@@ -72,6 +72,8 @@ SSH #9 is now published at exact `d1a2874` after the coordinator lock registrati
 
 Lead published independent contract-only draft #10 at `4c0c296`, based on checked #8. It adds browser-safe ChatService commands/client, bounded projection shapes and centrally documented immutable actor-scoped request binding, public Pi 1.4 two-phase reservation/admission, exact captured Stop and stateful nonce/body/status HMAC wire rules. No Pi execution, HTTP server/proxy, SSH change or editor dependency is implemented. Frozen install, three uncached tasks/33 application tests, four new public boundary cases, forty frozen hashes/UI copies/four browser contracts and diff checks pass. Independent review queues behind current SSH R1; no Pi module implementation dispatch before this contract is stable.
 
+Coordinator additionally qualified public Pi 1.4 atomic saved-chat creation in a real temporary SQLite probe: creation/model/cwd/metadata/request receipt commit together; concurrent and restarted retries return the same conversation; injected rollback leaves no partial creation; zero model calls. Source and limits are retained in `docs/research/pi-durable-1.4-create-probe.mjs` and evidence section8. This checks feasibility for contract #10 only, not a Pi implementation or atomic Send.
+
 ## Setup
 
 - Private target: `ejjsharpe/moonbase`; existing documentation-only main preserved at `c89e4db`.
