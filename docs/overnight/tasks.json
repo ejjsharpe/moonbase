@@ -1268,7 +1268,12 @@
       "realIntegration": 11
     },
     "branch": "chore/editor-integration",
-    "status": "DRAFT repaired candidate; 208tests pass, paired R9/R2 review and new CI pending"
+    "status": "DRAFT repaired2f9 candidate; 208tests and exacthead CI pass; paired R9/R2 pending",
+    "ci": [
+      "https://github.com/ejjsharpe/moonbase/actions/runs/41279421646/job/124768096522",
+      "https://github.com/ejjsharpe/moonbase/actions/runs/41279416797/job/124768083195",
+      "https://github.com/ejjsharpe/moonbase/actions/runs/41279417940/job/124768086192"
+    ]
   },
   "editorIntegrationReviewR1": {
     "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-editor-integration-r1-f44d698",

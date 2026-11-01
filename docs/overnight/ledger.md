@@ -18,7 +18,7 @@ All PRs are private, linked and unmerged. Older entries below are historical evi
 | [#9 SSH](https://github.com/ejjsharpe/moonbase/pull/9) | `1aec1a438ba0d5592b0e6c3f0e1be835cf3c034b` | #8 | DRAFT; 43+29 tests; R2 EPERM repair published, R3 queued/CI pending |
 | [#10 chat contract](https://github.com/ejjsharpe/moonbase/pull/10) | `d38833db81c5d97a1aa60f25e0dc27dd670af60f` | #8 | Ready; AstraR1 contract-only clear atd38833d; 33 tests/five fresh typedprobes/source/CI pass |
 
-| [#11 real editor fan-in](https://github.com/ejjsharpe/moonbase/pull/11) | `2f9f516f29df5299091cf7546b04c8077645e188` | #4(449) + #3, common #7 | DRAFT; 208 real/module tests pass on repair candidate; paired review/CI pending |
+| [#11 real editor fan-in](https://github.com/ejjsharpe/moonbase/pull/11) | `2f9f516f29df5299091cf7546b04c8077645e188` | #4(449) + #3, common #7 | DRAFT; 208 real/module tests and exacthead CI pass on repair candidate; paired review pending |
 
 Production fan-in R1 found a P1 after the first196 tests passed. The owner supplied449 and the repaired candidate2f9 now passes208 tests; independent paired review must clear it before standalone task04 resumes. Task04 unfinished app checkpoint f33 is safely pushed. Pi runtime has an independent partial checkpoint; its owner returned to Pi after publishing SSH R2 repair. Chat proof and composition remain unfinished. Independent SSH task 06 is active under the explicit technical-failure exception; it depends only on checked #8 and does not use failing editor behavior. Published Pi 1.4.0 controlled research is preparatory evidence only. No human/manual acceptance is inferred.
 
@@ -161,3 +161,5 @@ No explicit real-provider quota authorization or SSH test host has been supplied
 T3 notified CI success on #10 exact `d38833db81c5d97a1aa60f25e0dc27dd670af60f`; one metadata inspection confirmed both hosted module jobs green. It remains a contract-only DRAFT awaiting Astra after editor R8; no implementation/security/remote acceptance is inferred.
 
 T3 CI wake for #11 exact `a7a0d8861346e869a7fb8013ed2522cf2f578642`: one metadata read confirms both hosted jobs green. Frozen/public-asset integration is clear; independent R1 remains fixed to f44 and new asset review stays pending. Runs: https://github.com/ejjsharpe/moonbase/actions/runs/41278133678/job/124764390065, https://github.com/ejjsharpe/moonbase/actions/runs/41278130156/job/124764380688
+
+T3 notified #11 exact `2f9f516f29df5299091cf7546b04c8077645e188` CI success; one metadata inspection verifies both jobs passed. Paired module449/integration2f9 review remains active and neither editor nor fan-in clearance is inferred from CI. Runs: https://github.com/ejjsharpe/moonbase/actions/runs/41279421646/job/124768096522, https://github.com/ejjsharpe/moonbase/actions/runs/41279416797/job/124768083195, https://github.com/ejjsharpe/moonbase/actions/runs/41279417940/job/124768086192
