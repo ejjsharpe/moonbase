@@ -1,5 +1,5 @@
 import { Context, Effect, Layer, Queue, Stream } from 'effect';
-import { WorkspaceService, type WorkspaceServiceShape } from '@moonbase/application/services';
+import { WorkspaceService, releaseResource, type WorkspaceServiceShape } from '@moonbase/application/services';
 import { ApplicationError, emptyRecovery, type CheckoutTarget, type CommandInput, type CommandOutput, type EditorRecovery, type OperationResult, type SaveResult, type WorkspaceCommand, type WorkspaceOperation, type WorkspaceEvent } from '@moonbase/application/client';
 import { accessSync, closeSync, constants, fstatSync, openSync, readFileSync, realpathSync, watch as fsWatch, type FSWatcher } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
@@ -30,14 +30,14 @@ type OperationRecord = { staging?: string[]; publishedItems?: string[]; input: W
 const key = (clientId: string, id: string) => hash(canonical([clientId, id]));
 const affected = (p: string, source: string) => p === source || p.startsWith(source + '/');
 const folded = (p: string) => p.normalize('NFC').toLowerCase();
-const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
-const applicationError = (error: unknown, code: ApplicationError['code'] = 'Unavailable') => error instanceof ApplicationError ? error : new ApplicationError({ code, message: errorText(error) });
+const errorText = (error: unknown) => ApplicationError.fromUnknown(error).message;
+const applicationError = (error: unknown, code: ApplicationError['code'] = 'Unavailable') => ApplicationError.is(error) ? error : new ApplicationError({ code, message: errorText(error) });
 
 /** Scoped resources only; the shared application composition root supplies the runtime. */
 export function WorkspaceLive(configuration: WorkspaceConfiguration) {
   const resources = Layer.effect(LocalResources, Effect.acquireRelease(
     Effect.tryPromise({ try: async () => new LocalWorkspace(configuration), catch: error => applicationError(error, 'Persistence') }),
-    workspace => Effect.promise(() => workspace.close()),
+    workspace => releaseResource(() => workspace.close()),
   ));
   return Layer.merge(
     Layer.effect(WorkspaceService, Effect.map(LocalResources, workspace => workspace.service)),
@@ -643,7 +643,7 @@ class LocalWorkspace {
         if (!common.startsWith(directory.root + '/')) watchers.push(fsWatch(common, {persistent: false, recursive: true}, () => changed()).on('error', e => changed(errorText(e))));
         self.subscriptions.add(stop); Queue.offerUnsafe(queue, {checkout: input.checkout, paths: input.paths, ready: true}); return stop;
       } catch (error) { stop(); throw error; }
-      }), stop => Effect.sync(stop));
+      }), stop => releaseResource(stop));
       return Stream.fromQueue(queue);
     }));
   }

@@ -1,0 +1,38 @@
+# Workspace evidence
+
+Technical module checks pass. Independent PR review and human acceptance remain **PENDING**. The dependency base is `68aa035b9c283a65cac6e78ab02865e99882d15b` on `chore/application-coordination`, PR #2, which depends on foundation PR #1 (`bb5c5d0b366f43e5406fc328d5bd5ec7ee154e58`). Only `packages/workspace/**` is changed by this task.
+
+Environment: macOS 26.3.1 (25D2128), arm64 Darwin 25.3.0, Node 26.13.0, Bun 1.4.4, Apple clang 21.0.0 (clang-2100.1.1.101), pinned Effect 4.1.0 and TypeScript 7.0.2. Native production builds use `-std=c11 -Wall -Wextra -Werror -O2 -framework CoreServices`, without test pause macros.
+
+Final commands:
+
+```sh
+bun run --cwd packages/workspace typecheck
+bun run --cwd packages/workspace lint
+MOONBASE_TEST_RIPGREP=/tmp/moonbase-ripgrep-15.2.0/ripgrep-15.2.0-aarch64-apple-darwin/rg bun run --cwd packages/workspace test
+bun run check:foundation
+bun run --cwd packages/application test
+git diff --check
+```
+
+Results: workspace **41 passed, 0 failed/skipped**; application public-client **14 passed**; typecheck/lint and source hash checks passed. The test target builds the actual production native executable before running Node strip-types tests. Root foundation verification checks all 40 source-snapshot hashes, active UI copies and browser-safe contracts. No live escode source/state was used or modified.
+
+`test/workspace.test.ts` exercises the shared application client and real scoped `WorkspaceLive`, temporary files, Git repositories and independent SQLite persistence:
+
+- Read/save/version conflict, changed-payload retry rejection, deliberate overwrite, persisted dirty baselines and restart; an interrupted admitted Save restores its captured text even without an earlier draft publication. A staged-object replacement cannot publish or remove the impostor.
+- Independent client CAS; A's successful Save never rebases B's original dirty baseline, including identical initial text/versions and restart. B's subsequent Save conflicts. Newer same-client publications cannot be overwritten by old revisions.
+- Known move, copy, root-destination batches, creation with initial text, explicit replacement, partial success and real macOS Trash. Dirty text/baselines and exact immutable checkout identities survive path handoffs. Captured stale replacement identity rejects before Trash.
+- Lost native move/Trash responses use the actual production helper followed by controlled response loss. Native invocation counts remain one after retry/restart. Move recovery identifies the original object; interrupted Trash stays uncertain and retains drafts. Test-owned Trash fixtures are inspected and cleaned using returned locations.
+- Every operation result retains origin client plus immutable checkout. After A acknowledges a move/copy, B still observes the original fact across restart, must publish its own recovery, then independently acknowledges it. B's acknowledgement hides only B's pending evidence.
+- Save/move receipts retain exact before/after revision transitions atomically. A controlled same-client publication during native work creates a visible `2 → 3` receipt gap for a controller owning revision 1; old CAS publication fails, newer text survives, and retry returns the same transition without another effect/write.
+- Real SQLite write contention vetoes discard/mutation before effects. A native move can succeed while a held SQLite write lock prevents publication: known per-item success and pending persistence remain observable, and retry publishes without repeating the move. A child process with an OS file-size limit makes actual SQLite/WAL growth fail and verifies the old recovery survives. Unavailable state directories yield typed persistence failure. This is not a physical-volume exhaustion or power-loss test.
+- Local/remote/root replacement rejection; traversal, symbolic links, hard-linked save, metadata paths, binary and size bounds. Git staged originals use HEAD, unstaged originals use index, both expose current working text.
+- Standalone official ripgrep tests local/nested `.gitignore`, `.ignore`, `.rgignore`, ignore preflight rejection, ranking/highlights, every query piece, quoted contiguous pieces, separate filtered/deduplicated history, capped results and the scoped exact-path exclusion exception.
+- External watch notification, unsubscribe, pending acquisition plus concurrent runtime disposal; native watcher handles return to baseline. Release uses the shared normalization helper. Cancelling an admitted native copy is typed and preserves its source; unrelated reads and saves in the same checkout remain usable.
+- A separate child process uses copied helper/ripgrep files under `Packaged Resources` and PATH `/usr/bin:/bin` for real read/save/lookup. It needs no Electron, editor, React, chat database, agent/provider package or Codex executable path.
+
+`test/native-races.test.ts` ports **14** verified user-authored deterministic source fixtures. Separate test-only native builds pause recursive preflight/publication to replace or relocate source, destination parent, checkout root, external import ancestry or staging objects. Assertions inspect actual bytes/identities and reject publication/cleanup of replacements. These test macros are absent from the production executable.
+
+Production helper SHA-256 from the final build: `3b1431e53880081151fb7e2ca398f3534924c644d2aa240990e9f8ff5eafb3e1`. Official standalone ripgrep executable SHA-256 used for final tests: `a326a1fb48074202e9ad41e4cd1e389eeea372c8c6f7d7e80da81176d5d9430e` (15.2.0). The coordinator owns release provenance and normal dependency/release notices; this branch ships no copied binary or manually assembled license bundle.
+
+Limits and pending checks: real packaged Electron and renderer privilege isolation, app Quit/Save/Discard/Cancel UI, Finder Put Back, signing/notarization, other macOS/architectures, human visual/native/accessibility acceptance, physical-volume exhaustion and power-loss hardware behavior are unrun here. This module has no UI or provider/SSH integration to qualify. Native final identity/content checks remain separate syscalls from mutation, and recursive preflight is not a directory snapshot. Failed/uncertain staging remains for inspection. SQLite and filesystem effects are separate resources; no exactly-once external or power-loss guarantee is claimed. Cross-module editor fan-in must preserve the documented receipt/CAS and current-live-text rules before its own acceptance.

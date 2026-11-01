@@ -4,7 +4,7 @@ The immutable source snapshot at `docs/source-snapshot` revision `181097195a026d
 
 | Frozen source | SHA-256 | Active use |
 | --- | --- | --- |
-| `apps/desktop/host/filesystem.c` | `5d9a9b2e5fc68dc46ae1c4aad65469c59042753b37cf0d512f45a380dd636297` | `native/filesystem.c`: retained descriptor-scoped macOS implementation; added bounded native preflight/copy, atomic initial text creation, case collision check, and staged-save identity publication/revalidation. |
+| `apps/desktop/host/filesystem.c` | `5d9a9b2e5fc68dc46ae1c4aad65469c59042753b37cf0d512f45a380dd636297` | `native/filesystem.c`: retained descriptor-scoped macOS implementation; added bounded native preflight/copy, atomic initial text creation, case collision check, staged-save identity publication/revalidation, and retention of failed staging instead of pathname cleanup. |
 | `apps/desktop/host/native-import.ts` | `86b14a116a07cdfe6877222fde3bbe618eb8d002bca673e34ba1a42550b673b4` | `src/native-import.ts`: retained no-follow native source/ancestor capture; parameter properties expanded for Node strip-types. |
 | `apps/desktop/host/native-races.test.ts` | `1e2b021e142c9530a147995e2f3777e48d0fdbc6feacfad2e6cf13ea359f6d56` | `test/native-races.test.ts`: retained deterministic preflight/staging race scenarios; changed runner/assertion harness and paths only. |
 

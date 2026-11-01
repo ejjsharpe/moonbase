@@ -19,7 +19,7 @@ export class Store {
     closeSync(databaseFile);
     this.db = new DatabaseSync(file);
     try {
-      this.db.exec('PRAGMA busy_timeout=1000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;');
+      this.db.exec('PRAGMA busy_timeout=0; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;');
       const application = this.db.prepare('PRAGMA application_id').get()!.application_id;
       const tables = this.db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all();
       ensure(application === 1296193363 || (application === 0 && tables.length === 0), 'This is not a Moonbase workspace store. Existing data retained.');
@@ -37,7 +37,7 @@ export class Store {
   all<T>(bucket: string): T[] { return this.db.prepare('SELECT body FROM records WHERE bucket=? ORDER BY rowid').all(bucket).map(r => JSON.parse(r.body as string) as T); }
   put(bucket: string, key: string, value: unknown) {
     try { this.db.prepare('INSERT INTO records VALUES(?,?,?) ON CONFLICT(bucket,key) DO UPDATE SET body=excluded.body').run(bucket, key, JSON.stringify(value)); }
-    catch (error) { throw new ApplicationError({code: 'Persistence', message: 'Workspace journal publication failed; retain drafts and retry. ' + String(error)}); }
+    catch (error) { throw new ApplicationError({code: 'Persistence', message: 'Workspace journal publication failed; retain drafts and retry. ' + ApplicationError.fromUnknown(error).message}); }
   }
   readRecovery(client: string): { revision: number; state: unknown } | null {
     const row = this.db.prepare('SELECT revision, body FROM recovery WHERE client=?').get(client);
