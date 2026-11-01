@@ -10,12 +10,12 @@ All PRs are private, linked and unmerged. Older entries below are historical evi
 | [#2 shared boundary](https://github.com/ejjsharpe/moonbase/pull/2) | `68aa035b9c283a65cac6e78ab02865e99882d15b` | #1 | Astra R5: no blockers; 14 public tests plus independent probes |
 | [#5 checkout contract](https://github.com/ejjsharpe/moonbase/pull/5) | `6e58c1c4ea6944e8ca25eadc46e35c843f0f9fbe` | #2 | Astra: no contract blockers; actual adoption/fan-in pending |
 | [#3 workspace](https://github.com/ejjsharpe/moonbase/pull/3) | `38c6c551ff0ab1108077275d223a32967f32b9f6` | #7 | Ready for review; Astra R6 no blockers, 91+14 tests/10 independent probes and exact-head CI pass |
-| [#4 editor](https://github.com/ejjsharpe/moonbase/pull/4) | `914455852dcf0e700397adb3facb9daa0d7e0514` | #7 | DRAFT; owner 76+14 tests and isolated 22 browser journeys pass; Astra R7: one P2 recreated-working-file readiness defect; original R6 cases clear; owner fixing |
+| [#4 editor](https://github.com/ejjsharpe/moonbase/pull/4) | `c31bb4164d2ff18031e2b391a83198bb5e40d027` | #7 | DRAFT; owner 82+14 tests and isolated24 browser journeys pass; fresh Astra R8 running |
 | [#6 host health](https://github.com/ejjsharpe/moonbase/pull/6) | `42836b0421898b963e67f02795edc35f5e546173` | #5 | Ready; Astra R2 no source-boundary blockers, 25 tests/11 independent probes and CI pass |
 | [#7 recovery publications](https://github.com/ejjsharpe/moonbase/pull/7) | `8557fdd0d7a71f93a6584c77430e6fde57668580` | #5 | Ready; contract-only clearance, 14 tests/five independent probes and CI pass; both adapters published |
 | [#8 connection boundary](https://github.com/ejjsharpe/moonbase/pull/8) | `09b21f2ee8556c54ef4f8238f0be2ee88fd990c3` | #6 | Ready; Astra R1 no boundary blockers, 29 tests/11 probes/import graphs and CI pass; SSH implementation separate |
 
-| [#9 SSH](https://github.com/ejjsharpe/moonbase/pull/9) | `d1a28745362c5f9cf5c164f3ef19fc8ac8af983b` | #8 | DRAFT; 25 controlled child/loopback tests +29 app and exact-head CI pass; fresh Astra R1 running |
+| [#9 SSH](https://github.com/ejjsharpe/moonbase/pull/9) | `d1a28745362c5f9cf5c164f3ef19fc8ac8af983b` | #8 | DRAFT; 25 controlled child/loopback tests +29 app and exact-head CI pass; Astra R1 three blockers, owner fixing |
 | [#10 chat contract](https://github.com/ejjsharpe/moonbase/pull/10) | `4c0c2969d2ff506a122de2825cb79561a2825ed6` | #8 | DRAFT; 33 application tests/four new boundary cases/source checks/exact-head CI pass; independent review queued |
 
 Production editor fan-in, standalone Electron proof, Pi module, chat proof and composition remain unfinished. Independent SSH task 06 is active under the explicit technical-failure exception; it depends only on checked #8 and does not use failing editor behavior. Published Pi 1.4.0 controlled research is preparatory evidence only. No human/manual acceptance is inferred.
@@ -75,6 +75,10 @@ Lead published independent contract-only draft #10 at `4c0c296`, based on checke
 Coordinator additionally qualified public Pi 1.4 atomic saved-chat creation in a real temporary SQLite probe: creation/model/cwd/metadata/request receipt commit together; concurrent and restarted retries return the same conversation; injected rollback leaves no partial creation; zero model calls. Source and limits are retained in `docs/research/pi-durable-1.4-create-probe.mjs` and evidence section8. This checks feasibility for contract #10 only, not a Pi implementation or atomic Send.
 
 One post-publication inspection confirmed both hosted jobs green at SSH #9 `d1a2874` ([41275707654](https://github.com/ejjsharpe/moonbase/actions/runs/41275707654), [41275668842](https://github.com/ejjsharpe/moonbase/actions/runs/41275668842)) and chat contract #10 `4c0c296` ([41276094708](https://github.com/ejjsharpe/moonbase/actions/runs/41276094708), [41276090542](https://github.com/ejjsharpe/moonbase/actions/runs/41276090542)). Both remain DRAFT for independent review. CI success does not establish production protocol, remote host or editor acceptance.
+
+SSH Astra R1 reproduces two P1s (early Disconnect strands Connect; actual OpenSSH host-authentication bypass flags pass preflight) and a P2 (waiting for pipe close hides SSH exit and leaves a proxy helper/endpoint alive). See `reviews/ssh-r1.md`. Original owner is fixing all three through controlled public-client/process/policy regressions; no actual host or user SSH configuration is touched. Fresh implementation review is required; #9 remains DRAFT.
+
+Editor R7 repair is published at `c31bb41` (source `836b843`): owner reports both recreated-file modes editable after background return and active Refresh, with version-specific failure settling, dirty-baseline and empty/missing controls. All82 public/fourteen shared and24 isolated Chromium journeys/required checks pass; inspected captures are committed. Fresh Astra xhigh R8 runs exact head/base #7 with all seven prior reports and responses; model/options verified. Chat contract review remains queued after this higher-priority editor gate.
 
 ## Setup
 

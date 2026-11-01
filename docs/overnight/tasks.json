@@ -1135,6 +1135,56 @@
     "childThreadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-ssh-r1-d1a2874",
     "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-ssh-r1-d1a2874:ordinal:1",
     "childNodeId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-ssh-r1-d1a2874",
+    "status": "completed",
+    "workState": "result_available",
+    "hasPendingChildRuns": false,
+    "latestTerminalRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-ssh-r1-d1a2874:ordinal:1",
+    "latestTerminalStatus": "completed",
+    "latestTerminalSummary": null,
+    "latestTerminalResultContextTransferId": null,
+    "providerInstanceId": "codex",
+    "model": "gpt-6-astra",
+    "options": [
+      {
+        "id": "reasoningEffort",
+        "value": "xhigh"
+      },
+      {
+        "id": "serviceTier",
+        "value": "default"
+      }
+    ],
+    "summary": "What this change does: [PR #9](https://github.com/ejjsharpe/moonbase/pull/9) adds scoped SSH forwarding and authenticated host-health verification through the shared application service. **Three must-fix findings remain.**\n\n1. **[P1] Early Disconnect leaves Connect pending indefinitely** \u2014 [index.ts:119](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-158cbcd0/packages/ssh/src/index.ts:119). Calling Disconnect from the first `connecting` observation completes teardown with zero children, but the original Connect never settles. The attempt can be interrupted before its finalizer installs; nothing then completes `g.ready`. Settle pending waiters from the owning release path, including attempts that never started.\n\n2. **[P1] Host-authentication bypass settings pass preflight** \u2014 [index.ts:157](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-158cbcd0/packages/ssh/src/index.ts:157). Actual system `ssh -G` output with `StrictHostKeyChecking=yes` plus `NoHostAuthenticationForLocalhost=yes` is accepted. macOS\u2019s `NoHostAuthenticationForProxyCommand=yes` also passes. These disable host authentication; application health does not replace SSH verification. Reject enabled bypass flags before forwarding. [OpenSSH documentation](https://man.openbsd.org/ssh_config#NoHostAuthenticationForLocalhost)\n\n3. **[P2] SSH exit can leave a stale endpoint and surviving proxy helper** \u2014 [process.ts:30](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-158cbcd0/packages/ssh/src/process.ts:30). Exit is recorded only on `close`, which waits for inherited stdio. A helper holding stderr keeps status `connected` and endpoint lookup available after SSH dies; Disconnect then signals the dead PID and fails cleanup. Reproduced with controlled forwarding and actual system SSH using a pipe-only ProxyCommand. Separate exit detection from pipe drainage and scope cleanup to the owned process group. [Node event semantics](https://nodejs.org/api/child_process.html#event-close)\n\nReviewed exact commits:\n\n- **HEAD:** `d1a28745362c5f9cf5c164f3ef19fc8ac8af983b`\n- **BASE:** `09b21f2ee8556c54ef4f8238f0be2ee88fd990c3`\n\nThe 25 SSH and 29 application tests pass. Independent probes reproduce all three defects; typecheck, foundation checks and the 253-input dependency audit pass. Prior #6 health and #8 contract dispositions remain intact. No tracked files changed. PRs #1, #2, #5, #6, #8 and #9 are linked, without watches.\n\n[Full report](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-158cbcd0/test-results/review-task06/REPORT.txt) \u00b7 [Runnable repros](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-158cbcd0/test-results/review-task06/review.test.ts) \u00b7 [Results](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-158cbcd0/test-results/review-task06/final-independent-tests.log)\n\n**Verdict: fix 1\u20133 before technical clearance.**\n\nNot checked: real SSH handshake/agent/ProxyJump hosts, remote Pi persistence, packaged/native or human acceptance. One artificial scheduling probe was excluded; acceptance remains PENDING.",
+    "resultContextTransferId": "context-transfer:type:subagent_result:source-thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-ssh-r1-d1a2874:target-thread:63122af4-017b-4b66-bcae-a905f2b1659d:59502631-69cf-4faa-adcd-5968444ac320",
+    "hasPendingQuestion": false,
+    "pendingApproval": null,
+    "waitTimedOut": false,
+    "findings": "docs/overnight/reviews/ssh-r1.md",
+    "verdict": "three blockers; original owner fixing"
+  },
+  "chatContract": {
+    "head": "4c0c2969d2ff506a122de2825cb79561a2825ed6",
+    "base": "09b21f2ee8556c54ef4f8238f0be2ee88fd990c3",
+    "url": "https://github.com/ejjsharpe/moonbase/pull/10",
+    "status": "DRAFT, independent contract review queued after active SSH review",
+    "tests": {
+      "application": 33,
+      "newBoundary": 4
+    }
+  },
+  "sshFixR1": {
+    "threadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-03-workspace-module-r1-bb5c5d0",
+    "messageId": "message:mcp:809f45ac-99a5-4d58-a1ba-08cc0a77c997:thread-send:ssh-fix-review-r1-3findings",
+    "runId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-03-workspace-module-r1-bb5c5d0:ordinal:10",
+    "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Athread-send%3Assh-fix-review-r1-3findings",
+    "status": "starting",
+    "delivery": "started"
+  },
+  "editorReviewR8": {
+    "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-editor-r8-c31bb41",
+    "childThreadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-editor-r8-c31bb41",
+    "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-editor-r8-c31bb41:ordinal:1",
+    "childNodeId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-editor-r8-c31bb41",
     "status": "running",
     "workState": "working",
     "hasPendingChildRuns": false,
@@ -1160,14 +1210,15 @@
     "pendingApproval": null,
     "waitTimedOut": false
   },
-  "chatContract": {
-    "head": "4c0c2969d2ff506a122de2825cb79561a2825ed6",
-    "base": "09b21f2ee8556c54ef4f8238f0be2ee88fd990c3",
-    "url": "https://github.com/ejjsharpe/moonbase/pull/10",
-    "status": "DRAFT, independent contract review queued after active SSH review",
+  "editorR7Published": {
+    "head": "c31bb4164d2ff18031e2b391a83198bb5e40d027",
+    "base": "8557fdd0d7a71f93a6584c77430e6fde57668580",
+    "source": "836b843ff70f6219c63788ab277d4d15525974cb",
     "tests": {
-      "application": 33,
-      "newBoundary": 4
-    }
+      "editor": 82,
+      "application": 14,
+      "browser": 24
+    },
+    "evidence": "packages/editor/evidence/review-r7.md"
   }
 }
