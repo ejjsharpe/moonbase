@@ -3,563 +3,1605 @@ import { createHash, randomUUID } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, realpathSync, rmSync, renameSync, symlinkSync, linkSync, chmodSync, existsSync } from 'node:fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  renameSync,
+  symlinkSync,
+  linkSync,
+  chmodSync,
+  existsSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ManagedRuntime, Effect } from 'effect';
 import { makeEditorClient } from '@moonbase/application/runtime-client';
-import { ApplicationError, emptyRecovery, type CheckoutTarget, type EditorRecovery } from '@moonbase/application/client';
+import {
+  ApplicationError,
+  emptyRecovery,
+  type CheckoutTarget,
+  type EditorRecovery,
+} from '@moonbase/application/client';
 import { WorkspaceLive, WorkspaceNative } from '../src/index.ts';
 
 function fixture() {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-workspace-'))), root = join(base, 'repo'), dataDirectory = join(base, 'state');
-  mkdirSync(root); execFileSync('/usr/bin/git', ['init', '-q', '-b', 'main', root]);
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-workspace-'))),
+    root = join(base, 'repo'),
+    dataDirectory = join(base, 'state');
+  mkdirSync(root);
+  execFileSync('/usr/bin/git', ['init', '-q', '-b', 'main', root]);
   const start = () => {
-    const runtime = ManagedRuntime.make(WorkspaceLive({dataDirectory, hostId: 'local-test', ...(process.env.MOONBASE_TEST_RIPGREP ? {ripgrepExecutable: process.env.MOONBASE_TEST_RIPGREP} : {})}));
-    return {runtime, client: makeEditorClient(runtime)};
+    const runtime = ManagedRuntime.make(
+      WorkspaceLive({
+        dataDirectory,
+        hostId: 'local-test',
+        ...(process.env.MOONBASE_TEST_RIPGREP
+          ? { ripgrepExecutable: process.env.MOONBASE_TEST_RIPGREP }
+          : {}),
+      }),
+    );
+    return { runtime, client: makeEditorClient(runtime) };
   };
   const instance = start();
-  return {...instance, base, root, dataDirectory, start, async close() { await instance.runtime.dispose(); rmSync(base, {recursive: true, force: true}); }};
+  return {
+    ...instance,
+    base,
+    root,
+    dataDirectory,
+    start,
+    async close() {
+      await instance.runtime.dispose();
+      rmSync(base, { recursive: true, force: true });
+    },
+  };
 }
-const rejects = (code: ApplicationError['code']) => (error: unknown) => error instanceof ApplicationError && error.code === code;
-function draft(clientId: string, checkout: CheckoutTarget, text: string, disk: {text: string; version: string}): EditorRecovery {
-  return {...emptyRecovery(clientId), checkouts: [checkout], openCheckoutIds: [checkout.checkoutId], selectedCheckoutId: checkout.checkoutId, drafts: [{target: {checkout, path: 'file.txt'}, text, disk}]};
+const rejects = (code: ApplicationError['code']) => (error: unknown) =>
+  error instanceof ApplicationError && error.code === code;
+function draft(
+  clientId: string,
+  checkout: CheckoutTarget,
+  text: string,
+  disk: { text: string; version: string },
+): EditorRecovery {
+  return {
+    ...emptyRecovery(clientId),
+    checkouts: [checkout],
+    openCheckoutIds: [checkout.checkoutId],
+    selectedCheckoutId: checkout.checkoutId,
+    drafts: [{ target: { checkout, path: 'file.txt' }, text, disk }],
+  };
 }
 
 test('public client saves, rejects changed retries and preserves original dirty conflict baselines across restart', async () => {
   const f = fixture();
   try {
     writeFileSync(join(f.root, 'file.txt'), 'original');
-    const checkout = await f.client.command('openCheckout', {root: f.root}), target = {checkout, path: 'file.txt'};
+    const checkout = await f.client.command('openCheckout', { root: f.root }),
+      target = { checkout, path: 'file.txt' };
     const disk = await f.client.command('readFile', target);
-    await f.client.command('persistRecovery', {requestId: randomUUID(), clientId: 'alice', expectedRevision: 0, state: draft('alice', checkout, 'dirty text', disk)});
+    await f.client.command('persistRecovery', {
+      requestId: randomUUID(),
+      clientId: 'alice',
+      expectedRevision: 0,
+      state: draft('alice', checkout, 'dirty text', disk),
+    });
     writeFileSync(join(f.root, 'file.txt'), 'external');
-    const input = {target, clientId: 'alice', requestId: 'save-1', text: 'dirty text', expectedVersion: disk.version};
+    const input = {
+      target,
+      clientId: 'alice',
+      requestId: 'save-1',
+      text: 'dirty text',
+      expectedVersion: disk.version,
+    };
     const conflict = await f.client.command('saveFile', input);
     assert.equal(conflict.kind, 'conflict');
-    assert.equal((await f.client.command('loadRecovery', {clientId: 'alice'})).state.drafts[0].disk.text, 'original');
-    await assert.rejects(f.client.command('saveFile', {...input, text: 'changed retry'}), rejects('Conflict'));
+    assert.equal(
+      (await f.client.command('loadRecovery', { clientId: 'alice' })).state.drafts[0].disk.text,
+      'original',
+    );
+    await assert.rejects(
+      f.client.command('saveFile', { ...input, text: 'changed retry' }),
+      rejects('Conflict'),
+    );
     assert.deepEqual(await f.client.command('saveFile', input), conflict);
     assert.equal(readFileSync(join(f.root, 'file.txt'), 'utf8'), 'external');
-    assert.equal((await f.client.command('saveFile', {...input, requestId: 'deliberate-overwrite', expectedVersion: conflict.disk.version})).kind, 'saved');
+    assert.equal(
+      (
+        await f.client.command('saveFile', {
+          ...input,
+          requestId: 'deliberate-overwrite',
+          expectedVersion: conflict.disk.version,
+        })
+      ).kind,
+      'saved',
+    );
     await f.runtime.dispose();
     const restarted = f.start();
     try {
-      const state = await restarted.client.command('loadRecovery', {clientId: 'alice'});
+      const state = await restarted.client.command('loadRecovery', { clientId: 'alice' });
       assert.equal(state.state.drafts[0].text, 'dirty text');
       assert.equal(state.state.drafts[0].disk.text, 'dirty text');
       assert.equal((await restarted.client.command('readFile', target)).text, 'dirty text');
       assert.deepEqual(await restarted.client.command('saveFile', input), conflict);
-    } finally { await restarted.runtime.dispose(); }
-  } finally { await f.close(); }
+    } finally {
+      await restarted.runtime.dispose();
+    }
+  } finally {
+    await f.close();
+  }
 });
 
 test('independent clients and compare-and-swap recovery do not overwrite one another; invalid baselines fail', async () => {
   const f = fixture();
   try {
     writeFileSync(join(f.root, 'file.txt'), 'disk');
-    const checkout = await f.client.command('openCheckout', {root: f.root}), disk = await f.client.command('readFile', {checkout, path: 'file.txt'});
-    await f.client.command('persistRecovery', {requestId: randomUUID(), clientId: 'alice', expectedRevision: 0, state: draft('alice', checkout, 'alice edit', disk)});
-    await f.client.command('persistRecovery', {requestId: randomUUID(), clientId: 'bob', expectedRevision: 0, state: draft('bob', checkout, 'bob edit', disk)});
-    await assert.rejects(f.client.command('persistRecovery', {requestId: randomUUID(), clientId: 'alice', expectedRevision: 0, state: emptyRecovery('alice')}), rejects('Conflict'));
-    assert.equal((await f.client.command('loadRecovery', {clientId: 'bob'})).state.drafts[0].text, 'bob edit');
-    const bad = draft('alice', checkout, 'safe', {...disk, version: 'wrong'});
-    await assert.rejects(f.client.command('persistRecovery', {requestId: randomUUID(), clientId: 'alice', expectedRevision: 1, state: bad}), rejects('InvalidInput'));
-  } finally { await f.close(); }
+    const checkout = await f.client.command('openCheckout', { root: f.root }),
+      disk = await f.client.command('readFile', { checkout, path: 'file.txt' });
+    await f.client.command('persistRecovery', {
+      requestId: randomUUID(),
+      clientId: 'alice',
+      expectedRevision: 0,
+      state: draft('alice', checkout, 'alice edit', disk),
+    });
+    await f.client.command('persistRecovery', {
+      requestId: randomUUID(),
+      clientId: 'bob',
+      expectedRevision: 0,
+      state: draft('bob', checkout, 'bob edit', disk),
+    });
+    await assert.rejects(
+      f.client.command('persistRecovery', {
+        requestId: randomUUID(),
+        clientId: 'alice',
+        expectedRevision: 0,
+        state: emptyRecovery('alice'),
+      }),
+      rejects('Conflict'),
+    );
+    assert.equal(
+      (await f.client.command('loadRecovery', { clientId: 'bob' })).state.drafts[0].text,
+      'bob edit',
+    );
+    const bad = draft('alice', checkout, 'safe', { ...disk, version: 'wrong' });
+    await assert.rejects(
+      f.client.command('persistRecovery', {
+        requestId: randomUUID(),
+        clientId: 'alice',
+        expectedRevision: 1,
+        state: bad,
+      }),
+      rejects('InvalidInput'),
+    );
+  } finally {
+    await f.close();
+  }
 });
 
 test('known move preserves drafts and exact target, acknowledgement requires recovery publication; replay does not move twice', async () => {
   const f = fixture();
   try {
     writeFileSync(join(f.root, 'file.txt'), 'disk');
-    const checkout = await f.client.command('openCheckout', {root: f.root}), disk = await f.client.command('readFile', {checkout, path: 'file.txt'});
+    const checkout = await f.client.command('openCheckout', { root: f.root }),
+      disk = await f.client.command('readFile', { checkout, path: 'file.txt' });
     const state = draft('alice', checkout, 'dirty', disk);
-    await f.client.command('persistRecovery', {requestId: randomUUID(), clientId: 'alice', expectedRevision: 0, state});
-    const sources = await f.client.command('inspectEntries', {checkout, paths: ['file.txt']});
-    const operation = {id: 'move-1', clientId: 'alice', checkout, kind: 'move' as const, sources, destination: 'renamed.txt'};
+    await f.client.command('persistRecovery', {
+      requestId: randomUUID(),
+      clientId: 'alice',
+      expectedRevision: 0,
+      state,
+    });
+    const sources = await f.client.command('inspectEntries', { checkout, paths: ['file.txt'] });
+    const operation = {
+      id: 'move-1',
+      clientId: 'alice',
+      checkout,
+      kind: 'move' as const,
+      sources,
+      destination: 'renamed.txt',
+    };
     const result = await f.client.command('mutate', operation);
-    assert.equal(result.outcome, 'completed'); assert.deepEqual(result.checkout, checkout);
-    await assert.rejects(f.client.command('acknowledgeOperation', {clientId: 'alice', operationClientId: 'alice', id: 'move-1'}), rejects('Persistence'));
-    const recovered = await f.client.command('loadRecovery', {clientId: 'alice'});
-    assert.equal(recovered.state.drafts[0].target.path, 'renamed.txt'); assert.deepEqual(recovered.state.drafts[0].disk, disk);
-    await f.client.command('persistRecovery', {requestId: randomUUID(), clientId: 'alice', expectedRevision: recovered.revision, state: recovered.state});
-    await f.client.command('acknowledgeOperation', {clientId: 'alice', operationClientId: 'alice', id: 'move-1'});
+    assert.equal(result.outcome, 'completed');
+    assert.deepEqual(result.checkout, checkout);
+    await assert.rejects(
+      f.client.command('acknowledgeOperation', {
+        clientId: 'alice',
+        operationClientId: 'alice',
+        id: 'move-1',
+      }),
+      rejects('Persistence'),
+    );
+    const recovered = await f.client.command('loadRecovery', { clientId: 'alice' });
+    assert.equal(recovered.state.drafts[0].target.path, 'renamed.txt');
+    assert.deepEqual(recovered.state.drafts[0].disk, disk);
+    await f.client.command('persistRecovery', {
+      requestId: randomUUID(),
+      clientId: 'alice',
+      expectedRevision: recovered.revision,
+      state: recovered.state,
+    });
+    await f.client.command('acknowledgeOperation', {
+      clientId: 'alice',
+      operationClientId: 'alice',
+      id: 'move-1',
+    });
     assert.deepEqual(await f.client.command('mutate', operation), result);
-    await assert.rejects(f.client.command('mutate', {...operation, destination: 'other.txt'}), rejects('Conflict'));
-    await f.runtime.dispose(); const restarted = f.start();
-    try { assert.deepEqual(await restarted.client.command('operationStatus', {clientId: 'alice', id: 'move-1'}), result); assert.equal((await restarted.client.command('loadRecovery', {clientId: 'alice'})).state.drafts[0].target.path, 'renamed.txt'); }
-    finally { await restarted.runtime.dispose(); }
-  } finally { await f.close(); }
+    await assert.rejects(
+      f.client.command('mutate', { ...operation, destination: 'other.txt' }),
+      rejects('Conflict'),
+    );
+    await f.runtime.dispose();
+    const restarted = f.start();
+    try {
+      assert.deepEqual(
+        await restarted.client.command('operationStatus', { clientId: 'alice', id: 'move-1' }),
+        result,
+      );
+      assert.equal(
+        (await restarted.client.command('loadRecovery', { clientId: 'alice' })).state.drafts[0]
+          .target.path,
+        'renamed.txt',
+      );
+    } finally {
+      await restarted.runtime.dispose();
+    }
+  } finally {
+    await f.close();
+  }
 });
 
 test('local/remote and root replacement identities, traversal, symlinks, binary, size and hard-link save boundaries reject', async () => {
   const f = fixture();
   try {
-    writeFileSync(join(f.root, 'file.txt'), 'disk'); writeFileSync(join(f.base, 'secret'), 'secret'); symlinkSync(join(f.base, 'secret'), join(f.root, 'link'));
-    writeFileSync(join(f.root, 'binary'), Buffer.from([0, 12])); writeFileSync(join(f.root, 'large'), Buffer.alloc(2 * 1024 * 1024 + 1, 65));
-    const checkout = await f.client.command('openCheckout', {root: f.root});
-    for (const p of ['../secret', '.git/config', 'a/../file.txt', '/file.txt', 'link', 'binary', 'large']) await assert.rejects(f.client.command('readFile', {checkout, path: p}));
-    await assert.rejects(f.client.command('readFile', {checkout: {...checkout, hostId: 'remote'}, path: 'file.txt'}), rejects('Unauthorized'));
-    const disk = await f.client.command('readFile', {checkout, path: 'file.txt'}); linkSync(join(f.root, 'file.txt'), join(f.root, 'hard-link'));
-    await assert.rejects(f.client.command('saveFile', {target: {checkout, path: 'file.txt'}, clientId: 'a', requestId: 'hard', text: 'new', expectedVersion: disk.version}));
+    writeFileSync(join(f.root, 'file.txt'), 'disk');
+    writeFileSync(join(f.base, 'secret'), 'secret');
+    symlinkSync(join(f.base, 'secret'), join(f.root, 'link'));
+    writeFileSync(join(f.root, 'binary'), Buffer.from([0, 12]));
+    writeFileSync(join(f.root, 'large'), Buffer.alloc(2 * 1024 * 1024 + 1, 65));
+    const checkout = await f.client.command('openCheckout', { root: f.root });
+    for (const p of [
+      '../secret',
+      '.git/config',
+      'a/../file.txt',
+      '/file.txt',
+      'link',
+      'binary',
+      'large',
+    ])
+      await assert.rejects(f.client.command('readFile', { checkout, path: p }));
+    await assert.rejects(
+      f.client.command('readFile', {
+        checkout: { ...checkout, hostId: 'remote' },
+        path: 'file.txt',
+      }),
+      rejects('Unauthorized'),
+    );
+    const disk = await f.client.command('readFile', { checkout, path: 'file.txt' });
+    linkSync(join(f.root, 'file.txt'), join(f.root, 'hard-link'));
+    await assert.rejects(
+      f.client.command('saveFile', {
+        target: { checkout, path: 'file.txt' },
+        clientId: 'a',
+        requestId: 'hard',
+        text: 'new',
+        expectedVersion: disk.version,
+      }),
+    );
     assert.equal(readFileSync(join(f.root, 'file.txt'), 'utf8'), 'disk');
-    renameSync(f.root, f.root + '-old'); mkdirSync(f.root); writeFileSync(join(f.root, 'file.txt'), 'wrong checkout');
-    await assert.rejects(f.client.command('readFile', {checkout, path: 'file.txt'}));
-  } finally { await f.close(); }
+    renameSync(f.root, f.root + '-old');
+    mkdirSync(f.root);
+    writeFileSync(join(f.root, 'file.txt'), 'wrong checkout');
+    await assert.rejects(f.client.command('readFile', { checkout, path: 'file.txt' }));
+  } finally {
+    await f.close();
+  }
 });
 
 test('Git staged and unstaged originals both compare against the current working document, lookup and ignore filtering work', async () => {
   const f = fixture();
   try {
     writeFileSync(join(f.root, 'file.txt'), 'HEAD');
-    const git = (args: string[]) => execFileSync('/usr/bin/git', ['-C', f.root, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', ...args]);
-    git(['add', '.']); git(['commit', '-qm', 'initial']);
-    writeFileSync(join(f.root, 'file.txt'), 'index'); git(['add', '.']); writeFileSync(join(f.root, 'file.txt'), 'working');
-    writeFileSync(join(f.root, '.gitignore'), 'ignored.txt\n'); writeFileSync(join(f.root, 'ignored.txt'), 'ignored');
-    const checkout = await f.client.command('openCheckout', {root: f.root});
-    const staged = await f.client.command('readComparison', {target: {checkout, path: 'file.txt'}, area: 'staged'}), unstaged = await f.client.command('readComparison', {target: {checkout, path: 'file.txt'}, area: 'unstaged'});
-    assert.equal(staged.original, 'HEAD'); assert.equal(unstaged.original, 'index'); assert.equal(staged.working?.text, 'working');
-    assert.deepEqual((await f.client.command('gitStatus', {checkout})).changes.filter(c => c.path === 'file.txt').map(c => c.area), ['staged', 'unstaged']);
-    assert((await f.client.command('lookupFiles', {checkout, query: 'fltx'})).matches.some(match => match.path === 'file.txt'));
-    assert(!(await f.client.command('listDirectory', {checkout, path: '', hideIgnored: true})).entries.some(e => e.path === 'ignored.txt'));
+    const git = (args: string[]) =>
+      execFileSync('/usr/bin/git', [
+        '-C',
+        f.root,
+        '-c',
+        'user.name=Test',
+        '-c',
+        'user.email=test@example.invalid',
+        ...args,
+      ]);
+    git(['add', '.']);
+    git(['commit', '-qm', 'initial']);
+    writeFileSync(join(f.root, 'file.txt'), 'index');
+    git(['add', '.']);
+    writeFileSync(join(f.root, 'file.txt'), 'working');
+    writeFileSync(join(f.root, '.gitignore'), 'ignored.txt\n');
+    writeFileSync(join(f.root, 'ignored.txt'), 'ignored');
+    const checkout = await f.client.command('openCheckout', { root: f.root });
+    const staged = await f.client.command('readComparison', {
+        target: { checkout, path: 'file.txt' },
+        area: 'staged',
+      }),
+      unstaged = await f.client.command('readComparison', {
+        target: { checkout, path: 'file.txt' },
+        area: 'unstaged',
+      });
+    assert.equal(staged.original, 'HEAD');
+    assert.equal(unstaged.original, 'index');
+    assert.equal(staged.working?.text, 'working');
+    assert.deepEqual(
+      (await f.client.command('gitStatus', { checkout })).changes
+        .filter((c) => c.path === 'file.txt')
+        .map((c) => c.area),
+      ['staged', 'unstaged'],
+    );
+    assert(
+      (await f.client.command('lookupFiles', { checkout, query: 'fltx' })).matches.some(
+        (match) => match.path === 'file.txt',
+      ),
+    );
+    assert(
+      !(
+        await f.client.command('listDirectory', { checkout, path: '', hideIgnored: true })
+      ).entries.some((e) => e.path === 'ignored.txt'),
+    );
     rmSync(join(f.root, 'file.txt'));
-    const deleted = await f.client.command('readComparison', {target: {checkout, path: 'file.txt'}, area: 'unstaged'});
-    assert.equal(deleted.original, 'index'); assert.equal(deleted.working, null);
-  } finally { await f.close(); }
+    const deleted = await f.client.command('readComparison', {
+      target: { checkout, path: 'file.txt' },
+      area: 'unstaged',
+    });
+    assert.equal(deleted.original, 'index');
+    assert.equal(deleted.working, null);
+  } finally {
+    await f.close();
+  }
 });
 
 test('watch notifies external changes, coalesces and disposes independently of file commands', async () => {
-  const f = fixture(); let stop = () => {};
+  const f = fixture();
+  let stop = () => {};
   try {
-    writeFileSync(join(f.root, 'file.txt'), 'before'); const checkout = await f.client.command('openCheckout', {root: f.root});
-    let ready!: () => void, changed!: () => void, count = 0;
-    const readyPromise = new Promise<void>(r => ready = r), changedPromise = new Promise<void>(r => changed = r);
-    stop = f.client.watch({checkout, paths: ['']}, event => { count++; if (event.ready) ready(); else changed(); }, error => { throw error; });
-    await readyPromise; writeFileSync(join(f.root, 'file.txt'), 'external');
-    await Promise.race([changedPromise, new Promise((_, reject) => setTimeout(() => reject(Error('watch timeout')), 2000))]);
-    stop(); await f.runtime.runPromise(Effect.yieldNow); const before = count;
-    writeFileSync(join(f.root, 'file.txt'), 'after disposal'); await new Promise(r => setTimeout(r, 250));
-    assert.equal(count, before); assert.equal((await f.client.command('readFile', {checkout, path: 'file.txt'})).text, 'after disposal');
-  } finally { stop(); await f.close(); }
+    writeFileSync(join(f.root, 'file.txt'), 'before');
+    const checkout = await f.client.command('openCheckout', { root: f.root });
+    let ready!: () => void,
+      changed!: () => void,
+      count = 0;
+    const readyPromise = new Promise<void>((r) => (ready = r)),
+      changedPromise = new Promise<void>((r) => (changed = r));
+    stop = f.client.watch(
+      { checkout, paths: [''] },
+      (event) => {
+        count++;
+        if (event.ready) ready();
+        else changed();
+      },
+      (error) => {
+        throw error;
+      },
+    );
+    await readyPromise;
+    writeFileSync(join(f.root, 'file.txt'), 'external');
+    await Promise.race([
+      changedPromise,
+      new Promise((_, reject) => setTimeout(() => reject(Error('watch timeout')), 2000)),
+    ]);
+    stop();
+    await f.runtime.runPromise(Effect.yieldNow);
+    const before = count;
+    writeFileSync(join(f.root, 'file.txt'), 'after disposal');
+    await new Promise((r) => setTimeout(r, 250));
+    assert.equal(count, before);
+    assert.equal(
+      (await f.client.command('readFile', { checkout, path: 'file.txt' })).text,
+      'after disposal',
+    );
+  } finally {
+    stop();
+    await f.close();
+  }
 });
 
 test('create/copy and scoped native import use actual files; single-use references cannot authorize a later operation', async () => {
   const f = fixture();
   try {
-    const checkout = await f.client.command('openCheckout', {root: f.root});
-    const publish = async (id: string) => { const current = await f.client.command('loadRecovery', {clientId: 'alice'}); await f.client.command('persistRecovery', {requestId: randomUUID(), clientId: 'alice', expectedRevision: current.revision, state: current.state}); await f.client.command('acknowledgeOperation', {clientId: 'alice', operationClientId: 'alice', id}); };
-    assert.equal((await f.client.command('mutate', {id: 'create', clientId: 'alice', checkout, kind: 'create-file', sources: [], destination: 'created.txt', text: 'created'})).outcome, 'completed'); await publish('create');
-    const sources = await f.client.command('inspectEntries', {checkout, paths: ['created.txt']});
-    assert.equal((await f.client.command('mutate', {id: 'copy', clientId: 'alice', checkout, kind: 'copy', sources, destination: 'copy.txt'})).outcome, 'completed'); await publish('copy');
+    const checkout = await f.client.command('openCheckout', { root: f.root });
+    const publish = async (id: string) => {
+      const current = await f.client.command('loadRecovery', { clientId: 'alice' });
+      await f.client.command('persistRecovery', {
+        requestId: randomUUID(),
+        clientId: 'alice',
+        expectedRevision: current.revision,
+        state: current.state,
+      });
+      await f.client.command('acknowledgeOperation', {
+        clientId: 'alice',
+        operationClientId: 'alice',
+        id,
+      });
+    };
+    assert.equal(
+      (
+        await f.client.command('mutate', {
+          id: 'create',
+          clientId: 'alice',
+          checkout,
+          kind: 'create-file',
+          sources: [],
+          destination: 'created.txt',
+          text: 'created',
+        })
+      ).outcome,
+      'completed',
+    );
+    await publish('create');
+    const sources = await f.client.command('inspectEntries', { checkout, paths: ['created.txt'] });
+    assert.equal(
+      (
+        await f.client.command('mutate', {
+          id: 'copy',
+          clientId: 'alice',
+          checkout,
+          kind: 'copy',
+          sources,
+          destination: 'copy.txt',
+        })
+      ).outcome,
+      'completed',
+    );
+    await publish('copy');
     assert.equal(readFileSync(join(f.root, 'copy.txt'), 'utf8'), 'created');
     writeFileSync(join(f.base, 'external.txt'), 'native bytes');
-    const references = await f.runtime.runPromise(Effect.flatMap(WorkspaceNative, native => native.capture({checkout, clientId: 'alice', paths: [join(f.base, 'external.txt')]})));
-    assert.equal((await f.client.command('mutate', {id: 'import', clientId: 'alice', checkout, kind: 'import', sources: [], nativeReferences: references, destination: 'imported.txt'})).outcome, 'completed'); await publish('import');
+    const references = await f.runtime.runPromise(
+      Effect.flatMap(WorkspaceNative, (native) =>
+        native.capture({ checkout, clientId: 'alice', paths: [join(f.base, 'external.txt')] }),
+      ),
+    );
+    assert.equal(
+      (
+        await f.client.command('mutate', {
+          id: 'import',
+          clientId: 'alice',
+          checkout,
+          kind: 'import',
+          sources: [],
+          nativeReferences: references,
+          destination: 'imported.txt',
+        })
+      ).outcome,
+      'completed',
+    );
+    await publish('import');
     assert.equal(readFileSync(join(f.root, 'imported.txt'), 'utf8'), 'native bytes');
-    await assert.rejects(f.client.command('mutate', {id: 'import-again', clientId: 'alice', checkout, kind: 'import', sources: [], nativeReferences: references, destination: 'again.txt'}), rejects('Unauthorized'));
-  } finally { await f.close(); }
+    await assert.rejects(
+      f.client.command('mutate', {
+        id: 'import-again',
+        clientId: 'alice',
+        checkout,
+        kind: 'import',
+        sources: [],
+        nativeReferences: references,
+        destination: 'again.txt',
+      }),
+      rejects('Unauthorized'),
+    );
+  } finally {
+    await f.close();
+  }
 });
 
 test('identical source paths in independent checkout identities never reconcile each other, including restart', async () => {
   const f = fixture();
   try {
-    const root2 = join(f.base, 'repo2'); mkdirSync(root2); execFileSync('/usr/bin/git', ['init', '-q', '-b', 'main', root2]);
+    const root2 = join(f.base, 'repo2');
+    mkdirSync(root2);
+    execFileSync('/usr/bin/git', ['init', '-q', '-b', 'main', root2]);
     for (const root of [f.root, root2]) writeFileSync(join(root, 'file.txt'), 'disk');
-    const a = await f.client.command('openCheckout', {root: f.root}), b = await f.client.command('openCheckout', {root: root2});
-    const disk = await f.client.command('readFile', {checkout: a, path: 'file.txt'});
-    const state = draft('alice', a, 'first', disk); state.checkouts.push(b); state.drafts.push({target: {checkout: b, path: 'file.txt'}, text: 'second', disk});
-    await f.client.command('persistRecovery', {requestId: randomUUID(), clientId: 'alice', expectedRevision: 0, state});
-    const sources = await f.client.command('inspectEntries', {checkout: a, paths: ['file.txt']});
-    const result = await f.client.command('mutate', {id: 'move', clientId: 'alice', checkout: a, kind: 'move', sources, destination: 'moved.txt'});
+    const a = await f.client.command('openCheckout', { root: f.root }),
+      b = await f.client.command('openCheckout', { root: root2 });
+    const disk = await f.client.command('readFile', { checkout: a, path: 'file.txt' });
+    const state = draft('alice', a, 'first', disk);
+    state.checkouts.push(b);
+    state.drafts.push({ target: { checkout: b, path: 'file.txt' }, text: 'second', disk });
+    await f.client.command('persistRecovery', {
+      requestId: randomUUID(),
+      clientId: 'alice',
+      expectedRevision: 0,
+      state,
+    });
+    const sources = await f.client.command('inspectEntries', { checkout: a, paths: ['file.txt'] });
+    const result = await f.client.command('mutate', {
+      id: 'move',
+      clientId: 'alice',
+      checkout: a,
+      kind: 'move',
+      sources,
+      destination: 'moved.txt',
+    });
     assert.deepEqual(result.checkout, a);
-    await f.runtime.dispose(); const restarted = f.start();
+    await f.runtime.dispose();
+    const restarted = f.start();
     try {
-      const restored = await restarted.client.command('loadRecovery', {clientId: 'alice'});
-      assert.deepEqual(restored.state.drafts.map(d => [d.target.checkout.checkoutId, d.target.path, d.text]), [[a.checkoutId, 'moved.txt', 'first'], [b.checkoutId, 'file.txt', 'second']]);
+      const restored = await restarted.client.command('loadRecovery', { clientId: 'alice' });
+      assert.deepEqual(
+        restored.state.drafts.map((d) => [d.target.checkout.checkoutId, d.target.path, d.text]),
+        [
+          [a.checkoutId, 'moved.txt', 'first'],
+          [b.checkoutId, 'file.txt', 'second'],
+        ],
+      );
       assert.deepEqual(restored.operations[0].checkout, a);
-    } finally { await restarted.runtime.dispose(); }
-  } finally { await f.close(); }
-});
-
-test('real SQLite write contention vetoes recovery discard and mutation before any filesystem change', async () => {
-  const {DatabaseSync} = await import('node:sqlite');
-  const f = fixture();
-  try {
-    writeFileSync(join(f.root, 'file.txt'), 'disk'); const checkout = await f.client.command('openCheckout', {root: f.root});
-    const disk = await f.client.command('readFile', {checkout, path: 'file.txt'});
-    await f.client.command('persistRecovery', {requestId: randomUUID(), clientId: 'alice', expectedRevision: 0, state: draft('alice', checkout, 'retained', disk)});
-    const lock = new DatabaseSync(join(f.dataDirectory, 'moonbase-workspace-v1.sqlite'));
-    try {
-      lock.exec('BEGIN IMMEDIATE');
-      await assert.rejects(f.client.command('persistRecovery', {requestId: randomUUID(), clientId: 'alice', expectedRevision: 1, state: emptyRecovery('alice')}), rejects('Persistence'));
-      const sources = await f.client.command('inspectEntries', {checkout, paths: ['file.txt']});
-      await assert.rejects(f.client.command('mutate', {id: 'vetoed', clientId: 'alice', checkout, kind: 'move', sources, destination: 'moved.txt'}));
-      assert.equal(readFileSync(join(f.root, 'file.txt'), 'utf8'), 'disk');
-      assert.equal((await f.client.command('loadRecovery', {clientId: 'alice'})).state.drafts[0].text, 'retained');
-    } finally { lock.exec('ROLLBACK'); lock.close(); }
-  } finally { await f.close(); }
-});
-
-for (const kind of ['move', 'trash'] as const) test(`lost native ${kind} response preserves drafts and restart never repeats the mutation`, async () => {
-  const f = fixture();
-  const {fileURLToPath} = await import('node:url');
-  const binary = fileURLToPath(new URL('../dist/filesystem', import.meta.url));
-  const helper = join(f.base, 'lose-response'), countFile = join(f.base, 'count'), receipt = join(f.base, 'trash-receipt');
-  // Only this controlled helper drops a response after calling the actual production native binary.
-  const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
-  writeFileSync(helper, `#!/bin/sh\nif [ "$1" = ${quote(kind)} ]; then\n  printf 'called\\n' >> ${quote(countFile)}\n  ${quote(binary)} "$@" > ${quote(receipt)}\n  status=$?\n  if [ "$status" -ne 0 ]; then exit "$status"; fi\n  kill -KILL $$\nfi\nexec ${quote(binary)} "$@"\n`); chmodSync(helper, 0o700);
-  const runtime = ManagedRuntime.make(WorkspaceLive({dataDirectory: f.dataDirectory, hostId: 'local-test', filesystemHelper: helper})), client = makeEditorClient(runtime);
-  try {
-    writeFileSync(join(f.root, 'file.txt'), 'disk bytes');
-    const checkout = await client.command('openCheckout', {root: f.root}), disk = await client.command('readFile', {checkout, path: 'file.txt'});
-    await client.command('persistRecovery', {requestId: randomUUID(), clientId: 'alice', expectedRevision: 0, state: draft('alice', checkout, 'dirty survives', disk)});
-    const sources = await client.command('inspectEntries', {checkout, paths: ['file.txt']});
-    const operation = {id: 'lost', clientId: 'alice', checkout, kind, sources, ...(kind === 'move' ? {destination: 'moved.txt'} : {})};
-    const result = await client.command('mutate', operation);
-    assert.equal(result.outcome, 'uncertain'); assert.deepEqual(result.checkout, checkout);
-    assert.equal(readFileSync(countFile, 'utf8'), 'called\n');
-    await runtime.dispose(); const restarted = f.start();
-    try {
-      const recovered = await restarted.client.command('loadRecovery', {clientId: 'alice'});
-      assert.equal(recovered.state.drafts[0].text, 'dirty survives'); assert.deepEqual(recovered.state.drafts[0].disk, disk);
-      assert.equal(recovered.state.drafts[0].target.path, kind === 'move' ? 'moved.txt' : 'file.txt');
-      assert.equal(recovered.operations[0].outcome, kind === 'move' ? 'completed' : 'uncertain');
-      if (kind === 'trash') {
-        assert(recovered.errors.some(e => e.includes('Uncertain')));
-        await assert.rejects(restarted.client.command('acknowledgeOperation', {clientId: 'alice', operationClientId: 'alice', id: 'lost'}));
-      }
-      await restarted.client.command('mutate', operation);
-      assert.equal(readFileSync(countFile, 'utf8'), 'called\n');
-    } finally { await restarted.runtime.dispose(); }
-  } finally {
-    await runtime.dispose();
-    if (kind === 'trash' && existsSync(receipt)) {
-      const trashed = readFileSync(receipt, 'utf8');
-      if (trashed.includes('/.Trash/') && existsSync(trashed)) { assert.equal(readFileSync(trashed, 'utf8'), 'disk bytes'); rmSync(trashed); }
+    } finally {
+      await restarted.runtime.dispose();
     }
+  } finally {
     await f.close();
   }
 });
 
-test('known native Trash keeps another client draft and deliberate replacement uses captured identities', async () => {
-  const f = fixture(); let trashPath = '';
+test('real SQLite write contention vetoes recovery discard and mutation before any filesystem change', async () => {
+  const { DatabaseSync } = await import('node:sqlite');
+  const f = fixture();
   try {
     writeFileSync(join(f.root, 'file.txt'), 'disk');
-    const checkout = await f.client.command('openCheckout', {root: f.root}), disk = await f.client.command('readFile', {checkout, path: 'file.txt'});
-    await f.client.command('persistRecovery', {requestId: randomUUID(), clientId: 'bob', expectedRevision: 0, state: draft('bob', checkout, 'bob survives trash', disk)});
-    const sources = await f.client.command('inspectEntries', {checkout, paths: ['file.txt']});
-    const result = await f.client.command('mutate', {id: 'trash', clientId: 'alice', checkout, kind: 'trash', sources});
-    assert.equal(result.outcome, 'completed'); assert(!existsSync(join(f.root, 'file.txt')));
+    const checkout = await f.client.command('openCheckout', { root: f.root });
+    const disk = await f.client.command('readFile', { checkout, path: 'file.txt' });
+    await f.client.command('persistRecovery', {
+      requestId: randomUUID(),
+      clientId: 'alice',
+      expectedRevision: 0,
+      state: draft('alice', checkout, 'retained', disk),
+    });
+    const lock = new DatabaseSync(join(f.dataDirectory, 'moonbase-workspace-v1.sqlite'));
+    try {
+      lock.exec('BEGIN IMMEDIATE');
+      await assert.rejects(
+        f.client.command('persistRecovery', {
+          requestId: randomUUID(),
+          clientId: 'alice',
+          expectedRevision: 1,
+          state: emptyRecovery('alice'),
+        }),
+        rejects('Persistence'),
+      );
+      const sources = await f.client.command('inspectEntries', { checkout, paths: ['file.txt'] });
+      await assert.rejects(
+        f.client.command('mutate', {
+          id: 'vetoed',
+          clientId: 'alice',
+          checkout,
+          kind: 'move',
+          sources,
+          destination: 'moved.txt',
+        }),
+      );
+      assert.equal(readFileSync(join(f.root, 'file.txt'), 'utf8'), 'disk');
+      assert.equal(
+        (await f.client.command('loadRecovery', { clientId: 'alice' })).state.drafts[0].text,
+        'retained',
+      );
+    } finally {
+      lock.exec('ROLLBACK');
+      lock.close();
+    }
+  } finally {
+    await f.close();
+  }
+});
+
+for (const kind of ['move', 'trash'] as const)
+  test(`lost native ${kind} response preserves drafts and restart never repeats the mutation`, async () => {
+    const f = fixture();
+    const { fileURLToPath } = await import('node:url');
+    const binary = fileURLToPath(new URL('../dist/filesystem', import.meta.url));
+    const helper = join(f.base, 'lose-response'),
+      countFile = join(f.base, 'count'),
+      receipt = join(f.base, 'trash-receipt');
+    // Only this controlled helper drops a response after calling the actual production native binary.
+    const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
+    writeFileSync(
+      helper,
+      `#!/bin/sh\nif [ "$1" = ${quote(kind)} ]; then\n  printf 'called\\n' >> ${quote(countFile)}\n  ${quote(binary)} "$@" > ${quote(receipt)}\n  status=$?\n  if [ "$status" -ne 0 ]; then exit "$status"; fi\n  kill -KILL $$\nfi\nexec ${quote(binary)} "$@"\n`,
+    );
+    chmodSync(helper, 0o700);
+    const runtime = ManagedRuntime.make(
+        WorkspaceLive({
+          dataDirectory: f.dataDirectory,
+          hostId: 'local-test',
+          filesystemHelper: helper,
+        }),
+      ),
+      client = makeEditorClient(runtime);
+    try {
+      writeFileSync(join(f.root, 'file.txt'), 'disk bytes');
+      const checkout = await client.command('openCheckout', { root: f.root }),
+        disk = await client.command('readFile', { checkout, path: 'file.txt' });
+      await client.command('persistRecovery', {
+        requestId: randomUUID(),
+        clientId: 'alice',
+        expectedRevision: 0,
+        state: draft('alice', checkout, 'dirty survives', disk),
+      });
+      const sources = await client.command('inspectEntries', { checkout, paths: ['file.txt'] });
+      const operation = {
+        id: 'lost',
+        clientId: 'alice',
+        checkout,
+        kind,
+        sources,
+        ...(kind === 'move' ? { destination: 'moved.txt' } : {}),
+      };
+      const result = await client.command('mutate', operation);
+      assert.equal(result.outcome, 'uncertain');
+      assert.deepEqual(result.checkout, checkout);
+      assert.equal(readFileSync(countFile, 'utf8'), 'called\n');
+      await runtime.dispose();
+      const restarted = f.start();
+      try {
+        const recovered = await restarted.client.command('loadRecovery', { clientId: 'alice' });
+        assert.equal(recovered.state.drafts[0].text, 'dirty survives');
+        assert.deepEqual(recovered.state.drafts[0].disk, disk);
+        assert.equal(
+          recovered.state.drafts[0].target.path,
+          kind === 'move' ? 'moved.txt' : 'file.txt',
+        );
+        assert.equal(recovered.operations[0].outcome, kind === 'move' ? 'completed' : 'uncertain');
+        if (kind === 'trash') {
+          assert(recovered.errors.some((e) => e.includes('Uncertain')));
+          await assert.rejects(
+            restarted.client.command('acknowledgeOperation', {
+              clientId: 'alice',
+              operationClientId: 'alice',
+              id: 'lost',
+            }),
+          );
+        }
+        await restarted.client.command('mutate', operation);
+        assert.equal(readFileSync(countFile, 'utf8'), 'called\n');
+      } finally {
+        await restarted.runtime.dispose();
+      }
+    } finally {
+      await runtime.dispose();
+      if (kind === 'trash' && existsSync(receipt)) {
+        const trashed = readFileSync(receipt, 'utf8');
+        if (trashed.includes('/.Trash/') && existsSync(trashed)) {
+          assert.equal(readFileSync(trashed, 'utf8'), 'disk bytes');
+          rmSync(trashed);
+        }
+      }
+      await f.close();
+    }
+  });
+
+test('known native Trash keeps another client draft and deliberate replacement uses captured identities', async () => {
+  const f = fixture();
+  let trashPath = '';
+  try {
+    writeFileSync(join(f.root, 'file.txt'), 'disk');
+    const checkout = await f.client.command('openCheckout', { root: f.root }),
+      disk = await f.client.command('readFile', { checkout, path: 'file.txt' });
+    await f.client.command('persistRecovery', {
+      requestId: randomUUID(),
+      clientId: 'bob',
+      expectedRevision: 0,
+      state: draft('bob', checkout, 'bob survives trash', disk),
+    });
+    const sources = await f.client.command('inspectEntries', { checkout, paths: ['file.txt'] });
+    const result = await f.client.command('mutate', {
+      id: 'trash',
+      clientId: 'alice',
+      checkout,
+      kind: 'trash',
+      sources,
+    });
+    assert.equal(result.outcome, 'completed');
+    assert(!existsSync(join(f.root, 'file.txt')));
     trashPath = result.items[0].message!.replace('macOS Trash: ', '');
-    assert.equal((await f.client.command('loadRecovery', {clientId: 'bob'})).state.drafts[0].text, 'bob survives trash');
-  } finally { if (trashPath.includes('/.Trash/') && existsSync(trashPath)) rmSync(trashPath); await f.close(); }
+    assert.equal(
+      (await f.client.command('loadRecovery', { clientId: 'bob' })).state.drafts[0].text,
+      'bob survives trash',
+    );
+  } finally {
+    if (trashPath.includes('/.Trash/') && existsSync(trashPath)) rmSync(trashPath);
+    await f.close();
+  }
 });
 
 test('lookup honors nested ignore policies, ranks and highlights all pieces, quotes contiguous text, and keeps history separate', async () => {
   const f = fixture();
   try {
     for (const p of ['src', 'nested', 'node_modules']) mkdirSync(join(f.root, p));
-    const files = ['src/FooBar.test.ts', 'src/foo-baz.ts', 'nested/hidden.ts', 'nested/keep.ts', 'node_modules/dep.ts', 'ignored.ts', 'rg-hidden.ts'];
-    files.forEach(p => writeFileSync(join(f.root, p), p));
-    writeFileSync(join(f.root, '.gitignore'), 'ignored.ts\n'); writeFileSync(join(f.root, '.ignore'), 'rg-hidden.ts\n'); writeFileSync(join(f.root, 'nested/.rgignore'), 'hidden.ts\n');
-    const checkout = await f.client.command('openCheckout', {root: f.root});
-    const all = await f.client.command('lookupFiles', {checkout, query: 'ts'});
-    assert(!all.partial, all.error ?? 'Unexpected partial discovery'); assert(all.matches.some(m => m.path === 'nested/keep.ts'));
-    for (const hidden of ['nested/hidden.ts', 'node_modules/dep.ts', 'ignored.ts', 'rg-hidden.ts']) assert(!all.matches.some(m => m.path === hidden));
-    const pieces = await f.client.command('lookupFiles', {checkout, query: 'FB ts'});
+    const files = [
+      'src/FooBar.test.ts',
+      'src/foo-baz.ts',
+      'nested/hidden.ts',
+      'nested/keep.ts',
+      'node_modules/dep.ts',
+      'ignored.ts',
+      'rg-hidden.ts',
+    ];
+    files.forEach((p) => writeFileSync(join(f.root, p), p));
+    writeFileSync(join(f.root, '.gitignore'), 'ignored.ts\n');
+    writeFileSync(join(f.root, '.ignore'), 'rg-hidden.ts\n');
+    writeFileSync(join(f.root, 'nested/.rgignore'), 'hidden.ts\n');
+    const checkout = await f.client.command('openCheckout', { root: f.root });
+    const all = await f.client.command('lookupFiles', { checkout, query: 'ts' });
+    assert(!all.partial, all.error ?? 'Unexpected partial discovery');
+    assert(all.matches.some((m) => m.path === 'nested/keep.ts'));
+    for (const hidden of ['nested/hidden.ts', 'node_modules/dep.ts', 'ignored.ts', 'rg-hidden.ts'])
+      assert(!all.matches.some((m) => m.path === hidden));
+    const pieces = await f.client.command('lookupFiles', { checkout, query: 'FB ts' });
     assert.equal(pieces.matches[0].path, 'src/FooBar.test.ts');
-    assert.deepEqual(pieces.matches[0].positions.map(p => pieces.matches[0].path[p]).join(''), 'FBts');
-    assert.equal((await f.client.command('lookupFiles', {checkout, query: 'FB nonexistent'})).matches.length, 0);
-    assert.equal((await f.client.command('lookupFiles', {checkout, query: '"FooBar"'})).matches[0].path, 'src/FooBar.test.ts');
-    assert.equal((await f.client.command('lookupFiles', {checkout, query: '"FB"'})).matches.length, 0);
-    const history = ['node_modules/dep.ts', 'missing.ts', 'node_modules/dep.ts', 'src/FooBar.test.ts'];
-    const recent = await f.client.command('lookupFiles', {checkout, query: 'ts', history});
-    assert.equal(recent.history.filter(m => m.path === 'node_modules/dep.ts').length, 1);
-    assert(recent.history.some(m => m.path === 'missing.ts')); assert(!recent.matches.some(m => history.includes(m.path)));
-    assert.equal((await f.client.command('lookupFiles', {checkout, query: '', history})).matches.length, 0);
-    assert.equal((await f.client.command('lookupFiles', {checkout, query: 'node_modules/dep.ts'})).matches[0].path, 'node_modules/dep.ts');
-    assert((await f.client.command('lookupFiles', {checkout, query: 'ts', limit: 1})).partial);
-    await assert.rejects(f.client.command('lookupFiles', {checkout, query: 'ts', history: ['../outside']}), rejects('InvalidInput'));
-    writeFileSync(join(f.base, 'outside-ignore'), '*\n'); rmSync(join(f.root, '.ignore')); symlinkSync(join(f.base, 'outside-ignore'), join(f.root, '.ignore'));
-    const unavailable = await f.client.command('lookupFiles', {checkout, query: 'ts'});
-    assert(unavailable.partial && unavailable.error); assert.equal(unavailable.matches.length, 0);
-  } finally { await f.close(); }
+    assert.deepEqual(
+      pieces.matches[0].positions.map((p) => pieces.matches[0].path[p]).join(''),
+      'FBts',
+    );
+    assert.equal(
+      (await f.client.command('lookupFiles', { checkout, query: 'FB nonexistent' })).matches.length,
+      0,
+    );
+    assert.equal(
+      (await f.client.command('lookupFiles', { checkout, query: '"FooBar"' })).matches[0].path,
+      'src/FooBar.test.ts',
+    );
+    assert.equal(
+      (await f.client.command('lookupFiles', { checkout, query: '"FB"' })).matches.length,
+      0,
+    );
+    const history = [
+      'node_modules/dep.ts',
+      'missing.ts',
+      'node_modules/dep.ts',
+      'src/FooBar.test.ts',
+    ];
+    const recent = await f.client.command('lookupFiles', { checkout, query: 'ts', history });
+    assert.equal(recent.history.filter((m) => m.path === 'node_modules/dep.ts').length, 1);
+    assert(recent.history.some((m) => m.path === 'missing.ts'));
+    assert(!recent.matches.some((m) => history.includes(m.path)));
+    assert.equal(
+      (await f.client.command('lookupFiles', { checkout, query: '', history })).matches.length,
+      0,
+    );
+    assert.equal(
+      (await f.client.command('lookupFiles', { checkout, query: 'node_modules/dep.ts' })).matches[0]
+        .path,
+      'node_modules/dep.ts',
+    );
+    assert((await f.client.command('lookupFiles', { checkout, query: 'ts', limit: 1 })).partial);
+    await assert.rejects(
+      f.client.command('lookupFiles', { checkout, query: 'ts', history: ['../outside'] }),
+      rejects('InvalidInput'),
+    );
+    writeFileSync(join(f.base, 'outside-ignore'), '*\n');
+    rmSync(join(f.root, '.ignore'));
+    symlinkSync(join(f.base, 'outside-ignore'), join(f.root, '.ignore'));
+    const unavailable = await f.client.command('lookupFiles', { checkout, query: 'ts' });
+    assert(unavailable.partial && unavailable.error);
+    assert.equal(unavailable.matches.length, 0);
+  } finally {
+    await f.close();
+  }
 });
 
 test('unsubscribe during pending workspace/watch acquisition and concurrent runtime disposal release all native watchers', async () => {
   const f = fixture();
   try {
-    const checkout = await f.client.command('openCheckout', {root: f.root});
-    const before = process.getActiveResourcesInfo().filter(name => name === 'FSEventWrap').length;
-    let delivered = 0; const errors: unknown[] = [];
-    const stops = Array.from({length: 16}, () => f.client.watch({checkout, paths: ['']}, () => delivered++, error => errors.push(error)));
-    stops.forEach(stop => stop());
-    await f.runtime.dispose(); await new Promise(resolve => setTimeout(resolve, 100));
-    assert.equal(delivered, 0); assert.equal(errors.length, 0);
-    assert.equal(process.getActiveResourcesInfo().filter(name => name === 'FSEventWrap').length, before);
-  } finally { await f.close(); }
+    const checkout = await f.client.command('openCheckout', { root: f.root });
+    const before = process.getActiveResourcesInfo().filter((name) => name === 'FSEventWrap').length;
+    let delivered = 0;
+    const errors: unknown[] = [];
+    const stops = Array.from({ length: 16 }, () =>
+      f.client.watch(
+        { checkout, paths: [''] },
+        () => delivered++,
+        (error) => errors.push(error),
+      ),
+    );
+    stops.forEach((stop) => stop());
+    await f.runtime.dispose();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(delivered, 0);
+    assert.equal(errors.length, 0);
+    assert.equal(
+      process.getActiveResourcesInfo().filter((name) => name === 'FSEventWrap').length,
+      before,
+    );
+  } finally {
+    await f.close();
+  }
 });
 
 test('filesystem success followed by real SQLite publication failure stays observable and retry publishes without repeating mutation', async () => {
-  const {DatabaseSync} = await import('node:sqlite'), {fileURLToPath} = await import('node:url');
-  const f = fixture(), helper = join(f.base, 'pause-after-move'), ready = join(f.base, 'ready'), release = join(f.base, 'release'), count = join(f.base, 'count');
+  const { DatabaseSync } = await import('node:sqlite'),
+    { fileURLToPath } = await import('node:url');
+  const f = fixture(),
+    helper = join(f.base, 'pause-after-move'),
+    ready = join(f.base, 'ready'),
+    release = join(f.base, 'release'),
+    count = join(f.base, 'count');
   const binary = fileURLToPath(new URL('../dist/filesystem', import.meta.url));
   const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
-  writeFileSync(helper, `#!/bin/sh\nif [ "$1" = move ]; then\n printf 'called\\n' >> ${quote(count)}\n ${quote(binary)} "$@" || exit $?\n /usr/bin/touch ${quote(ready)}\n while [ ! -e ${quote(release)} ]; do /bin/sleep 0.01; done\n exit 0\nfi\nexec ${quote(binary)} "$@"\n`); chmodSync(helper, 0o700);
-  const runtime = ManagedRuntime.make(WorkspaceLive({dataDirectory: f.dataDirectory, hostId: 'local-test', filesystemHelper: helper})), client = makeEditorClient(runtime);
+  writeFileSync(
+    helper,
+    `#!/bin/sh\nif [ "$1" = move ]; then\n printf 'called\\n' >> ${quote(count)}\n ${quote(binary)} "$@" || exit $?\n /usr/bin/touch ${quote(ready)}\n while [ ! -e ${quote(release)} ]; do /bin/sleep 0.01; done\n exit 0\nfi\nexec ${quote(binary)} "$@"\n`,
+  );
+  chmodSync(helper, 0o700);
+  const runtime = ManagedRuntime.make(
+      WorkspaceLive({
+        dataDirectory: f.dataDirectory,
+        hostId: 'local-test',
+        filesystemHelper: helper,
+      }),
+    ),
+    client = makeEditorClient(runtime);
   try {
-    writeFileSync(join(f.root, 'file.txt'), 'disk'); const checkout = await client.command('openCheckout', {root: f.root});
-    const disk = await client.command('readFile', {checkout, path: 'file.txt'});
-    await client.command('persistRecovery', {requestId: randomUUID(), clientId: 'alice', expectedRevision: 0, state: draft('alice', checkout, 'retained dirty', disk)});
-    const sources = await client.command('inspectEntries', {checkout, paths: ['file.txt']});
-    const operation = {id: 'publication', clientId: 'alice', checkout, kind: 'move' as const, sources, destination: 'moved.txt'};
+    writeFileSync(join(f.root, 'file.txt'), 'disk');
+    const checkout = await client.command('openCheckout', { root: f.root });
+    const disk = await client.command('readFile', { checkout, path: 'file.txt' });
+    await client.command('persistRecovery', {
+      requestId: randomUUID(),
+      clientId: 'alice',
+      expectedRevision: 0,
+      state: draft('alice', checkout, 'retained dirty', disk),
+    });
+    const sources = await client.command('inspectEntries', { checkout, paths: ['file.txt'] });
+    const operation = {
+      id: 'publication',
+      clientId: 'alice',
+      checkout,
+      kind: 'move' as const,
+      sources,
+      destination: 'moved.txt',
+    };
     const pending = client.command('mutate', operation);
-    const deadline = Date.now() + 3000; while (!existsSync(ready)) { assert(Date.now() < deadline, 'native operation did not reach pause'); await new Promise(r => setTimeout(r, 10)); }
+    const deadline = Date.now() + 3000;
+    while (!existsSync(ready)) {
+      assert(Date.now() < deadline, 'native operation did not reach pause');
+      await new Promise((r) => setTimeout(r, 10));
+    }
     const lock = new DatabaseSync(join(f.dataDirectory, 'moonbase-workspace-v1.sqlite'));
     try {
-      lock.exec('BEGIN IMMEDIATE'); writeFileSync(release, 'resume'); const result = await pending;
-      assert(result.message?.includes('publication failed')); assert.equal(result.items[0].outcome, 'completed'); assert.equal(readFileSync(join(f.root, 'moved.txt'), 'utf8'), 'disk');
-    } finally { lock.exec('ROLLBACK'); lock.close(); }
-    const recovered = await client.command('loadRecovery', {clientId: 'alice'});
-    assert.equal(recovered.state.drafts[0].target.path, 'moved.txt'); assert.equal(recovered.state.drafts[0].text, 'retained dirty');
-    assert.equal((await client.command('mutate', operation)).outcome, 'completed'); assert.equal(readFileSync(count, 'utf8'), 'called\n');
-  } finally { writeFileSync(release, 'resume'); await runtime.dispose(); await f.close(); }
+      lock.exec('BEGIN IMMEDIATE');
+      writeFileSync(release, 'resume');
+      const result = await pending;
+      assert(result.message?.includes('publication failed'));
+      assert.equal(result.items[0].outcome, 'completed');
+      assert.equal(readFileSync(join(f.root, 'moved.txt'), 'utf8'), 'disk');
+    } finally {
+      lock.exec('ROLLBACK');
+      lock.close();
+    }
+    const recovered = await client.command('loadRecovery', { clientId: 'alice' });
+    assert.equal(recovered.state.drafts[0].target.path, 'moved.txt');
+    assert.equal(recovered.state.drafts[0].text, 'retained dirty');
+    assert.equal((await client.command('mutate', operation)).outcome, 'completed');
+    assert.equal(readFileSync(count, 'utf8'), 'called\n');
+  } finally {
+    writeFileSync(release, 'resume');
+    await runtime.dispose();
+    await f.close();
+  }
 });
 
 test('one client Save never rebases another client dirty baseline, including restart and newer-revision stale publication', async () => {
   const f = fixture();
   try {
     writeFileSync(join(f.root, 'file.txt'), 'original');
-    const checkout = await f.client.command('openCheckout', {root: f.root}), target = {checkout, path: 'file.txt'}, disk = await f.client.command('readFile', target);
-    for (const clientId of ['alice', 'bob']) await f.client.command('persistRecovery', {requestId: randomUUID(), clientId, expectedRevision: 0, state: draft(clientId, checkout, 'same dirty text', disk)});
-    await f.client.command('saveFile', {target, clientId: 'alice', requestId: 'own-save', text: 'same dirty text', expectedVersion: disk.version});
-    const bob = await f.client.command('loadRecovery', {clientId: 'bob'});
-    assert.deepEqual(bob.state.drafts[0].disk, disk); assert.equal(bob.revision, 1);
-    const newer = structuredClone(bob.state); newer.drafts[0].text = 'newer bob edit';
-    await f.client.command('persistRecovery', {requestId: randomUUID(), clientId: 'bob', expectedRevision: 1, state: newer});
-    await assert.rejects(f.client.command('persistRecovery', {requestId: randomUUID(), clientId: 'bob', expectedRevision: 1, state: bob.state}), rejects('Conflict'));
-    await f.runtime.dispose(); const restarted = f.start();
+    const checkout = await f.client.command('openCheckout', { root: f.root }),
+      target = { checkout, path: 'file.txt' },
+      disk = await f.client.command('readFile', target);
+    for (const clientId of ['alice', 'bob'])
+      await f.client.command('persistRecovery', {
+        requestId: randomUUID(),
+        clientId,
+        expectedRevision: 0,
+        state: draft(clientId, checkout, 'same dirty text', disk),
+      });
+    await f.client.command('saveFile', {
+      target,
+      clientId: 'alice',
+      requestId: 'own-save',
+      text: 'same dirty text',
+      expectedVersion: disk.version,
+    });
+    const bob = await f.client.command('loadRecovery', { clientId: 'bob' });
+    assert.deepEqual(bob.state.drafts[0].disk, disk);
+    assert.equal(bob.revision, 1);
+    const newer = structuredClone(bob.state);
+    newer.drafts[0].text = 'newer bob edit';
+    await f.client.command('persistRecovery', {
+      requestId: randomUUID(),
+      clientId: 'bob',
+      expectedRevision: 1,
+      state: newer,
+    });
+    await assert.rejects(
+      f.client.command('persistRecovery', {
+        requestId: randomUUID(),
+        clientId: 'bob',
+        expectedRevision: 1,
+        state: bob.state,
+      }),
+      rejects('Conflict'),
+    );
+    await f.runtime.dispose();
+    const restarted = f.start();
     try {
-      const restored = await restarted.client.command('loadRecovery', {clientId: 'bob'});
-      assert.equal(restored.state.drafts[0].text, 'newer bob edit'); assert.deepEqual(restored.state.drafts[0].disk, disk);
-      const result = await restarted.client.command('saveFile', {target, clientId: 'bob', requestId: 'bob-save', text: 'newer bob edit', expectedVersion: restored.state.drafts[0].disk.version});
-      assert.equal(result.kind, 'conflict'); assert.equal(result.disk.text, 'same dirty text'); assert.equal(readFileSync(join(f.root, 'file.txt'), 'utf8'), 'same dirty text');
-    } finally { await restarted.runtime.dispose(); }
-  } finally { await f.close(); }
+      const restored = await restarted.client.command('loadRecovery', { clientId: 'bob' });
+      assert.equal(restored.state.drafts[0].text, 'newer bob edit');
+      assert.deepEqual(restored.state.drafts[0].disk, disk);
+      const result = await restarted.client.command('saveFile', {
+        target,
+        clientId: 'bob',
+        requestId: 'bob-save',
+        text: 'newer bob edit',
+        expectedVersion: restored.state.drafts[0].disk.version,
+      });
+      assert.equal(result.kind, 'conflict');
+      assert.equal(result.disk.text, 'same dirty text');
+      assert.equal(readFileSync(join(f.root, 'file.txt'), 'utf8'), 'same dirty text');
+    } finally {
+      await restarted.runtime.dispose();
+    }
+  } finally {
+    await f.close();
+  }
 });
 
 test('unavailable persistence and real filesystem file-size exhaustion report typed errors and retain existing recovery', async () => {
-  const {fileURLToPath} = await import('node:url');
+  const { fileURLToPath } = await import('node:url');
   const f = fixture();
   try {
-    const notDirectory = join(f.base, 'not-directory'); writeFileSync(notDirectory, 'existing bytes');
-    const unavailable = ManagedRuntime.make(WorkspaceLive({hostId: 'unavailable', dataDirectory: notDirectory}));
-    try { await assert.rejects(makeEditorClient(unavailable).command('loadRecovery', {clientId: 'alice'}), rejects('Persistence')); }
-    finally { await unavailable.dispose(); }
+    const notDirectory = join(f.base, 'not-directory');
+    writeFileSync(notDirectory, 'existing bytes');
+    const unavailable = ManagedRuntime.make(
+      WorkspaceLive({ hostId: 'unavailable', dataDirectory: notDirectory }),
+    );
+    try {
+      await assert.rejects(
+        makeEditorClient(unavailable).command('loadRecovery', { clientId: 'alice' }),
+        rejects('Persistence'),
+      );
+    } finally {
+      await unavailable.dispose();
+    }
     assert.equal(readFileSync(notDirectory, 'utf8'), 'existing bytes');
     writeFileSync(join(f.root, 'file.txt'), 'disk');
-    const output = execFileSync('/bin/sh', ['-c', 'ulimit -f 128; exec "$@"', 'size-limited-workspace', process.execPath, '--experimental-strip-types', fileURLToPath(new URL('./persistence-limit.fixture.ts', import.meta.url)), f.root, join(f.base, 'limited-state')], {encoding: 'utf8', timeout: 10000});
+    const output = execFileSync(
+      '/bin/sh',
+      [
+        '-c',
+        'ulimit -f 128; exec "$@"',
+        'size-limited-workspace',
+        process.execPath,
+        '--experimental-strip-types',
+        fileURLToPath(new URL('./persistence-limit.fixture.ts', import.meta.url)),
+        f.root,
+        join(f.base, 'limited-state'),
+      ],
+      { encoding: 'utf8', timeout: 10000 },
+    );
     assert(output.includes('original recovery retained'));
-  } finally { await f.close(); }
+  } finally {
+    await f.close();
+  }
 });
 
 test('batch move reports partial success and explicit replacement revalidates the captured destination', async () => {
-  const f = fixture(); const trashPaths: string[] = [];
+  const f = fixture();
+  const trashPaths: string[] = [];
   try {
-    mkdirSync(join(f.root, 'target')); writeFileSync(join(f.root, 'first'), 'first'); writeFileSync(join(f.root, 'second'), 'second'); writeFileSync(join(f.root, 'target/second'), 'occupied');
-    const checkout = await f.client.command('openCheckout', {root: f.root});
-    const sources = await f.client.command('inspectEntries', {checkout, paths: ['first', 'second']});
-    const partial = await f.client.command('mutate', {id: 'partial', clientId: 'alice', checkout, kind: 'move', sources, destination: 'target'});
-    assert.equal(partial.outcome, 'failed'); assert.deepEqual(partial.items.map(item => item.outcome), ['completed', 'failed']);
-    assert.equal(readFileSync(join(f.root, 'target/first'), 'utf8'), 'first'); assert.equal(readFileSync(join(f.root, 'second'), 'utf8'), 'second');
-    const load = await f.client.command('loadRecovery', {clientId: 'alice'}); await f.client.command('persistRecovery', {requestId: randomUUID(), clientId: 'alice', expectedRevision: load.revision, state: load.state}); await f.client.command('acknowledgeOperation', {clientId: 'alice', operationClientId: 'alice', id: 'partial'});
-    const remaining = await f.client.command('inspectEntries', {checkout, paths: ['second']}), replacements = await f.client.command('inspectEntries', {checkout, paths: ['target/second']});
-    renameSync(join(f.root, 'target/second'), join(f.root, 'old-occupied')); writeFileSync(join(f.root, 'target/second'), 'replacement changed');
-    await assert.rejects(f.client.command('mutate', {id: 'stale-replacement', clientId: 'alice', checkout, kind: 'move', sources: remaining, replacements, destination: 'target/second'}), rejects('Conflict'));
+    mkdirSync(join(f.root, 'target'));
+    writeFileSync(join(f.root, 'first'), 'first');
+    writeFileSync(join(f.root, 'second'), 'second');
+    writeFileSync(join(f.root, 'target/second'), 'occupied');
+    const checkout = await f.client.command('openCheckout', { root: f.root });
+    const sources = await f.client.command('inspectEntries', {
+      checkout,
+      paths: ['first', 'second'],
+    });
+    const partial = await f.client.command('mutate', {
+      id: 'partial',
+      clientId: 'alice',
+      checkout,
+      kind: 'move',
+      sources,
+      destination: 'target',
+    });
+    assert.equal(partial.outcome, 'failed');
+    assert.deepEqual(
+      partial.items.map((item) => item.outcome),
+      ['completed', 'failed'],
+    );
+    assert.equal(readFileSync(join(f.root, 'target/first'), 'utf8'), 'first');
+    assert.equal(readFileSync(join(f.root, 'second'), 'utf8'), 'second');
+    const load = await f.client.command('loadRecovery', { clientId: 'alice' });
+    await f.client.command('persistRecovery', {
+      requestId: randomUUID(),
+      clientId: 'alice',
+      expectedRevision: load.revision,
+      state: load.state,
+    });
+    await f.client.command('acknowledgeOperation', {
+      clientId: 'alice',
+      operationClientId: 'alice',
+      id: 'partial',
+    });
+    const remaining = await f.client.command('inspectEntries', { checkout, paths: ['second'] }),
+      replacements = await f.client.command('inspectEntries', {
+        checkout,
+        paths: ['target/second'],
+      });
+    renameSync(join(f.root, 'target/second'), join(f.root, 'old-occupied'));
+    writeFileSync(join(f.root, 'target/second'), 'replacement changed');
+    await assert.rejects(
+      f.client.command('mutate', {
+        id: 'stale-replacement',
+        clientId: 'alice',
+        checkout,
+        kind: 'move',
+        sources: remaining,
+        replacements,
+        destination: 'target/second',
+      }),
+      rejects('Conflict'),
+    );
     assert.equal(readFileSync(join(f.root, 'target/second'), 'utf8'), 'replacement changed');
-    const fresh = await f.client.command('inspectEntries', {checkout, paths: ['target/second']});
-    const replaced = await f.client.command('mutate', {id: 'replacement', clientId: 'alice', checkout, kind: 'move', sources: remaining, replacements: fresh, destination: 'target/second'});
-    assert.equal(replaced.outcome, 'completed'); assert.equal(readFileSync(join(f.root, 'target/second'), 'utf8'), 'second');
+    const fresh = await f.client.command('inspectEntries', { checkout, paths: ['target/second'] });
+    const replaced = await f.client.command('mutate', {
+      id: 'replacement',
+      clientId: 'alice',
+      checkout,
+      kind: 'move',
+      sources: remaining,
+      replacements: fresh,
+      destination: 'target/second',
+    });
+    assert.equal(replaced.outcome, 'completed');
+    assert.equal(readFileSync(join(f.root, 'target/second'), 'utf8'), 'second');
     // The production result exposes actual native Trash location for ordinary Trash; replacement preserves bytes there too.
-    const replacementTrash = replaced.items.find(item => item.destination === undefined)!;
+    const replacementTrash = replaced.items.find((item) => item.destination === undefined)!;
     assert.equal(replacementTrash.outcome, 'completed');
     const trashed = replacementTrash.message!.slice(replacementTrash.message!.indexOf('/'));
-    assert(trashed.includes('/.Trash/')); trashPaths.push(trashed); assert.equal(readFileSync(trashed, 'utf8'), 'replacement changed');
-  } finally { trashPaths.forEach(p => { if (p.includes('/.Trash/') && existsSync(p)) rmSync(p); }); await f.close(); }
+    assert(trashed.includes('/.Trash/'));
+    trashPaths.push(trashed);
+    assert.equal(readFileSync(trashed, 'utf8'), 'replacement changed');
+  } finally {
+    trashPaths.forEach((p) => {
+      if (p.includes('/.Trash/') && existsSync(p)) rmSync(p);
+    });
+    await f.close();
+  }
 });
 
 test('native assets in packaged resource paths run with restricted PATH and no provider startup dependency', async () => {
-  const {fileURLToPath} = await import('node:url'), {copyFileSync} = await import('node:fs');
+  const { fileURLToPath } = await import('node:url'),
+    { copyFileSync } = await import('node:fs');
   const f = fixture();
   try {
-    const resources = join(f.base, 'Packaged Resources'); mkdirSync(resources);
-    const filesystem = join(resources, 'filesystem'), rg = join(resources, 'ripgrep');
-    copyFileSync(fileURLToPath(new URL('../dist/filesystem', import.meta.url)), filesystem); chmodSync(filesystem, 0o700);
-    const installed = process.env.MOONBASE_TEST_RIPGREP ?? execFileSync('/bin/sh', ['-c', 'command -v rg'], {encoding: 'utf8'}).trim();
-    copyFileSync(installed, rg); chmodSync(rg, 0o700);
+    const resources = join(f.base, 'Packaged Resources');
+    mkdirSync(resources);
+    const filesystem = join(resources, 'filesystem'),
+      rg = join(resources, 'ripgrep');
+    copyFileSync(fileURLToPath(new URL('../dist/filesystem', import.meta.url)), filesystem);
+    chmodSync(filesystem, 0o700);
+    const installed =
+      process.env.MOONBASE_TEST_RIPGREP ??
+      execFileSync('/bin/sh', ['-c', 'command -v rg'], { encoding: 'utf8' }).trim();
+    copyFileSync(installed, rg);
+    chmodSync(rg, 0o700);
     writeFileSync(join(f.root, 'file.txt'), 'disk');
-    const output = execFileSync(process.execPath, ['--experimental-strip-types', fileURLToPath(new URL('./packaged-assets.fixture.ts', import.meta.url)), f.root, f.dataDirectory, filesystem, rg], {env: {...process.env, PATH: '/usr/bin:/bin'}, encoding: 'utf8', timeout: 10000});
-    assert(output.includes('Independent workspace assets passed')); assert.equal(readFileSync(join(f.root, 'file.txt'), 'utf8'), 'saved from isolated assets');
-  } finally { await f.close(); }
+    const output = execFileSync(
+      process.execPath,
+      [
+        '--experimental-strip-types',
+        fileURLToPath(new URL('./packaged-assets.fixture.ts', import.meta.url)),
+        f.root,
+        f.dataDirectory,
+        filesystem,
+        rg,
+      ],
+      { env: { ...process.env, PATH: '/usr/bin:/bin' }, encoding: 'utf8', timeout: 10000 },
+    );
+    assert(output.includes('Independent workspace assets passed'));
+    assert.equal(readFileSync(join(f.root, 'file.txt'), 'utf8'), 'saved from isolated assets');
+  } finally {
+    await f.close();
+  }
 });
 
 test('cancelling admitted native copy is typed, preserves source and leaves unrelated file queries usable', async () => {
-  const {fileURLToPath} = await import('node:url');
-  const f = fixture(), helper = join(f.base, 'slow-copy'), ready = join(f.base, 'copy-ready');
+  const { fileURLToPath } = await import('node:url');
+  const f = fixture(),
+    helper = join(f.base, 'slow-copy'),
+    ready = join(f.base, 'copy-ready');
   const binary = fileURLToPath(new URL('../dist/filesystem', import.meta.url));
   const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
-  writeFileSync(helper, `#!/bin/sh\nif [ "$1" = copy ]; then\n /usr/bin/touch ${quote(ready)}\n while :; do /bin/sleep 0.05; done\nfi\nexec ${quote(binary)} "$@"\n`); chmodSync(helper, 0o700);
-  const runtime = ManagedRuntime.make(WorkspaceLive({dataDirectory: f.dataDirectory, hostId: 'local-test', filesystemHelper: helper})), client = makeEditorClient(runtime), abort = new AbortController();
+  writeFileSync(
+    helper,
+    `#!/bin/sh\nif [ "$1" = copy ]; then\n /usr/bin/touch ${quote(ready)}\n while :; do /bin/sleep 0.05; done\nfi\nexec ${quote(binary)} "$@"\n`,
+  );
+  chmodSync(helper, 0o700);
+  const runtime = ManagedRuntime.make(
+      WorkspaceLive({
+        dataDirectory: f.dataDirectory,
+        hostId: 'local-test',
+        filesystemHelper: helper,
+      }),
+    ),
+    client = makeEditorClient(runtime),
+    abort = new AbortController();
   try {
-    writeFileSync(join(f.root, 'file.txt'), 'source survives'); writeFileSync(join(f.root, 'unrelated.txt'), 'unrelated original'); const checkout = await client.command('openCheckout', {root: f.root});
-    const sources = await client.command('inspectEntries', {checkout, paths: ['file.txt']});
-    const pending = client.command('mutate', {id: 'cancel-copy', clientId: 'alice', checkout, kind: 'copy', sources, destination: 'copy.txt'}, {signal: abort.signal});
+    writeFileSync(join(f.root, 'file.txt'), 'source survives');
+    writeFileSync(join(f.root, 'unrelated.txt'), 'unrelated original');
+    const checkout = await client.command('openCheckout', { root: f.root });
+    const sources = await client.command('inspectEntries', { checkout, paths: ['file.txt'] });
+    const pending = client.command(
+      'mutate',
+      {
+        id: 'cancel-copy',
+        clientId: 'alice',
+        checkout,
+        kind: 'copy',
+        sources,
+        destination: 'copy.txt',
+      },
+      { signal: abort.signal },
+    );
     const rejected = assert.rejects(pending, rejects('Cancelled'));
-    const deadline = Date.now() + 3000; while (!existsSync(ready)) { assert(Date.now() < deadline); await new Promise(resolve => setTimeout(resolve, 10)); }
-    assert.equal((await client.command('readFile', {checkout, path: 'file.txt'})).text, 'source survives');
-    const unrelated = {checkout, path: 'unrelated.txt'}, baseline = await client.command('readFile', unrelated);
-    assert.equal((await client.command('saveFile', {target: unrelated, clientId: 'bob', requestId: 'unrelated-save', text: 'unrelated saved', expectedVersion: baseline.version})).kind, 'saved');
-    abort.abort(); await rejected; await runtime.dispose();
-    assert.equal(readFileSync(join(f.root, 'file.txt'), 'utf8'), 'source survives'); assert(!existsSync(join(f.root, 'copy.txt')));
+    const deadline = Date.now() + 3000;
+    while (!existsSync(ready)) {
+      assert(Date.now() < deadline);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(
+      (await client.command('readFile', { checkout, path: 'file.txt' })).text,
+      'source survives',
+    );
+    const unrelated = { checkout, path: 'unrelated.txt' },
+      baseline = await client.command('readFile', unrelated);
+    assert.equal(
+      (
+        await client.command('saveFile', {
+          target: unrelated,
+          clientId: 'bob',
+          requestId: 'unrelated-save',
+          text: 'unrelated saved',
+          expectedVersion: baseline.version,
+        })
+      ).kind,
+      'saved',
+    );
+    abort.abort();
+    await rejected;
+    await runtime.dispose();
+    assert.equal(readFileSync(join(f.root, 'file.txt'), 'utf8'), 'source survives');
+    assert(!existsSync(join(f.root, 'copy.txt')));
     const restarted = f.start();
-    try { assert.equal((await restarted.client.command('operationStatus', {clientId: 'alice', id: 'cancel-copy'}))?.outcome, 'uncertain'); }
-    finally { await restarted.runtime.dispose(); }
-  } finally { abort.abort(); await runtime.dispose(); await f.close(); }
-});
-
-for (const kind of ['move', 'copy'] as const) test(`origin acknowledgement cannot hide ${kind} evidence from another observer; each observer publishes/acknowledges independently`, async () => {
-  const f = fixture();
-  try {
-    writeFileSync(join(f.root, 'file.txt'), 'original'); const checkout = await f.client.command('openCheckout', {root: f.root});
-    const disk = await f.client.command('readFile', {checkout, path: 'file.txt'});
-    for (const clientId of ['alice', 'bob']) await f.client.command('persistRecovery', {requestId: randomUUID(), clientId, expectedRevision: 0, state: draft(clientId, checkout, clientId + ' dirty', disk)});
-    const sources = await f.client.command('inspectEntries', {checkout, paths: ['file.txt']});
-    const operation = {id: 'foreign-fact', clientId: 'alice', checkout, kind, sources, destination: 'destination.txt'};
-    const result = await f.client.command('mutate', operation);
-    assert.equal(result.clientId, 'alice'); assert.equal(result.outcome, 'completed');
-    assert.deepEqual(result.recoveryChanges, [{clientId: 'alice', previousRevision: 1, revision: 2}, {clientId: 'bob', previousRevision: 1, revision: 2}]);
-    const alice = await f.client.command('loadRecovery', {clientId: 'alice'});
-    await f.client.command('persistRecovery', {requestId: randomUUID(), clientId: 'alice', expectedRevision: 2, state: alice.state});
-    await f.client.command('acknowledgeOperation', {clientId: 'alice', operationClientId: 'alice', id: result.id});
-    await f.runtime.dispose(); const restarted = f.start();
     try {
-      const bob = await restarted.client.command('loadRecovery', {clientId: 'bob'});
-      assert.equal(bob.operations.length, 1); assert.deepEqual(bob.operations[0], result);
-      for (const d of bob.state.drafts) { assert.equal(d.text, 'bob dirty'); assert.deepEqual(d.disk, disk); }
-      assert(bob.state.drafts.some(d => d.target.path === 'destination.txt'));
-      await assert.rejects(restarted.client.command('acknowledgeOperation', {clientId: 'bob', operationClientId: 'alice', id: result.id}), rejects('Persistence'));
-      await restarted.client.command('persistRecovery', {requestId: randomUUID(), clientId: 'bob', expectedRevision: 2, state: bob.state});
-      await restarted.client.command('acknowledgeOperation', {clientId: 'bob', operationClientId: 'alice', id: result.id});
-      assert.equal((await restarted.client.command('loadRecovery', {clientId: 'bob'})).operations.length, 0);
-      assert.equal((await restarted.client.command('loadRecovery', {clientId: 'alice'})).operations.length, 0);
-      assert.deepEqual(await restarted.client.command('mutate', operation), result);
-      assert.equal((await restarted.client.command('loadRecovery', {clientId: 'bob'})).revision, 3);
-    } finally { await restarted.runtime.dispose(); }
-  } finally { await f.close(); }
+      assert.equal(
+        (
+          await restarted.client.command('operationStatus', {
+            clientId: 'alice',
+            id: 'cancel-copy',
+          })
+        )?.outcome,
+        'uncertain',
+      );
+    } finally {
+      await restarted.runtime.dispose();
+    }
+  } finally {
+    abort.abort();
+    await runtime.dispose();
+    await f.close();
+  }
 });
 
-for (const kind of ['save', 'move'] as const) test(`own ${kind} receipt exposes a competing same-client publication gap and retry does not write again`, async () => {
-  const {fileURLToPath} = await import('node:url');
-  const f = fixture(), helper = join(f.base, 'pause-effect'), ready = join(f.base, 'effect-ready'), release = join(f.base, 'effect-release'), count = join(f.base, 'effect-count');
-  const binary = fileURLToPath(new URL('../dist/filesystem', import.meta.url)), operationName = kind === 'save' ? 'replace' : 'move';
-  const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
-  writeFileSync(helper, `#!/bin/sh\nif [ "$1" = ${quote(operationName)} ]; then\n printf 'called\\n' >> ${quote(count)}\n /usr/bin/touch ${quote(ready)}\n while [ ! -e ${quote(release)} ]; do /bin/sleep 0.01; done\nfi\nexec ${quote(binary)} "$@"\n`); chmodSync(helper, 0o700);
-  const runtime = ManagedRuntime.make(WorkspaceLive({dataDirectory: f.dataDirectory, hostId: 'local-test', filesystemHelper: helper})), client = makeEditorClient(runtime);
-  try {
-    writeFileSync(join(f.root, 'file.txt'), 'original'); const checkout = await client.command('openCheckout', {root: f.root}), target = {checkout, path: 'file.txt'};
-    const disk = await client.command('readFile', target), initial = draft('alice', checkout, 'captured local edit', disk);
-    await client.command('persistRecovery', {requestId: randomUUID(), clientId: 'alice', expectedRevision: 0, state: initial});
-    const sources = await client.command('inspectEntries', {checkout, paths: ['file.txt']});
-    const operation = {id: 'gap', clientId: 'alice', checkout, kind: 'move' as const, sources, destination: 'moved.txt'}, save = {target, clientId: 'alice', requestId: 'gap', text: 'captured local edit', expectedVersion: disk.version};
-    const pending = kind === 'save' ? client.command('saveFile', save) : client.command('mutate', operation);
-    const deadline = Date.now() + 3000; while (!existsSync(ready)) { assert(Date.now() < deadline); await new Promise(r => setTimeout(r, 10)); }
-    const competing = structuredClone(initial); competing.drafts[0].text = 'newer competing client edit';
-    await client.command('persistRecovery', {requestId: randomUUID(), clientId: 'alice', expectedRevision: 1, state: competing});
-    writeFileSync(release, 'resume'); const result = await pending;
-    assert('recoveryChanges' in result); assert.deepEqual(result.recoveryChanges, [{clientId: 'alice', previousRevision: 2, revision: 3}]);
-    // A controller still at revision 1 cannot advance along the receipt beginning at 2.
-    assert.notEqual(result.recoveryChanges[0].previousRevision, 1);
-    await assert.rejects(client.command('persistRecovery', {requestId: randomUUID(), clientId: 'alice', expectedRevision: 1, state: initial}), rejects('Conflict'));
-    const retained = await client.command('loadRecovery', {clientId: 'alice'});
-    assert.equal(retained.revision, 3); assert.equal(retained.state.drafts[0].text, 'newer competing client edit');
-    const again = kind === 'save' ? await client.command('saveFile', save) : await client.command('mutate', operation);
-    assert.deepEqual(again, result); assert.equal((await client.command('loadRecovery', {clientId: 'alice'})).revision, 3); assert.equal(readFileSync(count, 'utf8'), 'called\n');
-  } finally { writeFileSync(release, 'resume'); await runtime.dispose(); await f.close(); }
-});
+for (const kind of ['move', 'copy'] as const)
+  test(`origin acknowledgement cannot hide ${kind} evidence from another observer; each observer publishes/acknowledges independently`, async () => {
+    const f = fixture();
+    try {
+      writeFileSync(join(f.root, 'file.txt'), 'original');
+      const checkout = await f.client.command('openCheckout', { root: f.root });
+      const disk = await f.client.command('readFile', { checkout, path: 'file.txt' });
+      for (const clientId of ['alice', 'bob'])
+        await f.client.command('persistRecovery', {
+          requestId: randomUUID(),
+          clientId,
+          expectedRevision: 0,
+          state: draft(clientId, checkout, clientId + ' dirty', disk),
+        });
+      const sources = await f.client.command('inspectEntries', { checkout, paths: ['file.txt'] });
+      const operation = {
+        id: 'foreign-fact',
+        clientId: 'alice',
+        checkout,
+        kind,
+        sources,
+        destination: 'destination.txt',
+      };
+      const result = await f.client.command('mutate', operation);
+      assert.equal(result.clientId, 'alice');
+      assert.equal(result.outcome, 'completed');
+      assert.deepEqual(result.recoveryChanges, [
+        { clientId: 'alice', previousRevision: 1, revision: 2 },
+        { clientId: 'bob', previousRevision: 1, revision: 2 },
+      ]);
+      const alice = await f.client.command('loadRecovery', { clientId: 'alice' });
+      await f.client.command('persistRecovery', {
+        requestId: randomUUID(),
+        clientId: 'alice',
+        expectedRevision: 2,
+        state: alice.state,
+      });
+      await f.client.command('acknowledgeOperation', {
+        clientId: 'alice',
+        operationClientId: 'alice',
+        id: result.id,
+      });
+      await f.runtime.dispose();
+      const restarted = f.start();
+      try {
+        const bob = await restarted.client.command('loadRecovery', { clientId: 'bob' });
+        assert.equal(bob.operations.length, 1);
+        assert.deepEqual(bob.operations[0], result);
+        for (const d of bob.state.drafts) {
+          assert.equal(d.text, 'bob dirty');
+          assert.deepEqual(d.disk, disk);
+        }
+        assert(bob.state.drafts.some((d) => d.target.path === 'destination.txt'));
+        await assert.rejects(
+          restarted.client.command('acknowledgeOperation', {
+            clientId: 'bob',
+            operationClientId: 'alice',
+            id: result.id,
+          }),
+          rejects('Persistence'),
+        );
+        await restarted.client.command('persistRecovery', {
+          requestId: randomUUID(),
+          clientId: 'bob',
+          expectedRevision: 2,
+          state: bob.state,
+        });
+        await restarted.client.command('acknowledgeOperation', {
+          clientId: 'bob',
+          operationClientId: 'alice',
+          id: result.id,
+        });
+        assert.equal(
+          (await restarted.client.command('loadRecovery', { clientId: 'bob' })).operations.length,
+          0,
+        );
+        assert.equal(
+          (await restarted.client.command('loadRecovery', { clientId: 'alice' })).operations.length,
+          0,
+        );
+        assert.deepEqual(await restarted.client.command('mutate', operation), result);
+        assert.equal(
+          (await restarted.client.command('loadRecovery', { clientId: 'bob' })).revision,
+          3,
+        );
+      } finally {
+        await restarted.runtime.dispose();
+      }
+    } finally {
+      await f.close();
+    }
+  });
+
+for (const kind of ['save', 'move'] as const)
+  test(`own ${kind} receipt exposes a competing same-client publication gap and retry does not write again`, async () => {
+    const { fileURLToPath } = await import('node:url');
+    const f = fixture(),
+      helper = join(f.base, 'pause-effect'),
+      ready = join(f.base, 'effect-ready'),
+      release = join(f.base, 'effect-release'),
+      count = join(f.base, 'effect-count');
+    const binary = fileURLToPath(new URL('../dist/filesystem', import.meta.url)),
+      operationName = kind === 'save' ? 'replace' : 'move';
+    const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
+    writeFileSync(
+      helper,
+      `#!/bin/sh\nif [ "$1" = ${quote(operationName)} ]; then\n printf 'called\\n' >> ${quote(count)}\n /usr/bin/touch ${quote(ready)}\n while [ ! -e ${quote(release)} ]; do /bin/sleep 0.01; done\nfi\nexec ${quote(binary)} "$@"\n`,
+    );
+    chmodSync(helper, 0o700);
+    const runtime = ManagedRuntime.make(
+        WorkspaceLive({
+          dataDirectory: f.dataDirectory,
+          hostId: 'local-test',
+          filesystemHelper: helper,
+        }),
+      ),
+      client = makeEditorClient(runtime);
+    try {
+      writeFileSync(join(f.root, 'file.txt'), 'original');
+      const checkout = await client.command('openCheckout', { root: f.root }),
+        target = { checkout, path: 'file.txt' };
+      const disk = await client.command('readFile', target),
+        initial = draft('alice', checkout, 'captured local edit', disk);
+      await client.command('persistRecovery', {
+        requestId: randomUUID(),
+        clientId: 'alice',
+        expectedRevision: 0,
+        state: initial,
+      });
+      const sources = await client.command('inspectEntries', { checkout, paths: ['file.txt'] });
+      const operation = {
+          id: 'gap',
+          clientId: 'alice',
+          checkout,
+          kind: 'move' as const,
+          sources,
+          destination: 'moved.txt',
+        },
+        save = {
+          target,
+          clientId: 'alice',
+          requestId: 'gap',
+          text: 'captured local edit',
+          expectedVersion: disk.version,
+        };
+      const pending =
+        kind === 'save' ? client.command('saveFile', save) : client.command('mutate', operation);
+      const deadline = Date.now() + 3000;
+      while (!existsSync(ready)) {
+        assert(Date.now() < deadline);
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      const competing = structuredClone(initial);
+      competing.drafts[0].text = 'newer competing client edit';
+      await client.command('persistRecovery', {
+        requestId: randomUUID(),
+        clientId: 'alice',
+        expectedRevision: 1,
+        state: competing,
+      });
+      writeFileSync(release, 'resume');
+      const result = await pending;
+      assert('recoveryChanges' in result);
+      assert.deepEqual(result.recoveryChanges, [
+        { clientId: 'alice', previousRevision: 2, revision: 3 },
+      ]);
+      // A controller still at revision 1 cannot advance along the receipt beginning at 2.
+      assert.notEqual(result.recoveryChanges[0].previousRevision, 1);
+      await assert.rejects(
+        client.command('persistRecovery', {
+          requestId: randomUUID(),
+          clientId: 'alice',
+          expectedRevision: 1,
+          state: initial,
+        }),
+        rejects('Conflict'),
+      );
+      const retained = await client.command('loadRecovery', { clientId: 'alice' });
+      assert.equal(retained.revision, 3);
+      assert.equal(retained.state.drafts[0].text, 'newer competing client edit');
+      const again =
+        kind === 'save'
+          ? await client.command('saveFile', save)
+          : await client.command('mutate', operation);
+      assert.deepEqual(again, result);
+      assert.equal((await client.command('loadRecovery', { clientId: 'alice' })).revision, 3);
+      assert.equal(readFileSync(count, 'utf8'), 'called\n');
+    } finally {
+      writeFileSync(release, 'resume');
+      await runtime.dispose();
+      await f.close();
+    }
+  });
 
 test('batch move can target the checkout root and preserves exact captured identities', async () => {
   const f = fixture();
   try {
-    mkdirSync(join(f.root, 'folder')); writeFileSync(join(f.root, 'folder/one'), 'one'); writeFileSync(join(f.root, 'folder/two'), 'two');
-    const checkout = await f.client.command('openCheckout', {root: f.root}), sources = await f.client.command('inspectEntries', {checkout, paths: ['folder/one', 'folder/two']});
-    const result = await f.client.command('mutate', {id: 'root-batch', clientId: 'alice', checkout, kind: 'move', sources, destination: ''});
-    assert.equal(result.outcome, 'completed'); assert.equal(readFileSync(join(f.root, 'one'), 'utf8'), 'one'); assert.equal(readFileSync(join(f.root, 'two'), 'utf8'), 'two');
-  } finally { await f.close(); }
+    mkdirSync(join(f.root, 'folder'));
+    writeFileSync(join(f.root, 'folder/one'), 'one');
+    writeFileSync(join(f.root, 'folder/two'), 'two');
+    const checkout = await f.client.command('openCheckout', { root: f.root }),
+      sources = await f.client.command('inspectEntries', {
+        checkout,
+        paths: ['folder/one', 'folder/two'],
+      });
+    const result = await f.client.command('mutate', {
+      id: 'root-batch',
+      clientId: 'alice',
+      checkout,
+      kind: 'move',
+      sources,
+      destination: '',
+    });
+    assert.equal(result.outcome, 'completed');
+    assert.equal(readFileSync(join(f.root, 'one'), 'utf8'), 'one');
+    assert.equal(readFileSync(join(f.root, 'two'), 'utf8'), 'two');
+  } finally {
+    await f.close();
+  }
 });
 
 test('save rejects a replaced staging object and never publishes or removes the impostor', async () => {
-  const {fileURLToPath} = await import('node:url');
-  const f = fixture(), helper = join(f.base, 'swap-save-stage'), stageRecord = join(f.base, 'stage-path');
+  const { fileURLToPath } = await import('node:url');
+  const f = fixture(),
+    helper = join(f.base, 'swap-save-stage'),
+    stageRecord = join(f.base, 'stage-path');
   const binary = fileURLToPath(new URL('../dist/filesystem', import.meta.url));
   const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
-  writeFileSync(helper, `#!/bin/sh\nif [ "$1" = stage ]; then\n ${quote(binary)} "$@" || exit $?\n stage=${quote(f.root + '/')}"$3"\n printf '%s' "$stage" > ${quote(stageRecord)}\n /bin/mv "$stage" "$stage-retained"\n printf 'impostor bytes' > "$stage"\n exit 0\nfi\nexec ${quote(binary)} "$@"\n`); chmodSync(helper, 0o700);
-  const runtime = ManagedRuntime.make(WorkspaceLive({dataDirectory: f.dataDirectory, hostId: 'local-test', filesystemHelper: helper})), client = makeEditorClient(runtime);
+  writeFileSync(
+    helper,
+    `#!/bin/sh\nif [ "$1" = stage ]; then\n ${quote(binary)} "$@" || exit $?\n stage=${quote(f.root + '/')}"$3"\n printf '%s' "$stage" > ${quote(stageRecord)}\n /bin/mv "$stage" "$stage-retained"\n printf 'impostor bytes' > "$stage"\n exit 0\nfi\nexec ${quote(binary)} "$@"\n`,
+  );
+  chmodSync(helper, 0o700);
+  const runtime = ManagedRuntime.make(
+      WorkspaceLive({
+        dataDirectory: f.dataDirectory,
+        hostId: 'local-test',
+        filesystemHelper: helper,
+      }),
+    ),
+    client = makeEditorClient(runtime);
   try {
-    writeFileSync(join(f.root, 'file.txt'), 'original'); const checkout = await client.command('openCheckout', {root: f.root}), target = {checkout, path: 'file.txt'}, disk = await client.command('readFile', target);
-    await assert.rejects(client.command('saveFile', {target, clientId: 'alice', requestId: 'stage-swap', text: 'intended bytes', expectedVersion: disk.version}), rejects('Uncertain'));
+    writeFileSync(join(f.root, 'file.txt'), 'original');
+    const checkout = await client.command('openCheckout', { root: f.root }),
+      target = { checkout, path: 'file.txt' },
+      disk = await client.command('readFile', target);
+    await assert.rejects(
+      client.command('saveFile', {
+        target,
+        clientId: 'alice',
+        requestId: 'stage-swap',
+        text: 'intended bytes',
+        expectedVersion: disk.version,
+      }),
+      rejects('Uncertain'),
+    );
     const stage = readFileSync(stageRecord, 'utf8');
-    assert.equal(readFileSync(join(f.root, 'file.txt'), 'utf8'), 'original'); assert.equal(readFileSync(stage, 'utf8'), 'impostor bytes'); assert.equal(readFileSync(stage + '-retained', 'utf8'), 'intended bytes');
-  } finally { await runtime.dispose(); await f.close(); }
+    assert.equal(readFileSync(join(f.root, 'file.txt'), 'utf8'), 'original');
+    assert.equal(readFileSync(stage, 'utf8'), 'impostor bytes');
+    assert.equal(readFileSync(stage + '-retained', 'utf8'), 'intended bytes');
+  } finally {
+    await runtime.dispose();
+    await f.close();
+  }
 });
 
 test('restart recovers the admitted Save text even when no earlier draft publication existed', async () => {
-  const {fileURLToPath} = await import('node:url');
-  const f = fixture(), helper = join(f.base, 'interrupt-save');
+  const { fileURLToPath } = await import('node:url');
+  const f = fixture(),
+    helper = join(f.base, 'interrupt-save');
   const binary = fileURLToPath(new URL('../dist/filesystem', import.meta.url));
   const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
-  writeFileSync(helper, `#!/bin/sh\nif [ "$1" = stage ]; then kill -KILL $$; fi\nexec ${quote(binary)} "$@"\n`); chmodSync(helper, 0o700);
-  const runtime = ManagedRuntime.make(WorkspaceLive({dataDirectory: f.dataDirectory, hostId: 'local-test', filesystemHelper: helper})), client = makeEditorClient(runtime);
+  writeFileSync(
+    helper,
+    `#!/bin/sh\nif [ "$1" = stage ]; then kill -KILL $$; fi\nexec ${quote(binary)} "$@"\n`,
+  );
+  chmodSync(helper, 0o700);
+  const runtime = ManagedRuntime.make(
+      WorkspaceLive({
+        dataDirectory: f.dataDirectory,
+        hostId: 'local-test',
+        filesystemHelper: helper,
+      }),
+    ),
+    client = makeEditorClient(runtime);
   try {
-    writeFileSync(join(f.root, 'file.txt'), 'original'); const checkout = await client.command('openCheckout', {root: f.root}), target = {checkout, path: 'file.txt'}, disk = await client.command('readFile', target);
-    const save = {target, clientId: 'alice', requestId: 'interrupted-save', text: 'admitted unsaved text', expectedVersion: disk.version};
-    await assert.rejects(client.command('saveFile', save), rejects('Uncertain')); await runtime.dispose();
+    writeFileSync(join(f.root, 'file.txt'), 'original');
+    const checkout = await client.command('openCheckout', { root: f.root }),
+      target = { checkout, path: 'file.txt' },
+      disk = await client.command('readFile', target);
+    const save = {
+      target,
+      clientId: 'alice',
+      requestId: 'interrupted-save',
+      text: 'admitted unsaved text',
+      expectedVersion: disk.version,
+    };
+    await assert.rejects(client.command('saveFile', save), rejects('Uncertain'));
+    await runtime.dispose();
     const restarted = f.start();
     try {
-      const restored = await restarted.client.command('loadRecovery', {clientId: 'alice'});
-      assert.equal(restored.state.drafts[0].text, 'admitted unsaved text'); assert.deepEqual(restored.state.drafts[0].disk, disk);
+      const restored = await restarted.client.command('loadRecovery', { clientId: 'alice' });
+      assert.equal(restored.state.drafts[0].text, 'admitted unsaved text');
+      assert.deepEqual(restored.state.drafts[0].disk, disk);
       assert.equal(readFileSync(join(f.root, 'file.txt'), 'utf8'), 'original');
       await assert.rejects(restarted.client.command('saveFile', save), rejects('Uncertain'));
-      await restarted.client.command('persistRecovery', {requestId: randomUUID(), clientId: 'alice', expectedRevision: restored.revision, state: {...restored.state, openCheckoutIds: [checkout.checkoutId]}});
-      await restarted.client.command('loadRecovery', {clientId: 'alice'});
+      await restarted.client.command('persistRecovery', {
+        requestId: randomUUID(),
+        clientId: 'alice',
+        expectedRevision: restored.revision,
+        state: { ...restored.state, openCheckoutIds: [checkout.checkoutId] },
+      });
+      await restarted.client.command('loadRecovery', { clientId: 'alice' });
       assert.equal((await restarted.client.command('saveFile', save)).kind, 'conflict');
-      assert.equal((await restarted.client.command('loadRecovery', {clientId: 'alice'})).revision, restored.revision + 1);
-    } finally { await restarted.runtime.dispose(); }
-  } finally { await runtime.dispose(); await f.close(); }
+      assert.equal(
+        (await restarted.client.command('loadRecovery', { clientId: 'alice' })).revision,
+        restored.revision + 1,
+      );
+    } finally {
+      await restarted.runtime.dispose();
+    }
+  } finally {
+    await runtime.dispose();
+    await f.close();
+  }
 });
 
 test('restart counts transfer and Trash results by structure regardless of display wording', async () => {
   const f = fixture();
   try {
     writeFileSync(join(f.root, 'source'), 'bytes');
-    const checkout = await f.client.command('openCheckout', {root: f.root});
-    const sources = await f.client.command('inspectEntries', {checkout, paths: ['source']});
+    const checkout = await f.client.command('openCheckout', { root: f.root });
+    const sources = await f.client.command('inspectEntries', { checkout, paths: ['source'] });
     await f.runtime.dispose();
     const db = new DatabaseSync(join(f.dataDirectory, 'moonbase-workspace-v1.sqlite'));
     try {
       for (const kind of ['move', 'trash'] as const) {
-        const items = kind === 'move'
-          ? [{source: 'destination', outcome: 'completed', message: 'Replacement retained in Trash.'}, {source: 'source', destination: 'destination', outcome: 'completed', message: 'Explicit replacement wording is display only.'}]
-          : [{source: 'source', outcome: 'completed', message: 'Explicit replacement wording is display only.'}];
-        const record = {input: {id: kind, clientId: 'alice', checkout, kind, sources, ...(kind === 'move' ? {destination: 'destination'} : {})}, publicationRevisions: {}, acknowledgedBy: [],
-          result: {id: kind, clientId: 'alice', checkout, kind, outcome: 'uncertain', items, recoveryChanges: []}};
-        db.prepare('INSERT INTO records VALUES(?,?,?)').run('operations', createHash('sha256').update(JSON.stringify(['alice', kind])).digest('hex'), JSON.stringify(record));
+        const items =
+          kind === 'move'
+            ? [
+                {
+                  source: 'destination',
+                  outcome: 'completed',
+                  message: 'Replacement retained in Trash.',
+                },
+                {
+                  source: 'source',
+                  destination: 'destination',
+                  outcome: 'completed',
+                  message: 'Explicit replacement wording is display only.',
+                },
+              ]
+            : [
+                {
+                  source: 'source',
+                  outcome: 'completed',
+                  message: 'Explicit replacement wording is display only.',
+                },
+              ];
+        const record = {
+          input: {
+            id: kind,
+            clientId: 'alice',
+            checkout,
+            kind,
+            sources,
+            ...(kind === 'move' ? { destination: 'destination' } : {}),
+          },
+          publicationRevisions: {},
+          acknowledgedBy: [],
+          result: {
+            id: kind,
+            clientId: 'alice',
+            checkout,
+            kind,
+            outcome: 'uncertain',
+            items,
+            recoveryChanges: [],
+          },
+        };
+        db.prepare('INSERT INTO records VALUES(?,?,?)').run(
+          'operations',
+          createHash('sha256')
+            .update(JSON.stringify(['alice', kind]))
+            .digest('hex'),
+          JSON.stringify(record),
+        );
       }
-    } finally { db.close(); }
+    } finally {
+      db.close();
+    }
     const restarted = f.start();
     try {
-      const loaded = await restarted.client.command('loadRecovery', {clientId: 'alice'});
+      const loaded = await restarted.client.command('loadRecovery', { clientId: 'alice' });
       assert.equal(loaded.operations.length, 2);
-      assert(loaded.operations.every(result => result.outcome === 'completed'));
-    } finally { await restarted.runtime.dispose(); }
-  } finally { await f.close(); }
+      assert(loaded.operations.every((result) => result.outcome === 'completed'));
+    } finally {
+      await restarted.runtime.dispose();
+    }
+  } finally {
+    await f.close();
+  }
 });

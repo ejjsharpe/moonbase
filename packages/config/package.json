@@ -1,0 +1,30 @@
+{
+  "name": "@moonbase/config",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./oxlint": "./oxlint.mjs",
+    "./oxfmt": "./oxfmt.json",
+    "./typescript/base.json": "./typescript/base.json"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "nx": {
+    "targets": {
+      "test": {
+        "inputs": [
+          "default",
+          "{workspaceRoot}/oxlint.config.mts",
+          "{workspaceRoot}/oxfmt.config.mts",
+          {
+            "externalDependencies": [
+              "oxlint",
+              "oxfmt"
+            ]
+          }
+        ]
+      }
+    }
+  }
+}
