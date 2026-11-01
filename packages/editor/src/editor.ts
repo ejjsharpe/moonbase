@@ -8,10 +8,8 @@ import {
 
 import { readOwn, writeOwn } from "./record.ts";
 
-export const checkoutKey = (target: CheckoutTarget) => JSON.stringify([
-  target.hostId, target.checkoutId, target.projectId, target.root, target.branch,
-]);
-export const fileKey = (target: FileTarget) => JSON.stringify([checkoutKey(target.checkout), target.path]);
+import { checkoutKey, fileKey, moveRecoveryReferences } from "./references.ts";
+export { checkoutKey, fileKey } from "./references.ts";
 const sameCheckout = (a: CheckoutTarget, b: CheckoutTarget) => checkoutKey(a) === checkoutKey(b);
 const operationKey = (clientId: string, id: string) => JSON.stringify([clientId, id]);
 const deferObservation = Symbol("defer recovery observation");
@@ -247,7 +245,9 @@ export class EditorController {
     this.report("Recovery publication PENDING/UNCERTAIN. Resolve its exact identity before Save, Reload, file operations, Close or Quit.");
     return true;
   }
-  private publish(state: EditorRecovery, onConfirmed?: () => Promise<void>, kind: "close" | "reload" = "close", before?: () => void, savedRequests: string[] = []) {
+  private publish(state: EditorRecovery, { onConfirmed, kind = "close", before, savedRequests = [] }: {
+    onConfirmed?: () => Promise<void>; kind?: "close" | "reload"; before?: () => void; savedRequests?: string[];
+  } = {}) {
     const captured = structuredClone(state), captureRevision = this.captureRevision;
     this.publications++; this.emit();
     const next = this.recoveryTail.catch(() => {}).then(async () => {
@@ -439,7 +439,7 @@ export class EditorController {
       const disk = await this.command("readFile", captured);
       guard();
       const state = this.capture(); state.drafts = state.drafts.filter(item => fileKey(item.target) !== key);
-      await this.publish(state, async () => {
+      await this.publish(state, { onConfirmed: async () => {
         if (sameBuffer()) {
           buffer.disk = disk; buffer.text = disk.text; buffer.conflict = undefined;
           if (readOwn(this.checkout(captured.checkout).fileViews, captured.path) === "conflict") {
@@ -448,7 +448,7 @@ export class EditorController {
           }
         } else this.report("Reload committed for its original target; a changed live buffer was retained.");
         await this.releasePreservation();
-      }, "reload", guard);
+      }, kind: "reload", before: guard });
       return true;
     } finally { if (this.preserving && !this.pendingPublication?.onConfirmed) await this.releasePreservation(); }
   }
@@ -476,11 +476,8 @@ export class EditorController {
     selected.openFiles.splice(Math.max(0, Math.min(to, selected.openFiles.length)), 0, from);
     this.keepOpen({ checkout, path: from }); this.changed();
   }
-  navigate(checkout: CheckoutTarget, direction: 1 | -1, order: "visual" | "recent" = "visual") {
-    const selected = this.checkout(checkout);
-    const paths = order === "visual" ? selected.openFiles : [...new Set([
-      ...this.recovery.recentFiles.filter(item => sameCheckout(item.checkout, checkout)).map(item => item.path), ...selected.openFiles,
-    ])].filter(path => selected.openFiles.includes(path));
+  navigate(checkout: CheckoutTarget, direction: 1 | -1) {
+    const selected = this.checkout(checkout), paths = selected.openFiles;
     if (!paths.length) return Promise.resolve(false);
     const next = (paths.indexOf(selected.active) + direction + paths.length) % paths.length;
     return this.open({ checkout, path: paths[next] });
@@ -565,7 +562,7 @@ export class EditorController {
         }
         await this.releasePreservation();
       };
-      await this.publish(state, commitClose);
+      await this.publish(state, { onConfirmed: commitClose });
       return true;
     } catch (error) { this.report(error); return committed; }
     finally {
@@ -796,7 +793,7 @@ export class EditorController {
           this.revision = transition.revision;
         }
         if (!facts.length && !changes.length && !savedRequests.length && !forcePublication) return;
-        await this.publish(this.capture(savedRequests), undefined, "close", check, savedRequests);
+        await this.publish(this.capture(savedRequests), { before: check, savedRequests });
         check();
         for (const fact of facts) if (fact.outcome !== "uncertain" && reconciled.has(operationKey(fact.clientId, fact.id))) {
           await this.command("acknowledgeOperation", { clientId: this.clientId, operationClientId: fact.clientId, id: fact.id });
@@ -826,20 +823,12 @@ export class EditorController {
       return false;
     }
     this.referenceRevision++;
-    const selected = this.checkout(checkout, false);
+    this.checkout(checkout, false);
     for (const [key, buffer] of [...this.buffers]) if (sameCheckout(buffer.target.checkout, checkout) && affected(buffer.target.path, source)) {
       this.buffers.delete(key); this.comparisonAttempts.delete(key); buffer.target = { checkout, path: move(buffer.target.path) }; this.buffers.set(fileKey(buffer.target), buffer);
       if (this.comparisons[key]) { this.comparisons[fileKey(buffer.target)] = this.comparisons[key]; delete this.comparisons[key]; }
     }
-    selected.openFiles = [...new Set(selected.openFiles.map(move))]; selected.active = move(selected.active);
-    if (selected.preview) selected.preview = move(selected.preview);
-    const movedViews = Object.entries(selected.fileViews).sort(([a], [b]) => Number(affected(b, source)) - Number(affected(a, source)));
-    const movedPositions = Object.entries(selected.positions).sort(([a], [b]) => Number(affected(b, source)) - Number(affected(a, source)));
-    selected.fileViews = Object.fromEntries(movedViews.map(([path, mode]) => [move(path), mode]));
-    selected.positions = Object.fromEntries(movedPositions.map(([path, positions]) => [move(path), positions]));
-    selected.tree.expanded = [...new Set(selected.tree.expanded.map(move))]; selected.tree.selected = [...new Set(selected.tree.selected.map(move))]; selected.tree.focus = move(selected.tree.focus);
-    const recentFiles = this.recovery.recentFiles.map(item => sameCheckout(item.checkout, checkout) ? { checkout, path: move(item.path) } : item);
-    this.recovery.recentFiles = [...new Map(recentFiles.map(item => [fileKey(item), item])).values()];
+    moveRecoveryReferences(this.recovery, checkout, source, destination);
     for (const action of this.history) if (sameCheckout(action.checkout, checkout)) {
       action.active = move(action.active); action.files = action.files.map(file => ({ ...file, path: move(file.path) }));
     }

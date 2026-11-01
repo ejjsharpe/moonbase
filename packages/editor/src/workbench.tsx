@@ -176,6 +176,8 @@ function Mutation({ controller, action, close }: { controller: EditorController;
   const [replacementPaths, setReplacementPaths] = useState("");
   const [replacements, setReplacements] = useState<EntryReference[] | null>(null), [sources, setSources] = useState<EntryReference[] | null>(null), [busy, setBusy] = useState(false);
   const [operationId] = useState(() => crypto.randomUUID());
+  const active = useRef(true);
+  useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
   const title = action.kind === "trash" ? "Move to Trash" : action.kind === "move" ? "Rename or move" : action.kind === "copy" ? "Copy" : action.kind === "import" ? "Import files" : action.kind === "create-file" ? "New File" : "New Folder";
   async function apply(consent = false) {
     if (busy || action.kind !== "trash" && !batchImport && !destination) return; setBusy(true); setError("");
@@ -201,8 +203,9 @@ function Mutation({ controller, action, close }: { controller: EditorController;
       }
       if (replace?.length && !consent) return;
       const result = await controller.mutate({ id: operationId, checkout, kind: action.kind, sources: captured, ...(action.kind === "trash" ? {} : { destination }), ...(action.nativeReferences ? { nativeReferences: action.nativeReferences } : {}), replacements: replace ?? [] });
+      if (!active.current || controller.getSnapshot().disposed) return;
       if (result.outcome !== "completed") { setError(result.message ?? "Operation incomplete. Review the recorded outcome before continuing."); return; }
-      if (action.kind === "create-file") await controller.open({ checkout, path: destination }, { view: "file", intent: "keep" });
+      if (action.kind === "create-file") await controller.open({ checkout, path: destination }, { view: "file", intent: "keep", current: () => active.current });
       close();
     } catch (error) { setError(String(error)); }
     finally { setBusy(false); }
