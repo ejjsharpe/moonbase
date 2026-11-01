@@ -1,6 +1,7 @@
 import { Schema, Struct } from 'effect';
 import { isAbsolute } from 'node:path';
 import { ApplicationError } from '@moonbase/application/client';
+import { hash } from './validation.ts';
 import {
   CheckoutTargetSchema,
   FileDocumentSchema,
@@ -19,6 +20,24 @@ const array = <S extends Schema.Constraint>(schema: S) => Schema.mutable(Schema.
 const optional = Schema.optional;
 const natural = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 const absolute = Schema.String.check(Schema.makeFilter((s) => isAbsolute(s) && !s.includes('\0')));
+const digest = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/));
+const storedDocument = FileDocumentSchema.check(
+  Schema.makeFilter((document) => hash(document.text) === document.version),
+);
+const operationItems = Schema.decodeUnknownSync(OperationResultSchema.fields.items, {
+  onExcessProperty: 'error',
+  reportInput: false,
+});
+const publishedItem = Schema.String.check(
+  Schema.makeFilter((value) => {
+    try {
+      operationItems([JSON.parse(value)]);
+      return true;
+    } catch {
+      return false;
+    }
+  }),
+);
 export const WorkspaceConfigurationSchema = struct({
   dataDirectory: absolute,
   hostId: WorkspaceIdentifierSchema,
@@ -50,11 +69,15 @@ export const SaveRecordSchema = struct({
   recoveryRestored: optional(Schema.Boolean),
   recoveryPublication: optional(natural),
   recoveryRevision: optional(natural),
-  baseline: optional(FileDocumentSchema),
+  baseline: optional(storedDocument),
   published: optional(Schema.Boolean),
   temporary: optional(Schema.String),
   input: workspaceInputSchemas.saveFile,
-  result: optional(SaveResultSchema),
+  result: optional(
+    SaveResultSchema.check(
+      Schema.makeFilter((result) => hash(result.disk.text) === result.disk.version),
+    ),
+  ),
   started: Schema.Boolean,
   message: optional(Schema.String),
 });
@@ -62,14 +85,14 @@ export const OperationRecordSchema = struct({
   paths: optional(array(Schema.String)),
   publicationError: optional(Schema.String),
   staging: optional(array(Schema.String)),
-  publishedItems: optional(array(Schema.String)),
+  publishedItems: optional(array(publishedItem)),
   input: WorkspaceOperationSchema,
   result: OperationResultSchema,
   publicationRevisions: Schema.Record(Schema.String, Schema.mutableKey(natural)),
   acknowledgedBy: array(WorkspaceIdentifierSchema),
 });
 const PublicationRecordSchema = struct({
-  digest: Schema.String,
+  digest,
   receipt: RecoveryPublicationSchema,
 });
 const stored = {

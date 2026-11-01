@@ -476,3 +476,70 @@ test('admitted cancellation retains its overlap lease and root resources until t
     f.cleanup();
   }
 });
+
+test('saved baseline hashes and embedded publication item objects reject corruption without rewriting', async () => {
+  const f = fixture(),
+    { runtime, client } = f.start();
+  try {
+    const checkout = await client.command('openCheckout', { root: f.root }),
+      target = { checkout, path: 'file.txt' },
+      disk = await client.command('readFile', target);
+    await client.command('saveFile', {
+      target,
+      clientId: 'alice',
+      requestId: 'baseline',
+      text: 'saved',
+      expectedVersion: disk.version,
+    });
+    const sources = await client.command('inspectEntries', { checkout, paths: ['file.txt'] });
+    await client.command('mutate', {
+      checkout,
+      clientId: 'alice',
+      id: 'move',
+      kind: 'move',
+      sources,
+      destination: 'moved',
+    });
+    const db = new DatabaseSync(join(f.base, 'state/moonbase-workspace-v1.sqlite'));
+    try {
+      for (const bucket of ['saves', 'operations']) {
+        const row = db.prepare('SELECT key,body FROM records WHERE bucket=?').get(bucket)!;
+        const record = JSON.parse(row.body as string);
+        if (bucket === 'saves') {
+          record.published = false;
+          record.baseline.version = '0'.repeat(64);
+        } else
+          record.publishedItems = record.publishedItems.map((item: string) =>
+            JSON.stringify({ ...JSON.parse(item), futureItem: 'must remain untouched' }),
+          );
+        const body = JSON.stringify(record);
+        db.prepare('UPDATE records SET body=? WHERE bucket=? AND key=?').run(
+          body,
+          bucket,
+          row.key!,
+        );
+        const attempt =
+          bucket === 'saves'
+            ? client.command('loadRecovery', { clientId: 'alice' })
+            : client.command('operationStatus', { clientId: 'alice', id: 'move' });
+        await assert.rejects(attempt, isError('Persistence'));
+        assert.equal(
+          db.prepare('SELECT body FROM records WHERE bucket=? AND key=?').get(bucket, row.key!)!
+            .body,
+          body,
+        );
+        db.prepare('UPDATE records SET body=? WHERE bucket=? AND key=?').run(
+          row.body!,
+          bucket,
+          row.key!,
+        );
+      }
+      assert.equal(readFileSync(join(f.root, 'moved'), 'utf8'), 'saved');
+    } finally {
+      db.close();
+    }
+  } finally {
+    await runtime.dispose();
+    f.cleanup();
+  }
+});
