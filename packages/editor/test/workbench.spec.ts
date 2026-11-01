@@ -413,9 +413,7 @@ test('uncertain final close is visible, blocks Quit and resolves by exact receip
   await expect(
     page.getByRole('button', { name: 'Resolve recovery publication', exact: true }),
   ).toBeVisible();
-  expect(
-    await page.evaluate(() => window.recoveryRace.editor.prepareQuit(async () => 'discard')),
-  ).toBe(false);
+  expect(await page.evaluate(() => window.recoveryRace.editor.prepareQuit())).toBe(false);
   expect(
     await page.evaluate(
       () =>
@@ -860,7 +858,7 @@ for (const viewport of [
     await page.evaluate(async () => {
       const { first, checkout } = window.demo;
       await first.open({ checkout, path: 'README.md' }, { intent: 'keep' });
-      await first.close([{ checkout, path: 'README.md' }], async () => 'discard');
+      await first.close([{ checkout, path: 'README.md' }]);
       await first.open({ checkout, path: 'src/example.ts' }, { intent: 'preview' });
     });
     const trigger = first(page).getByRole('button', { name: 'Tab actions', exact: true });

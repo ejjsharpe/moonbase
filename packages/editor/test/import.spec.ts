@@ -171,7 +171,7 @@ test('a delayed native picker cannot approve a checkout closed while selection w
     .getByRole('button', { name: 'Import files', exact: true })
     .click();
   await page.evaluate(async () => {
-    await window.demo.first.closeCheckout(window.demo.checkout, async () => 'discard');
+    await window.demo.first.closeCheckout(window.demo.checkout);
     (window as unknown as { finishPicker(): void }).finishPicker();
   });
   await expect(dialog(page)).toHaveCount(0);
