@@ -585,11 +585,6 @@ class Connection {
         g.reason = 'root';
         yield* self.release(g);
       }
-      yield* releaseResource(async () => {
-        await Promise.all(
-          [...self.generations].flatMap((g) => [...g.processes].map((child) => child.stop())),
-        );
-      });
       self.current = undefined;
       self.generations.clear();
       for (const queue of self.observers) Queue.endUnsafe(queue);
