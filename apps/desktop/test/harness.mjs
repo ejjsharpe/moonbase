@@ -21,4 +21,4 @@ ipcMain.handle = (name, listener) => register(name, async (event, input) => {
 });
 app.on('will-quit', () => { if (process.env.MOONBASE_TEST_REPORT) writeFileSync(process.env.MOONBASE_TEST_REPORT, JSON.stringify({ resources: process.getActiveResourcesInfo(), cancels: control.cancels, cancelListeners: ipcMain.listenerCount('moonbase:cancel'), chatCancelListeners: ipcMain.listenerCount('moonbase-chat:cancel') })); });
 if (process.env.MOONBASE_TEST_QUIT_EARLY) app.on('browser-window-created', () => queueMicrotask(() => app.quit()));
-await import('../dist/main.mjs');
+await import(process.env.MOONBASE_TEST_MAIN ?? '../dist/main.mjs');

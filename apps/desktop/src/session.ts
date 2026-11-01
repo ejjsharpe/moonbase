@@ -88,7 +88,7 @@ export class EditorSession {
       } else if (method === "watch") {
         const v = record(input); keys(v, ["checkout", "paths"]); this.inspect(v); this.approved(v.checkout);
         if (!Array.isArray(v.paths) || v.paths.length > 8192 || v.paths.some(p => typeof p !== "string")) invalid("Invalid watch paths.");
-        const stop = this.client.watch(v as never, event => { if (!this.closed && this.active.has(id)) this.send(id, { ok: true, value: event }); }, error => { if (!this.closed && this.active.has(id)) this.send(id, { ok: false, error: errorDTO(error) }); });
+        const stop = this.client.watch(v as never, event => { if (!this.closed && this.active.get(id) === reserved) this.send(id, { ok: true, value: event }); }, error => { if (!this.closed && this.active.get(id) === reserved) this.send(id, { ok: false, error: errorDTO(error) }); });
         reserved.cancel = stop; reserved.watch = true; return { ok: true, value: null };
       } else invalid("Unknown desktop method.");
       return { ok: true, value };
@@ -96,5 +96,6 @@ export class EditorSession {
     finally { if (reserved && !reserved.watch && this.active.get(id as string) === reserved) this.active.delete(id as string); }
   }
   cancel(id: unknown) { requestId(id); const active = this.active.get(id); if (active?.watch) this.active.delete(id); active?.cancel(); }
-  dispose() { this.closed = true; for (const active of this.active.values()) active.cancel(); this.active.clear(); }
+  releaseDocument() { for (const active of this.active.values()) active.cancel(); this.active.clear(); }
+  dispose() { this.closed = true; this.releaseDocument(); }
 }

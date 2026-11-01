@@ -131,7 +131,7 @@ async function main() {
   window.webContents.on("will-attach-webview", event => event.preventDefault());
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
-  window.webContents.on("render-process-gone", (_event, details) => { console.error("Editor renderer exited:", details.reason); });
+  window.webContents.on("render-process-gone", (_event, details) => { editorSession.releaseDocument(); chatSession?.dispose(); rendererReady = false; quit = undefined; console.error("Workbench renderer exited:", details.reason); });
   app.on("before-quit", event => { if (!exiting) { event.preventDefault(); requestQuit(); } });
   app.on("activate", show);
   app.on("second-instance", show);

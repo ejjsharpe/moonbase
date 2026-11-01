@@ -59,3 +59,17 @@ test("long-lived watches cannot consume command capacity or prevent disposal", a
   assert((await f.call("loadRecovery", { clientId: "desktop-primary" })).ok);
   f.session.dispose(); assert.equal(f.stops, 128);
 });
+test("a lost renderer releases document work without losing approvals or accepting late observations", async () => {
+  const receives: ((event: WorkspaceEvent) => void)[] = [], emitted: WorkspaceEvent[] = [];
+  let stopped = 0;
+  const client: EditorClient = { command: async () => ({ state: { checkouts: [target] }, operations: [] }) as never,
+    watch: (_input, receive) => { receives.push(receive); return () => stopped++; } };
+  const owner = new EditorSession(client, { chooseCheckout: async () => null, imports: async () => [] }, (_id, r) => { if (r.ok) emitted.push(r.value); });
+  await owner.call("command", { operation: "loadRecovery", input: { clientId: owner.clientId } }, "load");
+  assert((await owner.call("watch", { checkout: target, paths: [] }, "same-id")).ok);
+  owner.releaseDocument(); assert.equal(stopped, 1);
+  assert((await owner.call("watch", { checkout: target, paths: [] }, "same-id")).ok);
+  receives[0]({ checkout: target, paths: ["late-old"] }); assert.equal(emitted.length, 0);
+  receives[1]({ checkout: target, paths: ["current"] }); assert.equal(emitted[0].paths[0], "current");
+  owner.dispose(); assert.equal(stopped, 2);
+});

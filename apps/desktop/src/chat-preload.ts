@@ -2,12 +2,19 @@ import { contextBridge, ipcRenderer } from "electron";
 import { channels, unwrap, type ChatBridge, type Reply } from "@moonbase/chat-probe/bridge";
 
 // The reviewed bridge uses separate channels; the main process still authenticates every request.
+const active = new Set<string>();
 const bridge: ChatBridge = {
   context: async () =>
     unwrap(await ipcRenderer.invoke(channels.call, { kind: "context" })) as never,
-  call: (kind, operation, input, id) =>
-    ipcRenderer.invoke(channels.call, { kind, operation, input, id }),
-  cancel: (id) => ipcRenderer.send(channels.cancel, id),
+  async call(kind, operation, input, id) {
+    active.add(id);
+    try {
+      const reply: Reply = await ipcRenderer.invoke(channels.call, { kind, operation, input, id });
+      if (!kind.startsWith("watch-") || !reply.ok) active.delete(id);
+      return reply;
+    } catch (error) { active.delete(id); throw error; }
+  },
+  cancel(id) { active.delete(id); ipcRenderer.send(channels.cancel, id); },
   events(receive) {
     const listener = (_: unknown, id: string, result: Reply) => receive(id, result);
     ipcRenderer.on(channels.event, listener);
@@ -18,4 +25,6 @@ const bridge: ChatBridge = {
   consent: () => {},
   ready: () => {},
 };
+// A committed document unload releases waits/observations, never remote execution.
+window.addEventListener("unload", () => { for (const id of active) ipcRenderer.send(channels.cancel, id); active.clear(); });
 contextBridge.exposeInMainWorld("moonbaseChat", bridge);

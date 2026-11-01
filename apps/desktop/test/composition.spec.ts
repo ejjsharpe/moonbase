@@ -19,7 +19,7 @@ async function launch(f: Fixture, data = "desktop-data") {
   const app = await electron.launch({
     ...(packaged
       ? {
-          executablePath: resolve(
+          executablePath: process.env.MOONBASE_NATIVE_EXECUTABLE ?? resolve(
             `release/${process.arch === "arm64" ? "mac-arm64" : "mac"}/Moonbase.app/Contents/MacOS/Moonbase`,
           ),
         }
@@ -31,6 +31,7 @@ async function launch(f: Fixture, data = "desktop-data") {
       TMPDIR: process.env.TMPDIR!,
       MOONBASE_USER_DATA: join(f.directory, data),
       MOONBASE_CHAT_CONFIG: f.clientConfig,
+      ...(process.env.MOONBASE_TEST_MAIN ? { MOONBASE_TEST_MAIN: process.env.MOONBASE_TEST_MAIN } : {}),
       MOONBASE_CHAT_FORWARD_LOG: f.log,
       MOONBASE_CHAT_DROP_SEND: f.drop,
       GIT_CONFIG_GLOBAL: "/dev/null",
@@ -295,6 +296,7 @@ test("dirty editor/live chat, two drafts, no-resend reconnect, view close and cl
       chat: ids.chat.every(id => globalThis.desktopTest.chatCancelIds.includes(id)),
     }), priorWatches)).toEqual({ editor: true, chat: true });
     await screen(app, p, "restored-dirty-editor");
+    await editor(p).focus(); // Establish focus in the NEW document before testing navigation restoration.
     await tab(p, "Chat").click();
     await expect(p.getByLabel("Message", { exact: true })).toHaveValue("first independent newer draft");
     expect((await f.stats()).commands.filter(v => v === "sendChat")).toHaveLength(1);
