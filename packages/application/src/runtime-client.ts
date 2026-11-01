@@ -1,16 +1,31 @@
-import { Effect, Stream, type ManagedRuntime } from "effect";
+import { Cause, Effect, Exit, Stream, type ManagedRuntime } from "effect";
 import { ApplicationError, type EditorClient } from "./client.ts";
 import { workspaceCommand, workspaceWatch } from "./handlers.ts";
 import type { WorkspaceService } from "./services.ts";
 
+function applicationFailure(cause: Cause.Cause<ApplicationError>): ApplicationError {
+  if (Cause.hasInterruptsOnly(cause)) return new ApplicationError({ code: "Cancelled", message: "Command cancelled" });
+  const failures = cause.reasons.flatMap(reason => Cause.isFailReason(reason) ? [reason.error] : Cause.isDieReason(reason) ? [reason.defect] : []);
+  if (failures.length === 1 && failures[0] instanceof ApplicationError) return failures[0];
+  const typed = failures.find(error => error instanceof ApplicationError);
+  return new ApplicationError({ code: typed?.code ?? "Unavailable", target: typed?.target,
+    message: failures.map(String).join("; ") || "Application effect failed" });
+}
+
 /** Accept the process root's runtime; never acquire a second service graph here. */
 export function makeEditorClient(runtime: ManagedRuntime.ManagedRuntime<WorkspaceService, ApplicationError>): EditorClient {
   return {
-    command: (operation, input, options) => runtime.runPromise(workspaceCommand(operation, input), options),
+    command: async (operation, input, options) => {
+      const exit = await runtime.runPromiseExit(workspaceCommand(operation, input), options);
+      if (Exit.isFailure(exit)) throw applicationFailure(exit.cause);
+      return exit.value;
+    },
     watch(input, receive, onError) {
       const abort = new AbortController();
-      void runtime.runPromise(Stream.runForEach(workspaceWatch(input), event => Effect.sync(() => receive(event))), { signal: abort.signal })
-        .catch(error => { if (!abort.signal.aborted) onError(error instanceof ApplicationError ? error : new ApplicationError({ code: "Unavailable", message: String(error) })); });
+      void runtime.runPromiseExit(Stream.runForEach(workspaceWatch(input), event => Effect.sync(() => receive(event))), { signal: abort.signal })
+        .then(exit => {
+          if (Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)) onError(applicationFailure(exit.cause));
+        });
       return () => abort.abort();
     },
   };

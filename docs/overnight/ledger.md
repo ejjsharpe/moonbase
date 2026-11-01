@@ -12,6 +12,7 @@
 - Parallel Sol `xhigh` workers: `feat/editor-module` and `feat/workspace-module`, exact foundation verified; independent Astra `xhigh` foundation review running. Task IDs/options are persisted in `tasks.json`.
 - A direct StyleX MIT notice omitted from the installed npm tarballs has been obtained from the primary project; exact release-source matching remains part of distribution verification. Follow-up coordination changes are kept separately from the fixed review head.
 - Editor worker identified missing checkout binding in recovered operation evidence. Coordinator added mandatory `OperationResult.checkout` centrally; workspace journal/recovery and editor reconciliation must preserve it. Both workers consume the committed shared-contract follow-up and keep missing/unbound evidence visible instead of guessing.
+- Astra foundation review at `bb5c5d0` reported the same P1 identity gap plus two P2 runtime errors (hidden finalizer failures and untyped cancellation). PR #2 fixes all three; six public-client regression tests pass after three expected failing regression paths were reproduced. Full findings/responses are in `reviews/foundation-r1.md`; a fresh independent changed-head review follows.
 
 ## Planned dependency order
 

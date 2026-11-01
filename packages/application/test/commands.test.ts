@@ -6,7 +6,7 @@ import { WorkspaceService, type WorkspaceServiceShape } from "../src/services.ts
 import { makeEditorClient } from "../src/runtime-client.ts";
 
 const checkout: CheckoutTarget = { hostId: "host", checkoutId: "checkout", projectId: "project", root: "/checkout", branch: "main" };
-function fixture() {
+function fixture(failures: { watchCleanup?: Error; commandCleanup?: Error } = {}) {
   const counts = { acquired: 0, released: 0, subscriptions: 0, unsubscribed: 0, reads: 0, interrupted: 0 };
   let watching!: () => void;
   const ready = new Promise<void>(resolve => { watching = resolve; });
@@ -19,7 +19,10 @@ function fixture() {
       counts.reads++;
       if (input.path === "slow") {
         reading();
-        yield* Effect.never.pipe(Effect.ensuring(Effect.sync(() => { counts.interrupted++; })));
+        yield* Effect.never.pipe(Effect.ensuring(Effect.sync(() => {
+          counts.interrupted++;
+          if (failures.commandCleanup) throw failures.commandCleanup;
+        })));
       }
       return { text: input.path, version: String(counts.reads) };
     }),
@@ -29,7 +32,7 @@ function fixture() {
     mutate: unavailable, operationStatus: unavailable, acknowledgeOperation: unavailable, persistRecovery: unavailable,
     watch: () => Stream.callback(queue => Effect.acquireRelease(
       Effect.sync(() => { counts.subscriptions++; Queue.offerUnsafe(queue, { checkout, paths: [], ready: true }); watching(); }),
-      () => Effect.sync(() => { counts.unsubscribed++; }),
+      () => Effect.sync(() => { counts.unsubscribed++; if (failures.watchCleanup) throw failures.watchCleanup; }),
     )),
   };
   const layer = Layer.effect(WorkspaceService, Effect.acquireRelease(
@@ -57,7 +60,7 @@ test("cancelling one command leaves unrelated queries usable", async () => {
   const { counts, runtime, client, started } = fixture();
   const abort = new AbortController();
   const pending = client.command("readFile", { checkout, path: "slow" }, { signal: abort.signal });
-  const rejected = assert.rejects(pending);
+  const rejected = assert.rejects(pending, error => error instanceof ApplicationError && error.code === "Cancelled");
   try {
     await started;
     assert.equal((await client.command("loadRecovery", { clientId: "independent" })).state.clientId, "independent");
@@ -85,4 +88,26 @@ test("typed service failure crosses the same public command boundary", async () 
   try {
     await assert.rejects(client.command("gitStatus", { checkout }), error => error instanceof ApplicationError && error.code === "Unavailable");
   } finally { await runtime.dispose(); }
+});
+
+test("unsubscribe reports a failing finalizer through the public error callback", async () => {
+  const { counts, runtime, client, ready } = fixture({ watchCleanup: Error("Watch cleanup failed") });
+  const errors: ApplicationError[] = [];
+  const stop = client.watch({ checkout, paths: [""] }, () => {}, error => { errors.push(error); });
+  await ready; stop();
+  await runtime.dispose();
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(counts.unsubscribed, 1);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].code, "Unavailable");
+  assert.match(errors[0].message, /Watch cleanup failed/);
+});
+
+test("command cancellation preserves a failing cleanup instead of labelling it cancelled", async () => {
+  const { runtime, client, started } = fixture({ commandCleanup: Error("Read cleanup failed") });
+  const abort = new AbortController();
+  const pending = client.command("readFile", { checkout, path: "slow" }, { signal: abort.signal });
+  const rejected = assert.rejects(pending, error => error instanceof ApplicationError && error.code === "Unavailable" && /Read cleanup failed/.test(error.message));
+  try { await started; abort.abort(); await rejected; }
+  finally { abort.abort(); await runtime.dispose(); }
 });
