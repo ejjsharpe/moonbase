@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test, mock } from 'node:test';
-import { ChildProcess, execFile, execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { createServer as httpServer } from 'node:http';
 import { createServer as tcpServer } from 'node:net';
 import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -39,19 +39,20 @@ async function fixture(mode = 'normal', healthMode = 'valid') {
   const remotePort = (health.address() as import('node:net').AddressInfo).port;
   const executable = join(base, 'SSH resources with spaces');
   writeFileSync(executable, '#!' + process.execPath + '\nprocess.env.MOONBASE_SSH_TEST_CONTROL=' + JSON.stringify(control) + ';\n' + readFileSync(fileURLToPath(new URL('./fake-ssh.mjs', import.meta.url)), 'utf8')); chmodSync(executable, 0o700);
-  const setMode = (value: string, diagnostic?: string) => writeFileSync(control, JSON.stringify({mode: value, diagnostic, log, key})); setMode(mode);
+  const setMode = (value: string, diagnostic?: string, sshConfig?: string) => writeFileSync(control, JSON.stringify({mode: value, diagnostic, sshConfig, log, key})); setMode(mode);
   const profile = {id: 'configured', label: 'Operator host', destination: 'configured-alias', remotePort, expected};
   const config = {profile, token: key, sshExecutable: executable};
   const start = (configuration: SshConfiguration = config) => { const runtime = ManagedRuntime.make(SshLive(configuration)); return {runtime, client: makeConnectionClient(runtime)}; };
   const current = start();
   const spawned = () => rows(log).filter(r => r.event === 'preflight' || r.event === 'forward');
   const forwards = () => spawned().filter(r => r.event === 'forward');
+  const helpers = () => rows(log).filter(r => r.event === 'helper');
   const ports = () => forwards().map(r => Number(r.args[r.args.indexOf('-L') + 1].split(':')[1]));
   const endpoint = () => current.runtime.runPromise(Effect.flatMap(ConnectionService, service => service.endpoint({host: expected})));
-  return {...current, base, key, log, profile, config, requests, start, spawned, forwards, ports, setMode, endpoint, async close() {
+  return {...current, base, key, log, profile, config, requests, start, spawned, forwards, helpers, ports, setMode, endpoint, async close() {
     await current.runtime.dispose(); health.closeAllConnections(); await new Promise<void>(resolve => health.close(() => resolve()));
-    for (const child of spawned()) assert(!alive(child.pid), 'owned child leaked: ' + child.pid);
-    for (const port of ports()) await free(port);
+    for (const child of [...spawned(), ...helpers()]) assert(!alive(child.pid), 'owned child leaked: ' + child.pid);
+    for (const port of [...ports(), ...helpers().map(row => row.port)]) if (port) await free(port);
     rmSync(base, {recursive: true, force: true});
   }};
 }
@@ -166,12 +167,12 @@ test('root disposal kills an uncooperative owned child, releases the forward and
 });
 
 test('public disconnect reports an unknown throwing process release; later root cleanup can recover', async () => {
-  const f = await fixture(); const originalKill = ChildProcess.prototype.kill;
+  const f = await fixture(); const originalKill = process.kill.bind(process);
   try {
     const connected = await f.client.command('connect', {profileId: 'configured'}), pid = f.forwards()[0].pid;
-    mock.method(ChildProcess.prototype, 'kill', function(this: ChildProcess, signal?: NodeJS.Signals | number) {
-      if (this.pid === pid) throw new Proxy({}, {get() { throw f.key; }});
-      return originalKill.call(this, signal);
+    mock.method(process, 'kill', function(target: number, signal?: NodeJS.Signals | number) {
+      if (target === -pid && signal !== 0) throw new Proxy({}, {get() { throw f.key; }});
+      return originalKill(target, signal);
     });
     await assert.rejects(f.client.command('disconnect', {connectionId: connected.connectionId!}), e => ApplicationError.is(e) && /teardown|cleanup/i.test(e.message) && !JSON.stringify(e).includes(f.key));
     await assert.rejects(f.endpoint(), failure('Unavailable'));
@@ -239,4 +240,109 @@ test('runnable consumer composition root uses the public package and never print
     writeFileSync(configuration, '{ malformed private JSON ' + f.key);
     const bad = await execute(); assert(bad.error); assert.match(bad.stderr, /Could not read the private connection configuration JSON/); assert(!bad.stderr.includes(f.key)); assert.equal(f.forwards().length, 1);
   } finally { await f.close(); }
+});
+
+for (const action of ['disconnect', 'dispose']) for (const deduplicated of [false, true]) test(`R1 ${action} from the first connecting observation settles ${deduplicated ? 'all coalesced callers' : 'Connect before attempt startup'}`, async () => {
+  const f = await fixture(), abort = new AbortController(), secondAbort = new AbortController();
+  let release: Promise<void> | undefined, second: Promise<unknown> | undefined, outcome: unknown, secondOutcome: unknown;
+  let watched = false;
+  const stop = f.client.watch(value => {
+    watched = true;
+    if (value.state === 'connecting' && !release) {
+      if (deduplicated) second = f.client.command('connect', {profileId: 'configured'}, {signal: secondAbort.signal}).then(v => { secondOutcome = v; }, e => { secondOutcome = e; });
+      release = action === 'disconnect' ? f.client.command('disconnect', {connectionId: value.connectionId}) : f.runtime.dispose();
+    }
+  }, e => { throw e; });
+  let pending: Promise<unknown> | undefined;
+  try {
+    await until(() => watched);
+    pending = f.client.command('connect', {profileId: 'configured'}, {signal: abort.signal}).then(v => { outcome = v; }, e => { outcome = e; });
+    await until(() => !!release); await release;
+    await until(() => outcome !== undefined && (!deduplicated || secondOutcome !== undefined), 'owning release left a Connect waiter pending', 600);
+    const cancelled = (value: unknown) => ApplicationError.is(value) && (value.code === 'Cancelled' || action === 'dispose' && value.code === 'Unavailable');
+    assert(cancelled(outcome)); if (deduplicated) assert(cancelled(secondOutcome));
+    if (action === 'disconnect') assert.equal((await f.client.command('getConnection', {})).state, 'disconnected'); else await assert.rejects(f.client.command('getConnection', {}));
+    assert.equal(f.spawned().length, 0);
+  } finally { stop(); abort.abort(); secondAbort.abort(); await Promise.allSettled([pending, second, release]); await f.close(); }
+});
+
+for (const [flag, extra] of [['NoHostAuthenticationForLocalhost', 'HostName 127.0.0.1'], ['NoHostAuthenticationForProxyCommand', 'ProxyCommand /usr/bin/false']] as const) for (const enabled of [true, false]) test(`R1 actual system policy ${flag} ${enabled ? 'rejects enabled bypass' : 'preserves normal verification'}`, async () => {
+  const f = await fixture(), config = join(f.base, 'test-only-ssh-config');
+  writeFileSync(config, `Host *\n StrictHostKeyChecking yes\n ${extra}\n ${flag} ${enabled ? 'yes' : 'no'}\n`, {mode: 0o600}); f.setMode('normal', undefined, config);
+  try {
+    if (enabled) {
+      await assert.rejects(f.client.command('connect', {profileId: 'configured'}), failure('InvalidInput'));
+      assert.equal(f.forwards().length, 0); await assert.rejects(f.endpoint(), failure('Unavailable'));
+    } else assert.equal((await f.client.command('connect', {profileId: 'configured'})).state, 'connected');
+  } finally { await f.close(); }
+});
+
+for (const [mode, action] of [['held-stderr', 'exit'], ['held-both', 'exit'], ['held-none', 'exit'], ['held-both', 'disconnect'], ['held-none', 'dispose']]) test(`R1 SSH ${action} invalidates the endpoint and reaps ${mode} helper group without touching a different generation`, async () => {
+  const f = await fixture(mode), unrelated = f.start();
+  try {
+    const first = await f.client.command('connect', {profileId: 'configured'});
+    await until(() => f.helpers().length === 1); const helper = f.helpers()[0], forward = f.forwards()[0];
+    f.setMode('normal'); const other = await unrelated.client.command('connect', {profileId: 'configured'}); assert.notEqual(other.connectionId, first.connectionId);
+    const pgid = (pid: number) => Number(execFileSync('/bin/ps', ['-o', 'pgid=', '-p', String(pid)], {encoding: 'utf8'}).trim());
+    assert.equal(pgid(forward.pid), forward.pid); assert.equal(pgid(helper.pid), forward.pid); assert.notEqual(pgid(f.forwards()[1].pid), forward.pid);
+    if (action === 'exit') {
+      process.kill(forward.pid, 'SIGKILL'); await until(() => !alive(forward.pid));
+      await until(async () => (await f.client.command('getConnection', {})).state === 'failed', 'process exit stayed connected behind inherited pipes', 800);
+      await assert.rejects(f.endpoint(), failure('Unavailable'));
+      await f.client.command('disconnect', {connectionId: first.connectionId!});
+    } else if (action === 'disconnect') {
+      await f.client.command('disconnect', {connectionId: first.connectionId!}); await assert.rejects(f.endpoint(), failure('Unavailable'));
+    } else { await f.runtime.dispose(); await assert.rejects(f.endpoint()); }
+    await until(() => !alive(helper.pid)); await free(helper.port);
+    assert(alive(f.forwards()[1].pid)); assert.equal((await unrelated.client.command('getConnection', {})).state, 'connected');
+    if (mode !== 'held-stderr') assert(rows(f.log).some(row => row.event === 'helper-term'));
+    assert.throws(() => process.kill(-forward.pid, 0), (e: any) => e.code === 'ESRCH');
+  } finally {
+    // Failed pre-fix probes must not leave their explicitly recorded fixture helper running.
+    for (const row of f.helpers()) if (alive(row.pid)) process.kill(row.pid, 'SIGKILL');
+    await tick(); await unrelated.runtime.dispose(); await f.close();
+  }
+});
+
+for (const action of ['exit', 'cancel']) test(`R1 actual SSH with a pipe-only ProxyCommand releases its owned helper after ${action}`, async () => {
+  const f = await fixture(), abort = new AbortController(), proxy = join(f.base, 'pipe-only-proxy.mjs'), config = join(f.base, 'private-test-ssh-config');
+  const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+  writeFileSync(proxy, `import {appendFileSync} from 'node:fs'; import {createServer} from 'node:net';
+    const server=createServer(); server.listen(0,'127.0.0.1',()=>appendFileSync(${JSON.stringify(f.log)},JSON.stringify({event:'helper',pid:process.pid,parent:process.ppid,port:server.address().port})+'\\n'));
+    process.on('SIGTERM',()=>appendFileSync(${JSON.stringify(f.log)},JSON.stringify({event:'helper-term',pid:process.pid})+'\\n'));
+  `);
+  writeFileSync(config, `Host *\n HostName 127.0.0.1\n StrictHostKeyChecking yes\n ProxyCommand ${quote(process.execPath)} ${quote(proxy)}\n`, {mode: 0o600});
+  writeFileSync(f.config.sshExecutable, '#!/bin/sh\nexec /usr/bin/ssh -F ' + quote(config) + ' "$@"\n', {mode: 0o700});
+  let outcome: unknown, helper: any;
+  const pending = f.client.command('connect', {profileId: 'configured'}, {signal: abort.signal}).then(v => { outcome = v; }, e => { outcome = e; });
+  try {
+    await until(() => f.helpers().length === 1); helper = f.helpers()[0];
+    if (action === 'exit') { process.kill(helper.parent, 'SIGKILL'); await until(() => !alive(helper.parent)); }
+    else abort.abort();
+    await until(() => outcome !== undefined, 'actual SSH exit/cancel stayed pending behind its proxy pipe');
+    assert(failure(action === 'exit' ? 'Unavailable' : 'Cancelled')(outcome));
+    await until(() => !alive(helper.pid), 'owned ProxyCommand helper survived connection release'); await free(helper.port);
+    assert.equal((await f.client.command('getConnection', {})).state, action === 'exit' ? 'failed' : 'disconnected');
+    await assert.rejects(f.endpoint(), failure('Unavailable'));
+  } finally {
+    abort.abort();
+    for (const row of f.helpers()) if (alive(row.pid)) process.kill(row.pid, 'SIGKILL');
+    await pending; if (helper) await until(() => !alive(helper.parent) && !alive(helper.pid)); await f.close();
+  }
+});
+
+test('R1 cancellation during admitted teardown cannot strand the owned helper group', async () => {
+  const f = await fixture('held-both'), abort = new AbortController();
+  try {
+    const connected = await f.client.command('connect', {profileId: 'configured'});
+    await until(() => f.helpers().length === 1); const helper = f.helpers()[0], forward = f.forwards()[0];
+    const releasing = f.client.command('disconnect', {connectionId: connected.connectionId!}, {signal: abort.signal}).then(() => undefined, e => e);
+    await until(async () => (await f.client.command('getConnection', {})).state === 'disconnecting'); abort.abort();
+    const outcome = await releasing; assert(outcome === undefined || failure('Cancelled')(outcome));
+    assert.equal((await f.client.command('getConnection', {})).state, 'disconnected');
+    assert(!alive(forward.pid)); assert(!alive(helper.pid)); await free(helper.port);
+    assert.throws(() => process.kill(-forward.pid, 0), (e: any) => e.code === 'ESRCH');
+  } finally {
+    abort.abort(); for (const row of f.helpers()) if (alive(row.pid)) process.kill(row.pid, 'SIGKILL'); await f.close();
+  }
 });

@@ -3,9 +3,10 @@ import { ApplicationError } from '@moonbase/application/client';
 
 const unavailable = (message: string) => new ApplicationError({code: 'Unavailable', message});
 export type ProcessExit = { code: number | null; signal: NodeJS.Signals | null; spawnFailed: boolean };
-/** Own only this child, drain bounded private diagnostics, never return raw SSH output as an error. */
+/** Own one POSIX process group; process exit and inherited-pipe drainage are separate facts. */
 export class SshProcess {
   readonly child: ChildProcess;
+  readonly terminal: Promise<ProcessExit>;
   readonly closed: Promise<ProcessExit>;
   output = '';
   stderr = '';
@@ -15,22 +16,38 @@ export class SshProcess {
   private stopping: Promise<void> | undefined;
   constructor(executable: string, args: string[], token: string, captureOutput: boolean) {
     const env = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => typeof entry[1] === 'string' && !entry[1].includes(token)));
-    this.child = spawn(executable, args, {shell: false, stdio: ['ignore', 'pipe', 'pipe'], env});
+    // A new process group is still referenced/scoped; it is never unref'd or shared with user processes.
+    this.child = spawn(executable, args, {shell: false, detached: true, stdio: ['ignore', 'pipe', 'pipe'], env});
+    let terminal!: (exit: ProcessExit) => void;
+    this.terminal = new Promise(resolve => { terminal = resolve; });
+    const exited = (code: number | null, signal: NodeJS.Signals | null, spawnFailed = false) => {
+      if (this.exited) return;
+      this.exited = {code, signal, spawnFailed}; terminal(this.exited);
+    };
     this.closed = new Promise(resolve => {
-      let spawnFailed = false;
-      const failed = () => { spawnFailed = true; };
+      let spawned = false;
+      const started = () => { spawned = true; };
+      const failed = () => { if (!spawned) exited(null, null, true); };
+      const ended = (code: number | null, signal: NodeJS.Signals | null) => exited(code, signal);
       const stdout = (chunk: Buffer) => {
         if (!captureOutput) return;
         this.outputBytes += chunk.byteLength;
-        if (this.outputBytes > 64 * 1024) { this.overflow = true; this.child.kill('SIGTERM'); }
-        else this.output += chunk.toString('utf8');
+        if (this.outputBytes > 64 * 1024) {
+          this.overflow = true;
+          try { this.signal('SIGTERM'); } catch { /* Owning release reports a process-control failure. */ }
+        } else this.output += chunk.toString('utf8');
       };
       const stderr = (chunk: Buffer) => { this.stderr = (this.stderr + chunk.toString('utf8')).slice(-8192); };
-      this.child.on('error', failed); this.child.stdout!.on('data', stdout); this.child.stderr!.on('data', stderr);
+      const pipeError = () => {}; // Raw pipe errors are private; exit/deadline and release remain observable.
+      this.child.once('spawn', started); this.child.once('exit', ended); this.child.on('error', failed);
+      this.child.stdout!.on('data', stdout); this.child.stderr!.on('data', stderr);
+      this.child.stdout!.on('error', pipeError); this.child.stderr!.on('error', pipeError);
       this.child.once('close', (code, signal) => {
-        this.exited = {code, signal, spawnFailed};
-        this.child.off('error', failed); this.child.stdout!.off('data', stdout); this.child.stderr!.off('data', stderr);
-        resolve(this.exited);
+        exited(code, signal, !spawned);
+        this.child.off('spawn', started); this.child.off('exit', ended); this.child.off('error', failed);
+        this.child.stdout!.off('data', stdout); this.child.stderr!.off('data', stderr);
+        this.child.stdout!.off('error', pipeError); this.child.stderr!.off('error', pipeError);
+        resolve(this.exited!);
       });
     });
   }
@@ -42,18 +59,36 @@ export class SshProcess {
     if (this.overflow) return unavailable('SSH configuration output exceeded its bound. Use a focused connection profile.');
     return unavailable('SSH exited. Check the configured alias, network, host key policy and independently running chat host.');
   }
+  private signal(signal: NodeJS.Signals | 0) {
+    const pid = this.child.pid;
+    if (!pid) return false;
+    try { process.kill(-pid, signal); return true; }
+    catch (e) { if ((e as NodeJS.ErrnoException).code === 'ESRCH') return false; throw e; }
+  }
   stop(): Promise<void> {
     if (this.stopping) return this.stopping;
     this.stopping = (async () => {
-      if (this.exited) return;
-      const wait = async (milliseconds: number) => {
+      const deadline = Date.now() + 2500;
+      const gone = async (milliseconds: number) => {
+        const until = Date.now() + milliseconds;
+        while (this.signal(0)) { if (Date.now() >= until) return false; await new Promise(resolve => setTimeout(resolve, 10)); }
+        return true;
+      };
+      // An exited main PID does not release its proxy/helper group, including closed-pipe helpers.
+      if (this.signal(0)) {
+        this.signal('SIGTERM');
+        if (!await gone(500)) { this.signal('SIGKILL'); if (!await gone(Math.max(0, deadline - Date.now()))) throw unavailable('Owned SSH process group did not terminate.'); }
+      }
+      const drained = async (milliseconds: number) => {
         let timer: ReturnType<typeof setTimeout> | undefined;
         try { return await Promise.race([this.closed.then(() => true), new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), milliseconds); })]); }
         finally { clearTimeout(timer); }
       };
-      this.child.kill('SIGTERM');
-      if (!await wait(500)) { this.child.kill('SIGKILL'); if (!await wait(2000)) throw unavailable('Owned SSH child did not terminate. Connection teardown remains incomplete.'); }
-    })().catch(() => { this.stopping = undefined; throw unavailable('Owned SSH child teardown failed. Retry release after resolving the process access failure.'); });
+      if (!await drained(Math.min(100, Math.max(0, deadline - Date.now())))) {
+        this.child.stdout?.destroy(); this.child.stderr?.destroy();
+        if (!await drained(Math.max(0, deadline - Date.now()))) throw unavailable('Owned SSH output pipes did not close.');
+      }
+    })().catch(() => { this.stopping = undefined; throw unavailable('Owned SSH process group teardown failed. Retry release after resolving the process access failure.'); });
     return this.stopping;
   }
 }

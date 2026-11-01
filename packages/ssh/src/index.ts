@@ -18,6 +18,7 @@ function fields(input: unknown, names: string[]) {
 }
 function configuration(input: SshConfiguration): SshConfiguration {
   ensure(input && typeof input === 'object', 'Configure one SSH connection profile.');
+  ensure(process.platform !== 'win32', 'SSH process-group ownership requires a POSIX platform.');
   ensure(typeof input.token === 'string' && /^[\x21-\x7e]{16,4096}$/.test(input.token), 'Configure a valid private chat host key.');
   const p = input.profile;
   ensure(p && identifier(p.id) && typeof p.label === 'string' && /^[^\x00-\x1f\x7f]{1,128}$/.test(p.label), 'Configure the SSH profile identity and label.');
@@ -118,11 +119,18 @@ class Connection {
   }
   private release(g: Generation) {
     const self = this;
-    return Effect.gen(function* () {
+    return Effect.uninterruptible(Effect.gen(function* () {
       if (g.fiber) yield* Fiber.interrupt(g.fiber);
-      yield* releaseResource(async () => { await Promise.all([...g.processes].map(child => child.stop())); });
+      const cancelled = error('Cancelled', 'SSH connection generation was released.');
+      const cleanup = yield* Effect.exit(releaseResource(async () => { await Promise.all([...g.processes].map(child => child.stop())); }));
+      if (Exit.isFailure(cleanup)) {
+        yield* Deferred.failCause(g.ready, Cause.combine(Cause.fail(cancelled), cleanup.cause));
+        return yield* Effect.failCause(cleanup.cause);
+      }
       self.finished(g);
-    });
+      // The owning path also settles admissions whose attempt fiber never started.
+      yield* Deferred.fail(g.ready, cancelled);
+    }));
   }
   private finished(g: Generation, failure?: ApplicationError) {
     this.generations.delete(g);
@@ -134,7 +142,9 @@ class Connection {
     return ['-N', '-T', '-n', '-o', 'BatchMode=yes', '-o', 'ExitOnForwardFailure=yes', '-o', 'ControlMaster=no', '-o', 'ControlPath=none', '-o', 'ControlPersist=no', '-o', 'ForkAfterAuthentication=no', '-o', 'GatewayPorts=no', '-o', 'PermitLocalCommand=no', '-o', 'RemoteCommand=none', '-o', 'ForwardAgent=no', '-o', 'ForwardX11=no'];
   }
   private spawn(g: Generation, args: string[], captureOutput = false) {
-    return Effect.try({try: () => { const child = new SshProcess(this.config.sshExecutable!, args, this.config.token, captureOutput); g.processes.add(child); return child; }, catch: () => error('Unavailable', 'Could not start the owned SSH process.')});
+    return Effect.try({try: () => { const child = new SshProcess(this.config.sshExecutable!, args, this.config.token, captureOutput); g.processes.add(child);
+      void child.terminal.then(() => { if (this.current === g && g.forward === child && !g.reason) this.publish({profile: this.config.profile, state: 'failed', connectionId: g.id, message: child.failure().message}); });
+      return child; }, catch: () => error('Unavailable', 'Could not start the owned SSH process.')});
   }
   private port() {
     return Effect.acquireUseRelease(Effect.sync(() => ({server: createServer(), abort: new AbortController()})), ({server, abort}) => Effect.tryPromise({
@@ -150,17 +160,20 @@ class Connection {
   private attempt(g: Generation): Effect.Effect<void, ApplicationError> {
     const self = this;
     const establish = Effect.gen(function* () {
+      if (g.reason || self.closed || self.current !== g) return yield* Effect.fail(error('Cancelled', 'SSH generation was released before process admission.'));
       const preflight = yield* self.spawn(g, [...self.arguments(), '-G', '--', self.config.profile.destination], true);
-      const configured = yield* Effect.promise(() => preflight.closed);
+      const configured = yield* Effect.promise(() => preflight.terminal);
+      yield* releaseResource(() => preflight.stop());
       if (configured.spawnFailed || configured.code !== 0 || preflight.overflow) return yield* Effect.fail(preflight.failure());
       if (/^(localforward|remoteforward|dynamicforward)\s+/im.test(preflight.output)) return yield* Effect.fail(error('InvalidInput', 'Configured SSH alias includes additional forwards. Use a dedicated alias without forwarding rules.'));
       if (/^stricthostkeychecking\s+(false|no|off)\s*$/im.test(preflight.output)) return yield* Effect.fail(error('InvalidInput', 'Configured SSH policy disables host key checking. Use a verified host key policy.'));
+      if (/^nohostauthenticationfor(?:localhost|proxycommand)\s+(?!no\s*$|false\s*$|off\s*$)\S+/im.test(preflight.output)) return yield* Effect.fail(error('InvalidInput', 'Configured SSH policy bypasses host authentication. Disable the bypass and verify the host key before connecting.'));
       if (/^clearallforwardings\s+yes\s*$/im.test(preflight.output) || /^tunnel\s+(?!false\s*$|no\s*$|none\s*$)\S+/im.test(preflight.output)) return yield* Effect.fail(error('InvalidInput', 'Configured SSH alias clears forwarding or requests a device tunnel. Use a dedicated loopback-forward profile.'));
       preflight.output = ''; preflight.stderr = '';
       const port = yield* self.port(); g.origin = `http://127.0.0.1:${port}`;
       const child = yield* self.spawn(g, [...self.arguments(), '-L', `127.0.0.1:${port}:127.0.0.1:${self.config.profile.remotePort}`, '--', self.config.profile.destination]);
       g.forward = child;
-      const exited = Effect.flatMap(Effect.promise(() => child.closed), () => Effect.fail(child.failure()));
+      const exited = Effect.flatMap(Effect.promise(() => child.terminal), () => Effect.fail(child.failure()));
       const verify: Effect.Effect<ChatHostHealth, ApplicationError> = Effect.gen(function* () {
         while (true) {
           const result = yield* Effect.result(checkHostHealth({origin: g.origin!, token: self.config.token, expected: self.config.profile.expected}));
@@ -177,7 +190,7 @@ class Connection {
     }).pipe(Effect.timeoutOrElse({duration: '20 seconds', orElse: () => Effect.fail(error('Unavailable', 'SSH connection did not verify its independently running chat host before the startup deadline.'))}));
     return Effect.gen(function* () {
       const child = yield* establish;
-      yield* Effect.promise(() => child.closed);
+      yield* Effect.promise(() => child.terminal);
       return yield* Effect.fail(child.failure());
     }).pipe(Effect.onExit(exit => Effect.gen(function* () {
       const cause = Exit.isFailure(exit) ? exit.cause : undefined;
@@ -198,7 +211,7 @@ class Connection {
     const self = this;
     return Effect.gen(function* () {
       self.closed = true;
-      for (const g of self.generations) { g.reason = 'root'; if (g.fiber) yield* Fiber.interrupt(g.fiber); }
+      for (const g of [...self.generations]) { g.reason = 'root'; yield* self.release(g); }
       yield* releaseResource(async () => { await Promise.all([...self.generations].flatMap(g => [...g.processes].map(child => child.stop()))); });
       self.current = undefined; self.generations.clear();
       for (const queue of self.observers) Queue.endUnsafe(queue); self.observers.clear();
