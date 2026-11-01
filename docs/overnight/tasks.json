@@ -2184,8 +2184,8 @@
     "childThreadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-03-workspace-module-r1-bb5c5d0",
     "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-03-workspace-module-r1-bb5c5d0:ordinal:14",
     "childNodeId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Athread-send%3Achat-proof-apply-registration-fixed-integration-84923f2",
-    "status": "running",
-    "workState": "working",
+    "status": "completed",
+    "workState": "result_available",
     "hasPendingChildRuns": false,
     "latestTerminalRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-03-workspace-module-r1-bb5c5d0:ordinal:13",
     "latestTerminalStatus": "completed",
@@ -2208,5 +2208,19 @@
     "hasPendingQuestion": false,
     "pendingApproval": null,
     "waitTimedOut": false
+  },
+  "chat-proof-pr": {
+    "url": "https://github.com/ejjsharpe/moonbase/pull/18",
+    "head": "0b087c067fde4203635825abb395307a02c6b26d",
+    "base": "132d273073889bd0702cf96b1fc2a62d5027598c",
+    "state": "draft",
+    "nativeCurrentHead": "pending foreground release",
+    "sourceChecks": "26/frozen/type/build graph263/50/foundation40/diff pass"
+  },
+  "fresh-context-handoff": {
+    "requestedBy": "user",
+    "brief": "docs/overnight/FRESH-ORCHESTRATOR.md",
+    "goalComplete": false,
+    "parentWillStopCoding": true
   }
 }
