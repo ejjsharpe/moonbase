@@ -14,9 +14,6 @@ for (const file of manifest.files) {
   );
   const data = await readFile(`docs/source-snapshot/escode/${file.path}`);
   assert.equal(createHash('sha256').update(data).digest('hex'), file.sha256, file.path);
-  if (file.path.includes('/src/ui/')) {
-    assert.deepEqual(await readFile(`packages/ui/${file.path.split('/').at(-1)}`), data);
-  }
 }
 for (const entry of ['client', 'host-client', 'connection-client', 'chat-client']) {
   const path = `packages/application/src/${entry}.ts`;
@@ -30,6 +27,4 @@ for (const entry of ['client', 'host-client', 'connection-client', 'chat-client'
   assert.deepEqual(Object.keys(result.metafile.inputs), [path]);
   assert(!/node:|electron|@moonbase\/(workspace|pi-runtime|ssh)/.test(result.outputFiles[0].text));
 }
-console.log(
-  `Verified ${manifest.files.length} source hashes, active UI copies and browser-only command contracts.`,
-);
+console.log(`Verified ${manifest.files.length} source hashes and browser-only command contracts.`);

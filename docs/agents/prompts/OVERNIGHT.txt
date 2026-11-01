@@ -1,0 +1,281 @@
+HISTORICAL REQUIREMENTS — NOT AN EXECUTION INSTRUCTION
+
+Preserved verbatim below from Moonbase commit c89e4db for requirements and acceptance context.
+The orchestration, branch names and authorization below describe the original task.
+Use the current task authorization, AGENTS.md and MODULES.md for present work;
+this archive does not start work or grant new execution authority.
+
+PROJECT BRIEF — read this before the task
+
+Source application: /Users/elliotsharpe/Projects/escode (reference only).
+Target checkout: /Users/elliotsharpe/Projects/moonbase.
+Target GitHub repository: ejjsharpe/moonbase. Setup creates it private; workers use its verified origin.
+Product name: Moonbase. Preserve Nx, Bun, Electron, React, TypeScript, Monaco, StyleX and Base UI. Keep Effect for application effects, resource lifetimes, cancellation and typed failures. Keep React presentation and pure editor logic ordinary TypeScript.
+
+Current user direction replaces the earlier broad Pi Pocket-fork proposal. The user has now requested an unattended overnight implementation run producing reviewable PRs. Human review/acceptance remains pending, but is not a prerequisite for preparing later draft work. First produce a complete independent editor, then independent Pi Durable/chat/SSH modules, then compose them. Pi Pocket is a behavior reference only. Subagents, scheduling, sharing, PiP, browser automation, design tools and a Pocket frontend are outside this iteration.
+
+An independent editor includes a file/Git/recovery implementation. Its React package accepts an explicit browser-safe interface; it imports no Electron, Node filesystem, old escode host implementation, Codex or Pi Durable. The desktop shell composes modules. Pi Durable owns agent execution/transcript/task persistence. Effect manages surrounding application effects; it must not become a duplicate agent scheduler or transcript authority.
+
+SOURCE REUSE AND NOTICES
+- T3 references in this brief describe development/orchestration tooling only. Moonbase has no T3 Code application-code dependency. Use Pi Durable and the selected stack as normal dependencies; author Moonbase application code independently apart from verified user-authored escode editor/support code. Use Pi Pocket for behavior ideas only.
+- Before selecting any escode source, assets or tests, inspect attribution, extraction manifests and relevant history. The old repository includes T3/Codex vendoring and a Microsoft/VS Code lookup scorer. Exclude third-party-derived application helpers, schemas and vendored code from both the target source snapshot and active application. Reimplement required behavior from its requirements; preserve editor safety and observable behavior. Renaming or editing borrowed code is not an independent implementation. Unknown provenance is not proof of ownership: leave that source out and record the uncertainty.
+- Record the origin and reuse decision for selected editor files during setup. Copy only verified user-authored portions and required provenance; do not transplant the old backend, vendor directories or blanket notice bundle. Apply this rule to every later task and any copied fixture or asset.
+- Keep required notices for Pi Durable, the selected stack and actual transitive/bundled dependencies. A fresh Git history does not remove obligations for retained third-party material. Omit an old project-specific notice only after verifying the material requiring it is absent; never delete a notice to make retained borrowed code appear original. Derive distribution notices from what is actually shipped and record any unresolved provenance/licensing checks.
+
+EFFECT COMMAND CENTER — REQUIRED ARCHITECTURE
+- Build one shared application command center in packages/application. It owns typed application commands, queries and subscriptions, dispatch to module services, application-level cancellation/error handling, and composition of Effect dependencies. Organize implementation by these shared responsibilities and focused modules, rather than end-to-end feature vertical slices with separate runtimes, orchestration and transport.
+- Workspace, Pi and SSH packages expose focused Effect services/layers with injected dependencies. They retain their own domain rules, validation and resource implementations. The command center coordinates them; it does not absorb their implementations into a giant dispatcher. Keep the existing Nx apps/* and packages/* structure.
+- Each running process has one scoped Effect application runtime constructed at its composition root, with shared dependencies acquired once within that scope. Feature packages return Effects/scoped streams instead of constructing or running their own root runtimes. Tests may supply scoped test runtimes. Desktop and remote host are separate processes/authorities: compose the same application architecture with the capabilities each needs; do not attempt to share an in-memory runtime across SSH.
+- React receives a browser-safe command/query/subscription client. UI actions, keyboard actions and IPC/network adapters enter the same application command handlers instead of implementing feature-specific orchestration. Keep local buffers, rendering and pure editor calculations ordinary TypeScript. Privileged module implementations stay outside the renderer graph; validate/authenticate at real transport boundaries and preserve exact local/remote targets.
+- The standalone editor composes only editor/workspace capabilities; the standalone chat proof composes only chat/connection capabilities. Neither needs the other's runtime dependencies. The final desktop composes their capabilities through the same command center, without introducing a second orchestration path. Pi Durable remains the authority for agent execution, transcripts and task persistence.
+- Keep the center small: explicit typed handlers and layer composition for required operations. Use concurrency appropriate to each resource; a long chat or file operation must not globally block unrelated work or Stop. Add no generic workflow engine, plugin registry, global serial queue or duplicate event store.
+- The coordinator owns packages/application, its browser-safe contracts and composition conventions. Establish the first usable editor command interface in the foundation before parallel implementation; extend it centrally for chat/SSH when needed. Give every worker this architecture section with its task. Verify through public interfaces that entry points share handlers/dependencies, cancellation and disposal work, and standalone capability sets remain independent.
+
+Repository rules:
+- Inspect target README.md, AGENTS.md, DESIGN.md, glossary and the module plan before edits. When consulting source escode, read its README/AGENTS and applicable planning map; leave that repository and its tracker unchanged.
+- The source checkout has uncommitted StyleX/UI work. Use the setup's provenance-checked immutable source snapshot, not merely escode's HEAD or a live shared checkout. Follow SOURCE REUSE AND NOTICES above and preserve known save/path/recovery guarantees.
+- Work on the branch named by your task, in a separate checkout/worktree of the TARGET repository, starting from the coordinator's committed base. A changed working directory alone does not change T3's project/worktree binding. Never dispatch target work as a child of an escode-bound project.
+- Own only your assigned paths. Shared types, root manifests/lockfile, CI and exported interfaces have one coordinator. Request a concrete contract/dependency change there, then rebase; do not invent a competing interface or cherry-pick an unfinished sibling implementation.
+- Use existing code/platform facilities before adding abstractions or dependencies. Every nontrivial effect/recovery/state change needs an observable test through the module's public interface. Reuse meaningful existing tests; avoid tests of private helper calls or mocks that merely echo the implementation.
+- Do not delete original checkouts, provider history, stores, worktrees or unsaved edits. No legacy-state import or silent use of old live state.
+- Push your task branch and open one focused PR in ejjsharpe/moonbase, based on the supplied base branch. Describe final behavior, validation and limits. Do not merge GitHub PRs or push changes to an existing default branch. The lead may combine reviewed commits on separate working/integration branches. Do not mark manual/provider/packaged checks passed without evidence. If T3 PR-link tools exist, register the PR with the thread. Return PR URL, exact head SHA, checks run, pending checks and remaining concerns; delegated children do not watch/poll PRs.
+- A module is complete when it works through its interface and the task's acceptance examples pass. A compile-only source dump is not a completed feature.
+
+TASK — orchestrate Moonbase overnight and leave reviewable pull requests
+
+I am going away and want to return to a set of focused PRs. You are the single lead agent. Perform setup, delegate implementation, arrange independent review, fix findings and prepare dependent/integration work without waiting for my replies. Do not stop after a plan, one bootstrap PR, routine uncertainty or a missing manual check. Make ordinary engineering choices, record assumptions and continue all eligible work. Nothing in this instruction authorizes fabricating acceptance, narrowing editor safety or merging GitHub PRs.
+
+This prompt is self-contained: every numbered task brief is embedded below in its overnight form. Use those versions for workers; do not substitute older review-gated files from another copy of the prompt pack.
+
+CONTINUOUS WORK
+If this environment provides a goal tool, create an active goal: "Prepare Moonbase's independent editor, Pi Durable and SSH module PRs, technically reviewed dependent drafts, and an evidence-backed morning handoff without merging GitHub PRs." This is an explicit request to use that capability; no token budget is requested. Follow the tool's completion/blocking rules, and keep the objective active while authorized required work remains. In environments without it, maintain the same progress ledger across turns and act on child-completion notifications. A completed delegation or an intermediate progress message does not finish the overall job.
+
+PROJECT START AND AUTHORITY
+- Start this lead in the Moonbase project bound to /Users/elliotsharpe/Projects/moonbase. Read target instructions and inspect any existing work first. In T3, register/open the target as its own project before delegation; a cd from escode does not rebind a project. Do not launch Moonbase children from an escode-bound checkout or silently start extra top-level conversations. If project binding cannot be corrected with the available app tools, complete allowed setup/independent local work and report that exact blocker; never touch the source repository as a fallback.
+- Use the existing authenticated GitHub account to inspect/create the PRIVATE ejjsharpe/moonbase repository as task 00 specifies. If it exists, verify its identity and preserve its history/work. Fresh history means no imported escode/Pocket Git history, not permission to reset an existing repository.
+- All feature work happens in the new repository. Preserve escode's original checkout, uncommitted edits, user data and provider histories. Read and snapshot the selected editor source; do not destructively strip the original application.
+- Verify GitHub authentication and the available tool/permission mode early. Do not repeatedly request interaction while I am away. If an action is actually blocked by credentials, an approval callback or app capability, do not bypass that control: preserve work and continue independent tasks that do not depend on it. Record precise blockers and recovery steps.
+
+OVERNIGHT SCHEDULE
+1. Perform task 00 yourself and publish a focused foundation PR. Commit its source snapshot/contracts. Continue from that exact committed foundation on a working branch; do not wait for its GitHub merge or human review.
+2. Delegate 02-editor-module and 03-workspace-module concurrently into separate target-repository worktrees from that base. Give each the common brief, its complete overnight task, exact base SHA, ownership and agreed interfaces.
+3. Independently review each substantial PR using task 09. Arrange concrete fixes in the owning branch and re-review changed heads. Bring reviewed module commits together on a separate editor integration branch, resolve integration problems, then delegate 04-editor-proof from that committed combination.
+4. Once the editor proof's available automated/packaged checks are passing, preserve its evidence and label human visual/native acceptance PENDING. That label does not block independent Pi/SSH implementation. Delegate 05-pi-runtime and 06-ssh-module concurrently from the stable agreed base. If an actual editor technical failure remains, fix it rather than declaring the editor complete; separate Pi/SSH work may proceed only where it does not rely on that failing editor behavior or an unstable shared contract.
+5. Review/fix Pi and SSH PRs, combine their reviewed commits on a separate working branch, and delegate 07-chat-proof. Missing real credentials/test host blocks only those real-provider/SSH checks. Use controlled models/transport tests for the evidence they can establish and leave the missing real checks explicit.
+6. Prepare 08-combine only once the standalone module interfaces and available integration checks are technically sound. Human acceptance can remain pending. Keep this composition PR DRAFT when real/manual gates or product choices remain. Never couple modules to hide an incomplete independent proof, and never treat a local path as a remote path.
+7. At the end, produce one morning handoff with all PRs, exact heads/bases, dependencies, passing/failed/unrun checks, screenshots/evidence, review findings and a recommended review/merge order. State what works, what is incomplete and what I must do next. Leave no important work only in an unpushed branch when GitHub access is available.
+
+PR AND BRANCH STRATEGY — CONTINUE WITHOUT MERGING
+- Publish one focused PR per meaningful task. Use stacked PRs against the exact dependency branch when it is not merged; document every base. Independent editor/workspace siblings may share the foundation base. Do not open a pile of duplicate whole-project diffs against main.
+- The lead may merge reviewed feature commits into NON-DEFAULT working/integration branches to test fan-in and start dependent tasks. Publish/document those refs and ancestry. This is not authorization to merge PRs, accept the product, rewrite someone else's branches or push integration work to main. Keep original task PRs reviewable and give an explicit merge/retarget order.
+- Each PR must explain its actual contribution and prerequisite PRs/commits. Fix/rebase for changes in shared contracts under coordinator control. Never quietly start dependent work from a sibling's uncommitted filesystem state.
+- A complete, checked module may have a ready-for-review PR even when a parent PR is unmerged. Partial work, unresolved defects or missing required integration evidence belongs in a draft PR with an honest checklist. Do not manufacture tiny/stub PRs to hit a count.
+- No unattended merges to main, public exposure, deployment, release, credential rotation or remote-machine provisioning. The explicitly requested private repository creation and pushing new feature/working branches are in scope.
+
+DELEGATION AND QUALITY
+- Keep at most two coding workers plus one reviewer active, in addition to the lead. Use separate target-repository worktrees with committed bases. Reuse idle implementation workers; do not duplicate active work. Own shared contracts, root manifests/lockfile, CI, shared UI ownership and the dependency ledger yourself.
+- Use the live provider/model catalog and inherit the lead's actual model/options unless I explicitly chose others. For T3, use delegate_task with isolation='worktree' and advertised inherited options as required; retain task IDs and verify selections. Every independent delegated review round is a new task with the original brief, prior findings/responses and unresolved objections.
+- Validate changed runtime behavior through real module interfaces. Use real local files/Git/SQLite where appropriate, controlled providers and counted effects. Check independence, dirty-buffer preservation, conflicts/recovery, resource disposal, replay/reconnect, exact-target Stop and actual packaged/native assets. Distinguish source/type checks, controlled integration checks and real provider/SSH/manual evidence.
+- Review against the exact current head. Repair meaningful findings and repeat affected checks. Keep PRs linked to their T3 threads when tools are available. Children return PR/head/evidence and do not watch/poll PRs. The lead uses supported PR-watch/child-completion wakeups rather than shell watchers or busy polling; ending a turn while child work runs is fine, but do not declare the overall job finished with live tasks or avoidable authorized work remaining.
+- Do not wait for user acceptance overnight. Preserve PENDING HUMAN ACCEPTANCE labels for the editor, chat and final composition. Do not interpret my absence, a timeout or a passing mock as approval. For a genuinely unresolved product choice, choose the smallest reversible implementation consistent with my stated scope or leave that dependent portion draft/blocked while continuing independent work. Safety guarantees may not be weakened by assumption.
+- Do not ask for secrets in chat, spend real provider quota without explicit existing authorization, connect to an unspecified remote host or disable SSH host-key checking. Missing access is a check-specific blocker, not a reason to abandon unrelated implementation.
+
+MORNING DELIVERABLE
+A concise review queue of focused PRs, an honest runnable-state report, exact validation/evidence and a dependency/merge map. Preserve incomplete work as drafts and name blockers. Finishing the whole rewrite in one night is not a promise or an excuse to falsify tests; prioritize a useful independent editor and well-separated, reviewable Pi/SSH modules.
+
+NUMBERED OVERNIGHT TASK BRIEFS
+
+The common brief and overnight policy above apply to every task. Any mention of review means technical review by the lead/independent reviewer; human acceptance remains explicitly pending. All GitHub PRs stay unmerged.
+
+===== 00-setup.txt (OVERNIGHT) =====
+
+TASK — create the new project and the shared starting point
+
+Act as the setup agent. This task authorizes creating a private GitHub repository at ejjsharpe/moonbase and preparing a reviewable foundation PR, not implementing the editor or chat product.
+
+1. Inspect the target path and GitHub repository first. If absent, create them with fresh Git history, preserving source provenance instead of importing escode/Pocket history. If either exists, inspect ownership/history and preserve all existing work; report an incompatible target rather than overwriting it. Never reset, force-push, remove or replace an existing directory/history to achieve a clean start.
+2. Establish a minimal main baseline so PRs have a base. Then work on chore/module-foundation. Keep the Nx/Bun apps/* and packages/* structure and existing pinned stack choices. Register the target as its own T3 project when that capability is available. Do not launch implementation children from the source project.
+3. Apply SOURCE REUSE AND NOTICES before copying anything. Capture only the needed, verified user-authored escode editor source, UI tokens/recipes, behavior specs/tests and file/Git/native/recovery support into a documented source snapshot in the TARGET repository. Record original revision, hashes of selected working-tree files and their provenance/reuse decisions. Exclude .git, node_modules, state, secrets, old provider code and third-party-derived application helpers/vendor material. For excluded helpers, record required behavior and implement it independently. Preserve required notices for any retained material. Keep reference code distinct from active application entry points.
+4. Write a short MODULES.md defining public exports, allowed dependency directions and path ownership for packages/application, packages/editor, packages/workspace, packages/pi-runtime, packages/ssh and shared UI. Record the required Effect command center architecture in MODULES.md and target AGENTS.md. Define the first usable browser-safe editor command/query/subscription interface and the workspace service it calls; introduce only manifests/types immediately needed for that editor work. Put local IO behind the workspace adapter. Extract only editor-related data shapes from the old contracts, not its giant transport/schema layer. Document a small host health/auth/version contract for the later SSH and Pi tasks, with concrete inputs/outcomes rather than stub implementations.
+5. Establish editor acceptance scope from the existing product: normal/diff buffers, file/checkout tabs, preview/Keep Open, navigation/lookup/tree, explicit Save/conflicts, safe close/reopen, recovery and existing file operations. Preserve this scope unless the user explicitly narrows it. Identify which code is UI, pure state, local/native IO and agent-only. Existing filesystem helpers may be retained only when their user-authored provenance is verified; otherwise implement their required behavior independently. They do not justify importing the old chat runtime.
+6. Prepare the shared StyleX design source, short target AGENTS.md and meaningful bootstrap checks. Copy this prompt pack to docs/agents/prompts/ so future fresh-context agents receive the same brief. The new instructions must state the current module task, not inherit stale escode planning-only restrictions or Pocket self-editing instructions.
+7. Open the foundation PR. List exact base/source revisions, contracts, manifests and pending integration. Report which checks prove bootstrap only. The lead continues from this committed foundation without waiting for merge/human review, once it is operating in the target project.
+
+Done: correct new private repository, reviewable foundation PR, immutable source snapshot, one agreed editor interface and explicit acceptance scope. No supposedly runnable placeholder application, agent runtime or wholesale Pocket import is required here.
+
+
+===== 01-coordinator.txt (OVERNIGHT) =====
+
+TASK — coordinate the module PRs
+
+Run this in the registered Moonbase project from the committed foundation branch; its PR may remain unmerged. Read the prompt files in docs/agents/prompts/ and MODULES.md. Coordinate work; avoid becoming another author of every module.
+
+Maintain one committed base and a short PR/dependency ledger. Own packages/application and its command handlers, shared contracts, root manifests/lockfile, CI, module exports and shared UI changes while workers run. Required dependency/contract changes should be handled once in a small shared PR, then workers rebase. Verify root/worktree/project binding before delegation.
+
+Implement and test the shared command center as module services become available. Publish its initial interface before the editor/workspace workers start. Include the required architecture section in every dispatch, and keep application orchestration out of feature packages. Verify shared layer acquisition/disposal and command routing through the public client, including cancellation that leaves unrelated commands usable. Parallel task ownership is a delivery strategy, not permission to create feature-owned Effect runtimes or vertical application stacks.
+
+Schedule:
+A. Launch 02-editor-module and 03-workspace-module in parallel from the same committed foundation. Each gets its own target-repository worktree and branch. Review their interfaces and PRs. Keep file IO and browser UI ownership separate.
+B. After both are technically reviewed, combine their commits on a separate working branch and run 04-editor-proof. Keep editor independence and technical checks real; label human acceptance pending and continue eligible work.
+C. Launch 05-pi-runtime and 06-ssh-module in parallel from a stable committed base with agreed contracts, following the overnight technical-gate policy. The SSH module transports a connection; it neither owns chat state nor installs/stops the remote agent host. Use the documented health/connection contract.
+D. After their PRs are technically reviewed, combine reviewed commits on a working branch and run 07-chat-proof. Preserve human acceptance as pending.
+E. Once both independent interfaces/proofs are technically sound, prepare 08-combine as reviewable work, with any human/real-environment gates pending. Do not connect modules to conceal incomplete interfaces.
+
+Use 09-review as an independent reviewer of each substantial PR. Fix findings in the owning branch. Keep at most two implementation workers plus one reviewer active at a time. Never run agents on the same checkout or duplicate active work.
+
+For T3 delegation: discover the live provider/model catalog; inherit the current model/options unless instructed otherwise. Use app-owned delegate_task with isolation='worktree' when required by inherited options/worktree isolation. Track task IDs, PR URLs and exact head SHAs. Every independent review round is a new delegated task containing the complete brief and prior findings/responses. Child task completion returns to this thread. Use PR-watching tools rather than your own polling loop when monitoring is requested/available.
+
+All PRs target Moonbase and stay unmerged. Continue dependent draft work from documented committed dependency/working branches after technical review. Keep a morning PR/evidence/dependency ledger. Human acceptance is pending; do not narrow existing editor safety behavior.
+
+
+===== 02-editor-module.txt (OVERNIGHT) =====
+
+TASK — extract the independent editor module
+
+Branch: feat/editor-module.
+Own: packages/editor/** and its tests/demos. Use the shared UI package and the frozen workspace interface. Request changes outside that ownership from the coordinator.
+
+Read the source snapshot's main.tsx, file-activation.ts, close-preservation.ts, workspace.ts, files.tsx, files-model.ts, files-viewport.ts, file-lookup.tsx, sidebar.tsx and UI recipes. The old entry mixes editor and chat: extract the editor behavior rather than copying that application entry intact.
+
+Implement a reusable React/Monaco editor through the agreed public interface. Its state/buffers/tabs belong to an editor instance, not process-global registries tied to escode. Preserve shared normal/comparison buffers, explicit Save/conflict handling, checkout/file tabs, preview/Keep Open, order/reopen/navigation, tree/lookup, view state and safe close/recovery handoffs within the agreed scope. The injected browser-safe workspace client requests IO through the application command center; the workspace service supplies the implementation. This package owns presentation and client state, not filesystem authority.
+
+Remove direct window.escode calls and imports from old host internals. Keep Electron/Node/Pi/provider code outside the renderer dependency graph. Consume the command center's injected browser-safe editor client; the production adapter routes IO requests through its shared handlers. Keep React rendering/pure calculations ordinary TypeScript and construct no feature-owned Effect runtime. Expose only the editor operations a consumer actually needs.
+
+Provide a small in-memory workspace implementation for observable editor tests or a package demo, composed behind the same application command interface; it is a concrete second adapter, not a fake production persistence guarantee. Demonstrate two editor instances do not share dirty buffers, selections or recovery identity accidentally. Keep source helper errors/validation when moving code.
+
+Acceptance: open/edit/save; external-change conflict preserves dirty text; file/diff views share one buffer; navigation and Save/Discard/Cancel work; previews/reopen preserve promised state; disposal releases models/subscriptions; injected IO failures remain visible without losing edits. Run affected type/lint/tests and bundle/import checks demonstrating no host/provider code reaches the renderer. Report native and complete-app checks that require the workspace/integration PRs.
+
+Open the focused PR; include a public-interface example and the preservation scenarios passed. Do not add chat UI, SSH or Pi dependencies, or claim the complete desktop editor is accepted from a package demo.
+
+
+===== 03-workspace-module.txt (OVERNIGHT) =====
+
+TASK — extract the editor's local workspace implementation using Effect
+
+Branch: feat/workspace-module.
+Own: packages/workspace/**, its native assets and focused tests. Implement the frozen editor interface; keep React and chat/provider code out of this module.
+
+Inspect the provenance-checked source snapshot's Checkout/project, checkout-repository, workspace/recovery, file operations/journal, native-import, lookup, watcher/Git observation and filesystem helper code. Trace every required dependency before selecting a reusable part. Reuse only verified user-authored helpers under SOURCE REUSE AND NOTICES; independently implement required behavior of excluded borrowed helpers, including the old Microsoft/VS Code lookup scorer. Separate these editor responsibilities from chat SQLite, receipts, checkpoints, provider history and old host RPC wiring.
+
+Provide Effect-scoped local file read/save, listings/watch/lookup, Git status/comparisons and the agreed create/rename/move/Trash/copy/import behavior, with independent client recovery/workspace persistence. Own resource acquisition/disposal, cancellation and actionable typed errors. Keep existing trust-boundary validation, exact checkout/path identities, size/encoding limits, explicit overwrite checks, uncertain-operation evidence and partial-success semantics. Filesystem effects and database commits are not one atomic transaction.
+
+Export these capabilities as injectable services/layers for the shared application command center. Own workspace implementation and invariants; leave application command dispatch and root runtime construction to the coordinator/composition root.
+
+The new editor must start without Codex, Pi, a chat database or an old escode data store. New persistence uses a separate explicit namespace; legacy data is neither imported nor deleted. Avoid a generic workflow engine or a second transport layer for this local module.
+
+Acceptance: real temporary files/Git repositories and real persistence exercise read/save/conflict; an external change preserves dirty baselines; watcher disposal; known/uncertain move/Trash handoffs preserve drafts; independent clients do not erase each other's recovery; failed/full/unavailable persistence is visible; restart reconciliation does not repeat an uncertain mutation. Reuse meaningful source safety/native race fixtures and qualify copied native helper build/package paths.
+
+Run affected checks. State exact macOS/native and power-loss limits. Open one PR with a public-interface example and evidence that no agent/provider subsystem is needed. Keep the new app shell and React editor out of this branch.
+
+
+===== 04-editor-proof.txt (OVERNIGHT) =====
+
+TASK — deliver the standalone editor application and polish it
+
+Branch: feat/standalone-editor.
+Start from the lead's committed integration of technically reviewed editor/workspace heads; GitHub merges are not required.
+Own: apps/desktop/** and shared UI changes coordinated for this stage. Consume packages/editor and packages/workspace only through their public exports; fixes inside either package go through its owner or a clearly separated follow-up PR.
+
+Build the minimal Electron composition using packages/application's command center with workspace services and one scoped runtime at the process composition root, safe preload/IPC, native dialogs/clipboard/actions and the React editor. UI/keyboard/native/IPC actions use the same command handlers. Closing/hiding a window, explicit Quit and Save/Discard/Cancel must preserve the agreed editor lifecycle. No agents/chats/providers/Pi/SSH code is a startup dependency. App composition should be small and readable.
+
+Keep the source editor's useful behavior while simplifying the surrounding shell. Follow DESIGN.md, StyleX tokens/recipes and Base UI interaction patterns. Make tabs, tree, diff, lookup, empty/error/loading states and keyboard focus coherent. Check a small window, long names, many tabs, zoom and keyboard-only operation. Inspect screenshots from the actual built UI; do not call a visual change complete from source review alone.
+
+Wire real Nx dev/typecheck/lint/test/build/package targets and Monaco/native resources with the coordinator. Use a fresh user-data directory. Exercise real filesystem edits, conflict handling, view switching, file operations, restart recovery and close cancellation. Verify a packaged macOS editor starts with no provider installed/available and its renderer bundle contains no Node/filesystem/provider implementation.
+
+Done: a runnable, useful standalone editor, evidence/screenshots, concise consumer documentation and a focused PR. No disabled placeholder chat panel. Report manual VoiceOver/native gates honestly and label human acceptance pending. Return evidence to the lead so eligible independent work continues overnight.
+
+
+===== 05-pi-runtime.txt (OVERNIGHT) =====
+
+TASK — build the independent Pi Durable chat host with Effect
+
+Branch: feat/pi-runtime.
+Start when the lead dispatches this independent task from a stable committed contract base under the overnight technical-gate policy. Human editor acceptance may remain pending.
+Own: packages/pi-runtime/** and its tests. Follow the agreed loopback/auth/health/version interface. It must run and be testable with no editor, Electron or React import.
+
+Read current primary Pi Durable docs/source; select and record an exact compatible package pin. The prior research inspected Pi 8ffea8a1bfdc32523ab056549b26141018c1e700, Durable 1.4.0; reverify actual APIs and runtime/asset requirements before coding. Pi Pocket may inform required behavior for compact views, request identities and history handling; implement Moonbase's application code independently without copying Pocket source.
+
+Implement only personal chat v0: one host owner/store, saved conversations, fixed working directory, configured model/auth, send, streamed messages/tool activity, bounded history, status and Stop. Use existing host-side credentials; create no credential-management product. Pi Durable owns execution/transcripts/tasks. Effect owns host lifetime, resources, cancellation and typed failures; adapt cooperative cancellation deliberately rather than assuming an interrupted Effect stops admitted Pi work.
+
+Export Pi capabilities as services/layers consumed by the shared application command center. Coordinate its chat contracts/handlers and standalone host composition with the lead. The host executable creates its process runtime at bootstrap; this feature package does not create a parallel application dispatcher or per-chat Effect root runtimes.
+
+Expose a small validated, authenticated loopback protocol usable through SSH forwarding. Stable request IDs must bind immutable payload/actor/store/target; reconnect queries current state and never invents another Send. Distinguish deferred live progress from persisted admission/completion. State exact-target Stop, storage failure and restart semantics. A closed client subscription must not stop agent work. Closing the host is distinct from aborting conversations. Ensure one process owns a store and bound streaming/history delivery.
+
+Test with a scripted/faux model, real SQLite and counted tools: duplicate/lost Send responses, changed-payload retry, restart, interrupted effects, bounded view recovery, Stop races and storage failure. Run a real provider smoke only with available explicit credentials/authorization and record its cost/coverage. No external exactly-once promise. Return a documented standalone host command and a focused PR.
+
+Exclude editor integration, SSH implementation, subagents, schedules, roles/multiplayer, browser/artifacts/design, legacy imports and a second execution event store.
+
+
+===== 06-ssh-module.txt (OVERNIGHT) =====
+
+TASK — build the independent Effect SSH connection module
+
+Branch: feat/ssh-transport.
+Start when the lead dispatches this independent task from a stable committed contract base under the overnight policy; run alongside the Pi host task. Human editor acceptance may remain pending.
+Own: packages/ssh/** and its tests. Implement only scoped SSH connection/forwarding and connection status. Import no editor, React, Electron or Pi internals.
+
+Use the system OpenSSH client, existing SSH config/agent/key handling and local port forwarding to the explicit loopback chat-host endpoint. Scope the SSH child, forwarded port and health checks with Effect. Validate profile/options and pass process arguments safely. Preserve host-key verification and user SSH policy; never disable checking to make a test pass. Keep secrets out of source, transcripts, process arguments and logs; request missing secrets through the host's private mechanism when available.
+
+The remote Pi host runs independently. This module does not install packages, deploy code, auto-provision services, start/stop remote agent jobs or delete remote state. Document how an operator runs the standalone host separately. Closing/reconnecting a tunnel changes connectivity only. A successful TCP connection is not proof of application identity: surface the agreed authenticated host/version health result, or hand it to the client layer for verification.
+
+Expose a small scoped interface returning the forwarded endpoint and observable connection/error state. Handle connection failure, SSH exit, port collision, cancellation and teardown without leaking children/listeners/ports. Reconnect must not resend chat input.
+
+Supply that interface as a service/layer to the shared application command center; the connection command handlers and root runtime are coordinator-owned. Keep SSH process/resource mechanics inside this package.
+
+Test lifecycle/error cases with controlled SSH processes and a loopback endpoint; include a real OpenSSH integration test when an explicit test host is available. Report missing real-host coverage rather than pretending a fake process proves host-key behavior or remote persistence. Open one PR with a runnable connection example and exact tested limits.
+
+
+===== 07-chat-proof.txt (OVERNIGHT) =====
+
+TASK — prove the standalone remote-chat workflow
+
+Branch: feat/chat-proof.
+Start from the lead's committed integration of technically reviewed Pi runtime/SSH heads. Their PRs may remain unmerged.
+Own: a small apps/chat-probe/** proof application and required shared client code; coordinate root manifests/lockfile. Use the existing React/StyleX/Base UI stack and public Pi/SSH interfaces. Do not import the editor package.
+
+Deliver this exact workflow: connect to one configured remote host through SSH; verify its application identity; create/list/open a saved chat with a fixed remote working folder and configured model; send one message; see streamed response and tool activity; Stop; disconnect/reconnect and recover the current chat without resending. Keep drafts/status/error feedback understandable. The SSH lifecycle lives in privileged code, not the renderer. Expose only the narrow client operations needed.
+
+Compose the shared application command center with chat/connection services at the proof application's process root; use its browser-safe client for UI commands and subscriptions. Keep React rendering ordinary TypeScript. Leave Pi's database/model credentials on the remote machine. Page/bound displayed history/output and preserve one pending command identity across lost responses. Show disconnected, reconnecting, running, stopped, failed and uncertain outcomes honestly.
+
+Test the production client/host protocol with a local controlled host plus SSH lifecycle checks. A real remote smoke requires an available explicit test host; report if absent. Test a lost Send response, reload/reconnect, live output, Stop and client closure while remote work continues. Capture the actual UI at normal/constrained sizes. Run affected checks and package/runtime asset tests where applicable.
+
+Done: independently useful chat proof and focused PR with evidence; no dependency on the editor. Label human acceptance and unavailable real-remote checks pending; return the actual technical status to the lead. Do not add Pocket's other product features or promote a provider/SSH mock into a real-remote qualification claim.
+
+
+===== 08-combine.txt (OVERNIGHT) =====
+
+TASK — prepare composition of the independently proven editor and chat modules
+
+Branch: feat/workbench-composition.
+Start only when the lead confirms both independent module interfaces/proofs are technically sound. Human acceptance can remain pending; final composition remains draft where required real/manual checks are missing.
+Own: apps/desktop composition/navigation and narrowly required shared UI. The editor, workspace, Pi runtime and SSH packages remain reusable through public exports; no human approval is inferred from preparing this draft.
+
+Compose the two technically proven capabilities into the Moonbase desktop shell. Human product acceptance remains pending. Propose the smallest layout supporting switching between editor and chat; keep existing tokens, tabs, focus and dirty-buffer behavior coherent. Introduce no direct imports between editor internals and Pi internals. Keep each module's standalone proof runnable so independence remains demonstrable.
+
+Extend the existing application command center's composition with the reviewed capabilities. Preserve one application runtime per process and the shared handlers/client interface; do not nest the standalone proofs' runtimes or create a second effect/orchestration path in the desktop entry point.
+
+Local editor and remote agent paths are separate authorities. Do not map equal-looking paths across machines, synchronize files or imply that a remote agent edits local buffers. Bind any open-file action to verified host/checkout identity; otherwise show the path without opening an unrelated local file. Remote file editing/sync is a separate product decision.
+
+Test navigation during live chat and dirty editing, reconnect, Stop, tab closure, independent drafts, Save/Discard/Cancel and explicit Quit. Ensure closing an editor does not silently stop remote work, a chat reconnect does not overwrite buffers, and no connection retry resends a message. Keep host shutdown distinct from quitting a client.
+
+Run integrated type/lint/tests, real packaged Electron and available explicit provider/SSH checks. Record manual/native/accessibility and unavailable remote coverage. Open a focused composition PR and return remaining decisions. Do not absorb module implementations into the application entry point or remove standalone checks to get a green build.
+
+
+===== 09-review.txt (OVERNIGHT) =====
+
+TASK — independently review one module PR
+
+Input supplied by coordinator: TARGET PR URL, exact head SHA, base SHA, task brief, dependency state, evidence, and prior findings/responses. If any required input is missing, obtain it from the PR/coordinator before declaring a result.
+
+Read target AGENTS.md, MODULES.md, the originating brief, relevant source snapshot and connected implementation, not just the diff. Review against both the actual required behavior and the target repository's standards. This is read-only review; implementation fixes belong in the owning task branch.
+
+Prioritize: lost/overwritten editor work; unsafe paths; persistence/uncertain effects; cancellation/resource leaks; reconnect/resend; stale Stop; local/remote identity confusion; hidden imports between modules; unbounded output/cache; false security/durability claims; accessible UI/error states; broken build/package/native assets. Check public-interface tests prove observable behavior rather than private structure or a self-confirming mock.
+
+Check the required Effect command center architecture: shared handlers and dependencies, runtime creation at process composition roots, capability-only standalone compositions and browser-safe clients. Flag feature-owned root runtimes/vertical orchestration, duplicated dispatch, a giant dispatcher absorbing module logic, or global serialization that blocks unrelated work/Stop. Verify the relevant public-interface lifecycle/routing evidence rather than treating the package name as proof.
+
+Check selected source provenance and actual bundled inputs against SOURCE REUSE AND NOTICES. Flag copied third-party application helpers, missing required dependency notices, unsupported ownership claims, or old blanket notices carried forward without checking what ships.
+
+Verify the PR is self-contained or explicitly dependent, current checks match the exact head, and reported manual/provider/remote evidence exists. Compare claimed scope with what can actually run. A dump of old source, a demo stub or a narrowed save guarantee is not acceptance of the extraction.
+
+Return actionable findings with severity, file/line, concrete failure scenario and smallest adequate fix. Distinguish defects from unrun checks and optional suggestions. If none, say no blocking findings with remaining limits. Do not invent style findings to fill a quota, modify code, merge, or watch/poll PRs. Each later independent review is a fresh delegated task with the complete context and unresolved objections.
+
