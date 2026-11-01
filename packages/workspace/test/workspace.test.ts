@@ -118,7 +118,7 @@ test('Git staged and unstaged originals both compare against the current working
     const staged = await f.client.command('readComparison', {target: {checkout, path: 'file.txt'}, area: 'staged'}), unstaged = await f.client.command('readComparison', {target: {checkout, path: 'file.txt'}, area: 'unstaged'});
     assert.equal(staged.original, 'HEAD'); assert.equal(unstaged.original, 'index'); assert.equal(staged.working?.text, 'working');
     assert.deepEqual((await f.client.command('gitStatus', {checkout})).changes.filter(c => c.path === 'file.txt').map(c => c.area), ['staged', 'unstaged']);
-    assert((await f.client.command('lookupFiles', {checkout, query: 'fltx'})).paths.includes('file.txt'));
+    assert((await f.client.command('lookupFiles', {checkout, query: 'fltx'})).matches.some(match => match.path === 'file.txt'));
     assert(!(await f.client.command('listDirectory', {checkout, path: '', hideIgnored: true})).entries.some(e => e.path === 'ignored.txt'));
   } finally { await f.close(); }
 });
@@ -248,4 +248,75 @@ test('known native Trash keeps another client draft and deliberate replacement u
     trashPath = result.items[0].message!.replace('macOS Trash: ', '');
     assert.equal((await f.client.command('loadRecovery', {clientId: 'bob'})).state.drafts[0].text, 'bob survives trash');
   } finally { if (trashPath.includes('/.Trash/') && existsSync(trashPath)) rmSync(trashPath); await f.close(); }
+});
+
+test('lookup honors nested ignore policies, ranks and highlights all pieces, quotes contiguous text, and keeps history separate', async () => {
+  const f = fixture();
+  try {
+    for (const p of ['src', 'nested', 'node_modules']) mkdirSync(join(f.root, p));
+    const files = ['src/FooBar.test.ts', 'src/foo-baz.ts', 'nested/hidden.ts', 'nested/keep.ts', 'node_modules/dep.ts', 'ignored.ts', 'rg-hidden.ts'];
+    files.forEach(p => writeFileSync(join(f.root, p), p));
+    writeFileSync(join(f.root, '.gitignore'), 'ignored.ts\n'); writeFileSync(join(f.root, '.ignore'), 'rg-hidden.ts\n'); writeFileSync(join(f.root, 'nested/.rgignore'), 'hidden.ts\n');
+    const checkout = await f.client.command('openCheckout', {root: f.root});
+    const all = await f.client.command('lookupFiles', {checkout, query: 'ts'});
+    assert(!all.partial, all.error); assert(all.matches.some(m => m.path === 'nested/keep.ts'));
+    for (const hidden of ['nested/hidden.ts', 'node_modules/dep.ts', 'ignored.ts', 'rg-hidden.ts']) assert(!all.matches.some(m => m.path === hidden));
+    const pieces = await f.client.command('lookupFiles', {checkout, query: 'FB ts'});
+    assert.equal(pieces.matches[0].path, 'src/FooBar.test.ts');
+    assert.deepEqual(pieces.matches[0].positions.map(p => pieces.matches[0].path[p]).join(''), 'FBts');
+    assert.equal((await f.client.command('lookupFiles', {checkout, query: 'FB nonexistent'})).matches.length, 0);
+    assert.equal((await f.client.command('lookupFiles', {checkout, query: '"FooBar"'})).matches[0].path, 'src/FooBar.test.ts');
+    assert.equal((await f.client.command('lookupFiles', {checkout, query: '"FB"'})).matches.length, 0);
+    const history = ['node_modules/dep.ts', 'missing.ts', 'node_modules/dep.ts', 'src/FooBar.test.ts'];
+    const recent = await f.client.command('lookupFiles', {checkout, query: 'ts', history});
+    assert.equal(recent.history.filter(m => m.path === 'node_modules/dep.ts').length, 1);
+    assert(recent.history.some(m => m.path === 'missing.ts')); assert(!recent.matches.some(m => history.includes(m.path)));
+    assert.equal((await f.client.command('lookupFiles', {checkout, query: '', history})).matches.length, 0);
+    assert.equal((await f.client.command('lookupFiles', {checkout, query: 'node_modules/dep.ts'})).matches[0].path, 'node_modules/dep.ts');
+    assert((await f.client.command('lookupFiles', {checkout, query: 'ts', limit: 1})).partial);
+    await assert.rejects(f.client.command('lookupFiles', {checkout, query: 'ts', history: ['../outside']}), rejects('InvalidInput'));
+    writeFileSync(join(f.base, 'outside-ignore'), '*\n'); rmSync(join(f.root, '.ignore')); symlinkSync(join(f.base, 'outside-ignore'), join(f.root, '.ignore'));
+    const unavailable = await f.client.command('lookupFiles', {checkout, query: 'ts'});
+    assert(unavailable.partial && unavailable.error); assert.equal(unavailable.matches.length, 0);
+  } finally { await f.close(); }
+});
+
+test('unsubscribe during pending workspace/watch acquisition and concurrent runtime disposal release all native watchers', async () => {
+  const f = fixture();
+  try {
+    const checkout = await f.client.command('openCheckout', {root: f.root});
+    const before = process.getActiveResourcesInfo().filter(name => name === 'FSEventWrap').length;
+    let delivered = 0; const errors: unknown[] = [];
+    const stops = Array.from({length: 16}, () => f.client.watch({checkout, paths: ['']}, () => delivered++, error => errors.push(error)));
+    stops.forEach(stop => stop());
+    await f.runtime.dispose(); await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(delivered, 0); assert.equal(errors.length, 0);
+    assert.equal(process.getActiveResourcesInfo().filter(name => name === 'FSEventWrap').length, before);
+  } finally { await f.close(); }
+});
+
+test('filesystem success followed by real SQLite publication failure stays observable and retry publishes without repeating mutation', async () => {
+  const {DatabaseSync} = await import('node:sqlite'), {fileURLToPath} = await import('node:url');
+  const f = fixture(), helper = join(f.base, 'pause-after-move'), ready = join(f.base, 'ready'), release = join(f.base, 'release'), count = join(f.base, 'count');
+  const binary = fileURLToPath(new URL('../dist/filesystem', import.meta.url));
+  const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
+  writeFileSync(helper, `#!/bin/sh\nif [ "$1" = move ]; then\n printf 'called\\n' >> ${quote(count)}\n ${quote(binary)} "$@" || exit $?\n /usr/bin/touch ${quote(ready)}\n while [ ! -e ${quote(release)} ]; do /bin/sleep 0.01; done\n exit 0\nfi\nexec ${quote(binary)} "$@"\n`); chmodSync(helper, 0o700);
+  const runtime = ManagedRuntime.make(WorkspaceLive({dataDirectory: f.dataDirectory, hostId: 'local-test', filesystemHelper: helper})), client = makeEditorClient(runtime);
+  try {
+    writeFileSync(join(f.root, 'file.txt'), 'disk'); const checkout = await client.command('openCheckout', {root: f.root});
+    const disk = await client.command('readFile', {checkout, path: 'file.txt'});
+    await client.command('persistRecovery', {clientId: 'alice', expectedRevision: 0, state: draft('alice', checkout, 'retained dirty', disk)});
+    const sources = await client.command('inspectEntries', {checkout, paths: ['file.txt']});
+    const operation = {id: 'publication', clientId: 'alice', checkout, kind: 'move' as const, sources, destination: 'moved.txt'};
+    const pending = client.command('mutate', operation);
+    const deadline = Date.now() + 3000; while (!existsSync(ready)) { assert(Date.now() < deadline, 'native operation did not reach pause'); await new Promise(r => setTimeout(r, 10)); }
+    const lock = new DatabaseSync(join(f.dataDirectory, 'moonbase-workspace-v1.sqlite'));
+    try {
+      lock.exec('BEGIN IMMEDIATE'); writeFileSync(release, 'resume'); const result = await pending;
+      assert(result.message?.includes('publication failed')); assert.equal(result.items[0].outcome, 'completed'); assert.equal(readFileSync(join(f.root, 'moved.txt'), 'utf8'), 'disk');
+    } finally { lock.exec('ROLLBACK'); lock.close(); }
+    const recovered = await client.command('loadRecovery', {clientId: 'alice'});
+    assert.equal(recovered.state.drafts[0].target.path, 'moved.txt'); assert.equal(recovered.state.drafts[0].text, 'retained dirty');
+    assert.equal((await client.command('mutate', operation)).outcome, 'completed'); assert.equal(readFileSync(count, 'utf8'), 'called\n');
+  } finally { writeFileSync(release, 'resume'); await runtime.dispose(); await f.close(); }
 });

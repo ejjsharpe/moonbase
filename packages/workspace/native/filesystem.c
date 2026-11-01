@@ -507,8 +507,12 @@ int main(int argc, char **argv) {
     owned_temp = argv[3];
     transfer(STDIN_FILENO, temp);
     if (fcopyfile(original, temp, NULL, COPYFILE_METADATA) ||
-        fchmod(temp, info.st_mode & 07777) || fsync(temp) || close(temp))
+        fchmod(temp, info.st_mode & 07777) || fsync(temp))
       fail("Stage file");
+    struct stat staged;
+    if (fstat(temp, &staged)) fail("Inspect staged save");
+    printf("%llu:%llu", (unsigned long long)staged.st_dev, (unsigned long long)staged.st_ino);
+    if (close(temp)) fail("Close staged save");
     return 0;
   }
   errno = EINVAL;

@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import type { ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { Store } from './store.ts';
+import { matchPath, compareMatches } from './lookup.ts';
 import { Directory, identity, makeRunner } from './filesystem.ts';
 import { NativeImport } from './native-import.ts';
 import { canonical, checkout, document, ensure, fail, hash, identifier, path, recovery, same, textDocument } from './validation.ts';
@@ -25,7 +26,7 @@ export type WorkspaceConfiguration = {
 };
 type Approval = { target: CheckoutTarget; identity: string; common: {path: string; identity: string}; gitEntry: {identity: string; pointer: string | null} };
 type SaveRecord = { published?: boolean; temporary?: string; input: CommandInput<'saveFile'>; result?: SaveResult; started: boolean; message?: string };
-type OperationRecord = { publishedItems?: string[]; input: WorkspaceOperation; result: OperationResult; revision: number; acknowledged: boolean };
+type OperationRecord = { staging?: string[]; publishedItems?: string[]; input: WorkspaceOperation; result: OperationResult; revision: number; acknowledged: boolean };
 const key = (clientId: string, id: string) => hash(canonical([clientId, id]));
 const affected = (p: string, source: string) => p === source || p.startsWith(source + '/');
 const folded = (p: string) => p.normalize('NFC').toLowerCase();
@@ -93,14 +94,14 @@ class LocalWorkspace {
         return Promise.all(input.paths.map(async p => { path(p); return { target: {checkout: input.checkout, path: p}, ...await directory.entry(p, signal) }; }));
       }),
       mutate: call<'mutate'>((input, signal) => this.serial(input.checkout.checkoutId, () => this.mutate(input, signal))),
-      operationStatus: call<'operationStatus'>(async input => { identifier(input.clientId); identifier(input.id); return this.operation(key(input.clientId, input.id))?.result ?? null; }, true),
+      operationStatus: call<'operationStatus'>(async input => { identifier(input.clientId); identifier(input.id); await this.recoverEvidence(); return this.operation(key(input.clientId, input.id))?.result ?? null; }, true),
       acknowledgeOperation: call<'acknowledgeOperation'>(async input => {
         identifier(input.clientId); identifier(input.id);
         const id = key(input.clientId, input.id), record = this.operation(id);
         if (!record) return;
         ensure(record.result.outcome !== 'uncertain', 'Uncertain operation evidence cannot be acknowledged away. Inspect the affected paths.');
         if ((this.store.readRecovery(input.clientId)?.revision ?? 0) <= record.revision) fail('Persistence', 'Publish reconciled recovery before acknowledging this operation.');
-        record.acknowledged = true; this.store.put('operations', id, record); this.volatileOperations.delete(id);
+        this.store.put('operations', id, {...record, acknowledged: true}); this.volatileOperations.delete(id);
       }, true),
       loadRecovery: call<'loadRecovery'>(async input => this.load(input.clientId), true),
       persistRecovery: call<'persistRecovery'>(async input => {
@@ -108,6 +109,11 @@ class LocalWorkspace {
         recovery(input.state, input.clientId);
         for (const target of input.state.checkouts) this.approval(target);
         const state = structuredClone(input.state);
+        const retained = this.store.readRecovery(input.clientId)?.state as EditorRecovery | undefined;
+        for (const record of this.operations().filter(r => r.result.outcome === 'uncertain')) {
+          for (const draft of retained?.drafts ?? []) if (same(draft.target.checkout, record.input.checkout) && record.input.sources.some(s => affected(draft.target.path, s.target.path)))
+            if (!state.drafts.some(d => same(d.target, draft.target))) fail('Persistence', 'An uncertain operation still owns this recovery draft. Inspect/reconcile the original paths before discarding it.');
+        }
         return {revision: this.store.persist(input.clientId, input.expectedRevision, state)};
       }, true),
       watch: input => this.watch(input),
@@ -122,7 +128,7 @@ class LocalWorkspace {
   }
   async serial<A>(resource: string, fn: () => Promise<A>): Promise<A> {
     const previous = this.locks.get(resource) ?? Promise.resolve();
-    const next = previous.catch(() => {}).then(fn); this.locks.set(resource, next);
+    const next = previous.catch(() => {}).then(() => { if (this.closed) fail('Unavailable', 'Workspace scope is closed.'); return fn(); }); this.locks.set(resource, next);
     try { return await next; } finally { if (this.locks.get(resource) === next) this.locks.delete(resource); }
   }
   async close() {
@@ -132,6 +138,7 @@ class LocalWorkspace {
     const exits = [...this.children].map(child => once(child, 'close').catch(() => {}));
     for (const child of this.children) child.kill('SIGKILL');
     await Promise.allSettled(exits); await Promise.allSettled([...this.pending]);
+    for (const stop of this.subscriptions) stop();
     for (const directory of this.directories.values()) directory.close();
     this.store.close();
   }
@@ -215,7 +222,7 @@ class LocalWorkspace {
     const id = key(input.clientId, input.requestId), previous = this.saveRecord(id);
     if (previous) {
       if (!same(previous.input, input)) fail('Conflict', 'Save request ID already belongs to a different payload or target.');
-      if (previous.result) return previous.result;
+      if (previous.result) { if (this.volatileSaves.has(id)) this.publishSave(id, previous); return previous.result; }
       return fail('Uncertain', 'Interrupted save retained its intent. Inspect disk and recovered draft before a new deliberate save.');
     }
     this.assertSettled(input.target.checkout);
@@ -228,10 +235,10 @@ class LocalWorkspace {
     const record: SaveRecord = {input, started: true, temporary};
     this.store.put('saves', id, record);
     try {
-      await directory.io(['stage', input.target.path, temporary], input.text);
+      const stagingIdentity = (await directory.io(['stage', input.target.path, temporary], input.text)).toString();
       const current = await directory.read(input.target.path);
       if (current.version !== input.expectedVersion) record.result = {kind: 'conflict', disk: current};
-      else { await directory.io(['replace', input.target.path, temporary, (await directory.entry(temporary)).identity]); record.result = {kind: 'saved', disk: proposed}; }
+      else { await directory.io(['replace', input.target.path, temporary, stagingIdentity]); record.result = {kind: 'saved', disk: proposed}; }
       try { this.publishSave(id, record); }
       catch (error) {
         if (record.result.kind === 'saved') record.result = {...record.result, persistencePending: true, message: 'Saved to disk; durable request publication failed: ' + errorText(error)};
@@ -267,7 +274,7 @@ class LocalWorkspace {
     ensure(input.text === undefined || input.kind === 'create-file', 'Text belongs only to file creation.');
     if (input.text !== undefined) textDocument(input.text);
     const id = key(input.clientId, input.id), previous = this.operation(id);
-    if (previous) { if (!same(previous.input, input)) fail('Conflict', 'Operation ID already belongs to another payload/client/checkout.'); return previous.result; }
+    if (previous) { if (!same(previous.input, input)) fail('Conflict', 'Operation ID already belongs to another payload/client/checkout.'); if (this.volatileOperations.has(id)) this.publishOperation(id, previous); return previous.result; }
     this.assertSettled(input.checkout);
     if (signal.aborted) fail('Cancelled', 'Operation cancelled before admission.');
     const directory = await this.directory(input.checkout);
@@ -312,7 +319,8 @@ class LocalWorkspace {
         ensure(!state.drafts.some(d => d.target.checkout.checkoutId === input.checkout.checkoutId && affected(folded(d.target.path), folded(destination)) && (source.native || !affected(d.target.path, source.path))), 'Destination has recovery drafts. Preserve them before replacement.');
       }
     }
-    const record: OperationRecord = { input, revision: this.store.readRecovery(input.clientId)?.revision ?? 0, acknowledged: false,
+    const staging = destinations.map(destination => destination && ['copy', 'import'].includes(input.kind) ? join(dirname(destination), '.moonbase-copy-' + randomUUID()) : '');
+    const record: OperationRecord = { input, staging, revision: this.store.readRecovery(input.clientId)?.revision ?? 0, acknowledged: false,
       result: {id: input.id, checkout: input.checkout, kind: input.kind, outcome: 'uncertain', items: [], message: 'Admitted operation. Interrupted items must be inspected, never repeated automatically.'} };
     // The complete immutable selection is durable before the first native mutation.
     this.store.put('operations', id, record);
@@ -337,7 +345,7 @@ class LocalWorkspace {
             record.result.items.push({source: source.path, outcome: 'completed', message: trashPath ? 'macOS Trash: ' + trashPath : 'Moved to macOS Trash.'});
             this.store.put('operations', id, record); continue;
           } else {
-            const temporary = join(dirname(destination!), '.moonbase-copy-' + randomUUID());
+            const temporary = staging[i];
             await directory.io([importing ? 'import' : 'copy', source.path, destination!, source.identity, temporary, await directory.destination(destination!), ...(source.native ? [source.native.path, source.native.parents, input.checkout.root] : [])], undefined, signal, source.native ? [source.native.fd] : []);
           }
           record.result.items.push({source: source.path, destination, outcome: 'completed'});
@@ -354,7 +362,7 @@ class LocalWorkspace {
         if (record.result.items.some(item => item.outcome === 'uncertain')) break;
       }
       record.result.outcome = record.result.items.some(i => i.outcome === 'uncertain') || record.result.items.length < sources.length ? 'uncertain' : record.result.items.every(i => i.outcome === 'completed') ? 'completed' : 'failed';
-      if (record.result.outcome === 'uncertain') record.result.message = 'Inspect original, destination, staging and Finder Trash. Drafts and journal retained; no automatic retry.'; else delete record.result.message;
+      if (record.result.outcome === 'uncertain') record.result.message = 'Inspect original, destination, Finder Trash and staging: ' + staging.filter(Boolean).join(', ') + '. Drafts and journal retained; no automatic retry.'; else delete record.result.message;
       try { this.publishOperation(id, record); } catch (error) { record.result.message = 'Filesystem results known; persistence pending: ' + errorText(error); this.volatileOperations.set(id, record); }
       return record.result;
     } finally { tokens.forEach(token => this.releaseNative(token)); }
@@ -400,10 +408,10 @@ class LocalWorkspace {
           this.reconcile(state, [{...record, result: {...record.result, items: fresh}}]);
           if (JSON.stringify(state) !== row.body) this.store.db.prepare('UPDATE recovery SET revision=revision+1, body=? WHERE client=?').run(JSON.stringify(state), row.client as string);
         }
-        record.publishedItems = [...(record.publishedItems ?? []), ...fresh.map(canonical)];
-        record.revision = this.store.readRecovery(record.input.clientId)?.revision ?? 0;
+
       }
-      this.store.put('operations', id, record); this.store.db.exec('COMMIT'); this.volatileOperations.delete(id);
+      const updated = {...record, publishedItems: [...(record.publishedItems ?? []), ...fresh.map(canonical)], revision: fresh.length ? this.store.readRecovery(record.input.clientId)?.revision ?? 0 : record.revision};
+      this.store.put('operations', id, updated); this.store.db.exec('COMMIT'); Object.assign(record, updated); this.volatileOperations.delete(id);
     } catch (error) { this.store.db.exec('ROLLBACK'); throw error; }
   }
   publishSave(id: string, record: SaveRecord) {
@@ -416,13 +424,22 @@ class LocalWorkspace {
           for (const draft of state.drafts) if (same(draft.target, record.input.target) && draft.disk.version === record.input.expectedVersion) draft.disk = saved;
           if (JSON.stringify(state) !== row.body) this.store.db.prepare('UPDATE recovery SET revision=revision+1, body=? WHERE client=?').run(JSON.stringify(state), row.client as string);
         }
-        record.published = true;
       }
-      this.store.put('saves', id, record); this.store.db.exec('COMMIT'); this.volatileSaves.delete(id);
+      const result = record.result?.kind === 'saved' ? {kind: 'saved' as const, disk: record.result.disk} : record.result;
+      const updated = {...record, result, published: !!result};
+      this.store.put('saves', id, updated); this.store.db.exec('COMMIT'); Object.assign(record, updated); this.volatileSaves.delete(id);
     } catch (error) { this.store.db.exec('ROLLBACK'); throw error; }
   }
   async recoverEvidence() {
+    for (const [id, record] of this.volatileSaves) if (record.result) this.publishSave(id, record);
     for (const record of this.operations()) {
+      if (this.locks.has(record.input.checkout.checkoutId)) continue;
+      const items = record.result.items.filter(item => !item.message?.startsWith('Explicit replacement'));
+      if (items.length === (record.input.sources.length || record.input.nativeReferences?.length || 1) && items.every(item => item.outcome !== 'uncertain')) {
+        const outcome = items.every(item => item.outcome === 'completed') ? 'completed' : 'failed';
+        const id = key(record.input.clientId, record.input.id);
+        if (record.result.outcome !== outcome || record.result.items.some(item => item.outcome === 'completed' && !(record.publishedItems ?? []).includes(canonical(item))) || this.volatileOperations.has(id)) { record.result.outcome = outcome; this.publishOperation(id, record); }
+      }
       if (record.result.outcome !== 'uncertain' || this.locks.has(record.input.checkout.checkoutId)) continue;
       const kind = record.input.kind;
       if (kind !== 'move') continue;
@@ -461,7 +478,7 @@ class LocalWorkspace {
     recovery(state, clientId); const errors: string[] = [];
     for (const target of state.checkouts) { try { await this.directory(target); } catch (error) { errors.push(target.root + ': ' + errorText(error)); } }
     const operations = this.operations().filter(r => !r.acknowledged && (r.input.clientId === clientId || state.checkouts.some(c => same(c, r.input.checkout)))).map(r => r.result);
-    for (const operation of operations) if (operation.outcome === 'uncertain') errors.push('Uncertain operation ' + operation.id + ': inspect original, destination, staging and Finder Trash; drafts retained.');
+    for (const operation of operations) if (operation.outcome === 'uncertain') errors.push('Uncertain operation ' + operation.id + ': ' + (operation.message ?? 'inspect original, destination, staging and Finder Trash; drafts retained.'));
     for (const record of this.store.all<SaveRecord>('saves')) if (record.input.clientId === clientId && !record.result) errors.push('Uncertain save ' + record.input.requestId + ' for ' + record.input.target.path + ': inspect disk; saved draft and intent retained.');
     return {revision: stored?.revision ?? 0, state, errors, operations};
   }
@@ -509,42 +526,61 @@ class LocalWorkspace {
   async lookup(input: CommandInput<'lookupFiles'>, signal: AbortSignal) {
     ensure(typeof input.query === 'string' && input.query.length <= 256 && !input.query.includes('\0') && (input.limit === undefined || Number.isInteger(input.limit) && input.limit > 0 && input.limit <= 100), 'Invalid lookup query/limit.');
     const directory = await this.directory(input.checkout), limit = input.limit ?? 100;
+    const supplied = input.history ?? [];
+    ensure(Array.isArray(supplied) && supplied.length <= 1000 && supplied.reduce((n, p) => n + (typeof p === 'string' ? p.length : 1000000), 0) <= 256 * 1024, 'Lookup history exceeds its limit.');
+    supplied.forEach(p => path(p));
+    const excluded = (p: string) => ['.git', '.svn', '.hg', '.jj', '.DS_Store', 'Thumbs.db', 'node_modules', 'bower_components'].includes(p) || p.endsWith('.code-search');
+    let cells = 0, partial = false;
+    const rank = (paths: string[], history: boolean) => {
+      const matches = [];
+      for (const p of new Set(paths)) {
+        if (history ? excluded(basename(p)) : p.split('/').some(excluded)) continue;
+        cells += p.length * Math.max(input.query.length, 1);
+        if (cells > 16 * 1024 * 1024) { partial = true; break; }
+        const match = matchPath(p, input.query); if (match) matches.push(match);
+      }
+      matches.sort(compareMatches); if (matches.length > limit) partial = true; return matches.slice(0, limit);
+    };
+    const history = rank(supplied, true);
+    if (!input.query.trim()) return {matches: [], history, partial};
     try {
-      // Native preflight validates local policies; repository excludes are checked here.
       this.policy(input.checkout);
       if (!this.ripgrep) fail('Unavailable', 'Standalone ripgrep is unavailable. Supply the packaged ripgrepExecutable asset.');
       const args = ['--files', '--hidden', '--null', '--no-config', '--no-ignore-parent', '--no-ignore-global', '--threads', '1'];
-      for (const excluded of ['.git', '.svn', '.hg', '.jj', '.DS_Store', 'Thumbs.db', 'node_modules', 'bower_components', '*.code-search']) args.push('--glob', '!**/' + excluded);
-      const bytes = await directory.io(['lookup', this.ripgrep!, ...args, '.'], undefined, signal);
+      for (const name of ['.git', '.svn', '.hg', '.jj', '.DS_Store', 'Thumbs.db', 'node_modules', 'bower_components', '*.code-search']) args.push('--glob', '!**/' + name);
+      const bytes = await directory.io(['lookup', this.ripgrep!, ...args, '.'], undefined, signal).catch(error => { if (error.status === 1 && !error.message) return Buffer.alloc(0); throw error; });
       const candidates = [...new Set(bytes.toString().split('\0').filter(Boolean).map(p => p.replace(/^\.\//, '')))];
-      const paths: {path: string; score: number}[] = [];
-      let partial = candidates.length > 20000;
-      const query = input.query.trim().toLowerCase();
+      if (candidates.length > 20000) partial = true;
+      const eligible: string[] = [];
       for (const p of candidates.slice(0, 20000)) {
         if (signal.aborted) fail('Cancelled', 'Lookup cancelled.');
         path(p);
-        if (p.split('/').some(c => ['.svn', '.hg', '.jj', '.DS_Store', 'Thumbs.db', 'node_modules', 'bower_components'].includes(c) || c.endsWith('.code-search'))) continue;
-        // Independent bounded subsequence matching; no Microsoft lookup scorer.
-        const lower = p.toLowerCase(); let cursor = 0, matched = true;
-        for (const char of query) { const at = lower.indexOf(char, cursor); if (at < 0) { matched = false; break; } cursor = at + 1; }
-        if (matched) {
-          try { if (!(await directory.entry(p, signal)).directory) paths.push({path: p, score: basename(lower).startsWith(query) ? 0 : lower.includes(query) ? 1 : 2}); } catch { partial = true; }
-        }
+        try { if (!(await directory.entry(p, signal)).directory) eligible.push(p); } catch { partial = true; }
+        if (eligible.length % 32 === 0) await new Promise<void>(done => setImmediate(done));
       }
-      paths.sort((a,b) => a.score - b.score || a.path.length - b.path.length || a.path.localeCompare(b.path));
-      return {paths: paths.slice(0, limit).map(x => x.path), partial: partial || paths.length > limit, error: partial ? 'Discovery capped or entries unavailable; refine query.' : undefined};
-    } catch (error) { return {paths: [], partial: true, error: 'Discovery or ignore policy unavailable. ' + errorText(error)}; }
+      // Exact entered paths have a scoped no-follow exception to discovery ignore/exclusions.
+      try { path(input.query); if (!(await directory.entry(input.query, signal)).directory && !eligible.includes(input.query)) eligible.unshift(input.query); } catch { /* Ordinary fuzzy queries need not be exact paths. */ }
+      const recent = new Set(history.map(match => match.path));
+      const exact = eligible[0] === input.query ? matchPath(input.query, input.query) : null;
+      const matches = rank(eligible.filter(p => !recent.has(p)), false);
+      if (exact && !recent.has(exact.path) && !matches.some(m => m.path === exact.path)) { matches.unshift(exact); if (matches.length > limit) { matches.pop(); partial = true; } }
+      return {matches, history, partial, ...(partial ? {error: 'Discovery or ranking capped; refine query.'} : {})};
+    } catch (error) { return {matches: [], history, partial: true, error: 'Discovery or ignore policy unavailable. ' + errorText(error)}; }
   }
   watch(input: {checkout: CheckoutTarget; paths: string[]}) {
-    return Stream.callback<WorkspaceEvent, ApplicationError>(queue => Effect.acquireRelease(this.effect(async () => {
-      ensure(Array.isArray(input.paths) && input.paths.length > 0 && input.paths.length <= 128 && this.subscriptions.size < 64, 'Watch subscription limit reached.');
-      const directory = await this.directory(input.checkout);
+    const self = this;
+    return Stream.unwrap(Effect.gen(function* () {
+      const queue = yield* Queue.sliding<WorkspaceEvent>(1);
+      yield* Effect.acquireRelease(self.effect(async () => {
+      ensure(Array.isArray(input.paths) && input.paths.length > 0 && input.paths.length <= 128 && self.subscriptions.size < 64, 'Watch subscription limit reached.');
+      const directory = await self.directory(input.checkout);
+      ensure(!self.closed, 'Workspace scope closed during watch acquisition.');
       const watchers: FSWatcher[] = []; let timer: ReturnType<typeof setTimeout> | undefined, disposed = false, error: string | undefined;
       const changed = (failure?: string) => {
         if (disposed) return; error = failure ?? error;
         if (!timer) timer = setTimeout(() => { timer = undefined; if (disposed) return; try { directory.check(); } catch (e) { error = errorText(e); } Queue.offerUnsafe(queue, {checkout: input.checkout, paths: input.paths, error}); error = undefined; }, 100);
       };
-      const stop = () => { if (disposed) return; disposed = true; clearTimeout(timer); watchers.forEach(w => w.close()); this.subscriptions.delete(stop); };
+      const stop = () => { if (disposed) return; disposed = true; clearTimeout(timer); watchers.forEach(w => w.close()); self.subscriptions.delete(stop); };
       try {
         for (const p of new Set(input.paths)) {
           path(p, true); const before = await directory.entry(p);
@@ -553,8 +589,12 @@ class LocalWorkspace {
           watchers.push(watcher);
           ensure(same(before, await directory.entry(p)), 'Watch directory changed during subscription.');
         }
-        this.subscriptions.add(stop); Queue.offerUnsafe(queue, {checkout: input.checkout, paths: input.paths, ready: true}); return stop;
+        const common = self.approval(input.checkout).common.path;
+        if (!common.startsWith(directory.root + '/')) watchers.push(fsWatch(common, {persistent: false, recursive: true}, () => changed()).on('error', e => changed(errorText(e))));
+        self.subscriptions.add(stop); Queue.offerUnsafe(queue, {checkout: input.checkout, paths: input.paths, ready: true}); return stop;
       } catch (error) { stop(); throw error; }
-    }), stop => Effect.sync(stop)), {bufferSize: 1, strategy: 'sliding'});
+      }), stop => Effect.sync(stop));
+      return Stream.fromQueue(queue);
+    }));
   }
 }
