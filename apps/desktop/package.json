@@ -1,6 +1,9 @@
 {
-  "name": "@moonbase/desktop", "version": "0.1.0", "private": true, "type": "module",
-  "main": "dist/main.cjs",
+  "name": "@moonbase/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.mjs",
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
@@ -9,11 +12,42 @@
     "build": "node scripts/build.mjs",
     "package": "node scripts/package.mjs",
     "test:desktop": "playwright test --config playwright.config.ts",
-    "check:renderer": "node scripts/check-renderer.mjs"
+    "check:renderer": "node scripts/check-renderer.mjs",
+    "test:package": "MOONBASE_PACKAGED_TEST=1 playwright test --config playwright.config.ts"
   },
   "dependencies": {
-    "@moonbase/application": "workspace:*", "@moonbase/editor": "workspace:*", "@moonbase/workspace": "workspace:*", "@moonbase/ui": "workspace:*",
-    "effect": "4.1.0", "react": "19.3.1", "react-dom": "19.3.1", "@stylexjs/stylex": "0.19.1", "@base-ui/react": "1.9.0", "monaco-editor": "0.57.0"
+    "@moonbase/application": "workspace:*",
+    "@moonbase/editor": "workspace:*",
+    "@moonbase/workspace": "workspace:*",
+    "@moonbase/ui": "workspace:*",
+    "effect": "4.1.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "@stylexjs/stylex": "0.19.1",
+    "@base-ui/react": "1.9.0",
+    "monaco-editor": "0.57.0"
   },
-  "devDependencies": { "electron": "45.1.0", "electron-builder": "26.18.0" }
+  "devDependencies": {
+    "electron": "45.1.0",
+    "electron-builder": "26.18.0"
+  },
+  "nx": {
+    "targets": {
+      "dev": {
+        "dependsOn": [
+          "^build"
+        ]
+      },
+      "build": {
+        "dependsOn": [
+          "^build"
+        ]
+      },
+      "package": {
+        "dependsOn": [
+          "^build"
+        ]
+      }
+    }
+  }
 }

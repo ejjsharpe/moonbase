@@ -1,5 +1,6 @@
 import { createRoot } from "react-dom/client";
-import { useEffect, useRef, useSyncExternalStore } from "react";
+import { flushSync } from "react-dom";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Button } from "@base-ui/react/button";
 import * as stylex from "@stylexjs/stylex";
 import { EditorWorkbench, createEditor, type EditorWorkbenchHandle } from "@moonbase/editor";
@@ -21,20 +22,21 @@ const styles = stylex.create({
   editor: { flex: 1, minHeight: 0, overflow: "hidden" },
 });
 function Desktop() {
+  const [closing, setClosing] = useState(false);
   const handle = useRef<EditorWorkbenchHandle>(null), state = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
   const selected = state.recovery.checkouts.find(c => c.checkoutId === state.recovery.selectedCheckoutId);
   useEffect(() => bridge.actions((action, id) => {
-    if (action === "quit") void (async () => { try { bridge.quitResult(id, await handle.current?.prepareQuit() ?? false); } catch (error) { controller.report(error); bridge.quitResult(id, false); } })();
+    if (action === "quit") void (async () => { try { const consent = await handle.current?.prepareQuit() ?? false; if (consent) flushSync(() => setClosing(true)); bridge.quitResult(id, consent); } catch (error) { controller.report(error); bridge.quitResult(id, false); } })();
     if (action === "dispose") { controller.dispose(); root.unmount(); bridge.quitResult(id, true); }
   }), []);
   const run = (task: Promise<unknown>) => { void task.catch(controller.report); };
-  return <main {...stylex.props(styles.shell)} onDragOver={event => { if (event.dataTransfer.types.includes("Files")) event.preventDefault(); }} onDrop={event => {
+  return <main inert={closing} {...stylex.props(styles.shell)} onDragOver={event => { if (event.dataTransfer.types.includes("Files")) event.preventDefault(); }} onDrop={event => {
     if (!event.dataTransfer.files.length) return;
     event.preventDefault(); if (!selected) { controller.report(Error("Open a checkout before importing files.")); return; }
     run((async () => { const refs = unwrap(await bridge.drop(selected, [...event.dataTransfer.files])); if (refs.length) await controller.mutate({ checkout: selected, kind: "import", sources: [], destination: "", nativeReferences: refs }); })());
   }}>
     <header {...stylex.props(styles.toolbar)}><strong {...stylex.props(styles.title)}>Moonbase</strong>
-      <span role="status">{state.preserving ? "Preserving edits…" : state.publication ? "Recovery confirmation pending" : "Explicit Save · Local workspace"}</span>
+      <span role="status">{closing ? "Closing editor…" : state.preserving ? "Preserving edits…" : state.publication ? "Recovery confirmation pending" : "Explicit Save · Local workspace"}</span>
       <Button {...stylex.props(controls.button)} disabled={!selected || state.preserving} onClick={() => { if (selected) run((async () => {
         const refs = unwrap<string[]>(await bridge.call("clipboard-imports", { checkout: selected }, crypto.randomUUID()) as never);
         if (refs.length) await controller.mutate({ checkout: selected, kind: "import", sources: [], destination: "", nativeReferences: refs });

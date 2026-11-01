@@ -34,6 +34,7 @@ test("restored exact approvals, owned cancellation, failed-watch cleanup and dis
   const pending = f.call("readFile", { checkout: target, path: "a.ts" }, "owned");
   assert.equal((await f.call("readFile", { checkout: target, path: "a.ts" }, "owned")).ok, false);
   f.session.cancel("other"); assert.equal(f.signal?.aborted, false); f.session.cancel("owned");
+  assert.equal((await f.call("readFile", { checkout: target, path: "a.ts" }, "owned")).ok, false);
   const cancelled = await pending; assert(!cancelled.ok); assert.equal(cancelled.error.code, "Cancelled"); assert.deepEqual(cancelled.error.target, { checkout: target, path: "a.ts" });
   assert.equal((await f.session.call("watch", { checkout: target, paths: "bad" }, "watch")).ok, false);
   assert((await f.session.call("watch", { checkout: target, paths: [] }, "watch")).ok); assert.equal(f.events.length, 1);

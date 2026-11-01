@@ -12,7 +12,7 @@ export class EditorSession {
   private known = new Map<string, CheckoutTarget>();
   private rootGrants = new Set<string>();
   private operations = new Set<string>();
-  private active = new Map<string, () => void>();
+  private active = new Map<string, { cancel: () => void; watch: boolean }>();
   private closed = false;
   private client: EditorClient;
   private native: NativeActions;
@@ -39,6 +39,7 @@ export class EditorSession {
   private validate(operation: WorkspaceCommand, input: unknown) {
     const v = record(input), [allowed, required] = commandFields[operation]; keys(v, allowed, required ?? allowed);
     // Domain/path/state validation remains in WorkspaceService; this boundary additionally binds caller and approval.
+    if (JSON.stringify(v).length > 32 * 1024 * 1024) invalid("Command input is too large.");
     this.inspect(v);
     if (operation === "operationStatus") {
       requestId(v.clientId); requestId(v.id);
@@ -56,13 +57,13 @@ export class EditorSession {
     return v;
   }
   async call(method: unknown, input: unknown, id: unknown): Promise<Reply> {
-    let reserved = false, watching = false;
+    let reserved: { cancel: () => void; watch: boolean } | undefined;
     try {
       requestId(id);
       if (this.closed) throw new ApplicationError({ code: "Unavailable", message: "Editor session disposed." });
       if (this.active.has(id)) invalid("Request is already active.");
       if (this.active.size >= 128) invalid("Too many active requests.");
-      const abort = new AbortController(); this.active.set(id, () => abort.abort()); reserved = true;
+      const abort = new AbortController(); reserved = { cancel: () => abort.abort(), watch: false }; this.active.set(id, reserved);
       let value: unknown;
       if (method === "command") {
         const envelope = record(input); keys(envelope, ["operation", "input"]);
@@ -87,12 +88,12 @@ export class EditorSession {
         const v = record(input); keys(v, ["checkout", "paths"]); this.inspect(v); this.approved(v.checkout);
         if (!Array.isArray(v.paths) || v.paths.length > 8192 || v.paths.some(p => typeof p !== "string")) invalid("Invalid watch paths.");
         const stop = this.client.watch(v as never, event => { if (!this.closed && this.active.has(id)) this.send(id, { ok: true, value: event }); }, error => { if (!this.closed && this.active.has(id)) this.send(id, { ok: false, error: errorDTO(error) }); });
-        this.active.set(id, stop); watching = true; return { ok: true, value: null };
+        reserved.cancel = stop; reserved.watch = true; return { ok: true, value: null };
       } else invalid("Unknown desktop method.");
       return { ok: true, value };
     } catch (error) { return { ok: false, error: errorDTO(error) }; }
-    finally { if (reserved && !watching) this.active.delete(id as string); }
+    finally { if (reserved && !reserved.watch && this.active.get(id as string) === reserved) this.active.delete(id as string); }
   }
-  cancel(id: unknown) { requestId(id); const stop = this.active.get(id); this.active.delete(id); stop?.(); }
-  dispose() { this.closed = true; for (const stop of this.active.values()) stop(); this.active.clear(); }
+  cancel(id: unknown) { requestId(id); const active = this.active.get(id); if (active?.watch) this.active.delete(id); active?.cancel(); }
+  dispose() { this.closed = true; for (const active of this.active.values()) active.cancel(); this.active.clear(); }
 }
