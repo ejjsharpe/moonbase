@@ -1,0 +1,10 @@
+# Independent editor review, round 6
+
+PR #4 head `677ea50b625e213f074afd4d914bd8e993b15785`, base `8557fdd0d7a71f93a6584c77430e6fde57668580`. Fresh GPT-6 Astra `xhigh`, isolated read-only worktree, PR linked/clean tracked tree. Original R1–R5 scenarios pass, including observation/Reload preservation, all four release outcomes and comparison typing/focus. Two **P2** connected cases remain:
+
+1. **Delayed Copy recreates a deliberately closed destination** (`editor.ts:685`). Hold preflight, edit source, delay destination read, then open/edit destination and confirm Close/Discard. Releasing the old read recreates a stale dirty tab, republishes recovery and acknowledges the operation. Confirmed live/backend/restart/Chromium, one mutation. A confirmed destination close must invalidate older pending Copy materialization while retaining immutable operation evidence.
+2. **Restored dirty survivor skips its remembered comparison** (`editor.ts:186`). Persist dirty a.ts in staged/unstaged view with b.ts active, restart and close b.ts. Buffer presence skips activation, leaving a plain editor labelled comparison without its original. Both modes reproduce in Chromium and pass against the earlier R5 controller. Activate an unloaded remembered comparison even when its dirty working buffer exists.
+
+All 67 editor tests, 14 application tests, 19 supplied browser journeys, uncached root diagnostics/install/hash/import/build checks pass. Both exact-head CI jobs green in one inspection. Fresh probes: eleven of fourteen public and two of five browser pass; failures reproduce the findings. Record: `/Users/elliotsharpe/.t3/worktrees/moonbase/t3-7b8c8ac5/.review-r6/REVIEW.txt`. Review server stopped, no tracked changes/children/merges/watches.
+
+Original owner is fixing confirmed-close invalidation and guarded comparison activation with public/browser regressions. PR stays DRAFT pending fresh R7. Production workspace/IPC/native/package/physical durability/accessibility/human acceptance remain PENDING.

@@ -10,10 +10,10 @@ All PRs are private, linked and unmerged. Older entries below are historical evi
 | [#2 shared boundary](https://github.com/ejjsharpe/moonbase/pull/2) | `68aa035b9c283a65cac6e78ab02865e99882d15b` | #1 | Astra R5: no blockers; 14 public tests plus independent probes |
 | [#5 checkout contract](https://github.com/ejjsharpe/moonbase/pull/5) | `6e58c1c4ea6944e8ca25eadc46e35c843f0f9fbe` | #2 | Astra: no contract blockers; actual adoption/fan-in pending |
 | [#3 workspace](https://github.com/ejjsharpe/moonbase/pull/3) | `38c6c551ff0ab1108077275d223a32967f32b9f6` | #7 | Ready for review; Astra R6 no blockers, 91+14 tests/10 independent probes and exact-head CI pass |
-| [#4 editor](https://github.com/ejjsharpe/moonbase/pull/4) | `677ea50b625e213f074afd4d914bd8e993b15785` | #7 | DRAFT; owner 67+14 tests and 19 browser journeys pass; fresh Astra R6 running |
+| [#4 editor](https://github.com/ejjsharpe/moonbase/pull/4) | `677ea50b625e213f074afd4d914bd8e993b15785` | #7 | DRAFT; R6 found two P2 Copy-close/comparison cases; owner fixing |
 | [#6 host health](https://github.com/ejjsharpe/moonbase/pull/6) | `42836b0421898b963e67f02795edc35f5e546173` | #5 | Ready; Astra R2 no source-boundary blockers, 25 tests/11 independent probes and CI pass |
 | [#7 recovery publications](https://github.com/ejjsharpe/moonbase/pull/7) | `8557fdd0d7a71f93a6584c77430e6fde57668580` | #5 | Ready; contract-only clearance, 14 tests/five independent probes and CI pass; both adapters published |
-| [#8 connection boundary](https://github.com/ejjsharpe/moonbase/pull/8) | `09b21f2ee8556c54ef4f8238f0be2ee88fd990c3` | #6 | DRAFT; 29 tests/checks and hosted CI pass; independent review queued; no SSH implementation |
+| [#8 connection boundary](https://github.com/ejjsharpe/moonbase/pull/8) | `09b21f2ee8556c54ef4f8238f0be2ee88fd990c3` | #6 | DRAFT; 29 tests/checks and hosted CI pass; fresh Astra R1 running; no SSH implementation |
 
 Production editor fan-in, standalone Electron proof, independent Pi/SSH modules, chat proof and composition remain unfinished. Published Pi 1.4.0 controlled research is preparatory evidence only. No human/manual acceptance is inferred.
 
@@ -52,6 +52,8 @@ Editor R5 corrections published at `677ea50` (executable/tests `24954aab6e745ee1
 Connection preparation is published as draft #8 at `09b21f2`, based only on checked #6. It adds browser-safe profile/status/connect/generation-bound disconnect, a focused ConnectionService with privileged exact-host endpoint, shared handlers and runtime client. Error/cancellation/observation logic is shared with editor clients, retaining all prior regressions. Frozen install, three uncached root tasks, 29 application tests, forty source hashes/three browser bundles and diff checks pass. Four new fixture-service cases prove routing/scoping/cancellation/disposal, not SSH process or host-key behavior. Actual `SshLive` implementation and independent review remain pending; editor startup has no new capability requirement. #8 review queues after editor R6.
 
 After T3's notification, one inspection verified both hosted #8 jobs at `09b21f2ee8556c54ef4f8238f0be2ee88fd990c3` passed ([41272685610](https://github.com/ejjsharpe/moonbase/actions/runs/41272685610), [41272628483](https://github.com/ejjsharpe/moonbase/actions/runs/41272628483)). The contract/client boundary remains DRAFT for independent review, not actual SSH qualification.
+
+Editor R6 verifies earlier fixes but finds two additional P2 intent/presentation failures: a delayed Copy materialization can recreate a confirmed closed/discarded destination, and a dirty restored survivor can skip loading its remembered staged/unstaged original. See `reviews/editor-r6.md`. Original owner is fixing both with regressions. Connection boundary #8 R1 is now using the reviewer slot; no concurrent second reviewer or unqualified editor composition is started.
 
 ## Setup
 
