@@ -1,0 +1,37 @@
+12 uncached Nx tasks /216 tests
+ℹ tests 14
+ℹ pass 14
+ℹ fail 0
+ℹ skipped 0
+ℹ tests 106
+ℹ pass 106
+ℹ fail 0
+ℹ skipped 0
+ℹ tests 5
+ℹ pass 5
+ℹ fail 0
+ℹ skipped 0
+ℹ tests 91
+ℹ pass 91
+ℹ fail 0
+ℹ skipped 0
+ NX   Successfully ran targets typecheck, lint, test for 4 projects
+
+15 real integration
+ℹ tests 15
+ℹ pass 15
+ℹ fail 0
+ℹ skipped 0
+
+25 actual Electron
+  25 passed (54.5s)
+
+Unsigned package build
+ NX   Successfully ran target package for project @moonbase/desktop and 2 tasks it depends on
+
+Extended packaged proof
+  1 passed (9.9s)
+
+Original packaged regression expectations
+packaged-prototype pass
+packaged-menu pass

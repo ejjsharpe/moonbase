@@ -1,6 +1,6 @@
 # Standalone editor technical evidence
 
-Task04 composes reviewed integration `80b0ede184205b9fff1d633d19426c2bf9671688` (#11) and independently cleared import/create followup `71f272d354359f8d5e1cff7a9f57159325eeabc5` (#13). The app PR is stacked on `fix/editor-native-import-dialog`. Coordinator registration `4e32f72d999247d3f3c25e97e06da551f0b5cb98` adds only 22 lockfile lines and 5 workflow lines. All were normal merges; the preserved editor branch remains `3c7f0c3daf337753bbca10df495264af28b280eb`. App authorship is limited to `apps/desktop/**`.
+Task04 composes reviewed integration `80b0ede184205b9fff1d633d19426c2bf9671688` (#11) and independently cleared import/create followup `71f272d354359f8d5e1cff7a9f57159325eeabc5` (#13). The original app PR was stacked on `fix/editor-native-import-dialog`; [the R1 follow-up](app-r1/review-r1-response.md) consumes editor473e0fe (PR16) and retargets it to `fix/editor-filename-maps-and-menu`. Coordinator registration `4e32f72d999247d3f3c25e97e06da551f0b5cb98` adds only 22 lockfile lines and 5 workflow lines. All were normal merges; the preserved editor branch remains `3c7f0c3daf337753bbca10df495264af28b280eb`. App authorship is limited to `apps/desktop/**`.
 
 This is an unsigned macOS Apple Silicon technical proof, with **PENDING HUMAN ACCEPTANCE**. It is not an approval of signing/distribution, OS gestures, VoiceOver or physical durability.
 
@@ -9,11 +9,11 @@ This is an unsigned macOS Apple Silicon technical proof, with **PENDING HUMAN AC
 | Check | Evidence |
 | --- | --- |
 | Frozen install | `bun install --frozen-lockfile`, unchanged after exact coordinator registration |
-| Diagnostics/public tests |12 uncached Nx typecheck/lint/test tasks across desktop/application/editor/workspace; desktop5 +application14 +editor103 +workspace91 tests |
+| Diagnostics/public tests |12 uncached Nx typecheck/lint/test tasks across desktop/application/editor/workspace; desktop5 +application14 +editor106 +workspace91 tests |
 | Real module integration |15 typed public controller→shared client→WorkspaceLive cases with actual files/Git/SQLite/native helper |
-| Actual Electron |22 journeys through sandboxed preload/IPC and real workspace resources, no skips |
+| Actual Electron |25 journeys through sandboxed preload/IPC and real workspace resources, no skips |
 | Actual package |Unsigned `.app` launches under `PATH=/usr/bin:/bin`, fresh explicit data and no provider environment; actual read/edit/Save, Git comparison, rg lookup, New File and token import |
-| Renderer |Actual Vite graph:1,584 inputs; no Node/Electron/workspace/Effect runtime/Pi/SSH/connection/reference implementations; application/client+Monaco present, five workers/font built |
+| Renderer |Actual Vite graph:1,585 inputs; no Node/Electron/workspace/Effect runtime/Pi/SSH/connection/reference implementations; application/client+Monaco present, five workers/font built |
 | Package assets |Executable helper/rg outside asar, five workers/font inside renderer; automatic package/release notices and upstream Electron/Chromium notices. [Actual hashes/modes/versions](packaged-resources.json) |
 | Foundation |40 frozen source hashes/UI/browser contracts; no live escode/source edits |
 | Whitespace |`git diff --check` |

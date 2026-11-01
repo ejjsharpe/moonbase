@@ -1,3 +1,4 @@
+import { filenameCases, checkFilenameMaps, checkTabMenu, recoveryState } from "./editor-regressions.ts";
 import { test, expect, _electron as electron } from "@playwright/test";
 import { mkdtempSync, mkdirSync, realpathSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -9,10 +10,17 @@ test("unsigned macOS package runs with only system PATH, SQLite, native/rg resou
   test.setTimeout(45000);
   const base = realpathSync(mkdtempSync(join(tmpdir(), "moonbase-package-"))), checkout = join(base, "checkout"); mkdirSync(checkout);
   const git = (...args: string[]) => execFileSync("/usr/bin/git", ["-C", checkout, "-c", "user.name=Package Test", "-c", "user.email=package@example.invalid", ...args]);
-  git("init", "-q", "-b", "main"); writeFileSync(join(checkout, "package.ts"), "export const packaged = 'original';\n"); writeFileSync(join(checkout, "lookup-native-resource.txt"), "qualified rg fixture"); git("add", "."); git("commit", "-qm", "Package fixture");
+  git("init", "-q", "-b", "main"); writeFileSync(join(checkout, "package.ts"), "export const packaged = 'original';\n"); writeFileSync(join(checkout, "lookup-native-resource.txt"), "qualified rg fixture"); for (const path of filenameCases) writeFileSync(join(checkout, path), "baseline " + path); git("add", "."); git("commit", "-qm", "Package fixture");
   const executablePath = resolve(`release/${process.arch === "arm64" ? "mac-arm64" : "mac"}/Moonbase.app/Contents/MacOS/Moonbase`);
-  const app = await electron.launch({ executablePath, args: [], env: { PATH: "/usr/bin:/bin", HOME: process.env.HOME!, TMPDIR: process.env.TMPDIR ?? tmpdir(), MOONBASE_USER_DATA: join(base, "fresh-user-data"), GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" }, timeout: 20000 });
-  const child = app.process(), page = await app.firstWindow(), errors: string[] = []; page.on("pageerror", e => errors.push(e.message)); page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
+  const launch = () => electron.launch({ executablePath, args: [], env: { PATH: "/usr/bin:/bin", HOME: process.env.HOME!, TMPDIR: process.env.TMPDIR ?? tmpdir(), MOONBASE_USER_DATA: join(base, "fresh-user-data"), GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" }, timeout: 20000 });
+  let app = await launch(), child = app.process(), page = await app.firstWindow(); const errors: string[] = [];
+  const observe = () => { page.on("pageerror", e => errors.push(e.message)); page.on("console", message => { if (message.type() === "error") errors.push(message.text()); }); }; observe();
+  const stop = async () => { if (child.exitCode === null && child.signalCode === null) { const exited = new Promise<void>(resolve => child.once("exit", () => resolve())); child.kill("SIGKILL"); await exited; } };
+  const screen = async (name: string) => {
+    const capture = await app.evaluate(async ({ BrowserWindow }) => { const window = BrowserWindow.getAllWindows()[0]; return { bounds: window.getBounds(), zoom: window.webContents.getZoomFactor(), bytes: (await window.webContents.capturePage()).toPNG().toString("base64") }; });
+    writeFileSync("test-results/packaged-" + name + ".png", Buffer.from(capture.bytes, "base64"));
+    writeFileSync("test-results/packaged-" + name + ".png.json", JSON.stringify({ window: capture.bounds, zoom: capture.zoom, viewport: await page.evaluate(() => ({ width: innerWidth, height: innerHeight, devicePixelRatio })) }, null, 2) + "\n");
+  };
   try {
     const resource = await app.evaluate(async ({ app }) => {
       const fs = process.getBuiltinModule("fs"), path = process.getBuiltinModule("path"), crypto = process.getBuiltinModule("crypto");
@@ -49,9 +57,19 @@ test("unsigned macOS package runs with only system PATH, SQLite, native/rg resou
     const capture = await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0].webContents.capturePage()).toPNG().toString("base64"));
     writeFileSync("test-results/packaged-editor.png", Buffer.from(capture, "base64"));
     writeFileSync("test-results/packaged-resources.json", JSON.stringify({ ...resource, notices: undefined, workerErrors, asarSha256: createHash("sha256").update(readFileSync(resolve(`release/${process.arch === "arm64" ? "mac-arm64" : "mac"}/Moonbase.app/Contents/Resources/app.asar`))).digest("hex"), fixture: "fresh temporary Git repository with package.ts and lookup-native-resource.txt, UI-created packaged-created.txt and token-imported packaged-import.txt; no provider environment", viewport: await page.evaluate(() => ({ width: innerWidth, height: innerHeight, devicePixelRatio })) }, null, 2) + "\n");
-    const closed = app.waitForEvent("close"); await app.evaluate(({ app }) => app.quit()); await closed;
+    const filenameEvidence = await checkFilenameMaps(page, checkout, "package.ts", async () => { await stop(); app = await launch(); child = app.process(); page = await app.firstWindow(); observe(); return page; });
+    await screen("filename-maps");
+    await page.getByRole("button", { name: "Close packaged-created.txt", exact: true }).click();
+    await expect(page.getByRole("tab", { name: "packaged-created.txt", exact: true })).toHaveCount(0);
+    await checkTabMenu(app, page, screen, "packaged-created.txt");
+    writeFileSync("test-results/packaged-filename-maps.json", JSON.stringify(filenameEvidence, null, 2) + "\n");
+    expect(errors).toEqual([]);
+    const dirty = (await recoveryState(page)).state.drafts.length;
+    const closed = app.waitForEvent("close"); await app.evaluate(({ app }) => app.quit());
+    for (let index = 0; index < dirty; index++) await page.getByRole("dialog").getByRole("button", { name: "Discard", exact: true }).click();
+    await closed;
   } finally {
-    if (child.exitCode === null && child.signalCode === null) { const exited = new Promise<void>(resolve => child.once("exit", () => resolve())); child.kill("SIGKILL"); await exited; }
+    await stop();
     rmSync(base, { recursive: true, force: true });
   }
 });

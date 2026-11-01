@@ -37,7 +37,7 @@
     "html-RMGzLAmU.js",
     "html.worker-D9ugpX4y.js",
     "htmlMode-D71tr5wz.js",
-    "index-DpafypsJ.js",
+    "index-CApeJeda.js",
     "index-Dq5RUqpG.css",
     "ini-sBoK_t0W.js",
     "java-BEtHBSE6.js",
@@ -157,7 +157,7 @@
     }
   ],
   "workerErrors": [],
-  "asarSha256": "7a24f8ea0d9386307318ab8bf12b5cfee5eb855443ce16fd56e5312c785e6d6b",
+  "asarSha256": "37ad94c692afbde6b2b9a6afabfda6272425e98470e5557419e1b83818ba2f8d",
   "fixture": "fresh temporary Git repository with package.ts and lookup-native-resource.txt, UI-created packaged-created.txt and token-imported packaged-import.txt; no provider environment",
   "viewport": {
     "width": 1280,

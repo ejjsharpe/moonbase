@@ -1,0 +1,808 @@
+{
+  "unchangedPrototypes": true,
+  "persisted": {
+    "version": 1,
+    "clientId": "desktop-primary",
+    "checkouts": [
+      {
+        "hostId": "moonbase-local",
+        "checkoutId": "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a",
+        "projectId": "a63cec3fb5cea77fff7d8d2f3c95d5ded6279752d8395fa3e09796633e17902d",
+        "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-1oNBbk/checkout",
+        "branch": "main"
+      }
+    ],
+    "openCheckoutIds": [
+      "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a"
+    ],
+    "selectedCheckoutId": "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a",
+    "views": {
+      "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a": {
+        "openFiles": [
+          "a.ts",
+          "__proto__",
+          "constructor",
+          "toString",
+          "hasOwnProperty"
+        ],
+        "active": "hasOwnProperty",
+        "preview": null,
+        "fileViews": {
+          "a.ts": "file",
+          "__proto__": "staged",
+          "constructor": "staged",
+          "toString": "staged",
+          "hasOwnProperty": "staged"
+        },
+        "positions": {
+          "a.ts": {
+            "file": {
+              "line": 1,
+              "column": 23,
+              "top": 0,
+              "left": 0
+            }
+          },
+          "__proto__": {
+            "file": {
+              "line": 1,
+              "column": 16,
+              "top": 0,
+              "left": 0
+            },
+            "staged:original": {
+              "line": 1,
+              "column": 1,
+              "top": 0,
+              "left": 0
+            },
+            "staged": {
+              "line": 1,
+              "column": 15,
+              "top": 0,
+              "left": 0
+            }
+          },
+          "constructor": {
+            "file": {
+              "line": 1,
+              "column": 18,
+              "top": 0,
+              "left": 0
+            },
+            "staged:original": {
+              "line": 1,
+              "column": 1,
+              "top": 0,
+              "left": 0
+            },
+            "staged": {
+              "line": 1,
+              "column": 17,
+              "top": 0,
+              "left": 0
+            }
+          },
+          "toString": {
+            "file": {
+              "line": 1,
+              "column": 15,
+              "top": 0,
+              "left": 0
+            },
+            "staged:original": {
+              "line": 1,
+              "column": 1,
+              "top": 0,
+              "left": 0
+            },
+            "staged": {
+              "line": 1,
+              "column": 14,
+              "top": 0,
+              "left": 0
+            }
+          },
+          "hasOwnProperty": {
+            "file": {
+              "line": 1,
+              "column": 21,
+              "top": 0,
+              "left": 0
+            },
+            "staged:original": {
+              "line": 1,
+              "column": 1,
+              "top": 0,
+              "left": 0
+            },
+            "staged": {
+              "line": 1,
+              "column": 20,
+              "top": 0,
+              "left": 0
+            }
+          }
+        },
+        "tree": {
+          "expanded": [],
+          "selected": [],
+          "focus": "",
+          "scroll": 0,
+          "hideIgnored": false
+        }
+      }
+    },
+    "drafts": [
+      {
+        "target": {
+          "checkout": {
+            "hostId": "moonbase-local",
+            "checkoutId": "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a",
+            "projectId": "a63cec3fb5cea77fff7d8d2f3c95d5ded6279752d8395fa3e09796633e17902d",
+            "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-1oNBbk/checkout",
+            "branch": "main"
+          },
+          "path": "a.ts"
+        },
+        "text": "retained sibling draft",
+        "disk": {
+          "text": "export const value = 'WORKING';\n",
+          "version": "21316020226accd1c3a21d0d680f51e9f0c0431e2cd93010f8e43c31d47e1c40"
+        }
+      },
+      {
+        "target": {
+          "checkout": {
+            "hostId": "moonbase-local",
+            "checkoutId": "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a",
+            "projectId": "a63cec3fb5cea77fff7d8d2f3c95d5ded6279752d8395fa3e09796633e17902d",
+            "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-1oNBbk/checkout",
+            "branch": "main"
+          },
+          "path": "__proto__"
+        },
+        "text": "dirty __proto__",
+        "disk": {
+          "text": "saved __proto__",
+          "version": "9dddc9020d5fa4581bb9d5bb81cf090ed9f94de4a94b22af2e99f5a725400296"
+        }
+      },
+      {
+        "target": {
+          "checkout": {
+            "hostId": "moonbase-local",
+            "checkoutId": "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a",
+            "projectId": "a63cec3fb5cea77fff7d8d2f3c95d5ded6279752d8395fa3e09796633e17902d",
+            "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-1oNBbk/checkout",
+            "branch": "main"
+          },
+          "path": "constructor"
+        },
+        "text": "dirty constructor",
+        "disk": {
+          "text": "saved constructor",
+          "version": "cd9645ed07643eeff7d9b7d11e7d4ae5a41f6707e6c4763a7a2f68ccc892ea02"
+        }
+      },
+      {
+        "target": {
+          "checkout": {
+            "hostId": "moonbase-local",
+            "checkoutId": "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a",
+            "projectId": "a63cec3fb5cea77fff7d8d2f3c95d5ded6279752d8395fa3e09796633e17902d",
+            "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-1oNBbk/checkout",
+            "branch": "main"
+          },
+          "path": "toString"
+        },
+        "text": "dirty toString",
+        "disk": {
+          "text": "saved toString",
+          "version": "219a0ab56bd7f4f34809408c250b289677a3be2a69af4fc4f1d06f6c0d796040"
+        }
+      },
+      {
+        "target": {
+          "checkout": {
+            "hostId": "moonbase-local",
+            "checkoutId": "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a",
+            "projectId": "a63cec3fb5cea77fff7d8d2f3c95d5ded6279752d8395fa3e09796633e17902d",
+            "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-1oNBbk/checkout",
+            "branch": "main"
+          },
+          "path": "hasOwnProperty"
+        },
+        "text": "dirty hasOwnProperty",
+        "disk": {
+          "text": "saved hasOwnProperty",
+          "version": "eb18e5f4d33224acfbf3d4488e08ee025bb3342023ec25af596beb06eab2b3e4"
+        }
+      }
+    ],
+    "recentFiles": [
+      {
+        "checkout": {
+          "hostId": "moonbase-local",
+          "checkoutId": "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a",
+          "projectId": "a63cec3fb5cea77fff7d8d2f3c95d5ded6279752d8395fa3e09796633e17902d",
+          "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-1oNBbk/checkout",
+          "branch": "main"
+        },
+        "path": "hasOwnProperty"
+      },
+      {
+        "checkout": {
+          "hostId": "moonbase-local",
+          "checkoutId": "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a",
+          "projectId": "a63cec3fb5cea77fff7d8d2f3c95d5ded6279752d8395fa3e09796633e17902d",
+          "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-1oNBbk/checkout",
+          "branch": "main"
+        },
+        "path": "toString"
+      },
+      {
+        "checkout": {
+          "hostId": "moonbase-local",
+          "checkoutId": "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a",
+          "projectId": "a63cec3fb5cea77fff7d8d2f3c95d5ded6279752d8395fa3e09796633e17902d",
+          "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-1oNBbk/checkout",
+          "branch": "main"
+        },
+        "path": "constructor"
+      },
+      {
+        "checkout": {
+          "hostId": "moonbase-local",
+          "checkoutId": "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a",
+          "projectId": "a63cec3fb5cea77fff7d8d2f3c95d5ded6279752d8395fa3e09796633e17902d",
+          "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-1oNBbk/checkout",
+          "branch": "main"
+        },
+        "path": "__proto__"
+      },
+      {
+        "checkout": {
+          "hostId": "moonbase-local",
+          "checkoutId": "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a",
+          "projectId": "a63cec3fb5cea77fff7d8d2f3c95d5ded6279752d8395fa3e09796633e17902d",
+          "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-1oNBbk/checkout",
+          "branch": "main"
+        },
+        "path": "a.ts"
+      }
+    ],
+    "sidebarWidth": 270
+  },
+  "restarted": {
+    "version": 1,
+    "clientId": "desktop-primary",
+    "checkouts": [
+      {
+        "hostId": "moonbase-local",
+        "checkoutId": "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a",
+        "projectId": "a63cec3fb5cea77fff7d8d2f3c95d5ded6279752d8395fa3e09796633e17902d",
+        "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-1oNBbk/checkout",
+        "branch": "main"
+      }
+    ],
+    "openCheckoutIds": [
+      "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a"
+    ],
+    "selectedCheckoutId": "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a",
+    "views": {
+      "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a": {
+        "openFiles": [
+          "a.ts",
+          "__proto__",
+          "constructor",
+          "toString",
+          "hasOwnProperty"
+        ],
+        "active": "hasOwnProperty",
+        "preview": null,
+        "fileViews": {
+          "a.ts": "file",
+          "__proto__": "staged",
+          "constructor": "staged",
+          "toString": "staged",
+          "hasOwnProperty": "staged"
+        },
+        "positions": {
+          "a.ts": {
+            "file": {
+              "line": 1,
+              "column": 23,
+              "top": 0,
+              "left": 0
+            }
+          },
+          "__proto__": {
+            "file": {
+              "line": 1,
+              "column": 16,
+              "top": 0,
+              "left": 0
+            },
+            "staged:original": {
+              "line": 1,
+              "column": 1,
+              "top": 0,
+              "left": 0
+            },
+            "staged": {
+              "line": 1,
+              "column": 15,
+              "top": 0,
+              "left": 0
+            }
+          },
+          "constructor": {
+            "file": {
+              "line": 1,
+              "column": 18,
+              "top": 0,
+              "left": 0
+            },
+            "staged:original": {
+              "line": 1,
+              "column": 1,
+              "top": 0,
+              "left": 0
+            },
+            "staged": {
+              "line": 1,
+              "column": 17,
+              "top": 0,
+              "left": 0
+            }
+          },
+          "toString": {
+            "file": {
+              "line": 1,
+              "column": 15,
+              "top": 0,
+              "left": 0
+            },
+            "staged:original": {
+              "line": 1,
+              "column": 1,
+              "top": 0,
+              "left": 0
+            },
+            "staged": {
+              "line": 1,
+              "column": 14,
+              "top": 0,
+              "left": 0
+            }
+          },
+          "hasOwnProperty": {
+            "file": {
+              "line": 1,
+              "column": 21,
+              "top": 0,
+              "left": 0
+            },
+            "staged:original": {
+              "line": 1,
+              "column": 1,
+              "top": 0,
+              "left": 0
+            },
+            "staged": {
+              "line": 1,
+              "column": 20,
+              "top": 0,
+              "left": 0
+            }
+          }
+        },
+        "tree": {
+          "expanded": [],
+          "selected": [],
+          "focus": "",
+          "scroll": 0,
+          "hideIgnored": false
+        }
+      }
+    },
+    "drafts": [
+      {
+        "target": {
+          "checkout": {
+            "hostId": "moonbase-local",
+            "checkoutId": "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a",
+            "projectId": "a63cec3fb5cea77fff7d8d2f3c95d5ded6279752d8395fa3e09796633e17902d",
+            "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-1oNBbk/checkout",
+            "branch": "main"
+          },
+          "path": "a.ts"
+        },
+        "text": "retained sibling draft",
+        "disk": {
+          "text": "export const value = 'WORKING';\n",
+          "version": "21316020226accd1c3a21d0d680f51e9f0c0431e2cd93010f8e43c31d47e1c40"
+        }
+      },
+      {
+        "target": {
+          "checkout": {
+            "hostId": "moonbase-local",
+            "checkoutId": "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a",
+            "projectId": "a63cec3fb5cea77fff7d8d2f3c95d5ded6279752d8395fa3e09796633e17902d",
+            "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-1oNBbk/checkout",
+            "branch": "main"
+          },
+          "path": "__proto__"
+        },
+        "text": "dirty __proto__",
+        "disk": {
+          "text": "saved __proto__",
+          "version": "9dddc9020d5fa4581bb9d5bb81cf090ed9f94de4a94b22af2e99f5a725400296"
+        }
+      },
+      {
+        "target": {
+          "checkout": {
+            "hostId": "moonbase-local",
+            "checkoutId": "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a",
+            "projectId": "a63cec3fb5cea77fff7d8d2f3c95d5ded6279752d8395fa3e09796633e17902d",
+            "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-1oNBbk/checkout",
+            "branch": "main"
+          },
+          "path": "constructor"
+        },
+        "text": "dirty constructor",
+        "disk": {
+          "text": "saved constructor",
+          "version": "cd9645ed07643eeff7d9b7d11e7d4ae5a41f6707e6c4763a7a2f68ccc892ea02"
+        }
+      },
+      {
+        "target": {
+          "checkout": {
+            "hostId": "moonbase-local",
+            "checkoutId": "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a",
+            "projectId": "a63cec3fb5cea77fff7d8d2f3c95d5ded6279752d8395fa3e09796633e17902d",
+            "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-1oNBbk/checkout",
+            "branch": "main"
+          },
+          "path": "toString"
+        },
+        "text": "dirty toString",
+        "disk": {
+          "text": "saved toString",
+          "version": "219a0ab56bd7f4f34809408c250b289677a3be2a69af4fc4f1d06f6c0d796040"
+        }
+      },
+      {
+        "target": {
+          "checkout": {
+            "hostId": "moonbase-local",
+            "checkoutId": "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a",
+            "projectId": "a63cec3fb5cea77fff7d8d2f3c95d5ded6279752d8395fa3e09796633e17902d",
+            "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-1oNBbk/checkout",
+            "branch": "main"
+          },
+          "path": "hasOwnProperty"
+        },
+        "text": "dirty hasOwnProperty",
+        "disk": {
+          "text": "saved hasOwnProperty",
+          "version": "eb18e5f4d33224acfbf3d4488e08ee025bb3342023ec25af596beb06eab2b3e4"
+        }
+      }
+    ],
+    "recentFiles": [
+      {
+        "checkout": {
+          "hostId": "moonbase-local",
+          "checkoutId": "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a",
+          "projectId": "a63cec3fb5cea77fff7d8d2f3c95d5ded6279752d8395fa3e09796633e17902d",
+          "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-1oNBbk/checkout",
+          "branch": "main"
+        },
+        "path": "hasOwnProperty"
+      },
+      {
+        "checkout": {
+          "hostId": "moonbase-local",
+          "checkoutId": "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a",
+          "projectId": "a63cec3fb5cea77fff7d8d2f3c95d5ded6279752d8395fa3e09796633e17902d",
+          "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-1oNBbk/checkout",
+          "branch": "main"
+        },
+        "path": "toString"
+      },
+      {
+        "checkout": {
+          "hostId": "moonbase-local",
+          "checkoutId": "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a",
+          "projectId": "a63cec3fb5cea77fff7d8d2f3c95d5ded6279752d8395fa3e09796633e17902d",
+          "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-1oNBbk/checkout",
+          "branch": "main"
+        },
+        "path": "constructor"
+      },
+      {
+        "checkout": {
+          "hostId": "moonbase-local",
+          "checkoutId": "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a",
+          "projectId": "a63cec3fb5cea77fff7d8d2f3c95d5ded6279752d8395fa3e09796633e17902d",
+          "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-1oNBbk/checkout",
+          "branch": "main"
+        },
+        "path": "__proto__"
+      },
+      {
+        "checkout": {
+          "hostId": "moonbase-local",
+          "checkoutId": "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a",
+          "projectId": "a63cec3fb5cea77fff7d8d2f3c95d5ded6279752d8395fa3e09796633e17902d",
+          "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-1oNBbk/checkout",
+          "branch": "main"
+        },
+        "path": "a.ts"
+      }
+    ],
+    "sidebarWidth": 270
+  },
+  "afterSave": {
+    "version": 1,
+    "clientId": "desktop-primary",
+    "checkouts": [
+      {
+        "hostId": "moonbase-local",
+        "checkoutId": "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a",
+        "projectId": "a63cec3fb5cea77fff7d8d2f3c95d5ded6279752d8395fa3e09796633e17902d",
+        "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-1oNBbk/checkout",
+        "branch": "main"
+      }
+    ],
+    "openCheckoutIds": [
+      "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a"
+    ],
+    "selectedCheckoutId": "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a",
+    "views": {
+      "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a": {
+        "openFiles": [
+          "a.ts",
+          "__proto__",
+          "constructor",
+          "toString",
+          "hasOwnProperty"
+        ],
+        "active": "__proto__",
+        "preview": null,
+        "fileViews": {
+          "a.ts": "file",
+          "__proto__": "staged",
+          "constructor": "staged",
+          "toString": "staged",
+          "hasOwnProperty": "staged"
+        },
+        "positions": {
+          "a.ts": {
+            "file": {
+              "line": 1,
+              "column": 23,
+              "top": 0,
+              "left": 0
+            }
+          },
+          "__proto__": {
+            "file": {
+              "line": 1,
+              "column": 16,
+              "top": 0,
+              "left": 0
+            },
+            "staged:original": {
+              "line": 1,
+              "column": 1,
+              "top": 0,
+              "left": 0
+            },
+            "staged": {
+              "line": 1,
+              "column": 15,
+              "top": 0,
+              "left": 0
+            }
+          },
+          "constructor": {
+            "file": {
+              "line": 1,
+              "column": 18,
+              "top": 0,
+              "left": 0
+            },
+            "staged:original": {
+              "line": 1,
+              "column": 1,
+              "top": 0,
+              "left": 0
+            },
+            "staged": {
+              "line": 1,
+              "column": 17,
+              "top": 0,
+              "left": 0
+            }
+          },
+          "toString": {
+            "file": {
+              "line": 1,
+              "column": 15,
+              "top": 0,
+              "left": 0
+            },
+            "staged:original": {
+              "line": 1,
+              "column": 1,
+              "top": 0,
+              "left": 0
+            },
+            "staged": {
+              "line": 1,
+              "column": 14,
+              "top": 0,
+              "left": 0
+            }
+          },
+          "hasOwnProperty": {
+            "file": {
+              "line": 1,
+              "column": 21,
+              "top": 0,
+              "left": 0
+            },
+            "staged:original": {
+              "line": 1,
+              "column": 1,
+              "top": 0,
+              "left": 0
+            },
+            "staged": {
+              "line": 1,
+              "column": 20,
+              "top": 0,
+              "left": 0
+            }
+          }
+        },
+        "tree": {
+          "expanded": [],
+          "selected": [],
+          "focus": "",
+          "scroll": 0,
+          "hideIgnored": false
+        }
+      }
+    },
+    "drafts": [
+      {
+        "target": {
+          "checkout": {
+            "hostId": "moonbase-local",
+            "checkoutId": "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a",
+            "projectId": "a63cec3fb5cea77fff7d8d2f3c95d5ded6279752d8395fa3e09796633e17902d",
+            "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-1oNBbk/checkout",
+            "branch": "main"
+          },
+          "path": "a.ts"
+        },
+        "text": "retained sibling draft",
+        "disk": {
+          "text": "export const value = 'WORKING';\n",
+          "version": "21316020226accd1c3a21d0d680f51e9f0c0431e2cd93010f8e43c31d47e1c40"
+        }
+      },
+      {
+        "target": {
+          "checkout": {
+            "hostId": "moonbase-local",
+            "checkoutId": "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a",
+            "projectId": "a63cec3fb5cea77fff7d8d2f3c95d5ded6279752d8395fa3e09796633e17902d",
+            "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-1oNBbk/checkout",
+            "branch": "main"
+          },
+          "path": "constructor"
+        },
+        "text": "dirty constructor",
+        "disk": {
+          "text": "saved constructor",
+          "version": "cd9645ed07643eeff7d9b7d11e7d4ae5a41f6707e6c4763a7a2f68ccc892ea02"
+        }
+      },
+      {
+        "target": {
+          "checkout": {
+            "hostId": "moonbase-local",
+            "checkoutId": "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a",
+            "projectId": "a63cec3fb5cea77fff7d8d2f3c95d5ded6279752d8395fa3e09796633e17902d",
+            "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-1oNBbk/checkout",
+            "branch": "main"
+          },
+          "path": "toString"
+        },
+        "text": "dirty toString",
+        "disk": {
+          "text": "saved toString",
+          "version": "219a0ab56bd7f4f34809408c250b289677a3be2a69af4fc4f1d06f6c0d796040"
+        }
+      },
+      {
+        "target": {
+          "checkout": {
+            "hostId": "moonbase-local",
+            "checkoutId": "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a",
+            "projectId": "a63cec3fb5cea77fff7d8d2f3c95d5ded6279752d8395fa3e09796633e17902d",
+            "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-1oNBbk/checkout",
+            "branch": "main"
+          },
+          "path": "hasOwnProperty"
+        },
+        "text": "dirty hasOwnProperty",
+        "disk": {
+          "text": "saved hasOwnProperty",
+          "version": "eb18e5f4d33224acfbf3d4488e08ee025bb3342023ec25af596beb06eab2b3e4"
+        }
+      }
+    ],
+    "recentFiles": [
+      {
+        "checkout": {
+          "hostId": "moonbase-local",
+          "checkoutId": "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a",
+          "projectId": "a63cec3fb5cea77fff7d8d2f3c95d5ded6279752d8395fa3e09796633e17902d",
+          "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-1oNBbk/checkout",
+          "branch": "main"
+        },
+        "path": "__proto__"
+      },
+      {
+        "checkout": {
+          "hostId": "moonbase-local",
+          "checkoutId": "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a",
+          "projectId": "a63cec3fb5cea77fff7d8d2f3c95d5ded6279752d8395fa3e09796633e17902d",
+          "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-1oNBbk/checkout",
+          "branch": "main"
+        },
+        "path": "a.ts"
+      },
+      {
+        "checkout": {
+          "hostId": "moonbase-local",
+          "checkoutId": "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a",
+          "projectId": "a63cec3fb5cea77fff7d8d2f3c95d5ded6279752d8395fa3e09796633e17902d",
+          "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-1oNBbk/checkout",
+          "branch": "main"
+        },
+        "path": "hasOwnProperty"
+      },
+      {
+        "checkout": {
+          "hostId": "moonbase-local",
+          "checkoutId": "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a",
+          "projectId": "a63cec3fb5cea77fff7d8d2f3c95d5ded6279752d8395fa3e09796633e17902d",
+          "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-1oNBbk/checkout",
+          "branch": "main"
+        },
+        "path": "toString"
+      },
+      {
+        "checkout": {
+          "hostId": "moonbase-local",
+          "checkoutId": "14846e8d51e08ee8a99f91ad7e7e6d69f0175d9c652eff2a2773377addfe9b8a",
+          "projectId": "a63cec3fb5cea77fff7d8d2f3c95d5ded6279752d8395fa3e09796633e17902d",
+          "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-1oNBbk/checkout",
+          "branch": "main"
+        },
+        "path": "constructor"
+      }
+    ],
+    "sidebarWidth": 270
+  }
+}

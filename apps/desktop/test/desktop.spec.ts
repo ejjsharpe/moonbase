@@ -1,3 +1,4 @@
+import { filenameCases, checkFilenameMaps, checkTabMenu } from "./editor-regressions.ts";
 import { test, expect, _electron as electron } from "@playwright/test";
 import type { ElectronApplication, Page } from "@playwright/test";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync, existsSync, statSync } from "node:fs";
@@ -456,4 +457,30 @@ test("an explicit native Quit arriving before renderer startup is not lost", asy
   const env = { ...process.env, MOONBASE_USER_DATA: join(base, "early-user-data"), MOONBASE_TEST_REPORT: join(base, "early-quit.json"), MOONBASE_TEST_QUIT_EARLY: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } as Record<string, string>; delete env.ELECTRON_RUN_AS_NODE;
   app = await electron.launch({ args: [resolve("test/harness.mjs")], env, timeout: 20000 }); child = app.process();
   await app.waitForEvent("close", { timeout: 5000 }); expect(existsSync(join(base, "early-quit.json"))).toBe(true);
+});
+
+test("app R1 filename maps preserve actual Save, positions, sibling drafts and restart", async () => {
+  for (const path of filenameCases) writeFileSync(join(checkout, path), "baseline " + path);
+  execFileSync("/usr/bin/git", ["-C", checkout, "-c", "user.name=Filename Test", "-c", "user.email=test@example.invalid", "add", "--", ...filenameCases]);
+  execFileSync("/usr/bin/git", ["-C", checkout, "-c", "user.name=Filename Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "Filename fixtures"]);
+  await open();
+  let evidence;
+  try { evidence = await checkFilenameMaps(page, checkout, "a.ts", async () => { expect(errors).toEqual([]); expect(consoleErrors).toEqual([]); await forceStop(); await launch(); return page; }); }
+  finally { writeFileSync("test-results/filename-bridge-inputs.json", await app.evaluate(() => JSON.stringify({ calls: globalThis.desktopTest.calls, results: globalThis.desktopTest.results }, null, 2)) + "\n"); }
+  writeFileSync("test-results/filename-maps.json", JSON.stringify(evidence, null, 2) + "\n"); await capture("desktop-filename-maps");
+});
+
+test("app R1 context-isolated command transport preserves own JSON keys", async () => {
+  expect(await page.evaluate(() => { const map = {}; Object.defineProperty(map, "__proto__", { value: "staged", enumerable: true, configurable: true, writable: true }); return Object.keys(structuredClone(map)); })).toEqual(["__proto__"]);
+  const reply = await page.evaluate(() => window.moonbase.call("command", { operation: "unknown", input: JSON.parse('{"__proto__":{"marker":1},"constructor":2,"fileViews":{"__proto__":"staged"},"positions":{"__proto__":{"staged":{"line":1,"column":3,"top":0,"left":0}}},"state":{"views":{"known":{"fileViews":{"__proto__":"staged"},"positions":{"__proto__":{"staged":{"line":1,"column":3,"top":0,"left":0}}}}}}}') }, crypto.randomUUID()));
+  expect(reply.ok).toBe(false);
+  const result = await app.evaluate(() => { const input = globalThis.desktopTest.calls.at(-1)!.input.input!; return { own: Object.hasOwn(input, "__proto__"), fileViews: Object.keys(input.fileViews as object), positions: Object.keys(input.positions as object), deep: Object.keys((input.state as { views: { known: { fileViews: object } } }).views.known.fileViews) }; });
+  writeFileSync("test-results/own-keys-boundary.json", JSON.stringify(result, null, 2) + "\n");
+  expect(result).toEqual({ own: true, fileViews: ["__proto__"], positions: ["__proto__"], deep: ["__proto__"] });
+});
+
+test("app R1 Tab actions first/last selection and Close click work at native size and zoom", async () => {
+  await open("b.ts"); await open(); await page.getByRole("button", { name: "Close b.ts", exact: true }).click();
+  await expect(page.getByRole("tab", { name: "b.ts", exact: true })).toHaveCount(0);
+  await checkTabMenu(app, page, name => capture("desktop-" + name));
 });
