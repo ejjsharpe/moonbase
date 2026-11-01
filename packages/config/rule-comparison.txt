@@ -300,8 +300,9 @@ UNICORN RECOMMENDED: AVAILABLE NATIVELY BUT NOT ENABLED (117)
   unicorn/throw-new-error (style)
 
 UNICORN RECOMMENDED: NO SAME-NAME NATIVE RULE (220; includes renamed and expanded rules)
-  Known upstream renames: name-replacements <- native prevent-abbreviations;
-  consistent-json-file-read <- native prefer-json-parse-buffer; dom-node-dataset <- native prefer-dom-node-dataset.
+  Upstream name-replacements replaces prevent-abbreviations; neither name exists in native Oxlint 1.90.0.
+  Upstream consistent-json-file-read replaces prefer-json-parse-buffer; neither name exists natively here.
+  Upstream dom-node-dataset replaces native prefer-dom-node-dataset.
   Expanded successors are not treated as fully covered: no-instanceof-builtins vs no-instanceof-array,
   no-unnecessary-slice-end vs no-length-as-slice-end, prefer-single-call vs no-array-push-push.
   unicorn/`consistent-compound-words`
