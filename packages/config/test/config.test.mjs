@@ -11,7 +11,7 @@ const tools = (name) => path.join(root, 'node_modules', name, 'bin', name);
 
 // Exercise the actual root overrides in an isolated monorepo, without linting invalid fixtures in CI.
 test('Universe rules, Electron scopes and standalone formatting', () => {
-  const directory = mkdtempSync(path.join(tmpdir(), 'moonbase-code-style-'));
+  const directory = mkdtempSync(path.join(tmpdir(), 'moonbase-config-'));
   try {
     symlinkSync(path.join(root, 'node_modules'), path.join(directory, 'node_modules'), 'dir');
     writeFileSync(path.join(directory, '.gitignore'), 'node_modules/\n');

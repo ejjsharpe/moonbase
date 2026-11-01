@@ -1,4 +1,4 @@
-import { base, node, web } from '@moonbase/code-style/oxlint';
+import { base, node, web } from '@moonbase/config/oxlint';
 import { defineConfig } from 'oxlint';
 
 export default defineConfig({
@@ -11,7 +11,7 @@ export default defineConfig({
       files: [
         '**/*.config.{js,mjs,cjs,ts,mts,cts}',
         'scripts/**',
-        'packages/code-style/**',
+        'packages/config/**',
         '**/{test,tests,scripts}/**',
         'apps/desktop/src/*.{js,ts,mjs,cjs,mts,cts}',
         'packages/{workspace,pi-runtime,ssh}/**',

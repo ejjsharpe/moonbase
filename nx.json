@@ -2,14 +2,19 @@
   "analytics": false,
   "targetDefaults": {
     "typecheck": {
-      "cache": true
+      "cache": true,
+      "inputs": [
+        "default",
+        "{workspaceRoot}/tsconfig.base.json",
+        "{workspaceRoot}/packages/config/typescript/**/*.json"
+      ]
     },
     "lint": {
       "cache": true,
       "inputs": [
         "default",
         "{workspaceRoot}/oxlint.config.mts",
-        "{workspaceRoot}/packages/code-style/**/*",
+        "{workspaceRoot}/packages/config/**/*",
         {
           "externalDependencies": ["oxlint"]
         }

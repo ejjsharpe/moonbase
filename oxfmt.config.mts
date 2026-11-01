@@ -1,4 +1,4 @@
-import formatting from '@moonbase/code-style/oxfmt' with { type: 'json' };
+import formatting from '@moonbase/config/oxfmt' with { type: 'json' };
 import { defineConfig } from 'oxfmt';
 
 export default defineConfig({

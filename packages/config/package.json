@@ -1,10 +1,11 @@
 {
-  "name": "@moonbase/code-style",
+  "name": "@moonbase/config",
   "private": true,
   "type": "module",
   "exports": {
     "./oxlint": "./oxlint.mjs",
-    "./oxfmt": "./oxfmt.json"
+    "./oxfmt": "./oxfmt.json",
+    "./typescript/base.json": "./typescript/base.json"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"

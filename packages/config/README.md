@@ -1,6 +1,6 @@
-# Moonbase code style
+# Moonbase configuration
 
-Shared Oxlint and Oxfmt configuration for the Bun/Nx monorepo. Root config files select the Electron Node/main/preload and React/browser scopes; packages inherit them automatically when running `oxlint .` from their own directory.
+Shared Oxlint, Oxfmt and TypeScript configuration for the Bun/Nx monorepo. Root config files select the Electron Node/main/preload and React/browser scopes; packages inherit them automatically when running `oxlint .` from their own directory.
 
 ```sh
 bun run lint
@@ -11,6 +11,20 @@ bun run test
 ```
 
 `oxlint.mjs` exports `base` (Universe default), `node` and `web` (override fragments to combine with `base`). `oxfmt.json` exports formatting options. Add platform paths to the root `oxlint.config.mts` as packages arrive. Keep privileged Electron globals out of renderer overrides; TypeScript still owns undefined-name checks in TS/TSX, as in Universe.
+
+## TypeScript
+
+The existing shared compiler settings live in `typescript/base.json`. Consumer packages declare `@moonbase/config` as a workspace dev dependency and extend the exported subpath:
+
+```json
+{
+  "extends": "@moonbase/config/typescript/base.json",
+  "compilerOptions": { "types": ["node"] },
+  "include": ["src", "test"]
+}
+```
+
+Each package keeps its own input files and environment-specific options. Root `tsconfig.base.json` forwards to this same base so other branches can keep their existing relative extends paths. Compiler behavior is unchanged; separate Node/browser presets can be introduced when consumers need them.
 
 ## Universe migration
 

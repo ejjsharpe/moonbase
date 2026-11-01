@@ -15,5 +15,8 @@
   },
   "dependencies": {
     "effect": "4.1.0"
+  },
+  "devDependencies": {
+    "@moonbase/config": "workspace:*"
   }
 }
