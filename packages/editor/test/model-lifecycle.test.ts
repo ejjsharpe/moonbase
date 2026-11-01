@@ -597,3 +597,148 @@ test('UI report callbacks ignore only cancellation from a closed captured read o
     await runtime.dispose();
   }
 });
+
+test('raw observation cleanup rejection is safely normalized without losing typed cleanup failures', async () => {
+  const memory = memoryWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
+  const runtime = ManagedRuntime.make(memory.layer),
+    raw = makeEditorClient(runtime);
+  const sentinel = 'api_key=SYNTHETIC_PRIVATE_RELEASE_VALUE';
+  const client: EditorClient = {
+    ...raw,
+    watch(input, receive, onError) {
+      const close = raw.watch(input, receive, onError);
+      let completion: Promise<void> | undefined;
+      return () =>
+        (completion ??= close().then(() => {
+          throw Error(sentinel);
+        }));
+    },
+  };
+  const editor = await acquireEditor(runtime, { client, clientId: 'raw-release' });
+  try {
+    await editor.load();
+    await editor.openCheckout(checkout.root);
+    await assert.rejects(
+      editor.dispose(),
+      (error) =>
+        ApplicationError.is(error) &&
+        error.code === 'Unavailable' &&
+        !error.message.includes(sentinel),
+    );
+    await assert.rejects(editor.dispose(), (error) => !String(error).includes(sentinel));
+    assert.equal(editor.getSnapshot().disposed, false);
+  } finally {
+    await editor.dispose().catch(() => {});
+    await runtime.dispose();
+  }
+});
+
+test('typed compound Cancelled failures remain visible for active and newly closed read owners', async () => {
+  const memory = memoryWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
+  const runtime = ManagedRuntime.make(memory.layer),
+    raw = makeEditorClient(runtime);
+  const compound = new ApplicationError({
+    code: 'Cancelled',
+    message: 'Cancelled read; Real cleanup failure',
+  });
+  const entered = gate(),
+    release = gate();
+  let delayExit = false,
+    fault = '';
+  const delayed: typeof runtime = {
+    ...runtime,
+    async runPromiseExit(effect, options) {
+      const exit = await runtime.runPromiseExit(effect, options);
+      if (
+        delayExit &&
+        Exit.isFailure(exit) &&
+        exit.cause.reasons.some((reason) => reason._tag === 'Fail' && reason.error === compound)
+      ) {
+        delayExit = false;
+        entered.release();
+        await release.promise;
+      }
+      return exit;
+    },
+  };
+  const client: EditorClient = {
+    ...raw,
+    command(name, input, options) {
+      return name === fault ? Promise.reject(compound) : raw.command(name, input, options);
+    },
+  };
+  const editor = await acquireEditor(delayed, { client, clientId: 'compound-read-errors' });
+  try {
+    await editor.load();
+    await editor.openCheckout(checkout.root);
+    await editor.open(target('a.ts'));
+    await editor.flush();
+    fault = 'gitStatus';
+    await editor.refresh(checkout);
+    assert(editor.getSnapshot().errors.includes(compound.message));
+    editor.clearErrors();
+    fault = 'listDirectory';
+    delayExit = true;
+    const list = editor.list(checkout, '').catch(editor.report);
+    await entered.promise;
+    fault = '';
+    assert.equal(await editor.closeCheckout(checkout), true);
+    release.release();
+    await list;
+    assert(editor.getSnapshot().errors.includes(compound.message));
+  } finally {
+    release.release();
+    await editor.dispose();
+    await runtime.dispose();
+  }
+});
+
+test('untyped injected read, lookup and inspection errors cannot publish private diagnostics', async () => {
+  const { Layer } = await import('effect');
+  const { TestClock } = await import('effect/testing');
+  const memory = memoryWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
+  const runtime = ManagedRuntime.make(Layer.merge(memory.layer, TestClock.layer())),
+    raw = makeEditorClient(runtime);
+  const sentinel = 'api_key=SYNTHETIC_PRIVATE_CLIENT_VALUE';
+  let fault = '';
+  const client: EditorClient = {
+    ...raw,
+    command(name, input, options) {
+      return name === fault ? Promise.reject(Error(sentinel)) : raw.command(name, input, options);
+    },
+  };
+  const editor = await acquireEditor(runtime, { client, clientId: 'raw-client-errors' });
+  try {
+    await editor.load();
+    await editor.openCheckout(checkout.root);
+    fault = 'readFile';
+    assert.equal(await editor.open(target('a.ts')), false);
+    assert(editor.getSnapshot().errors.includes('Application effect failed'));
+    assert(!JSON.stringify(editor.getSnapshot()).includes(sentinel));
+    fault = 'lookupFiles';
+    const lookup = editor.createLookup();
+    const complete = new Promise<void>((resolve) => {
+      const off = lookup.subscribe(() => {
+        if (lookup.getSnapshot().message !== 'Searching…') {
+          off();
+          resolve();
+        }
+      });
+    });
+    lookup.query('a', [checkout]);
+    await runtime.runPromise(TestClock.adjust('120 millis'));
+    await complete;
+    assert(lookup.getSnapshot().message.includes('Application effect failed'));
+    assert(!JSON.stringify(lookup.getSnapshot()).includes(sentinel));
+    await lookup.dispose();
+    fault = 'inspectEntries';
+    const mutation = editor.createMutation({ checkout, kind: 'move', paths: ['a.ts'] });
+    assert.equal(await mutation.apply('moved.ts', '', false), false);
+    assert.equal(mutation.getSnapshot().error, 'Application effect failed');
+    assert(!JSON.stringify(mutation.getSnapshot()).includes(sentinel));
+    await mutation.dispose();
+  } finally {
+    await editor.dispose();
+    await runtime.dispose();
+  }
+});
