@@ -10,7 +10,7 @@ const root = fileURLToPath(new URL('../../../', import.meta.url));
 const tools = (name) => path.join(root, 'node_modules', name, 'bin', name);
 
 // Exercise the actual root overrides in an isolated monorepo, without linting invalid fixtures in CI.
-test('Universe rules, Electron scopes and standalone formatting', () => {
+test('Oxlint correctness baseline, native React checks and standalone formatting', () => {
   const directory = mkdtempSync(path.join(tmpdir(), 'moonbase-config-'));
   try {
     symlinkSync(path.join(root, 'node_modules'), path.join(directory, 'node_modules'), 'dir');
@@ -22,18 +22,11 @@ test('Universe rules, Electron scopes and standalone formatting', () => {
     const fixtures = {
       'packages/shared/constants.js': 'const value = 1; value = 2; console.log(value);',
       'packages/shared/unused.ts': 'const unused: Array<string> = [];',
-      'packages/shared/declarations.d.ts':
-        'import z from "z";\nimport a from "a";\nexport { z, a };',
-      'scripts/node.js': 'console.log(process.pid, __dirname); new Buffer(1);',
-      'scripts/buffer-call.js': 'export const buffer = Buffer(1);',
-      'scripts/browser.js': 'window.alert("not a browser");',
-      'apps/desktop/src/renderer/browser.jsx':
-        'export const view = <div>{window.location.href}</div>;',
-      'apps/desktop/src/renderer/node.jsx': 'console.log(process.pid);',
+      'packages/shared/array.js': 'export const array = new Array(10);',
+      'scripts/node.js': 'export const buffer = new Buffer(1);',
+      'apps/desktop/src/renderer/keys.jsx': 'export const view = [<div />, <span />];',
       'apps/desktop/src/renderer/hooks.tsx':
         'import { useState } from "react";\nexport function View({ enabled }) { if (enabled) useState(0); return <div />; }',
-      'apps/desktop/src/renderer/bind.tsx':
-        'export const view = <button onClick={console.log.bind(console)} />;',
       'scripts/order.mjs':
         'import z from "node:zlib";\nimport a from "node:assert";\nconsole.log(z, a);',
       'docs/source-snapshot/invalid.js': 'const = broken;',
@@ -53,22 +46,17 @@ test('Universe rules, Electron scopes and standalone formatting', () => {
     const codes = (file) =>
       diagnostics.filter((item) => item.filename.endsWith(file)).map((item) => item.code);
     assert(codes('constants.js').includes('eslint(no-const-assign)'));
-    assert(codes('unused.ts').includes('typescript(array-type)'));
     assert(codes('unused.ts').includes('eslint(no-unused-vars)'));
-    assert(!codes('declarations.d.ts').includes('import-js(order)'));
-    assert.equal(codes('node.js').filter((code) => code === 'unicorn(no-new-buffer)').length, 1);
-    assert(!codes('buffer-call.js').includes('unicorn(no-new-buffer)'));
-    assert(!codes('node.js').includes('eslint(no-undef)'));
-    assert(codes('browser.js').includes('eslint(no-undef)'));
-    assert(!codes('browser.jsx').includes('eslint(no-undef)'));
-    assert(codes('node.jsx').includes('eslint(no-undef)'));
-    assert(codes('hooks.tsx').includes('react-hooks(rules-of-hooks)'));
+    assert(codes('array.js').includes('unicorn(no-new-array)'), JSON.stringify(diagnostics));
+    assert(codes('keys.jsx').includes('react(jsx-key)'), JSON.stringify(diagnostics));
+    assert(!codes('unused.ts').includes('typescript(array-type)'));
+    assert(!codes('node.js').includes('unicorn(no-new-buffer)'));
+    assert(!codes('hooks.tsx').includes('react-hooks(rules-of-hooks)'));
+    assert(!codes('order.mjs').length);
     assert(
-      diagnostics.every((item) => item.code),
+      diagnostics.every((item) => item.code && item.severity === 'error'),
       JSON.stringify(diagnostics),
     );
-    assert(codes('bind.tsx').includes('react-js(jsx-no-bind)'));
-    assert(codes('order.mjs').includes('import-js(order)'));
     assert.deepEqual(codes('invalid.js'), []);
 
     const format = spawnSync(process.execPath, [tools('oxfmt'), '--stdin-filepath=example.tsx'], {

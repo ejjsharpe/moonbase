@@ -5,7 +5,6 @@ export default defineConfig({
   ...base,
   ignorePatterns: ['docs/source-snapshot/**', '**/dist/**', '**/release/**', '**/coverage/**'],
   overrides: [
-    ...base.overrides,
     {
       ...node,
       files: [

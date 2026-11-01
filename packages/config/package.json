@@ -10,10 +10,6 @@
   "scripts": {
     "test": "node --test test/*.test.mjs"
   },
-  "dependencies": {
-    "eslint-plugin-import": "2.32.0",
-    "eslint-plugin-react": "7.37.5"
-  },
   "nx": {
     "targets": {
       "test": {
