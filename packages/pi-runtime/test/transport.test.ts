@@ -654,6 +654,77 @@ test('unknown shapes, canonical nonces, malformed Unicode and raw body limits re
   assert.equal(f.calls.filter((x) => x === 'createChat').length, before);
 });
 
+for (const loss of ['fetch', 'body', 'verification'] as const)
+  for (const mutation of [false, true])
+    test(`remote ${mutation ? 'Send' : 'read'} ${loss} response loss preserves the correct retry semantics`, async (t) => {
+      const f = await setup(t),
+        original = fetch,
+        target = (
+          await f.client.command('createChat', {
+            session,
+            requestId: 'setup-loss',
+            title: 'Response loss',
+          })
+        ).conversation.target,
+        input = { target, requestId: 'lost-send', text: 'Saved once' };
+      f.faux.setResponses([fauxAssistantMessage('Saved once')]);
+      mock.method(globalThis, 'fetch', async (...args: Parameters<typeof fetch>) => {
+        const response = await original(...args);
+        if (!String(args[0]).endsWith('/v1/chat')) return response;
+        if (loss === 'fetch') {
+          await response.arrayBuffer();
+          throw Error('Lost response after dispatch');
+        }
+        if (loss === 'body') {
+          const reader = response.body!.getReader();
+          Object.defineProperty(response, 'body', {
+            value: {
+              getReader: () => ({
+                read: async () => {
+                  throw Error('Lost response body');
+                },
+                cancel: () => reader.cancel(),
+                releaseLock: () => reader.releaseLock(),
+              }),
+            },
+          });
+        } else {
+          const get = response.headers.get.bind(response.headers);
+          mock.method(response.headers, 'get', (name: string) => {
+            if (name === 'x-moonbase-nonce') throw Error('Response verification failed');
+            return get(name);
+          });
+        }
+        return response;
+      });
+      try {
+        await assert.rejects(
+          mutation
+            ? f.remote.command('sendChat', input)
+            : f.remote.command('getChatHost', { host }),
+          (error) =>
+            ApplicationError.is(error) &&
+            error.code === (mutation ? 'Uncertain' : 'Unavailable') &&
+            (mutation || !/original request|another Send/.test(error.message)),
+        );
+      } finally {
+        mock.restoreAll();
+      }
+      assert.equal((await f.remote.command('getChatHost', { host })).actorId, session.actorId);
+      if (mutation) {
+        const receipt = await f.remote.command('getChatSend', {
+          target,
+          requestId: input.requestId,
+        });
+        assert.equal(receipt?.admission, 'admitted');
+        assert.deepEqual(await f.remote.command('sendChat', input), receipt);
+        assert.equal(f.calls.filter((operation) => operation === 'sendChat').length, 2);
+        for (let i = 0; i < 100 && f.faux.state.callCount === 0; i++)
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        assert.equal(f.faux.state.callCount, 1);
+      }
+    });
+
 for (const deadline of [false, true])
   test(`remote ${deadline ? 'whole-request deadline' : 'caller cancellation'} releases a stalled RPC body reader`, async (t) => {
     const f = await setup(t),
@@ -704,7 +775,7 @@ for (const deadline of [false, true])
       pending = f.remote.command('getChatHost', { host }, { signal: abort.signal });
     await started;
     if (!deadline) abort.abort();
-    await assert.rejects(pending, { code: deadline ? 'Uncertain' : 'Cancelled' });
+    await assert.rejects(pending, { code: deadline ? 'Unavailable' : 'Cancelled' });
     await Promise.race([
       released,
       new Promise<never>((_, reject) =>
