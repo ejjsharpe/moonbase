@@ -31,6 +31,12 @@ function configuration(input: SshConfiguration): SshConfiguration {
   return {profile: {id: p.id, label: p.label, destination: p.destination, remotePort: p.remotePort, expected: {hostId: p.expected.hostId, storeId: p.expected.storeId}}, token: input.token, sshExecutable};
 }
 const command = <A>(run: () => A): Effect.Effect<A, ApplicationError> => Effect.try({try: run, catch: e => ApplicationError.is(e) ? e : error('InvalidInput', 'Invalid SSH configuration or command.')});
+function validateSshPolicy(output: string) {
+  if (/^(localforward|remoteforward|dynamicforward)\s+/im.test(output)) throw error('InvalidInput', 'Configured SSH alias includes additional forwards. Use a dedicated alias without forwarding rules.');
+  if (/^stricthostkeychecking\s+(false|no|off)\s*$/im.test(output)) throw error('InvalidInput', 'Configured SSH policy disables host key checking. Use a verified host key policy.');
+  if (/^nohostauthenticationfor(?:localhost|proxycommand)\s+(?!no\s*$|false\s*$|off\s*$)\S+/im.test(output)) throw error('InvalidInput', 'Configured SSH policy bypasses host authentication. Disable the bypass and verify the host key before connecting.');
+  if (/^clearallforwardings\s+yes\s*$/im.test(output) || /^tunnel\s+(?!false\s*$|no\s*$|none\s*$)\S+/im.test(output)) throw error('InvalidInput', 'Configured SSH alias clears forwarding or requests a device tunnel. Use a dedicated loopback-forward profile.');
+}
 type Generation = {
   id: string; ready: Deferred.Deferred<ConnectionSnapshot, ApplicationError>; fiber?: Fiber.Fiber<void, ApplicationError>;
   processes: Set<SshProcess>; forward?: SshProcess; origin?: string; health?: ChatHostHealth; reason?: 'disconnect' | 'cancel' | 'root';
@@ -169,10 +175,7 @@ class Connection {
       const configured = yield* Effect.promise(() => preflight.terminal);
       yield* releaseResource(() => preflight.stop());
       if (configured.spawnFailed || configured.code !== 0 || preflight.overflow) return yield* Effect.fail(preflight.failure());
-      if (/^(localforward|remoteforward|dynamicforward)\s+/im.test(preflight.output)) return yield* Effect.fail(error('InvalidInput', 'Configured SSH alias includes additional forwards. Use a dedicated alias without forwarding rules.'));
-      if (/^stricthostkeychecking\s+(false|no|off)\s*$/im.test(preflight.output)) return yield* Effect.fail(error('InvalidInput', 'Configured SSH policy disables host key checking. Use a verified host key policy.'));
-      if (/^nohostauthenticationfor(?:localhost|proxycommand)\s+(?!no\s*$|false\s*$|off\s*$)\S+/im.test(preflight.output)) return yield* Effect.fail(error('InvalidInput', 'Configured SSH policy bypasses host authentication. Disable the bypass and verify the host key before connecting.'));
-      if (/^clearallforwardings\s+yes\s*$/im.test(preflight.output) || /^tunnel\s+(?!false\s*$|no\s*$|none\s*$)\S+/im.test(preflight.output)) return yield* Effect.fail(error('InvalidInput', 'Configured SSH alias clears forwarding or requests a device tunnel. Use a dedicated loopback-forward profile.'));
+      yield* command(() => validateSshPolicy(preflight.output));
       preflight.output = ''; preflight.stderr = '';
       const port = yield* self.port(); g.origin = `http://127.0.0.1:${port}`;
       const child = yield* self.spawn(g, [...self.arguments(), '-L', `127.0.0.1:${port}:127.0.0.1:${self.config.profile.remotePort}`, '--', self.config.profile.destination]);
@@ -216,7 +219,6 @@ class Connection {
     return Effect.gen(function* () {
       self.closed = true;
       for (const g of [...self.generations]) { g.reason = 'root'; yield* self.release(g); }
-      yield* releaseResource(async () => { await Promise.all([...self.generations].flatMap(g => [...g.processes].map(child => child.stop()))); });
       self.current = undefined; self.generations.clear();
       for (const queue of self.observers) Queue.endUnsafe(queue); self.observers.clear();
     });

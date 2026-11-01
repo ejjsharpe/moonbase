@@ -88,7 +88,12 @@ export class SshProcess {
       // An exited main PID does not release its proxy/helper group, including closed-pipe helpers.
       if (attempt(0) !== false) {
         await send('SIGTERM');
-        if (!await gone(Math.min(500, Math.max(0, deadline - Date.now())))) { await send('SIGKILL'); if (!await gone(Math.max(0, deadline - Date.now()))) throw unavailable('Owned SSH process group did not terminate.'); }
+        if (!await gone(Math.min(500, Math.max(0, deadline - Date.now())))) {
+          await send('SIGKILL');
+          if (!await gone(Math.max(0, deadline - Date.now()))) {
+            throw unavailable('Owned SSH process group did not terminate.');
+          }
+        }
       }
       const drained = async (milliseconds: number) => {
         let timer: ReturnType<typeof setTimeout> | undefined;
