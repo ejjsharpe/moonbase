@@ -583,3 +583,54 @@ for (const operation of ["createChat", "sendChat", "stopChat"] as const)
         assert.equal(f.calls.filter((c) => c.operation === operation).length, before);
         f.controller.dispose();
       });
+
+for (const lifecycle of ["detach", "dispose"] as const)
+  test(`late Create reply reconciles its receipt without observing after ${lifecycle}`, async () => {
+    const f = fixture();
+    await ready(f);
+    let release!: (value: unknown) => void;
+    f.answers.set("createChat", () => new Promise((resolve) => (release = resolve)));
+    const creating = f.controller.create("Delayed creation");
+    const pending = f.controller.getSnapshot().pending[0];
+    f.controller[lifecycle]();
+    assert.equal(f.subscriptions, 0);
+    const reads = f.calls.filter((c) => c.operation === "getChat").length;
+    release({ requestId: pending.input.requestId, conversation: summary });
+    await creating;
+    assert.equal(f.subscriptions, 0);
+    assert.equal(f.calls.filter((c) => c.operation === "getChat").length, reads);
+    const saved = JSON.parse(f.storage.value!);
+    assert.deepEqual(saved.pending, []);
+    assert.deepEqual(saved.selected, target);
+    f.controller.dispose();
+  });
+
+for (const extraField of ["selectedHost", "createSession"] as const)
+  test(`stored ${extraField} still requires an exact shape`, async () => {
+    const storage = new Storage();
+    const saved = {
+      version: 1,
+      session: context,
+      selected: target,
+      drafts: [],
+      pending: [{
+        operation: "createChat",
+        input: { session: context, requestId: "retained", title: "Saved" },
+        message: "Pending",
+      }],
+    };
+    if (extraField === "selectedHost")
+      saved.selected = { ...target, host: { ...context.host, extra: true } } as ChatTarget;
+    else
+      saved.pending[0].input.session = { ...context, extra: true } as typeof context;
+    storage.value = JSON.stringify(saved);
+    const original = storage.value;
+    const f = fixture(storage);
+    await f.controller.start();
+    await f.controller.connect();
+    await f.controller.create("Blocked");
+    assert(f.controller.getSnapshot().storageError);
+    assert.equal(storage.value, original);
+    assert(!f.calls.some((c) => c.operation === "createChat"));
+    f.controller.dispose();
+  });

@@ -7,6 +7,7 @@ import type {
   ChatSnapshot,
   ChatSummary,
   ChatTarget,
+  ChatStopTarget,
   ChatEntry,
 } from "@moonbase/application/chat-client";
 import type { ConnectionClient, ConnectionSnapshot } from "@moonbase/application/connection-client";
@@ -41,18 +42,14 @@ export type ChatProofState = {
   notice: string;
 };
 const key = "moonbase.chat-proof.v1";
-const canonical = (v: unknown): unknown =>
-  Array.isArray(v)
-    ? v.map(canonical)
-    : v && typeof v === "object"
-      ? Object.fromEntries(
-          Object.entries(v)
-            .sort(([a], [b]) => a.localeCompare(b))
-            .map(([k, v]) => [k, canonical(v)]),
-        )
-      : v;
-const same = (a: unknown, b: unknown) =>
-  JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
+const sameHost = (a: ChatSession["host"], b: ChatSession["host"]) =>
+  a.hostId === b.hostId && a.storeId === b.storeId;
+const sameSession = (a: ChatSession, b: ChatSession) =>
+  sameHost(a.host, b.host) && a.actorId === b.actorId;
+const sameTarget = (a: ChatTarget | null, b: ChatTarget | null) =>
+  a === b || (!!a && !!b && sameSession(a, b) && a.conversationId === b.conversationId);
+const sameStop = (a: ChatStopTarget, b: ChatStopTarget) =>
+  sameTarget(a.target, b.target) && a.submissionId === b.submissionId && a.taskId === b.taskId;
 const bytes = (s: string) => new TextEncoder().encode(s).length;
 const text = (s: unknown, limit: number): s is string =>
   typeof s === "string" && s.isWellFormed() && !s.includes("\0") && bytes(s) <= limit;
@@ -61,14 +58,14 @@ const object = (v: unknown): v is Record<string, unknown> =>
   !!v && typeof v === "object" && !Array.isArray(v);
 const exact = (v: Record<string, unknown>, fields: string[]) =>
   Object.keys(v).length === fields.length && fields.every((k) => Object.hasOwn(v, k));
+function host(v: unknown): v is ChatSession["host"] {
+  return object(v) && exact(v, ["hostId", "storeId"]) && id(v.hostId) && id(v.storeId);
+}
 function session(v: unknown): v is ChatSession {
   return (
     object(v) &&
     exact(v, ["host", "actorId"]) &&
-    object(v.host) &&
-    exact(v.host, ["hostId", "storeId"]) &&
-    id(v.host.hostId) &&
-    id(v.host.storeId) &&
+    host(v.host) &&
     id(v.actorId)
   );
 }
@@ -76,7 +73,8 @@ function target(v: unknown, s: ChatSession): v is ChatTarget {
   return (
     object(v) &&
     exact(v, ["host", "actorId", "conversationId"]) &&
-    same(v.host, s.host) &&
+    host(v.host) &&
+    sameHost(v.host, s.host) &&
     v.actorId === s.actorId &&
     id(v.conversationId)
   );
@@ -87,7 +85,7 @@ function validate(v: unknown, s: ChatSession): asserts v is Saved {
     !exact(v, ["version", "session", "selected", "drafts", "pending"]) ||
     v.version !== 1 ||
     !session(v.session) ||
-    !same(v.session, s) ||
+    !sameSession(v.session, s) ||
     (v.selected !== null && !target(v.selected, s)) ||
     !Array.isArray(v.drafts) ||
     v.drafts.length > 32 ||
@@ -125,7 +123,8 @@ function validate(v: unknown, s: ChatSession): asserts v is Saved {
     if (
       p.operation === "createChat" &&
       exact(i, ["session", "requestId", "title"]) &&
-      same(i.session, s) &&
+      session(i.session) &&
+      sameSession(i.session, s) &&
       text(i.title, 200) &&
       i.title.trim()
     )
@@ -234,7 +233,7 @@ export class ChatProofController {
     for (const f of this.listeners) f();
   }
   private draft() {
-    return this.saved.drafts.find((d) => same(d.target, this.saved.selected))?.text ?? "";
+    return this.saved.drafts.find((d) => sameTarget(d.target, this.saved.selected))?.text ?? "";
   }
   private commit(next: Saved) {
     if (this.state.storageError) throw Error(this.state.storageError);
@@ -325,7 +324,7 @@ export class ChatProofController {
     this.action("refresh", async () => {
       const epoch = this.connected();
       const host = await this.chat.command("getChatHost", { host: this.context.host });
-      if (!same({ host: host.host, actorId: host.actorId }, this.context))
+      if (!sameSession(host, this.context))
         throw new ApplicationError({
           code: "Incompatible",
           message: "Host actor does not match the configured proof context.",
@@ -362,9 +361,9 @@ export class ChatProofController {
     this.update({ draft: value });
     try {
       const next = structuredClone(this.saved);
-      if (!value) next.drafts = next.drafts.filter((d) => !same(d.target, target));
+      if (!value) next.drafts = next.drafts.filter((d) => !sameTarget(d.target, target));
       else {
-        const entry = next.drafts.find((d) => same(d.target, target));
+        const entry = next.drafts.find((d) => sameTarget(d.target, target));
         if (entry) entry.text = value;
         else next.drafts.push({ target, text: value });
       }
@@ -382,7 +381,7 @@ export class ChatProofController {
     this.action("open", async () => {
       if (
         !target ||
-        !same(target.host, this.context.host) ||
+        !sameHost(target.host, this.context.host) ||
         target.actorId !== this.context.actorId
       )
         throw Error("Chat belongs to another context.");
@@ -404,12 +403,13 @@ export class ChatProofController {
     }
   }
   private async observe(target: ChatTarget, epoch: number) {
+    if (!this.attached || this.closed) return;
     this.stopChat?.();
     this.stopChat = undefined;
     this.update({ snapshot: null, older: [], olderCursor: null });
     let received = false;
     const accept = (s: ChatSnapshot) => {
-      if (epoch === this.epoch && same(this.saved.selected, target) && !this.closed)
+      if (epoch === this.epoch && sameTarget(this.saved.selected, target) && !this.closed)
         this.update({
           snapshot: s,
           ...(this.state.older.length ? {} : { olderCursor: s.olderCursor }),
@@ -436,7 +436,7 @@ export class ChatProofController {
         epoch = this.connected();
       if (!target || !cursor) return;
       const p = await this.chat.command("getChatHistory", { target, cursor });
-      if (epoch === this.epoch && same(target, this.saved.selected))
+      if (epoch === this.epoch && sameTarget(target, this.saved.selected))
         this.update({ older: p.entries, olderCursor: p.olderCursor });
     });
   private reserve(p: Pending) {
@@ -466,7 +466,7 @@ export class ChatProofController {
       if (!target || !text(value, 32768) || !value.trim())
         throw Error("Write a message before sending.");
       if (
-        this.saved.pending.some((p) => p.operation === "sendChat" && same(p.input.target, target))
+        this.saved.pending.some((p) => p.operation === "sendChat" && sameTarget(p.input.target, target))
       )
         throw Error("Resolve the retained Send before starting another in this chat.");
       const p: Pending = {
@@ -482,7 +482,7 @@ export class ChatProofController {
       this.connected();
       const stop = this.state.snapshot?.run?.stop;
       if (!stop) return;
-      if (this.saved.pending.some((p) => p.operation === "stopChat" && same(p.input.stop, stop)))
+      if (this.saved.pending.some((p) => p.operation === "stopChat" && sameStop(p.input.stop, stop)))
         throw Error("Resolve the captured Stop before requesting it again.");
       const p: Pending = {
         operation: "stopChat",
@@ -539,7 +539,7 @@ export class ChatProofController {
     next.pending = next.pending.filter((q) => q.input.requestId !== p.input.requestId);
     if (p.operation === "sendChat")
       next.drafts = next.drafts.filter(
-        (d) => !same(d.target, p.input.target) || d.text !== p.input.text,
+        (d) => !sameTarget(d.target, p.input.target) || d.text !== p.input.text,
       );
     if (conversation) next.selected = conversation.target;
     this.commit(next);
@@ -554,7 +554,7 @@ export class ChatProofController {
         this.update({
           chats: [
             r.conversation,
-            ...this.state.chats.filter((c) => !same(c.target, r.conversation.target)),
+            ...this.state.chats.filter((c) => !sameTarget(c.target, r.conversation.target)),
           ].slice(0, 32),
         });
         if (this.state.connection?.state === "connected")
