@@ -13,6 +13,7 @@ import type { ChatSnapshot } from '@moonbase/application/chat-client';
 import { RemoteChatLive } from '@moonbase/pi-runtime/remote';
 import { SshLive } from '@moonbase/ssh';
 
+type HostStats = { calls: number; commands: string[]; replyOperation?: string; heldReplies: string[] };
 async function until<T>(read: () => Promise<T>, ready: (value: T) => boolean): Promise<T> {
   const deadline = Date.now() + 10000;
   while (Date.now() < deadline) { const value = await read(); if (ready(value)) return value; await new Promise(resolve => setTimeout(resolve, 10)); }
@@ -27,14 +28,14 @@ async function fixture(t: { after(fn: () => Promise<void>): void }, hold = false
   await writeFile(executable, '#!' + process.execPath + '\n' + await readFile(new URL('./forward.mjs', import.meta.url), 'utf8')); await chmod(executable, 0o700);
   const previousLog = process.env.MOONBASE_CHAT_FORWARD_LOG, previousDrop = process.env.MOONBASE_CHAT_DROP_SEND;
   process.env.MOONBASE_CHAT_FORWARD_LOG = log; process.env.MOONBASE_CHAT_DROP_SEND = dropSend;
-  const requests = new Map<string, (value: { calls: number; commands: string[] }) => void>();
+  const requests = new Map<string, (value: HostStats) => void>();
   let host: ChildProcess | undefined, hostOrigin = '';
   const roots: { runtime: { dispose(): Promise<void> } }[] = [];
   async function startHost() {
     const child = fork(new URL('./host.mjs', import.meta.url), [configuration], { execArgv: ['--experimental-strip-types'], silent: true,
       env: Object.fromEntries(Object.entries(process.env).filter(([key]) => ['PATH', 'TMPDIR', 'TEMP', 'TMP', 'LANG', 'LC_ALL', 'LC_CTYPE'].includes(key))) });
     host = child; child.stderr?.resume(); child.stdout?.resume();
-    child.on('message', (message: unknown) => { const value = message as { id?: string; calls: number; commands: string[] }; if (value.id) { requests.get(value.id)?.(value); requests.delete(value.id); } });
+    child.on('message', (message: unknown) => { const value = message as HostStats & { id?: string }; if (value.id) { requests.get(value.id)?.(value); requests.delete(value.id); } });
     hostOrigin = await new Promise<string>((resolve, reject) => {
       const timeout = setTimeout(() => reject(Error('Controlled host startup timed out')), 10000);
       const receive = (message: unknown) => { const value = message as { event?: string; origin?: string }; if (value.event === 'ready') { clearTimeout(timeout); child.off('message', receive); resolve(value.origin!); } else if (value.event === 'failed') { clearTimeout(timeout); reject(Error('Controlled host failed')); } };
@@ -53,7 +54,7 @@ async function fixture(t: { after(fn: () => Promise<void>): void }, hold = false
   }
   t.after(async () => {
     try {
-      if (host?.connected) host.send({ type: 'release' });
+      if (host?.connected) { host.send({ type: 'release' }); host.send({ type: 'release-reply' }); }
       const disposed = await Promise.allSettled(roots.map(value => value.runtime.dispose()));
       await stopHost();
       const records = await readFile(log, 'utf8').then(text => text.trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as { pid: number; event: string; port?: number }), () => []);
@@ -67,8 +68,11 @@ async function fixture(t: { after(fn: () => Promise<void>): void }, hold = false
     }
   });
   await startHost();
+  const stats = () => new Promise<HostStats>((resolve, reject) => { const id = randomUUID(); const timer = setTimeout(() => { requests.delete(id); reject(Error('Host observation timed out')); }, 2000); requests.set(id, value => { clearTimeout(timer); resolve(value); }); host!.send({ type: 'stats', id }); });
   return { session, cwd, token, log, root, stopHost, startHost, loseNextSend: () => writeFile(dropSend, ''), release: () => host!.send({ type: 'release' }),
-    stats: () => new Promise<{ calls: number; commands: string[] }>((resolve, reject) => { const id = randomUUID(); const timer = setTimeout(() => { requests.delete(id); reject(Error('Host observation timed out')); }, 2000); requests.set(id, value => { clearTimeout(timer); resolve(value); }); host!.send({ type: 'stats', id }); }) };
+    stats,
+    holdReply: async (operation: string) => { host!.send({ type: 'hold-reply', operation }); await until(stats, value => value.replyOperation === operation); },
+    releaseReply: async () => { host!.send({ type: 'release-reply' }); await until(stats, value => value.replyOperation === undefined); } };
 }
 
 test('combined public root requires explicit verified Connect, then saves/lists/streams a chat through controlled forwarding', async t => {
@@ -130,4 +134,44 @@ test('a signed health reply for another exact host cannot connect or expose a ch
   assert.equal((await wrong.connection.command('getConnection', {})).state, 'failed');
   await assert.rejects(wrong.chat.command('getChatHost', { host: wrong.profile.expected }));
   assert.equal((await f.stats()).calls, 0); assert((await f.stats()).commands.every(name => name === 'getChatHost'));
+});
+
+for (const operation of ['createChat', 'sendChat', 'stopChat'] as const) test(`Disconnect after committed ${operation} preserves uncertainty and original identity across real forwarding teardown`, async t => {
+  const f = await fixture(t, true), client = f.root();
+  const connected = await client.connection.command('connect', { profileId: client.profile.id });
+  const create = { session: f.session, requestId: 'captured-create', title: 'Captured conversation' };
+  const created = operation === 'createChat' ? undefined : await client.chat.command('createChat', create);
+  const target = created?.conversation.target;
+  const send = { target: target!, requestId: 'captured-send', text: 'Exactly one admitted input' };
+  const stop = operation === 'stopChat' ? await (async () => {
+    await client.chat.command('sendChat', send);
+    return (await until(() => client.chat.command('getChat', { target: target! }), value => !!value.run?.stop.taskId)).run!.stop;
+  })() : undefined;
+  await f.holdReply(operation);
+  const outcome = (operation === 'createChat' ? client.chat.command('createChat', create) : operation === 'sendChat' ? client.chat.command('sendChat', send) : client.chat.command('stopChat', { stop: stop!, requestId: 'captured-stop' }))
+    .then(value => ({ value, error: undefined }), (error: unknown) => ({ value: undefined, error }));
+  await until(f.stats, value => value.heldReplies.includes(operation));
+  assert.equal((await client.connection.command('getConnection', {})).state, 'connected', 'unrelated commands remain responsive while the mutation reply is held');
+  await client.connection.command('disconnect', { connectionId: connected.connectionId! });
+  assert.equal((await client.connection.command('getConnection', {})).state, 'disconnected');
+  const result = await outcome;
+  assert.equal((result.error as ApplicationError)?.code, 'Uncertain', 'dispatch may have committed; retain the original identity');
+  assert.equal((await f.stats()).commands.filter(name => name === operation).length, 1);
+  await f.releaseReply();
+  const next = await client.connection.command('connect', { profileId: client.profile.id }); assert.notEqual(next.connectionId, connected.connectionId);
+  if (operation === 'createChat') {
+    const listed = await client.chat.command('listChats', { session: f.session }); assert.equal(listed.conversations.length, 1);
+    const retried = await client.chat.command('createChat', create); assert.deepEqual(retried.conversation.target, listed.conversations[0]!.target);
+    assert.equal((await client.chat.command('listChats', { session: f.session })).conversations.length, 1);
+    assert.equal((await f.stats()).calls, 0);
+  } else {
+    const receipt = await client.chat.command('getChatSend', { target: target!, requestId: send.requestId }); assert.equal(receipt?.admission, 'admitted');
+    if (operation === 'stopChat') {
+      const retried = await client.chat.command('stopChat', { stop: stop!, requestId: 'captured-stop' }); assert.deepEqual(retried.stop, stop);
+    }
+    f.release(); await until(() => client.chat.command('getChat', { target: target! }), value => !value.run);
+    const snapshot = await client.chat.command('getChat', { target: target! }); assert.equal(snapshot.entries.filter(entry => entry.role === 'user' && entry.text === send.text).length, 1);
+    assert.equal((await f.stats()).commands.filter(name => name === 'sendChat').length, 1, 'reconnect and receipt lookup never resend');
+    assert.equal((await f.stats()).calls, 1);
+  }
 });
