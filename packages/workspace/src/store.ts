@@ -1,8 +1,10 @@
 import { DatabaseSync } from 'node:sqlite';
 import { chmodSync, constants, closeSync, mkdirSync, openSync, realpathSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
-import { ensure, fail } from './validation.ts';
-import { ApplicationError } from '@moonbase/application/client';
+import { canonical, ensure, fail, hash } from './validation.ts';
+import { ApplicationError, type CommandInput, type RecoveryPublication } from '@moonbase/application/client';
+
+type PublicationRecord = { digest: string; receipt: RecoveryPublication };
 
 /** Independent editor-only namespace. No legacy schemas, stores or migrations. */
 export class Store {
@@ -50,18 +52,31 @@ export class Store {
     return row ? { revision: Number(row.revision), state: JSON.parse(row.body as string) } : null;
   }
   publication(client: string): number { return this.get<number>('publications', client) ?? 0; }
+  recoveryPublication(clientId: string, requestId: string) {
+    return this.get<PublicationRecord>('recovery-publications', hash(canonical([clientId, requestId])));
+  }
+  replayPublication(input: CommandInput<'persistRecovery'>, digest: string): RecoveryPublication | null {
+    const previous = this.recoveryPublication(input.clientId, input.requestId);
+    if (previous && previous.digest !== digest) fail('InvalidInput', 'Recovery request ID already belongs to a different immutable publication.');
+    return previous?.receipt ?? null;
+  }
   /** Caller owns the transaction; module facts advance CAS without impersonating a client publication. */
   writeInternalRecovery(client: string, revision: number, state: unknown) {
     this.db.prepare('INSERT INTO recovery VALUES(?,?,?) ON CONFLICT(client) DO UPDATE SET revision=excluded.revision, body=excluded.body').run(client, revision + 1, JSON.stringify(state));
   }
-  persist(client: string, expected: number, state: unknown) {
+  persist(input: CommandInput<'persistRecovery'>, digest: string): RecoveryPublication {
     this.db.exec('BEGIN IMMEDIATE');
     try {
+      const previous = this.replayPublication(input, digest);
+      if (previous) { this.db.exec('COMMIT'); return previous; }
+      const {clientId: client, requestId, expectedRevision: expected, state} = input;
       const revision = this.readRecovery(client)?.revision ?? 0;
       if (revision !== expected) fail('Conflict', 'Recovery changed in another window. Reload before publishing.');
+      const receipt = {clientId: client, requestId, previousRevision: revision, revision: revision + 1};
       this.db.prepare('INSERT INTO recovery VALUES(?,?,?) ON CONFLICT(client) DO UPDATE SET revision=excluded.revision, body=excluded.body').run(client, revision + 1, JSON.stringify(state));
       this.put('publications', client, revision + 1);
-      this.db.exec('COMMIT'); return revision + 1;
+      this.put('recovery-publications', hash(canonical([client, requestId])), {digest, receipt});
+      this.db.exec('COMMIT'); return receipt;
     } catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
   close() { this.db.close(); }

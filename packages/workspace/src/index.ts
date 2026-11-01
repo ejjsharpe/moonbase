@@ -114,9 +114,16 @@ class LocalWorkspace {
         this.store.put('operations', id, {...record, acknowledgedBy: [...record.acknowledgedBy, input.clientId]}); this.volatileOperations.delete(id);
       }, true),
       loadRecovery: call<'loadRecovery'>(async input => this.load(input.clientId), true),
-      persistRecovery: call<'persistRecovery'>(async input => {
-        identifier(input.clientId); ensure(Number.isSafeInteger(input.expectedRevision) && input.expectedRevision >= 0, 'Invalid recovery revision.');
+      getRecoveryPublication: call<'getRecoveryPublication'>(async input => {
+        identifier(input.clientId); identifier(input.requestId);
+        return this.store.recoveryPublication(input.clientId, input.requestId)?.receipt ?? null;
+      }, true),
+      persistRecovery: call<'persistRecovery'>(async (input, signal) => {
+        identifier(input.clientId); identifier(input.requestId); ensure(Number.isSafeInteger(input.expectedRevision) && input.expectedRevision >= 0, 'Invalid recovery revision.');
         recovery(input.state, input.clientId);
+        if (signal.aborted) fail('Cancelled', 'Recovery publication cancelled before commit.');
+        const digest = hash(canonical(input)), previous = this.store.replayPublication(input, digest);
+        if (previous) return previous;
         for (const target of input.state.checkouts) this.approval(target);
         const state = structuredClone(input.state);
         const retained = this.store.readRecovery(input.clientId)?.state as EditorRecovery | undefined;
@@ -124,7 +131,7 @@ class LocalWorkspace {
           for (const draft of retained?.drafts ?? []) if (same(draft.target.checkout, record.input.checkout) && record.input.sources.some(s => affected(draft.target.path, s.target.path)))
             if (!state.drafts.some(d => same(d.target, draft.target))) fail('Persistence', 'An uncertain operation still owns this recovery draft. Inspect/reconcile the original paths before discarding it.');
         }
-        return {revision: this.store.persist(input.clientId, input.expectedRevision, state)};
+        return this.store.persist(input, digest);
       }, true),
       watch: input => this.watch(input),
     };
