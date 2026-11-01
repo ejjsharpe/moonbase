@@ -943,6 +943,6 @@
     "base": "42836b0421898b963e67f02795edc35f5e546173",
     "branch": "chore/connection-contract",
     "status": "draft; independent review queued after editor R6; no SSH implementation",
-    "checks": "29 tests, frozen install, uncached Nx 3 tasks, 40 hashes and 3 browser bundles, diff pass; hosted pending"
+    "checks": "29 tests, frozen install, uncached Nx 3 tasks, 40 hashes and 3 browser bundles, diff pass; exact-head hosted runs 41272685610 and 41272628483 pass"
   }
 }
