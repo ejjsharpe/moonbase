@@ -1,0 +1,9 @@
+# Frozen escode editor reference
+
+Source revision and per-file SHA-256, history, working-tree status and reuse decisions are in `manifest.json`. The original checkout is read-only. Its selected working files, including the in-progress StyleX migration, are frozen here so parallel workers never depend on mutable source. `source-status.txt` records the original dirty paths; no state, credentials, Git history or node_modules were copied.
+
+Relevant implementation history identifies Elliot Sharpe as the author of the selected committed editor/file support. Attribution/extraction inspection found Microsoft code in `lookup-score.ts`, T3-adapted machinery in `packages/host`/contracts, and T3/Codex vendor files; all are excluded. The uncommitted UI recipes correspond to the existing user-authored visual language and current StyleX migration documented by the source README/DESIGN and its working diff. The active `packages/ui` files match those frozen recipes. No ownership inference extends to unlisted files or transitive imports.
+
+These are reference documents/source, not application entry points. Original imports mention deliberately excluded old contracts, host orchestration and providers; do not resolve them by copying those dependencies. Reimplement the needed browser-safe shapes and non-owned helpers from behavioral requirements. The source entry is retained only to trace editor state and lifecycle amid its old mixed UI. File/Git/native/recovery selection does not authorize old backend/database/provider reuse. Dependencies and import seams must be reviewed before selecting active portions.
+
+Dependency notices stay with their installed packages. Packaging must carry the required notices from its actual renderer/host/native dependency inputs into generated output automatically; this foundation ships no application. The source tree does not maintain manual copies of dependency license files.

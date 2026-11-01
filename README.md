@@ -1,19 +1,20 @@
 # Moonbase
 
-A fresh project for an independent editor and Pi Durable chat modules, retaining Nx, Bun, Electron, React, TypeScript, Monaco, StyleX, Base UI and Effect.
+A macOS Electron workbench with a local React/Monaco editor and optional remote Pi Durable chat. Workspace, editor, SSH and Pi services share the application contracts and one scoped Effect runtime per process.
 
-This repository currently contains the overnight orchestration brief only. Application implementation and GitHub repository setup are tasks for the lead agent.
+See [module boundaries](MODULES.md), [design rules](DESIGN.md), [desktop setup](apps/desktop/README.md) and [standalone chat setup](apps/chat-probe/README.md). Package READMEs describe their public APIs. Source provenance and the checksum-verified reference snapshot are retained alongside the code.
 
-The brief requires one shared Effect application command center, with focused module services and one runtime per process. The architecture and task ownership are defined in `docs/agents/prompts/OVERNIGHT.txt`.
+```sh
+bun install --frozen-lockfile
+bun run check:foundation
+bun run typecheck
+bun run lint
+node scripts/prepare-ripgrep.mjs
+bun run test
+bun run test:editor-integration
+bun run test:chat-integration
+```
 
-T3 Code is development tooling only. The brief excludes T3/Pocket/Codex application-code reuse, checks provenance before retaining your editor code, and keeps required notices for Pi Durable and the actual stack/dependencies.
+Native workspace checks require macOS and Xcode command-line tools. Lint currently runs TypeScript diagnostics. Generated test output belongs in ignored `test-results/`; build and package output belongs in `dist/` and `release/`.
 
-## Start the overnight run
-
-Open this checkout as the **Moonbase** project in T3 Code, start a new chat there, and send:
-
-> Read `docs/agents/prompts/OVERNIGHT.txt` and run the overnight task described there.
-
-The prompt is self-contained and authorizes the lead to prepare focused pull requests in the private `ejjsharpe/moonbase` repository, using parallel workers and independent review. It preserves the original escode checkout and leaves GitHub PRs for human review. Keep the executing machine and session running.
-
-Source reference: `/Users/elliotsharpe/Projects/escode`. Do not modify or import that repository's Git history.
+The desktop remains pending human acceptance. Real SSH/provider, signing/notarization, VoiceOver, physical durability and Intel execution require separate qualification.

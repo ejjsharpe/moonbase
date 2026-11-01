@@ -1,0 +1,19 @@
+# Chat host health v1
+
+This shared boundary prepares independent Pi and SSH modules. It is not a running host, SSH connection or chat implementation. Standalone editor composition does not import it.
+
+`@moonbase/application/host-client` contains browser-safe host/store identities and exact protocol/application versions. Privileged `@moonbase/application/host-health` exports `checkHostHealth({ origin, token, expected })` as an Effect for the existing process runtime, and `createHostHealthReply` for the host's HTTP handler. The operator-provisioned random host key (`token`) remains private configuration on the two peers: it never enters renderer commands, HTTP requests/responses, URLs, SSH arguments or logs.
+
+The configured endpoint is a bare HTTP origin on `127.0.0.1`, normally a system OpenSSH local forward. Each GET `/v1/health` generates a fresh 32-byte base64url nonce. Headers carry `X-Moonbase-Nonce: <nonce>` and `Authorization: Moonbase-HMAC-SHA256 <request proof>`. The server helper checks the client proof before returning bounded, signed JSON:
+
+```json
+{ "protocol": 1, "hostId": "configured-host", "storeId": "configured-store", "version": "0.1.0", "capabilities": ["chat-v0"], "nonce": "<request nonce>", "proof": "<response proof>" }
+```
+
+Proofs are lowercase hexadecimal HMAC-SHA256 of UTF-8 `JSON.stringify` arrays, keyed by the configured secret string. The request array is `["moonbase-health-v1", "request", nonce]`. The response array is `["moonbase-health-v1", "response", nonce, protocol, hostId, storeId, version, capabilities]`. The distinct domains prevent request reflection; fresh nonces reject old responses, and the response proof covers every returned identity/capability field. Proof comparisons use constant-time byte comparison. The client returns only the validated health fields, stripping proof/nonce and unknown metadata. Signing helpers are specific to read-only health; their proofs do not authorize Send, Stop or other endpoints. Stateful transport authentication must also keep this reusable key private; there is no bearer fallback after health.
+
+The client rejects missing/invalid proof, unexpected host/store, incompatible exact versions, missing capability, non-JSON/malformed/oversized responses and redirects. Actual body bytes are capped at 8 KiB; the request/body deadline is five seconds. Cancellation and every success/failure release the response reader. No supplied response body or key is echoed in errors. Authentication failures are `Unauthorized`; incompatible health is `Incompatible`; network/deadline failures are `Unavailable`; invalid local configuration is `InvalidInput`.
+
+The client requires proof from the configured application key in addition to the operator's verified SSH host-key policy. It does not replace SSH machine authentication or encrypt arbitrary HTTP. A wrong listener cannot pass with public identity JSON or capture a reusable credential. A verified health response grants no filesystem authority and never rebinds an existing conversation to a different store. Reconnect must query state without sending chat input.
+
+Independent R1 at `eba354c` reproduced credential capture and unsigned impersonation in the earlier bearer handshake. A tracked rogue-listener regression failed before this repair. All 25 application tests now pass (14 existing boundary tests, 11 health cases), including no secret disclosure, valid configured-peer proof, reflected request/old response/tampered capabilities rejection, distinct nonces across concurrent executions, server-side rejection, cancellation and a real stalled-body deadline. These use synthetic keys and real controlled Node HTTP, no provider or SSH. Fresh independent review and actual Pi server/SSH/client protocol adoption, persistence and packaging remain pending. Human acceptance remains PENDING.

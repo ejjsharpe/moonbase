@@ -1,0 +1,20 @@
+/* Document reset only. App appearance belongs to StyleX recipes and tokens. */
+@layer reset {
+  :root {
+    color-scheme: dark;
+  }
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+  }
+  [hidden] {
+    display: none !important;
+  }
+}
