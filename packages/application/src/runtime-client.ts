@@ -3,17 +3,13 @@ import { ApplicationError, type EditorClient } from "./client.ts";
 import { workspaceCommand, workspaceWatch } from "./handlers.ts";
 import type { WorkspaceService } from "./services.ts";
 
-function describeFailure(value: unknown): string {
-  try { return String(value); } catch { return "Unprintable application failure"; }
-}
-
 function applicationFailure(cause: Cause.Cause<ApplicationError>): ApplicationError {
   if (Cause.hasInterruptsOnly(cause)) return new ApplicationError({ code: "Cancelled", message: "Command cancelled" });
   const failures = cause.reasons.flatMap(reason => Cause.isFailReason(reason) ? [reason.error] : Cause.isDieReason(reason) ? [reason.defect] : []);
   if (failures.length === 1 && ApplicationError.is(failures[0])) return failures[0];
   const typed = failures.find(ApplicationError.is);
   return new ApplicationError({ code: typed?.code ?? "Unavailable", target: typed?.target,
-    message: failures.map(describeFailure).join("; ") || "Application effect failed" });
+    message: failures.map(value => ApplicationError.fromUnknown(value).message).join("; ") || "Application effect failed" });
 }
 
 /** Accept the process root's runtime; never acquire a second service graph here. */
