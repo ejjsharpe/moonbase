@@ -125,7 +125,7 @@ test('Git staged and unstaged originals both compare against the current working
 
 test('watch notifies external changes, coalesces and disposes independently of file commands', async () => {
   const f = fixture();
-  let stop = () => {};
+  let stop = async () => {};
   try {
     writeFileSync(join(f.root, 'file.txt'), 'before');
     const checkout = await f.client.command('openCheckout', { root: f.root });
@@ -151,7 +151,7 @@ test('watch notifies external changes, coalesces and disposes independently of f
       changedPromise,
       new Promise((_, reject) => setTimeout(() => reject(Error('watch timeout')), 2000)),
     ]);
-    stop();
+    await stop();
     await f.runtime.runPromise(Effect.yieldNow);
     const before = count;
     writeFileSync(join(f.root, 'file.txt'), 'after disposal');
@@ -162,7 +162,7 @@ test('watch notifies external changes, coalesces and disposes independently of f
       'after disposal',
     );
   } finally {
-    stop();
+    await stop();
     await f.close();
   }
 });
@@ -257,7 +257,7 @@ test('unsubscribe during pending workspace/watch acquisition and concurrent runt
         (error) => errors.push(error),
       ),
     );
-    stops.forEach((stop) => stop());
+    await Promise.all(stops.map((stop) => stop()));
     await f.runtime.dispose();
     await new Promise((resolve) => setTimeout(resolve, 100));
     assert.equal(delivered, 0);

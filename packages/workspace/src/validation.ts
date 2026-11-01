@@ -1,3 +1,4 @@
+import { decodeEditorRecovery } from '@moonbase/application/workspace-schema';
 import { isAbsolute } from 'node:path';
 import { createHash } from 'node:crypto';
 import {
@@ -84,6 +85,7 @@ export function canonical(value: unknown): string {
 const record = (v: unknown): v is Record<string, unknown> =>
   !!v && typeof v === 'object' && !Array.isArray(v);
 export function recovery(state: EditorRecovery, clientId: string) {
+  decodeEditorRecovery(state);
   ensure(
     record(state) &&
       state.version === 1 &&
