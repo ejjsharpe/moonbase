@@ -309,16 +309,24 @@ test("R9 lost and reordered Save receipts keep Retry Save visible until exact re
   await page.evaluate(() => window.demo.memory.failNext("saveFile", "Lost committed Save reply", true));
   await first(page).getByRole("button", { name: "Save", exact: true }).click();
   await expect(first(page).getByRole("button", { name: "Retry Save", exact: true })).toBeVisible();
+  const pendingA = await page.evaluate(() => window.demo.first.buffer({ checkout: window.demo.checkout, path: "welcome.ts" })!.pendingSave!);
   await edit(page, "newer welcome");
   await page.evaluate(async () => { const { first, checkout } = window.demo; await first.open({ checkout, path: "README.md" }, { intent: "keep" }); first.edit({ checkout, path: "README.md" }, "captured README"); });
   await first(page).getByRole("button", { name: "Save", exact: true }).click();
-  await expect(first(page).getByRole("alert").filter({ hasText: "Recovery revision gap" }).first()).toBeVisible();
+  await expect.poll(() => page.evaluate(() => { const buffer = window.demo.first.buffer({ checkout: window.demo.checkout, path: "README.md" }); return !!buffer?.pendingSave && !buffer.saving; })).toBe(true);
+  const pendingB = await page.evaluate(() => window.demo.first.buffer({ checkout: window.demo.checkout, path: "README.md" })!.pendingSave!);
+  // A legitimate background flush may replace the alert; pending identities and controls stay stable.
+  await page.evaluate(() => window.demo.first.flush().catch(window.demo.first.report));
+  expect(await page.evaluate(() => window.demo.first.buffer({ checkout: window.demo.checkout, path: "README.md" })!.pendingSave)).toEqual(pendingB);
+  expect(await page.evaluate(() => window.demo.first.buffer({ checkout: window.demo.checkout, path: "welcome.ts" })!.pendingSave)).toEqual(pendingA);
   await expect(first(page).getByRole("button", { name: "Retry Save", exact: true })).toBeVisible();
   const readme = first(page).getByRole("textbox", { name: "README.md editor", exact: true });
   await readme.focus(); await readme.press("Meta+a"); await readme.pressSequentially("newer README");
   await first(page).getByRole("tab", { name: "welcome.ts", exact: true }).click();
   await first(page).getByRole("button", { name: "Retry Save", exact: true }).click();
   await expect(first(page).getByRole("button", { name: "Save", exact: true })).toBeVisible();
+  expect(await page.evaluate(() => window.demo.first.buffer({ checkout: window.demo.checkout, path: "README.md" })!.pendingSave)).toBeUndefined();
+  expect(pendingB.target.path).toBe("README.md");
   await page.evaluate(() => window.demo.first.flush());
   expect(await page.evaluate(() => window.demo.first.buffer({ checkout: window.demo.checkout, path: "welcome.ts" })?.text)).toBe("newer welcome");
   expect(await page.evaluate(() => window.demo.first.buffer({ checkout: window.demo.checkout, path: "README.md" })?.text)).toBe("newer README");
@@ -328,4 +336,30 @@ test("R9 lost and reordered Save receipts keep Retry Save visible until exact re
   expect(await page.evaluate(() => window.demo.memory.stats.saves)).toBe(2);
   for (const dismiss of await first(page).getByRole("button", { name: "Dismiss error", exact: true }).all()) await dismiss.click();
   await page.screenshot({ path: "test-results/save-receipts.png", fullPage: true });
+});
+
+test("R10 Resolve recovers a rejected metadata publication after an already-started Save", async ({ page }) => {
+  await page.goto("/save-race.html");
+  const input = page.getByRole("textbox", { name: "a.ts editor", exact: true }); await expect(input).toBeVisible();
+  await page.evaluate(() => window.saveRace.startB());
+  await page.evaluate(() => window.saveRace.memory.failNext("persistRecovery", "Controlled before-commit publication failure"));
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Resolve recovery publication", exact: true })).toBeVisible();
+  await page.evaluate(() => window.saveRace.releaseB());
+  await input.focus(); await input.press("Meta+a"); await input.pressSequentially("NEWER A");
+  await page.getByRole("tab", { name: "b.ts", exact: true }).click();
+  const b = page.getByRole("textbox", { name: "b.ts editor", exact: true }); await b.focus(); await b.press("Meta+a"); await b.pressSequentially("NEWER B");
+  const ids = await page.evaluate(() => window.saveRace.editor.getSnapshot().buffers.map(buffer => buffer.pendingSave!.requestId));
+  await page.getByRole("button", { name: "Resolve recovery publication", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Resolve recovery publication", exact: true })).toHaveCount(0);
+  await page.evaluate(async () => { await window.saveRace.editor.reconcileRecovery(); await window.saveRace.editor.flush(); });
+  expect(await page.evaluate(() => window.saveRace.memory.stats.saves)).toBe(2);
+  expect(await page.evaluate(() => window.saveRace.requests.map(request => request.requestId).sort())).toEqual(ids.sort());
+  await page.evaluate(() => window.saveRace.restart());
+  await expect(b).toBeVisible(); await expect(page.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
+  expect(await page.evaluate(() => window.saveRace.editor.getSnapshot().buffers.map(buffer => [buffer.target.path, buffer.text, buffer.disk.text]).sort())).toEqual([["a.ts", "NEWER A", "CAPTURE a.ts"], ["b.ts", "NEWER B", "CAPTURE b.ts"]]);
+  await b.focus(); await b.press("End"); await b.pressSequentially(" typed after resolution");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.saveRace.editor.buffer({ checkout: window.saveRace.checkout, path: "b.ts" })?.disk.text)).toBe("NEWER B typed after resolution");
+  await page.screenshot({ path: "test-results/publication-rejoined.png", fullPage: true });
 });

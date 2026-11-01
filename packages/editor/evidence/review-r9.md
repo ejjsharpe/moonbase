@@ -1,5 +1,7 @@
 # R9 — retain missing and reordered Save receipts
 
+Historical owner evidence at4494969. Paired independent R9 cleared the original Save-reordering defect but found a connected publication-resolution defect and a flaky last-alert assertion; see the [current R10 response](review-r10.md). Earlier passing owner runs do not override that independent result.
+
 This followup fixes the production fan-in P1 reported against reviewed editor `c31bb4164d2ff18031e2b391a83198bb5e40d027`. PR #4 remains based on publication contract #7, `8557fdd0d7a71f93a6584c77430e6fde57668580`; the coordinator owns the real workspace fan-in and independent R9 review. Only this package changes.
 
 ## Cause and change
