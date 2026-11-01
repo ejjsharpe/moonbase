@@ -25,8 +25,8 @@ export type WorkspaceConfiguration = {
   ripgrepExecutable?: string;
 };
 type Approval = { target: CheckoutTarget; identity: string; common: {path: string; identity: string}; gitEntry: {identity: string; pointer: string | null} };
-type SaveRecord = { baseline?: import('@moonbase/application/client').FileDocument; published?: boolean; temporary?: string; input: CommandInput<'saveFile'>; result?: SaveResult; started: boolean; message?: string };
-type OperationRecord = { staging?: string[]; publishedItems?: string[]; input: WorkspaceOperation; result: OperationResult; revision: number; acknowledged: boolean };
+type SaveRecord = { recoveryRevision?: number; baseline?: import('@moonbase/application/client').FileDocument; published?: boolean; temporary?: string; input: CommandInput<'saveFile'>; result?: SaveResult; started: boolean; message?: string };
+type OperationRecord = { staging?: string[]; publishedItems?: string[]; input: WorkspaceOperation; result: OperationResult; publicationRevisions: Record<string, number>; acknowledgedBy: string[] };
 const key = (clientId: string, id: string) => hash(canonical([clientId, id]));
 const affected = (p: string, source: string) => p === source || p.startsWith(source + '/');
 const folded = (p: string) => p.normalize('NFC').toLowerCase();
@@ -79,7 +79,7 @@ class LocalWorkspace {
     this.store = new Store(config.dataDirectory, config.hostId);
     this.run = makeRunner(helper, this.children);
     const call = <K extends WorkspaceCommand>(fn: (input: CommandInput<K>, signal: AbortSignal) => Promise<CommandOutput<K>>, persistence = false) =>
-      (input: CommandInput<K>) => this.effect(signal => fn(structuredClone(input), signal), persistence);
+      (input: CommandInput<K>) => this.effect(async signal => structuredClone(await fn(structuredClone(input), signal)), persistence);
     this.service = {
       openCheckout: call<'openCheckout'>((input, signal) => this.open(input.root, signal)),
       readFile: call<'readFile'>(async (target, signal) => (await this.directory(target.checkout)).read(target.path, signal)),
@@ -96,12 +96,14 @@ class LocalWorkspace {
       mutate: call<'mutate'>((input, signal) => this.serial(input.checkout.checkoutId, this.footprint(input), () => this.mutate(input, signal))),
       operationStatus: call<'operationStatus'>(async input => { identifier(input.clientId); identifier(input.id); await this.recoverEvidence(); return this.operation(key(input.clientId, input.id))?.result ?? null; }, true),
       acknowledgeOperation: call<'acknowledgeOperation'>(async input => {
-        identifier(input.clientId); identifier(input.id);
-        const id = key(input.clientId, input.id), record = this.operation(id);
-        if (!record) return;
+        identifier(input.clientId); identifier(input.operationClientId); identifier(input.id);
+        const id = key(input.operationClientId, input.id), record = this.operation(id);
+        if (!record || record.acknowledgedBy.includes(input.clientId)) return;
+        const observation = this.store.readRecovery(input.clientId);
+        if (input.clientId !== input.operationClientId && !(observation?.state as EditorRecovery | undefined)?.checkouts.some(c => same(c, record.input.checkout))) fail('Unauthorized', 'Observer has not opened this exact checkout.');
         if (record.result.outcome === 'uncertain') fail('Uncertain', 'Uncertain operation evidence cannot be acknowledged away. Inspect the affected paths.');
-        if ((this.store.readRecovery(input.clientId)?.revision ?? 0) <= record.revision) fail('Persistence', 'Publish reconciled recovery before acknowledging this operation.');
-        this.store.put('operations', id, {...record, acknowledged: true}); this.volatileOperations.delete(id);
+        if ((observation?.revision ?? 0) <= (record.publicationRevisions[input.clientId] ?? observation?.revision ?? 0)) fail('Persistence', 'Publish reconciled recovery before acknowledging this operation.');
+        this.store.put('operations', id, {...record, acknowledgedBy: [...record.acknowledgedBy, input.clientId]}); this.volatileOperations.delete(id);
       }, true),
       loadRecovery: call<'loadRecovery'>(async input => this.load(input.clientId), true),
       persistRecovery: call<'persistRecovery'>(async input => {
@@ -126,8 +128,13 @@ class LocalWorkspace {
       void task.finally(() => this.pending.delete(task)).catch(() => {}); return task;
     }, catch: error => applicationError(error, persistence ? 'Persistence' : 'Unavailable') });
   }
-  footprint(input: WorkspaceOperation) { return [...input.sources.map(s => s.target.path), ...(input.destination ? [input.destination] : [])]; }
-  overlaps(a: string[], b: string[]) { return a.some(p => b.some(q => affected(p, q) || affected(q, p))); }
+  footprint(input: WorkspaceOperation) {
+    const sources = input.sources.map(s => s.target.path);
+    if (input.destination === undefined) return sources;
+    const names = sources.length ? sources.map(p => basename(p)) : (input.nativeReferences ?? []).map(token => this.native.get(token)?.source.source ?? '');
+    return [...sources, ...(names.length > 1 ? names.map(name => name ? join(input.destination!, name) : input.destination!) : [input.destination])];
+  }
+  overlaps(a: string[], b: string[]) { return a.some(p => b.some(q => p === '' || q === '' || affected(p, q) || affected(q, p))); }
   active(checkoutId: string) { return [...this.locks].some(lock => lock.checkoutId === checkoutId); }
   async serial<A>(checkoutId: string, paths: string[], fn: () => Promise<A>): Promise<A> {
     const previous = [...this.locks].filter(lock => lock.checkoutId === checkoutId && this.overlaps(paths, lock.paths));
@@ -220,8 +227,8 @@ class LocalWorkspace {
     const records = new Map(this.store.all<OperationRecord>('operations').map(r => [key(r.input.clientId, r.input.id), r]));
     for (const [id, record] of this.volatileOperations) records.set(id, record); return [...records.values()];
   }
-  assertSettled(target: CheckoutTarget, paths: string[]) {
-    if (this.operations().some(r => r.input.checkout.checkoutId === target.checkoutId && this.overlaps(paths, this.footprint(r.input)) && (!r.acknowledged || r.result.outcome === 'uncertain')) || this.store.all<SaveRecord>('saves').some(r => r.input.target.checkout.checkoutId === target.checkoutId && this.overlaps(paths, [r.input.target.path]) && !r.result))
+  assertSettled(target: CheckoutTarget, paths: string[], clientId: string) {
+    if (this.operations().some(r => r.input.checkout.checkoutId === target.checkoutId && this.overlaps(paths, this.footprint(r.input)) && (!r.acknowledgedBy.includes(clientId) || r.result.outcome === 'uncertain')) || this.store.all<SaveRecord>('saves').some(r => r.input.target.checkout.checkoutId === target.checkoutId && this.overlaps(paths, [r.input.target.path]) && !r.result))
       fail('Uncertain', 'An operation awaits recovery publication or inspection. Query its status; do not repeat the mutation.');
   }
   async save(input: CommandInput<'saveFile'>): Promise<SaveResult> {
@@ -233,20 +240,20 @@ class LocalWorkspace {
       if (previous.result) { if (this.volatileSaves.has(id)) this.publishSave(id, previous); return previous.result; }
       return fail('Uncertain', 'Interrupted save retained its intent. Inspect disk and recovered draft before a new deliberate save.');
     }
-    this.assertSettled(input.target.checkout, [input.target.path]);
+    this.assertSettled(input.target.checkout, [input.target.path], input.clientId);
     const directory = await this.directory(input.target.checkout), disk = await directory.read(input.target.path);
     if (disk.version !== input.expectedVersion) {
       const result = {kind: 'conflict', disk} as const;
       this.store.put('saves', id, {input, result, started: false}); return result;
     }
     const temporary = join(dirname(input.target.path), '.moonbase-save-' + randomUUID());
-    const record: SaveRecord = {input, started: true, temporary, baseline: disk};
+    const record: SaveRecord = {input, started: true, temporary, baseline: disk, recoveryRevision: this.store.readRecovery(input.clientId)?.revision ?? 0};
     this.store.put('saves', id, record);
     try {
       const stagingIdentity = (await directory.io(['stage', input.target.path, temporary], input.text)).toString();
       const current = await directory.read(input.target.path);
       if (current.version !== input.expectedVersion) record.result = {kind: 'conflict', disk: current};
-      else { await directory.io(['replace', input.target.path, temporary, stagingIdentity]); record.result = {kind: 'saved', disk: proposed}; }
+      else { await directory.io(['replace', input.target.path, temporary, stagingIdentity]); record.result = {kind: 'saved', disk: proposed, recoveryChanges: []}; }
       try { this.publishSave(id, record); }
       catch (error) {
         if (record.result.kind === 'saved') record.result = {...record.result, persistencePending: true, message: 'Saved to disk; durable request publication failed: ' + errorText(error)};
@@ -283,7 +290,7 @@ class LocalWorkspace {
     if (input.text !== undefined) textDocument(input.text);
     const id = key(input.clientId, input.id), previous = this.operation(id);
     if (previous) { if (!same(previous.input, input)) fail('Conflict', 'Operation ID already belongs to another payload/client/checkout.'); if (this.volatileOperations.has(id)) this.publishOperation(id, previous); return previous.result; }
-    this.assertSettled(input.checkout, this.footprint(input));
+    this.assertSettled(input.checkout, this.footprint(input), input.clientId);
     if (signal.aborted) fail('Cancelled', 'Operation cancelled before admission.');
     const directory = await this.directory(input.checkout);
     const create = input.kind.startsWith('create-');
@@ -305,7 +312,7 @@ class LocalWorkspace {
       const captured = ref!; captured.source.validate(); sources.push({path: captured.source.source, identity: captured.source.identity, directory: captured.source.directory, native: captured.source});
     }
     if (create) sources.push({path: '', identity: '', directory: input.kind === 'create-directory'});
-    if (input.kind !== 'trash') path(input.destination);
+    if (input.kind !== 'trash') path(input.destination, sources.length > 1);
     const destinations = sources.map(source => input.kind === 'trash' ? undefined : sources.length === 1 ? input.destination! : join(input.destination!, basename(source.path)));
     if (sources.length > 1 && input.kind !== 'trash') ensure((await directory.entry(input.destination!, signal)).directory, 'Batch destination must be an existing folder.');
     ensure(new Set(destinations.filter(Boolean).map(p => folded(p!))).size === destinations.filter(Boolean).length, 'Selection has colliding destination names.');
@@ -328,8 +335,10 @@ class LocalWorkspace {
       }
     }
     const staging = destinations.map(destination => destination && ['copy', 'import'].includes(input.kind) ? join(dirname(destination), '.moonbase-copy-' + randomUUID()) : '');
-    const record: OperationRecord = { input, staging, revision: this.store.readRecovery(input.clientId)?.revision ?? 0, acknowledged: false,
-      result: {id: input.id, checkout: input.checkout, kind: input.kind, outcome: 'uncertain', items: [], message: 'Admitted operation. Interrupted items must be inspected, never repeated automatically.'} };
+    const publicationRevisions: Record<string, number> = {[input.clientId]: this.store.readRecovery(input.clientId)?.revision ?? 0};
+    for (const row of this.store.db.prepare('SELECT client, revision, body FROM recovery').all()) if ((JSON.parse(row.body as string) as EditorRecovery).checkouts.some(c => same(c, input.checkout))) publicationRevisions[row.client as string] = Number(row.revision);
+    const record: OperationRecord = { input, staging, publicationRevisions, acknowledgedBy: [],
+      result: {id: input.id, clientId: input.clientId, recoveryChanges: [], checkout: input.checkout, kind: input.kind, outcome: 'uncertain', items: [], message: 'Admitted operation. Interrupted items must be inspected, never repeated automatically.'} };
     // The complete immutable selection is durable before the first native mutation.
     this.store.put('operations', id, record);
     try {
@@ -410,30 +419,44 @@ class LocalWorkspace {
     const fresh = record.result.items.filter(item => item.outcome === 'completed' && !(record.publishedItems ?? []).includes(canonical(item)));
     this.store.db.exec('BEGIN IMMEDIATE');
     try {
-      if (fresh.length) {
-        for (const row of this.store.db.prepare('SELECT client, revision, body FROM recovery').all()) {
-          const state = JSON.parse(row.body as string) as EditorRecovery;
-          this.reconcile(state, [{...record, result: {...record.result, items: fresh}}]);
-          if (JSON.stringify(state) !== row.body) this.store.db.prepare('UPDATE recovery SET revision=revision+1, body=? WHERE client=?').run(JSON.stringify(state), row.client as string);
+      const changes: OperationResult['recoveryChanges'] = [];
+      const publicationRevisions = {...record.publicationRevisions};
+      for (const row of this.store.db.prepare('SELECT client, revision, body FROM recovery').all()) {
+        const state = JSON.parse(row.body as string) as EditorRecovery;
+        if (row.client !== record.input.clientId && !state.checkouts.some(c => same(c, record.input.checkout))) continue;
+        let revision = Number(row.revision);
+        if (fresh.length) this.reconcile(state, [{...record, result: {...record.result, items: fresh}}]);
+        if (JSON.stringify(state) !== row.body) {
+          this.store.db.prepare('UPDATE recovery SET revision=revision+1, body=? WHERE client=?').run(JSON.stringify(state), row.client as string);
+          changes.push({clientId: row.client as string, previousRevision: revision, revision: revision + 1}); revision++;
         }
-
+        publicationRevisions[row.client as string] = revision;
       }
-      const updated = {...record, publishedItems: [...(record.publishedItems ?? []), ...fresh.map(canonical)], revision: fresh.length ? this.store.readRecovery(record.input.clientId)?.revision ?? 0 : record.revision};
+      const updated = {...record, publicationRevisions, publishedItems: [...(record.publishedItems ?? []), ...fresh.map(canonical)], result: {...record.result, recoveryChanges: [...record.result.recoveryChanges, ...changes]}};
       this.store.put('operations', id, updated); this.store.db.exec('COMMIT'); Object.assign(record, updated); this.volatileOperations.delete(id);
     } catch (error) { this.store.db.exec('ROLLBACK'); throw error; }
   }
-  publishSave(id: string, record: SaveRecord) {
+  publishSave(id: string, record: SaveRecord, restore = false) {
     this.store.db.exec('BEGIN IMMEDIATE');
     try {
-      if (!record.published && record.result?.kind === 'saved') {
-        const saved = record.result.disk;
-        for (const row of this.store.db.prepare('SELECT client, body FROM recovery').all()) {
-          const state = JSON.parse(row.body as string) as EditorRecovery;
-          for (const draft of state.drafts) if (row.client === record.input.clientId && same(draft.target, record.input.target)) draft.disk = saved;
-          if (JSON.stringify(state) !== row.body) this.store.db.prepare('UPDATE recovery SET revision=revision+1, body=? WHERE client=?').run(JSON.stringify(state), row.client as string);
+      const changes: OperationResult['recoveryChanges'] = [];
+      if (!record.published) {
+        const stored = this.store.readRecovery(record.input.clientId);
+        const state = (stored?.state ?? emptyRecovery(record.input.clientId)) as EditorRecovery, before = JSON.stringify(state);
+        if (restore && record.baseline && (stored?.revision ?? 0) === record.recoveryRevision) {
+          if (!state.checkouts.some(c => same(c, record.input.target.checkout))) state.checkouts.push(record.input.target.checkout);
+          const existing = state.drafts.find(d => same(d.target, record.input.target));
+          if (existing) existing.text = record.input.text;
+          else state.drafts.push({target: record.input.target, text: record.input.text, disk: record.baseline});
+        }
+        if (record.result?.kind === 'saved') for (const draft of state.drafts) if (same(draft.target, record.input.target)) draft.disk = record.result.disk;
+        if (JSON.stringify(state) !== before) {
+          const previousRevision = stored?.revision ?? 0;
+          this.store.db.prepare('INSERT INTO recovery VALUES(?,?,?) ON CONFLICT(client) DO UPDATE SET revision=excluded.revision, body=excluded.body').run(record.input.clientId, previousRevision + 1, JSON.stringify(state));
+          changes.push({clientId: record.input.clientId, previousRevision, revision: previousRevision + 1});
         }
       }
-      const result = record.result?.kind === 'saved' ? {kind: 'saved' as const, disk: record.result.disk} : record.result;
+      const result = record.result?.kind === 'saved' ? {kind: 'saved' as const, disk: record.result.disk, recoveryChanges: [...record.result.recoveryChanges, ...changes]} : record.result;
       const updated = {...record, result, published: !!result};
       this.store.put('saves', id, updated); this.store.db.exec('COMMIT'); Object.assign(record, updated); this.volatileSaves.delete(id);
     } catch (error) { this.store.db.exec('ROLLBACK'); throw error; }
@@ -473,10 +496,10 @@ class LocalWorkspace {
       if (record.result || this.active(record.input.target.checkout.checkoutId)) continue;
       try {
         const disk = await (await this.directory(record.input.target.checkout)).read(record.input.target.path);
-        if (disk.version === textDocument(record.input.text).version) record.result = {kind: 'saved', disk};
+        if (disk.version === textDocument(record.input.text).version) record.result = {kind: 'saved', disk, recoveryChanges: []};
         else if (disk.version === record.input.expectedVersion) record.result = {kind: 'conflict', disk};
         else continue;
-        this.publishSave(key(record.input.clientId, record.input.requestId), record);
+        this.publishSave(key(record.input.clientId, record.input.requestId), record, true);
       } catch { /* Unavailable/changed path retains save intent. */ }
     }
   }
@@ -485,7 +508,9 @@ class LocalWorkspace {
     const stored = this.store.readRecovery(clientId), state = (stored?.state ?? emptyRecovery(clientId)) as EditorRecovery;
     recovery(state, clientId); const errors: string[] = [];
     for (const target of state.checkouts) { try { await this.directory(target); } catch (error) { errors.push(target.root + ': ' + errorText(error)); } }
-    const operations = this.operations().filter(r => !r.acknowledged && (r.input.clientId === clientId || state.checkouts.some(c => same(c, r.input.checkout)))).map(r => r.result);
+    const relevant = this.operations().filter(r => !r.acknowledgedBy.includes(clientId) && (r.input.clientId === clientId || state.checkouts.some(c => same(c, r.input.checkout))));
+    for (const record of relevant) if (record.publicationRevisions[clientId] === undefined) { record.publicationRevisions[clientId] = stored?.revision ?? 0; this.store.put('operations', key(record.input.clientId, record.input.id), record); }
+    const operations = relevant.map(r => r.result);
     for (const operation of operations) if (operation.outcome === 'uncertain') errors.push('Uncertain operation ' + operation.id + ': ' + (operation.message ?? 'inspect original, destination, staging and Finder Trash; drafts retained.'));
     for (const record of this.store.all<SaveRecord>('saves')) if (record.input.clientId === clientId && !record.result) {
       errors.push('Uncertain save ' + record.input.requestId + ' for ' + record.input.target.path + ': inspect disk and staging ' + record.temporary + '; saved draft and intent retained.');
