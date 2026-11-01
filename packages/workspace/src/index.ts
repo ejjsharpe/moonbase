@@ -1,3 +1,4 @@
+import { normalizeApplicationError } from '@moonbase/application/effect-client';
 import { Context, Effect, FiberSet, Layer, Scope } from 'effect';
 import { WorkspaceService } from '@moonbase/application/services';
 import { ApplicationError, type CheckoutTarget } from '@moonbase/application/client';
@@ -10,7 +11,7 @@ import {
 const applicationError = (error: unknown, code: ApplicationError['code'] = 'Unavailable') =>
   ApplicationError.is(error)
     ? error
-    : new ApplicationError({ code, message: ApplicationError.fromUnknown(error).message });
+    : new ApplicationError({ code, message: normalizeApplicationError(error).message });
 export type WorkspaceConfiguration = typeof WorkspaceConfigurationSchema.Type;
 /** Scoped resources only; the shared application composition root supplies the runtime. */
 export function WorkspaceLive(configuration: WorkspaceConfiguration) {

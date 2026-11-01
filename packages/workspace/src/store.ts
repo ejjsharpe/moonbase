@@ -1,3 +1,4 @@
+import { normalizeApplicationError } from '@moonbase/application/effect-client';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { chmodSync, constants, closeSync, mkdirSync, openSync, realpathSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
@@ -77,7 +78,7 @@ export class Store {
         code: 'Persistence',
         message:
           'Workspace journal publication failed; retain drafts and retry. ' +
-          ApplicationError.fromUnknown(error).message,
+          normalizeApplicationError(error).message,
       });
     }
   }
@@ -92,7 +93,7 @@ export class Store {
         code: 'Persistence',
         message:
           'Workspace request reservation failed; no mutation admitted. ' +
-          ApplicationError.fromUnknown(error).message,
+          normalizeApplicationError(error).message,
       });
     }
   }

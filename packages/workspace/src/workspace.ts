@@ -1,3 +1,4 @@
+import { normalizeApplicationError } from '@moonbase/application/effect-client';
 import { type ApprovalSchema, parseRecovery } from './schema.ts';
 import { Cause, Deferred, Effect, Exit, Fiber, FiberSet, Queue, Scope, Stream } from 'effect';
 import {
@@ -81,7 +82,9 @@ const containsSelectedSource = (
       ? source.native.parents.split(',').includes(entry.identity)
       : affected(source.path, entry.path)));
 const applicationError = (error: unknown, code: ApplicationError['code'] = 'Unavailable') =>
-  ApplicationError.is(error) ? error : new ApplicationError({ code, message: errorText(error) });
+  ApplicationError.is(error)
+    ? error
+    : new ApplicationError({ code, message: normalizeApplicationError(error).message });
 
 type WorkspaceOwnership = {
   operations: FiberSet.FiberSet<unknown, ApplicationError>;
@@ -1437,7 +1440,7 @@ export class LocalWorkspace {
     } catch (error) {
       if (
         (error as NodeJS.ErrnoException).code !== 'ENOENT' &&
-        !errorText(error).includes('No such file')
+        !(error as { stderr?: string }).stderr?.includes('No such file')
       )
         throw error;
     }

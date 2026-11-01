@@ -543,3 +543,40 @@ test('saved baseline hashes and embedded publication item objects reject corrupt
     f.cleanup();
   }
 });
+
+test('public workspace IO normalizes unknown helper failures without rebranding raw private diagnostics', async () => {
+  const f = fixture();
+  const enabled = join(f.base, 'private-failure-enabled');
+  const helper = f.wrapper(
+    `if [ -e ${quote(enabled)} ]; then case "$1" in read|git|lookup) printf '%s\n' 'credential-like-private-value /private/host/configuration' >&2; exit 1;; esac; fi`,
+  );
+  const { runtime, client } = f.start(helper);
+  try {
+    const checkout = await client.command('openCheckout', { root: f.root });
+    writeFileSync(enabled, 'enabled');
+    await assert.rejects(
+      client.command('readFile', { checkout, path: 'file.txt' }),
+      (error: unknown) => {
+        assert(isError('Unavailable')(error));
+        assert(!String(error).includes('credential-like-private-value'));
+        assert(!String(error).includes('/private/host/configuration'));
+        return true;
+      },
+    );
+    for (const diagnostic of [
+      await client.command('gitStatus', { checkout }),
+      await client.command('lookupFiles', { checkout, query: 'file' }),
+    ]) {
+      assert(diagnostic.error);
+      assert(!diagnostic.error.includes('credential-like-private-value'));
+      assert(!diagnostic.error.includes('/private/host/configuration'));
+    }
+    await assert.rejects(
+      client.command('readFile', { checkout, path: '../escape' }),
+      isError('InvalidInput'),
+    );
+  } finally {
+    await runtime.dispose();
+    f.cleanup();
+  }
+});
