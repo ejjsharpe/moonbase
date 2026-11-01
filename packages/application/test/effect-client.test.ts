@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Effect, Layer, ManagedRuntime, Stream } from 'effect';
+import { Cause, Effect, Layer, ManagedRuntime, Stream } from 'effect';
 import { ApplicationError } from '@moonbase/application/client';
 import {
   runApplicationEffect,
@@ -168,6 +168,204 @@ test('unexpected runner rejection is normalized at invocation and observation bo
       () => {},
     );
     await assert.rejects(close(), (error) => error === rejection);
+  } finally {
+    await runtime.dispose();
+  }
+});
+
+const privateDiagnostic = 'SYNTHETIC_PRIVATE_SENTINEL';
+const target = {
+  checkout: {
+    hostId: 'host',
+    checkoutId: 'checkout',
+    projectId: 'project',
+    root: '/checkout',
+    branch: 'main',
+  },
+  path: 'file.txt',
+};
+function safeFailure(error: unknown, message: string) {
+  assert(ApplicationError.is(error));
+  assert.equal(error.code, 'Unavailable');
+  assert.equal(error.message, message);
+  assert(!String(error).includes(privateDiagnostic));
+  assert(!JSON.stringify(error).includes(privateDiagnostic));
+  assert.equal(error.target, undefined);
+  return true;
+}
+
+test('unknown defects and raw Effect evidence never expose private diagnostics', async () => {
+  const runtime = ManagedRuntime.make(Layer.empty);
+  let stringifications = 0;
+  const rawError = new Error(privateDiagnostic);
+  const fiberFailure = await runtime
+    .runPromise(Effect.die(rawError))
+    .catch((error: unknown) => error);
+  const unknowns = [
+    rawError,
+    privateDiagnostic,
+    Cause.die(rawError),
+    fiberFailure,
+    { _tag: 'ApplicationError', code: 'Uncertain', message: privateDiagnostic, target },
+    {
+      toString() {
+        stringifications++;
+        return privateDiagnostic;
+      },
+    },
+  ];
+  try {
+    for (const unknown of unknowns) {
+      await assert.rejects(runApplicationEffect(runtime, Effect.die(unknown)), (error) =>
+        safeFailure(error, 'Application effect failed'),
+      );
+      const typed = new ApplicationError({
+        code: 'Uncertain',
+        message: 'Original mutation outcome remains uncertain',
+        target,
+      });
+      await assert.rejects(
+        runApplicationEffect(
+          runtime,
+          Effect.fail(typed).pipe(Effect.ensuring(Effect.die(unknown))),
+        ),
+        (error) => {
+          assert(ApplicationError.is(error));
+          assert.equal(error.code, typed.code);
+          assert.strictEqual(error.target, target);
+          assert.equal(error.message, `${typed.message}; Application effect failed`);
+          assert(!String(error).includes(privateDiagnostic));
+          assert(!JSON.stringify(error).includes(privateDiagnostic));
+          return true;
+        },
+      );
+    }
+    assert.equal(stringifications, 0);
+  } finally {
+    await runtime.dispose();
+  }
+});
+
+test('unknown cleanup failures cannot be rebranded into public private diagnostics', async () => {
+  const runtime = ManagedRuntime.make(Layer.empty);
+  const safeTyped = new ApplicationError({
+    code: 'Persistence',
+    message: 'Recovery release failed safely',
+    target,
+  });
+  try {
+    for (const release of [
+      () => {
+        throw new Error(privateDiagnostic);
+      },
+      () => Promise.reject(Cause.die(new Error(privateDiagnostic))),
+    ]) {
+      await assert.rejects(runApplicationEffect(runtime, releaseResource(release)), (error) =>
+        safeFailure(error, 'Application resource cleanup failed'),
+      );
+      const uncertain = new ApplicationError({
+        code: 'Uncertain',
+        message: 'Mutation receipt missing',
+        target,
+      });
+      await assert.rejects(
+        runApplicationEffect(
+          runtime,
+          Effect.fail(uncertain).pipe(Effect.ensuring(releaseResource(release))),
+        ),
+        (error) => {
+          assert(ApplicationError.is(error));
+          assert.equal(error.code, 'Uncertain');
+          assert.strictEqual(error.target, target);
+          assert.equal(
+            error.message,
+            'Mutation receipt missing; Application resource cleanup failed',
+          );
+          assert(!JSON.stringify(error).includes(privateDiagnostic));
+          return true;
+        },
+      );
+    }
+    await assert.rejects(
+      runApplicationEffect(
+        runtime,
+        releaseResource(() => {
+          throw safeTyped;
+        }),
+      ),
+      (error) => error === safeTyped,
+    );
+  } finally {
+    await runtime.dispose();
+  }
+});
+
+test('unknown runner rejection and synchronous throws are redacted for commands and observations', async () => {
+  const runtime = ManagedRuntime.make(Layer.empty);
+  try {
+    for (const runPromiseExit of [
+      () => Promise.reject(new Error(privateDiagnostic)),
+      () => {
+        throw Cause.die(new Error(privateDiagnostic));
+      },
+    ]) {
+      const runner = { ...runtime, runPromiseExit };
+      await assert.rejects(runApplicationEffect(runner, Effect.void), (error) =>
+        safeFailure(error, 'Application effect failed'),
+      );
+      const close = observeApplicationStream(
+        runner,
+        Stream.never,
+        () => {},
+        () => {},
+      );
+      await assert.rejects(close(), (error) => safeFailure(error, 'Application effect failed'));
+    }
+  } finally {
+    await runtime.dispose();
+  }
+});
+
+test('active observation defects and deliberate-close cleanup failures are redacted', async () => {
+  const runtime = ManagedRuntime.make(Layer.empty);
+  const reported = event(),
+    entered = event();
+  const errors: ApplicationError[] = [];
+  const close = observeApplicationStream(
+    runtime,
+    Stream.fromEffect(Effect.die(new Error(privateDiagnostic))),
+    () => {},
+    (error) => {
+      errors.push(error);
+      reported.resolve();
+    },
+  );
+  try {
+    await reported.promise;
+    safeFailure(errors[0], 'Application effect failed');
+    await assert.rejects(close(), (error) => error === errors[0]);
+    const closeOwned = observeApplicationStream(
+      runtime,
+      Stream.unwrap(
+        Effect.gen(function* () {
+          yield* Effect.acquireRelease(Effect.sync(entered.resolve), () =>
+            releaseResource(() => {
+              throw new Error(privateDiagnostic);
+            }),
+          );
+          return Stream.never;
+        }),
+      ),
+      () => {},
+      (error) => errors.push(error),
+    );
+    await entered.promise;
+    const completion = closeOwned();
+    assert.strictEqual(closeOwned(), completion);
+    await assert.rejects(completion, (error) =>
+      safeFailure(error, 'Application resource cleanup failed'),
+    );
+    assert.equal(errors.length, 1);
   } finally {
     await runtime.dispose();
   }

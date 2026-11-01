@@ -281,7 +281,7 @@ test('chat observer failures stay observable without closing the process service
       return true;
     });
     assert.equal(error.code, 'Unavailable');
-    assert.match(error.message, /Chat observer cleanup failed/);
+    assert.match(error.message, /Application resource cleanup failed/);
     assert.equal(counts.unwatch, 1);
     assert.equal(counts.release, 0);
     assert.equal(counts.stop, 0);

@@ -210,7 +210,7 @@ test('connection observer cleanup errors remain observable without disposing the
       return true;
     });
     assert.equal(error.code, 'Unavailable');
-    assert.match(error.message, /cleanup failed/);
+    assert.match(error.message, /Application resource cleanup failed/);
     assert.equal(counts.unwatch, 1);
     assert.equal(counts.released, 0);
     await client.command('getConnection', {});
