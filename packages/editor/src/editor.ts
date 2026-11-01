@@ -365,7 +365,7 @@ export class EditorController {
     const captured = [...new Map(targets.map(target => [fileKey(target), structuredClone(target)])).values()];
     if (captured.some(target => this.uncertainAffects(target))) { this.report("Resolve pending file operations before closing their files."); return false; }
     this.preserving = true; this.activation++; clearTimeout(this.scheduled); this.emit();
-    const activation = this.activation;
+    let activation = this.activation, committed = false;
     let survivor: FileTarget | undefined;
     const referenceRevision = this.referenceRevision;
     const discarded = new Set<string>();
@@ -379,33 +379,46 @@ export class EditorController {
         else if (!await this.save(target)) return false;
       }
       if (referenceRevision !== this.referenceRevision) throw Error("Files moved during the captured close. Edits retained; review their new paths and retry.");
-      const state = this.capture();
       const keys = new Set(captured.map(fileKey));
-      state.drafts = state.drafts.filter(draft => !discarded.has(fileKey(draft.target)) && (kind === "quit" || !keys.has(fileKey(draft.target))));
       const history: ClosedAction[] = [];
-      if (kind === "files") for (const target of state.checkouts) {
-        const selected = state.views[target.checkoutId];
-        const closing = selected.openFiles.filter(path => keys.has(fileKey({ checkout: target, path })));
-        if (!closing.length) continue;
-        history.push({ checkout: target, active: closing.includes(selected.active) ? selected.active : closing.at(-1)!,
-          files: closing.map(path => ({ path, index: selected.openFiles.indexOf(path), view: selected.fileViews[path] ?? "file",
-            positions: structuredClone(selected.positions[path]) })) });
-        selected.openFiles = selected.openFiles.filter(path => !closing.includes(path));
-        if (closing.includes(selected.active)) selected.active = this.recovery.recentFiles.find(item =>
-          sameCheckout(item.checkout, target) && selected.openFiles.includes(item.path))?.path ?? selected.openFiles[0] ?? "";
-        if (selected.preview && closing.includes(selected.preview)) selected.preview = null;
+      const applyClose = (state: EditorRecovery, remember = false) => {
+        state.drafts = state.drafts.filter(draft => !discarded.has(fileKey(draft.target)) && (kind === "quit" || !keys.has(fileKey(draft.target))));
+        if (kind === "files") for (const target of state.checkouts) {
+          const selected = state.views[target.checkoutId];
+          const closing = selected.openFiles.filter(path => keys.has(fileKey({ checkout: target, path })));
+          if (!closing.length) continue;
+          if (remember) history.push({ checkout: target, active: closing.includes(selected.active) ? selected.active : closing.at(-1)!,
+            files: closing.map(path => ({ path, index: selected.openFiles.indexOf(path), view: selected.fileViews[path] ?? "file",
+              positions: structuredClone(selected.positions[path]) })) });
+          selected.openFiles = selected.openFiles.filter(path => !closing.includes(path));
+          if (closing.includes(selected.active)) selected.active = state.recentFiles.find(item =>
+            sameCheckout(item.checkout, target) && selected.openFiles.includes(item.path))?.path ?? selected.openFiles[0] ?? "";
+          if (selected.preview && closing.includes(selected.preview)) selected.preview = null;
+        }
+        if (kind === "checkout" && checkout) {
+          state.openCheckoutIds = state.openCheckoutIds.filter(id => id !== checkout.checkoutId);
+          if (state.selectedCheckoutId === checkout.checkoutId) state.selectedCheckoutId = state.openCheckoutIds[0] ?? null;
+        }
+        return state;
+      };
+      let state = applyClose(this.capture(), true);
+      for (;;) {
+        await this.publish(state);
+        if (referenceRevision !== this.referenceRevision) throw Error("Files moved during the captured close. Edits retained; review their new paths and retry.");
+        const latest = applyClose(this.capture());
+        if (JSON.stringify(latest) === JSON.stringify(state)) break;
+        // Retain metadata changed during publication, using the actual acknowledged CAS revision.
+        state = latest;
       }
-      if (kind === "checkout" && checkout) {
-        state.openCheckoutIds = state.openCheckoutIds.filter(id => id !== checkout.checkoutId);
-        if (state.selectedCheckoutId === checkout.checkoutId) state.selectedCheckoutId = state.openCheckoutIds[0] ?? null;
+      const activeCheckout = this.recovery.checkouts.find(target => target.checkoutId === this.recovery.selectedCheckoutId);
+      const previous = activeCheckout && this.recovery.views[activeCheckout.checkoutId].active;
+      applyClose(this.recovery); this.recovery.drafts = state.drafts;
+      if (kind === "files" && activeCheckout && previous && keys.has(fileKey({ checkout: activeCheckout, path: previous }))) {
+        const next = this.recovery.views[activeCheckout.checkoutId].active;
+        if (next) survivor = { checkout: activeCheckout, path: next };
       }
-      await this.publish(state);
-      const activeCheckout = state.checkouts.find(target => target.checkoutId === state.selectedCheckoutId);
-      if (kind === "files" && activeCheckout) {
-        const previous = this.recovery.views[activeCheckout.checkoutId].active, next = state.views[activeCheckout.checkoutId].active;
-        if (next && keys.has(fileKey({ checkout: activeCheckout, path: previous }))) survivor = { checkout: activeCheckout, path: next };
-      }
-      this.recovery = state;
+      activation = this.activation;
+      committed = true;
       if (kind === "quit") for (const key of discarded) {
         const buffer = this.buffers.get(key)!; buffer.text = buffer.disk.text; buffer.conflict = undefined;
       }
@@ -418,6 +431,7 @@ export class EditorController {
     } catch (error) { this.report(error); return false; }
     finally {
       this.preserving = false; this.emit();
+      if (!committed) this.schedule();
       if (survivor && activation === this.activation) await this.open(survivor).catch(this.report);
     }
   }

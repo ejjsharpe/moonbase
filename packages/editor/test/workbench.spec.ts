@@ -135,3 +135,59 @@ for (const navigation of ["visual", "recent"] as const) test(`R2 ${navigation} k
   await first(page).getByRole("tab", { name: "README.md", exact: true }).focus(); await navigate();
   await expect(first(page).getByRole("tab", { name: "welcome.ts", exact: true })).toBeFocused();
 });
+
+test("R3 a checkout clicked during close publication remains selected live and durably", async ({ page }) => {
+  await page.goto("/recovery-race.html");
+  await expect(page.getByRole("textbox", { name: "b.ts editor", exact: true })).toBeVisible();
+  await page.evaluate(() => window.recoveryRace.hold()); await page.getByRole("button", { name: "Close b.ts", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.recoveryRace.waiting)).toBe(true);
+  await page.getByRole("tab", { name: "beta · main", exact: true }).click(); await page.evaluate(() => window.recoveryRace.release());
+  await expect.poll(() => page.evaluate(() => window.recoveryRace.editor.getSnapshot().preserving)).toBe(false);
+  expect(await page.evaluate(() => window.recoveryRace.editor.getSnapshot().recovery.selectedCheckoutId)).toBe("beta");
+  expect(await page.evaluate(async () => (await window.recoveryRace.load()).state.selectedCheckoutId)).toBe("beta");
+  await expect(page.getByRole("textbox", { name: "a.ts editor", exact: true })).toBeVisible();
+  await page.screenshot({ path: "test-results/editor-close-selection.png", fullPage: true });
+});
+
+for (const shortcut of ["close", "reopen"] as const) test(`R3 keyboard ${shortcut} hands off typing focus`, async ({ page }) => {
+  await page.goto("/"); await first(page).getByRole("treeitem", { name: "README.md", exact: true }).dblclick();
+  if (shortcut === "reopen") await first(page).getByRole("button", { name: "Close README.md", exact: true }).click();
+  const previous = shortcut === "close" ? "README.md" : "welcome.ts", next = shortcut === "close" ? "welcome.ts" : "README.md";
+  await first(page).getByRole("textbox", { name: previous + " editor", exact: true }).focus();
+  await page.keyboard.press(shortcut === "close" ? "Meta+w" : "Meta+Shift+t");
+  await expect(first(page).getByRole("textbox", { name: next + " editor", exact: true })).toBeFocused();
+  await page.keyboard.type("typed after " + shortcut);
+  await expect.poll(() => page.evaluate(path => window.demo.first.buffer({ checkout: window.demo.checkout, path })!.text, next)).toContain("typed after " + shortcut);
+  await page.screenshot({ path: `test-results/editor-keyboard-${shortcut}.png`, fullPage: true });
+});
+
+test("R3 keyboard close cancellation and failed publication preserve typing focus and dialog scope", async ({ page }) => {
+  await page.goto("/"); await edit(page, "dirty retained ");
+  await page.keyboard.press("Meta+w"); const dialog = page.getByRole("dialog", { name: "Save changes before closing?", exact: true });
+  await expect(dialog).toBeVisible(); await dialog.getByRole("button", { name: "Cancel", exact: true }).focus();
+  await page.keyboard.press("Meta+Shift+t"); await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(first(page).getByRole("textbox", { name: "welcome.ts editor", exact: true })).toBeFocused(); await page.keyboard.type("after cancel ");
+  await page.getByRole("button", { name: "Fail next recovery", exact: true }).click();
+  await first(page).getByRole("textbox", { name: "welcome.ts editor", exact: true }).focus(); await page.keyboard.press("Meta+w");
+  await dialog.getByRole("button", { name: "Discard", exact: true }).click();
+  await expect(first(page).getByRole("textbox", { name: "welcome.ts editor", exact: true })).toBeFocused(); await page.keyboard.type("after failed close ");
+  expect(await page.evaluate(() => window.demo.first.buffer({ checkout: window.demo.checkout, path: "welcome.ts" })!.text)).toContain("after failed close");
+});
+
+test("R3 keyboard close/reopen retains tree or strip origin and meaningful empty-editor focus", async ({ page }) => {
+  await page.goto("/"); await first(page).getByRole("treeitem", { name: "README.md", exact: true }).dblclick();
+  for (const origin of ["strip", "tree"] as const) {
+    const focused = origin === "strip" ? first(page).getByRole("tab", { name: "README.md", exact: true }) : first(page).getByRole("tree", { name: "Files", exact: true });
+    await focused.focus(); await page.keyboard.press("Meta+w");
+    await expect(origin === "strip" ? first(page).getByRole("tab", { name: "welcome.ts", exact: true }) : focused).toBeFocused();
+    await page.keyboard.press("Meta+Shift+t"); await expect(focused).toBeFocused();
+  }
+  await first(page).getByRole("textbox", { name: "README.md editor", exact: true }).focus(); await page.keyboard.press("Meta+w");
+  await first(page).getByRole("textbox", { name: "welcome.ts editor", exact: true }).focus(); await page.keyboard.press("Meta+w");
+  await expect(first(page).getByRole("button", { name: "Find file", exact: true })).toBeFocused();
+  await page.keyboard.press("Meta+Shift+t"); await expect(first(page).getByRole("textbox", { name: "welcome.ts editor", exact: true })).toBeFocused();
+  await page.getByRole("button", { name: "Hide first editor", exact: true }).click();
+  const before = await page.evaluate(() => window.demo.first.getSnapshot().recovery);
+  await page.keyboard.press("Meta+Shift+t"); expect(await page.evaluate(() => window.demo.first.getSnapshot().recovery)).toEqual(before);
+});

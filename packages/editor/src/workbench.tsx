@@ -14,6 +14,9 @@ import { checkoutKey, fileKey, type ChooseClose, type CloseChoice, type EditorBu
 import { MonacoView } from "./monaco-view.tsx";
 import { styles } from "./styles.ts";
 
+type FocusOrigin = "editor" | "strip" | "tree";
+const focusOrigin = (element: HTMLElement): FocusOrigin => element.closest('[role="tree"]') ? "tree" : element.closest('[aria-label="Open files"]') ? "strip" : "editor";
+
 function Popup({ title, children, onClose, finalFocus }: { title: string; children: ReactNode; onClose: () => void; finalFocus?: () => boolean | HTMLElement | null }) {
   return <Dialog.Root open onOpenChange={open => { if (!open) onClose(); }}>
     <Dialog.Portal><Dialog.Backdrop {...stylex.props(styles.backdrop)} />
@@ -225,24 +228,31 @@ export const EditorWorkbench = forwardRef<EditorWorkbenchHandle, EditorWorkbench
   const [lookup, setLookup] = useState(false), [panel, setPanel] = useState("files"), [action, setAction] = useState<Action | null>(null);
   const [choice, setChoice] = useState<{ file: Readonly<EditorBuffer>; resolve: (choice: CloseChoice) => void } | null>(null);
   const pendingChoice = useRef<((choice: CloseChoice) => void) | null>(null);
-  const [recent, setRecent] = useState<{ paths: string[]; index: number; strip: boolean } | null>(null), dragged = useRef<string | null>(null);
-  const [focusRequest, setFocusRequest] = useState<{ target: FileTarget; strip: boolean } | null>(null);
-  const menuCapture = useRef<string[]>([]), root = useRef<HTMLDivElement>(null);
+  const [recent, setRecent] = useState<{ paths: string[]; index: number; origin: FocusOrigin } | null>(null), dragged = useRef<string | null>(null);
+  const [focusRequest, setFocusRequest] = useState<{ checkout: CheckoutTarget; path: string; origin: FocusOrigin } | null>(null);
+  const menuCapture = useRef<string[]>([]), root = useRef<HTMLDivElement>(null), findFile = useRef<HTMLButtonElement>(null);
   useLayoutEffect(() => {
-    if (!focusRequest) return;
-    if (target && fileKey(target) === fileKey(focusRequest.target)) {
-      const elements = root.current?.querySelectorAll<HTMLElement>(focusRequest.strip ? '[aria-label="Open files"] [role="tab"]' : '.monaco-editor textarea[role="textbox"]');
-      const label = target.path + (focusRequest.strip ? "" : " editor");
-      Array.from(elements ?? []).find(element => element.getAttribute("aria-label") === label)?.focus();
+    if (!focusRequest || choice || lookup || action || state.preserving) return;
+    if (root.current?.getClientRects().length && checkout && checkoutKey(checkout) === checkoutKey(focusRequest.checkout) && selected?.active === focusRequest.path) {
+      let element: HTMLElement | undefined | null;
+      if (focusRequest.origin === "tree") element = root.current.querySelector<HTMLElement>('[role="tree"][aria-label="Files"]');
+      else if (target) {
+        const strip = focusRequest.origin === "strip";
+        const elements = root.current.querySelectorAll<HTMLElement>(strip ? '[aria-label="Open files"] [role="tab"]' : '.monaco-editor textarea[role="textbox"]');
+        element = Array.from(elements).find(element => element.getAttribute("aria-label") === target.path + (strip ? "" : " editor"));
+      }
+      (element ?? findFile.current)?.focus();
     }
     setFocusRequest(null);
-  }, [focusRequest, target && fileKey(target)]);
-  const withFocus = (opening: Promise<boolean>, strip: boolean) => opening.then(success => {
-    const next = controller.getSnapshot().recovery;
-    if (!success || !checkout || next.selectedCheckoutId !== checkout.checkoutId) return;
-    const path = next.views[checkout.checkoutId].active;
-    if (path) setFocusRequest({ target: { checkout, path }, strip });
-  });
+  }, [focusRequest, target && fileKey(target), checkout && checkoutKey(checkout), choice, lookup, action, state.preserving]);
+  const withFocus = (opening: Promise<boolean>, origin: FocusOrigin, restore = false) => {
+    const focus = () => {
+      const next = controller.getSnapshot().recovery;
+      if (checkout && next.selectedCheckoutId === checkout.checkoutId)
+        setFocusRequest({ checkout, path: next.views[checkout.checkoutId].active, origin });
+    };
+    return opening.then(success => { if (success || restore) focus(); }, error => { if (restore) focus(); throw error; });
+  };
   const choose: ChooseClose = file => new Promise(resolve => { pendingChoice.current = resolve; setChoice({ file, resolve }); });
   function answer(value: CloseChoice) { pendingChoice.current?.(value); pendingChoice.current = null; setChoice(null); }
   useEffect(() => () => { pendingChoice.current?.("cancel"); }, []);
@@ -258,15 +268,15 @@ export const EditorWorkbench = forwardRef<EditorWorkbenchHandle, EditorWorkbench
       const key = event.key.toLowerCase(), command = event.metaKey || event.ctrlKey;
       if (command && key === "s") { event.preventDefault(); event.stopPropagation(); if (target) run(controller.save(target)); }
       else if (command && key === "p" && !event.shiftKey && !event.altKey) { event.preventDefault(); event.stopPropagation(); setLookup(true); }
-      else if (event.metaKey && key === "w" && !event.shiftKey) { event.preventDefault(); event.stopPropagation(); if (target) run(controller.close([target], choose)); }
-      else if (event.metaKey && event.shiftKey && key === "t") { event.preventDefault(); event.stopPropagation(); run(controller.reopen(checkout)); }
-      else if (event.metaKey && event.altKey && ["ArrowLeft", "ArrowRight"].includes(event.key)) { event.preventDefault(); event.stopPropagation(); run(withFocus(controller.navigate(checkout, event.key === "ArrowRight" ? 1 : -1), !!element.closest('[aria-label="Open files"]'))); }
+      else if (event.metaKey && key === "w" && !event.shiftKey) { event.preventDefault(); event.stopPropagation(); if (target) run(withFocus(controller.close([target], choose), focusOrigin(element), true)); }
+      else if (event.metaKey && event.shiftKey && key === "t") { event.preventDefault(); event.stopPropagation(); run(withFocus(controller.reopen(checkout), focusOrigin(element), true)); }
+      else if (event.metaKey && event.altKey && ["ArrowLeft", "ArrowRight"].includes(event.key)) { event.preventDefault(); event.stopPropagation(); run(withFocus(controller.navigate(checkout, event.key === "ArrowRight" ? 1 : -1), focusOrigin(element))); }
       else if (event.ctrlKey && event.key === "Tab") {
         event.preventDefault(); event.stopPropagation();
         const paths = recent?.paths ?? [...new Set([selected.active, ...state.recovery.recentFiles.filter(file => checkoutKey(file.checkout) === checkoutKey(checkout)).map(file => file.path), ...selected.openFiles])].filter(path => selected.openFiles.includes(path));
-        if (paths.length) setRecent({ paths, index: ((recent?.index ?? 0) + (event.shiftKey ? paths.length - 1 : 1)) % paths.length, strip: recent?.strip ?? !!element.closest('[aria-label="Open files"]') });
+        if (paths.length) setRecent({ paths, index: ((recent?.index ?? 0) + (event.shiftKey ? paths.length - 1 : 1)) % paths.length, origin: recent?.origin ?? focusOrigin(element) });
       } else if (event.key === "Escape" && recent) { event.preventDefault(); setRecent(null); }
-    }} onKeyUp={event => { if (event.key === "Control" && recent && checkout) { const path = recent.paths[recent.index]; setRecent(null); run(withFocus(controller.open({ checkout, path }), recent.strip)); } }}>
+    }} onKeyUp={event => { if (event.key === "Control" && recent && checkout) { const path = recent.paths[recent.index]; setRecent(null); run(withFocus(controller.open({ checkout, path }), recent.origin)); } }}>
     <Tabs.Root value={checkout?.checkoutId ?? ""} onValueChange={value => { const target = openCheckouts.find(item => item.checkoutId === value); if (target) controller.selectCheckout(target); }} {...stylex.props(styles.panel)}>
       <Tabs.List {...stylex.props(workbench.projectTabs, styles.checkoutTabs)} aria-label="Checkouts">
         {openCheckouts.map(item => <div key={checkoutKey(item)} {...stylex.props(workbench.fileTab)}>
@@ -288,7 +298,7 @@ export const EditorWorkbench = forwardRef<EditorWorkbenchHandle, EditorWorkbench
               onPointerUp={event => { if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }} />
             <aside {...stylex.props(workbench.sidebar)} aria-label="Editor sidebar">
               <div {...stylex.props(filesUI.tools)}><Button {...stylex.props(controls.button)} aria-pressed={panel === "files"} onClick={() => setPanel("files")}>Files</Button><Button {...stylex.props(controls.button)} aria-pressed={panel === "git"} onClick={() => setPanel("git")}>Diff</Button>
-                <Button {...stylex.props(controls.button)} onClick={() => setLookup(true)}>Find file</Button></div>
+                <Button ref={findFile} {...stylex.props(controls.button)} onClick={() => setLookup(true)}>Find file</Button></div>
               <p {...stylex.props(workbench.directory)}>{checkout.branch} · {checkout.root}</p>
               <Button {...stylex.props(controls.button)} onClick={() => run(controller.refresh(checkout))}>Refresh</Button>
               {panel === "files" ? <>
