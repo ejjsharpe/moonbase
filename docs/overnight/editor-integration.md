@@ -1,10 +1,10 @@
 # Reviewed independent editor integration
 
-**DRAFT repair candidate.** Independent fan-in R1 at f44 found a P1 lost/reordered Save-receipt gap in inherited c31 editor behavior. This candidate includes committed module repair `449496961c29c90c7a2e3c44d0618f08ef504947` and two real regressions; module R9 and fan-in R2 review are pending. No app acceptance/resume follows from local tests alone.
+**DRAFT repair candidate.** R1 lost/reordered Save receipts are cleared by449. PairedR9/fan-inR2 then found a connected P1 rejected-publication loop and a flaky browser assertion. This candidate includes module `3c7f0c3daf337753bbca10df495264af28b280eb`, retaining Save facts while retiring only an authoritatively rejected original publication. Fourteen real cases pass; paired moduleR10/fan-inR3 review remains pending. No app acceptance/resume follows from local tests alone.
 
 This non-default working branch normal-merges reviewed workspace `38c6c551ff0ab1108077275d223a32967f32b9f6` (PR #3, Astra R6) and editor `c31bb4164d2ff18031e2b391a83198bb5e40d027` (PR #4, Astra R8). Both depend on publication contract #7 `8557fdd0d7a71f93a6584c77430e6fde57668580`. The parent merge commits are `c15bc16` (workspace) and `1e7c442` (editor). No GitHub PR/default-branch merge or source rewrite occurred.
 
-The original coordinator fan-in added real boundary tests, test imports/lock registration, CI invocation and evidence. Its new candidate additionally normal-merges the editor owner's committed repair; `packages/editor` exactly matches4494969. Shared application interfaces, workspace implementation source and pinned versions are unchanged. A coordinator follow-up adds the public `@moonbase/workspace/filesystem` asset export for require.resolve-based packaging, with no executable JavaScript import or native source change. The real fixture resolves that public asset rather than a sibling implementation path. Root test dependencies reference application/editor/workspace through their workspace exports; no private helpers or memory adapter are used. This branch contains no chat, connection or SSH implementation.
+The original coordinator fan-in added real boundary tests, test imports/lock registration, CI invocation and evidence. Its new candidate additionally normal-merges the editor owner's committed repair; `packages/editor` exactly matches3c7f0c3. Shared application interfaces, workspace implementation source and pinned versions are unchanged. A coordinator follow-up adds the public `@moonbase/workspace/filesystem` asset export for require.resolve-based packaging, with no executable JavaScript import or native source change. The real fixture resolves that public asset rather than a sibling implementation path. Root test dependencies reference application/editor/workspace through their workspace exports; no private helpers or memory adapter are used. This branch contains no chat, connection or SSH implementation.
 
 ## Public production-adapter proof
 
@@ -24,6 +24,8 @@ The original nine scenarios pass:
 
 Two additional real scenarios causally failed at old c31 (9pass/2fail) and now pass: lost A reply → B commit → original A retry, and reversed A/B replies. Both retain newer drafts/baselines through restart and recover Quit. Original request-ID sets and saved-file inodes remain unchanged during receipt recovery. See editor-save-regressions.md and the committed owner response.
 
+Three further cases qualify a failed publication with another already-started Save: a real SQLite before-commit lock first reproduces the stuck-loop defect, while committed reply loss and post-commit Persistence errors are controls. Allthree now pass, proving code/error/null status alone cannot retire an uncertain publication and exact rejected retries can rejoin retained Save receipts. See editor-publication-regressions.md.
+
 One move scenario coalesces actual watcher delivery until origin acknowledgement, then releases it; the service, controllers, SQLite and native mutation are real. Reply-loss scenarios wrap the public command response only, leaving actual committed persistence intact. These are controlled process-boundary failures, not Electron IPC tests.
 
 ## Validation
@@ -38,7 +40,7 @@ NX_DAEMON=false MOONBASE_TEST_RIPGREP="$PWD/dist/tools/ripgrep/rg" \
 git diff --check
 ```
 
-Passed locally: frozen install unchanged after root test registration; eleven integration cases; all nine uncached Nx tasks across three projects; application14/editor92/workspace91 tests, no failures/skips; forty source hashes/UI/browser boundaries. Lint is TypeScript diagnostics. Eleven integration cases plus197 module tests total208 tests. Source/compiled assets are unchanged: native helper SHA256 `3b1431e53880081151fb7e2ca398f3534924c644d2aa240990e9f8ff5eafb3e1`; official rg15.2.0 SHA256 `a326a1fb48074202e9ad41e4cd1e389eeea372c8c6f7d7e80da81176d5d9430e`. Raw local Nx log: `/tmp/moonbase-editor-save-repair-nx.log`. CI now invokes these typed integration cases after module tests using its qualified standalone rg asset.
+Passed locally: frozen install unchanged after root test registration; fourteen integration cases; all nine uncached Nx tasks across three projects; application14/editor102/workspace91 tests, no failures/skips; forty source hashes/UI/browser boundaries. Lint is TypeScript diagnostics. Fourteen integration cases plus207 module tests total221 tests. Source/compiled assets are unchanged: native helper SHA256 `3b1431e53880081151fb7e2ca398f3534924c644d2aa240990e9f8ff5eafb3e1`; official rg15.2.0 SHA256 `a326a1fb48074202e9ad41e4cd1e389eeea372c8c6f7d7e80da81176d5d9430e`. Raw local Nx log: `/tmp/moonbase-editor-publication-repair-nx.log`. CI now invokes these typed integration cases after module tests using its qualified standalone rg asset.
 
 Prior browser evidence remains at reviewed editor head: 24 supplied Chromium journeys plus four fresh R8 journeys, inspected screenshots,1,569-input renderer isolation and five Monaco workers/font build. Those unchanged-source browser tests were not repeated for test/root-only fan-in additions. The two exact-head independent review reports are retained under `reviews/`.
 
