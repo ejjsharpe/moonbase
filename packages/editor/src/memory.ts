@@ -133,13 +133,14 @@ export function memoryWorkspace(seeds: Seed[]) {
       const key = JSON.stringify([operation.clientId, operation.id]), payload = JSON.stringify(operation), previous = operations.get(key);
       if (previous) return previous.payload === payload ? previous.result : fail("Operation ID reused with changed payload.", "Conflict");
       if (!operation.id || !operation.clientId) fail("Operation requires immutable IDs.");
-      const map = entries(operation.checkout);
+      const map = new Map(entries(operation.checkout));
       const result: OperationResult = { id: operation.id, checkout: operation.checkout, kind: operation.kind, outcome: "completed", items: [] };
       for (const ref of [...operation.sources, ...(operation.replacements ?? [])]) {
         pathCheck(ref.target.path);
         if (checkoutKey(ref.target.checkout) !== checkoutKey(operation.checkout) || map.get(ref.target.path)?.version !== ref.identity) fail("Entry identity changed.", "Conflict");
       }
       if (operation.kind === "import") fail("Memory adapter has no native file authority.", "Unavailable");
+      if ((operation.kind === "move" || operation.kind === "copy") && operation.sources.length !== 1) fail("The memory adapter transfers one captured source at a time.");
       if (operation.destination) pathCheck(operation.destination);
       const replace = (destination: string) => {
         const collision = [...map.keys()].find(path => path.normalize("NFC").toLowerCase() === destination.normalize("NFC").toLowerCase());
@@ -164,6 +165,7 @@ export function memoryWorkspace(seeds: Seed[]) {
         }
         result.items.push({ source: source.target.path, ...(destination ? { destination } : {}), outcome: "completed" });
       }
+      files.set(checkoutKey(operation.checkout), map);
       operations.set(key, { payload, result, clientId: operation.clientId, ack: false }); stats.mutations++;
       notify(operation.checkout, result.items.map(item => item.destination ?? item.source));
       return result;

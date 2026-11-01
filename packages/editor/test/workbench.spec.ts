@@ -4,7 +4,7 @@ import type { Page } from "@playwright/test";
 const first = (page: Page) => page.getByRole("region", { name: "First editor", exact: true });
 async function edit(page: Page, text: string) {
   const input = first(page).getByRole("textbox", { name: "welcome.ts editor", exact: true });
-  await input.click(); await input.press("Meta+a"); await input.pressSequentially(text);
+  await input.focus(); await input.press("Meta+a"); await input.pressSequentially(text);
 }
 
 test("real Monaco edits/save, shared diff model and isolated second instance", async ({ page }) => {

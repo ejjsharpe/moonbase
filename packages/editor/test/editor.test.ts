@@ -187,10 +187,77 @@ test("lost move response resolves status once and publishes dirty drafts at the 
     f.memory.failNext("mutate", "Response lost", true);
     await assert.rejects(f.editor.mutate({ id: "move-one", checkout, kind: "move", sources, destination: "renamed.ts" }));
     assert.equal(f.editor.buffer(target("a.ts"))!.text, "dirty source");
+    assert.equal(await f.editor.close([target("a.ts")], async () => "discard"), false);
+    assert.equal(await f.editor.save(target("a.ts")), false);
+    await f.editor.open(target("b.ts")); f.editor.edit(target("b.ts"), "unrelated remains usable");
+    assert.equal(await f.editor.save(target("b.ts")), true);
     await f.editor.resolveOperation("move-one"); await f.editor.resolveOperation("move-one");
     assert.equal(f.memory.stats.mutations, 1); assert.equal(f.editor.buffer(target("a.ts")), undefined);
     assert.equal(f.editor.buffer(target("renamed.ts"))!.text, "dirty source");
     assert.equal((await f.client.command("loadRecovery", { clientId: f.editor.clientId })).state.drafts[0].target.path, "renamed.ts");
+  } finally { await f.dispose(); }
+});
+
+test("incompatible recovered operation evidence never rebinds equal checkout/path strings", async () => {
+  const f = await fixture();
+  try {
+    await f.editor.open(target("a.ts")); f.editor.edit(target("a.ts"), "retained"); await f.editor.flush(); f.editor.dispose();
+    const client: EditorClient = { ...f.client, async command(name, input, options) {
+      const result = await f.client.command(name, input, options);
+      if (name !== "loadRecovery") return result;
+      return { ...result, operations: [{ id: "foreign", checkout: { ...checkout, hostId: "impostor" }, kind: "move", outcome: "completed",
+        items: [{ source: "a.ts", destination: "moved.ts", outcome: "completed" }] }] } as typeof result;
+    } };
+    const editor = createEditor({ client, clientId: f.editor.clientId });
+    try {
+      await editor.load(); assert.equal(editor.buffer(target("a.ts"))!.text, "retained");
+      assert.equal(editor.buffer(target("moved.ts")), undefined);
+      assert.match(editor.getSnapshot().errors.join(" "), /identity unavailable or changed/);
+      assert.equal(editor.getSnapshot().operations[0].checkout.hostId, "impostor");
+    } finally { editor.dispose(); }
+  } finally { await f.dispose(); }
+});
+
+test("typed lookup filters history separately, deduplicates, ranks and highlights independently", async () => {
+  const f = await fixture();
+  try {
+    await f.editor.open(target("a.ts"));
+    const blank = await f.editor.lookup(checkout, ""); assert.equal(blank.matches.length, 0); assert.equal(blank.history[0].path, "a.ts");
+    const typed = await f.editor.lookup(checkout, "ats");
+    assert.equal(typed.history[0].path, "a.ts"); assert.deepEqual(typed.history[0].positions, [0, 2, 3]);
+    assert.equal(typed.matches.some(row => row.path === "a.ts"), false);
+    const nested = await f.editor.lookup(checkout, '"nested"');
+    assert.equal(nested.matches[0].path, "folder/nested.ts"); assert.deepEqual(nested.matches[0].positions, [7, 8, 9, 10, 11, 12]);
+    assert.deepEqual((await f.editor.lookup(checkout, "ignored")).matches, []);
+  } finally { await f.dispose(); }
+});
+
+test("pending commands retain newer live text and close cannot cross an unresolved Save", async () => {
+  const f = await fixture(); let received!: () => void, release!: () => void;
+  const admitted = new Promise<void>(resolve => { received = resolve; }), delayed = new Promise<void>(resolve => { release = resolve; });
+  const client: EditorClient = { ...f.client, async command(name, input, options) {
+    const result = await f.client.command(name, input, options);
+    if (name === "saveFile") { received(); await delayed; }
+    return result;
+  } };
+  const editor = createEditor({ client, clientId: "pending-save" });
+  try {
+    await editor.load(); await editor.openCheckout(checkout.root); await editor.open(target("a.ts")); editor.edit(target("a.ts"), "captured save");
+    const save = editor.save(target("a.ts")); await admitted; editor.edit(target("a.ts"), "newer live edit");
+    assert.equal(await editor.prepareQuit(async () => "discard"), false);
+    release(); assert.equal(await save, false);
+    assert.equal(editor.buffer(target("a.ts"))!.disk.text, "captured save"); assert.equal(editor.buffer(target("a.ts"))!.text, "newer live edit");
+    assert.equal((await f.client.command("loadRecovery", { clientId: editor.clientId })).state.drafts[0].text, "newer live edit");
+  } finally { release(); editor.dispose(); await f.dispose(); }
+});
+
+test("a rejected memory transfer preserves its destination instead of partially deleting it", async () => {
+  const f = await fixture();
+  try {
+    const sources = await f.editor.inspect(checkout, ["a.ts"]), replacements = await f.editor.inspect(checkout, ["b.ts"]);
+    await assert.rejects(f.client.command("mutate", { id: "invalid-transfer", clientId: "raw", checkout, kind: "copy", sources, destination: "missing/b.ts", replacements }));
+    assert.equal((await f.client.command("readFile", target("b.ts"))).text, "second");
+    assert.equal((await f.client.command("readFile", target("a.ts"))).text, "const a = 1;");
   } finally { await f.dispose(); }
 });
 

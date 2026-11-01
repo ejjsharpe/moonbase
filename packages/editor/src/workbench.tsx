@@ -52,7 +52,7 @@ function FileLookup({ controller, state, checkout, close }: { controller: Editor
       });
     }, 120);
     return () => { clearTimeout(timer); request.current++; };
-  }, [query, scopeKey, refresh, controller]);
+  }, [query, scopeKey, refresh, controller, state.discoveryRevision]);
   async function open(row = rows[index]) {
     if (busy) return;
     setBusy(true); const generation = ++request.current;
@@ -169,10 +169,17 @@ type Action = { kind: WorkspaceOperation["kind"]; paths: string[] };
 function Mutation({ controller, checkout, action, close }: { controller: EditorController; checkout: CheckoutTarget; action: Action; close: () => void }) {
   const [destination, setDestination] = useState(action.kind === "move" ? action.paths[0] ?? "" : ""), [error, setError] = useState("");
   const [replacements, setReplacements] = useState<EntryReference[] | null>(null), [sources, setSources] = useState<EntryReference[] | null>(null), [busy, setBusy] = useState(false);
+  const [operationId] = useState(() => crypto.randomUUID());
   const title = action.kind === "trash" ? "Move to Trash" : action.kind === "move" ? "Rename or move" : action.kind === "copy" ? "Copy" : action.kind === "create-file" ? "New File" : "New Folder";
   async function apply(consent = false) {
     if (busy) return; setBusy(true); setError("");
     try {
+      if (controller.getSnapshot().operations.some(operation => operation.id === operationId)) {
+        const result = await controller.resolveOperation(operationId);
+        if (result?.outcome === "completed") close();
+        else setError("Operation remains unresolved. Its original identity is retained; no effects were repeated.");
+        return;
+      }
       const captured = sources ?? await controller.inspect(checkout, action.paths); setSources(captured);
       let replace = replacements;
       if (action.kind !== "trash" && replace === null) {
@@ -181,7 +188,7 @@ function Mutation({ controller, checkout, action, close }: { controller: EditorC
         replace = collision ? await controller.inspect(checkout, [collision.path]) : []; setReplacements(replace);
       }
       if (replace?.length && !consent) return;
-      const result = await controller.mutate({ checkout, kind: action.kind, sources: captured, ...(action.kind === "trash" ? {} : { destination }), replacements: replace ?? [] });
+      const result = await controller.mutate({ id: operationId, checkout, kind: action.kind, sources: captured, ...(action.kind === "trash" ? {} : { destination }), replacements: replace ?? [] });
       if (result.outcome !== "completed") { setError(result.message ?? "Operation incomplete. Review the recorded outcome before continuing."); return; }
       if (action.kind === "create-file") await controller.open({ checkout, path: destination }, { view: "file", intent: "keep" });
       close();
@@ -298,7 +305,7 @@ export const EditorWorkbench = forwardRef<EditorWorkbenchHandle, EditorWorkbench
                   })}
                 </Tabs.List>
                 <div {...stylex.props(workbench.toolbar)}><span {...stylex.props(workbench.toolbarLabel)}>{selected.active || "No file selected"}{buffer && buffer.text !== buffer.disk.text ? " · Unsaved" : ""}</span>
-                  {target && <><label>File view <select {...stylex.props(controls.field)} value={mode} onChange={event => run(controller.open(target, { view: event.target.value as FileView }))}>
+                  {target && <><label>File view <select aria-label="File view" {...stylex.props(controls.field)} value={mode} onChange={event => run(controller.open(target, { view: event.target.value as FileView }))}>
                     <option value="file">File</option>{(["staged", "unstaged", "untracked"] as const).map(mode => <option key={mode} value={mode}>{mode}</option>)}{(buffer?.conflict || mode === "conflict") && <option value="conflict">Save conflict</option>}
                   </select></label><Button {...stylex.props(controls.button)} disabled={!buffer || buffer.saving || state.preserving} onClick={() => run(controller.save(target))}>{buffer?.pendingSave ? "Retry Save" : "Save"}</Button>
                     {selected.preview === target.path && <Button {...stylex.props(controls.button)} onClick={() => controller.keepOpen(target)}>Keep Open</Button>}</>}

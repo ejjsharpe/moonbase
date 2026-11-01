@@ -29,7 +29,7 @@ export type EditorBuffer = {
 export type CloseChoice = "save" | "discard" | "cancel";
 export type ChooseClose = (file: Readonly<EditorBuffer>) => Promise<CloseChoice>;
 export type EditorSnapshot = {
-  ready: boolean; disposed: boolean; preserving: boolean; recovery: EditorRecovery;
+  ready: boolean; disposed: boolean; preserving: boolean; discoveryRevision: number; recovery: EditorRecovery;
   buffers: readonly EditorBuffer[]; comparisons: Readonly<Record<string, Comparison>>;
   listings: Readonly<Record<string, DirectoryListing>>; git: Readonly<Record<string, GitStatus>>;
   errors: readonly string[]; operations: readonly OperationResult[];
@@ -45,6 +45,7 @@ export class EditorController {
   private recovery: EditorRecovery;
   private revision = 0;
   private ready = false;
+  private loading = false;
   private disposed = false;
   private preserving = false;
   private buffers = new Map<string, EditorBuffer>();
@@ -58,6 +59,9 @@ export class EditorController {
   private stops = new Map<string, () => void>();
   private requests = new Set<AbortController>();
   private activation = 0;
+  private discoveryRevision = 0;
+  private refreshing = new Map<string, Promise<void>>();
+  private refreshPending = new Set<string>();
   private recoveryTail: Promise<unknown> = Promise.resolve();
   private scheduled?: ReturnType<typeof setTimeout>;
   private snapshot!: EditorSnapshot;
@@ -71,7 +75,7 @@ export class EditorController {
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   getSnapshot = () => this.snapshot;
   private emit() {
-    this.snapshot = { ready: this.ready, disposed: this.disposed, preserving: this.preserving,
+    this.snapshot = { ready: this.ready, disposed: this.disposed, preserving: this.preserving, discoveryRevision: this.discoveryRevision,
       recovery: structuredClone(this.recovery), buffers: structuredClone([...this.buffers.values()]),
       comparisons: { ...this.comparisons }, listings: { ...this.listings }, git: { ...this.git },
       errors: [...this.errors], operations: [...this.operations.values()].map(value => structuredClone(value.result)) };
@@ -102,6 +106,7 @@ export class EditorController {
   }
   async load() {
     if (this.ready) return;
+    this.loading = true;
     const loaded = await this.command("loadRecovery", { clientId: this.clientId });
     if (this.disposed) return;
     if (loaded.state.clientId !== this.clientId) throw Error("Recovery belongs to another editor client.");
@@ -120,7 +125,15 @@ export class EditorController {
       try { await this.reconcileOperation(undefined, result); }
       catch (error) { this.report(error); }
     }
-    for (const checkout of this.recovery.checkouts) this.observe(checkout);
+    const selectedCheckoutId = this.recovery.selectedCheckoutId;
+    for (const checkout of this.recovery.checkouts) {
+      if (this.disposed) break;
+      this.observe(checkout);
+      const selected = this.recovery.views[checkoutKey(checkout)];
+      if (selected?.active) await this.open({ checkout, path: selected.active }, { view: selected.fileViews[selected.active] ?? "file" });
+    }
+    this.recovery.selectedCheckoutId = selectedCheckoutId;
+    this.loading = false;
     this.emit();
   }
   private observe(checkout: CheckoutTarget) {
@@ -130,6 +143,7 @@ export class EditorController {
       if (this.disposed || !sameCheckout(event.checkout, checkout)) return;
       if (event.error) this.report(event.error);
       if (event.ready) return;
+      this.discoveryRevision++;
       void this.refresh(checkout).catch(this.report);
     }, this.report));
   }
@@ -155,7 +169,7 @@ export class EditorController {
   }
   private changed() { this.emit(); this.schedule(); }
   private schedule() {
-    if (!this.ready || this.disposed || this.preserving) return;
+    if (!this.ready || this.loading || this.disposed || this.preserving) return;
     clearTimeout(this.scheduled);
     this.scheduled = setTimeout(() => { this.scheduled = undefined; void this.flush().catch(this.report); }, 150);
   }
@@ -244,6 +258,7 @@ export class EditorController {
   }
   async save(target: FileTarget, overwrite = false): Promise<boolean> {
     this.checkout(target.checkout);
+    if (this.uncertainAffects(target)) { this.report("Resolve the pending file operation before saving this file."); return false; }
     const buffer = this.buffers.get(fileKey(target));
     if (!buffer || buffer.saving) return false;
     const request = buffer.pendingSave ?? { target: structuredClone(target), clientId: this.clientId,
@@ -323,6 +338,7 @@ export class EditorController {
     this.assertReady();
     if (this.preserving || [...this.buffers.values()].some(buffer => buffer.saving || buffer.pendingSave)) return false;
     const captured = [...new Map(targets.map(target => [fileKey(target), structuredClone(target)])).values()];
+    if (captured.some(target => this.uncertainAffects(target))) { this.report("Resolve pending file operations before closing their files."); return false; }
     this.preserving = true; this.activation++; clearTimeout(this.scheduled); this.emit();
     const discarded = new Set<string>();
     try {
@@ -417,12 +433,37 @@ export class EditorController {
     return this.command("lookupFiles", { checkout, query, limit: 100,
       history: this.recovery.recentFiles.filter(item => sameCheckout(item.checkout, checkout)).map(item => item.path) });
   }
-  async refresh(checkout: CheckoutTarget) {
+  refresh(checkout: CheckoutTarget): Promise<void> {
     this.checkout(checkout);
+    const key = checkoutKey(checkout), existing = this.refreshing.get(key);
+    if (existing) { this.refreshPending.add(key); return existing; }
+    const pending = this.refreshOnce(checkout).finally(() => {
+      this.refreshing.delete(key);
+      if (this.refreshPending.delete(key) && !this.disposed && this.recovery.checkouts.some(target => sameCheckout(target, checkout)))
+        void this.refresh(checkout).catch(this.report);
+    });
+    this.refreshing.set(key, pending); return pending;
+  }
+  private async refreshOnce(checkout: CheckoutTarget) {
     const paths = ["", ...this.checkout(checkout).tree.expanded];
     await Promise.allSettled(paths.map(path => this.list(checkout, path)));
     try { this.git[checkoutKey(checkout)] = await this.command("gitStatus", { checkout }); }
     catch { /* The public command already reported the error; retained buffers stay usable. */ }
+    if (this.disposed) return;
+    const selected = this.checkout(checkout), mode = selected.fileViews[selected.active], generation = this.activation;
+    if (selected.active && mode && mode !== "file" && mode !== "conflict" && !this.preserving) {
+      const target = { checkout, path: selected.active }, key = fileKey(target);
+      try {
+        const comparison = await this.command("readComparison", { target, area: mode });
+        if (!this.disposed && generation === this.activation && selected.active === target.path && selected.fileViews[target.path] === mode) {
+          this.comparisons[key] = comparison;
+          const buffer = this.buffers.get(key);
+          if (buffer && comparison.working && buffer.text === buffer.disk.text && !buffer.pendingSave) {
+            buffer.disk = comparison.working; buffer.text = comparison.working.text;
+          }
+        }
+      } catch { /* A failed refresh retains the last comparison and current edits. */ }
+    }
     if (!this.disposed) this.emit();
   }
   async inspect(checkout: CheckoutTarget, paths: string[]) {
@@ -434,7 +475,9 @@ export class EditorController {
     if (this.preserving) throw Error("Finish the captured preservation action first.");
     const operation: WorkspaceOperation = { ...structuredClone(input), clientId: this.clientId, id: input.id ?? crypto.randomUUID() };
     if (this.operations.has(operation.id)) throw Error("Operation already submitted. Resolve its status instead of dispatching it again.");
-    if (operation.destination !== undefined) validPath(operation.destination);
+    if (operation.destination !== undefined) validPath(operation.destination, operation.kind === "import");
+    if (operation.sources.some(source => this.uncertainAffects(source.target)) || operation.destination && this.uncertainAffects({ checkout: operation.checkout, path: operation.destination }))
+      throw Error("Resolve the pending operation on these entries before applying another.");
     for (const source of [...operation.sources, ...(operation.replacements ?? [])]) {
       validPath(source.target.path);
       if (!sameCheckout(source.target.checkout, operation.checkout)) throw Error("A file operation must use one exact checkout.");
@@ -462,6 +505,14 @@ export class EditorController {
     const result = await this.command("operationStatus", { clientId: this.clientId, id });
     if (!result) { this.report("Operation status unavailable; drafts and original references retained."); return null; }
     return this.reconcileOperation(known.operation, result);
+  }
+  private uncertainAffects(target: FileTarget) {
+    return [...this.operations.values()].some(({ operation, result }) => {
+      if (result.outcome !== "uncertain" || !sameCheckout(result.checkout, target.checkout)) return false;
+      const paths = operation ? [...operation.sources.map(source => source.target.path), ...(operation.destination ? [operation.destination] : [])] :
+        result.items.flatMap(item => [item.source, ...(item.destination ? [item.destination] : [])]);
+      return !paths.length || paths.some(path => affected(target.path, path) || affected(path, target.path));
+    });
   }
   private async reconcileOperation(operation: WorkspaceOperation | undefined, result: OperationResult) {
     const known = this.operations.get(result.id);

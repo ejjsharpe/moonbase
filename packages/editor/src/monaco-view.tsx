@@ -29,7 +29,7 @@ export function MonacoView({ controller, state, target, mode }: {
     };
   }, [controller]);
   useLayoutEffect(() => {
-    for (const buffer of state.buffers) {
+    for (const buffer of state.disposed ? [] : state.buffers) {
       const key = fileKey(buffer.target);
       let entry = models.current.get(key);
       if (!entry) {
@@ -46,7 +46,7 @@ export function MonacoView({ controller, state, target, mode }: {
       }
       if (entry.model.getValue() !== buffer.text) entry.model.setValue(buffer.text);
     }
-    for (const [key, item] of models.current) if (!state.buffers.some(buffer => fileKey(buffer.target) === key)) {
+    for (const [key, item] of models.current) if (state.disposed || !state.buffers.some(buffer => fileKey(buffer.target) === key)) {
       const instance = mounted.current;
       if (instance && ("getModifiedEditor" in instance ? instance.getModifiedEditor().getModel() : instance.getModel()) === item.model) {
         instance.dispose(); mounted.current = null;
