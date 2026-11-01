@@ -150,11 +150,35 @@ test("unprintable defects reach command and watch application error boundaries",
 test("an already-aborted command is rejected before runtime acquisition or service dispatch", async () => {
   const { service, counts, runtime, client } = fixture();
   let saves = 0;
-  service.saveFile = () => Effect.sync(() => { saves++; return { kind: "saved", disk: { text: "text", version: "new" } }; });
+  service.saveFile = () => Effect.sync(() => { saves++; return { kind: "saved", disk: { text: "text", version: "new" }, recoveryChanges: [] }; });
   const abort = new AbortController(); abort.abort();
   try {
     await assert.rejects(client.command("saveFile", { target: { checkout, path: "a" }, clientId: "client", requestId: "request", text: "text", expectedVersion: "old" }, { signal: abort.signal }),
       error => error instanceof ApplicationError && error.code === "Cancelled");
     assert.equal(saves, 0); assert.equal(counts.acquired, 0);
+  } finally { await runtime.dispose(); }
+});
+
+for (const cleanup of ["ensuring", "scoped"]) test(`combined ${cleanup} failures retain uncertainty and exact target in commands and subscriptions`, async () => {
+  const { service, runtime, client } = fixture();
+  const target = { checkout, path: "a.txt" };
+  const failure = Effect.fail(new ApplicationError({ code: "Uncertain", message: "File outcome uncertain", target }));
+  const finalizer = Effect.die(Error("Cleanup also failed"));
+  const combined = cleanup === "ensuring" ? failure.pipe(Effect.ensuring(finalizer)) : Effect.scoped(Effect.gen(function* () {
+    yield* Effect.acquireRelease(Effect.void, () => finalizer);
+    return yield* failure;
+  }));
+  service.gitStatus = () => combined;
+  service.watch = () => Stream.fromEffect(combined);
+  try {
+    await assert.rejects(client.command("gitStatus", { checkout }), error => {
+      assert(error instanceof ApplicationError); assert.equal(error.code, "Uncertain");
+      assert.deepEqual(error.target, target); assert.match(error.message, /Cleanup also failed/); return true;
+    });
+    const errors: ApplicationError[] = [];
+    client.watch({ checkout, paths: [""] }, () => {}, error => { errors.push(error); });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(errors.length, 1); assert.equal(errors[0].code, "Uncertain"); assert.deepEqual(errors[0].target, target);
+    assert.match(errors[0].message, /Cleanup also failed/);
   } finally { await runtime.dispose(); }
 });
