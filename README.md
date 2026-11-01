@@ -6,6 +6,8 @@ This repository currently contains the overnight orchestration brief only. Appli
 
 The brief requires one shared Effect application command center, with focused module services and one runtime per process. The architecture and task ownership are defined in `docs/agents/prompts/OVERNIGHT.txt`.
 
+T3 Code is development tooling only. The brief excludes T3/Pocket/Codex application-code reuse, checks provenance before retaining your editor code, and keeps required notices for Pi Durable and the actual stack/dependencies.
+
 ## Start the overnight run
 
 Open this checkout as the **Moonbase** project in T3 Code, start a new chat there, and send:
