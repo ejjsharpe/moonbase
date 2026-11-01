@@ -7,7 +7,7 @@ import {
   type ElectronApplication,
   type Page,
 } from '@playwright/test';
-import { fixture, until } from '@moonbase/chat-probe/test-fixture';
+import { fixture, until } from '../../../tests/chat/tool-fixture.ts';
 import { mkdir, writeFile, readFile, appendFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
@@ -105,8 +105,26 @@ async function create(p: Page, title: string) {
   await expect(p.getByRole('heading', { name: title, exact: true })).toBeVisible();
   await expect(p.getByLabel('Message', { exact: true })).toBeEnabled();
 }
+
+const reloadOutcome = (app: ElectronApplication) =>
+  app.evaluate(
+    ({ BrowserWindow }) =>
+      new Promise<string>((resolve) => {
+        const contents = BrowserWindow.getAllWindows()[0].webContents;
+        const finish = (value: string) => {
+          contents.removeListener('will-prevent-unload', veto);
+          contents.removeListener('did-finish-load', loaded);
+          resolve(value);
+        };
+        const veto = () => finish('veto'),
+          loaded = () => finish('reload');
+        contents.once('will-prevent-unload', veto);
+        contents.once('did-finish-load', loaded);
+        contents.reload();
+      }),
+  );
 async function saved(p: Page) {
-  return p.evaluate(() => JSON.parse(localStorage.getItem('moonbase.chat-proof.v1')!));
+  return p.evaluate(() => JSON.parse(localStorage.getItem('moonbase.chat.v1')!));
 }
 async function recovery(p: Page) {
   return p
@@ -283,22 +301,7 @@ test('dirty editor/live chat, two drafts, no-resend reconnect, view close and cl
     try {
       await expect
         .poll(async () => {
-          const outcome = await app.evaluate(
-            ({ BrowserWindow }) =>
-              new Promise<string>((resolve) => {
-                const contents = BrowserWindow.getAllWindows()[0].webContents;
-                const finish = (value: string) => {
-                  contents.removeListener('will-prevent-unload', veto);
-                  contents.removeListener('did-finish-load', loaded);
-                  resolve(value);
-                };
-                const veto = () => finish('veto'),
-                  loaded = () => finish('reload');
-                contents.once('will-prevent-unload', veto);
-                contents.once('did-finish-load', loaded);
-                contents.reload();
-              }),
-          );
+          const outcome = await reloadOutcome(app);
           reloadOutcomes.push(outcome);
           return outcome;
         })
@@ -406,9 +409,9 @@ for (const change of ['external', 'write-failure'])
       await connect(p);
       await create(p, 'Preservation fence');
       await p.getByLabel('Message', { exact: true }).fill('preserved chat draft');
-      const prior = await p.evaluate(() => localStorage.getItem('moonbase.chat-proof.v1'));
+      const prior = await p.evaluate(() => localStorage.getItem('moonbase.chat.v1'));
       await p.evaluate((change) => {
-        if (change === 'external') localStorage.setItem('moonbase.chat-proof.v1', 'external bytes');
+        if (change === 'external') localStorage.setItem('moonbase.chat.v1', 'external bytes');
         else
           Storage.prototype.setItem = () => {
             throw new DOMException('full controlled storage', 'QuotaExceededError');
@@ -427,7 +430,7 @@ for (const change of ['external', 'write-failure'])
       await expect
         .poll(async () => (await recovery(p)).state.drafts[0]?.text)
         .toBe('local dirty draft');
-      const bytes = await p.evaluate(() => localStorage.getItem('moonbase.chat-proof.v1'));
+      const bytes = await p.evaluate(() => localStorage.getItem('moonbase.chat.v1'));
       expect(bytes).toBe(change === 'external' ? 'external bytes' : prior);
       expect(
         (await f.stats()).commands.filter((v) => ['sendChat', 'stopChat'].includes(v)),
@@ -769,3 +772,337 @@ test('composed IPC rejects foreign frames/hosts and extra/prototype operations b
     await close(f);
   }
 });
+
+for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
+  test(`${packaged ? 'packaged' : 'source'} ${operation}: committed reply lost on Disconnect retains original identity and never resends`, async () => {
+    await mkdir(output, { recursive: true });
+    const f = await fixture(true);
+    let current: ElectronApplication | undefined;
+    try {
+      const { app, page } = await launch(f, 'generation-data');
+      current = app;
+      await connect(page);
+      await expect(page.getByText('Verified host.', { exact: false })).toBeVisible();
+      if (operation !== 'createChat') {
+        await page.getByLabel('New saved chat').fill('Exact generation');
+        await page.getByRole('button', { name: 'Create chat', exact: true }).click();
+        await expect(
+          page.getByRole('heading', { name: 'Exact generation', exact: true }),
+        ).toBeVisible();
+      }
+      if (operation === 'stopChat') {
+        await page
+          .getByLabel('Message', { exact: true })
+          .fill('One admitted task before exact Stop');
+        await page.getByRole('button', { name: 'Send message', exact: true }).click();
+        await expect(page.getByRole('article', { name: 'Live response' })).toContainText(
+          'Controlled remote tool activity',
+        );
+      }
+      await f.holdReply(operation);
+      if (operation === 'createChat') {
+        await page.getByLabel('New saved chat').fill('Captured creation');
+        await page.getByRole('button', { name: 'Create chat', exact: true }).click();
+      } else if (operation === 'sendChat') {
+        await page
+          .getByLabel('Message', { exact: true })
+          .fill('Captured text at original generation');
+        await page.getByRole('button', { name: 'Send message', exact: true }).click();
+      } else await page.getByRole('button', { name: 'Stop', exact: true }).click();
+      await until(f.stats, (s) => s.heldReplies.includes(operation));
+      const retained = await page.evaluate(
+        (op) =>
+          JSON.parse(localStorage.getItem('moonbase.chat.v1')!).pending.find(
+            (p: { operation: string }) => p.operation === op,
+          ),
+        operation,
+      );
+      expect(retained.operation).toBe(operation);
+      const originalConnection = await page.evaluate(
+        async () =>
+          await window.moonbaseChat.call('connection', 'getConnection', {}, crypto.randomUUID()),
+      );
+      await page.getByRole('button', { name: 'Disconnect', exact: true }).click();
+      await expect(page.getByRole('button', { name: 'Connect', exact: true })).toBeEnabled();
+      await expect(page.getByRole('region', { name: 'Retained commands' })).toContainText(
+        'Uncertain',
+      );
+      const afterLoss = await page.evaluate(
+        (op) =>
+          JSON.parse(localStorage.getItem('moonbase.chat.v1')!).pending.find(
+            (p: { operation: string }) => p.operation === op,
+          ),
+        operation,
+      );
+      expect(afterLoss.input).toEqual(retained.input);
+      if (operation === 'sendChat')
+        await page
+          .getByLabel('Message', { exact: true })
+          .fill('Newer unsent edit after disconnect');
+      await f.releaseReply();
+      await expect.poll(() => reloadOutcome(app)).toBe('reload');
+      await connect(page);
+      await expect(page.getByRole('button', { name: 'Disconnect', exact: true })).toBeEnabled();
+      await expect(page.getByRole('main').getByText(f.cwd, { exact: false })).toBeVisible();
+      if (operation === 'sendChat') {
+        await expect(page.getByRole('region', { name: 'Retained commands' })).toHaveCount(0);
+        await expect(page.getByLabel('Message', { exact: true })).toHaveValue(
+          'Newer unsent edit after disconnect',
+        );
+      } else {
+        const region = page.getByRole('region', { name: 'Retained commands' });
+        await region.locator('summary').click();
+        await region
+          .getByRole('button', {
+            name: operation === 'createChat' ? 'Retry original Create' : 'Retry original Stop',
+            exact: true,
+          })
+          .click();
+        await expect(region).toHaveCount(0);
+      }
+      const stats = await f.stats(),
+        mutations = stats.mutations.filter((m) => m.operation === operation);
+      expect(mutations.length).toBe(operation === 'sendChat' ? 1 : 2);
+      for (const call of mutations) expect(call.input).toEqual(retained.input);
+      if (operation === 'createChat') {
+        expect(mutations[1].result).toEqual(mutations[0].result);
+        expect(stats.calls).toBe(0);
+      } else {
+        expect(stats.commands.filter((c) => c === 'sendChat')).toHaveLength(1);
+        expect(stats.tools).toBe(1);
+      }
+      const latestConnection = await page.evaluate(
+        async () =>
+          await window.moonbaseChat.call('connection', 'getConnection', {}, crypto.randomUUID()),
+      );
+      expect(latestConnection.ok && originalConnection.ok && latestConnection.value).not.toEqual(
+        originalConnection.ok && originalConnection.value,
+      );
+      await writeFile(
+        join(output, `${packaged ? 'packaged' : 'source'}-${operation}-generation.json`),
+        JSON.stringify(
+          {
+            operation,
+            retainedInput: retained.input,
+            lossMessage: afterLoss.message,
+            mutationInputs: mutations.map((m) => m.input),
+            matchingReceipt:
+              operation === 'createChat'
+                ? JSON.stringify(mutations[0].result) === JSON.stringify(mutations[1].result)
+                : undefined,
+            sendDispatches: stats.commands.filter((c) => c === 'sendChat').length,
+            tools: stats.tools,
+          },
+          null,
+          2,
+        ),
+      );
+      await stop(app);
+      current = undefined;
+    } finally {
+      try {
+        if (current) await stop(current, true);
+      } finally {
+        await close(f);
+      }
+    }
+  });
+
+test(`${packaged ? 'packaged' : 'source'} Create readiness: repeated reload/fill/refresh records the disabled-button symptom without bypass`, async () => {
+  await mkdir(output, { recursive: true });
+  const f = await fixture(false);
+  let current: ElectronApplication | undefined;
+  const observations: unknown[] = [];
+  try {
+    const { app, page } = await launch(f, 'create-readiness');
+    current = app;
+    await connect(page);
+    await expect(page.getByText('Verified host.', { exact: false })).toBeVisible();
+    for (let i = 0; i < 12; i++) {
+      if (i) {
+        await expect
+          .poll(async () => {
+            const outcome = await reloadOutcome(app);
+            observations.push({ iteration: i, reload: outcome });
+            return outcome;
+          })
+          .toBe('reload');
+        await tab(page, 'Chat').click();
+        await expect(page.getByText('Verified host.', { exact: false })).toBeVisible();
+      }
+      await page.evaluate(() => {
+        const events: { type: string; value: string; trusted: boolean; visibility: string }[] = [];
+        (window as unknown as { createEvents: unknown }).createEvents = events;
+        for (const type of ['input', 'change'])
+          document.getElementById('chat-title')!.addEventListener(type, (e) => {
+            events.push({
+              type: e.type,
+              value: (e.target as HTMLInputElement).value,
+              trusted: e.isTrusted,
+              visibility: document.visibilityState,
+            });
+          });
+      });
+      const title = 'Readiness ' + i;
+      await page.getByLabel('New saved chat').fill(title);
+      if (i % 3 === 0) await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+      await expect(page.getByLabel('New saved chat')).toHaveValue(title);
+      await expect(page.getByRole('button', { name: 'Create chat', exact: true })).toBeEnabled({
+        timeout: 2000,
+      });
+      observations.push(
+        await page.evaluate(
+          (i) => ({
+            iteration: i,
+            title: (document.getElementById('chat-title') as HTMLInputElement).value,
+            disabled: Array.from(document.querySelectorAll('button')).find(
+              (b) => b.textContent === 'Create chat',
+            )?.disabled,
+            events: (window as unknown as { createEvents: unknown }).createEvents,
+            visibility: document.visibilityState,
+          }),
+          i,
+        ),
+      );
+      await page.getByRole('button', { name: 'Create chat', exact: true }).click();
+      await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();
+    }
+    expect((await f.stats()).commands.filter((c) => c === 'createChat')).toHaveLength(12);
+    expect((await f.stats()).calls).toBe(0);
+    await stop(app);
+    current = undefined;
+  } catch (error) {
+    const page = current?.windows()[0];
+    if (page && !page.isClosed()) {
+      await page.screenshot({
+        path: join(output, `${packaged ? 'packaged' : 'source'}-create-readiness-failure.png`),
+      });
+      observations.push(
+        await page.evaluate(() => ({
+          body: document.body.innerText,
+          title: (document.getElementById('chat-title') as HTMLInputElement)?.value,
+          events: (window as unknown as { createEvents: unknown }).createEvents,
+        })),
+      );
+    }
+    throw error;
+  } finally {
+    await writeFile(
+      join(output, `${packaged ? 'packaged' : 'source'}-create-readiness.json`),
+      JSON.stringify(observations, null, 2),
+    );
+    if (current) await stop(current, true);
+    await close(f);
+  }
+});
+
+for (const failsWrite of [false, true])
+  test(`R1 ${packaged ? 'packaged' : 'source'} reserved Send retry must veto ${failsWrite ? 'failing writes during query' : 'a changed snapshot'} before production admission`, async () => {
+    await mkdir(output, { recursive: true });
+    const f = await fixture(true);
+    let current: ElectronApplication | undefined;
+    try {
+      const { app, page } = await launch(f, 'retry-preservation');
+      current = app;
+      await connect(page);
+      await expect(page.getByText('Verified host.', { exact: false })).toBeVisible();
+      await page.getByLabel('New saved chat').fill('Retry preservation');
+      await page.getByRole('button', { name: 'Create chat', exact: true }).click();
+      await expect(
+        page.getByRole('heading', { name: 'Retry preservation', exact: true }),
+      ).toBeVisible();
+      await page
+        .getByLabel('Message', { exact: true })
+        .fill('First admitted input keeps chat busy');
+      await page.getByRole('button', { name: 'Send message', exact: true }).click();
+      await expect(page.getByRole('article', { name: 'Live response' })).toContainText(
+        'Controlled remote tool activity',
+      );
+      await page.getByLabel('Message', { exact: true }).fill('Captured second busy intent');
+      await page.getByRole('button', { name: 'Send message', exact: true }).click();
+      const region = page.getByRole('region', { name: 'Retained commands' });
+      await expect(region).toContainText('Conflict');
+      const pending = await page.evaluate(
+        () => JSON.parse(localStorage.getItem('moonbase.chat.v1')!).pending[0],
+      );
+      await page.getByLabel('Message', { exact: true }).fill('Newer live draft remains');
+      f.release();
+      await expect(page.getByRole('article', { name: 'Live response' })).toHaveCount(0);
+      const reserved = await page.evaluate(
+        (p) =>
+          window.moonbaseChat.call(
+            'chat',
+            'getChatSend',
+            { target: p.input.target, requestId: p.input.requestId },
+            crypto.randomUUID(),
+          ),
+        pending,
+      );
+      expect(reserved.ok && (reserved.value as { admission: string }).admission).toBe('reserved');
+      const replacement = failsWrite
+        ? await page.evaluate(() => localStorage.getItem('moonbase.chat.v1'))
+        : await page.evaluate(() => {
+            const key = 'moonbase.chat.v1',
+              v = JSON.parse(localStorage.getItem(key)!);
+            v.pending = [];
+            v.drafts = [{ target: v.selected, text: 'Newer external publication' }];
+            const raw = JSON.stringify(v);
+            localStorage.setItem(key, raw);
+            return raw;
+          });
+      if (failsWrite) await f.holdReply('getChatSend');
+      const before = await f.stats();
+      await region.locator('summary').click();
+      await region.getByRole('button', { name: 'Retry original Send', exact: true }).click();
+      if (failsWrite) {
+        await until(f.stats, (s) => s.heldReplies.includes('getChatSend'));
+        await page.evaluate(() => {
+          Storage.prototype.setItem = function () {
+            throw new DOMException('Controlled full storage', 'QuotaExceededError');
+          };
+        });
+        await f.releaseReply();
+      }
+      await expect(page.getByRole('alert').first()).toContainText('preservation failed');
+      await region.getByRole('button', { name: 'Query outcome', exact: true }).click();
+      const after = await f.stats(),
+        stored = await page.evaluate(() => localStorage.getItem('moonbase.chat.v1')),
+        receipt = await page.evaluate(
+          (p) =>
+            window.moonbaseChat.call(
+              'chat',
+              'getChatSend',
+              { target: p.input.target, requestId: p.input.requestId },
+              crypto.randomUUID(),
+            ),
+          pending,
+        );
+      await page.screenshot({
+        path: join(
+          output,
+          `r1-${packaged ? 'packaged' : 'source'}-retry-veto-${failsWrite ? 'write-fails' : 'changed'}.png`,
+        ),
+      });
+      await writeFile(
+        join(
+          output,
+          `r1-${packaged ? 'packaged' : 'source'}-retry-veto-${failsWrite ? 'write-fails' : 'changed'}.json`,
+        ),
+        JSON.stringify({ pending, reserved, receipt, before, after, replacement, stored }, null, 2),
+      );
+      expect(stored).toBe(replacement);
+      await expect(page.getByLabel('Message', { exact: true })).toHaveValue(
+        'Newer live draft remains',
+      );
+      expect(after.commands.filter((c) => c === 'sendChat').length).toBe(
+        before.commands.filter((c) => c === 'sendChat').length,
+      );
+      expect(receipt.ok && (receipt.value as { admission: string }).admission).toBe('reserved');
+    } finally {
+      try {
+        if (current) await stop(current, true);
+      } finally {
+        await close(f);
+      }
+    }
+  });

@@ -4,7 +4,7 @@ const output = new URL('../dist/', import.meta.url);
 const inputs = JSON.parse(await readFile(new URL('renderer/module-inputs.json', output), 'utf8'));
 assert.deepEqual(
   inputs.filter((p) =>
-    /(?:^|\/)node_modules\/(?:electron|effect|@moonbase\/(?:workspace|pi-runtime|ssh|connection))\/|packages\/(?:workspace|pi-runtime|ssh|connection)\/|apps\/chat-probe\/src\/(?:main|config|session|preload)\.ts|@earendil-works|pi-ai|pi-durable|node:sqlite|source-snapshot|node:/.test(
+    /(?:^|\/)node_modules\/(?:electron|effect|@moonbase\/(?:workspace|pi-runtime|ssh|connection))\/|packages\/(?:workspace|pi-runtime|ssh|connection)\/|apps\/desktop\/src\/(?:main|session|preload|chat-preload|chat\/(?:config|session))\.ts|@earendil-works|pi-ai|pi-durable|node:sqlite|source-snapshot|node:/.test(
       p,
     ),
   ),
@@ -13,8 +13,8 @@ assert.deepEqual(
 );
 assert(inputs.some((p) => p.endsWith('application/src/client.ts')));
 assert(inputs.some((p) => p.includes('monaco-editor')));
-assert(inputs.some((p) => p.endsWith('chat-probe/src/ui.tsx')));
-assert(inputs.some((p) => p.endsWith('chat-probe/src/controller.ts')));
+assert(inputs.some((p) => p.endsWith('desktop/src/chat/view.tsx')));
+assert(inputs.some((p) => p.endsWith('chat/src/controller.ts')));
 const assets = await readdir(new URL('renderer/assets/', output));
 assert.equal(
   assets.filter((name) => /^(editor|json|css|html|ts)\.worker.*\.js$/.test(name)).length,

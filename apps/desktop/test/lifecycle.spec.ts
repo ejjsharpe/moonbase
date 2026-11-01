@@ -1,7 +1,7 @@
 import { prepareCrashRecovery, recoverCrashedWorkbench } from './editor-regressions.ts';
 import type { RecoveryLoad } from '@moonbase/application/client';
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
-import { fixture, until } from '@moonbase/chat-probe/test-fixture';
+import { fixture, until } from '../../../tests/chat/tool-fixture.ts';
 import { join, resolve } from 'node:path';
 import { mkdir, writeFile, appendFile, readFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
@@ -91,9 +91,7 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
       await p.getByRole('button', { name: 'Send message', exact: true }).click();
       await until(f.stats, (s) => s.tools === 1);
       await p.getByLabel('Message', { exact: true }).fill('newer chat draft across reload');
-      const state = await p.evaluate(() =>
-        JSON.parse(localStorage.getItem('moonbase.chat-proof.v1')!),
-      );
+      const state = await p.evaluate(() => JSON.parse(localStorage.getItem('moonbase.chat.v1')!));
       const connection = await p.evaluate(() =>
         window.moonbaseChat.call('connection', 'getConnection', {}, crypto.randomUUID()),
       );
@@ -126,7 +124,7 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
       if (veto) {
         if (mode === 'veto')
           await p.evaluate(() =>
-            localStorage.setItem('moonbase.chat-proof.v1', 'controlled external replacement'),
+            localStorage.setItem('moonbase.chat.v1', 'controlled external replacement'),
           );
         await p.getByLabel('Message', { exact: true }).fill('newer unpreserved live draft');
       } else {
@@ -166,7 +164,7 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
             BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(`(async () => {
           if (!document.querySelector('[aria-label="a.ts editor"]')) return null;
           const r = await window.moonbase.call("command", { operation: "loadRecovery", input: { clientId: window.moonbase.clientId } }, crypto.randomUUID());
-          return { recovery: r, saved: JSON.parse(localStorage.getItem("moonbase.chat-proof.v1")), connection: await window.moonbaseChat.call("connection", "getConnection", {}, crypto.randomUUID()) };
+          return { recovery: r, saved: JSON.parse(localStorage.getItem("moonbase.chat.v1")), connection: await window.moonbaseChat.call("connection", "getConnection", {}, crypto.randomUUID()) };
         })()`),
           );
         const restored = (await until(read, Boolean)) as {

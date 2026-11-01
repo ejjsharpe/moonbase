@@ -4,20 +4,10 @@ import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
 import { workbench } from '@moonbase/ui/workbench';
 import { colors, layout, radius, space, type } from '@moonbase/ui/tokens.stylex';
-import type { ChatClient, ChatEntry, ChatSession } from '@moonbase/application/chat-client';
-import type { ConnectionClient } from '@moonbase/application/connection-client';
-import { ChatProofController, type DraftStorage } from './controller.ts';
-export { ChatProofController } from './controller.ts';
-export type { ChatProofState, Pending, DraftStorage } from './controller.ts';
-
-export type ChatProofProps = {
-  chat: ChatClient;
-  connection: ConnectionClient;
-  context: ChatSession;
-  storage: DraftStorage;
-};
+import type { ChatEntry } from '@moonbase/application/chat-client';
+import type { ChatController } from '@moonbase/chat';
 /** The consumer owns the clients/runtime and controller lifetime; this view installs no capabilities. */
-export function ChatProof({ controller }: { controller: ChatProofController }) {
+export function ChatView({ controller }: { controller: ChatController }) {
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot),
     [title, setTitle] = useState('');
   const connected = state.connection?.state === 'connected',
@@ -394,8 +384,7 @@ export function ChatProof({ controller }: { controller: ChatProofController }) {
         </main>
       </div>
       <footer {...stylex.props(controls.status)}>
-        Chat proof · human acceptance pending · Closing a view or quitting does not Stop remote
-        work.
+        Chat · human acceptance pending · Closing a view or quitting does not Stop remote work.
       </footer>
     </div>
   );
@@ -418,9 +407,6 @@ function Entry({ entry: e }: { entry: ChatEntry }) {
       )}
     </article>
   );
-}
-export function createChatProof(props: ChatProofProps) {
-  return new ChatProofController(props.chat, props.connection, props.context, props.storage);
 }
 const styles = stylex.create({
   page: { fontFamily: type.sans },

@@ -1,5 +1,5 @@
 import { test, expect, _electron as electron } from '@playwright/test';
-import { fixture } from '@moonbase/chat-probe/test-fixture';
+import { fixture } from '../../../tests/chat/tool-fixture.ts';
 import { mkdtempSync, realpathSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';

@@ -27,7 +27,7 @@ Run `bun run test:chat-integration` under the qualified Node 26.13 baseline. The
 
 Every test disposes all client roots and the separate host, checks recorded forwarding PIDs are absent and ports can rebind, and restores fixture environment variables. The controlled forward uses real TCP/children but supplies synthetic SSH configuration: this is **controlled transport**, not a real SSH handshake/host-key/agent/ProxyJump qualification. Those independent source cases live in PR #9; no real remote test host was supplied.
 
-`host.mjs` and `forward.mjs` are test-only first-party fixtures, not product transports or runtime assets. The response-drop parser is bounded and only arms an explicit fixture fault. No feature test helper/private implementation is imported, no transcript store or scheduler is added, and no fixture key appears in argv/logs/public output.
+`host.mjs`, `tool-host.mjs`, the fixture wrappers and `forward.mjs` are test-only first-party fixtures, not product transports or runtime assets. The response-drop parser is bounded and only arms an explicit fixture fault. No feature test helper/private implementation is imported, no transcript store or scheduler is added, and no fixture key appears in argv/logs/public output.
 
 ## Validation at this integration
 
@@ -37,7 +37,7 @@ Every test disposes all client roots and the separate host, checks recorded forw
 - A static esbuild audit of the public client-exports entry records **260 inputs / 535,926 bytes**, including application runtime client, RemoteChatLive and SshLive. It excludes editor/workspace, Pi engine/server/CLI, Pi/Chord/provider SDK implementations, React/Electron and reference source. The host is a separate executable fixture, not part of that client graph. This is no claim about the future chat renderer or packaged application. This re-export entry differs from the original composition audit (260 inputs / 552,475 bytes), so emitted byte counts are not a size-regression comparison. Full input list: `/tmp/moonbase-chat-generation-client-graph.json`.
 - Initial harness checks were corrected before final qualification: ES2024 source-consumer typing, canonical temporary cwd, documented stale-generation Conflict, and normal startup/health `getChatHost` reads. No module guarantee or implementation was weakened to match the fixture.
 
-The next stage is the independently useful React/StyleX/Base UI chat proof. This integration has no UI and establishes no real provider/SSH, packaged/native, optional-engine, physical-durability or human acceptance. Pi host distribution notices remain a separate gate; the coordinator's pinned upstream notice/source-correspondence research does not qualify a shipped transitive graph.
+The shared [headless chat controller](../../packages/chat/README.md) uses `tool-fixture.ts` and `tool-host.mjs` for protocol checks and desktop composition tests. The tool host adds controlled streamed output; `host.mjs` remains the separate backend integration host. This integration has no UI and establishes no real provider/SSH, packaged/native, optional-engine, physical-durability or human acceptance. Pi host distribution notices remain a separate gate; the coordinator's pinned upstream notice/source-correspondence research does not qualify a shipped transitive graph.
 
 ## Independent review checkpoints
 

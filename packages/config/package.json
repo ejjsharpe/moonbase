@@ -19,6 +19,9 @@
           "{workspaceRoot}/oxfmt.config.mts",
           "{workspaceRoot}/scripts/check-foundation.mjs",
           "{workspaceRoot}/packages/application/src/**/*",
+          "{workspaceRoot}/packages/application/package.json",
+          "{workspaceRoot}/packages/chat/src/**/*",
+          "{workspaceRoot}/packages/chat/package.json",
           {
             "externalDependencies": [
               "oxlint",

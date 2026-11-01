@@ -1,11 +1,11 @@
-import { open, realpath, mkdir } from 'node:fs/promises';
+import { open } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import type { SshConfiguration } from '@moonbase/ssh';
 import type { ChatSession } from '@moonbase/application/chat-client';
 import { fields, record, requestId, invalid } from './wire.ts';
-export type ProofConfiguration = { ssh: SshConfiguration; context: ChatSession };
-export async function readConfiguration(path: string | undefined): Promise<ProofConfiguration> {
+export type ChatConfiguration = { ssh: SshConfiguration; context: ChatSession };
+export async function readConfiguration(path: string | undefined): Promise<ChatConfiguration> {
   if (!path || !isAbsolute(path))
     throw Error('Set MOONBASE_CHAT_CONFIG to an absolute private configuration file.');
   const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -63,10 +63,4 @@ export async function readConfiguration(path: string | undefined): Promise<Proof
   } finally {
     await file.close();
   }
-}
-export async function dataDirectory(path: string | undefined) {
-  if (!path || !isAbsolute(path))
-    throw Error('Set MOONBASE_CHAT_DATA to an explicit new chat-proof user-data directory.');
-  await mkdir(path, { recursive: true, mode: 0o700 });
-  return realpath(path);
 }

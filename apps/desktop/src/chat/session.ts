@@ -13,7 +13,7 @@ import {
 } from './wire.ts';
 
 /** A window's bounded IPC waits and observations; commands still enter shared application handlers. */
-export class ProofSession {
+export class ChatIpcSession {
   private work = new Map<string, () => void>();
   private chat: ChatClient;
   private connection: ConnectionClient;

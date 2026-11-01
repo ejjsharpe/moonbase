@@ -29,14 +29,14 @@ import { channels, errorDTO, keys, record, requestId } from './wire.ts';
 
 import { RemoteChatLive } from '@moonbase/pi-runtime/remote';
 import { SshLive } from '@moonbase/ssh';
-import { readConfiguration } from '@moonbase/chat-probe/native-config';
-import { ProofSession } from '@moonbase/chat-probe/native-session';
+import { readConfiguration } from './chat/config.ts';
+import { ChatIpcSession } from './chat/session.ts';
 import {
   channels as chatChannels,
   record as chatRecord,
   fields,
   errorDTO as chatError,
-} from '@moonbase/chat-probe/bridge';
+} from './chat/wire.ts';
 
 const directory = fileURLToPath(new URL('.', import.meta.url));
 
@@ -235,7 +235,7 @@ async function main() {
   });
   const chatSession =
     chatConfiguration && chat && connection
-      ? new ProofSession(chat, connection, chatConfiguration.context, (id, result) => {
+      ? new ChatIpcSession(chat, connection, chatConfiguration.context, (id, result) => {
           if (!window.isDestroyed()) window.webContents.send(chatChannels.event, id, result);
         })
       : null;

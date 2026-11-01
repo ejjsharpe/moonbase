@@ -24,8 +24,11 @@ type Saved = {
   drafts: { target: ChatTarget; text: string }[];
   pending: Pending[];
 };
-export type DraftStorage = Pick<Storage, 'getItem' | 'setItem'>;
-export type ChatProofState = {
+export interface DraftStorage {
+  read(): string | null;
+  write(value: string): void;
+}
+export type ChatState = {
   connection: ConnectionSnapshot | null;
   host: ChatHostConfiguration | null;
   chats: ChatSummary[];
@@ -41,7 +44,6 @@ export type ChatProofState = {
   storageError: string | null;
   notice: string;
 };
-const key = 'moonbase.chat-proof.v1';
 const sameHost = (a: ChatSession['host'], b: ChatSession['host']) =>
   a.hostId === b.hostId && a.storeId === b.storeId;
 const sameSession = (a: ChatSession, b: ChatSession) =>
@@ -88,7 +90,7 @@ function validate(v: unknown, s: ChatSession): asserts v is Saved {
     v.pending.length > 16
   )
     throw Error(
-      'Saved drafts have an incompatible context or format. Preserve the existing chat-proof data; use its original host/store/actor.',
+      'Saved drafts have an incompatible context or format. Preserve the existing chat data; use its original host/store/actor.',
     );
   const drafts = new Set<string>(),
     requests = new Set<string>();
@@ -146,10 +148,10 @@ function validate(v: unknown, s: ChatSession): asserts v is Saved {
   }
 }
 /** Ordinary browser state only: drafts/immutable command inputs, never execution or transcript authority. */
-export class ChatProofController {
+export class ChatController {
   private saved: Saved;
   private raw: string | null = null;
-  private state: ChatProofState;
+  private state: ChatState;
   private listeners = new Set<() => void>();
   private stopConnection?: () => void;
   private stopChat?: () => void;
@@ -184,10 +186,10 @@ export class ChatProofController {
     };
     let storageError: string | null = null;
     try {
-      this.raw = storage.getItem(key);
+      this.raw = storage.read();
       if (this.raw !== null) {
         if (bytes(this.raw) > 2 * 1024 * 1024)
-          throw Error('Saved chat-proof data exceeds its bound. Preserve it for recovery.');
+          throw Error('Saved chat data exceeds its bound. Preserve it for recovery.');
         const v: unknown = JSON.parse(this.raw);
         validate(v, context);
         this.saved = v;
@@ -222,7 +224,7 @@ export class ChatProofController {
       this.listeners.delete(listener);
     };
   };
-  private update(change: Partial<ChatProofState>) {
+  private update(change: Partial<ChatState>) {
     if (this.closed) return;
     this.state = { ...this.state, ...change };
     for (const f of this.listeners) f();
@@ -235,11 +237,11 @@ export class ChatProofController {
     validate(next, this.context);
     const raw = JSON.stringify(next);
     try {
-      if (this.storage.getItem(key) !== this.raw)
+      if (this.storage.read() !== this.raw)
         throw Error(
           'Draft storage changed in another client. Reload to preserve both versions before sending.',
         );
-      this.storage.setItem(key, raw);
+      this.storage.write(raw);
       this.raw = raw;
       this.saved = next;
       this.update({ selected: next.selected, draft: this.draft(), pending: next.pending });
@@ -323,7 +325,7 @@ export class ChatProofController {
       if (!sameSession(host, this.context))
         throw new ApplicationError({
           code: 'Incompatible',
-          message: 'Host actor does not match the configured proof context.',
+          message: 'Host actor does not match the configured chat context.',
         });
       const page = await this.chat.command('listChats', { session: this.context });
       if (epoch !== this.epoch || this.closed) return;

@@ -32,7 +32,7 @@ export type CleanupReport = {
   reboundPorts: number[];
 };
 export async function controlledHostFixture(hostScript: URL, hold = false) {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-chat-proof-'))),
+  const directory = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-chat-test-'))),
     cwd = join(directory, 'remote-folder');
   await mkdir(cwd);
   const session = {
@@ -124,7 +124,7 @@ export async function controlledHostFixture(hostScript: URL, hold = false) {
   }
   function profile(expected = session.host) {
     return {
-      id: 'proof',
+      id: 'controlled-chat',
       label: 'Controlled remote host',
       destination: 'controlled',
       remotePort: Number(new URL(origin).port),

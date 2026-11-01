@@ -51,6 +51,9 @@
     "@moonbase/pi-runtime": "workspace:*",
     "oxlint": "1.90.0",
     "oxfmt": "0.75.0",
-    "@moonbase/config": "workspace:*"
+    "@moonbase/config": "workspace:*",
+    "@moonbase/chat": "workspace:*",
+    "@earendil-works/pi-durable": "1.4.0",
+    "typebox": "1.3.27"
   }
 }

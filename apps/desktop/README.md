@@ -27,7 +27,7 @@ MOONBASE_USER_DATA="$(mktemp -d -t moonbase-packaged)" \
   apps/desktop/release/mac-arm64/Moonbase.app/Contents/MacOS/Moonbase
 ```
 
-The demonstrated package is Apple Silicon. Electron-builder uses `release/mac` for an Intel build; Intel execution is unqualified here. Builds require a compiler; the generated app uses its bundled Electron/Node, native helper, standalone rg and system Git/plutil. The packaged proof starts with `PATH=/usr/bin:/bin` and no provider environment. Signing, notarization and distribution are not performed; the bundle still uses Electron's default icon.
+The demonstrated package is Apple Silicon. Electron-builder uses `release/mac` for an Intel build; Intel execution is unqualified here. Builds require a compiler; the generated app uses its bundled Electron/Node, native helper, standalone rg and system Git/plutil. The packaged check starts with `PATH=/usr/bin:/bin` and no provider environment. Signing, notarization and distribution are not performed; the bundle still uses Electron's default icon.
 
 ## Composition and authority
 
@@ -35,12 +35,12 @@ The demonstrated package is Apple Silicon. Electron-builder uses `release/mac` f
 Electron main: one runtime
   WorkspaceLive → makeEditorClient + shared WorkspaceNative
   optional RemoteChatLive + SshLive → makeChatClient + makeConnectionClient
-  owned main-frame/document → EditorSession / public ProofSession
+  owned main-frame/document → EditorSession / ChatIpcSession
     sandboxed preload → public browser clients
-      mounted EditorWorkbench / ChatProof (Base UI view tabs)
+      mounted EditorWorkbench / ChatView (Base UI view tabs)
 ```
 
-Only public application/editor/workspace/UI and registered chat adapters are consumed. The renderer imports chat UI/controller/bridge only; privileged native configuration/session and remote/SSH layers stay in main. Main supplies absolute packaged helper/rg paths, acquires the service graph once and disposes it after chat preservation, the editor Save/Discard/Cancel gate, and a second preservation of the latest chat state. A chat storage veto precedes destructive editor choices. Successful Saves and confirmed Discards remain facts if another gate later vetoes Quit. The renderer graph has no Node, filesystem, workspace, Effect runtime, provider or remote implementation.
+Only public application/chat/editor/workspace/UI and registered chat adapters are consumed. The renderer imports the desktop ChatView/bridge and public `@moonbase/chat` controller; privileged native configuration/session and remote/SSH layers stay in main. Main supplies absolute packaged helper/rg paths, acquires the service graph once and disposes it after chat preservation, the editor Save/Discard/Cancel gate, and a second preservation of the latest chat state. A chat storage veto precedes destructive editor choices. Successful Saves and confirmed Discards remain facts if another gate later vetoes Quit. The renderer graph has no Node, filesystem, workspace, Effect runtime, provider or remote implementation.
 
 `EditorSession` is the local transport boundary, not another feature runtime. It validates command/envelope names, bounded unknown input, stable caller ownership, observed operation origin and exact approved checkout identity. The workspace remains the path/schema/domain authority. Native picker approval is required for a new root; arbitrary renderer strings grant none. Captured picker, File-backed drop and consented clipboard files become scoped single-use `WorkspaceNative` tokens. No raw-path import method or generic IPC channel is exposed to page code. Picker, clipboard and drop enter the same public `EditorWorkbenchHandle.importFiles` destination/replacement flow.
 
@@ -66,7 +66,7 @@ Build-generated resources/notices live only in ignored `dist`/`release`. The wor
 PENDING: independent app review/hosted checks, including an unexplained initial rapid Open→Find dismissal (cause remains unqualified); real OS directory-picker/clipboard/drag gestures, Finder Put Back, signing/notarization/distribution, VoiceOver/full accessibility, physical full-volume/power-loss durability, performance qualification and human visual/product acceptance. Controlled fixtures and unsigned local execution do not establish those gates.
 
 
-## Optional remote chat and independent proofs
+## Optional remote chat
 
 ```sh
 MOONBASE_USER_DATA="$(mktemp -d -t moonbase-composed)" \
@@ -74,14 +74,17 @@ MOONBASE_CHAT_CONFIG=/absolute/owner-only/host.json \
   NX_DAEMON=false bunx nx run @moonbase/desktop:dev
 ```
 
-Use the [chat proof's private configuration format](../chat-probe/README.md); no token, endpoint or credential is sent to the renderer. Connect explicitly. Local checkout roots remain distinct from authenticated remote host/store/cwd identities even when their path strings match. Remote output is descriptive text; there is no file synchronization or remote-to-local open action.
+Use the private configuration below; no token, endpoint or credential is sent to the renderer. Connect explicitly. Local checkout roots remain distinct from authenticated remote host/store/cwd identities even when their path strings match. Remote output is descriptive text; there is no file synchronization or remote-to-local open action.
 
 View switching, closing a file/chat view, Hide, Disconnect and client Quit never Stop remote work. Stop keeps the public controller's exact captured submission/task. Quit preserves chat first, asks the existing editor gate, then preserves the latest chat snapshot before disposal. Unknown editor publications retain live work and block Quit/reload until exact resolution. A committed reload releases old document observations/waits and restores persisted drafts on the same root; a veto keeps the mounted document. Renderer loss releases its transport resources, without disposing the root or stopping the host. Recovery covers observed durable snapshots, not instruction-by-instruction crash or power-loss durability.
+
+Desktop binds the shared chat controller's synchronous storage interface to LocalStorage under `moonbase.chat.v1`. The shared module owns the saved schema and preservation rules; desktop owns this namespace and keeps it fixed for the controller's lifetime. No saved-state migration or import occurs.
 
 `test:native` is a separate required macOS qualification gate: it enumerates editor,
 configuration, reload/document lifecycle, composed chat, and recovery/cleanup suites
 with one worker. `test:package` covers package resources plus packaged reload and
 composition; configuration and injected cleanup checks remain source tests.
+Composition includes the retained Create/Send/Stop reply-loss, Create readiness and reserved-Send preservation regressions.
 Run both gates before desktop qualification; CI build checks alone do not qualify it.
 `test:desktop`, `test:composition`, and `test:reload` select named projects for focused runs.
 
@@ -91,21 +94,42 @@ Quit uses that persisted recovery. Changes since the last publication can be los
 Once renderer disposal is acknowledged, cleanup errors are reported natively and
 Moonbase exits after attempting all cleanup; it never returns to the disposed UI.
 
-The editor-only checkpoint is preserved at `feat/standalone-editor` (`4dd148a`); the chat app remains independently launchable:
-
-```sh
-bun run --cwd apps/chat-probe build
-MOONBASE_CHAT_CONFIG=/absolute/owner-only/host.json \
-MOONBASE_CHAT_DATA="$(mktemp -d -t moonbase-independent-chat)" \
-  bun run --cwd apps/chat-probe start
-```
-
 Composition tests add to the existing editor/native suites:
 
 ```sh
 bun run --cwd apps/desktop test:composition
 MOONBASE_PACKAGED_TEST=1 bun run --cwd apps/desktop test:composition
 ```
+
+### Private chat configuration
+
+Create the private configuration outside source control, mode `0600`, owned by the current user, without symlinks. It contains exactly:
+
+```json
+{
+  "profile": {
+    "id": "personal-host",
+    "label": "Personal host",
+    "destination": "an-already-authorized-ssh-alias",
+    "remotePort": 8787,
+    "expected": { "hostId": "my-host", "storeId": "my-store" }
+  },
+  "actorId": "personal",
+  "token": "YOUR-SEPARATELY-PROVISIONED-PRIVATE-RANDOM-HOST-KEY"
+}
+```
+
+The private file may additionally specify an absolute `sshExecutable`; normal operation uses `/usr/bin/ssh`. The controlled tests use their own executable only through this privileged configuration. The key must be separate from public settings and match the independently configured host. Never place it in a renderer, URL, command-line argument, log or repository. The renderer receives only public session/profile/health DTOs; no endpoint or provider/database configuration.
+
+Use existing SSH config/agent/keys and verified host-key policy. A dedicated alias must satisfy the SSH module's checked policy (no host-authentication bypass or additional forwards). Moonbase does not change SSH files, install software, start a remote service or stop remote jobs when disconnecting. No test host or provider authorization is assumed.
+
+Start the host **separately on its machine**, using its qualified Node **26.13.0** environment and private host configuration:
+
+```sh
+node --experimental-strip-types packages/pi-runtime/src/host.ts /absolute/private/moonbase-host.json
+```
+
+See [host setup](../../packages/pi-runtime/README.md) and [SSH policy](../../packages/ssh/README.md). The host configuration fixes the exact host/store/actor, remote cwd and model, plus a new explicit Moonbase database namespace and existing host-side provider auth. The cwd shown here is remote context, not a local filesystem approval. The compiled desktop client uses Electron **45.1.0 / Node 24.22.1**, and imports only the qualified remote adapter and SSH capability, with no host-baseline guard or engine initialization locally.
 
 ### Reload checks
 

@@ -1,5 +1,5 @@
 // Test-only composition: public Pi/SDK APIs, real SQLite, no provider/network or native tools.
-import { hostControl } from '../../../tests/chat/host-control.mjs';
+import { hostControl } from './host-control.mjs';
 import { readFileSync } from 'node:fs';
 import { ManagedRuntime, Effect } from 'effect';
 import { createModels } from '@earendil-works/pi-ai/models';
@@ -24,11 +24,11 @@ const gate = config.hold ? new Promise((r) => (release = r)) : Promise.resolve()
 const registry = createRegistry();
 registry.install(
   defineExtension({
-    name: 'proof-controlled',
+    name: 'chat-controlled',
     tools: [
       defineTool({
         name: 'inspect_remote_context',
-        description: 'Controlled proof tool; does not inspect the real filesystem',
+        description: 'Controlled chat test tool; does not inspect the real filesystem',
         parameters: Type.Object({}),
         execute: async (_input, api, ctx) => {
           tools++;

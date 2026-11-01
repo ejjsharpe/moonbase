@@ -3,8 +3,8 @@ import { test } from 'node:test';
 import type { ChatClient } from '@moonbase/application/chat-client';
 import type { ConnectionClient } from '@moonbase/application/connection-client';
 import { ApplicationError } from '@moonbase/application/client';
-import { ProofSession } from '../src/session.ts';
-import { browserClients, type ChatBridge } from '../src/wire.ts';
+import { ChatIpcSession } from '../src/chat/session.ts';
+import { browserClients, type ChatBridge } from '../src/chat/wire.ts';
 const context = { host: { hostId: 'host', storeId: 'store' }, actorId: 'owner' },
   target = { ...context, conversationId: 'saved' };
 function fixture() {
@@ -40,7 +40,7 @@ function fixture() {
     },
     watch: () => () => {},
   };
-  const owner = new ProofSession(chat, connection, context, () => {});
+  const owner = new ChatIpcSession(chat, connection, context, () => {});
   return {
     owner,
     get calls() {
@@ -78,9 +78,6 @@ test('public bridge preserves Uncertain and exact pending payload; preaborted ca
     call: (kind, op, input, id) => f.owner.call(kind, op, input, id),
     cancel: (id) => f.owner.cancel(id),
     events: () => () => {},
-    quit: () => () => {},
-    consent: () => {},
-    ready: () => {},
   };
   const client = browserClients(bridge).chat,
     input = { target, requestId: 'original', text: 'captured' };

@@ -14,3 +14,17 @@ for (const entry of ['client', 'host-client', 'connection-client', 'chat-client'
   assert(!/node:|electron|@moonbase\/(workspace|pi-runtime|ssh)/.test(result.outputFiles[0].text));
 }
 console.log('Verified browser-only command contracts.');
+
+const chat = await build({
+  entryPoints: ['@moonbase/chat'],
+  bundle: true,
+  platform: 'browser',
+  write: false,
+  metafile: true,
+});
+assert.deepEqual(Object.keys(chat.metafile.inputs).sort(), [
+  'packages/application/src/client.ts',
+  'packages/chat/src/controller.ts',
+  'packages/chat/src/index.ts',
+]);
+console.log('Verified headless browser chat: controller and application contracts only.');

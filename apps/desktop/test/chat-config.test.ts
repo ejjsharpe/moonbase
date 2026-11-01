@@ -3,9 +3,9 @@ import { test } from 'node:test';
 import { mkdtemp, writeFile, chmod, symlink, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readConfiguration } from '../src/config.ts';
+import { readConfiguration } from '../src/chat/config.ts';
 test('private configuration is owner-only, bounded, explicit and projected; bad files never initialize transport', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'moonbase-proof-config-'));
+  const directory = await mkdtemp(join(tmpdir(), 'moonbase-chat-config-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'private.json'),
     value = {

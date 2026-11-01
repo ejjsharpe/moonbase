@@ -8,7 +8,7 @@ import type {
   ChatCommands,
 } from '@moonbase/application/chat-client';
 import type { ConnectionClient, ConnectionSnapshot } from '@moonbase/application/connection-client';
-import { ChatProofController, type DraftStorage } from '../src/controller.ts';
+import { ChatController, type DraftStorage } from '@moonbase/chat';
 const context = { host: { hostId: 'host', storeId: 'store' }, actorId: 'owner' },
   target = { ...context, conversationId: 'chat' };
 const summary = {
@@ -37,10 +37,10 @@ const failure = () =>
 class Storage implements DraftStorage {
   value: string | null = null;
   fail = false;
-  getItem() {
+  read() {
     return this.value;
   }
-  setItem(_key: string, value: string) {
+  write(value: string) {
     if (this.fail) throw Error('Controlled full storage');
     this.value = value;
   }
@@ -116,7 +116,7 @@ function fixture(storage = new Storage()) {
       return () => {};
     },
   };
-  const controller = new ChatProofController(
+  const controller = new ChatController(
     chat,
     connection,
     context,
@@ -143,6 +143,31 @@ async function ready(f: ReturnType<typeof fixture>) {
   await turn();
   await f.controller.select(target);
 }
+
+test('existing version-1 drafts and pending identities reopen unchanged through the public entry', () => {
+  const storage = new Storage();
+  const saved = {
+    version: 1,
+    session: context,
+    selected: target,
+    drafts: [{ target, text: 'Existing unsent draft' }],
+    pending: [
+      {
+        operation: 'sendChat',
+        input: { target, requestId: 'existing-request', text: 'Original uncertain Send' },
+        message: 'Uncertain: response lost',
+      },
+    ],
+  };
+  storage.value = JSON.stringify(saved);
+  const f = fixture(storage);
+  assert.equal(f.controller.getSnapshot().draft, saved.drafts[0].text);
+  assert.deepEqual(f.controller.getSnapshot().pending, saved.pending);
+  assert.equal(f.controller.preserve(), true);
+  assert.equal(storage.value, JSON.stringify(saved));
+  assert.deepEqual(f.calls, []);
+  f.controller.dispose();
+});
 
 test('startup only observes; every mutation is durably captured before disclosure', async () => {
   const f = fixture();
@@ -181,7 +206,7 @@ test('lost reply, null query, reload and reconnect retain original input without
   await f.controller.query(p.input.requestId);
   assert.deepEqual(f.controller.getSnapshot().pending[0].input, p.input);
   f.controller.dispose();
-  const second = new ChatProofController(f.chat, f.connection, context, f.storage);
+  const second = new ChatController(f.chat, f.connection, context, f.storage);
   await second.start();
   await turn();
   assert.deepEqual(second.getSnapshot().pending[0].input, p.input);
@@ -424,7 +449,7 @@ test('Create and captured Stop are written before disclosure; lost replies recov
   await f.controller.stop();
   const retained = structuredClone(f.controller.getSnapshot().pending);
   f.controller.dispose();
-  const next = new ChatProofController(f.chat, f.connection, context, f.storage);
+  const next = new ChatController(f.chat, f.connection, context, f.storage);
   assert.deepEqual(next.getSnapshot().pending, retained);
   next.dispose();
 });
@@ -490,7 +515,7 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
     await call;
     assert.deepEqual(f.controller.getSnapshot().pending[0].input, original.input);
     f.controller.dispose();
-    const next = new ChatProofController(f.chat, f.connection, context, f.storage);
+    const next = new ChatController(f.chat, f.connection, context, f.storage);
     await next.start();
     await next.connect();
     await turn();

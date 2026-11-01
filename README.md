@@ -7,7 +7,7 @@ Each application and package keeps its setup and public interface in its README:
 | Package | Purpose |
 | --- | --- |
 | [Desktop](apps/desktop/README.md) | Electron workbench and native packaging |
-| [Chat probe](apps/chat-probe/README.md) | Standalone remote chat application |
+| [Chat](packages/chat/README.md) | Headless client chat state and preservation |
 | [Application](packages/application/README.md) | Shared commands, clients and Effect service contracts |
 | [Editor](packages/editor/README.md) | React/Monaco workbench |
 | [Workspace](packages/workspace/README.md) | Local files, Git and recovery |

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { channels, unwrap, type ChatBridge, type Reply } from '@moonbase/chat-probe/bridge';
+import { channels, unwrap, type ChatBridge, type Reply } from './chat/wire.ts';
 
 // The reviewed bridge uses separate channels; the main process still authenticates every request.
 const active = new Set<string>();
@@ -26,10 +26,6 @@ const bridge: ChatBridge = {
     ipcRenderer.on(channels.event, listener);
     return () => ipcRenderer.off(channels.event, listener);
   },
-  // Desktop Quit is coordinated with the editor gate, never the standalone chat handshake.
-  quit: () => () => {},
-  consent: () => {},
-  ready: () => {},
 };
 // A committed document unload releases waits/observations, never remote execution.
 window.addEventListener('unload', () => {

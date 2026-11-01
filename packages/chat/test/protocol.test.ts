@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ChatProofController, type DraftStorage } from '../src/controller.ts';
-import { fixture, until } from './fixture.ts';
+import { ChatController, type DraftStorage } from '@moonbase/chat';
+import { fixture, until } from '../../../tests/chat/tool-fixture.ts';
 class Storage implements DraftStorage {
   value: string | null = null;
-  getItem() {
+  read() {
     return this.value;
   }
-  setItem(_k: string, v: string) {
+  write(v: string) {
     this.value = v;
   }
 }
@@ -18,7 +18,7 @@ async function setup(t: { after: (f: () => Promise<void>) => void }, hold = fals
   });
   const root = f.root(),
     storage = new Storage(),
-    controller = new ChatProofController(root.chat, root.connection, f.session, storage);
+    controller = new ChatController(root.chat, root.connection, f.session, storage);
   t.after(async () => controller.dispose());
   await controller.start();
   await controller.connect();
@@ -29,7 +29,7 @@ async function setup(t: { after: (f: () => Promise<void>) => void }, hold = fals
   await controller.create('Production protocol chat');
   return { ...f, clientRoot: root, controller, storage };
 }
-test('public proof controller creates, lists, opens, streams real tool output and captures exact Stop through SSH/HTTP/Pi', async (t) => {
+test('public chat controller creates, lists, opens, streams real tool output and captures exact Stop through SSH/HTTP/Pi', async (t) => {
   const f = await setup(t, true);
   const target = f.controller.getSnapshot().selected!;
   assert.equal(f.controller.getSnapshot().host!.cwd, f.cwd);
@@ -73,7 +73,7 @@ test('lost actual HTTP Send response + newer draft + controller reload/client cl
   await f.clientRoot.runtime.dispose();
   await until(f.stats, (s) => s.tools === 1);
   const second = f.root(),
-    next = new ChatProofController(second.chat, second.connection, f.session, f.storage);
+    next = new ChatController(second.chat, second.connection, f.session, f.storage);
   t.after(async () => next.dispose());
   await next.start();
   assert.equal(next.getSnapshot().pending[0].input.requestId, pending.input.requestId);
@@ -94,7 +94,7 @@ test('lost actual HTTP Send response + newer draft + controller reload/client cl
   await f.stopHost();
   await f.startHost();
   const third = f.root(),
-    last = new ChatProofController(third.chat, third.connection, f.session, f.storage);
+    last = new ChatController(third.chat, third.connection, f.session, f.storage);
   t.after(async () => last.dispose());
   await last.start();
   await last.connect();

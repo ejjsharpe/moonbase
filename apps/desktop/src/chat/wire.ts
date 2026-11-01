@@ -6,9 +6,6 @@ export const channels = {
   call: 'moonbase-chat:call',
   cancel: 'moonbase-chat:cancel',
   event: 'moonbase-chat:event',
-  quit: 'moonbase-chat:quit',
-  ready: 'moonbase-chat:ready',
-  consent: 'moonbase-chat:consent',
 } as const;
 export type Reply =
   | { ok: true; value: unknown }
@@ -23,12 +20,9 @@ export interface ChatBridge {
   ): Promise<Reply>;
   cancel(id: string): void;
   events(receive: (id: string, result: Reply) => void): () => void;
-  quit(receive: (id: string) => void): () => void;
-  consent(id: string, preserved: boolean): void;
-  ready(): void;
 }
 export const invalid = (): never => {
-  throw new ApplicationError({ code: 'InvalidInput', message: 'Invalid chat proof request.' });
+  throw new ApplicationError({ code: 'InvalidInput', message: 'Invalid chat request.' });
 };
 export function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return invalid();

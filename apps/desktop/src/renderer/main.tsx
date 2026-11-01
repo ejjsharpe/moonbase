@@ -2,8 +2,9 @@ import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Tabs } from '@base-ui/react/tabs';
-import { ChatProof, createChatProof } from '@moonbase/chat-probe/ui';
-import { browserClients, type ChatBridge } from '@moonbase/chat-probe/bridge';
+import { ChatController } from '@moonbase/chat';
+import { ChatView } from '../chat/view.tsx';
+import { browserClients, type ChatBridge } from '../chat/wire.ts';
 import { Button } from '@base-ui/react/button';
 import * as stylex from '@stylexjs/stylex';
 import { EditorWorkbench, createEditor, type EditorWorkbenchHandle } from '@moonbase/editor';
@@ -37,10 +38,11 @@ const chat = await (async () => {
       return null;
     }
     const context = await window.moonbaseChat.context();
-    return createChatProof({
-      ...browserClients(window.moonbaseChat),
-      context,
-      storage: localStorage,
+    const { chat, connection } = browserClients(window.moonbaseChat);
+    const storageKey = 'moonbase.chat.v1';
+    return new ChatController(chat, connection, context, {
+      read: () => localStorage.getItem(storageKey),
+      write: (value) => localStorage.setItem(storageKey, value),
     });
   } catch (error) {
     chatInitializationFailed = true;
@@ -261,7 +263,7 @@ function Desktop() {
         }}
         {...stylex.props(styles.panel)}>
         {chat ? (
-          <ChatProof controller={chat} />
+          <ChatView controller={chat} />
         ) : (
           <section {...stylex.props(styles.empty)} aria-label="Remote chat configuration">
             <h1>Remote chat is unavailable</h1>
