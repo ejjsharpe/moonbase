@@ -448,3 +448,54 @@ test("hide/detach releases observations, resume is read-only, and draft capacity
   assert.equal(JSON.parse(f.storage.value!).drafts.length, 32);
   f.controller.dispose();
 });
+for (const operation of ["createChat", "sendChat", "stopChat"] as const)
+  test(`${operation} retains the captured identity when Disconnect makes a dispatched reply Unavailable`, async () => {
+    const f = fixture();
+    await ready(f);
+    f.controller.setDraft("captured before disconnect");
+    f.publish({
+      ...snapshot,
+      state: "running",
+      run: {
+        state: "running",
+        stop: { target, submissionId: "admitted", taskId: "captured-task" },
+        text: "live",
+        truncated: false,
+        tools: [],
+      },
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    f.answers.set(operation, async () => {
+      await gate;
+      throw new ApplicationError({
+        code: "Unavailable",
+        message: "Connection generation gone after dispatch",
+      });
+    });
+    const call =
+      operation === "createChat"
+        ? f.controller.create("Captured create")
+        : operation === "sendChat"
+          ? f.controller.send()
+          : f.controller.stop();
+    await turn();
+    const original = structuredClone(f.controller.getSnapshot().pending[0]);
+    await f.controller.disconnect();
+    release();
+    await call;
+    assert.deepEqual(f.controller.getSnapshot().pending[0].input, original.input);
+    f.controller.dispose();
+    const next = new ChatProofController(f.chat, f.connection, context, f.storage);
+    await next.start();
+    await next.connect();
+    await turn();
+    assert.deepEqual(next.getSnapshot().pending[0].input, original.input);
+    assert.equal(f.calls.filter((c) => c.operation === operation).length, 1);
+    await next.retry(original.input.requestId);
+    assert.deepEqual(
+      f.calls.filter((c) => c.operation === operation).at(-1)!.input,
+      original.input,
+    );
+    next.dispose();
+  });
