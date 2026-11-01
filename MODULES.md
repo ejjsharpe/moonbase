@@ -4,11 +4,11 @@ The architecture requirements in `AGENTS.md` apply to every module. Keep Nx/Bun 
 
 | Owner | Public boundary | Allowed dependencies |
 | --- | --- | --- |
-| Coordinator: `packages/application/**` | `./client` and `./host-client` browser-safe types; `./services` Effect contracts; `./handlers` shared dispatch; `./runtime-client` process adapter; privileged `./host-health` | Effect; no feature implementation imports |
+| Coordinator: `packages/application/**` | `./client`, `./host-client`, `./connection-client` browser-safe boundaries; `./services` Effect contracts; `./handlers` shared dispatch; `./runtime-client` process adapters; privileged `./host-health` | Effect; no feature implementation imports |
 | 02: `packages/editor/**` | React editor, per-instance state/controller and in-memory demo adapter | application/client, shared UI, React, Monaco; demo adapter may implement application/services outside renderer |
 | 03: `packages/workspace/**` | `WorkspaceLive` layer/configuration, focused native assets | application/services and client types, Effect, Node/platform/Git/native resources; no React/Electron/provider dependency |
 | 05: `packages/pi-runtime/**` | chat service/layer and validated loopback protocol implementation | application contracts, Effect, pinned Pi Durable/Pi dependencies, Node/SQLite; no editor/Electron/React |
-| 06: `packages/ssh/**` | scoped connection service/layer | application contracts, Effect, system OpenSSH; no editor/Pi implementation |
+| 06: `packages/ssh/**` | `SshLive(config)` provides shared ConnectionService | application contracts, Effect, system OpenSSH; no editor/Pi implementation |
 | Coordinator: `packages/ui/**` | StyleX tokens/recipes | StyleX; Base UI interactions belong in consuming React controls |
 | 04/08: `apps/desktop/**` | Electron main/preload and renderer composition | public module exports; one scoped process runtime; privileged implementations stay out of renderer |
 | 07: `apps/chat-probe/**` | independent chat proof | public application/chat/SSH interfaces and UI; no editor |
@@ -52,6 +52,8 @@ Retain checkout/file tabs; shared normal/diff/conflict buffers; explicit Save; c
 Protocol v1 uses authenticated HTTP on an explicit `127.0.0.1` host endpoint, reachable through a system OpenSSH local forward. `GET /v1/health` uses a fresh nonce with domain-separated HMAC-SHA256 client and host proofs; the response signs `{ protocol: 1, hostId, storeId, version, capabilities: ["chat-v0"] }` and that nonce. The reusable shared key is never transmitted, including after health, and never enters renderer commands, URLs, logs or SSH arguments. Wrong proof: 401; incompatible protocol/capability or unexpected host/store: reject without rebinding saved chats. A TCP connection and matching unsigned JSON do not authenticate an application. All stateful requests bind actor, host/store, immutable request ID and exact conversation/task target through their own authenticated protocol; a health proof authorizes no other endpoint. Reconnect reads status/history; it never sends again. Stop names the selected task generation, not whichever task is currently running. Delivery is bounded and recoverable from Pi Durable, which remains transcript/execution/task authority. The coordinator extends concrete chat/connection contracts centrally before tasks 05/06 start. No duplicate execution scheduler or event store; no remote provisioning or mapping remote paths onto local files.
 
 `application/host-client` freezes protocol 1/application version 0.1.0 identities; privileged `application/host-health` verifies signed, nonce-bound health with an 8 KiB body bound and five-second deadline. See `packages/application/HOST-PROTOCOL.md`. These exports alone do not implement chat/SSH or alter editor startup.
+
+The shared connection boundary is in `application/connection-client` and `ConnectionService`; see `packages/application/CONNECTION.md`. Browser clients use status/connect/exact-generation disconnect through the common handlers. A privileged exact-host endpoint lookup exposes credentials only inside the process root/service graph. One configured profile, scoped system-SSH forwarding and authenticated health are the SSH implementation's responsibilities; no Pi/editor dependency or remote job lifecycle is added.
 
 ## Technical gates and branches
 
