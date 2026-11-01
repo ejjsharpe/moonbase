@@ -1798,11 +1798,11 @@
     "childThreadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-pi-r1-f6c081d",
     "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-pi-r1-f6c081d:ordinal:1",
     "childNodeId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-pi-r1-f6c081d",
-    "status": "running",
-    "workState": "working",
+    "status": "completed",
+    "workState": "result_available",
     "hasPendingChildRuns": false,
-    "latestTerminalRunId": null,
-    "latestTerminalStatus": null,
+    "latestTerminalRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-pi-r1-f6c081d:ordinal:1",
+    "latestTerminalStatus": "completed",
     "latestTerminalSummary": null,
     "latestTerminalResultContextTransferId": null,
     "providerInstanceId": "codex",
@@ -1817,8 +1817,8 @@
         "value": "default"
       }
     ],
-    "summary": null,
-    "resultContextTransferId": null,
+    "summary": "What this change does: [PR #12](https://github.com/ejjsharpe/moonbase/pull/12) adds the independent Pi chat host, bounded views, exact-task Stop and authenticated remote client.\n\n**Verdict: fix both findings before implementation approval.**\n\n1. **P1 \u2014 Unauthenticated requests can obtain trusted RPC errors** \u2014 [server.ts:53](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a948b3bf/packages/pi-runtime/src/server.ts:53).\n   \n   Validation failures are signed before authentication/grant consumption. Using only observed nonce/challenge headers, an active relay can obtain a genuine signed `InvalidInput` response\u2014even after the challenge was consumed\u2014and substitute it for a successful reply. I reproduced this through the production remote client: creation persisted, and Send was admitted and executed, while both appeared rejected.\n   \n   **Fix:** sign application errors only after successful authentication and atomic grant consumption; return generic unsigned failures earlier. Otherwise, authenticated responses can misrepresent executed work.\n\n2. **P2 \u2014 Committed creation is reported as definite failure** \u2014 [index.ts:55](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a948b3bf/packages/pi-runtime/src/index.ts:55).\n   \n   `createChat` commits before reading metadata for its reply, but unknown creation failures become `Persistence`. Injecting failure into that public read after a real SQLite commit produced `Persistence`; matching retry recovered the saved conversation.\n   \n   **Fix:** retain `Uncertain` once creation may have committed. Otherwise, callers can abandon the original request and create duplicates.\n\nReviewed **HEAD** `f6c081dab4ddabbc2c86ee42cdd5637fdba6ef47` against **BASE** `d38833db81c5d97a1aa60f25e0dc27dd670af60f`. Verified private origin, isolated Moonbase worktree/project binding and frozen-source ancestry. PRs #1/#2/#5/#6/#8/#10/#12 are linked.\n\nValidation:\n\n- All six uncached Nx tasks passed; **37 Pi + 33 application tests**, zero skips.\n- Seven independent probes completed, including the two defect reproductions.\n- Authentic escaped paging, task handover, busy reservation/crash recovery, exclusive ownership and failing-finalizer cleanup passed.\n- Remote/renderer graph audits passed; actual Electron 45.1 / Node 24 remote test passed separately from the intentional Node 26.13 host baseline.\n- Frozen install, foundation\u2019s 40 hashes and diff checks passed. One hosted inspection showed three successful checks at exact HEAD.\n\nPrior admission, bounded-observation, exact Stop and normal grant-replay objections are supported by source and execution evidence. Finding 1 leaves response authentication unresolved.\n\n[Full review and prior-objection dispositions](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a948b3bf/.review-pr12/REVIEW.txt) \u00b7 [Independent results](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a948b3bf/.review-pr12/independent-final.log) \u00b7 [Suite results](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a948b3bf/.review-pr12/test-counts.log)\n\nTracked files remain unchanged; children/groups are gone and ports were rebound.\n\nNot checked: real providers/SSH, distributed packaging/notices, native UI, power loss or human acceptance. Those remain pending; keep the PR draft.",
+    "resultContextTransferId": "context-transfer:type:subagent_result:source-thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-pi-r1-f6c081d:target-thread:63122af4-017b-4b66-bcae-a905f2b1659d:b30fb475-0c8b-46a4-8e70-de2cd59347d6",
     "hasPendingQuestion": false,
     "pendingApproval": null,
     "waitTimedOut": false
@@ -1846,15 +1846,41 @@
     "implementationOwner": "lead"
   },
   "review-editor-import-r1": {
-    "status": "queued_after_active_pi_r1",
-    "head": "71f272d354359f8d5e1cff7a9f57159325eeabc5",
-    "base": "80b0ede184205b9fff1d633d19426c2bf9671688",
-    "model": "gpt-6-astra",
+    "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-editor-import-r1-71f272d",
+    "childThreadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-editor-import-r1-71f272d",
+    "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-editor-import-r1-71f272d:ordinal:1",
+    "childNodeId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-editor-import-r1-71f272d",
+    "status": "running",
+    "workState": "working",
+    "hasPendingChildRuns": false,
+    "latestTerminalRunId": null,
+    "latestTerminalStatus": null,
+    "latestTerminalSummary": null,
+    "latestTerminalResultContextTransferId": null,
     "providerInstanceId": "codex",
-    "options": {
-      "reasoningEffort": "xhigh",
-      "serviceTier": "default"
-    },
-    "mustUseNewDelegateTask": true
+    "model": "gpt-6-astra",
+    "options": [
+      {
+        "id": "reasoningEffort",
+        "value": "xhigh"
+      },
+      {
+        "id": "serviceTier",
+        "value": "default"
+      }
+    ],
+    "summary": null,
+    "resultContextTransferId": null,
+    "hasPendingQuestion": false,
+    "pendingApproval": null,
+    "waitTimedOut": false
+  },
+  "pi-fix-r1": {
+    "threadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-03-workspace-module-r1-bb5c5d0",
+    "messageId": "message:mcp:809f45ac-99a5-4d58-a1ba-08cc0a77c997:thread-send:pi-fix-review-r1-auth-and-create-f6c081d",
+    "runId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-03-workspace-module-r1-bb5c5d0:ordinal:12",
+    "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Athread-send%3Api-fix-review-r1-auth-and-create-f6c081d",
+    "status": "starting",
+    "delivery": "started"
   }
 }
