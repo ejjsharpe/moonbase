@@ -9,6 +9,7 @@
         "@earendil-works/pi-ai": "1.4.0",
         "@effect/platform-node": "4.1.0",
         "@moonbase/application": "workspace:*",
+        "@moonbase/editor": "workspace:*",
         "@moonbase/workspace": "workspace:*",
         "@playwright/test": "1.64.1",
         "@stylexjs/stylex": "0.19.1",
@@ -33,6 +34,18 @@
       "name": "@moonbase/application",
       "dependencies": {
         "effect": "4.1.0",
+      },
+    },
+    "packages/editor": {
+      "name": "@moonbase/editor",
+      "dependencies": {
+        "@base-ui/react": "1.9.0",
+        "@moonbase/application": "workspace:*",
+        "@moonbase/ui": "workspace:*",
+        "@stylexjs/stylex": "0.19.1",
+        "effect": "4.1.0",
+        "monaco-editor": "0.57.0",
+        "react": "19.3.1",
       },
     },
     "packages/ui": {
@@ -271,6 +284,7 @@
 
 
 
+    "@moonbase/editor": ["@moonbase/editor@workspace:packages/editor"],
 
 
 

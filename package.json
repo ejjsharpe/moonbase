@@ -11,7 +11,8 @@
     "lint": "nx run-many -t lint",
     "test": "nx run-many -t test",
     "build": "nx run-many -t build",
-    "check:foundation": "node scripts/check-foundation.mjs"
+    "check:foundation": "node scripts/check-foundation.mjs",
+    "test:editor-integration": "tsc --noEmit -p tests/editor-workspace/tsconfig.json && node packages/workspace/scripts/build-native.mjs && node --experimental-strip-types --test --test-concurrency=1 tests/editor-workspace/*.test.ts"
   },
   "trustedDependencies": [
     "electron",
@@ -39,6 +40,7 @@
     "typescript": "7.0.2",
     "vite-plus": "1.4.0",
     "@moonbase/application": "workspace:*",
+    "@moonbase/editor": "workspace:*",
     "@moonbase/workspace": "workspace:*",
     "@earendil-works/pi-ai": "1.4.0"
   }
