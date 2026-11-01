@@ -18,7 +18,7 @@ All PRs are private, linked and unmerged. Older entries below are historical evi
 | [#9 SSH](https://github.com/ejjsharpe/moonbase/pull/9) | `d1a28745362c5f9cf5c164f3ef19fc8ac8af983b` | #8 | DRAFT; 25 controlled child/loopback tests +29 app and exact-head CI pass; Astra R1 three blockers, owner fixing |
 | [#10 chat contract](https://github.com/ejjsharpe/moonbase/pull/10) | `d38833db81c5d97a1aa60f25e0dc27dd670af60f` | #8 | Ready; AstraR1 contract-only clear atd38833d; 33 tests/five fresh typedprobes/source/CI pass |
 
-| [#11 real editor fan-in](https://github.com/ejjsharpe/moonbase/pull/11) | `a7a0d8861346e869a7fb8013ed2522cf2f578642` | #4 + #3, common #7 | DRAFT; f44:196 tests/CI pass,R1 reviewing; later public asset follow-up9tests pass, changed-head review/CI pending |
+| [#11 real editor fan-in](https://github.com/ejjsharpe/moonbase/pull/11) | `a7a0d8861346e869a7fb8013ed2522cf2f578642` | #4 + #3, common #7 | DRAFT; f44:196 tests/CI pass,R1 reviewing; later public asset follow-up9tests/CI pass, changed-head review pending |
 
 Production controller/workspace fan-in passes nine real checks; standalone Electron task04 is active. Pi module, chat proof and composition remain unfinished. Independent SSH task 06 is active under the explicit technical-failure exception; it depends only on checked #8 and does not use failing editor behavior. Published Pi 1.4.0 controlled research is preparatory evidence only. No human/manual acceptance is inferred.
 
@@ -151,3 +151,5 @@ Task04 owner verified same isolated Moonbase/private binding and actual feat/sta
 No explicit real-provider quota authorization or SSH test host has been supplied. Real-provider/SSH smoke, native Finder/Trash, VoiceOver, human visual acceptance and power-loss qualification are not claimed. Continue controlled independent checks without changing those gates. No PR merges, deployment or source-checkout modifications are authorized.
 
 T3 notified CI success on #10 exact `d38833db81c5d97a1aa60f25e0dc27dd670af60f`; one metadata inspection confirmed both hosted module jobs green. It remains a contract-only DRAFT awaiting Astra after editor R8; no implementation/security/remote acceptance is inferred.
+
+T3 CI wake for #11 exact `a7a0d8861346e869a7fb8013ed2522cf2f578642`: one metadata read confirms both hosted jobs green. Frozen/public-asset integration is clear; independent R1 remains fixed to f44 and new asset review stays pending. Runs: https://github.com/ejjsharpe/moonbase/actions/runs/41278133678/job/124764390065, https://github.com/ejjsharpe/moonbase/actions/runs/41278130156/job/124764380688

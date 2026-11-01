@@ -1268,7 +1268,7 @@
       "realIntegration": 9
     },
     "branch": "chore/editor-integration",
-    "status": "DRAFT; old f44 CI pass/R1 reviewing; public asset follow-up9tests pass needs changed-head review/CI"
+    "status": "DRAFT; a7 CI/frozen/9integration pass; fixed f44 R1 reviewing, fresh asset review pending"
   },
   "editorIntegrationReviewR1": {
     "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-editor-integration-r1-f44d698",
@@ -1353,7 +1353,11 @@
       "status": "running",
       "delivery": "steered"
     },
-    "review": "fresh changed-head review needed after fixed f44 R1"
+    "review": "fresh changed-head review needed after fixed f44 R1",
+    "ci": [
+      "https://github.com/ejjsharpe/moonbase/actions/runs/41278133678/job/124764390065",
+      "https://github.com/ejjsharpe/moonbase/actions/runs/41278130156/job/124764380688"
+    ]
   },
   "standaloneBinding": {
     "path": "/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c",
