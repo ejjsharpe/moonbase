@@ -2113,8 +2113,8 @@
     "waitTimedOut": false
   },
   "foreground-test-slot": {
-    "owner": null,
-    "state": "Original Sol owner explicitly released after clean pushed pair; reserved for NEW independent paired review"
+    "owner": "review-reload21-composition20-r2",
+    "state": "exclusive NEW Astra paired qualification; no duplicate reviewer/native jobs"
   },
   "review-desktop-r2": {
     "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-desktop-r2-module16-4dd148a",
@@ -2465,7 +2465,7 @@
     "path": "docs/overnight/handoff.md",
     "state": "WORKING DRAFT; notcomplete",
     "sourcePrCheckpoint": 20,
-    "composition": "PR21fc547 +PR20f682 owning gates pass; fresh independent pair review pending",
+    "composition": "NEW Astra pair review ACTIVE on exact21fc547 and20f682; no acceptance inferred",
     "finalAudit": "pending",
     "visualInspection": "Root read actual owning package-live-chat-normal, package-dirty-editor and package-zoom-700 images. Actual200% cramped scrolling accepted only with measured native reachability; no independent review clearance inferred."
   },
@@ -2505,5 +2505,27 @@
     "response": "docs/overnight/reviews/reload-preservation-owning-response.md",
     "foreground": "not released: original owner continues composition integration",
     "limits": "Deleted local archives/initial raw phases explicit; reviewer immutable copies and NEW reruns distinct; one235.7ms pre-causal failure not productred; original cc06/Trash/unknownobservations unchanged"
+  },
+  "review-reload21-composition20-r2": {
+    "taskId": "node:delegated-task:command%3Amcp%3A8185ba6c-62ae-4571-ad0b-9688ad5a1b92%3Adelegate-task%3Afresh-lead-reload-followup-composition20-r2-astra",
+    "childThreadId": "thread:delegated-task:command%3Amcp%3A8185ba6c-62ae-4571-ad0b-9688ad5a1b92%3Adelegate-task%3Afresh-lead-reload-followup-composition20-r2-astra",
+    "status": "running",
+    "model": "gpt-6-astra",
+    "options": {
+      "reasoningEffort": "xhigh",
+      "serviceTier": "default"
+    },
+    "initialCoordinator": "d18fb46",
+    "heads": {
+      "standalone21": "fc547673c519871136388f6e5cc0e4fdc1d9bd6a",
+      "composition20": "f6822a50e80920488a012f7bd57cb612f9b97be7"
+    },
+    "bases": {
+      "standalone21": "4dd148ade5f279e2b3820df0325313ee08ce4f8d",
+      "composition20": "d79d1e9b8347f7f5f19cdbe9aad0233a0c47be8d"
+    },
+    "promptCharacters": 119492,
+    "brief": "FULL originalOVERNIGHT+FULL R1+FULL standalone/composition ownresponses+mandatoryallpriorreports+allobjections/evidence-loss/unknownveto/resourcefindings",
+    "foreground": "exclusive new reviewer; original Sol owner explicitly released/idle"
   }
 }
