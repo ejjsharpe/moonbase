@@ -30,6 +30,7 @@ test("every present invalid configuration including empty fails startup", async 
 
 for (const configured of [false, true]) test(`${configured ? "valid private" : "absent"} configuration starts without automatic Connect or Send`, async () => {
   const f = configured ? await fixture() : undefined;
+  const before = await f?.stats();
   const base = f?.directory ?? realpathSync(mkdtempSync(join(tmpdir(), "moonbase-config-absent-")));
   const app = await electron.launch({ executablePath: executable, args, env: { ...platform, MOONBASE_USER_DATA: join(base, "desktop"), ...(f ? { MOONBASE_CHAT_CONFIG: f.clientConfig, MOONBASE_CHAT_FORWARD_LOG: f.log } : {}) } });
   const child = app.process(), pids = new Set<number>([child.pid!]);
@@ -39,9 +40,9 @@ for (const configured of [false, true]) test(`${configured ? "valid private" : "
     await page.getByRole("tablist", { name: "Workbench views", exact: true }).getByRole("tab", { name: "Chat", exact: true }).click();
     if (configured) {
       await expect(page.getByRole("button", { name: "Connect", exact: true })).toBeEnabled();
-      const stats = await f!.stats(); expect(stats.calls).toBe(0); expect(stats.tools).toBe(0); expect(stats.commands).toEqual([]);
+      const stats = await f!.stats(); expect(stats.calls).toBe(0); expect(stats.tools).toBe(0); expect(stats.commands).toEqual(before!.commands);
       const status = await page.evaluate(() => window.moonbaseChat.call("connection", "getConnection", {}, crypto.randomUUID()));
-      expect(status.ok).toBe(true); writeFileSync(test.info().outputPath("configured-no-connect.json"), JSON.stringify({ stats, status }, null, 2));
+      expect(status.ok).toBe(true); if (status.ok) expect(status.value).toMatchObject({ state: "disconnected", connectionId: null }); writeFileSync(test.info().outputPath("configured-no-connect.json"), JSON.stringify({ before, stats, status }, null, 2));
     } else await expect(page.getByLabel("Remote chat configuration")).toContainText("not configured");
   } finally {
     for (const pid of await app.evaluate(({ app }) => app.getAppMetrics().map(value => value.pid))) pids.add(pid);
