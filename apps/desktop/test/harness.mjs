@@ -17,6 +17,6 @@ ipcMain.handle = (name, listener) => register(name, async (event, input) => {
   if (control.noStatus && operation === "getRecoveryPublication") return { ok: false, error: { code: "Unavailable", message: "Controlled exact-status outage" } };
   return reply;
 });
-app.on('will-quit', () => { if (process.env.MOONBASE_TEST_REPORT) writeFileSync(process.env.MOONBASE_TEST_REPORT, JSON.stringify({ resources: process.getActiveResourcesInfo(), cancels: control.cancels, cancelListeners: ipcMain.listenerCount('moonbase:cancel') })); });
+app.on('will-quit', () => { if (process.env.MOONBASE_TEST_REPORT) writeFileSync(process.env.MOONBASE_TEST_REPORT, JSON.stringify({ resources: process.getActiveResourcesInfo(), cancels: control.cancels, cancelListeners: ipcMain.listenerCount('moonbase:cancel'), chatCancelListeners: ipcMain.listenerCount('moonbase-chat:cancel') })); });
 if (process.env.MOONBASE_TEST_QUIT_EARLY) app.on('browser-window-created', () => queueMicrotask(() => app.quit()));
 await import('../dist/main.mjs');

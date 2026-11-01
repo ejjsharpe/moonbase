@@ -86,6 +86,10 @@ for (const holdDiscovery of [false, true]) test(`rapid native Open to Find retai
   }
 });
 test("actual sandboxed custom-scheme editor reads, edits and saves through SQLite workspace", async () => {
+  await page.getByRole("tablist", { name: "Workbench views", exact: true }).getByRole("tab", { name: "Chat", exact: true }).click();
+  await expect(page.getByLabel("Remote chat configuration")).toContainText("not configured");
+  expect(await page.evaluate(() => window.moonbaseChat.call("connection", "getConnection", {}, crypto.randomUUID()))).toMatchObject({ ok: false, error: { code: "Unavailable" } });
+  await page.getByRole("tablist", { name: "Workbench views", exact: true }).getByRole("tab", { name: "Editor", exact: true }).click();
   await open(); await edit("export const saved = 42;"); await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect.poll(() => readFileSync(join(checkout, "a.ts"), "utf8")).toBe("export const saved = 42;");
   expect(await page.evaluate(() => ({ node: typeof (window as unknown as {require: unknown}).require, process: typeof (window as unknown as {process: unknown}).process, url: location.href }))).toEqual({ node: "undefined", process: "undefined", url: "moonbase://editor/index.html" });
@@ -157,7 +161,7 @@ test("window close hides mounted Monaco; Quit Cancel preserves undo, then Save q
   const exited = app.waitForEvent("close"); await quit(); await page.getByRole("dialog").getByRole("button", { name: "Save", exact: true }).click(); await exited;
   expect(readFileSync(join(checkout, "a.ts"), "utf8")).toContain("after cancel"); expect(readFileSync(join(checkout, "b.ts"), "utf8")).toBe("second draft after cancel");
   const report = JSON.parse(readFileSync(join(base, "quit-report.json"), "utf8"));
-  expect(report.resources.filter((name: string) => /FSWatcher/.test(name))).toEqual([]); expect(report.cancelListeners).toBe(0);
+  expect(report.resources.filter((name: string) => /FSWatcher/.test(name))).toEqual([]); expect(report.cancelListeners).toBe(0); expect(report.chatCancelListeners).toBe(0);
   const db = new DatabaseSync(join(base, "user-data/workspace-v1/moonbase-workspace-v1.sqlite")); db.exec("BEGIN IMMEDIATE; ROLLBACK"); db.close();
 });
 
@@ -332,7 +336,7 @@ test("previews, Keep Open, order, keyboard Close/Reopen and overflow remain usef
   await capture("desktop-keyboard-menu");
   await page.keyboard.press("Escape"); await page.getByRole("button", { name: "Find file", exact: true }).focus(); await page.keyboard.press("Enter");
   await page.getByRole("combobox").fill("a.ts"); await expect(page.getByRole("option", { name: "a.ts", exact: true })).toBeVisible();
-  expect(await page.getByRole("dialog").evaluate(element => getComputedStyle(element).fontFamily)).toBe(await page.locator("main").evaluate(element => getComputedStyle(element).fontFamily));
+  expect(await page.getByRole("dialog").evaluate(element => getComputedStyle(element).fontFamily)).toBe(await page.getByLabel("Moonbase workbench", { exact: true }).evaluate(element => getComputedStyle(element).fontFamily));
   await capture("desktop-keyboard-dialog"); await page.getByRole("combobox").press("Enter");
   await expect(page.getByRole("textbox", { name: "a.ts editor", exact: true })).toBeFocused();
   await page.getByRole("textbox", { name: "a.ts editor", exact: true }).pressSequentially("keyboard lookup typing");
@@ -346,6 +350,7 @@ test("native Trash moves only a captured temporary fixture and leaves its dirty 
   await page.getByRole("treeitem", { name: name + ", unsaved", exact: true }).click(); await page.getByRole("button", { name: "Trash", exact: true }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Move to Trash", exact: true }).click();
   await expect.poll(() => existsSync(join(checkout, name))).toBe(false);
+  await expect.poll(() => app.evaluate(() => !!globalThis.desktopTest.results.findLast(r => r.operation === "mutate" && r.reply.ok))).toBe(true);
   const result = await app.evaluate(() => globalThis.desktopTest.results.findLast(r => r.operation === "mutate" && r.reply.ok));
   const trashPath = result?.reply.value?.items.find(item => item.message?.startsWith("macOS Trash: "))?.message?.slice("macOS Trash: ".length);
   expect(trashPath).toBeTruthy(); if (!trashPath) throw Error("No native Trash path recorded");
@@ -412,7 +417,7 @@ test("single-file picker and File-backed drop share the editor's destination dia
   await expect(page.getByRole("dialog", { name: "Import files", exact: true })).toHaveCount(0);
   await page.evaluate(() => { const input = document.createElement("input"); input.type = "file"; input.id = "drop-fixture"; document.body.append(input); });
   await page.locator("#drop-fixture").setInputFiles(source);
-  await page.evaluate(() => { const transfer = new DataTransfer(); transfer.items.add(document.querySelector<HTMLInputElement>("#drop-fixture")!.files![0]); document.querySelector("main")!.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: transfer })); });
+  await page.evaluate(() => { const transfer = new DataTransfer(); transfer.items.add(document.querySelector<HTMLInputElement>("#drop-fixture")!.files![0]); document.querySelector('[aria-label="Moonbase workbench"]')!.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: transfer })); });
   await expect(page.getByRole("dialog", { name: "Import files", exact: true })).toBeVisible();
   await page.getByLabel("Destination relative path").fill("drop.txt"); await page.getByRole("dialog").getByRole("button", { name: "Import files", exact: true }).click();
   await expect.poll(() => existsSync(join(checkout, "drop.txt"))).toBe(true); expect(readFileSync(join(checkout, "drop.txt"), "utf8")).toBe("ONE PICKED NATIVE FILE");

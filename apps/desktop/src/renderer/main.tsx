@@ -45,16 +45,27 @@ function Desktop() {
   const currentView = useRef(view); currentView.current = view;
   const handle = useRef<EditorWorkbenchHandle>(null), state = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
   const selected = state.recovery.checkouts.find(c => c.checkoutId === state.recovery.selectedCheckoutId);
-  useEffect(() => { const stop = bridge.actions((action, id) => {
-    if (action === "quit") void (async () => { try { if (chatInitializationFailed || chat && !chat.preserve()) { setView("chat"); bridge.quitResult(id, false); return; }
-      // Check chat before destructive editor choices, then preserve any newer draft after them.
-      setView("editor");
-      const consent = (await handle.current?.prepareQuit() ?? false) && (chat?.preserve() ?? true);
-      if (!consent && chat?.getSnapshot().storageError) setView("chat"); if (consent) flushSync(() => setClosing(true)); bridge.quitResult(id, consent); } catch (error) { controller.report(error); bridge.quitResult(id, false); } })();
-    if (action === "dispose") { chat?.dispose(); controller.dispose(); root.unmount(); bridge.quitResult(id, true); }
-  }); void loaded.then(() => bridge.ready()); return stop; }, []);
+  useEffect(() => {
+    async function prepareQuit(id: string) {
+      try {
+        if (chatInitializationFailed || chat && !chat.preserve()) { setView("chat"); bridge.quitResult(id, false); return; }
+        // Check chat before destructive choices, then preserve newer drafts after them.
+        setView("editor");
+        const consent = (await handle.current?.prepareQuit() ?? false) && (chat?.preserve() ?? true);
+        if (!consent && chat?.getSnapshot().storageError) setView("chat");
+        if (consent) flushSync(() => setClosing(true));
+        bridge.quitResult(id, consent);
+      } catch (error) { controller.report(error); bridge.quitResult(id, false); }
+    }
+    const off = bridge.actions((action, id) => {
+      if (action === "quit") void prepareQuit(id);
+      if (action === "dispose") { chat?.dispose(); controller.dispose(); root.unmount(); bridge.quitResult(id, true); }
+    });
+    void loaded.then(() => bridge.ready());
+    return off;
+  }, []);
   const run = (task: Promise<unknown>) => { void task.catch(controller.report); };
-  return <Tabs.Root value={view} onValueChange={(value, details) => {
+  return <Tabs.Root aria-label="Moonbase workbench" value={view} onValueChange={(value, details) => {
     const next = String(value); setView(next);
     if (details.event.type === "click") requestAnimationFrame(() => requestAnimationFrame(() => {
       const element = focus.current[next]; if (currentView.current === next && element?.isConnected && panels.current[next]?.contains(element)) element.focus();
