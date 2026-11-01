@@ -38,6 +38,13 @@
         "@stylexjs/stylex": "0.19.1",
       },
     },
+    "packages/workspace": {
+      "name": "@moonbase/workspace",
+      "dependencies": {
+        "@moonbase/application": "workspace:*",
+        "effect": "4.1.0",
+      },
+    },
   },
   "trustedDependencies": [
     "electron",
@@ -208,6 +215,8 @@
     "@moonbase/application": ["@moonbase/application@workspace:packages/application"],
 
     "@moonbase/ui": ["@moonbase/ui@workspace:packages/ui"],
+
+    "@moonbase/workspace": ["@moonbase/workspace@workspace:packages/workspace"],
 
     "@napi-rs/wasm-runtime": ["@napi-rs/wasm-runtime@0.2.4", "", { "dependencies": { "@emnapi/core": "^1.1.0", "@emnapi/runtime": "^1.1.0", "@tybys/wasm-util": "^0.9.0" } }, "sha512-9zESzOO5aDByvhIAsOy9TbpZ0Ur2AJbUI7UT73kcUTS2mxAMHOBaa1st/jAymNoCtvrit99kkzT1FZuXVcgfIQ=="],
 
