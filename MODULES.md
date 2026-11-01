@@ -4,7 +4,7 @@ The architecture requirements in `AGENTS.md` apply to every module. Keep Nx/Bun 
 
 | Owner | Public boundary | Allowed dependencies |
 | --- | --- | --- |
-| Coordinator: `packages/application/**` | `./client` browser-safe types/client; `./services` Effect service contracts; `./handlers` shared dispatch; `./runtime-client` process-runtime adapter | Effect; no feature implementation imports |
+| Coordinator: `packages/application/**` | `./client` and `./host-client` browser-safe types; `./services` Effect contracts; `./handlers` shared dispatch; `./runtime-client` process adapter; privileged `./host-health` | Effect; no feature implementation imports |
 | 02: `packages/editor/**` | React editor, per-instance state/controller and in-memory demo adapter | application/client, shared UI, React, Monaco; demo adapter may implement application/services outside renderer |
 | 03: `packages/workspace/**` | `WorkspaceLive` layer/configuration, focused native assets | application/services and client types, Effect, Node/platform/Git/native resources; no React/Electron/provider dependency |
 | 05: `packages/pi-runtime/**` | chat service/layer and validated loopback protocol implementation | application contracts, Effect, pinned Pi Durable/Pi dependencies, Node/SQLite; no editor/Electron/React |
@@ -50,6 +50,8 @@ Retain checkout/file tabs; shared normal/diff/conflict buffers; explicit Save; c
 ## Host identity contract for later chat/SSH
 
 Protocol v1 uses authenticated HTTP on an explicit `127.0.0.1` host endpoint, reachable through a system OpenSSH local forward. `GET /v1/health`, with `Authorization: Bearer <host token>`, returns `{ protocol: 1, hostId, storeId, version, capabilities: ["chat-v0"] }`. No token in URL, logs or SSH arguments. Missing/wrong token: 401; incompatible protocol/capability: reject; unexpected host/store identity: reject without rebinding saved chats. A TCP connection alone is not authenticated health. All stateful requests bind actor, host/store, immutable request ID and exact conversation/task target. Reconnect reads status/history; it never sends again. Stop names the selected task generation, not whichever task is currently running. Delivery is bounded and recoverable from Pi Durable, which remains transcript/execution/task authority. The coordinator extends concrete chat/connection contracts centrally before tasks 05/06 start. No duplicate execution scheduler or event store; no remote provisioning or mapping remote paths onto local files.
+
+`application/host-client` freezes protocol 1/application version 0.1.0 identities; privileged `application/host-health` verifies the configured bearer-authenticated endpoint with an 8 KiB body bound and five-second deadline. See `packages/application/HOST-PROTOCOL.md`. These exports alone do not implement chat/SSH or alter editor startup.
 
 ## Technical gates and branches
 

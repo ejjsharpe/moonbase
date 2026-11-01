@@ -14,7 +14,10 @@ for (const file of manifest.files) {
     assert.deepEqual(await readFile(`packages/ui/${file.path.split("/").at(-1)}`), data);
   }
 }
-const result = await build({ entryPoints: ["packages/application/src/client.ts"], bundle: true, platform: "browser", write: false, metafile: true });
-assert.deepEqual(Object.keys(result.metafile.inputs), ["packages/application/src/client.ts"]);
-assert(!/node:|electron|@moonbase\/(workspace|pi-runtime|ssh)/.test(result.outputFiles[0].text));
+for (const entry of ["client", "host-client"]) {
+  const path = `packages/application/src/${entry}.ts`;
+  const result = await build({ entryPoints: [path], bundle: true, platform: "browser", write: false, metafile: true });
+  assert.deepEqual(Object.keys(result.metafile.inputs), [path]);
+  assert(!/node:|electron|@moonbase\/(workspace|pi-runtime|ssh)/.test(result.outputFiles[0].text));
+}
 console.log(`Verified ${manifest.files.length} source hashes, active UI copies and browser-only command contracts.`);

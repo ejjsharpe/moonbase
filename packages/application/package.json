@@ -6,7 +6,9 @@
     "./client": "./src/client.ts",
     "./services": "./src/services.ts",
     "./handlers": "./src/handlers.ts",
-    "./runtime-client": "./src/runtime-client.ts"
+    "./runtime-client": "./src/runtime-client.ts",
+    "./host-client": "./src/host-client.ts",
+    "./host-health": "./src/host-health.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
