@@ -13,12 +13,15 @@ export type CheckoutView = {
 };
 export type RecoveryDraft = { target: FileTarget; text: string; disk: FileDocument };
 export type EditorRecovery = {
-  version: 1; clientId: string; checkouts: CheckoutTarget[]; selectedCheckoutId: string | null;
+  version: 1; clientId: string;
+  /** Known exact targets retain closed checkout metadata; open membership is separate. */
+  checkouts: CheckoutTarget[]; openCheckoutIds: string[]; selectedCheckoutId: string | null;
+  /** Keys are CheckoutTarget.checkoutId, not display labels or composite JSON keys. */
   views: Record<string, CheckoutView>; drafts: RecoveryDraft[];
   recentFiles: FileTarget[]; sidebarWidth: number;
 };
 export const emptyRecovery = (clientId: string): EditorRecovery => ({
-  version: 1, clientId, checkouts: [], selectedCheckoutId: null, views: {}, drafts: [], recentFiles: [], sidebarWidth: 270,
+  version: 1, clientId, checkouts: [], openCheckoutIds: [], selectedCheckoutId: null, views: {}, drafts: [], recentFiles: [], sidebarWidth: 270,
 });
 export type RecoveryLoad = { revision: number; state: EditorRecovery; errors: string[]; operations: OperationResult[] };
 export type DirectoryEntry = { path: string; directory: boolean; ignored?: boolean };
