@@ -1,5 +1,7 @@
 # Review R5 corrections
 
+Historical response: R6 cleared those reported cases but found a delayed Copy materialization and a dirty restored comparison variant. See the [current R6 response](review-r6.md).
+
 Reviewed head: `4c1e319d810ed4673765a008ae4c7101ee8b9f57`. Exact prerequisite/base remains `8557fdd0d7a71f93a6584c77430e6fde57668580` (`chore/recovery-publication-contract`, #7). Executable/test source: `24954aab6e745ee1830de2a50c10a6ffd118967a`, following main fix `f253774ba3de54cc43fb5cc1be67149ead1aba38`. The next evidence-only commit adds this record, README links and the inspected capture. Stack remains #1 → #2 → #5 → #7 → #4; PR #4 stays **DRAFT** for fresh independent R6.
 
 Only `packages/editor` changed in this round. No root/shared contract, dependency, export, memory-service authority, sibling implementation or runtime boundary changed. The controller remains ordinary per-instance TypeScript, using the shared application handlers/client. No new browser store, workflow engine or global command queue was added.
