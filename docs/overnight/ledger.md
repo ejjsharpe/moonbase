@@ -13,6 +13,9 @@
 - A direct StyleX MIT notice omitted from the installed npm tarballs has been obtained from the primary project; exact release-source matching remains part of distribution verification. Follow-up coordination changes are kept separately from the fixed review head.
 - Editor worker identified missing checkout binding in recovered operation evidence. Coordinator added mandatory `OperationResult.checkout` centrally; workspace journal/recovery and editor reconciliation must preserve it. Both workers consume the committed shared-contract follow-up and keep missing/unbound evidence visible instead of guessing.
 - Astra foundation review at `bb5c5d0` reported the same P1 identity gap plus two P2 runtime errors (hidden finalizer failures and untyped cancellation). PR #2 fixes all three; six public-client regression tests pass after three expected failing regression paths were reproduced. Full findings/responses are in `reviews/foundation-r1.md`; a fresh independent changed-head review follows.
+- Round 2 at `a77b241` found a pinned-Effect pending-acquisition cleanup race, throwing arbitrary-defect formatting and inherited pre-aborted dispatch. All were reproduced and repaired centrally; ten public-client tests now pass, and both feature owners have the required enclosing-scope watch convention. See `reviews/boundary-r2.md`.
+- Lookup contract now includes ranked matches, highlight positions and separately filtered scoped history. Workspace owner is using the verified standalone ripgrep 15.2.0 asset for full local/nested ignore policy and independent matching/ranking.
+- Standalone macOS arm64 ripgrep asset matches its official GitHub release digest, executes independently and links only system libraries. Release notices plus a checksum-verified Cargo.lock notice superset (49 registry crates, 108 notice files) are retained; final packaged artifact/target closure remains a packaging gate.
 
 ## Planned dependency order
 

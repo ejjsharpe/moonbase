@@ -1,15 +1,17 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Effect, Layer, ManagedRuntime, Stream, Queue } from "effect";
-import { ApplicationError, emptyRecovery, type CheckoutTarget } from "../src/client.ts";
+import { Effect, Layer, ManagedRuntime, Stream } from "effect";
+import { ApplicationError, emptyRecovery, type CheckoutTarget, type WorkspaceEvent } from "../src/client.ts";
 import { WorkspaceService, type WorkspaceServiceShape } from "../src/services.ts";
 import { makeEditorClient } from "../src/runtime-client.ts";
 
 const checkout: CheckoutTarget = { hostId: "host", checkoutId: "checkout", projectId: "project", root: "/checkout", branch: "main" };
-function fixture(failures: { watchCleanup?: Error; commandCleanup?: Error } = {}) {
+function fixture(failures: { watchCleanup?: Error; commandCleanup?: Error; watchAcquisition?: Effect.Effect<void> } = {}) {
   const counts = { acquired: 0, released: 0, subscriptions: 0, unsubscribed: 0, reads: 0, interrupted: 0 };
   let watching!: () => void;
   const ready = new Promise<void>(resolve => { watching = resolve; });
+  let entering!: () => void;
+  const acquiring = new Promise<void>(resolve => { entering = resolve; });
   let reading!: () => void;
   const started = new Promise<void>(resolve => { reading = resolve; });
   const unavailable = () => Effect.fail(new ApplicationError({ code: "Unavailable", message: "Unused fixture capability" }));
@@ -30,17 +32,21 @@ function fixture(failures: { watchCleanup?: Error; commandCleanup?: Error } = {}
     saveFile: unavailable, listDirectory: unavailable, gitStatus: unavailable,
     readComparison: unavailable, lookupFiles: unavailable, inspectEntries: unavailable,
     mutate: unavailable, operationStatus: unavailable, acknowledgeOperation: unavailable, persistRecovery: unavailable,
-    watch: () => Stream.callback(queue => Effect.acquireRelease(
-      Effect.sync(() => { counts.subscriptions++; Queue.offerUnsafe(queue, { checkout, paths: [], ready: true }); watching(); }),
+    watch: () => Stream.unwrap(Effect.as(Effect.acquireRelease(
+      Effect.gen(function* () {
+        yield* Effect.sync(() => { counts.subscriptions++; entering(); });
+        yield* failures.watchAcquisition ?? Effect.void;
+        yield* Effect.sync(() => { watching(); });
+      }),
       () => Effect.sync(() => { counts.unsubscribed++; if (failures.watchCleanup) throw failures.watchCleanup; }),
-    )),
+    ), Stream.concat(Stream.succeed<WorkspaceEvent>({ checkout, paths: [], ready: true }), Stream.never))),
   };
   const layer = Layer.effect(WorkspaceService, Effect.acquireRelease(
     Effect.sync(() => { counts.acquired++; return service; }),
     () => Effect.sync(() => { counts.released++; }),
   ));
   const runtime = ManagedRuntime.make(layer);
-  return { counts, runtime, client: makeEditorClient(runtime), ready, started };
+  return { counts, service, runtime, client: makeEditorClient(runtime), ready, started, acquiring };
 }
 
 test("public clients share one acquired service and release it at the process scope", async () => {
@@ -110,4 +116,45 @@ test("command cancellation preserves a failing cleanup instead of labelling it c
   const rejected = assert.rejects(pending, error => error instanceof ApplicationError && error.code === "Unavailable" && /Read cleanup failed/.test(error.message));
   try { await started; abort.abort(); await rejected; }
   finally { abort.abort(); await runtime.dispose(); }
+});
+
+for (const concurrentDispose of [false, true]) test(`pending watch acquisition retains cleanup failure; concurrent disposal=${concurrentDispose}`, async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const { runtime, client, counts, acquiring } = fixture({ watchAcquisition: Effect.promise(() => gate), watchCleanup: Error("Pending watch cleanup failed") });
+  const errors: ApplicationError[] = [];
+  const stop = client.watch({ checkout, paths: [""] }, () => {}, error => { errors.push(error); });
+  await acquiring; stop();
+  const disposal = concurrentDispose ? runtime.dispose() : undefined;
+  release(); await disposal;
+  await new Promise<void>(resolve => setImmediate(resolve));
+  await runtime.dispose();
+  assert.equal(counts.unsubscribed, 1); assert.equal(errors.length, 1);
+  assert.equal(errors[0].code, "Unavailable"); assert.match(errors[0].message, /Pending watch cleanup failed/);
+});
+
+test("unprintable defects reach command and watch application error boundaries", async () => {
+  const { service, runtime, client } = fixture();
+  const defect = Object.create(null);
+  service.gitStatus = () => Effect.die(defect);
+  service.watch = () => Stream.fromEffect(Effect.die(defect));
+  try {
+    await assert.rejects(client.command("gitStatus", { checkout }), error => error instanceof ApplicationError && error.code === "Unavailable");
+    const errors: ApplicationError[] = [];
+    client.watch({ checkout, paths: [""] }, () => {}, error => { errors.push(error); });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(errors.length, 1); assert.equal(errors[0].code, "Unavailable");
+  } finally { await runtime.dispose(); }
+});
+
+test("an already-aborted command is rejected before runtime acquisition or service dispatch", async () => {
+  const { service, counts, runtime, client } = fixture();
+  let saves = 0;
+  service.saveFile = () => Effect.sync(() => { saves++; return { kind: "saved", disk: { text: "text", version: "new" } }; });
+  const abort = new AbortController(); abort.abort();
+  try {
+    await assert.rejects(client.command("saveFile", { target: { checkout, path: "a" }, clientId: "client", requestId: "request", text: "text", expectedVersion: "old" }, { signal: abort.signal }),
+      error => error instanceof ApplicationError && error.code === "Cancelled");
+    assert.equal(saves, 0); assert.equal(counts.acquired, 0);
+  } finally { await runtime.dispose(); }
 });
