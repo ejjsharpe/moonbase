@@ -10,7 +10,7 @@ import { execFileSync } from "node:child_process";
 
 let app: ElectronApplication, child: ChildProcess, page: Page, base: string, checkout: string;
 const errors: string[] = [], consoleErrors: string[] = [];
-declare global { var desktopTest: { calls: {method: string; input: {operation?: string; input?: Record<string, unknown>}}[]; results: { operation?: string; reply: {ok: boolean; value?: {items: {message?: string}[]}} }[]; fault: string | null; noStatus: boolean; outage: string | null; restoreOn: string | null; held: string | null; release(): void; cancels: number }; }
+declare global { var desktopTest: { chatCalls: {kind: string; id: string}[]; cancelIds: string[]; chatCancelIds: string[]; calls: {id: string; method: string; input: {operation?: string; input?: Record<string, unknown>}}[]; results: { operation?: string; reply: {ok: boolean; value?: {items: {message?: string}[]}} }[]; fault: string | null; noStatus: boolean; outage: string | null; restoreOn: string | null; held: string | null; release(): void; cancels: number }; }
 test.beforeEach(async () => {
   base = realpathSync(mkdtempSync(join(tmpdir(), "moonbase-desktop-"))); checkout = join(base, "checkout"); mkdirSync(checkout);
   const git = (...args: string[]) => execFileSync("/usr/bin/git", ["-C", checkout, "-c", "user.name=Moonbase Test", "-c", "user.email=test@example.invalid", ...args], { env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" } });
@@ -369,6 +369,12 @@ test("unknown final Quit publication retains the window and resolves only the ex
   await quit(); await page.getByRole("button", { name: "Discard", exact: true }).click();
   await expect(page.getByRole("button", { name: "Resolve recovery publication", exact: true })).toBeVisible();
   expect((await recovery()).state.drafts).toEqual([]); // The consented final publication actually committed.
+  await page.evaluate(() => Object.assign(window, { pendingDocumentIdentity: crypto.randomUUID() }));
+  const pendingDocument = await page.evaluate(() => (window as unknown as {pendingDocumentIdentity:string}).pendingDocumentIdentity);
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.reload());
+  await page.evaluate(() => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
+  expect(await page.evaluate(() => (window as unknown as {pendingDocumentIdentity:string}).pendingDocumentIdentity)).toBe(pendingDocument);
+  await expect(page.getByRole("button", { name: "Resolve recovery publication", exact: true })).toBeVisible();
   await expect(page.locator('.view-line').filter({ hasText: "consented pending discard" }).first()).toBeVisible();
   expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible())).toBe(true);
   await app.evaluate(() => { globalThis.desktopTest.noStatus = false; });

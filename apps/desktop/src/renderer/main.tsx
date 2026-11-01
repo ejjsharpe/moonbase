@@ -29,7 +29,13 @@ const chat = await (async () => {
     return createChatProof({ ...browserClients(window.moonbaseChat), context, storage: localStorage });
   } catch (error) { chatInitializationFailed = true; chatError = error instanceof Error ? error.message : "Chat could not initialize. Preserve this user-data directory."; return null; }
 })();
-window.addEventListener("beforeunload", event => { if (chatInitializationFailed || chat && !chat.preserve()) { event.preventDefault(); event.returnValue = ""; } });
+window.addEventListener("beforeunload", event => {
+  const state = controller.getSnapshot();
+  if (chatInitializationFailed || state.preserving || state.publication || state.buffers.some(buffer => buffer.saving || buffer.pendingSave) || chat && !chat.preserve()) {
+    event.preventDefault(); event.returnValue = "";
+  }
+});
+window.addEventListener("unload", () => { chat?.dispose(); controller.dispose(); });
 document.addEventListener("visibilitychange", () => { if (document.hidden) chat?.detach(); else void chat?.start(); });
 const styles = stylex.create({
   shell: { height: "100dvh", display: "flex", flexDirection: "column", overflow: "hidden", backgroundColor: colors.canvas, color: colors.text },

@@ -236,6 +236,8 @@ test("dirty editor/live chat, two drafts, no-resend reconnect, view close and cl
     await expect(tab(p, "Editor")).toBeFocused();
     await p.keyboard.press("Enter");
     await p.evaluate(() => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
+    await screen(app, p, "keyboard-activation");
+    await writeFile(join(output, "keyboard-focus.json"), JSON.stringify(await p.evaluate(() => ({ active: { tag: document.activeElement?.tagName, label: document.activeElement?.getAttribute("aria-label"), role: document.activeElement?.getAttribute("role") }, text: document.querySelector(".view-lines")?.textContent })), null, 2));
     await expect(tab(p, "Editor")).toBeFocused();
     await expect(tab(p, "Editor")).toHaveAttribute("aria-selected", "true");
     const editorHasFocus = () => p.evaluate(() => !!document.activeElement?.closest('[aria-label="Moonbase editor"]'));
@@ -281,6 +283,21 @@ test("dirty editor/live chat, two drafts, no-resend reconnect, view close and cl
     await expect(p.getByLabel("Message", { exact: true })).toHaveValue(
       "first independent newer draft",
     );
+    const priorWatches = packaged ? null : await app.evaluate(() => ({
+      editor: globalThis.desktopTest.calls.filter(v => v.method === "watch").map(v => v.id),
+      chat: globalThis.desktopTest.chatCalls.filter(v => v.kind.startsWith("watch-")).map(v => v.id),
+    }));
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.reload());
+    await expect(editor(p)).toBeVisible();
+    await expect(p.locator(".view-line").filter({ hasText: "local dirty draft + live tool editing" }).first()).toBeVisible();
+    if (priorWatches) await expect.poll(() => app.evaluate((_, ids) => ({
+      editor: ids.editor.every(id => globalThis.desktopTest.cancelIds.includes(id)),
+      chat: ids.chat.every(id => globalThis.desktopTest.chatCancelIds.includes(id)),
+    }), priorWatches)).toEqual({ editor: true, chat: true });
+    await screen(app, p, "restored-dirty-editor");
+    await tab(p, "Chat").click();
+    await expect(p.getByLabel("Message", { exact: true })).toHaveValue("first independent newer draft");
+    expect((await f.stats()).commands.filter(v => v === "sendChat")).toHaveLength(1);
     await p.getByRole("button", { name: "Disconnect", exact: true }).click();
     await p.getByRole("button", { name: "Connect", exact: true }).click();
     await expect(p.getByRole("button", { name: "Stop", exact: true })).toBeEnabled();

@@ -2,10 +2,12 @@
 import { app, ipcMain } from 'electron';
 import { writeFileSync } from 'node:fs';
 const register = ipcMain.handle.bind(ipcMain);
-const control = { calls: [], results: [], fault: null, noStatus: false, outage: null, restoreOn: null, held: null, released: null, release() { this.released?.(); this.released = null; }, cancels: 0 };
+const control = { calls: [], chatCalls: [], cancelIds: [], chatCancelIds: [], results: [], fault: null, noStatus: false, outage: null, restoreOn: null, held: null, released: null, release() { this.released?.(); this.released = null; }, cancels: 0 };
 globalThis.desktopTest = control;
-ipcMain.on('moonbase:cancel', () => control.cancels++);
+ipcMain.on('moonbase:cancel', (_event, id) => { control.cancels++; control.cancelIds.push(id); });
+ipcMain.on('moonbase-chat:cancel', (_event, id) => control.chatCancelIds.push(id));
 ipcMain.handle = (name, listener) => register(name, async (event, input) => {
+  if (name === 'moonbase-chat:call') control.chatCalls.push(structuredClone(input));
   if (name !== 'moonbase:call') return listener(event, input);
   control.calls.push(structuredClone(input));
   if (control.restoreOn === input?.input?.operation) { control.outage = null; control.restoreOn = null; }
