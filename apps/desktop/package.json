@@ -25,7 +25,10 @@
     "react-dom": "19.3.1",
     "@stylexjs/stylex": "0.19.1",
     "@base-ui/react": "1.9.0",
-    "monaco-editor": "0.57.0"
+    "monaco-editor": "0.57.0",
+    "@moonbase/chat-probe": "workspace:*",
+    "@moonbase/pi-runtime": "workspace:*",
+    "@moonbase/ssh": "workspace:*"
   },
   "devDependencies": {
     "electron": "45.1.0",

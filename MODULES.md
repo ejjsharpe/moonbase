@@ -11,7 +11,7 @@ The architecture requirements in `AGENTS.md` apply to every module. Keep Nx/Bun 
 | 06: `packages/ssh/**` | `SshLive(config)` provides shared ConnectionService | application contracts, Effect, system OpenSSH; no editor/Pi implementation |
 | Coordinator: `packages/ui/**` | StyleX tokens/recipes | StyleX; Base UI interactions belong in consuming React controls |
 | 04/08: `apps/desktop/**` | Electron main/preload and renderer composition | public module exports; one scoped process runtime; privileged implementations stay out of renderer |
-| 07: `apps/chat-probe/**` | independent chat proof | public application/chat/SSH interfaces and UI; no editor |
+| 07: `apps/chat-probe/**` | browser-safe `./ui`, `./controller`, `./bridge`; privileged `./native-session`, `./native-config` adapters | public application/chat/SSH interfaces and UI; no editor |
 
 The coordinator owns root configuration, package export maps, lockfile, CI and shared UI. Feature workers may create their own package manifest/test/build configuration inside assigned paths, using pinned installed versions, and request coordinator installation/lockfile changes. No cross-module internal imports. Tests may construct scoped runtimes; feature production code must not.
 
@@ -56,3 +56,7 @@ Host health uses the nonce-bound HMAC protocol in `packages/application/HOST-PRO
 ## Technical gates and branches
 
 Foundation → independent editor/workspace siblings → reviewed editor fan-in → standalone editor proof. Then stable contracts → independent Pi/SSH siblings → reviewed chat fan-in → standalone chat proof. Prepare composition only when independent interfaces and available checks are sound; keep final composition draft while real/manual gates remain. Non-default fan-in branches preserve ancestry; original PRs stay unmerged. Track exact refs, review rounds, checks and blockers in `docs/overnight/ledger.md`.
+
+## Desktop composition adapters
+
+Task08 reuses the existing chat bridge and exact-host/actor IPC session through public exports. `./native-config` reads only the explicit owner-private configuration; the desktop still authenticates its owned main frame before entering `./native-session`. These adapters create no runtime. The composition root supplies clients from its one shared runtime. Import `./bridge`/`./ui`/`./controller` in the renderer, and keep the native configuration/session in main. The standalone proof remains independently runnable.

@@ -6,7 +6,10 @@
   "main": "dist/main.mjs",
   "exports": {
     "./ui": "./src/ui.tsx",
-    "./controller": "./src/controller.ts"
+    "./controller": "./src/controller.ts",
+    "./bridge": "./src/wire.ts",
+    "./native-session": "./src/session.ts",
+    "./native-config": "./src/config.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
