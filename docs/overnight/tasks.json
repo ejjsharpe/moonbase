@@ -807,6 +807,38 @@
     "childThreadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-workspace-r6-38c6c55",
     "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-workspace-r6-38c6c55:ordinal:1",
     "childNodeId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-workspace-r6-38c6c55",
+    "status": "completed",
+    "workState": "working",
+    "hasPendingChildRuns": false,
+    "latestTerminalRunId": null,
+    "latestTerminalStatus": null,
+    "latestTerminalSummary": null,
+    "latestTerminalResultContextTransferId": null,
+    "providerInstanceId": "codex",
+    "model": "gpt-6-astra",
+    "options": [
+      {
+        "id": "reasoningEffort",
+        "value": "xhigh"
+      },
+      {
+        "id": "serviceTier",
+        "value": "default"
+      }
+    ],
+    "summary": null,
+    "resultContextTransferId": null,
+    "hasPendingQuestion": false,
+    "pendingApproval": null,
+    "waitTimedOut": false,
+    "findings": "docs/overnight/reviews/workspace-r6.md",
+    "verdict": "no blocking findings at current 38c6c55/base7; backend-only"
+  },
+  "editorReviewR5": {
+    "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-editor-r5-4c1e319",
+    "childThreadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-editor-r5-4c1e319",
+    "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-editor-r5-4c1e319:ordinal:1",
+    "childNodeId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-editor-r5-4c1e319",
     "status": "running",
     "workState": "working",
     "hasPendingChildRuns": false,
@@ -831,16 +863,5 @@
     "hasPendingQuestion": false,
     "pendingApproval": null,
     "waitTimedOut": false
-  },
-  "editorReviewNext": {
-    "round": 5,
-    "head": "4c1e319d810ed4673765a008ae4c7101ee8b9f57",
-    "base": "8557fdd0d7a71f93a6584c77430e6fde57668580",
-    "status": "queued behind workspace R6, before host-health R2",
-    "model": "gpt-6-astra",
-    "options": {
-      "reasoningEffort": "xhigh",
-      "serviceTier": "default"
-    }
   }
 }

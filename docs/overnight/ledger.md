@@ -9,8 +9,8 @@ All PRs are private, linked and unmerged. Older entries below are historical evi
 | [#1 foundation](https://github.com/ejjsharpe/moonbase/pull/1) | `8ef20b06222db32b54b4bdf9e6c2223a1ebd4da4` | main `c89e4db` | Source provenance checked; boundary findings repaired in #2 |
 | [#2 shared boundary](https://github.com/ejjsharpe/moonbase/pull/2) | `68aa035b9c283a65cac6e78ab02865e99882d15b` | #1 | Astra R5: no blockers; 14 public tests plus independent probes |
 | [#5 checkout contract](https://github.com/ejjsharpe/moonbase/pull/5) | `6e58c1c4ea6944e8ca25eadc46e35c843f0f9fbe` | #2 | Astra: no contract blockers; actual adoption/fan-in pending |
-| [#3 workspace](https://github.com/ejjsharpe/moonbase/pull/3) | `38c6c551ff0ab1108077275d223a32967f32b9f6` | #7 | DRAFT; new receipt adoption, 91+14 tests pass; fresh Astra R6 running |
-| [#4 editor](https://github.com/ejjsharpe/moonbase/pull/4) | `4c1e319d810ed4673765a008ae4c7101ee8b9f57` | #7 | DRAFT; R4 repairs/receipt adoption, 59+14 tests and 18 browser journeys pass; R5 queued |
+| [#3 workspace](https://github.com/ejjsharpe/moonbase/pull/3) | `38c6c551ff0ab1108077275d223a32967f32b9f6` | #7 | Ready for review; Astra R6 no blockers, 91+14 tests/10 independent probes and exact-head CI pass |
+| [#4 editor](https://github.com/ejjsharpe/moonbase/pull/4) | `4c1e319d810ed4673765a008ae4c7101ee8b9f57` | #7 | DRAFT; owner 59+14 tests and 18 browser journeys pass; fresh Astra R5 running |
 | [#6 host health](https://github.com/ejjsharpe/moonbase/pull/6) | `42836b0421898b963e67f02795edc35f5e546173` | #5 | DRAFT; R1 credential flaw repaired, 25 application tests/checks pass; R2 queued |
 | [#7 recovery publications](https://github.com/ejjsharpe/moonbase/pull/7) | `8557fdd0d7a71f93a6584c77430e6fde57668580` | #5 | DRAFT for coordinated adoption; Astra contract-only no blockers, 14 tests plus five independent probes and CI pass |
 
@@ -37,6 +37,8 @@ PR #7 fresh Astra review completed with no contract blockers; see `reviews/recov
 Both adoption heads are now published and based on exact #7. Workspace `38c6c55` adds atomic immutable recovery receipts/read-only lookup with 91 real module/native and fourteen application tests passing. Editor `4c1e319` (source/tests `a777c4169655bd5c3b3924be8ee3cf189185254c`) reports all three R4 fixes, exact pending/final publication semantics and 59 public/eighteen browser cases passing with inspected committed captures. Owner observed its exact-head CI green. Fresh workspace R6 is running; editor R5 is next, then host-health R2. Old workspace `1fc9692` clearance does not extend to receipt adoption without this review.
 
 Host-health R1 independently reproduced the bearer credential flaw: matching unsigned JSON at a wrong listener was accepted and its captured token could be reused. Lead repaired it at `42836b0` with domain-separated, nonce-bound client/host HMAC proofs, no key transmission or bearer fallback; 25 tests and required source checks pass. See `reviews/host-health-r1.md`. This is a changed-head repair awaiting independent R2, not accepted security or Pi/SSH implementation. New-head CI remains pending; supported watch is active.
+
+Workspace R6 clears current `38c6c55`/base #7 with no blockers; all thirteen prior findings remain cleared, supplied 91+14 tests and ten fresh probes plus CI pass. See `reviews/workspace-r6.md`. Lead marked module #3 ready, preserving the backend-only scope and unrun controller/package gates in the PR body. Fresh editor R5 now reviews `4c1e319`/base #7, followed by host-health R2. Only after editor clearance may the lead form the reviewed fan-in, reconcile root lock and run real controller/workspace tests before task 04.
 
 ## Setup
 
