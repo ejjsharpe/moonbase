@@ -253,7 +253,7 @@
     "childThreadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-workspace-r1-271920d",
     "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-workspace-r1-271920d:ordinal:1",
     "childNodeId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-workspace-r1-271920d",
-    "status": "running",
+    "status": "completed",
     "workState": "working",
     "hasPendingChildRuns": false,
     "latestTerminalRunId": null,
@@ -276,6 +276,93 @@
     "resultContextTransferId": null,
     "hasPendingQuestion": false,
     "pendingApproval": null,
-    "waitTimedOut": false
+    "waitTimedOut": false,
+    "findings": "docs/overnight/reviews/workspace-r1.md",
+    "blocking": 7
+  },
+  "editorReviewR1": {
+    "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-editor-r1-0556678",
+    "childThreadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-editor-r1-0556678",
+    "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-editor-r1-0556678:ordinal:1",
+    "childNodeId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-editor-r1-0556678",
+    "status": "completed",
+    "workState": "working",
+    "hasPendingChildRuns": false,
+    "latestTerminalRunId": null,
+    "latestTerminalStatus": null,
+    "latestTerminalSummary": null,
+    "latestTerminalResultContextTransferId": null,
+    "providerInstanceId": "codex",
+    "model": "gpt-6-astra",
+    "options": [
+      {
+        "id": "reasoningEffort",
+        "value": "xhigh"
+      },
+      {
+        "id": "serviceTier",
+        "value": "default"
+      }
+    ],
+    "summary": null,
+    "resultContextTransferId": null,
+    "hasPendingQuestion": false,
+    "pendingApproval": null,
+    "waitTimedOut": false,
+    "findings": "docs/overnight/reviews/editor-r1.md",
+    "blocking": 8
+  },
+  "workspaceFixR1": {
+    "threadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-03-workspace-module-r1-bb5c5d0",
+    "messageId": "message:mcp:809f45ac-99a5-4d58-a1ba-08cc0a77c997:thread-send:workspace-fix-review-r1-7findings",
+    "runId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-03-workspace-module-r1-bb5c5d0:ordinal:4",
+    "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Athread-send%3Aworkspace-fix-review-r1-7findings",
+    "status": "starting",
+    "delivery": "started"
+  },
+  "editorFixR1": {
+    "threadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-02-editor-module-r1-bb5c5d0",
+    "messageId": "message:mcp:809f45ac-99a5-4d58-a1ba-08cc0a77c997:thread-send:editor-fix-review-r1-8findings",
+    "runId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-02-editor-module-r1-bb5c5d0:ordinal:3",
+    "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Athread-send%3Aeditor-fix-review-r1-8findings",
+    "status": "starting",
+    "delivery": "started"
+  },
+  "checkoutContract": {
+    "head": "6e58c1c4ea6944e8ca25eadc46e35c843f0f9fbe",
+    "url": "https://github.com/ejjsharpe/moonbase/pull/5",
+    "base": "68aa035b9c283a65cac6e78ab02865e99882d15b"
+  },
+  "checkoutContractReview": {
+    "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-checkout-contract-r1-6e58c1c",
+    "childThreadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-checkout-contract-r1-6e58c1c",
+    "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-checkout-contract-r1-6e58c1c:ordinal:1",
+    "childNodeId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-checkout-contract-r1-6e58c1c",
+    "status": "completed",
+    "workState": "working",
+    "hasPendingChildRuns": false,
+    "latestTerminalRunId": null,
+    "latestTerminalStatus": null,
+    "latestTerminalSummary": null,
+    "latestTerminalResultContextTransferId": null,
+    "providerInstanceId": "codex",
+    "model": "gpt-6-astra",
+    "options": [
+      {
+        "id": "reasoningEffort",
+        "value": "xhigh"
+      },
+      {
+        "id": "serviceTier",
+        "value": "default"
+      }
+    ],
+    "summary": null,
+    "resultContextTransferId": null,
+    "hasPendingQuestion": false,
+    "pendingApproval": null,
+    "waitTimedOut": false,
+    "verdict": "no blocking findings",
+    "findings": "docs/overnight/reviews/checkout-contract-r1.md"
   }
 }
