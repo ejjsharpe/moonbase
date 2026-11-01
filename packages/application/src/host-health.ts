@@ -1,13 +1,9 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { Effect } from 'effect';
 import { ApplicationError } from './client.ts';
-import {
-  chatHostVersion,
-  chatProtocolVersion,
-  type ChatHostHealth,
-  type ChatHostTarget,
-} from './host-client.ts';
+import { type ChatHostHealth, type ChatHostTarget } from './host-client.ts';
 import { releaseResource } from './services.ts';
+import { decodeChatHostHealth } from './host-schema.ts';
 
 /** Privileged configuration; never expose this shape through a renderer bridge. */
 export type ChatHostEndpoint = { origin: string; token: string; expected: ChatHostTarget };
@@ -109,22 +105,7 @@ export function validateHostHealth(value: unknown, expected: ChatHostTarget): Ch
       'Incompatible',
       'Chat host or store identity does not match the configured target.',
     );
-  if (
-    data.protocol !== chatProtocolVersion ||
-    data.version !== chatHostVersion ||
-    !Array.isArray(data.capabilities) ||
-    data.capabilities.length > 16 ||
-    !data.capabilities.every((value) => typeof value === 'string' && value.length <= 64) ||
-    !data.capabilities.includes('chat-v0')
-  )
-    return fail('Incompatible', 'Chat host protocol, version or capabilities are incompatible.');
-  return {
-    hostId: data.hostId,
-    storeId: data.storeId,
-    protocol: chatProtocolVersion,
-    version: chatHostVersion,
-    capabilities: [...data.capabilities],
-  };
+  return decodeChatHostHealth(value);
 }
 
 /** Verification is an Effect in the caller's existing process scope, never a runtime. */
