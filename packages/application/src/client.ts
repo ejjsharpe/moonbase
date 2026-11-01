@@ -76,6 +76,12 @@ export class ApplicationError extends Error {
   static is(value: unknown): value is ApplicationError {
     try { return typeof value === "object" && value !== null && #applicationError in value; } catch { return false; }
   }
+  static fromUnknown(value: unknown): ApplicationError {
+    if (ApplicationError.is(value)) return value;
+    let message: string;
+    try { message = String(value); } catch { message = "Unprintable application failure"; }
+    return new ApplicationError({ code: "Unavailable", message });
+  }
 }
 export type CommandOptions = { signal?: AbortSignal };
 export interface EditorClient {

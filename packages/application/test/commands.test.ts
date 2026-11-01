@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect, Layer, ManagedRuntime, Stream } from "effect";
 import { ApplicationError, emptyRecovery, type CheckoutTarget, type WorkspaceEvent } from "../src/client.ts";
-import { WorkspaceService, type WorkspaceServiceShape } from "../src/services.ts";
+import { WorkspaceService, releaseResource, type WorkspaceServiceShape } from "../src/services.ts";
 import { makeEditorClient } from "../src/runtime-client.ts";
 
 const checkout: CheckoutTarget = { hostId: "host", checkoutId: "checkout", projectId: "project", root: "/checkout", branch: "main" };
@@ -21,7 +21,7 @@ function fixture(failures: { watchCleanup?: Error; commandCleanup?: Error; watch
       counts.reads++;
       if (input.path === "slow") {
         reading();
-        yield* Effect.never.pipe(Effect.ensuring(Effect.sync(() => {
+        yield* Effect.never.pipe(Effect.ensuring(releaseResource(() => {
           counts.interrupted++;
           if (failures.commandCleanup) throw failures.commandCleanup;
         })));
@@ -38,7 +38,7 @@ function fixture(failures: { watchCleanup?: Error; commandCleanup?: Error; watch
         yield* failures.watchAcquisition ?? Effect.void;
         yield* Effect.sync(() => { watching(); });
       }),
-      () => Effect.sync(() => { counts.unsubscribed++; if (failures.watchCleanup) throw failures.watchCleanup; }),
+      () => releaseResource(() => { counts.unsubscribed++; if (failures.watchCleanup) throw failures.watchCleanup; }),
     ), Stream.concat(Stream.succeed<WorkspaceEvent>({ checkout, paths: [], ready: true }), Stream.never))),
   };
   const layer = Layer.effect(WorkspaceService, Effect.acquireRelease(
@@ -159,11 +159,12 @@ test("an already-aborted command is rejected before runtime acquisition or servi
   } finally { await runtime.dispose(); }
 });
 
-for (const cleanup of ["ensuring", "scoped"]) test(`combined ${cleanup} failures retain uncertainty and exact target in commands and subscriptions`, async () => {
+for (const cleanup of ["ensuring", "scoped"]) for (const proxy of [false, true]) test(`combined ${cleanup} failures retain uncertainty and exact target; proxy=${proxy}`, async () => {
   const { service, runtime, client } = fixture();
   const target = { checkout, path: "a.txt" };
   const failure = Effect.fail(new ApplicationError({ code: "Uncertain", message: "File outcome uncertain", target }));
-  const finalizer = Effect.die(Error("Cleanup also failed"));
+  const defect = proxy ? new Proxy(Error("Cleanup also failed"), { getPrototypeOf() { throw Error("Cleanup prototype trap"); } }) : Error("Cleanup also failed");
+  const finalizer = releaseResource(cleanup === "ensuring" ? () => { throw defect; } : () => Promise.reject(defect));
   const combined = cleanup === "ensuring" ? failure.pipe(Effect.ensuring(finalizer)) : Effect.scoped(Effect.gen(function* () {
     yield* Effect.acquireRelease(Effect.void, () => finalizer);
     return yield* failure;
