@@ -1844,5 +1844,17 @@
       ]
     },
     "implementationOwner": "lead"
+  },
+  "review-editor-import-r1": {
+    "status": "queued_after_active_pi_r1",
+    "head": "71f272d354359f8d5e1cff7a9f57159325eeabc5",
+    "base": "80b0ede184205b9fff1d633d19426c2bf9671688",
+    "model": "gpt-6-astra",
+    "providerInstanceId": "codex",
+    "options": {
+      "reasoningEffort": "xhigh",
+      "serviceTier": "default"
+    },
+    "mustUseNewDelegateTask": true
   }
 }
