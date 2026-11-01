@@ -1,0 +1,145 @@
+[
+  {
+    "phase": "red-4dd-source",
+    "cases": 1,
+    "pids": [
+      12425,
+      12440,
+      12441,
+      12442
+    ],
+    "absentAtTeardown": true,
+    "tempDirectories": [
+      "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-reload-v2UeB4"
+    ],
+    "noConfiguredHostForwarder": true
+  },
+  {
+    "phase": "red-4dd-package",
+    "cases": 1,
+    "pids": [
+      12586,
+      12611,
+      12612,
+      12613
+    ],
+    "absentAtTeardown": true,
+    "tempDirectories": [
+      "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-reload-RMRGfe"
+    ],
+    "noConfiguredHostForwarder": true
+  },
+  {
+    "phase": "red-4dd-package-isolated",
+    "cases": 1,
+    "pids": [
+      18175,
+      18176,
+      18177,
+      18178
+    ],
+    "absentAtTeardown": true,
+    "tempDirectories": [
+      "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-reload-HDHwcr"
+    ],
+    "noConfiguredHostForwarder": true
+  },
+  {
+    "phase": "red-8a-source",
+    "cases": 1,
+    "pids": [
+      12716,
+      12723,
+      12724,
+      12735
+    ],
+    "absentAtTeardown": true,
+    "tempDirectories": [
+      "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-reload-dE1Q8R"
+    ],
+    "noConfiguredHostForwarder": true
+  },
+  {
+    "phase": "red-8a-package",
+    "cases": 1,
+    "pids": [
+      12960,
+      13106,
+      13108,
+      13114
+    ],
+    "absentAtTeardown": true,
+    "tempDirectories": [
+      "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-reload-fyMeMR"
+    ],
+    "noConfiguredHostForwarder": true
+  },
+  {
+    "phase": "standalone-source",
+    "cases": 4,
+    "pids": [
+      13697,
+      13698,
+      13699,
+      13700,
+      13713,
+      13721,
+      13722,
+      13723,
+      13732,
+      13765,
+      13767,
+      13768,
+      13769,
+      13778,
+      13831,
+      13833,
+      13845,
+      13852,
+      13854,
+      13863
+    ],
+    "absentAtTeardown": true,
+    "tempDirectories": [
+      "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-document-atoYop",
+      "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-document-RlzzRr",
+      "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-document-THUTKb",
+      "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-reload-icJqbf"
+    ],
+    "noConfiguredHostForwarder": true
+  },
+  {
+    "phase": "standalone-package",
+    "cases": 4,
+    "pids": [
+      13921,
+      13922,
+      13923,
+      13924,
+      13949,
+      13957,
+      13958,
+      13959,
+      13968,
+      14000,
+      14002,
+      14003,
+      14004,
+      14006,
+      14045,
+      14046,
+      14058,
+      14059,
+      14060,
+      14061
+    ],
+    "absentAtTeardown": true,
+    "tempDirectories": [
+      "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-document-TkMEpU",
+      "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-document-rMvAir",
+      "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-document-aCP5Ud",
+      "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-reload-qZ3GmH"
+    ],
+    "noConfiguredHostForwarder": true
+  }
+]

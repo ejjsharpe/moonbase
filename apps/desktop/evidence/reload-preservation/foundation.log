@@ -1,0 +1,2 @@
+$ node scripts/check-foundation.mjs
+Verified 40 source hashes, active UI copies and browser-only command contracts.

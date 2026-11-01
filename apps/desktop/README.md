@@ -84,3 +84,6 @@ Set `MOONBASE_PACKAGED_TEST=1` and `MOONBASE_RELOAD_EXECUTABLE` to the absolute
 unsigned executable for the same packaged checks. Outputs default to
 `apps/desktop/test-results/reload` when launched from that app directory; set
 `MOONBASE_RELOAD_OUTPUT` explicitly when preserving separate phases.
+
+The focused response, old/new native captures, exact source/archive hashes and
+explicit evidence-loss correction are in [reload-preservation evidence](evidence/reload-preservation/response.md).

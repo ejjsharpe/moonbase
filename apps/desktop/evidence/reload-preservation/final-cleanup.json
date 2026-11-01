@@ -1,0 +1,252 @@
+{
+  "recordedPids": [
+    {
+      "pid": 12425,
+      "ESRCH": true
+    },
+    {
+      "pid": 12440,
+      "ESRCH": true
+    },
+    {
+      "pid": 12441,
+      "ESRCH": true
+    },
+    {
+      "pid": 12442,
+      "ESRCH": true
+    },
+    {
+      "pid": 12586,
+      "ESRCH": true
+    },
+    {
+      "pid": 12611,
+      "ESRCH": true
+    },
+    {
+      "pid": 12612,
+      "ESRCH": true
+    },
+    {
+      "pid": 12613,
+      "ESRCH": true
+    },
+    {
+      "pid": 18175,
+      "ESRCH": true
+    },
+    {
+      "pid": 18176,
+      "ESRCH": true
+    },
+    {
+      "pid": 18177,
+      "ESRCH": true
+    },
+    {
+      "pid": 18178,
+      "ESRCH": true
+    },
+    {
+      "pid": 12716,
+      "ESRCH": true
+    },
+    {
+      "pid": 12723,
+      "ESRCH": true
+    },
+    {
+      "pid": 12724,
+      "ESRCH": true
+    },
+    {
+      "pid": 12735,
+      "ESRCH": true
+    },
+    {
+      "pid": 12960,
+      "ESRCH": true
+    },
+    {
+      "pid": 13106,
+      "ESRCH": true
+    },
+    {
+      "pid": 13108,
+      "ESRCH": true
+    },
+    {
+      "pid": 13114,
+      "ESRCH": true
+    },
+    {
+      "pid": 13697,
+      "ESRCH": true
+    },
+    {
+      "pid": 13698,
+      "ESRCH": true
+    },
+    {
+      "pid": 13699,
+      "ESRCH": true
+    },
+    {
+      "pid": 13700,
+      "ESRCH": true
+    },
+    {
+      "pid": 13713,
+      "ESRCH": true
+    },
+    {
+      "pid": 13721,
+      "ESRCH": true
+    },
+    {
+      "pid": 13722,
+      "ESRCH": true
+    },
+    {
+      "pid": 13723,
+      "ESRCH": true
+    },
+    {
+      "pid": 13732,
+      "ESRCH": true
+    },
+    {
+      "pid": 13765,
+      "ESRCH": true
+    },
+    {
+      "pid": 13767,
+      "ESRCH": true
+    },
+    {
+      "pid": 13768,
+      "ESRCH": true
+    },
+    {
+      "pid": 13769,
+      "ESRCH": true
+    },
+    {
+      "pid": 13778,
+      "ESRCH": true
+    },
+    {
+      "pid": 13831,
+      "ESRCH": true
+    },
+    {
+      "pid": 13833,
+      "ESRCH": true
+    },
+    {
+      "pid": 13845,
+      "ESRCH": true
+    },
+    {
+      "pid": 13852,
+      "ESRCH": true
+    },
+    {
+      "pid": 13854,
+      "ESRCH": true
+    },
+    {
+      "pid": 13863,
+      "ESRCH": true
+    },
+    {
+      "pid": 13921,
+      "ESRCH": true
+    },
+    {
+      "pid": 13922,
+      "ESRCH": true
+    },
+    {
+      "pid": 13923,
+      "ESRCH": true
+    },
+    {
+      "pid": 13924,
+      "ESRCH": true
+    },
+    {
+      "pid": 13949,
+      "ESRCH": true
+    },
+    {
+      "pid": 13957,
+      "ESRCH": true
+    },
+    {
+      "pid": 13958,
+      "ESRCH": true
+    },
+    {
+      "pid": 13959,
+      "ESRCH": true
+    },
+    {
+      "pid": 13968,
+      "ESRCH": true
+    },
+    {
+      "pid": 14000,
+      "ESRCH": true
+    },
+    {
+      "pid": 14002,
+      "ESRCH": true
+    },
+    {
+      "pid": 14003,
+      "ESRCH": true
+    },
+    {
+      "pid": 14004,
+      "ESRCH": true
+    },
+    {
+      "pid": 14006,
+      "ESRCH": true
+    },
+    {
+      "pid": 14045,
+      "ESRCH": true
+    },
+    {
+      "pid": 14046,
+      "ESRCH": true
+    },
+    {
+      "pid": 14058,
+      "ESRCH": true
+    },
+    {
+      "pid": 14059,
+      "ESRCH": true
+    },
+    {
+      "pid": 14060,
+      "ESRCH": true
+    },
+    {
+      "pid": 14061,
+      "ESRCH": true
+    }
+  ],
+  "ports": [
+    {
+      "port": 4176,
+      "bindListenClose": true
+    }
+  ],
+  "scopedInventory": [],
+  "note": "No configured host/forwarder. Deleted historical local phase evidence not reconstructed; Nx daemon preexisting left untouched."
+}

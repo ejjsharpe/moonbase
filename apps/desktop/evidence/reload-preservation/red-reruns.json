@@ -1,0 +1,30 @@
+[
+  {
+    "product": "4dd",
+    "phase": "source",
+    "exit": 1,
+    "expected": "assertion loses fresh visible tail",
+    "observed": "fresh-tail loss assertion"
+  },
+  {
+    "product": "4dd",
+    "phase": "package",
+    "exit": 1,
+    "expected": "assertion loses fresh visible tail",
+    "observed": "pre-causal timing limit (not product red)"
+  },
+  {
+    "product": "8a",
+    "phase": "source",
+    "exit": 1,
+    "expected": "assertion loses fresh visible tail",
+    "observed": "fresh-tail loss assertion"
+  },
+  {
+    "product": "8a",
+    "phase": "package",
+    "exit": 1,
+    "expected": "assertion loses fresh visible tail",
+    "observed": "fresh-tail loss assertion"
+  }
+]

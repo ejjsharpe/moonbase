@@ -1,0 +1,2 @@
+$ node scripts/check-renderer.mjs
+Actual Vite desktop renderer: 1585 inputs, five workers/font, no privileged modules or feature runtime.

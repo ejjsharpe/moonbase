@@ -1,0 +1,48 @@
+$ playwright test --config playwright.config.ts
+[WebServer] $ vp dev --config vite.config.ts --host 127.0.0.1
+[WebServer] (node:18409) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+[WebServer] (node:18410) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+Running 35 tests using 1 worker
+
+(node:18411) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓   1 test/import.spec.ts:20:1 › native picker asks for a full single destination and captures explicit replacement consent (2.5s)
+  ✓   2 test/import.spec.ts:37:1 › public importFiles copies exact target/tokens and never redirects to a newer selection (2.0s)
+  ✓   3 test/import.spec.ts:53:1 › batch imports allow root and explicitly captured replacement paths in the same dialog (1.9s)
+  ✓   4 test/import.spec.ts:65:1 › cancelled/empty/closed-checkout imports dispatch nothing; create file/folder inspect no empty selection (3.6s)
+  ✓   5 test/import.spec.ts:82:1 › a delayed native picker cannot approve a checkout closed while selection was pending (1.7s)
+  ✓   6 test/workbench.spec.ts:10:1 › real Monaco edits/save, shared diff model and isolated second instance (2.3s)
+  ✓   7 test/workbench.spec.ts:30:1 › external conflict Compare/Cancel and failed Save preserve edits in the visible UI (2.2s)
+  ✓   8 test/workbench.spec.ts:47:1 › close dialog Cancel then Discard; Reopen reads disk and disposal releases Monaco/subscriptions (2.3s)
+  ✓   9 test/workbench.spec.ts:65:1 › lookup groups/highlights, previews, tree actions and constrained layout (2.6s)
+  ✓  10 test/workbench.spec.ts:87:1 › R1 real close-checkout removes its Monaco models without a teardown exception (1.8s)
+  ✓  11 test/workbench.spec.ts:98:1 › R2 rejected unchanged Rename/Move leaves explicit Save and Close usable (2.6s)
+  ✓  12 test/workbench.spec.ts:112:1 › R2 close-all/reopen/close-active loads the surviving file instead of an unavailable placeholder (2.3s)
+  ✓  13 test/workbench.spec.ts:122:57 › R2 visual keyboard navigation restores typing focus and keeps tab-strip focus (2.2s)
+  ✓  14 test/workbench.spec.ts:122:57 › R2 recent keyboard navigation restores typing focus and keeps tab-strip focus (2.1s)
+  ✓  15 test/workbench.spec.ts:139:1 › R3 a checkout clicked during close publication remains selected live and durably (1.9s)
+  ✓  16 test/workbench.spec.ts:152:54 › R3 keyboard close hands off typing focus (2.1s)
+  ✓  17 test/workbench.spec.ts:152:54 › R3 keyboard reopen hands off typing focus (2.2s)
+  ✓  18 test/workbench.spec.ts:164:1 › R3 keyboard close cancellation and failed publication preserve typing focus and dialog scope (2.3s)
+  ✓  19 test/workbench.spec.ts:178:1 › R3 keyboard close/reopen retains tree or strip origin and meaningful empty-editor focus (2.2s)
+  ✓  20 test/workbench.spec.ts:195:1 › R4 returning to a background-closed checkout loads the survivor (1.9s)
+  ✓  21 test/workbench.spec.ts:206:53 › R4 actual typing after close into remembered staged comparison (2.3s)
+  ✓  22 test/workbench.spec.ts:206:53 › R4 actual typing after close into remembered unstaged comparison (2.2s)
+  ✓  23 test/workbench.spec.ts:219:1 › R4 uncertain final close is visible, blocks Quit and resolves by exact receipt before focusing its survivor (2.4s)
+  ✓  24 test/workbench.spec.ts:237:1 › R5 selecting an absent survivor during another close loads it after preservation releases (2.3s)
+  ✓  25 test/workbench.spec.ts:251:1 › R6 delayed public Copy cannot reopen a destination closed through Monaco UI (2.6s)
+  ✓  26 test/workbench.spec.ts:273:53 › R6 restored dirty staged survivor shows its original and accepts typing (2.3s)
+  ✓  27 test/workbench.spec.ts:273:53 › R6 restored dirty unstaged survivor shows its original and accepts typing (2.4s)
+  ✓  28 test/workbench.spec.ts:288:53 › R7 recreated staged working file becomes editable with Save enabled (2.3s)
+  ✓  29 test/workbench.spec.ts:288:53 › R7 recreated unstaged working file becomes editable with Save enabled (2.4s)
+  ✓  30 test/workbench.spec.ts:306:1 › R9 lost and reordered Save receipts keep Retry Save visible until exact recovery settles (2.7s)
+  ✓  31 test/workbench.spec.ts:341:1 › R10 Resolve recovers a rejected metadata publication after an already-started Save (2.5s)
+  ✓  32 test/workbench.spec.ts:367:1 › valid prototype-shaped filenames edit and save without changing browser prototypes (2.9s)
+  ✓  33 test/workbench.spec.ts:383:115 › Tab actions first/last keyboard selection and Close click fit 1600x1000 (2.2s)
+  ✓  34 test/workbench.spec.ts:383:115 › Tab actions first/last keyboard selection and Close click fit 760x650 (2.0s)
+  ✓  35 test/workbench.spec.ts:383:115 › Tab actions first/last keyboard selection and Close click fit 543x441 (2.0s)
+
+  35 passed (1.4m)
