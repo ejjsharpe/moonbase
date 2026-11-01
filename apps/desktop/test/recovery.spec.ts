@@ -1,3 +1,4 @@
+import { prepareCrashRecovery } from './editor-regressions.ts';
 import { test, expect, _electron as electron } from '@playwright/test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -23,14 +24,7 @@ for (const action of ['Recover workbench', 'Quit Moonbase', 'cleanup failure'])
     try {
       const page = await app.firstWindow();
       await expect(page.getByRole('button', { name: 'Open checkout', exact: true })).toBeVisible();
-      await app.evaluate(({ dialog }) => {
-        dialog.showMessageBox = ((_window: unknown, options: { buttons: string[] }) => {
-          globalThis.recoveryButtons = options.buttons;
-          return new Promise((resolve) => {
-            globalThis.recoveryChoice = resolve;
-          });
-        }) as typeof dialog.showMessageBox;
-      });
+      await prepareCrashRecovery(app);
       if (action === 'cleanup failure') {
         // A real scoped finalizer fails after the renderer has acknowledged disposal.
         await app.evaluate(async () => {

@@ -687,7 +687,7 @@ test('held admitted Send leaves local Save/read/status and exact Stop independen
       stop: { target: unknown };
     };
     expect(stopped.stop.target).toEqual(original.input.target);
-    f.releaseReply();
+    await f.releaseReply();
     await expect
       .poll(async () =>
         (await saved(p)).pending.some((v: { operation: string }) => v.operation === 'sendChat'),
@@ -701,9 +701,15 @@ test('held admitted Send leaves local Save/read/status and exact Stop independen
     await stop(app);
     current = undefined;
   } finally {
-    f.releaseReply();
-    if (current) await stop(current, true);
-    await close(f);
+    try {
+      await f.releaseReply();
+    } finally {
+      try {
+        if (current) await stop(current, true);
+      } finally {
+        await close(f);
+      }
+    }
   }
 });
 

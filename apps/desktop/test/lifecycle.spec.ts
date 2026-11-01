@@ -177,7 +177,7 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
         expect(restored.recovery.value.state.drafts[0].text).toBe('retained local draft at reload');
         expect(restored.saved.drafts[0].text).toBe('newer chat draft across reload');
         expect(restored.connection).toEqual(connection);
-        f.releaseReply();
+        await f.releaseReply();
         await current.evaluate(async ({ BrowserWindow }) => {
           const c = BrowserWindow.getAllWindows()[0].webContents;
           await c.executeJavaScript(`document.querySelector('[aria-label="a.ts editor"]').focus()`);
@@ -296,7 +296,7 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
               ),
             )
             .toBe(true);
-        f.releaseReply();
+        await f.releaseReply();
         await views.getByRole('tab', { name: 'Chat', exact: true }).click();
         await expect(p.getByLabel('Message', { exact: true })).toHaveValue(
           'newer chat draft across reload',
@@ -363,75 +363,85 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
       );
       throw error;
     } finally {
-      f.releaseReply();
-      if (app && child?.exitCode === null && child?.signalCode === null) {
-        await app
-          .windows()[0]
-          .evaluate(async () => {
-            const r = await window.moonbaseChat.call(
-              'connection',
-              'getConnection',
-              {},
-              crypto.randomUUID(),
+      try {
+        await f.releaseReply();
+      } finally {
+        try {
+          if (app && child?.exitCode === null && child?.signalCode === null) {
+            await app
+              .windows()[0]
+              .evaluate(async () => {
+                const r = await window.moonbaseChat.call(
+                  'connection',
+                  'getConnection',
+                  {},
+                  crypto.randomUUID(),
+                );
+                if (r.ok && (r.value as { connectionId: string | null }).connectionId)
+                  await window.moonbaseChat.call(
+                    'connection',
+                    'disconnect',
+                    { connectionId: (r.value as { connectionId: string }).connectionId },
+                    crypto.randomUUID(),
+                  );
+              })
+              .catch(() => {});
+            await app.evaluate(({ app }) => app.exit(0));
+            await until(
+              async () => child!.exitCode !== null || child!.signalCode !== null,
+              Boolean,
             );
-            if (r.ok && (r.value as { connectionId: string | null }).connectionId)
-              await window.moonbaseChat.call(
-                'connection',
-                'disconnect',
-                { connectionId: (r.value as { connectionId: string }).connectionId },
-                crypto.randomUUID(),
+            const records = (await readFile(f.log, 'utf8').catch(() => ''))
+              .split('\n')
+              .filter(Boolean)
+              .map((line) => JSON.parse(line) as { pid: number });
+            for (const pid of new Set(records.map((record) => record.pid))) {
+              try {
+                process.kill(-pid, 0);
+              } catch (error) {
+                if ((error as NodeJS.ErrnoException).code === 'ESRCH') continue;
+                // oxlint-disable-next-line no-unsafe-finally -- Unexpected cleanup failures must remain visible.
+                throw error;
+              }
+              const command = execFileSync('/bin/ps', ['-p', String(pid), '-o', 'command='], {
+                encoding: 'utf8',
+              });
+              if (!command.includes(join(f.directory, 'controlled-ssh')))
+                // oxlint-disable-next-line no-unsafe-finally -- Never signal a process group whose fixture ownership cannot be verified.
+                throw Error('Refusing to signal an unverified group.');
+              process.kill(-pid, 'SIGTERM');
+              await until(async () => {
+                try {
+                  process.kill(-pid, 0);
+                  return false;
+                } catch (error) {
+                  return (error as NodeJS.ErrnoException).code === 'ESRCH';
+                }
+              }, Boolean);
+              await appendFile(
+                join(evidence, 'forced-failure-cleanup.jsonl'),
+                JSON.stringify({ pid, command, signal: 'TERM', confirmedAbsent: true }) + '\n',
               );
-          })
-          .catch(() => {});
-        await app.evaluate(({ app }) => app.exit(0));
-        await until(async () => child!.exitCode !== null || child!.signalCode !== null, Boolean);
-        const records = (await readFile(f.log, 'utf8').catch(() => ''))
-          .split('\n')
-          .filter(Boolean)
-          .map((line) => JSON.parse(line) as { pid: number });
-        for (const pid of new Set(records.map((record) => record.pid))) {
-          try {
-            process.kill(-pid, 0);
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code === 'ESRCH') continue;
-            // oxlint-disable-next-line no-unsafe-finally -- Unexpected cleanup failures must remain visible.
-            throw error;
-          }
-          const command = execFileSync('/bin/ps', ['-p', String(pid), '-o', 'command='], {
-            encoding: 'utf8',
-          });
-          if (!command.includes(join(f.directory, 'controlled-ssh')))
-            // oxlint-disable-next-line no-unsafe-finally -- Never signal a process group whose fixture ownership cannot be verified.
-            throw Error('Refusing to signal an unverified group.');
-          process.kill(-pid, 'SIGTERM');
-          await until(async () => {
-            try {
-              process.kill(-pid, 0);
-              return false;
-            } catch (error) {
-              return (error as NodeJS.ErrnoException).code === 'ESRCH';
             }
-          }, Boolean);
+          }
+        } finally {
+          const cleanup = await f.close();
+          for (const pid of pids)
+            await until(async () => {
+              try {
+                process.kill(pid, 0);
+                return false;
+              } catch (e) {
+                return (e as NodeJS.ErrnoException).code === 'ESRCH';
+              }
+            }, Boolean);
+          await mkdir(evidence, { recursive: true });
           await appendFile(
-            join(evidence, 'forced-failure-cleanup.jsonl'),
-            JSON.stringify({ pid, command, signal: 'TERM', confirmedAbsent: true }) + '\n',
+            join(evidence, 'cleanup.jsonl'),
+            JSON.stringify({ packaged, mode, veto, pids: [...pids], absent: true, ...cleanup }) +
+              '\n',
           );
         }
       }
-      const cleanup = await f.close();
-      for (const pid of pids)
-        await until(async () => {
-          try {
-            process.kill(pid, 0);
-            return false;
-          } catch (e) {
-            return (e as NodeJS.ErrnoException).code === 'ESRCH';
-          }
-        }, Boolean);
-      await mkdir(evidence, { recursive: true });
-      await appendFile(
-        join(evidence, 'cleanup.jsonl'),
-        JSON.stringify({ packaged, mode, veto, pids: [...pids], absent: true, ...cleanup }) + '\n',
-      );
     }
   });
