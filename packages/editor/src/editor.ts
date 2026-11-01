@@ -34,7 +34,7 @@ export type EditorBuffer = {
 export type CloseChoice = "save" | "discard" | "cancel";
 export type ChooseClose = (file: Readonly<EditorBuffer>) => Promise<CloseChoice>;
 export type EditorSnapshot = {
-  ready: boolean; disposed: boolean; preserving: boolean; discoveryRevision: number; recovery: EditorRecovery;
+  ready: boolean; recoveryReady: boolean; disposed: boolean; preserving: boolean; discoveryRevision: number; recovery: EditorRecovery;
   buffers: readonly EditorBuffer[]; comparisons: Readonly<Record<string, Comparison>>;
   listings: Readonly<Record<string, DirectoryListing>>; git: Readonly<Record<string, GitStatus>>;
   publication?: { requestId: string; kind: "recovery" | "close" | "reload" };
@@ -50,6 +50,9 @@ export class EditorController {
   private client: EditorClient;
   private recovery: EditorRecovery;
   private revision = 0;
+  private captureRevision = 0;
+  private confirmedCapture = -1;
+  private publications = 0;
   private ready = false;
   private loading = false;
   private disposed = false;
@@ -73,7 +76,7 @@ export class EditorController {
   private deferredFacts: { changes: RecoveryChange[]; result?: OperationResult; forcePublication: boolean }[] = [];
   private refreshing = new Map<string, Promise<void>>();
   private refreshPending = new Set<string>();
-  private pendingPublication?: { request: CommandInput<"persistRecovery">; onConfirmed?: () => Promise<void>; kind: "recovery" | "close" | "reload"; savedRequests: string[] };
+  private pendingPublication?: { request: CommandInput<"persistRecovery">; onConfirmed?: () => Promise<void>; kind: "recovery" | "close" | "reload"; savedRequests: string[]; captureRevision: number };
   private recoveryTail: Promise<unknown> = Promise.resolve();
   private factsTail: Promise<unknown> = Promise.resolve();
   private scheduled?: ReturnType<typeof setTimeout>;
@@ -88,7 +91,10 @@ export class EditorController {
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   getSnapshot = () => this.snapshot;
   private emit() {
-    this.snapshot = { ready: this.ready, disposed: this.disposed, preserving: this.preserving, discoveryRevision: this.discoveryRevision,
+    this.snapshot = { ready: this.ready, recoveryReady: this.ready && !this.loading && !this.disposed && !this.preserving &&
+      this.captureRevision === this.confirmedCapture && this.publications === 0 && !this.pendingPublication &&
+      ![...this.buffers.values()].some(buffer => buffer.saving || buffer.pendingSave) &&
+      ![...this.operations.values()].some(value => !value.acknowledged), disposed: this.disposed, preserving: this.preserving, discoveryRevision: this.discoveryRevision,
       recovery: structuredClone(this.recovery), buffers: structuredClone([...this.buffers.values()]),
       comparisons: { ...this.comparisons }, listings: { ...this.listings }, git: { ...this.git },
       publication: this.pendingPublication && { requestId: this.pendingPublication.request.requestId, kind: this.pendingPublication.kind },
@@ -146,7 +152,7 @@ export class EditorController {
     }
     this.recovery.selectedCheckoutId = selectedCheckoutId;
     this.loading = false;
-    this.emit();
+    this.changed();
   }
   private observe(checkout: CheckoutTarget) {
     const key = checkoutKey(checkout);
@@ -208,7 +214,8 @@ export class EditorController {
     await this.activateSelected();
     this.schedule();
   }
-  private changed() { this.emit(); this.schedule(); }
+  private invalidateRecovery() { this.captureRevision++; this.emit(); }
+  private changed() { this.invalidateRecovery(); this.schedule(); }
   private schedule() {
     if (!this.ready || this.loading || this.disposed || this.preserving || this.pendingPublication) return;
     clearTimeout(this.scheduled);
@@ -220,7 +227,7 @@ export class EditorController {
       .map(({ target, text, disk }) => structuredClone({ target, text, disk }));
     return state;
   }
-  private async confirmPublication(request: CommandInput<"persistRecovery">, receipt: RecoveryPublication, onConfirmed?: () => Promise<void>, savedRequests: string[] = []) {
+  private async confirmPublication(request: CommandInput<"persistRecovery">, receipt: RecoveryPublication, onConfirmed: (() => Promise<void>) | undefined, savedRequests: string[], captureRevision: number) {
     if (receipt.clientId !== request.clientId || receipt.requestId !== request.requestId || receipt.previousRevision !== request.expectedRevision ||
       receipt.revision !== receipt.previousRevision + 1 || this.revision !== receipt.previousRevision)
       throw new ApplicationError({ code: "Uncertain", message: "Recovery receipt does not confirm this exact pending publication/revision. Live work retained." });
@@ -231,6 +238,7 @@ export class EditorController {
       for (const buffer of this.buffers.values()) if (buffer.pendingSave?.requestId === id) buffer.pendingSave = undefined;
     }
     await onConfirmed?.();
+    this.confirmedCapture = captureRevision;
     this.resumeFacts();
     this.emit();
   }
@@ -240,7 +248,8 @@ export class EditorController {
     return true;
   }
   private publish(state: EditorRecovery, onConfirmed?: () => Promise<void>, kind: "close" | "reload" = "close", before?: () => void, savedRequests: string[] = []) {
-    const captured = structuredClone(state);
+    const captured = structuredClone(state), captureRevision = this.captureRevision;
+    this.publications++; this.emit();
     const next = this.recoveryTail.catch(() => {}).then(async () => {
       before?.();
       if (this.publicationBlocked()) throw new ApplicationError({ code: "Uncertain", message: "Resolve the pending recovery publication first." });
@@ -249,7 +258,7 @@ export class EditorController {
       try { receipt = await this.command("persistRecovery", request); }
       catch (error) {
         if (ApplicationError.is(error) && ["InvalidInput", "Conflict"].includes(error.code)) throw error;
-        this.pendingPublication = { request, onConfirmed, kind: onConfirmed ? kind : "recovery", savedRequests }; this.emit();
+        this.pendingPublication = { request, onConfirmed, kind: onConfirmed ? kind : "recovery", savedRequests, captureRevision }; this.emit();
         const known = await this.command("getRecoveryPublication", { clientId: request.clientId, requestId: request.requestId }).catch(() => null);
         if (!known) {
           this.report("Recovery publication PENDING/UNCERTAIN. Live work and the immutable request are retained; null status does not prove failure.");
@@ -258,9 +267,10 @@ export class EditorController {
         receipt = known;
       }
       // Retain identity even when a malformed/mismatched receipt cannot be accepted.
-      this.pendingPublication = { request, onConfirmed, kind: onConfirmed ? kind : "recovery", savedRequests };
-      await this.confirmPublication(request, receipt, onConfirmed, savedRequests);
-    });
+      this.pendingPublication = { request, onConfirmed, kind: onConfirmed ? kind : "recovery", savedRequests, captureRevision };
+      await this.confirmPublication(request, receipt, onConfirmed, savedRequests, captureRevision);
+    }).catch(error => { this.confirmedCapture = -1; throw error; })
+      .finally(() => { this.publications--; this.emit(); });
     this.recoveryTail = next;
     return next;
   }
@@ -270,7 +280,7 @@ export class EditorController {
       const pending = this.pendingPublication;
       if (!pending || this.disposed) return !this.disposed;
       try {
-        const { request, onConfirmed, savedRequests } = pending;
+        const { request, onConfirmed, savedRequests, captureRevision } = pending;
         let receipt = await this.command("getRecoveryPublication", { clientId: request.clientId, requestId: request.requestId });
         if (!receipt) {
           try { receipt = await this.command("persistRecovery", request); }
@@ -285,7 +295,7 @@ export class EditorController {
           }
         }
         if (this.disposed) return false;
-        await this.confirmPublication(request, receipt, onConfirmed, savedRequests);
+        await this.confirmPublication(request, receipt, onConfirmed, savedRequests, captureRevision);
         this.schedule();
         return true;
       } catch (error) { this.report(error); this.publicationBlocked(); return false; }
@@ -409,7 +419,7 @@ export class EditorController {
         return false;
       }
       this.saveResults.set(request.requestId, structuredClone(result));
-      buffer.disk = result.disk; buffer.conflict = undefined;
+      buffer.disk = result.disk; buffer.conflict = undefined; this.invalidateRecovery();
       await this.publishFacts([], undefined, undefined, true, preservation);
       return !buffer.pendingSave && buffer.text === result.disk.text;
     } finally { buffer.saving = false; this.emit(); }
@@ -573,7 +583,7 @@ export class EditorController {
       writeOwn(selected.fileViews, file.path, file.view);
       if (file.positions) writeOwn(selected.positions, file.path, structuredClone(file.positions));
     }
-    selected.active = action.active; selected.preview = null;
+    selected.active = action.active; selected.preview = null; this.invalidateRecovery();
     const success = await this.open({ checkout, path: action.active });
     await this.flush(); this.history.splice(index, 1); this.emit();
     return success;
@@ -712,6 +722,7 @@ export class EditorController {
       known.result.kind !== result.kind || !sameCheckout(known.result.checkout, result.checkout) || !this.recovery.checkouts.some(item => sameCheckout(item, result.checkout)))
       throw Error("Operation checkout identity unavailable or changed. Evidence and drafts retained without rebinding.");
     known.result = result;
+    this.invalidateRecovery();
     let reconciled = true;
     for (const item of result.items.filter(item => item.outcome === "completed")) {
       const itemKey = JSON.stringify([item.source, item.destination]);

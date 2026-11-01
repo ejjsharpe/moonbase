@@ -1,0 +1,67 @@
+import { test, expect, _electron as electron } from "@playwright/test";
+import { mkdtempSync, realpathSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
+
+declare global { var reloadProbe: { cancels: string[]; held: number | null; stopped: boolean }; }
+for (const mode of ["reload", "veto", "crash"]) test(`standalone document ${mode} owns exact observers and read-only waits`, async () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "moonbase-document-"))), checkout = join(base, "checkout"); mkdirSync(checkout);
+  writeFileSync(join(checkout, "a.ts"), "original"); execFileSync("/usr/bin/git", ["-C", checkout, "init", "-q", "-b", "main"]);
+  const packaged = !!process.env.MOONBASE_PACKAGED_TEST;
+  const app = await electron.launch({ ...(packaged ? { executablePath: process.env.MOONBASE_RELOAD_EXECUTABLE ?? resolve("release/mac-arm64/Moonbase.app/Contents/MacOS/Moonbase") } : {}), args: packaged ? [] : [process.env.MOONBASE_RELOAD_MAIN ?? resolve("dist/main.mjs")], env: { PATH: "/usr/bin:/bin", HOME: process.env.HOME!, TMPDIR: process.env.TMPDIR!, MOONBASE_USER_DATA: join(base, "data"), GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } });
+  const child = app.process(), pids = new Set<number>([child.pid!]), page = await app.firstWindow();
+  try {
+    await app.evaluate(({ ipcMain }) => { globalThis.reloadProbe = { cancels: [], held: null, stopped: false }; ipcMain.on("moonbase:cancel", (_event, id) => globalThis.reloadProbe.cancels.push(id)); });
+    await expect(page.getByRole("button", { name: "Open checkout", exact: true })).toBeVisible();
+    await page.evaluate(() => { Object.assign(window, { oldEditorObservers: [] as string[], documentIdentity: crypto.randomUUID() }); window.moonbase.events(id => { const ids = (window as unknown as { oldEditorObservers: string[] }).oldEditorObservers; if (!ids.includes(id)) ids.push(id); }); });
+    const identity = await page.evaluate(() => (window as unknown as { documentIdentity: string }).documentIdentity);
+    await app.evaluate(({ dialog }, root) => { dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [root] })) as typeof dialog.showOpenDialog; }, checkout);
+    await page.getByRole("button", { name: "Open checkout", exact: true }).click(); await page.getByRole("treeitem", { name: "a.ts", exact: true }).dblclick();
+    const editor = page.getByRole("textbox", { name: "a.ts editor", exact: true }); await editor.focus(); await editor.press("Meta+a"); await editor.pressSequentially("durable dirty text");
+    const recovery = () => page.evaluate(async () => { const r = await window.moonbase.call("command", { operation: "loadRecovery", input: { clientId: window.moonbase.clientId } }, crypto.randomUUID()); if (!r.ok) throw Error(r.error.message); return r.value as import("@moonbase/application/client").RecoveryLoad; });
+    await expect.poll(async () => (await recovery()).state.drafts[0]?.text).toBe("durable dirty text");
+    const target = { checkout: (await recovery()).state.checkouts[0], path: "a.ts" };
+    await expect.poll(() => page.evaluate(() => (window as unknown as { oldEditorObservers: string[] }).oldEditorObservers.length)).toBeGreaterThan(0);
+    const observers = await page.evaluate(() => (window as unknown as { oldEditorObservers: string[] }).oldEditorObservers);
+    // Hold one actual read helper; normal command cancellation still owns its SIGKILL and close.
+    await app.evaluate(async () => {
+      const processes = process.getBuiltinModule("child_process"), module = process.getBuiltinModule("module"), spawn = processes.spawn;
+      processes.spawn = ((...args: Parameters<typeof spawn>) => { const child = spawn(...args); if (!globalThis.reloadProbe.stopped && Array.isArray(args[1]) && args[1][0] === "read" && args[1][1] === "a.ts") { globalThis.reloadProbe.stopped = true; globalThis.reloadProbe.held = child.pid!; child.kill("SIGSTOP"); } return child; }) as typeof spawn; module.syncBuiltinESMExports();
+    });
+    const waitId = "old-document-read";
+    await page.evaluate(({ target, id }) => { void window.moonbase.call("command", { operation: "readFile", input: target }, id).catch(() => {}); }, { target, id: waitId });
+    await expect.poll(() => app.evaluate(() => globalThis.reloadProbe.held)).not.toBeNull();
+    const heldPid = (await app.evaluate(() => globalThis.reloadProbe.held))!; pids.add(heldPid);
+    for (const pid of await app.evaluate(({ app }) => app.getAppMetrics().map(value => value.pid))) pids.add(pid);
+    if (mode === "veto") {
+      await editor.focus(); await editor.press("End"); await app.evaluate(async ({ BrowserWindow }) => { const c = BrowserWindow.getAllWindows()[0].webContents; await c.insertText(" fresh"); await c.executeJavaScript("new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))"); });
+      const outcome = await app.evaluate(({ BrowserWindow }) => new Promise<string>(resolve => { const c = BrowserWindow.getAllWindows()[0].webContents; c.once("will-prevent-unload", () => resolve("veto")); c.once("did-finish-load", () => resolve("reload")); c.reload(); }));
+      expect(outcome).toBe("veto"); expect(await page.evaluate(() => (window as unknown as { documentIdentity: string }).documentIdentity)).toBe(identity);
+      const cancelled = await app.evaluate(() => globalThis.reloadProbe.cancels); expect([...observers, waitId].some(id => cancelled.includes(id))).toBe(false);
+      await page.evaluate(id => window.moonbase.cancel(id), waitId);
+    } else {
+      if (mode === "crash") {
+        await app.evaluate(({ app }, path) => app.setPath("crashDumps", path), join(base, "crash-dumps"));
+        await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.forcefullyCrashRenderer());
+        await expect.poll(() => app.evaluate(() => process.getActiveResourcesInfo().filter(value => value === "FSWatcher").length)).toBe(0);
+      } else {
+        await expect.poll(() => app.evaluate(({ BrowserWindow }) => new Promise<string>(resolve => { const c = BrowserWindow.getAllWindows()[0].webContents; const finish = (outcome: string) => { c.removeListener("will-prevent-unload", veto); c.removeListener("did-finish-load", done); resolve(outcome); }; const veto = () => finish("veto"), done = () => finish("reload"); c.once("will-prevent-unload", veto); c.once("did-finish-load", done); c.reload(); }))).toBe("reload");
+        await expect.poll(() => app.evaluate((_, ids) => ids.every(id => globalThis.reloadProbe.cancels.includes(id)), [...observers, waitId])).toBe(true);
+      }
+      await expect.poll(() => { try { process.kill(heldPid, 0); return false; } catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; } }).toBe(true);
+      if (mode === "crash") await app.evaluate(({ BrowserWindow }) => new Promise<void>(resolve => { const c = BrowserWindow.getAllWindows()[0].webContents; c.once("did-finish-load", () => resolve()); c.reload(); }));
+      await expect.poll(() => app.evaluate(async ({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(`document.querySelector('.view-lines')?.textContent?.replace(/\\u00a0/g, ' ')`))).toContain("durable dirty text");
+      // Same process root keeps its exact approval and accepts the reused read ID after document replacement.
+      const saved = await app.evaluate(async ({ BrowserWindow }, { target, waitId }) => BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(`window.moonbase.call('command',{operation:'readFile',input:${JSON.stringify(target)}},'${waitId}')`), { target, waitId }); expect(saved.ok).toBe(true);
+    }
+    writeFileSync(test.info().outputPath("document.json"), JSON.stringify({ mode, identity, observers, waitId, probe: await app.evaluate(() => globalThis.reloadProbe), rootPid: child.pid, target }, null, 2));
+  } finally {
+    writeFileSync(test.info().outputPath("final-probe.json"), JSON.stringify(await app.evaluate(() => globalThis.reloadProbe), null, 2));
+    const held = await app.evaluate(() => globalThis.reloadProbe?.held); if (held) { pids.add(held); try { process.kill(held, "SIGKILL"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; } }
+    for (const pid of await app.evaluate(({ app }) => app.getAppMetrics().map(value => value.pid))) pids.add(pid);
+    await app.evaluate(({ app }) => app.exit(0)); await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
+    for (const pid of pids) await expect.poll(() => { try { process.kill(pid, 0); return false; } catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; } }).toBe(true);
+    rmSync(base, { recursive: true }); writeFileSync(test.info().outputPath("cleanup.json"), JSON.stringify({ pids: [...pids], absent: true, directory: base, removed: true, configured: false }, null, 2));
+  }
+});

@@ -1,0 +1,29 @@
+
+Running 1 test using 1 worker
+
+(node:12931) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+  ✘  1 apps/desktop/test/reload.spec.ts:8:1 › native Reload retains text painted before ordinary recovery debounce (4.1s)
+
+
+  1) apps/desktop/test/reload.spec.ts:8:1 › native Reload retains text painted before ordinary recovery debounce 
+
+    Error: expect(received).toContain(expected) // indexOf
+
+    Expected substring: "fresh visible tail"
+    Received string:    "local dirty draft"
+
+      51 |     writeFileSync(file + ".json", JSON.stringify({ ...native, png: undefined, width: png.readUInt32BE(16), height: png.readUInt32BE(20), sha256: createHash("sha256").update(png).digest("hex") }, null, 2));
+      52 |     writeFileSync(test.info().outputPath("fresh-reload.json"), JSON.stringify({ before, outcome, after, recovery: await recovery() }, null, 2));
+    > 53 |     expect(after).toContain("fresh visible tail");
+         |                   ^
+      54 |     // A durable dirty draft must eventually permit an actual reload, without Save or Discard.
+      55 |     await expect.poll(async () => (await recovery()).state.drafts[0]?.text).toContain("fresh visible tail");
+      56 |     await expect.poll(reload).toBe("reload"); await expect(editor()).toBeVisible();
+        at /Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/test/reload.spec.ts:53:19
+
+    Error Context: apps/desktop/.repair-evidence/red-8a-package/reload-native-Reload-retai-2c3df--ordinary-recovery-debounce/error-context.md
+
+  1 failed
+    apps/desktop/test/reload.spec.ts:8:1 › native Reload retains text painted before ordinary recovery debounce 

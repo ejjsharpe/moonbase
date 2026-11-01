@@ -1,0 +1,181 @@
+{
+  "before": {
+    "text": "local dirty draft fresh visible tail",
+    "elapsed": 142.60000002384186,
+    "persisted": {
+      "ok": true,
+      "value": {
+        "revision": 1,
+        "state": {
+          "version": 1,
+          "clientId": "desktop-primary",
+          "checkouts": [
+            {
+              "hostId": "moonbase-local",
+              "checkoutId": "ede00dafcb3f19a96d9cd048e32f8741b858befe20c5b3946fa412bd6d90dc96",
+              "projectId": "9d40cb84e64cd654d08ca073adc3e33c0868ea5d0d9358ad6121a9a7b0a8cb10",
+              "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-reload-fyMeMR/checkout",
+              "branch": "main"
+            }
+          ],
+          "openCheckoutIds": [
+            "ede00dafcb3f19a96d9cd048e32f8741b858befe20c5b3946fa412bd6d90dc96"
+          ],
+          "selectedCheckoutId": "ede00dafcb3f19a96d9cd048e32f8741b858befe20c5b3946fa412bd6d90dc96",
+          "views": {
+            "ede00dafcb3f19a96d9cd048e32f8741b858befe20c5b3946fa412bd6d90dc96": {
+              "openFiles": [
+                "a.ts"
+              ],
+              "active": "a.ts",
+              "preview": null,
+              "fileViews": {
+                "a.ts": "file"
+              },
+              "positions": {
+                "a.ts": {
+                  "file": {
+                    "line": 1,
+                    "column": 18,
+                    "top": 0,
+                    "left": 0
+                  }
+                }
+              },
+              "tree": {
+                "expanded": [],
+                "selected": [
+                  "a.ts"
+                ],
+                "focus": "a.ts",
+                "scroll": 0,
+                "hideIgnored": false
+              }
+            }
+          },
+          "drafts": [
+            {
+              "target": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "ede00dafcb3f19a96d9cd048e32f8741b858befe20c5b3946fa412bd6d90dc96",
+                  "projectId": "9d40cb84e64cd654d08ca073adc3e33c0868ea5d0d9358ad6121a9a7b0a8cb10",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-reload-fyMeMR/checkout",
+                  "branch": "main"
+                },
+                "path": "a.ts"
+              },
+              "text": "local dirty draft",
+              "disk": {
+                "text": "const original = 1;\n",
+                "version": "3c23b2070988644c34f661544adea306ed70e1d772edf68a8abbc6988d2b5e2a"
+              }
+            }
+          ],
+          "recentFiles": [
+            {
+              "checkout": {
+                "hostId": "moonbase-local",
+                "checkoutId": "ede00dafcb3f19a96d9cd048e32f8741b858befe20c5b3946fa412bd6d90dc96",
+                "projectId": "9d40cb84e64cd654d08ca073adc3e33c0868ea5d0d9358ad6121a9a7b0a8cb10",
+                "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-reload-fyMeMR/checkout",
+                "branch": "main"
+              },
+              "path": "a.ts"
+            }
+          ],
+          "sidebarWidth": 270
+        },
+        "errors": [],
+        "operations": []
+      }
+    }
+  },
+  "outcome": "reload",
+  "after": "local dirty draft",
+  "recovery": {
+    "revision": 1,
+    "state": {
+      "version": 1,
+      "clientId": "desktop-primary",
+      "checkouts": [
+        {
+          "hostId": "moonbase-local",
+          "checkoutId": "ede00dafcb3f19a96d9cd048e32f8741b858befe20c5b3946fa412bd6d90dc96",
+          "projectId": "9d40cb84e64cd654d08ca073adc3e33c0868ea5d0d9358ad6121a9a7b0a8cb10",
+          "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-reload-fyMeMR/checkout",
+          "branch": "main"
+        }
+      ],
+      "openCheckoutIds": [
+        "ede00dafcb3f19a96d9cd048e32f8741b858befe20c5b3946fa412bd6d90dc96"
+      ],
+      "selectedCheckoutId": "ede00dafcb3f19a96d9cd048e32f8741b858befe20c5b3946fa412bd6d90dc96",
+      "views": {
+        "ede00dafcb3f19a96d9cd048e32f8741b858befe20c5b3946fa412bd6d90dc96": {
+          "openFiles": [
+            "a.ts"
+          ],
+          "active": "a.ts",
+          "preview": null,
+          "fileViews": {
+            "a.ts": "file"
+          },
+          "positions": {
+            "a.ts": {
+              "file": {
+                "line": 1,
+                "column": 18,
+                "top": 0,
+                "left": 0
+              }
+            }
+          },
+          "tree": {
+            "expanded": [],
+            "selected": [
+              "a.ts"
+            ],
+            "focus": "a.ts",
+            "scroll": 0,
+            "hideIgnored": false
+          }
+        }
+      },
+      "drafts": [
+        {
+          "target": {
+            "checkout": {
+              "hostId": "moonbase-local",
+              "checkoutId": "ede00dafcb3f19a96d9cd048e32f8741b858befe20c5b3946fa412bd6d90dc96",
+              "projectId": "9d40cb84e64cd654d08ca073adc3e33c0868ea5d0d9358ad6121a9a7b0a8cb10",
+              "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-reload-fyMeMR/checkout",
+              "branch": "main"
+            },
+            "path": "a.ts"
+          },
+          "text": "local dirty draft",
+          "disk": {
+            "text": "const original = 1;\n",
+            "version": "3c23b2070988644c34f661544adea306ed70e1d772edf68a8abbc6988d2b5e2a"
+          }
+        }
+      ],
+      "recentFiles": [
+        {
+          "checkout": {
+            "hostId": "moonbase-local",
+            "checkoutId": "ede00dafcb3f19a96d9cd048e32f8741b858befe20c5b3946fa412bd6d90dc96",
+            "projectId": "9d40cb84e64cd654d08ca073adc3e33c0868ea5d0d9358ad6121a9a7b0a8cb10",
+            "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-reload-fyMeMR/checkout",
+            "branch": "main"
+          },
+          "path": "a.ts"
+        }
+      ],
+      "sidebarWidth": 270
+    },
+    "errors": [],
+    "operations": []
+  }
+}

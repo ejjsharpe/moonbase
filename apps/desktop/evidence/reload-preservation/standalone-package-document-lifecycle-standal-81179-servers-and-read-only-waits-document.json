@@ -1,0 +1,26 @@
+{
+  "mode": "veto",
+  "identity": "7a215e24-3bbc-4506-b427-c8accfb8dbe3",
+  "observers": [
+    "c90956b3-f9db-461c-abdf-3fd7853042b4"
+  ],
+  "waitId": "old-document-read",
+  "probe": {
+    "cancels": [
+      "old-document-read"
+    ],
+    "held": 14000,
+    "stopped": true
+  },
+  "rootPid": 13957,
+  "target": {
+    "checkout": {
+      "hostId": "moonbase-local",
+      "checkoutId": "59e1dc56fce47c39e1be70a1d110f5ffcf48701e5929abaeedffe838e7bc5573",
+      "projectId": "f452515aebb4f2cd1183aea6f9f90c689fa7c1f4459e1e8107c929a9ab35f5a9",
+      "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-document-aCP5Ud/checkout",
+      "branch": "main"
+    },
+    "path": "a.ts"
+  }
+}

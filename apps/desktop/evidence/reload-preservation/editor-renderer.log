@@ -1,0 +1,2 @@
+$ node test/renderer-imports.mjs
+Renderer browser bundle checked: 1570 inputs, no privileged modules or feature runtime.

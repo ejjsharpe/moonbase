@@ -102,3 +102,24 @@ MOONBASE_COMPOSITION_TEST=1 MOONBASE_PACKAGED_TEST=1 bun run --cwd apps/desktop 
 ```
 
 [Composition evidence](evidence/composition/validation.md) records exact source/artifact mappings, actual native captures, causal keyboard/lifecycle probes, initial failed runs and pending gates. These controlled temporary-host tests use production HTTP/SQLite and the public SSH service with a controlled forwarding child and faux provider; they spend no real provider quota and do not establish a real SSH handshake.
+
+### Standalone Reload follow-up (additional composition dependency)
+
+The focused `fix/editor-reload-preservation` follow-up starts at standalone
+`4dd148ade5f279e2b3820df0325313ee08ce4f8d`. It uses the editor's public
+`recoveryReady` gate to veto unloading a capture until an exact recovery receipt
+confirms it. Ordinary dirty text that is already durable still reloads. A veto keeps
+the mounted editor, watchers and pending immutable publication usable. Successful
+unload cancels the old document's IPC waits/observers; renderer loss releases the
+same editor session resources while retaining native approvals and the process root.
+PR21 preserves the independent standalone entry without chat/Pi/SSH; this composition normally merges that exact follow-up and retains its own reviewed chat preservation gate.
+
+Targeted native command (after build/package):
+`cd apps/desktop && bunx playwright test --config reload.config.ts`.
+Set `MOONBASE_PACKAGED_TEST=1` and `MOONBASE_RELOAD_EXECUTABLE` to the absolute
+unsigned executable for the same packaged checks. Outputs default to
+`apps/desktop/test-results/reload` when launched from that app directory; set
+`MOONBASE_RELOAD_OUTPUT` explicitly when preserving separate phases.
+
+The focused response, old/new native captures, exact source/archive hashes and
+explicit evidence-loss correction are in [reload-preservation evidence](evidence/reload-preservation/response.md).

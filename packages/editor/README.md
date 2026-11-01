@@ -116,3 +116,13 @@ Behavior was read only from the immutable `docs/source-snapshot`, whose manifest
 The active renderer uses the pinned React/React DOM, Monaco, Base UI and StyleX stack. The memory-only composition also uses Effect. The coordinator owns generation of distribution notices from package-provided licenses/notices for actual bundled assets, including Monaco workers/fonts. No manually copied notice bundle is added by this module.
 
 The [app R1 filename-map/menu follow-up](evidence/filename-maps-menu/review-app-r1.md) records own-property safety for valid prototype-shaped filenames, bounded keyboard/click menu behavior, causal red/green evidence and separate pending packaged/manual gates.
+
+`controller.getSnapshot().recoveryReady` is the synchronous document-unload gate.
+It becomes false on a new capture (including caret/view metadata), while an ordinary
+publication is queued or in flight, or while preservation/immutable work is unresolved.
+Only the existing exact publication receipt confirms the generation it captured;
+a later edit invalidates that confirmation even if its text equals an older draft.
+A successfully published dirty draft may be reloaded without Save or Discard.
+Veto unload while false; keep the controller mounted and its normal publication/retry
+path available. Dispose observers/waits only after committed unload. This flag is not
+permission to skip `prepareQuit` and its Save/Discard/Cancel choices.

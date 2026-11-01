@@ -31,7 +31,7 @@ const chat = await (async () => {
 })();
 window.addEventListener("beforeunload", event => {
   const state = controller.getSnapshot();
-  if (chatInitializationFailed || state.preserving || state.publication || state.buffers.some(buffer => buffer.saving || buffer.pendingSave) || chat && !chat.preserve()) {
+  if (chatInitializationFailed || !state.recoveryReady || chat && !chat.preserve()) {
     event.preventDefault(); event.returnValue = "";
   }
 });
