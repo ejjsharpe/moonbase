@@ -54,7 +54,7 @@ export class EditorController {
   private preserving = false;
   private buffers = new Map<string, EditorBuffer>();
   private comparisons: Record<string, Comparison> = {};
-  private comparisonAttempts = new Map<string, FileView>();
+  private comparisonAttempts = new Map<string, { mode: FileView; failedWorkingVersion?: string }>();
   private listings: Record<string, DirectoryListing> = {};
   private git: Record<string, GitStatus> = {};
   private errors: string[] = [];
@@ -186,7 +186,10 @@ export class EditorController {
     const path = checkout && this.recovery.views[checkout.checkoutId]?.active;
     if (!checkout || !path) return true;
     const key = fileKey({ checkout, path }), mode = this.recovery.views[checkout.checkoutId].fileViews[path] ?? "file";
-    if (mode === "file" ? this.buffers.has(key) : this.comparisonAttempts.get(key) === mode) return true;
+    const attempt = this.comparisonAttempts.get(key), working = this.comparisons[key]?.working;
+    // A failed activation stays settled for that working version, not future availability.
+    const needsWorking = !this.buffers.has(key) && working != null && working.version !== attempt?.failedWorkingVersion;
+    if (mode === "file" ? this.buffers.has(key) : attempt?.mode === mode && !needsWorking) return true;
     return this.open({ checkout, path }, { current: () => this.recovery.selectedCheckoutId === checkout.checkoutId && this.recovery.views[checkout.checkoutId]?.active === path });
   }
   private resumeFacts() {
@@ -322,7 +325,7 @@ export class EditorController {
       }
       if (!current()) return false;
       if (mode === "file") this.comparisonAttempts.delete(key);
-      else this.comparisonAttempts.set(key, mode);
+      else this.comparisonAttempts.set(key, { mode });
       let buffer = this.buffers.get(key);
       if (!buffer && disk) { buffer = { target, text: disk.text, disk, saving: false }; this.buffers.set(key, buffer); }
       else if (buffer && disk && buffer.text === buffer.disk.text && !buffer.pendingSave) {
@@ -352,7 +355,7 @@ export class EditorController {
       this.changed();
       return true;
     } catch {
-      if (current() && mode !== "file") this.comparisonAttempts.set(key, mode);
+      if (current() && mode !== "file") this.comparisonAttempts.set(key, { mode, failedWorkingVersion: this.comparisons[key]?.working?.version });
       return false;
     }
   }
@@ -406,7 +409,7 @@ export class EditorController {
           buffer.disk = disk; buffer.text = disk.text; buffer.conflict = undefined;
           if (this.checkout(captured.checkout).fileViews[captured.path] === "conflict") {
             this.comparisons[key] = { original: disk.text, working: disk, title: "Disk versus your edits" };
-            this.comparisonAttempts.set(key, "conflict");
+            this.comparisonAttempts.set(key, { mode: "conflict" });
           }
         } else this.report("Reload committed for its original target; a changed live buffer was retained.");
         await this.releasePreservation();
@@ -604,11 +607,11 @@ export class EditorController {
       try {
         const comparison = await this.command("readComparison", { target, area: mode });
         if (!this.disposed && !this.preserving && generation === this.activation && selected.active === target.path && selected.fileViews[target.path] === mode) {
-          this.comparisons[key] = comparison; this.comparisonAttempts.set(key, mode);
+          this.comparisons[key] = comparison; this.comparisonAttempts.set(key, { mode });
           const buffer = this.buffers.get(key);
           if (buffer && comparison.working && buffer.text === buffer.disk.text && !buffer.pendingSave) {
             buffer.disk = comparison.working; buffer.text = comparison.working.text;
-          }
+          } else if (!buffer && comparison.working && this.recovery.selectedCheckoutId === checkout.checkoutId) await this.activateSelected();
         }
       } catch { /* A failed refresh retains the last comparison and current edits. */ }
     }

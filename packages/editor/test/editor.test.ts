@@ -1161,3 +1161,83 @@ for (const area of ["staged", "untracked"] as const) test(`R6 settled ${area} co
     }
   } finally { restarted?.dispose(); await f.dispose(); }
 });
+
+async function missingWorkingFixture(area: "staged" | "unstaged" | "untracked") {
+  const memory = memoryWorkspace([
+    { checkout, files: { "b.ts": "other file" }, head: { "a.ts": "HEAD A" }, index: { "a.ts": "INDEX A" } },
+    { checkout: second, files: { "b.ts": "second checkout" } },
+  ]);
+  const runtime = ManagedRuntime.make(memory.layer), raw = makeEditorClient(runtime); let reads = 0;
+  const client: EditorClient = { ...raw, watch: () => () => {}, command(name, input, options) { if (name === "readComparison") reads++; return raw.command(name, input, options); } };
+  const editor = createEditor({ client, clientId: "r7-working-" + area }); await editor.load(); await editor.openCheckout(checkout.root);
+  await editor.open(target("a.ts"), { view: area });
+  return { editor, raw, memory, get reads() { return reads; }, async recreate() {
+    await raw.command("mutate", { checkout, clientId: "foreign", id: "recreate-" + area, kind: "create-file", sources: [], destination: "a.ts", text: "RECREATED WORKING FILE" });
+  }, async dispose() { editor.dispose(); await runtime.dispose(); } };
+}
+
+for (const area of ["staged", "unstaged"] as const) test(`R7 missing ${area} working document becomes editable after recreation and refresh`, async () => {
+  const f = await missingWorkingFixture(area);
+  try {
+    assert.equal(f.editor.buffer(target("a.ts")), undefined); assert.equal(f.editor.getSnapshot().comparisons[fileKey(target("a.ts"))].working, null);
+    await f.editor.openCheckout(second.root); await f.recreate(); await f.editor.refresh(checkout);
+    assert.equal(f.editor.getSnapshot().comparisons[fileKey(target("a.ts"))].working?.text, "RECREATED WORKING FILE");
+    await f.editor.selectCheckout(checkout); await f.editor.refresh(checkout);
+    assert.equal(f.editor.buffer(target("a.ts"))?.text, "RECREATED WORKING FILE");
+    assert.equal(f.editor.getSnapshot().comparisons[fileKey(target("a.ts"))].original, area === "staged" ? "HEAD A" : "INDEX A");
+    f.editor.edit(target("a.ts"), "typed after recreation"); assert.equal(await f.editor.save(target("a.ts")), true);
+    assert.equal((await f.raw.command("readFile", target("a.ts"))).text, "typed after recreation");
+  } finally { await f.dispose(); }
+});
+
+test("R7 persistent missing and failed working activation settle until a newer document is observed", async () => {
+  const f = await missingWorkingFixture("staged");
+  try {
+    await f.editor.openCheckout(second.root); await f.editor.open(target("b.ts", second)); f.editor.edit(target("b.ts", second), "cancel this other draft");
+    await f.editor.selectCheckout(checkout); const missingReads = f.reads;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await f.editor.selectCheckout(checkout); assert.equal(await f.editor.close([target("b.ts", second)], async () => "cancel"), false);
+    }
+    assert.equal(f.reads, missingReads); assert.equal(f.editor.buffer(target("a.ts")), undefined);
+    await f.editor.selectCheckout(second); await f.recreate(); await f.editor.refresh(checkout);
+    f.memory.failNext("readComparison", "Working activation unavailable"); const beforeFailure = f.reads;
+    assert.equal(await f.editor.selectCheckout(checkout), false); assert.equal(f.reads, beforeFailure + 1); const failedReads = f.reads;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await f.editor.selectCheckout(checkout); assert.equal(await f.editor.close([target("b.ts", second)], async () => "cancel"), false);
+    }
+    assert.equal(f.reads, failedReads); assert.equal(f.editor.buffer(target("a.ts")), undefined);
+    const disk = await f.raw.command("readFile", target("a.ts"));
+    await f.raw.command("saveFile", { clientId: "foreign", requestId: "new-working-version", target: target("a.ts"), text: "NEW WORKING VERSION", expectedVersion: disk.version });
+    await f.editor.refresh(checkout); await f.editor.selectCheckout(checkout);
+    assert.equal(f.editor.buffer(target("a.ts"))?.text, "NEW WORKING VERSION");
+    const baseline = f.editor.buffer(target("a.ts"))!.disk; f.editor.edit(target("a.ts"), "retained new dirty text");
+    await f.raw.command("saveFile", { clientId: "foreign", requestId: "later-working-version", target: target("a.ts"), text: "LATER EXTERNAL VERSION", expectedVersion: baseline.version });
+    await f.editor.refresh(checkout); await f.editor.selectCheckout(checkout);
+    assert.equal(f.editor.buffer(target("a.ts"))!.text, "retained new dirty text"); assert.deepEqual(f.editor.buffer(target("a.ts"))!.disk, baseline);
+    assert.equal(await f.editor.save(target("a.ts")), false); assert.equal(f.editor.buffer(target("a.ts"))!.conflict?.text, "LATER EXTERNAL VERSION");
+  } finally { await f.dispose(); }
+});
+
+test("R7 an empty original remains settled while missing and editable after recreation", async () => {
+  const f = await missingWorkingFixture("untracked");
+  try {
+    const initialReads = f.reads; assert.equal(f.editor.getSnapshot().comparisons[fileKey(target("a.ts"))].original, "");
+    await f.editor.selectCheckout(checkout); await f.editor.selectCheckout(checkout); assert.equal(f.reads, initialReads);
+    await f.editor.openCheckout(second.root); await f.recreate(); await f.editor.refresh(checkout); await f.editor.selectCheckout(checkout);
+    assert.equal(f.editor.buffer(target("a.ts"))?.text, "RECREATED WORKING FILE");
+    const readyReads = f.reads; await f.editor.selectCheckout(checkout); assert.equal(f.reads, readyReads);
+    assert.equal(f.editor.getSnapshot().comparisons[fileKey(target("a.ts"))].original, "");
+  } finally { await f.dispose(); }
+});
+
+for (const area of ["staged", "unstaged"] as const) test(`R7 selected ${area} refresh installs a newly available working buffer`, async () => {
+  const f = await missingWorkingFixture(area);
+  try {
+    await f.recreate(); await f.editor.refresh(checkout);
+    assert.equal(f.editor.getSnapshot().recovery.selectedCheckoutId, checkout.checkoutId);
+    assert.equal(f.editor.buffer(target("a.ts"))?.text, "RECREATED WORKING FILE");
+    f.editor.edit(target("a.ts"), "editable without changing checkout");
+    assert.equal(await f.editor.save(target("a.ts")), true);
+    assert.equal((await f.raw.command("readFile", target("a.ts"))).text, "editable without changing checkout");
+  } finally { await f.dispose(); }
+});

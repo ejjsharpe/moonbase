@@ -9,18 +9,22 @@ import "@moonbase/ui/reset.css";
 import "virtual:stylex:runtime";
 
 configureMonacoWorkers();
-const parameters = new URLSearchParams(location.search), dirtyArea = parameters.get("dirty");
+const parameters = new URLSearchParams(location.search), dirtyArea = parameters.get("dirty"), missingArea = parameters.get("missing");
 const alpha = { hostId: "memory", checkoutId: "alpha", projectId: "race", root: "/race/alpha", branch: "main" };
 const beta = { ...alpha, checkoutId: "beta", root: "/race/beta" };
-const memory = memoryWorkspace([alpha, beta].map(checkout => ({ checkout, files: { "a.ts": "current A", "b.ts": "current B" }, ...(dirtyArea ? { head: { "a.ts": "HEAD A" }, index: { "a.ts": "INDEX A" } } : {}) })));
+const memory = memoryWorkspace([alpha, beta].map(checkout => {
+  const files: Record<string, string> = checkout === alpha && missingArea ? { "b.ts": "current B" } : { "a.ts": "current A", "b.ts": "current B" };
+  return { checkout, files, ...(dirtyArea || missingArea ? { head: { "a.ts": "HEAD A" }, index: { "a.ts": "INDEX A" } } : {}) };
+}));
 const runtime = ManagedRuntime.make(memory.layer), client = makeEditorClient(runtime);
 const seed = createEditor({ client, clientId: "recovery-race" }); await seed.load();
 await seed.openCheckout(beta.root); await seed.open({ checkout: beta, path: "a.ts" });
 if (parameters.has("both")) await seed.open({ checkout: beta, path: "b.ts" });
 await seed.openCheckout(alpha.root);
-await seed.open({ checkout: alpha, path: "a.ts" }, { view: dirtyArea === "staged" || dirtyArea === "unstaged" ? dirtyArea : "file" });
+const comparisonArea = missingArea ?? dirtyArea;
+await seed.open({ checkout: alpha, path: "a.ts" }, { view: comparisonArea === "staged" || comparisonArea === "unstaged" ? comparisonArea : "file" });
 if (dirtyArea) seed.edit({ checkout: alpha, path: "a.ts" }, "restored dirty A");
-await seed.open({ checkout: alpha, path: "b.ts" });
+if (!missingArea) await seed.open({ checkout: alpha, path: "b.ts" });
 await seed.flush(); seed.dispose();
 let loseFinal = false, failStatus = false;
 let hold = false, waiting = false, release!: () => void;
@@ -45,10 +49,13 @@ const editor = createEditor({ clientId: "recovery-race", client: { ...client, as
 } } });
 await editor.load();
 createRoot(document.getElementById("root")!).render(<div style={{ height: "100vh" }}><EditorWorkbench controller={editor} /></div>);
-declare global { interface Window { recoveryRace: { editor: typeof editor; hold(): void; release(): void; loseFinalResponse(): void; readonly waiting: boolean;
+declare global { interface Window { recoveryRace: { editor: typeof editor; hold(): void; release(): void; loseFinalResponse(): void; recreateWorking(): Promise<void>; readonly waiting: boolean;
   copy: { start(): void; releasePreflight(): void; releaseRead(): void; finish(): Promise<void>; readonly phase: string };
   load(): ReturnType<typeof client.command<"loadRecovery">> } } }
-window.recoveryRace = { editor, hold() { hold = true; waiting = false; wait = new Promise<void>(resolve => { release = resolve; }); }, release() { hold = false; release(); }, loseFinalResponse() { loseFinal = true; }, get waiting() { return waiting; }, copy: {
+window.recoveryRace = { editor, hold() { hold = true; waiting = false; wait = new Promise<void>(resolve => { release = resolve; }); }, release() { hold = false; release(); }, loseFinalResponse() { loseFinal = true; }, get waiting() { return waiting; }, async recreateWorking() {
+  await client.command("mutate", { checkout: alpha, clientId: "fixture-recreator", id: crypto.randomUUID(), kind: "create-file", sources: [], destination: "a.ts", text: "RECREATED WORKING FILE" });
+  await editor.refresh(alpha);
+}, copy: {
   start() {
     holdCopyPreflight = true; holdCopyRead = true; copyPhase = "";
     copyPreflight = new Promise<void>(resolve => { releaseCopyPreflight = resolve; });

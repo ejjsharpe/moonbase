@@ -284,3 +284,21 @@ for (const area of ["staged", "unstaged"] as const) test(`R6 restored dirty ${ar
   await expect(page.locator(".monaco-diff-editor .line-delete-selectable .view-line").filter({ hasText: area === "staged" ? /HEAD\s+A/ : /INDEX\s+A/ }).first()).toBeVisible();
   await page.screenshot({ path: `test-results/editor-restored-${area}.png`, fullPage: true });
 });
+
+for (const area of ["staged", "unstaged"] as const) test(`R7 recreated ${area} working file becomes editable with Save enabled`, async ({ page }) => {
+  await page.goto("/recovery-race.html?missing=" + area);
+  const original = page.getByRole("textbox", { name: area + " · a.ts original", exact: true }), modified = page.getByRole("textbox", { name: "a.ts editor", exact: true });
+  await expect(original).toHaveJSProperty("readOnly", true); await expect(modified).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+  await page.getByRole("tab", { name: "beta · main", exact: true }).click();
+  await page.evaluate(() => window.recoveryRace.recreateWorking());
+  await page.getByRole("tab", { name: "alpha · main", exact: true }).click(); await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
+  await expect(original).toHaveJSProperty("readOnly", true); await expect(modified).toHaveJSProperty("readOnly", false);
+  await modified.focus(); await page.keyboard.type("typed after recreation " + area + " ");
+  await expect.poll(() => page.evaluate(() => window.recoveryRace.editor.getSnapshot().buffers.find(buffer => buffer.target.checkout.checkoutId === "alpha" && buffer.target.path === "a.ts")?.text)).toContain("typed after recreation " + area);
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.recoveryRace.editor.getSnapshot().buffers.find(buffer => buffer.target.checkout.checkoutId === "alpha" && buffer.target.path === "a.ts")?.disk.text)).toContain("typed after recreation " + area);
+  await expect(page.locator(".monaco-diff-editor .line-delete-selectable .view-line").filter({ hasText: area === "staged" ? /HEAD\s+A/ : /INDEX\s+A/ }).first()).toBeVisible();
+  await page.screenshot({ path: `test-results/editor-recreated-${area}.png`, fullPage: true });
+});
