@@ -1,0 +1,52 @@
+# Local workspace
+
+`@moonbase/workspace` implements the shared `WorkspaceService` with local macOS file, Git, lookup, watcher, recovery and operation resources. It imports no React, Electron, agent/provider package or chat database. Its SQLite database is a new editor-only schema at the explicitly configured `dataDirectory/moonbase-workspace-v1.sqlite`; no legacy state is read, imported or removed.
+
+`WorkspaceLive(config)` is a scoped Effect layer providing `WorkspaceService` and privileged `WorkspaceNative`. Compose it once in the process root and use the shared application handlers/client for every UI, keyboard, native or IPC action. Production module code does not construct a root runtime or another dispatcher.
+
+```ts
+import { ManagedRuntime } from 'effect';
+import { makeEditorClient } from '@moonbase/application/runtime-client';
+import { WorkspaceLive } from '@moonbase/workspace';
+
+// This belongs in the application's process composition root.
+const runtime = ManagedRuntime.make(WorkspaceLive({
+  hostId: 'stable-local-host',
+  dataDirectory: '/absolute/new-moonbase-user-data/workspace',
+  filesystemHelper: '/absolute/resources/filesystem',
+  ripgrepExecutable: '/absolute/resources/ripgrep',
+}));
+const client = makeEditorClient(runtime);
+// Only after an authorized native/user root selection:
+const checkout = await client.command('openCheckout', {root: '/absolute/git-checkout'});
+const target = {checkout, path: 'src/file.ts'};
+const disk = await client.command('readFile', target);
+const result = await client.command('saveFile', {
+  target, clientId: 'stable-editor-instance', requestId: 'unique-immutable-save',
+  expectedVersion: disk.version, text: disk.text,
+});
+// At process shutdown, after the editor's preservation gate:
+await runtime.dispose();
+```
+
+The independent read/status example is `examples/local.ts`. It accepts an explicitly selected checkout, new data directory and relative file. After the native build, run `node --experimental-strip-types packages/workspace/examples/local.ts ABSOLUTE_CHECKOUT ABSOLUTE_NEW_STATE RELATIVE_FILE`. `MOONBASE_RIPGREP` can supply the absolute standalone executable path. No provider credentials or old store are used.
+
+Only approved exact `{hostId,checkoutId,projectId,root,branch}` targets grant filesystem authority. Each command checks the retained root and Git metadata/common-directory identities. The branch field is the immutable approval snapshot; `gitStatus` reports the live branch. A renderer-provided root alone grants nothing: production transport must authenticate/authorize caller/client, validate unknown inputs and allow `openCheckout` only for native/user-approved selection. Remote-looking identities never become local paths.
+
+File text is bounded to 2 MiB and strict UTF-8, rejecting NUL/binary and invalid Unicode saves. Relative paths reject traversal, empty components, `.git`, backslashes and symbolic-link traversal. Native tree operations reject links, special files, nested metadata and hard-linked files; native preflight is capped at 20,000 entries, depth 128 and 512 MiB. Watch subscriptions and acquired checkouts are bounded; notifications coalesce into a sliding one-event queue. Watch acquisition/finalization lives outside `Stream.callback` in the outer stream scope, including pending-acquisition cancellation.
+
+Save uses a content version and a staged, identity-checked replacement. A conflict returns current disk without changing dirty text or its baseline. Overwrite is a deliberate new request using the newly observed version. A saving client's persisted baseline can advance after its own success; another client's dirty baseline never advances from that save. Request IDs bind immutable payload/client/target across restart. Filesystem success followed by journal failure returns visible pending persistence; replay publishes facts or returns uncertainty, never blindly saves again.
+
+`inspectEntries` captures source/replacement identity for `mutate`. A single source's `destination` is its complete destination path; multiple sources use an existing destination folder and retain basenames. Creation uses a complete destination path, `sources: []` and optional initial text. Captured `replacements` express explicit overwrite consent: each occupied target is moved to native Trash before its transfer. A later transfer failure retains that Trash result and earlier successes. There is no permanent-delete fallback. Known results include per-item outcomes and original immutable checkout; uncertain results retain journal/staging evidence. Restart can identify a known moved object, but absence after Trash is never proof of safe discard. Inspect Finder Trash/original/destination/staging when uncertainty remains; no uncertain mutation is repeated automatically.
+
+Before any mutation, the client must successfully publish all affected dirty drafts. Reconcile only known successes against the captured exact targets, retaining newer local text and original baselines. A dirty move changes path/Monaco resource, so the editor must disclose its undo-history reset. An uncertain item keeps its original draft; known Trash does not authorize removal of another client's drafts. Use captured Save/Discard/Cancel batches and the same preservation gate for explicit Quit; persistence failure must veto discard/close. The service supplies persistence and facts, while those UI decisions remain in the editor/controller.
+
+Recovery publication is client-namespaced compare-and-swap. Known move/copy facts and a client's own successful saves reconcile its persisted snapshot transactionally with the journal, potentially advancing revision. Stale publication fails instead of undoing those facts or a newer same-client publication. Consumer receipt/acknowledgement details follow the shared contract; never replace current local edits wholesale with a loaded snapshot or blindly adopt a latest revision from a competing same-client writer. Merge only captured known facts into current text/view state, publish with the owned revision, then acknowledge the exact operation. No filesystem action and SQLite transaction are claimed atomic together.
+
+Lookup uses standalone ripgrep through native descriptor-scoped ignore-policy preflight, retaining `.gitignore`, `.ignore`, `.rgignore`, nested rules, repository excludes and default directory exclusions. An independent matcher returns case/consecutive/boundary/basename/path relevance and UTF-16 highlight positions; all whitespace pieces must match and quoted pieces are contiguous. History is independently filtered, deduplicated and ranked in its separate group, including its in-scope exclusion exception. Exact typed paths still pass no-follow checks. Enumeration/ranking/output are bounded; actual unavailable policies/tools return explicit partial/error results.
+
+Build with `bun run --cwd packages/workspace build` on macOS with Xcode command-line tools. `dist/filesystem` is a native executable, not JavaScript; the app packager must ship it outside asar, preserve executable permission, set `filesystemHelper` to that resource path and qualify signing/SDK compatibility. Ship a separately qualified standalone ripgrep 15.2.0 executable and pass `ripgrepExecutable`; PATH discovery is only a development convenience. System Git defaults to `/usr/bin/git`. The coordinator owns root export-map/lockfile/package-asset/notice finalization. Module tests copy helper/ripgrep into resource paths containing spaces and run read/save/lookup with PATH restricted to `/usr/bin:/bin`; that is an asset-location proof, not an Electron package test.
+
+The native guarantees are practical final no-follow/check-before-mutation checks, not atomic filesystem snapshots. Another process can write between the final content check and replacement, or replace/relocate objects after the final identity check; recursive preflight cannot freeze descendants. Interrupted copy staging and failed save staging are retained for inspection instead of recursive cleanup. SQLite uses WAL and `synchronous=FULL`; native file bytes are fsynced, but neither the journal nor native filesystem APIs promise power-loss survival or a cross-resource transaction. Unacknowledged keystrokes, durable hardware caches, machine power loss, Finder Put Back, signing, packaged Electron and human visual/accessibility acceptance require their own evidence.
+
+See `PROVENANCE.md` for selected source/hash decisions and `EVIDENCE.md` for exact checks and limits.

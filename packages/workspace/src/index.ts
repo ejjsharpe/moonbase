@@ -25,7 +25,7 @@ export type WorkspaceConfiguration = {
   ripgrepExecutable?: string;
 };
 type Approval = { target: CheckoutTarget; identity: string; common: {path: string; identity: string}; gitEntry: {identity: string; pointer: string | null} };
-type SaveRecord = { published?: boolean; temporary?: string; input: CommandInput<'saveFile'>; result?: SaveResult; started: boolean; message?: string };
+type SaveRecord = { baseline?: import('@moonbase/application/client').FileDocument; published?: boolean; temporary?: string; input: CommandInput<'saveFile'>; result?: SaveResult; started: boolean; message?: string };
 type OperationRecord = { staging?: string[]; publishedItems?: string[]; input: WorkspaceOperation; result: OperationResult; revision: number; acknowledged: boolean };
 const key = (clientId: string, id: string) => hash(canonical([clientId, id]));
 const affected = (p: string, source: string) => p === source || p.startsWith(source + '/');
@@ -60,7 +60,7 @@ class LocalWorkspace {
   readonly directories = new Map<string, Directory>();
   readonly subscriptions = new Set<() => void>();
   readonly pending = new Set<Promise<unknown>>();
-  readonly locks = new Map<string, Promise<unknown>>();
+  readonly locks = new Set<{checkoutId: string; paths: string[]; done: Promise<void>}>();
   readonly native = new Map<string, { source: NativeImport; clientId: string; checkoutId: string; expires: ReturnType<typeof setTimeout> }>();
   readonly volatileSaves = new Map<string, SaveRecord>();
   readonly volatileOperations = new Map<string, OperationRecord>();
@@ -83,7 +83,7 @@ class LocalWorkspace {
     this.service = {
       openCheckout: call<'openCheckout'>((input, signal) => this.open(input.root, signal)),
       readFile: call<'readFile'>(async (target, signal) => (await this.directory(target.checkout)).read(target.path, signal)),
-      saveFile: call<'saveFile'>((input, signal) => this.serial(input.target.checkout.checkoutId, () => { if (signal.aborted) fail('Cancelled', 'Save cancelled before admission.'); return this.save(input); })),
+      saveFile: call<'saveFile'>((input, signal) => this.serial(input.target.checkout.checkoutId, [input.target.path], () => { if (signal.aborted) fail('Cancelled', 'Save cancelled before admission.'); return this.save(input); })),
       listDirectory: call<'listDirectory'>((input, signal) => this.list(input, signal)),
       gitStatus: call<'gitStatus'>((input, signal) => this.status(input.checkout, signal)),
       readComparison: call<'readComparison'>((input, signal) => this.comparison(input, signal)),
@@ -93,13 +93,13 @@ class LocalWorkspace {
         const directory = await this.directory(input.checkout);
         return Promise.all(input.paths.map(async p => { path(p); return { target: {checkout: input.checkout, path: p}, ...await directory.entry(p, signal) }; }));
       }),
-      mutate: call<'mutate'>((input, signal) => this.serial(input.checkout.checkoutId, () => this.mutate(input, signal))),
+      mutate: call<'mutate'>((input, signal) => this.serial(input.checkout.checkoutId, this.footprint(input), () => this.mutate(input, signal))),
       operationStatus: call<'operationStatus'>(async input => { identifier(input.clientId); identifier(input.id); await this.recoverEvidence(); return this.operation(key(input.clientId, input.id))?.result ?? null; }, true),
       acknowledgeOperation: call<'acknowledgeOperation'>(async input => {
         identifier(input.clientId); identifier(input.id);
         const id = key(input.clientId, input.id), record = this.operation(id);
         if (!record) return;
-        ensure(record.result.outcome !== 'uncertain', 'Uncertain operation evidence cannot be acknowledged away. Inspect the affected paths.');
+        if (record.result.outcome === 'uncertain') fail('Uncertain', 'Uncertain operation evidence cannot be acknowledged away. Inspect the affected paths.');
         if ((this.store.readRecovery(input.clientId)?.revision ?? 0) <= record.revision) fail('Persistence', 'Publish reconciled recovery before acknowledging this operation.');
         this.store.put('operations', id, {...record, acknowledged: true}); this.volatileOperations.delete(id);
       }, true),
@@ -126,10 +126,16 @@ class LocalWorkspace {
       void task.finally(() => this.pending.delete(task)).catch(() => {}); return task;
     }, catch: error => applicationError(error, persistence ? 'Persistence' : 'Unavailable') });
   }
-  async serial<A>(resource: string, fn: () => Promise<A>): Promise<A> {
-    const previous = this.locks.get(resource) ?? Promise.resolve();
-    const next = previous.catch(() => {}).then(() => { if (this.closed) fail('Unavailable', 'Workspace scope is closed.'); return fn(); }); this.locks.set(resource, next);
-    try { return await next; } finally { if (this.locks.get(resource) === next) this.locks.delete(resource); }
+  footprint(input: WorkspaceOperation) { return [...input.sources.map(s => s.target.path), ...(input.destination ? [input.destination] : [])]; }
+  overlaps(a: string[], b: string[]) { return a.some(p => b.some(q => affected(p, q) || affected(q, p))); }
+  active(checkoutId: string) { return [...this.locks].some(lock => lock.checkoutId === checkoutId); }
+  async serial<A>(checkoutId: string, paths: string[], fn: () => Promise<A>): Promise<A> {
+    const previous = [...this.locks].filter(lock => lock.checkoutId === checkoutId && this.overlaps(paths, lock.paths));
+    let release!: () => void;
+    const lock = {checkoutId, paths, done: new Promise<void>(resolve => { release = resolve; })};
+    this.locks.add(lock);
+    try { await Promise.all(previous.map(p => p.done)); if (this.closed) fail('Unavailable', 'Workspace scope is closed.'); return await fn(); }
+    finally { this.locks.delete(lock); release(); }
   }
   async close() {
     this.closed = true;
@@ -157,6 +163,7 @@ class LocalWorkspace {
     const approved = this.approval(target);
     let directory = this.directories.get(target.checkoutId);
     if (!directory) {
+      ensure(this.directories.size < 128, 'Open checkout resource limit reached. Restart after preserving recovery to release retained checkout descriptors.');
       directory = new Directory(target.root, approved.identity, this.run, this.config.gitExecutable ?? '/usr/bin/git');
       this.directories.set(target.checkoutId, directory);
     }
@@ -187,6 +194,7 @@ class LocalWorkspace {
     root = realpathSync(root); this.protected(root);
     const fd = openSync(root, constants.O_RDONLY | constants.O_DIRECTORY | 0x20000000);
     const id = identity(fstatSync(fd)); closeSync(fd);
+    const gitEntry = this.gitEntry(root);
     const directory = new Directory(root, id, this.run, this.config.gitExecutable ?? '/usr/bin/git');
     try {
       const top = (await directory.git(['rev-parse', '--show-toplevel'], undefined, signal)).toString().trim();
@@ -199,7 +207,7 @@ class LocalWorkspace {
       if (previous) { ensure(previous.identity === id && previous.target.projectId === projectId, 'Checkout or repository identity changed. Restore the original directory.'); return previous.target; }
       const branch = await this.branch(directory, signal);
       const target = {hostId: this.config.hostId, checkoutId: hash(canonical([this.config.hostId, root, id])), projectId, root, branch};
-      this.store.put('approvals', target.checkoutId, { target, identity: id, common: {path: common, identity: commonIdentity}, gitEntry: this.gitEntry(root) }); return target;
+      this.store.put('approvals', target.checkoutId, { target, identity: id, common: {path: common, identity: commonIdentity}, gitEntry }); return target;
     } finally { directory.close(); }
   }
   async branch(directory: Directory, signal?: AbortSignal) {
@@ -212,8 +220,8 @@ class LocalWorkspace {
     const records = new Map(this.store.all<OperationRecord>('operations').map(r => [key(r.input.clientId, r.input.id), r]));
     for (const [id, record] of this.volatileOperations) records.set(id, record); return [...records.values()];
   }
-  assertSettled(target: CheckoutTarget) {
-    if (this.operations().some(r => r.input.checkout.checkoutId === target.checkoutId && (!r.acknowledged || r.result.outcome === 'uncertain')) || this.store.all<SaveRecord>('saves').some(r => r.input.target.checkout.checkoutId === target.checkoutId && !r.result))
+  assertSettled(target: CheckoutTarget, paths: string[]) {
+    if (this.operations().some(r => r.input.checkout.checkoutId === target.checkoutId && this.overlaps(paths, this.footprint(r.input)) && (!r.acknowledged || r.result.outcome === 'uncertain')) || this.store.all<SaveRecord>('saves').some(r => r.input.target.checkout.checkoutId === target.checkoutId && this.overlaps(paths, [r.input.target.path]) && !r.result))
       fail('Uncertain', 'An operation awaits recovery publication or inspection. Query its status; do not repeat the mutation.');
   }
   async save(input: CommandInput<'saveFile'>): Promise<SaveResult> {
@@ -225,14 +233,14 @@ class LocalWorkspace {
       if (previous.result) { if (this.volatileSaves.has(id)) this.publishSave(id, previous); return previous.result; }
       return fail('Uncertain', 'Interrupted save retained its intent. Inspect disk and recovered draft before a new deliberate save.');
     }
-    this.assertSettled(input.target.checkout);
+    this.assertSettled(input.target.checkout, [input.target.path]);
     const directory = await this.directory(input.target.checkout), disk = await directory.read(input.target.path);
     if (disk.version !== input.expectedVersion) {
       const result = {kind: 'conflict', disk} as const;
       this.store.put('saves', id, {input, result, started: false}); return result;
     }
     const temporary = join(dirname(input.target.path), '.moonbase-save-' + randomUUID());
-    const record: SaveRecord = {input, started: true, temporary};
+    const record: SaveRecord = {input, started: true, temporary, baseline: disk};
     this.store.put('saves', id, record);
     try {
       const stagingIdentity = (await directory.io(['stage', input.target.path, temporary], input.text)).toString();
@@ -275,7 +283,7 @@ class LocalWorkspace {
     if (input.text !== undefined) textDocument(input.text);
     const id = key(input.clientId, input.id), previous = this.operation(id);
     if (previous) { if (!same(previous.input, input)) fail('Conflict', 'Operation ID already belongs to another payload/client/checkout.'); if (this.volatileOperations.has(id)) this.publishOperation(id, previous); return previous.result; }
-    this.assertSettled(input.checkout);
+    this.assertSettled(input.checkout, this.footprint(input));
     if (signal.aborted) fail('Cancelled', 'Operation cancelled before admission.');
     const directory = await this.directory(input.checkout);
     const create = input.kind.startsWith('create-');
@@ -331,8 +339,8 @@ class LocalWorkspace {
         const replacement = replacements.find(r => r.target.path === destination);
         try {
           if (replacement) {
-            await directory.io(['trash', replacement.target.path, '-', replacement.identity], undefined, signal);
-            record.result.items.push({source: replacement.target.path, outcome: 'completed', message: 'Explicit replacement moved to macOS Trash; retained if transfer fails.'});
+            const trashLocation = (await directory.io(['trash', replacement.target.path, '-', replacement.identity], undefined, signal)).toString();
+            record.result.items.push({source: replacement.target.path, outcome: 'completed', message: 'Explicit replacement moved to macOS Trash: ' + trashLocation});
             this.store.put('operations', id, record);
           }
           if (create) {
@@ -421,7 +429,7 @@ class LocalWorkspace {
         const saved = record.result.disk;
         for (const row of this.store.db.prepare('SELECT client, body FROM recovery').all()) {
           const state = JSON.parse(row.body as string) as EditorRecovery;
-          for (const draft of state.drafts) if (same(draft.target, record.input.target) && draft.disk.version === record.input.expectedVersion) draft.disk = saved;
+          for (const draft of state.drafts) if (row.client === record.input.clientId && same(draft.target, record.input.target)) draft.disk = saved;
           if (JSON.stringify(state) !== row.body) this.store.db.prepare('UPDATE recovery SET revision=revision+1, body=? WHERE client=?').run(JSON.stringify(state), row.client as string);
         }
       }
@@ -433,14 +441,14 @@ class LocalWorkspace {
   async recoverEvidence() {
     for (const [id, record] of this.volatileSaves) if (record.result) this.publishSave(id, record);
     for (const record of this.operations()) {
-      if (this.locks.has(record.input.checkout.checkoutId)) continue;
+      if (this.active(record.input.checkout.checkoutId)) continue;
       const items = record.result.items.filter(item => !item.message?.startsWith('Explicit replacement'));
       if (items.length === (record.input.sources.length || record.input.nativeReferences?.length || 1) && items.every(item => item.outcome !== 'uncertain')) {
         const outcome = items.every(item => item.outcome === 'completed') ? 'completed' : 'failed';
         const id = key(record.input.clientId, record.input.id);
         if (record.result.outcome !== outcome || record.result.items.some(item => item.outcome === 'completed' && !(record.publishedItems ?? []).includes(canonical(item))) || this.volatileOperations.has(id)) { record.result.outcome = outcome; this.publishOperation(id, record); }
       }
-      if (record.result.outcome !== 'uncertain' || this.locks.has(record.input.checkout.checkoutId)) continue;
+      if (record.result.outcome !== 'uncertain' || this.active(record.input.checkout.checkoutId)) continue;
       const kind = record.input.kind;
       if (kind !== 'move') continue;
       let directory: Directory;
@@ -462,7 +470,7 @@ class LocalWorkspace {
       this.publishOperation(key(record.input.clientId, record.input.id), record);
     }
     for (const record of this.store.all<SaveRecord>('saves')) {
-      if (record.result || this.locks.has(record.input.target.checkout.checkoutId)) continue;
+      if (record.result || this.active(record.input.target.checkout.checkoutId)) continue;
       try {
         const disk = await (await this.directory(record.input.target.checkout)).read(record.input.target.path);
         if (disk.version === textDocument(record.input.text).version) record.result = {kind: 'saved', disk};
@@ -479,7 +487,13 @@ class LocalWorkspace {
     for (const target of state.checkouts) { try { await this.directory(target); } catch (error) { errors.push(target.root + ': ' + errorText(error)); } }
     const operations = this.operations().filter(r => !r.acknowledged && (r.input.clientId === clientId || state.checkouts.some(c => same(c, r.input.checkout)))).map(r => r.result);
     for (const operation of operations) if (operation.outcome === 'uncertain') errors.push('Uncertain operation ' + operation.id + ': ' + (operation.message ?? 'inspect original, destination, staging and Finder Trash; drafts retained.'));
-    for (const record of this.store.all<SaveRecord>('saves')) if (record.input.clientId === clientId && !record.result) errors.push('Uncertain save ' + record.input.requestId + ' for ' + record.input.target.path + ': inspect disk; saved draft and intent retained.');
+    for (const record of this.store.all<SaveRecord>('saves')) if (record.input.clientId === clientId && !record.result) {
+      errors.push('Uncertain save ' + record.input.requestId + ' for ' + record.input.target.path + ': inspect disk and staging ' + record.temporary + '; saved draft and intent retained.');
+      if (record.baseline && !state.drafts.some(d => same(d.target, record.input.target))) {
+        if (!state.checkouts.some(c => same(c, record.input.target.checkout))) state.checkouts.push(record.input.target.checkout);
+        state.drafts.push({target: record.input.target, text: record.input.text, disk: record.baseline});
+      }
+    }
     return {revision: stored?.revision ?? 0, state, errors, operations};
   }
   async list(input: CommandInput<'listDirectory'>, signal: AbortSignal) {
@@ -514,11 +528,16 @@ class LocalWorkspace {
     try {
       let original = '';
       if (input.area === 'staged') {
-        const entries = (await directory.git(['ls-tree', '-z', 'HEAD', '--', p], undefined, signal)).toString();
+        const exists = await directory.git(['rev-parse', '--verify', '--quiet', 'HEAD'], undefined, signal).then(() => true).catch(error => { if (error.status === 1) return false; throw error; });
+        const entries = exists ? (await directory.git(['ls-tree', '-z', 'HEAD', '--', p], undefined, signal)).toString() : '';
         if (entries) original = document(await directory.git(['cat-file', 'blob', entries.split(' ')[2].split('\t')[0]], undefined, signal)).text;
       } else if (input.area === 'unstaged') {
         const entries = (await directory.git(['ls-files', '--stage', '-z', '--', p], undefined, signal)).toString();
-        if (entries) original = document(await directory.git(['cat-file', 'blob', entries.split(' ')[1]], undefined, signal)).text;
+        if (entries) {
+          const rows = entries.split('\0').filter(Boolean); const stage = rows.find(row => row.split(' ')[2]?.startsWith('0\t'));
+          if (!stage) fail('Unavailable', 'Index contains unresolved merge stages; no single index baseline is available.');
+          original = document(await directory.git(['cat-file', 'blob', stage!.split(' ')[1]], undefined, signal)).text;
+        }
       }
       return {original, working, title: input.area === 'staged' ? 'HEAD ↔ working buffer' : input.area === 'unstaged' ? 'Index ↔ working buffer' : 'Untracked file'};
     } catch (error) { return {original: '', working, title: input.area, error: 'Git comparison unavailable. ' + errorText(error)}; }
@@ -548,7 +567,13 @@ class LocalWorkspace {
       if (!this.ripgrep) fail('Unavailable', 'Standalone ripgrep is unavailable. Supply the packaged ripgrepExecutable asset.');
       const args = ['--files', '--hidden', '--null', '--no-config', '--no-ignore-parent', '--no-ignore-global', '--threads', '1'];
       for (const name of ['.git', '.svn', '.hg', '.jj', '.DS_Store', 'Thumbs.db', 'node_modules', 'bower_components', '*.code-search']) args.push('--glob', '!**/' + name);
-      const bytes = await directory.io(['lookup', this.ripgrep!, ...args, '.'], undefined, signal).catch(error => { if (error.status === 1 && !error.message) return Buffer.alloc(0); throw error; });
+      let enumerationError: string | undefined;
+      const bytes = await directory.io(['lookup', this.ripgrep!, ...args, '.'], undefined, signal).catch(error => {
+        const output = (error as {output?: Buffer}).output;
+        if (output?.length && output.lastIndexOf(0) >= 0) { partial = true; enumerationError = errorText(error); return output.subarray(0, output.lastIndexOf(0) + 1); }
+        if (error.status === 1 && !error.stderr) return Buffer.alloc(0);
+        throw error;
+      });
       const candidates = [...new Set(bytes.toString().split('\0').filter(Boolean).map(p => p.replace(/^\.\//, '')))];
       if (candidates.length > 20000) partial = true;
       const eligible: string[] = [];
@@ -564,7 +589,7 @@ class LocalWorkspace {
       const exact = eligible[0] === input.query ? matchPath(input.query, input.query) : null;
       const matches = rank(eligible.filter(p => !recent.has(p)), false);
       if (exact && !recent.has(exact.path) && !matches.some(m => m.path === exact.path)) { matches.unshift(exact); if (matches.length > limit) { matches.pop(); partial = true; } }
-      return {matches, history, partial, ...(partial ? {error: 'Discovery or ranking capped; refine query.'} : {})};
+      return {matches, history, partial, ...(partial ? {error: enumerationError ?? 'Discovery or ranking capped; refine query.'} : {})};
     } catch (error) { return {matches: [], history, partial: true, error: 'Discovery or ignore policy unavailable. ' + errorText(error)}; }
   }
   watch(input: {checkout: CheckoutTarget; paths: string[]}) {

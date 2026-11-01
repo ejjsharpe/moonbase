@@ -45,7 +45,7 @@ test('public client saves, rejects changed retries and preserves original dirty 
     try {
       const state = await restarted.client.command('loadRecovery', {clientId: 'alice'});
       assert.equal(state.state.drafts[0].text, 'dirty text');
-      assert.equal(state.state.drafts[0].disk.text, 'original');
+      assert.equal(state.state.drafts[0].disk.text, 'dirty text');
       assert.equal((await restarted.client.command('readFile', target)).text, 'dirty text');
       assert.deepEqual(await restarted.client.command('saveFile', input), conflict);
     } finally { await restarted.runtime.dispose(); }
@@ -259,7 +259,7 @@ test('lookup honors nested ignore policies, ranks and highlights all pieces, quo
     writeFileSync(join(f.root, '.gitignore'), 'ignored.ts\n'); writeFileSync(join(f.root, '.ignore'), 'rg-hidden.ts\n'); writeFileSync(join(f.root, 'nested/.rgignore'), 'hidden.ts\n');
     const checkout = await f.client.command('openCheckout', {root: f.root});
     const all = await f.client.command('lookupFiles', {checkout, query: 'ts'});
-    assert(!all.partial, all.error); assert(all.matches.some(m => m.path === 'nested/keep.ts'));
+    assert(!all.partial, all.error ?? 'Unexpected partial discovery'); assert(all.matches.some(m => m.path === 'nested/keep.ts'));
     for (const hidden of ['nested/hidden.ts', 'node_modules/dep.ts', 'ignored.ts', 'rg-hidden.ts']) assert(!all.matches.some(m => m.path === hidden));
     const pieces = await f.client.command('lookupFiles', {checkout, query: 'FB ts'});
     assert.equal(pieces.matches[0].path, 'src/FooBar.test.ts');
@@ -319,4 +319,104 @@ test('filesystem success followed by real SQLite publication failure stays obser
     assert.equal(recovered.state.drafts[0].target.path, 'moved.txt'); assert.equal(recovered.state.drafts[0].text, 'retained dirty');
     assert.equal((await client.command('mutate', operation)).outcome, 'completed'); assert.equal(readFileSync(count, 'utf8'), 'called\n');
   } finally { writeFileSync(release, 'resume'); await runtime.dispose(); await f.close(); }
+});
+
+test('one client Save never rebases another client dirty baseline, including restart and newer-revision stale publication', async () => {
+  const f = fixture();
+  try {
+    writeFileSync(join(f.root, 'file.txt'), 'original');
+    const checkout = await f.client.command('openCheckout', {root: f.root}), target = {checkout, path: 'file.txt'}, disk = await f.client.command('readFile', target);
+    for (const clientId of ['alice', 'bob']) await f.client.command('persistRecovery', {clientId, expectedRevision: 0, state: draft(clientId, checkout, 'same dirty text', disk)});
+    await f.client.command('saveFile', {target, clientId: 'alice', requestId: 'own-save', text: 'same dirty text', expectedVersion: disk.version});
+    const bob = await f.client.command('loadRecovery', {clientId: 'bob'});
+    assert.deepEqual(bob.state.drafts[0].disk, disk); assert.equal(bob.revision, 1);
+    const newer = structuredClone(bob.state); newer.drafts[0].text = 'newer bob edit';
+    await f.client.command('persistRecovery', {clientId: 'bob', expectedRevision: 1, state: newer});
+    await assert.rejects(f.client.command('persistRecovery', {clientId: 'bob', expectedRevision: 1, state: bob.state}), rejects('Conflict'));
+    await f.runtime.dispose(); const restarted = f.start();
+    try {
+      const restored = await restarted.client.command('loadRecovery', {clientId: 'bob'});
+      assert.equal(restored.state.drafts[0].text, 'newer bob edit'); assert.deepEqual(restored.state.drafts[0].disk, disk);
+      const result = await restarted.client.command('saveFile', {target, clientId: 'bob', requestId: 'bob-save', text: 'newer bob edit', expectedVersion: restored.state.drafts[0].disk.version});
+      assert.equal(result.kind, 'conflict'); assert.equal(result.disk.text, 'same dirty text'); assert.equal(readFileSync(join(f.root, 'file.txt'), 'utf8'), 'same dirty text');
+    } finally { await restarted.runtime.dispose(); }
+  } finally { await f.close(); }
+});
+
+test('unavailable persistence and real filesystem file-size exhaustion report typed errors and retain existing recovery', async () => {
+  const {fileURLToPath} = await import('node:url');
+  const f = fixture();
+  try {
+    const notDirectory = join(f.base, 'not-directory'); writeFileSync(notDirectory, 'existing bytes');
+    const unavailable = ManagedRuntime.make(WorkspaceLive({hostId: 'unavailable', dataDirectory: notDirectory}));
+    try { await assert.rejects(makeEditorClient(unavailable).command('loadRecovery', {clientId: 'alice'}), rejects('Persistence')); }
+    finally { await unavailable.dispose(); }
+    assert.equal(readFileSync(notDirectory, 'utf8'), 'existing bytes');
+    writeFileSync(join(f.root, 'file.txt'), 'disk');
+    const output = execFileSync('/bin/sh', ['-c', 'ulimit -f 128; exec "$@"', 'size-limited-workspace', process.execPath, '--experimental-strip-types', fileURLToPath(new URL('./persistence-limit.fixture.ts', import.meta.url)), f.root, join(f.base, 'limited-state')], {encoding: 'utf8', timeout: 10000});
+    assert(output.includes('original recovery retained'));
+  } finally { await f.close(); }
+});
+
+test('batch move reports partial success and explicit replacement revalidates the captured destination', async () => {
+  const f = fixture(); const trashPaths: string[] = [];
+  try {
+    mkdirSync(join(f.root, 'target')); writeFileSync(join(f.root, 'first'), 'first'); writeFileSync(join(f.root, 'second'), 'second'); writeFileSync(join(f.root, 'target/second'), 'occupied');
+    const checkout = await f.client.command('openCheckout', {root: f.root});
+    const sources = await f.client.command('inspectEntries', {checkout, paths: ['first', 'second']});
+    const partial = await f.client.command('mutate', {id: 'partial', clientId: 'alice', checkout, kind: 'move', sources, destination: 'target'});
+    assert.equal(partial.outcome, 'failed'); assert.deepEqual(partial.items.map(item => item.outcome), ['completed', 'failed']);
+    assert.equal(readFileSync(join(f.root, 'target/first'), 'utf8'), 'first'); assert.equal(readFileSync(join(f.root, 'second'), 'utf8'), 'second');
+    const load = await f.client.command('loadRecovery', {clientId: 'alice'}); await f.client.command('persistRecovery', {clientId: 'alice', expectedRevision: load.revision, state: load.state}); await f.client.command('acknowledgeOperation', {clientId: 'alice', id: 'partial'});
+    const remaining = await f.client.command('inspectEntries', {checkout, paths: ['second']}), replacements = await f.client.command('inspectEntries', {checkout, paths: ['target/second']});
+    renameSync(join(f.root, 'target/second'), join(f.root, 'old-occupied')); writeFileSync(join(f.root, 'target/second'), 'replacement changed');
+    await assert.rejects(f.client.command('mutate', {id: 'stale-replacement', clientId: 'alice', checkout, kind: 'move', sources: remaining, replacements, destination: 'target/second'}), rejects('Conflict'));
+    assert.equal(readFileSync(join(f.root, 'target/second'), 'utf8'), 'replacement changed');
+    const fresh = await f.client.command('inspectEntries', {checkout, paths: ['target/second']});
+    const replaced = await f.client.command('mutate', {id: 'replacement', clientId: 'alice', checkout, kind: 'move', sources: remaining, replacements: fresh, destination: 'target/second'});
+    assert.equal(replaced.outcome, 'completed'); assert.equal(readFileSync(join(f.root, 'target/second'), 'utf8'), 'second');
+    // The production result exposes actual native Trash location for ordinary Trash; replacement preserves bytes there too.
+    assert.equal(replaced.items[0].outcome, 'completed');
+    const trashed = replaced.items[0].message!.replace('Explicit replacement moved to macOS Trash: ', '');
+    assert(trashed.includes('/.Trash/')); trashPaths.push(trashed); assert.equal(readFileSync(trashed, 'utf8'), 'replacement changed');
+  } finally { trashPaths.forEach(p => { if (p.includes('/.Trash/') && existsSync(p)) rmSync(p); }); await f.close(); }
+});
+
+test('native assets in packaged resource paths run with restricted PATH and no provider startup dependency', async () => {
+  const {fileURLToPath} = await import('node:url'), {copyFileSync} = await import('node:fs');
+  const f = fixture();
+  try {
+    const resources = join(f.base, 'Packaged Resources'); mkdirSync(resources);
+    const filesystem = join(resources, 'filesystem'), rg = join(resources, 'ripgrep');
+    copyFileSync(fileURLToPath(new URL('../dist/filesystem', import.meta.url)), filesystem); chmodSync(filesystem, 0o700);
+    const installed = process.env.MOONBASE_TEST_RIPGREP ?? execFileSync('/bin/sh', ['-c', 'command -v rg'], {encoding: 'utf8'}).trim();
+    copyFileSync(installed, rg); chmodSync(rg, 0o700);
+    writeFileSync(join(f.root, 'file.txt'), 'disk');
+    const output = execFileSync(process.execPath, ['--experimental-strip-types', fileURLToPath(new URL('./packaged-assets.fixture.ts', import.meta.url)), f.root, f.dataDirectory, filesystem, rg], {env: {...process.env, PATH: '/usr/bin:/bin'}, encoding: 'utf8', timeout: 10000});
+    assert(output.includes('Independent workspace assets passed')); assert.equal(readFileSync(join(f.root, 'file.txt'), 'utf8'), 'saved from isolated assets');
+  } finally { await f.close(); }
+});
+
+test('cancelling admitted native copy is typed, preserves source and leaves unrelated file queries usable', async () => {
+  const {fileURLToPath} = await import('node:url');
+  const f = fixture(), helper = join(f.base, 'slow-copy'), ready = join(f.base, 'copy-ready');
+  const binary = fileURLToPath(new URL('../dist/filesystem', import.meta.url));
+  const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
+  writeFileSync(helper, `#!/bin/sh\nif [ "$1" = copy ]; then\n /usr/bin/touch ${quote(ready)}\n while :; do /bin/sleep 0.05; done\nfi\nexec ${quote(binary)} "$@"\n`); chmodSync(helper, 0o700);
+  const runtime = ManagedRuntime.make(WorkspaceLive({dataDirectory: f.dataDirectory, hostId: 'local-test', filesystemHelper: helper})), client = makeEditorClient(runtime), abort = new AbortController();
+  try {
+    writeFileSync(join(f.root, 'file.txt'), 'source survives'); writeFileSync(join(f.root, 'unrelated.txt'), 'unrelated original'); const checkout = await client.command('openCheckout', {root: f.root});
+    const sources = await client.command('inspectEntries', {checkout, paths: ['file.txt']});
+    const pending = client.command('mutate', {id: 'cancel-copy', clientId: 'alice', checkout, kind: 'copy', sources, destination: 'copy.txt'}, {signal: abort.signal});
+    const rejected = assert.rejects(pending, rejects('Cancelled'));
+    const deadline = Date.now() + 3000; while (!existsSync(ready)) { assert(Date.now() < deadline); await new Promise(resolve => setTimeout(resolve, 10)); }
+    assert.equal((await client.command('readFile', {checkout, path: 'file.txt'})).text, 'source survives');
+    const unrelated = {checkout, path: 'unrelated.txt'}, baseline = await client.command('readFile', unrelated);
+    assert.equal((await client.command('saveFile', {target: unrelated, clientId: 'bob', requestId: 'unrelated-save', text: 'unrelated saved', expectedVersion: baseline.version})).kind, 'saved');
+    abort.abort(); await rejected; await runtime.dispose();
+    assert.equal(readFileSync(join(f.root, 'file.txt'), 'utf8'), 'source survives'); assert(!existsSync(join(f.root, 'copy.txt')));
+    const restarted = f.start();
+    try { assert.equal((await restarted.client.command('operationStatus', {clientId: 'alice', id: 'cancel-copy'}))?.outcome, 'uncertain'); }
+    finally { await restarted.runtime.dispose(); }
+  } finally { abort.abort(); await runtime.dispose(); await f.close(); }
 });

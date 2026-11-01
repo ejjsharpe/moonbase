@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { chmodSync, constants, closeSync, mkdirSync, openSync, realpathSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { ensure, fail } from './validation.ts';
+import { ApplicationError } from '@moonbase/application/client';
 
 /** Independent editor-only namespace. No legacy schemas, stores or migrations. */
 export class Store {
@@ -34,7 +35,10 @@ export class Store {
     return row ? JSON.parse(row.body as string) as T : null;
   }
   all<T>(bucket: string): T[] { return this.db.prepare('SELECT body FROM records WHERE bucket=? ORDER BY rowid').all(bucket).map(r => JSON.parse(r.body as string) as T); }
-  put(bucket: string, key: string, value: unknown) { this.db.prepare('INSERT INTO records VALUES(?,?,?) ON CONFLICT(bucket,key) DO UPDATE SET body=excluded.body').run(bucket, key, JSON.stringify(value)); }
+  put(bucket: string, key: string, value: unknown) {
+    try { this.db.prepare('INSERT INTO records VALUES(?,?,?) ON CONFLICT(bucket,key) DO UPDATE SET body=excluded.body').run(bucket, key, JSON.stringify(value)); }
+    catch (error) { throw new ApplicationError({code: 'Persistence', message: 'Workspace journal publication failed; retain drafts and retry. ' + String(error)}); }
+  }
   readRecovery(client: string): { revision: number; state: unknown } | null {
     const row = this.db.prepare('SELECT revision, body FROM recovery WHERE client=?').get(client);
     return row ? { revision: Number(row.revision), state: JSON.parse(row.body as string) } : null;

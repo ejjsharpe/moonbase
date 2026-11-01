@@ -18,10 +18,7 @@ static const char *owned_temp;
 
 static void fail(const char *message) {
   fprintf(stderr, "%d:%s: %s\n", errno, message, strerror(errno));
-  if (owned_temp &&
-      unlinkat(3, owned_temp, AT_SYMLINK_NOFOLLOW_ANY | AT_RESOLVE_BENEATH) &&
-      errno != ENOENT)
-    fprintf(stderr, "Temporary file remains: %s\n", owned_temp);
+  if (owned_temp) fprintf(stderr, "Temporary file retained for inspection: %s\n", owned_temp);
   exit(1);
 }
 

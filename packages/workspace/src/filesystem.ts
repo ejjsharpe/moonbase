@@ -23,7 +23,7 @@ export function makeRunner(helper: string, children: Set<ChildProcess>): Run {
     child.once('close', (code, killed) => {
       clearTimeout(timer); signal?.removeEventListener('abort', stop); children.delete(child);
       if (code === 0 && !capped && !signal?.aborted) resolve(output);
-      else reject(Object.assign(Error(errors || (capped ? 'Filesystem output/time limit reached; refine request.' : signal?.aborted ? 'Cancelled' : 'Filesystem helper unavailable.')), { status: code, uncertain: !!killed || capped || signal?.aborted, output }));
+      else reject(Object.assign(Error(errors || (capped ? 'Filesystem output/time limit reached; refine request.' : signal?.aborted ? 'Cancelled' : 'Filesystem helper unavailable.')), { status: code, stderr: errors, uncertain: !!killed || capped || signal?.aborted, output }));
     });
   });
 }
