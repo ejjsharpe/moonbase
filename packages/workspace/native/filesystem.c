@@ -352,14 +352,10 @@ int main(int argc, char **argv) {
     return 0;
   }
 
-  if (!strcmp(operation, "identity") || !strcmp(operation, "move") || !strcmp(operation, "trash")) {
+  if (!strcmp(operation, "move") || !strcmp(operation, "trash")) {
     int fd = scoped_open(3, argv[2], O_RDONLY);
     struct stat info;
     if (fstat(fd, &info)) fail("Inspect source");
-    if (!strcmp(operation, "identity")) {
-      printf("%llu:%llu", (unsigned long long)info.st_dev, (unsigned long long)info.st_ino);
-      return 0;
-    }
     if (argc != 5) { errno = EINVAL; fail("Invalid operation"); }
     char identity[100];
     snprintf(identity, sizeof(identity), "%llu:%llu", (unsigned long long)info.st_dev, (unsigned long long)info.st_ino);
@@ -472,11 +468,6 @@ int main(int argc, char **argv) {
     return 0;
   }
 
-  if (!strcmp(operation, "remove")) {
-    if (unlinkat(3, argv[2], AT_SYMLINK_NOFOLLOW_ANY | AT_RESOLVE_BENEATH) && errno != ENOENT)
-      fail("Remove temporary file");
-    return 0;
-  }
   if (!strcmp(operation, "replace")) {
     if (argc != 5) { errno = EINVAL; fail("Invalid replacement identity"); }
     int fd = scoped_open(3, argv[3], O_RDONLY);

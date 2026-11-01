@@ -8,11 +8,14 @@
   ],
   "scripts": {
     "typecheck": "nx run-many -t typecheck",
-    "lint": "nx run-many -t lint",
+    "lint": "oxlint . --report-unused-disable-directives",
     "test": "nx run-many -t test",
     "build": "nx run-many -t build",
     "check:foundation": "node scripts/check-foundation.mjs",
-    "test:editor-integration": "tsc --noEmit -p tests/editor-workspace/tsconfig.json && node packages/workspace/scripts/build-native.mjs && node --experimental-strip-types --test --test-concurrency=1 tests/editor-workspace/*.test.ts"
+    "test:editor-integration": "tsc --noEmit -p tests/editor-workspace/tsconfig.json && node packages/workspace/scripts/build-native.mjs && node --experimental-strip-types --test --test-concurrency=1 tests/editor-workspace/*.test.ts",
+    "lint:fix": "bun run lint --fix --ignore-pattern \"packages/ui/**\"",
+    "format": "oxfmt --write .",
+    "format:check": "oxfmt --check ."
   },
   "trustedDependencies": [
     "electron",
@@ -42,8 +45,11 @@
     "@moonbase/application": "workspace:*",
     "@moonbase/editor": "workspace:*",
     "@moonbase/workspace": "workspace:*",
-    "@moonbase/pi-runtime": "workspace:*",
     "@moonbase/ssh": "workspace:*",
-    "@earendil-works/pi-ai": "1.4.0"
+    "@earendil-works/pi-ai": "1.4.0",
+    "@moonbase/pi-runtime": "workspace:*",
+    "oxlint": "1.90.0",
+    "oxfmt": "0.75.0",
+    "@moonbase/config": "workspace:*"
   }
 }
