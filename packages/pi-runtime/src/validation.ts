@@ -59,23 +59,27 @@ export function preview(text: string, bytes = 4096) {
   let result='', used=0; for(const char of text.toWellFormed()) {const size=Buffer.byteLength(char); if(used+size>bytes) break; result+=char; used+=size;}
   return {text:result,truncated:result.length<text.length};
 }
+function outputText(value:unknown):string {if(typeof value!=='string'||!value.isWellFormed()||Buffer.byteLength(value)>4096)return fail('Incompatible','Invalid chat preview.');return value;}
 function bool(value: unknown): boolean { if(typeof value!=='boolean') return fail('Incompatible','Invalid chat flag.'); return value; }
 function one<T extends string>(value:unknown, options:readonly T[]):T {if(!options.includes(value as T)) return fail('Incompatible','Invalid chat status.'); return value as T;}
 function array(value: unknown, max: number):unknown[] {if(!Array.isArray(value)||value.length>max) return fail('Incompatible','Chat list exceeds its limit.'); return value;}
+function outputHost(value:unknown):ChatHostTarget {const d=object(value);return host({hostId:d.hostId,storeId:d.storeId});}
+function outputTarget(value:unknown):ChatTarget {const d=object(value);return target({host:outputHost(d.host),actorId:d.actorId,conversationId:d.conversationId});}
+function outputStop(value:unknown):ChatStopTarget {const d=object(value);return stopTarget({target:outputTarget(d.target),submissionId:d.submissionId,taskId:d.taskId});}
 function summary(value: unknown): ChatSummary {
   const d=object(value); const createdAt=string(d.createdAt,64); if(!Number.isFinite(Date.parse(createdAt))) fail('Incompatible','Invalid chat timestamp.');
-  return {target:target(d.target),title:string(d.title,200),createdAt,cwd:string(d.cwd,4096),model:string(d.model,512)};
+  return {target:outputTarget(d.target),title:string(d.title,200),createdAt,cwd:string(d.cwd,4096),model:string(d.model,512)};
 }
 function history(value:unknown):ChatHistoryPage {const d=object(value); return {entries:array(d.entries,32).map(value=>{
-  const e=object(value); return {id:id(e.id),role:one(e.role,['user','assistant','tool','system'] as const),text:string(e.text,4096,true),truncated:bool(e.truncated),...(e.toolName===undefined?{}:{toolName:string(e.toolName,128)}),...(e.isError===undefined?{}:{isError:bool(e.isError)})};
+  const e=object(value); return {id:id(e.id),role:one(e.role,['user','assistant','tool','system'] as const),text:outputText(e.text),truncated:bool(e.truncated),...(e.toolName===undefined?{}:{toolName:string(e.toolName,128)}),...(e.isError===undefined?{}:{isError:bool(e.isError)})};
 }),olderCursor:d.olderCursor===null?null:cursor(d.olderCursor)};}
 function snapshot(value:unknown):ChatSnapshot {
   const d=object(value); let run:ChatSnapshot['run']=null;
-  if(d.run!==null) {const r=object(d.run); run={stop:stopTarget(r.stop),state:one(r.state,['running','stopping','deferred'] as const),text:string(r.text,4096,true),truncated:bool(r.truncated),tools:array(r.tools,8).map(value=>{const t=object(value); return {taskId:id(t.taskId),name:string(t.name,128),state:one(t.state,['running','completed','failed'] as const),text:string(t.text,4096,true),truncated:bool(t.truncated)};})};}
+  if(d.run!==null) {const r=object(d.run); run={stop:outputStop(r.stop),state:one(r.state,['running','stopping','deferred'] as const),text:outputText(r.text),truncated:bool(r.truncated),tools:array(r.tools,8).map(value=>{const t=object(value); return {taskId:id(t.taskId),name:string(t.name,128),state:one(t.state,['running','completed','failed'] as const),text:outputText(t.text),truncated:bool(t.truncated)};})};}
   const conversation=summary(d.conversation); if(run&&!sameTarget(run.stop.target,conversation.target)) fail('Incompatible','Run target differs from its conversation.');
   return {...history(d),conversation,run,state:one(d.state,['idle','running','stopped','failed','uncertain'] as const),...(d.message===undefined?{}:{message:string(d.message,512)})};
 }
-function receipt(value:unknown): ChatSendReceipt {const d=object(value); const base={target:target(d.target),requestId:id(d.requestId)};
+function receipt(value:unknown): ChatSendReceipt {const d=object(value); const base={target:outputTarget(d.target),requestId:id(d.requestId)};
   if(d.admission==='reserved'&&d.submissionId===null) return {...base,admission:'reserved',submissionId:null};
   if(d.admission==='admitted') return {...base,admission:'admitted',submissionId:id(d.submissionId)};
   return fail('Incompatible','Invalid Send receipt.');
@@ -84,14 +88,14 @@ function receipt(value:unknown): ChatSendReceipt {const d=object(value); const b
 export function output<K extends ChatCommand>(operation:K,value:unknown,request:ChatInput<K>):ChatOutput<K> {
   const d=value===null?null:object(value); let result:unknown;
   switch(operation) {
-    case 'getChatHost': {const x=d!; result={...session({host:x.host,actorId:x.actorId}),cwd:string(x.cwd,4096),model:string(x.model,512)}; break;}
+    case 'getChatHost': {const x=d!; result={...session({host:outputHost(x.host),actorId:x.actorId}),cwd:string(x.cwd,4096),model:string(x.model,512)}; break;}
     case 'listChats': result={conversations:array(d!.conversations,32).map(summary),nextCursor:d!.nextCursor===null?null:cursor(d!.nextCursor)}; break;
     case 'createChat': result={requestId:id(d!.requestId),conversation:summary(d!.conversation)}; break;
     case 'getChat': result=snapshot(value); break;
     case 'getChatHistory': result=history(value); break;
     case 'sendChat': result=receipt(value); break;
     case 'getChatSend': result=value===null?null:receipt(value); break;
-    case 'stopChat': result={stop:stopTarget(d!.stop),requestId:id(d!.requestId),outcome:one(d!.outcome,['stopped','terminal','superseded','pending'] as const)}; break;
+    case 'stopChat': result={stop:outputStop(d!.stop),requestId:id(d!.requestId),outcome:one(d!.outcome,['stopped','terminal','superseded','pending'] as const)}; break;
   }
   const r=result as Record<string,unknown>|null, q=request as Record<string,unknown>;
   const requestedSession=q.session as ChatSession|undefined;

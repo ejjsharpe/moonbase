@@ -13,10 +13,11 @@ export type ChatServerConfiguration={host:ChatHostTarget;token:string;port:numbe
 export const serveChat=(config:ChatServerConfiguration,client:ChatClient)=>Effect.acquireRelease(Effect.tryPromise({try:async()=>{
   const expected=V.host(config.host),token=P.token(config.token);if(!Number.isInteger(config.port)||config.port<0||config.port>65535)V.fail('InvalidInput','Choose a valid loopback host port.');
   const health=validateHostHealth({...expected,protocol:chatProtocolVersion,version:chatHostVersion,capabilities:['chat-v0']},expected);
-  await client.command('getChatHost',{host:expected});
+  const configuration=V.output('getChatHost',await client.command('getChatHost',{host:expected}),{host:expected});
+  if(JSON.stringify(configuration).includes(token))V.fail('InvalidInput','Keep the private host key separate from public chat identities and settings.');
   const grants=new Map<string,{nonce:string;expires:number}>();
-  let closed=false;
-  const server=createServer((request,response)=>{void handle(request,response).catch(()=>{if(!response.headersSent){response.writeHead(503,{'content-type':'application/json'});response.end(JSON.stringify({ok:false,error:P.publicError(null)}));}else response.destroy();});});
+  let closed=false,active=0;
+  const server=createServer((request,response)=>{if(active>=128){response.writeHead(503);response.end();return;}active++;void handle(request,response).catch(()=>{if(!response.headersSent){response.writeHead(503,{'content-type':'application/json'});response.end(JSON.stringify({ok:false,error:P.publicError(null)}));}else response.destroy();}).finally(()=>{active--;});});
   server.requestTimeout=20000;server.headersTimeout=10000;server.maxConnections=128;server.keepAliveTimeout=1000;
   async function handle(request:IncomingMessage,response:ServerResponse) {
     if(closed){response.writeHead(503);response.end();return;}
@@ -62,4 +63,4 @@ export const serveChat=(config:ChatServerConfiguration,client:ChatClient)=>Effec
   await new Promise<void>((resolve,reject)=>{server.once('error',reject);server.listen(config.port,'127.0.0.1',()=>{server.off('error',reject);resolve();});});
   const address=server.address();if(!address||typeof address==='string')V.fail('Unavailable','Chat loopback listener did not open.');
   return {origin:`http://127.0.0.1:${(address as import('node:net').AddressInfo).port}`,close:async()=>{closed=true;grants.clear();await new Promise<void>((resolve,reject)=>{server.close(error=>error?reject(error):resolve());server.closeAllConnections();});}};
-},catch:()=>new ApplicationError({code:'Unavailable',message:'Chat host could not acquire its loopback listener or backing service.'})}),server=>releaseResource(()=>server.close()));
+},catch:error=>ApplicationError.is(error)?error:new ApplicationError({code:'Unavailable',message:'Chat host could not acquire its loopback listener or backing service.'})}),server=>releaseResource(()=>server.close()));
