@@ -10,9 +10,9 @@ declare global {
 }
 const packaged = !!process.env.MOONBASE_PACKAGED_TEST;
 const evidence = resolve(process.env.MOONBASE_NATIVE_OUTPUT ?? "test-results", "lifecycle");
-for (const mode of ["reload", "veto", "crash"])
+for (const mode of ["reload", "veto", "fresh-veto", "crash"])
   test(`native document ${mode === "veto" ? "veto retains" : mode + " releases"} observers and waits without replacing the root or stopping work`, async () => {
-    const veto = mode === "veto",
+    const veto = mode === "veto" || mode === "fresh-veto",
       crash = mode === "crash";
     const f = await fixture(true);
     let app: ElectronApplication | undefined;
@@ -120,7 +120,7 @@ for (const mode of ["reload", "veto", "crash"])
       expect(active.filter((v) => v.startsWith("moonbase-chat:"))).not.toHaveLength(0);
       const waitId = randomUUID();
       if (veto) {
-        await p.evaluate(() =>
+        if (mode === "veto") await p.evaluate(() =>
           localStorage.setItem("moonbase.chat-proof.v1", "controlled external replacement"),
         );
         await p.getByLabel("Message", { exact: true }).fill("newer unpreserved live draft");
@@ -179,10 +179,24 @@ for (const mode of ["reload", "veto", "crash"])
         await mkdir(evidence,{recursive:true}); await writeFile(join(evidence,`${packaged?"package":"source"}-crash.json`),JSON.stringify({restored,stats,oldWatchersReleased:true},null,2));
         await current.evaluate(({app})=>app.quit()); await until(async()=>child!.exitCode!==null||child!.signalCode!==null,Boolean);app=undefined;return;
       }
-      if (veto) await current.evaluate(({ BrowserWindow }) => new Promise<void>(resolve => {
-        const contents = BrowserWindow.getAllWindows()[0].webContents;
-        contents.once("will-prevent-unload", () => resolve()); contents.reload();
-      }));
+      if (veto) {
+        if (mode === "fresh-veto") {
+          await views.getByRole("tab", { name: "Editor", exact: true }).click();
+          await p.getByRole("textbox", { name: "a.ts editor", exact: true }).focus(); await p.keyboard.press("End");
+        }
+        const outcome = await current.evaluate(async ({ BrowserWindow }, fresh) => {
+          const contents = BrowserWindow.getAllWindows()[0].webContents;
+          if (fresh) { await contents.insertText(" fresh visible tail"); await contents.executeJavaScript("new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))"); }
+          const visible = await contents.executeJavaScript("document.querySelector('.view-lines')?.textContent?.replace(/\\u00a0/g, ' ')");
+          return new Promise<{outcome:string;visible:string}>(resolve => {
+            const finish = (outcome: string) => { contents.removeListener("will-prevent-unload", veto); contents.removeListener("did-finish-load", loaded); resolve({ outcome, visible }); };
+            const veto = () => finish("veto"), loaded = () => finish("reload");
+            contents.once("will-prevent-unload", veto); contents.once("did-finish-load", loaded); contents.reload();
+          });
+        }, mode === "fresh-veto");
+        if (mode === "fresh-veto") expect(outcome.visible).toContain("fresh visible tail");
+        expect(outcome.outcome).toBe("veto");
+      }
       else await Promise.all([p.waitForEvent("domcontentloaded"), current.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.reload())]);
       await p.evaluate(
         () =>
@@ -196,6 +210,10 @@ for (const mode of ["reload", "veto", "crash"])
         ).toBe(oldDocument);
         const cancelled = await current.evaluate(() => globalThis.task08Cancels);
         expect(active.some((id) => cancelled.includes(id))).toBe(false);
+        if (mode === "fresh-veto") {
+          await expect(p.locator(".view-line").filter({ hasText: "fresh visible tail" }).first()).toBeVisible();
+          await views.getByRole("tab", { name: "Chat", exact: true }).click();
+        }
         await expect(p.getByLabel("Message", { exact: true })).toHaveValue(
           "newer unpreserved live draft",
         );
