@@ -23,6 +23,8 @@ A decoded error DTO is ordinary data. It does not pass `ApplicationError.is`; tr
 `effect-client` exports:
 
 ```ts
+normalizeApplicationError(value: unknown): ApplicationError;
+
 runApplicationEffect<A, R, E extends ApplicationError>(
   runtime: ManagedRuntime<R, E>,
   effect: Effect<A, ApplicationError, R>,
@@ -36,6 +38,8 @@ observeApplicationStream<A, R, E extends ApplicationError>(
   onError: (error: ApplicationError) => void,
 ): ObservationClose
 ```
+
+`normalizeApplicationError` lets Promise IO adapters create typed failures before inspecting their outcomes. It preserves authentic branded errors by identity and returns fixed `Unavailable` / `Application effect failed` for unknown values, without inspecting private diagnostics.
 
 The helpers never acquire services, create/dispose a runtime or retry commands. An empty renderer runtime (`R = never`, `E = never`) works for injected browser clients/models. Pre-aborted commands dispatch nothing. Typed error identity/target and composite cleanup evidence survive normalization; interruption alone becomes `Cancelled`. Unknown defects and unexpected runner failures use static safe diagnostics. `releaseResource` likewise redacts unknown cleanup failures before combining them with a command cause; explicitly authored `ApplicationError` values retain their safe owner diagnostics. This does not stringify raw Cause/FiberFailure objects or change the general-purpose `ApplicationError.fromUnknown` conversion.
 
