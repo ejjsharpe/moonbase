@@ -59,3 +59,20 @@ test("long-lived watches cannot consume command capacity or prevent disposal", a
   assert((await f.call("loadRecovery", { clientId: "desktop-primary" })).ok);
   f.session.dispose(); assert.equal(f.stops, 128);
 });
+
+test("document release retains approvals but cancels waits and isolates reused observer IDs", async () => {
+  const receives: ((event: import("@moonbase/application/client").WorkspaceEvent) => void)[] = [];
+  let stops = 0, sends = 0;
+  const f = fixture(); await f.call("loadRecovery", { clientId: "desktop-primary" });
+  const pending = f.call("readFile", { checkout: target, path: "a.ts" }, "wait"); f.session.releaseDocument();
+  assert.equal(f.signal?.aborted, true); assert.equal((await pending).ok, false);
+  assert((await f.call("loadRecovery", { clientId: "desktop-primary" })).ok); f.session.dispose();
+  const client: EditorClient = { command: async () => ({ state: { checkouts: [target] }, operations: [] }) as never, watch: (_input, receive) => { receives.push(receive); return () => stops++; } };
+  const owner = new EditorSession(client, { chooseCheckout: async () => null, imports: async () => [] }, () => sends++);
+  await owner.call("command", { operation: "loadRecovery", input: { clientId: owner.clientId } }, "load");
+  await owner.call("watch", { checkout: target, paths: [] }, "reused"); owner.releaseDocument();
+  await owner.call("watch", { checkout: target, paths: [] }, "reused");
+  receives[0]({ checkout: target, paths: ["old"] }); assert.equal(sends, 0);
+  receives[1]({ checkout: target, paths: ["new"] }); assert.equal(sends, 1);
+  owner.dispose(); assert.equal(stops, 2);
+});

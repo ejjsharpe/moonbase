@@ -17,6 +17,10 @@ configureMonacoWorkers();
 const bridge = window.moonbase, controller = createEditor({ client: bridgeClient(bridge), clientId: bridge.clientId });
 const root = createRoot(document.getElementById("root")!);
 const loaded = controller.load().catch(controller.report);
+window.addEventListener("beforeunload", event => {
+  if (!controller.getSnapshot().recoveryReady) { event.preventDefault(); event.returnValue = ""; }
+});
+window.addEventListener("unload", () => controller.dispose());
 const styles = stylex.create({
   shell: { height: "100dvh", display: "flex", flexDirection: "column", overflow: "hidden", backgroundColor: colors.canvas, color: colors.text },
   toolbar: { display: "flex", alignItems: "center", gap: space.sm, padding: space.sm, flexWrap: "wrap", borderBottomWidth: 1, borderBottomStyle: "solid", borderBottomColor: colors.border, backgroundColor: colors.chrome },

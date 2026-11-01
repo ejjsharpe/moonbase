@@ -66,3 +66,21 @@ Prerequisites: #1 → #2 → #5 → #7 → reviewed workspace#3/editor#4 → int
 PENDING: independent app review/hosted checks, including an unexplained initial rapid Open→Find dismissal (original failure and separate probes retained in the evidence); real OS directory-picker/clipboard/drag gestures, Finder Put Back, signing/notarization/distribution, VoiceOver/full accessibility, physical full-volume/power-loss durability, performance qualification and human visual/product acceptance. Controlled fixtures and unsigned local execution do not establish those gates.
 
 [App R1 response and refreshed packaged proof](evidence/app-r1/review-r1-response.md) records the two owning module fixes, actual filename/restart/menu regressions, source/artifact mapping and remaining paired-review/acceptance gates.
+
+### Native document Reload follow-up
+
+The focused `fix/editor-reload-preservation` follow-up starts at standalone
+`4dd148ade5f279e2b3820df0325313ee08ce4f8d`. It uses the editor's public
+`recoveryReady` gate to veto unloading a capture until an exact recovery receipt
+confirms it. Ordinary dirty text that is already durable still reloads. A veto keeps
+the mounted editor, watchers and pending immutable publication usable. Successful
+unload cancels the old document's IPC waits/observers; renderer loss releases the
+same editor session resources while retaining native approvals and the process root.
+This standalone entry has no chat configuration, Pi, provider or SSH dependency.
+
+Targeted native command (after build/package):
+`cd apps/desktop && bunx playwright test --config reload.config.ts`.
+Set `MOONBASE_PACKAGED_TEST=1` and `MOONBASE_RELOAD_EXECUTABLE` to the absolute
+unsigned executable for the same packaged checks. Outputs default to
+`apps/desktop/test-results/reload` when launched from that app directory; set
+`MOONBASE_RELOAD_OUTPUT` explicitly when preserving separate phases.
