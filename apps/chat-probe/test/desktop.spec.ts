@@ -379,7 +379,7 @@ for (const packaged of [false, true])
           await page
             .getByLabel('Message', { exact: true })
             .fill('Newer unsent edit after disconnect');
-        f.releaseReply();
+        await f.releaseReply();
         await page.reload();
         await page.getByRole('button', { name: 'Connect', exact: true }).click();
         await expect(page.getByRole('button', { name: 'Disconnect', exact: true })).toBeEnabled();
@@ -440,8 +440,11 @@ for (const packaged of [false, true])
         await shutdown(app);
         current = undefined;
       } finally {
-        if (current) await current.close();
-        await closeFixture(f);
+        try {
+          if (current) await current.close();
+        } finally {
+          await closeFixture(f);
+        }
       }
     });
 
@@ -711,7 +714,7 @@ for (const packaged of [false, true])
               throw new DOMException('Controlled full storage', 'QuotaExceededError');
             };
           });
-          f.releaseReply();
+          await f.releaseReply();
         }
         await expect(page.getByRole('alert').first()).toContainText('preservation failed');
         await region.getByRole('button', { name: 'Query outcome', exact: true }).click();
