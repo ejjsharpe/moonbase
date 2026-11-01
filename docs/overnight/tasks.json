@@ -669,5 +669,13 @@
     "hasPendingQuestion": false,
     "pendingApproval": null,
     "waitTimedOut": false
+  },
+  "hostHealth": {
+    "url": "https://github.com/ejjsharpe/moonbase/pull/6",
+    "head": "eba354cc4062eee3575facad0d774f08d897f75a",
+    "base": "6e58c1c4ea6944e8ca25eadc46e35c843f0f9fbe",
+    "branch": "chore/host-health-contract",
+    "status": "draft; independent review queued after editor/workspace",
+    "checks": "frozen install, uncached Nx 3 tasks, 22 application tests, 40 source hashes and both browser bundles, diff pass; hosted pending"
   }
 }

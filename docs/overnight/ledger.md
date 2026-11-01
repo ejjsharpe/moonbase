@@ -11,12 +11,15 @@ All PRs are private, linked and unmerged. Older entries below are historical evi
 | [#5 checkout contract](https://github.com/ejjsharpe/moonbase/pull/5) | `6e58c1c4ea6944e8ca25eadc46e35c843f0f9fbe` | #2 | Astra: no contract blockers; actual adoption/fan-in pending |
 | [#3 workspace](https://github.com/ejjsharpe/moonbase/pull/3) | `6495a2576f30f33035158e47143d29dcace75bf3` | #5 | DRAFT; current-format repairs pass, R4 found two old-format compatibility defects; owner fixing; CI green |
 | [#4 editor](https://github.com/ejjsharpe/moonbase/pull/4) | `2ff2a6b70e43a4558fd4347a287802ca8b9bcb46` | #5 | DRAFT; owner 46+14 tests and 14 browser journeys pass; fresh Astra R4 running |
+| [#6 host health](https://github.com/ejjsharpe/moonbase/pull/6) | `eba354cc4062eee3575facad0d774f08d897f75a` | #5 | DRAFT; shared Pi/SSH preparation only; 22 application tests/checks pass; independent review queued |
 
 Production editor fan-in, standalone Electron proof, independent Pi/SSH modules, chat proof and composition remain unfinished. Published Pi 1.4.0 controlled research is preparatory evidence only. No human/manual acceptance is inferred.
 
 Current workspace CI was verified after T3's notification: both module runs at `6495a2576f30f33035158e47143d29dcace75bf3` passed ([41267431002](https://github.com/ejjsharpe/moonbase/actions/runs/41267431002), [41267427892](https://github.com/ejjsharpe/moonbase/actions/runs/41267427892)). This clears hosted checks only; R4 defects remain unresolved.
 
 Editor R3 repair source/tests are `3ff979cca6206fc19416150b189b211fcc6de86b`; final head adds inspected evidence only. Owner reports exact-head hosted checks green. Fresh R4 includes all three prior reports/responses and began after workspace R4 completed. Workspace's two new defects are confined to unsafe old-format ordering/publication inference; its original owner is removing optimistic inference and retaining snapshots/evidence conservatively. See `reviews/workspace-r4.md`.
+
+Lead prepared #6 independently from exact #5 while module reviews ran. `application/host-client` exposes only browser-safe host/store/protocol identities; privileged `application/host-health` verifies configured bearer-authenticated loopback health, exact host/store/version/capability, redirects, bounded JSON and cancellation/deadline reader cleanup in the caller's Effect scope. Eight controlled real HTTP tests plus the existing fourteen public-client tests, uncached root type/lint/test, frozen install, forty source hashes, both browser export bundles and diff checks pass. No new dependency, host runtime, credentials, editor import or feature startup was added. Actual Pi/SSH implementation and protocol adoption are still pending. Review priority remains the editor/workspace gates before this independent preparation.
 
 ## Setup
 
