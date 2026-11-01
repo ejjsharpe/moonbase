@@ -1,6 +1,6 @@
 # Moonbase handoff — qualification still in progress
 
-The independent editor, workspace, Pi, SSH and standalone chat technical gates are clear. Task08 composition is active; this is a working handoff and **not a completion claim**. The final composition head, independent review and final audit will replace this status before delivery. All human/product acceptance remains **PENDING**. No GitHub PR is merged or deployed by this run.
+The independent editor, workspace, Pi, SSH and standalone chat technical gates are clear. Task08 is published and its independent R1 review is active; this is a working handoff and **not a completion claim**. The independent review and final audit will replace this status before delivery; current composition head is `8a1636902b129f2fd6e04d26cfa75dd2e90ee415`. All human/product acceptance remains **PENDING**. No GitHub PR is merged or deployed by this run.
 
 Private target: `ejjsharpe/moonbase`, T3 project `mcp:7cbe46d8-154d-422f-969f-cfaff7f0f0dd`. Fresh lead started clean at exact `3edf9814569ed8c9fa24e155355605cdcf26b98e` in isolated `t3-f9e2f375`. A meaningful checkpoint confirms private/open PRs and unchanged main `c89e4db49efcb998cdd3834b89d43ac581694314`; final recheck is pending. Original escode checkout/tracker and old state were not edited, imported or deleted. Source selection uses the immutable provenance manifest and40 verified hashes.
 
@@ -29,6 +29,7 @@ These are real dependency branches, not T3's derived display order. Additional f
 | [#15](https://github.com/ejjsharpe/moonbase/pull/15) Pi/SSH integration | `chore/chat-integration`<br>`132d273073889bd0702cf96b1fc2a62d5027598c` | `feat/pi-runtime`<br>`235eb27a448635a995bb65e67147e99119830b92` | DRAFT; Integration R2 clear; CI pending |
 | [#18](https://github.com/ejjsharpe/moonbase/pull/18) Standalone chat | `feat/chat-proof`<br>`dbd06a6d3f8c8f310868349e7ed099468db9b9ba` | `chore/chat-integration`<br>`132d273073889bd0702cf96b1fc2a62d5027598c` | DRAFT; Proof R2 clear; manual/real/CI pending |
 | [#19](https://github.com/ejjsharpe/moonbase/pull/19) Reviewed proof fan-in/adapters | `chore/workbench-integration`<br>`d79d1e9b8347f7f5f19cdbe9aad0233a0c47be8d` | `feat/standalone-editor`<br>`4dd148ade5f279e2b3820df0325313ee08ce4f8d` | DRAFT; DFF checkpoint R1 clear; D79 fixture seam pending composition review |
+| [#20](https://github.com/ejjsharpe/moonbase/pull/20) Composed workbench | `feat/workbench-composition`<br>`8a1636902b129f2fd6e04d26cfa75dd2e90ee415` | `chore/workbench-integration`<br>`d79d1e9b8347f7f5f19cdbe9aad0233a0c47be8d` | DRAFT; owning qualification complete; independent R1 found fresh-edit Reload loss (package check/report pending) |
 <!-- PR_QUEUE_END -->
 
 ## What is qualified
@@ -40,6 +41,8 @@ These are real dependency branches, not T3's derived display order. Additional f
 
 Source/type checks, controlled file/Git/SQLite/HTTP/SSH-child integration, actual Electron/unsigned packaging and real/manual evidence are separate. Controlled faux providers/TCP forwards never qualify a real provider or SSH peer.
 
+- **Composed workbench #20, owning evidence (independent R1 currently blocking):**21uncachedNx370module+15editor+7chat=392;35Chromium;25preservededitor+1packageresource;11source/10packagedcomposed journeys pass, including reload/veto/rendererloss and capturedStop/draftpreservation. Productb4f514d682927a2d65a08af0d08bfe7adb7534e3, qualification7147a1352c7d699a8f60eb62815775b963eb764d, published903 then README-only8a. Actualrenderer1588/main271 inputs; asar96d74c67389db0c3d41083d6b39b01f79844b60ddfeada48619625c1351e74e3.12nativecapturesinspected. [Full owning evidence](reviews/composition-owning-evidence.md). New Astra R1 covers exact8a and #19 D79 test export. It found fresh-edit Reload data loss in source; package reproduction and the full report are pending. No technical clearance is inferred.
+
 ## Findings and evidence limits
 
 | Scope | Findings / disposition |
@@ -50,7 +53,7 @@ Source/type checks, controlled file/Git/SQLite/HTTP/SSH-child integration, actua
 | SSH | Four findings clear: early/coalesced release, host-authentication bypass flags, terminal exit versus inherited pipes/helpers, and EPERM/owned-group deadline uncertainty. No real peer/agent/ProxyJump claim. |
 | Pi/integration | Signed-error oracle P1 and postcommit Create P2 clear. Postdispatch generation disappearance P2 now preserves Uncertain plus reader-cleanup details. No automatic resend, successor Stop or external exactly-once claim. |
 | Standalone chat | Retry must recheck preservation immediately before mutation after read-only query; actual200% controls must be reachable. Both R1 blockers causally clear atdbd. |
-| Task08 | Pointer focus handoff on keyboard Enter produced a real native red at source `cc06d753e76dc02470628a611a3a481f771953b9`; repair/final qualification active. Original asar was overwritten before digest recording: no original binary-equivalence claim. Exact source/two-frame trace retained; any reconstructed archive gets its own provenance/digest. A separate keyboard-driver sequencing correction must be distinguished from the product fix. A corrected reload probe also found surviving renderer watches; unload teardown/preservation guard qualification active. |
+| Task08 | Pointer focus handoff on keyboard Enter produced a real native red at source `cc06d753e76dc02470628a611a3a481f771953b9`; owning repair qualified; independent R1 active. Original asar was overwritten before digest recording: no original binary-equivalence claim. Exact source/two-frame trace retained; any reconstructed archive gets its own provenance/digest. A separate keyboard-driver sequencing correction must be distinguished from the product fix. A corrected reload probe also found surviving renderer watches; owning unload cleanup passed; independent R1 now found a separate fresh-edit Reload race before the recovery debounce completes. This finding is unresolved. |
 
 **Historical cleanup limit:** initial task08 22/25 Trash fixture observed source removal before its receipt; after failed-run teardown its native-returned destination/inode record was unavailable. Cleanup of that synthetic Trash artifact is **UNPROVEN**. There is no safely identified deletion target; no broad/unverified Trash sweep or basename/content guess was used. Later cases verify returned inode/content before cleaning their own fixture. This uncertainty is separate from final verified PID/group/listener cleanup, and no original/escode/user data was removed.
 
@@ -101,7 +104,17 @@ The standalone public SSH consumer is `node --experimental-strip-types packages/
 
 Controlled checks need no real credentials: `bun run --cwd apps/chat-probe test`, `bun run test:chat-integration`, then package and `bun run --cwd apps/chat-probe test:desktop` with the foreground free. No passing controlled check spends real provider quota or establishes real SSH acceptance.
 
-**Composed application:** final exact head, runnable/package commands and independent review are pending task08 publication. It must start as local editor when chat is unconfigured, and connect only on explicit user action when private configuration is supplied.
+**Composed application, exact current review head:**
+
+```sh
+git worktree add --detach /tmp/moonbase-workbench-proof 8a1636902b129f2fd6e04d26cfa75dd2e90ee415
+cd /tmp/moonbase-workbench-proof
+bun install --frozen-lockfile
+node scripts/prepare-ripgrep.mjs
+MOONBASE_USER_DATA="$(mktemp -d -t moonbase-workbench)" NX_DAEMON=false bunx nx run @moonbase/desktop:dev
+```
+
+This starts the local editor with Chat unconfigured. To enable optional chat, additionally set `MOONBASE_CHAT_CONFIG=/absolute/private/chat-client.json` to the separately prepared owner-only client configuration; Connect stays explicit. Package with `NX_DAEMON=false bunx nx run @moonbase/desktop:package`, then launch the same Moonbase binary path with fresh `MOONBASE_USER_DATA` and optional configuration. Source/package composed tests: `MOONBASE_COMPOSITION_TEST=1 bun run --cwd apps/desktop test:desktop` and add `MOONBASE_PACKAGED_TEST=1` for the actual package, after build/package and with the foreground free. [Current guide](https://github.com/ejjsharpe/moonbase/blob/8a1636902b129f2fd6e04d26cfa75dd2e90ee415/apps/desktop/README.md). Independent final review remains pending.
 
 ## Human merge/retarget order
 

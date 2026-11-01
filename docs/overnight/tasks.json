@@ -2375,8 +2375,8 @@
     "base": "d79d1e9b8347f7f5f19cdbe9aad0233a0c47be8d",
     "baseBranch": "chore/workbench-integration",
     "branch": "feat/workbench-composition",
-    "runOrdinal": 15,
-    "status": "implementation-complete/idle; availableforconcretereviewfindings",
+    "runOrdinal": 16,
+    "status": "Published clean 8a; headless inspection complete/idle awaiting full independent R1 report and authorized fix.",
     "model": "gpt-6.1-sol",
     "options": {
       "reasoningEffort": "xhigh",
@@ -2387,7 +2387,7 @@
     "brief": "completecommon08+exactbase+fullindependentdesktopR2/chatR2reports+allpriorobjections/safetytests",
     "requestedBaseFollowup": "d79d1e9b8347f7f5f19cdbe9aad0233a0c47be8d",
     "testFixtureExport": "@moonbase/chat-probe/test-fixture -> existing ./test/fixture.ts; testconsumersonly; no newdeps",
-    "ownProductRed": "Keyboard Enter on viewtab produces click detail0; pointer handoff focusedMonaco so twoTabs insertspaces. ActualtwoframeRED retained; own MouseEvent.detail>0 fix; source/packagekeyboard requalification pending.",
+    "ownProductRed": "Keyboard Enter click detail0 incorrectly restored Monaco focus; own detail>0 fix qualified source/package with same corrected driver, pending independent review.",
     "fixtureCorrections": "initial22/25shellselectors/Trashreceiptwait; healthbaseline/readFileenvelope/fauxalternatingresponse/processwrapper/concurrentbuildstartup; keepdistinctfromproductred",
     "keyboardRedEvidence": {
       "source": "cc06d753e76dc02470628a611a3a481f771953b9",
@@ -2396,10 +2396,10 @@
       "reconstruction": "must labelfresharchivebuild digest separately; compare SAMEcorrecteddriverold/new",
       "fixtureCorrection": "firstfocusedgreen also needed separatekeyboardsequencingcorrection; retained distinctfromproductred",
       "reconstructionAsar": "4f59a6c209607daf72a253315bbf04fda2dcf95ed9bf4b91007c8a604b159993",
-      "correctedSameDriver": "oldcc06source RED reconfirmed; reconstructpackagedred underway; finalnewsource/package pending"
+      "correctedSameDriver": "Oldcc06 source and reconstructed package RED; current source/package GREEN under identical final driver c7cea1c946a4fad94977e7c0df712c980452ed037de1d662fa65c84b87e29b5b."
     },
-    "reloadFinding": "actualRED afterevaluateargcorrection: oldeditor+chatwatchIDssurviveReload. unloadpubliccontrollerdispose; chat-preloaddocumentIDcancel committedunloadonly; ownEditorSession.releaseDocument/crashhandshakeclear; preserveauthregistry/root; actualsource/package lifecycle qualification active",
-    "qualification": "OWNING final392 tests+35Chromium+25editor+1packageeditor+11composedsource/10packaged PASS; finaldocs/head/PR andindependentreviewpending",
+    "reloadFinding": "Old source/reconstructed package reload failed cancellation of three observers and one held readonly wait. Owning document cleanup repair qualified current source/package; independent R1 active. Separate fresh-edit recovery debounce data-loss finding now open.",
+    "qualification": "Published8a/baseD79; owning392+35Chromium+25editor+1package-resource+11composedsource/10package PASS. Independent R1 active and blocking on fresh-edit Reload data loss.",
     "productCheckpoint": "b4f514d682927a2d65a08af0d08bfe7adb7534e3",
     "testCheckpoint": "7147a1352c7d699a8f60eb62815775b963eb764d",
     "cleanupSource": {
@@ -2451,8 +2451,8 @@
   "morning-handoff": {
     "path": "docs/overnight/handoff.md",
     "state": "WORKING DRAFT; notcomplete",
-    "sourcePrCheckpoint": 18,
-    "composition": "pendingfinalhead/newindependentreview",
+    "sourcePrCheckpoint": 19,
+    "composition": "PR20 8a published; independent R1 active with fresh-edit Reload blocker.",
     "finalAudit": "pending"
   },
   "review-composition-r1": {
@@ -2469,6 +2469,7 @@
       "serviceTier": "default"
     },
     "brief": "completecommon08/09+fullDesktopR2/ChatR2/PR19DFFreview+ownfullreport+allpriorlimits/corrections",
-    "foreground": "exclusive review slot"
+    "foreground": "exclusive review slot",
+    "interimFinding": "Fresh visible edit followed by native Reload loses tail before150ms recovery debounce: actual SOURCE and PACKAGE reproduced. Complete report/baseline comparison pending; reviewer retains exclusive foreground."
   }
 }
