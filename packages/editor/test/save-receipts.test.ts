@@ -153,3 +153,125 @@ test("R9 disposal releases observations and prevents a late missing Save receipt
     await f.runtime.dispose(); assert.equal(f.memory.stats.active, 0);
   } finally { reply.release(); await f.dispose(); }
 });
+
+for (const committed of [false, true]) for (const observe of [false, true]) test(`R10 an in-flight B Save cannot strand A's uncertain publication (committed=${committed}, watch=${observe})`, async () => {
+  const entered = gate(), release = gate(); let holdB = false, noStatus = false, rejectRetry = false;
+  const saves: CommandInput<"saveFile">[] = [], publications: CommandInput<"persistRecovery">[] = [];
+  const f = await fixture(raw => ({ watch: observe ? raw.watch : () => () => {}, async command(name, input, options) {
+    if (name === "saveFile") { const request = input as CommandInput<"saveFile">; saves.push(structuredClone(request)); if (holdB && request.target.path === "b.ts") { entered.release(); await release.promise; } }
+    if (name === "persistRecovery") { publications.push(structuredClone(input as CommandInput<"persistRecovery">)); if (rejectRetry) { rejectRetry = false; throw new ApplicationError({ code: "Unavailable", message: "Original retry delivery unavailable" }); } }
+    if (noStatus && name === "getRecoveryPublication") throw new ApplicationError({ code: "Unavailable", message: "Exact status unavailable" });
+    return raw.command(name, input, options);
+  } }));
+  try {
+    holdB = true; const b = f.editor.save(target("b.ts")); await entered.promise;
+    noStatus = true; f.memory.failNext("persistRecovery", "Unknown A publication", committed);
+    await assert.rejects(f.editor.save(target("a.ts")), /Unknown A publication/);
+    const pending = f.editor.getSnapshot().publication!; assert(pending);
+    const original = publications.find(p => p.requestId === pending.requestId)!;
+    release.release(); await b;
+    const ids = ["a.ts", "b.ts"].map(path => f.editor.buffer(target(path))!.pendingSave!.requestId);
+    f.editor.edit(target("a.ts"), "NEWER A"); f.editor.edit(target("b.ts"), "NEWER B");
+    assert.equal(await f.editor.resolveRecoveryPublication(), false); assert.equal(f.editor.getSnapshot().publication!.requestId, pending.requestId);
+    noStatus = false;
+    if (!committed) { rejectRetry = true; assert.equal(await f.editor.resolveRecoveryPublication(), false); assert.equal(f.editor.getSnapshot().publication!.requestId, pending.requestId); }
+    assert.equal(await f.editor.resolveRecoveryPublication(), true, "an exact receipt or definitive identical-retry rejection must release the metadata gate");
+    await f.editor.reconcileRecovery(); await f.editor.flush();
+    assert.equal(f.editor.getSnapshot().publication, undefined);
+    for (const path of ["a.ts", "b.ts"]) assert.equal(f.editor.buffer(target(path))!.pendingSave, undefined);
+    for (const retry of publications.filter(p => p.requestId === pending.requestId)) assert.deepEqual(retry, original);
+    assert.equal(saves.length, 2); assert.deepEqual(new Set(saves.map(r => r.requestId)), new Set(ids)); assert.equal(f.memory.stats.saves, 2);
+    assert.equal(!!await f.raw.command("getRecoveryPublication", { clientId: f.editor.clientId, requestId: pending.requestId }), committed);
+    const stored = await f.raw.command("loadRecovery", { clientId: f.editor.clientId });
+    for (const [path, text] of [["a.ts", "NEWER A"], ["b.ts", "NEWER B"]]) { assert.equal(stored.state.drafts.find(d => d.target.path === path)?.text, text); assert.equal((await f.raw.command("readFile", target(path))).text, "captured " + path); }
+    const restored = await f.restart();
+    for (const [path, text] of [["a.ts", "NEWER A"], ["b.ts", "NEWER B"]]) { assert.equal(restored.buffer(target(path))!.text, text); assert.equal(restored.buffer(target(path))!.disk.text, "captured " + path); }
+    assert.equal(await restored.prepareQuit(async () => "cancel"), false); assert.equal(await restored.prepareQuit(async () => "discard"), true);
+  } finally { release.release(); await f.dispose(); }
+});
+
+test("R10 retiring a rejected publication cannot bridge an unrelated same-client CAS gap", async () => {
+  const entered = gate(), release = gate(); let holdB = false;
+  const f = await fixture(raw => ({ ...raw, async command(name, input, options) { if (name === "saveFile" && holdB && (input as CommandInput<"saveFile">).target.path === "b.ts") { entered.release(); await release.promise; } return raw.command(name, input, options); } }));
+  try {
+    holdB = true; const b = f.editor.save(target("b.ts")); await entered.promise;
+    f.memory.failNext("persistRecovery"); await assert.rejects(f.editor.save(target("a.ts")));
+    const publication = f.editor.getSnapshot().publication!;
+    const loaded = await f.raw.command("loadRecovery", { clientId: f.editor.clientId });
+    await f.raw.command("persistRecovery", { clientId: f.editor.clientId, requestId: "competing-publication", expectedRevision: loaded.revision, state: { ...loaded.state, sidebarWidth: 333 } });
+    release.release(); await b; f.editor.edit(target("a.ts"), "NEWER A"); f.editor.edit(target("b.ts"), "NEWER B");
+    assert.equal(await f.editor.resolveRecoveryPublication(), false); assert.equal(f.editor.getSnapshot().publication, undefined);
+    assert.equal(await f.raw.command("getRecoveryPublication", { clientId: f.editor.clientId, requestId: publication.requestId }), null);
+    for (const path of ["a.ts", "b.ts"]) assert(f.editor.buffer(target(path))!.pendingSave);
+    await assert.rejects(f.editor.reconcileRecovery(), /revision gap/); await assert.rejects(f.editor.flush(), e => ApplicationError.is(e) && e.code === "Conflict");
+    assert.equal(await f.editor.prepareQuit(async () => "discard"), false); assert.equal(f.memory.stats.saves, 2);
+    assert.equal((await f.raw.command("loadRecovery", { clientId: f.editor.clientId })).state.sidebarWidth, 333);
+    assert.equal(f.editor.buffer(target("a.ts"))!.text, "NEWER A"); assert.equal(f.editor.buffer(target("b.ts"))!.text, "NEWER B");
+  } finally { release.release(); await f.dispose(); }
+});
+for (const kind of ["close", "reload"] as const) test(`R10 a definitively rejected final ${kind} releases preservation without executing its old destructive callback`, async () => {
+  let rejectFinal = true;
+  const f = await fixture(raw => ({ ...raw, async command(name, input, options) {
+    if (name === "persistRecovery" && rejectFinal && !(input as CommandInput<"persistRecovery">).state.drafts.some(d => d.target.path === "a.ts")) { rejectFinal = false; throw new ApplicationError({ code: "Persistence", message: "Final delivery failed before commit" }); }
+    return raw.command(name, input, options);
+  } }));
+  try {
+    if (kind === "reload") f.memory.externalWrite(target("a.ts"), "external A");
+    if (kind === "close") assert.equal(await f.editor.close([target("a.ts")], async () => "discard"), false);
+    else await assert.rejects(f.editor.reload(target("a.ts")), /Final delivery/);
+    const pending = f.editor.getSnapshot().publication!; assert.equal(pending.kind, kind); assert.equal(f.editor.getSnapshot().preserving, true);
+    const sources = await f.raw.command("inspectEntries", { checkout, paths: ["b.ts"] });
+    await f.raw.command("mutate", { checkout, clientId: "foreign", id: "move-after-final-failure", kind: "move", sources, destination: "moved.ts" });
+    assert.equal(await f.editor.resolveRecoveryPublication(), false, "the original destructive action did not commit");
+    assert.equal(f.editor.getSnapshot().publication, undefined); assert.equal(f.editor.getSnapshot().preserving, false);
+    assert.equal(await f.raw.command("getRecoveryPublication", { clientId: f.editor.clientId, requestId: pending.requestId }), null);
+    assert.equal(f.editor.buffer(target("a.ts"))!.text, "captured a.ts"); assert.equal(f.editor.buffer(target("a.ts"))!.disk.text, "A");
+    assert(f.editor.getSnapshot().recovery.views[checkout.checkoutId].openFiles.includes("a.ts"));
+    assert.equal(f.editor.buffer(target("moved.ts"))!.text, "captured b.ts");
+    const stored = await f.raw.command("loadRecovery", { clientId: f.editor.clientId }); assert.equal(stored.state.drafts.find(d => d.target.path === "a.ts")!.text, "captured a.ts");
+    const restored = await f.restart(); assert.equal(restored.buffer(target("a.ts"))!.text, "captured a.ts");
+    let choices = 0; assert.equal(await restored.close([target("a.ts")], async () => { choices++; return "cancel"; }), false); assert.equal(choices, 1);
+    if (kind === "close") { assert.equal(await restored.close([target("a.ts")], async () => "discard"), true); assert.equal(restored.buffer(target("a.ts")), undefined); }
+    else { assert.equal(await restored.reload(target("a.ts")), true); assert.equal(restored.buffer(target("a.ts"))!.text, "external A"); }
+    assert.equal(f.memory.stats.saves, 0); assert.equal(f.memory.stats.mutations, 1);
+  } finally { await f.dispose(); }
+});
+test("R10 a status-query Conflict does not prove publication rejection", async () => {
+  let queryFails = true;
+  const f = await fixture(raw => ({ ...raw, async command(name, input, options) { if (queryFails && name === "getRecoveryPublication") throw new ApplicationError({ code: "Conflict", message: "Query failed" }); return raw.command(name, input, options); } }));
+  try {
+    f.memory.failNext("persistRecovery"); await assert.rejects(f.editor.save(target("a.ts")));
+    const pending = f.editor.getSnapshot().publication!;
+    assert.equal(await f.editor.resolveRecoveryPublication(), false); assert.equal(f.editor.getSnapshot().publication!.requestId, pending.requestId); assert(f.editor.buffer(target("a.ts"))!.pendingSave);
+    queryFails = false; assert.equal(await f.editor.resolveRecoveryPublication(), true); assert.equal(f.editor.buffer(target("a.ts"))!.pendingSave, undefined); assert.equal(f.memory.stats.saves, 1);
+  } finally { await f.dispose(); }
+});
+test("R10 a committed publication clears only its captured A identity when B's later publication is uncertain", async () => {
+  const entered = gate(), release = gate(); let holdB = false, statusFails = true;
+  const f = await fixture(raw => ({ ...raw, async command(name, input, options) {
+    if (name === "saveFile" && holdB && (input as CommandInput<"saveFile">).target.path === "b.ts") { entered.release(); await release.promise; }
+    if (name === "getRecoveryPublication" && statusFails) throw Error("Status unavailable");
+    return raw.command(name, input, options);
+  } }));
+  try {
+    holdB = true; const b = f.editor.save(target("b.ts")); await entered.promise;
+    f.memory.failNext("persistRecovery", "Lost committed A publication", true); await assert.rejects(f.editor.save(target("a.ts")));
+    const aPublication = f.editor.getSnapshot().publication!; release.release(); await b;
+    statusFails = false; f.memory.failNext("persistRecovery", "B publication not delivered");
+    assert.equal(await f.editor.resolveRecoveryPublication(), true); await f.editor.reconcileRecovery().catch(() => {});
+    assert.equal(f.editor.buffer(target("a.ts"))!.pendingSave, undefined); assert(f.editor.buffer(target("b.ts"))!.pendingSave);
+    const bPublication = f.editor.getSnapshot().publication!; assert(bPublication); assert.notEqual(bPublication.requestId, aPublication.requestId);
+    f.editor.edit(target("b.ts"), "B after its pending publication"); assert.equal(await f.editor.resolveRecoveryPublication(), true); await f.editor.flush();
+    const restored = await f.restart(); assert.equal(restored.buffer(target("b.ts"))!.text, "B after its pending publication"); assert.equal(restored.buffer(target("b.ts"))!.disk.text, "captured b.ts"); assert.equal(f.memory.stats.saves, 2);
+  } finally { release.release(); await f.dispose(); }
+});
+test("R10 disposal during publication uncertainty cancels a later B admission without publishing or replay", async () => {
+  const entered = gate(), release = gate(); let holdB = false;
+  const f = await fixture(raw => ({ ...raw, async command(name, input, options) { if (name === "saveFile" && holdB && (input as CommandInput<"saveFile">).target.path === "b.ts") { entered.release(); await release.promise; } return raw.command(name, input, options); } }));
+  try {
+    holdB = true; const b = f.editor.save(target("b.ts")); const cancelled = assert.rejects(b, e => ApplicationError.is(e) && e.code === "Cancelled"); await entered.promise;
+    f.memory.failNext("persistRecovery"); await assert.rejects(f.editor.save(target("a.ts"))); const publications = f.memory.stats.publications;
+    f.editor.dispose(); release.release(); await cancelled; assert.equal(await f.editor.resolveRecoveryPublication(), false);
+    assert.equal(f.memory.stats.publications, publications); assert.equal(f.memory.stats.saves, 1); assert.equal((await f.raw.command("readFile", target("b.ts"))).text, "B");
+  } finally { release.release(); await f.dispose(); }
+});

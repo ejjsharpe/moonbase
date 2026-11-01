@@ -263,20 +263,37 @@ export class EditorController {
     return next;
   }
   async resolveRecoveryPublication(): Promise<boolean> {
+    let rejected = false;
     const next = this.recoveryTail.catch(() => {}).then(async () => {
       const pending = this.pendingPublication;
-      if (!pending) return true;
+      if (!pending || this.disposed) return !this.disposed;
       try {
         const { request, onConfirmed, savedRequests } = pending;
-        const receipt = await this.command("getRecoveryPublication", { clientId: request.clientId, requestId: request.requestId }) ??
-          await this.command("persistRecovery", request);
+        let receipt = await this.command("getRecoveryPublication", { clientId: request.clientId, requestId: request.requestId });
+        if (!receipt) {
+          try { receipt = await this.command("persistRecovery", request); }
+          catch (error) {
+            // Matching committed requests return their receipt before CAS; only this retry's Conflict proves rejection.
+            if (this.disposed || !ApplicationError.is(error) || error.code !== "Conflict") throw error;
+            this.pendingPublication = undefined; rejected = true;
+            this.report(onConfirmed ? "The original Close/Reload publication did not commit. Drafts retained; choose the action again." : "The original recovery publication did not commit. Retained facts will reconcile into a fresh capture.");
+            if (onConfirmed) await this.releasePreservation();
+            else this.resumeFacts();
+            return !onConfirmed;
+          }
+        }
+        if (this.disposed) return false;
         await this.confirmPublication(request, receipt, onConfirmed, savedRequests);
         this.schedule();
         return true;
       } catch (error) { this.report(error); this.publicationBlocked(); return false; }
     });
     this.recoveryTail = next;
-    return next;
+    const resolved = await next;
+    // Rejoin after the publication tail settles; never run a rejected destructive callback.
+    if (rejected && !this.disposed) try { await this.publishFacts([], undefined, undefined, true); }
+    catch (error) { this.report(error); return false; }
+    return resolved;
   }
   async flush() {
     this.assertReady();
