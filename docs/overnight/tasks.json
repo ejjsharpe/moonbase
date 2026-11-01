@@ -2113,8 +2113,8 @@
     "waitTimedOut": false
   },
   "foreground-test-slot": {
-    "owner": "08-workbench-composition original Sol owner",
-    "state": "exclusive causal repair source/package qualification; Astra R1 completed/released; no competing browser/native jobs"
+    "owner": null,
+    "state": "Original Sol owner explicitly released after clean pushed pair; reserved for NEW independent paired review"
   },
   "review-desktop-r2": {
     "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-desktop-r2-module16-4dd148a",
@@ -2376,14 +2376,14 @@
     "baseBranch": "chore/workbench-integration",
     "branch": "feat/workbench-composition",
     "runOrdinal": 17,
-    "status": "Standalone PR21 fc547673 published; original owner normally merging into PR20 +strict-present configuration repair, retains exclusive native foreground",
+    "status": "COMPLETE clean/pushed owning repair pair; NEW independent review next",
     "model": "gpt-6.1-sol",
     "options": {
       "reasoningEffort": "xhigh",
       "serviceTier": "default"
     },
     "ownership": "apps/desktop only; coordinator ownsshared/root/exports",
-    "foreground": "explicitly released; no furthernativejobs planned",
+    "foreground": "EXPLICITLY RELEASED; no owned native/browser/host/forward jobs running/scheduled",
     "brief": "completecommon08+exactbase+fullindependentdesktopR2/chatR2reports+allpriorobjections/safetytests",
     "requestedBaseFollowup": "d79d1e9b8347f7f5f19cdbe9aad0233a0c47be8d",
     "testFixtureExport": "@moonbase/chat-probe/test-fixture -> existing ./test/fixture.ts; testconsumersonly; no newdeps",
@@ -2399,9 +2399,9 @@
       "correctedSameDriver": "Oldcc06 source and reconstructed package RED; current source/package GREEN under identical final driver c7cea1c946a4fad94977e7c0df712c980452ed037de1d662fa65c84b87e29b5b."
     },
     "reloadFinding": "Old source/reconstructed package reload failed cancellation of three observers and one held readonly wait. Owning document cleanup repair qualified current source/package; independent R1 active. Separate fresh-edit recovery debounce data-loss finding now open.",
-    "qualification": "Published8a/baseD79; owning392+35Chromium+25editor+1package-resource+11composedsource/10package PASS. Independent R1 active and blocking on fresh-edit Reload data loss.",
-    "productCheckpoint": "b4f514d682927a2d65a08af0d08bfe7adb7534e3",
-    "testCheckpoint": "7147a1352c7d699a8f60eb62815775b963eb764d",
+    "qualification": "402Node/integration (380+15+7),21Nx,35Chromium via21,12source/11package,config3+3,unconfigured4+4,realpublicadapter/builds/graphs/notices/foundation40 PASS per owner; new independent review required",
+    "productCheckpoint": "e65a0551db7e9c9e75efd1bc07773c4dd590217b",
+    "testCheckpoint": "f66deaa246f956f6318f3da7a44f1536ee72b230",
     "cleanupSource": {
       "electronHelpersAbsent": 53,
       "hostPidsAbsent": 11,
@@ -2416,10 +2416,10 @@
       "port4176": "free"
     },
     "cleanupCorrections": "THREEfailedharness groups separately ownershipverifiedTERM/ESRCH/ports recovered; notnormalcleanupaggregate",
-    "finalRuntimeAsar": "96d74c67389db0c3d41083d6b39b01f79844b60ddfeada48619625c1351e74e3",
+    "finalRuntimeAsar": "f0f7380cad57d5abd733ff28f02117d3c58e970453af78080dc0391c36cd55eb",
     "historicalTrashCleanupLimit": "Initial22/25syntheticTrashfixture: no native-returnedpath/inoderecord retainedafterfailedteardown; cleanupUNPROVEN. No safelyidentifiedtarget/no broadscan/sweep/basename-contentguess. LaterexactreturnedidentityTrashcleanupverified; original/escode/userdata untouched. SeparatefromverifiedfinalPID/group/port cleanup.",
     "url": "https://github.com/ejjsharpe/moonbase/pull/20",
-    "head": "8a1636902b129f2fd6e04d26cfa75dd2e90ee415",
+    "head": "f6822a50e80920488a012f7bd57cb612f9b97be7",
     "initialPublishedHead": "903ece141847d64544681d2a73f61b9f404b026e",
     "readmeOnlyFix": "new8a corrects standalonechat build/start andcompositiondependencyparagraph;code/evidencebyteequal903",
     "ownerGoalStatus": "ownbroadgoalblockedwaitingcoordinator; NOTprojectblock; sourceworkeridleavailable",
@@ -2432,7 +2432,11 @@
     "evidenceLossCorrection": "Default desktop Playwright outputDir cleared owner apps/desktop/test-results, deleting local archived4dd/8a copies and targeted phase records before commit. Reviewer immutable R1 artifacts and committed8a evidence untouched. Restore read-only checksum-verified reviewer copies outside ALL output roots; reruns are NEW runs, never recovered/survived original records. Inventory extant/lost records explicitly.",
     "currentQualificationObservation": "Initial composition source11/12 +package10/11 sole failures: long journey assumed immediate Reload commitment, expected Editor but remained Chat. New fresh-editor-veto/live-chat resources/existing lifecycle pass; no textloss. Positive control records real veto/load events and bounded explicit Reload retries, no sleeps/force/productretry. Initial veto cause UNEXPLAINED; persistent veto is product blocker; later pass not causal explanation.",
     "configFixtureCorrection": "Initial source/package2/3 valid-config count failed because setup had getChatHost baseline. Corrected3/3 compare prelaunch baseline, public disconnected state and zero new Connect/Send; fixture correction only.",
-    "currentHeadlessChecks": "Owner402Node/integration +bothbuilds/actualgraphs pass; final20 pushedhead and source/package final rerun/cleanup pending"
+    "currentHeadlessChecks": "Owner402Node/integration +bothbuilds/actualgraphs pass; final20 pushedhead and source/package final rerun/cleanup pending",
+    "normalMerge21": "0efb222e424f5a46bdc52fa8aa7181ba8ba3a41b",
+    "additionalDependency21": "fc547673c519871136388f6e5cc0e4fdc1d9bd6a",
+    "ownR1Response": "docs/overnight/reviews/composition-r1-owning-response.md",
+    "finalCleanup": "all recorded PID/PGID ESRCH,100 distinct captured ports rebound,50 identified new fixture dirs absent,scoped inventoryempty; phase-specific counts/no census for deleted phases/preserved25"
   },
   "review-workbench-integration-r1": {
     "taskId": "node:delegated-task:command%3Amcp%3A8185ba6c-62ae-4571-ad0b-9688ad5a1b92%3Adelegate-task%3Afresh-lead-workbench19-dff-review-astra",
@@ -2461,7 +2465,7 @@
     "path": "docs/overnight/handoff.md",
     "state": "WORKING DRAFT; notcomplete",
     "sourcePrCheckpoint": 20,
-    "composition": "PR20 8a blocked by R1 P1/P2; original owner repairing both affected apps; final new exact refs and review pending",
+    "composition": "PR21fc547 +PR20f682 owning gates pass; fresh independent pair review pending",
     "finalAudit": "pending",
     "visualInspection": "Root read actual owning package-live-chat-normal, package-dirty-editor and package-zoom-700 images. Actual200% cramped scrolling accepted only with measured native reachability; no independent review clearance inferred."
   },
