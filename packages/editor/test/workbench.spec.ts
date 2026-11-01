@@ -281,6 +281,6 @@ for (const area of ["staged", "unstaged"] as const) test(`R6 restored dirty ${ar
   expect(state.buffers.find(buffer => buffer.target.checkout.checkoutId === "alpha" && buffer.target.path === "a.ts")?.text).toContain("restored dirty A");
   expect(state.buffers.find(buffer => buffer.target.checkout.checkoutId === "alpha" && buffer.target.path === "a.ts")?.text).toContain("typed dirty " + area);
   expect(Object.values(state.comparisons).some(comparison => comparison.original === (area === "staged" ? "HEAD A" : "INDEX A"))).toBe(true);
-  await expect(page.locator(".monaco-diff-editor .view-line:visible").filter({ hasText: area === "staged" ? /HEAD\s+A/ : /INDEX\s+A/ }).first()).toBeVisible();
+  await expect(page.locator(".monaco-diff-editor .line-delete-selectable .view-line").filter({ hasText: area === "staged" ? /HEAD\s+A/ : /INDEX\s+A/ }).first()).toBeVisible();
   await page.screenshot({ path: `test-results/editor-restored-${area}.png`, fullPage: true });
 });
