@@ -1,6 +1,7 @@
 import { Context, Effect, type Stream } from 'effect';
+import { safeApplicationFailure } from './failure.ts';
 import {
-  ApplicationError,
+  type ApplicationError,
   type CommandInput,
   type CommandOutput,
   type WorkspaceCommand,
@@ -71,5 +72,5 @@ export const releaseResource = (release: () => void | Promise<void>): Effect.Eff
     try: async () => {
       await release();
     },
-    catch: ApplicationError.fromUnknown,
+    catch: (error) => safeApplicationFailure(error, 'Application resource cleanup failed'),
   }).pipe(Effect.orDie);
