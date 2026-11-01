@@ -1,0 +1,28 @@
+import assert from "node:assert/strict";
+import { createRequire } from "node:module";
+import { createHash } from "node:crypto";
+import { readFile, stat } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+const root = fileURLToPath(new URL("../", import.meta.url));
+const require = createRequire(import.meta.url), builder = createRequire(require.resolve("electron-builder")), library = createRequire(builder.resolve("app-builder-lib"));
+const asar = library("@electron/asar");
+const resources = join(root, `release/${process.arch === "arm64" ? "mac-arm64" : "mac"}/Moonbase.app/Contents/Resources`), archive = join(resources, "app.asar");
+const hash = bytes => createHash("sha256").update(bytes).digest("hex");
+const files = asar.listPackage(archive).map(name => name.replace(/^\//, ""));
+assert(!files.some(name => /(?:^|\/)(?:test|tests|evidence|node_modules)\/|main-inputs|module-inputs|test-fixture|host\.mjs/.test(name)), "Private graph/test metadata shipped in archive");
+const records = [];
+for (const name of ["main.mjs", "preload.cjs", "renderer/index.html", "dependency-notices.txt", ...files.filter(name => /^renderer\/assets\/.+\.(?:js|css|ttf)$/.test(name))]) {
+  const bytes = asar.extractFile(archive, name), source = await readFile(join(root, "dist", name));
+  assert(bytes.equals(source), `Packaged ${name} differs from built output`);
+  records.push({name,bytes:bytes.length,sha256:hash(bytes)});
+}
+const main = Object.keys(JSON.parse(await readFile(join(root,"dist/main-inputs.json"),"utf8"))), renderer = JSON.parse(await readFile(join(root,"dist/renderer/module-inputs.json"),"utf8"));
+assert.deepEqual([...main,...renderer].filter(p => /(?:^|\/)(?:test|tests)\/|test-fixture|host\.mjs|@earendil-works|pi-runtime\/src\/(?:runtime|server|index)\.ts/.test(p)),[]);
+assert.equal(files.filter(name=>/^renderer\/assets\/(editor|json|css|html|ts)\.worker.*\.js$/.test(name)).length,5);
+for(const name of ["workspace/filesystem","workspace/ripgrep/rg","workspace/ripgrep/COPYING","workspace/ripgrep/LICENSE-MIT","workspace/ripgrep/UNLICENSE","LICENSE.electron.txt","LICENSES.chromium.html"]){
+  const file=join(resources,name), bytes=await readFile(file), mode=(await stat(file)).mode&0o777;
+  if(["workspace/filesystem","workspace/ripgrep/rg"].includes(name)) assert(mode&0o111,`${name} is not executable`);
+  records.push({name,bytes:bytes.length,mode,sha256:hash(bytes)});
+}
+console.log(JSON.stringify({archive:{path:archive,sha256:hash(await readFile(archive))},inventory:files,mainInputs:main.length,rendererInputs:renderer.length,records},null,2));

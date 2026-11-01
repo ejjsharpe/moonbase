@@ -1,0 +1,43 @@
+$ playwright test --config playwright.config.ts --grep "dirty editor/live"
+
+Running 1 test using 1 worker
+
+(node:15412) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+  ✘  1 test/composition.spec.ts:207:1 › dirty editor/live chat, two drafts, no-resend reconnect, view close and client Quit stay independent (4.1s)
+
+
+  1) test/composition.spec.ts:207:1 › dirty editor/live chat, two drafts, no-resend reconnect, view close and client Quit stay independent 
+
+    Error: locator.fill: Error: Element is not an <input>, <textarea> or [contenteditable] element
+    Call log:
+      - waiting for getByRole('combobox')
+        - locator resolved to <select aria-label="File view" class="xln7xf2 x1mq84lg xc9c29 xmkeg23 x1y0btm7 xeqek5s x53wgf3 x18tqr4w xhoa4aa x1wi9n51 xeuugli x193iq5w xkklm2h x7s97pk x1y8y0xa x7xwk5j">…</select>
+        - fill("a.ts")
+      - attempting fill action
+        - waiting for element to be visible, enabled and editable
+
+
+      242 |     await p.keyboard.press("Tab");
+      243 |     await p.keyboard.press("Meta+p");
+    > 244 |     await p.getByRole("combobox").fill("a.ts");
+          |                                   ^
+      245 |     await p.getByRole("combobox").press("Enter");
+      246 |     await expect(editor(p)).toBeFocused();
+      247 |     await editor(p).press("End");
+        at /Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/test/composition.spec.ts:244:35
+
+    Error Context: test-results/keyboard-focus-green/composition-dirty-editor-l-15107-lient-Quit-stay-independent/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/keyboard-focus-green/composition-dirty-editor-l-15107-lient-Quit-stay-independent/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/keyboard-focus-green/composition-dirty-editor-l-15107-lient-Quit-stay-independent/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    test/composition.spec.ts:207:1 › dirty editor/live chat, two drafts, no-resend reconnect, view close and client Quit stay independent 
+error: script "test:desktop" exited with code 1

@@ -1,0 +1,24 @@
+$ tsc --noEmit -p tests/editor-workspace/tsconfig.json && node packages/workspace/scripts/build-native.mjs && node --experimental-strip-types --test --test-concurrency=1 tests/editor-workspace/*.test.ts
+✔ create and native import consumer payloads need no empty inspection and retain explicit destination/replacement authority (1012.772667ms)
+✔ real Git comparisons share a working buffer and exact-checkout recovery survives a fresh runtime (950.43425ms)
+✔ an admitted Save reply preserves newer live text and its original saved baseline across restart (452.917875ms)
+✔ another controller's Save cannot rebase an independently persisted dirty baseline (614.998167ms)
+✔ real move facts remain visible after origin acknowledgement until the other controller publishes (586.805125ms)
+✔ copy keeps both dirty drafts independently editable against actual copied disk (491.992125ms)
+✔ actual SQLite contention vetoes discard; resolving a preflight cannot silently commit Close (381.298792ms)
+✔ lost final Close response resolves its original SQLite receipt without adopting a later revision (555.445042ms)
+✔ closed unavailable checkouts retain exact view metadata without discovery until authorized reopen (829.65075ms)
+✔ a captured close retains a completed Save and defers every proposed Discard when a later Save conflicts (404.178708ms)
+✔ lost Save replies recover every own transition without another native replacement (724.467625ms)
+✔ reordered Save replies recover every own transition without another native replacement (510.49775ms)
+✔ sqlite-before-commit publication with an already-started Save resolves without losing newer drafts (493.006958ms)
+✔ lost-after-commit publication with an already-started Save resolves without losing newer drafts (502.135459ms)
+✔ persistence-after-commit publication with an already-started Save resolves without losing newer drafts (543.907958ms)
+ℹ tests 15
+ℹ suites 0
+ℹ pass 15
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 9314.686792

@@ -1,0 +1,97 @@
+[
+  {
+    "file": "keyboard-red/corrected-driver-final.ts.txt",
+    "bytes": 31933,
+    "sha256": "c7cea1c946a4fad94977e7c0df712c980452ed037de1d662fa65c84b87e29b5b"
+  },
+  {
+    "file": "keyboard-red/corrected-driver.ts.txt",
+    "bytes": 31679,
+    "sha256": "46796baacc122f12352cb54aa138d1f2221bbba5e72423f1ed1defea3c963a8b"
+  },
+  {
+    "file": "keyboard-red/final-driver-package-trace.zip",
+    "bytes": 14442,
+    "sha256": "e64102755d0c5d96d2322f37d9d93f61105da16d20a088344c8056d2a7e2a2a9"
+  },
+  {
+    "file": "keyboard-red/final-driver-source-trace.zip",
+    "bytes": 14479,
+    "sha256": "ad56b7b3c6d1df24b978fca13c692eaf88c7b3e89658720bd53537f8141f528d"
+  },
+  {
+    "file": "keyboard-red/pointer-focus.patch",
+    "bytes": 1065,
+    "sha256": "aa5129fc67008f2eaabf65dd1f590c25cf22de8e53461992af609c6343ebca70"
+  },
+  {
+    "file": "keyboard-red/reconstructed-package-focus.json",
+    "bytes": 127,
+    "sha256": "4fa3acde46f5fb776fa5243d5770cd986bfe7d3ecf93abb21c2a5f7e4d8e3b88"
+  },
+  {
+    "file": "keyboard-red/reconstructed-package-red.log",
+    "bytes": 3684,
+    "sha256": "63d9e835da7e096db5523e5c40c3f62a2c1aef6df2451c3d9ca56a66e62ba1dc"
+  },
+  {
+    "file": "keyboard-red/reconstructed-package-trace.zip",
+    "bytes": 14289,
+    "sha256": "bd1b42b1c693286e4c584e11eafc66c33d206b206aa3104f765d7f076c39bdba"
+  },
+  {
+    "file": "keyboard-red/reconstructed-package.png",
+    "bytes": 117768,
+    "sha256": "0511cdbd9da6896e34ed90390a27564d8768c4ef411a9383513e0285a2f2e637"
+  },
+  {
+    "file": "keyboard-red/reconstructed-package.png.json",
+    "bytes": 519,
+    "sha256": "3a4e010c4f7bdfb047d88cd249a76a9523968284e8f502c0aea86ae4b716fc67"
+  },
+  {
+    "file": "keyboard-red/reconstructed-source-focus.json",
+    "bytes": 127,
+    "sha256": "4fa3acde46f5fb776fa5243d5770cd986bfe7d3ecf93abb21c2a5f7e4d8e3b88"
+  },
+  {
+    "file": "keyboard-red/reconstructed-source-red.log",
+    "bytes": 3723,
+    "sha256": "4a1fc905e311a0e635dfab528c39ba7e6a218d4ba8be1da32e22c60ad48e8693"
+  },
+  {
+    "file": "keyboard-red/reconstructed-source-trace.zip",
+    "bytes": 14343,
+    "sha256": "937e4e4a8bea255b989f1fddc1873c2583ee2033735cdd231a77051cefb96d4a"
+  },
+  {
+    "file": "keyboard-red/reconstructed-source.png",
+    "bytes": 117996,
+    "sha256": "a152fe3a0a21fd18cfcc732280e6595dd16324aa4e11d4fcbe93ac48b97e9657"
+  },
+  {
+    "file": "keyboard-red/reconstructed-source.png.json",
+    "bytes": 519,
+    "sha256": "34694b89b83b1fa6a949f3acff3df391d61a0c6e7409ffc4f63faf1af92f44cb"
+  },
+  {
+    "file": "keyboard-red/reconstruction.json",
+    "bytes": 827,
+    "sha256": "945f7ec598613da19cbcd91203a61b41a3829dfe07425188a56ebe4d89d58c27"
+  },
+  {
+    "file": "keyboard-red/renderer-cc06.tsx.txt",
+    "bytes": 7885,
+    "sha256": "240b0ce39bd81e19a8c3637d5125b272a3dbb3a08ed017d6aaaddc0b0edb7dee"
+  },
+  {
+    "file": "keyboard-red/source-red.log",
+    "bytes": 3299,
+    "sha256": "4ea4e2eb99dba1fc6195e006e2e021466248dc960e220d9d0afb18bc36c8d324"
+  },
+  {
+    "file": "keyboard-red/source-trace.zip",
+    "bytes": 13441,
+    "sha256": "f0ea8af69e6f50c3225b8a431cff3760d8729534ab21a09e4676a95c0d0bb107"
+  }
+]

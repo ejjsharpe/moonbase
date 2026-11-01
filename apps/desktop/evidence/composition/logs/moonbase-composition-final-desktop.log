@@ -1,0 +1,52 @@
+
+ NX   Running targets typecheck, lint, test for project @moonbase/desktop:
+
+- @moonbase/desktop
+
+
+
+> nx run @moonbase/desktop:test
+
+(node:45152) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[0m[2m[35m$[0m [2m[1mnode --experimental-strip-types --test test/*.test.ts[0m
+(node:45171) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:45174) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[32m✔ native approval, exact identity and caller validation reject before command dispatch [90m(10.0415ms)[39m[39m
+[32m✔ restored exact approvals, owned cancellation, failed-watch cleanup and disposal [90m(0.669667ms)[39m[39m
+[32m✔ error DTO reconstructs the application brand/code/target and rejects malformed DTOs [90m(0.624625ms)[39m[39m
+[32m✔ preaborted browser command sends nothing [90m(0.367292ms)[39m[39m
+[32m✔ long-lived watches cannot consume command capacity or prevent disposal [90m(5.065917ms)[39m[39m
+[32m✔ a lost renderer releases document work without losing approvals or accepting late observations [90m(0.285375ms)[39m[39m
+[34mℹ tests 6[39m
+[34mℹ suites 0[39m
+[34mℹ pass 6[39m
+[34mℹ fail 0[39m
+[34mℹ cancelled 0[39m
+[34mℹ skipped 0[39m
+[34mℹ todo 0[39m
+[34mℹ duration_ms 225.055708[39m
+
+> nx run @moonbase/desktop:typecheck
+
+(node:45150) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[0m[2m[35m$[0m [2m[1mtsc --noEmit -p tsconfig.json[0m
+
+> nx run @moonbase/desktop:lint
+
+(node:45151) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[0m[2m[35m$[0m [2m[1mtsc --noEmit -p tsconfig.json[0m
+
+
+
+ NX   Successfully ran targets typecheck, lint, test for project @moonbase/desktop
+
+
+  Run duration:      641ms
+  Cache:             Skipped (--skip-nx-cache)
+  Critical path:     636ms (1 task)
+  Recoverable time:  <1ms

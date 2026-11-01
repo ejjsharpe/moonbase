@@ -1,6 +1,8 @@
-# Moonbase standalone editor
+# Moonbase desktop workbench
 
-A macOS Electron application composing the independent editor and local workspace. No chat panel, provider, Pi, SSH, old escode host or legacy store is a startup dependency. Human acceptance is **PENDING**; this is an unsigned technical proof for review.
+A macOS Electron workbench composing the independently proven local editor and optional remote chat through one shared application runtime. Editor and Chat stay mounted across navigation. Human acceptance is **PENDING**; this unsigned composition remains a draft for independent review.
+
+Without `MOONBASE_CHAT_CONFIG`, only workspace capabilities are acquired and Chat explains its unconfigured state. With an explicitly configured private host, the same root adds the reviewed remote-chat and SSH capabilities. Startup and navigation never Connect or Send.
 
 ## Run
 
@@ -30,14 +32,15 @@ The demonstrated package is Apple Silicon. Electron-builder uses `release/mac` f
 ## Composition and authority
 
 ```text
-Electron main: one ManagedRuntime(WorkspaceLive), makeEditorClient
-  native directory approval / WorkspaceNative.capture
-  authenticated main-frame EditorSession → shared application handlers
-    sandboxed preload → browser-safe EditorClient
-      createEditor + EditorWorkbench + five Monaco workers
+Electron main: one runtime
+  WorkspaceLive → makeEditorClient + shared WorkspaceNative
+  optional RemoteChatLive + SshLive → makeChatClient + makeConnectionClient
+  owned main-frame/document → EditorSession / public ProofSession
+    sandboxed preload → public browser clients
+      mounted EditorWorkbench / ChatProof (Base UI view tabs)
 ```
 
-Only public application/editor/workspace/UI exports are consumed. Main supplies absolute packaged helper/rg paths, acquires the service graph once and disposes it after the editor's Quit gate. The renderer graph has no Node, filesystem, workspace, Effect runtime, provider or remote implementation.
+Only public application/editor/workspace/UI and registered chat adapters are consumed. The renderer imports chat UI/controller/bridge only; privileged native configuration/session and remote/SSH layers stay in main. Main supplies absolute packaged helper/rg paths, acquires the service graph once and disposes it after chat preservation, the editor Save/Discard/Cancel gate, and a second preservation of the latest chat state. A chat storage veto precedes destructive editor choices. Successful Saves and confirmed Discards remain facts if another gate later vetoes Quit. The renderer graph has no Node, filesystem, workspace, Effect runtime, provider or remote implementation.
 
 `EditorSession` is the local transport boundary, not another feature runtime. It validates command/envelope names, bounded unknown input, stable caller ownership, observed operation origin and exact approved checkout identity. The workspace remains the path/schema/domain authority. Native picker approval is required for a new root; arbitrary renderer strings grant none. Captured picker, File-backed drop and consented clipboard files become scoped single-use `WorkspaceNative` tokens. No raw-path import method or generic IPC channel is exposed to page code. Picker, clipboard and drop enter the same public `EditorWorkbenchHandle.importFiles` destination/replacement flow.
 
@@ -66,3 +69,33 @@ Prerequisites: #1 → #2 → #5 → #7 → reviewed workspace#3/editor#4 → int
 PENDING: independent app review/hosted checks, including an unexplained initial rapid Open→Find dismissal (original failure and separate probes retained in the evidence); real OS directory-picker/clipboard/drag gestures, Finder Put Back, signing/notarization/distribution, VoiceOver/full accessibility, physical full-volume/power-loss durability, performance qualification and human visual/product acceptance. Controlled fixtures and unsigned local execution do not establish those gates.
 
 [App R1 response and refreshed packaged proof](evidence/app-r1/review-r1-response.md) records the two owning module fixes, actual filename/restart/menu regressions, source/artifact mapping and remaining paired-review/acceptance gates.
+
+
+## Optional remote chat and independent proofs
+
+```sh
+MOONBASE_USER_DATA="$(mktemp -d -t moonbase-composed)" \
+MOONBASE_CHAT_CONFIG=/absolute/owner-only/host.json \
+  NX_DAEMON=false bunx nx run @moonbase/desktop:dev
+```
+
+Use the [chat proof's private configuration format](../chat-probe/README.md); no token, endpoint or credential is sent to the renderer. Connect explicitly. Local checkout roots remain distinct from authenticated remote host/store/cwd identities even when their path strings match. Remote output is descriptive text; there is no file synchronization or remote-to-local open action.
+
+View switching, closing a file/chat view, Hide, Disconnect and client Quit never Stop remote work. Stop keeps the public controller's exact captured submission/task. Quit preserves chat first, asks the existing editor gate, then preserves the latest chat snapshot before disposal. Unknown editor publications retain live work and block Quit/reload until exact resolution. A committed reload releases old document observations/waits and restores persisted drafts on the same root; a veto keeps the mounted document. Renderer loss releases its transport resources, without disposing the root or stopping the host. Recovery covers observed durable snapshots, not instruction-by-instruction crash or power-loss durability.
+
+The editor-only checkpoint is preserved at `feat/standalone-editor` (`4dd148a`); the independent chat app remains unchanged in this tree:
+
+```sh
+MOONBASE_CHAT_CONFIG=/absolute/owner-only/host.json \
+MOONBASE_CHAT_DATA="$(mktemp -d -t moonbase-independent-chat)" \
+  NX_DAEMON=false bunx nx run @moonbase/chat-probe:dev
+```
+
+Composition tests add to the existing editor/native suites:
+
+```sh
+MOONBASE_COMPOSITION_TEST=1 bun run --cwd apps/desktop test:desktop
+MOONBASE_COMPOSITION_TEST=1 MOONBASE_PACKAGED_TEST=1 bun run --cwd apps/desktop test:desktop
+```
+
+[Composition evidence](evidence/composition/validation.md) records exact source/artifact mappings, actual native captures, causal keyboard/lifecycle probes, initial failed runs and pending gates. These controlled temporary-host tests use production HTTP/SQLite and the public SSH service with a controlled forwarding child and faux provider; they spend no real provider quota and do not establish a real SSH handshake.

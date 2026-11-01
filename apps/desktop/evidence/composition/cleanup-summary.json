@@ -1,0 +1,26 @@
+{
+  "phases": [
+    {
+      "phase": "source",
+      "electronPids": 53,
+      "hostPids": 11,
+      "forwardPids": 24,
+      "groups": 24,
+      "ports": 23,
+      "allRecordedESRCH": true,
+      "allPortsRebound": true
+    },
+    {
+      "phase": "package",
+      "electronPids": 45,
+      "hostPids": 10,
+      "forwardPids": 23,
+      "groups": 23,
+      "ports": 21,
+      "allRecordedESRCH": true,
+      "allPortsRebound": true
+    }
+  ],
+  "moduleBrowserPort4176Rebound": true,
+  "limits": "Counts cover the recorded final composition phases, not a fabricated total of every transient helper or earlier failed phase. Failed historical teardown recoveries are recorded separately."
+}

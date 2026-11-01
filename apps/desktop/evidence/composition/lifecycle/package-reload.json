@@ -1,0 +1,143 @@
+{
+  "mode": "reload",
+  "active": [
+    "moonbase:a2065a5d-c970-4355-9b3b-e5480f74143b",
+    "moonbase-chat:5e5db6db-6d40-4ab1-af9e-b46d22198b1d",
+    "moonbase-chat:ca089ac3-a2ac-4f78-93fe-83c74222a2b2"
+  ],
+  "waitId": "bafa78cd-0f04-44c8-b30d-21783aac3a03",
+  "cancelled": [
+    "moonbase-chat:5e5db6db-6d40-4ab1-af9e-b46d22198b1d",
+    "moonbase-chat:ca089ac3-a2ac-4f78-93fe-83c74222a2b2",
+    "moonbase-chat:bafa78cd-0f04-44c8-b30d-21783aac3a03",
+    "moonbase:a2065a5d-c970-4355-9b3b-e5480f74143b"
+  ],
+  "connection": {
+    "ok": true,
+    "value": {
+      "profile": {
+        "id": "proof",
+        "label": "Controlled remote host",
+        "destination": "controlled",
+        "remotePort": 64422,
+        "expected": {
+          "hostId": "controlled-host",
+          "storeId": "controlled-store"
+        }
+      },
+      "state": "connected",
+      "connectionId": "2148f7e3-9cac-40d6-9bf5-2c00b9c04b89",
+      "health": {
+        "hostId": "controlled-host",
+        "storeId": "controlled-store",
+        "protocol": 1,
+        "version": "0.1.0",
+        "capabilities": [
+          "chat-v0"
+        ]
+      }
+    }
+  },
+  "stats": {
+    "id": "fd06fe74-a80e-4357-94bf-d906420b3341",
+    "calls": 1,
+    "tools": 1,
+    "commands": [
+      "getChatHost",
+      "getChatHost",
+      "getChatHost",
+      "getChatHost",
+      "getChatHost",
+      "listChats",
+      "getChatHost",
+      "createChat",
+      "getChatHost",
+      "getChatHost",
+      "getChat",
+      "getChat",
+      "getChatHost",
+      "sendChat",
+      "getChatHost",
+      "getChat",
+      "getChatHost",
+      "getChat",
+      "getChatHost",
+      "getChatHost",
+      "getChatHost",
+      "listChats",
+      "getChatHost",
+      "getChatHost",
+      "getChat",
+      "getChat",
+      "getChatHost",
+      "getChatSend"
+    ],
+    "mutations": [
+      {
+        "operation": "createChat",
+        "input": {
+          "session": {
+            "host": {
+              "hostId": "controlled-host",
+              "storeId": "controlled-store"
+            },
+            "actorId": "personal"
+          },
+          "requestId": "b3b9af95-64c7-47f0-ad88-8980cd4a65c8",
+          "title": "Live lifecycle task"
+        },
+        "result": {
+          "requestId": "b3b9af95-64c7-47f0-ad88-8980cd4a65c8",
+          "conversation": {
+            "target": {
+              "host": {
+                "hostId": "controlled-host",
+                "storeId": "controlled-store"
+              },
+              "actorId": "personal",
+              "conversationId": "4"
+            },
+            "title": "Live lifecycle task",
+            "createdAt": "2026-11-01T12:02:42.277Z",
+            "cwd": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-chat-proof-RxnHSW/remote-folder",
+            "model": "faux/faux-1"
+          }
+        }
+      },
+      {
+        "operation": "sendChat",
+        "input": {
+          "target": {
+            "host": {
+              "hostId": "controlled-host",
+              "storeId": "controlled-store"
+            },
+            "actorId": "personal",
+            "conversationId": "4"
+          },
+          "requestId": "fed13379-5778-4582-b32d-4ae9cbcac82a",
+          "text": "one immutable Send"
+        },
+        "result": {
+          "target": {
+            "host": {
+              "hostId": "controlled-host",
+              "storeId": "controlled-store"
+            },
+            "actorId": "personal",
+            "conversationId": "4"
+          },
+          "requestId": "fed13379-5778-4582-b32d-4ae9cbcac82a",
+          "admission": "admitted",
+          "submissionId": "13"
+        }
+      }
+    ],
+    "heldReplies": [
+      "getChat",
+      "getChat",
+      "getChat",
+      "getChat"
+    ]
+  }
+}

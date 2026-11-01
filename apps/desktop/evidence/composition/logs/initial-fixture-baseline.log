@@ -1,0 +1,51 @@
+$ playwright test --config playwright.config.ts
+
+Running 3 tests using 1 worker
+
+(node:3096) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+  ✘  1 test/composition.spec.ts:78:1 › dirty editor/live chat, two drafts, no-resend reconnect, exact Stop, view close and client Quit stay independent (1.5s)
+(node:3115) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+  ✓  2 test/composition.spec.ts:126:53 › chat external vetoes Quit before any editor Discard or Save (3.2s)
+
+  ✓  3 test/composition.spec.ts:126:53 › chat write-failure vetoes Quit before any editor Discard or Save (2.1s)
+
+
+  1) test/composition.spec.ts:78:1 › dirty editor/live chat, two drafts, no-resend reconnect, exact Stop, view close and client Quit stay independent 
+
+    Error: expect(received).toEqual(expected) // deep equality
+
+    - Expected  - 1
+    + Received  + 3
+
+    - Array []
+    + Array [
+    +   "getChatHost",
+    + ]
+
+      80 |   try {
+      81 |     await setup(f); const { app, page: p, errors } = await launch(f); current = app;
+    > 82 |     expect((await f.stats()).commands).toEqual([]); await local(p, app, f);
+         |                                        ^
+      83 |     await connect(p); await create(p, "First remote chat");
+      84 |     await f.loseNextSend(); await p.getByLabel("Message", { exact: true }).fill("one deliberately admitted message");
+      85 |     await p.getByRole("button", { name: "Send message", exact: true }).click();
+        at /Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/test/composition.spec.ts:82:40
+
+    Error Context: test-results/composition-dirty-editor-l-b1a1b-lient-Quit-stay-independent/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/composition-dirty-editor-l-b1a1b-lient-Quit-stay-independent/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/composition-dirty-editor-l-b1a1b-lient-Quit-stay-independent/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    test/composition.spec.ts:78:1 › dirty editor/live chat, two drafts, no-resend reconnect, exact Stop, view close and client Quit stay independent 
+  2 passed (7.9s)
+error: script "test:desktop" exited with code 1

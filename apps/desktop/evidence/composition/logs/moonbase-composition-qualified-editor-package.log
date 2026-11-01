@@ -1,0 +1,10 @@
+$ MOONBASE_PACKAGED_TEST=1 playwright test --config playwright.config.ts
+
+Running 1 test using 1 worker
+
+(node:44622) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+  ✓  1 test/packaged.spec.ts:9:1 › unsigned macOS package runs with only system PATH, SQLite, native/rg resources and CSP workers (8.4s)
+
+  1 passed (8.7s)

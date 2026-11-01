@@ -1,0 +1,48 @@
+$ playwright test --config playwright.config.ts --grep "dirty editor/live"
+
+Running 1 test using 1 worker
+
+(node:15077) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+  ✘  1 test/composition.spec.ts:207:1 › dirty editor/live chat, two drafts, no-resend reconnect, view close and client Quit stay independent (8.1s)
+
+
+  1) test/composition.spec.ts:207:1 › dirty editor/live chat, two drafts, no-resend reconnect, view close and client Quit stay independent 
+
+    Error: expect(locator).toBeFocused() failed
+
+    Locator:  getByRole('tablist', { name: 'Workbench views', exact: true }).getByRole('tab', { name: 'Editor', exact: true })
+    Expected: focused
+    Received: inactive
+    Timeout:  5000ms
+
+    Call log:
+      - Expect "toBeFocused" getByRole('tablist', { name: 'Workbench views', exact: true }).getByRole('tab', { name: 'Editor', exact: true }) with timeout 5000ms
+      - waiting for getByRole('tablist', { name: 'Workbench views', exact: true }).getByRole('tab', { name: 'Editor', exact: true })
+        14 × locator resolved to <button role="tab" tabindex="0" type="button" data-active="" id="base-ui-_r_0_" aria-selected="true" aria-disabled="false" data-orientation="horizontal" aria-controls="base-ui-_r_2_" data-composite-item-active="" data-activation-direction="left" class="x8c7e9d x1s4ats8 xd4r4e8 x1mq84lg xmkeg23 x1y0btm7 xeqek5s x53wgf3 x36usyh x1ypdohk xkklm2h xze8r8f x1hl8ikr x1hc1fzr xk0mbs4 x1s07b3s x18i0eku x1r3k303">Editor</button>
+           - unexpected value "inactive"
+
+
+      237 |     await p.keyboard.press("Enter");
+      238 |     await p.evaluate(() => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
+    > 239 |     await expect(tab(p, "Editor")).toBeFocused();
+          |                                    ^
+      240 |     await expect(tab(p, "Editor")).toHaveAttribute("aria-selected", "true");
+      241 |     await p.keyboard.press("Tab");
+      242 |     await p.keyboard.press("Tab");
+        at /Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/test/composition.spec.ts:239:36
+
+    Error Context: test-results/keyboard-focus-red/composition-dirty-editor-l-15107-lient-Quit-stay-independent/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/keyboard-focus-red/composition-dirty-editor-l-15107-lient-Quit-stay-independent/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/keyboard-focus-red/composition-dirty-editor-l-15107-lient-Quit-stay-independent/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    test/composition.spec.ts:207:1 › dirty editor/live chat, two drafts, no-resend reconnect, view close and client Quit stay independent 
+error: script "test:desktop" exited with code 1

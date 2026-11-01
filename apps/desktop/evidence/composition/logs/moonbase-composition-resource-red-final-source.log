@@ -1,0 +1,42 @@
+$ playwright test --config playwright.config.ts --grep "native document reload"
+
+Running 1 test using 1 worker
+
+(node:37475) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+  ✘  1 test/lifecycle.spec.ts:14:3 › native document reload releases observers and waits without replacing the root or stopping work (7.9s)
+
+
+  1) test/lifecycle.spec.ts:14:3 › native document reload releases observers and waits without replacing the root or stopping work 
+
+    Error: expect(received).toBe(expected) // Object.is equality
+
+    Expected: true
+    Received: false
+
+    Call Log:
+    - Timeout 5000ms exceeded while waiting on the predicate
+
+      183 |               ),
+      184 |             )
+    > 185 |             .toBe(true);
+          |              ^
+      186 |         f.releaseReply();
+      187 |         await views.getByRole("tab", { name: "Chat", exact: true }).click();
+      188 |         await expect(p.getByLabel("Message", { exact: true })).toHaveValue(
+        at /Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/test/lifecycle.spec.ts:185:14
+
+    Error Context: test-results/resource-red-final-source/lifecycle-native-document--550ca-g-the-root-or-stopping-work/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/resource-red-final-source/lifecycle-native-document--550ca-g-the-root-or-stopping-work/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/resource-red-final-source/lifecycle-native-document--550ca-g-the-root-or-stopping-work/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    test/lifecycle.spec.ts:14:3 › native document reload releases observers and waits without replacing the root or stopping work 
+error: script "test:desktop" exited with code 1

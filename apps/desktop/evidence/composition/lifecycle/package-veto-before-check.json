@@ -1,0 +1,10 @@
+{
+  "mode": "veto",
+  "active": [
+    "moonbase:dd1fff55-54a3-4bb7-8ced-58bbe7c63410",
+    "moonbase-chat:893d0f0e-930e-43b1-aca8-85cb356dd2f6",
+    "moonbase-chat:98a4e66d-ddd1-47ed-b886-30b02cadfdd6"
+  ],
+  "waitId": null,
+  "cancelled": []
+}

@@ -1,0 +1,40 @@
+$ playwright test --config playwright.config.ts --grep "native document reload"
+
+Running 1 test using 1 worker
+
+(node:33200) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+  ✘  1 test/lifecycle.spec.ts:14:3 › native document reload releases observers and waits without replacing the root or stopping work (23.2s)
+
+
+  1) test/lifecycle.spec.ts:14:3 › native document reload releases observers and waits without replacing the root or stopping work 
+
+    Error: Controlled state did not settle
+
+       at ../../chat-probe/test/fixture.ts:19
+
+      17 |     await new Promise((r) => setTimeout(r, 25));
+      18 |   }
+    > 19 |   throw Error("Controlled state did not settle");
+         |         ^
+      20 | }
+      21 | export type FixtureStats = {
+      22 |   calls: number;
+        at until (/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/chat-probe/test/fixture.ts:19:9)
+        at Object.close (/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/chat-probe/test/fixture.ts:179:9)
+        at /Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/test/lifecycle.spec.ts:249:23
+
+    Error Context: test-results/old-resource-source/lifecycle-native-document--550ca-g-the-root-or-stopping-work/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/old-resource-source/lifecycle-native-document--550ca-g-the-root-or-stopping-work/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/old-resource-source/lifecycle-native-document--550ca-g-the-root-or-stopping-work/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    test/lifecycle.spec.ts:14:3 › native document reload releases observers and waits without replacing the root or stopping work 
+error: script "test:desktop" exited with code 1

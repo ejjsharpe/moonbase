@@ -1,0 +1,140 @@
+$ node scripts/package.mjs
+transforming...
+✓ 1589 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/renderer/index.html                                  0.76 kB │ gzip:   0.35 kB
+dist/renderer/assets/codicon-DF1abBS2.ttf               153.22 kB
+dist/renderer/module-inputs.json                        278.63 kB │ gzip:  18.90 kB
+dist/renderer/assets/editor.worker-CRz__AKW.js          303.77 kB
+dist/renderer/assets/json.worker-CV9fqkUp.js            433.12 kB
+dist/renderer/assets/html.worker-D9ugpX4y.js            743.37 kB
+dist/renderer/assets/css.worker-DwfUZ3fB.js           1,078.23 kB
+dist/renderer/assets/ts.worker-DIAQkoB3.js            6,927.79 kB
+dist/renderer/assets/index-CUlIrWHT.css                  19.97 kB │ gzip:   4.03 kB
+dist/renderer/assets/toggleHighContrast-Kp8g3qXg.css     86.91 kB │ gzip:  13.74 kB
+dist/renderer/assets/editor-B8GMDV7_.css                 99.09 kB │ gzip:  14.27 kB
+dist/renderer/assets/typescript-CyrqSLak.js               0.06 kB │ gzip:   0.07 kB
+dist/renderer/assets/javascript-3OmBWpVs.js               0.67 kB │ gzip:   0.40 kB
+dist/renderer/assets/azcli-Bc_sGQ0U.js                    0.70 kB │ gzip:   0.28 kB
+dist/renderer/assets/ini-sBoK_t0W.js                      0.96 kB │ gzip:   0.49 kB
+dist/renderer/assets/workers-D8PEWue7.js                  1.26 kB │ gzip:   0.59 kB
+dist/renderer/assets/csp-bTuwJoIa.js                      1.27 kB │ gzip:   0.48 kB
+dist/renderer/assets/pla-CopQ2nXW.js                      1.54 kB │ gzip:   0.60 kB
+dist/renderer/assets/scheme-BeGwcela.js                   1.62 kB │ gzip:   0.77 kB
+dist/renderer/assets/flow9-C5_-GSwl.js                    1.66 kB │ gzip:   0.80 kB
+dist/renderer/assets/sb-CcwsVR0C.js                       1.68 kB │ gzip:   0.78 kB
+dist/renderer/assets/bat-i0X4ZdIN.js                      1.69 kB │ gzip:   0.82 kB
+dist/renderer/assets/dockerfile-DZFCIeNp.js               1.72 kB │ gzip:   0.63 kB
+dist/renderer/assets/pascaligo-D-ptJ9y-.js                1.85 kB │ gzip:   0.86 kB
+dist/renderer/assets/xml-Dl2mrSyJ.js                      1.92 kB │ gzip:   0.72 kB
+dist/renderer/assets/cameligo-DMUM7wLl.js                 1.97 kB │ gzip:   0.91 kB
+dist/renderer/assets/lua-CsQS60Ue.js                      1.98 kB │ gzip:   0.88 kB
+dist/renderer/assets/objective-c-FvmIjYaQ.js              2.10 kB │ gzip:   1.01 kB
+dist/renderer/assets/graphql-fmXr3nnJ.js                  2.11 kB │ gzip:   0.99 kB
+dist/renderer/assets/sparql-D_Lu-MrJ.js                   2.21 kB │ gzip:   1.10 kB
+dist/renderer/assets/lexon-CfSJPG6W.js                    2.28 kB │ gzip:   0.88 kB
+dist/renderer/assets/mips-CIPQ_RoX.js                     2.32 kB │ gzip:   1.02 kB
+dist/renderer/assets/go-C-y9NEjX.js                       2.35 kB │ gzip:   1.11 kB
+dist/renderer/assets/bicep-B5-_aFwp.js                    2.36 kB │ gzip:   0.91 kB
+dist/renderer/assets/sophia-CRfGWb83.js                   2.48 kB │ gzip:   1.15 kB
+dist/renderer/assets/m3-D-oSqn_W.js                       2.52 kB │ gzip:   1.29 kB
+dist/renderer/assets/typespec-B8J7ngcE.js                 2.62 kB │ gzip:   1.01 kB
+dist/renderer/assets/pascal-DrH0SRf2.js                   2.63 kB │ gzip:   1.35 kB
+dist/renderer/assets/fsharp-C8Ef5oNN.js                   2.65 kB │ gzip:   1.27 kB
+dist/renderer/assets/qsharp-DkqhCAOL.js                   2.72 kB │ gzip:   1.37 kB
+dist/renderer/assets/shell-CC2rA5mh.js                    2.81 kB │ gzip:   1.16 kB
+dist/renderer/assets/r-BwWrilGY.js                        2.83 kB │ gzip:   1.25 kB
+dist/renderer/assets/java-BEtHBSE6.js                     2.90 kB │ gzip:   1.34 kB
+dist/renderer/assets/cssMode-D2UJozdL.js                  2.97 kB │ gzip:   1.13 kB
+dist/renderer/assets/redis-ClamHrr6.js                    3.03 kB │ gzip:   1.41 kB
+dist/renderer/assets/kotlin-BOotOW0E.js                   3.04 kB │ gzip:   1.41 kB
+dist/renderer/assets/cypher-CVaqCwHa.js                   3.04 kB │ gzip:   1.40 kB
+dist/renderer/assets/powershell-DmHpPYUd.js               3.05 kB │ gzip:   1.33 kB
+dist/renderer/assets/tcl-DISqw1ZD.js                      3.27 kB │ gzip:   1.32 kB
+dist/renderer/assets/liquid-nYL9Z5aP.js                   3.34 kB │ gzip:   1.42 kB
+dist/renderer/assets/coffee-Ba7i2nA0.js                   3.36 kB │ gzip:   1.24 kB
+dist/renderer/assets/htmlMode-D71tr5wz.js                 3.42 kB │ gzip:   1.24 kB
+dist/renderer/assets/hcl-CpzslTdj.js                      3.44 kB │ gzip:   1.45 kB
+dist/renderer/assets/python-B-hLbqvu.js                   3.45 kB │ gzip:   1.42 kB
+dist/renderer/assets/apex-BWPQTe0t.js                     3.46 kB │ gzip:   1.70 kB
+dist/renderer/assets/yaml-DAvnmsKy.js                     3.54 kB │ gzip:   1.29 kB
+dist/renderer/assets/register-D7_5gWna.js                 3.58 kB │ gzip:   1.18 kB
+dist/renderer/assets/markdown-Cimd5fb3.js                 3.63 kB │ gzip:   1.34 kB
+dist/renderer/assets/rust-DdL9SqIa.js                     3.66 kB │ gzip:   1.80 kB
+dist/renderer/assets/restructuredtext-BYgofb2h.js         3.74 kB │ gzip:   1.32 kB
+dist/renderer/assets/less-B9JPFI3C.js                     3.74 kB │ gzip:   1.36 kB
+dist/renderer/assets/dart-onAF5SnQ.js                     3.93 kB │ gzip:   1.60 kB
+dist/renderer/assets/csharp-BKxtCVv1.js                   4.11 kB │ gzip:   1.66 kB
+dist/renderer/assets/msdax-DauUninz.js                    4.27 kB │ gzip:   1.87 kB
+dist/renderer/assets/mdx-BwUol5-x.js                      4.31 kB │ gzip:   1.21 kB
+dist/renderer/assets/css-DIMkf-bt.js                      4.36 kB │ gzip:   1.33 kB
+dist/renderer/assets/pug-Z5eAx3Zn.js                      4.46 kB │ gzip:   1.60 kB
+dist/renderer/assets/swift-Bxkupp3x.js                    4.48 kB │ gzip:   1.99 kB
+dist/renderer/assets/ecl-94qehhXe.js                      4.50 kB │ gzip:   2.17 kB
+dist/renderer/assets/html-RMGzLAmU.js                     4.51 kB │ gzip:   1.15 kB
+dist/renderer/assets/typescript-BYAfd4oM.js               4.65 kB │ gzip:   1.92 kB
+dist/renderer/assets/cpp-C7h46wYY.js                      4.74 kB │ gzip:   2.02 kB
+dist/renderer/assets/vb-DV3o63ZY.js                       5.30 kB │ gzip:   2.01 kB
+dist/renderer/assets/twig-De2hgUGE.js                     5.78 kB │ gzip:   1.48 kB
+dist/renderer/assets/scss-gp-XZpBa.js                     6.26 kB │ gzip:   1.70 kB
+dist/renderer/assets/handlebars-CuZxXLQU.js               6.28 kB │ gzip:   1.37 kB
+dist/renderer/assets/julia-Bri6UV-V.js                    6.50 kB │ gzip:   2.64 kB
+dist/renderer/assets/systemverilog-Bz4Y3fRF.js            6.85 kB │ gzip:   2.72 kB
+dist/renderer/assets/st-DbInun42.js                       6.94 kB │ gzip:   2.24 kB
+dist/renderer/assets/scala-DHpiXF5c.js                    7.11 kB │ gzip:   2.07 kB
+dist/renderer/assets/wgsl-DpFanUEy.js                     7.18 kB │ gzip:   2.73 kB
+dist/renderer/assets/perl-oz_6vUea.js                     7.35 kB │ gzip:   3.10 kB
+dist/renderer/assets/postiats-43DmfD33.js                 7.36 kB │ gzip:   2.39 kB
+dist/renderer/assets/php-nr791fC2.js                      7.74 kB │ gzip:   2.03 kB
+dist/renderer/assets/razor-BCW2fvUW.js                    8.11 kB │ gzip:   2.04 kB
+dist/renderer/assets/clojure-Cm7r79vr.js                  8.21 kB │ gzip:   3.49 kB
+dist/renderer/assets/ruby-DezsRK8O.js                     8.21 kB │ gzip:   2.55 kB
+dist/renderer/assets/sql-NEE52Syq.js                      8.84 kB │ gzip:   3.73 kB
+dist/renderer/assets/protobuf-C531GsRP.js                 8.89 kB │ gzip:   2.04 kB
+dist/renderer/assets/mysql-SOo6toE5.js                    9.65 kB │ gzip:   3.98 kB
+dist/renderer/assets/elixir-6RTg0lbw.js                  10.11 kB │ gzip:   2.50 kB
+dist/renderer/assets/redshift-DT7zqm-g.js                10.33 kB │ gzip:   4.24 kB
+dist/renderer/assets/abap-08VXUWAP.js                    11.69 kB │ gzip:   5.15 kB
+dist/renderer/assets/pgsql-DTj74zXo.js                   11.91 kB │ gzip:   4.42 kB
+dist/renderer/assets/jsonMode-DndpaBWq.js                12.20 kB │ gzip:   4.45 kB
+dist/renderer/assets/powerquery-D3hlyOfw.js              15.34 kB │ gzip:   4.73 kB
+dist/renderer/assets/freemarker2-CakwATGH.js             15.54 kB │ gzip:   3.97 kB
+dist/renderer/assets/solidity-BEEn4gHE.js                15.99 kB │ gzip:   4.39 kB
+dist/renderer/assets/tsMode-B-0I_vBs.js                  21.86 kB │ gzip:   6.16 kB
+dist/renderer/assets/lspLanguageFeatures-kEtY59gM.js     28.21 kB │ gzip:   7.17 kB
+dist/renderer/assets/index-CEanvWmJ.js                  533.98 kB │ gzip: 167.39 kB
+dist/renderer/assets/toggleHighContrast-rAHVhYNH.js   1,193.94 kB │ gzip: 303.18 kB
+dist/renderer/assets/editor.api-Dyi9UopE.js           2,736.98 kB │ gzip: 706.61 kB
+
+[plugin builtin:vite-reporter] 
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 1.70s
+Collected upstream notices for 15 bundled packages.
+  • electron-builder  version=26.18.0 os=25.3.0
+  • packageManager not detected by file, falling back to environment detection  resolvedPackageManager=bun detected=/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop
+  • detected workspace root for project using packageManager field  pm=bun config=bun@1.4.4 resolved=/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c projectDir=/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/dist
+  • skipped dependencies rebuild  reason=npmRebuild is set to false
+  • packaging       platform=darwin arch=arm64 electron=45.1.0 appOutDir=release/mac-arm64
+  • downloaded      label=electron progress=100%
+  • downloaded electron zip extracted successfully  output=/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/release/mac-arm64
+  • searching for node modules  pm=bun searchDir=/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/dist
+  • note: bun does not support any CLI for dependency tree extraction, utilizing file traversal collector instead
+  • using manual traversal of node_modules to build dependency tree
+  • no node modules found in collection, trying next search directory  pm=bun searchDir=/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/dist
+  • searching for node modules  pm=bun searchDir=/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c
+  • note: bun does not support any CLI for dependency tree extraction, utilizing file traversal collector instead
+  • using manual traversal of node_modules to build dependency tree
+  • no node modules found in collection, trying next search directory  pm=bun searchDir=/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c
+  • searching for node modules  pm=traversal searchDir=/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/dist
+  • using manual traversal of node_modules to build dependency tree
+  • no node modules found in collection, trying next search directory  pm=traversal searchDir=/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/dist
+  • searching for node modules  pm=traversal searchDir=/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c
+  • using manual traversal of node_modules to build dependency tree
+  • no node modules found in collection, trying next search directory  pm=traversal searchDir=/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c
+  • no node modules returned while searching directories  searchDirectories=["dist","/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c"]
+  • default Electron icon is used  reason=application icon is not set
+  • skipped macOS code signing  reason=identity explicitly is set to null

@@ -1,0 +1,10 @@
+$ playwright test --config playwright.config.ts --grep "native document crash"
+
+Running 1 test using 1 worker
+
+(node:39378) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+  ✓  1 test/lifecycle.spec.ts:14:3 › native document crash releases observers and waits without replacing the root or stopping work (3.4s)
+
+  1 passed (4.1s)

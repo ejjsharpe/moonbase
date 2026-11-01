@@ -1,0 +1,65 @@
+$ playwright test --config playwright.config.ts
+
+Running 6 tests using 1 worker
+
+(node:7646) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+  ✘  1 test/composition.spec.ts:80:1 › dirty editor/live chat, two drafts, no-resend reconnect, exact Stop, view close and client Quit stay independent (5.9s)
+Worker teardown timeout of 45000ms exceeded.
+
+Failed worker ran 1 test:
+test/composition.spec.ts:80:1 › dirty editor/live chat, two drafts, no-resend reconnect, exact Stop, view close and client Quit stay independent
+(node:7938) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+  ✓  2 test/composition.spec.ts:128:53 › chat external vetoes Quit before any editor Discard or Save (2.9s)
+
+  ✓  3 test/composition.spec.ts:128:53 › chat write-failure vetoes Quit before any editor Discard or Save (2.1s)
+
+  ✓  4 test/composition.spec.ts:145:1 › native 200% normal/constrained live chat keeps wheel/Tab Stop and Send reachable beside a dirty editor (3.1s)
+
+  ✓  5 test/composition.spec.ts:171:1 › captured Quit keeps chat/newer drafts and editor conflicts usable; Cancel then Save/Discard commits only consented work (3.0s)
+
+  ✓  6 test/composition.spec.ts:186:16 › held Save and final publication do not globally block Send/status/Stop; uncertain Quit retains exact publication (4.1s)
+
+
+  1) test/composition.spec.ts:80:1 › dirty editor/live chat, two drafts, no-resend reconnect, exact Stop, view close and client Quit stay independent 
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: getByRole('button', { name: 'Open checkout', exact: true })
+    Expected: visible
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" getByRole('button', { name: 'Open checkout', exact: true }) with timeout 5000ms
+      - waiting for getByRole('button', { name: 'Open checkout', exact: true })
+
+
+      22 |   page.on("pageerror", e => errors.push(e.message));
+      23 |   page.on("console", m => { if (m.type() === "error") errors.push(m.text()); });
+    > 24 |   await expect(page.getByRole("button", { name: "Open checkout", exact: true })).toBeVisible();
+         |                                                                                  ^
+      25 |   return { app, page, errors };
+      26 | }
+      27 | async function setup(f: Fixture) {
+        at launch (/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/test/composition.spec.ts:24:82)
+        at /Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/test/composition.spec.ts:83:88
+
+    Error Context: test-results/composition-dirty-editor-l-b1a1b-lient-Quit-stay-independent/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/composition-dirty-editor-l-b1a1b-lient-Quit-stay-independent/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/composition-dirty-editor-l-b1a1b-lient-Quit-stay-independent/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    test/composition.spec.ts:80:1 › dirty editor/live chat, two drafts, no-resend reconnect, exact Stop, view close and client Quit stay independent 
+  5 passed (1.1m)
+  1 error was not a part of any test, see above for details
+error: script "test:desktop" exited with code 1

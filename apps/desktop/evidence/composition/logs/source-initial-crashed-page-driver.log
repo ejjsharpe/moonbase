@@ -1,0 +1,56 @@
+$ playwright test --config playwright.config.ts
+
+Running 11 tests using 1 worker
+
+(node:37844) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+  ✓   1 test/composition.spec.ts:208:1 › dirty editor/live chat, two drafts, no-resend reconnect, view close and client Quit stay independent (5.9s)
+
+  ✓   2 test/composition.spec.ts:369:3 › chat external vetoes Quit before any editor Discard or Save (2.0s)
+
+  ✓   3 test/composition.spec.ts:369:3 › chat write-failure vetoes Quit before any editor Discard or Save (2.0s)
+
+  ✓   4 test/composition.spec.ts:415:1 › native 200% normal/constrained live chat keeps wheel/Tab Stop and Send reachable beside a dirty editor (3.0s)
+
+  ✓   5 test/composition.spec.ts:502:1 › captured Quit keeps chat/newer drafts and editor conflicts usable; Cancel then Save/Discard commits only consented work (3.1s)
+
+  ✓   6 test/composition.spec.ts:549:3 › held Save and final publication do not globally block Send/status/Stop; uncertain Quit retains exact publication (4.1s)
+
+  ✓   7 test/composition.spec.ts:628:1 › held admitted Send leaves local Save/read/status and exact Stop independently responsive (2.3s)
+  ✓   8 test/composition.spec.ts:681:1 › composed IPC rejects foreign frames/hosts and extra/prototype operations before dispatch or local IO (1.4s)
+
+  ✓   9 test/lifecycle.spec.ts:14:3 › native document reload releases observers and waits without replacing the root or stopping work (2.9s)
+
+  ✓  10 test/lifecycle.spec.ts:14:3 › native document veto retains observers and waits without replacing the root or stopping work (2.1s)
+
+  ✘  11 test/lifecycle.spec.ts:14:3 › native document crash releases observers and waits without replacing the root or stopping work (2.3s)
+
+
+  1) test/lifecycle.spec.ts:14:3 › native document crash releases observers and waits without replacing the root or stopping work 
+
+    Error: page.evaluate: Target crashed 
+
+      158 |       }));
+      159 |       else await Promise.all([p.waitForEvent("domcontentloaded"), current.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.reload())]);
+    > 160 |       await p.evaluate(
+          |               ^
+      161 |         () =>
+      162 |           new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
+      163 |       );
+        at /Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/test/lifecycle.spec.ts:160:15
+
+    Error Context: test-results/final-source/lifecycle-native-document--0236e-g-the-root-or-stopping-work/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/final-source/lifecycle-native-document--0236e-g-the-root-or-stopping-work/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/final-source/lifecycle-native-document--0236e-g-the-root-or-stopping-work/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    test/lifecycle.spec.ts:14:3 › native document crash releases observers and waits without replacing the root or stopping work 
+  10 passed (31.7s)
+error: script "test:desktop" exited with code 1

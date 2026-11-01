@@ -1,0 +1,22 @@
+{
+  "kind": "fresh reconstruction; original cc06 asar was overwritten without a recorded digest",
+  "source": "cc06d753e76dc02470628a611a3a481f771953b9",
+  "rendererSourceSha256": "240b0ce39bd81e19a8c3637d5125b272a3dbb3a08ed017d6aaaddc0b0edb7dee",
+  "files": [
+    {
+      "path": "apps/desktop/release/mac-arm64/Moonbase.app/Contents/Resources/app.asar",
+      "bytes": 15535059,
+      "sha256": "4f59a6c209607daf72a253315bbf04fda2dcf95ed9bf4b91007c8a604b159993"
+    },
+    {
+      "path": "apps/desktop/dist/main.mjs",
+      "bytes": 653534,
+      "sha256": "10433c57e2b1f592fb0ca27d1927df5696bedfefc82bff65d061a10e1f77d0a4"
+    },
+    {
+      "path": "apps/desktop/dist/renderer/assets/index-DCXMKgNz.js",
+      "bytes": 533792,
+      "sha256": "2a42c79892ac09bc1099858ffb099cb4e5b765299381abc179014d233a8e9ec9"
+    }
+  ]
+}

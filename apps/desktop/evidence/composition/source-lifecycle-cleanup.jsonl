@@ -1,0 +1,3 @@
+{"packaged":false,"mode":"reload","veto":false,"pids":[41646,41648,41649,41650],"absent":true,"hostPids":[41635],"forwardPids":[41677,41678],"processGroups":[41677,41678],"reboundPorts":[63901,63906]}
+{"packaged":false,"mode":"veto","veto":true,"pids":[41720,41721,41722,41723],"absent":true,"hostPids":[41702],"forwardPids":[41747,41748],"processGroups":[41747,41748],"reboundPorts":[63961,63968]}
+{"packaged":false,"mode":"crash","veto":false,"pids":[41767,41768,41769,41770,41976],"absent":true,"hostPids":[41750],"forwardPids":[41973,41974],"processGroups":[41973,41974],"reboundPorts":[63996,64001]}

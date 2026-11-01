@@ -1,0 +1,26 @@
+{
+  "bounds": {
+    "x": 116,
+    "y": 66,
+    "width": 1280,
+    "height": 850
+  },
+  "content": {
+    "x": 116,
+    "y": 98,
+    "width": 1280,
+    "height": 818
+  },
+  "zoom": 1,
+  "viewport": {
+    "width": 1280,
+    "height": 818,
+    "devicePixelRatio": 2
+  },
+  "size": {
+    "width": 2560,
+    "height": 1636
+  },
+  "sha256": "3e351d57c501f98a36c93e70fdc4935027891a9edf98b99cae4dd7fbd7916f93",
+  "fixture": "dirty editor/live chat, two drafts, no-resend reconnect, view close and client Quit stay independent"
+}

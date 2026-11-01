@@ -1,0 +1,265 @@
+{
+  "restored": {
+    "recovery": {
+      "ok": true,
+      "value": {
+        "revision": 1,
+        "state": {
+          "version": 1,
+          "clientId": "desktop-primary",
+          "checkouts": [
+            {
+              "hostId": "moonbase-local",
+              "checkoutId": "77cc92a3f9963f05ea1c6973b89cf042cb26cb41457869edc2019f7bedef4292",
+              "projectId": "660d9d7c025efc91c53c9d7503c2a6ae78d370332c406dbcb2d81730e3195c8d",
+              "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-chat-proof-kfUan9/remote-folder",
+              "branch": "main"
+            }
+          ],
+          "openCheckoutIds": [
+            "77cc92a3f9963f05ea1c6973b89cf042cb26cb41457869edc2019f7bedef4292"
+          ],
+          "selectedCheckoutId": "77cc92a3f9963f05ea1c6973b89cf042cb26cb41457869edc2019f7bedef4292",
+          "views": {
+            "77cc92a3f9963f05ea1c6973b89cf042cb26cb41457869edc2019f7bedef4292": {
+              "openFiles": [
+                "a.ts"
+              ],
+              "active": "a.ts",
+              "preview": null,
+              "fileViews": {
+                "a.ts": "file"
+              },
+              "positions": {
+                "a.ts": {
+                  "file": {
+                    "line": 1,
+                    "column": 31,
+                    "top": 0,
+                    "left": 0
+                  }
+                }
+              },
+              "tree": {
+                "expanded": [],
+                "selected": [
+                  "a.ts"
+                ],
+                "focus": "a.ts",
+                "scroll": 0,
+                "hideIgnored": false
+              }
+            }
+          },
+          "drafts": [
+            {
+              "target": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "77cc92a3f9963f05ea1c6973b89cf042cb26cb41457869edc2019f7bedef4292",
+                  "projectId": "660d9d7c025efc91c53c9d7503c2a6ae78d370332c406dbcb2d81730e3195c8d",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-chat-proof-kfUan9/remote-folder",
+                  "branch": "main"
+                },
+                "path": "a.ts"
+              },
+              "text": "retained local draft at reload",
+              "disk": {
+                "text": "original local text",
+                "version": "07d398e58b5a46ec925344ac70fe1c1831d742c17f28a89e3c8bfe3fc18272e0"
+              }
+            }
+          ],
+          "recentFiles": [
+            {
+              "checkout": {
+                "hostId": "moonbase-local",
+                "checkoutId": "77cc92a3f9963f05ea1c6973b89cf042cb26cb41457869edc2019f7bedef4292",
+                "projectId": "660d9d7c025efc91c53c9d7503c2a6ae78d370332c406dbcb2d81730e3195c8d",
+                "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-chat-proof-kfUan9/remote-folder",
+                "branch": "main"
+              },
+              "path": "a.ts"
+            }
+          ],
+          "sidebarWidth": 270
+        },
+        "errors": [],
+        "operations": []
+      }
+    },
+    "saved": {
+      "version": 1,
+      "session": {
+        "host": {
+          "hostId": "controlled-host",
+          "storeId": "controlled-store"
+        },
+        "actorId": "personal"
+      },
+      "selected": {
+        "host": {
+          "hostId": "controlled-host",
+          "storeId": "controlled-store"
+        },
+        "actorId": "personal",
+        "conversationId": "4"
+      },
+      "drafts": [
+        {
+          "target": {
+            "host": {
+              "hostId": "controlled-host",
+              "storeId": "controlled-store"
+            },
+            "actorId": "personal",
+            "conversationId": "4"
+          },
+          "text": "newer chat draft across reload"
+        }
+      ],
+      "pending": [
+        {
+          "operation": "sendChat",
+          "input": {
+            "target": {
+              "host": {
+                "hostId": "controlled-host",
+                "storeId": "controlled-store"
+              },
+              "actorId": "personal",
+              "conversationId": "4"
+            },
+            "requestId": "ee7da569-5481-44c0-8ba7-95ef85b9b5a0",
+            "text": "one immutable Send"
+          },
+          "message": "Uncertain: Chat reply was lost. Query the original request; do not invent another Send."
+        }
+      ]
+    },
+    "connection": {
+      "ok": true,
+      "value": {
+        "profile": {
+          "id": "proof",
+          "label": "Controlled remote host",
+          "destination": "controlled",
+          "remotePort": 64523,
+          "expected": {
+            "hostId": "controlled-host",
+            "storeId": "controlled-store"
+          }
+        },
+        "state": "connected",
+        "connectionId": "3a89c116-71b9-4fb3-8dbd-fbccd8c135e5",
+        "health": {
+          "hostId": "controlled-host",
+          "storeId": "controlled-store",
+          "protocol": 1,
+          "version": "0.1.0",
+          "capabilities": [
+            "chat-v0"
+          ]
+        }
+      }
+    }
+  },
+  "stats": {
+    "id": "d02b5487-7e65-449a-b4fe-eb174404b1c7",
+    "calls": 1,
+    "tools": 1,
+    "commands": [
+      "getChatHost",
+      "getChatHost",
+      "getChatHost",
+      "getChatHost",
+      "getChatHost",
+      "listChats",
+      "getChatHost",
+      "createChat",
+      "getChatHost",
+      "getChatHost",
+      "getChat",
+      "getChat",
+      "getChatHost",
+      "sendChat",
+      "getChatHost",
+      "getChat",
+      "getChatHost",
+      "getChatHost",
+      "getChatHost",
+      "listChats",
+      "getChatHost",
+      "getChatHost",
+      "getChat",
+      "getChat",
+      "getChatHost",
+      "getChatSend"
+    ],
+    "mutations": [
+      {
+        "operation": "createChat",
+        "input": {
+          "session": {
+            "host": {
+              "hostId": "controlled-host",
+              "storeId": "controlled-store"
+            },
+            "actorId": "personal"
+          },
+          "requestId": "220d6b23-3265-429a-9324-3e8bd57b3238",
+          "title": "Live lifecycle task"
+        },
+        "result": {
+          "requestId": "220d6b23-3265-429a-9324-3e8bd57b3238",
+          "conversation": {
+            "target": {
+              "host": {
+                "hostId": "controlled-host",
+                "storeId": "controlled-store"
+              },
+              "actorId": "personal",
+              "conversationId": "4"
+            },
+            "title": "Live lifecycle task",
+            "createdAt": "2026-11-01T12:02:46.704Z",
+            "cwd": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-chat-proof-kfUan9/remote-folder",
+            "model": "faux/faux-1"
+          }
+        }
+      },
+      {
+        "operation": "sendChat",
+        "input": {
+          "target": {
+            "host": {
+              "hostId": "controlled-host",
+              "storeId": "controlled-store"
+            },
+            "actorId": "personal",
+            "conversationId": "4"
+          },
+          "requestId": "ee7da569-5481-44c0-8ba7-95ef85b9b5a0",
+          "text": "one immutable Send"
+        },
+        "result": {
+          "target": {
+            "host": {
+              "hostId": "controlled-host",
+              "storeId": "controlled-store"
+            },
+            "actorId": "personal",
+            "conversationId": "4"
+          },
+          "requestId": "ee7da569-5481-44c0-8ba7-95ef85b9b5a0",
+          "admission": "admitted",
+          "submissionId": "13"
+        }
+      }
+    ],
+    "heldReplies": [
+      "getChat"
+    ]
+  },
+  "oldWatchersReleased": true
+}
