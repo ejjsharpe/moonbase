@@ -679,7 +679,7 @@
     "base": "6e58c1c4ea6944e8ca25eadc46e35c843f0f9fbe",
     "branch": "chore/host-health-contract",
     "status": "draft R1 security fix published; R2 queued after module reviews",
-    "checks": "25 tests, typecheck, uncached lint, frozen install, 40 source hashes and both browser bundles, diff pass; new-head CI pending"
+    "checks": "25 tests, typecheck, uncached lint, frozen install, 40 source hashes and both browser bundles, diff pass; exact repair-head hosted runs 41270384552 and 41270381679 pass"
   },
   "editorFixR4": {
     "threadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-02-editor-module-r1-bb5c5d0",
