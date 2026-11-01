@@ -1,0 +1,35 @@
+{
+  "name": "moonbase",
+  "private": true,
+  "packageManager": "bun@1.4.4",
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "typecheck": "nx run-many -t typecheck",
+    "lint": "nx run-many -t lint",
+    "test": "nx run-many -t test",
+    "build": "nx run-many -t build",
+    "check:foundation": "node scripts/check-foundation.mjs"
+  },
+  "trustedDependencies": ["electron", "esbuild", "nx"],
+  "devDependencies": {
+    "@base-ui/react": "1.9.0",
+    "@effect/platform-node": "4.1.0",
+    "@playwright/test": "1.64.1",
+    "@stylexjs/stylex": "0.19.1",
+    "@stylexjs/unplugin": "0.19.1",
+    "@types/node": "26.6.6",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "effect": "4.1.0",
+    "electron": "45.1.0",
+    "electron-builder": "26.18.0",
+    "esbuild": "0.28.2",
+    "monaco-editor": "0.57.0",
+    "nx": "24.0.2",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "typescript": "7.0.2",
+    "vite-plus": "1.4.0"
+  }
+}

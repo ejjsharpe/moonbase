@@ -1,0 +1,17 @@
+{
+  "name": "@moonbase/application",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./client": "./src/client.ts",
+    "./services": "./src/services.ts",
+    "./handlers": "./src/handlers.ts",
+    "./runtime-client": "./src/runtime-client.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "tsc --noEmit -p tsconfig.json",
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  },
+  "dependencies": { "effect": "4.1.0" }
+}
