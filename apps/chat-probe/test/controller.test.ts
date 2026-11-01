@@ -647,3 +647,62 @@ for (const extraField of ['selectedHost', 'createSession'] as const)
     assert(!f.calls.some((c) => c.operation === 'createChat'));
     f.controller.dispose();
   });
+
+for (const invalidate of ['resume', 'selection'] as const)
+  test(`obsolete refresh cannot suppress current ${invalidate} reads`, async () => {
+    const f = fixture();
+    await ready(f);
+    f.controller.detach();
+    let release!: (value: unknown) => void;
+    f.answers.set('listChats', () => new Promise((resolve) => (release = resolve)));
+    const starting = f.controller.start();
+    await turn();
+    f.answers.delete('listChats');
+    if (invalidate === 'resume') {
+      f.controller.detach();
+      await f.controller.start();
+    } else {
+      await f.controller.select(target);
+    }
+    release({ conversations: [{ ...summary, title: 'Obsolete' }], nextCursor: null });
+    await starting;
+    await turn();
+    assert(f.controller.getSnapshot().host, 'current generation restores host');
+    assert.deepEqual(f.controller.getSnapshot().snapshot, snapshot);
+    assert.equal(f.subscriptions, 1);
+    assert.equal(f.controller.getSnapshot().chats[0].title, 'Saved');
+    assert(!f.calls.some((c) => ['sendChat', 'stopChat'].includes(c.operation)));
+    f.controller.dispose();
+  });
+
+for (const lifecycle of ['detach', 'dispose'] as const)
+  test(`pending refresh leaves Stop concurrent and cannot observe after ${lifecycle}`, async () => {
+    const f = fixture();
+    await ready(f);
+    let release!: (value: unknown) => void;
+    f.answers.set('listChats', () => new Promise((resolve) => (release = resolve)));
+    const refreshing = f.controller.refresh();
+    await turn();
+    f.publish({
+      ...snapshot,
+      state: 'running',
+      run: {
+        state: 'running',
+        stop: { target, submissionId: 'one', taskId: 'task' },
+        text: '',
+        truncated: false,
+        tools: [],
+      },
+    });
+    await f.controller.stop();
+    assert.equal(f.calls.filter((c) => c.operation === 'stopChat').length, 1);
+    f.controller[lifecycle]();
+    const reads = f.calls.filter((c) => c.operation === 'listChats').length;
+    release({ conversations: [], nextCursor: null });
+    await refreshing;
+    assert.equal(f.calls.filter((c) => c.operation === 'listChats').length, reads);
+    assert.equal(f.controller.getSnapshot().host, null);
+    assert.equal(f.controller.getSnapshot().snapshot, null);
+    assert.equal(f.subscriptions, 0);
+    f.controller.dispose();
+  });

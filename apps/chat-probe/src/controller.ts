@@ -315,8 +315,9 @@ export class ChatProofController {
       });
     return this.epoch;
   }
-  refresh = () =>
-    this.action('refresh', async () => {
+  refresh = async (): Promise<void> => {
+    const generation = this.epoch;
+    await this.action('refresh', async () => {
       const epoch = this.connected();
       const host = await this.chat.command('getChatHost', { host: this.context.host });
       if (!sameSession(host, this.context))
@@ -336,6 +337,15 @@ export class ChatProofController {
       for (const p of this.saved.pending)
         if (p.operation === 'sendChat') await this.query(p.input.requestId);
     });
+    // An obsolete read must not consume the refresh needed by a resumed or selected view.
+    if (
+      generation !== this.epoch &&
+      this.attached &&
+      !this.closed &&
+      this.state.connection?.state === 'connected'
+    )
+      await this.refresh();
+  };
   moreChats = () =>
     this.action('chats', async () => {
       const epoch = this.connected(),
