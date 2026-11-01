@@ -288,7 +288,18 @@ test("dirty editor/live chat, two drafts, no-resend reconnect, view close and cl
       editor: globalThis.desktopTest.calls.filter(v => v.method === "watch").map(v => v.id),
       chat: globalThis.desktopTest.chatCalls.filter(v => v.kind.startsWith("watch-")).map(v => v.id),
     }));
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.reload());
+    const reloadOutcomes: string[] = [];
+    try {
+      await expect.poll(async () => {
+        const outcome = await app.evaluate(({ BrowserWindow }) => new Promise<string>(resolve => {
+          const contents = BrowserWindow.getAllWindows()[0].webContents;
+          const finish = (value: string) => { contents.removeListener("will-prevent-unload", veto); contents.removeListener("did-finish-load", loaded); resolve(value); };
+          const veto = () => finish("veto"), loaded = () => finish("reload");
+          contents.once("will-prevent-unload", veto); contents.once("did-finish-load", loaded); contents.reload();
+        }));
+        reloadOutcomes.push(outcome); return outcome;
+      }).toBe("reload");
+    } finally { await writeFile(join(output, "durable-reload-outcomes.json"), JSON.stringify(reloadOutcomes)); }
     await expect(editor(p)).toBeVisible();
     await expect(p.locator(".view-line").filter({ hasText: "local dirty draft + live tool editing" }).first()).toBeVisible();
     if (priorWatches) await expect.poll(() => app.evaluate((_, ids) => ({
