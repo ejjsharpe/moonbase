@@ -2,6 +2,7 @@ import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { chmodSync, constants, closeSync, mkdirSync, openSync, realpathSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { canonical, ensure, fail, hash } from './validation.ts';
+import { invalidStored, parseRecord, parseRecovery } from './schema.ts';
 import {
   ApplicationError,
   type CommandInput,
@@ -55,16 +56,17 @@ export class Store {
     const row = this.db
       .prepare('SELECT body FROM records WHERE bucket=? AND key=?')
       .get(bucket, key);
-    return row ? (JSON.parse(row.body as string) as T) : null;
+    return row ? parseRecord<T>(bucket, row.body as string) : null;
   }
   all<T>(bucket: string, predicate = '1', parameters: SQLInputValue[] = []): T[] {
     return this.db
       .prepare(`SELECT body FROM records WHERE bucket=? AND (${predicate}) ORDER BY rowid`)
       .all(bucket, ...parameters)
-      .map((r) => JSON.parse(r.body as string) as T);
+      .map((r) => parseRecord<T>(bucket, r.body as string));
   }
   put(bucket: string, key: string, value: unknown) {
     try {
+      this.get(bucket, key);
       this.db
         .prepare(
           'INSERT INTO records VALUES(?,?,?) ON CONFLICT(bucket,key) DO UPDATE SET body=excluded.body',
@@ -96,7 +98,10 @@ export class Store {
   }
   readRecovery(client: string): { revision: number; state: unknown } | null {
     const row = this.db.prepare('SELECT revision, body FROM recovery WHERE client=?').get(client);
-    return row ? { revision: Number(row.revision), state: JSON.parse(row.body as string) } : null;
+    if (!row) return null;
+    const revision = Number(row.revision);
+    if (!Number.isSafeInteger(revision) || revision < 0) throw invalidStored();
+    return { revision, state: parseRecovery(row.body as string, client) };
   }
   publication(client: string): number {
     return this.get<number>('publications', client) ?? 0;
@@ -121,6 +126,7 @@ export class Store {
   }
   /** Caller owns the transaction; module facts advance CAS without impersonating a client publication. */
   writeInternalRecovery(client: string, revision: number, state: unknown) {
+    this.readRecovery(client);
     this.db
       .prepare(
         'INSERT INTO recovery VALUES(?,?,?) ON CONFLICT(client) DO UPDATE SET revision=excluded.revision, body=excluded.body',
@@ -159,7 +165,10 @@ export class Store {
       throw error;
     }
   }
+  private closed = false;
   close() {
+    if (this.closed) return;
+    this.closed = true;
     this.db.close();
   }
 }

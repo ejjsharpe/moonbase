@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
-import { test, mock } from 'node:test';
+import { test } from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { Effect } from 'effect';
+import { Effect, Layer, ManagedRuntime } from 'effect';
+import { TestClock } from 'effect/testing';
+import { makeEditorClient } from '@moonbase/application/runtime-client';
 import { emptyRecovery } from '@moonbase/application/client';
-import { WorkspaceNative } from '../src/index.ts';
+import { WorkspaceLive, WorkspaceNative } from '../src/index.ts';
 import { quote, fixture, isError, waitFor } from './recovery-fixture.ts';
 test('aliases cannot authorize two same-baseline saves of one macOS object', async () => {
   const f = fixture(),
@@ -149,36 +151,22 @@ test('concurrent different operations can consume a native token only once', asy
   }
 });
 
-test('expiry cannot close a native descriptor after its operation has claimed it', async () => {
-  const f = fixture(),
-    ready = join(f.base, 'ready'),
-    resume = join(f.base, 'resume');
+test('expiry cannot close native descriptors across a multi-item operation longer than five minutes', async () => {
+  const f = fixture();
   const helper = f.wrapper(
-      `if [ "$1" = import ]; then /usr/bin/touch ${quote(ready)}; while [ ! -e ${quote(resume)} ]; do /bin/sleep 0.01; done; fi`,
-    ),
-    { runtime, client } = f.start(helper);
-  const originalTimeout = globalThis.setTimeout,
-    originalClear = globalThis.clearTimeout;
-  const expirations: (() => void)[] = [],
-    cancelled = new Set<unknown>();
-  mock.method(
-    globalThis,
-    'setTimeout',
-    (callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) => {
-      const timer = originalTimeout(delay === 300000 ? () => {} : callback, delay, ...args);
-      if (delay === 300000)
-        expirations.push(() => {
-          if (!cancelled.has(timer)) callback(...args);
-        });
-      return timer;
-    },
+    `if [ "$1" = import ]; then /usr/bin/touch ${quote(f.base)}/ready-"$2"; while [ ! -e ${quote(f.base)}/resume-"$2" ]; do /bin/sleep 0.01; done; fi`,
   );
-  mock.method(globalThis, 'clearTimeout', (timer: ReturnType<typeof setTimeout>) => {
-    cancelled.add(timer);
-    originalClear(timer);
-  });
+  const runtime = ManagedRuntime.make(
+    WorkspaceLive({
+      dataDirectory: join(f.base, 'state'),
+      hostId: 'review-host',
+      filesystemHelper: helper,
+    }).pipe(Layer.provideMerge(TestClock.layer())),
+  );
+  const client = makeEditorClient(runtime);
+  const names = Array.from({ length: 16 }, (_, i) => 'external-' + i);
   try {
-    const external = [join(f.base, 'external-one'), join(f.base, 'external-two')];
+    const external = names.map((name) => join(f.base, name));
     external.forEach((p) => writeFileSync(p, 'native bytes'));
     mkdirSync(join(f.root, 'imports'));
     const checkout = await client.command('openCheckout', { root: f.root });
@@ -196,15 +184,23 @@ test('expiry cannot close a native descriptor after its operation has claimed it
       nativeReferences,
       destination: 'imports',
     });
-    await waitFor(ready);
-    expirations.forEach((expire) => expire());
-    writeFileSync(resume, 'continue');
+    void pending.catch(() => {});
+    for (const name of names) {
+      await waitFor(join(f.base, 'ready-' + name));
+      // Each helper remains under its 30s budget; the claimed selection outlives 5m overall.
+      await runtime.runPromise(TestClock.adjust('20 seconds'));
+      writeFileSync(join(f.base, 'resume-' + name), 'continue');
+    }
     assert.equal((await pending).outcome, 'completed');
-    for (const name of ['external-one', 'external-two'])
+    for (const name of names)
       assert.equal(readFileSync(join(f.root, 'imports', name), 'utf8'), 'native bytes');
+    await runtime.runPromise(
+      Effect.flatMap(WorkspaceNative, (native) =>
+        native.release({ checkout, clientId: 'alice', references: nativeReferences }),
+      ),
+    );
   } finally {
-    mock.restoreAll();
-    writeFileSync(resume, 'continue');
+    for (const name of names) writeFileSync(join(f.base, 'resume-' + name), 'continue');
     await runtime.dispose();
     f.cleanup();
   }
