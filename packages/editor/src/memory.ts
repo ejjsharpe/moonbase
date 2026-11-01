@@ -1,3 +1,4 @@
+import { readOwn } from "./record.ts";
 import { Effect, Layer, Queue, Stream } from "effect";
 import { WorkspaceService, type WorkspaceServiceShape } from "@moonbase/application/services";
 import { ApplicationError, emptyRecovery, maximumFileBytes, type CheckoutTarget, type FileDocument,
@@ -114,7 +115,7 @@ export function memoryWorkspace(seeds: Seed[]) {
         const move = (path: string) => item.destination && affected(path, item.source) ? item.destination + path.slice(item.source.length) : path;
         if (result.kind === "move") {
           state.drafts = state.drafts.map(draft => checkoutKey(draft.target.checkout) === checkoutKey(result.checkout) ? { ...draft, target: { ...draft.target, path: move(draft.target.path) } } : draft);
-          const selected = state.views[result.checkout.checkoutId];
+          const selected = readOwn(state.views, result.checkout.checkoutId);
           if (selected) {
             selected.openFiles = [...new Set(selected.openFiles.map(move))]; selected.active = move(selected.active); if (selected.preview) selected.preview = move(selected.preview);
             selected.fileViews = Object.fromEntries(Object.entries(selected.fileViews).sort(([a], [b]) => Number(affected(b, item.source)) - Number(affected(a, item.source))).map(([path, mode]) => [move(path), mode]));
@@ -189,16 +190,16 @@ export function memoryWorkspace(seeds: Seed[]) {
     gitStatus: ({ checkout }) => call("gitStatus", () => {
       const seed = exact(checkout), changes: { path: string; area: "staged" | "unstaged" | "untracked" }[] = [];
       for (const [path, entry] of entries(checkout)) if (!entry.directory) {
-        const index = seed.index?.[path] ?? seed.head?.[path];
+        const index = readOwn(seed.index, path) ?? readOwn(seed.head, path);
         if (index === undefined) changes.push({ path, area: "untracked" });
         else if (entry.text !== index) changes.push({ path, area: "unstaged" });
-        if (seed.index?.[path] !== undefined && seed.index[path] !== seed.head?.[path]) changes.push({ path, area: "staged" });
+        if (readOwn(seed.index, path) !== undefined && readOwn(seed.index, path) !== readOwn(seed.head, path)) changes.push({ path, area: "staged" });
       }
       return { branch: checkout.branch, changes };
     }),
     readComparison: ({ target, area }) => call("readComparison", () => {
       const seed = exact(target.checkout); pathCheck(target.path);
-      const original = area === "untracked" ? "" : area === "staged" ? seed.head?.[target.path] : seed.index?.[target.path] ?? seed.head?.[target.path];
+      const original = area === "untracked" ? "" : area === "staged" ? readOwn(seed.head, target.path) : readOwn(seed.index, target.path) ?? readOwn(seed.head, target.path);
       if (original === undefined) fail("Git baseline unavailable.", "Unavailable");
       const working = entries(target.checkout).get(target.path);
       return { original: original!, working: working && !working.directory ? read(target) : null, title: `${area} · ${target.path}` };

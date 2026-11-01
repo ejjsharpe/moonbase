@@ -1,3 +1,4 @@
+import { readOwn } from "./record.ts";
 import { useLayoutEffect, useRef } from "react";
 import * as monaco from "monaco-editor";
 import * as stylex from "@stylexjs/stylex";
@@ -60,7 +61,7 @@ export function MonacoView({ controller, state, target, mode }: {
     if (!element || !target || state.disposed || !buffer && !comparison) return;
     const working = models.current.get(key)?.model;
     const track = (editor: monaco.editor.ICodeEditor, selected: FileView | `${FileView}:original`) => {
-      const position = controller.getSnapshot().recovery.views[target.checkout.checkoutId]?.positions[target.path]?.[selected];
+      const position = readOwn(readOwn(readOwn(controller.getSnapshot().recovery.views, target.checkout.checkoutId)?.positions, target.path), selected);
       if (position) { editor.setPosition({ lineNumber: position.line, column: position.column }); editor.setScrollPosition({ scrollTop: position.top, scrollLeft: position.left }); }
       const record = () => {
         try {

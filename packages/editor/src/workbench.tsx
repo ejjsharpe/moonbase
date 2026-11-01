@@ -1,3 +1,4 @@
+import { readOwn } from "./record.ts";
 import { forwardRef, useEffect, useId, useImperativeHandle, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { ReactNode } from "react";
 import * as stylex from "@stylexjs/stylex";
@@ -98,7 +99,7 @@ function FileLookup({ controller, state, checkout, close, editorFocus }: { contr
 }
 
 function FilesTree({ controller, state, checkout, active }: { controller: EditorController; state: EditorSnapshot; checkout: CheckoutTarget; active: string }) {
-  const tree = state.recovery.views[checkout.checkoutId].tree, treeElement = useRef<HTMLDivElement>(null), id = useId();
+  const tree = readOwn(state.recovery.views, checkout.checkoutId)!.tree, treeElement = useRef<HTMLDivElement>(null), id = useId();
   const [geometry, setGeometry] = useState({ top: tree.scroll, height: 500 });
   const rows: { path: string; directory: boolean; level: number; ignored?: boolean; position: number; size: number }[] = [];
   function visit(parent: string, level: number) {
@@ -234,9 +235,9 @@ export const EditorWorkbench = forwardRef<EditorWorkbenchHandle, EditorWorkbench
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
   const openCheckouts = state.recovery.checkouts.filter(target => state.recovery.openCheckoutIds.includes(target.checkoutId));
   const checkout = openCheckouts.find(target => target.checkoutId === state.recovery.selectedCheckoutId);
-  const selected = checkout && state.recovery.views[checkout.checkoutId], target = checkout && selected?.active ? { checkout, path: selected.active } : undefined;
+  const selected = checkout && readOwn(state.recovery.views, checkout.checkoutId), target = checkout && selected?.active ? { checkout, path: selected.active } : undefined;
   const buffer = target && state.buffers.find(buffer => fileKey(buffer.target) === fileKey(target));
-  const mode = target && selected?.fileViews[target.path] || "file";
+  const mode = target && readOwn(selected?.fileViews, target.path) || "file";
   const [lookup, setLookup] = useState(false), [panel, setPanel] = useState("files"), [action, updateAction] = useState<Action | null>(null);
   const actionRef = useRef<Action | null>(null), lookupRef = useRef(lookup); lookupRef.current = lookup;
   function setAction(value: Action | null) { actionRef.current = value; updateAction(value); }
@@ -263,7 +264,7 @@ export const EditorWorkbench = forwardRef<EditorWorkbenchHandle, EditorWorkbench
     const focus = () => {
       const next = controller.getSnapshot().recovery;
       if (checkout && next.selectedCheckoutId === checkout.checkoutId)
-        setFocusRequest({ checkout, path: next.views[checkout.checkoutId].active, origin });
+        setFocusRequest({ checkout, path: readOwn(next.views, checkout.checkoutId)!.active, origin });
     };
     return opening.then(success => { if (success || restore) focus(); }, error => { if (restore) focus(); throw error; });
   };
@@ -358,7 +359,7 @@ export const EditorWorkbench = forwardRef<EditorWorkbenchHandle, EditorWorkbench
                   </select></label><Button {...stylex.props(controls.button)} disabled={!buffer || buffer.saving || state.preserving} onClick={() => run(controller.save(target))}>{buffer?.pendingSave ? "Retry Save" : "Save"}</Button>
                     {selected.preview === target.path && <Button {...stylex.props(controls.button)} onClick={() => controller.keepOpen(target)}>Keep Open</Button>}</>}
                   <Menu.Root onOpenChange={open => { if (open) menuCapture.current = [...selected.openFiles]; }}><Menu.Trigger {...stylex.props(controls.button)}>Tab actions</Menu.Trigger>
-                    <Menu.Portal><Menu.Positioner><Menu.Popup {...stylex.props(overlays.popup)}>
+                    <Menu.Portal><Menu.Positioner><Menu.Popup {...stylex.props(overlays.popup, overlays.options)}>
                       {target && <><Menu.Item {...stylex.props(overlays.option)} onClick={() => controller.keepOpen(target)}>Keep Open</Menu.Item>
                         {(["Close", "Close Others", "Close to the Right", "Close All"] as const).map(label => <Menu.Item key={label} {...stylex.props(overlays.option)} onClick={() => {
                           const paths = label === "Close" ? [target.path] : label === "Close Others" ? menuCapture.current.filter(path => path !== target.path) : label === "Close to the Right" ? menuCapture.current.slice(menuCapture.current.indexOf(target.path) + 1) : menuCapture.current;

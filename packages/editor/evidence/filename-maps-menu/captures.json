@@ -1,0 +1,28 @@
+{
+  "scope": "Controlled Chromium module UI, two memory-backed editor instances; actual packaged RED captures use original app8f artifact unchanged module71f. No packaged green claim here.",
+  "fixtures": "welcome.ts, README.md, src/example.ts; four valid filename creates via public mutation",
+  "cases": [
+    {
+      "width": 1600,
+      "height": 1000,
+      "zoomEquivalent": "100%",
+      "first": "tab-menu-first-1600.png",
+      "last": "tab-menu-1600.png"
+    },
+    {
+      "width": 760,
+      "height": 650,
+      "zoomEquivalent": "100%",
+      "first": "tab-menu-first-760.png",
+      "last": "tab-menu-760.png"
+    },
+    {
+      "width": 543,
+      "height": 441,
+      "zoomEquivalent": "760x650 at 140% native zoom",
+      "first": "tab-menu-first-543.png",
+      "last": "tab-menu-543.png"
+    }
+  ],
+  "packagedRedAsarSha256": "7a24f8ea0d9386307318ab8bf12b5cfee5eb855443ce16fd56e5312c785e6d6b"
+}

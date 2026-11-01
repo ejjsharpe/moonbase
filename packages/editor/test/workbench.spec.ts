@@ -363,3 +363,37 @@ test("R10 Resolve recovers a rejected metadata publication after an already-star
   await expect.poll(() => page.evaluate(() => window.saveRace.editor.buffer({ checkout: window.saveRace.checkout, path: "b.ts" })?.disk.text)).toBe("NEWER B typed after resolution");
   await page.screenshot({ path: "test-results/publication-rejoined.png", fullPage: true });
 });
+
+test("valid prototype-shaped filenames edit and save without changing browser prototypes", async ({ page }) => {
+  await page.goto("/");
+  const errors: string[] = []; page.on("pageerror", error => errors.push(error.message)); page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
+  try {
+    for (const path of ["__proto__", "constructor", "toString", "hasOwnProperty"]) {
+      await page.evaluate(path => window.demo.first.mutate({ checkout: window.demo.checkout, kind: "create-file", sources: [], destination: path, text: "baseline " + path }), path);
+      await first(page).getByRole("treeitem", { name: path, exact: true }).dblclick();
+      const input = first(page).getByRole("textbox", { name: path + " editor", exact: true }); await expect(input).toBeVisible(); await input.focus(); await input.press("ArrowRight");
+      expect(await page.evaluate(() => Object.hasOwn(Object.prototype, "file"))).toBe(false);
+      await input.press("Meta+a"); await input.pressSequentially("saved " + path); await first(page).getByRole("button", { name: "Save", exact: true }).click();
+      await expect.poll(() => page.evaluate(async path => (await window.demo.client.command("readFile", { checkout: window.demo.checkout, path })).text, path)).toBe("saved " + path);
+    }
+    expect(errors).toEqual([]);
+  } finally { await page.evaluate(() => { delete (Object.prototype as { file?: unknown }).file; }).catch(() => {}); }
+});
+
+for (const viewport of [{ width: 1600, height: 1000 }, { width: 760, height: 650 }, { width: 543, height: 441 }]) test(`Tab actions first/last keyboard selection and Close click fit ${viewport.width}x${viewport.height}`, async ({ page }) => {
+  await page.setViewportSize(viewport); await page.goto("/");
+  await page.evaluate(async () => {
+    const { first, checkout } = window.demo; await first.open({ checkout, path: "README.md" }, { intent: "keep" }); await first.close([{ checkout, path: "README.md" }], async () => "discard");
+    await first.open({ checkout, path: "src/example.ts" }, { intent: "preview" });
+  });
+  const trigger = first(page).getByRole("button", { name: "Tab actions", exact: true }); await trigger.focus(); await trigger.press("Enter");
+  const menu = page.getByRole("menu"), firstItem = page.getByRole("menuitem", { name: "Keep Open", exact: true }), lastItem = page.getByRole("menuitem", { name: "Reopen Closed Files", exact: true });
+  const within = async (item: ReturnType<Page["getByRole"]>) => item.evaluate(element => { const rect = element.getBoundingClientRect(); return rect.top >= 0 && rect.bottom <= innerHeight; });
+  await page.keyboard.press("Home"); await expect(firstItem).toBeFocused(); expect(await within(firstItem)).toBe(true);
+  await page.screenshot({ path: `test-results/tab-menu-first-${viewport.width}.png`, fullPage: true });
+  await page.keyboard.press("End"); await expect(lastItem).toBeFocused(); expect(await within(lastItem)).toBe(true);
+  await page.screenshot({ path: `test-results/tab-menu-${viewport.width}.png`, fullPage: true });
+  await page.keyboard.press("Enter"); await expect(first(page).getByRole("tab", { name: "README.md", exact: true })).toBeVisible();
+  await trigger.click(); await page.getByRole("menuitem", { name: "Close", exact: true }).click();
+  await expect(first(page).getByRole("tab", { name: "README.md", exact: true })).toHaveCount(0); await expect(menu).toHaveCount(0);
+});
