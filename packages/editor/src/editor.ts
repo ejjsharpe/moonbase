@@ -1,6 +1,18 @@
 import { EditorLookup, EditorMutation, type MutationAction } from './workflows.ts';
-import { Deferred, Effect, Exit, Fiber, Scope, Semaphore, type ManagedRuntime } from 'effect';
-import { runApplicationEffect } from '@moonbase/application/effect-client';
+import {
+  Cause,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Scope,
+  Semaphore,
+  type ManagedRuntime,
+} from 'effect';
+import {
+  normalizeApplicationError,
+  runApplicationEffect,
+} from '@moonbase/application/effect-client';
 import { decodeEditorRecovery } from '@moonbase/application/workspace-schema';
 import {
   ApplicationError,
@@ -33,6 +45,8 @@ import { readOwn, writeOwn } from './record.ts';
 
 import { checkoutKey, fileKey, moveRecoveryReferences } from './references.ts';
 export { checkoutKey, fileKey } from './references.ts';
+// These diagnostics are authored by this module; injected failures use shared normalization.
+const editorError = (message: string) => new ApplicationError({ code: 'Unavailable', message });
 const sameCheckout = (a: CheckoutTarget, b: CheckoutTarget) => checkoutKey(a) === checkoutKey(b);
 const operationKey = (clientId: string, id: string) => JSON.stringify([clientId, id]);
 const deferObservation = Symbol('defer recovery observation');
@@ -179,7 +193,7 @@ class EditorModelState {
     this.client = options.client;
     this.clientId = options.clientId ?? crypto.randomUUID();
     if (!this.clientId.trim())
-      throw Error('An editor requires its own nonempty recovery client ID.');
+      throw editorError('An editor requires its own nonempty recovery client ID.');
     this.recovery = emptyRecovery(this.clientId);
     this.emit();
   }
@@ -194,8 +208,9 @@ class EditorModelState {
     effect: Effect.Effect<A, ApplicationError>,
     scope: Scope.Scope = this.scope,
   ): Promise<A> {
-    return this.runEffect(
+    return this.invoke(
       Effect.flatMap(Effect.forkIn(effect, scope, { startImmediately: true }), Fiber.join),
+      scope,
     );
   }
   private selectReadScope(checkout: CheckoutTarget, replace = false) {
@@ -213,9 +228,21 @@ class EditorModelState {
     if (previous) void this.runEffect(Scope.close(previous, Exit.void)).catch(this.report);
     return scope;
   }
-  private markObsoleteRead(error: unknown, scope: Scope.Scope) {
-    if (ApplicationError.is(error) && error.code === 'Cancelled' && scope.state._tag === 'Closed')
-      this.obsoleteReadErrors.add(error);
+  private invoke<A>(effect: Effect.Effect<A, ApplicationError>, scope: Scope.Scope): Promise<A> {
+    let interruptOnly = false;
+    return this.runEffect(
+      effect.pipe(
+        Effect.onExit((exit) =>
+          Effect.sync(() => {
+            interruptOnly = Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause);
+          }),
+        ),
+      ),
+    ).catch((error) => {
+      if (interruptOnly && scope.state._tag === 'Closed' && ApplicationError.is(error))
+        this.obsoleteReadErrors.add(error);
+      throw error;
+    });
   }
   private cancelScheduled() {
     this.scheduleGeneration++;
@@ -228,9 +255,7 @@ class EditorModelState {
     this.stops.delete(key);
     return this.runEffect(
       Scope.close(observation.scope, Exit.void).pipe(
-        Effect.flatMap(() =>
-          Effect.tryPromise({ try: observation.close, catch: ApplicationError.fromUnknown }),
-        ),
+        Effect.flatMap(() => Effect.promise(observation.close)),
       ),
     );
   }
@@ -286,7 +311,7 @@ class EditorModelState {
   }
   private assertReady() {
     if (this.closing || !this.ready)
-      throw Error(this.closing ? 'Editor disposed.' : 'Load editor recovery first.');
+      throw editorError(this.closing ? 'Editor disposed.' : 'Load editor recovery first.');
   }
   private checkout(target: CheckoutTarget, requireOpen = true) {
     this.assertReady();
@@ -294,7 +319,7 @@ class EditorModelState {
       !this.recovery.checkouts.some((item) => sameCheckout(item, target)) ||
       (requireOpen && !this.recovery.openCheckoutIds.includes(target.checkoutId))
     )
-      throw Error('This exact checkout is not open in this editor.');
+      throw editorError('This exact checkout is not open in this editor.');
     return (
       readOwn(this.recovery.views, target.checkoutId) ??
       writeOwn(this.recovery.views, target.checkoutId, view())
@@ -311,13 +336,12 @@ class EditorModelState {
       return await this.run(
         Effect.tryPromise({
           try: (signal) => this.client.command(name, input, { signal }),
-          catch: ApplicationError.fromUnknown,
+          catch: normalizeApplicationError,
         }),
         scope,
       );
     } catch (error) {
-      this.markObsoleteRead(error, scope);
-      if (!ApplicationError.is(error) || error.code !== 'Cancelled') this.report(error);
+      this.report(error);
       throw error;
     }
   }
@@ -333,7 +357,7 @@ class EditorModelState {
     }
     if (this.closing) return;
     if (loaded.state.clientId !== this.clientId)
-      throw Error('Recovery belongs to another editor client.');
+      throw editorError('Recovery belongs to another editor client.');
     this.recovery = decodeEditorRecovery(loaded.state);
     this.revision = loaded.revision;
     this.errors.push(...loaded.errors);
@@ -385,10 +409,7 @@ class EditorModelState {
           scope,
           Effect.suspend(() =>
             close
-              ? Effect.tryPromise({
-                  try: close,
-                  catch: ApplicationError.fromUnknown,
-                }).pipe(
+              ? Effect.promise(close).pipe(
                   Effect.exit,
                   Effect.tap((exit) =>
                     Effect.sync(() => {
@@ -432,7 +453,8 @@ class EditorModelState {
     const collision = this.recovery.checkouts.find(
       (item) => item.checkoutId === target.checkoutId && !sameCheckout(item, target),
     );
-    if (collision) throw Error('Checkout identity changed; retained work has not been rebound.');
+    if (collision)
+      throw editorError('Checkout identity changed; retained work has not been rebound.');
     if (!this.recovery.checkouts.some((item) => sameCheckout(item, target))) {
       this.recovery.checkouts.push(target);
       writeOwn(this.recovery.views, target.checkoutId, view());
@@ -757,7 +779,8 @@ class EditorModelState {
   }
   async flush() {
     this.assertReady();
-    if (this.preserving) throw Error('Finish the captured preservation action before flushing.');
+    if (this.preserving)
+      throw editorError('Finish the captured preservation action before flushing.');
     this.cancelScheduled();
     await this.publish(this.capture());
   }
@@ -767,11 +790,11 @@ class EditorModelState {
   edit(target: FileTarget, text: string) {
     this.checkout(target.checkout);
     validPath(target.path);
-    if (this.preserving) throw Error('Finish the captured preservation action first.');
+    if (this.preserving) throw editorError('Finish the captured preservation action first.');
     if (new TextEncoder().encode(text).length > maximumFileBytes)
-      throw Error('Editable text exceeds 2 MiB.');
+      throw editorError('Editable text exceeds 2 MiB.');
     const buffer = this.buffers.get(fileKey(target));
-    if (!buffer) throw Error('Open this file before editing it.');
+    if (!buffer) throw editorError('Open this file before editing it.');
     buffer.text = text;
     if (text !== buffer.disk.text) this.keepOpen(target);
     this.changed();
@@ -957,7 +980,7 @@ class EditorModelState {
       this.referenceRevision === reference;
     const guard = () => {
       if (this.closing || !sameBuffer() || this.revision !== revision)
-        throw Error(
+        throw editorError(
           'Captured Reload target or recovery revision changed. Edits retained; reconcile and retry.',
         );
     };
@@ -1108,7 +1131,7 @@ class EditorModelState {
         else if (!(await this.saveFile(target, false, this.preservationRevision))) return false;
       }
       if (referenceRevision !== this.referenceRevision)
-        throw Error(
+        throw editorError(
           'Files moved during the captured close. Edits retained; review their new paths and retry.',
         );
       const keys = new Set(captured.map(fileKey));
@@ -1160,7 +1183,7 @@ class EditorModelState {
       for (;;) {
         await this.publish(preflight);
         if (referenceRevision !== this.referenceRevision)
-          throw Error(
+          throw editorError(
             'Files moved during the captured close. Edits retained; review their new paths and retry.',
           );
         const latest = this.capture();
@@ -1283,9 +1306,11 @@ class EditorModelState {
         scope,
       );
       const entry = listing.entries.find((item) => item.path === path);
-      if (!entry) throw Error(listing.error ?? 'Active file unavailable. Refresh and retry.');
+      if (!entry) throw editorError(listing.error ?? 'Active file unavailable. Refresh and retry.');
       if (entry.ignored && selected.tree.hideIgnored && !showIgnored)
-        throw Error('Active file is hidden. Turn off Hide Git-ignored files and reveal again.');
+        throw editorError(
+          'Active file is hidden. Turn off Hide Git-ignored files and reveal again.',
+        );
       if (i < parts.length - 1) expanded.push(path);
     }
     this.tree(target.checkout, {
@@ -1311,7 +1336,7 @@ class EditorModelState {
     this.checkout(checkout);
     const key = checkoutKey(checkout);
     const scope = this.stops.get(key)?.scope ?? this.scope;
-    return this.runEffect(
+    return this.invoke(
       Effect.suspend(() => {
         const existing = this.refreshing.get(key);
         if (existing) {
@@ -1336,10 +1361,8 @@ class EditorModelState {
           return Fiber.join(fiber);
         });
       }),
-    ).catch((error) => {
-      this.markObsoleteRead(error, scope);
-      throw error;
-    });
+      scope,
+    );
   }
   private async refreshOnce(checkout: CheckoutTarget) {
     const paths = ['', ...this.checkout(checkout).tree.expanded];
@@ -1465,14 +1488,14 @@ class EditorModelState {
   async mutate(input: Omit<WorkspaceOperation, 'clientId' | 'id'> & { id?: string }) {
     this.checkout(input.checkout);
     if (this.preserving || this.publicationBlocked())
-      throw Error('Finish the captured preservation/publication action first.');
+      throw editorError('Finish the captured preservation/publication action first.');
     const operation: WorkspaceOperation = {
       ...structuredClone(input),
       clientId: this.clientId,
       id: input.id ?? crypto.randomUUID(),
     };
     if (this.operations.has(operationKey(this.clientId, operation.id)))
-      throw Error(
+      throw editorError(
         'Operation already submitted. Resolve its status instead of dispatching it again.',
       );
     if (operation.destination !== undefined)
@@ -1482,11 +1505,11 @@ class EditorModelState {
       (operation.destination &&
         this.uncertainAffects({ checkout: operation.checkout, path: operation.destination }))
     )
-      throw Error('Resolve the pending operation on these entries before applying another.');
+      throw editorError('Resolve the pending operation on these entries before applying another.');
     for (const source of [...operation.sources, ...(operation.replacements ?? [])]) {
       validPath(source.target.path);
       if (!sameCheckout(source.target.checkout, operation.checkout))
-        throw Error('A file operation must use one exact checkout.');
+        throw editorError('A file operation must use one exact checkout.');
     }
     const replacementPaths = [
       ...(operation.replacements ?? []).map((item) => item.target.path),
@@ -1505,7 +1528,9 @@ class EditorModelState {
           ),
       )
     )
-      throw Error('Replacement has open buffers. Close them safely before replacing their files.');
+      throw editorError(
+        'Replacement has open buffers. Close them safely before replacing their files.',
+      );
     if (
       [...this.buffers.values()].some(
         (buffer) =>
@@ -1514,7 +1539,7 @@ class EditorModelState {
           (buffer.saving || buffer.pendingSave),
       )
     )
-      throw Error('Resolve the source Save before moving or copying it.');
+      throw editorError('Resolve the source Save before moving or copying it.');
     // Publish dirty source drafts before any external mutation, including Trash.
     await this.flush();
     const uncertain: OperationResult = {
@@ -1548,7 +1573,9 @@ class EditorModelState {
         result.kind !== operation.kind ||
         !sameCheckout(result.checkout, operation.checkout)
       )
-        throw Error('Operation response identity mismatch. Original pending evidence retained.');
+        throw editorError(
+          'Operation response identity mismatch. Original pending evidence retained.',
+        );
       await this.publishFacts([], result);
       if (this.recovery.openCheckoutIds.includes(operation.checkout.checkoutId))
         await this.refresh(operation.checkout);
@@ -1561,14 +1588,14 @@ class EditorModelState {
   }
   async resolveOperation(id: string, operationClientId = this.clientId) {
     const known = this.operations.get(operationKey(operationClientId, id));
-    if (!known) throw Error('Unknown operation.');
+    if (!known) throw editorError('Unknown operation.');
     const result = await this.command('operationStatus', { clientId: operationClientId, id });
     if (!result) {
       this.report('Operation status unavailable; drafts and original references retained.');
       return null;
     }
     if (result.clientId !== operationClientId || result.id !== id)
-      throw Error('Operation status identity mismatch.');
+      throw editorError('Operation status identity mismatch.');
     await this.publishFacts([], result);
     if (this.recovery.openCheckoutIds.includes(result.checkout.checkoutId))
       await this.refresh(result.checkout);
@@ -1620,7 +1647,7 @@ class EditorModelState {
       !sameCheckout(known.result.checkout, result.checkout) ||
       !this.recovery.checkouts.some((item) => sameCheckout(item, result.checkout))
     )
-      throw Error(
+      throw editorError(
         'Operation checkout identity unavailable or changed. Evidence and drafts retained without rebinding.',
       );
     known.result = result;
@@ -1722,7 +1749,7 @@ class EditorModelState {
                 initial ?? (await this.command('loadRecovery', { clientId: this.clientId }));
               check();
               if (loaded.state.clientId !== this.clientId)
-                throw Error('Recovery belongs to another editor client.');
+                throw editorError('Recovery belongs to another editor client.');
               const facts = [
                 ...new Map(
                   [...loaded.operations, ...(result ? [result] : [])].map((fact) => [
@@ -1893,11 +1920,7 @@ class EditorModelState {
         Effect.ensuring(
           Effect.suspend(() =>
             Effect.all(
-              [...this.observationClosures].map((close) =>
-                Effect.tryPromise({ try: close, catch: ApplicationError.fromUnknown }).pipe(
-                  Effect.exit,
-                ),
-              ),
+              [...this.observationClosures].map((close) => Effect.promise(close).pipe(Effect.exit)),
               { concurrency: 'unbounded' },
             ).pipe(Effect.flatMap(Exit.asVoidAll), Effect.orDie),
           ),
