@@ -37,7 +37,7 @@ observeApplicationStream<A, R, E extends ApplicationError>(
 ): ObservationClose
 ```
 
-The helpers never acquire services, create/dispose a runtime or retry commands. An empty renderer runtime (`R = never`, `E = never`) works for injected browser clients/models. Pre-aborted commands dispatch nothing. Typed error identity/target and composite cleanup evidence survive normalization; interruption alone becomes `Cancelled`.
+The helpers never acquire services, create/dispose a runtime or retry commands. An empty renderer runtime (`R = never`, `E = never`) works for injected browser clients/models. Pre-aborted commands dispatch nothing. Typed error identity/target and composite cleanup evidence survive normalization; interruption alone becomes `Cancelled`. Unknown defects and unexpected runner failures use static safe diagnostics. `releaseResource` likewise redacts unknown cleanup failures before combining them with a command cause; explicitly authored `ApplicationError` values retain their safe owner diagnostics. This does not stringify raw Cause/FiberFailure objects or change the general-purpose `ApplicationError.fromUnknown` conversion.
 
 `ObservationClose = () => Promise<void>` is an Effect-free public type. Close fences event delivery immediately, interrupts the actual observation, and joins its exit/finalizers. Repeated close returns the same promise and outcome. Active failures reach `onError`; cleanup failure after deliberate close rejects the close promise, without duplicate active callback delivery. The application root retains and observes cleanup after its panel disappears, and drains those tasks before root disposal. Snapshot-store subscriptions remain synchronous. Closing observation never rolls back mutations or Stops remote work.
 
