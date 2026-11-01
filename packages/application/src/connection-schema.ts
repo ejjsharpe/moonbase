@@ -35,7 +35,7 @@ export const ConnectionSnapshotSchema = Schema.Union([
   }),
 ]);
 export const connectionInputSchemas = {
-  getConnection: Schema.Record(Schema.String, Schema.Never),
+  getConnection: Schema.Record(Schema.String, Schema.mutableKey(Schema.Never)),
   connect: struct({ profileId: ChatIdentifierSchema }),
   disconnect: struct({ connectionId: ChatIdentifierSchema }),
 };
