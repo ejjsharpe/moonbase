@@ -11,6 +11,7 @@ export const RemoteChatLive:Layer.Layer<ChatService,never,ConnectionService>=Lay
   const connections=yield* ConnectionService;
   const call=<K extends ChatCommand>(operation:K,unknown:ChatInput<K>):Effect.Effect<ChatOutput<K>,ApplicationError>=>Effect.gen(function*(){
     const input=yield* Effect.try({try:()=>V.input(operation,unknown),catch:ApplicationError.fromUnknown});
+    const mutation=operation==='createChat'||operation==='sendChat'||operation==='stopChat';
     const shape=input as {host?:{hostId:string;storeId:string};session?:{host:{hostId:string;storeId:string}};target?:ChatTarget;stop?:{target:ChatTarget}};
     const host=shape.host??shape.session?.host??shape.target?.host??shape.stop!.target.host;
     const endpoint=yield* connections.endpoint({host});
@@ -29,12 +30,20 @@ export const RemoteChatLive:Layer.Layer<ChatService,never,ConnectionService>=Lay
       yield* assertGeneration;
       const body=JSON.stringify({operation,input});if(Buffer.byteLength(body)>64*1024)return yield*Effect.fail(new ApplicationError({code:'InvalidInput',message:'Chat input exceeds its transport limit.'}));
       const response=yield*Effect.tryPromise({try:signal=>fetch(`${prepared.origin}/v1/chat`,{method:'POST',body,headers:{'content-type':'application/json','X-Moonbase-Nonce':prepared.nonce,'X-Moonbase-Challenge':challenge,Authorization:`Moonbase-RPC-HMAC-SHA256 ${P.mac(endpoint.token,'request',prepared.nonce,challenge,'POST','/v1/chat',P.hash(body))}`},redirect:'error',signal:AbortSignal.any([signal,controller.signal]),cache:'no-store',credentials:'omit'}),catch:()=>new ApplicationError({code:'Uncertain',message:'Chat reply was lost. Query the original request; do not invent another Send.'})});
-      const bytes=yield*P.responseBytes(response,256*1024,'Uncertain');
+      const bytes=yield*P.responseBytes(response,256*1024,'Uncertain',mutation);
       const result=yield*Effect.try({try:()=>{
-        if(response.headers.get('x-moonbase-nonce')!==prepared.nonce||response.headers.get('x-moonbase-challenge')!==challenge||!P.proof(response.headers.get('x-moonbase-proof'),P.mac(endpoint.token,'response',prepared.nonce,challenge,response.status,P.hash(bytes))))V.fail('Unauthorized','Chat host did not prove its response.');
-        const envelope=V.object(P.json(bytes));
-        if(envelope.ok!==true){const error=V.object(envelope.error);const code=P.codes.find(x=>x===error.code);if(!code)V.fail('Incompatible','Chat returned an invalid error.');throw new ApplicationError({code:code!,message:P.publicError(new ApplicationError({code:code!,message:''})).message});}
-        if(response.status!==200)V.fail('Incompatible','Chat reply has an unexpected status.');return V.output(operation,envelope.value,input);
+        const invalid=(code:'Unauthorized'|'Incompatible',message:string):never=>V.fail(mutation?'Uncertain':code,mutation?'Chat mutation outcome could not be authenticated. Preserve its original request and query before retrying.':message);
+        if(response.headers.get('x-moonbase-nonce')!==prepared.nonce||response.headers.get('x-moonbase-challenge')!==challenge||!P.proof(response.headers.get('x-moonbase-proof'),P.mac(endpoint.token,'response',prepared.nonce,challenge,response.status,P.hash(bytes))))invalid('Unauthorized','Chat host did not prove its response.');
+        let envelope:Record<string,unknown>;
+        try{envelope=V.object(P.json(bytes));}catch{return invalid('Incompatible','Chat returned invalid response data.');}
+        if(envelope.ok===false){
+          let code:typeof P.codes[number]|undefined;
+          try{const error=V.object(envelope.error);code=P.codes.find(value=>value===error.code);}catch{return invalid('Incompatible','Chat returned an invalid error.');}
+          if(!code)return invalid('Incompatible','Chat returned an invalid error.');
+          throw new ApplicationError({code,message:P.publicError(new ApplicationError({code,message:''})).message});
+        }
+        if(envelope.ok!==true||response.status!==200)return invalid('Incompatible','Chat reply has an unexpected status or shape.');
+        try{return V.output(operation,envelope.value,input);}catch{return invalid('Incompatible','Chat returned invalid response data.');}
       },catch:error=>ApplicationError.is(error)?error:new ApplicationError({code:'Uncertain',message:'Chat reply was lost. Query the original request; do not invent another Send.'})});
       yield* assertGeneration;return result;
     }),Effect.sync(()=>{clearTimeout(timer);controller.abort();})));

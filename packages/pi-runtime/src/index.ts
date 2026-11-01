@@ -26,6 +26,7 @@ function numeric(value:string):number {if(!/^[1-9][0-9]*$/.test(value)||!Number.
 const cid=(value:string)=>numeric(value) as ConversationId;
 const sid=(value:string)=>numeric(value) as SubmissionId;
 const tid=(value:string)=>numeric(value) as TaskId;
+const unknownOutcome=()=>new ApplicationError({code:'Uncertain',message:'Chat operation may have committed. Preserve its exact request and query before retrying.'});
 const safeError=(error:unknown, uncertain=false):ApplicationError => ApplicationError.is(error)?error:
   new ApplicationError({code:error instanceof ConversationBusy?'Conflict':uncertain?'Uncertain':'Persistence',message:error instanceof ConversationBusy?'Conversation is busy; retain this request and retry explicitly.':uncertain?'Chat operation may have committed. Preserve its exact request and query before retrying.':'Pi storage or execution is unavailable. Reopen this explicit store after resolving its failure.'});
 const readCursor=(value:string|undefined,kind:string,conversationId?:string):Cursor|undefined=>{
@@ -49,10 +50,12 @@ class Host {
   serial<T>(conversationId:string,fn:()=>Promise<T>):Promise<T> {const previous=this.admissions.get(conversationId)??Promise.resolve(); const promise=previous.catch(()=>{}).then(fn); this.admissions.set(conversationId,promise); promise.finally(()=>{if(this.admissions.get(conversationId)===promise)this.admissions.delete(conversationId);}).catch(()=>{}); return promise;}
   async close() {this.closed=true; await Promise.allSettled([...this.pending]); try{await this.harness.close(context);}finally{await this.env.cleanup(context);}}
   run<K extends ChatCommand>(operation:K,value:ChatInput<K>,handle:(data:ChatInput<K>)=>Promise<ChatOutput<K>>):Effect.Effect<ChatOutput<K>,ApplicationError> {
+    const mutation=operation==='createChat'||operation==='sendChat'||operation==='stopChat';
     return Effect.tryPromise({try:()=>this.track(async()=>{
       const data=V.input(operation,value);
-      return V.output(operation,await handle(data),data);
-    }),catch:error=>safeError(error,operation==='sendChat'||operation==='stopChat')});
+      const result=await handle(data);
+      try{return V.output(operation,result,data);}catch(error){if(mutation)throw unknownOutcome();throw error;}
+    }),catch:error=>safeError(error,mutation)});
   }
   async getHost(d:ChatInput<'getChatHost'>):Promise<ChatOutput<'getChatHost'>> {
     if(!V.sameHost(d.host,this.config.host))V.fail('Incompatible','Chat host/store does not match this host.');
@@ -79,17 +82,19 @@ class Host {
   async create(d:ChatInput<'createChat'>):Promise<ChatOutput<'createChat'>> {
     this.session(d.session);
     const binding=JSON.stringify({operation:'createChat',...d});
-    const conversationId=await this.harness.commit(async tx=>{
+    let conversationId:string,definiteRejection:ApplicationError|undefined;
+    try{conversationId=await this.harness.commit(async tx=>{
       const request=await tx.doc(Request,key(d.session.actorId,d.requestId),binding);
-      if(request.binding!==binding)V.fail('InvalidInput','Request ID is already bound to different chat input.');
+      if(request.binding!==binding){definiteRejection=new ApplicationError({code:'InvalidInput',message:'Request ID is already bound to different chat input.'});throw definiteRejection;}
       if(request.conversationId)return request.conversationId;
       const conversation=await tx.createConversation({ownership:{kind:'ownerless'}});
       await configure(tx,conversation.id,{model:this.config.model,cwd:this.config.cwd});
       await tx.doc(Metadata,conversation.id,'metadata',{identity:this.identity,title:d.title,createdAt:new Date().toISOString()});
       request.conversationId=String(conversation.id);
       return String(conversation.id);
-    },context);
-    return {requestId:d.requestId,conversation:this.summary(conversationId,await this.metadata({...d.session,conversationId}))};
+    },context);}catch(error){if(definiteRejection&&error===definiteRejection)throw error;throw unknownOutcome();}
+    try{return {requestId:d.requestId,conversation:this.summary(conversationId,await this.metadata({...d.session,conversationId}))};}
+    catch{throw unknownOutcome();}
   }
   async send(d:ChatInput<'sendChat'>):Promise<ChatSendReceipt> {
     await this.metadata(d.target);

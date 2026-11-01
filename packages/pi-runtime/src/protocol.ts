@@ -19,15 +19,16 @@ export function publicError(error:unknown) {const code=ApplicationError.is(error
   const messages:Record<string,string>={InvalidInput:'Chat request is invalid or differs from its original identity.',Unauthorized:'Chat request is not authorized.',Incompatible:'Chat authority or protocol is incompatible.',Conflict:'Chat is busy; retain this request and retry explicitly.',Persistence:'Chat storage is unavailable; preserve pending input.',Uncertain:'Chat outcome is uncertain; query its original request.',Unavailable:'Chat host is unavailable.',Cancelled:'Chat wait was cancelled.'};
   return {code,message:messages[code]};
 }
-export function responseBytes(response:Response,max:number,unavailableCode:'Unavailable'|'Uncertain'='Unavailable'):Effect.Effect<Uint8Array,ApplicationError> {
+export function responseBytes(response:Response,max:number,unavailableCode:'Unavailable'|'Uncertain'='Unavailable',unprovedMutation=false):Effect.Effect<Uint8Array,ApplicationError> {
+  const reject=(code:'Unauthorized'|'Incompatible',message:string):never=>fail(unprovedMutation?'Uncertain':code,unprovedMutation?'Chat mutation outcome could not be authenticated. Preserve its original request and query before retrying.':message);
   return Effect.acquireUseRelease(
     Effect.try({try:()=>response.body?.getReader(),catch:()=>new ApplicationError({code:unavailableCode,message:'Chat response reader is unavailable.'})}),
     reader=>Effect.tryPromise({try:async()=>{
-      if(response.status===401||response.status===403)return fail('Unauthorized','Chat host rejected authentication; no signed result was accepted.');
-      if(!/^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type')??''))return fail('Incompatible','Chat response must be JSON.');
-      if(!reader)return fail('Incompatible','Chat response is empty.');
+      if(response.status===401||response.status===403)return reject('Unauthorized','Chat host rejected authentication; no signed result was accepted.');
+      if(!/^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type')??''))return reject('Incompatible','Chat response must be JSON.');
+      if(!reader)return reject('Incompatible','Chat response is empty.');
       const chunks:Uint8Array[]=[];let total=0;
-      while(true){const part=await reader.read();if(part.done)break;total+=part.value.length;if(total>max)return fail('Incompatible','Chat response exceeds its delivery limit.');chunks.push(part.value);}
+      while(true){const part=await reader.read();if(part.done)break;total+=part.value.length;if(total>max)return reject('Incompatible','Chat response exceeds its delivery limit.');chunks.push(part.value);}
       return Buffer.concat(chunks,total);
     },catch:error=>ApplicationError.is(error)?error:new ApplicationError({code:unavailableCode,message:'Chat response could not be read.'})}),
     reader=>releaseResource(async()=>{try{try{await reader?.cancel();}finally{reader?.releaseLock();}}catch{throw new ApplicationError({code:unavailableCode,message:'Chat response reader release failed; preserve the original request.'});}}),

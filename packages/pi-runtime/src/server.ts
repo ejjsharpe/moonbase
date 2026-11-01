@@ -47,7 +47,7 @@ export const serveChat=(config:ChatServerConfiguration,client:ChatClient)=>Effec
     if(request.method!=='POST'||request.url!=='/v1/chat'){response.writeHead(404);response.end();return;}
     const challenge=request.headers['x-moonbase-challenge'];
     if(!P.validNonce(challenge)){response.writeHead(401);response.end();return;}
-    const chunks:Buffer[]=[];let length=0;let timer:ReturnType<typeof setTimeout>|undefined;
+    const chunks:Buffer[]=[];let length=0,authenticated=false;let timer:ReturnType<typeof setTimeout>|undefined;
     try {
       timer=setTimeout(()=>request.destroy(),20000);
       if(!/^application\/json(?:\s*;|$)/i.test(request.headers['content-type']??''))V.fail('InvalidInput','Chat request must be JSON.');
@@ -56,9 +56,13 @@ export const serveChat=(config:ChatServerConfiguration,client:ChatClient)=>Effec
       if(!grant||grant.nonce!==clientNonce||grant.expires<=performance.now()||!P.proof(auth,P.mac(token,'request',clientNonce,challenge,'POST','/v1/chat',P.hash(bytes)))){response.writeHead(401);response.end();return;}
       // No await may separate checking a grant from consuming it.
       grants.delete(challenge);
+      authenticated=true;
       const envelope=V.object(P.json(bytes),['operation','input']),operation=V.command(envelope.operation),input=V.input(operation,envelope.input);
       const value=V.output(operation,await client.command(operation,input),input);send(200,{ok:true,value},challenge);
-    }catch(error){send(400,{ok:false,error:P.publicError(error)},challenge);}finally{clearTimeout(timer);}
+    }catch(error){
+      if(authenticated)send(400,{ok:false,error:P.publicError(error)},challenge);
+      else if(!response.destroyed){response.writeHead(400);response.end();}
+    }finally{clearTimeout(timer);}
   }
   await new Promise<void>((resolve,reject)=>{server.once('error',reject);server.listen(config.port,'127.0.0.1',()=>{server.off('error',reject);resolve();});});
   const address=server.address();if(!address||typeof address==='string')V.fail('Unavailable','Chat loopback listener did not open.');

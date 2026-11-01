@@ -4,7 +4,7 @@ import {createHmac,createHash,randomBytes} from 'node:crypto';
 import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {createServer} from 'node:http';
+import {createServer,request as httpRequest} from 'node:http';
 import {connect as connectSocket} from 'node:net';
 import {Effect,Exit,Layer,ManagedRuntime,Scope,Stream} from 'effect';
 import {createModels} from '@earendil-works/pi-ai/models';
@@ -159,4 +159,63 @@ test('pipelined HTTP requests have a bounded active window without queuing anoth
 test('private host key cannot reuse public configuration data',async t=>{
   const f=await setup(t),configuration=await f.client.command('getChatHost',{host});
   await assert.rejects(Effect.runPromise(Effect.scoped(serveChat({host,token:configuration.cwd,port:0},f.client))),{code:'InvalidInput'});
+});
+
+for(const operation of ['createChat','sendChat'] as const) test(`R1 unauthenticated rejection cannot replace an executed ${operation} response`,async t=>{
+  const f=await setup(t),target=operation==='sendChat'?(await f.remote.command('createChat',{session,requestId:'existing',title:'Existing'})).conversation.target:undefined;
+  f.faux.setResponses([fauxAssistantMessage('Executed once')]);const original=fetch;let substituted=false,forgedProof:string|null|undefined;let failure:unknown;
+  const input=operation==='createChat'?{session,requestId:'relay-create',title:'Persisted before reply'}:{target:target!,requestId:'relay-send',text:'Run exactly this intent'};
+  mock.method(globalThis,'fetch',async(...args:Parameters<typeof fetch>)=>{
+    const response=await original(...args);
+    if(String(args[0])===f.origin+'/v1/chat'&&!substituted){substituted=true;assert.equal(response.status,200);await response.arrayBuffer();const observed=new Headers(args[1]?.headers);
+      // The relay uses only observed public headers, with no key or Authorization proof.
+      const replacement=await original(f.origin+'/v1/chat',{method:'POST',headers:{'content-type':'text/plain','X-Moonbase-Nonce':observed.get('x-moonbase-nonce')!,'X-Moonbase-Challenge':observed.get('x-moonbase-challenge')!},body:''});forgedProof=replacement.headers.get('x-moonbase-proof');return replacement;
+    }return response;
+  });
+  try{if(operation==='createChat')await f.remote.command(operation,input as {session:typeof session;requestId:string;title:string}).catch(error=>failure=error);else await f.remote.command(operation,input as {target:NonNullable<typeof target>;requestId:string;text:string}).catch(error=>failure=error);}
+  finally{mock.restoreAll();}
+  assert(substituted);const saved=await f.client.command('listChats',{session});assert.equal(saved.conversations.length,1);
+  if(operation==='createChat'){const recovered=await f.remote.command('createChat',input as {session:typeof session;requestId:string;title:string});assert.equal(recovered.conversation.target.conversationId,saved.conversations[0].target.conversationId);assert.equal(f.faux.state.callCount,0);}
+  else {const receipt=await f.remote.command('getChatSend',{target:target!,requestId:'relay-send'});assert.equal(receipt?.admission,'admitted');for(let i=0;i<300&&f.faux.state.callCount===0;i++)await new Promise(r=>setTimeout(r,10));assert.equal(f.faux.state.callCount,1);assert.deepEqual(await f.remote.command('sendChat',input as {target:NonNullable<typeof target>;requestId:string;text:string}),receipt);}
+  assert.equal((failure as {code?:string})?.code,'Uncertain','executed work appeared definitively rejected by a substituted response');assert.equal(forgedProof,null,'unauthenticated input obtained an authenticated RPC response');
+});
+
+test('R1 pre-authentication malformed requests never obtain RPC signatures before or after grant consumption',async t=>{
+  const f=await setup(t);
+  for(const state of ['arbitrary','live','consumed'])for(const mode of ['content-type','oversized','bad-proof','malformed-json','missing-auth']) {
+    const g=state==='arbitrary'?{clientNonce:nonce(),challenge:nonce()}:await grant(f);
+    if(state==='consumed'){const consumed=await post(f,g,'getChatHost',{host});assert.equal(consumed.status,200);await consumed.arrayBuffer();}
+    const body=mode==='oversized'?'x'.repeat(64*1024+1):mode==='malformed-json'?'{':JSON.stringify({operation:'createChat',input:{session,requestId:'must-not-run',title:'Untrusted'}});
+    const headers:Record<string,string>={'content-type':mode==='content-type'?'text/plain':'application/json','X-Moonbase-Nonce':g.clientNonce,'X-Moonbase-Challenge':g.challenge};
+    if(mode==='bad-proof')headers.Authorization=auth('0'.repeat(64));
+    const response=await fetch(f.origin+'/v1/chat',{method:'POST',headers,body}).then(value=>value,()=>null);
+    if(response){assert(response.status>=400);assert.equal(response.headers.get('x-moonbase-proof'),null,`${state}/${mode} received a trusted error`);assert.equal(response.headers.get('x-moonbase-challenge'),null);await response.arrayBuffer();}
+    if(state==='live'){const valid=await post(f,g,'getChatHost',{host});assert.equal(valid.status,200,'unauthenticated input consumed another caller grant');await valid.arrayBuffer();}
+  }
+  assert.equal(f.calls.filter(value=>value==='createChat').length,0);assert.equal((await f.client.command('listChats',{session})).conversations.length,0);
+});
+test('R1 authenticated consumed-request validation and domain rejections remain signed and specific',async t=>{
+  const f=await setup(t);
+  for(const body of ['{',JSON.stringify({operation:'unknown',input:{}})]){
+    const g=await grant(f),headers={'content-type':'application/json','X-Moonbase-Nonce':g.clientNonce,'X-Moonbase-Challenge':g.challenge,Authorization:auth(mac(f.token,'request',g.clientNonce,g.challenge,'POST','/v1/chat',hash(body)))};
+    const response=await fetch(f.origin+'/v1/chat',{method:'POST',headers,body}),raw=await response.text();assert.equal(response.status,400);assert.equal(response.headers.get('x-moonbase-proof'),mac(f.token,'response',g.clientNonce,g.challenge,400,hash(raw)));assert.equal(JSON.parse(raw).error.code,'InvalidInput');
+    const replay=await fetch(f.origin+'/v1/chat',{method:'POST',headers,body});assert.equal(replay.status,401);assert.equal(replay.headers.get('x-moonbase-proof'),null);await replay.arrayBuffer();
+  }
+  await assert.rejects(f.remote.command('createChat',{session:{...session,actorId:'other'},requestId:'wrong-actor',title:'Rejected'}),{code:'Unauthorized'});
+  const input={session,requestId:'original',title:'Original'},created=await f.remote.command('createChat',input);await assert.rejects(f.remote.command('createChat',{...input,title:'Changed'}),{code:'InvalidInput'});
+  let release!:()=>void;const gate=new Promise<void>(resolve=>release=resolve);f.faux.setResponses([async()=>{await gate;return fauxAssistantMessage('Completed');}]);
+  try{const target=created.conversation.target;await f.remote.command('sendChat',{target,requestId:'active',text:'Wait'});await assert.rejects(f.remote.command('sendChat',{target,requestId:'busy',text:'Busy'}),{code:'Conflict'});assert.equal((await f.remote.command('getChatSend',{target,requestId:'busy'}))?.admission,'reserved');}
+  finally{release();}
+  assert.equal((await f.client.command('listChats',{session})).conversations.length,1);
+});
+test('R1 incomplete pre-authentication request hits its real deadline without a signed rejection or dispatch',async t=>{
+  const f=await setup(t),g=await grant(f),started=performance.now();let request:ReturnType<typeof httpRequest>|undefined;
+  let timer:ReturnType<typeof setTimeout>|undefined;
+  try{
+    const proof=await new Promise<string|undefined>((resolve,reject)=>{
+      request=httpRequest(f.origin+'/v1/chat',{method:'POST',headers:{'content-type':'application/json','content-length':'100','X-Moonbase-Nonce':g.clientNonce,'X-Moonbase-Challenge':g.challenge}},response=>{const signature=response.headers['x-moonbase-proof'];response.resume();response.once('end',()=>resolve(typeof signature==='string'?signature:undefined));});
+      request.once('error',()=>resolve(undefined));request.write('{');timer=setTimeout(()=>{request?.destroy();reject(Error('Server did not release incomplete input within its bound'));},22500);
+    });
+    assert.equal(proof,undefined);assert(performance.now()-started>=19500);assert(performance.now()-started<22500);assert.equal(f.calls.filter(value=>value==='createChat').length,0);
+  }finally{clearTimeout(timer);request?.destroy();}
 });

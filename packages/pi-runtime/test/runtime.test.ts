@@ -4,6 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ManagedRuntime } from 'effect';
+import {ApplicationError} from '@moonbase/application/client';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai/providers/faux';
 import { makeChatClient } from '@moonbase/application/runtime-client';
@@ -191,4 +192,29 @@ test('null-task Stop withdraws an actual Pi-queued submission while preserving t
     const withdrawn=await f.client.command('stopChat',{stop:{target,submissionId:String(queued.id),taskId:null},requestId:'queued-stop'});assert.equal(withdrawn.outcome,'stopped');assert.equal((await f.client.command('getChat',{target})).run!.stop.taskId,stop.taskId);
     release();const final=await until(()=>f.client.command('getChat',{target}),s=>!s.run&&s.entries.some(e=>e.text==='Active input completed'));assert(!final.entries.some(e=>e.text.includes('Withdraw only')));assert.equal(f.faux.state.callCount,1);
   }finally{release();mock.restoreAll();}
+});
+
+for(const typed of [false,true]) test(`R1 create reply-read failure after real commit is uncertain (${typed?'typed':'unknown'}) and exact retry survives restart`,async t=>{
+  const original=Harness.open;let harness:Harness|undefined;mock.method(Harness,'open',async(...args:Parameters<typeof original>)=>harness=await original(...args));
+  const f=await fixture(t);await f.client.command('getChatHost',{host:session.host});mock.restoreAll();
+  const committed:string[]=[];const off=harness!.subscribeCommits(publication=>{for(const change of publication.changes)if(change.type==='conversation')committed.push(String(change.value.id));});
+  const snapshot=harness!.snapshot.bind(harness!);let reads=0;
+  mock.method(harness!,'snapshot',async(...args:Parameters<typeof snapshot>)=>{if(reads++===0)throw typed?new ApplicationError({code:'Persistence',message:'Controlled post-commit read failure'}):Error('Controlled post-commit read failure');return snapshot(...args);});
+  const input={session,requestId:'committed-create',title:'Original saved chat'};let failure:unknown;
+  try{await f.client.command('createChat',input).catch(error=>{failure=error;});}finally{mock.restoreAll();off();}
+  assert.equal(committed.length,1);assert.equal((await f.client.command('listChats',{session})).conversations.length,1);
+  await f.restart();const recovered=await f.client.command('createChat',input);assert.equal(recovered.conversation.target.conversationId,committed[0]);assert.deepEqual(await f.client.command('createChat',input),recovered);
+  await assert.rejects(f.client.command('createChat',{...input,title:'Changed'}),{code:'InvalidInput'});assert.equal((await f.client.command('listChats',{session})).conversations.length,1);assert.equal(f.faux.state.callCount,0);
+  assert.equal((failure as {code?:string})?.code,'Uncertain','a real committed conversation appeared definitively rejected');
+});
+
+test('R1 lost typed commit acknowledgement stays uncertain while proven create validation stays definite',async t=>{
+  const original=Harness.open;let harness:Harness|undefined;mock.method(Harness,'open',async(...args:Parameters<typeof original>)=>harness=await original(...args));
+  const f=await fixture(t);await f.client.command('getChatHost',{host:session.host});mock.restoreAll();const committed:string[]=[];
+  const off=harness!.subscribeCommits(publication=>{for(const change of publication.changes)if(change.type==='conversation')committed.push(String(change.value.id));});
+  const commit=harness!.commit.bind(harness!);let calls=0;mock.method(harness!,'commit',async(...args:Parameters<typeof commit>)=>{calls++;await commit(...args);throw new ApplicationError({code:'Persistence',message:'Controlled lost commit acknowledgement'});});
+  const input={session,requestId:'lost-commit',title:'Committed'};
+  try{await assert.rejects(f.client.command('createChat',{...input,title:''}),{code:'InvalidInput'});await assert.rejects(f.client.command('createChat',{...input,session:{...session,actorId:'other'}}),{code:'Unauthorized'});assert.equal(calls,0);await assert.rejects(f.client.command('createChat',input),{code:'Uncertain'});}
+  finally{mock.restoreAll();off();}
+  assert.equal(committed.length,1);await f.restart();const recovered=await f.client.command('createChat',input);assert.equal(recovered.conversation.target.conversationId,committed[0]);await assert.rejects(f.client.command('createChat',{...input,title:'Changed'}),{code:'InvalidInput'});assert.equal((await f.client.command('listChats',{session})).conversations.length,1);assert.equal(f.faux.state.callCount,0);
 });
