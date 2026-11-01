@@ -455,7 +455,11 @@ describe('controller preservation and activation', () => {
               admit();
               await wait;
             }
-            if (publications === 2) throw Error('Later metadata publication failed');
+            if (publications === 2)
+              throw new ApplicationError({
+                code: 'Persistence',
+                message: 'Later metadata publication failed',
+              });
           }
           return f.client.command(name, input, options);
         },
@@ -1160,7 +1164,8 @@ describe('controller preservation and activation', () => {
           await f.clientCommand(name, input, options);
           throw new ApplicationError({ code: 'Uncertain', message: 'Lost final receipt' });
         }
-        if (name === 'getRecoveryPublication' && statusDown) throw Error('Status unavailable');
+        if (name === 'getRecoveryPublication' && statusDown)
+          throw new ApplicationError({ code: 'Unavailable', message: 'Status unavailable' });
         return f.clientCommand(name, input, options);
       };
       const observation = f.editor.reconcileRecovery();
@@ -1254,7 +1259,7 @@ describe('controller preservation and activation', () => {
             lost = true;
             await f.clientCommand(name, input, options);
             f.memory.failNext('getRecoveryPublication');
-            throw Error('Lost final reply');
+            throw new ApplicationError({ code: 'Uncertain', message: 'Lost final reply' });
           }
           return f.clientCommand(name, input, options);
         };

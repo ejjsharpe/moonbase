@@ -76,7 +76,7 @@ for (const observe of [false, true])
           requests.push(request);
           if (request.target.path === 'a.ts' && lose) {
             lose = false;
-            throw Error('Lost committed A reply');
+            throw new ApplicationError({ code: 'Uncertain', message: 'Lost committed A reply' });
           }
         }
         return result;
@@ -215,7 +215,7 @@ for (const committed of [false, true])
           });
         }
         if (unavailable && name === 'getRecoveryPublication')
-          throw Error('Exact lookup unavailable');
+          throw new ApplicationError({ code: 'Unavailable', message: 'Exact lookup unavailable' });
         const result = await raw.command(name, input, options);
         if (
           loseA &&
@@ -223,7 +223,7 @@ for (const committed of [false, true])
           (input as CommandInput<'saveFile'>).target.path === 'a.ts'
         ) {
           loseA = false;
-          throw Error('Lost A');
+          throw new ApplicationError({ code: 'Uncertain', message: 'Lost A' });
         }
         return result;
       },
@@ -289,7 +289,7 @@ test('a real unrelated same-client publication cannot be bridged by retained own
         (input as CommandInput<'saveFile'>).target.path === 'a.ts'
       ) {
         loseA = false;
-        throw Error('Lost A');
+        throw new ApplicationError({ code: 'Uncertain', message: 'Lost A' });
       }
       return result;
     },
@@ -338,7 +338,7 @@ for (const outcome of ['cancel', 'conflict'] as const)
         const result = await raw.command(name, input, options);
         if (lose && name === 'saveFile') {
           lose = false;
-          throw Error('Lost A');
+          throw new ApplicationError({ code: 'Uncertain', message: 'Lost A' });
         }
         return result;
       },
@@ -761,7 +761,8 @@ test("a committed publication clears only its captured A identity when B's later
         entered.release();
         await release.promise;
       }
-      if (name === 'getRecoveryPublication' && statusFails) throw Error('Status unavailable');
+      if (name === 'getRecoveryPublication' && statusFails)
+        throw new ApplicationError({ code: 'Unavailable', message: 'Status unavailable' });
       return raw.command(name, input, options);
     },
   }));

@@ -1,6 +1,7 @@
+import { normalizeApplicationError } from '@moonbase/application/effect-client';
 import { Effect, Exit, Fiber, Scope } from 'effect';
 import {
-  ApplicationError,
+  type ApplicationError,
   type CheckoutTarget,
   type EntryReference,
   type LookupMatch,
@@ -61,7 +62,7 @@ export class EditorLookup {
         captured.slice(0, 8).map((checkout) =>
           Effect.tryPromise({
             try: (signal) => search(checkout, query, signal),
-            catch: ApplicationError.fromUnknown,
+            catch: normalizeApplicationError,
           }).pipe(
             Effect.map((result) => ({ checkout, result })),
             Effect.exit,
@@ -100,7 +101,7 @@ export class EditorLookup {
       });
     });
     void this.execute(Effect.forkIn(work, scope)).catch((error) =>
-      this.update({ message: ApplicationError.fromUnknown(error).message }),
+      this.update({ message: normalizeApplicationError(error).message }),
     );
   }
   async open(open: (current: () => boolean) => Promise<boolean>): Promise<boolean> {
@@ -112,7 +113,7 @@ export class EditorLookup {
       const result = await this.execute(
         Effect.flatMap(
           Effect.forkIn(
-            Effect.tryPromise({ try: () => open(current), catch: ApplicationError.fromUnknown }),
+            Effect.tryPromise({ try: () => open(current), catch: normalizeApplicationError }),
             this.scope,
           ),
           Fiber.join,
@@ -125,7 +126,7 @@ export class EditorLookup {
         });
       return result && current();
     } catch (error) {
-      this.update({ message: ApplicationError.fromUnknown(error).message });
+      this.update({ message: normalizeApplicationError(error).message });
       return false;
     } finally {
       this.update({ busy: false });
@@ -279,7 +280,7 @@ export class EditorMutation {
       }
       return true;
     } catch (error) {
-      this.update({ error: ApplicationError.fromUnknown(error).message });
+      this.update({ error: normalizeApplicationError(error).message });
       return false;
     } finally {
       this.update({ busy: false });
