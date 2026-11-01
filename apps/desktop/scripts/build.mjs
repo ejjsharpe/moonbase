@@ -8,12 +8,12 @@ const root = fileURLToPath(new URL("../", import.meta.url)), require = createReq
 await rm(join(root, "dist"), { recursive: true, force: true });
 await build({ absWorkingDir: root, entryPoints: ["src/main.ts"], outfile: "dist/main.cjs", bundle: true, platform: "node", format: "cjs", external: ["electron"], logLevel: "warning" });
 await build({ absWorkingDir: root, entryPoints: ["src/preload.ts"], outfile: "dist/preload.cjs", bundle: true, platform: "node", format: "cjs", external: ["electron"], logLevel: "warning" });
-execFileSync(resolve("node_modules/.bin/vp"), ["build", "--config", join(root, "vite.config.ts")], { cwd: root, stdio: "inherit" });
+execFileSync("vp", ["build", "--config", join(root, "vite.config.ts")], { cwd: root, stdio: "inherit" });
 const resources = join(root, "resources/workspace");
 await mkdir(resources, { recursive: true });
 const helper = require.resolve("@moonbase/workspace/filesystem");
 await cp(helper, join(resources, "filesystem"));
-const rg = resolve(process.env.MOONBASE_RIPGREP_ASSETS ?? "../../dist/tools/ripgrep");
+const rg = process.env.MOONBASE_RIPGREP_ASSETS ? resolve(process.env.MOONBASE_RIPGREP_ASSETS) : fileURLToPath(new URL("../../../dist/tools/ripgrep", import.meta.url));
 await stat(join(rg, "rg"));
 await cp(rg, join(resources, "ripgrep"), { recursive: true });
 await writeFile(join(root, "dist/package.json"), JSON.stringify({ name: "moonbase", version: "0.1.0", private: true, main: "main.cjs", description: "Moonbase standalone editor", author: "Elliot Sharpe" }));

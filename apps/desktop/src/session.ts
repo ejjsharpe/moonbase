@@ -14,7 +14,10 @@ export class EditorSession {
   private operations = new Set<string>();
   private active = new Map<string, () => void>();
   private closed = false;
-  constructor(private client: EditorClient, private native: NativeActions, private send: (id: string, result: Reply<WorkspaceEvent>) => void) {}
+  private client: EditorClient;
+  private native: NativeActions;
+  private send: (id: string, result: Reply<WorkspaceEvent>) => void;
+  constructor(client: EditorClient, native: NativeActions, send: (id: string, result: Reply<WorkspaceEvent>) => void) { this.client = client; this.native = native; this.send = send; }
   private own(value: unknown) { if (value !== this.clientId) throw new ApplicationError({ code: "Unauthorized", message: "Foreign editor identity." }); }
   private approved(value: unknown) {
     checkout(value); const known = this.known.get(value.checkoutId);

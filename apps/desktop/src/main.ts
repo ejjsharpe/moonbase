@@ -4,7 +4,7 @@ import { WorkspaceLive, WorkspaceNative } from "@moonbase/workspace";
 import { makeEditorClient } from "@moonbase/application/runtime-client";
 import { ApplicationError, type CheckoutTarget } from "@moonbase/application/client";
 import { randomUUID } from "node:crypto";
-import { readFileSync, mkdirSync } from "node:fs";
+import { realpathSync, mkdirSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { execFileSync } from "node:child_process";
@@ -12,9 +12,10 @@ import { EditorSession } from "./session.ts";
 import { channels, errorDTO, record, requestId } from "./wire.ts";
 
 async function main() {
-const userData = process.env.MOONBASE_USER_DATA;
-if (!userData || !isAbsolute(userData)) throw Error("Set MOONBASE_USER_DATA to an explicit new Moonbase user-data directory.");
-mkdirSync(userData, { recursive: true, mode: 0o700 }); app.setPath("userData", userData);
+const requestedData = process.env.MOONBASE_USER_DATA ?? (app.isPackaged ? join(app.getPath("appData"), "Moonbase") : undefined);
+if (!requestedData || !isAbsolute(requestedData)) throw Error("Set MOONBASE_USER_DATA to an explicit new Moonbase user-data directory.");
+mkdirSync(requestedData, { recursive: true, mode: 0o700 });
+const userData = realpathSync(requestedData); app.setPath("userData", userData);
 app.setName("Moonbase");
 if (!app.requestSingleInstanceLock()) { app.exit(0); return; }
 protocol.registerSchemesAsPrivileged([{ scheme: "moonbase", privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }]);
