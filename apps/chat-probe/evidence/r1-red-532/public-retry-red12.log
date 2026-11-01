@@ -1,0 +1,226 @@
+✖ createChat retry vetoes changed local storage before retry before mutating redisclosure (30.32975ms)
+✖ createChat retry vetoes unwritable local storage before retry before mutating redisclosure (2.518333ms)
+✖ createChat retry vetoes changed local storage during query before mutating redisclosure (2.444083ms)
+✖ createChat retry vetoes unwritable local storage during query before mutating redisclosure (1.536333ms)
+✖ sendChat retry vetoes changed local storage before retry before mutating redisclosure (2.090083ms)
+✖ sendChat retry vetoes unwritable local storage before retry before mutating redisclosure (1.905125ms)
+✖ sendChat retry vetoes changed local storage during query before mutating redisclosure (1.878125ms)
+✖ sendChat retry vetoes unwritable local storage during query before mutating redisclosure (2.05625ms)
+✖ stopChat retry vetoes changed local storage before retry before mutating redisclosure (2.05075ms)
+✖ stopChat retry vetoes unwritable local storage before retry before mutating redisclosure (2.029792ms)
+✖ stopChat retry vetoes changed local storage during query before mutating redisclosure (1.845167ms)
+✖ stopChat retry vetoes unwritable local storage during query before mutating redisclosure (1.760709ms)
+ℹ tests 12
+ℹ suites 0
+ℹ pass 0
+ℹ fail 12
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 191.403541
+
+✖ failing tests:
+
+test at apps/chat-probe/test/controller.test.ts:506:7
+✖ createChat retry vetoes changed local storage before retry before mutating redisclosure (30.32975ms)
+  AssertionError [ERR_ASSERTION]: metadata preservation must veto before the remote mutation
+
+  2 !== 1
+
+      at TestContext.<anonymous> (file:///Users/elliotsharpe/.t3/worktrees/moonbase/t3-541038a5/apps/chat-probe/test/controller.test.ts:568:16)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 2,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at apps/chat-probe/test/controller.test.ts:506:7
+✖ createChat retry vetoes unwritable local storage before retry before mutating redisclosure (2.518333ms)
+  AssertionError [ERR_ASSERTION]: metadata preservation must veto before the remote mutation
+
+  2 !== 1
+
+      at TestContext.<anonymous> (file:///Users/elliotsharpe/.t3/worktrees/moonbase/t3-541038a5/apps/chat-probe/test/controller.test.ts:568:16)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 2,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at apps/chat-probe/test/controller.test.ts:506:7
+✖ createChat retry vetoes changed local storage during query before mutating redisclosure (2.444083ms)
+  AssertionError [ERR_ASSERTION]: metadata preservation must veto before the remote mutation
+
+  2 !== 1
+
+      at TestContext.<anonymous> (file:///Users/elliotsharpe/.t3/worktrees/moonbase/t3-541038a5/apps/chat-probe/test/controller.test.ts:568:16)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 2,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at apps/chat-probe/test/controller.test.ts:506:7
+✖ createChat retry vetoes unwritable local storage during query before mutating redisclosure (1.536333ms)
+  AssertionError [ERR_ASSERTION]: metadata preservation must veto before the remote mutation
+
+  2 !== 1
+
+      at TestContext.<anonymous> (file:///Users/elliotsharpe/.t3/worktrees/moonbase/t3-541038a5/apps/chat-probe/test/controller.test.ts:568:16)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 2,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at apps/chat-probe/test/controller.test.ts:506:7
+✖ sendChat retry vetoes changed local storage before retry before mutating redisclosure (2.090083ms)
+  AssertionError [ERR_ASSERTION]: metadata preservation must veto before the remote mutation
+
+  2 !== 1
+
+      at TestContext.<anonymous> (file:///Users/elliotsharpe/.t3/worktrees/moonbase/t3-541038a5/apps/chat-probe/test/controller.test.ts:568:16)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 2,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at apps/chat-probe/test/controller.test.ts:506:7
+✖ sendChat retry vetoes unwritable local storage before retry before mutating redisclosure (1.905125ms)
+  AssertionError [ERR_ASSERTION]: metadata preservation must veto before the remote mutation
+
+  2 !== 1
+
+      at TestContext.<anonymous> (file:///Users/elliotsharpe/.t3/worktrees/moonbase/t3-541038a5/apps/chat-probe/test/controller.test.ts:568:16)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 2,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at apps/chat-probe/test/controller.test.ts:506:7
+✖ sendChat retry vetoes changed local storage during query before mutating redisclosure (1.878125ms)
+  AssertionError [ERR_ASSERTION]: metadata preservation must veto before the remote mutation
+
+  2 !== 1
+
+      at TestContext.<anonymous> (file:///Users/elliotsharpe/.t3/worktrees/moonbase/t3-541038a5/apps/chat-probe/test/controller.test.ts:568:16)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 2,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at apps/chat-probe/test/controller.test.ts:506:7
+✖ sendChat retry vetoes unwritable local storage during query before mutating redisclosure (2.05625ms)
+  AssertionError [ERR_ASSERTION]: metadata preservation must veto before the remote mutation
+
+  2 !== 1
+
+      at TestContext.<anonymous> (file:///Users/elliotsharpe/.t3/worktrees/moonbase/t3-541038a5/apps/chat-probe/test/controller.test.ts:568:16)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 2,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at apps/chat-probe/test/controller.test.ts:506:7
+✖ stopChat retry vetoes changed local storage before retry before mutating redisclosure (2.05075ms)
+  AssertionError [ERR_ASSERTION]: metadata preservation must veto before the remote mutation
+
+  2 !== 1
+
+      at TestContext.<anonymous> (file:///Users/elliotsharpe/.t3/worktrees/moonbase/t3-541038a5/apps/chat-probe/test/controller.test.ts:568:16)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 2,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at apps/chat-probe/test/controller.test.ts:506:7
+✖ stopChat retry vetoes unwritable local storage before retry before mutating redisclosure (2.029792ms)
+  AssertionError [ERR_ASSERTION]: metadata preservation must veto before the remote mutation
+
+  2 !== 1
+
+      at TestContext.<anonymous> (file:///Users/elliotsharpe/.t3/worktrees/moonbase/t3-541038a5/apps/chat-probe/test/controller.test.ts:568:16)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 2,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at apps/chat-probe/test/controller.test.ts:506:7
+✖ stopChat retry vetoes changed local storage during query before mutating redisclosure (1.845167ms)
+  AssertionError [ERR_ASSERTION]: metadata preservation must veto before the remote mutation
+
+  2 !== 1
+
+      at TestContext.<anonymous> (file:///Users/elliotsharpe/.t3/worktrees/moonbase/t3-541038a5/apps/chat-probe/test/controller.test.ts:568:16)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 2,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at apps/chat-probe/test/controller.test.ts:506:7
+✖ stopChat retry vetoes unwritable local storage during query before mutating redisclosure (1.760709ms)
+  AssertionError [ERR_ASSERTION]: metadata preservation must veto before the remote mutation
+
+  2 !== 1
+
+      at TestContext.<anonymous> (file:///Users/elliotsharpe/.t3/worktrees/moonbase/t3-541038a5/apps/chat-probe/test/controller.test.ts:568:16)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 2,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

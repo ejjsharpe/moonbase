@@ -1,0 +1,8 @@
+{
+  "active": {
+    "tag": "TEXTAREA",
+    "label": "a.ts editor",
+    "role": "textbox"
+  },
+  "text": "local dirty draft"
+}

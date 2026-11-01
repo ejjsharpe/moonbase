@@ -1,0 +1,30 @@
+{
+  "deleted": [
+    "original owner96d74 archive copy under apps/desktop/test-results/r1-repair-baseline",
+    "initial local4dd37ad copy",
+    "first four local timed red logs/captures",
+    "initial local public and native cleanup probe logs (including dynamic-import setup error)",
+    "initial full check logs"
+  ],
+  "survive": [
+    "committed8a evidence (unchanged)",
+    "reviewer immutable R1 source/package/archive/raw files (read-only untouched)",
+    "terminal tool transcript observations"
+  ],
+  "newCopies": [
+    ".overnight-artifacts/reload-r1/dist/reviewer-8a",
+    ".overnight-artifacts/reload-r1/dist/reviewer-4dd"
+  ],
+  "newRuns": [
+    "red-4dd-source",
+    "red-4dd-package (pre-causal235.7ms limit failure)",
+    "red-4dd-package-isolated (intended loss assertion)",
+    "red-8a-source",
+    "red-8a-package",
+    "standalone-source",
+    "standalone-package",
+    "editor-native-results",
+    "editor-packaged-results"
+  ],
+  "correction": "No replacement copy is the recovered original; no claim deleted local raw files remain. Storage now outside every runner outputDir, using an already-ignored dist child; no ignore config change."
+}

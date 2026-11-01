@@ -1,0 +1,62 @@
+{
+  "qualificationCommit": "7147a1352c7d699a8f60eb62815775b963eb764d",
+  "originalBase": "dff2ece7503aef4159994e8e169dd29180842a4d",
+  "base": "d79d1e9b8347f7f5f19cdbe9aad0233a0c47be8d",
+  "builtProductionCommit": "b4f514d682927a2d65a08af0d08bfe7adb7534e3",
+  "productionUnchangedSinceBuild": true,
+  "driverSha256": "c7cea1c946a4fad94977e7c0df712c980452ed037de1d662fa65c84b87e29b5b",
+  "productionFiles": [
+    {
+      "path": "apps/desktop/package.json",
+      "sha256": "e09fea8a5958c79a0fdf9ff8acf489bfc56f6f7f570742ab37761f71cb0458d4"
+    },
+    {
+      "path": "apps/desktop/scripts/build.mjs",
+      "sha256": "6d2cdc40a6dd28a931b5297b4a579c63fa33026d856a5cd7c9c0ab55d6ce300f"
+    },
+    {
+      "path": "apps/desktop/scripts/notices.mjs",
+      "sha256": "76d5207203cc8a2d63fadb4f8f179e8ad910d0d410664232899df4206b6edbcb"
+    },
+    {
+      "path": "apps/desktop/scripts/package.mjs",
+      "sha256": "91d479e7aa1a388c1601b6c2767f098fd0d2d971ec19e43dacefe29f7cde5608"
+    },
+    {
+      "path": "apps/desktop/src/chat-preload.ts",
+      "sha256": "72dd3f656bcc4aa29aa620ef0a5b1bb2c0a9fc4ebca4b6893933b2e867e6cbc5"
+    },
+    {
+      "path": "apps/desktop/src/main.ts",
+      "sha256": "1e38c150d5ac352defe420bc4f9240433048b6706b1d6580f025e3694b907d79"
+    },
+    {
+      "path": "apps/desktop/src/preload.ts",
+      "sha256": "691678963588cb62ea5b5f42aaeb58ab36a749b113954906a69823f5dee1e4c1"
+    },
+    {
+      "path": "apps/desktop/src/renderer/env.d.ts",
+      "sha256": "74871f48f45c9e7ae08150df02317cf13fd1ad46a7cff3c01cc8e537c0073856"
+    },
+    {
+      "path": "apps/desktop/src/renderer/index.html",
+      "sha256": "667913478ad77390896bbf48d6fbd207e5d48083aa75f14c1dc01821c1fe3363"
+    },
+    {
+      "path": "apps/desktop/src/renderer/main.tsx",
+      "sha256": "5011469b89d1e30bef697e01f50a45e9222f50a8733264704ec4141a3824f73f"
+    },
+    {
+      "path": "apps/desktop/src/session.ts",
+      "sha256": "b740c45eac33e93cddbf56944af43ff3c22ab08b24b2f6e56053fbdaacde4eb2"
+    },
+    {
+      "path": "apps/desktop/src/wire.ts",
+      "sha256": "bedfdf51ad45b2c826d8de085c7297811c06e70ecba96fdb4620b1afa7f354fe"
+    },
+    {
+      "path": "apps/desktop/vite.config.ts",
+      "sha256": "d0abd73823f5f8f34ccf4ebc3c4a1410a5b4464c08c80a5b9cecb49c532db22e"
+    }
+  ]
+}

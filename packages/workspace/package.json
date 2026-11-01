@@ -1,0 +1,11 @@
+{
+  "name": "@moonbase/workspace", "private": true, "type": "module",
+  "exports": { ".": "./src/index.ts", "./filesystem": "./dist/filesystem" },
+  "scripts": {
+    "build": "node scripts/build-native.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "tsc --noEmit -p tsconfig.json",
+    "test": "node scripts/build-native.mjs && node --experimental-strip-types --test test/*.test.ts"
+  },
+  "dependencies": { "@moonbase/application": "workspace:*", "effect": "4.1.0" }
+}

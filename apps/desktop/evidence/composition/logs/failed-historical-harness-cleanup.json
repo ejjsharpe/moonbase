@@ -1,0 +1,36 @@
+[
+  {
+    "pid": 33312,
+    "group": 33312,
+    "command": "/Users/elliotsharpe/.local/share/vite-plus/js_runtime/node/26.13.0/bin/node /private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-chat-proof-RjekEC/controlled-ssh -N -T -n -o BatchMode=yes -o ExitOnForwardFailure=yes -o ControlMaster=no -o ControlPath=none -o ControlPersist=no -o ForkAfterAuthentication=no -o GatewayPorts=no -o PermitLocalCommand=no -o RemoteCommand=none -o ForwardAgent=no -o ForwardX11=no -L 127.0.0.1:60259:127.0.0.1:60225 -- controlled",
+    "TERM": true,
+    "confirmedESRCH": true,
+    "portsRebound": [
+      60225,
+      60259
+    ]
+  },
+  {
+    "pid": 34835,
+    "group": 34835,
+    "command": "/Users/elliotsharpe/.local/share/vite-plus/js_runtime/node/26.13.0/bin/node /private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-chat-proof-2YEMOQ/controlled-ssh -N -T -n -o BatchMode=yes -o ExitOnForwardFailure=yes -o ControlMaster=no -o ControlPath=none -o ControlPersist=no -o ForkAfterAuthentication=no -o GatewayPorts=no -o PermitLocalCommand=no -o RemoteCommand=none -o ForwardAgent=no -o ForwardX11=no -L 127.0.0.1:61398:127.0.0.1:61369 -- controlled",
+    "TERM": true,
+    "confirmedESRCH": true,
+    "portsRebound": [
+      61369,
+      61398
+    ]
+  },
+  {
+    "pid": 35391,
+    "group": 35391,
+    "command": "/Users/elliotsharpe/.local/share/vite-plus/js_runtime/node/26.13.0/bin/node /private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-chat-proof-wAsOuQ/controlled-ssh -N -T -n -o BatchMode=yes -o ExitOnForwardFailure=yes -o ControlMaster=no -o ControlPath=none -o ControlPersist=no -o ForkAfterAuthentication=no -o GatewayPorts=no -o PermitLocalCommand=no -o RemoteCommand=none -o ForwardAgent=no -o ForwardX11=no -L 127.0.0.1:61681:127.0.0.1:61671 -- controlled",
+    "TERM": true,
+    "confirmedESRCH": true,
+    "portsRebound": [
+      61671,
+      61681
+    ],
+    "cause": "cleanup evaluate raced committed navigation"
+  }
+]

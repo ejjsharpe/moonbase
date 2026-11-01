@@ -1,0 +1,41 @@
+$ playwright test --config playwright.config.ts --grep "native document reload"
+
+Running 1 test using 1 worker
+
+(node:35335) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+  ✘  1 test/lifecycle.spec.ts:14:3 › native document reload releases observers and waits without replacing the root or stopping work (3.0s)
+Worker teardown timeout of 45000ms exceeded.
+
+Failed worker ran 1 test:
+test/lifecycle.spec.ts:14:3 › native document reload releases observers and waits without replacing the root or stopping work
+
+
+  1) test/lifecycle.spec.ts:14:3 › native document reload releases observers and waits without replacing the root or stopping work 
+
+    Error: page.evaluate: Execution context was destroyed, most likely because of a navigation
+
+      244 |       f.releaseReply();
+      245 |       if (app && child?.exitCode === null && child?.signalCode === null) {
+    > 246 |         await app.windows()[0].evaluate(async () => {
+          |                                ^
+      247 |           const r = await window.moonbaseChat.call("connection", "getConnection", {}, crypto.randomUUID());
+      248 |           if (r.ok && (r.value as { connectionId: string | null }).connectionId) await window.moonbaseChat.call("connection", "disconnect", { connectionId: (r.value as { connectionId: string }).connectionId }, crypto.randomUUID());
+      249 |         });
+        at /Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/test/lifecycle.spec.ts:246:32
+
+    Error Context: test-results/old-resource-source-corrected/lifecycle-native-document--550ca-g-the-root-or-stopping-work/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/old-resource-source-corrected/lifecycle-native-document--550ca-g-the-root-or-stopping-work/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/old-resource-source-corrected/lifecycle-native-document--550ca-g-the-root-or-stopping-work/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    test/lifecycle.spec.ts:14:3 › native document reload releases observers and waits without replacing the root or stopping work 
+  1 error was not a part of any test, see above for details
+error: script "test:desktop" exited with code 1

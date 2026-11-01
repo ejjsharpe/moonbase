@@ -1,0 +1,17 @@
+{
+  "window": {
+    "width": 1280,
+    "height": 850,
+    "zoom": 1
+  },
+  "viewport": {
+    "width": 1280,
+    "height": 818,
+    "devicePixelRatio": 2
+  },
+  "png": {
+    "width": 2560,
+    "height": 1636
+  },
+  "fixture": "app R1 filename maps preserve actual Save, positions, sibling drafts and restart"
+}

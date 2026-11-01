@@ -1,0 +1,35 @@
+$ node --experimental-strip-types --test --test-concurrency=1 test/*.test.ts
+✔ private configuration is owner-only, bounded, explicit and projected; bad files never initialize transport (6.548125ms)
+✔ startup only observes; every mutation is durably captured before disclosure (13.189ms)
+✔ lost reply, null query, reload and reconnect retain original input without auto Send (4.097667ms)
+✔ matching Send recovery clears only captured draft text and preserves newer edits (3.330583ms)
+✔ createChat never discloses when pending metadata write fails (1.9455ms)
+✔ sendChat never discloses when pending metadata write fails (1.03325ms)
+✔ stopChat never discloses when pending metadata write fails (1.823167ms)
+✔ corruption/foreign context remains untouched and blocks admission on reload: {broken (0.237166ms)
+✔ corruption/foreign context remains untouched and blocks admission on reload: {"version":1 (0.126792ms)
+✔ write failure preserves latest live edit and blocks Quit instead of claiming reload safety (1.679ms)
+✔ same-input retry queries first, keeps original Create/Send/Stop identities, and never adopts successor (2.440667ms)
+✔ pending Send does not block captured Stop or status and detach never stops work (3.531166ms)
+✔ read-only admitted lookup resolves without Send; foreign storage writes are never overwritten (1.738542ms)
+✔ replacement watch snapshots and one older page keep output bounded (3.235084ms)
+✔ bounds reject oversized/invalid Unicode input without replacing retained draft or issuing Send (0.497875ms)
+✔ Create and captured Stop are written before disclosure; lost replies recover exact inputs after reload (1.690666ms)
+✔ hide/detach releases observations, resume is read-only, and draft capacity failure blocks Quit (9.92875ms)
+✔ createChat retains the captured identity when Disconnect makes a dispatched reply Unavailable (4.941666ms)
+✔ sendChat retains the captured identity when Disconnect makes a dispatched reply Unavailable (3.226333ms)
+✔ stopChat retains the captured identity when Disconnect makes a dispatched reply Unavailable (4.200083ms)
+✔ public proof controller creates, lists, opens, streams real tool output and captures exact Stop through SSH/HTTP/Pi (1068.967166ms)
+✔ lost actual HTTP Send response + newer draft + controller reload/client closure/reconnect/store reopen never resends (1811.611583ms)
+✔ view detach and Disconnect leave remote tool running; reopen queries same chat without Send (1261.568167ms)
+✔ IPC rejects unknown fields/operations/foreign authority before dispatch (1.44825ms)
+✔ public bridge preserves Uncertain and exact pending payload; preaborted calls do not dispatch (2.49975ms)
+✔ IPC cancellation/disposal releases only owned waiters/observations, never Stop or Disconnect (0.28125ms)
+ℹ tests 26
+ℹ suites 0
+ℹ pass 26
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4724.841875

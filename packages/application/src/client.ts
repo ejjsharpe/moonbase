@@ -31,6 +31,7 @@ export type GitStatus = { branch: string; changes: GitChange[]; error?: string }
 export type Comparison = { original: string; title: string; working: FileDocument | null; error?: string };
 export type LookupMatch = { path: string; score: number; positions: number[] };
 export type RecoveryChange = { clientId: string; previousRevision: number; revision: number };
+export type RecoveryPublication = RecoveryChange & { requestId: string };
 export type EntryReference = { target: FileTarget; identity: string; directory: boolean };
 export type WorkspaceOperation = {
   id: string; clientId: string; checkout: CheckoutTarget;
@@ -62,7 +63,8 @@ export type WorkspaceCommands = {
   operationStatus: { input: { clientId: string; id: string }; output: OperationResult | null };
   acknowledgeOperation: { input: { clientId: string; operationClientId: string; id: string }; output: void };
   loadRecovery: { input: { clientId: string }; output: RecoveryLoad };
-  persistRecovery: { input: { clientId: string; expectedRevision: number; state: EditorRecovery }; output: { revision: number } };
+  persistRecovery: { input: { clientId: string; requestId: string; expectedRevision: number; state: EditorRecovery }; output: RecoveryPublication };
+  getRecoveryPublication: { input: { clientId: string; requestId: string }; output: RecoveryPublication | null };
 };
 export type WorkspaceCommand = keyof WorkspaceCommands;
 export type CommandInput<K extends WorkspaceCommand> = WorkspaceCommands[K]["input"];

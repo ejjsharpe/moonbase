@@ -1,0 +1,176 @@
+{
+  "checkout": {
+    "hostId": "moonbase-local",
+    "checkoutId": "7e2c78bc0aa01923177ddb27cab8b34d7b4ddb0183791c4708a4a737a4e12152",
+    "projectId": "e7d7cc2c55479d134c05907ae4e63387b3b69bec70b68273313335108a90d4db",
+    "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-chat-proof-dGWP3l/remote-folder",
+    "branch": "main"
+  },
+  "lateOldWatchSuppressed": true,
+  "lateOldFinallyCannotRemoveNewSlot": true,
+  "cancelled": {
+    "error": {
+      "code": "Cancelled",
+      "message": "Command cancelled"
+    }
+  },
+  "receipt": {
+    "target": {
+      "host": {
+        "hostId": "controlled-host",
+        "storeId": "controlled-store"
+      },
+      "actorId": "personal",
+      "conversationId": "4"
+    },
+    "requestId": "review-send",
+    "admission": "admitted",
+    "submissionId": "13"
+  },
+  "capturedStop": {
+    "target": {
+      "host": {
+        "hostId": "controlled-host",
+        "storeId": "controlled-store"
+      },
+      "actorId": "personal",
+      "conversationId": "4"
+    },
+    "submissionId": "13",
+    "taskId": "14"
+  },
+  "stats": {
+    "id": "9799355c-5d12-48e8-8642-ebb207035d93",
+    "calls": 1,
+    "tools": 0,
+    "commands": [
+      "getChatHost",
+      "getChatHost",
+      "getChatHost",
+      "createChat",
+      "getChatHost",
+      "sendChat",
+      "getChatHost",
+      "getChatSend",
+      "getChatHost",
+      "getChat",
+      "getChatHost",
+      "stopChat"
+    ],
+    "mutations": [
+      {
+        "operation": "createChat",
+        "input": {
+          "session": {
+            "host": {
+              "hostId": "controlled-host",
+              "storeId": "controlled-store"
+            },
+            "actorId": "personal"
+          },
+          "requestId": "review-create",
+          "title": "Real public session"
+        },
+        "result": {
+          "requestId": "review-create",
+          "conversation": {
+            "target": {
+              "host": {
+                "hostId": "controlled-host",
+                "storeId": "controlled-store"
+              },
+              "actorId": "personal",
+              "conversationId": "4"
+            },
+            "title": "Real public session",
+            "createdAt": "2026-11-01T13:54:31.448Z",
+            "cwd": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-chat-proof-dGWP3l/remote-folder",
+            "model": "faux/faux-1"
+          }
+        }
+      },
+      {
+        "operation": "sendChat",
+        "input": {
+          "target": {
+            "host": {
+              "hostId": "controlled-host",
+              "storeId": "controlled-store"
+            },
+            "actorId": "personal",
+            "conversationId": "4"
+          },
+          "requestId": "review-send",
+          "text": "real admitted request"
+        },
+        "result": {
+          "target": {
+            "host": {
+              "hostId": "controlled-host",
+              "storeId": "controlled-store"
+            },
+            "actorId": "personal",
+            "conversationId": "4"
+          },
+          "requestId": "review-send",
+          "admission": "admitted",
+          "submissionId": "13"
+        }
+      },
+      {
+        "operation": "stopChat",
+        "input": {
+          "stop": {
+            "target": {
+              "host": {
+                "hostId": "controlled-host",
+                "storeId": "controlled-store"
+              },
+              "actorId": "personal",
+              "conversationId": "4"
+            },
+            "submissionId": "13",
+            "taskId": "14"
+          },
+          "requestId": "review-stop"
+        },
+        "result": {
+          "stop": {
+            "target": {
+              "host": {
+                "hostId": "controlled-host",
+                "storeId": "controlled-store"
+              },
+              "actorId": "personal",
+              "conversationId": "4"
+            },
+            "submissionId": "13",
+            "taskId": "14"
+          },
+          "requestId": "review-stop",
+          "outcome": "stopped"
+        }
+      }
+    ],
+    "heldReplies": [
+      "sendChat"
+    ]
+  },
+  "cleanup": {
+    "hostPids": [
+      31885
+    ],
+    "forwardPids": [
+      31902,
+      31914
+    ],
+    "processGroups": [
+      31902,
+      31914
+    ],
+    "reboundPorts": [
+      61760,
+      61785
+    ]
+  }
+}

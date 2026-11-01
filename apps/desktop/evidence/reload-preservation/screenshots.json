@@ -1,0 +1,38 @@
+[
+  {
+    "path": "red-4dd-package-fresh-reload.png",
+    "width": 2560,
+    "height": 1636,
+    "sha256": "82785cd439a5d508d5849fc823396ffe762a996e0971b38df5c032eca6fb7e75"
+  },
+  {
+    "path": "red-4dd-source-fresh-reload.png",
+    "width": 2560,
+    "height": 1636,
+    "sha256": "ec166dcb095ef4b2519138355f858a80e79e365301d3c17f934855be6f5f164e"
+  },
+  {
+    "path": "red-8a-package-fresh-reload.png",
+    "width": 2560,
+    "height": 1636,
+    "sha256": "401cae488e5e8a120bb1273b427467f51fbad7fc81720e95712308f0d5a4eeb1"
+  },
+  {
+    "path": "red-8a-source-fresh-reload.png",
+    "width": 2560,
+    "height": 1636,
+    "sha256": "705b1587e5404f6114626eb1e27c533dea917b24fa38118777da653265bc5491"
+  },
+  {
+    "path": "standalone-package-fresh-reload.png",
+    "width": 2560,
+    "height": 1636,
+    "sha256": "2b55348133f4db6233139e17f8b1aadda4ac2c104e8810a9e9ef1729d3f4bc52"
+  },
+  {
+    "path": "standalone-source-fresh-reload.png",
+    "width": 2560,
+    "height": 1636,
+    "sha256": "269ff7088fdacb7a70e2f761f77df3fed92b020cfa7abe0ad610732284bd8966"
+  }
+]

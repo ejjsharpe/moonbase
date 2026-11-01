@@ -1,0 +1,4468 @@
+{
+  "conclusion": "10/10 bounded probes passed; original isolated dismissal remains unexplained, not causally cleared",
+  "sourceSha256": {
+    "apps/desktop/src/main.ts": "021b760b46095d0e981b16b891189b5534252d74884b67f2f16c8845d8c999d5",
+    "apps/desktop/src/renderer/main.tsx": "e972d8ab84c81c24a4adb8835975b5608d91557005ec68e34d918410674c0d99",
+    "apps/desktop/test/desktop.spec.ts": "af96a9bfcd8fb0d239e9e4fac03614443d5c9edf908f16df4b7b631942cdeaa4",
+    "apps/desktop/dist/main.mjs": "d8f459e5d0ee629a2a0e29dcaa92cafa1fc93d27d338c5c67912b06c4f54f44e"
+  },
+  "packagedAsarSha256": "7a24f8ea0d9386307318ab8bf12b5cfee5eb855443ce16fd56e5312c785e6d6b",
+  "localTraceDirectory": "apps/desktop/evidence/test-results/rapid-probes",
+  "runs": [
+    {
+      "name": "desktop-rapid-native-Open--ad18a--the-dialog-held-discovery-",
+      "holdDiscovery": true,
+      "events": [
+        {
+          "time": 332.5,
+          "state": {
+            "dialogs": 0,
+            "focus": "BODY"
+          }
+        },
+        {
+          "time": 345.90000000596046,
+          "state": {
+            "dialogs": 0,
+            "focus": "BUTTON"
+          }
+        },
+        {
+          "time": 435,
+          "state": {
+            "dialogs": 0,
+            "focus": "BUTTON",
+            "selected": "checkout \u00b7 main"
+          }
+        },
+        {
+          "time": 462.90000000596046,
+          "state": {
+            "dialogs": 1,
+            "focus": "combobox",
+            "selected": "checkout \u00b7 main"
+          }
+        },
+        {
+          "time": 751.9000000059605,
+          "state": {
+            "dialogs": 0,
+            "focus": "BODY",
+            "selected": "checkout \u00b7 main"
+          }
+        },
+        {
+          "time": 752.9000000059605,
+          "state": {
+            "dialogs": 0,
+            "focus": "a.ts editor",
+            "selected": "checkout \u00b7 main"
+          }
+        }
+      ],
+      "io": {
+        "calls": [
+          {
+            "method": "command",
+            "input": {
+              "operation": "loadRecovery",
+              "input": {
+                "clientId": "desktop-primary"
+              }
+            },
+            "id": "b4b2dd03-9f83-4d1a-a0e1-8db7204b4f8a"
+          },
+          {
+            "method": "choose-checkout",
+            "input": null,
+            "id": "918eb7b1-5225-4fd7-a9fb-79bd7091c430"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "openCheckout",
+              "input": {
+                "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-bWjxqk/checkout"
+              }
+            },
+            "id": "b7151c52-8dd9-4d1d-8e20-a844854ad409"
+          },
+          {
+            "method": "watch",
+            "input": {
+              "checkout": {
+                "hostId": "moonbase-local",
+                "checkoutId": "68ed338f97535666e9515fd7a4c2efeec04920264a3669e88f6a66c2d532d1e0",
+                "projectId": "09f35fbe7898d82568bbcbd4ff7fe049e3cf7bbc5a18305171066239a561d085",
+                "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-bWjxqk/checkout",
+                "branch": "main"
+              },
+              "paths": [
+                ""
+              ]
+            },
+            "id": "8a8a7a92-371f-4b8e-8885-2dc438a8ee9c"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "listDirectory",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "68ed338f97535666e9515fd7a4c2efeec04920264a3669e88f6a66c2d532d1e0",
+                  "projectId": "09f35fbe7898d82568bbcbd4ff7fe049e3cf7bbc5a18305171066239a561d085",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-bWjxqk/checkout",
+                  "branch": "main"
+                },
+                "path": "",
+                "hideIgnored": false
+              }
+            },
+            "id": "da292d8b-ce79-44db-b06f-3de1244966bf"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "gitStatus",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "68ed338f97535666e9515fd7a4c2efeec04920264a3669e88f6a66c2d532d1e0",
+                  "projectId": "09f35fbe7898d82568bbcbd4ff7fe049e3cf7bbc5a18305171066239a561d085",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-bWjxqk/checkout",
+                  "branch": "main"
+                }
+              }
+            },
+            "id": "8459d232-1cbe-4986-ab84-43d7047fdaea"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "persistRecovery",
+              "input": {
+                "clientId": "desktop-primary",
+                "requestId": "bcba2588-b93d-4f1d-8a79-6e4a368eeb4a",
+                "expectedRevision": 0,
+                "state": {
+                  "version": 1,
+                  "clientId": "desktop-primary",
+                  "checkouts": [
+                    {
+                      "hostId": "moonbase-local",
+                      "checkoutId": "68ed338f97535666e9515fd7a4c2efeec04920264a3669e88f6a66c2d532d1e0",
+                      "projectId": "09f35fbe7898d82568bbcbd4ff7fe049e3cf7bbc5a18305171066239a561d085",
+                      "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-bWjxqk/checkout",
+                      "branch": "main"
+                    }
+                  ],
+                  "openCheckoutIds": [
+                    "68ed338f97535666e9515fd7a4c2efeec04920264a3669e88f6a66c2d532d1e0"
+                  ],
+                  "selectedCheckoutId": "68ed338f97535666e9515fd7a4c2efeec04920264a3669e88f6a66c2d532d1e0",
+                  "views": {
+                    "68ed338f97535666e9515fd7a4c2efeec04920264a3669e88f6a66c2d532d1e0": {
+                      "openFiles": [],
+                      "active": "",
+                      "preview": null,
+                      "fileViews": {},
+                      "positions": {},
+                      "tree": {
+                        "expanded": [],
+                        "selected": [],
+                        "focus": "",
+                        "scroll": 0,
+                        "hideIgnored": false
+                      }
+                    }
+                  },
+                  "drafts": [],
+                  "recentFiles": [],
+                  "sidebarWidth": 270
+                }
+              }
+            },
+            "id": "7bfb65fe-3a9e-4f7f-967a-33748b44590f"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "lookupFiles",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "68ed338f97535666e9515fd7a4c2efeec04920264a3669e88f6a66c2d532d1e0",
+                  "projectId": "09f35fbe7898d82568bbcbd4ff7fe049e3cf7bbc5a18305171066239a561d085",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-bWjxqk/checkout",
+                  "branch": "main"
+                },
+                "query": "a.ts",
+                "limit": 100,
+                "history": []
+              }
+            },
+            "id": "4ec9fffa-44c4-4b99-babc-893adbae9f2e"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "readFile",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "68ed338f97535666e9515fd7a4c2efeec04920264a3669e88f6a66c2d532d1e0",
+                  "projectId": "09f35fbe7898d82568bbcbd4ff7fe049e3cf7bbc5a18305171066239a561d085",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-bWjxqk/checkout",
+                  "branch": "main"
+                },
+                "path": "a.ts"
+              }
+            },
+            "id": "97ba1c65-f6b1-4375-b7eb-1b461b6e3784"
+          }
+        ],
+        "results": [
+          {
+            "operation": "loadRecovery",
+            "reply": {
+              "ok": true,
+              "value": {
+                "revision": 0,
+                "state": {
+                  "version": 1,
+                  "clientId": "desktop-primary",
+                  "checkouts": [],
+                  "openCheckoutIds": [],
+                  "selectedCheckoutId": null,
+                  "views": {},
+                  "drafts": [],
+                  "recentFiles": [],
+                  "sidebarWidth": 270
+                },
+                "errors": [],
+                "operations": []
+              }
+            }
+          },
+          {
+            "reply": {
+              "ok": true,
+              "value": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-bWjxqk/checkout"
+            }
+          },
+          {
+            "operation": "openCheckout",
+            "reply": {
+              "ok": true,
+              "value": {
+                "hostId": "moonbase-local",
+                "checkoutId": "68ed338f97535666e9515fd7a4c2efeec04920264a3669e88f6a66c2d532d1e0",
+                "projectId": "09f35fbe7898d82568bbcbd4ff7fe049e3cf7bbc5a18305171066239a561d085",
+                "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-bWjxqk/checkout",
+                "branch": "main"
+              }
+            }
+          },
+          {
+            "reply": {
+              "ok": true,
+              "value": null
+            }
+          },
+          {
+            "operation": "listDirectory",
+            "reply": {
+              "ok": true,
+              "value": {
+                "entries": [
+                  {
+                    "path": "a.ts",
+                    "directory": false,
+                    "ignored": false
+                  },
+                  {
+                    "path": "b.ts",
+                    "directory": false,
+                    "ignored": false
+                  }
+                ],
+                "partial": false
+              }
+            }
+          },
+          {
+            "operation": "gitStatus",
+            "reply": {
+              "ok": true,
+              "value": {
+                "branch": "main",
+                "changes": [
+                  {
+                    "path": "a.ts",
+                    "area": "staged"
+                  },
+                  {
+                    "path": "a.ts",
+                    "area": "unstaged"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "operation": "persistRecovery",
+            "reply": {
+              "ok": true,
+              "value": {
+                "clientId": "desktop-primary",
+                "requestId": "bcba2588-b93d-4f1d-8a79-6e4a368eeb4a",
+                "previousRevision": 0,
+                "revision": 1
+              }
+            }
+          },
+          {
+            "operation": "lookupFiles",
+            "reply": {
+              "ok": true,
+              "value": {
+                "matches": [
+                  {
+                    "path": "a.ts",
+                    "score": 247.996,
+                    "positions": [
+                      0,
+                      1,
+                      2,
+                      3
+                    ]
+                  }
+                ],
+                "history": [],
+                "partial": false
+              }
+            }
+          },
+          {
+            "operation": "readFile",
+            "reply": {
+              "ok": true,
+              "value": {
+                "text": "export const value = 'WORKING';\n",
+                "version": "21316020226accd1c3a21d0d680f51e9f0c0431e2cd93010f8e43c31d47e1c40"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "desktop-rapid-native-Open--ad18a--the-dialog-held-discovery--repeat1",
+      "holdDiscovery": true,
+      "events": [
+        {
+          "time": 297.90000000596046,
+          "state": {
+            "dialogs": 0,
+            "focus": "BODY"
+          }
+        },
+        {
+          "time": 314,
+          "state": {
+            "dialogs": 0,
+            "focus": "BUTTON"
+          }
+        },
+        {
+          "time": 410.90000000596046,
+          "state": {
+            "dialogs": 0,
+            "focus": "BUTTON",
+            "selected": "checkout \u00b7 main"
+          }
+        },
+        {
+          "time": 461.2000000178814,
+          "state": {
+            "dialogs": 1,
+            "focus": "combobox",
+            "selected": "checkout \u00b7 main"
+          }
+        },
+        {
+          "time": 824.2000000178814,
+          "state": {
+            "dialogs": 0,
+            "focus": "BODY",
+            "selected": "checkout \u00b7 main"
+          }
+        },
+        {
+          "time": 825.6000000238419,
+          "state": {
+            "dialogs": 0,
+            "focus": "a.ts editor",
+            "selected": "checkout \u00b7 main"
+          }
+        }
+      ],
+      "io": {
+        "calls": [
+          {
+            "method": "command",
+            "input": {
+              "operation": "loadRecovery",
+              "input": {
+                "clientId": "desktop-primary"
+              }
+            },
+            "id": "2efb8276-8b35-4d39-bf23-bca415eb417f"
+          },
+          {
+            "method": "choose-checkout",
+            "input": null,
+            "id": "721a973d-f898-471e-9cca-0bfd41230738"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "openCheckout",
+              "input": {
+                "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-kkRNn3/checkout"
+              }
+            },
+            "id": "1ef280ad-7b1e-4067-b245-56b867973a11"
+          },
+          {
+            "method": "watch",
+            "input": {
+              "checkout": {
+                "hostId": "moonbase-local",
+                "checkoutId": "c38795a2f14c83389a00d5c33910f57591be6a3e65566ac3900888ba8a8b1806",
+                "projectId": "4d260c2d251ac07d524e163cbf6c9262d7384f6a19748810ece77a20082824f6",
+                "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-kkRNn3/checkout",
+                "branch": "main"
+              },
+              "paths": [
+                ""
+              ]
+            },
+            "id": "e5e0b071-2da0-46ba-99e1-958802d6ef61"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "listDirectory",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "c38795a2f14c83389a00d5c33910f57591be6a3e65566ac3900888ba8a8b1806",
+                  "projectId": "4d260c2d251ac07d524e163cbf6c9262d7384f6a19748810ece77a20082824f6",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-kkRNn3/checkout",
+                  "branch": "main"
+                },
+                "path": "",
+                "hideIgnored": false
+              }
+            },
+            "id": "3ad05f93-4795-41b8-a562-36b1b2769cbe"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "gitStatus",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "c38795a2f14c83389a00d5c33910f57591be6a3e65566ac3900888ba8a8b1806",
+                  "projectId": "4d260c2d251ac07d524e163cbf6c9262d7384f6a19748810ece77a20082824f6",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-kkRNn3/checkout",
+                  "branch": "main"
+                }
+              }
+            },
+            "id": "12675fbc-ec39-447b-b239-ebc39f050ba7"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "persistRecovery",
+              "input": {
+                "clientId": "desktop-primary",
+                "requestId": "24e80eb8-9d5e-4331-a2bf-1a27de90247a",
+                "expectedRevision": 0,
+                "state": {
+                  "version": 1,
+                  "clientId": "desktop-primary",
+                  "checkouts": [
+                    {
+                      "hostId": "moonbase-local",
+                      "checkoutId": "c38795a2f14c83389a00d5c33910f57591be6a3e65566ac3900888ba8a8b1806",
+                      "projectId": "4d260c2d251ac07d524e163cbf6c9262d7384f6a19748810ece77a20082824f6",
+                      "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-kkRNn3/checkout",
+                      "branch": "main"
+                    }
+                  ],
+                  "openCheckoutIds": [
+                    "c38795a2f14c83389a00d5c33910f57591be6a3e65566ac3900888ba8a8b1806"
+                  ],
+                  "selectedCheckoutId": "c38795a2f14c83389a00d5c33910f57591be6a3e65566ac3900888ba8a8b1806",
+                  "views": {
+                    "c38795a2f14c83389a00d5c33910f57591be6a3e65566ac3900888ba8a8b1806": {
+                      "openFiles": [],
+                      "active": "",
+                      "preview": null,
+                      "fileViews": {},
+                      "positions": {},
+                      "tree": {
+                        "expanded": [],
+                        "selected": [],
+                        "focus": "",
+                        "scroll": 0,
+                        "hideIgnored": false
+                      }
+                    }
+                  },
+                  "drafts": [],
+                  "recentFiles": [],
+                  "sidebarWidth": 270
+                }
+              }
+            },
+            "id": "7b31736f-f872-4be5-bdc8-6a8e299c5ecb"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "lookupFiles",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "c38795a2f14c83389a00d5c33910f57591be6a3e65566ac3900888ba8a8b1806",
+                  "projectId": "4d260c2d251ac07d524e163cbf6c9262d7384f6a19748810ece77a20082824f6",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-kkRNn3/checkout",
+                  "branch": "main"
+                },
+                "query": "a.ts",
+                "limit": 100,
+                "history": []
+              }
+            },
+            "id": "2acaefd3-9a05-448f-bd3a-83c6c1d78bb4"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "readFile",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "c38795a2f14c83389a00d5c33910f57591be6a3e65566ac3900888ba8a8b1806",
+                  "projectId": "4d260c2d251ac07d524e163cbf6c9262d7384f6a19748810ece77a20082824f6",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-kkRNn3/checkout",
+                  "branch": "main"
+                },
+                "path": "a.ts"
+              }
+            },
+            "id": "004a89b8-e213-4b91-bfc9-3e9c20a05276"
+          }
+        ],
+        "results": [
+          {
+            "operation": "loadRecovery",
+            "reply": {
+              "ok": true,
+              "value": {
+                "revision": 0,
+                "state": {
+                  "version": 1,
+                  "clientId": "desktop-primary",
+                  "checkouts": [],
+                  "openCheckoutIds": [],
+                  "selectedCheckoutId": null,
+                  "views": {},
+                  "drafts": [],
+                  "recentFiles": [],
+                  "sidebarWidth": 270
+                },
+                "errors": [],
+                "operations": []
+              }
+            }
+          },
+          {
+            "reply": {
+              "ok": true,
+              "value": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-kkRNn3/checkout"
+            }
+          },
+          {
+            "operation": "openCheckout",
+            "reply": {
+              "ok": true,
+              "value": {
+                "hostId": "moonbase-local",
+                "checkoutId": "c38795a2f14c83389a00d5c33910f57591be6a3e65566ac3900888ba8a8b1806",
+                "projectId": "4d260c2d251ac07d524e163cbf6c9262d7384f6a19748810ece77a20082824f6",
+                "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-kkRNn3/checkout",
+                "branch": "main"
+              }
+            }
+          },
+          {
+            "reply": {
+              "ok": true,
+              "value": null
+            }
+          },
+          {
+            "operation": "listDirectory",
+            "reply": {
+              "ok": true,
+              "value": {
+                "entries": [
+                  {
+                    "path": "a.ts",
+                    "directory": false,
+                    "ignored": false
+                  },
+                  {
+                    "path": "b.ts",
+                    "directory": false,
+                    "ignored": false
+                  }
+                ],
+                "partial": false
+              }
+            }
+          },
+          {
+            "operation": "persistRecovery",
+            "reply": {
+              "ok": true,
+              "value": {
+                "clientId": "desktop-primary",
+                "requestId": "24e80eb8-9d5e-4331-a2bf-1a27de90247a",
+                "previousRevision": 0,
+                "revision": 1
+              }
+            }
+          },
+          {
+            "operation": "gitStatus",
+            "reply": {
+              "ok": true,
+              "value": {
+                "branch": "main",
+                "changes": [
+                  {
+                    "path": "a.ts",
+                    "area": "staged"
+                  },
+                  {
+                    "path": "a.ts",
+                    "area": "unstaged"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "operation": "lookupFiles",
+            "reply": {
+              "ok": true,
+              "value": {
+                "matches": [
+                  {
+                    "path": "a.ts",
+                    "score": 247.996,
+                    "positions": [
+                      0,
+                      1,
+                      2,
+                      3
+                    ]
+                  }
+                ],
+                "history": [],
+                "partial": false
+              }
+            }
+          },
+          {
+            "operation": "readFile",
+            "reply": {
+              "ok": true,
+              "value": {
+                "text": "export const value = 'WORKING';\n",
+                "version": "21316020226accd1c3a21d0d680f51e9f0c0431e2cd93010f8e43c31d47e1c40"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "desktop-rapid-native-Open--ad18a--the-dialog-held-discovery--repeat2",
+      "holdDiscovery": true,
+      "events": [
+        {
+          "time": 336.40000000596046,
+          "state": {
+            "dialogs": 0,
+            "focus": "BODY"
+          }
+        },
+        {
+          "time": 377.69999998807907,
+          "state": {
+            "dialogs": 0,
+            "focus": "BUTTON"
+          }
+        },
+        {
+          "time": 470.40000000596046,
+          "state": {
+            "dialogs": 0,
+            "focus": "BUTTON",
+            "selected": "checkout \u00b7 main"
+          }
+        },
+        {
+          "time": 495,
+          "state": {
+            "dialogs": 1,
+            "focus": "combobox",
+            "selected": "checkout \u00b7 main"
+          }
+        },
+        {
+          "time": 813.4000000059605,
+          "state": {
+            "dialogs": 0,
+            "focus": "BODY",
+            "selected": "checkout \u00b7 main"
+          }
+        },
+        {
+          "time": 814.5,
+          "state": {
+            "dialogs": 0,
+            "focus": "a.ts editor",
+            "selected": "checkout \u00b7 main"
+          }
+        }
+      ],
+      "io": {
+        "calls": [
+          {
+            "method": "command",
+            "input": {
+              "operation": "loadRecovery",
+              "input": {
+                "clientId": "desktop-primary"
+              }
+            },
+            "id": "8c29c2c1-5294-4d5b-a328-fc661e431265"
+          },
+          {
+            "method": "choose-checkout",
+            "input": null,
+            "id": "35d12fe7-f324-48c4-869f-f1bbf77e8d34"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "openCheckout",
+              "input": {
+                "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-dJRG9Q/checkout"
+              }
+            },
+            "id": "a7b99a7b-8505-468c-aafe-3bb87f944062"
+          },
+          {
+            "method": "watch",
+            "input": {
+              "checkout": {
+                "hostId": "moonbase-local",
+                "checkoutId": "f32149903c4738f9e4bd708f2c099fde6d5642ed4578965c78d6628dc175d7de",
+                "projectId": "09997b89c61ebcb82a53d48069d797a7a2e0e4c63cd05efc45f578053001a2e7",
+                "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-dJRG9Q/checkout",
+                "branch": "main"
+              },
+              "paths": [
+                ""
+              ]
+            },
+            "id": "4ccc5d27-e530-4c8f-a068-3d8ea9953307"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "listDirectory",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "f32149903c4738f9e4bd708f2c099fde6d5642ed4578965c78d6628dc175d7de",
+                  "projectId": "09997b89c61ebcb82a53d48069d797a7a2e0e4c63cd05efc45f578053001a2e7",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-dJRG9Q/checkout",
+                  "branch": "main"
+                },
+                "path": "",
+                "hideIgnored": false
+              }
+            },
+            "id": "54af11dc-a229-43db-9fbb-3aa9b96aae0d"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "gitStatus",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "f32149903c4738f9e4bd708f2c099fde6d5642ed4578965c78d6628dc175d7de",
+                  "projectId": "09997b89c61ebcb82a53d48069d797a7a2e0e4c63cd05efc45f578053001a2e7",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-dJRG9Q/checkout",
+                  "branch": "main"
+                }
+              }
+            },
+            "id": "9cf8efc3-dcc7-4d70-95d2-8df8c0ef8119"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "persistRecovery",
+              "input": {
+                "clientId": "desktop-primary",
+                "requestId": "dbb16aa7-885e-405e-b62c-bdd550d563d2",
+                "expectedRevision": 0,
+                "state": {
+                  "version": 1,
+                  "clientId": "desktop-primary",
+                  "checkouts": [
+                    {
+                      "hostId": "moonbase-local",
+                      "checkoutId": "f32149903c4738f9e4bd708f2c099fde6d5642ed4578965c78d6628dc175d7de",
+                      "projectId": "09997b89c61ebcb82a53d48069d797a7a2e0e4c63cd05efc45f578053001a2e7",
+                      "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-dJRG9Q/checkout",
+                      "branch": "main"
+                    }
+                  ],
+                  "openCheckoutIds": [
+                    "f32149903c4738f9e4bd708f2c099fde6d5642ed4578965c78d6628dc175d7de"
+                  ],
+                  "selectedCheckoutId": "f32149903c4738f9e4bd708f2c099fde6d5642ed4578965c78d6628dc175d7de",
+                  "views": {
+                    "f32149903c4738f9e4bd708f2c099fde6d5642ed4578965c78d6628dc175d7de": {
+                      "openFiles": [],
+                      "active": "",
+                      "preview": null,
+                      "fileViews": {},
+                      "positions": {},
+                      "tree": {
+                        "expanded": [],
+                        "selected": [],
+                        "focus": "",
+                        "scroll": 0,
+                        "hideIgnored": false
+                      }
+                    }
+                  },
+                  "drafts": [],
+                  "recentFiles": [],
+                  "sidebarWidth": 270
+                }
+              }
+            },
+            "id": "3ddf6b50-f909-4000-9d74-5f840b5f48a6"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "lookupFiles",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "f32149903c4738f9e4bd708f2c099fde6d5642ed4578965c78d6628dc175d7de",
+                  "projectId": "09997b89c61ebcb82a53d48069d797a7a2e0e4c63cd05efc45f578053001a2e7",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-dJRG9Q/checkout",
+                  "branch": "main"
+                },
+                "query": "a.ts",
+                "limit": 100,
+                "history": []
+              }
+            },
+            "id": "0ab42dcc-708e-49d7-acbe-8a783a74ff8a"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "readFile",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "f32149903c4738f9e4bd708f2c099fde6d5642ed4578965c78d6628dc175d7de",
+                  "projectId": "09997b89c61ebcb82a53d48069d797a7a2e0e4c63cd05efc45f578053001a2e7",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-dJRG9Q/checkout",
+                  "branch": "main"
+                },
+                "path": "a.ts"
+              }
+            },
+            "id": "b090b74a-ffc2-4dbd-8383-6307372d58f1"
+          }
+        ],
+        "results": [
+          {
+            "operation": "loadRecovery",
+            "reply": {
+              "ok": true,
+              "value": {
+                "revision": 0,
+                "state": {
+                  "version": 1,
+                  "clientId": "desktop-primary",
+                  "checkouts": [],
+                  "openCheckoutIds": [],
+                  "selectedCheckoutId": null,
+                  "views": {},
+                  "drafts": [],
+                  "recentFiles": [],
+                  "sidebarWidth": 270
+                },
+                "errors": [],
+                "operations": []
+              }
+            }
+          },
+          {
+            "reply": {
+              "ok": true,
+              "value": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-dJRG9Q/checkout"
+            }
+          },
+          {
+            "operation": "openCheckout",
+            "reply": {
+              "ok": true,
+              "value": {
+                "hostId": "moonbase-local",
+                "checkoutId": "f32149903c4738f9e4bd708f2c099fde6d5642ed4578965c78d6628dc175d7de",
+                "projectId": "09997b89c61ebcb82a53d48069d797a7a2e0e4c63cd05efc45f578053001a2e7",
+                "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-dJRG9Q/checkout",
+                "branch": "main"
+              }
+            }
+          },
+          {
+            "reply": {
+              "ok": true,
+              "value": null
+            }
+          },
+          {
+            "operation": "listDirectory",
+            "reply": {
+              "ok": true,
+              "value": {
+                "entries": [
+                  {
+                    "path": "a.ts",
+                    "directory": false,
+                    "ignored": false
+                  },
+                  {
+                    "path": "b.ts",
+                    "directory": false,
+                    "ignored": false
+                  }
+                ],
+                "partial": false
+              }
+            }
+          },
+          {
+            "operation": "gitStatus",
+            "reply": {
+              "ok": true,
+              "value": {
+                "branch": "main",
+                "changes": [
+                  {
+                    "path": "a.ts",
+                    "area": "staged"
+                  },
+                  {
+                    "path": "a.ts",
+                    "area": "unstaged"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "operation": "persistRecovery",
+            "reply": {
+              "ok": true,
+              "value": {
+                "clientId": "desktop-primary",
+                "requestId": "dbb16aa7-885e-405e-b62c-bdd550d563d2",
+                "previousRevision": 0,
+                "revision": 1
+              }
+            }
+          },
+          {
+            "operation": "lookupFiles",
+            "reply": {
+              "ok": true,
+              "value": {
+                "matches": [
+                  {
+                    "path": "a.ts",
+                    "score": 247.996,
+                    "positions": [
+                      0,
+                      1,
+                      2,
+                      3
+                    ]
+                  }
+                ],
+                "history": [],
+                "partial": false
+              }
+            }
+          },
+          {
+            "operation": "readFile",
+            "reply": {
+              "ok": true,
+              "value": {
+                "text": "export const value = 'WORKING';\n",
+                "version": "21316020226accd1c3a21d0d680f51e9f0c0431e2cd93010f8e43c31d47e1c40"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "desktop-rapid-native-Open--ad18a--the-dialog-held-discovery--repeat3",
+      "holdDiscovery": true,
+      "events": [
+        {
+          "time": 291.09999999403954,
+          "state": {
+            "dialogs": 0,
+            "focus": "BODY"
+          }
+        },
+        {
+          "time": 302.30000001192093,
+          "state": {
+            "dialogs": 0,
+            "focus": "BUTTON"
+          }
+        },
+        {
+          "time": 390.90000000596046,
+          "state": {
+            "dialogs": 0,
+            "focus": "BUTTON",
+            "selected": "checkout \u00b7 main"
+          }
+        },
+        {
+          "time": 418.40000000596046,
+          "state": {
+            "dialogs": 1,
+            "focus": "combobox",
+            "selected": "checkout \u00b7 main"
+          }
+        },
+        {
+          "time": 734.9000000059605,
+          "state": {
+            "dialogs": 0,
+            "focus": "BODY",
+            "selected": "checkout \u00b7 main"
+          }
+        },
+        {
+          "time": 735.9000000059605,
+          "state": {
+            "dialogs": 0,
+            "focus": "a.ts editor",
+            "selected": "checkout \u00b7 main"
+          }
+        }
+      ],
+      "io": {
+        "calls": [
+          {
+            "method": "command",
+            "input": {
+              "operation": "loadRecovery",
+              "input": {
+                "clientId": "desktop-primary"
+              }
+            },
+            "id": "c4015a5d-02b4-4679-bc2c-e81dfd534a1d"
+          },
+          {
+            "method": "choose-checkout",
+            "input": null,
+            "id": "57f45532-0a8a-4202-8a30-1a5f3b86f0fc"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "openCheckout",
+              "input": {
+                "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-yP4I2E/checkout"
+              }
+            },
+            "id": "988b3467-2e89-4d72-aab2-63100c63473c"
+          },
+          {
+            "method": "watch",
+            "input": {
+              "checkout": {
+                "hostId": "moonbase-local",
+                "checkoutId": "e64a52497955a215726dd6b8584aa7cc70694a4ddef6a4c9dd46a5be1a0a182d",
+                "projectId": "e3ed6e148c2445bf49987696d6a5fe388ad0441e71065558aa6ef12d5dc3f78d",
+                "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-yP4I2E/checkout",
+                "branch": "main"
+              },
+              "paths": [
+                ""
+              ]
+            },
+            "id": "d2a51d73-ee7f-41ff-b1df-a0033f5abd64"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "listDirectory",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "e64a52497955a215726dd6b8584aa7cc70694a4ddef6a4c9dd46a5be1a0a182d",
+                  "projectId": "e3ed6e148c2445bf49987696d6a5fe388ad0441e71065558aa6ef12d5dc3f78d",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-yP4I2E/checkout",
+                  "branch": "main"
+                },
+                "path": "",
+                "hideIgnored": false
+              }
+            },
+            "id": "80894ac4-c982-4fc3-b9c5-29efb41d8512"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "gitStatus",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "e64a52497955a215726dd6b8584aa7cc70694a4ddef6a4c9dd46a5be1a0a182d",
+                  "projectId": "e3ed6e148c2445bf49987696d6a5fe388ad0441e71065558aa6ef12d5dc3f78d",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-yP4I2E/checkout",
+                  "branch": "main"
+                }
+              }
+            },
+            "id": "a3c57d96-e303-43e7-8d65-18461bb8f093"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "persistRecovery",
+              "input": {
+                "clientId": "desktop-primary",
+                "requestId": "46521608-e9af-452e-b6ad-1120df97b94e",
+                "expectedRevision": 0,
+                "state": {
+                  "version": 1,
+                  "clientId": "desktop-primary",
+                  "checkouts": [
+                    {
+                      "hostId": "moonbase-local",
+                      "checkoutId": "e64a52497955a215726dd6b8584aa7cc70694a4ddef6a4c9dd46a5be1a0a182d",
+                      "projectId": "e3ed6e148c2445bf49987696d6a5fe388ad0441e71065558aa6ef12d5dc3f78d",
+                      "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-yP4I2E/checkout",
+                      "branch": "main"
+                    }
+                  ],
+                  "openCheckoutIds": [
+                    "e64a52497955a215726dd6b8584aa7cc70694a4ddef6a4c9dd46a5be1a0a182d"
+                  ],
+                  "selectedCheckoutId": "e64a52497955a215726dd6b8584aa7cc70694a4ddef6a4c9dd46a5be1a0a182d",
+                  "views": {
+                    "e64a52497955a215726dd6b8584aa7cc70694a4ddef6a4c9dd46a5be1a0a182d": {
+                      "openFiles": [],
+                      "active": "",
+                      "preview": null,
+                      "fileViews": {},
+                      "positions": {},
+                      "tree": {
+                        "expanded": [],
+                        "selected": [],
+                        "focus": "",
+                        "scroll": 0,
+                        "hideIgnored": false
+                      }
+                    }
+                  },
+                  "drafts": [],
+                  "recentFiles": [],
+                  "sidebarWidth": 270
+                }
+              }
+            },
+            "id": "4f06356d-f21a-41cf-9819-54ebc71cc93c"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "lookupFiles",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "e64a52497955a215726dd6b8584aa7cc70694a4ddef6a4c9dd46a5be1a0a182d",
+                  "projectId": "e3ed6e148c2445bf49987696d6a5fe388ad0441e71065558aa6ef12d5dc3f78d",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-yP4I2E/checkout",
+                  "branch": "main"
+                },
+                "query": "a.ts",
+                "limit": 100,
+                "history": []
+              }
+            },
+            "id": "541f6ec4-9f4b-4d46-9a91-9eebff2abd30"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "readFile",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "e64a52497955a215726dd6b8584aa7cc70694a4ddef6a4c9dd46a5be1a0a182d",
+                  "projectId": "e3ed6e148c2445bf49987696d6a5fe388ad0441e71065558aa6ef12d5dc3f78d",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-yP4I2E/checkout",
+                  "branch": "main"
+                },
+                "path": "a.ts"
+              }
+            },
+            "id": "836f23ba-ae5b-4d26-9216-96629c5e7080"
+          }
+        ],
+        "results": [
+          {
+            "operation": "loadRecovery",
+            "reply": {
+              "ok": true,
+              "value": {
+                "revision": 0,
+                "state": {
+                  "version": 1,
+                  "clientId": "desktop-primary",
+                  "checkouts": [],
+                  "openCheckoutIds": [],
+                  "selectedCheckoutId": null,
+                  "views": {},
+                  "drafts": [],
+                  "recentFiles": [],
+                  "sidebarWidth": 270
+                },
+                "errors": [],
+                "operations": []
+              }
+            }
+          },
+          {
+            "reply": {
+              "ok": true,
+              "value": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-yP4I2E/checkout"
+            }
+          },
+          {
+            "operation": "openCheckout",
+            "reply": {
+              "ok": true,
+              "value": {
+                "hostId": "moonbase-local",
+                "checkoutId": "e64a52497955a215726dd6b8584aa7cc70694a4ddef6a4c9dd46a5be1a0a182d",
+                "projectId": "e3ed6e148c2445bf49987696d6a5fe388ad0441e71065558aa6ef12d5dc3f78d",
+                "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-yP4I2E/checkout",
+                "branch": "main"
+              }
+            }
+          },
+          {
+            "reply": {
+              "ok": true,
+              "value": null
+            }
+          },
+          {
+            "operation": "listDirectory",
+            "reply": {
+              "ok": true,
+              "value": {
+                "entries": [
+                  {
+                    "path": "a.ts",
+                    "directory": false,
+                    "ignored": false
+                  },
+                  {
+                    "path": "b.ts",
+                    "directory": false,
+                    "ignored": false
+                  }
+                ],
+                "partial": false
+              }
+            }
+          },
+          {
+            "operation": "gitStatus",
+            "reply": {
+              "ok": true,
+              "value": {
+                "branch": "main",
+                "changes": [
+                  {
+                    "path": "a.ts",
+                    "area": "staged"
+                  },
+                  {
+                    "path": "a.ts",
+                    "area": "unstaged"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "operation": "persistRecovery",
+            "reply": {
+              "ok": true,
+              "value": {
+                "clientId": "desktop-primary",
+                "requestId": "46521608-e9af-452e-b6ad-1120df97b94e",
+                "previousRevision": 0,
+                "revision": 1
+              }
+            }
+          },
+          {
+            "operation": "lookupFiles",
+            "reply": {
+              "ok": true,
+              "value": {
+                "matches": [
+                  {
+                    "path": "a.ts",
+                    "score": 247.996,
+                    "positions": [
+                      0,
+                      1,
+                      2,
+                      3
+                    ]
+                  }
+                ],
+                "history": [],
+                "partial": false
+              }
+            }
+          },
+          {
+            "operation": "readFile",
+            "reply": {
+              "ok": true,
+              "value": {
+                "text": "export const value = 'WORKING';\n",
+                "version": "21316020226accd1c3a21d0d680f51e9f0c0431e2cd93010f8e43c31d47e1c40"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "desktop-rapid-native-Open--ad18a--the-dialog-held-discovery--repeat4",
+      "holdDiscovery": true,
+      "events": [
+        {
+          "time": 290.2999999821186,
+          "state": {
+            "dialogs": 0,
+            "focus": "BODY"
+          }
+        },
+        {
+          "time": 311,
+          "state": {
+            "dialogs": 0,
+            "focus": "BUTTON"
+          }
+        },
+        {
+          "time": 398.2999999821186,
+          "state": {
+            "dialogs": 0,
+            "focus": "BUTTON",
+            "selected": "checkout \u00b7 main"
+          }
+        },
+        {
+          "time": 425.69999998807907,
+          "state": {
+            "dialogs": 1,
+            "focus": "combobox",
+            "selected": "checkout \u00b7 main"
+          }
+        },
+        {
+          "time": 734.5,
+          "state": {
+            "dialogs": 0,
+            "focus": "BODY",
+            "selected": "checkout \u00b7 main"
+          }
+        },
+        {
+          "time": 735.5999999940395,
+          "state": {
+            "dialogs": 0,
+            "focus": "a.ts editor",
+            "selected": "checkout \u00b7 main"
+          }
+        }
+      ],
+      "io": {
+        "calls": [
+          {
+            "method": "command",
+            "input": {
+              "operation": "loadRecovery",
+              "input": {
+                "clientId": "desktop-primary"
+              }
+            },
+            "id": "6485c1f6-54da-4330-974d-b815dc18c5e4"
+          },
+          {
+            "method": "choose-checkout",
+            "input": null,
+            "id": "781baa61-1819-4584-9ff1-2bc5eedb0e88"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "openCheckout",
+              "input": {
+                "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-TvxB5k/checkout"
+              }
+            },
+            "id": "5849f77c-3153-4008-8a57-90cfcb255d7a"
+          },
+          {
+            "method": "watch",
+            "input": {
+              "checkout": {
+                "hostId": "moonbase-local",
+                "checkoutId": "0a9c17e1e60a05e6a9ee0dddcf474f549092e20e8316afd1e8450f94d7c1b6aa",
+                "projectId": "cdf4540d6be86018daa64dc4a83564d7de18321a8c345cc22f4197e0f5fcf5b7",
+                "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-TvxB5k/checkout",
+                "branch": "main"
+              },
+              "paths": [
+                ""
+              ]
+            },
+            "id": "a358e304-a62b-4b45-a163-15d4b473bf07"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "listDirectory",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "0a9c17e1e60a05e6a9ee0dddcf474f549092e20e8316afd1e8450f94d7c1b6aa",
+                  "projectId": "cdf4540d6be86018daa64dc4a83564d7de18321a8c345cc22f4197e0f5fcf5b7",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-TvxB5k/checkout",
+                  "branch": "main"
+                },
+                "path": "",
+                "hideIgnored": false
+              }
+            },
+            "id": "65ec4c23-8134-4970-8d11-629f46cce40a"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "gitStatus",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "0a9c17e1e60a05e6a9ee0dddcf474f549092e20e8316afd1e8450f94d7c1b6aa",
+                  "projectId": "cdf4540d6be86018daa64dc4a83564d7de18321a8c345cc22f4197e0f5fcf5b7",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-TvxB5k/checkout",
+                  "branch": "main"
+                }
+              }
+            },
+            "id": "94670647-cada-4383-9957-f51889a39700"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "persistRecovery",
+              "input": {
+                "clientId": "desktop-primary",
+                "requestId": "c7e7c315-dd4f-4cef-8e0c-5a10000e87de",
+                "expectedRevision": 0,
+                "state": {
+                  "version": 1,
+                  "clientId": "desktop-primary",
+                  "checkouts": [
+                    {
+                      "hostId": "moonbase-local",
+                      "checkoutId": "0a9c17e1e60a05e6a9ee0dddcf474f549092e20e8316afd1e8450f94d7c1b6aa",
+                      "projectId": "cdf4540d6be86018daa64dc4a83564d7de18321a8c345cc22f4197e0f5fcf5b7",
+                      "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-TvxB5k/checkout",
+                      "branch": "main"
+                    }
+                  ],
+                  "openCheckoutIds": [
+                    "0a9c17e1e60a05e6a9ee0dddcf474f549092e20e8316afd1e8450f94d7c1b6aa"
+                  ],
+                  "selectedCheckoutId": "0a9c17e1e60a05e6a9ee0dddcf474f549092e20e8316afd1e8450f94d7c1b6aa",
+                  "views": {
+                    "0a9c17e1e60a05e6a9ee0dddcf474f549092e20e8316afd1e8450f94d7c1b6aa": {
+                      "openFiles": [],
+                      "active": "",
+                      "preview": null,
+                      "fileViews": {},
+                      "positions": {},
+                      "tree": {
+                        "expanded": [],
+                        "selected": [],
+                        "focus": "",
+                        "scroll": 0,
+                        "hideIgnored": false
+                      }
+                    }
+                  },
+                  "drafts": [],
+                  "recentFiles": [],
+                  "sidebarWidth": 270
+                }
+              }
+            },
+            "id": "0169e54f-dcfb-4fef-a14e-2e490b31d087"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "lookupFiles",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "0a9c17e1e60a05e6a9ee0dddcf474f549092e20e8316afd1e8450f94d7c1b6aa",
+                  "projectId": "cdf4540d6be86018daa64dc4a83564d7de18321a8c345cc22f4197e0f5fcf5b7",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-TvxB5k/checkout",
+                  "branch": "main"
+                },
+                "query": "a.ts",
+                "limit": 100,
+                "history": []
+              }
+            },
+            "id": "089103b2-3369-4dc6-a185-b4c698ab79fb"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "readFile",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "0a9c17e1e60a05e6a9ee0dddcf474f549092e20e8316afd1e8450f94d7c1b6aa",
+                  "projectId": "cdf4540d6be86018daa64dc4a83564d7de18321a8c345cc22f4197e0f5fcf5b7",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-TvxB5k/checkout",
+                  "branch": "main"
+                },
+                "path": "a.ts"
+              }
+            },
+            "id": "36a9e319-acdd-41a9-8361-f04eb9e52211"
+          }
+        ],
+        "results": [
+          {
+            "operation": "loadRecovery",
+            "reply": {
+              "ok": true,
+              "value": {
+                "revision": 0,
+                "state": {
+                  "version": 1,
+                  "clientId": "desktop-primary",
+                  "checkouts": [],
+                  "openCheckoutIds": [],
+                  "selectedCheckoutId": null,
+                  "views": {},
+                  "drafts": [],
+                  "recentFiles": [],
+                  "sidebarWidth": 270
+                },
+                "errors": [],
+                "operations": []
+              }
+            }
+          },
+          {
+            "reply": {
+              "ok": true,
+              "value": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-TvxB5k/checkout"
+            }
+          },
+          {
+            "operation": "openCheckout",
+            "reply": {
+              "ok": true,
+              "value": {
+                "hostId": "moonbase-local",
+                "checkoutId": "0a9c17e1e60a05e6a9ee0dddcf474f549092e20e8316afd1e8450f94d7c1b6aa",
+                "projectId": "cdf4540d6be86018daa64dc4a83564d7de18321a8c345cc22f4197e0f5fcf5b7",
+                "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-TvxB5k/checkout",
+                "branch": "main"
+              }
+            }
+          },
+          {
+            "reply": {
+              "ok": true,
+              "value": null
+            }
+          },
+          {
+            "operation": "listDirectory",
+            "reply": {
+              "ok": true,
+              "value": {
+                "entries": [
+                  {
+                    "path": "a.ts",
+                    "directory": false,
+                    "ignored": false
+                  },
+                  {
+                    "path": "b.ts",
+                    "directory": false,
+                    "ignored": false
+                  }
+                ],
+                "partial": false
+              }
+            }
+          },
+          {
+            "operation": "gitStatus",
+            "reply": {
+              "ok": true,
+              "value": {
+                "branch": "main",
+                "changes": [
+                  {
+                    "path": "a.ts",
+                    "area": "staged"
+                  },
+                  {
+                    "path": "a.ts",
+                    "area": "unstaged"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "operation": "persistRecovery",
+            "reply": {
+              "ok": true,
+              "value": {
+                "clientId": "desktop-primary",
+                "requestId": "c7e7c315-dd4f-4cef-8e0c-5a10000e87de",
+                "previousRevision": 0,
+                "revision": 1
+              }
+            }
+          },
+          {
+            "operation": "lookupFiles",
+            "reply": {
+              "ok": true,
+              "value": {
+                "matches": [
+                  {
+                    "path": "a.ts",
+                    "score": 247.996,
+                    "positions": [
+                      0,
+                      1,
+                      2,
+                      3
+                    ]
+                  }
+                ],
+                "history": [],
+                "partial": false
+              }
+            }
+          },
+          {
+            "operation": "readFile",
+            "reply": {
+              "ok": true,
+              "value": {
+                "text": "export const value = 'WORKING';\n",
+                "version": "21316020226accd1c3a21d0d680f51e9f0c0431e2cd93010f8e43c31d47e1c40"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "desktop-rapid-native-Open--f54d2-tains-the-dialog-immediate-",
+      "holdDiscovery": false,
+      "events": [
+        {
+          "time": 391,
+          "state": {
+            "dialogs": 0,
+            "focus": "BODY"
+          }
+        },
+        {
+          "time": 421,
+          "state": {
+            "dialogs": 0,
+            "focus": "BUTTON"
+          }
+        },
+        {
+          "time": 523,
+          "state": {
+            "dialogs": 0,
+            "focus": "BUTTON",
+            "selected": "checkout \u00b7 main"
+          }
+        },
+        {
+          "time": 561.9000000059605,
+          "state": {
+            "dialogs": 1,
+            "focus": "combobox",
+            "selected": "checkout \u00b7 main"
+          }
+        },
+        {
+          "time": 867.6999999880791,
+          "state": {
+            "dialogs": 0,
+            "focus": "BODY",
+            "selected": "checkout \u00b7 main"
+          }
+        },
+        {
+          "time": 868.9000000059605,
+          "state": {
+            "dialogs": 0,
+            "focus": "a.ts editor",
+            "selected": "checkout \u00b7 main"
+          }
+        }
+      ],
+      "io": {
+        "calls": [
+          {
+            "method": "command",
+            "input": {
+              "operation": "loadRecovery",
+              "input": {
+                "clientId": "desktop-primary"
+              }
+            },
+            "id": "fbfc4fba-2b6d-4919-bfbd-aa1034611f12"
+          },
+          {
+            "method": "choose-checkout",
+            "input": null,
+            "id": "e7de2a2b-3ab5-4ca6-9e64-f80edd46f325"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "openCheckout",
+              "input": {
+                "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-GHp0TI/checkout"
+              }
+            },
+            "id": "b516b920-d784-47f3-bda0-561a9542364e"
+          },
+          {
+            "method": "watch",
+            "input": {
+              "checkout": {
+                "hostId": "moonbase-local",
+                "checkoutId": "ef130af27367bb681fc8c9aa5daff0dc84b115670c97ddba17ce34f19eaaa95b",
+                "projectId": "9ab1783590408683a9d47a87e3c677e598dc0d9524069187cb0ef3c45d8736d5",
+                "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-GHp0TI/checkout",
+                "branch": "main"
+              },
+              "paths": [
+                ""
+              ]
+            },
+            "id": "1fe682d9-532b-4626-bcc8-6564b0450950"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "listDirectory",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "ef130af27367bb681fc8c9aa5daff0dc84b115670c97ddba17ce34f19eaaa95b",
+                  "projectId": "9ab1783590408683a9d47a87e3c677e598dc0d9524069187cb0ef3c45d8736d5",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-GHp0TI/checkout",
+                  "branch": "main"
+                },
+                "path": "",
+                "hideIgnored": false
+              }
+            },
+            "id": "7b033220-3781-48b3-bb8e-a8a01a267c61"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "gitStatus",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "ef130af27367bb681fc8c9aa5daff0dc84b115670c97ddba17ce34f19eaaa95b",
+                  "projectId": "9ab1783590408683a9d47a87e3c677e598dc0d9524069187cb0ef3c45d8736d5",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-GHp0TI/checkout",
+                  "branch": "main"
+                }
+              }
+            },
+            "id": "f4799afc-fe16-4e09-8369-438badeceb0b"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "persistRecovery",
+              "input": {
+                "clientId": "desktop-primary",
+                "requestId": "d598b513-f676-4f43-b2ba-355d5d54db8c",
+                "expectedRevision": 0,
+                "state": {
+                  "version": 1,
+                  "clientId": "desktop-primary",
+                  "checkouts": [
+                    {
+                      "hostId": "moonbase-local",
+                      "checkoutId": "ef130af27367bb681fc8c9aa5daff0dc84b115670c97ddba17ce34f19eaaa95b",
+                      "projectId": "9ab1783590408683a9d47a87e3c677e598dc0d9524069187cb0ef3c45d8736d5",
+                      "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-GHp0TI/checkout",
+                      "branch": "main"
+                    }
+                  ],
+                  "openCheckoutIds": [
+                    "ef130af27367bb681fc8c9aa5daff0dc84b115670c97ddba17ce34f19eaaa95b"
+                  ],
+                  "selectedCheckoutId": "ef130af27367bb681fc8c9aa5daff0dc84b115670c97ddba17ce34f19eaaa95b",
+                  "views": {
+                    "ef130af27367bb681fc8c9aa5daff0dc84b115670c97ddba17ce34f19eaaa95b": {
+                      "openFiles": [],
+                      "active": "",
+                      "preview": null,
+                      "fileViews": {},
+                      "positions": {},
+                      "tree": {
+                        "expanded": [],
+                        "selected": [],
+                        "focus": "",
+                        "scroll": 0,
+                        "hideIgnored": false
+                      }
+                    }
+                  },
+                  "drafts": [],
+                  "recentFiles": [],
+                  "sidebarWidth": 270
+                }
+              }
+            },
+            "id": "181e6bc8-fce8-4708-9940-2e8812dd37da"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "lookupFiles",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "ef130af27367bb681fc8c9aa5daff0dc84b115670c97ddba17ce34f19eaaa95b",
+                  "projectId": "9ab1783590408683a9d47a87e3c677e598dc0d9524069187cb0ef3c45d8736d5",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-GHp0TI/checkout",
+                  "branch": "main"
+                },
+                "query": "a.ts",
+                "limit": 100,
+                "history": []
+              }
+            },
+            "id": "8000109d-d1c1-41c5-bbfe-07c058288b7c"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "readFile",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "ef130af27367bb681fc8c9aa5daff0dc84b115670c97ddba17ce34f19eaaa95b",
+                  "projectId": "9ab1783590408683a9d47a87e3c677e598dc0d9524069187cb0ef3c45d8736d5",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-GHp0TI/checkout",
+                  "branch": "main"
+                },
+                "path": "a.ts"
+              }
+            },
+            "id": "08bf1a57-a1ad-49e4-a341-cdb299cf3417"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "persistRecovery",
+              "input": {
+                "clientId": "desktop-primary",
+                "requestId": "0c94113f-13b7-4c25-a4fe-886ca2a7d54e",
+                "expectedRevision": 1,
+                "state": {
+                  "version": 1,
+                  "clientId": "desktop-primary",
+                  "checkouts": [
+                    {
+                      "hostId": "moonbase-local",
+                      "checkoutId": "ef130af27367bb681fc8c9aa5daff0dc84b115670c97ddba17ce34f19eaaa95b",
+                      "projectId": "9ab1783590408683a9d47a87e3c677e598dc0d9524069187cb0ef3c45d8736d5",
+                      "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-GHp0TI/checkout",
+                      "branch": "main"
+                    }
+                  ],
+                  "openCheckoutIds": [
+                    "ef130af27367bb681fc8c9aa5daff0dc84b115670c97ddba17ce34f19eaaa95b"
+                  ],
+                  "selectedCheckoutId": "ef130af27367bb681fc8c9aa5daff0dc84b115670c97ddba17ce34f19eaaa95b",
+                  "views": {
+                    "ef130af27367bb681fc8c9aa5daff0dc84b115670c97ddba17ce34f19eaaa95b": {
+                      "openFiles": [
+                        "a.ts"
+                      ],
+                      "active": "a.ts",
+                      "preview": null,
+                      "fileViews": {
+                        "a.ts": "file"
+                      },
+                      "positions": {},
+                      "tree": {
+                        "expanded": [],
+                        "selected": [],
+                        "focus": "",
+                        "scroll": 0,
+                        "hideIgnored": false
+                      }
+                    }
+                  },
+                  "drafts": [],
+                  "recentFiles": [
+                    {
+                      "checkout": {
+                        "hostId": "moonbase-local",
+                        "checkoutId": "ef130af27367bb681fc8c9aa5daff0dc84b115670c97ddba17ce34f19eaaa95b",
+                        "projectId": "9ab1783590408683a9d47a87e3c677e598dc0d9524069187cb0ef3c45d8736d5",
+                        "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-GHp0TI/checkout",
+                        "branch": "main"
+                      },
+                      "path": "a.ts"
+                    }
+                  ],
+                  "sidebarWidth": 270
+                }
+              }
+            },
+            "id": "cfd42ce3-a12f-4bbf-a495-f7dea2c8798c"
+          }
+        ],
+        "results": [
+          {
+            "operation": "loadRecovery",
+            "reply": {
+              "ok": true,
+              "value": {
+                "revision": 0,
+                "state": {
+                  "version": 1,
+                  "clientId": "desktop-primary",
+                  "checkouts": [],
+                  "openCheckoutIds": [],
+                  "selectedCheckoutId": null,
+                  "views": {},
+                  "drafts": [],
+                  "recentFiles": [],
+                  "sidebarWidth": 270
+                },
+                "errors": [],
+                "operations": []
+              }
+            }
+          },
+          {
+            "reply": {
+              "ok": true,
+              "value": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-GHp0TI/checkout"
+            }
+          },
+          {
+            "operation": "openCheckout",
+            "reply": {
+              "ok": true,
+              "value": {
+                "hostId": "moonbase-local",
+                "checkoutId": "ef130af27367bb681fc8c9aa5daff0dc84b115670c97ddba17ce34f19eaaa95b",
+                "projectId": "9ab1783590408683a9d47a87e3c677e598dc0d9524069187cb0ef3c45d8736d5",
+                "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-GHp0TI/checkout",
+                "branch": "main"
+              }
+            }
+          },
+          {
+            "reply": {
+              "ok": true,
+              "value": null
+            }
+          },
+          {
+            "operation": "listDirectory",
+            "reply": {
+              "ok": true,
+              "value": {
+                "entries": [
+                  {
+                    "path": "a.ts",
+                    "directory": false,
+                    "ignored": false
+                  },
+                  {
+                    "path": "b.ts",
+                    "directory": false,
+                    "ignored": false
+                  }
+                ],
+                "partial": false
+              }
+            }
+          },
+          {
+            "operation": "gitStatus",
+            "reply": {
+              "ok": true,
+              "value": {
+                "branch": "main",
+                "changes": [
+                  {
+                    "path": "a.ts",
+                    "area": "staged"
+                  },
+                  {
+                    "path": "a.ts",
+                    "area": "unstaged"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "operation": "persistRecovery",
+            "reply": {
+              "ok": true,
+              "value": {
+                "clientId": "desktop-primary",
+                "requestId": "d598b513-f676-4f43-b2ba-355d5d54db8c",
+                "previousRevision": 0,
+                "revision": 1
+              }
+            }
+          },
+          {
+            "operation": "lookupFiles",
+            "reply": {
+              "ok": true,
+              "value": {
+                "matches": [
+                  {
+                    "path": "a.ts",
+                    "score": 247.996,
+                    "positions": [
+                      0,
+                      1,
+                      2,
+                      3
+                    ]
+                  }
+                ],
+                "history": [],
+                "partial": false
+              }
+            }
+          },
+          {
+            "operation": "readFile",
+            "reply": {
+              "ok": true,
+              "value": {
+                "text": "export const value = 'WORKING';\n",
+                "version": "21316020226accd1c3a21d0d680f51e9f0c0431e2cd93010f8e43c31d47e1c40"
+              }
+            }
+          },
+          {
+            "operation": "persistRecovery",
+            "reply": {
+              "ok": true,
+              "value": {
+                "clientId": "desktop-primary",
+                "requestId": "0c94113f-13b7-4c25-a4fe-886ca2a7d54e",
+                "previousRevision": 1,
+                "revision": 2
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "desktop-rapid-native-Open--f54d2-tains-the-dialog-immediate--repeat1",
+      "holdDiscovery": false,
+      "events": [
+        {
+          "time": 305.19999998807907,
+          "state": {
+            "dialogs": 0,
+            "focus": "BODY"
+          }
+        },
+        {
+          "time": 325.5,
+          "state": {
+            "dialogs": 0,
+            "focus": "BUTTON"
+          }
+        },
+        {
+          "time": 411.90000000596046,
+          "state": {
+            "dialogs": 0,
+            "focus": "BUTTON",
+            "selected": "checkout \u00b7 main"
+          }
+        },
+        {
+          "time": 445.5,
+          "state": {
+            "dialogs": 1,
+            "focus": "combobox",
+            "selected": "checkout \u00b7 main"
+          }
+        },
+        {
+          "time": 783.7999999821186,
+          "state": {
+            "dialogs": 0,
+            "focus": "BODY",
+            "selected": "checkout \u00b7 main"
+          }
+        },
+        {
+          "time": 785.0999999940395,
+          "state": {
+            "dialogs": 0,
+            "focus": "a.ts editor",
+            "selected": "checkout \u00b7 main"
+          }
+        }
+      ],
+      "io": {
+        "calls": [
+          {
+            "method": "command",
+            "input": {
+              "operation": "loadRecovery",
+              "input": {
+                "clientId": "desktop-primary"
+              }
+            },
+            "id": "6a14214e-89de-49e3-a11b-f629c473a0b4"
+          },
+          {
+            "method": "choose-checkout",
+            "input": null,
+            "id": "cb63f007-382b-48c0-8f59-281b0366cc1b"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "openCheckout",
+              "input": {
+                "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-xGjVZY/checkout"
+              }
+            },
+            "id": "673e2c16-d622-43e9-9103-6ca64a603f4c"
+          },
+          {
+            "method": "watch",
+            "input": {
+              "checkout": {
+                "hostId": "moonbase-local",
+                "checkoutId": "d222fd20b3547f5242353c953c0ee85c1918b1b0a0f146639731f7e24c5b5565",
+                "projectId": "c5a236ad4bfa94a9747150339fdd55357c78a6e483edf69391a91d75f20eff0c",
+                "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-xGjVZY/checkout",
+                "branch": "main"
+              },
+              "paths": [
+                ""
+              ]
+            },
+            "id": "d3543b61-28cb-47a0-bbd8-8264f2d47e34"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "listDirectory",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "d222fd20b3547f5242353c953c0ee85c1918b1b0a0f146639731f7e24c5b5565",
+                  "projectId": "c5a236ad4bfa94a9747150339fdd55357c78a6e483edf69391a91d75f20eff0c",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-xGjVZY/checkout",
+                  "branch": "main"
+                },
+                "path": "",
+                "hideIgnored": false
+              }
+            },
+            "id": "0dccd8b4-ba91-45f4-8877-3d7d11c035f1"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "gitStatus",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "d222fd20b3547f5242353c953c0ee85c1918b1b0a0f146639731f7e24c5b5565",
+                  "projectId": "c5a236ad4bfa94a9747150339fdd55357c78a6e483edf69391a91d75f20eff0c",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-xGjVZY/checkout",
+                  "branch": "main"
+                }
+              }
+            },
+            "id": "9dfc3529-5654-4908-ba8e-d3a64913e393"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "persistRecovery",
+              "input": {
+                "clientId": "desktop-primary",
+                "requestId": "c0e43ae6-82b1-4f3c-870d-549a2420318e",
+                "expectedRevision": 0,
+                "state": {
+                  "version": 1,
+                  "clientId": "desktop-primary",
+                  "checkouts": [
+                    {
+                      "hostId": "moonbase-local",
+                      "checkoutId": "d222fd20b3547f5242353c953c0ee85c1918b1b0a0f146639731f7e24c5b5565",
+                      "projectId": "c5a236ad4bfa94a9747150339fdd55357c78a6e483edf69391a91d75f20eff0c",
+                      "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-xGjVZY/checkout",
+                      "branch": "main"
+                    }
+                  ],
+                  "openCheckoutIds": [
+                    "d222fd20b3547f5242353c953c0ee85c1918b1b0a0f146639731f7e24c5b5565"
+                  ],
+                  "selectedCheckoutId": "d222fd20b3547f5242353c953c0ee85c1918b1b0a0f146639731f7e24c5b5565",
+                  "views": {
+                    "d222fd20b3547f5242353c953c0ee85c1918b1b0a0f146639731f7e24c5b5565": {
+                      "openFiles": [],
+                      "active": "",
+                      "preview": null,
+                      "fileViews": {},
+                      "positions": {},
+                      "tree": {
+                        "expanded": [],
+                        "selected": [],
+                        "focus": "",
+                        "scroll": 0,
+                        "hideIgnored": false
+                      }
+                    }
+                  },
+                  "drafts": [],
+                  "recentFiles": [],
+                  "sidebarWidth": 270
+                }
+              }
+            },
+            "id": "dd2970a3-f1d1-44fe-a9b7-2ea21bdddbb2"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "lookupFiles",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "d222fd20b3547f5242353c953c0ee85c1918b1b0a0f146639731f7e24c5b5565",
+                  "projectId": "c5a236ad4bfa94a9747150339fdd55357c78a6e483edf69391a91d75f20eff0c",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-xGjVZY/checkout",
+                  "branch": "main"
+                },
+                "query": "a.ts",
+                "limit": 100,
+                "history": []
+              }
+            },
+            "id": "04564619-0ccf-4066-a3f7-6c7e582de11f"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "readFile",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "d222fd20b3547f5242353c953c0ee85c1918b1b0a0f146639731f7e24c5b5565",
+                  "projectId": "c5a236ad4bfa94a9747150339fdd55357c78a6e483edf69391a91d75f20eff0c",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-xGjVZY/checkout",
+                  "branch": "main"
+                },
+                "path": "a.ts"
+              }
+            },
+            "id": "f203ef09-192b-4544-9781-6be44a80930c"
+          }
+        ],
+        "results": [
+          {
+            "operation": "loadRecovery",
+            "reply": {
+              "ok": true,
+              "value": {
+                "revision": 0,
+                "state": {
+                  "version": 1,
+                  "clientId": "desktop-primary",
+                  "checkouts": [],
+                  "openCheckoutIds": [],
+                  "selectedCheckoutId": null,
+                  "views": {},
+                  "drafts": [],
+                  "recentFiles": [],
+                  "sidebarWidth": 270
+                },
+                "errors": [],
+                "operations": []
+              }
+            }
+          },
+          {
+            "reply": {
+              "ok": true,
+              "value": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-xGjVZY/checkout"
+            }
+          },
+          {
+            "operation": "openCheckout",
+            "reply": {
+              "ok": true,
+              "value": {
+                "hostId": "moonbase-local",
+                "checkoutId": "d222fd20b3547f5242353c953c0ee85c1918b1b0a0f146639731f7e24c5b5565",
+                "projectId": "c5a236ad4bfa94a9747150339fdd55357c78a6e483edf69391a91d75f20eff0c",
+                "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-xGjVZY/checkout",
+                "branch": "main"
+              }
+            }
+          },
+          {
+            "reply": {
+              "ok": true,
+              "value": null
+            }
+          },
+          {
+            "operation": "listDirectory",
+            "reply": {
+              "ok": true,
+              "value": {
+                "entries": [
+                  {
+                    "path": "a.ts",
+                    "directory": false,
+                    "ignored": false
+                  },
+                  {
+                    "path": "b.ts",
+                    "directory": false,
+                    "ignored": false
+                  }
+                ],
+                "partial": false
+              }
+            }
+          },
+          {
+            "operation": "gitStatus",
+            "reply": {
+              "ok": true,
+              "value": {
+                "branch": "main",
+                "changes": [
+                  {
+                    "path": "a.ts",
+                    "area": "staged"
+                  },
+                  {
+                    "path": "a.ts",
+                    "area": "unstaged"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "operation": "persistRecovery",
+            "reply": {
+              "ok": true,
+              "value": {
+                "clientId": "desktop-primary",
+                "requestId": "c0e43ae6-82b1-4f3c-870d-549a2420318e",
+                "previousRevision": 0,
+                "revision": 1
+              }
+            }
+          },
+          {
+            "operation": "lookupFiles",
+            "reply": {
+              "ok": true,
+              "value": {
+                "matches": [
+                  {
+                    "path": "a.ts",
+                    "score": 247.996,
+                    "positions": [
+                      0,
+                      1,
+                      2,
+                      3
+                    ]
+                  }
+                ],
+                "history": [],
+                "partial": false
+              }
+            }
+          },
+          {
+            "operation": "readFile",
+            "reply": {
+              "ok": true,
+              "value": {
+                "text": "export const value = 'WORKING';\n",
+                "version": "21316020226accd1c3a21d0d680f51e9f0c0431e2cd93010f8e43c31d47e1c40"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "desktop-rapid-native-Open--f54d2-tains-the-dialog-immediate--repeat2",
+      "holdDiscovery": false,
+      "events": [
+        {
+          "time": 307.89999997615814,
+          "state": {
+            "dialogs": 0,
+            "focus": "BODY"
+          }
+        },
+        {
+          "time": 338.09999999403954,
+          "state": {
+            "dialogs": 0,
+            "focus": "BUTTON"
+          }
+        },
+        {
+          "time": 430.89999997615814,
+          "state": {
+            "dialogs": 0,
+            "focus": "BUTTON",
+            "selected": "checkout \u00b7 main"
+          }
+        },
+        {
+          "time": 478.5,
+          "state": {
+            "dialogs": 0,
+            "focus": "Files",
+            "selected": "checkout \u00b7 main"
+          }
+        },
+        {
+          "time": 486.5,
+          "state": {
+            "dialogs": 0,
+            "focus": "BUTTON",
+            "selected": "checkout \u00b7 main"
+          }
+        },
+        {
+          "time": 493.69999998807907,
+          "state": {
+            "dialogs": 1,
+            "focus": "combobox",
+            "selected": "checkout \u00b7 main"
+          }
+        },
+        {
+          "time": 794.5999999940395,
+          "state": {
+            "dialogs": 0,
+            "focus": "BODY",
+            "selected": "checkout \u00b7 main"
+          }
+        },
+        {
+          "time": 795.5999999940395,
+          "state": {
+            "dialogs": 0,
+            "focus": "a.ts editor",
+            "selected": "checkout \u00b7 main"
+          }
+        }
+      ],
+      "io": {
+        "calls": [
+          {
+            "method": "command",
+            "input": {
+              "operation": "loadRecovery",
+              "input": {
+                "clientId": "desktop-primary"
+              }
+            },
+            "id": "ad3dc98d-7a1b-417a-a57a-9b22c2cca2a9"
+          },
+          {
+            "method": "choose-checkout",
+            "input": null,
+            "id": "d71f7393-750c-4501-b81f-84c936300e4d"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "openCheckout",
+              "input": {
+                "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-hicZUE/checkout"
+              }
+            },
+            "id": "95348970-be07-4fe6-9bcb-0ac26f16cddc"
+          },
+          {
+            "method": "watch",
+            "input": {
+              "checkout": {
+                "hostId": "moonbase-local",
+                "checkoutId": "a115585cbcd3dbe7ce47b62655d8551edef941fd83d844ab1ad81e19f76b20f5",
+                "projectId": "29b0dc0035c27e1158ac0834232265c3fb3ef16d9bda82855aad78d35a2e82f4",
+                "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-hicZUE/checkout",
+                "branch": "main"
+              },
+              "paths": [
+                ""
+              ]
+            },
+            "id": "6c28f56d-9cf8-410d-a4e5-02f2a33a1425"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "listDirectory",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "a115585cbcd3dbe7ce47b62655d8551edef941fd83d844ab1ad81e19f76b20f5",
+                  "projectId": "29b0dc0035c27e1158ac0834232265c3fb3ef16d9bda82855aad78d35a2e82f4",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-hicZUE/checkout",
+                  "branch": "main"
+                },
+                "path": "",
+                "hideIgnored": false
+              }
+            },
+            "id": "d5368834-e1bf-47e3-b7c1-6131acba9027"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "gitStatus",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "a115585cbcd3dbe7ce47b62655d8551edef941fd83d844ab1ad81e19f76b20f5",
+                  "projectId": "29b0dc0035c27e1158ac0834232265c3fb3ef16d9bda82855aad78d35a2e82f4",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-hicZUE/checkout",
+                  "branch": "main"
+                }
+              }
+            },
+            "id": "36b8346c-8e26-4a6f-a1aa-c914dc02182c"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "persistRecovery",
+              "input": {
+                "clientId": "desktop-primary",
+                "requestId": "d840ba05-0e11-451e-9f2d-db250c645973",
+                "expectedRevision": 0,
+                "state": {
+                  "version": 1,
+                  "clientId": "desktop-primary",
+                  "checkouts": [
+                    {
+                      "hostId": "moonbase-local",
+                      "checkoutId": "a115585cbcd3dbe7ce47b62655d8551edef941fd83d844ab1ad81e19f76b20f5",
+                      "projectId": "29b0dc0035c27e1158ac0834232265c3fb3ef16d9bda82855aad78d35a2e82f4",
+                      "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-hicZUE/checkout",
+                      "branch": "main"
+                    }
+                  ],
+                  "openCheckoutIds": [
+                    "a115585cbcd3dbe7ce47b62655d8551edef941fd83d844ab1ad81e19f76b20f5"
+                  ],
+                  "selectedCheckoutId": "a115585cbcd3dbe7ce47b62655d8551edef941fd83d844ab1ad81e19f76b20f5",
+                  "views": {
+                    "a115585cbcd3dbe7ce47b62655d8551edef941fd83d844ab1ad81e19f76b20f5": {
+                      "openFiles": [],
+                      "active": "",
+                      "preview": null,
+                      "fileViews": {},
+                      "positions": {},
+                      "tree": {
+                        "expanded": [],
+                        "selected": [],
+                        "focus": "",
+                        "scroll": 0,
+                        "hideIgnored": false
+                      }
+                    }
+                  },
+                  "drafts": [],
+                  "recentFiles": [],
+                  "sidebarWidth": 270
+                }
+              }
+            },
+            "id": "f9d1e813-eeb1-41ce-b9a2-a567118fd06a"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "lookupFiles",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "a115585cbcd3dbe7ce47b62655d8551edef941fd83d844ab1ad81e19f76b20f5",
+                  "projectId": "29b0dc0035c27e1158ac0834232265c3fb3ef16d9bda82855aad78d35a2e82f4",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-hicZUE/checkout",
+                  "branch": "main"
+                },
+                "query": "a.ts",
+                "limit": 100,
+                "history": []
+              }
+            },
+            "id": "d3fc1de4-ed71-4bc8-9138-ba30e4aa76a9"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "readFile",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "a115585cbcd3dbe7ce47b62655d8551edef941fd83d844ab1ad81e19f76b20f5",
+                  "projectId": "29b0dc0035c27e1158ac0834232265c3fb3ef16d9bda82855aad78d35a2e82f4",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-hicZUE/checkout",
+                  "branch": "main"
+                },
+                "path": "a.ts"
+              }
+            },
+            "id": "edd83c14-2689-4c33-bb24-c72b466b54fe"
+          }
+        ],
+        "results": [
+          {
+            "operation": "loadRecovery",
+            "reply": {
+              "ok": true,
+              "value": {
+                "revision": 0,
+                "state": {
+                  "version": 1,
+                  "clientId": "desktop-primary",
+                  "checkouts": [],
+                  "openCheckoutIds": [],
+                  "selectedCheckoutId": null,
+                  "views": {},
+                  "drafts": [],
+                  "recentFiles": [],
+                  "sidebarWidth": 270
+                },
+                "errors": [],
+                "operations": []
+              }
+            }
+          },
+          {
+            "reply": {
+              "ok": true,
+              "value": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-hicZUE/checkout"
+            }
+          },
+          {
+            "operation": "openCheckout",
+            "reply": {
+              "ok": true,
+              "value": {
+                "hostId": "moonbase-local",
+                "checkoutId": "a115585cbcd3dbe7ce47b62655d8551edef941fd83d844ab1ad81e19f76b20f5",
+                "projectId": "29b0dc0035c27e1158ac0834232265c3fb3ef16d9bda82855aad78d35a2e82f4",
+                "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-hicZUE/checkout",
+                "branch": "main"
+              }
+            }
+          },
+          {
+            "reply": {
+              "ok": true,
+              "value": null
+            }
+          },
+          {
+            "operation": "listDirectory",
+            "reply": {
+              "ok": true,
+              "value": {
+                "entries": [
+                  {
+                    "path": "a.ts",
+                    "directory": false,
+                    "ignored": false
+                  },
+                  {
+                    "path": "b.ts",
+                    "directory": false,
+                    "ignored": false
+                  }
+                ],
+                "partial": false
+              }
+            }
+          },
+          {
+            "operation": "gitStatus",
+            "reply": {
+              "ok": true,
+              "value": {
+                "branch": "main",
+                "changes": [
+                  {
+                    "path": "a.ts",
+                    "area": "staged"
+                  },
+                  {
+                    "path": "a.ts",
+                    "area": "unstaged"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "operation": "persistRecovery",
+            "reply": {
+              "ok": true,
+              "value": {
+                "clientId": "desktop-primary",
+                "requestId": "d840ba05-0e11-451e-9f2d-db250c645973",
+                "previousRevision": 0,
+                "revision": 1
+              }
+            }
+          },
+          {
+            "operation": "lookupFiles",
+            "reply": {
+              "ok": true,
+              "value": {
+                "matches": [
+                  {
+                    "path": "a.ts",
+                    "score": 247.996,
+                    "positions": [
+                      0,
+                      1,
+                      2,
+                      3
+                    ]
+                  }
+                ],
+                "history": [],
+                "partial": false
+              }
+            }
+          },
+          {
+            "operation": "readFile",
+            "reply": {
+              "ok": true,
+              "value": {
+                "text": "export const value = 'WORKING';\n",
+                "version": "21316020226accd1c3a21d0d680f51e9f0c0431e2cd93010f8e43c31d47e1c40"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "desktop-rapid-native-Open--f54d2-tains-the-dialog-immediate--repeat3",
+      "holdDiscovery": false,
+      "events": [
+        {
+          "time": 316.7000000178814,
+          "state": {
+            "dialogs": 0,
+            "focus": "BODY"
+          }
+        },
+        {
+          "time": 335,
+          "state": {
+            "dialogs": 0,
+            "focus": "BUTTON"
+          }
+        },
+        {
+          "time": 424.2000000178814,
+          "state": {
+            "dialogs": 0,
+            "focus": "BUTTON",
+            "selected": "checkout \u00b7 main"
+          }
+        },
+        {
+          "time": 470.60000002384186,
+          "state": {
+            "dialogs": 1,
+            "focus": "combobox",
+            "selected": "checkout \u00b7 main"
+          }
+        },
+        {
+          "time": 764.1000000238419,
+          "state": {
+            "dialogs": 0,
+            "focus": "BODY",
+            "selected": "checkout \u00b7 main"
+          }
+        },
+        {
+          "time": 765.2000000178814,
+          "state": {
+            "dialogs": 0,
+            "focus": "a.ts editor",
+            "selected": "checkout \u00b7 main"
+          }
+        }
+      ],
+      "io": {
+        "calls": [
+          {
+            "method": "command",
+            "input": {
+              "operation": "loadRecovery",
+              "input": {
+                "clientId": "desktop-primary"
+              }
+            },
+            "id": "6489f3df-b2f0-4137-ae54-1c02ae977790"
+          },
+          {
+            "method": "choose-checkout",
+            "input": null,
+            "id": "d4fe8c6b-c341-4193-a56b-712b71173c21"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "openCheckout",
+              "input": {
+                "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-hWca5i/checkout"
+              }
+            },
+            "id": "6485e0c8-e4cf-4a9d-8fc5-55e13410df59"
+          },
+          {
+            "method": "watch",
+            "input": {
+              "checkout": {
+                "hostId": "moonbase-local",
+                "checkoutId": "fb5066314e325375701393a024d91f5b66803819869407f9c05fc1a1edb4c373",
+                "projectId": "35650a8543e453a6bb4518cfee970287a5b20d4aa81b776e1efc6dd93b4a9e9f",
+                "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-hWca5i/checkout",
+                "branch": "main"
+              },
+              "paths": [
+                ""
+              ]
+            },
+            "id": "e072c03d-ea54-4c73-bcb8-b3085b030c9c"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "listDirectory",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "fb5066314e325375701393a024d91f5b66803819869407f9c05fc1a1edb4c373",
+                  "projectId": "35650a8543e453a6bb4518cfee970287a5b20d4aa81b776e1efc6dd93b4a9e9f",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-hWca5i/checkout",
+                  "branch": "main"
+                },
+                "path": "",
+                "hideIgnored": false
+              }
+            },
+            "id": "9e0ae19b-46ee-4463-bfa9-095f582f8d21"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "gitStatus",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "fb5066314e325375701393a024d91f5b66803819869407f9c05fc1a1edb4c373",
+                  "projectId": "35650a8543e453a6bb4518cfee970287a5b20d4aa81b776e1efc6dd93b4a9e9f",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-hWca5i/checkout",
+                  "branch": "main"
+                }
+              }
+            },
+            "id": "3be60721-d045-4346-8703-f2d256d8fe22"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "persistRecovery",
+              "input": {
+                "clientId": "desktop-primary",
+                "requestId": "e1e64108-7ee0-4cd1-bda8-f5e0fca733bc",
+                "expectedRevision": 0,
+                "state": {
+                  "version": 1,
+                  "clientId": "desktop-primary",
+                  "checkouts": [
+                    {
+                      "hostId": "moonbase-local",
+                      "checkoutId": "fb5066314e325375701393a024d91f5b66803819869407f9c05fc1a1edb4c373",
+                      "projectId": "35650a8543e453a6bb4518cfee970287a5b20d4aa81b776e1efc6dd93b4a9e9f",
+                      "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-hWca5i/checkout",
+                      "branch": "main"
+                    }
+                  ],
+                  "openCheckoutIds": [
+                    "fb5066314e325375701393a024d91f5b66803819869407f9c05fc1a1edb4c373"
+                  ],
+                  "selectedCheckoutId": "fb5066314e325375701393a024d91f5b66803819869407f9c05fc1a1edb4c373",
+                  "views": {
+                    "fb5066314e325375701393a024d91f5b66803819869407f9c05fc1a1edb4c373": {
+                      "openFiles": [],
+                      "active": "",
+                      "preview": null,
+                      "fileViews": {},
+                      "positions": {},
+                      "tree": {
+                        "expanded": [],
+                        "selected": [],
+                        "focus": "",
+                        "scroll": 0,
+                        "hideIgnored": false
+                      }
+                    }
+                  },
+                  "drafts": [],
+                  "recentFiles": [],
+                  "sidebarWidth": 270
+                }
+              }
+            },
+            "id": "f06c108e-dc6e-4ed4-b527-4850bcba2b6c"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "lookupFiles",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "fb5066314e325375701393a024d91f5b66803819869407f9c05fc1a1edb4c373",
+                  "projectId": "35650a8543e453a6bb4518cfee970287a5b20d4aa81b776e1efc6dd93b4a9e9f",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-hWca5i/checkout",
+                  "branch": "main"
+                },
+                "query": "a.ts",
+                "limit": 100,
+                "history": []
+              }
+            },
+            "id": "a875775d-e5da-4439-9e17-5edb637d0dee"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "readFile",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "fb5066314e325375701393a024d91f5b66803819869407f9c05fc1a1edb4c373",
+                  "projectId": "35650a8543e453a6bb4518cfee970287a5b20d4aa81b776e1efc6dd93b4a9e9f",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-hWca5i/checkout",
+                  "branch": "main"
+                },
+                "path": "a.ts"
+              }
+            },
+            "id": "405b7459-4203-468f-b310-a48a4e6f75e7"
+          }
+        ],
+        "results": [
+          {
+            "operation": "loadRecovery",
+            "reply": {
+              "ok": true,
+              "value": {
+                "revision": 0,
+                "state": {
+                  "version": 1,
+                  "clientId": "desktop-primary",
+                  "checkouts": [],
+                  "openCheckoutIds": [],
+                  "selectedCheckoutId": null,
+                  "views": {},
+                  "drafts": [],
+                  "recentFiles": [],
+                  "sidebarWidth": 270
+                },
+                "errors": [],
+                "operations": []
+              }
+            }
+          },
+          {
+            "reply": {
+              "ok": true,
+              "value": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-hWca5i/checkout"
+            }
+          },
+          {
+            "operation": "openCheckout",
+            "reply": {
+              "ok": true,
+              "value": {
+                "hostId": "moonbase-local",
+                "checkoutId": "fb5066314e325375701393a024d91f5b66803819869407f9c05fc1a1edb4c373",
+                "projectId": "35650a8543e453a6bb4518cfee970287a5b20d4aa81b776e1efc6dd93b4a9e9f",
+                "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-hWca5i/checkout",
+                "branch": "main"
+              }
+            }
+          },
+          {
+            "reply": {
+              "ok": true,
+              "value": null
+            }
+          },
+          {
+            "operation": "listDirectory",
+            "reply": {
+              "ok": true,
+              "value": {
+                "entries": [
+                  {
+                    "path": "a.ts",
+                    "directory": false,
+                    "ignored": false
+                  },
+                  {
+                    "path": "b.ts",
+                    "directory": false,
+                    "ignored": false
+                  }
+                ],
+                "partial": false
+              }
+            }
+          },
+          {
+            "operation": "gitStatus",
+            "reply": {
+              "ok": true,
+              "value": {
+                "branch": "main",
+                "changes": [
+                  {
+                    "path": "a.ts",
+                    "area": "staged"
+                  },
+                  {
+                    "path": "a.ts",
+                    "area": "unstaged"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "operation": "persistRecovery",
+            "reply": {
+              "ok": true,
+              "value": {
+                "clientId": "desktop-primary",
+                "requestId": "e1e64108-7ee0-4cd1-bda8-f5e0fca733bc",
+                "previousRevision": 0,
+                "revision": 1
+              }
+            }
+          },
+          {
+            "operation": "lookupFiles",
+            "reply": {
+              "ok": true,
+              "value": {
+                "matches": [
+                  {
+                    "path": "a.ts",
+                    "score": 247.996,
+                    "positions": [
+                      0,
+                      1,
+                      2,
+                      3
+                    ]
+                  }
+                ],
+                "history": [],
+                "partial": false
+              }
+            }
+          },
+          {
+            "operation": "readFile",
+            "reply": {
+              "ok": true,
+              "value": {
+                "text": "export const value = 'WORKING';\n",
+                "version": "21316020226accd1c3a21d0d680f51e9f0c0431e2cd93010f8e43c31d47e1c40"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "desktop-rapid-native-Open--f54d2-tains-the-dialog-immediate--repeat4",
+      "holdDiscovery": false,
+      "events": [
+        {
+          "time": 295.80000001192093,
+          "state": {
+            "dialogs": 0,
+            "focus": "BODY"
+          }
+        },
+        {
+          "time": 313.90000000596046,
+          "state": {
+            "dialogs": 0,
+            "focus": "BUTTON"
+          }
+        },
+        {
+          "time": 407.59999999403954,
+          "state": {
+            "dialogs": 0,
+            "focus": "BUTTON",
+            "selected": "checkout \u00b7 main"
+          }
+        },
+        {
+          "time": 435.90000000596046,
+          "state": {
+            "dialogs": 1,
+            "focus": "combobox",
+            "selected": "checkout \u00b7 main"
+          }
+        },
+        {
+          "time": 742,
+          "state": {
+            "dialogs": 0,
+            "focus": "BODY",
+            "selected": "checkout \u00b7 main"
+          }
+        },
+        {
+          "time": 743.0999999940395,
+          "state": {
+            "dialogs": 0,
+            "focus": "a.ts editor",
+            "selected": "checkout \u00b7 main"
+          }
+        }
+      ],
+      "io": {
+        "calls": [
+          {
+            "method": "command",
+            "input": {
+              "operation": "loadRecovery",
+              "input": {
+                "clientId": "desktop-primary"
+              }
+            },
+            "id": "0427a719-28ec-43c7-b828-a537376fb195"
+          },
+          {
+            "method": "choose-checkout",
+            "input": null,
+            "id": "5747428b-3fa9-4111-a91e-9033da5c8351"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "openCheckout",
+              "input": {
+                "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-8uf6xK/checkout"
+              }
+            },
+            "id": "08a32263-167d-4168-8591-af416c7469f7"
+          },
+          {
+            "method": "watch",
+            "input": {
+              "checkout": {
+                "hostId": "moonbase-local",
+                "checkoutId": "e4ba9a079d02f9690f75a8aa684401aab8c2c5d40bcaf52b8c8f05ae5c8cc8c1",
+                "projectId": "423b9b1f857deda01111800ec64e74270b597f801f98f5fc45f01bcb64ded839",
+                "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-8uf6xK/checkout",
+                "branch": "main"
+              },
+              "paths": [
+                ""
+              ]
+            },
+            "id": "c0c18fe4-0608-4dad-a8a2-6c66bdaf03aa"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "listDirectory",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "e4ba9a079d02f9690f75a8aa684401aab8c2c5d40bcaf52b8c8f05ae5c8cc8c1",
+                  "projectId": "423b9b1f857deda01111800ec64e74270b597f801f98f5fc45f01bcb64ded839",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-8uf6xK/checkout",
+                  "branch": "main"
+                },
+                "path": "",
+                "hideIgnored": false
+              }
+            },
+            "id": "51e8b51c-8c5e-454e-91e1-a73c3ef51044"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "gitStatus",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "e4ba9a079d02f9690f75a8aa684401aab8c2c5d40bcaf52b8c8f05ae5c8cc8c1",
+                  "projectId": "423b9b1f857deda01111800ec64e74270b597f801f98f5fc45f01bcb64ded839",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-8uf6xK/checkout",
+                  "branch": "main"
+                }
+              }
+            },
+            "id": "28e7bcc9-a47d-4043-b7c2-6a0a37b8406f"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "persistRecovery",
+              "input": {
+                "clientId": "desktop-primary",
+                "requestId": "ec84887f-f9f1-4351-b7f3-4d8a6fe52cb2",
+                "expectedRevision": 0,
+                "state": {
+                  "version": 1,
+                  "clientId": "desktop-primary",
+                  "checkouts": [
+                    {
+                      "hostId": "moonbase-local",
+                      "checkoutId": "e4ba9a079d02f9690f75a8aa684401aab8c2c5d40bcaf52b8c8f05ae5c8cc8c1",
+                      "projectId": "423b9b1f857deda01111800ec64e74270b597f801f98f5fc45f01bcb64ded839",
+                      "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-8uf6xK/checkout",
+                      "branch": "main"
+                    }
+                  ],
+                  "openCheckoutIds": [
+                    "e4ba9a079d02f9690f75a8aa684401aab8c2c5d40bcaf52b8c8f05ae5c8cc8c1"
+                  ],
+                  "selectedCheckoutId": "e4ba9a079d02f9690f75a8aa684401aab8c2c5d40bcaf52b8c8f05ae5c8cc8c1",
+                  "views": {
+                    "e4ba9a079d02f9690f75a8aa684401aab8c2c5d40bcaf52b8c8f05ae5c8cc8c1": {
+                      "openFiles": [],
+                      "active": "",
+                      "preview": null,
+                      "fileViews": {},
+                      "positions": {},
+                      "tree": {
+                        "expanded": [],
+                        "selected": [],
+                        "focus": "",
+                        "scroll": 0,
+                        "hideIgnored": false
+                      }
+                    }
+                  },
+                  "drafts": [],
+                  "recentFiles": [],
+                  "sidebarWidth": 270
+                }
+              }
+            },
+            "id": "817dd76f-e480-451b-a7f4-51410dcd4681"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "lookupFiles",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "e4ba9a079d02f9690f75a8aa684401aab8c2c5d40bcaf52b8c8f05ae5c8cc8c1",
+                  "projectId": "423b9b1f857deda01111800ec64e74270b597f801f98f5fc45f01bcb64ded839",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-8uf6xK/checkout",
+                  "branch": "main"
+                },
+                "query": "a.ts",
+                "limit": 100,
+                "history": []
+              }
+            },
+            "id": "645e498e-2978-46f1-a04b-483b4885a5c7"
+          },
+          {
+            "method": "command",
+            "input": {
+              "operation": "readFile",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "e4ba9a079d02f9690f75a8aa684401aab8c2c5d40bcaf52b8c8f05ae5c8cc8c1",
+                  "projectId": "423b9b1f857deda01111800ec64e74270b597f801f98f5fc45f01bcb64ded839",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-8uf6xK/checkout",
+                  "branch": "main"
+                },
+                "path": "a.ts"
+              }
+            },
+            "id": "88c6f646-ef44-4488-88a9-957edbf0cb00"
+          }
+        ],
+        "results": [
+          {
+            "operation": "loadRecovery",
+            "reply": {
+              "ok": true,
+              "value": {
+                "revision": 0,
+                "state": {
+                  "version": 1,
+                  "clientId": "desktop-primary",
+                  "checkouts": [],
+                  "openCheckoutIds": [],
+                  "selectedCheckoutId": null,
+                  "views": {},
+                  "drafts": [],
+                  "recentFiles": [],
+                  "sidebarWidth": 270
+                },
+                "errors": [],
+                "operations": []
+              }
+            }
+          },
+          {
+            "reply": {
+              "ok": true,
+              "value": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-8uf6xK/checkout"
+            }
+          },
+          {
+            "operation": "openCheckout",
+            "reply": {
+              "ok": true,
+              "value": {
+                "hostId": "moonbase-local",
+                "checkoutId": "e4ba9a079d02f9690f75a8aa684401aab8c2c5d40bcaf52b8c8f05ae5c8cc8c1",
+                "projectId": "423b9b1f857deda01111800ec64e74270b597f801f98f5fc45f01bcb64ded839",
+                "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-8uf6xK/checkout",
+                "branch": "main"
+              }
+            }
+          },
+          {
+            "reply": {
+              "ok": true,
+              "value": null
+            }
+          },
+          {
+            "operation": "listDirectory",
+            "reply": {
+              "ok": true,
+              "value": {
+                "entries": [
+                  {
+                    "path": "a.ts",
+                    "directory": false,
+                    "ignored": false
+                  },
+                  {
+                    "path": "b.ts",
+                    "directory": false,
+                    "ignored": false
+                  }
+                ],
+                "partial": false
+              }
+            }
+          },
+          {
+            "operation": "gitStatus",
+            "reply": {
+              "ok": true,
+              "value": {
+                "branch": "main",
+                "changes": [
+                  {
+                    "path": "a.ts",
+                    "area": "staged"
+                  },
+                  {
+                    "path": "a.ts",
+                    "area": "unstaged"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "operation": "persistRecovery",
+            "reply": {
+              "ok": true,
+              "value": {
+                "clientId": "desktop-primary",
+                "requestId": "ec84887f-f9f1-4351-b7f3-4d8a6fe52cb2",
+                "previousRevision": 0,
+                "revision": 1
+              }
+            }
+          },
+          {
+            "operation": "lookupFiles",
+            "reply": {
+              "ok": true,
+              "value": {
+                "matches": [
+                  {
+                    "path": "a.ts",
+                    "score": 247.996,
+                    "positions": [
+                      0,
+                      1,
+                      2,
+                      3
+                    ]
+                  }
+                ],
+                "history": [],
+                "partial": false
+              }
+            }
+          },
+          {
+            "operation": "readFile",
+            "reply": {
+              "ok": true,
+              "value": {
+                "text": "export const value = 'WORKING';\n",
+                "version": "21316020226accd1c3a21d0d680f51e9f0c0431e2cd93010f8e43c31d47e1c40"
+              }
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "finalFullSuite": {
+    "result": "22/22 passed",
+    "sourceSha256": {
+      "apps/desktop/src/main.ts": "021b760b46095d0e981b16b891189b5534252d74884b67f2f16c8845d8c999d5",
+      "apps/desktop/src/renderer/main.tsx": "e972d8ab84c81c24a4adb8835975b5608d91557005ec68e34d918410674c0d99",
+      "apps/desktop/test/desktop.spec.ts": "53828e9cb735606f888a4307fc2b70fc8add77a0499742f7d5c0e94f1a584f3f",
+      "apps/desktop/dist/main.mjs": "d8f459e5d0ee629a2a0e29dcaa92cafa1fc93d27d338c5c67912b06c4f54f44e"
+    },
+    "runs": [
+      {
+        "name": "desktop-rapid-native-Open--ad18a--the-dialog-held-discovery-",
+        "holdDiscovery": true,
+        "events": [
+          {
+            "time": 295,
+            "state": {
+              "dialogs": 0,
+              "focus": "BODY"
+            }
+          },
+          {
+            "time": 308.09999999403954,
+            "state": {
+              "dialogs": 0,
+              "focus": "BUTTON"
+            }
+          },
+          {
+            "time": 397.2000000178814,
+            "state": {
+              "dialogs": 0,
+              "focus": "BUTTON",
+              "selected": "checkout \u00b7 main"
+            }
+          },
+          {
+            "time": 425.90000000596046,
+            "state": {
+              "dialogs": 1,
+              "focus": "combobox",
+              "selected": "checkout \u00b7 main"
+            }
+          },
+          {
+            "time": 744.5999999940395,
+            "state": {
+              "dialogs": 0,
+              "focus": "BODY",
+              "selected": "checkout \u00b7 main"
+            }
+          },
+          {
+            "time": 745.5,
+            "state": {
+              "dialogs": 0,
+              "focus": "a.ts editor",
+              "selected": "checkout \u00b7 main"
+            }
+          }
+        ],
+        "io": {
+          "calls": [
+            {
+              "method": "command",
+              "input": {
+                "operation": "loadRecovery",
+                "input": {
+                  "clientId": "desktop-primary"
+                }
+              },
+              "id": "38e6f250-294b-466c-bc83-ae110160d613"
+            },
+            {
+              "method": "choose-checkout",
+              "input": null,
+              "id": "e3448d3d-4cdc-4b09-b733-a550df2c1e68"
+            },
+            {
+              "method": "command",
+              "input": {
+                "operation": "openCheckout",
+                "input": {
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-D1EhCE/checkout"
+                }
+              },
+              "id": "938b3b1f-a809-4e97-a36b-15994bb46314"
+            },
+            {
+              "method": "watch",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "beeb32bd6596d8471ded692f8cbf7eba0add5c9fc504aa7884688b88f2b298eb",
+                  "projectId": "e77ee7ba0a66d6c0f570cf012e95d89fe605bd0dbb5104ed7663860e41cc2fb7",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-D1EhCE/checkout",
+                  "branch": "main"
+                },
+                "paths": [
+                  ""
+                ]
+              },
+              "id": "6be62abd-37d7-412a-8527-c48bf33be268"
+            },
+            {
+              "method": "command",
+              "input": {
+                "operation": "listDirectory",
+                "input": {
+                  "checkout": {
+                    "hostId": "moonbase-local",
+                    "checkoutId": "beeb32bd6596d8471ded692f8cbf7eba0add5c9fc504aa7884688b88f2b298eb",
+                    "projectId": "e77ee7ba0a66d6c0f570cf012e95d89fe605bd0dbb5104ed7663860e41cc2fb7",
+                    "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-D1EhCE/checkout",
+                    "branch": "main"
+                  },
+                  "path": "",
+                  "hideIgnored": false
+                }
+              },
+              "id": "7dda68ba-d568-4675-8025-34842864e738"
+            },
+            {
+              "method": "command",
+              "input": {
+                "operation": "gitStatus",
+                "input": {
+                  "checkout": {
+                    "hostId": "moonbase-local",
+                    "checkoutId": "beeb32bd6596d8471ded692f8cbf7eba0add5c9fc504aa7884688b88f2b298eb",
+                    "projectId": "e77ee7ba0a66d6c0f570cf012e95d89fe605bd0dbb5104ed7663860e41cc2fb7",
+                    "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-D1EhCE/checkout",
+                    "branch": "main"
+                  }
+                }
+              },
+              "id": "44c92fcc-ad73-4076-9003-4e2f86dc63b8"
+            },
+            {
+              "method": "command",
+              "input": {
+                "operation": "persistRecovery",
+                "input": {
+                  "clientId": "desktop-primary",
+                  "requestId": "3add66e5-4e3f-4976-9fca-4e12c151279e",
+                  "expectedRevision": 0,
+                  "state": {
+                    "version": 1,
+                    "clientId": "desktop-primary",
+                    "checkouts": [
+                      {
+                        "hostId": "moonbase-local",
+                        "checkoutId": "beeb32bd6596d8471ded692f8cbf7eba0add5c9fc504aa7884688b88f2b298eb",
+                        "projectId": "e77ee7ba0a66d6c0f570cf012e95d89fe605bd0dbb5104ed7663860e41cc2fb7",
+                        "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-D1EhCE/checkout",
+                        "branch": "main"
+                      }
+                    ],
+                    "openCheckoutIds": [
+                      "beeb32bd6596d8471ded692f8cbf7eba0add5c9fc504aa7884688b88f2b298eb"
+                    ],
+                    "selectedCheckoutId": "beeb32bd6596d8471ded692f8cbf7eba0add5c9fc504aa7884688b88f2b298eb",
+                    "views": {
+                      "beeb32bd6596d8471ded692f8cbf7eba0add5c9fc504aa7884688b88f2b298eb": {
+                        "openFiles": [],
+                        "active": "",
+                        "preview": null,
+                        "fileViews": {},
+                        "positions": {},
+                        "tree": {
+                          "expanded": [],
+                          "selected": [],
+                          "focus": "",
+                          "scroll": 0,
+                          "hideIgnored": false
+                        }
+                      }
+                    },
+                    "drafts": [],
+                    "recentFiles": [],
+                    "sidebarWidth": 270
+                  }
+                }
+              },
+              "id": "8959d519-fa25-4427-8f7d-d308bdcaf0fc"
+            },
+            {
+              "method": "command",
+              "input": {
+                "operation": "lookupFiles",
+                "input": {
+                  "checkout": {
+                    "hostId": "moonbase-local",
+                    "checkoutId": "beeb32bd6596d8471ded692f8cbf7eba0add5c9fc504aa7884688b88f2b298eb",
+                    "projectId": "e77ee7ba0a66d6c0f570cf012e95d89fe605bd0dbb5104ed7663860e41cc2fb7",
+                    "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-D1EhCE/checkout",
+                    "branch": "main"
+                  },
+                  "query": "a.ts",
+                  "limit": 100,
+                  "history": []
+                }
+              },
+              "id": "201eb5db-906b-44ab-818a-2b46da9c1d46"
+            },
+            {
+              "method": "command",
+              "input": {
+                "operation": "readFile",
+                "input": {
+                  "checkout": {
+                    "hostId": "moonbase-local",
+                    "checkoutId": "beeb32bd6596d8471ded692f8cbf7eba0add5c9fc504aa7884688b88f2b298eb",
+                    "projectId": "e77ee7ba0a66d6c0f570cf012e95d89fe605bd0dbb5104ed7663860e41cc2fb7",
+                    "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-D1EhCE/checkout",
+                    "branch": "main"
+                  },
+                  "path": "a.ts"
+                }
+              },
+              "id": "490fe561-ce6a-4665-8fe2-3b375af2a766"
+            }
+          ],
+          "results": [
+            {
+              "operation": "loadRecovery",
+              "reply": {
+                "ok": true,
+                "value": {
+                  "revision": 0,
+                  "state": {
+                    "version": 1,
+                    "clientId": "desktop-primary",
+                    "checkouts": [],
+                    "openCheckoutIds": [],
+                    "selectedCheckoutId": null,
+                    "views": {},
+                    "drafts": [],
+                    "recentFiles": [],
+                    "sidebarWidth": 270
+                  },
+                  "errors": [],
+                  "operations": []
+                }
+              }
+            },
+            {
+              "reply": {
+                "ok": true,
+                "value": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-D1EhCE/checkout"
+              }
+            },
+            {
+              "operation": "openCheckout",
+              "reply": {
+                "ok": true,
+                "value": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "beeb32bd6596d8471ded692f8cbf7eba0add5c9fc504aa7884688b88f2b298eb",
+                  "projectId": "e77ee7ba0a66d6c0f570cf012e95d89fe605bd0dbb5104ed7663860e41cc2fb7",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-D1EhCE/checkout",
+                  "branch": "main"
+                }
+              }
+            },
+            {
+              "reply": {
+                "ok": true,
+                "value": null
+              }
+            },
+            {
+              "operation": "listDirectory",
+              "reply": {
+                "ok": true,
+                "value": {
+                  "entries": [
+                    {
+                      "path": "a.ts",
+                      "directory": false,
+                      "ignored": false
+                    },
+                    {
+                      "path": "b.ts",
+                      "directory": false,
+                      "ignored": false
+                    }
+                  ],
+                  "partial": false
+                }
+              }
+            },
+            {
+              "operation": "gitStatus",
+              "reply": {
+                "ok": true,
+                "value": {
+                  "branch": "main",
+                  "changes": [
+                    {
+                      "path": "a.ts",
+                      "area": "staged"
+                    },
+                    {
+                      "path": "a.ts",
+                      "area": "unstaged"
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "operation": "persistRecovery",
+              "reply": {
+                "ok": true,
+                "value": {
+                  "clientId": "desktop-primary",
+                  "requestId": "3add66e5-4e3f-4976-9fca-4e12c151279e",
+                  "previousRevision": 0,
+                  "revision": 1
+                }
+              }
+            },
+            {
+              "operation": "lookupFiles",
+              "reply": {
+                "ok": true,
+                "value": {
+                  "matches": [
+                    {
+                      "path": "a.ts",
+                      "score": 247.996,
+                      "positions": [
+                        0,
+                        1,
+                        2,
+                        3
+                      ]
+                    }
+                  ],
+                  "history": [],
+                  "partial": false
+                }
+              }
+            },
+            {
+              "operation": "readFile",
+              "reply": {
+                "ok": true,
+                "value": {
+                  "text": "export const value = 'WORKING';\n",
+                  "version": "21316020226accd1c3a21d0d680f51e9f0c0431e2cd93010f8e43c31d47e1c40"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "desktop-rapid-native-Open--f54d2-tains-the-dialog-immediate-",
+        "holdDiscovery": false,
+        "events": [
+          {
+            "time": 394.59999999403954,
+            "state": {
+              "dialogs": 0,
+              "focus": "BODY"
+            }
+          },
+          {
+            "time": 421,
+            "state": {
+              "dialogs": 0,
+              "focus": "BUTTON"
+            }
+          },
+          {
+            "time": 527.9000000059605,
+            "state": {
+              "dialogs": 0,
+              "focus": "BUTTON",
+              "selected": "checkout \u00b7 main"
+            }
+          },
+          {
+            "time": 559.9000000059605,
+            "state": {
+              "dialogs": 1,
+              "focus": "combobox",
+              "selected": "checkout \u00b7 main"
+            }
+          },
+          {
+            "time": 902.8000000119209,
+            "state": {
+              "dialogs": 0,
+              "focus": "BODY",
+              "selected": "checkout \u00b7 main"
+            }
+          },
+          {
+            "time": 904.0999999940395,
+            "state": {
+              "dialogs": 0,
+              "focus": "a.ts editor",
+              "selected": "checkout \u00b7 main"
+            }
+          }
+        ],
+        "io": {
+          "calls": [
+            {
+              "method": "command",
+              "input": {
+                "operation": "loadRecovery",
+                "input": {
+                  "clientId": "desktop-primary"
+                }
+              },
+              "id": "a670ae90-4bfb-4ddb-bd65-ea409fa026dd"
+            },
+            {
+              "method": "choose-checkout",
+              "input": null,
+              "id": "11ad15f2-a9db-4bdf-b4d0-78631c962feb"
+            },
+            {
+              "method": "command",
+              "input": {
+                "operation": "openCheckout",
+                "input": {
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-r4iwYP/checkout"
+                }
+              },
+              "id": "77597d23-c080-4ced-b455-8ae4eef1751f"
+            },
+            {
+              "method": "watch",
+              "input": {
+                "checkout": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "a10690cc7883c06a870168524c241e6d1cc3d0011b6394b69de95ce171c938bf",
+                  "projectId": "545003bfab48ce15f3945b57c039b3ad990cc460f5b26971e8ac4c675dc9c6bb",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-r4iwYP/checkout",
+                  "branch": "main"
+                },
+                "paths": [
+                  ""
+                ]
+              },
+              "id": "d31168ce-460c-4bec-b0cf-6ee970d6fdc5"
+            },
+            {
+              "method": "command",
+              "input": {
+                "operation": "listDirectory",
+                "input": {
+                  "checkout": {
+                    "hostId": "moonbase-local",
+                    "checkoutId": "a10690cc7883c06a870168524c241e6d1cc3d0011b6394b69de95ce171c938bf",
+                    "projectId": "545003bfab48ce15f3945b57c039b3ad990cc460f5b26971e8ac4c675dc9c6bb",
+                    "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-r4iwYP/checkout",
+                    "branch": "main"
+                  },
+                  "path": "",
+                  "hideIgnored": false
+                }
+              },
+              "id": "100e7694-ac17-4f0e-a4e0-7f5f13b4ae57"
+            },
+            {
+              "method": "command",
+              "input": {
+                "operation": "gitStatus",
+                "input": {
+                  "checkout": {
+                    "hostId": "moonbase-local",
+                    "checkoutId": "a10690cc7883c06a870168524c241e6d1cc3d0011b6394b69de95ce171c938bf",
+                    "projectId": "545003bfab48ce15f3945b57c039b3ad990cc460f5b26971e8ac4c675dc9c6bb",
+                    "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-r4iwYP/checkout",
+                    "branch": "main"
+                  }
+                }
+              },
+              "id": "74728981-8d42-415c-ab59-110c5c2c10ea"
+            },
+            {
+              "method": "command",
+              "input": {
+                "operation": "persistRecovery",
+                "input": {
+                  "clientId": "desktop-primary",
+                  "requestId": "54362592-58d7-460c-a732-39b7db5063a6",
+                  "expectedRevision": 0,
+                  "state": {
+                    "version": 1,
+                    "clientId": "desktop-primary",
+                    "checkouts": [
+                      {
+                        "hostId": "moonbase-local",
+                        "checkoutId": "a10690cc7883c06a870168524c241e6d1cc3d0011b6394b69de95ce171c938bf",
+                        "projectId": "545003bfab48ce15f3945b57c039b3ad990cc460f5b26971e8ac4c675dc9c6bb",
+                        "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-r4iwYP/checkout",
+                        "branch": "main"
+                      }
+                    ],
+                    "openCheckoutIds": [
+                      "a10690cc7883c06a870168524c241e6d1cc3d0011b6394b69de95ce171c938bf"
+                    ],
+                    "selectedCheckoutId": "a10690cc7883c06a870168524c241e6d1cc3d0011b6394b69de95ce171c938bf",
+                    "views": {
+                      "a10690cc7883c06a870168524c241e6d1cc3d0011b6394b69de95ce171c938bf": {
+                        "openFiles": [],
+                        "active": "",
+                        "preview": null,
+                        "fileViews": {},
+                        "positions": {},
+                        "tree": {
+                          "expanded": [],
+                          "selected": [],
+                          "focus": "",
+                          "scroll": 0,
+                          "hideIgnored": false
+                        }
+                      }
+                    },
+                    "drafts": [],
+                    "recentFiles": [],
+                    "sidebarWidth": 270
+                  }
+                }
+              },
+              "id": "3469ea8f-9e35-4962-a17c-4dcca3d6a5ef"
+            },
+            {
+              "method": "command",
+              "input": {
+                "operation": "lookupFiles",
+                "input": {
+                  "checkout": {
+                    "hostId": "moonbase-local",
+                    "checkoutId": "a10690cc7883c06a870168524c241e6d1cc3d0011b6394b69de95ce171c938bf",
+                    "projectId": "545003bfab48ce15f3945b57c039b3ad990cc460f5b26971e8ac4c675dc9c6bb",
+                    "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-r4iwYP/checkout",
+                    "branch": "main"
+                  },
+                  "query": "a.ts",
+                  "limit": 100,
+                  "history": []
+                }
+              },
+              "id": "b9234954-c889-470e-9ce4-ebc3938d54e1"
+            },
+            {
+              "method": "command",
+              "input": {
+                "operation": "readFile",
+                "input": {
+                  "checkout": {
+                    "hostId": "moonbase-local",
+                    "checkoutId": "a10690cc7883c06a870168524c241e6d1cc3d0011b6394b69de95ce171c938bf",
+                    "projectId": "545003bfab48ce15f3945b57c039b3ad990cc460f5b26971e8ac4c675dc9c6bb",
+                    "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-r4iwYP/checkout",
+                    "branch": "main"
+                  },
+                  "path": "a.ts"
+                }
+              },
+              "id": "8eed5151-fa4e-4b45-a0d1-c7fef10aee83"
+            },
+            {
+              "method": "command",
+              "input": {
+                "operation": "persistRecovery",
+                "input": {
+                  "clientId": "desktop-primary",
+                  "requestId": "0654f28f-fcbe-432e-9d5a-c78cb7f16988",
+                  "expectedRevision": 1,
+                  "state": {
+                    "version": 1,
+                    "clientId": "desktop-primary",
+                    "checkouts": [
+                      {
+                        "hostId": "moonbase-local",
+                        "checkoutId": "a10690cc7883c06a870168524c241e6d1cc3d0011b6394b69de95ce171c938bf",
+                        "projectId": "545003bfab48ce15f3945b57c039b3ad990cc460f5b26971e8ac4c675dc9c6bb",
+                        "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-r4iwYP/checkout",
+                        "branch": "main"
+                      }
+                    ],
+                    "openCheckoutIds": [
+                      "a10690cc7883c06a870168524c241e6d1cc3d0011b6394b69de95ce171c938bf"
+                    ],
+                    "selectedCheckoutId": "a10690cc7883c06a870168524c241e6d1cc3d0011b6394b69de95ce171c938bf",
+                    "views": {
+                      "a10690cc7883c06a870168524c241e6d1cc3d0011b6394b69de95ce171c938bf": {
+                        "openFiles": [
+                          "a.ts"
+                        ],
+                        "active": "a.ts",
+                        "preview": null,
+                        "fileViews": {
+                          "a.ts": "file"
+                        },
+                        "positions": {},
+                        "tree": {
+                          "expanded": [],
+                          "selected": [],
+                          "focus": "",
+                          "scroll": 0,
+                          "hideIgnored": false
+                        }
+                      }
+                    },
+                    "drafts": [],
+                    "recentFiles": [
+                      {
+                        "checkout": {
+                          "hostId": "moonbase-local",
+                          "checkoutId": "a10690cc7883c06a870168524c241e6d1cc3d0011b6394b69de95ce171c938bf",
+                          "projectId": "545003bfab48ce15f3945b57c039b3ad990cc460f5b26971e8ac4c675dc9c6bb",
+                          "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-r4iwYP/checkout",
+                          "branch": "main"
+                        },
+                        "path": "a.ts"
+                      }
+                    ],
+                    "sidebarWidth": 270
+                  }
+                }
+              },
+              "id": "7a8b7e68-860a-4f73-ad13-c19c464efd6d"
+            },
+            {
+              "method": "command",
+              "input": {
+                "operation": "persistRecovery",
+                "input": {
+                  "clientId": "desktop-primary",
+                  "requestId": "d24335b7-0d6f-4b8d-916c-12b36bc0abd7",
+                  "expectedRevision": 2,
+                  "state": {
+                    "version": 1,
+                    "clientId": "desktop-primary",
+                    "checkouts": [
+                      {
+                        "hostId": "moonbase-local",
+                        "checkoutId": "a10690cc7883c06a870168524c241e6d1cc3d0011b6394b69de95ce171c938bf",
+                        "projectId": "545003bfab48ce15f3945b57c039b3ad990cc460f5b26971e8ac4c675dc9c6bb",
+                        "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-r4iwYP/checkout",
+                        "branch": "main"
+                      }
+                    ],
+                    "openCheckoutIds": [
+                      "a10690cc7883c06a870168524c241e6d1cc3d0011b6394b69de95ce171c938bf"
+                    ],
+                    "selectedCheckoutId": "a10690cc7883c06a870168524c241e6d1cc3d0011b6394b69de95ce171c938bf",
+                    "views": {
+                      "a10690cc7883c06a870168524c241e6d1cc3d0011b6394b69de95ce171c938bf": {
+                        "openFiles": [
+                          "a.ts"
+                        ],
+                        "active": "a.ts",
+                        "preview": null,
+                        "fileViews": {
+                          "a.ts": "file"
+                        },
+                        "positions": {
+                          "a.ts": {
+                            "file": {
+                              "line": 1,
+                              "column": 18,
+                              "top": 0,
+                              "left": 0
+                            }
+                          }
+                        },
+                        "tree": {
+                          "expanded": [],
+                          "selected": [],
+                          "focus": "",
+                          "scroll": 0,
+                          "hideIgnored": false
+                        }
+                      }
+                    },
+                    "drafts": [
+                      {
+                        "target": {
+                          "checkout": {
+                            "hostId": "moonbase-local",
+                            "checkoutId": "a10690cc7883c06a870168524c241e6d1cc3d0011b6394b69de95ce171c938bf",
+                            "projectId": "545003bfab48ce15f3945b57c039b3ad990cc460f5b26971e8ac4c675dc9c6bb",
+                            "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-r4iwYP/checkout",
+                            "branch": "main"
+                          },
+                          "path": "a.ts"
+                        },
+                        "text": "rapid flow typingexport const value = 'WORKING';\n",
+                        "disk": {
+                          "text": "export const value = 'WORKING';\n",
+                          "version": "21316020226accd1c3a21d0d680f51e9f0c0431e2cd93010f8e43c31d47e1c40"
+                        }
+                      }
+                    ],
+                    "recentFiles": [
+                      {
+                        "checkout": {
+                          "hostId": "moonbase-local",
+                          "checkoutId": "a10690cc7883c06a870168524c241e6d1cc3d0011b6394b69de95ce171c938bf",
+                          "projectId": "545003bfab48ce15f3945b57c039b3ad990cc460f5b26971e8ac4c675dc9c6bb",
+                          "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-r4iwYP/checkout",
+                          "branch": "main"
+                        },
+                        "path": "a.ts"
+                      }
+                    ],
+                    "sidebarWidth": 270
+                  }
+                }
+              },
+              "id": "6c88c6ae-816c-4def-800b-4eb1dfa555e4"
+            }
+          ],
+          "results": [
+            {
+              "operation": "loadRecovery",
+              "reply": {
+                "ok": true,
+                "value": {
+                  "revision": 0,
+                  "state": {
+                    "version": 1,
+                    "clientId": "desktop-primary",
+                    "checkouts": [],
+                    "openCheckoutIds": [],
+                    "selectedCheckoutId": null,
+                    "views": {},
+                    "drafts": [],
+                    "recentFiles": [],
+                    "sidebarWidth": 270
+                  },
+                  "errors": [],
+                  "operations": []
+                }
+              }
+            },
+            {
+              "reply": {
+                "ok": true,
+                "value": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-r4iwYP/checkout"
+              }
+            },
+            {
+              "operation": "openCheckout",
+              "reply": {
+                "ok": true,
+                "value": {
+                  "hostId": "moonbase-local",
+                  "checkoutId": "a10690cc7883c06a870168524c241e6d1cc3d0011b6394b69de95ce171c938bf",
+                  "projectId": "545003bfab48ce15f3945b57c039b3ad990cc460f5b26971e8ac4c675dc9c6bb",
+                  "root": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-desktop-r4iwYP/checkout",
+                  "branch": "main"
+                }
+              }
+            },
+            {
+              "reply": {
+                "ok": true,
+                "value": null
+              }
+            },
+            {
+              "operation": "listDirectory",
+              "reply": {
+                "ok": true,
+                "value": {
+                  "entries": [
+                    {
+                      "path": "a.ts",
+                      "directory": false,
+                      "ignored": false
+                    },
+                    {
+                      "path": "b.ts",
+                      "directory": false,
+                      "ignored": false
+                    }
+                  ],
+                  "partial": false
+                }
+              }
+            },
+            {
+              "operation": "gitStatus",
+              "reply": {
+                "ok": true,
+                "value": {
+                  "branch": "main",
+                  "changes": [
+                    {
+                      "path": "a.ts",
+                      "area": "staged"
+                    },
+                    {
+                      "path": "a.ts",
+                      "area": "unstaged"
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "operation": "persistRecovery",
+              "reply": {
+                "ok": true,
+                "value": {
+                  "clientId": "desktop-primary",
+                  "requestId": "54362592-58d7-460c-a732-39b7db5063a6",
+                  "previousRevision": 0,
+                  "revision": 1
+                }
+              }
+            },
+            {
+              "operation": "lookupFiles",
+              "reply": {
+                "ok": true,
+                "value": {
+                  "matches": [
+                    {
+                      "path": "a.ts",
+                      "score": 247.996,
+                      "positions": [
+                        0,
+                        1,
+                        2,
+                        3
+                      ]
+                    }
+                  ],
+                  "history": [],
+                  "partial": false
+                }
+              }
+            },
+            {
+              "operation": "readFile",
+              "reply": {
+                "ok": true,
+                "value": {
+                  "text": "export const value = 'WORKING';\n",
+                  "version": "21316020226accd1c3a21d0d680f51e9f0c0431e2cd93010f8e43c31d47e1c40"
+                }
+              }
+            },
+            {
+              "operation": "persistRecovery",
+              "reply": {
+                "ok": true,
+                "value": {
+                  "clientId": "desktop-primary",
+                  "requestId": "0654f28f-fcbe-432e-9d5a-c78cb7f16988",
+                  "previousRevision": 1,
+                  "revision": 2
+                }
+              }
+            },
+            {
+              "operation": "persistRecovery",
+              "reply": {
+                "ok": true,
+                "value": {
+                  "clientId": "desktop-primary",
+                  "requestId": "d24335b7-0d6f-4b8d-916c-12b36bc0abd7",
+                  "previousRevision": 2,
+                  "revision": 3
+                }
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

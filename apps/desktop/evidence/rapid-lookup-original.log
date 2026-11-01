@@ -1,0 +1,91 @@
+$ playwright test --config playwright.config.ts
+
+Running 20 tests using 1 worker
+
+(node:31420) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+  ✓   1 test/desktop.spec.ts:55:1 › actual sandboxed custom-scheme editor reads, edits and saves through SQLite workspace (2.9s)
+
+  ✓   2 test/desktop.spec.ts:79:1 › actual conflict Compare, Cancel, Overwrite and Reload retain one dirty working buffer and Git index (2.3s)
+Waiting for the debugger to disconnect...
+
+  ✓   3 test/desktop.spec.ts:104:1 › window close hides mounted Monaco; Quit Cancel preserves undo, then Save quits and releases resources (2.3s)
+
+  ✘   4 test/desktop.spec.ts:131:1 › SQLite contention vetoes Quit Discard; exact resolution and fresh choice keep window usable (6.0s)
+(node:31554) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+  ✓   5 test/desktop.spec.ts:146:1 › dirty recovery and comparison metadata restore across actual process restart (2.8s)
+
+  ✓   6 test/desktop.spec.ts:156:1 › lost real Save reply retries original identity without replacing the native file again (2.0s)
+Untrusted renderer frame/document.
+
+  ✓   7 test/desktop.spec.ts:170:1 › actual IPC rejects unapproved roots, foreign callers/targets, unknown inputs and navigation (1.5s)
+
+  ✓   8 test/desktop.spec.ts:200:1 › native picker creates scoped single-use tokens through the actual bridge; fake File paths grant no authority (1.3s)
+
+  ✓   9 test/desktop.spec.ts:222:1 › controlled clipboard fixtures require native consent and capture real files without accessing user's clipboard (1.6s)
+
+  ✓  10 test/desktop.spec.ts:241:1 › real create, dirty move and copy use native operations; lost move reply resolves status without replay (2.7s)
+
+  ✓  11 test/desktop.spec.ts:263:1 › previews, Keep Open, order, keyboard Close/Reopen and overflow remain useful at small size and zoom (4.1s)
+
+  ✓  12 test/desktop.spec.ts:299:1 › native Trash moves only a captured temporary fixture and leaves its dirty draft available (1.9s)
+Waiting for the debugger to disconnect...
+
+  ✓  13 test/desktop.spec.ts:318:1 › unknown final Quit publication retains the window and resolves only the exact committed receipt (1.8s)
+
+  ✓  14 test/desktop.spec.ts:334:1 › a command cancelled over real IPC keeps typed cancellation and leaves unrelated IO usable (1.2s)
+
+  ✓  15 test/desktop.spec.ts:345:1 › exact checkout tabs preserve independent dirty paths, views and closed metadata through native approval (2.5s)
+
+  ✓  16 test/desktop.spec.ts:362:1 › single-file picker and File-backed drop share the editor's destination dialog (1.7s)
+
+  ✓  17 test/desktop.spec.ts:378:1 › unacknowledged real move evidence restores dirty text on process restart without another mutation (2.7s)
+
+  ✓  18 test/desktop.spec.ts:392:1 › replacement consent cannot overwrite another open dirty draft or admit a native mutation (2.3s)
+
+  ✓  19 test/desktop.spec.ts:404:1 › a file named checkout remains data when its view and draft cross the authority boundary (1.8s)
+
+  ✓  20 test/desktop.spec.ts:412:1 › an explicit native Quit arriving before renderer startup is not lost (1.4s)
+
+
+  1) test/desktop.spec.ts:131:1 › SQLite contention vetoes Quit Discard; exact resolution and fresh choice keep window usable
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: getByRole('option', { name: 'a.ts', exact: true })
+    Expected: visible
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" getByRole('option', { name: 'a.ts', exact: true }) with timeout 5000ms
+      - waiting for getByRole('option', { name: 'a.ts', exact: true })
+
+
+      49 | async function open(path = "a.ts") {
+      50 |   if (!await page.getByRole("button", { name: "Find file", exact: true }).count()) await page.getByRole("button", { name: "Open checkout", exact: true }).click();
+    > 51 |   await page.getByRole("button", { name: "Find file", exact: true }).click(); await page.getByRole("combobox").fill(path); await expect(page.getByRole("option", { name: path, exact: true })).toBeVisible(); await page.getByRole("combobox").press("Enter");
+         |                                                                                                                                                                                                ^
+      52 |   await expect(page.getByRole("textbox", { name: `${path} editor`, exact: true })).toBeVisible();
+      53 | }
+      54 | async function edit(text: string, path = "a.ts") { const input = page.getByRole("textbox", { name: `${path} editor`, exact: true }); await input.focus(); await input.press("Meta+a"); await input.pressSequentially(text); }
+        at open (/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/test/desktop.spec.ts:51:192)
+        at /Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/test/desktop.spec.ts:132:3
+
+    Error Context: test-results/desktop-SQLite-contention--464b5-h-choice-keep-window-usable/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/desktop-SQLite-contention--464b5-h-choice-keep-window-usable/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/desktop-SQLite-contention--464b5-h-choice-keep-window-usable/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    test/desktop.spec.ts:131:1 › SQLite contention vetoes Quit Discard; exact resolution and fresh choice keep window usable
+  19 passed (47.4s)
+error: script "test:desktop" exited with code 1

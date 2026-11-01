@@ -1,0 +1,112 @@
+[
+  {
+    "width": 1180,
+    "before": {
+      "viewport": {
+        "width": 590,
+        "height": 394
+      },
+      "controls": [
+        {
+          "name": "Stop",
+          "top": 494.39453125,
+          "bottom": 524.39453125
+        },
+        {
+          "name": "Send message",
+          "top": 494.39453125,
+          "bottom": 524.39453125
+        }
+      ]
+    },
+    "after": {
+      "mainScroll": 193,
+      "overflow": "auto",
+      "viewportHeight": 394,
+      "controls": [
+        {
+          "name": "Stop",
+          "top": 301.39453125,
+          "bottom": 331.39453125,
+          "left": 231,
+          "right": 279.33203125
+        },
+        {
+          "name": "Send message",
+          "top": 301.39453125,
+          "bottom": 331.39453125,
+          "left": 287.33203125,
+          "right": 392.11328125
+        }
+      ]
+    },
+    "native": {
+      "size": {
+        "width": 2360,
+        "height": 1576
+      },
+      "zoom": 2,
+      "bounds": {
+        "x": 166,
+        "y": 113,
+        "width": 1180,
+        "height": 788
+      }
+    }
+  },
+  {
+    "width": 700,
+    "before": {
+      "viewport": {
+        "width": 350,
+        "height": 309
+      },
+      "controls": [
+        {
+          "name": "Stop",
+          "top": 378.19921875,
+          "bottom": 408.19921875
+        },
+        {
+          "name": "Send message",
+          "top": 416.19921875,
+          "bottom": 464.19921875
+        }
+      ]
+    },
+    "after": {
+      "mainScroll": 1848,
+      "overflow": "auto",
+      "viewportHeight": 309,
+      "controls": [
+        {
+          "name": "Stop",
+          "top": 143.94921875,
+          "bottom": 173.94921875,
+          "left": 231,
+          "right": 279.33203125
+        },
+        {
+          "name": "Send message",
+          "top": 181.94921875,
+          "bottom": 229.94921875,
+          "left": 231,
+          "right": 309
+        }
+      ]
+    },
+    "native": {
+      "size": {
+        "width": 1400,
+        "height": 1236
+      },
+      "zoom": 2,
+      "bounds": {
+        "x": 166,
+        "y": 113,
+        "width": 700,
+        "height": 618
+      }
+    }
+  }
+]

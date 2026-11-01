@@ -1,0 +1,150 @@
+$ playwright test --config playwright.config.ts
+
+Running 25 tests using 1 worker
+
+(node:274) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+  ✓   1 test/desktop.spec.ts:60:44 › rapid native Open to Find retains the dialog (immediate) (3.1s)
+
+  ✓   2 test/desktop.spec.ts:60:44 › rapid native Open to Find retains the dialog (held discovery) (1.5s)
+
+  ✓   3 test/desktop.spec.ts:88:1 › actual sandboxed custom-scheme editor reads, edits and saves through SQLite workspace (1.5s)
+
+  ✓   4 test/desktop.spec.ts:112:1 › actual conflict Compare, Cancel, Overwrite and Reload retain one dirty working buffer and Git index (2.2s)
+Waiting for the debugger to disconnect...
+
+  ✓   5 test/desktop.spec.ts:137:1 › window close hides mounted Monaco; Quit Cancel preserves undo, then Save quits and releases resources (2.2s)
+Waiting for the debugger to disconnect...
+
+  ✓   6 test/desktop.spec.ts:164:1 › SQLite contention vetoes Quit Discard; exact resolution and fresh choice keep window usable (1.9s)
+
+  ✓   7 test/desktop.spec.ts:179:1 › dirty recovery and comparison metadata restore across actual process restart (2.6s)
+
+  ✓   8 test/desktop.spec.ts:189:1 › lost real Save reply retries original identity without replacing the native file again (1.9s)
+Untrusted renderer frame/document.
+
+Renderer console: Framing 'moonbase://editor/index.html' violates the following Content Security Policy directive: "frame-src 'none'". The request has been blocked.
+
+(node:1006) electron: Failed to load URL: moonbase://editor/index.html with error: ERR_BLOCKED_BY_CSP
+
+  ✓   9 test/desktop.spec.ts:203:1 › actual IPC rejects unapproved roots, foreign callers/targets, unknown inputs and navigation (1.5s)
+
+  ✓  10 test/desktop.spec.ts:242:1 › native picker creates scoped single-use tokens through the actual bridge; fake File paths grant no authority (1.3s)
+
+  ✓  11 test/desktop.spec.ts:264:1 › controlled clipboard fixtures require native consent and capture real files without accessing user's clipboard (1.4s)
+
+  ✓  12 test/desktop.spec.ts:283:1 › real create, dirty move and copy use native operations; lost move reply resolves status without replay (2.6s)
+
+  ✘  13 test/desktop.spec.ts:306:1 › previews, Keep Open, order, keyboard Close/Reopen and overflow remain useful at small size and zoom (33.9s)
+(node:1514) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+  ✘  14 test/desktop.spec.ts:342:1 › native Trash moves only a captured temporary fixture and leaves its dirty draft available (1.5s)
+(node:1564) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+Waiting for the debugger to disconnect...
+
+  ✓  15 test/desktop.spec.ts:361:1 › unknown final Quit publication retains the window and resolves only the exact committed receipt (1.8s)
+
+  ✓  16 test/desktop.spec.ts:377:1 › a command cancelled over real IPC keeps typed cancellation and leaves unrelated IO usable (1.2s)
+
+  ✓  17 test/desktop.spec.ts:388:1 › exact checkout tabs preserve independent dirty paths, views and closed metadata through native approval (2.4s)
+
+  ✘  18 test/desktop.spec.ts:405:1 › single-file picker and File-backed drop share the editor's destination dialog (1.4s)
+(node:1828) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+  ✓  19 test/desktop.spec.ts:421:1 › unacknowledged real move evidence restores dirty text on process restart without another mutation (2.6s)
+
+  ✓  20 test/desktop.spec.ts:435:1 › replacement consent cannot overwrite another open dirty draft or admit a native mutation (2.3s)
+
+  ✓  21 test/desktop.spec.ts:447:1 › a file named checkout remains data when its view and draft cross the authority boundary (2.1s)
+
+  ✓  22 test/desktop.spec.ts:455:1 › an explicit native Quit arriving before renderer startup is not lost (1.9s)
+
+  ✓  23 test/desktop.spec.ts:462:1 › app R1 filename maps preserve actual Save, positions, sibling drafts and restart (6.3s)
+
+  ✓  24 test/desktop.spec.ts:473:1 › app R1 context-isolated command transport preserves own JSON keys (750ms)
+
+  ✓  25 test/desktop.spec.ts:482:1 › app R1 Tab actions first/last selection and Close click work at native size and zoom (2.3s)
+
+
+  1) test/desktop.spec.ts:306:1 › previews, Keep Open, order, keyboard Close/Reopen and overflow remain useful at small size and zoom 
+
+    TimeoutError: locator.evaluate: Timeout 30000ms exceeded.
+    Call log:
+      - waiting for locator('main')
+
+
+      333 |   await page.keyboard.press("Escape"); await page.getByRole("button", { name: "Find file", exact: true }).focus(); await page.keyboard.press("Enter");
+      334 |   await page.getByRole("combobox").fill("a.ts"); await expect(page.getByRole("option", { name: "a.ts", exact: true })).toBeVisible();
+    > 335 |   expect(await page.getByRole("dialog").evaluate(element => getComputedStyle(element).fontFamily)).toBe(await page.locator("main").evaluate(element => getComputedStyle(element).fontFamily));
+          |                                                                                                                                    ^
+      336 |   await capture("desktop-keyboard-dialog"); await page.getByRole("combobox").press("Enter");
+      337 |   await expect(page.getByRole("textbox", { name: "a.ts editor", exact: true })).toBeFocused();
+      338 |   await page.getByRole("textbox", { name: "a.ts editor", exact: true }).pressSequentially("keyboard lookup typing");
+        at /Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/test/desktop.spec.ts:335:132
+
+    Error Context: test-results/desktop-previews-Keep-Open-bd903-eful-at-small-size-and-zoom/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/desktop-previews-Keep-Open-bd903-eful-at-small-size-and-zoom/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/desktop-previews-Keep-Open-bd903-eful-at-small-size-and-zoom/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  2) test/desktop.spec.ts:342:1 › native Trash moves only a captured temporary fixture and leaves its dirty draft available 
+
+    Error: expect(received).toBeTruthy()
+
+    Received: undefined
+
+      349 |   const result = await app.evaluate(() => globalThis.desktopTest.results.findLast(r => r.operation === "mutate" && r.reply.ok));
+      350 |   const trashPath = result?.reply.value?.items.find(item => item.message?.startsWith("macOS Trash: "))?.message?.slice("macOS Trash: ".length);
+    > 351 |   expect(trashPath).toBeTruthy(); if (!trashPath) throw Error("No native Trash path recorded");
+          |                     ^
+      352 |   // Cleanup touches only the exact native-returned fixture, after content and inode verification.
+      353 |   try { expect(trashPath.split("/").at(-1)).toBe(name); expect(statSync(trashPath).ino).toBe(inode); expect(readFileSync(trashPath, "utf8")).toBe(content); }
+      354 |   finally { if (statSync(trashPath).ino === inode && readFileSync(trashPath, "utf8") === content) rmSync(trashPath); }
+        at /Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/test/desktop.spec.ts:351:21
+
+    Error Context: test-results/desktop-native-Trash-moves-7ebcb-s-its-dirty-draft-available/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/desktop-native-Trash-moves-7ebcb-s-its-dirty-draft-available/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/desktop-native-Trash-moves-7ebcb-s-its-dirty-draft-available/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  3) test/desktop.spec.ts:405:1 › single-file picker and File-backed drop share the editor's destination dialog 
+
+    Error: page.evaluate: TypeError: Cannot read properties of null (reading 'dispatchEvent')
+        at eval (eval at evaluate (:370:30), <anonymous>:4:35)
+        at UtilityScript.evaluate (<anonymous>:372:16)
+        at UtilityScript.<anonymous> (<anonymous>:1:44)
+        at eval (eval at evaluate (:370:30), <anonymous>:4:35)
+        at UtilityScript.evaluate (<anonymous>:372:16)
+        at UtilityScript.<anonymous> (<anonymous>:1:44)
+        at /Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/test/desktop.spec.ts:415:14
+
+    Error Context: test-results/desktop-single-file-picker-a41f0-editor-s-destination-dialog/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/desktop-single-file-picker-a41f0-editor-s-destination-dialog/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/desktop-single-file-picker-a41f0-editor-s-destination-dialog/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  3 failed
+    test/desktop.spec.ts:306:1 › previews, Keep Open, order, keyboard Close/Reopen and overflow remain useful at small size and zoom 
+    test/desktop.spec.ts:342:1 › native Trash moves only a captured temporary fixture and leaves its dirty draft available 
+    test/desktop.spec.ts:405:1 › single-file picker and File-backed drop share the editor's destination dialog 
+  22 passed (1.4m)
+error: script "test:desktop" exited with code 1

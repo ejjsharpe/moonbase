@@ -1,0 +1,14 @@
+✔ independent retry preservation fence: createChat / changed (12.287916ms)
+✔ independent retry preservation fence: createChat / write-fails (2.31625ms)
+✔ independent retry preservation fence: sendChat / changed (2.386416ms)
+✔ independent retry preservation fence: sendChat / write-fails (2.084917ms)
+✔ independent retry preservation fence: stopChat / changed (1.406833ms)
+✔ independent retry preservation fence: stopChat / write-fails (1.7955ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 6
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 115.299375

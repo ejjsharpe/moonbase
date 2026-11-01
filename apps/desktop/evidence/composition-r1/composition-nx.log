@@ -1,0 +1,649 @@
+
+ NX   Running targets typecheck, lint, test for 7 projects:
+
+- @moonbase/application
+- @moonbase/pi-runtime
+- @moonbase/workspace
+- @moonbase/chat-probe
+- @moonbase/editor
+- @moonbase/desktop
+- @moonbase/ssh
+
+
+
+> nx run @moonbase/application:typecheck
+
+(node:21704) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[0m[2m[35m$[0m [2m[1mtsc --noEmit -p tsconfig.json[0m
+
+> nx run @moonbase/application:lint
+
+(node:21705) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[0m[2m[35m$[0m [2m[1mtsc --noEmit -p tsconfig.json[0m
+
+> nx run @moonbase/application:test
+
+(node:21703) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[0m[2m[35m$[0m [2m[1mnode --experimental-strip-types --test test/*.test.ts[0m
+(node:21725) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:21727) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[32m✔ public chat entry points share one scope and preserve exact targets/request identities [90m(4.089541ms)[39m[39m
+[32m✔ in-flight chat dispatch permits status and explicit Stop; cancellation invents no Stop [90m(0.641167ms)[39m[39m
+[32m✔ pre-aborted chat commands acquire nothing [90m(0.212833ms)[39m[39m
+[32m✔ chat observer failures stay observable without closing the process service [90m(0.950083ms)[39m[39m
+(node:21728) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[32m✔ public clients share one acquired service and release it at the process scope [90m(2.675792ms)[39m[39m
+[32m✔ cancelling one command leaves unrelated queries usable [90m(0.819541ms)[39m[39m
+[32m✔ ending a view subscription disposes its listener without ending the service [90m(2.802875ms)[39m[39m
+[32m✔ typed service failure crosses the same public command boundary [90m(0.292084ms)[39m[39m
+[32m✔ unsubscribe reports a failing finalizer through the public error callback [90m(3.528375ms)[39m[39m
+[32m✔ command cancellation preserves a failing cleanup instead of labelling it cancelled [90m(0.536459ms)[39m[39m
+[32m✔ pending watch acquisition retains cleanup failure; concurrent disposal=false [90m(3.252041ms)[39m[39m
+[32m✔ pending watch acquisition retains cleanup failure; concurrent disposal=true [90m(5.080709ms)[39m[39m
+[32m✔ unprintable defects reach command and watch application error boundaries [90m(12.275417ms)[39m[39m
+[32m✔ an already-aborted command is rejected before runtime acquisition or service dispatch [90m(0.429333ms)[39m[39m
+[32m✔ combined ensuring failures retain uncertainty and exact target; proxy=false [90m(3.58475ms)[39m[39m
+[32m✔ combined ensuring failures retain uncertainty and exact target; proxy=true [90m(0.879375ms)[39m[39m
+[32m✔ combined scoped failures retain uncertainty and exact target; proxy=false [90m(0.802ms)[39m[39m
+[32m✔ combined scoped failures retain uncertainty and exact target; proxy=true [90m(0.669542ms)[39m[39m
+(node:21729) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[32m✔ public connection clients share one scoped service and keep endpoint lookup outside public commands [90m(3.975625ms)[39m[39m
+[32m✔ an in-flight connection command does not block status and cancellation retains the service [90m(0.543708ms)[39m[39m
+[32m✔ pre-aborted connection commands dispatch nothing [90m(0.213416ms)[39m[39m
+[32m✔ connection observer cleanup errors remain observable without disposing the process service [90m(1.027541ms)[39m[39m
+(node:21730) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[32m✔ health authenticates the loopback request and retains the exact configured identity [90m(35.748458ms)[39m[39m
+[32m✔ an unsigned impostor cannot learn a reusable credential or pass health [90m(5.575083ms)[39m[39m
+[32m✔ health rejects reflected requests, replayed replies and tampered signed metadata [90m(9.040667ms)[39m[39m
+[32m✔ the server health helper rejects an unproved client without returning a signed reply [90m(0.480791ms)[39m[39m
+[32m✔ wrong authentication is a typed rejection without including the token in errors [90m(4.226333ms)[39m[39m
+[32m✔ host, store, protocol, version and required capability mismatches fail closed [90m(6.164541ms)[39m[39m
+[32m✔ invalid endpoint configuration is rejected before any network request [90m(1.1315ms)[39m[39m
+[32m✔ redirects are not followed with the host credential [90m(1.864667ms)[39m[39m
+[32m✔ health bounds actual response bytes and rejects malformed or non-JSON data [90m(3.700541ms)[39m[39m
+[32m✔ cancelling health closes an in-flight response without owning the server [90m(2.162167ms)[39m[39m
+[32m✔ a stalled health body reaches its deadline and releases the response [90m(5003.978458ms)[39m[39m
+[34mℹ tests 33[39m
+[34mℹ suites 0[39m
+[34mℹ pass 33[39m
+[34mℹ fail 0[39m
+[34mℹ cancelled 0[39m
+[34mℹ skipped 0[39m
+[34mℹ todo 0[39m
+[34mℹ duration_ms 5574.787125[39m
+
+> nx run @moonbase/pi-runtime:lint
+
+(node:21940) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[0m[2m[35m$[0m [2m[1mtsc --noEmit -p tsconfig.json[0m
+
+> nx run @moonbase/pi-runtime:typecheck
+
+(node:21976) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[0m[2m[35m$[0m [2m[1mtsc --noEmit -p tsconfig.json[0m
+
+> nx run @moonbase/ssh:typecheck
+
+(node:21990) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[0m[2m[35m$[0m [2m[1mtsc --noEmit -p tsconfig.json[0m
+
+> nx run @moonbase/ssh:lint
+
+(node:22001) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[0m[2m[35m$[0m [2m[1mtsc --noEmit -p tsconfig.json[0m
+
+> nx run @moonbase/workspace:test
+
+(node:22010) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[0m[2m[35m$[0m [2m[1mnode scripts/build-native.mjs && node --experimental-strip-types --test test/*.test.ts[0m
+(node:22027) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:22028) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[32m✔ copy rejects a source replaced with protected contents during recursive preflight [90m(630.126333ms)[39m[39m
+[32m✔ copy rejects a source relocated outside the checkout during recursive preflight [90m(186.404417ms)[39m[39m
+[32m✔ move rejects a source replaced with protected contents during recursive preflight [90m(186.746666ms)[39m[39m
+[32m✔ trash rejects a source relocated outside the checkout during recursive preflight [90m(188.148666ms)[39m[39m
+[32m✔ trash rejects a source replaced with protected contents during recursive preflight [90m(185.14825ms)[39m[39m
+[32m✔ copy rejects destination-parent replacement during native recursive preflight [90m(188.076792ms)[39m[39m
+[32m✔ copy rejects replacement of its open folder staging object without publishing or cleaning the replacement [90m(1001.435042ms)[39m[39m
+[32m✔ copy rejects replacement of its open file staging object without publishing or cleaning the replacement [90m(8.960708ms)[39m[39m
+[32m✔ native import rejects source replacement before publish and retains staging without cleanup [90m(9.796ms)[39m[39m
+[32m✔ native import rejects ancestor replacement before publish and retains staging without cleanup [90m(5.311458ms)[39m[39m
+[32m✔ native import rejects parent replacement before publish and retains staging without cleanup [90m(5.5865ms)[39m[39m
+[32m✔ native import rejects root replacement before publish and retains staging without cleanup [90m(6.087917ms)[39m[39m
+[32m✔ native import rejects stage replacement before publish and retains staging without cleanup [90m(6.129542ms)[39m[39m
+[32m✔ native helper rejects destination ancestry before any staging even without the host preflight [90m(5.744ms)[39m[39m
+(node:22029) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[32m✔ publication receipt resolves a response lost after commit despite a later competing publication and restart [90m(530.991584ms)[39m[39m
+[32m✔ publication IDs bind full canonical inputs and isolate client namespaces [90m(124.114917ms)[39m[39m
+[32m✔ cancellation before publication commit creates no receipt and retains the prior snapshot [90m(267.4525ms)[39m[39m
+[32m✔ real SQLite contention before commit leaves no publication receipt and original retry commits once [90m(107.072208ms)[39m[39m
+[32m✔ receipt insertion failure rolls back recovery snapshot and explicit publication fence together [90m(116.134542ms)[39m[39m
+[32m✔ old matching publication replay and query do not advance observer acknowledgement bounds [90m(117.294542ms)[39m[39m
+[32m✔ matching receipt replay precedes later uncertain-operation preservation guards [90m(957.837584ms)[39m[39m
+(node:22030) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[32m✔ R1 aliases cannot authorize two same-baseline saves of one macOS object [90m(543.607709ms)[39m[39m
+[32m✔ R2 native self import rejects before replacement Trash [90m(365.309292ms)[39m[39m
+[32m✔ R2 native descendant import rejects before replacement Trash [90m(1113.823125ms)[39m[39m
+[32m✔ R2 native ancestor import rejects before replacement Trash [90m(496.053708ms)[39m[39m
+[32m✔ R3 concurrent changed-payload save IDs reserve one immutable target before mutation [90m(502.7615ms)[39m[39m
+[32m✔ R3 concurrent changed-payload move IDs reserve one immutable target before mutation [90m(384.099708ms)[39m[39m
+[32m✔ R4 concurrent lost-move reconciliation retains the original revision receipt and acknowledgement bounds [90m(456.560833ms)[39m[39m
+[32m✔ R5 copy recovery overflow retains a valid snapshot and pending evidence across restart without replay [90m(1267.567583ms)[39m[39m
+[32m✔ R6 interrupted newer Save plus external change restores admitted text over the older draft [90m(398.605041ms)[39m[39m
+[32m✔ R6 interrupted newer Save plus external change preserves later competing publication [90m(273.740917ms)[39m[39m
+[32m✔ R7 concurrent different operations can consume a native token only once [90m(384.222667ms)[39m[39m
+[32m✔ R7 expiry cannot close a native descriptor after its operation has claimed it [90m(615.59575ms)[39m[39m
+[32m✔ known closed checkout move metadata reconciles without probing its unavailable directory [90m(634.176ms)[39m[39m
+[32m✔ known closed checkout copy metadata reconciles without probing its unavailable directory [90m(598.236167ms)[39m[39m
+[32m✔ R2 interrupted Save group restores both admitted drafts in one revision across repeated restarts [90m(498.81775ms)[39m[39m
+[32m✔ R2 interrupted Save group preserves a genuinely later client publication [90m(474.106875ms)[39m[39m
+[32m✔ R2 interrupted Save group capacity overflow retains the entire prior valid snapshot and both pending intents [90m(439.595208ms)[39m[39m
+[32m✔ R2 local move cannot replace an ancestor containing its selected dirty source [90m(355.060417ms)[39m[39m
+[32m✔ R2 local copy cannot replace an ancestor containing its selected dirty source [90m(368.968833ms)[39m[39m
+[32m✔ R2 a client publication during grouped disk inspection stays authoritative [90m(553.7325ms)[39m[39m
+[32m✔ R2 grouped Save publisher preserves visible persistence failure and clears pending on a non-replaying retry [90m(401.004958ms)[39m[39m
+[32m✔ R3 retries cannot split an overflowing interrupted Save restoration group [90m(502.478084ms)[39m[39m
+[32m✔ R3 unrelated save preserves pending interrupted text across internal revisions [90m(435.120875ms)[39m[39m
+[32m✔ R3 unrelated save does not weaken a later client publication fence [90m(434.77825ms)[39m[39m
+[32m✔ R3 unrelated move preserves pending interrupted text across internal revisions [90m(430.167708ms)[39m[39m
+[32m✔ R3 unrelated move does not weaken a later client publication fence [90m(424.223458ms)[39m[39m
+[32m✔ R3 a genuine client publication during Save preflight fences later interrupted admission [90m(425.162542ms)[39m[39m
+[32m✔ R3 unresolved same-target text blocks newer Save and Move effects [90m(426.432042ms)[39m[39m
+[32m✔ R3 pending text survives a failed save fact publication and its non-replaying retry [90m(445.563041ms)[39m[39m
+[32m✔ R3 pending text survives a failed move fact publication and its non-replaying retry [90m(436.773333ms)[39m[39m
+[32m✔ R3 foreign operation and restoration revisions do not acknowledge either observer without client publication [90m(300.715584ms)[39m[39m
+[32m✔ R3 complete restoration retries wait for an active sibling admission without publishing part of its group [90m(429.453375ms)[39m[39m
+[32m✔ R4 previous public producer cannot restore over a publication made during Save preflight; lost stage [90m(482.211416ms)[39m[39m
+[32m✔ R4 previous public producer cannot restore over a publication made during Save preflight; lost replace [90m(468.254708ms)[39m[39m
+[32m✔ R4 current public producer cannot restore over a publication made during Save preflight; lost stage [90m(459.317167ms)[39m[39m
+[32m✔ R4 current public producer cannot restore over a publication made during Save preflight; lost replace [90m(482.558417ms)[39m[39m
+[32m✔ R4 missing publication metadata and internal none cannot authorize observer acknowledgement [90m(429.964ms)[39m[39m
+[32m✔ R4 missing publication metadata and internal save cannot authorize observer acknowledgement [90m(458.329125ms)[39m[39m
+[32m✔ R4 missing publication metadata and internal move cannot authorize observer acknowledgement [90m(446.586042ms)[39m[39m
+[32m✔ R4 current publication metadata and internal none cannot authorize observer acknowledgement [90m(442.465042ms)[39m[39m
+[32m✔ R4 current publication metadata and internal save cannot authorize observer acknowledgement [90m(459.00225ms)[39m[39m
+[32m✔ R4 current publication metadata and internal move cannot authorize observer acknowledgement [90m(450.965416ms)[39m[39m
+[32m✔ R4 current Save in a previous public store retains its zero fence across internal revisions [90m(415.397916ms)[39m[39m
+(node:22031) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[32m✔ public client saves, rejects changed retries and preserves original dirty conflict baselines across restart [90m(554.282625ms)[39m[39m
+[32m✔ independent clients and compare-and-swap recovery do not overwrite one another; invalid baselines fail [90m(278.50875ms)[39m[39m
+[32m✔ known move preserves drafts and exact target, acknowledgement requires recovery publication; replay does not move twice [90m(127.851958ms)[39m[39m
+[32m✔ local/remote and root replacement identities, traversal, symlinks, binary, size and hard-link save boundaries reject [90m(124.683083ms)[39m[39m
+[32m✔ Git staged and unstaged originals both compare against the current working document, lookup and ignore filtering work [90m(1160.734792ms)[39m[39m
+[32m✔ watch notifies external changes, coalesces and disposes independently of file commands [90m(466.92625ms)[39m[39m
+[32m✔ create/copy and scoped native import use actual files; single-use references cannot authorize a later operation [90m(126.503709ms)[39m[39m
+[32m✔ identical source paths in independent checkout identities never reconcile each other, including restart [90m(210.247167ms)[39m[39m
+[32m✔ real SQLite write contention vetoes recovery discard and mutation before any filesystem change [90m(109.371541ms)[39m[39m
+[32m✔ lost native move response preserves drafts and restart never repeats the mutation [90m(486.347125ms)[39m[39m
+[32m✔ lost native trash response preserves drafts and restart never repeats the mutation [90m(467.273584ms)[39m[39m
+[32m✔ known native Trash keeps another client draft and deliberate replacement uses captured identities [90m(126.854958ms)[39m[39m
+[32m✔ lookup honors nested ignore policies, ranks and highlights all pieces, quotes contiguous text, and keeps history separate [90m(169.545666ms)[39m[39m
+[32m✔ unsubscribe during pending workspace/watch acquisition and concurrent runtime disposal release all native watchers [90m(212.996167ms)[39m[39m
+[32m✔ filesystem success followed by real SQLite publication failure stays observable and retry publishes without repeating mutation [90m(392.784083ms)[39m[39m
+(node:22543) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[32m✔ one client Save never rebases another client dirty baseline, including restart and newer-revision stale publication [90m(136.130625ms)[39m[39m
+[32m✔ unavailable persistence and real filesystem file-size exhaustion report typed errors and retain existing recovery [90m(326.357625ms)[39m[39m
+(node:22567) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[32m✔ batch move reports partial success and explicit replacement revalidates the captured destination [90m(140.871ms)[39m[39m
+[32m✔ native assets in packaged resource paths run with restricted PATH and no provider startup dependency [90m(1161.351708ms)[39m[39m
+[32m✔ cancelling admitted native copy is typed, preserves source and leaves unrelated file queries usable [90m(417.55475ms)[39m[39m
+[32m✔ origin acknowledgement cannot hide move evidence from another observer; each observer publishes/acknowledges independently [90m(116.540083ms)[39m[39m
+[32m✔ origin acknowledgement cannot hide copy evidence from another observer; each observer publishes/acknowledges independently [90m(116.098959ms)[39m[39m
+[32m✔ own save receipt exposes a competing same-client publication gap and retry does not write again [90m(421.312917ms)[39m[39m
+[32m✔ own move receipt exposes a competing same-client publication gap and retry does not write again [90m(430.236167ms)[39m[39m
+[32m✔ batch move can target the checkout root and preserves exact captured identities [90m(105.187458ms)[39m[39m
+[32m✔ save rejects a replaced staging object and never publishes or removes the impostor [90m(374.181916ms)[39m[39m
+[32m✔ restart recovers the admitted Save text even when no earlier draft publication existed [90m(344.012542ms)[39m[39m
+[34mℹ tests 91[39m
+[34mℹ suites 0[39m
+[34mℹ pass 91[39m
+[34mℹ fail 0[39m
+[34mℹ cancelled 0[39m
+[34mℹ skipped 0[39m
+[34mℹ todo 0[39m
+[34mℹ duration_ms 21082.604458[39m
+
+> nx run @moonbase/chat-probe:test
+
+(node:23060) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[0m[2m[35m$[0m [2m[1mnode --experimental-strip-types --test --test-concurrency=1 test/*.test.ts[0m
+(node:23067) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:23068) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[32m✔ private configuration is owner-only, bounded, explicit and projected; bad files never initialize transport [90m(5.293416ms)[39m[39m
+(node:23069) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[32m✔ startup only observes; every mutation is durably captured before disclosure [90m(11.544791ms)[39m[39m
+[32m✔ lost reply, null query, reload and reconnect retain original input without auto Send [90m(4.858333ms)[39m[39m
+[32m✔ matching Send recovery clears only captured draft text and preserves newer edits [90m(2.467959ms)[39m[39m
+[32m✔ createChat never discloses when pending metadata write fails [90m(1.94225ms)[39m[39m
+[32m✔ sendChat never discloses when pending metadata write fails [90m(1.724ms)[39m[39m
+[32m✔ stopChat never discloses when pending metadata write fails [90m(1.815833ms)[39m[39m
+[32m✔ corruption/foreign context remains untouched and blocks admission on reload: {broken [90m(0.286917ms)[39m[39m
+[32m✔ corruption/foreign context remains untouched and blocks admission on reload: {"version":1 [90m(0.164042ms)[39m[39m
+[32m✔ write failure preserves latest live edit and blocks Quit instead of claiming reload safety [90m(0.660584ms)[39m[39m
+[32m✔ same-input retry queries first, keeps original Create/Send/Stop identities, and never adopts successor [90m(3.171792ms)[39m[39m
+[32m✔ pending Send does not block captured Stop or status and detach never stops work [90m(2.0595ms)[39m[39m
+[32m✔ read-only admitted lookup resolves without Send; foreign storage writes are never overwritten [90m(1.766542ms)[39m[39m
+[32m✔ replacement watch snapshots and one older page keep output bounded [90m(3.036875ms)[39m[39m
+[32m✔ bounds reject oversized/invalid Unicode input without replacing retained draft or issuing Send [90m(1.628167ms)[39m[39m
+[32m✔ Create and captured Stop are written before disclosure; lost replies recover exact inputs after reload [90m(1.906625ms)[39m[39m
+[32m✔ hide/detach releases observations, resume is read-only, and draft capacity failure blocks Quit [90m(9.158083ms)[39m[39m
+[32m✔ createChat retains the captured identity when Disconnect makes a dispatched reply Unavailable [90m(4.990792ms)[39m[39m
+[32m✔ sendChat retains the captured identity when Disconnect makes a dispatched reply Unavailable [90m(4.31775ms)[39m[39m
+[32m✔ stopChat retains the captured identity when Disconnect makes a dispatched reply Unavailable [90m(4.232791ms)[39m[39m
+[32m✔ createChat retry vetoes changed local storage before retry before mutating redisclosure [90m(1.925333ms)[39m[39m
+[32m✔ createChat retry vetoes unwritable local storage before retry before mutating redisclosure [90m(1.861ms)[39m[39m
+[32m✔ createChat retry vetoes changed local storage during query before mutating redisclosure [90m(0.7045ms)[39m[39m
+[32m✔ createChat retry vetoes unwritable local storage during query before mutating redisclosure [90m(0.822ms)[39m[39m
+[32m✔ sendChat retry vetoes changed local storage before retry before mutating redisclosure [90m(1.344584ms)[39m[39m
+[32m✔ sendChat retry vetoes unwritable local storage before retry before mutating redisclosure [90m(1.663459ms)[39m[39m
+[32m✔ sendChat retry vetoes changed local storage during query before mutating redisclosure [90m(1.684209ms)[39m[39m
+[32m✔ sendChat retry vetoes unwritable local storage during query before mutating redisclosure [90m(1.726125ms)[39m[39m
+[32m✔ stopChat retry vetoes changed local storage before retry before mutating redisclosure [90m(0.436333ms)[39m[39m
+[32m✔ stopChat retry vetoes unwritable local storage before retry before mutating redisclosure [90m(1.757625ms)[39m[39m
+[32m✔ stopChat retry vetoes changed local storage during query before mutating redisclosure [90m(2.217209ms)[39m[39m
+[32m✔ stopChat retry vetoes unwritable local storage during query before mutating redisclosure [90m(1.728042ms)[39m[39m
+(node:23070) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[32m✔ public proof controller creates, lists, opens, streams real tool output and captures exact Stop through SSH/HTTP/Pi [90m(1203.848666ms)[39m[39m
+[32m✔ lost actual HTTP Send response + newer draft + controller reload/client closure/reconnect/store reopen never resends [90m(1679.937166ms)[39m[39m
+[32m✔ view detach and Disconnect leave remote tool running; reopen queries same chat without Send [90m(1167.56975ms)[39m[39m
+(node:23087) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[32m✔ IPC rejects unknown fields/operations/foreign authority before dispatch [90m(1.675584ms)[39m[39m
+[32m✔ public bridge preserves Uncertain and exact pending payload; preaborted calls do not dispatch [90m(2.53625ms)[39m[39m
+[32m✔ IPC cancellation/disposal releases only owned waiters/observations, never Stop or Disconnect [90m(0.271292ms)[39m[39m
+[34mℹ tests 38[39m
+[34mℹ suites 0[39m
+[34mℹ pass 38[39m
+[34mℹ fail 0[39m
+[34mℹ cancelled 0[39m
+[34mℹ skipped 0[39m
+[34mℹ todo 0[39m
+[34mℹ duration_ms 4608.472375[39m
+
+> nx run @moonbase/editor:test
+
+(node:23088) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[0m[2m[35m$[0m [2m[1mnode --experimental-strip-types --test test/*.test.ts[0m
+(node:23095) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:23096) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[32m✔ memory inspection rejects empty and oversized selections like the production service [90m(15.222917ms)[39m[39m
+[32m✔ open/edit/save and staged/unstaged views use one working buffer and distinct baselines [90m(2.400084ms)[39m[39m
+[32m✔ external-change conflict retains dirty text and baseline; Overwrite checks the observed version again [90m(1.768916ms)[39m[39m
+[32m✔ Reload persistence failure vetoes loss; Cancel keeps the edits [90m(2.131875ms)[39m[39m
+[32m✔ lost Save response retries its immutable payload once, preserving newer edits [90m(1.795167ms)[39m[39m
+[32m✔ captured close defers Discards; earlier Save remains a fact after later Cancel [90m(5.641583ms)[39m[39m
+[32m✔ preview replacement follows successful activation; dirty, Keep Open and reordered previews remain [90m(0.7965ms)[39m[39m
+[32m✔ reopen restores batch order/view/position and reads current source rather than discarded text [90m(1.147792ms)[39m[39m
+[32m✔ two editor instances isolate buffers, positions, selection and recovery; restart restores only its own namespace [90m(1.545125ms)[39m[39m
+[32m✔ recovery CAS conflict is visible and vetoes close [90m(1.016ms)[39m[39m
+[32m✔ tree ignore filtering/reveal and bounded lookup expose their real results [90m(1.011875ms)[39m[39m
+[32m✔ lost move response resolves status once and publishes dirty drafts at the exact successful destination [90m(2.717791ms)[39m[39m
+[32m✔ incompatible recovered operation evidence never rebinds equal checkout/path strings [90m(0.965ms)[39m[39m
+[32m✔ typed lookup filters history separately, deduplicates, ranks and highlights independently [90m(0.562709ms)[39m[39m
+[32m✔ pending commands retain newer live text and close cannot cross an unresolved Save [90m(1.01ms)[39m[39m
+[32m✔ a rejected memory transfer preserves its destination instead of partially deleting it [90m(0.438041ms)[39m[39m
+[32m✔ restart reconciles recorded outcomes only in their immutable checkout despite colliding source paths [90m(1.803209ms)[39m[39m
+[32m✔ dirty Copy carries a separate destination draft; Trash retains dirty source recovery [90m(1.574458ms)[39m[39m
+[32m✔ mutation persistence failure precedes effects; acknowledgement waits for reconciled recovery publication [90m(1.168916ms)[39m[39m
+[32m✔ stale file activation cannot replace a later successful comparison [90m(1.055792ms)[39m[39m
+[32m✔ disposal releases view subscriptions without discarding a published draft or ending the process runtime [90m(5.825625ms)[39m[39m
+[32m✔ Quit uses the same deferred preservation gate and persistence failure keeps all edits [90m(1.456625ms)[39m[39m
+[32m✔ origin acknowledgement cannot hide a move from another observer; observer publication/ack then hides its fact [90m(1.623833ms)[39m[39m
+[32m✔ Save receipts advance only known own revisions; a competing same-client publication gap stays visible [90m(0.871875ms)[39m[39m
+[32m✔ an observer's own Save does not rebase another dirty editor's baseline [90m(1.062333ms)[39m[39m
+[32m✔ move receipts preserve edits made while the mutation response is pending [90m(1.208958ms)[39m[39m
+[32m✔ copy receipts preserve edits made while the mutation response is pending [90m(2.630833ms)[39m[39m
+[32m✔ clean tabs restore current disk content while dirty tabs retain their original baseline [90m(0.759625ms)[39m[39m
+[32m✔ R1 move collision retains both drafts and evidence for own outcome [90m(2.985ms)[39m[39m
+[32m✔ R1 move collision retains both drafts and evidence for foreign outcome [90m(2.304084ms)[39m[39m
+[32m✔ R1 removed checkout ignores late position recording [90m(0.871959ms)[39m[39m
+[32m✔ R1 definitive InvalidInput Save frees the captured request while uncertain retries remain immutable [90m(1.1415ms)[39m[39m
+[32m✔ R1 missing retained dirty tab stays accessible after Trash and new missing opens leave selection alone [90m(0.926708ms)[39m[39m
+[32m✔ R1 restored open roots populate initial tree and Git including expanded folders [90m(0.935209ms)[39m[39m
+[32m✔ R1 a newer explicit checkout selection defeats a delayed file activation in another checkout [90m(0.477291ms)[39m[39m
+[32m✔ R1 checkout close retains exact metadata and reopens its order, comparison, positions and active file [90m(0.73875ms)[39m[39m
+[32m✔ R1 memory persistence rejects composite view keys and invalid open membership [90m(0.398792ms)[39m[39m
+[32m✔ R1 closed checkout metadata receives operation facts without discovery or reopening [90m(1.098875ms)[39m[39m
+[32m✔ R1 an unavailable retained comparison activates its buffer while a new comparison failure preserves selection [90m(0.417875ms)[39m[39m
+[32m✔ R2 pre-existing persisted replacement drafts survive a foreign move and controller restart [90m(1.101792ms)[39m[39m
+[32m✔ R2 definitive rejected mutation releases pending state and leaves Save, Close and Quit usable [90m(1.0935ms)[39m[39m
+[32m✔ R2 closing a restored active clean file loads its survivor's remembered comparison [90m(0.793542ms)[39m[39m
+[32m✔ R3 files preservation retains newer selection and unrelated metadata during publication [90m(1.356417ms)[39m[39m
+[32m✔ R3 checkout preservation retains newer selection and unrelated metadata during publication [90m(1.106625ms)[39m[39m
+[32m✔ R3 quit preservation retains newer selection and unrelated metadata during publication [90m(1.398375ms)[39m[39m
+[32m✔ R3 failed close publication keeps drafts and newer metadata without bypassing competing CAS [90m(1.153833ms)[39m[39m
+[32m✔ R3 later close publication failure retains dirty buffers and can publish newer metadata at the actual revision [90m(1.106166ms)[39m[39m
+[32m✔ R4 files conflict at second publication cannot lose a persisted draft after failed close [90m(1.205125ms)[39m[39m
+[32m✔ R4 files lost response at second publication cannot lose a persisted draft after failed close [90m(1.176959ms)[39m[39m
+[32m✔ R4 checkout conflict at second publication cannot lose a persisted draft after failed close [90m(1.202666ms)[39m[39m
+[32m✔ R4 checkout lost response at second publication cannot lose a persisted draft after failed close [90m(1.144625ms)[39m[39m
+[32m✔ R4 quit conflict at second publication cannot lose a persisted draft after failed close [90m(2.403667ms)[39m[39m
+[32m✔ R4 quit lost response at second publication cannot lose a persisted draft after failed close [90m(1.601ms)[39m[39m
+[32m✔ R4 selecting a background-closed checkout loads its absent survivor in its remembered view [90m(1.541375ms)[39m[39m
+[32m✔ R4 recovery publications bind canonical immutable input; retries/status do not write or adopt newer CAS [90m(0.586916ms)[39m[39m
+[32m✔ R4 retry/status of an old publication cannot acknowledge a newer foreign operation [90m(0.548667ms)[39m[39m
+[32m✔ R4 exact resolution of an uncertain final close (not committed) preserves the durable outcome and original request [90m(1.2605ms)[39m[39m
+[32m✔ R4 exact resolution of an uncertain final close (committed) preserves the durable outcome and original request [90m(0.883708ms)[39m[39m
+[32m✔ R4 exact resolution of an uncertain final close (competing CAS) preserves the durable outcome and original request [90m(1.366292ms)[39m[39m
+[32m✔ R4 later metadata failure cannot veto a final close already confirmed by exact receipt [90m(1.109125ms)[39m[39m
+[32m✔ R5 an observation already awaiting recovery cannot remap Reload's captured draft or erase it on restart [90m(2.709625ms)[39m[39m
+[32m✔ R5 an older observation cannot resurrect a consented draft around an uncertain final close receipt [90m(2.422208ms)[39m[39m
+[32m✔ R5 a selected absent survivor activates after another preservation releases (success) [90m(1.818ms)[39m[39m
+[32m✔ R5 a selected absent survivor activates after another preservation releases (cancel) [90m(1.391042ms)[39m[39m
+[32m✔ R5 a selected absent survivor activates after another preservation releases (failure) [90m(1.966125ms)[39m[39m
+[32m✔ R5 a selected absent survivor activates after another preservation releases (unknown) [90m(1.961375ms)[39m[39m
+[32m✔ R5 a captured Save remains a fact while new foreign remaps wait for preservation release [90m(3.025417ms)[39m[39m
+[32m✔ R5 an admitted observer acknowledgement stays completed when its response crosses a Reload lock [90m(1.829208ms)[39m[39m
+[32m✔ R6 a confirmed destination close invalidates an older Copy materialization across retry and restart [90m(6.107708ms)[39m[39m
+[32m✔ R6 restored dirty staged survivor loads its remembered comparison [90m(1.7355ms)[39m[39m
+[32m✔ R6 restored dirty unstaged survivor loads its remembered comparison [90m(1.663834ms)[39m[39m
+[32m✔ R6 Copy target invalidation preserves newer intent without cancelling other targets (cancel) [90m(2.021292ms)[39m[39m
+[32m✔ R6 Copy target invalidation preserves newer intent without cancelling other targets (failure) [90m(2.369417ms)[39m[39m
+[32m✔ R6 Copy target invalidation preserves newer intent without cancelling other targets (reopen) [90m(2.443458ms)[39m[39m
+[32m✔ R6 Copy target invalidation preserves newer intent without cancelling other targets (unrelated) [90m(2.153ms)[39m[39m
+[32m✔ R6 settled staged comparison activation does not retry on every release [90m(1.794208ms)[39m[39m
+[32m✔ R6 settled untracked comparison activation does not retry on every release [90m(1.579083ms)[39m[39m
+[32m✔ R7 missing staged working document becomes editable after recreation and refresh [90m(1.276875ms)[39m[39m
+[32m✔ R7 missing unstaged working document becomes editable after recreation and refresh [90m(0.787042ms)[39m[39m
+[32m✔ R7 persistent missing and failed working activation settle until a newer document is observed [90m(1.362167ms)[39m[39m
+[32m✔ R7 an empty original remains settled while missing and editable after recreation [90m(0.533459ms)[39m[39m
+[32m✔ R7 selected staged refresh installs a newly available working buffer [90m(0.483ms)[39m[39m
+[32m✔ R7 selected unstaged refresh installs a newly available working buffer [90m(0.404875ms)[39m[39m
+(node:23097) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[32m✔ filename caret state never mutates inherited prototypes [90m(7.733959ms)[39m[39m
+[32m✔ prototype-shaped filenames keep own JSON view keys through Save, reopen, restart and move reconciliation [90m(27.29325ms)[39m[39m
+[32m✔ untracked prototype-shaped filenames never inherit a demo Git baseline [90m(0.767709ms)[39m[39m
+(node:23098) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[32m✔ fresh capture invalidates exact recovery confirmation synchronously; confirmed dirty drafts allow unload [90m(9.213ms)[39m[39m
+[32m✔ ordinary publication stays unready in flight and cannot confirm an edit made after capture [90m(1.77325ms)[39m[39m
+[32m✔ uncertain uncommitted publication retains identity and only confirms its captured generation [90m(2.564ms)[39m[39m
+[32m✔ uncertain committed publication retains identity and only confirms its captured generation [90m(1.611416ms)[39m[39m
+[32m✔ read-only work and visible diagnostics do not invalidate confirmed recovery; view changes do [90m(1.415625ms)[39m[39m
+[32m✔ even a publication of an already confirmed capture vetoes unload until its exact reply [90m(3.606375ms)[39m[39m
+[32m✔ an exact recovered receipt confirms unchanged dirty text without saving the file [90m(0.99175ms)[39m[39m
+[32m✔ a definitively rejected ordinary publication invalidates earlier confirmation without adopting a foreign CAS revision [90m(0.9195ms)[39m[39m
+[32m✔ a held public read-only lookup does not veto an otherwise confirmed capture [90m(0.574083ms)[39m[39m
+(node:23099) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[32m✔ R9 lost A reply retains B receipt until A retry bridges the exact chain (watch=false) [90m(21.044791ms)[39m[39m
+[32m✔ R9 lost A reply retains B receipt until A retry bridges the exact chain (watch=true) [90m(4.362708ms)[39m[39m
+[32m✔ R9 reversed three Save replies reconcile retained receipts without repeating writes (watch=false) [90m(3.664917ms)[39m[39m
+[32m✔ R9 reversed three Save replies reconcile retained receipts without repeating writes (watch=true) [90m(4.391042ms)[39m[39m
+[32m✔ R9 reconciliation publication uncertainty retains all known requests until its exact receipt (committed=false) [90m(3.143625ms)[39m[39m
+[32m✔ R9 reconciliation publication uncertainty retains all known requests until its exact receipt (committed=true) [90m(2.901625ms)[39m[39m
+[32m✔ R9 a real unrelated same-client publication cannot be bridged by retained own Save receipts [90m(2.406584ms)[39m[39m
+[32m✔ R9 exact Save chain clears the gate but a later captured-close cancel retains completed Saves and proposed drafts [90m(2.612708ms)[39m[39m
+[32m✔ R9 exact Save chain clears the gate but a later captured-close conflict retains completed Saves and proposed drafts [90m(2.380375ms)[39m[39m
+[32m✔ R9 disposal releases observations and prevents a late missing Save receipt from publishing [90m(1.111125ms)[39m[39m
+[32m✔ R10 an in-flight B Save cannot strand A's uncertain publication (committed=false, watch=false) [90m(3.386583ms)[39m[39m
+[32m✔ R10 an in-flight B Save cannot strand A's uncertain publication (committed=false, watch=true) [90m(2.81425ms)[39m[39m
+[32m✔ R10 an in-flight B Save cannot strand A's uncertain publication (committed=true, watch=false) [90m(4.001458ms)[39m[39m
+[32m✔ R10 an in-flight B Save cannot strand A's uncertain publication (committed=true, watch=true) [90m(2.301167ms)[39m[39m
+[32m✔ R10 retiring a rejected publication cannot bridge an unrelated same-client CAS gap [90m(1.666292ms)[39m[39m
+[32m✔ R10 a definitively rejected final close releases preservation without executing its old destructive callback [90m(3.462959ms)[39m[39m
+[32m✔ R10 a definitively rejected final reload releases preservation without executing its old destructive callback [90m(2.054875ms)[39m[39m
+[32m✔ R10 a status-query Conflict does not prove publication rejection [90m(1.035916ms)[39m[39m
+[32m✔ R10 a committed publication clears only its captured A identity when B's later publication is uncertain [90m(1.759416ms)[39m[39m
+[32m✔ R10 disposal during publication uncertainty cancels a later B admission without publishing or replay [90m(0.957583ms)[39m[39m
+[34mℹ tests 115[39m
+[34mℹ suites 0[39m
+[34mℹ pass 115[39m
+[34mℹ fail 0[39m
+[34mℹ cancelled 0[39m
+[34mℹ skipped 0[39m
+[34mℹ todo 0[39m
+[34mℹ duration_ms 415.669417[39m
+
+> nx run @moonbase/editor:typecheck
+
+(node:23101) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[0m[2m[35m$[0m [2m[1mtsc --noEmit -p tsconfig.json[0m
+
+> nx run @moonbase/editor:lint
+
+(node:23187) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[0m[2m[35m$[0m [2m[1mtsc --noEmit -p tsconfig.json[0m
+
+> nx run @moonbase/workspace:lint
+
+(node:23197) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[0m[2m[35m$[0m [2m[1mtsc --noEmit -p tsconfig.json[0m
+
+> nx run @moonbase/workspace:typecheck
+
+(node:23209) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[0m[2m[35m$[0m [2m[1mtsc --noEmit -p tsconfig.json[0m
+
+> nx run @moonbase/chat-probe:typecheck
+
+(node:23220) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[0m[2m[35m$[0m [2m[1mtsc --noEmit -p tsconfig.json[0m
+
+> nx run @moonbase/chat-probe:lint
+
+(node:23230) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[0m[2m[35m$[0m [2m[1mtsc --noEmit -p tsconfig.json[0m
+
+> nx run @moonbase/desktop:lint
+
+(node:23241) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[0m[2m[35m$[0m [2m[1mtsc --noEmit -p tsconfig.json[0m
+
+> nx run @moonbase/desktop:typecheck
+
+(node:23257) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[0m[2m[35m$[0m [2m[1mtsc --noEmit -p tsconfig.json[0m
+
+> nx run @moonbase/desktop:test
+
+(node:23272) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[0m[2m[35m$[0m [2m[1mnode --experimental-strip-types --test test/*.test.ts[0m
+(node:23279) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:23280) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[32m✔ native approval, exact identity and caller validation reject before command dispatch [90m(3.167417ms)[39m[39m
+[32m✔ restored exact approvals, owned cancellation, failed-watch cleanup and disposal [90m(0.588ms)[39m[39m
+[32m✔ error DTO reconstructs the application brand/code/target and rejects malformed DTOs [90m(0.260541ms)[39m[39m
+[32m✔ preaborted browser command sends nothing [90m(0.275917ms)[39m[39m
+[32m✔ long-lived watches cannot consume command capacity or prevent disposal [90m(1.039166ms)[39m[39m
+[32m✔ a lost renderer releases document work without losing approvals or accepting late observations [90m(0.156084ms)[39m[39m
+[32m✔ document release retains approvals but cancels waits and isolates reused observer IDs [90m(0.233541ms)[39m[39m
+[34mℹ tests 7[39m
+[34mℹ suites 0[39m
+[34mℹ pass 7[39m
+[34mℹ fail 0[39m
+[34mℹ cancelled 0[39m
+[34mℹ skipped 0[39m
+[34mℹ todo 0[39m
+[34mℹ duration_ms 96.937833[39m
+
+> nx run @moonbase/ssh:test
+
+(node:21738) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[0m[2m[35m$[0m [2m[1mnode --experimental-strip-types --test test/*.test.ts[0m
+(node:21752) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:21754) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[32m✔ independent public client connects once, verifies health, protects privileged fields and tears down only its child [90m(1082.441875ms)[39m[39m
+[32m✔ slow startup leaves status usable; cancellation releases a shared attempt and unrelated observers remain alive [90m(506.195542ms)[39m[39m
+[32m✔ observation unsubscribe is not disconnect; generation exit fails visibly and reconnect never sends [90m(524.979ms)[39m[39m
+[32m✔ forwarded health rejects auth without publishing a private endpoint [90m(373.309792ms)[39m[39m
+[32m✔ forwarded health rejects identity without publishing a private endpoint [90m(362.408333ms)[39m[39m
+[32m✔ forwarded health rejects store without publishing a private endpoint [90m(424.666917ms)[39m[39m
+[32m✔ forwarded health rejects version without publishing a private endpoint [90m(357.47375ms)[39m[39m
+[32m✔ owned SSH failure early/REMOTE HOST IDENTIFICATION HAS CHANGED cleans children and keeps raw output private [90m(342.160542ms)[39m[39m
+[32m✔ owned SSH failure early/Permission denied cleans children and keeps raw output private [90m(436.127833ms)[39m[39m
+[32m✔ owned SSH failure collision/ cleans children and keeps raw output private [90m(512.192166ms)[39m[39m
+[32m✔ owned SSH failure extra-forward/ cleans children and keeps raw output private [90m(312.829916ms)[39m[39m
+[32m✔ owned SSH failure key-policy/ cleans children and keeps raw output private [90m(287.153417ms)[39m[39m
+[32m✔ owned SSH failure clear-forward/ cleans children and keeps raw output private [90m(285.061708ms)[39m[39m
+[32m✔ owned SSH failure device-tunnel/ cleans children and keeps raw output private [90m(288.749959ms)[39m[39m
+[32m✔ owned SSH failure overflow/ cleans children and keeps raw output private [90m(284.0325ms)[39m[39m
+[32m✔ private config is projected explicitly and invalid commands/config cannot spawn or select a target [90m(2.32875ms)[39m[39m
+[32m✔ executable spawn failure is typed and does not disclose paths or private values [90m(2.080375ms)[39m[39m
+[32m✔ root disposal kills an uncooperative owned child, releases the forward and isolates other runtimes [90m(973.055375ms)[39m[39m
+[32m✔ public disconnect reports an unknown throwing process release; later root cleanup can recover [90m(368.592ms)[39m[39m
+[32m✔ watch subscriptions are bounded and unsubscribe plus concurrent root disposal has no connection side effect [90m(19.520542ms)[39m[39m
+[32m✔ installed system OpenSSH accepts the safe owned-child options without making a network connection [90m(13.720042ms)[39m[39m
+[32m✔ disconnect and root disposal during startup release the pending generation without disposing its independent host [90m(1120.839708ms)[39m[39m
+[32m✔ a stalled forwarded health response hits the bounded startup deadline and releases the reader/child/port [90m(5510.265667ms)[39m[39m
+[32m✔ a child that never opens its forward cannot keep startup pending beyond the overall deadline [90m(20016.88ms)[39m[39m
+[32m✔ runnable consumer composition root uses the public package and never prints its private configuration [90m(831.638959ms)[39m[39m
+[32m✔ R1 disconnect from the first connecting observation settles Connect before attempt startup [90m(13.353167ms)[39m[39m
+[32m✔ R1 disconnect from the first connecting observation settles all coalesced callers [90m(13.497708ms)[39m[39m
+[32m✔ R1 dispose from the first connecting observation settles Connect before attempt startup [90m(16.743667ms)[39m[39m
+[32m✔ R1 dispose from the first connecting observation settles all coalesced callers [90m(11.353ms)[39m[39m
+[32m✔ R1 actual system policy NoHostAuthenticationForLocalhost rejects enabled bypass [90m(303.745083ms)[39m[39m
+[32m✔ R1 actual system policy NoHostAuthenticationForLocalhost preserves normal verification [90m(356.228875ms)[39m[39m
+[32m✔ R1 actual system policy NoHostAuthenticationForProxyCommand rejects enabled bypass [90m(294.535834ms)[39m[39m
+[32m✔ R1 actual system policy NoHostAuthenticationForProxyCommand preserves normal verification [90m(351.941375ms)[39m[39m
+[32m✔ R1 SSH exit invalidates the endpoint and reaps held-stderr helper group without touching a different generation [90m(521.4075ms)[39m[39m
+[32m✔ R1 SSH exit invalidates the endpoint and reaps held-both helper group without touching a different generation [90m(1057.278833ms)[39m[39m
+[32m✔ R1 SSH exit invalidates the endpoint and reaps held-none helper group without touching a different generation [90m(1054.168834ms)[39m[39m
+[32m✔ R1 SSH disconnect invalidates the endpoint and reaps held-both helper group without touching a different generation [90m(1027.77025ms)[39m[39m
+[32m✔ R1 SSH dispose invalidates the endpoint and reaps held-none helper group without touching a different generation [90m(1032.551542ms)[39m[39m
+[32m✔ R1 actual SSH with a pipe-only ProxyCommand releases its owned helper after exit [90m(862.770042ms)[39m[39m
+[32m✔ R1 actual SSH with a pipe-only ProxyCommand releases its owned helper after cancel [90m(844.211667ms)[39m[39m
+[32m✔ R1 cancellation during admitted teardown cannot strand the owned helper group [90m(1003.746041ms)[39m[39m
+[32m✔ R2 transient EPERM during owned-group exit requires confirmed absence [90m(1143.595375ms)[39m[39m
+[32m✔ R2 persistent EPERM during owned-group exit requires confirmed absence [90m(3120.296208ms)[39m[39m
+[34mℹ tests 43[39m
+[34mℹ suites 0[39m
+[34mℹ pass 43[39m
+[34mℹ fail 0[39m
+[34mℹ cancelled 0[39m
+[34mℹ skipped 0[39m
+[34mℹ todo 0[39m
+[34mℹ duration_ms 48566.23625[39m
+
+> nx run @moonbase/pi-runtime:test
+
+(node:21737) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[0m[2m[35m$[0m [2m[1mnode --experimental-strip-types --test test/*.test.ts[0m
+(node:21753) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:21755) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[32m✔ actual standalone CLI owns one SQLite store before serving, releases on shutdown and recovers after SIGKILL [90m(2693.8445ms)[39m[39m
+[32m✔ CLI rejects malformed private config without echoing secrets or file paths [90m(371.936375ms)[39m[39m
+[32m✔ actual child host crash resumes Pi-owned work without resubmitting reserved application input or replaying the counted unsafe tool [90m(819.511416ms)[39m[39m
+[32m✔ compiled remote entry runs on Electron Node24 against the separate Node26 production host with no engine graph [90m(892.028917ms)[39m[39m
+[32m✔ repeated actual process interruption parks Pi work visibly instead of reporting healthy idle/running [90m(3018.40625ms)[39m[39m
+(node:21756) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[32m✔ atomic creation retries and actor/request immutable binding survive restart [90m(30.388084ms)[39m[39m
+[32m✔ duplicate/lost Send, read-only lookup, restart and cross-operation reuse never resend [90m(30.835917ms)[39m[39m
+[32m✔ busy reservation stays visible; view unsubscribe and caller cancellation never Stop admitted work [90m(24.558458ms)[39m[39m
+[32m✔ exact task Stop settles and cannot abort a later task [90m(31.399875ms)[39m[39m
+[32m✔ interrupted reservation recovers without implicit resubmission [90m(24.693833ms)[39m[39m
+[32m✔ interrupted admitted binding recovers without implicit resubmission [90m(27.76875ms)[39m[39m
+[32m✔ caller cancellation after persisted admission closes only its wait [90m(20.991792ms)[39m[39m
+[32m✔ counted tools publish bounded progress; old task Stop cannot follow generation handover [90m(186.289792ms)[39m[39m
+[32m✔ bounded escaped Unicode history pages retain every durable entry ID without skips [90m(2501.81825ms)[39m[39m
+[32m✔ real SQLite full failure is visible and old committed chats survive reopen [90m(8.492958ms)[39m[39m
+[32m✔ ten actual tools retain only eight live previews and view disposal never stops them [90m(344.912208ms)[39m[39m
+[32m✔ null-task Stop never falls through to active work; captured task Stop cooperatively joins it [90m(22.612625ms)[39m[39m
+[32m✔ watch limits, pending unsubscribe/root disposal and arbitrary failing release stay observable without leaking storage [90m(45.0255ms)[39m[39m
+[32m✔ model failure remains failed across restart and never exposes raw provider diagnostics [90m(24.493083ms)[39m[39m
+[32m✔ fixed store authority rejects model/cwd/actor/host retargeting without executing work [90m(17.221542ms)[39m[39m
+[32m✔ completed failing tool activity is projected as failed while another tool remains live [90m(19.032666ms)[39m[39m
+[32m✔ selected Pi coding-tool runtime executes in the fixed cwd once and retained Send does not rerun native work after reopen [90m(31.961459ms)[39m[39m
+[32m✔ null-task Stop withdraws an actual Pi-queued submission while preserving the unrelated active input [90m(20.658ms)[39m[39m
+[32m✔ R1 create reply-read failure after real commit is uncertain (unknown) and exact retry survives restart [90m(9.058708ms)[39m[39m
+[32m✔ R1 create reply-read failure after real commit is uncertain (typed) and exact retry survives restart [90m(8.435833ms)[39m[39m
+[32m✔ R1 lost typed commit acknowledgement stays uncertain while proven create validation stays definite [90m(9.772084ms)[39m[39m
+(node:21757) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[32m✔ production remote/server route shared commands and immutable retries without key disclosure [90m(86.796375ms)[39m[39m
+[32m✔ single-use challenges reject concurrent replay, tampering, unknown operation/shapes and wrong actors before mutations [90m(23.218583ms)[39m[39m
+[32m✔ server restart invalidates old grants; cache has bounded capacity without reactivating consumed grants [90m(142.325375ms)[39m[39m
+[32m✔ remote drops successful and error responses from a stale connection generation [90m(58.135625ms)[39m[39m
+[32m✔ R3 createChat generation disconnect after dispatch preserves uncertainty and original identity [90m(19.563166ms)[39m[39m
+[32m✔ R3 createChat generation replacement after dispatch preserves uncertainty and original identity [90m(20.828084ms)[39m[39m
+[32m✔ R3 sendChat generation disconnect after dispatch preserves uncertainty and original identity [90m(26.555166ms)[39m[39m
+[32m✔ R3 sendChat generation replacement after dispatch preserves uncertainty and original identity [90m(31.717167ms)[39m[39m
+[32m✔ R3 stopChat generation disconnect after dispatch preserves uncertainty and original identity [90m(2030.649042ms)[39m[39m
+[32m✔ R3 stopChat generation replacement after dispatch preserves uncertainty and original identity [90m(2026.655833ms)[39m[39m
+[32m✔ R3 disconnect during challenge keeps pre-dispatch Unavailable and discloses no mutation [90m(11.09875ms)[39m[39m
+[32m✔ remote rejects wrong listener proof or health before disclosing prompt [90m(9.237417ms)[39m[39m
+[32m✔ lost HTTP Send acknowledgement resolves through reconnect lookup without another model call [90m(29.441834ms)[39m[39m
+[32m✔ actual 20-second grant expiry rejects an old RPC without dispatch and frees capacity [90m(20110.949541ms)[39m[39m
+[32m✔ signed hostile responses are bounded/projected and cannot reflect or tamper with authority [90m(15.931792ms)[39m[39m
+[32m✔ unknown shapes, canonical nonces, malformed Unicode and raw body limits reject before chat mutation [90m(24.123542ms)[39m[39m
+[32m✔ remote caller cancellation releases a stalled RPC body reader [90m(7.61325ms)[39m[39m
+[32m✔ remote whole-request deadline releases a stalled RPC body reader [90m(20007.067958ms)[39m[39m
+[32m✔ unknown failing reader release retains uncertain mutation evidence and sanitizes the cleanup defect [90m(12.734542ms)[39m[39m
+[32m✔ R3 generation loss retains reader cleanup failure alongside mutation uncertainty [90m(10.259834ms)[39m[39m
+[32m✔ pipelined HTTP requests have a bounded active window without queuing another application read [90m(27.880834ms)[39m[39m
+[32m✔ private host key cannot reuse public configuration data [90m(4.740292ms)[39m[39m
+[32m✔ R1 unauthenticated rejection cannot replace an executed createChat response [90m(12.554834ms)[39m[39m
+[32m✔ R1 unauthenticated rejection cannot replace an executed sendChat response [90m(18.446666ms)[39m[39m
+[32m✔ R1 pre-authentication malformed requests never obtain RPC signatures before or after grant consumption [90m(31.382708ms)[39m[39m
+[32m✔ R1 authenticated consumed-request validation and domain rejections remain signed and specific [90m(28.111792ms)[39m[39m
+[32m✔ R1 incomplete pre-authentication request hits its real deadline without a signed rejection or dispatch [90m(20011.941708ms)[39m[39m
+[34mℹ tests 53[39m
+[34mℹ suites 0[39m
+[34mℹ pass 53[39m
+[34mℹ fail 0[39m
+[34mℹ cancelled 0[39m
+[34mℹ skipped 0[39m
+[34mℹ todo 0[39m
+[34mℹ duration_ms 65511.115167[39m
+
+
+
+ NX   Successfully ran targets typecheck, lint, test for 7 projects
+
+
+  Run duration:      1m 6s
+  Cache:             Skipped (--skip-nx-cache)
+  Critical path:     1m 6s (1 task)
+  Recoverable time:  583ms (1% of the run)
+
+  Recommendations:
+    - Cache: drop --skip-nx-cache to restore unchanged tasks instantly.
+    - Speed up or split the longest tasks on the critical path:
+        @moonbase/pi-runtime:test    1m 6s

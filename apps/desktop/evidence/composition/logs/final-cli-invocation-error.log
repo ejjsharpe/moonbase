@@ -1,0 +1,24 @@
+
+> nx run @moonbase/desktop:typecheck @moonbase/desktop:lint @moonbase/desktop:test
+
+(node:45106) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[0m[2m[35m$[0m [2m[1mtsc --noEmit -p tsconfig.json @moonbase/desktop:lint @moonbase/desktop:test[0m
+error TS5083: Cannot read file '/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/moonbase/desktop:lint'.
+error TS5083: Cannot read file '/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/moonbase/desktop:test'.
+[0m[31merror[0m[2m:[0m script [1m"typecheck"[0m exited with code 1[0m
+
+
+
+ NX   Running target typecheck for project @moonbase/desktop failed
+
+Failed tasks:
+
+- @moonbase/desktop:typecheck
+
+Hint: run the command with --verbose for more details.
+
+  Run duration:      231ms
+  Cache:             Skipped (--skip-nx-cache)
+  Critical path:     225ms (1 task)
+  Recoverable time:  <1ms

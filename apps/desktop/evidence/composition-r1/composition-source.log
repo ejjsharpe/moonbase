@@ -1,0 +1,68 @@
+
+Running 12 tests using 1 worker
+
+(node:26545) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+  ✘   1 test/composition.spec.ts:208:1 › dirty editor/live chat, two drafts, no-resend reconnect, view close and client Quit stay independent (9.0s)
+(node:26571) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+  ✓   2 test/composition.spec.ts:369:3 › chat external vetoes Quit before any editor Discard or Save (2.0s)
+
+  ✓   3 test/composition.spec.ts:369:3 › chat write-failure vetoes Quit before any editor Discard or Save (2.1s)
+
+  ✓   4 test/composition.spec.ts:415:1 › native 200% normal/constrained live chat keeps wheel/Tab Stop and Send reachable beside a dirty editor (3.1s)
+
+  ✓   5 test/composition.spec.ts:502:1 › captured Quit keeps chat/newer drafts and editor conflicts usable; Cancel then Save/Discard commits only consented work (3.2s)
+
+  ✓   6 test/composition.spec.ts:549:3 › held Save and final publication do not globally block Send/status/Stop; uncertain Quit retains exact publication (4.1s)
+
+  ✓   7 test/composition.spec.ts:628:1 › held admitted Send leaves local Save/read/status and exact Stop independently responsive (2.3s)
+  ✓   8 test/composition.spec.ts:681:1 › composed IPC rejects foreign frames/hosts and extra/prototype operations before dispatch or local IO (1.4s)
+
+  ✓   9 test/lifecycle.spec.ts:14:3 › native document reload releases observers and waits without replacing the root or stopping work (2.4s)
+
+  ✓  10 test/lifecycle.spec.ts:14:3 › native document veto retains observers and waits without replacing the root or stopping work (2.1s)
+
+  ✓  11 test/lifecycle.spec.ts:14:3 › native document fresh-veto retains observers and waits without replacing the root or stopping work (2.2s)
+
+  ✓  12 test/lifecycle.spec.ts:14:3 › native document crash releases observers and waits without replacing the root or stopping work (2.5s)
+
+
+  1) test/composition.spec.ts:208:1 › dirty editor/live chat, two drafts, no-resend reconnect, view close and client Quit stay independent 
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: getByRole('textbox', { name: 'a.ts editor', exact: true })
+    Expected: visible
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" getByRole('textbox', { name: 'a.ts editor', exact: true }) with timeout 5000ms
+      - waiting for getByRole('textbox', { name: 'a.ts editor', exact: true })
+
+
+      290 |     }));
+      291 |     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.reload());
+    > 292 |     await expect(editor(p)).toBeVisible();
+          |                             ^
+      293 |     await expect(p.locator(".view-line").filter({ hasText: "local dirty draft + live tool editing" }).first()).toBeVisible();
+      294 |     if (priorWatches) await expect.poll(() => app.evaluate((_, ids) => ({
+      295 |       editor: ids.editor.every(id => globalThis.desktopTest.cancelIds.includes(id)),
+        at /Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/test/composition.spec.ts:292:29
+
+    Error Context: ../../.overnight-artifacts/reload-r1/dist/composition-source/runner/composition-dirty-editor-l-15107-lient-Quit-stay-independent/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    ../../.overnight-artifacts/reload-r1/dist/composition-source/runner/composition-dirty-editor-l-15107-lient-Quit-stay-independent/trace.zip
+    Usage:
+
+        npx playwright show-trace ../../.overnight-artifacts/reload-r1/dist/composition-source/runner/composition-dirty-editor-l-15107-lient-Quit-stay-independent/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    test/composition.spec.ts:208:1 › dirty editor/live chat, two drafts, no-resend reconnect, view close and client Quit stay independent 
+  11 passed (37.3s)

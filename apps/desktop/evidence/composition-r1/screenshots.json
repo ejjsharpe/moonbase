@@ -1,0 +1,86 @@
+[
+  {
+    "path": "composition-editor-package-fresh-reload.png",
+    "width": 2560,
+    "height": 1636,
+    "sha256": "43491226b1e1759215569296004dc0217328b42f51cd4eaecfc623c94adfca20"
+  },
+  {
+    "path": "composition-editor-source-fresh-reload.png",
+    "width": 2560,
+    "height": 1636,
+    "sha256": "d54b06d2f6e9cfebeda285c65a7e49f656162604a24739141420a4448df02684"
+  },
+  {
+    "path": "package-dirty-editor.png",
+    "width": 2560,
+    "height": 1636,
+    "sha256": "0f4354fe9f0b31b6ad4d0e656b574900dce20f896a49573e68087f6c93335713"
+  },
+  {
+    "path": "package-keyboard-activation.png",
+    "width": 2560,
+    "height": 1636,
+    "sha256": "9617c954266468db81cdbd37afc262f0aa1e9ba709c328e03c839da7a953fcc6"
+  },
+  {
+    "path": "package-live-chat-normal.png",
+    "width": 2560,
+    "height": 1636,
+    "sha256": "3f43c56029ff9a993f89de680e2f821d233d2d6b3134d2eaa7270502ee44e229"
+  },
+  {
+    "path": "package-restored-dirty-editor.png",
+    "width": 2560,
+    "height": 1636,
+    "sha256": "dc018a38e4caa5c7cb9c450e716c72a849452cf2a1a03d4112c91bdda87a48b5"
+  },
+  {
+    "path": "package-zoom-1180.png",
+    "width": 2360,
+    "height": 1576,
+    "sha256": "4424a32298a122e6061769994a046f7d03cfcb4a0d94fdcb16d29d49a8eae4a8"
+  },
+  {
+    "path": "package-zoom-700.png",
+    "width": 1400,
+    "height": 1236,
+    "sha256": "d10f6563267b0a2da6be2a47b601b5e0815fe186fb6a8fe174bed981681a3686"
+  },
+  {
+    "path": "source-dirty-editor.png",
+    "width": 2560,
+    "height": 1636,
+    "sha256": "eff5093b35140019613d32cfdfc9a28d34a2ba49bdecfa8dbd6eb6f08fa88c49"
+  },
+  {
+    "path": "source-keyboard-activation.png",
+    "width": 2560,
+    "height": 1636,
+    "sha256": "9f1250f88bf8ceba157faece8183d26cfed1cbde7e300782e9dab2e3b8917dc1"
+  },
+  {
+    "path": "source-live-chat-normal.png",
+    "width": 2560,
+    "height": 1636,
+    "sha256": "02369558395c63310bd0eaec9069061452b10661c9ac4d404ab6c078e2b0957e"
+  },
+  {
+    "path": "source-restored-dirty-editor.png",
+    "width": 2560,
+    "height": 1636,
+    "sha256": "5cc3785e837d2a62e43183d6de6fc7f3096e5d938b7bc5351b764dab2a755cb4"
+  },
+  {
+    "path": "source-zoom-1180.png",
+    "width": 2360,
+    "height": 1576,
+    "sha256": "4424a32298a122e6061769994a046f7d03cfcb4a0d94fdcb16d29d49a8eae4a8"
+  },
+  {
+    "path": "source-zoom-700.png",
+    "width": 1400,
+    "height": 1236,
+    "sha256": "73e008f3841302dfa461e2d13bfcb8a6dde4570e774b85eb28fb772aaaebc2f4"
+  }
+]

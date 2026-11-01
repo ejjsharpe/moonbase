@@ -1,0 +1,26 @@
+{
+  "failure": "Test launched from repository root; harness relative args did not resolve; first timed out,11 not run. SIGINT sent only to verified runner28967. Not a product red.",
+  "checks": [
+    {
+      "pid": 28967,
+      "ESRCH": true
+    },
+    {
+      "pid": 28983,
+      "ESRCH": true
+    },
+    {
+      "pid": 28985,
+      "ESRCH": true
+    },
+    {
+      "group": 28967,
+      "ESRCH": true
+    }
+  ],
+  "hostPort": 60907,
+  "bindListenClose": true,
+  "directory": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-chat-proof-SGYcmq",
+  "removedAfterOwnedProcessAudit": true,
+  "noConnectForwarders": "No application bridge initialized; no controlled forward log. Public Disconnect unavailable before renderer setup."
+}

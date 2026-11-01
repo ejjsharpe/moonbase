@@ -1,0 +1,13 @@
+{
+  "mode": "reload",
+  "active": [
+    "moonbase:3c716f34-fea0-4ecc-bc20-e2c3b553779f",
+    "moonbase-chat:f2a018f2-d1c2-4e86-b671-6e5a5820dcfe",
+    "moonbase-chat:472b94e4-0f26-4078-a6d6-f27fc88744de"
+  ],
+  "waitId": "d53517d6-6827-467d-a553-8fbefbc1a86b",
+  "cancelled": [
+    "moonbase-chat:f2a018f2-d1c2-4e86-b671-6e5a5820dcfe",
+    "moonbase-chat:472b94e4-0f26-4078-a6d6-f27fc88744de"
+  ]
+}

@@ -1,0 +1,92 @@
+
+Running 11 tests using 1 worker
+
+(node:41041) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓   1 apps/chat-probe/test/desktop.spec.ts:86:1 › actual Electron proof: lost response, streamed tools, reload, captured Stop, reconnect and keyboard/constrained UI (4.4s)
+  ✓   2 apps/chat-probe/test/desktop.spec.ts:214:1 › packaged actual client starts disconnected, uses public production transport and carries generated notices (4.4s)
+  ✓   3 apps/chat-probe/test/desktop.spec.ts:245:1 › actual Hide/Quit detach the client while remote work continues; a fresh client reconnects without Send (2.5s)
+  ✓   4 apps/chat-probe/test/desktop.spec.ts:286:5 › source createChat: committed reply lost on Disconnect retains original identity and never resends (1.7s)
+  ✘   5 apps/chat-probe/test/desktop.spec.ts:286:5 › source sendChat: committed reply lost on Disconnect retains original identity and never resends (7.1s)
+(node:41440) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓   6 apps/chat-probe/test/desktop.spec.ts:286:5 › source stopChat: committed reply lost on Disconnect retains original identity and never resends (2.1s)
+  ✓   7 apps/chat-probe/test/desktop.spec.ts:286:5 › packaged createChat: committed reply lost on Disconnect retains original identity and never resends (2.1s)
+  ✘   8 apps/chat-probe/test/desktop.spec.ts:286:5 › packaged sendChat: committed reply lost on Disconnect retains original identity and never resends (6.7s)
+(node:41593) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓   9 apps/chat-probe/test/desktop.spec.ts:286:5 › packaged stopChat: committed reply lost on Disconnect retains original identity and never resends (2.7s)
+  ✓  10 apps/chat-probe/test/desktop.spec.ts:416:3 › source Create readiness: repeated reload/fill/refresh records the disabled-button symptom without bypass (3.6s)
+  ✓  11 apps/chat-probe/test/desktop.spec.ts:416:3 › packaged Create readiness: repeated reload/fill/refresh records the disabled-button symptom without bypass (3.0s)
+
+
+  1) apps/chat-probe/test/desktop.spec.ts:286:5 › source sendChat: committed reply lost on Disconnect retains original identity and never resends
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: getByText('Verified host.')
+    Expected: visible
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" getByText('Verified host.') with timeout 5000ms
+      - waiting for getByText('Verified host.')
+
+
+      351 |         await page.reload();
+      352 |         await page.getByRole("button", { name: "Connect", exact: true }).click();
+    > 353 |         await expect(page.getByText("Verified host.", { exact: false })).toBeVisible();
+          |                                                                          ^
+      354 |         if (operation === "sendChat") {
+      355 |           await expect(page.getByRole("region", { name: "Retained commands" })).toHaveCount(0);
+      356 |           await expect(page.getByLabel("Message", { exact: true })).toHaveValue(
+        at /Users/elliotsharpe/.t3/worktrees/moonbase/t3-541038a5/apps/chat-probe/test/desktop.spec.ts:353:74
+
+    Error Context: apps/chat-probe/test-results/desktop-source-sendChat-co-8d7e0--identity-and-never-resends/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    apps/chat-probe/test-results/desktop-source-sendChat-co-8d7e0--identity-and-never-resends/trace.zip
+    Usage:
+
+        npx playwright show-trace apps/chat-probe/test-results/desktop-source-sendChat-co-8d7e0--identity-and-never-resends/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  2) apps/chat-probe/test/desktop.spec.ts:286:5 › packaged sendChat: committed reply lost on Disconnect retains original identity and never resends
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: getByText('Verified host.')
+    Expected: visible
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" getByText('Verified host.') with timeout 5000ms
+      - waiting for getByText('Verified host.')
+
+
+      351 |         await page.reload();
+      352 |         await page.getByRole("button", { name: "Connect", exact: true }).click();
+    > 353 |         await expect(page.getByText("Verified host.", { exact: false })).toBeVisible();
+          |                                                                          ^
+      354 |         if (operation === "sendChat") {
+      355 |           await expect(page.getByRole("region", { name: "Retained commands" })).toHaveCount(0);
+      356 |           await expect(page.getByLabel("Message", { exact: true })).toHaveValue(
+        at /Users/elliotsharpe/.t3/worktrees/moonbase/t3-541038a5/apps/chat-probe/test/desktop.spec.ts:353:74
+
+    Error Context: apps/chat-probe/test-results/desktop-packaged-sendChat--15a50--identity-and-never-resends/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    apps/chat-probe/test-results/desktop-packaged-sendChat--15a50--identity-and-never-resends/trace.zip
+    Usage:
+
+        npx playwright show-trace apps/chat-probe/test-results/desktop-packaged-sendChat--15a50--identity-and-never-resends/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  2 failed
+    apps/chat-probe/test/desktop.spec.ts:286:5 › source sendChat: committed reply lost on Disconnect retains original identity and never resends
+    apps/chat-probe/test/desktop.spec.ts:286:5 › packaged sendChat: committed reply lost on Disconnect retains original identity and never resends
+  9 passed (42.1s)

@@ -2,15 +2,24 @@
   "name": "moonbase",
   "private": true,
   "packageManager": "bun@1.4.4",
-  "workspaces": ["apps/*", "packages/*"],
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
     "typecheck": "nx run-many -t typecheck",
     "lint": "nx run-many -t lint",
     "test": "nx run-many -t test",
     "build": "nx run-many -t build",
-    "check:foundation": "node scripts/check-foundation.mjs"
+    "check:foundation": "node scripts/check-foundation.mjs",
+    "test:editor-integration": "tsc --noEmit -p tests/editor-workspace/tsconfig.json && node packages/workspace/scripts/build-native.mjs && node --experimental-strip-types --test --test-concurrency=1 tests/editor-workspace/*.test.ts",
+    "test:chat-integration": "tsc --noEmit -p tests/chat/tsconfig.json && node --experimental-strip-types --test --test-concurrency=1 tests/chat/*.test.ts"
   },
-  "trustedDependencies": ["electron", "esbuild", "nx"],
+  "trustedDependencies": [
+    "electron",
+    "esbuild",
+    "nx"
+  ],
   "devDependencies": {
     "@base-ui/react": "1.9.0",
     "@effect/platform-node": "4.1.0",
@@ -30,6 +39,12 @@
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "typescript": "7.0.2",
-    "vite-plus": "1.4.0"
+    "vite-plus": "1.4.0",
+    "@moonbase/application": "workspace:*",
+    "@moonbase/editor": "workspace:*",
+    "@moonbase/workspace": "workspace:*",
+    "@moonbase/pi-runtime": "workspace:*",
+    "@moonbase/ssh": "workspace:*",
+    "@earendil-works/pi-ai": "1.4.0"
   }
 }

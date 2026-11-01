@@ -1,0 +1,12 @@
+$ node scripts/build.mjs
+transforming...
+✓ 51 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/renderer/index.html                   0.40 kB │ gzip:  0.26 kB
+dist/renderer/module-inputs.json           7.04 kB │ gzip:  0.81 kB
+dist/renderer/assets/index-cN05CcEa.css   13.69 kB │ gzip:  2.98 kB
+dist/renderer/assets/index-BeMCfOhG.js   261.18 kB │ gzip: 82.28 kB
+
+✓ built in 271ms
+Graphs: main 263, renderer 50; no host engine/editor in client.

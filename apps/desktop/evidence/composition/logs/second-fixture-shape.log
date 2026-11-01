@@ -1,0 +1,54 @@
+$ playwright test --config playwright.config.ts
+
+Running 3 tests using 1 worker
+
+(node:4056) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+  ✘  1 test/composition.spec.ts:78:1 › dirty editor/live chat, two drafts, no-resend reconnect, exact Stop, view close and client Quit stay independent (3.8s)
+(node:4298) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+  ✓  2 test/composition.spec.ts:126:53 › chat external vetoes Quit before any editor Discard or Save (2.5s)
+
+  ✓  3 test/composition.spec.ts:126:53 › chat write-failure vetoes Quit before any editor Discard or Save (2.1s)
+
+
+  1) test/composition.spec.ts:78:1 › dirty editor/live chat, two drafts, no-resend reconnect, exact Stop, view close and client Quit stay independent 
+
+    Error: expect(received).toMatchObject(expected)
+
+    - Expected  - 1
+    + Received  + 1
+
+      Object {
+        "error": Object {
+    -     "code": "Unauthorized",
+    +     "code": "InvalidInput",
+        },
+        "ok": false,
+      }
+
+      92 |     // Remote cwd is never authority to the local editor, even with an equal root string.
+      93 |     const rejected = await p.evaluate(async host => { const r = await window.moonbase.call("command", { operation: "loadRecovery", input: { clientId: window.moonbase.clientId } }, crypto.randomUUID()); if (!r.ok) throw Error(r.error.message); const local = (r.value as {state:{checkouts: import("@moonbase/application/client").CheckoutTarget[]}}).state.checkouts[0]; return window.moonbase.call("command", { operation: "readFile", input: { target: { checkout: { ...local, hostId: host }, path: "a.ts" } } }, crypto.randomUUID()); }, f.session.host.hostId);
+    > 94 |     expect(rejected).toMatchObject({ ok: false, error: { code: "Unauthorized" } }); expect(await readFile(join(f.cwd, "a.ts"), "utf8")).toContain("original");
+         |                      ^
+      95 |     await screen(app, p, "dirty-editor");
+      96 |     await tab(p, "Chat").click(); await expect(p.getByLabel("Message", { exact: true })).toHaveValue("first independent newer draft");
+      97 |     await create(p, "Second remote chat"); await p.getByLabel("Message", { exact: true }).fill("second independent draft");
+        at /Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/test/composition.spec.ts:94:22
+
+    Error Context: test-results/composition-dirty-editor-l-b1a1b-lient-Quit-stay-independent/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/composition-dirty-editor-l-b1a1b-lient-Quit-stay-independent/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/composition-dirty-editor-l-b1a1b-lient-Quit-stay-independent/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    test/composition.spec.ts:78:1 › dirty editor/live chat, two drafts, no-resend reconnect, exact Stop, view close and client Quit stay independent 
+  2 passed (9.6s)
+error: script "test:desktop" exited with code 1

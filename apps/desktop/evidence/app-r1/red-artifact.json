@@ -1,0 +1,10 @@
+{
+  "appSource": "8f4a3e9daa6733b023cf84ac040943241c0bd712",
+  "moduleSource": "71f272d354359f8d5e1cff7a9f57159325eeabc5",
+  "asarSha256": "7a24f8ea0d9386307318ab8bf12b5cfee5eb855443ce16fd56e5312c785e6d6b",
+  "result": "both packaged first-party repros and both new built-Electron regression cases RED before rebuilt adoption",
+  "logs": [
+    "/tmp/moonbase-filename-menu-packaged-red.log",
+    "/tmp/moonbase-app-r1-own-red.log"
+  ]
+}

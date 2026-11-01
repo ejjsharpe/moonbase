@@ -1,0 +1,62 @@
+[
+  {
+    "phase": "config-old-source",
+    "path": "/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/.overnight-artifacts/reload-r1/dist/config-old-source/configuration-every-presen-23b6d-cluding-empty-fails-startup/error-context.md",
+    "bytes": 6367,
+    "sha256": "997968d4138c3f15a0c2baf9e2238f34e2c744f0452da2d752053b8133854e7e"
+  },
+  {
+    "phase": "config-old-package",
+    "path": "/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/.overnight-artifacts/reload-r1/dist/config-old-package/configuration-every-presen-23b6d-cluding-empty-fails-startup/error-context.md",
+    "bytes": 6367,
+    "sha256": "997968d4138c3f15a0c2baf9e2238f34e2c744f0452da2d752053b8133854e7e"
+  },
+  {
+    "phase": "config-source",
+    "path": "/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/.overnight-artifacts/reload-r1/dist/config-source/configuration-valid-privat-e47ec-t-automatic-Connect-or-Send/error-context.md",
+    "bytes": 6406,
+    "sha256": "94bc901a683e0aa4d7caf3498208c793f0a7742a22accaad0cad76c5a686625b"
+  },
+  {
+    "phase": "config-package",
+    "path": "/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/.overnight-artifacts/reload-r1/dist/config-package/configuration-valid-privat-e47ec-t-automatic-Connect-or-Send/error-context.md",
+    "bytes": 6406,
+    "sha256": "94bc901a683e0aa4d7caf3498208c793f0a7742a22accaad0cad76c5a686625b"
+  },
+  {
+    "phase": "composition-source",
+    "path": "/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/.overnight-artifacts/reload-r1/dist/composition-source/runner/composition-dirty-editor-l-15107-lient-Quit-stay-independent/trace.zip",
+    "bytes": 16173,
+    "sha256": "87efd1e7eb66739d9e07704f822af5e6e672a36f4825b275afc8bd5bbb9b1551"
+  },
+  {
+    "phase": "composition-source",
+    "path": "/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/.overnight-artifacts/reload-r1/dist/composition-source/runner/composition-dirty-editor-l-15107-lient-Quit-stay-independent/error-context.md",
+    "bytes": 19307,
+    "sha256": "c268043d7d10fc172fce9203d5641bc8bbe2df2c164c34c7f141dee29316ae26"
+  },
+  {
+    "phase": "composition-package",
+    "path": "/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/.overnight-artifacts/reload-r1/dist/composition-package/runner/composition-dirty-editor-l-15107-lient-Quit-stay-independent/trace.zip",
+    "bytes": 16118,
+    "sha256": "9d5c861d4b1b5fb74a9db519bbd1ae987254924cc8899a9c16effeb66e11e385"
+  },
+  {
+    "phase": "composition-package",
+    "path": "/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/.overnight-artifacts/reload-r1/dist/composition-package/runner/composition-dirty-editor-l-15107-lient-Quit-stay-independent/error-context.md",
+    "bytes": 19307,
+    "sha256": "9de9bd4c5210f55faf0d8fa4902639fdcbeabbd9441d32c0bcd17a137588eb76"
+  },
+  {
+    "phase": "composition-editor-source",
+    "path": "/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/.overnight-artifacts/reload-r1/dist/composition-editor-source/reload-native-Reload-retai-2c3df--ordinary-recovery-debounce/trace.zip",
+    "bytes": 942048,
+    "sha256": "b747c84e3d8b11cdcea6c93f79cfb77813d44a29783933d6201b7c442ffb7610"
+  },
+  {
+    "phase": "composition-editor-package",
+    "path": "/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/.overnight-artifacts/reload-r1/dist/composition-editor-package/reload-native-Reload-retai-2c3df--ordinary-recovery-debounce/trace.zip",
+    "bytes": 942014,
+    "sha256": "c63df37e403bd5f451e535391b71a398e3b81f81cb095f7c538ec22a3f1bc4b4"
+  }
+]

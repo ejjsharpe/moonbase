@@ -1,0 +1,61 @@
+$ playwright test --config playwright.config.ts
+
+Running 6 tests using 1 worker
+
+(node:8619) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+  ✘  1 test/composition.spec.ts:81:1 › dirty editor/live chat, two drafts, no-resend reconnect, exact Stop, view close and client Quit stay independent (11.0s)
+(node:8720) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+  ✓  2 test/composition.spec.ts:129:53 › chat external vetoes Quit before any editor Discard or Save (2.3s)
+
+  ✓  3 test/composition.spec.ts:129:53 › chat write-failure vetoes Quit before any editor Discard or Save (2.2s)
+
+  ✓  4 test/composition.spec.ts:146:1 › native 200% normal/constrained live chat keeps wheel/Tab Stop and Send reachable beside a dirty editor (3.2s)
+
+  ✓  5 test/composition.spec.ts:172:1 › captured Quit keeps chat/newer drafts and editor conflicts usable; Cancel then Save/Discard commits only consented work (3.2s)
+
+  ✓  6 test/composition.spec.ts:187:16 › held Save and final publication do not globally block Send/status/Stop; uncertain Quit retains exact publication (4.4s)
+
+
+  1) test/composition.spec.ts:81:1 › dirty editor/live chat, two drafts, no-resend reconnect, exact Stop, view close and client Quit stay independent 
+
+    Error: expect(locator).toBeEnabled() failed
+
+    Locator:  getByRole('button', { name: 'Stop', exact: true })
+    Expected: enabled
+    Received: disabled
+    Timeout:  5000ms
+
+    Call log:
+      - Expect "toBeEnabled" getByRole('button', { name: 'Stop', exact: true }) with timeout 5000ms
+      - waiting for getByRole('button', { name: 'Stop', exact: true })
+        14 × locator resolved to <button disabled tabindex="0" type="button" data-disabled="" class="x8c7e9d x1s4ats8 xd4r4e8 x1mq84lg xeu4iup x1xy4kka xmkeg23 x1y0btm7 xeqek5s x53wgf3 x36usyh x1ypdohk xkklm2h xze8r8f x1hl8ikr x1hc1fzr xk0mbs4 x1s07b3s">Stop</button>
+           - unexpected value "disabled"
+
+
+      122 |     expect((await f.stats()).commands.filter(v => v === "stopChat")).toHaveLength(1); // Quit didn't Stop/shut down the host.
+      123 |     const second = await launch(f); current = second.app; await connect(second.page); await expect(second.page.getByLabel("Message", { exact: true })).toHaveValue("latest second draft for restart");
+    > 124 |     expect((await f.stats()).commands.filter(v => v === "sendChat")).toHaveLength(2); await expect(second.page.getByRole("button", { name: "Stop", exact: true })).toBeEnabled();
+          |                                                                                                                                                                    ^
+      125 |     expect(errors).toEqual([]); expect(second.errors).toEqual([]); await stop(second.app); current = undefined;
+      126 |   } finally { if (current) await stop(current, true); await close(f); }
+      127 | });
+        at /Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/test/composition.spec.ts:124:164
+
+    Error Context: test-results/source-qualified/composition-dirty-editor-l-b1a1b-lient-Quit-stay-independent/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/source-qualified/composition-dirty-editor-l-b1a1b-lient-Quit-stay-independent/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/source-qualified/composition-dirty-editor-l-b1a1b-lient-Quit-stay-independent/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    test/composition.spec.ts:81:1 › dirty editor/live chat, two drafts, no-resend reconnect, exact Stop, view close and client Quit stay independent 
+  5 passed (27.6s)
+error: script "test:desktop" exited with code 1

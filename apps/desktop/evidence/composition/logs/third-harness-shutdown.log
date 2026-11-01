@@ -1,0 +1,50 @@
+$ playwright test --config playwright.config.ts
+
+Running 6 tests using 1 worker
+
+(node:6870) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+  ✓  1 test/composition.spec.ts:78:1 › dirty editor/live chat, two drafts, no-resend reconnect, exact Stop, view close and client Quit stay independent (5.0s)
+
+  ✓  2 test/composition.spec.ts:126:53 › chat external vetoes Quit before any editor Discard or Save (2.0s)
+
+  ✓  3 test/composition.spec.ts:126:53 › chat write-failure vetoes Quit before any editor Discard or Save (2.1s)
+
+  ✓  4 test/composition.spec.ts:143:1 › native 200% normal/constrained live chat keeps wheel/Tab Stop and Send reachable beside a dirty editor (3.0s)
+
+  ✘  5 test/composition.spec.ts:169:1 › captured Quit keeps chat/newer drafts and editor conflicts usable; Cancel then Save/Discard commits only consented work (2.2s)
+(node:7328) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+  ✓  6 test/composition.spec.ts:184:16 › held Save and final publication do not globally block Send/status/Stop; uncertain Quit retains exact publication (4.0s)
+
+
+  1) test/composition.spec.ts:169:1 › captured Quit keeps chat/newer drafts and editor conflicts usable; Cancel then Save/Discard commits only consented work 
+
+    TypeError: Cannot read properties of undefined (reading '_object')
+
+      64 | }
+      65 | async function stop(app: ElectronApplication, fault = false) {
+    > 66 |   const child = app.process(); if (child.exitCode !== null || child.signalCode !== null) return;
+         |                     ^
+      67 |   const pids = await app.evaluate(({ app }) => app.getAppMetrics().map(m => m.pid));
+      68 |   if (fault) {
+      69 |     await app.windows()[0].evaluate(async () => { const r = await window.moonbaseChat.call("connection", "getConnection", {}, crypto.randomUUID()); if (r.ok && (r.value as { connectionId: string }).connectionId) await window.moonbaseChat.call("connection", "disconnect", { connectionId: (r.value as { connectionId: string }).connectionId }, crypto.randomUUID()); });
+        at stop (/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/test/composition.spec.ts:66:21)
+        at /Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/test/composition.spec.ts:181:29
+
+    Error Context: test-results/composition-captured-Quit--4edd8-commits-only-consented-work/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/composition-captured-Quit--4edd8-commits-only-consented-work/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/composition-captured-Quit--4edd8-commits-only-consented-work/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    test/composition.spec.ts:169:1 › captured Quit keeps chat/newer drafts and editor conflicts usable; Cancel then Save/Discard commits only consented work 
+  5 passed (19.6s)
+error: script "test:desktop" exited with code 1

@@ -1,0 +1,64 @@
+$ playwright test --config playwright.config.ts
+
+Running 8 tests using 1 worker
+
+(node:12823) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+  ✘  1 test/composition.spec.ts:207:1 › dirty editor/live chat, two drafts, no-resend reconnect, view close and client Quit stay independent (8.6s)
+(node:13008) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+  ✓  2 test/composition.spec.ts:344:3 › chat external vetoes Quit before any editor Discard or Save (2.8s)
+
+  ✓  3 test/composition.spec.ts:344:3 › chat write-failure vetoes Quit before any editor Discard or Save (2.2s)
+
+  ✓  4 test/composition.spec.ts:390:1 › native 200% normal/constrained live chat keeps wheel/Tab Stop and Send reachable beside a dirty editor (3.6s)
+
+  ✓  5 test/composition.spec.ts:477:1 › captured Quit keeps chat/newer drafts and editor conflicts usable; Cancel then Save/Discard commits only consented work (3.2s)
+
+  ✓  6 test/composition.spec.ts:524:3 › held Save and final publication do not globally block Send/status/Stop; uncertain Quit retains exact publication (4.1s)
+
+  ✓  7 test/composition.spec.ts:603:1 › held admitted Send leaves local Save/read/status and exact Stop independently responsive (2.8s)
+  ✓  8 test/composition.spec.ts:656:1 › composed IPC rejects foreign frames/hosts and extra/prototype operations before dispatch or local IO (1.3s)
+
+
+  1) test/composition.spec.ts:207:1 › dirty editor/live chat, two drafts, no-resend reconnect, view close and client Quit stay independent 
+
+    Error: expect(locator).toHaveAttribute(expected) failed
+
+    Locator:  getByRole('tablist', { name: 'Workbench views', exact: true }).getByRole('tab', { name: 'Editor', exact: true })
+    Expected: "true"
+    Received: "false"
+    Timeout:  5000ms
+
+    Call log:
+      - Expect "toHaveAttribute" getByRole('tablist', { name: 'Workbench views', exact: true }).getByRole('tab', { name: 'Editor', exact: true }) with timeout 5000ms
+      - waiting for getByRole('tablist', { name: 'Workbench views', exact: true }).getByRole('tab', { name: 'Editor', exact: true })
+        14 × locator resolved to <button role="tab" tabindex="0" type="button" id="base-ui-_r_0_" aria-disabled="false" aria-selected="false" data-orientation="horizontal" aria-controls="base-ui-_r_2_" data-activation-direction="right" class="x8c7e9d x1s4ats8 xd4r4e8 x1mq84lg xeu4iup x1xy4kka xmkeg23 x1y0btm7 xeqek5s x53wgf3 x36usyh x1ypdohk xkklm2h xze8r8f x1hl8ikr x1hc1fzr xk0mbs4 x1s07b3s">Editor</button>
+           - unexpected value "false"
+
+
+      234 |     await tab(p, "Chat").focus();
+      235 |     await p.keyboard.press("ArrowLeft");
+    > 236 |     await expect(tab(p, "Editor")).toHaveAttribute("aria-selected", "true");
+          |                                    ^
+      237 |     await p.keyboard.press("Tab");
+      238 |     await p.keyboard.press("Tab");
+      239 |     await p.keyboard.press("Meta+p");
+        at /Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/test/composition.spec.ts:236:36
+
+    Error Context: test-results/source-final-cc06/composition-dirty-editor-l-15107-lient-Quit-stay-independent/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/source-final-cc06/composition-dirty-editor-l-15107-lient-Quit-stay-independent/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/source-final-cc06/composition-dirty-editor-l-15107-lient-Quit-stay-independent/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    test/composition.spec.ts:207:1 › dirty editor/live chat, two drafts, no-resend reconnect, view close and client Quit stay independent 
+  7 passed (29.9s)
+error: script "test:desktop" exited with code 1

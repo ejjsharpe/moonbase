@@ -1,0 +1,2 @@
+No ownership-specific desktop, archived-candidate, controlled-host or forwarding process remains.
+Browser test port4176 rebound; final recorded PID/group ESRCH and fixture port checks are in cleanup-summary.json.

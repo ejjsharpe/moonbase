@@ -1,0 +1,363 @@
+{
+  "dataset": "Fresh temporary Git repositories: a.ts/b.ts or package.ts; four valid prototype-shaped filenames; saved/dirty text, staged original and caret positions; normal1280x850, small760x650, native140% zoom. Real files/Git/SQLite, fixture restart and controlled native picker.",
+  "moduleHead": "473e0fe03f6c5fc34fd8282fab4875c20f143ac2",
+  "asarSha256": "37ad94c692afbde6b2b9a6afabfda6272425e98470e5557419e1b83818ba2f8d",
+  "captures": [
+    {
+      "file": "packaged-menu-last-zoom.png",
+      "sha256": "59aa22a98997c7efdd7106db67def420d7b09d24fb019e00f6296ba3f7b40d07",
+      "png": {
+        "width": 1520,
+        "height": 1236
+      },
+      "metadata": {
+        "window": {
+          "x": 116,
+          "y": 66,
+          "width": 760,
+          "height": 650
+        },
+        "zoom": 1.4,
+        "viewport": {
+          "width": 543,
+          "height": 441,
+          "devicePixelRatio": 2.799999952316284
+        }
+      }
+    },
+    {
+      "file": "original-repro-green-menu.png",
+      "sha256": "946b140b8d214d9927453bcd440a6ccecf21381ed4df7f031188a76c6e2a3432",
+      "png": {
+        "width": 1520,
+        "height": 1236
+      },
+      "metadata": {}
+    },
+    {
+      "file": "desktop-menu-last-normal.png",
+      "sha256": "aa7bea18563914e0b5ded8eea4761496c4bf9b5eeff34ffa70a0a5f453743559",
+      "png": {
+        "width": 2560,
+        "height": 1636
+      },
+      "metadata": {
+        "window": {
+          "width": 1280,
+          "height": 850,
+          "zoom": 1
+        },
+        "viewport": {
+          "width": 1280,
+          "height": 818,
+          "devicePixelRatio": 2
+        },
+        "png": {
+          "width": 2560,
+          "height": 1636
+        },
+        "fixture": "app R1 Tab actions first/last selection and Close click work at native size and zoom"
+      }
+    },
+    {
+      "file": "packaged-filename-maps.png",
+      "sha256": "8e42751b082322277b2574c4a95baa4255d135b2844c2b2463f75f96252171fa",
+      "png": {
+        "width": 2560,
+        "height": 1636
+      },
+      "metadata": {
+        "window": {
+          "x": 116,
+          "y": 66,
+          "width": 1280,
+          "height": 850
+        },
+        "zoom": 1,
+        "viewport": {
+          "width": 1280,
+          "height": 818,
+          "devicePixelRatio": 2
+        }
+      }
+    },
+    {
+      "file": "packaged-menu-last-normal.png",
+      "sha256": "b5b64e43ae58674fa89f174480e3825bb43d2486956ca5dffe59f2ba5a55a408",
+      "png": {
+        "width": 2560,
+        "height": 1636
+      },
+      "metadata": {
+        "window": {
+          "x": 116,
+          "y": 66,
+          "width": 1280,
+          "height": 850
+        },
+        "zoom": 1,
+        "viewport": {
+          "width": 1280,
+          "height": 818,
+          "devicePixelRatio": 2
+        }
+      }
+    },
+    {
+      "file": "packaged-menu-first-zoom.png",
+      "sha256": "1d350c2332182160a49e4cdd58e6098e594cc6e6e870fb07ba4e7f75ac5d8f9b",
+      "png": {
+        "width": 1520,
+        "height": 1236
+      },
+      "metadata": {
+        "window": {
+          "x": 116,
+          "y": 66,
+          "width": 760,
+          "height": 650
+        },
+        "zoom": 1.4,
+        "viewport": {
+          "width": 543,
+          "height": 441,
+          "devicePixelRatio": 2.799999952316284
+        }
+      }
+    },
+    {
+      "file": "desktop-menu-first-normal.png",
+      "sha256": "b1d374b44c426b0581f75cbc008ab491a20af15a35e2011ce288f971c24f4f3a",
+      "png": {
+        "width": 2560,
+        "height": 1636
+      },
+      "metadata": {
+        "window": {
+          "width": 1280,
+          "height": 850,
+          "zoom": 1
+        },
+        "viewport": {
+          "width": 1280,
+          "height": 818,
+          "devicePixelRatio": 2
+        },
+        "png": {
+          "width": 2560,
+          "height": 1636
+        },
+        "fixture": "app R1 Tab actions first/last selection and Close click work at native size and zoom"
+      }
+    },
+    {
+      "file": "desktop-menu-first-small.png",
+      "sha256": "e515ada31bd202da92932caa8b192cd28a92c831da11d4eadc77cf63f3934249",
+      "png": {
+        "width": 1520,
+        "height": 1236
+      },
+      "metadata": {
+        "window": {
+          "width": 760,
+          "height": 650,
+          "zoom": 1
+        },
+        "viewport": {
+          "width": 760,
+          "height": 618,
+          "devicePixelRatio": 2
+        },
+        "png": {
+          "width": 1520,
+          "height": 1236
+        },
+        "fixture": "app R1 Tab actions first/last selection and Close click work at native size and zoom"
+      }
+    },
+    {
+      "file": "packaged-editor.png",
+      "sha256": "7c7b54ba3b21a20f67af03ee0bb0ad3769dc288e761efec683c32d23739c993b",
+      "png": {
+        "width": 2560,
+        "height": 1636
+      },
+      "metadata": {}
+    },
+    {
+      "file": "packaged-menu-last-small.png",
+      "sha256": "a31db331735311f7f9484c3379c590657f6c1265f064e9b2405971c51179e9db",
+      "png": {
+        "width": 1520,
+        "height": 1236
+      },
+      "metadata": {
+        "window": {
+          "x": 116,
+          "y": 66,
+          "width": 760,
+          "height": 650
+        },
+        "zoom": 1,
+        "viewport": {
+          "width": 760,
+          "height": 618,
+          "devicePixelRatio": 2
+        }
+      }
+    },
+    {
+      "file": "packaged-menu-first-small.png",
+      "sha256": "1030fb0b19d5981c9db58c2f2695addb1d19bb336ecb6c755abba80a6f2a5402",
+      "png": {
+        "width": 1520,
+        "height": 1236
+      },
+      "metadata": {
+        "window": {
+          "x": 116,
+          "y": 66,
+          "width": 760,
+          "height": 650
+        },
+        "zoom": 1,
+        "viewport": {
+          "width": 760,
+          "height": 618,
+          "devicePixelRatio": 2
+        }
+      }
+    },
+    {
+      "file": "packaged-menu-first-normal.png",
+      "sha256": "4f5a32828dab8f9ad22fbe2a0ab4e47670e3bf00a0adbdf1d1c767008d98fb4e",
+      "png": {
+        "width": 2560,
+        "height": 1636
+      },
+      "metadata": {
+        "window": {
+          "x": 116,
+          "y": 66,
+          "width": 1280,
+          "height": 850
+        },
+        "zoom": 1,
+        "viewport": {
+          "width": 1280,
+          "height": 818,
+          "devicePixelRatio": 2
+        }
+      }
+    },
+    {
+      "file": "desktop-filename-maps.png",
+      "sha256": "2497fc54e1fe10666c6e1bc8ce9a3857e76c4f387a1f657d030f08c6624b4803",
+      "png": {
+        "width": 2560,
+        "height": 1636
+      },
+      "metadata": {
+        "window": {
+          "width": 1280,
+          "height": 850,
+          "zoom": 1
+        },
+        "viewport": {
+          "width": 1280,
+          "height": 818,
+          "devicePixelRatio": 2
+        },
+        "png": {
+          "width": 2560,
+          "height": 1636
+        },
+        "fixture": "app R1 filename maps preserve actual Save, positions, sibling drafts and restart"
+      }
+    },
+    {
+      "file": "desktop-menu-first-zoom.png",
+      "sha256": "bd297596d74e271c53e305e1f416d72720cad76f3dac97656b150d953180d3c5",
+      "png": {
+        "width": 1520,
+        "height": 1236
+      },
+      "metadata": {
+        "window": {
+          "width": 760,
+          "height": 650,
+          "zoom": 1.4
+        },
+        "viewport": {
+          "width": 543,
+          "height": 441,
+          "devicePixelRatio": 2.799999952316284
+        },
+        "png": {
+          "width": 1520,
+          "height": 1236
+        },
+        "fixture": "app R1 Tab actions first/last selection and Close click work at native size and zoom"
+      }
+    },
+    {
+      "file": "original-repro-green-prototype.png",
+      "sha256": "c57918d0998ee4146dbdb8c50a5f851e6662a6bd51366437ce5aaba4c3414e18",
+      "png": {
+        "width": 2560,
+        "height": 1636
+      },
+      "metadata": {}
+    },
+    {
+      "file": "desktop-menu-last-zoom.png",
+      "sha256": "83ab43fc49439114b99361949c717e2a84a6107cecb4949fcf83dd83a4f2642e",
+      "png": {
+        "width": 1520,
+        "height": 1236
+      },
+      "metadata": {
+        "window": {
+          "width": 760,
+          "height": 650,
+          "zoom": 1.4
+        },
+        "viewport": {
+          "width": 543,
+          "height": 441,
+          "devicePixelRatio": 2.799999952316284
+        },
+        "png": {
+          "width": 1520,
+          "height": 1236
+        },
+        "fixture": "app R1 Tab actions first/last selection and Close click work at native size and zoom"
+      }
+    },
+    {
+      "file": "desktop-menu-last-small.png",
+      "sha256": "1962d85b6f51e1b19c2c06e1ff8142e3ef04781bbd1deef5bf336f6d89c0fe76",
+      "png": {
+        "width": 1520,
+        "height": 1236
+      },
+      "metadata": {
+        "window": {
+          "width": 760,
+          "height": 650,
+          "zoom": 1
+        },
+        "viewport": {
+          "width": 760,
+          "height": 618,
+          "devicePixelRatio": 2
+        },
+        "png": {
+          "width": 1520,
+          "height": 1236
+        },
+        "fixture": "app R1 Tab actions first/last selection and Close click work at native size and zoom"
+      }
+    }
+  ]
+}

@@ -1,0 +1,119 @@
+{
+  "mode": "veto",
+  "active": [
+    "moonbase:0a5bd96f-0b4d-4b74-b155-768f74dc37ff",
+    "moonbase-chat:c872cee8-d7eb-42d0-96b9-3e73b94e679a",
+    "moonbase-chat:a67b89c8-5eb4-4873-b534-fe7abd6d2a64"
+  ],
+  "waitId": null,
+  "cancelled": [],
+  "connection": {
+    "ok": true,
+    "value": {
+      "profile": {
+        "id": "proof",
+        "label": "Controlled remote host",
+        "destination": "controlled",
+        "remotePort": 63961,
+        "expected": {
+          "hostId": "controlled-host",
+          "storeId": "controlled-store"
+        }
+      },
+      "state": "connected",
+      "connectionId": "587b3d6a-3b87-497d-a45c-8b69cd1695bc",
+      "health": {
+        "hostId": "controlled-host",
+        "storeId": "controlled-store",
+        "protocol": 1,
+        "version": "0.1.0",
+        "capabilities": [
+          "chat-v0"
+        ]
+      }
+    }
+  },
+  "stats": {
+    "id": "d484bafe-6b43-49f9-bdba-f165e74a2317",
+    "calls": 1,
+    "tools": 1,
+    "commands": [
+      "getChatHost",
+      "getChatHost",
+      "getChatHost",
+      "getChatHost",
+      "getChatHost",
+      "listChats",
+      "getChatHost",
+      "createChat",
+      "getChatHost",
+      "getChatHost",
+      "getChat",
+      "getChat",
+      "getChatHost",
+      "sendChat"
+    ],
+    "mutations": [
+      {
+        "operation": "createChat",
+        "input": {
+          "session": {
+            "host": {
+              "hostId": "controlled-host",
+              "storeId": "controlled-store"
+            },
+            "actorId": "personal"
+          },
+          "requestId": "08d95091-f3a7-4503-94a3-3b589fffac8f",
+          "title": "Live lifecycle task"
+        },
+        "result": {
+          "requestId": "08d95091-f3a7-4503-94a3-3b589fffac8f",
+          "conversation": {
+            "target": {
+              "host": {
+                "hostId": "controlled-host",
+                "storeId": "controlled-store"
+              },
+              "actorId": "personal",
+              "conversationId": "4"
+            },
+            "title": "Live lifecycle task",
+            "createdAt": "2026-11-01T12:02:15.989Z",
+            "cwd": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-chat-proof-Msx8ri/remote-folder",
+            "model": "faux/faux-1"
+          }
+        }
+      },
+      {
+        "operation": "sendChat",
+        "input": {
+          "target": {
+            "host": {
+              "hostId": "controlled-host",
+              "storeId": "controlled-store"
+            },
+            "actorId": "personal",
+            "conversationId": "4"
+          },
+          "requestId": "db349791-cccc-48e2-bdad-653922b6198c",
+          "text": "one immutable Send"
+        },
+        "result": {
+          "target": {
+            "host": {
+              "hostId": "controlled-host",
+              "storeId": "controlled-store"
+            },
+            "actorId": "personal",
+            "conversationId": "4"
+          },
+          "requestId": "db349791-cccc-48e2-bdad-653922b6198c",
+          "admission": "admitted",
+          "submissionId": "13"
+        }
+      }
+    ],
+    "heldReplies": []
+  }
+}

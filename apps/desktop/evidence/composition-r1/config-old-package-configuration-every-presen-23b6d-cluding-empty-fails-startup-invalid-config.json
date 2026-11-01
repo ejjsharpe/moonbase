@@ -1,0 +1,14 @@
+[
+  {
+    "value": "",
+    "pid": 21382,
+    "group": 21382,
+    "outcome": {
+      "code": null,
+      "signal": "SIGKILL"
+    },
+    "stderr": "",
+    "expired": true,
+    "groupAbsent": true
+  }
+]

@@ -1,0 +1,15 @@
+
+Running 4 tests using 1 worker
+
+(node:13919) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+  ✓  1 test/document-lifecycle.spec.ts:8:49 › standalone document reload owns exact observers and read-only waits (1.9s)
+
+  ✓  2 test/document-lifecycle.spec.ts:8:49 › standalone document veto owns exact observers and read-only waits (1.6s)
+
+  ✓  3 test/document-lifecycle.spec.ts:8:49 › standalone document crash owns exact observers and read-only waits (2.0s)
+
+  ✓  4 test/reload.spec.ts:8:1 › native Reload retains text painted before ordinary recovery debounce (2.3s)
+
+  4 passed (8.1s)

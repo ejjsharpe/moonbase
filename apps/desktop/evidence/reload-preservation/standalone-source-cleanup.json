@@ -1,0 +1,54 @@
+[
+  {
+    "pids": [
+      13697,
+      13713,
+      13698,
+      13699,
+      13700
+    ],
+    "absent": true,
+    "directory": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-document-atoYop",
+    "removed": true,
+    "configured": false
+  },
+  {
+    "pids": [
+      13767,
+      13831,
+      13768,
+      13769,
+      13778,
+      13833
+    ],
+    "absent": true,
+    "directory": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-document-RlzzRr",
+    "removed": true,
+    "configured": false
+  },
+  {
+    "pids": [
+      13721,
+      13765,
+      13722,
+      13723,
+      13732
+    ],
+    "absent": true,
+    "directory": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-document-THUTKb",
+    "removed": true,
+    "configured": false
+  },
+  {
+    "pids": [
+      13845,
+      13852,
+      13854,
+      13863
+    ],
+    "absent": true,
+    "directory": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-reload-icJqbf",
+    "removed": true,
+    "configured": false
+  }
+]
