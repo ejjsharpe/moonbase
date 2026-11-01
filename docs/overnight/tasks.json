@@ -694,6 +694,53 @@
     "childThreadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-workspace-r5-1fc9692",
     "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-workspace-r5-1fc9692:ordinal:1",
     "childNodeId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-workspace-r5-1fc9692",
+    "status": "completed",
+    "workState": "working",
+    "hasPendingChildRuns": false,
+    "latestTerminalRunId": null,
+    "latestTerminalStatus": null,
+    "latestTerminalSummary": null,
+    "latestTerminalResultContextTransferId": null,
+    "providerInstanceId": "codex",
+    "model": "gpt-6-astra",
+    "options": [
+      {
+        "id": "reasoningEffort",
+        "value": "xhigh"
+      },
+      {
+        "id": "serviceTier",
+        "value": "default"
+      }
+    ],
+    "summary": null,
+    "resultContextTransferId": null,
+    "hasPendingQuestion": false,
+    "pendingApproval": null,
+    "waitTimedOut": false,
+    "findings": "docs/overnight/reviews/workspace-r5.md",
+    "verdict": "no blocking findings at 1fc9692/base5; new receipt adoption requires review"
+  },
+  "recoveryPublicationContract": {
+    "head": "8557fdd0d7a71f93a6584c77430e6fde57668580",
+    "url": "https://github.com/ejjsharpe/moonbase/pull/7",
+    "base": "6e58c1c4ea6944e8ca25eadc46e35c843f0f9fbe",
+    "branch": "chore/recovery-publication-contract",
+    "status": "draft; independent contract review queued after workspace R5; adapter adoption active"
+  },
+  "workspaceRecoveryPublications": {
+    "threadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-03-workspace-module-r1-bb5c5d0",
+    "messageId": "message:mcp:809f45ac-99a5-4d58-a1ba-08cc0a77c997:thread-send:workspace-adopt-recovery-publication-8557fdd",
+    "runId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-03-workspace-module-r1-bb5c5d0:ordinal:8",
+    "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Athread-send%3Aworkspace-adopt-recovery-publication-8557fdd",
+    "status": "starting",
+    "delivery": "started"
+  },
+  "recoveryPublicationReviewR1": {
+    "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-recovery-contract-r1-8557fdd",
+    "childThreadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-recovery-contract-r1-8557fdd",
+    "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-recovery-contract-r1-8557fdd:ordinal:1",
+    "childNodeId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-recovery-contract-r1-8557fdd",
     "status": "running",
     "workState": "working",
     "hasPendingChildRuns": false,
@@ -718,20 +765,5 @@
     "hasPendingQuestion": false,
     "pendingApproval": null,
     "waitTimedOut": false
-  },
-  "recoveryPublicationContract": {
-    "head": "8557fdd0d7a71f93a6584c77430e6fde57668580",
-    "url": "https://github.com/ejjsharpe/moonbase/pull/7",
-    "base": "6e58c1c4ea6944e8ca25eadc46e35c843f0f9fbe",
-    "branch": "chore/recovery-publication-contract",
-    "status": "draft; independent contract review queued after workspace R5; adapter adoption active"
-  },
-  "workspaceRecoveryPublications": {
-    "threadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-03-workspace-module-r1-bb5c5d0",
-    "messageId": "message:mcp:809f45ac-99a5-4d58-a1ba-08cc0a77c997:thread-send:workspace-adopt-recovery-publication-8557fdd",
-    "runId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-03-workspace-module-r1-bb5c5d0:ordinal:8",
-    "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Athread-send%3Aworkspace-adopt-recovery-publication-8557fdd",
-    "status": "starting",
-    "delivery": "started"
   }
 }
