@@ -1,0 +1,16 @@
+$ tsc --noEmit -p tests/chat/tsconfig.json && node --experimental-strip-types --test --test-concurrency=1 tests/chat/*.test.ts
+✔ combined public root requires explicit verified Connect, then saves/lists/streams a chat through controlled forwarding (1443.632ms)
+✔ lost HTTP Send response and client closure retain original receipt; reconnect/store reopen do not Send again (1472.939583ms)
+✔ disconnect denies commands without implicit reconnect; stale Disconnect and captured cooperative Stop preserve exact generations (1830.040875ms)
+✔ a signed health reply for another exact host cannot connect or expose a chat endpoint (631.493291ms)
+✔ Disconnect after committed createChat preserves uncertainty and original identity across real forwarding teardown (845.048792ms)
+✔ Disconnect after committed sendChat preserves uncertainty and original identity across real forwarding teardown (1044.29925ms)
+✔ Disconnect after committed stopChat preserves uncertainty and original identity across real forwarding teardown (2858.4375ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 7
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 10406.778333

@@ -492,7 +492,13 @@ const styles = stylex.create({
   },
   chatDate: { display: "block", color: colors.muted, fontSize: type.caption, marginTop: space.xs },
   sidebarFoot: { marginTop: "auto" },
-  content: { display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0 },
+  content: {
+    display: "flex",
+    flexDirection: "column",
+    minWidth: 0,
+    minHeight: 0,
+    overflowY: "auto",
+  },
   context: {
     display: "flex",
     alignItems: "start",

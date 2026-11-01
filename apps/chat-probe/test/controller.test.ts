@@ -499,3 +499,87 @@ for (const operation of ["createChat", "sendChat", "stopChat"] as const)
     );
     next.dispose();
   });
+
+for (const operation of ["createChat", "sendChat", "stopChat"] as const)
+  for (const duringQuery of [false, true])
+    for (const failsWrite of [false, true])
+      test(`${operation} retry vetoes ${failsWrite ? "unwritable" : "changed"} local storage ${duringQuery ? "during query" : "before retry"} before mutating redisclosure`, async () => {
+        const f = fixture();
+        await ready(f);
+        f.controller.setDraft("captured draft");
+        f.answers.set(operation, async (input) => {
+          if (operation === "sendChat")
+            return {
+              target,
+              requestId: (input as ChatCommands["sendChat"]["input"]).requestId,
+              admission: "reserved",
+              submissionId: null,
+            };
+          throw failure();
+        });
+        if (operation === "createChat") await f.controller.create("Captured title");
+        else if (operation === "sendChat") await f.controller.send();
+        else {
+          f.publish({
+            ...snapshot,
+            state: "running",
+            run: {
+              state: "running",
+              stop: { target, submissionId: "original-submission", taskId: "original-task" },
+              text: "live",
+              truncated: false,
+              tools: [],
+            },
+          });
+          await f.controller.stop();
+        }
+        f.controller.setDraft("newer live edit");
+        const retained = structuredClone(f.controller.getSnapshot().pending[0]),
+          original = JSON.parse(f.storage.value!);
+        original.drafts[0].text = "newer externally published edit";
+        const replacement = failsWrite ? f.storage.value : JSON.stringify(original);
+        const breakStorage = () => {
+          if (failsWrite) f.storage.fail = true;
+          else f.storage.value = replacement;
+        };
+        const query =
+          operation === "createChat"
+            ? "listChats"
+            : operation === "sendChat"
+              ? "getChatSend"
+              : "getChat";
+        f.answers.set(query, async () => {
+          if (duringQuery) breakStorage();
+          return operation === "createChat"
+            ? { conversations: [summary], nextCursor: null }
+            : operation === "sendChat"
+              ? {
+                  target,
+                  requestId: retained.input.requestId,
+                  admission: "reserved",
+                  submissionId: null,
+                }
+              : snapshot;
+        });
+        f.answers.delete(operation);
+        if (!duringQuery) breakStorage();
+        const before = f.calls.filter((c) => c.operation === operation).length;
+        await f.controller.retry(retained.input.requestId);
+        assert.equal(
+          f.calls.filter((c) => c.operation === operation).length,
+          before,
+          "metadata preservation must veto before the remote mutation",
+        );
+        assert.equal(f.storage.value, replacement);
+        assert.deepEqual(f.controller.getSnapshot().pending[0].input, retained.input);
+        assert.equal(f.controller.getSnapshot().draft, "newer live edit");
+        assert(f.controller.getSnapshot().storageError);
+        const queries = f.calls.filter((c) => c.operation === query).length;
+        await f.controller.query(retained.input.requestId);
+        assert(
+          f.calls.filter((c) => c.operation === query).length > queries,
+          "safe read-only query remains available",
+        );
+        assert.equal(f.calls.filter((c) => c.operation === operation).length, before);
+        f.controller.dispose();
+      });

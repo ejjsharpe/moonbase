@@ -1,24 +1,83 @@
 {
-  "source": "current Pi235/integration132; same UI source hash as build-checkpoint.json",
+  "source": "R1 repaired source hashes in build-checkpoint.json; Pi235/integration132",
   "visuallyInspected": true,
   "screenshots": [
     {
       "path": "normal.png",
       "width": 2360,
       "height": 1576,
-      "sha256": "092446acce3075bb2eb7de0b41a8a727710f9812d43a887c3d78c970f2fb5312"
+      "sha256": "a3f374efde756f3d1e42e6228ab4b9f904cf345f304a2a9cd46bc54554e41e29",
+      "method": "Playwright normal native zoom"
     },
     {
       "path": "constrained-keyboard.png",
       "width": 1400,
       "height": 1236,
-      "sha256": "6defdf0847ee643abc1c928811c8962e6ca8be9dfc5a2117be4a6a79835747ef"
+      "sha256": "ddb8d4322a96961d2d77800512f49aa3f45c843986cad8c9fa2b062835c99250",
+      "method": "Playwright normal native zoom"
     },
     {
       "path": "packaged.png",
       "width": 2360,
       "height": 1576,
-      "sha256": "65662f201acfc3a03afa5a0b3573f764572832c9717c92181c465d3dc2dbc028"
+      "sha256": "98a02b41b2d30fcc13f07a38c069829d5a3972f7d6e6fb4ef6d22e54a45694f8",
+      "method": "Playwright normal native zoom"
+    },
+    {
+      "path": "r1-packaged-retry-veto-changed.png",
+      "width": 2360,
+      "height": 1576,
+      "sha256": "026934fa08310d67e7f6582792e276c506de8c1e8063ad558316f88e7ffdfd92",
+      "method": "Playwright normal native zoom"
+    },
+    {
+      "path": "r1-packaged-retry-veto-write-fails.png",
+      "width": 2360,
+      "height": 1576,
+      "sha256": "27f3aa48749718167fed02fc7d8894c3f9ac82da4178d7fd8758ea9ad558c2e9",
+      "method": "Playwright normal native zoom"
+    },
+    {
+      "path": "r1-packaged-zoom-1180.png",
+      "width": 2360,
+      "height": 1576,
+      "sha256": "b142b3530fa0340d5fa42ce7fe7a9e5e4ef86a3733a8482eabd6a12497291307",
+      "method": "Electron webContents.capturePage; native zoom2; two animation frames"
+    },
+    {
+      "path": "r1-packaged-zoom-700.png",
+      "width": 1400,
+      "height": 1236,
+      "sha256": "3bd8c41751b2fbc0cf2798aff62c57de22101d6f60d2d4f951b6f0fb3aa2d7d1",
+      "method": "Electron webContents.capturePage; native zoom2; two animation frames"
+    },
+    {
+      "path": "r1-source-retry-veto-changed.png",
+      "width": 2360,
+      "height": 1576,
+      "sha256": "4480131cbeb515dc03ae630c657e992af507316aada434945224d44ce80eb9a5",
+      "method": "Playwright normal native zoom"
+    },
+    {
+      "path": "r1-source-retry-veto-write-fails.png",
+      "width": 2360,
+      "height": 1576,
+      "sha256": "5977cfb4b3eeb1dd8a683a0a4da55c38e97ceadaf11d336c8df3486d1c83ad73",
+      "method": "Playwright normal native zoom"
+    },
+    {
+      "path": "r1-source-zoom-1180.png",
+      "width": 2360,
+      "height": 1576,
+      "sha256": "b142b3530fa0340d5fa42ce7fe7a9e5e4ef86a3733a8482eabd6a12497291307",
+      "method": "Electron webContents.capturePage; native zoom2; two animation frames"
+    },
+    {
+      "path": "r1-source-zoom-700.png",
+      "width": 1400,
+      "height": 1236,
+      "sha256": "3bd8c41751b2fbc0cf2798aff62c57de22101d6f60d2d4f951b6f0fb3aa2d7d1",
+      "method": "Electron webContents.capturePage; native zoom2; two animation frames"
     }
   ]
 }

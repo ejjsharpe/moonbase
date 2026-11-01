@@ -1,0 +1,9 @@
+{
+  "reviewedHead": "5321ae5b4ff3d3c4ed4cfb5b67b6a7139288b6bf",
+  "original": "/Users/elliotsharpe/.t3/worktrees/moonbase/t3-502b2b70/test-results/review-task07-r1/retry-public.test.ts",
+  "originalSha256": "1348a2d24ce3a3686823292f60202824fb21f74473a4d6266c54708e1c2ffe49",
+  "executedAdaptation": "apps/chat-probe/test-results/r1-independent-public.test.ts",
+  "adaptationSha256": "4d58ae163a54b3a160522b9a000b877758c81fe0bb75669303af904ddedf648a",
+  "onlyChange": "controller import ../../apps/chat-probe/src/controller.ts \u2192 ../src/controller.ts",
+  "result": "6/6 independent public probes pass on repaired source"
+}

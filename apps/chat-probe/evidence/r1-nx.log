@@ -1,0 +1,15 @@
+
+ NX   12 tasks: 12 succeeded
+
+
+Re-run with --output-style=static to inline logs.
+
+  Run duration:      1m 6s
+  Cache:             Skipped (--skip-nx-cache)
+  Critical path:     1m 6s (1 task)
+  Recoverable time:  527ms (1% of the run)
+
+  Recommendations:
+    - Cache: drop --skip-nx-cache to restore unchanged tasks instantly.
+    - Speed up or split the longest tasks on the critical path:
+        @moonbase/pi-runtime:test    1m 6s

@@ -1,0 +1,104 @@
+{
+  "original": "/Users/elliotsharpe/.t3/worktrees/moonbase/t3-502b2b70/test-results/review-task07-r1/independent-native/source-accessibility.json",
+  "originalSha256": "29974eef7216e0c7becc0e1b681cb15ab32c99f39286b66f5d6dc484a0b70619",
+  "native": {
+    "size": {
+      "width": 2360,
+      "height": 1576
+    },
+    "zoom": 2,
+    "bounds": {
+      "x": 166,
+      "y": 113,
+      "width": 1180,
+      "height": 788
+    }
+  },
+  "attempted": {
+    "ancestors": [
+      {
+        "tag": "BUTTON",
+        "overflowY": "visible",
+        "height": 28,
+        "scrollHeight": 28,
+        "scrollTop": 0
+      },
+      {
+        "tag": "DIV",
+        "overflowY": "visible",
+        "height": 30,
+        "scrollHeight": 30,
+        "scrollTop": 0
+      },
+      {
+        "tag": "DIV",
+        "overflowY": "visible",
+        "height": 65,
+        "scrollHeight": 65,
+        "scrollTop": 0
+      },
+      {
+        "tag": "FORM",
+        "overflowY": "visible",
+        "height": 207,
+        "scrollHeight": 207,
+        "scrollTop": 0
+      },
+      {
+        "tag": "MAIN",
+        "overflowY": "visible",
+        "height": 309,
+        "scrollHeight": 485,
+        "scrollTop": 0
+      },
+      {
+        "tag": "DIV",
+        "overflowY": "visible",
+        "height": 309,
+        "scrollHeight": 485,
+        "scrollTop": 0
+      },
+      {
+        "tag": "DIV",
+        "overflowY": "hidden",
+        "height": 394,
+        "scrollHeight": 541,
+        "scrollTop": 0
+      },
+      {
+        "tag": "DIV",
+        "overflowY": "visible",
+        "height": 394,
+        "scrollHeight": 394,
+        "scrollTop": 0
+      },
+      {
+        "tag": "BODY",
+        "overflowY": "visible",
+        "height": 394,
+        "scrollHeight": 394,
+        "scrollTop": 0
+      },
+      {
+        "tag": "HTML",
+        "overflowY": "visible",
+        "height": 394,
+        "scrollHeight": 394,
+        "scrollTop": 0
+      }
+    ],
+    "windowScroll": 0,
+    "mainScroll": 0,
+    "viewportHeight": 394,
+    "stopAfterScroll": {
+      "top": 494.39453125,
+      "bottom": 524.39453125
+    }
+  },
+  "axSummary": {
+    "nodeCount": 389,
+    "stopButtonPresent": true,
+    "messageLabelPresent": true
+  },
+  "note": "Derived geometry/AX summary only; complete original AX remains untouched at referenced review evidence."
+}

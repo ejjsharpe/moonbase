@@ -1,0 +1,9 @@
+
+Running 2 tests using 1 worker
+
+(node:67889) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  1 apps/chat-probe/test/desktop.spec.ts:531:3 › R1 source 200% normal/constrained controls have a usable scrolling and keyboard path (5.0s)
+  ✓  2 apps/chat-probe/test/desktop.spec.ts:531:3 › R1 packaged 200% normal/constrained controls have a usable scrolling and keyboard path (4.1s)
+
+  2 passed (9.9s)

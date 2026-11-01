@@ -27,7 +27,7 @@
     {
       "path": "renderer/index.html",
       "bytes": 400,
-      "sha256": "6692788a730b3a8ab8f737a82be66dbb881e886298fa03d632999c97d03ac0a3"
+      "sha256": "174d6dd6f1a5a5eb4c9532eda88e5d404a8ead702913478ceaae6dd116c91274"
     },
     {
       "path": "dependency-notices.txt",
@@ -40,9 +40,9 @@
       "sha256": "d77d81b943521aa9b4c7546ccee4e59087c1b7bb611266db70ec2e8c11b0df90"
     },
     {
-      "path": "renderer/assets/index-BbV-TeAl.js",
-      "bytes": 261134,
-      "sha256": "ec9630611539305749289d839e13f07dac0a68942fb6bddf74bae8bf2d074a7e"
+      "path": "renderer/assets/index-BeMCfOhG.js",
+      "bytes": 261184,
+      "sha256": "8192a408925ee872843f61b31a4283de9f05b2091b2d8c81183699f2c7821cc6"
     },
     {
       "path": "renderer/assets/index-cN05CcEa.css",
@@ -61,8 +61,8 @@
     },
     {
       "path": "app.asar",
-      "bytes": 845591,
-      "sha256": "85b1f249655df02229b4239ee4f54af619416ba8882f191bd40bbeafa33a1ce0"
+      "bytes": 845641,
+      "sha256": "baabf3fc9734aea731d83d19ae1ec6392f264fc4a311e14381752dc178946990"
     }
   ]
 }

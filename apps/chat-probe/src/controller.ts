@@ -545,6 +545,8 @@ export class ChatProofController {
     this.commit(next);
   }
   private async dispatch(p: Pending) {
+    // A read-only reconciliation may await while another client replaces local preservation.
+    this.commit(structuredClone(this.saved));
     try {
       if (p.operation === "createChat") {
         const r = await this.chat.command(p.operation, p.input);

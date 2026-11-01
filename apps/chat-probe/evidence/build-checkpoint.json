@@ -2,12 +2,12 @@
   "registration": "84923f29331dd1458301f1a5a74002ab19a08955",
   "integrationBase": "132d273073889bd0702cf96b1fc2a62d5027598c",
   "piRepair": "235eb27a448635a995bb65e67147e99119830b92",
-  "qualifiedSourceBase": "0b087c067fde4203635825abb395307a02c6b26d plus own source hashes below",
-  "qualification": "11 current source/package Electron checks and 26 public proof tests pass; independent review and human acceptance PENDING",
+  "qualifiedSourceBase": "5321ae5b4ff3d3c4ed4cfb5b67b6a7139288b6bf plus R1 repair source hashes below",
+  "qualification": "38 public tests; 17 source/package native cases plus 2 native-capture reruns; 167 Nx and 7 integration tests pass. Independent R2 and human acceptance pending; hosted CI billing-blocked per R1.",
   "sources": [
     {
       "path": "src/ui.tsx",
-      "sha256": "efac2861bde771560d0a90c140881079ffd0c44148674372efd52fde293ae4be"
+      "sha256": "0ebba459931e10d988b1a4acf69825a66e6d97bf071b456fac6032923a06ae84"
     },
     {
       "path": "src/main.ts",
@@ -15,15 +15,35 @@
     },
     {
       "path": "src/controller.ts",
-      "sha256": "ab9c799e1c3e245d90aebbf11f3ca157acf9c38cd66a6829cbd1f2019f378d73"
+      "sha256": "eccdfc62f42085c9216c2782b5f0d17c0d04ec5511d4e6d7065f3f6347a753cf"
     },
     {
       "path": "src/session.ts",
       "sha256": "86017be4a4ed89c13e8b23132d04a0f0eb303560fb8299cb118dc348d97ad391"
     },
     {
+      "path": "src/wire.ts",
+      "sha256": "52f14011ad25245f3c8e27c4b158e3ac24765e27845a8a461ce0f2d5791306f5"
+    },
+    {
+      "path": "src/preload.ts",
+      "sha256": "c5bab9026ee34663ef8ed4aa994d68cf564b66e6e743f0139b6ae89d78bda1a6"
+    },
+    {
+      "path": "src/config.ts",
+      "sha256": "88354ea93b96e3150bee444f56081a0fbb1c2a7dfcb5ec8d78d0d2a6d7745667"
+    },
+    {
+      "path": "src/renderer/main.tsx",
+      "sha256": "c82327e9c6857f67a01da0ba0a6600999d4ebca323de513477ee3110594dae7f"
+    },
+    {
+      "path": "test/controller.test.ts",
+      "sha256": "19873039d8f829e00aa666f03ed8750da1ff4387e22ea246cee27ff27ba33dd4"
+    },
+    {
       "path": "test/desktop.spec.ts",
-      "sha256": "4cdf66c0f7559167e3062ec9c9214ab4f5f72e845c0cbf687938b563599385fe"
+      "sha256": "61c64d799926069daca12bd756ce7233c6c7959b9ea1bf154a4e7e842a00bca3"
     },
     {
       "path": "test/fixture.ts",
@@ -32,6 +52,14 @@
     {
       "path": "test/host.mjs",
       "sha256": "1845f447f9f645c6045a29678ffe5e3dcf94c42acfa7b2c8a77a425ddbecf1e8"
+    },
+    {
+      "path": "scripts/check-artifacts.mjs",
+      "sha256": "d2d117eaa11202f4eecc214ac6990f1d7c3832bcf32fc08d8399483f2aee8996"
+    },
+    {
+      "path": "package.json",
+      "sha256": "413a9a8ffbf77ff3e732355b3604022885d809dbd36c1ae0fd52013bd2855357"
     }
   ],
   "files": [
@@ -48,7 +76,7 @@
     {
       "path": "dist/renderer/index.html",
       "bytes": 400,
-      "sha256": "6692788a730b3a8ab8f737a82be66dbb881e886298fa03d632999c97d03ac0a3"
+      "sha256": "174d6dd6f1a5a5eb4c9532eda88e5d404a8ead702913478ceaae6dd116c91274"
     },
     {
       "path": "dist/inputs.json",
@@ -61,9 +89,9 @@
       "sha256": "d469bb246c96be0baea1fa72f8cc38d454f260510586eabeab7170c414f9e593"
     },
     {
-      "path": "dist/renderer/assets/index-BbV-TeAl.js",
-      "bytes": 261134,
-      "sha256": "ec9630611539305749289d839e13f07dac0a68942fb6bddf74bae8bf2d074a7e"
+      "path": "dist/renderer/assets/index-BeMCfOhG.js",
+      "bytes": 261184,
+      "sha256": "8192a408925ee872843f61b31a4283de9f05b2091b2d8c81183699f2c7821cc6"
     },
     {
       "path": "dist/renderer/assets/index-cN05CcEa.css",

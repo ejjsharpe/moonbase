@@ -1,6 +1,6 @@
 import { test, expect, _electron as electron, type ElectronApplication } from "@playwright/test";
 import { resolve, join } from "node:path";
-import { readFile, writeFile, mkdir, stat } from "node:fs/promises";
+import { readFile, writeFile, mkdir, stat, appendFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { fixture, until } from "./fixture.ts";
 const root = resolve(import.meta.dirname, ".."),
@@ -46,20 +46,35 @@ async function launch(f: Awaited<ReturnType<typeof fixture>>, data: string, pack
     page,
   };
 }
-const electronCleanup: { pids: number[]; confirmedAbsent: boolean }[] = [];
+const electronCleanup: {
+  pids: number[];
+  confirmedAbsent: boolean;
+  forcedForPreservationFault?: boolean;
+}[] = [];
 const serviceCleanup: unknown[] = [];
-async function shutdown(app: ElectronApplication) {
-  if (app.process().exitCode !== null) return;
+async function shutdown(app: ElectronApplication, preservationFault = false) {
+  const child = app.process();
+  if (child.exitCode !== null || child.signalCode !== null) return;
   const pids = await app.evaluate(({ app }) => app.getAppMetrics().map((m) => m.pid));
-  await app.evaluate(({ app }) => app.quit());
-  if (app.process().exitCode === null)
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(Error("Preserved Quit deadline")), 10000);
-      app.process().once("close", () => {
-        clearTimeout(timer);
-        resolve();
-      });
+  if (preservationFault) {
+    await app.windows()[0].evaluate(async () => {
+      const r = await window.moonbaseChat.call(
+        "connection",
+        "getConnection",
+        {},
+        crypto.randomUUID(),
+      );
+      if (r.ok && (r.value as { connectionId: string | null }).connectionId)
+        await window.moonbaseChat.call(
+          "connection",
+          "disconnect",
+          { connectionId: (r.value as { connectionId: string }).connectionId },
+          crypto.randomUUID(),
+        );
     });
+    await app.evaluate(({ app }) => app.exit(0));
+  } else await app.evaluate(({ app }) => app.quit());
+  await until(async () => child.exitCode !== null || child.signalCode !== null, Boolean);
   for (const pid of pids)
     await until(async () => {
       try {
@@ -69,11 +84,11 @@ async function shutdown(app: ElectronApplication) {
         return (e as NodeJS.ErrnoException).code === "ESRCH";
       }
     }, Boolean);
-  electronCleanup.push({ pids, confirmedAbsent: true });
-  await writeFile(
-    join(evidence, "cleanup.json"),
-    JSON.stringify({ electron: electronCleanup, services: serviceCleanup }, null, 2),
-  );
+  electronCleanup.push({
+    pids,
+    confirmedAbsent: true,
+    ...(preservationFault ? { forcedForPreservationFault: true } : {}),
+  });
 }
 async function closeFixture(f: Awaited<ReturnType<typeof fixture>>) {
   serviceCleanup.push(await f.close());
@@ -81,6 +96,15 @@ async function closeFixture(f: Awaited<ReturnType<typeof fixture>>) {
   await writeFile(
     join(evidence, "cleanup.json"),
     JSON.stringify({ electron: electronCleanup, services: serviceCleanup }, null, 2),
+  );
+  await appendFile(
+    join(evidence, "r1-cleanup-runs.jsonl"),
+    JSON.stringify({
+      worker: process.pid,
+      run: process.env.MOONBASE_PROOF_RUN ?? "current",
+      electron: electronCleanup,
+      services: serviceCleanup,
+    }) + "\n",
   );
 }
 test("actual Electron proof: lost response, streamed tools, reload, captured Stop, reconnect and keyboard/constrained UI", async () => {
@@ -502,3 +526,237 @@ for (const packaged of [false, true])
       await closeFixture(f);
     }
   });
+
+for (const packaged of [false, true])
+  test(`R1 ${packaged ? "packaged" : "source"} 200% normal/constrained controls have a usable scrolling and keyboard path`, async () => {
+    const f = await fixture(true);
+    let current: ElectronApplication | undefined;
+    const geometry: unknown[] = [];
+    try {
+      const { app, page } = await launch(f, join(f.directory, "zoom-r1"), packaged);
+      current = app;
+      await page.getByRole("button", { name: "Connect", exact: true }).click();
+      await expect(page.getByText("Verified host.", { exact: false })).toBeVisible();
+      await page.getByLabel("New saved chat").fill("Zoom with running work");
+      await page.getByRole("button", { name: "Create chat", exact: true }).click();
+      await expect(
+        page.getByRole("heading", { name: "Zoom with running work", exact: true }),
+      ).toBeVisible();
+      await page.getByLabel("Message", { exact: true }).fill("Keep exact Stop reachable at zoom");
+      await page.getByRole("button", { name: "Send message", exact: true }).click();
+      await expect(page.getByRole("article", { name: "Live response" })).toContainText(
+        "Controlled remote tool activity",
+      );
+      await page.getByLabel("Message", { exact: true }).fill("Newer zoom draft remains unsent");
+      for (const width of [1180, 700]) {
+        await app.evaluate(({ BrowserWindow }, width) => {
+          const w = BrowserWindow.getAllWindows()[0];
+          w.setSize(width, width === 1180 ? 820 : 650);
+          w.webContents.setZoomFactor(2);
+        }, width);
+        await page.evaluate(
+          () =>
+            new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
+        );
+        const before = await page.evaluate(() => ({
+          viewport: { width: innerWidth, height: innerHeight },
+          controls: [...document.querySelectorAll("button")]
+            .filter((b) => ["Stop", "Send message"].includes(b.textContent ?? ""))
+            .map((b) => ({
+              name: b.textContent,
+              top: b.getBoundingClientRect().top,
+              bottom: b.getBoundingClientRect().bottom,
+            })),
+        }));
+        const after = await page.evaluate(() => {
+          const main = document.querySelector("main")!;
+          main.scrollTop = main.scrollHeight;
+          return {
+            mainScroll: main.scrollTop,
+            overflow: getComputedStyle(main).overflowY,
+            viewportHeight: innerHeight,
+            controls: [...document.querySelectorAll("button")]
+              .filter((b) => ["Stop", "Send message"].includes(b.textContent ?? ""))
+              .map((b) => ({
+                name: b.textContent,
+                top: b.getBoundingClientRect().top,
+                bottom: b.getBoundingClientRect().bottom,
+                left: b.getBoundingClientRect().left,
+                right: b.getBoundingClientRect().right,
+              })),
+          };
+        });
+        await page.evaluate(
+          () =>
+            new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
+        );
+        const native = await app.evaluate(async ({ BrowserWindow }) => {
+          const w = BrowserWindow.getAllWindows()[0],
+            image = await w.webContents.capturePage();
+          return {
+            png: image.toPNG().toString("base64"),
+            size: image.getSize(),
+            zoom: w.webContents.getZoomFactor(),
+            bounds: w.getContentBounds(),
+          };
+        });
+        geometry.push({
+          width,
+          before,
+          after,
+          native: { size: native.size, zoom: native.zoom, bounds: native.bounds },
+        });
+        await writeFile(
+          join(evidence, `r1-${packaged ? "packaged" : "source"}-zoom-${width}.png`),
+          Buffer.from(native.png, "base64"),
+        );
+      }
+      await writeFile(
+        join(evidence, `r1-${packaged ? "packaged" : "source"}-zoom.json`),
+        JSON.stringify(geometry, null, 2),
+      );
+      for (const row of geometry as {
+        after: { viewportHeight: number; controls: { top: number; bottom: number }[] };
+      }[])
+        for (const control of row.after.controls) {
+          expect(control.top).toBeGreaterThanOrEqual(0);
+          expect(control.bottom).toBeLessThanOrEqual(row.after.viewportHeight);
+        }
+      await page.getByLabel("Message", { exact: true }).focus();
+      await page.keyboard.press("Tab");
+      await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeFocused();
+      await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeInViewport();
+      await page.keyboard.press("Tab");
+      await expect(page.getByRole("button", { name: "Send message", exact: true })).toBeFocused();
+      await expect(
+        page.getByRole("button", { name: "Send message", exact: true }),
+      ).toBeInViewport();
+      await expect(page.getByLabel("Message", { exact: true })).toHaveValue(
+        "Newer zoom draft remains unsent",
+      );
+      expect((await f.stats()).commands.filter((c) => c === "sendChat")).toHaveLength(1);
+      await app.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(1),
+      );
+      await shutdown(app);
+      current = undefined;
+    } finally {
+      if (current) await shutdown(current);
+      await closeFixture(f);
+    }
+  });
+
+for (const packaged of [false, true])
+  for (const failsWrite of [false, true])
+    test(`R1 ${packaged ? "packaged" : "source"} reserved Send retry must veto ${failsWrite ? "failing writes during query" : "a changed snapshot"} before production admission`, async () => {
+      const f = await fixture(true);
+      let current: ElectronApplication | undefined;
+      try {
+        const { app, page } = await launch(f, join(f.directory, "retry-r1"), packaged);
+        current = app;
+        await page.getByRole("button", { name: "Connect", exact: true }).click();
+        await expect(page.getByText("Verified host.", { exact: false })).toBeVisible();
+        await page.getByLabel("New saved chat").fill("Retry preservation");
+        await page.getByRole("button", { name: "Create chat", exact: true }).click();
+        await expect(
+          page.getByRole("heading", { name: "Retry preservation", exact: true }),
+        ).toBeVisible();
+        await page
+          .getByLabel("Message", { exact: true })
+          .fill("First admitted input keeps chat busy");
+        await page.getByRole("button", { name: "Send message", exact: true }).click();
+        await expect(page.getByRole("article", { name: "Live response" })).toContainText(
+          "Controlled remote tool activity",
+        );
+        await page.getByLabel("Message", { exact: true }).fill("Captured second busy intent");
+        await page.getByRole("button", { name: "Send message", exact: true }).click();
+        const region = page.getByRole("region", { name: "Retained commands" });
+        await expect(region).toContainText("Conflict");
+        const pending = await page.evaluate(
+          () => JSON.parse(localStorage.getItem("moonbase.chat-proof.v1")!).pending[0],
+        );
+        await page.getByLabel("Message", { exact: true }).fill("Newer live draft remains");
+        f.release();
+        await expect(page.getByRole("article", { name: "Live response" })).toHaveCount(0);
+        const reserved = await page.evaluate(
+          (p) =>
+            window.moonbaseChat.call(
+              "chat",
+              "getChatSend",
+              { target: p.input.target, requestId: p.input.requestId },
+              crypto.randomUUID(),
+            ),
+          pending,
+        );
+        expect(reserved.ok && (reserved.value as { admission: string }).admission).toBe("reserved");
+        const replacement = failsWrite
+          ? await page.evaluate(() => localStorage.getItem("moonbase.chat-proof.v1"))
+          : await page.evaluate(() => {
+              const key = "moonbase.chat-proof.v1",
+                v = JSON.parse(localStorage.getItem(key)!);
+              v.pending = [];
+              v.drafts = [{ target: v.selected, text: "Newer external publication" }];
+              const raw = JSON.stringify(v);
+              localStorage.setItem(key, raw);
+              return raw;
+            });
+        if (failsWrite) await f.holdReply("getChatSend");
+        const before = await f.stats();
+        await region.locator("summary").click();
+        await region.getByRole("button", { name: "Retry original Send", exact: true }).click();
+        if (failsWrite) {
+          await until(f.stats, (s) => s.heldReplies.includes("getChatSend"));
+          await page.evaluate(() => {
+            Storage.prototype.setItem = function () {
+              throw new DOMException("Controlled full storage", "QuotaExceededError");
+            };
+          });
+          f.releaseReply();
+        }
+        await expect(page.getByRole("alert").first()).toContainText("preservation failed");
+        await region.getByRole("button", { name: "Query outcome", exact: true }).click();
+        const after = await f.stats(),
+          stored = await page.evaluate(() => localStorage.getItem("moonbase.chat-proof.v1")),
+          receipt = await page.evaluate(
+            (p) =>
+              window.moonbaseChat.call(
+                "chat",
+                "getChatSend",
+                { target: p.input.target, requestId: p.input.requestId },
+                crypto.randomUUID(),
+              ),
+            pending,
+          );
+        await page.screenshot({
+          path: join(
+            evidence,
+            `r1-${packaged ? "packaged" : "source"}-retry-veto-${failsWrite ? "write-fails" : "changed"}.png`,
+          ),
+        });
+        await writeFile(
+          join(
+            evidence,
+            `r1-${packaged ? "packaged" : "source"}-retry-veto-${failsWrite ? "write-fails" : "changed"}.json`,
+          ),
+          JSON.stringify(
+            { pending, reserved, receipt, before, after, replacement, stored },
+            null,
+            2,
+          ),
+        );
+        expect(stored).toBe(replacement);
+        await expect(page.getByLabel("Message", { exact: true })).toHaveValue(
+          "Newer live draft remains",
+        );
+        expect(after.commands.filter((c) => c === "sendChat").length).toBe(
+          before.commands.filter((c) => c === "sendChat").length,
+        );
+        expect(receipt.ok && (receipt.value as { admission: string }).admission).toBe("reserved");
+      } finally {
+        try {
+          if (current) await shutdown(current, true);
+        } finally {
+          await closeFixture(f);
+        }
+      }
+    });

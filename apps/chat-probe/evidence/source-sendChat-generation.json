@@ -9,7 +9,7 @@
       "actorId": "personal",
       "conversationId": "4"
     },
-    "requestId": "2b616d4a-c3c9-45a3-a4b7-6ce1b1d39df5",
+    "requestId": "fb48bf08-280d-4b62-8adb-fe9b14d4d286",
     "text": "Captured text at original generation"
   },
   "lossMessage": "Uncertain: Connection changed after a chat mutation may have dispatched. Preserve its original request and reconcile through its authority.; Chat reply was lost. Query the original request; do not invent another Send.",
@@ -23,7 +23,7 @@
         "actorId": "personal",
         "conversationId": "4"
       },
-      "requestId": "2b616d4a-c3c9-45a3-a4b7-6ce1b1d39df5",
+      "requestId": "fb48bf08-280d-4b62-8adb-fe9b14d4d286",
       "text": "Captured text at original generation"
     }
   ],

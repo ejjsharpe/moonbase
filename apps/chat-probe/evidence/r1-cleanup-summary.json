@@ -1,0 +1,32 @@
+{
+  "r1-green": {
+    "electronPidsAbsent": 76,
+    "hostPidsAbsent": 17,
+    "forwardPidsAbsent": 50,
+    "forwardGroupsAbsent": 50,
+    "portsRebound": 42
+  },
+  "r1-native-capture": {
+    "electronPidsAbsent": 8,
+    "hostPidsAbsent": 2,
+    "forwardPidsAbsent": 4,
+    "forwardGroupsAbsent": 4,
+    "portsRebound": 4
+  },
+  "r1-red-quota-corrected": {
+    "electronPidsAbsent": 8,
+    "hostPidsAbsent": 2,
+    "forwardPidsAbsent": 4,
+    "forwardGroupsAbsent": 4,
+    "portsRebound": 4
+  },
+  "r1-red-storage-corrected": {
+    "electronPidsAbsent": 8,
+    "hostPidsAbsent": 2,
+    "forwardPidsAbsent": 4,
+    "forwardGroupsAbsent": 4,
+    "portsRebound": 4
+  },
+  "ownershipSpecificInventory": [],
+  "initialHarnessCorrection": "see r1-harness-correction-cleanup.json; corrected-run totals do not pretend to count every initial failed-run process"
+}
