@@ -1,4 +1,5 @@
 // Controlled host process composition root; public SDK/service APIs only, no provider network.
+import { hostControl } from './host-control.mjs';
 import { readFileSync } from 'node:fs';
 import { ManagedRuntime, Effect } from 'effect';
 import { createModels } from '@earendil-works/pi-ai/models';
@@ -17,15 +18,6 @@ const gate = config.hold
       release = resolve;
     })
   : Promise.resolve();
-let end;
-const ended = new Promise((resolve) => {
-  end = resolve;
-});
-const commands = [];
-let replyOperation,
-  replyGate = Promise.resolve(),
-  releaseReply = () => {};
-const heldReplies = [];
 faux.setResponses([
   async () => {
     await gate;
@@ -42,50 +34,11 @@ const runtime = ManagedRuntime.make(
   }),
 );
 const client = makeChatClient(runtime);
-const bound = {
-  command: async (...args) => {
-    commands.push(args[0]);
-    const result = await client.command(...args);
-    if (args[0] === replyOperation) {
-      heldReplies.push(args[0]);
-      await replyGate;
-    }
-    return result;
-  },
-  watch: client.watch,
-};
-const control = (message) => {
-  if (message?.type === 'stats')
-    process.send?.({
-      id: message.id,
-      calls: faux.state.callCount,
-      commands: [...commands],
-      replyOperation,
-      heldReplies: [...heldReplies],
-    });
-  if (message?.type === 'hold-reply') {
-    replyOperation = message.operation;
-    replyGate = new Promise((resolve) => {
-      releaseReply = resolve;
-    });
-  }
-  if (message?.type === 'release-reply') {
-    replyOperation = undefined;
-    releaseReply();
-  }
-  if (message?.type === 'release') release?.();
-  if (message?.type === 'shutdown') {
-    release?.();
-    releaseReply();
-    end();
-  }
-};
-process.on('message', control);
-process.once('disconnect', () => {
-  release?.();
-  releaseReply();
-  end();
-});
+const { bound, ended, close } = hostControl(
+  client,
+  () => ({ calls: faux.state.callCount, tools: 0 }),
+  () => release?.(),
+);
 try {
   await runtime.runPromise(
     Effect.scoped(
@@ -104,6 +57,6 @@ try {
   process.exitCode = 1;
 } finally {
   await runtime.dispose();
-  process.off('message', control);
+  close();
   if (process.connected) process.disconnect();
 }
