@@ -397,3 +397,34 @@ for (const viewport of [{ width: 1600, height: 1000 }, { width: 760, height: 650
   await trigger.click(); await page.getByRole("menuitem", { name: "Close", exact: true }).click();
   await expect(first(page).getByRole("tab", { name: "README.md", exact: true })).toHaveCount(0); await expect(menu).toHaveCount(0);
 });
+
+test("delayed Create reply after disposal does not open the created file", async ({ page }) => {
+  await page.goto("/");
+  const second = page.getByRole("region", { name: "Second editor", exact: true });
+  await expect(second.getByRole("tab", { name: "welcome.ts", exact: true })).toBeVisible();
+  await page.evaluate(() => {
+    const editor = window.demo.second, mutate = editor.mutate.bind(editor);
+    editor.mutate = async input => {
+      const result = await mutate(input);
+      await new Promise<void>(resolve => {
+        window.addEventListener("release-create", () => resolve(), { once: true });
+        document.body.dataset.createReply = "waiting";
+      });
+      return result;
+    };
+    editor.open = async () => { document.body.dataset.detachedCreateOpen = "true"; return false; };
+  });
+  await second.getByRole("button", { name: "New File", exact: true }).click();
+  await page.getByRole("textbox", { name: "Destination relative path" }).fill("delayed.ts");
+  await page.getByRole("dialog", { name: "New File", exact: true }).getByRole("button", { name: "New File", exact: true }).click();
+  await expect(page.locator("body")).toHaveAttribute("data-create-reply", "waiting");
+  // Simulate shell teardown while the modal owns focus.
+  await page.evaluate(() => Array.from(document.querySelectorAll("button")).find(button => button.textContent === "Dispose second editor")!.click());
+  await expect(second).toHaveCount(0);
+  await page.evaluate(async () => {
+    window.dispatchEvent(new Event("release-create"));
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+  });
+  expect(await page.locator("body").getAttribute("data-detached-create-open")).toBeNull();
+  expect(await page.evaluate(async () => (await window.demo.client.command("readFile", { checkout: window.demo.checkout, path: "delayed.ts" })).text)).toBe("");
+});

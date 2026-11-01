@@ -4,7 +4,7 @@ import { WorkspaceService, type WorkspaceServiceShape } from "@moonbase/applicat
 import { ApplicationError, emptyRecovery, maximumFileBytes, type CheckoutTarget, type FileDocument,
   type FileTarget, type WorkspaceCommand, type EditorRecovery, type OperationResult, type SaveResult, type WorkspaceEvent, type LookupMatch, type RecoveryChange, type RecoveryPublication,
 } from "@moonbase/application/client";
-import { checkoutKey, fileKey } from "./editor.ts";
+import { checkoutKey, fileKey, moveRecoveryReferences } from "./references.ts";
 
 type Seed = { checkout: CheckoutTarget; files: Record<string, string>; head?: Record<string, string>; index?: Record<string, string>; ignored?: string[] };
 type Entry = FileDocument & { directory: boolean };
@@ -115,15 +115,7 @@ export function memoryWorkspace(seeds: Seed[]) {
         const move = (path: string) => item.destination && affected(path, item.source) ? item.destination + path.slice(item.source.length) : path;
         if (result.kind === "move") {
           state.drafts = state.drafts.map(draft => checkoutKey(draft.target.checkout) === checkoutKey(result.checkout) ? { ...draft, target: { ...draft.target, path: move(draft.target.path) } } : draft);
-          const selected = readOwn(state.views, result.checkout.checkoutId);
-          if (selected) {
-            selected.openFiles = [...new Set(selected.openFiles.map(move))]; selected.active = move(selected.active); if (selected.preview) selected.preview = move(selected.preview);
-            selected.fileViews = Object.fromEntries(Object.entries(selected.fileViews).sort(([a], [b]) => Number(affected(b, item.source)) - Number(affected(a, item.source))).map(([path, mode]) => [move(path), mode]));
-            selected.positions = Object.fromEntries(Object.entries(selected.positions).sort(([a], [b]) => Number(affected(b, item.source)) - Number(affected(a, item.source))).map(([path, positions]) => [move(path), positions]));
-            selected.tree.expanded = [...new Set(selected.tree.expanded.map(move))]; selected.tree.selected = [...new Set(selected.tree.selected.map(move))]; selected.tree.focus = move(selected.tree.focus);
-          }
-          const recent = state.recentFiles.map(target => checkoutKey(target.checkout) === checkoutKey(result.checkout) ? { ...target, path: move(target.path) } : target);
-          state.recentFiles = [...new Map(recent.map(target => [fileKey(target), target])).values()];
+          if (item.destination) moveRecoveryReferences(state, result.checkout, item.source, item.destination);
         }
         if (result.kind === "copy" && item.destination) for (const draft of [...state.drafts]) {
           if (checkoutKey(draft.target.checkout) !== checkoutKey(result.checkout) || !affected(draft.target.path, item.source)) continue;
