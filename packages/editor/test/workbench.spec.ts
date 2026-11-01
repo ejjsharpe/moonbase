@@ -28,6 +28,7 @@ test("real Monaco edits/save, shared diff model and isolated second instance", a
 });
 
 test("external conflict Compare/Cancel and failed Save preserve edits in the visible UI", async ({ page }) => {
+  const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
   await page.goto("/"); await edit(page, "my retained edits");
   await page.getByRole("button", { name: "External change", exact: true }).click();
   await first(page).getByRole("button", { name: "Save", exact: true }).click();
@@ -40,6 +41,7 @@ test("external conflict Compare/Cancel and failed Save preserve edits in the vis
   await first(page).getByRole("button", { name: "Save", exact: true }).click();
   await expect(first(page).getByRole("alert").last()).toContainText("Demo Save failed");
   expect(await page.evaluate(() => window.demo.first.buffer({ checkout: window.demo.checkout, path: "welcome.ts" })!.text)).toBe("my retained edits");
+  expect(errors).toEqual([]);
 });
 
 test("close dialog Cancel then Discard; Reopen reads disk and disposal releases Monaco/subscriptions", async ({ page }) => {

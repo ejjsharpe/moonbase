@@ -13,6 +13,7 @@ export function MonacoView({ controller, state, target, mode }: {
   const container = useRef<HTMLDivElement>(null);
   const models = useRef(new Map<string, { model: monaco.editor.ITextModel; listener: monaco.IDisposable }>());
   const mounted = useRef<monaco.editor.IStandaloneCodeEditor | monaco.editor.IStandaloneDiffEditor | null>(null);
+  const releaseView = useRef<(() => void) | null>(null);
   const key = target ? fileKey(target) : "", buffer = state.buffers.find(buffer => fileKey(buffer.target) === key);
   const comparison = state.comparisons[key];
   useLayoutEffect(() => {
@@ -23,7 +24,7 @@ export function MonacoView({ controller, state, target, mode }: {
       "editorWidget.background": colors.elevated, "editorWidget.border": colors.controlBorder,
     } });
     return () => {
-      mounted.current?.dispose(); mounted.current = null;
+      releaseView.current?.(); releaseView.current = null;
       for (const item of models.current.values()) { item.listener.dispose(); item.model.dispose(); }
       models.current.clear();
     };
@@ -49,7 +50,7 @@ export function MonacoView({ controller, state, target, mode }: {
     for (const [key, item] of models.current) if (state.disposed || !state.buffers.some(buffer => fileKey(buffer.target) === key)) {
       const instance = mounted.current;
       if (instance && ("getModifiedEditor" in instance ? instance.getModifiedEditor().getModel() : instance.getModel()) === item.model) {
-        instance.dispose(); mounted.current = null;
+        releaseView.current?.(); releaseView.current = null;
       }
       item.listener.dispose(); item.model.dispose(); models.current.delete(key);
     }
@@ -76,17 +77,21 @@ export function MonacoView({ controller, state, target, mode }: {
       const original = monaco.editor.createModel(comparison.original, "plaintext");
       const modified = working ?? monaco.editor.createModel(comparison.working?.text ?? "", "plaintext");
       const editor = monaco.editor.createDiffEditor(element, { ...options, originalEditable: false, renderSideBySide: false });
-      editor.setModel({ original, modified }); mounted.current = editor;
+      const viewModel = editor.createViewModel({ original, modified });
+      editor.setModel(viewModel); mounted.current = editor;
       editor.getOriginalEditor().updateOptions({ ariaLabel: comparison.title + " original", readOnly: true, domReadOnly: true });
       editor.getModifiedEditor().updateOptions({ ariaLabel: target.path + " editor" });
       const modifiedPosition = track(editor.getModifiedEditor(), mode), originalPosition = track(editor.getOriginalEditor(), `${mode}:original`);
-      release = () => { modifiedPosition(); originalPosition(); editor.dispose(); original.dispose(); if (!working) modified.dispose(); };
+      release = () => { modifiedPosition(); originalPosition(); editor.setModel(null); editor.dispose(); viewModel.dispose(); original.dispose(); if (!working) modified.dispose(); };
     } else if (working) {
       const editor = monaco.editor.create(element, { ...options, model: working }); mounted.current = editor;
       const position = track(editor, "file"); release = () => { position(); editor.dispose(); };
     } else return;
     element.dataset.modelUri = working?.uri.toString() ?? "";
-    return () => { release(); mounted.current = null; };
+    let released = false;
+    const cleanup = () => { if (!released) { released = true; release(); mounted.current = null; } };
+    releaseView.current = cleanup;
+    return cleanup;
   }, [controller, key, mode, !!buffer, comparison?.original, comparison?.title, state.disposed]);
   useLayoutEffect(() => {
     const editor = mounted.current;
