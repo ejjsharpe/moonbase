@@ -2386,7 +2386,16 @@
     "foreground": "exclusive owner after chatR2release",
     "brief": "completecommon08+exactbase+fullindependentdesktopR2/chatR2reports+allpriorobjections/safetytests",
     "requestedBaseFollowup": "d79d1e9b8347f7f5f19cdbe9aad0233a0c47be8d",
-    "testFixtureExport": "@moonbase/chat-probe/test-fixture -> existing ./test/fixture.ts; testconsumersonly; no newdeps"
+    "testFixtureExport": "@moonbase/chat-probe/test-fixture -> existing ./test/fixture.ts; testconsumersonly; no newdeps",
+    "ownProductRed": "Keyboard Enter on viewtab produces click detail0; pointer handoff focusedMonaco so twoTabs insertspaces. ActualtwoframeRED retained; own MouseEvent.detail>0 fix; source/packagekeyboard requalification pending.",
+    "fixtureCorrections": "initial22/25shellselectors/Trashreceiptwait; healthbaseline/readFileenvelope/fauxalternatingresponse/processwrapper/concurrentbuildstartup; keepdistinctfromproductred",
+    "keyboardRedEvidence": {
+      "source": "cc06d753e76dc02470628a611a3a481f771953b9",
+      "trace": "/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/test-results/keyboard-focus-red",
+      "originalAsar": "overwritten before digest recorded; no originalbinaryequivalence claim",
+      "reconstruction": "must labelfresharchivebuild digest separately; compare SAMEcorrecteddriverold/new",
+      "fixtureCorrection": "firstfocusedgreen also needed separatekeyboardsequencingcorrection; retained distinctfromproductred"
+    }
   },
   "review-workbench-integration-r1": {
     "taskId": "node:delegated-task:command%3Amcp%3A8185ba6c-62ae-4571-ad0b-9688ad5a1b92%3Adelegate-task%3Afresh-lead-workbench19-dff-review-astra",
