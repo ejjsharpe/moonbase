@@ -1,8 +1,9 @@
 import { Cause, Effect, Exit, Stream, type ManagedRuntime } from "effect";
 import { ApplicationError, type CommandOptions, type EditorClient } from "./client.ts";
 import type { ConnectionClient } from "./connection-client.ts";
-import { connectionCommand, connectionWatch, workspaceCommand, workspaceWatch } from "./handlers.ts";
-import type { ConnectionService, WorkspaceService } from "./services.ts";
+import type { ChatClient } from "./chat-client.ts";
+import { chatCommand, chatWatch, connectionCommand, connectionWatch, workspaceCommand, workspaceWatch } from "./handlers.ts";
+import type { ChatService, ConnectionService, WorkspaceService } from "./services.ts";
 
 function applicationFailure(cause: Cause.Cause<ApplicationError>): ApplicationError {
   if (Cause.hasInterruptsOnly(cause)) return new ApplicationError({ code: "Cancelled", message: "Command cancelled" });
@@ -37,5 +38,11 @@ export function makeConnectionClient(runtime: ManagedRuntime.ManagedRuntime<Conn
   return {
     command: (operation, input, options) => invoke(runtime, connectionCommand(operation, input), options),
     watch: (receive, onError) => observe(runtime, connectionWatch(), receive, onError),
+  };
+}
+export function makeChatClient(runtime: ManagedRuntime.ManagedRuntime<ChatService, ApplicationError>): ChatClient {
+  return {
+    command: (operation, input, options) => invoke(runtime, chatCommand(operation, input), options),
+    watch: (input, receive, onError) => observe(runtime, chatWatch(input), receive, onError),
   };
 }

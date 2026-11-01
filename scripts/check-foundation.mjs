@@ -14,7 +14,7 @@ for (const file of manifest.files) {
     assert.deepEqual(await readFile(`packages/ui/${file.path.split("/").at(-1)}`), data);
   }
 }
-for (const entry of ["client", "host-client", "connection-client"]) {
+for (const entry of ["client", "host-client", "connection-client", "chat-client"]) {
   const path = `packages/application/src/${entry}.ts`;
   const result = await build({ entryPoints: [path], bundle: true, platform: "browser", write: false, metafile: true });
   assert.deepEqual(Object.keys(result.metafile.inputs), [path]);

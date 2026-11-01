@@ -3,6 +3,7 @@ import { ApplicationError, type CommandInput, type CommandOutput, type Workspace
 import type { ConnectionCommand, ConnectionInput, ConnectionOutput, ConnectionSnapshot } from "./connection-client.ts";
 import type { ChatHostTarget, ChatHostHealth } from "./host-client.ts";
 import type { ChatHostEndpoint } from "./host-health.ts";
+import type { ChatCommand, ChatInput, ChatOutput, ChatSnapshot, ChatTarget } from "./chat-client.ts";
 
 export type WorkspaceHandler<K extends WorkspaceCommand> = (input: CommandInput<K>) => Effect.Effect<CommandOutput<K>, ApplicationError>;
 export type WorkspaceHandlers = { [K in WorkspaceCommand]: WorkspaceHandler<K> };
@@ -19,6 +20,12 @@ export type ConnectionServiceShape = ConnectionHandlers & {
   endpoint(input: { host: ChatHostTarget }): Effect.Effect<VerifiedChatEndpoint, ApplicationError>;
 };
 export class ConnectionService extends Context.Service<ConnectionService, ConnectionServiceShape>()("moonbase/Connection") {}
+
+export type ChatHandlers = { [K in ChatCommand]: (input: ChatInput<K>) => Effect.Effect<ChatOutput<K>, ApplicationError> };
+export type ChatServiceShape = ChatHandlers & {
+  watch(input: { target: ChatTarget }): Stream.Stream<ChatSnapshot, ApplicationError>;
+};
+export class ChatService extends Context.Service<ChatService, ChatServiceShape>()("moonbase/Chat") {}
 
 /** Normalize release failures before Effect combines them with a command's cause. */
 export const releaseResource = (release: () => void | Promise<void>): Effect.Effect<void> =>
