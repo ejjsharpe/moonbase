@@ -1116,12 +1116,12 @@
     }
   },
   "sshModulePublished": {
-    "head": "115c30b81b3f5845cb8aced8f03f47543f37d7a9",
+    "head": "1aec1a438ba0d5592b0e6c3f0e1be835cf3c034b",
     "base": "09b21f2ee8556c54ef4f8238f0be2ee88fd990c3",
     "url": "https://github.com/ejjsharpe/moonbase/pull/9",
-    "status": "DRAFT; R2 one P2 EPERM cleanup retry owner fixing",
+    "status": "DRAFT R2 repaired; R3 queued behind editor paired review",
     "tests": {
-      "ssh": 41,
+      "ssh": 43,
       "application": 29
     },
     "unrun": [
@@ -1517,5 +1517,20 @@
     "base": "7bfc7764b8950f93ee8fd41cc8ca86914b434f86",
     "state": "preserved/pushed unfinished; owner temporarily fixes SSH R2 then returns; no final manifest/root registration/PR",
     "evidence": "owner four public realSQLite tests/typecheck pass; server/remote implemented but HTTP/security/CLI/locking/assets still pending"
+  },
+  "sshR2Repair": {
+    "head": "1aec1a438ba0d5592b0e6c3f0e1be835cf3c034b",
+    "base": "09b21f2ee8556c54ef4f8238f0be2ee88fd990c3",
+    "tests": {
+      "ssh": 43,
+      "application": 29
+    },
+    "status": "DRAFT, fresh R3 queued behind paired editor review; CI pending",
+    "evidence": "public/realchild transient EPERM and persistent-budget controls red\u2192green; passive trace saw2naturalEPERM; no automatic second cleanup budget"
+  },
+  "piResumed": {
+    "branch": "feat/pi-runtime",
+    "preserved": "cef64eee5f8fd9e0572e4c0dc380358485a650ee",
+    "state": "owner returned after SSH repair publication; task05 continues; no final manifest/root registration/PR"
   }
 }
