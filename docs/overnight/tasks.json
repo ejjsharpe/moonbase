@@ -543,7 +543,7 @@
         "value": "default"
       }
     ],
-    "summary": "Pushed `chore/pi-contract-research` at **`caed29486b4b1ab0400b54a12d0ea4ea3f51343c`**.\n\n[Evidence note](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-5e024c93/docs/research/pi-durable-v0-contract-evidence.md) · [Reproducible probe](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-5e024c93/docs/research/pi-durable-1.4-probe.mjs)\n\nControlled probes passed: lost-response recovery without resubmit, changed-payload rejection, two-process exclusive contention and crash recovery, bounded observation/unsubscribe, task handover and busy rejection. Worktree clean; artifacts remain in `/tmp/moonbase-pi-probe.mBU3Js`.\n\nUnrun: minimum Node, packaging, providers/SSH, power loss and exhaustive Stop races. Results qualify these controlled cases, not general host guarantees.",
+    "summary": "Pushed `chore/pi-contract-research` at **`caed29486b4b1ab0400b54a12d0ea4ea3f51343c`**.\n\n[Evidence note](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-5e024c93/docs/research/pi-durable-v0-contract-evidence.md) \u00b7 [Reproducible probe](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-5e024c93/docs/research/pi-durable-1.4-probe.mjs)\n\nControlled probes passed: lost-response recovery without resubmit, changed-payload rejection, two-process exclusive contention and crash recovery, bounded observation/unsubscribe, task handover and busy rejection. Worktree clean; artifacts remain in `/tmp/moonbase-pi-probe.mBU3Js`.\n\nUnrun: minimum Node, packaging, providers/SSH, power loss and exhaustive Stop races. Results qualify these controlled cases, not general host guarantees.",
     "resultContextTransferId": "context-transfer:type:subagent_result:source-thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-pi-api-contract-research-r1:target-thread:63122af4-017b-4b66-bcae-a905f2b1659d:da70dadc-5b05-4bf1-aa92-ed0aecee4af9",
     "hasPendingQuestion": false,
     "pendingApproval": null,
@@ -1018,15 +1018,47 @@
     "childThreadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-editor-r7-9144558",
     "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-editor-r7-9144558:ordinal:1",
     "childNodeId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-editor-r7-9144558",
-    "status": "running",
-    "workState": "working",
+    "status": "completed",
+    "workState": "result_available",
     "hasPendingChildRuns": false,
-    "latestTerminalRunId": null,
-    "latestTerminalStatus": null,
+    "latestTerminalRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-editor-r7-9144558:ordinal:1",
+    "latestTerminalStatus": "completed",
     "latestTerminalSummary": null,
     "latestTerminalResultContextTransferId": null,
     "providerInstanceId": "codex",
     "model": "gpt-6-astra",
+    "options": [
+      {
+        "id": "reasoningEffort",
+        "value": "xhigh"
+      },
+      {
+        "id": "serviceTier",
+        "value": "default"
+      }
+    ],
+    "summary": "What this change does: fixes delayed Copy resurrection and restores dirty comparison views. Both original R6 defects pass fresh causal checks, but **one P2 blocker remains** in [PR #4](https://github.com/ejjsharpe/moonbase/pull/4).\n\n- **HEAD:** `914455852dcf0e700397adb3facb9daa0d7e0514`\n- **BASE:** `8557fdd0d7a71f93a6584c77430e6fde57668580`\n\n**P2 \u2014 Recreated working files remain read-only in comparisons** ([editor.ts:189](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-2e5f465d/packages/editor/src/editor.ts:189)).\n\nOpen a staged/unstaged comparison whose working file is missing, switch checkouts, recreate the file, Refresh, then return. The settled-attempt cache skips activation despite the missing working buffer. Chromium renders the recreated text, but Save remains disabled and typing reports \u201cCannot edit in read-only editor.\u201d Explicit Open recovers editing.\n\nThe same public probe **passes against R6 and fails at this head**. Fix readiness so a newly available working document triggers guarded buffer activation, preserving failure settling, empty originals and dirty baselines.\n\nPrior R1\u2013R5 regressions remain green in the supplied suites. Independent R6 probes verify confirmed Discard across backend recovery/restart, Cancel/rejection, unknown receipts, newer reopening, directory siblings, exact hosts and later operation facts.\n\nFresh results: **76 editor tests, 14 application tests, 22 supplied Chromium journeys**, six uncached root tasks, 40 hashes, renderer isolation and build pass. Independent probes: **15/16 public cases pass**; four browser journeys pass and two reproduce this single defect. Both hosted checks passed in one inspection.\n\n[Full review, reproductions and artifacts](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-2e5f465d/.review-r7/REVIEW.txt). Tracked tree unchanged; review server stopped; PR linked.\n\n**Verdict: fix the P2 before technical clearance; keep DRAFT.**\n\nNot checked: production workspace/IPC, Electron/native/package/signing, physical durability, performance, manual/VoiceOver and human acceptance\u2014all remain PENDING.",
+    "resultContextTransferId": "context-transfer:type:subagent_result:source-thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-editor-r7-9144558:target-thread:63122af4-017b-4b66-bcae-a905f2b1659d:565b25fd-39a5-4b5f-8434-a9e097a1af4b",
+    "hasPendingQuestion": false,
+    "pendingApproval": null,
+    "waitTimedOut": false,
+    "findings": "docs/overnight/reviews/editor-r7.md",
+    "verdict": "one P2; owner fixing; keep draft"
+  },
+  "editorFixR7": {
+    "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Athread-send%3Aeditor-fix-review-r7-recreated-comparison",
+    "childThreadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-02-editor-module-r1-bb5c5d0",
+    "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-02-editor-module-r1-bb5c5d0:ordinal:9",
+    "childNodeId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Athread-send%3Aeditor-fix-review-r7-recreated-comparison",
+    "status": "running",
+    "workState": "working",
+    "hasPendingChildRuns": false,
+    "latestTerminalRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-02-editor-module-r1-bb5c5d0:ordinal:8",
+    "latestTerminalStatus": "completed",
+    "latestTerminalSummary": "Both R6 fixes are pushed to [PR #4](https://github.com/ejjsharpe/moonbase/pull/4), still **DRAFT** for R7.\n\n- Head: `914455852dcf0e700397adb3facb9daa0d7e0514`\n- Base: `8557fdd0d7a71f93a6584c77430e6fde57668580`\n- Passing: 76 editor tests, 14 application tests, 22 isolated Chromium journeys, normal checks and hosted CI.\n- [Responses and inspected screenshots](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/packages/editor/evidence/review-r6.md) committed; worktree clean.\n\nPending: independent R7, production workspace fan-in, native/package/signing, VoiceOver and human acceptance. No composition dispatched.",
+    "latestTerminalResultContextTransferId": "context-transfer:type:subagent_result:source-thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-02-editor-module-r1-bb5c5d0:target-thread:63122af4-017b-4b66-bcae-a905f2b1659d:65d6fa08-b0d9-4085-b578-35c9ff5ac7b3",
+    "providerInstanceId": "codex",
+    "model": "gpt-6.1-sol",
     "options": [
       {
         "id": "reasoningEffort",
@@ -1042,5 +1074,23 @@
     "hasPendingQuestion": false,
     "pendingApproval": null,
     "waitTimedOut": false
+  },
+  "sshRegistration": {
+    "head": "63565596e1ea63771cb26ce455bc3e4613822283",
+    "parent": "2762c4b570c35ddf2a95a40cdae1020922b76bb0",
+    "branch": "chore/ssh-registration",
+    "checks": [
+      "frozen install",
+      "foundation40/browser",
+      "diff"
+    ],
+    "followup": {
+      "threadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-03-workspace-module-r1-bb5c5d0",
+      "messageId": "message:mcp:809f45ac-99a5-4d58-a1ba-08cc0a77c997:thread-send:ssh-apply-root-registration-6356559",
+      "runId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-03-workspace-module-r1-bb5c5d0:ordinal:9",
+      "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Athread-send%3Amoonbase-06-ssh-module-r1-09b21f2",
+      "status": "running",
+      "delivery": "steered"
+    }
   }
 }
