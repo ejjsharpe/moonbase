@@ -1,5 +1,7 @@
 # Editor module validation
 
+Historical evidence before independent review R1. That review found eight defects despite these passing checks. The [R1 correction record](review-r1.md) supersedes this acceptance scope and records the new source/base, 38 public tests and five Chromium journeys. Human/native acceptance remains pending.
+
 Validated executable/test source: `1e010afff23facf07759e1dddeffce2b248372c9`.
 Exact committed dependency: `68aa035b9c283a65cac6e78ab02865e99882d15b` on `chore/application-coordination` (#2, after foundation #1). The follow-up evidence commit only updates this record, README links and the inspected PNGs; final checks are repeated against the final PR head and reported in its description/handoff.
 
