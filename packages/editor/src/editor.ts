@@ -54,10 +54,11 @@ export class EditorController {
   private preserving = false;
   private buffers = new Map<string, EditorBuffer>();
   private comparisons: Record<string, Comparison> = {};
+  private comparisonAttempts = new Map<string, FileView>();
   private listings: Record<string, DirectoryListing> = {};
   private git: Record<string, GitStatus> = {};
   private errors: string[] = [];
-  private operations = new Map<string, { operation?: WorkspaceOperation; result: OperationResult; applied: Set<string>; copies?: EditorBuffer[]; acknowledged?: boolean }>();
+  private operations = new Map<string, { operation?: WorkspaceOperation; result: OperationResult; applied: Set<string>; copies?: EditorBuffer[]; closedCopyTargets?: Set<string>; acknowledged?: boolean }>();
   private history: ClosedAction[] = [];
   private listeners = new Set<() => void>();
   private stops = new Map<string, () => void>();
@@ -183,7 +184,9 @@ export class EditorController {
     if (this.disposed || this.preserving) return false;
     const checkout = this.recovery.checkouts.find(target => target.checkoutId === this.recovery.selectedCheckoutId);
     const path = checkout && this.recovery.views[checkout.checkoutId]?.active;
-    if (!checkout || !path || this.buffers.has(fileKey({ checkout, path }))) return true;
+    if (!checkout || !path) return true;
+    const key = fileKey({ checkout, path }), mode = this.recovery.views[checkout.checkoutId].fileViews[path] ?? "file";
+    if (mode === "file" ? this.buffers.has(key) : this.comparisonAttempts.get(key) === mode) return true;
     return this.open({ checkout, path }, { current: () => this.recovery.selectedCheckoutId === checkout.checkoutId && this.recovery.views[checkout.checkoutId]?.active === path });
   }
   private resumeFacts() {
@@ -318,6 +321,8 @@ export class EditorController {
         }
       }
       if (!current()) return false;
+      if (mode === "file") this.comparisonAttempts.delete(key);
+      else this.comparisonAttempts.set(key, mode);
       let buffer = this.buffers.get(key);
       if (!buffer && disk) { buffer = { target, text: disk.text, disk, saving: false }; this.buffers.set(key, buffer); }
       else if (buffer && disk && buffer.text === buffer.disk.text && !buffer.pendingSave) {
@@ -334,7 +339,7 @@ export class EditorController {
           const oldKey = fileKey({ checkout: target.checkout, path: previous }), old = this.buffers.get(oldKey);
           if (!old || old.text === old.disk.text && !old.pendingSave) {
             selected.openFiles = selected.openFiles.filter(path => path !== previous);
-            this.buffers.delete(oldKey); delete this.comparisons[oldKey];
+            this.buffers.delete(oldKey); delete this.comparisons[oldKey]; this.comparisonAttempts.delete(oldKey);
           }
         }
         selected.openFiles.splice(selected.openFiles.indexOf(selected.active) + 1, 0, target.path);
@@ -346,7 +351,10 @@ export class EditorController {
       this.recovery.recentFiles = [target, ...this.recovery.recentFiles.filter(item => fileKey(item) !== key)].slice(0, 100);
       this.changed();
       return true;
-    } catch { return false; }
+    } catch {
+      if (current() && mode !== "file") this.comparisonAttempts.set(key, mode);
+      return false;
+    }
   }
   async save(target: FileTarget, overwrite = false): Promise<boolean> { return this.saveFile(target, overwrite); }
   private async saveFile(target: FileTarget, overwrite = false, preservation?: number): Promise<boolean> {
@@ -396,8 +404,10 @@ export class EditorController {
       await this.publish(state, async () => {
         if (sameBuffer()) {
           buffer.disk = disk; buffer.text = disk.text; buffer.conflict = undefined;
-          if (this.checkout(captured.checkout).fileViews[captured.path] === "conflict")
+          if (this.checkout(captured.checkout).fileViews[captured.path] === "conflict") {
             this.comparisons[key] = { original: disk.text, working: disk, title: "Disk versus your edits" };
+            this.comparisonAttempts.set(key, "conflict");
+          }
         } else this.report("Reload committed for its original target; a changed live buffer was retained.");
         await this.releasePreservation();
       }, "reload", guard);
@@ -497,13 +507,17 @@ export class EditorController {
       const state = applyClose(this.capture(), true);
       commitClose = async () => {
         committed = true; // The exact final receipt is the close outcome; later IO cannot veto it.
+        // A confirmed close overrides older Copy materialization only for these exact targets.
+        for (const known of this.operations.values()) if (known.result.kind === "copy" && known.copies)
+          for (const target of captured) if (sameCheckout(target.checkout, known.result.checkout))
+            (known.closedCopyTargets ??= new Set()).add(fileKey(target));
         applyClose(this.recovery); this.recovery.drafts = state.drafts;
         if (kind === "quit") for (const key of discarded) {
           const buffer = this.buffers.get(key)!; buffer.text = buffer.disk.text; buffer.conflict = undefined;
         }
         else {
           this.history = [...this.history, ...history].slice(-20);
-          for (const key of keys) { this.buffers.delete(key); delete this.comparisons[key]; }
+          for (const key of keys) { this.buffers.delete(key); delete this.comparisons[key]; this.comparisonAttempts.delete(key); }
           if (kind === "checkout" && checkout) {
             try { this.stops.get(checkoutKey(checkout))?.(); } catch (error) { this.report(error); }
             this.stops.delete(checkoutKey(checkout));
@@ -590,7 +604,7 @@ export class EditorController {
       try {
         const comparison = await this.command("readComparison", { target, area: mode });
         if (!this.disposed && !this.preserving && generation === this.activation && selected.active === target.path && selected.fileViews[target.path] === mode) {
-          this.comparisons[key] = comparison;
+          this.comparisons[key] = comparison; this.comparisonAttempts.set(key, mode);
           const buffer = this.buffers.get(key);
           if (buffer && comparison.working && buffer.text === buffer.disk.text && !buffer.pendingSave) {
             buffer.disk = comparison.working; buffer.text = comparison.working.text;
@@ -678,16 +692,16 @@ export class EditorController {
       }
       if (result.kind === "copy" && item.destination) {
         const durableCopies = durable.drafts.filter(draft => sameCheckout(draft.target.checkout, result.checkout) && affected(draft.target.path, item.destination!));
-        for (const draft of durableCopies) if (!this.buffers.has(fileKey(draft.target))) {
+        for (const draft of durableCopies) if (!known.closedCopyTargets?.has(fileKey(draft.target)) && !this.buffers.has(fileKey(draft.target))) {
           this.buffers.set(fileKey(draft.target), { ...structuredClone(draft), saving: false });
           const selected = this.checkout(result.checkout, false); if (!selected.openFiles.includes(draft.target.path)) selected.openFiles.push(draft.target.path);
         }
         for (const buffer of known.copies ?? []) if (sameCheckout(buffer.target.checkout, result.checkout) && affected(buffer.target.path, item.source) && buffer.text !== buffer.disk.text) {
           const target = { checkout: result.checkout, path: item.destination + buffer.target.path.slice(item.source.length) };
-          if (!this.buffers.has(fileKey(target))) {
+          if (!known.closedCopyTargets?.has(fileKey(target)) && !this.buffers.has(fileKey(target))) {
             const disk = await this.command("readFile", target);
             check();
-            if (this.buffers.has(fileKey(target))) continue;
+            if (known.closedCopyTargets?.has(fileKey(target)) || this.buffers.has(fileKey(target))) continue;
             this.buffers.set(fileKey(target), { target, disk, text: buffer.text, saving: false });
             const selected = this.checkout(result.checkout, false);
             if (!selected.openFiles.includes(target.path)) selected.openFiles.push(target.path);
@@ -744,7 +758,7 @@ export class EditorController {
         for (const fact of facts) if (fact.outcome !== "uncertain" && reconciled.has(operationKey(fact.clientId, fact.id))) {
           await this.command("acknowledgeOperation", { clientId: this.clientId, operationClientId: fact.clientId, id: fact.id });
           const known = this.operations.get(operationKey(fact.clientId, fact.id))!;
-          known.acknowledged = true; known.copies = undefined;
+          known.acknowledged = true; known.copies = undefined; known.closedCopyTargets = undefined;
           check();
         }
         this.emit();
@@ -771,7 +785,7 @@ export class EditorController {
     this.referenceRevision++;
     const selected = this.checkout(checkout, false);
     for (const [key, buffer] of [...this.buffers]) if (sameCheckout(buffer.target.checkout, checkout) && affected(buffer.target.path, source)) {
-      this.buffers.delete(key); buffer.target = { checkout, path: move(buffer.target.path) }; this.buffers.set(fileKey(buffer.target), buffer);
+      this.buffers.delete(key); this.comparisonAttempts.delete(key); buffer.target = { checkout, path: move(buffer.target.path) }; this.buffers.set(fileKey(buffer.target), buffer);
       if (this.comparisons[key]) { this.comparisons[fileKey(buffer.target)] = this.comparisons[key]; delete this.comparisons[key]; }
     }
     selected.openFiles = [...new Set(selected.openFiles.map(move))]; selected.active = move(selected.active);
@@ -791,7 +805,7 @@ export class EditorController {
   /** Release resources after a successful close/Quit gate. Hiding a view must not call this. */
   dispose() {
     if (this.disposed) return;
-    this.disposed = true; this.activation++; clearTimeout(this.scheduled); this.deferredFacts = [];
+    this.disposed = true; this.activation++; clearTimeout(this.scheduled); this.deferredFacts = []; this.comparisonAttempts.clear();
     for (const stop of this.stops.values()) stop(); this.stops.clear();
     for (const abort of this.requests) abort.abort(); this.requests.clear();
     this.emit(); this.listeners.clear();

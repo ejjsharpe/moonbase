@@ -1066,3 +1066,98 @@ test("R5 an admitted observer acknowledgement stays completed when its response 
     assert.equal(f.memory.stats.mutations, 1);
   } finally { releaseAck.release(); releaseRead.release(); await f.dispose(); }
 });
+
+test("R6 a confirmed destination close invalidates an older Copy materialization across retry and restart", async () => {
+  const f = await observedFixture("r6-copy-close"), preflight = held(), releasePreflight = held(), reading = held(), releaseRead = held();
+  try {
+    await f.editor.open(target("a.ts"), { view: "file" }); await f.editor.open(target("b.ts")); await f.editor.flush();
+    const sources = await f.editor.inspect(checkout, ["a.ts"]); let delayPreflight = true, delayRead = true;
+    f.transport.command = async (name, input, options) => {
+      const result = await f.clientCommand(name, input, options);
+      if (name === "persistRecovery" && delayPreflight) { delayPreflight = false; preflight.release(); await releasePreflight.promise; }
+      if (name === "readFile" && (input as CommandInput<"readFile">).path === "copy.ts" && delayRead) { delayRead = false; reading.release(); await releaseRead.promise; }
+      return result;
+    };
+    const copying = f.editor.mutate({ checkout, kind: "copy", sources, destination: "copy.ts" }); await preflight.promise;
+    f.editor.edit(target("a.ts"), "source changed after preflight"); releasePreflight.release(); await reading.promise;
+    assert.equal(await f.editor.open(target("copy.ts")), true); f.editor.edit(target("copy.ts"), "destination edits discarded");
+    assert.equal(await f.editor.close([target("copy.ts")], async () => "discard"), true);
+    assert.equal(f.editor.buffer(target("copy.ts")), undefined);
+    assert.equal((await f.raw.command("loadRecovery", { clientId: f.editor.clientId })).state.drafts.some(draft => draft.target.path === "copy.ts"), false);
+    releaseRead.release(); await copying; await f.editor.reconcileRecovery(); await f.editor.flush();
+    const live = f.editor.buffer(target("copy.ts")), stored = await f.raw.command("loadRecovery", { clientId: f.editor.clientId });
+    f.editor.dispose(); const restarted = createEditor({ clientId: f.editor.clientId, client: { ...f.raw, watch: () => () => {} } });
+    try {
+      await restarted.load(); assert.equal(stored.operations.length, 0); assert.equal(f.memory.stats.mutations, 1);
+      assert.equal(live, undefined); assert.equal(restarted.buffer(target("copy.ts")), undefined);
+      assert.equal(stored.state.drafts.some(draft => draft.target.path === "copy.ts"), false);
+      assert.equal(stored.state.views[checkout.checkoutId].openFiles.includes("copy.ts"), false);
+      assert.equal((await f.raw.command("readFile", target("copy.ts"))).text, "const a = 1;");
+    } finally { restarted.dispose(); }
+  } finally { releasePreflight.release(); releaseRead.release(); await f.dispose(); }
+});
+
+for (const area of ["staged", "unstaged"] as const) test(`R6 restored dirty ${area} survivor loads its remembered comparison`, async () => {
+  const f = await observedFixture("r6-dirty-" + area);
+  let restarted: ReturnType<typeof createEditor> | undefined;
+  try {
+    await f.editor.open(target("a.ts"), { view: area }); f.editor.edit(target("a.ts"), "restored dirty comparison");
+    const baseline = f.editor.buffer(target("a.ts"))!.disk; await f.editor.open(target("b.ts")); await f.editor.flush(); f.editor.dispose();
+    f.memory.externalWrite(target("a.ts"), "new external working content");
+    restarted = createEditor({ clientId: f.editor.clientId, client: f.client }); await restarted.load();
+    assert.equal(restarted.getSnapshot().comparisons[fileKey(target("a.ts"))], undefined);
+    assert.equal(await restarted.close([target("b.ts")], async () => "discard"), true);
+    assert.equal(restarted.getSnapshot().comparisons[fileKey(target("a.ts"))]?.original, area === "staged" ? "const a = 0;" : "const a = 0.5;");
+    assert.equal(restarted.buffer(target("a.ts"))!.text, "restored dirty comparison"); assert.deepEqual(restarted.buffer(target("a.ts"))!.disk, baseline);
+    assert.equal(restarted.buffer(target("a.ts"))!.conflict?.text, "new external working content");
+  } finally { restarted?.dispose(); await f.dispose(); }
+});
+
+for (const outcome of ["cancel", "failure", "reopen", "unrelated"] as const)
+  test(`R6 Copy target invalidation preserves newer intent without cancelling other targets (${outcome})`, async () => {
+    const f = await observedFixture("r6-copy-" + outcome), preflight = held(), releasePreflight = held(), reading = held(), releaseRead = held();
+    const source = outcome === "unrelated" ? "folder/nested.ts" : "a.ts", copied = outcome === "unrelated" ? "folder-copy/nested.ts" : "copy.ts";
+    try {
+      await f.editor.open(target(source), { view: "file" }); await f.editor.flush();
+      const sources = await f.editor.inspect(checkout, [outcome === "unrelated" ? "folder" : source]);
+      let delayPreflight = true, delayRead = true, failClose = false;
+      f.transport.command = async (name, input, options) => {
+        if (name === "persistRecovery" && failClose) { failClose = false; throw new ApplicationError({ code: "Conflict", message: "Close not admitted" }); }
+        const result = await f.clientCommand(name, input, options);
+        if (name === "persistRecovery" && delayPreflight) { delayPreflight = false; preflight.release(); await releasePreflight.promise; }
+        if (name === "readFile" && (input as CommandInput<"readFile">).path === copied && delayRead) { delayRead = false; reading.release(); await releaseRead.promise; }
+        return result;
+      };
+      const copying = f.editor.mutate({ checkout, kind: "copy", sources, destination: outcome === "unrelated" ? "folder-copy" : copied }); await preflight.promise;
+      f.editor.edit(target(source), "source changed after preflight"); releasePreflight.release(); await reading.promise;
+      const closing = outcome === "unrelated" ? "a.ts" : copied;
+      await f.editor.open(target(closing), { view: "file" }); f.editor.edit(target(closing), "current destination edits"); failClose = outcome === "failure";
+      assert.equal(await f.editor.close([target(closing)], async () => outcome === "cancel" ? "cancel" : "discard"), outcome === "reopen" || outcome === "unrelated");
+      if (outcome === "reopen") { await f.editor.open(target(copied)); f.editor.edit(target(copied), "later explicit edits"); }
+      releaseRead.release(); await copying; await f.editor.reconcileRecovery(); await f.editor.flush();
+      const expected = outcome === "reopen" ? "later explicit edits" : outcome === "unrelated" ? "source changed after preflight" : "current destination edits";
+      assert.equal(f.editor.buffer(target(copied))?.text, expected);
+      const stored = await f.raw.command("loadRecovery", { clientId: f.editor.clientId });
+      assert.equal(stored.state.drafts.find(draft => draft.target.path === copied)?.text, expected);
+      assert.equal(stored.operations.length, 0); assert.equal(f.memory.stats.mutations, 1);
+    } finally { releasePreflight.release(); releaseRead.release(); await f.dispose(); }
+  });
+
+for (const area of ["staged", "untracked"] as const) test(`R6 settled ${area} comparison activation does not retry on every release`, async () => {
+  const f = await observedFixture("r6-comparison-ready-" + area); let restarted: ReturnType<typeof createEditor> | undefined, reads = 0;
+  try {
+    await f.editor.open(target("a.ts"), { view: area }); f.editor.edit(target("a.ts"), "retained dirty text"); await f.editor.open(target("b.ts")); await f.editor.flush(); f.editor.dispose();
+    f.transport.command = async (name, input, options) => { if (name === "readComparison") reads++; return f.clientCommand(name, input, options); };
+    restarted = createEditor({ clientId: f.editor.clientId, client: f.client }); await restarted.load();
+    if (area === "staged") f.memory.failNext("readComparison", "Controlled comparison failure");
+    assert.equal(await restarted.close([target("b.ts")], async () => "discard"), true); const attempts = reads;
+    await restarted.selectCheckout(checkout); assert.equal(await restarted.prepareQuit(async () => "cancel"), false);
+    assert.equal(reads, attempts); assert.equal(restarted.buffer(target("a.ts"))?.text, "retained dirty text");
+    if (area === "untracked") assert.equal(restarted.getSnapshot().comparisons[fileKey(target("a.ts"))]?.original, "");
+    else {
+      assert(restarted.getSnapshot().errors.some(error => error.includes("Comparison unavailable")));
+      assert.equal(await restarted.open(target("a.ts")), true); assert.equal(reads, attempts + 1);
+      assert.equal(restarted.getSnapshot().comparisons[fileKey(target("a.ts"))]?.original, "const a = 0;");
+    }
+  } finally { restarted?.dispose(); await f.dispose(); }
+});

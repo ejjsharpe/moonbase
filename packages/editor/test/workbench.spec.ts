@@ -247,3 +247,39 @@ test("R5 selecting an absent survivor during another close loads it after preser
   await expect.poll(() => page.evaluate(() => window.recoveryRace.editor.getSnapshot().buffers.find(buffer => buffer.target.checkout.checkoutId === "alpha" && buffer.target.path === "a.ts")?.text)).toContain("after deferred selection");
   await page.screenshot({ path: "test-results/editor-preservation-selection.png", fullPage: true });
 });
+
+test("R6 delayed public Copy cannot reopen a destination closed through Monaco UI", async ({ page }) => {
+  const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
+  await page.goto("/recovery-race.html"); await page.getByRole("treeitem", { name: "a.ts", exact: true }).dblclick();
+  await page.evaluate(() => window.recoveryRace.copy.start());
+  await expect.poll(() => page.evaluate(() => window.recoveryRace.copy.phase)).toBe("preflight");
+  await page.evaluate(() => {
+    const editor = window.recoveryRace.editor, checkout = editor.getSnapshot().recovery.checkouts.find(target => target.checkoutId === "alpha")!;
+    editor.edit({ checkout, path: "a.ts" }, "source changed after preflight"); window.recoveryRace.copy.releasePreflight();
+  });
+  await expect.poll(() => page.evaluate(() => window.recoveryRace.copy.phase)).toBe("read");
+  await page.getByRole("treeitem", { name: "copy.ts", exact: true }).dblclick();
+  await page.getByRole("textbox", { name: "copy.ts editor", exact: true }).focus(); await page.keyboard.type("destination discarded ");
+  await page.getByRole("button", { name: "Close copy.ts", exact: true }).click();
+  await page.getByRole("dialog", { name: "Save changes before closing?", exact: true }).getByRole("button", { name: "Discard", exact: true }).click();
+  await expect(page.getByRole("tab", { name: "copy.ts", exact: true })).toHaveCount(0);
+  await page.evaluate(async () => { window.recoveryRace.copy.releaseRead(); await window.recoveryRace.copy.finish(); await window.recoveryRace.editor.reconcileRecovery(); });
+  await expect(page.getByRole("tab", { name: "copy.ts", exact: true })).toHaveCount(0);
+  expect(await page.evaluate(async () => (await window.recoveryRace.load()).state.drafts.some(draft => draft.target.path === "copy.ts"))).toBe(false);
+  expect(await page.evaluate(async () => (await window.recoveryRace.load()).operations.length)).toBe(0);
+  await page.screenshot({ path: "test-results/editor-copy-closed.png", fullPage: true }); expect(errors).toEqual([]);
+});
+
+for (const area of ["staged", "unstaged"] as const) test(`R6 restored dirty ${area} survivor shows its original and accepts typing`, async ({ page }) => {
+  await page.goto("/recovery-race.html?dirty=" + area);
+  await page.getByRole("textbox", { name: "b.ts editor", exact: true }).focus(); await page.keyboard.press("Meta+w");
+  const original = page.getByRole("textbox", { name: area + " · a.ts original", exact: true }), modified = page.getByRole("textbox", { name: "a.ts editor", exact: true });
+  await expect(original).toBeVisible(); await expect(original).toHaveJSProperty("readOnly", true);
+  await expect(modified).toBeFocused(); await expect(modified).toHaveJSProperty("readOnly", false);
+  await page.keyboard.type("typed dirty " + area + " ");
+  const state = await page.evaluate(() => window.recoveryRace.editor.getSnapshot());
+  expect(state.buffers.find(buffer => buffer.target.checkout.checkoutId === "alpha" && buffer.target.path === "a.ts")?.text).toContain("restored dirty A");
+  expect(state.buffers.find(buffer => buffer.target.checkout.checkoutId === "alpha" && buffer.target.path === "a.ts")?.text).toContain("typed dirty " + area);
+  expect(Object.values(state.comparisons).some(comparison => comparison.original === (area === "staged" ? "HEAD A" : "INDEX A"))).toBe(true);
+  await page.screenshot({ path: `test-results/editor-restored-${area}.png`, fullPage: true });
+});
