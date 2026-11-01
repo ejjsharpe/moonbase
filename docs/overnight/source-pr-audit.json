@@ -1,0 +1,454 @@
+{
+  "observedAt": "2026-11-01T14:23:37.696875+00:00",
+  "repository": "ejjsharpe/moonbase",
+  "isPrivate": true,
+  "defaultBranch": {
+    "name": "main",
+    "target": {
+      "oid": "c89e4db49efcb998cdd3834b89d43ac581694314"
+    }
+  },
+  "scope": "20 frozen source PRs; documentation22 delivery head recorded externally after final commit; unrelated17 excluded",
+  "pullRequests": [
+    {
+      "number": 1,
+      "url": "https://github.com/ejjsharpe/moonbase/pull/1",
+      "state": "OPEN",
+      "isDraft": false,
+      "headRefName": "chore/module-foundation",
+      "headRefOid": "8ef20b06222db32b54b4bdf9e6c2223a1ebd4da4",
+      "baseRefName": "main",
+      "baseRefOid": "c89e4db49efcb998cdd3834b89d43ac581694314",
+      "mergedAt": null,
+      "commits": {
+        "nodes": [
+          {
+            "commit": {
+              "statusCheckRollup": {
+                "state": "SUCCESS"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "number": 2,
+      "url": "https://github.com/ejjsharpe/moonbase/pull/2",
+      "state": "OPEN",
+      "isDraft": false,
+      "headRefName": "chore/application-coordination",
+      "headRefOid": "68aa035b9c283a65cac6e78ab02865e99882d15b",
+      "baseRefName": "chore/module-foundation",
+      "baseRefOid": "8ef20b06222db32b54b4bdf9e6c2223a1ebd4da4",
+      "mergedAt": null,
+      "commits": {
+        "nodes": [
+          {
+            "commit": {
+              "statusCheckRollup": {
+                "state": "SUCCESS"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "number": 5,
+      "url": "https://github.com/ejjsharpe/moonbase/pull/5",
+      "state": "OPEN",
+      "isDraft": false,
+      "headRefName": "chore/checkout-recovery-contract",
+      "headRefOid": "6e58c1c4ea6944e8ca25eadc46e35c843f0f9fbe",
+      "baseRefName": "chore/application-coordination",
+      "baseRefOid": "68aa035b9c283a65cac6e78ab02865e99882d15b",
+      "mergedAt": null,
+      "commits": {
+        "nodes": [
+          {
+            "commit": {
+              "statusCheckRollup": {
+                "state": "SUCCESS"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "number": 7,
+      "url": "https://github.com/ejjsharpe/moonbase/pull/7",
+      "state": "OPEN",
+      "isDraft": false,
+      "headRefName": "chore/recovery-publication-contract",
+      "headRefOid": "8557fdd0d7a71f93a6584c77430e6fde57668580",
+      "baseRefName": "chore/checkout-recovery-contract",
+      "baseRefOid": "6e58c1c4ea6944e8ca25eadc46e35c843f0f9fbe",
+      "mergedAt": null,
+      "commits": {
+        "nodes": [
+          {
+            "commit": {
+              "statusCheckRollup": {
+                "state": "SUCCESS"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "number": 3,
+      "url": "https://github.com/ejjsharpe/moonbase/pull/3",
+      "state": "OPEN",
+      "isDraft": false,
+      "headRefName": "feat/workspace-module",
+      "headRefOid": "38c6c551ff0ab1108077275d223a32967f32b9f6",
+      "baseRefName": "chore/recovery-publication-contract",
+      "baseRefOid": "8557fdd0d7a71f93a6584c77430e6fde57668580",
+      "mergedAt": null,
+      "commits": {
+        "nodes": [
+          {
+            "commit": {
+              "statusCheckRollup": {
+                "state": "SUCCESS"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "number": 4,
+      "url": "https://github.com/ejjsharpe/moonbase/pull/4",
+      "state": "OPEN",
+      "isDraft": false,
+      "headRefName": "feat/editor-module",
+      "headRefOid": "3c7f0c3daf337753bbca10df495264af28b280eb",
+      "baseRefName": "chore/recovery-publication-contract",
+      "baseRefOid": "8557fdd0d7a71f93a6584c77430e6fde57668580",
+      "mergedAt": null,
+      "commits": {
+        "nodes": [
+          {
+            "commit": {
+              "statusCheckRollup": {
+                "state": "SUCCESS"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "number": 11,
+      "url": "https://github.com/ejjsharpe/moonbase/pull/11",
+      "state": "OPEN",
+      "isDraft": false,
+      "headRefName": "chore/editor-integration",
+      "headRefOid": "80b0ede184205b9fff1d633d19426c2bf9671688",
+      "baseRefName": "feat/editor-module",
+      "baseRefOid": "3c7f0c3daf337753bbca10df495264af28b280eb",
+      "mergedAt": null,
+      "commits": {
+        "nodes": [
+          {
+            "commit": {
+              "statusCheckRollup": {
+                "state": "SUCCESS"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "number": 13,
+      "url": "https://github.com/ejjsharpe/moonbase/pull/13",
+      "state": "OPEN",
+      "isDraft": false,
+      "headRefName": "fix/editor-native-import-dialog",
+      "headRefOid": "71f272d354359f8d5e1cff7a9f57159325eeabc5",
+      "baseRefName": "chore/editor-integration",
+      "baseRefOid": "80b0ede184205b9fff1d633d19426c2bf9671688",
+      "mergedAt": null,
+      "commits": {
+        "nodes": [
+          {
+            "commit": {
+              "statusCheckRollup": {
+                "state": "SUCCESS"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "number": 16,
+      "url": "https://github.com/ejjsharpe/moonbase/pull/16",
+      "state": "OPEN",
+      "isDraft": false,
+      "headRefName": "fix/editor-filename-maps-and-menu",
+      "headRefOid": "473e0fe03f6c5fc34fd8282fab4875c20f143ac2",
+      "baseRefName": "fix/editor-native-import-dialog",
+      "baseRefOid": "71f272d354359f8d5e1cff7a9f57159325eeabc5",
+      "mergedAt": null,
+      "commits": {
+        "nodes": [
+          {
+            "commit": {
+              "statusCheckRollup": {
+                "state": "SUCCESS"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "number": 14,
+      "url": "https://github.com/ejjsharpe/moonbase/pull/14",
+      "state": "OPEN",
+      "isDraft": true,
+      "headRefName": "feat/standalone-editor",
+      "headRefOid": "4dd148ade5f279e2b3820df0325313ee08ce4f8d",
+      "baseRefName": "fix/editor-filename-maps-and-menu",
+      "baseRefOid": "473e0fe03f6c5fc34fd8282fab4875c20f143ac2",
+      "mergedAt": null,
+      "commits": {
+        "nodes": [
+          {
+            "commit": {
+              "statusCheckRollup": {
+                "state": "FAILURE"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "number": 21,
+      "url": "https://github.com/ejjsharpe/moonbase/pull/21",
+      "state": "OPEN",
+      "isDraft": true,
+      "headRefName": "fix/editor-reload-preservation",
+      "headRefOid": "fc547673c519871136388f6e5cc0e4fdc1d9bd6a",
+      "baseRefName": "feat/standalone-editor",
+      "baseRefOid": "4dd148ade5f279e2b3820df0325313ee08ce4f8d",
+      "mergedAt": null,
+      "commits": {
+        "nodes": [
+          {
+            "commit": {
+              "statusCheckRollup": {
+                "state": "FAILURE"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "number": 6,
+      "url": "https://github.com/ejjsharpe/moonbase/pull/6",
+      "state": "OPEN",
+      "isDraft": false,
+      "headRefName": "chore/host-health-contract",
+      "headRefOid": "42836b0421898b963e67f02795edc35f5e546173",
+      "baseRefName": "chore/checkout-recovery-contract",
+      "baseRefOid": "6e58c1c4ea6944e8ca25eadc46e35c843f0f9fbe",
+      "mergedAt": null,
+      "commits": {
+        "nodes": [
+          {
+            "commit": {
+              "statusCheckRollup": {
+                "state": "SUCCESS"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "number": 8,
+      "url": "https://github.com/ejjsharpe/moonbase/pull/8",
+      "state": "OPEN",
+      "isDraft": false,
+      "headRefName": "chore/connection-contract",
+      "headRefOid": "09b21f2ee8556c54ef4f8238f0be2ee88fd990c3",
+      "baseRefName": "chore/host-health-contract",
+      "baseRefOid": "42836b0421898b963e67f02795edc35f5e546173",
+      "mergedAt": null,
+      "commits": {
+        "nodes": [
+          {
+            "commit": {
+              "statusCheckRollup": {
+                "state": "SUCCESS"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "number": 9,
+      "url": "https://github.com/ejjsharpe/moonbase/pull/9",
+      "state": "OPEN",
+      "isDraft": false,
+      "headRefName": "feat/ssh-transport",
+      "headRefOid": "1aec1a438ba0d5592b0e6c3f0e1be835cf3c034b",
+      "baseRefName": "chore/connection-contract",
+      "baseRefOid": "09b21f2ee8556c54ef4f8238f0be2ee88fd990c3",
+      "mergedAt": null,
+      "commits": {
+        "nodes": [
+          {
+            "commit": {
+              "statusCheckRollup": {
+                "state": "SUCCESS"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "number": 10,
+      "url": "https://github.com/ejjsharpe/moonbase/pull/10",
+      "state": "OPEN",
+      "isDraft": false,
+      "headRefName": "chore/chat-contract",
+      "headRefOid": "d38833db81c5d97a1aa60f25e0dc27dd670af60f",
+      "baseRefName": "chore/connection-contract",
+      "baseRefOid": "09b21f2ee8556c54ef4f8238f0be2ee88fd990c3",
+      "mergedAt": null,
+      "commits": {
+        "nodes": [
+          {
+            "commit": {
+              "statusCheckRollup": {
+                "state": "SUCCESS"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "number": 12,
+      "url": "https://github.com/ejjsharpe/moonbase/pull/12",
+      "state": "OPEN",
+      "isDraft": true,
+      "headRefName": "feat/pi-runtime",
+      "headRefOid": "235eb27a448635a995bb65e67147e99119830b92",
+      "baseRefName": "chore/chat-contract",
+      "baseRefOid": "d38833db81c5d97a1aa60f25e0dc27dd670af60f",
+      "mergedAt": null,
+      "commits": {
+        "nodes": [
+          {
+            "commit": {
+              "statusCheckRollup": {
+                "state": "FAILURE"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "number": 15,
+      "url": "https://github.com/ejjsharpe/moonbase/pull/15",
+      "state": "OPEN",
+      "isDraft": true,
+      "headRefName": "chore/chat-integration",
+      "headRefOid": "132d273073889bd0702cf96b1fc2a62d5027598c",
+      "baseRefName": "feat/pi-runtime",
+      "baseRefOid": "235eb27a448635a995bb65e67147e99119830b92",
+      "mergedAt": null,
+      "commits": {
+        "nodes": [
+          {
+            "commit": {
+              "statusCheckRollup": {
+                "state": "FAILURE"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "number": 18,
+      "url": "https://github.com/ejjsharpe/moonbase/pull/18",
+      "state": "OPEN",
+      "isDraft": true,
+      "headRefName": "feat/chat-proof",
+      "headRefOid": "dbd06a6d3f8c8f310868349e7ed099468db9b9ba",
+      "baseRefName": "chore/chat-integration",
+      "baseRefOid": "132d273073889bd0702cf96b1fc2a62d5027598c",
+      "mergedAt": null,
+      "commits": {
+        "nodes": [
+          {
+            "commit": {
+              "statusCheckRollup": {
+                "state": "FAILURE"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "number": 19,
+      "url": "https://github.com/ejjsharpe/moonbase/pull/19",
+      "state": "OPEN",
+      "isDraft": true,
+      "headRefName": "chore/workbench-integration",
+      "headRefOid": "d79d1e9b8347f7f5f19cdbe9aad0233a0c47be8d",
+      "baseRefName": "feat/standalone-editor",
+      "baseRefOid": "4dd148ade5f279e2b3820df0325313ee08ce4f8d",
+      "mergedAt": null,
+      "commits": {
+        "nodes": [
+          {
+            "commit": {
+              "statusCheckRollup": {
+                "state": "FAILURE"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "number": 20,
+      "url": "https://github.com/ejjsharpe/moonbase/pull/20",
+      "state": "OPEN",
+      "isDraft": true,
+      "headRefName": "feat/workbench-composition",
+      "headRefOid": "f6822a50e80920488a012f7bd57cb612f9b97be7",
+      "baseRefName": "chore/workbench-integration",
+      "baseRefOid": "d79d1e9b8347f7f5f19cdbe9aad0233a0c47be8d",
+      "mergedAt": null,
+      "commits": {
+        "nodes": [
+          {
+            "commit": {
+              "statusCheckRollup": {
+                "state": "FAILURE"
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,5 +1,12 @@
 # Overnight delivery ledger
 
+## FINAL — user-directed wrap-up, no more tests/reviews
+
+User explicitly stopped further testing/reviewing. Current code is pushed: PR21fc547673/base4dd and PR20f6822a50/baseD79. Final independent paired review is INCOMPLETE/STOPPED AT USER REQUEST, no final approval issued; terminal observations and cleanup are preserved in `reviews/final-pair-stopped.md`. Reviewer foreground was released before stop:1196PIDs/281groupsabsent,59portsrebind,scopedinventoryempty,no ownedjobsremain. Owning qualification and historical scoped reviews remain evidence, not substituted final approval. PR22 final handoff gives all exact source refs/dependencies/commands, actual observed checks, uncertainties/user checklist and unrun gates. No automatic rerun/review is pending. Consolidation is a separate user-directed agent task, not performed here.
+
+The sections below retain execution history and may describe previously active work; [handoff.md](handoff.md) is authoritative final status.
+
+
 ## Current technical status (supersedes historical entries below)
 
 All PRs are private, open and unmerged. READY means technically reviewed for the stated source scope, not human/product acceptance. Original escode and target main remain untouched. Implementation workers use verified Sol `xhigh`; independent reviews use verified Astra `xhigh`, service tier `default`.

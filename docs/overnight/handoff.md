@@ -1,12 +1,16 @@
-# Moonbase handoff — qualification still in progress
+# Moonbase handoff — testing stopped at user request
 
-Workspace, Pi, SSH and standalone chat technical gates are clear. The final composition review found fresh-edit native Reload loss in both composition8a and exact standalone editor4dd source/package; editor Reload preservation is therefore open again despite the earlier R2 clearance. Task08 is published and its independent R1 review is active; this is a working handoff and **not a completion claim**. The independent review and final audit will replace this status before delivery; current composition head is `f6822a50e80920488a012f7bd57cb612f9b97be7`. All human/product acceptance remains **PENDING**. No GitHub PR is merged or deployed by this run.
+At your request, **all further testing and reviewing has stopped**. The code and owning qualification are committed and pushed. Final independent review of PR21/PR20 is **INCOMPLETE / STOPPED AT USER REQUEST; no final approval was issued**. There is no automatic rerun or additional agent acceptance gate pending. The remaining uncertainties below are yours to test if you choose. Human/product acceptance stays PENDING.
 
-Private target: `ejjsharpe/moonbase`, T3 project `mcp:7cbe46d8-154d-422f-969f-cfaff7f0f0dd`. Fresh lead started clean at exact `3edf9814569ed8c9fa24e155355605cdcf26b98e` in isolated `t3-f9e2f375`. A meaningful checkpoint confirms private/open PRs and unchanged main `c89e4db49efcb998cdd3834b89d43ac581694314`; final recheck is pending. Original escode checkout/tracker and old state were not edited, imported or deleted. Source selection uses the immutable provenance manifest and40 verified hashes.
+Current runnable refs: standalone editor **PR21 `fc547673c519871136388f6e5cc0e4fdc1d9bd6a`** and composed workbench **PR20 `f6822a50e80920488a012f7bd57cb612f9b97be7`**. Use PR21 rather than the historical standalone4dd checkpoint for the Reload repairs. Standalone chat remains **PR18 `dbd06a6d3f8c8f310868349e7ed099468db9b9ba`**.
 
-## Exact review queue
+**Cleanup complete:** reviewer explicitly released the foreground before the stop instruction: all1,196 recorded PIDs and281 groups absent,59 ports rebound, empty scoped inventory; no owned jobs remain running or scheduled. Owning repair cleanup is separate:100 captured ports rebound and50 identified new fixture directories absent. These are phase-specific records, not an aggregate census or a claim that historical artifacts were all removed.
 
-These are real dependency branches, not T3's derived display order. Additional fan-in parents: #11 includes #3, #15 includes #9, #19 includes #18. Composition will be based on #19. #17 is unrelated user work and excluded.
+Private target `ejjsharpe/moonbase`, project `mcp:7cbe46d8-154d-422f-969f-cfaff7f0f0dd`. Lead started exact3edf981 in isolated t3-f9e2f375. The existing [source audit](source-pr-audit.json) confirms all20 source head/base pairs, private repository and unchanged main `c89e4db49efcb998cdd3834b89d43ac581694314`. All relevant PRs including documentation22 are T3-linked, none watched. No GitHub merge or deployment was performed. Original escode checkout/tracker/data were not edited, imported or deleted.
+
+## Exact source PR queue
+
+All20 source PRs were OPEN/unmerged at the recorded audit. READY below means a historical technically reviewed scope, not human approval. Additional fan-in parents: #11 includes#3, #15 includes#9, #19 includes#18, and #20 normally merges#21. Unrelated#17 is excluded. [Documentation PR22](https://github.com/ejjsharpe/moonbase/pull/22) is based on exact PR20; its final head/base are in PR metadata and the delivery message (a file cannot contain its own final commit hash).
 
 <!-- PR_QUEUE_START -->
 | PR / contribution | Branch / exact HEAD | Dependency branch / exact BASE | Host state / technical scope |
@@ -20,8 +24,8 @@ These are real dependency branches, not T3's derived display order. Additional f
 | [#11](https://github.com/ejjsharpe/moonbase/pull/11) Editor/workspace integration | `chore/editor-integration`<br>`80b0ede184205b9fff1d633d19426c2bf9671688` | `feat/editor-module`<br>`3c7f0c3daf337753bbca10df495264af28b280eb` | Ready; Paired R10/fan-in R3 clear |
 | [#13](https://github.com/ejjsharpe/moonbase/pull/13) Native import/Create follow-up | `fix/editor-native-import-dialog`<br>`71f272d354359f8d5e1cff7a9f57159325eeabc5` | `chore/editor-integration`<br>`80b0ede184205b9fff1d633d19426c2bf9671688` | Ready; R1 clear |
 | [#16](https://github.com/ejjsharpe/moonbase/pull/16) Filename maps/menu follow-up | `fix/editor-filename-maps-and-menu`<br>`473e0fe03f6c5fc34fd8282fab4875c20f143ac2` | `fix/editor-native-import-dialog`<br>`71f272d354359f8d5e1cff7a9f57159325eeabc5` | Ready; Paired desktop R2 clear |
-| [#14](https://github.com/ejjsharpe/moonbase/pull/14) Standalone editor | `feat/standalone-editor`<br>`4dd148ade5f279e2b3820df0325313ee08ce4f8d` | `fix/editor-filename-maps-and-menu`<br>`473e0fe03f6c5fc34fd8282fab4875c20f143ac2` | DRAFT; prior Desktop R2 clear; newly reproduced Reload loss open |
-| [#21](https://github.com/ejjsharpe/moonbase/pull/21) Standalone Reload preservation/cleanup | `fix/editor-reload-preservation`<br>`fc547673c519871136388f6e5cc0e4fdc1d9bd6a` | `feat/standalone-editor`<br>`4dd148ade5f279e2b3820df0325313ee08ce4f8d` | DRAFT; owner-qualified source/package; fresh independent review pending |
+| [#14](https://github.com/ejjsharpe/moonbase/pull/14) Standalone editor | `feat/standalone-editor`<br>`4dd148ade5f279e2b3820df0325313ee08ce4f8d` | `fix/editor-filename-maps-and-menu`<br>`473e0fe03f6c5fc34fd8282fab4875c20f143ac2` | DRAFT; historical proof; native Reload/cleanup follow-up is #21 |
+| [#21](https://github.com/ejjsharpe/moonbase/pull/21) Standalone Reload preservation/cleanup | `fix/editor-reload-preservation`<br>`fc547673c519871136388f6e5cc0e4fdc1d9bd6a` | `feat/standalone-editor`<br>`4dd148ade5f279e2b3820df0325313ee08ce4f8d` | DRAFT; owner-qualified; final paired review stopped/incomplete at user request |
 | [#6](https://github.com/ejjsharpe/moonbase/pull/6) Authenticated health contract | `chore/host-health-contract`<br>`42836b0421898b963e67f02795edc35f5e546173` | `chore/checkout-recovery-contract`<br>`6e58c1c4ea6944e8ca25eadc46e35c843f0f9fbe` | Ready; Health R2 clear |
 | [#8](https://github.com/ejjsharpe/moonbase/pull/8) Connection contract | `chore/connection-contract`<br>`09b21f2ee8556c54ef4f8238f0be2ee88fd990c3` | `chore/host-health-contract`<br>`42836b0421898b963e67f02795edc35f5e546173` | Ready; R1 clear |
 | [#9](https://github.com/ejjsharpe/moonbase/pull/9) SSH transport | `feat/ssh-transport`<br>`1aec1a438ba0d5592b0e6c3f0e1be835cf3c034b` | `chore/connection-contract`<br>`09b21f2ee8556c54ef4f8238f0be2ee88fd990c3` | Ready; R3:4 findings clear; controlled transport |
@@ -30,62 +34,63 @@ These are real dependency branches, not T3's derived display order. Additional f
 | [#15](https://github.com/ejjsharpe/moonbase/pull/15) Pi/SSH integration | `chore/chat-integration`<br>`132d273073889bd0702cf96b1fc2a62d5027598c` | `feat/pi-runtime`<br>`235eb27a448635a995bb65e67147e99119830b92` | DRAFT; Integration R2 clear; CI pending |
 | [#18](https://github.com/ejjsharpe/moonbase/pull/18) Standalone chat | `feat/chat-proof`<br>`dbd06a6d3f8c8f310868349e7ed099468db9b9ba` | `chore/chat-integration`<br>`132d273073889bd0702cf96b1fc2a62d5027598c` | DRAFT; Proof R2 clear; manual/real/CI pending |
 | [#19](https://github.com/ejjsharpe/moonbase/pull/19) Reviewed proof fan-in/adapters | `chore/workbench-integration`<br>`d79d1e9b8347f7f5f19cdbe9aad0233a0c47be8d` | `feat/standalone-editor`<br>`4dd148ade5f279e2b3820df0325313ee08ce4f8d` | DRAFT; DFF checkpoint R1 clear; D79 fixture-export delta clear; inherited Reload defect open |
-| [#20](https://github.com/ejjsharpe/moonbase/pull/20) Composed workbench | `feat/workbench-composition`<br>`f6822a50e80920488a012f7bd57cb612f9b97be7` | `chore/workbench-integration`<br>`d79d1e9b8347f7f5f19cdbe9aad0233a0c47be8d` | DRAFT; R1 P1/P2 owning repairs qualified; new exact-head pair review pending |
+| [#20](https://github.com/ejjsharpe/moonbase/pull/20) Composed workbench | `feat/workbench-composition`<br>`f6822a50e80920488a012f7bd57cb612f9b97be7` | `chore/workbench-integration`<br>`d79d1e9b8347f7f5f19cdbe9aad0233a0c47be8d` | DRAFT; owner-qualified repairs; final paired review stopped/incomplete at user request |
 <!-- PR_QUEUE_END -->
 
-## Technical status and review evidence
+## What is delivered and what was observed
 
-The repaired pair is now published: #21 `fc547673` /#20 `f6822a50`, normal merge `0efb222`. Owner reports402Node/integration, source12/package11, config3+3 and unconfigured editor4+4 passing; current composed asar `f0f7380cad57d5abd733ff28f02117d3c58e970453af78080dc0391c36cd55eb`. [Full composition repair response](reviews/composition-r1-owning-response.md). New independent pair review is still required.
+- **Standalone editor #21:** own226 Node tests +15 real editor/workspace integration =241;35 Chromium,25 preserved Electron +one packaged journey, and4 focused source/4 package cases pass. Public `recoveryReady` confirms the latest local capture only through the existing exact publication receipt; newer edits, queued/in-flight/failed/uncertain work veto unload. Durable dirty drafts can reload. Editor-only preload/session cleanup releases old calls/observers on committed unload and renderer loss while preserving the root/native approvals. No chat/Pi/SSH capability is installed. [Owning response](reviews/reload-preservation-owning-response.md).
+- **Composed #20:** exact PR21 normally merged at `0efb222e424f5a46bdc52fa8aa7181ba8ba3a41b`; product `e65a0551db7e9c9e75efd1bc07773c4dd590217b`, qualification `f66deaa246f956f6318f3da7a44f1536ee72b230`. Own402 Node/integration (380+15+7),21 Nx targets, source12/package11, configuration3+3, unconfigured editor4+4, builds/actual graphs/notices/foundation40 pass. Only absent configuration selects local-only startup; present empty/invalid values validate and fail visibly. One process root composes public capabilities; Connect/Send remain explicit. [Owning response](reviews/composition-r1-owning-response.md).
+- **Final independent observations before stop:** composition12source/11package; targeted Reload/lifecycle4source+4package for EACH product; configuration3+3; latest-chat Quit gates both; public readiness/resource probes;22 integration cases; Chromium35/35 passed. Preserved editor18 passed initially; seven evidence-write interruptions passed after output-path correction, plus packaged journey. Old builds reproduced text loss, held-read leaks and empty-config failure. Both rebuilt archive hashes matched. **These observations are not a completed final review verdict.** [Terminal partial result and cleanup](reviews/final-pair-stopped.md), [existing raw evidence/commands](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-4b7a7866/.overnight-artifacts/review09-r2).
+- **Pi235/integration132:** completed independent R3/R2 has no blocking findings in its source/controlled runtime scope:136 shipped +22 independent probes,21 historical expected failures. [Report](reviews/pi-r3-chat-integration-r2.md).
+- **Standalone chat dbd:** completed independent R2 clears retry-preservation P1 and native200% controls P2:167 module/public +7 integration,6 original public probes and31 native case executions (overlap).18 public/12 native old failures reproduce. [R1](reviews/chat-proof-r1.md), [response](reviews/chat-proof-r1-response.md), [R2](reviews/chat-proof-r2.md).
+- **Shared fan-in:** DFF independent R1 clears391 tests and two combined-root probes. Completed composition R1 separately clears the exact DFF→D79 test-fixture export delta; it does not approve inherited old desktop Reload. [Fan-in report](reviews/workbench-integration-r1.md), [composition R1](reviews/composition-r1.md).
 
-- **Editor baseline #14/#16:** paired Astra R2 cleared prototype-like filenames and bounded menus in source/package (231 repository/integration tests,35 Chromium journeys,25 Electron journeys). Final composition R1 subsequently found a distinct native document Reload P1 at exact4dd: a visibly typed tail can be lost before the150ms recovery debounce. The old proof remains preserved; focused follow-up #21 atfc547673 is published with owning source/package qualification; independent review remains pending. Its targeted native checks additionally reproduced a direct held-read resource surviving committed Reload/renderer loss in source; the editor-only cleanup repair and package qualification are pending. Use the repaired standalone ref once its fresh review is complete. [Desktop R2](reviews/desktop-r2.md), [new R1](reviews/composition-r1.md).
-- **Standalone follow-up #21:** owner reports241 Node/integration tests,35 Chromium,25 editor Electron +one packaged-resource journey and4 focused cases in each source/package passing. Public recoveryReady uses local capture generation confirmed by the existing exact receipt; editor-only preload/session cleanup releases document resources. Actual archive `2d80155594f4912c2604983e0eb16c942b479140cd81723ee113019503740df2`. Four fresh old loss cases reproduce under the same driver; a separate235.7ms packaged run failed before its timing precondition and is not a product red. [Full owning response and evidence correction](reviews/reload-preservation-owning-response.md). NEW independent review is pending with the composed successor.
-- **Pi #12 / integration #15:** independent R3/R2 clears exact235/132, including postdispatch generation loss.136 shipped tests and22 independent probes pass;21 expected historical failures reproduce. Controlled production HTTP/SQLite/SSH-child evidence is separate from real remote qualification. [Full report](reviews/pi-r3-chat-integration-r2.md).
-- **Standalone chat #18:** independent R2 clears exactdbd. Retry now checks preservation immediately before mutation after awaited read-only lookup; native200% Send/Stop are reachable by scrolling/keyboard.167 module/public +7 integration tests,6 original public probes and31 native case executions pass (overlapping scenarios);18 public/12 native expected old failures reproduce. Actual archive `baabf3fc9734aea731d83d19ae1ec6392f264fc4a311e14381752dc178946990`, seven packaged files and nine generated notices verified. [R1](reviews/chat-proof-r1.md), [response](reviews/chat-proof-r1-response.md), [R2](reviews/chat-proof-r2.md).
-- **Fan-in #19:** independent DFF R1 clears391 shipped tests and two independent combined-root probes. Final composition R1 separately clears the exact DFF→D79 test-fixture export delta. That seam clearance does not approve its inherited old desktop Reload behavior. Public exports reuse existing implementations; production graphs exclude the test host/SDK. [DFF review](reviews/workbench-integration-r1.md), [D79 review](reviews/composition-r1.md).
-- **Composition #20:** R1 at exact8a is **NOT CLEARED**. It reproduced the Reload P1 in current source/package and exact standalone4dd source/package, whose rebuilt archive matches the original37ad94c. P2: a present empty configuration silently takes the absent branch. Original Sol owner is repairing both apps, preserving old refs and the archived8a package. A new independent review on exact pushed repaired heads is mandatory.
-
-R1 nevertheless passed392 shipped tests (370 module +15 real editor +7 controlled chat),35 Chromium journeys,11 source/10 unsigned-package composition cases,25 preserved editor journeys and one packaged-resource journey. These passing checks do not clear the new findings. Prior keyboard activation and committed-unload resource defects are independently cleared within the limits below. [Full R1, all prior dispositions and artifact audit](reviews/composition-r1.md), [commands](reviews/composition-r1-commands.md), [cleanup](reviews/composition-r1-cleanup.json).
-
-The committed reports preserve their originating evidence references. For R1's local probes, raw traces and native captures, open the [original report and artifact tree](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-95174512/apps/desktop/test-results/review-task08-r1/REPORT.md); exact source refs and archive hashes are also retained in the committed copy.
+Actual current archives: standalone `2d80155594f4912c2604983e0eb16c942b479140cd81723ee113019503740df2`; composed `f0f7380cad57d5abd733ff28f02117d3c58e970453af78080dc0391c36cd55eb`; standalone chat `baabf3fc9734aea731d83d19ae1ec6392f264fc4a311e14381752dc178946990`. Composed actual renderer1588/main271 inputs, five Monaco workers/font, helper/rg and actual notices are audited in committed evidence. Native/browser executions overlap and are not added into Node totals.
 
 ## Findings and disposition
 
-| Scope | Concrete findings / current disposition |
+| Scope | Recorded disposition |
 | --- | --- |
-| Application/contracts | Boundary R5 clears identity, cancellation and cleanup error findings. Exact receipts/CAS, nonce authentication and normalized failures remain required. |
-| Workspace | All13 prior findings clear at38c: path/native authority, immutable requests, grouped restoration/capacity, conservative journal order and per-client publication/observer identity. The full individual list is retained in the R1 report and original reviews. |
-| Editor/integration | All22 original editor findings, lost/reordered Save P1, rejected-publication P1, transient alert P2, native import/Create mismatches and filename-map/menu P2s retain their scoped clearance. New native document Reload P1 is distinct from the earlier controller Reload/Close cases and remains open. |
-| SSH | Four findings clear at1aec: early/coalesced release, authentication bypass flags, inherited helpers/pipes after exit, and bounded EPERM uncertainty. No real-peer claim. |
-| Pi/integration | Signed-error oracle P1, postcommit Create P2 and postdispatch generation-loss P2 clear at235/132. Retain original identities and Uncertain after possible dispatch; no resend, successor Stop or external exactly-once claim. |
-| Chat | Retry-preservation P1 and native200% controls P2 causally clear atdbd. Border0px→1px is an independent own-UI repair; volatile notice assertions were fixture corrections. |
-| Composition keyboard | Enter activation produced a click with detail0 and incorrectly returned focus to Monaco. Pointer-only detail>0 fix is independently causal with the same corrected driver in old/new source/package. |
-| Composition lifecycle | Committed unload now releases document-owned observers/waits while preserving root, native approval registry and connection. Reviewer old runs canceled both chat observers but retained editor observer/held read; owner previously observed all three observers retained. Both observations are preserved. Current cancels all four exact resources; veto cancels none. This does not clear fresh-edit preservation. |
-| New R1 repairs | Public observable exact-publication readiness must cover debounce, ordinary in-flight publication and edits during preservation; already durable dirty reload must remain possible. Present configuration must validate even when empty. Repairs and re-review are in progress. |
+| Application/contracts | Boundary R5 and exact recovery/publication/health/connection/chat contracts clear their historical scopes; immutable receipts/CAS, nonce authentication, cancellation and cleanup errors retained. |
+| Workspace | All13 prior findings clear at38c. Path/native authority, immutable identities, grouped restoration/capacity, conservative journal order and per-client publication/observer identity remain. Initial final-review watch timeout remains unexplained as below. |
+| Editor/integration | All22 prior editor findings, lost/reordered Save P1, rejected-publication P1, alert P2, native import/Create and filename-map/menu P2s retain their scoped reports. |
+| SSH | Four fixes clear at1aec: early/coalesced release, authentication bypass options, inherited helpers/pipes after exit and bounded EPERM uncertainty. Controlled transport only. |
+| Pi/integration | Signed-error oracle P1, postcommit Create P2 and postdispatch generation-loss P2 clear at235/132. Original request/task identities and Uncertain after possible dispatch retained; no resend/external exactly-once claim. |
+| Chat | Retry-preservation P1 and200% scrolling P2 clear atdbd; border0px→1px repair and volatile-notice fixture correction remain separate. |
+| Composition R1 | Keyboard Enter pointer-focus defect and committed-unload cleanup independently clear at historical8a within recorded limits. Native fresh-edit Reload P1 and present-empty config P2 were then found; owning repairs are published in21/20 and critical old/new comparisons passed before the final review was stopped. No final independent approval issued. |
+| Standalone resource follow-up | Direct held read survived committed Reload/renderer loss in old code. Editor-only cleanup is included in21 and normally carried into20; current source/package and independent old/new targeted probes passed before stop. |
 
-## Evidence limits and unresolved observations
+Full individual22/13/4/Pi/chat dispositions and original responses are retained in the review directory and [composition R1 report](reviews/composition-r1.md); earlier causal matrices were not all rerun in this final partial review.
 
-- **New owner evidence deletion:** preserved editor suite default Playwright outputDir cleared the owner's local test-results, deleting its baseline archive copies and targeted raw phases before commit. Reviewer R1 artifacts and committed8a evidence are intact. Checksum-verified replacement copies outside all runner output roots and repeated old/new probes must be labeled NEW records, not recovered/surviving originals. The owner is inventorying exactly which earlier raw records remain.
-- **Original keyboard binary unavailable:** actual red source `cc06d753e76dc02470628a611a3a481f771953b9` and trace survive; the original asar was overwritten before a digest was recorded. Reconstructed asar `4f59a6c209607daf72a253315bbf04fda2dcf95ed9bf4b91007c8a604b159993` is a NEW artifact, not proof of original binary equivalence. The final corrected driver `c7cea1c946a4fad94977e7c0df712c980452ed037de1d662fa65c84b87e29b5b` reproduces old focus failures and passes current source/package. Earlier Arrow-only/Tab-count corrections remain distinct from the product defect.
-- **Historical synthetic Trash cleanup UNPROVEN:** initial22/25 fixture observed source removal before receipt, and its returned destination/inode was unavailable after failed teardown. No safely identified deletion target exists; no broad Trash scan/sweep or basename/content guess was used. Later cases clean only their exact returned identity/content. This residual uncertainty is separate from verified final PID/group/listener cleanup. Original/escode/user data was not removed.
-- **New composition veto observation:** initial source11/12 and package10/11 each failed the long-journey assumption that native Reload committed immediately (view stayed on Chat). No text loss was shown. Positive-control driver now records veto/load and requires eventual genuine Reload with bounded explicit retries, without forcing unload or changing product logic. Initial veto cause remains UNEXPLAINED; later passes do not identify it, and persistent veto remains a product blocker. Config initial valid-case2/3 health-count failure was a separate fixture baseline mistake; corrected3/3 checks no startup dispatch and explicit disconnection.
-- **Unexplained:** original rapid Open→Find→fill dismissal (trace overwritten, raw failure retained); initial Undo/Redo timing and public Reopen return-value/settling observations (no demonstrated lost text); historical Create-disabled transient despite bounded passing readiness cycles. Repeated greens do not explain them.
-- **Harness corrections remain raw evidence:** initial shell selectors/Trash receipt wait; health baseline/readFile envelope/faux alternating completion; process-wrapper and concurrent-build startup; lifecycle argument/navigation/stale crashed-Page drivers; storage-fault teardown, volatile host notice, cropped Playwright captures versus full native capturePage. Three historical failed-harness forward groups were separately ownership-verified/recovered; do not claim all historical runs cleaned normally. Reviewer-only NBSP/path-canonicalization/setup audit corrections are listed in the full report.
-- **Runtime/trust boundary:** same-origin srcdoc parent-bridge access under privileged evaluation remains a documented limit. CSP, owned frame/document validation and ordinary app data paths are separate controls. No renderer-compromise immunity is claimed.
+## Uncertainties for your testing
 
-All12 owning composition captures were inspected by the owner and independent reviewer; root also inspected packaged dirty editor, live chat and constrained200% images. Actual wheel/Tab/Stop/Send checks establish reachability; the small view is cramped and requires scrolling. The captures do not prove manual accessibility. R1 current archive is `96d74c67389db0c3d41083d6b39b01f79844b60ddfeada48619625c1351e74e3`, main271/preload5/renderer1588 actual inputs,15 independently derived notice roots. Final repaired artifacts will replace the runnable recommendation after re-review.
+1. **Reload timing:** earlier composed source/package long journeys vetoed Reload unexpectedly; initial causes remain UNEXPLAINED. Current controls recorded `[veto,reload]` and restored text. Try quick edits, switching to live Chat, then Reload; a persistent veto or lost draft needs investigation. No force-unload or automatic resend was added.
+2. **Filesystem watch timing:** one unchanged workspace watch test timed out during final review, then passed in isolation without an established cause. Check that external file changes and conflicts become visible while editing.
+3. **Earlier UI observations:** original rapid Open→Find→fill dismissal, Undo/Redo timing, public Reopen return-value/settling and historical Create-disabled behavior remain unexplained/unattributed. Passing bounded repeats did not establish their causes.
+4. **Final review stopped:** no formal final verdict/report was issued. The terminal partial result is preserved; no further agent review or rerun is scheduled.
 
-## External and manual gates
+## Evidence limitations
 
-- Hosted jobs at current relevant source heads were blocked **before execution** by GitHub account billing/spending restrictions. This is UNRUN/BLOCKED, not a local source failure or a hosted pass. Account owner must resolve the restriction and run exact-head checks before merge.
-- No explicit real SSH peer or provider quota authorization was supplied. Real handshake/known-host/agent/ProxyJump, remote partition/persistence and provider authentication/network/cost are UNRUN. No bypass, provisioning or remote shutdown was attempted.
-- Actual host-distribution/transitive notices and optional engine assets remain unqualified. Release-pinned323-source/three-README/seven-manifest correspondence is not distribution qualification. Actual desktop notices derive from shipped graphs; the SDK is excluded from the client.
-- Signing/notarization, Intel/other platforms, physical picker/clipboard/drag/Finder Put Back, VoiceOver/full manual accessibility/product acceptance, performance and physical full-volume/power-loss checks remain UNRUN/PENDING. Unsigned ARM64 automation is not these gates.
+- Owner initially stored baseline archive copies/raw phases under Playwright's default output root; it cleared those files before commit. The local96d74/37ad copies and initial local public/native/setup logs were DELETED, not recovered. Committed8a evidence and immutable original reviewer artifacts were untouched. Replacement reviewer-build copies and later runs are NEW; survivors/losses are inventoried in committed evidence-correction.json. One235.7ms old packaged attempt failed before its timing precondition and is not a product red.
+- Original cc06 keyboard asar was overwritten before digest capture and remains unavailable. Source/trace survive; reconstruction `4f59a6c209607daf72a253315bbf04fda2dcf95ed9bf4b91007c8a604b159993` is a NEW artifact, not original binary-equivalence proof.
+- Initial synthetic Trash fixture cleanup remains **UNPROVEN**: returned destination/inode unavailable, no safe identified target. No broad scan/sweep or basename/content-guess deletion occurred. This is separate from verified current process cleanup. Later known fixtures clean only exact returned identity/content.
+- Initial composed11/12 and10/11 failures/traces, configuration fixture-health baseline correction, wrong-cwd timeout/11notrun and exact cleanup, pre-setup import failure, dynamic-import/Electron argument/type-wrapper observations and review evidence-write corrections retain their actual surviving records. Deleted records are not claimed extant. Three earlier failed-harness groups were separately verified/recovered; do not claim all historical runs cleaned normally.
+- Owner's old all-three-observer observation differs from independent R1's two-chat-observers-canceled/editor+read-wait-not-canceled observation; both remain. Same-origin srcdoc parent-bridge access under privileged evaluation is a documented limit; CSP and owned frame/document checks are separate controls, not renderer-compromise immunity.
 
-## Runnable checkpoints
+## Unrun / external items
 
-Use a new clean checkout for each exact ref; preserve existing dirty work. Build requires pinned Bun1.4.4/Node26.13 tooling and macOS compiler tools. The package runs bundled Electron45.1/Node24.22. Separate explicit Moonbase data directories are mandatory for review; never point at an old application's data.
+Hosted source jobs are billing/spending-blocked before execution; their FAILURE rollups are not local test failures or hosted passes. Real SSH/known-host/agent/ProxyJump/remote partition/persistence and real provider authentication/network/quota were not run. No explicit real host/quota authorization was supplied.
 
-**Independent editor candidate #21, no Pi/SSH/configuration required (fresh review pending):**
+Actual host distribution/transitive notices and optional engines/assets remain unqualified;323 source/three README/seven manifest correspondence is not distribution qualification. Desktop notices derive from actual shipped graphs; SDK/host/test implementations are excluded.
+
+Signing/notarization, Intel/other platforms, physical picker/clipboard/drag/Finder Put Back, VoiceOver/full manual accessibility/product acceptance, performance and physical full-volume/power-loss checks remain UNRUN/PENDING. You can choose the relevant checks; the agents will not resume them automatically.
+
+## Runnable refs and commands
+
+Use a new clean worktree and fresh explicit Moonbase data; preserve existing dirty work. Toolchain is pinned Bun1.4.4/Node26.13 with macOS compiler tools; package runtime is Electron45.1/Node24.22.1. The following are instructions for you, not further agent execution.
+
+**Standalone editor21, no chat/provider/SSH dependency:**
 
 ```sh
 git worktree add --detach /tmp/moonbase-editor-proof fc547673c519871136388f6e5cc0e4fdc1d9bd6a
@@ -95,29 +100,9 @@ node scripts/prepare-ripgrep.mjs
 MOONBASE_USER_DATA="$(mktemp -d -t moonbase-editor)" NX_DAEMON=false bunx nx run @moonbase/desktop:dev
 ```
 
-Package: `NX_DAEMON=false bunx nx run @moonbase/desktop:package`, then run `apps/desktop/release/mac-arm64/Moonbase.app/Contents/MacOS/Moonbase` with a fresh `MOONBASE_USER_DATA`. Actual source/package tests are `bun run --cwd apps/desktop test:desktop` / `test:package` after build/package. [Guide](https://github.com/ejjsharpe/moonbase/blob/fc547673c519871136388f6e5cc0e4fdc1d9bd6a/apps/desktop/README.md).
+Package: `NX_DAEMON=false bunx nx run @moonbase/desktop:package`, then launch `apps/desktop/release/mac-arm64/Moonbase.app/Contents/MacOS/Moonbase` with fresh `MOONBASE_USER_DATA`. [Exact guide](https://github.com/ejjsharpe/moonbase/blob/fc547673c519871136388f6e5cc0e4fdc1d9bd6a/apps/desktop/README.md).
 
-**Independent chat, no editor dependency:**
-
-```sh
-git worktree add --detach /tmp/moonbase-chat-proof dbd06a6d3f8c8f310868349e7ed099468db9b9ba
-cd /tmp/moonbase-chat-proof
-bun install --frozen-lockfile
-bun run --cwd apps/chat-probe build
-MOONBASE_CHAT_CONFIG=/absolute/private/chat-client.json MOONBASE_CHAT_DATA="$(mktemp -d -t moonbase-chat)" bun run --cwd apps/chat-probe start
-```
-
-The private0600 configuration must name an already authorized SSH alias/expected host+store and separately provisioned matching key. No remote is assumed. Start the host **separately on its machine** with qualified Node26.13:
-
-```sh
-node --experimental-strip-types packages/pi-runtime/src/host.ts /absolute/private/moonbase-host.json
-```
-
-The standalone public SSH consumer is `node --experimental-strip-types packages/ssh/examples/connect.ts /absolute/private/connection.json`. It uses normal SSH policy and explicitly connects/disconnects; run only with an approved host. [Host](https://github.com/ejjsharpe/moonbase/blob/235eb27a448635a995bb65e67147e99119830b92/packages/pi-runtime/README.md), [SSH](https://github.com/ejjsharpe/moonbase/blob/1aec1a438ba0d5592b0e6c3f0e1be835cf3c034b/packages/ssh/README.md), [chat guide](https://github.com/ejjsharpe/moonbase/blob/dbd06a6d3f8c8f310868349e7ed099468db9b9ba/apps/chat-probe/README.md).
-
-Controlled checks need no real credentials: `bun run --cwd apps/chat-probe test`, `bun run test:chat-integration`, then package and `bun run --cwd apps/chat-probe test:desktop` with the foreground free. No passing controlled check spends real provider quota or establishes real SSH acceptance.
-
-**Composed application, exact current review head:**
+**Composed20, local editor with Chat unconfigured:**
 
 ```sh
 git worktree add --detach /tmp/moonbase-workbench-proof f6822a50e80920488a012f7bd57cb612f9b97be7
@@ -127,13 +112,31 @@ node scripts/prepare-ripgrep.mjs
 env -u MOONBASE_CHAT_CONFIG MOONBASE_USER_DATA="$(mktemp -d -t moonbase-workbench)" NX_DAEMON=false bunx nx run @moonbase/desktop:dev
 ```
 
-This explicitly removes any inherited chat configuration for the launched process and starts the local editor with Chat unconfigured. To enable optional chat, additionally set `MOONBASE_CHAT_CONFIG=/absolute/private/chat-client.json` to the separately prepared owner-only client configuration; Connect stays explicit. Package with `NX_DAEMON=false bunx nx run @moonbase/desktop:package`, then launch the same Moonbase binary path with fresh `MOONBASE_USER_DATA` and optional configuration. Source/package composed tests: `MOONBASE_COMPOSITION_TEST=1 bun run --cwd apps/desktop test:desktop` and add `MOONBASE_PACKAGED_TEST=1` for the actual package, after build/package and with the foreground free. [Current guide](https://github.com/ejjsharpe/moonbase/blob/f6822a50e80920488a012f7bd57cb612f9b97be7/apps/desktop/README.md). R1 repairs are owner-qualified atf682/21fc547; new independent exact-head review remains pending.
+For optional chat, launch with `MOONBASE_CHAT_CONFIG=/absolute/private/chat-client.json` instead of removing it. It must name your explicitly authorized SSH alias/host/store and owner-only matching key; Connect remains explicit. Present empty config is an error. Package with the same desktop package target and fresh-data binary command. [Exact guide](https://github.com/ejjsharpe/moonbase/blob/f6822a50e80920488a012f7bd57cb612f9b97be7/apps/desktop/README.md).
 
-## Human merge/retarget order
+**Independent chat18, no editor dependency:**
 
-1. Resolve GitHub billing/CI and review provenance/contracts: #1 → #2 → #5.
-2. Editor line: #7 → siblings #3/#4 → #11 → #13 → #16 → #14 → #21.
-3. Chat line can be reviewed alongside editor: #6 → #8 → siblings #9/#10 → #12 after#10 → #15 after#12+#9 → #18.
-4. #19 after#14+#18; final #20 after#19 +the normally merged #21 preservation follow-up, then final handoff documentation. Do not accept/run old4dd as the repaired standalone.
+```sh
+git worktree add --detach /tmp/moonbase-chat-proof dbd06a6d3f8c8f310868349e7ed099468db9b9ba
+cd /tmp/moonbase-chat-proof
+bun install --frozen-lockfile
+bun run --cwd apps/chat-probe build
+MOONBASE_CHAT_CONFIG=/absolute/private/chat-client.json MOONBASE_CHAT_DATA="$(mktemp -d -t moonbase-chat)" bun run --cwd apps/chat-probe start
+```
 
-After a human merges dependencies, retarget newly unblocked PRs to the updated appropriate base, retain ancestry and rerun exact-head checks. Integration branches normally contain reviewed parent merges; don't merge duplicate whole-project diffs blindly. This run performs no GitHub merges, deployment or acceptance. Documentation [PR22](https://github.com/ejjsharpe/moonbase/pull/22) is prepared against frozen20; its product/manifests/lock/CI/build trees are byte-equal to20 and its delta is documentation only. Final independent verdict and cleanup/link/privacy/default-branch/pushed-state audit remain pending. The documentation PR's exact delivery head is reported in its final PR metadata and delivery message, avoiding a self-referential commit hash in this file.
+Start the host separately on its authorized machine: `node --experimental-strip-types packages/pi-runtime/src/host.ts /absolute/private/moonbase-host.json`. Public SSH consumer: `node --experimental-strip-types packages/ssh/examples/connect.ts /absolute/private/connection.json`. No remote is assumed or provisioned. [Chat guide](https://github.com/ejjsharpe/moonbase/blob/dbd06a6d3f8c8f310868349e7ed099468db9b9ba/apps/chat-probe/README.md).
+
+Existing optional automated commands, for your use only: `bun run test:editor-integration`, `bun run test:chat-integration`; desktop `test:desktop`/`test:package`; composed `MOONBASE_COMPOSITION_TEST=1 bun run --cwd apps/desktop test:desktop` with `MOONBASE_PACKAGED_TEST=1` for package; focused Reload commands in the exact app README. No further agent test/review will run.
+
+## Review/merge order and handoff state
+
+Suggested order for your review, with billing/manual choices remaining yours:
+
+1. #1 → #2 → #5.
+2. Editor: #7 → siblings#3/#4 → #11 → #13 → #16 → #14 → #21. Use the21 follow-up with14 for the repaired standalone.
+3. Chat: #6 → #8 → siblings#9/#10 → #12 after10 → #15 after12+9 → #18.
+4. #19 after14+18; #20 after19+21; documentation#22 after20.
+
+After human merges, retarget at the intended identical checkpoints and account for updated bases. Your separate consolidation-agent prompt concerns safe linear groups6→8 and11→13→16; this run performs no consolidation, force push, deletion or GitHub merge. Exact review checkpoints/source/package inputs remain preserved.
+
+[PR22](https://github.com/ejjsharpe/moonbase/pull/22) contains this handoff, full reports, exact queue and research records. Its product/manifests/lock/CI/build trees are byte-equal to frozen20; its delta is documentation only. Final delivery reports its exact head/base externally to avoid a self-referential commit hash. All work is pushed; no more tests/reviews or automatic follow-up are pending. The final independent verdict remains incomplete, and no human acceptance is inferred.
