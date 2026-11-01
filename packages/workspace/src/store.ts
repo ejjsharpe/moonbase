@@ -10,7 +10,7 @@ import {
 
 // shortcut: immutable receipts still grow on disk; compact only with proven replay and recovery compatibility.
 export const pendingSaves =
-  "(json_extract(body, '$.result') IS NULL OR json_extract(body, '$.published') IS NOT 1 OR json_extract(body, '$.restorePending') = 1)";
+  "(json_extract(body, '$.result') IS NULL OR json_extract(body, '$.published') IS NOT 1 OR json_extract(body, '$.restorePending') = 1) AND NOT (json_extract(body, '$.started') IS 0 AND json_extract(body, '$.result') IS NOT NULL AND json_extract(body, '$.restorePending') IS NOT 1)";
 
 type PublicationRecord = { digest: string; receipt: RecoveryPublication };
 
@@ -40,7 +40,7 @@ export class Store {
         'PRAGMA application_id=1296193363; CREATE TABLE IF NOT EXISTS records (bucket TEXT NOT NULL, key TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(bucket,key)); CREATE TABLE IF NOT EXISTS recovery (client TEXT PRIMARY KEY, revision INTEGER NOT NULL, body TEXT NOT NULL);',
       );
       this.db.exec(
-        `CREATE INDEX IF NOT EXISTS pending_saves ON records(bucket) WHERE bucket='saves' AND ${pendingSaves}`,
+        `CREATE INDEX IF NOT EXISTS pending_saves_v2 ON records(bucket) WHERE bucket='saves' AND ${pendingSaves}; DROP INDEX IF EXISTS pending_saves;`,
       );
       chmodSync(file, 0o600);
       const identity = this.get<string>('meta', 'host');
