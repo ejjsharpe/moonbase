@@ -2527,5 +2527,23 @@
     "promptCharacters": 119492,
     "brief": "FULL originalOVERNIGHT+FULL R1+FULL standalone/composition ownresponses+mandatoryallpriorreports+allobjections/evidence-loss/unknownveto/resourcefindings",
     "foreground": "exclusive new reviewer; original Sol owner explicitly released/idle"
+  },
+  "handoff-pr": {
+    "url": "https://github.com/ejjsharpe/moonbase/pull/22",
+    "branch": "t3/overnight-task-continuation",
+    "baseBranch": "feat/workbench-composition",
+    "base": "f6822a50e80920488a012f7bd57cb612f9b97be7",
+    "state": "DRAFT working handoff; independent pair review ACTIVE; final audit pending",
+    "preparedMerge": "f9868bd013f2f4e4d3cc0756a92bc26a095c523c",
+    "productEquality": "46 docs-only files vs frozen20; product/manifests/lock/CI/build trees byte-equal, no new source checks needed for documentation"
+  },
+  "consolidationCoordination": {
+    "scope": "User asked parent for PROMPT only; no consolidation mutations by this run",
+    "proposedSafePass": [
+      "reviewed linear6->8 final09b21f2",
+      "reviewed linear11->13->16 final473e0fe"
+    ],
+    "freeze": "20f682/21fc547 and actual source/package inputs frozen while current paired review runs",
+    "rules": "exclude unrelated17; preserve exact review commits/final trees; identical-commit retarget only if separately authorized; no merges/deploys/forcepush/deletions/duplicate review; do not wait for hypothetical consolidation agent"
   }
 }
