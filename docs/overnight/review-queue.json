@@ -97,7 +97,17 @@
     "head": "4dd148ade5f279e2b3820df0325313ee08ce4f8d",
     "baseBranch": "fix/editor-filename-maps-and-menu",
     "base": "473e0fe03f6c5fc34fd8282fab4875c20f143ac2",
-    "status": "DRAFT; prior desktop R2 clear; new fresh-edit Reload loss open"
+    "status": "DRAFT; prior Desktop R2 clear; newly reproduced Reload loss open"
+  },
+  {
+    "number": 21,
+    "url": "https://github.com/ejjsharpe/moonbase/pull/21",
+    "title": "Standalone Reload preservation/cleanup",
+    "branch": "fix/editor-reload-preservation",
+    "head": "fc547673c519871136388f6e5cc0e4fdc1d9bd6a",
+    "baseBranch": "feat/standalone-editor",
+    "base": "4dd148ade5f279e2b3820df0325313ee08ce4f8d",
+    "status": "DRAFT; owner-qualified source/package; fresh independent review pending"
   },
   {
     "number": 6,
@@ -177,16 +187,16 @@
     "head": "d79d1e9b8347f7f5f19cdbe9aad0233a0c47be8d",
     "baseBranch": "feat/standalone-editor",
     "base": "4dd148ade5f279e2b3820df0325313ee08ce4f8d",
-    "status": "DRAFT; DFF reviewed; D79 fixture-export delta clear; inherited Reload loss open"
+    "status": "DRAFT; DFF checkpoint R1 clear; D79 fixture-export delta clear; inherited Reload defect open"
   },
   {
     "number": 20,
     "url": "https://github.com/ejjsharpe/moonbase/pull/20",
     "title": "Composed workbench",
     "branch": "feat/workbench-composition",
-    "head": "8a1636902b129f2fd6e04d26cfa75dd2e90ee415",
+    "head": "f6822a50e80920488a012f7bd57cb612f9b97be7",
     "baseBranch": "chore/workbench-integration",
     "base": "d79d1e9b8347f7f5f19cdbe9aad0233a0c47be8d",
-    "status": "DRAFT; owning qualification complete; independent R1 found fresh-edit Reload loss (package check/report pending)"
+    "status": "DRAFT; R1 P1/P2 owning repairs qualified; new exact-head pair review pending"
   }
 ]
