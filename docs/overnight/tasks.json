@@ -2113,8 +2113,8 @@
     "waitTimedOut": false
   },
   "foreground-test-slot": {
-    "owner": "chat-r1-repair",
-    "state": "explicitly released by R1 reviewer and assigned original owner run16"
+    "owner": "review-chat-proof-r2",
+    "state": "exclusive native review after finalowner cleanup"
   },
   "review-desktop-r2": {
     "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-desktop-r2-module16-4dd148a",
@@ -2212,10 +2212,10 @@
   },
   "chat-proof-pr": {
     "url": "https://github.com/ejjsharpe/moonbase/pull/18",
-    "head": "5321ae5b4ff3d3c4ed4cfb5b67b6a7139288b6bf",
+    "head": "dbd06a6d3f8c8f310868349e7ed099468db9b9ba",
     "base": "132d273073889bd0702cf96b1fc2a62d5027598c",
     "state": "draft",
-    "nativeCurrentHead": "11/11 source/package actual Electron pass;26public;24readiness iterations pass; original transient unattributed",
+    "nativeCurrentHead": "38public+17source/package+2nativecapture reruns pass;167module+7integration; old532causal reds; new independent R2 running",
     "sourceChecks": "frozen/type/lint26/build263/50/artifact7/notices9/foundation40/diff pass"
   },
   "fresh-context-handoff": {
@@ -2301,7 +2301,7 @@
     "requestId": "fresh-lead-chat-r1-zoom200-owner-headless",
     "threadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-03-workspace-module-r1-bb5c5d0",
     "runOrdinal": 16,
-    "status": "running",
+    "status": "completed",
     "baseHead": "5321ae5b4ff3d3c4ed4cfb5b67b6a7139288b6bf",
     "model": "gpt-6.1-sol",
     "options": {
@@ -2312,6 +2312,39 @@
       "P1: preservation must recheck after awaited read query immediately before every retry mutation",
       "P2: actual200%normal/constrained source/package controls have no usable scroll path"
     ],
-    "newReview": "must delegate new independent AstraR2 after exactpushedfix andcleanup"
+    "newReview": "must delegate new independent AstraR2 after exactpushedfix andcleanup",
+    "head": "dbd06a6d3f8c8f310868349e7ed099468db9b9ba",
+    "response": "docs/overnight/reviews/chat-proof-r1-response.md",
+    "productionChanges": [
+      "shared dispatch commit(cloned latest Saved) immediately before mutating call",
+      "main overflowY:auto"
+    ],
+    "cleanupFullGreen": {
+      "electronHelpersAbsent": 76,
+      "hostPidsAbsent": 17,
+      "forwardPidsGroupsAbsent": 50,
+      "portsRebound": 42
+    },
+    "cleanupCaptureOnly": {
+      "electronHelpersAbsent": 8,
+      "hostPidsAbsent": 2,
+      "forwardPidsGroupsAbsent": 4,
+      "portsRebound": 4
+    },
+    "captureCorrection": "croppedPlaywright originals retained; nativecapturePage aftertwoframes requalified twoaffectedcases only"
+  },
+  "review-chat-proof-r2": {
+    "taskId": "node:delegated-task:command%3Amcp%3A8185ba6c-62ae-4571-ad0b-9688ad5a1b92%3Adelegate-task%3Afresh-lead-chat-dbd06a6-r2-astra",
+    "childThreadId": "thread:delegated-task:command%3Amcp%3A8185ba6c-62ae-4571-ad0b-9688ad5a1b92%3Adelegate-task%3Afresh-lead-chat-dbd06a6-r2-astra",
+    "status": "running",
+    "head": "dbd06a6d3f8c8f310868349e7ed099468db9b9ba",
+    "base": "132d273073889bd0702cf96b1fc2a62d5027598c",
+    "model": "gpt-6-astra",
+    "options": {
+      "reasoningEffort": "xhigh",
+      "serviceTier": "default"
+    },
+    "brief": "completecommon07/09+fullcurrentPiR3integrationR2+fullproofR1+fullownresponse+allunresolvedobjections",
+    "foreground": "exclusive native review; original owner explicitly cleaned and released"
   }
 }
