@@ -25,11 +25,13 @@ export type WorkspaceConfiguration = {
   ripgrepExecutable?: string;
 };
 type Approval = { target: CheckoutTarget; identity: string; common: {path: string; identity: string}; gitEntry: {identity: string; pointer: string | null} };
-type SaveRecord = { recoveryRestored?: boolean; recoveryRevision?: number; baseline?: import('@moonbase/application/client').FileDocument; published?: boolean; temporary?: string; input: CommandInput<'saveFile'>; result?: SaveResult; started: boolean; message?: string };
+type SaveRecord = { restorePending?: boolean; recoveryRestored?: boolean; recoveryRevision?: number; baseline?: import('@moonbase/application/client').FileDocument; published?: boolean; temporary?: string; input: CommandInput<'saveFile'>; result?: SaveResult; started: boolean; message?: string };
 type OperationRecord = { paths?: string[]; publicationError?: string; staging?: string[]; publishedItems?: string[]; input: WorkspaceOperation; result: OperationResult; publicationRevisions: Record<string, number>; acknowledgedBy: string[] };
 const key = (clientId: string, id: string) => hash(canonical([clientId, id]));
 const affected = (p: string, source: string) => p === source || p.startsWith(source + '/');
 const folded = (p: string) => p.normalize('NFC').toLowerCase();
+const containsSelectedSource = (entry: {path: string; identity: string; directory: boolean}, source: {path: string; identity: string; native?: NativeImport}) =>
+  entry.identity === source.identity || entry.directory && (source.native ? source.native.parents.split(',').includes(entry.identity) : affected(source.path, entry.path));
 const errorText = (error: unknown) => ApplicationError.fromUnknown(error).message;
 const applicationError = (error: unknown, code: ApplicationError['code'] = 'Unavailable') => ApplicationError.is(error) ? error : new ApplicationError({ code, message: errorText(error) });
 
@@ -225,6 +227,10 @@ class LocalWorkspace {
     catch { return (await directory.git(['rev-parse', '--short', 'HEAD'], undefined, signal)).toString().trim() + ' (detached)'; }
   }
   saveRecord(id: string) { return this.volatileSaves.get(id) ?? this.store.get<SaveRecord>('saves', id); }
+  saveRecords() {
+    const records = new Map(this.store.all<SaveRecord>('saves').map(record => [key(record.input.clientId, record.input.requestId), record]));
+    for (const [id, record] of this.volatileSaves) records.set(id, record); return [...records.values()];
+  }
   operation(id: string) { return this.volatileOperations.get(id) ?? this.store.get<OperationRecord>('operations', id); }
   operations() {
     const records = new Map(this.store.all<OperationRecord>('operations').map(r => [key(r.input.clientId, r.input.id), r]));
@@ -238,7 +244,7 @@ class LocalWorkspace {
     if (!same(record.input, input)) fail('Conflict', 'Save request ID already belongs to a different payload or target.');
     if (record.result) {
       if (this.volatileSaves.has(id)) {
-        try { this.publishSave(id, record); }
+        try { this.publishSaves([record]); }
         catch (error) { if (record.result.kind !== 'saved') throw error; record.result = {...record.result, persistencePending: true, message: 'Saved to disk; recovery publication pending. ' + errorText(error)}; }
       }
       return record.result;
@@ -271,7 +277,7 @@ class LocalWorkspace {
       const current = await directory.read(input.target.path);
       if (current.version !== input.expectedVersion) record.result = {kind: 'conflict', disk: current};
       else { await directory.io(['replace', input.target.path, temporary, stagingIdentity]); record.result = {kind: 'saved', disk: proposed, recoveryChanges: []}; }
-      try { this.publishSave(id, record); }
+      try { this.publishSaves([record]); }
       catch (error) {
         if (record.result.kind === 'saved') record.result = {...record.result, persistencePending: true, message: 'Saved to disk; durable request publication failed: ' + errorText(error)};
         this.volatileSaves.set(id, record);
@@ -339,6 +345,7 @@ class LocalWorkspace {
       ensure(replacement && same(replacement.target.checkout, input.checkout) && destinations.includes(replacement.target.path), 'Replacement must name the exact captured destination.');
       const actual = await directory.entry(replacement.target.path, signal);
       if (!same(actual, {identity: replacement.identity, directory: replacement.directory})) fail('Conflict', 'Replacement changed. Confirm a freshly captured destination.');
+      ensure(!sources.some(source => containsSelectedSource({path: replacement.target.path, ...actual}, source)), 'A replacement cannot contain or replace a selected source.');
     }
     for (let i = 0; i < sources.length; i++) {
       const source = sources[i], destination = destinations[i];
@@ -349,7 +356,7 @@ class LocalWorkspace {
         ensure(!native.containsDirectory(resolve(input.checkout.root, dirname(destination))), 'Choose a native import destination outside its source directory.');
         let actual: Awaited<ReturnType<Directory['entry']>> | undefined;
         try { actual = await directory.entry(destination, signal); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-        ensure(!actual || actual.identity !== native.identity && !(actual.directory && native.parents.split(',').includes(actual.identity)), 'A native import cannot replace itself or an ancestor of its source.');
+        ensure(!actual || !containsSelectedSource({path: destination, ...actual}, selected), 'A native import cannot replace itself or an ancestor of its source.');
       }
       if (!source.native && !create) ensure(!affected(folded(destination), folded(source.path)) || (input.kind === 'move' && destination !== source.path && folded(destination) === folded(source.path)), 'Choose a destination outside the source.');
       ensure(!sources.some(s => s.path !== source.path && affected(folded(destination), folded(s.path))), 'Destination overlaps another selected source.');
@@ -489,37 +496,68 @@ class LocalWorkspace {
       this.store.put('operations', id, updated); this.store.db.exec('COMMIT'); delete record.publicationError; Object.assign(record, updated); this.volatileOperations.delete(id);
     } catch (error) { this.store.db.exec('ROLLBACK'); throw error; }
   }
-  publishSave(id: string, record: SaveRecord, restore = false) {
+  publishSaves(records: SaveRecord[], restore = false) {
+    if (!records.length) return;
+    const clientId = records[0].input.clientId;
+    ensure(records.every(record => record.input.clientId === clientId), 'A Save publication group belongs to one client.');
     this.store.db.exec('BEGIN IMMEDIATE');
     try {
-      const committed = this.store.get<SaveRecord>('saves', id);
-      if (committed && !same(committed.input, record.input)) fail('Conflict', 'Save identity changed before recovery publication.');
-      if (committed?.published || committed?.recoveryRestored && !record.result) { this.store.db.exec('COMMIT'); Object.assign(record, committed); this.volatileSaves.delete(id); return; }
-      const changes: OperationResult['recoveryChanges'] = [];
-      if (!record.published) {
-        const stored = this.store.readRecovery(record.input.clientId);
-        const state = (stored?.state ?? emptyRecovery(record.input.clientId)) as EditorRecovery, before = JSON.stringify(state);
-        if (restore && record.baseline && (stored?.revision ?? 0) === record.recoveryRevision) {
+      // A sibling restoration must not look like a competing client publication.
+      const stored = this.store.readRecovery(clientId), revision = stored?.revision ?? 0;
+      const state = (stored?.state ?? emptyRecovery(clientId)) as EditorRecovery, before = JSON.stringify(state);
+      const updates = records.map(record => {
+        const id = key(clientId, record.input.requestId), committed = this.store.get<SaveRecord>('saves', id);
+        if (committed && !same(committed.input, record.input)) fail('Conflict', 'Save identity changed before recovery publication.');
+        const knownResult = committed?.published ? committed.result : record.result;
+        const result: SaveResult | undefined = knownResult?.kind === 'saved' ? {kind: 'saved', disk: knownResult.disk, recoveryChanges: knownResult.recoveryChanges} : knownResult;
+        const wantsRestore = restore || record.restorePending || committed?.restorePending;
+        const restored = !!(wantsRestore && !committed?.recoveryRestored && record.baseline && revision === record.recoveryRevision);
+        const entryBefore = JSON.stringify(state);
+        if (restored) {
           if (!state.checkouts.some(c => same(c, record.input.target.checkout))) state.checkouts.push(record.input.target.checkout);
           const existing = state.drafts.find(d => same(d.target, record.input.target));
-          if (existing) { existing.text = record.input.text; existing.disk = record.baseline; }
-          else state.drafts.push({target: record.input.target, text: record.input.text, disk: record.baseline});
+          if (existing) { existing.text = record.input.text; existing.disk = record.baseline!; }
+          else state.drafts.push({target: record.input.target, text: record.input.text, disk: record.baseline!});
         }
-        if (record.result?.kind === 'saved') for (const draft of state.drafts) if (same(draft.target, record.input.target)) draft.disk = record.result.disk;
-        recovery(state, record.input.clientId);
-        if (JSON.stringify(state) !== before) {
-          const previousRevision = stored?.revision ?? 0;
-          this.store.db.prepare('INSERT INTO recovery VALUES(?,?,?) ON CONFLICT(client) DO UPDATE SET revision=excluded.revision, body=excluded.body').run(record.input.clientId, previousRevision + 1, JSON.stringify(state));
-          changes.push({clientId: record.input.clientId, previousRevision, revision: previousRevision + 1});
-        }
+        if (!committed?.published && result?.kind === 'saved') for (const draft of state.drafts) if (same(draft.target, record.input.target)) draft.disk = result.disk;
+        const updated: SaveRecord = {...record, result, published: !!result, recoveryRestored: !!committed?.recoveryRestored || restored,
+          restorePending: !!wantsRestore && !committed?.recoveryRestored && !restored};
+        return {id, record, committed, updated, changed: entryBefore !== JSON.stringify(state)};
+      });
+      recovery(state, clientId);
+      const changed = JSON.stringify(state) !== before;
+      if (changed) this.store.db.prepare('INSERT INTO recovery VALUES(?,?,?) ON CONFLICT(client) DO UPDATE SET revision=excluded.revision, body=excluded.body').run(clientId, revision + 1, JSON.stringify(state));
+      for (const entry of updates) {
+        if (changed && entry.changed && entry.updated.result?.kind === 'saved') entry.updated.result = {...entry.updated.result,
+          recoveryChanges: [...entry.updated.result.recoveryChanges, {clientId, previousRevision: revision, revision: revision + 1}]};
+        if (!same(entry.committed, entry.updated)) this.store.put('saves', entry.id, entry.updated);
       }
-      const result = record.result?.kind === 'saved' ? {kind: 'saved' as const, disk: record.result.disk, recoveryChanges: [...record.result.recoveryChanges, ...changes]} : record.result;
-      const updated = {...record, result, published: !!result, recoveryRestored: restore || record.recoveryRestored};
-      this.store.put('saves', id, updated); this.store.db.exec('COMMIT'); Object.assign(record, updated); this.volatileSaves.delete(id);
+      this.store.db.exec('COMMIT');
+      for (const {id, record, updated} of updates) { Object.assign(record, updated); this.volatileSaves.delete(id); }
     } catch (error) { this.store.db.exec('ROLLBACK'); throw error; }
   }
   async recoverEvidence(openIds?: Set<string>) {
-    for (const [id, record] of this.volatileSaves) if (record.result) { try { this.publishSave(id, record); } catch (error) { record.message = 'Recovery publication pending. ' + errorText(error); } }
+    const groups = new Map<string, SaveRecord[]>();
+    for (const record of this.saveRecords()) {
+      if (!record.started || record.published && !record.restorePending) continue;
+      const records = groups.get(record.input.clientId) ?? []; records.push(record); groups.set(record.input.clientId, records);
+    }
+    for (const records of groups.values()) {
+      if (records.some(record => this.active(record.input.target.checkout.checkoutId))) continue;
+      for (const record of records) if (!record.result && (!openIds || openIds.has(record.input.target.checkout.checkoutId))) {
+        try {
+          const disk = await (await this.directory(record.input.target.checkout)).read(record.input.target.path);
+          if (disk.version === textDocument(record.input.text).version) record.result = {kind: 'saved', disk, recoveryChanges: []};
+          else if (disk.version === record.input.expectedVersion) record.result = {kind: 'conflict', disk};
+        } catch { /* Restore admitted text without guessing an unavailable disk outcome. */ }
+      }
+      try { this.publishSaves(records, true); }
+      catch (error) { for (const record of records) {
+        record.restorePending = !record.recoveryRestored;
+        record.message = 'Admitted Save recovery publication pending; previous valid snapshot retained. ' + errorText(error);
+        this.volatileSaves.set(key(record.input.clientId, record.input.requestId), record);
+      } }
+    }
     for (const record of this.operations()) {
       if (this.active(record.input.checkout.checkoutId)) continue;
       const items = record.result.items.filter(item => !item.message?.startsWith('Explicit replacement'));
@@ -550,20 +588,8 @@ class LocalWorkspace {
       const id = key(record.input.clientId, record.input.id);
       try { this.publishOperation(id, record); } catch (error) { this.retainPublication(id, record, error); }
     }
-    for (const record of this.store.all<SaveRecord>('saves')) {
-      if (record.result || this.active(record.input.target.checkout.checkoutId)) continue;
-      try {
-        if (!openIds || openIds.has(record.input.target.checkout.checkoutId)) {
-          try {
-            const disk = await (await this.directory(record.input.target.checkout)).read(record.input.target.path);
-            if (disk.version === textDocument(record.input.text).version) record.result = {kind: 'saved', disk, recoveryChanges: []};
-            else if (disk.version === record.input.expectedVersion) record.result = {kind: 'conflict', disk};
-          } catch { /* Restore admitted text without guessing an unavailable disk outcome. */ }
-        }
-        this.publishSave(key(record.input.clientId, record.input.requestId), record, true);
-      } catch (error) { record.message = 'Admitted Save recovery publication pending. ' + errorText(error); this.volatileSaves.set(key(record.input.clientId, record.input.requestId), record); }
-    }
   }
+
   async load(clientId: string) {
     identifier(clientId);
     const before = this.store.readRecovery(clientId);
@@ -577,17 +603,8 @@ class LocalWorkspace {
     const operations = relevant.map(r => r.result);
     for (const record of relevant) if (record.publicationError) errors.push(record.publicationError);
     for (const operation of operations) if (operation.outcome === 'uncertain') errors.push('Uncertain operation ' + operation.id + ': ' + (operation.message ?? 'inspect original, destination, staging and Finder Trash; drafts retained.'));
-    for (const record of this.store.all<SaveRecord>('saves')) if (record.input.clientId === clientId && !record.result) {
-      errors.push('Uncertain save ' + record.input.requestId + ' for ' + record.input.target.path + ': inspect disk and staging ' + record.temporary + '; saved draft and intent retained.');
-      if (record.baseline && (stored?.revision ?? 0) === record.recoveryRevision) {
-        const candidate = structuredClone(state);
-        if (!candidate.checkouts.some(c => same(c, record.input.target.checkout))) candidate.checkouts.push(record.input.target.checkout);
-        const existing = candidate.drafts.find(d => same(d.target, record.input.target));
-        if (existing) { existing.text = record.input.text; existing.disk = record.baseline; }
-        else candidate.drafts.push({target: record.input.target, text: record.input.text, disk: record.baseline});
-        try { recovery(candidate, clientId); Object.assign(state, candidate); }
-        catch (error) { errors.push('Admitted Save recovery publication pending; journal text retained. ' + errorText(error)); }
-      }
+    for (const record of this.saveRecords()) if (record.input.clientId === clientId && (!record.result || record.restorePending && !record.recoveryRestored)) {
+      errors.push((record.result ? 'Save restoration pending ' : 'Uncertain save ') + record.input.requestId + ' for ' + record.input.target.path + ': inspect disk and staging ' + record.temporary + '; journal text retained.' + (record.message ? ' ' + record.message : ''));
     }
     return {revision: stored?.revision ?? 0, state, errors, operations};
   }
