@@ -8,10 +8,13 @@
   ],
   "scripts": {
     "typecheck": "nx run-many -t typecheck",
-    "lint": "nx run-many -t lint",
+    "lint": "oxlint . --report-unused-disable-directives",
     "test": "nx run-many -t test",
     "build": "nx run-many -t build",
-    "check:foundation": "node scripts/check-foundation.mjs"
+    "check:foundation": "node scripts/check-foundation.mjs",
+    "lint:fix": "bun run lint --fix --ignore-pattern \"packages/ui/**\"",
+    "format": "oxfmt --write .",
+    "format:check": "oxfmt --check ."
   },
   "trustedDependencies": [
     "electron",
@@ -39,6 +42,9 @@
     "typescript": "7.0.2",
     "vite-plus": "1.4.0",
     "@moonbase/application": "workspace:*",
-    "@earendil-works/pi-ai": "1.4.0"
+    "@earendil-works/pi-ai": "1.4.0",
+    "oxfmt": "0.75.0",
+    "oxlint": "1.90.0",
+    "@moonbase/config": "workspace:*"
   }
 }
