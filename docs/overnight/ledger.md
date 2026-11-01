@@ -9,9 +9,9 @@ All PRs are private, linked and unmerged. Older entries below are historical evi
 | [#1 foundation](https://github.com/ejjsharpe/moonbase/pull/1) | `8ef20b06222db32b54b4bdf9e6c2223a1ebd4da4` | main `c89e4db` | Source provenance checked; boundary findings repaired in #2 |
 | [#2 shared boundary](https://github.com/ejjsharpe/moonbase/pull/2) | `68aa035b9c283a65cac6e78ab02865e99882d15b` | #1 | Astra R5: no blockers; 14 public tests plus independent probes |
 | [#5 checkout contract](https://github.com/ejjsharpe/moonbase/pull/5) | `6e58c1c4ea6944e8ca25eadc46e35c843f0f9fbe` | #2 | Astra: no contract blockers; actual adoption/fan-in pending |
-| [#3 workspace](https://github.com/ejjsharpe/moonbase/pull/3) | `1fc969227e98dc56b66985675910663ec51759a6` | #5; adopting #7 next | DRAFT for new receipt adoption; R5 clears all 13 earlier findings at this head, 84+14+11 probes and CI pass |
-| [#4 editor](https://github.com/ejjsharpe/moonbase/pull/4) | `2ff2a6b70e43a4558fd4347a287802ca8b9bcb46` | #5; adopting #7 next | DRAFT; R4 found one P1/two P2; owner fixing close, activation, diff focus |
-| [#6 host health](https://github.com/ejjsharpe/moonbase/pull/6) | `eba354cc4062eee3575facad0d774f08d897f75a` | #5 | DRAFT; 22 application tests/checks and hosted CI pass; fresh Astra R1 running |
+| [#3 workspace](https://github.com/ejjsharpe/moonbase/pull/3) | `38c6c551ff0ab1108077275d223a32967f32b9f6` | #7 | DRAFT; new receipt adoption, 91+14 tests pass; fresh Astra R6 running |
+| [#4 editor](https://github.com/ejjsharpe/moonbase/pull/4) | `4c1e319d810ed4673765a008ae4c7101ee8b9f57` | #7 | DRAFT; R4 repairs/receipt adoption, 59+14 tests and 18 browser journeys pass; R5 queued |
+| [#6 host health](https://github.com/ejjsharpe/moonbase/pull/6) | `42836b0421898b963e67f02795edc35f5e546173` | #5 | DRAFT; R1 credential flaw repaired, 25 application tests/checks pass; R2 queued |
 | [#7 recovery publications](https://github.com/ejjsharpe/moonbase/pull/7) | `8557fdd0d7a71f93a6584c77430e6fde57668580` | #5 | DRAFT for coordinated adoption; Astra contract-only no blockers, 14 tests plus five independent probes and CI pass |
 
 Production editor fan-in, standalone Electron proof, independent Pi/SSH modules, chat proof and composition remain unfinished. Published Pi 1.4.0 controlled research is preparatory evidence only. No human/manual acceptance is inferred.
@@ -33,6 +33,10 @@ Workspace R5 completed with no blockers at `1fc9692`/base #5; all thirteen prior
 After T3's notification, one exact-head inspection verified both hosted #7 runs at `8557fdd0d7a71f93a6584c77430e6fde57668580` passed ([41269232732](https://github.com/ejjsharpe/moonbase/actions/runs/41269232732), [41269213538](https://github.com/ejjsharpe/moonbase/actions/runs/41269213538)). This verifies the shared shape and existing boundary checks, not atomic workspace receipts or editor close correctness.
 
 PR #7 fresh Astra review completed with no contract blockers; see `reviews/recovery-publication-contract-r1.md`. Both owners retain that narrow scope distinction. Unpublished adoption progress: workspace reports 91 real module/native tests and seven new receipt/fence/failure probes passing; editor reports 59 public cases and seventeen browser journeys passing with the final eighteen-journey run in progress. Await exact pushed heads before independent implementation review. Host-health #6 R1 now uses the reviewer slot while owners finish; no second reviewer runs concurrently.
+
+Both adoption heads are now published and based on exact #7. Workspace `38c6c55` adds atomic immutable recovery receipts/read-only lookup with 91 real module/native and fourteen application tests passing. Editor `4c1e319` (source/tests `a777c4169655bd5c3b3924be8ee3cf189185254c`) reports all three R4 fixes, exact pending/final publication semantics and 59 public/eighteen browser cases passing with inspected committed captures. Owner observed its exact-head CI green. Fresh workspace R6 is running; editor R5 is next, then host-health R2. Old workspace `1fc9692` clearance does not extend to receipt adoption without this review.
+
+Host-health R1 independently reproduced the bearer credential flaw: matching unsigned JSON at a wrong listener was accepted and its captured token could be reused. Lead repaired it at `42836b0` with domain-separated, nonce-bound client/host HMAC proofs, no key transmission or bearer fallback; 25 tests and required source checks pass. See `reviews/host-health-r1.md`. This is a changed-head repair awaiting independent R2, not accepted security or Pi/SSH implementation. New-head CI remains pending; supported watch is active.
 
 ## Setup
 

@@ -675,19 +675,20 @@
   },
   "hostHealth": {
     "url": "https://github.com/ejjsharpe/moonbase/pull/6",
-    "head": "eba354cc4062eee3575facad0d774f08d897f75a",
+    "head": "42836b0421898b963e67f02795edc35f5e546173",
     "base": "6e58c1c4ea6944e8ca25eadc46e35c843f0f9fbe",
     "branch": "chore/host-health-contract",
-    "status": "draft; independent review queued after editor/workspace",
-    "checks": "frozen install, uncached Nx 3 tasks, 22 application tests, 40 source hashes and both browser bundles, diff pass; exact-head hosted runs 41268693491 and 41268678488 pass"
+    "status": "draft R1 security fix published; R2 queued after module reviews",
+    "checks": "25 tests, typecheck, uncached lint, frozen install, 40 source hashes and both browser bundles, diff pass; new-head CI pending"
   },
   "editorFixR4": {
     "threadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-02-editor-module-r1-bb5c5d0",
     "messageId": "message:mcp:809f45ac-99a5-4d58-a1ba-08cc0a77c997:thread-send:editor-fix-review-r4-3findings",
     "runId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-02-editor-module-r1-bb5c5d0:ordinal:6",
     "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Athread-send%3Aeditor-fix-review-r4-3findings",
-    "status": "starting",
-    "delivery": "started"
+    "status": "completed",
+    "delivery": "started",
+    "head": "4c1e319d810ed4673765a008ae4c7101ee8b9f57"
   },
   "workspaceReviewR5": {
     "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-workspace-r5-1fc9692",
@@ -733,8 +734,9 @@
     "messageId": "message:mcp:809f45ac-99a5-4d58-a1ba-08cc0a77c997:thread-send:workspace-adopt-recovery-publication-8557fdd",
     "runId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-03-workspace-module-r1-bb5c5d0:ordinal:8",
     "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Athread-send%3Aworkspace-adopt-recovery-publication-8557fdd",
-    "status": "starting",
-    "delivery": "started"
+    "status": "completed",
+    "delivery": "started",
+    "head": "38c6c551ff0ab1108077275d223a32967f32b9f6"
   },
   "recoveryPublicationReviewR1": {
     "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-recovery-contract-r1-8557fdd",
@@ -773,6 +775,38 @@
     "childThreadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-host-health-r1-eba354c",
     "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-host-health-r1-eba354c:ordinal:1",
     "childNodeId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-host-health-r1-eba354c",
+    "status": "completed",
+    "workState": "working",
+    "hasPendingChildRuns": false,
+    "latestTerminalRunId": null,
+    "latestTerminalStatus": null,
+    "latestTerminalSummary": null,
+    "latestTerminalResultContextTransferId": null,
+    "providerInstanceId": "codex",
+    "model": "gpt-6-astra",
+    "options": [
+      {
+        "id": "reasoningEffort",
+        "value": "xhigh"
+      },
+      {
+        "id": "serviceTier",
+        "value": "default"
+      }
+    ],
+    "summary": null,
+    "resultContextTransferId": null,
+    "hasPendingQuestion": false,
+    "pendingApproval": null,
+    "waitTimedOut": false,
+    "findings": "docs/overnight/reviews/host-health-r1.md",
+    "blocking": 1
+  },
+  "workspaceReviewR6": {
+    "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-workspace-r6-38c6c55",
+    "childThreadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-workspace-r6-38c6c55",
+    "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-workspace-r6-38c6c55:ordinal:1",
+    "childNodeId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-workspace-r6-38c6c55",
     "status": "running",
     "workState": "working",
     "hasPendingChildRuns": false,
@@ -797,5 +831,16 @@
     "hasPendingQuestion": false,
     "pendingApproval": null,
     "waitTimedOut": false
+  },
+  "editorReviewNext": {
+    "round": 5,
+    "head": "4c1e319d810ed4673765a008ae4c7101ee8b9f57",
+    "base": "8557fdd0d7a71f93a6584c77430e6fde57668580",
+    "status": "queued behind workspace R6, before host-health R2",
+    "model": "gpt-6-astra",
+    "options": {
+      "reasoningEffort": "xhigh",
+      "serviceTier": "default"
+    }
   }
 }
