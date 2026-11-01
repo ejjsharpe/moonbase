@@ -10,6 +10,7 @@ import { Effect, Layer, ManagedRuntime } from 'effect';
 import { ApplicationError, emptyRecovery, type CommandInput } from '@moonbase/application/client';
 import { WorkspaceService } from '@moonbase/application/services';
 import { makeEditorClient } from '@moonbase/application/runtime-client';
+import { Store, pendingSaves } from '../src/store.ts';
 import { WorkspaceLive } from '../src/index.ts';
 const binary = fileURLToPath(new URL('../dist/filesystem', import.meta.url));
 const isError = (code: ApplicationError['code']) => (e: unknown) =>
@@ -482,5 +483,179 @@ test('matching receipt replay precedes later uncertain-operation preservation gu
   } finally {
     await runtime.dispose();
     f.cleanup();
+  }
+});
+
+test('growing settled Save history is not parsed by later Save or recovery load', async () => {
+  const f = fixture();
+  const { runtime, client } = f.start();
+  try {
+    const checkout = await client.command('openCheckout', { root: f.root });
+    const target = { checkout, path: 'a.txt' };
+    let disk = await client.command('readFile', target);
+    const inputs = [];
+    for (let i = 0; i < 12; i++) {
+      const input = {
+        target,
+        clientId: 'alice',
+        requestId: `large-${i}`,
+        text: String(i) + 'x'.repeat(256 * 1024),
+        expectedVersion: disk.version,
+      };
+      const result = await client.command('saveFile', input);
+      assert.equal(result.kind, 'saved');
+      disk = result.disk;
+      inputs.push({ input, result });
+    }
+    const database = f.database();
+    try {
+      const plan = database
+        .prepare(
+          `EXPLAIN QUERY PLAN SELECT body FROM records WHERE bucket=? AND ${pendingSaves} ORDER BY rowid`,
+        )
+        .all('saves');
+      assert.ok(
+        plan.some((row) => String(row.detail).includes('pending_saves')),
+        'pending reads must use the partial index rather than scan settled text in SQLite',
+      );
+    } finally {
+      database.close();
+    }
+    const parse = JSON.parse;
+    let historyBytes = 0;
+    JSON.parse = (body, ...args) => {
+      const value = parse(body, ...args);
+      if (value?.input?.requestId?.startsWith('large-')) historyBytes += body.length;
+      return value;
+    };
+    try {
+      await client.command('saveFile', {
+        target,
+        clientId: 'alice',
+        requestId: 'next',
+        text: 'next',
+        expectedVersion: disk.version,
+      });
+      await client.command('loadRecovery', { clientId: 'alice' });
+    } finally {
+      JSON.parse = parse;
+    }
+    assert.equal(historyBytes, 0, 'settled Save bodies must be filtered before JSON.parse');
+    await runtime.dispose();
+    const restarted = f.start();
+    try {
+      assert.deepEqual(
+        await restarted.client.command('saveFile', inputs[0].input),
+        inputs[0].result,
+      );
+      await assert.rejects(
+        restarted.client.command('saveFile', { ...inputs[0].input, text: 'changed' }),
+        isError('Conflict'),
+      );
+    } finally {
+      await restarted.runtime.dispose();
+    }
+  } finally {
+    await runtime.dispose();
+    f.cleanup();
+  }
+});
+
+test('completed conflict history is not parsed by recovery and replays exactly after restart', async () => {
+  const f = fixture();
+  const { runtime, client } = f.start();
+  try {
+    const checkout = await client.command('openCheckout', { root: f.root });
+    const target = { checkout, path: 'a.txt' };
+    const disk = await client.command('readFile', target);
+    writeFileSync(join(f.root, 'a.txt'), 'external writer');
+    const inputs = [];
+    for (let i = 0; i < 3; i++) {
+      const input = {
+        target,
+        clientId: 'alice',
+        requestId: `conflict-history-${i}`,
+        text: String(i) + 'x'.repeat(256 * 1024),
+        expectedVersion: disk.version,
+      };
+      const result = await client.command('saveFile', input);
+      assert.equal(result.kind, 'conflict');
+      inputs.push({ input, result });
+    }
+    const parse = JSON.parse;
+    let historyBytes = 0;
+    JSON.parse = (body, ...args) => {
+      const value = parse(body, ...args);
+      if (value?.input?.requestId?.startsWith('conflict-history-')) historyBytes += body.length;
+      return value;
+    };
+    try {
+      await client.command('loadRecovery', { clientId: 'alice' });
+      await client.command('loadRecovery', { clientId: 'bob' });
+    } finally {
+      JSON.parse = parse;
+    }
+    assert.equal(historyBytes, 0, 'completed conflict bodies must be filtered before JSON.parse');
+    await runtime.dispose();
+    const restarted = f.start();
+    try {
+      assert.deepEqual(
+        await restarted.client.command('saveFile', inputs[0].input),
+        inputs[0].result,
+      );
+      await assert.rejects(
+        restarted.client.command('saveFile', { ...inputs[0].input, text: 'changed' }),
+        isError('Conflict'),
+      );
+    } finally {
+      await restarted.runtime.dispose();
+    }
+  } finally {
+    await runtime.dispose();
+    f.cleanup();
+  }
+});
+
+test('pending Save index upgrades existing stores and retains unresolved and restore records', () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-index-upgrade-')));
+  const database = new DatabaseSync(join(base, 'moonbase-workspace-v1.sqlite'));
+  const records = [
+    { started: false },
+    { started: true },
+    { started: true, result: {}, published: false },
+    { result: {} },
+    { started: false, result: {}, restorePending: true, published: true },
+    { started: true, result: {}, restorePending: true, published: true },
+    { started: false, result: {} },
+    { started: true, result: {}, published: true },
+  ];
+  database.exec(`
+    PRAGMA application_id=1296193363;
+    CREATE TABLE records (bucket TEXT NOT NULL, key TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(bucket,key));
+    CREATE INDEX pending_saves ON records(bucket) WHERE bucket='saves' AND
+      (json_extract(body, '$.result') IS NULL OR json_extract(body, '$.published') IS NOT 1 OR json_extract(body, '$.restorePending') = 1);
+  `);
+  for (const [i, record] of records.entries())
+    database
+      .prepare('INSERT INTO records VALUES(?,?,?)')
+      .run('saves', String(i), JSON.stringify(record));
+  database.close();
+  const store = new Store(base, 'index-host');
+  try {
+    assert.deepEqual(store.all('saves', pendingSaves), records.slice(0, 6));
+    assert.deepEqual(store.all('saves'), records, 'upgrading must retain every immutable receipt');
+    const plan = store.db
+      .prepare(
+        `EXPLAIN QUERY PLAN SELECT body FROM records WHERE bucket=? AND ${pendingSaves} ORDER BY rowid`,
+      )
+      .all('saves');
+    assert.ok(plan.some((row) => String(row.detail).includes('pending_saves_v2')));
+    assert.equal(
+      store.db.prepare("SELECT name FROM sqlite_master WHERE name='pending_saves'").get(),
+      undefined,
+    );
+  } finally {
+    store.close();
+    rmSync(base, { recursive: true, force: true });
   }
 });
