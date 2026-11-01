@@ -10,9 +10,10 @@ All PRs are private, linked and unmerged. Older entries below are historical evi
 | [#2 shared boundary](https://github.com/ejjsharpe/moonbase/pull/2) | `68aa035b9c283a65cac6e78ab02865e99882d15b` | #1 | Astra R5: no blockers; 14 public tests plus independent probes |
 | [#5 checkout contract](https://github.com/ejjsharpe/moonbase/pull/5) | `6e58c1c4ea6944e8ca25eadc46e35c843f0f9fbe` | #2 | Astra: no contract blockers; actual adoption/fan-in pending |
 | [#3 workspace](https://github.com/ejjsharpe/moonbase/pull/3) | `38c6c551ff0ab1108077275d223a32967f32b9f6` | #7 | Ready for review; Astra R6 no blockers, 91+14 tests/10 independent probes and exact-head CI pass |
-| [#4 editor](https://github.com/ejjsharpe/moonbase/pull/4) | `4c1e319d810ed4673765a008ae4c7101ee8b9f57` | #7 | DRAFT; R5 found one P1/two related races and one P2 deferred activation; owner fixing |
+| [#4 editor](https://github.com/ejjsharpe/moonbase/pull/4) | `677ea50b625e213f074afd4d914bd8e993b15785` | #7 | DRAFT; owner 67+14 tests and 19 browser journeys pass; fresh Astra R6 running |
 | [#6 host health](https://github.com/ejjsharpe/moonbase/pull/6) | `42836b0421898b963e67f02795edc35f5e546173` | #5 | Ready; Astra R2 no source-boundary blockers, 25 tests/11 independent probes and CI pass |
 | [#7 recovery publications](https://github.com/ejjsharpe/moonbase/pull/7) | `8557fdd0d7a71f93a6584c77430e6fde57668580` | #5 | Ready; contract-only clearance, 14 tests/five independent probes and CI pass; both adapters published |
+| [#8 connection boundary](https://github.com/ejjsharpe/moonbase/pull/8) | `09b21f2ee8556c54ef4f8238f0be2ee88fd990c3` | #6 | DRAFT; 29 application tests/checks pass; independent review queued; no SSH implementation |
 
 Production editor fan-in, standalone Electron proof, independent Pi/SSH modules, chat proof and composition remain unfinished. Published Pi 1.4.0 controlled research is preparatory evidence only. No human/manual acceptance is inferred.
 
@@ -45,6 +46,10 @@ After T3's notification, one inspection verified both hosted #6 repair runs at `
 Editor R5 verifies the original reported repairs but finds a new P1 in-flight-observation/preservation race (Reload loses dirty recovery; pending Close can resurrect discarded moved text) and a P2 latest-selection activation missed during another preservation. See `reviews/editor-r5.md`. Original owner is fixing after-await gates and deferred activation; source composition remains gated. Fresh host-health R2 now occupies the reviewer slot while editor repairs run. Workspace backend clearance is unchanged.
 
 Host-health R2 independently clears `42836b0` with no source-boundary blockers; R1 credential capture/reuse reproduced on old code and rejected on current. Eleven independent probes include WebCrypto wire verification; see `reviews/host-health-r2.md`. Read-only request replay/live relay remain possible and health authorizes no Send/Stop. Lead marked #6 and the separately cleared #7 contract ready with exact scope/remaining gates in their bodies. No PR is merged. Lead is preparing the independent connection service/command/client boundary from the checked health base; no SSH process, remote contact or Pi/editor composition is introduced during this preparation.
+
+Editor R5 corrections published at `677ea50` (executable/tests `24954aab6e745ee1830de2a50c10a6ffd118967a`, main fix `f253774ba3de54cc43fb5cc1be67149ead1aba38`): owner reports after-await preservation-generation/fresh-fact gating, captured Reload checks, deferred latest activation and admitted-ACK handling with 67 editor/fourteen application tests, nineteen browser journeys and required checks passing. New inspected selection capture is committed. Fresh exact-head Astra R6 is running; no editor approval inferred yet.
+
+Connection preparation is published as draft #8 at `09b21f2`, based only on checked #6. It adds browser-safe profile/status/connect/generation-bound disconnect, a focused ConnectionService with privileged exact-host endpoint, shared handlers and runtime client. Error/cancellation/observation logic is shared with editor clients, retaining all prior regressions. Frozen install, three uncached root tasks, 29 application tests, forty source hashes/three browser bundles and diff checks pass. Four new fixture-service cases prove routing/scoping/cancellation/disposal, not SSH process or host-key behavior. Actual `SshLive` implementation and independent review remain pending; editor startup has no new capability requirement. #8 review queues after editor R6.
 
 ## Setup
 
