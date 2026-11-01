@@ -1,0 +1,55 @@
+✖ filename caret state never mutates inherited prototypes (8.716208ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 314.729417
+
+✖ failing tests:
+
+test at packages/editor/test/filename-maps.test.ts:21:1
+✖ filename caret state never mutates inherited prototypes (8.716208ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  ... Skipped lines
+
+    {
+      ['__proto__']: {
+        configurable: true,
+        enumerable: false,
+        get: [Function: get __proto__],
+  ...
+      },
+  +   file: {
+  +     configurable: true,
+  +     enumerable: true,
+  +     value: {
+  +       column: 3,
+  +       left: 0,
+  +       line: 1,
+  +       top: 0
+  +     },
+  +     writable: true
+  +   },
+      hasOwnProperty: {
+        configurable: true,
+        enumerable: false,
+        value: [Function: hasOwnProperty],
+        writable: true
+
+      at file:///Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/packages/editor/test/filename-maps.test.ts:16:66
+      at Array.forEach (<anonymous>)
+      at Object.assertUnchanged (file:///Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/packages/editor/test/filename-maps.test.ts:16:33)
+      at TestContext.<anonymous> (file:///Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/packages/editor/test/filename-maps.test.ts:28:16)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [Object],
+    expected: [Object],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }

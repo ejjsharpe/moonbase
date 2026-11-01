@@ -6,6 +6,8 @@ import {
   type OperationResult, type SaveResult, type RecoveryChange, type RecoveryPublication, type RecoveryLoad, type WorkspaceCommand, type CommandInput, type CommandOutput, type WorkspaceOperation,
 } from "@moonbase/application/client";
 
+import { readOwn, writeOwn } from "./record.ts";
+
 export const checkoutKey = (target: CheckoutTarget) => JSON.stringify([
   target.hostId, target.checkoutId, target.projectId, target.root, target.branch,
 ]);
@@ -106,7 +108,7 @@ export class EditorController {
     this.assertReady();
     if (!this.recovery.checkouts.some(item => sameCheckout(item, target)) || requireOpen && !this.recovery.openCheckoutIds.includes(target.checkoutId))
       throw Error("This exact checkout is not open in this editor.");
-    return this.recovery.views[target.checkoutId] ??= view();
+    return readOwn(this.recovery.views, target.checkoutId) ?? writeOwn(this.recovery.views, target.checkoutId, view());
   }
   private async command<K extends WorkspaceCommand>(name: K, input: CommandInput<K>): Promise<CommandOutput<K>> {
     if (this.disposed) throw Error("Editor disposed.");
@@ -127,7 +129,7 @@ export class EditorController {
     this.errors.push(...loaded.errors);
     for (const draft of this.recovery.drafts) {
       this.buffers.set(fileKey(draft.target), { ...structuredClone(draft), saving: false });
-      const selected = this.recovery.views[draft.target.checkout.checkoutId] ??= view();
+      const selected = readOwn(this.recovery.views, draft.target.checkout.checkoutId) ?? writeOwn(this.recovery.views, draft.target.checkout.checkoutId, view());
       if (!selected.openFiles.includes(draft.target.path)) selected.openFiles.push(draft.target.path);
       if (selected.preview === draft.target.path) selected.preview = null;
     }
@@ -138,8 +140,8 @@ export class EditorController {
     for (const checkout of this.recovery.checkouts.filter(target => this.recovery.openCheckoutIds.includes(target.checkoutId))) {
       if (this.disposed) break;
       this.observe(checkout);
-      const selected = this.recovery.views[checkout.checkoutId];
-      if (selected?.active) await this.open({ checkout, path: selected.active }, { view: selected.fileViews[selected.active] ?? "file" });
+      const selected = readOwn(this.recovery.views, checkout.checkoutId);
+      if (selected?.active) await this.open({ checkout, path: selected.active }, { view: readOwn(selected.fileViews, selected.active) ?? "file" });
       await this.refresh(checkout);
     }
     this.recovery.selectedCheckoutId = selectedCheckoutId;
@@ -166,7 +168,7 @@ export class EditorController {
     if (collision) throw Error("Checkout identity changed; retained work has not been rebound.");
     if (!this.recovery.checkouts.some(item => sameCheckout(item, target))) {
       this.recovery.checkouts.push(target);
-      this.recovery.views[target.checkoutId] = view();
+      writeOwn(this.recovery.views, target.checkoutId, view());
     }
     const reopening = !this.recovery.openCheckoutIds.includes(target.checkoutId);
     if (reopening) { this.recovery.openCheckoutIds.push(target.checkoutId); this.observe(target); }
@@ -184,14 +186,14 @@ export class EditorController {
   private async activateSelected() {
     if (this.disposed || this.preserving) return false;
     const checkout = this.recovery.checkouts.find(target => target.checkoutId === this.recovery.selectedCheckoutId);
-    const path = checkout && this.recovery.views[checkout.checkoutId]?.active;
+    const path = checkout && readOwn(this.recovery.views, checkout.checkoutId)?.active;
     if (!checkout || !path) return true;
-    const key = fileKey({ checkout, path }), mode = this.recovery.views[checkout.checkoutId].fileViews[path] ?? "file";
+    const key = fileKey({ checkout, path }), mode = readOwn(this.checkout(checkout).fileViews, path) ?? "file";
     const attempt = this.comparisonAttempts.get(key), working = this.comparisons[key]?.working;
     // A failed activation stays settled for that working version, not future availability.
     const needsWorking = !this.buffers.has(key) && working != null && working.version !== attempt?.failedWorkingVersion;
     if (mode === "file" ? this.buffers.has(key) : attempt?.mode === mode && !needsWorking) return true;
-    return this.open({ checkout, path }, { current: () => this.recovery.selectedCheckoutId === checkout.checkoutId && this.recovery.views[checkout.checkoutId]?.active === path });
+    return this.open({ checkout, path }, { current: () => this.recovery.selectedCheckoutId === checkout.checkoutId && readOwn(this.recovery.views, checkout.checkoutId)?.active === path });
   }
   private resumeFacts() {
     if (this.disposed || this.preserving || this.pendingPublication) return;
@@ -324,7 +326,7 @@ export class EditorController {
     const generation = ++this.activation;
     const current = () => !this.disposed && !this.preserving && generation === this.activation && (options.current?.() ?? true) &&
       this.recovery.openCheckoutIds.includes(target.checkout.checkoutId) && this.recovery.checkouts.some(item => sameCheckout(item, target.checkout));
-    const key = fileKey(target), mode = options.view ?? selected.fileViews[target.path] ?? "file";
+    const key = fileKey(target), mode = options.view ?? readOwn(selected.fileViews, target.path) ?? "file";
     try {
       let disk: FileDocument | null, comparison: Comparison | undefined;
       if (mode === "file" || mode === "conflict") {
@@ -371,7 +373,7 @@ export class EditorController {
         if (options.intent === "preview" && (!buffer || buffer.text === buffer.disk.text)) selected.preview = target.path;
       }
       if (options.intent === "keep") selected.preview = selected.preview === target.path ? null : selected.preview;
-      selected.active = target.path; selected.fileViews[target.path] = mode;
+      selected.active = target.path; writeOwn(selected.fileViews, target.path, mode);
       this.recovery.selectedCheckoutId = target.checkout.checkoutId;
       this.recovery.recentFiles = [target, ...this.recovery.recentFiles.filter(item => fileKey(item) !== key)].slice(0, 100);
       this.changed();
@@ -430,7 +432,7 @@ export class EditorController {
       await this.publish(state, async () => {
         if (sameBuffer()) {
           buffer.disk = disk; buffer.text = disk.text; buffer.conflict = undefined;
-          if (this.checkout(captured.checkout).fileViews[captured.path] === "conflict") {
+          if (readOwn(this.checkout(captured.checkout).fileViews, captured.path) === "conflict") {
             this.comparisons[key] = { original: disk.text, working: disk, title: "Disk versus your edits" };
             this.comparisonAttempts.set(key, { mode: "conflict" });
           }
@@ -444,16 +446,17 @@ export class EditorController {
     const buffer = this.buffers.get(fileKey(target));
     if (buffer) buffer.conflict = undefined;
     const selected = this.checkout(target.checkout);
-    if (selected.fileViews[target.path] === "conflict") selected.fileViews[target.path] = "file";
+    if (readOwn(selected.fileViews, target.path) === "conflict") writeOwn(selected.fileViews, target.path, "file");
     this.changed();
   }
   position(target: FileTarget, mode: FileView | `${FileView}:original`, position: EditorPosition) {
     if (this.disposed || this.preserving) return;
     if (!this.recovery.openCheckoutIds.includes(target.checkout.checkoutId) || !this.recovery.checkouts.some(item => sameCheckout(item, target.checkout))) return;
-    const selected = this.recovery.views[target.checkout.checkoutId];
+    const selected = readOwn(this.recovery.views, target.checkout.checkoutId);
     if (!selected) return;
     if (!selected.openFiles.includes(target.path)) return;
-    (selected.positions[target.path] ??= {})[mode] = position;
+    const positions = readOwn(selected.positions, target.path) ?? writeOwn(selected.positions, target.path, {});
+    writeOwn(positions, mode, position);
     this.changed();
   }
   reorder(checkout: CheckoutTarget, from: string, to: number) {
@@ -505,12 +508,13 @@ export class EditorController {
       const applyClose = (state: EditorRecovery, remember = false) => {
         state.drafts = state.drafts.filter(draft => !discarded.has(fileKey(draft.target)) && (kind === "quit" || !keys.has(fileKey(draft.target))));
         if (kind === "files") for (const target of state.checkouts) {
-          const selected = state.views[target.checkoutId];
+          const selected = readOwn(state.views, target.checkoutId);
+          if (!selected) continue;
           const closing = selected.openFiles.filter(path => keys.has(fileKey({ checkout: target, path })));
           if (!closing.length) continue;
           if (remember) history.push({ checkout: target, active: closing.includes(selected.active) ? selected.active : closing.at(-1)!,
-            files: closing.map(path => ({ path, index: selected.openFiles.indexOf(path), view: selected.fileViews[path] ?? "file",
-              positions: structuredClone(selected.positions[path]) })) });
+            files: closing.map(path => ({ path, index: selected.openFiles.indexOf(path), view: readOwn(selected.fileViews, path) ?? "file",
+              positions: structuredClone(readOwn(selected.positions, path)) })) });
           selected.openFiles = selected.openFiles.filter(path => !closing.includes(path));
           if (closing.includes(selected.active)) selected.active = state.recentFiles.find(item =>
             sameCheckout(item.checkout, target) && selected.openFiles.includes(item.path))?.path ?? selected.openFiles[0] ?? "";
@@ -566,8 +570,8 @@ export class EditorController {
     const action = this.history[index];
     for (const file of action.files) if (!selected.openFiles.includes(file.path)) {
       selected.openFiles.splice(Math.min(file.index, selected.openFiles.length), 0, file.path);
-      selected.fileViews[file.path] = file.view;
-      if (file.positions) selected.positions[file.path] = structuredClone(file.positions);
+      writeOwn(selected.fileViews, file.path, file.view);
+      if (file.positions) writeOwn(selected.positions, file.path, structuredClone(file.positions));
     }
     selected.active = action.active; selected.preview = null;
     const success = await this.open({ checkout, path: action.active });
@@ -624,12 +628,12 @@ export class EditorController {
     try { this.git[checkoutKey(checkout)] = await this.command("gitStatus", { checkout }); }
     catch { /* The public command already reported the error; retained buffers stay usable. */ }
     if (this.disposed || !this.recovery.openCheckoutIds.includes(checkout.checkoutId)) return;
-    const selected = this.checkout(checkout), mode = selected.fileViews[selected.active], generation = this.activation;
+    const selected = this.checkout(checkout), mode = readOwn(selected.fileViews, selected.active), generation = this.activation;
     if (selected.active && mode && mode !== "file" && mode !== "conflict" && !this.preserving) {
       const target = { checkout, path: selected.active }, key = fileKey(target);
       try {
         const comparison = await this.command("readComparison", { target, area: mode });
-        if (!this.disposed && !this.preserving && generation === this.activation && selected.active === target.path && selected.fileViews[target.path] === mode) {
+        if (!this.disposed && !this.preserving && generation === this.activation && selected.active === target.path && readOwn(selected.fileViews, target.path) === mode) {
           this.comparisons[key] = comparison; this.comparisonAttempts.set(key, { mode });
           const buffer = this.buffers.get(key);
           if (buffer && comparison.working && buffer.text === buffer.disk.text && !buffer.pendingSave) {

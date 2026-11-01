@@ -1,0 +1,18 @@
+node:internal/modules/run_main:111
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: Opening a filename must not mutate Object.prototype
+
+true !== false
+
+    at file:///Users/elliotsharpe/.t3/worktrees/moonbase/t3-23880320/dist/astra-r1-review/proto-public.mjs:21:9 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: true,
+  expected: false,
+  operator: 'strictEqual',
+  diff: 'simple'
+}
+
+Node.js v26.13.0

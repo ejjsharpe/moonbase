@@ -51,6 +51,6 @@ function Demo() {
 }
 createRoot(document.getElementById("root")!).render(<Demo />);
 declare global { interface Window { demo: { first: typeof first; second: typeof second; checkout: typeof checkout; memory: typeof memory;
-  workbench(): EditorWorkbenchHandle; selectNativeImports(): Promise<string[]>; modelCount(): number; runtime: typeof runtime } } }
-window.demo = { first, second, checkout, memory, workbench: () => firstHandle.current!, selectNativeImports: async () => [], modelCount: () => monaco.editor.getModels().length, runtime };
+  workbench(): EditorWorkbenchHandle; selectNativeImports(): Promise<string[]>; modelCount(): number; client: typeof client; runtime: typeof runtime } } }
+window.demo = { first, second, checkout, memory, workbench: () => firstHandle.current!, selectNativeImports: async () => [], modelCount: () => monaco.editor.getModels().length, client, runtime };
 window.addEventListener("pagehide", () => { first.dispose(); second.dispose(); void runtime.dispose(); }, { once: true });
