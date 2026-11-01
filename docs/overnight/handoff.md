@@ -21,6 +21,7 @@ These are real dependency branches, not T3's derived display order. Additional f
 | [#13](https://github.com/ejjsharpe/moonbase/pull/13) Native import/Create follow-up | `fix/editor-native-import-dialog`<br>`71f272d354359f8d5e1cff7a9f57159325eeabc5` | `chore/editor-integration`<br>`80b0ede184205b9fff1d633d19426c2bf9671688` | Ready; R1 clear |
 | [#16](https://github.com/ejjsharpe/moonbase/pull/16) Filename maps/menu follow-up | `fix/editor-filename-maps-and-menu`<br>`473e0fe03f6c5fc34fd8282fab4875c20f143ac2` | `fix/editor-native-import-dialog`<br>`71f272d354359f8d5e1cff7a9f57159325eeabc5` | Ready; Paired desktop R2 clear |
 | [#14](https://github.com/ejjsharpe/moonbase/pull/14) Standalone editor | `feat/standalone-editor`<br>`4dd148ade5f279e2b3820df0325313ee08ce4f8d` | `fix/editor-filename-maps-and-menu`<br>`473e0fe03f6c5fc34fd8282fab4875c20f143ac2` | DRAFT; prior Desktop R2 clear; newly reproduced Reload loss open |
+| [#21](https://github.com/ejjsharpe/moonbase/pull/21) Standalone Reload preservation/cleanup | `fix/editor-reload-preservation`<br>`fc547673c519871136388f6e5cc0e4fdc1d9bd6a` | `feat/standalone-editor`<br>`4dd148ade5f279e2b3820df0325313ee08ce4f8d` | DRAFT; owner-qualified source/package; fresh independent review pending |
 | [#6](https://github.com/ejjsharpe/moonbase/pull/6) Authenticated health contract | `chore/host-health-contract`<br>`42836b0421898b963e67f02795edc35f5e546173` | `chore/checkout-recovery-contract`<br>`6e58c1c4ea6944e8ca25eadc46e35c843f0f9fbe` | Ready; Health R2 clear |
 | [#8](https://github.com/ejjsharpe/moonbase/pull/8) Connection contract | `chore/connection-contract`<br>`09b21f2ee8556c54ef4f8238f0be2ee88fd990c3` | `chore/host-health-contract`<br>`42836b0421898b963e67f02795edc35f5e546173` | Ready; R1 clear |
 | [#9](https://github.com/ejjsharpe/moonbase/pull/9) SSH transport | `feat/ssh-transport`<br>`1aec1a438ba0d5592b0e6c3f0e1be835cf3c034b` | `chore/connection-contract`<br>`09b21f2ee8556c54ef4f8238f0be2ee88fd990c3` | Ready; R3:4 findings clear; controlled transport |
@@ -34,7 +35,8 @@ These are real dependency branches, not T3's derived display order. Additional f
 
 ## Technical status and review evidence
 
-- **Editor baseline #14/#16:** paired Astra R2 cleared prototype-like filenames and bounded menus in source/package (231 repository/integration tests,35 Chromium journeys,25 Electron journeys). Final composition R1 subsequently found a distinct native document Reload P1 at exact4dd: a visibly typed tail can be lost before the150ms recovery debounce. The old proof remains preserved; a focused standalone follow-up is being prepared. Its targeted native checks additionally reproduced a direct held-read resource surviving committed Reload/renderer loss in source; the editor-only cleanup repair and package qualification are pending. Use the repaired standalone ref once its fresh review is complete. [Desktop R2](reviews/desktop-r2.md), [new R1](reviews/composition-r1.md).
+- **Editor baseline #14/#16:** paired Astra R2 cleared prototype-like filenames and bounded menus in source/package (231 repository/integration tests,35 Chromium journeys,25 Electron journeys). Final composition R1 subsequently found a distinct native document Reload P1 at exact4dd: a visibly typed tail can be lost before the150ms recovery debounce. The old proof remains preserved; focused follow-up #21 atfc547673 is published with owning source/package qualification; independent review remains pending. Its targeted native checks additionally reproduced a direct held-read resource surviving committed Reload/renderer loss in source; the editor-only cleanup repair and package qualification are pending. Use the repaired standalone ref once its fresh review is complete. [Desktop R2](reviews/desktop-r2.md), [new R1](reviews/composition-r1.md).
+- **Standalone follow-up #21:** owner reports241 Node/integration tests,35 Chromium,25 editor Electron +one packaged-resource journey and4 focused cases in each source/package passing. Public recoveryReady uses local capture generation confirmed by the existing exact receipt; editor-only preload/session cleanup releases document resources. Actual archive `2d80155594f4912c2604983e0eb16c942b479140cd81723ee113019503740df2`. Four fresh old loss cases reproduce under the same driver; a separate235.7ms packaged run failed before its timing precondition and is not a product red. [Full owning response and evidence correction](reviews/reload-preservation-owning-response.md). NEW independent review is pending with the composed successor.
 - **Pi #12 / integration #15:** independent R3/R2 clears exact235/132, including postdispatch generation loss.136 shipped tests and22 independent probes pass;21 expected historical failures reproduce. Controlled production HTTP/SQLite/SSH-child evidence is separate from real remote qualification. [Full report](reviews/pi-r3-chat-integration-r2.md).
 - **Standalone chat #18:** independent R2 clears exactdbd. Retry now checks preservation immediately before mutation after awaited read-only lookup; native200% Send/Stop are reachable by scrolling/keyboard.167 module/public +7 integration tests,6 original public probes and31 native case executions pass (overlapping scenarios);18 public/12 native expected old failures reproduce. Actual archive `baabf3fc9734aea731d83d19ae1ec6392f264fc4a311e14381752dc178946990`, seven packaged files and nine generated notices verified. [R1](reviews/chat-proof-r1.md), [response](reviews/chat-proof-r1-response.md), [R2](reviews/chat-proof-r2.md).
 - **Fan-in #19:** independent DFF R1 clears391 shipped tests and two independent combined-root probes. Final composition R1 separately clears the exact DFF→D79 test-fixture export delta. That seam clearance does not approve its inherited old desktop Reload behavior. Public exports reuse existing implementations; production graphs exclude the test host/SDK. [DFF review](reviews/workbench-integration-r1.md), [D79 review](reviews/composition-r1.md).
@@ -80,17 +82,17 @@ All12 owning composition captures were inspected by the owner and independent re
 
 Use a new clean checkout for each exact ref; preserve existing dirty work. Build requires pinned Bun1.4.4/Node26.13 tooling and macOS compiler tools. The package runs bundled Electron45.1/Node24.22. Separate explicit Moonbase data directories are mandatory for review; never point at an old application's data.
 
-**Independent editor, no Pi/SSH/configuration required:**
+**Independent editor candidate #21, no Pi/SSH/configuration required (fresh review pending):**
 
 ```sh
-git worktree add --detach /tmp/moonbase-editor-proof 4dd148ade5f279e2b3820df0325313ee08ce4f8d
+git worktree add --detach /tmp/moonbase-editor-proof fc547673c519871136388f6e5cc0e4fdc1d9bd6a
 cd /tmp/moonbase-editor-proof
 bun install --frozen-lockfile
 node scripts/prepare-ripgrep.mjs
 MOONBASE_USER_DATA="$(mktemp -d -t moonbase-editor)" NX_DAEMON=false bunx nx run @moonbase/desktop:dev
 ```
 
-Package: `NX_DAEMON=false bunx nx run @moonbase/desktop:package`, then run `apps/desktop/release/mac-arm64/Moonbase.app/Contents/MacOS/Moonbase` with a fresh `MOONBASE_USER_DATA`. Actual source/package tests are `bun run --cwd apps/desktop test:desktop` / `test:package` after build/package. [Guide](https://github.com/ejjsharpe/moonbase/blob/4dd148ade5f279e2b3820df0325313ee08ce4f8d/apps/desktop/README.md).
+Package: `NX_DAEMON=false bunx nx run @moonbase/desktop:package`, then run `apps/desktop/release/mac-arm64/Moonbase.app/Contents/MacOS/Moonbase` with a fresh `MOONBASE_USER_DATA`. Actual source/package tests are `bun run --cwd apps/desktop test:desktop` / `test:package` after build/package. [Guide](https://github.com/ejjsharpe/moonbase/blob/fc547673c519871136388f6e5cc0e4fdc1d9bd6a/apps/desktop/README.md).
 
 **Independent chat, no editor dependency:**
 
@@ -127,8 +129,8 @@ This explicitly removes any inherited chat configuration for the launched proces
 ## Human merge/retarget order
 
 1. Resolve GitHub billing/CI and review provenance/contracts: #1 → #2 → #5.
-2. Editor line: #7 → siblings #3/#4 → #11 → #13 → #16 → #14.
+2. Editor line: #7 → siblings #3/#4 → #11 → #13 → #16 → #14 → #21.
 3. Chat line can be reviewed alongside editor: #6 → #8 → siblings #9/#10 → #12 after#10 → #15 after#12+#9 → #18.
-4. #19 after#14+#18, then the final composition, then final handoff documentation.
+4. #19 after#14+#18; final #20 after#19 +the normally merged #21 preservation follow-up, then final handoff documentation. Do not accept/run old4dd as the repaired standalone.
 
 After a human merges dependencies, retarget newly unblocked PRs to the updated appropriate base, retain ancestry and rerun exact-head checks. Integration branches normally contain reviewed parent merges; don't merge duplicate whole-project diffs blindly. This run performs no GitHub merges, deployment or acceptance. Final cleanup/link/privacy/default-branch/pushed-state audit remains pending.

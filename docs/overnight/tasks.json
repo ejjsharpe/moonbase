@@ -2376,7 +2376,7 @@
     "baseBranch": "chore/workbench-integration",
     "branch": "feat/workbench-composition",
     "runOrdinal": 17,
-    "status": "AUTHORIZED R1 repairs: new focused standalone follow-up from4dd, normal merge into composition, empty-config fix; exact final heads/native requalification pending",
+    "status": "Standalone PR21 fc547673 published; original owner normally merging into PR20 +strict-present configuration repair, retains exclusive native foreground",
     "model": "gpt-6.1-sol",
     "options": {
       "reasoningEffort": "xhigh",
@@ -2457,7 +2457,7 @@
   "morning-handoff": {
     "path": "docs/overnight/handoff.md",
     "state": "WORKING DRAFT; notcomplete",
-    "sourcePrCheckpoint": 19,
+    "sourcePrCheckpoint": 20,
     "composition": "PR20 8a blocked by R1 P1/P2; original owner repairing both affected apps; final new exact refs and review pending",
     "finalAudit": "pending",
     "visualInspection": "Root read actual owning package-live-chat-normal, package-dirty-editor and package-zoom-700 images. Actual200% cramped scrolling accepted only with measured native reachability; no independent review clearance inferred."
@@ -2484,5 +2484,19 @@
     "commands": "docs/overnight/reviews/composition-r1-commands.md",
     "cleanup": "docs/overnight/reviews/composition-r1-cleanup.json",
     "artifactRoot": "/Users/elliotsharpe/.t3/worktrees/moonbase/t3-95174512/apps/desktop/test-results/review-task08-r1"
+  },
+  "reload-preservation-pr": {
+    "url": "https://github.com/ejjsharpe/moonbase/pull/21",
+    "branch": "fix/editor-reload-preservation",
+    "head": "fc547673c519871136388f6e5cc0e4fdc1d9bd6a",
+    "base": "4dd148ade5f279e2b3820df0325313ee08ce4f8d",
+    "baseBranch": "feat/standalone-editor",
+    "state": "DRAFT clean/pushed; owner-qualified, NEW independent review pending",
+    "productTest": "c487c8d5da7f72011b0bc3652162f4640c08c123",
+    "asar": "2d80155594f4912c2604983e0eb16c942b479140cd81723ee113019503740df2",
+    "checks": "226Node (application14/editor115/workspace91/desktop6)+15realintegration=241;35Chromium;25Electron+1package;focused4source/4package PASS",
+    "response": "docs/overnight/reviews/reload-preservation-owning-response.md",
+    "foreground": "not released: original owner continues composition integration",
+    "limits": "Deleted local archives/initial raw phases explicit; reviewer immutable copies and NEW reruns distinct; one235.7ms pre-causal failure not productred; original cc06/Trash/unknownobservations unchanged"
   }
 }
