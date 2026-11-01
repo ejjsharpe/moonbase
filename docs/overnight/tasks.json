@@ -2357,14 +2357,16 @@
   },
   "workbench-integration": {
     "url": "https://github.com/ejjsharpe/moonbase/pull/19",
-    "head": "dff2ece7503aef4159994e8e169dd29180842a4d",
+    "head": "d79d1e9b8347f7f5f19cdbe9aad0233a0c47be8d",
     "base": "4dd148ade5f279e2b3820df0325313ee08ce4f8d",
     "additionalChat": "dbd06a6d3f8c8f310868349e7ed099468db9b9ba",
     "merge": "90747e4",
     "tests": 391,
     "nxTasks": 21,
     "sourceChanges": "rootconflictsunion; existingpublicchatadapterexports;desktopdeps;noimplementationchanges",
-    "review": "fresh headlessAstraR1 active"
+    "review": "fresh headlessAstraR1 active",
+    "reviewCheckpoint": "dff2ece7503aef4159994e8e169dd29180842a4d",
+    "followup": "one test-only existingfixture export +docs; frozenimportlifecycle smokezero model/tool,hostgone/portrebind; finalcompositionreview mustcoverdelta"
   },
   "08-workbench-composition": {
     "requestId": "fresh-lead-task08-dff2ece-sol",
@@ -2382,7 +2384,9 @@
     },
     "ownership": "apps/desktop only; coordinator ownsshared/root/exports",
     "foreground": "exclusive owner after chatR2release",
-    "brief": "completecommon08+exactbase+fullindependentdesktopR2/chatR2reports+allpriorobjections/safetytests"
+    "brief": "completecommon08+exactbase+fullindependentdesktopR2/chatR2reports+allpriorobjections/safetytests",
+    "requestedBaseFollowup": "d79d1e9b8347f7f5f19cdbe9aad0233a0c47be8d",
+    "testFixtureExport": "@moonbase/chat-probe/test-fixture -> existing ./test/fixture.ts; testconsumersonly; no newdeps"
   },
   "review-workbench-integration-r1": {
     "taskId": "node:delegated-task:command%3Amcp%3A8185ba6c-62ae-4571-ad0b-9688ad5a1b92%3Adelegate-task%3Afresh-lead-workbench19-dff-review-astra",
