@@ -30,7 +30,8 @@ export function recovery(state: EditorRecovery, clientId: string) {
   ensure(Array.isArray(state.checkouts) && state.checkouts.length <= 128 && record(state.views) && Array.isArray(state.drafts) && state.drafts.length <= 512 && Array.isArray(state.recentFiles) && state.recentFiles.length <= 1000 && Number.isFinite(state.sidebarWidth) && state.sidebarWidth >= 100 && state.sidebarWidth <= 2000, 'Invalid recovery state.');
   state.checkouts.forEach(checkout);
   const identities = new Map(state.checkouts.map(c => [c.checkoutId, c]));
-  ensure(identities.size === state.checkouts.length && (state.selectedCheckoutId === null || identities.has(state.selectedCheckoutId)), 'Invalid recovery checkout selection.');
+  ensure(Array.isArray(state.openCheckoutIds) && state.openCheckoutIds.length <= 128 && new Set(state.openCheckoutIds).size === state.openCheckoutIds.length && state.openCheckoutIds.every(id => typeof id === 'string' && identities.has(id)), 'Invalid open checkout membership.');
+  ensure(identities.size === state.checkouts.length && (state.selectedCheckoutId === null || state.openCheckoutIds.includes(state.selectedCheckoutId)), 'Invalid recovery checkout selection.');
   const target = (t: any) => { ensure(record(t), 'Invalid recovery target.'); path(t.path); checkout(t.checkout); ensure(same(identities.get(t.checkout.checkoutId), t.checkout), 'Recovery target has mismatched checkout.'); };
   const seen = new Set<string>();
   for (const draft of state.drafts) {

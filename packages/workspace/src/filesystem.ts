@@ -52,14 +52,15 @@ export class Directory {
   git(args: string[], input?: string, signal?: AbortSignal) {
     return this.io(['git', this.gitExecutable, '--literal-pathspecs', '-c', 'core.fsmonitor=false', '-c', 'core.excludesFile=/dev/null', '--work-tree=.', ...args], input, signal);
   }
-  async entry(p: string, signal?: AbortSignal) {
+  async entry(p: string, signal?: AbortSignal, spellings?: Map<string, Set<string>>) {
     path(p, true);
     this.check();
     if (p) {
       ensure(relative(this.root, realpathSync(resolve(this.root, p))) === p, 'Use exact paths without mount or symbolic-link aliases.');
       let parent = this.root;
       for (const component of p.split('/')) {
-        ensure(readdirSync(parent).includes(component), 'Use the actual on-disk spelling without case or Unicode aliases.');
+        const names = spellings?.get(parent) ?? new Set(readdirSync(parent)); spellings?.set(parent, names);
+        ensure(names.has(component), 'Use the actual on-disk spelling without case or Unicode aliases.');
         parent = resolve(parent, component);
       }
     }

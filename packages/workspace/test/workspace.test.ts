@@ -21,7 +21,7 @@ function fixture() {
 }
 const rejects = (code: ApplicationError['code']) => (error: unknown) => error instanceof ApplicationError && error.code === code;
 function draft(clientId: string, checkout: CheckoutTarget, text: string, disk: {text: string; version: string}): EditorRecovery {
-  return {...emptyRecovery(clientId), checkouts: [checkout], selectedCheckoutId: checkout.checkoutId, drafts: [{target: {checkout, path: 'file.txt'}, text, disk}]};
+  return {...emptyRecovery(clientId), checkouts: [checkout], openCheckoutIds: [checkout.checkoutId], selectedCheckoutId: checkout.checkoutId, drafts: [{target: {checkout, path: 'file.txt'}, text, disk}]};
 }
 
 test('public client saves, rejects changed retries and preserves original dirty conflict baselines across restart', async () => {
@@ -120,6 +120,9 @@ test('Git staged and unstaged originals both compare against the current working
     assert.deepEqual((await f.client.command('gitStatus', {checkout})).changes.filter(c => c.path === 'file.txt').map(c => c.area), ['staged', 'unstaged']);
     assert((await f.client.command('lookupFiles', {checkout, query: 'fltx'})).matches.some(match => match.path === 'file.txt'));
     assert(!(await f.client.command('listDirectory', {checkout, path: '', hideIgnored: true})).entries.some(e => e.path === 'ignored.txt'));
+    rmSync(join(f.root, 'file.txt'));
+    const deleted = await f.client.command('readComparison', {target: {checkout, path: 'file.txt'}, area: 'unstaged'});
+    assert.equal(deleted.original, 'index'); assert.equal(deleted.working, null);
   } finally { await f.close(); }
 });
 
@@ -522,8 +525,11 @@ test('restart recovers the admitted Save text even when no earlier draft publica
       const restored = await restarted.client.command('loadRecovery', {clientId: 'alice'});
       assert.equal(restored.state.drafts[0].text, 'admitted unsaved text'); assert.deepEqual(restored.state.drafts[0].disk, disk);
       assert.equal(readFileSync(join(f.root, 'file.txt'), 'utf8'), 'original');
+      await assert.rejects(restarted.client.command('saveFile', save), rejects('Uncertain'));
+      await restarted.client.command('persistRecovery', {clientId: 'alice', expectedRevision: restored.revision, state: {...restored.state, openCheckoutIds: [checkout.checkoutId]}});
+      await restarted.client.command('loadRecovery', {clientId: 'alice'});
       assert.equal((await restarted.client.command('saveFile', save)).kind, 'conflict');
-      assert.equal((await restarted.client.command('loadRecovery', {clientId: 'alice'})).revision, restored.revision);
+      assert.equal((await restarted.client.command('loadRecovery', {clientId: 'alice'})).revision, restored.revision + 1);
     } finally { await restarted.runtime.dispose(); }
   } finally { await runtime.dispose(); await f.close(); }
 });

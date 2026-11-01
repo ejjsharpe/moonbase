@@ -23,7 +23,7 @@ function fixture() {
 }
 const isError = (code: ApplicationError['code']) => (value: unknown) => ApplicationError.is(value) && value.code === code;
 function state(checkout: CheckoutTarget, disk: {text: string; version: string}, text = 'older draft'): EditorRecovery {
-  return {...emptyRecovery('alice'), checkouts: [checkout], drafts: [{target: {checkout, path: 'file.txt'}, disk, text}]};
+  return {...emptyRecovery('alice'), checkouts: [checkout], openCheckoutIds: [checkout.checkoutId], drafts: [{target: {checkout, path: 'file.txt'}, disk, text}]};
 }
 async function waitFor(path: string) { const deadline = Date.now() + 3000; while (!existsSync(path)) { assert(Date.now() < deadline, 'native helper did not reach barrier'); await new Promise(resolve => setTimeout(resolve, 5)); } }
 
@@ -36,20 +36,23 @@ test('R1 aliases cannot authorize two same-baseline saves of one macOS object', 
     assert.equal(results.filter(r => r.status === 'fulfilled' && r.value.kind === 'saved').length, 1);
     assert.equal(results[1].status, 'rejected');
     await assert.rejects(client.command('readFile', {checkout, path: 'FILE.TXT'}), isError('InvalidInput'));
+    const sources = await client.command('inspectEntries', {checkout, paths: ['file.txt']});
+    assert.equal((await client.command('mutate', {clientId: 'alice', id: 'case-only', checkout, kind: 'move', sources, destination: 'FILE.TXT'})).outcome, 'completed');
+    assert.equal((await client.command('readFile', {checkout, path: 'FILE.TXT'})).text, 'save-0');
   } finally { await runtime.dispose(); f.cleanup(); }
 });
 
-for (const directory of [false, true]) test(`R2 native ${directory ? 'directory descendant' : 'self'} import rejects before replacement Trash`, async () => {
+for (const selection of ['self', 'descendant', 'ancestor'] as const) test(`R2 native ${selection} import rejects before replacement Trash`, async () => {
   const f = fixture(), count = join(f.base, 'trash-count');
   const helper = f.wrapper(`if [ "$1" = trash ]; then printf 'trash\\n' >> ${quote(count)}; exit 1; fi`), {runtime, client} = f.start(helper);
   try {
-    if (directory) { mkdirSync(join(f.root, 'source')); writeFileSync(join(f.root, 'source/child'), 'keep child'); }
-    const checkout = await client.command('openCheckout', {root: f.root}), source = directory ? 'source' : 'file.txt', destination = directory ? 'source/child' : source;
+    if (selection !== 'self') { mkdirSync(join(f.root, 'source')); writeFileSync(join(f.root, 'source/child'), 'keep child'); }
+    const checkout = await client.command('openCheckout', {root: f.root}), source = selection === 'descendant' ? 'source' : selection === 'ancestor' ? 'source/child' : 'file.txt', destination = selection === 'descendant' ? 'source/child' : selection === 'ancestor' ? 'source' : source;
     const nativeReferences = await runtime.runPromise(Effect.flatMap(WorkspaceNative, native => native.capture({checkout, clientId: 'alice', paths: [join(f.root, source)]})));
     const replacements = await client.command('inspectEntries', {checkout, paths: [destination]});
     await assert.rejects(client.command('mutate', {id: 'self-import', clientId: 'alice', checkout, kind: 'import', sources: [], destination, replacements, nativeReferences}));
     assert(!existsSync(count), 'Unsafe import must not invoke native Trash.');
-    assert.equal(readFileSync(join(f.root, destination), 'utf8'), directory ? 'keep child' : 'original');
+    assert.equal(readFileSync(join(f.root, selection === 'self' ? destination : 'source/child'), 'utf8'), selection === 'self' ? 'original' : 'keep child');
   } finally { await runtime.dispose(); f.cleanup(); }
 });
 
@@ -103,6 +106,7 @@ test('R5 copy recovery overflow retains a valid snapshot and pending evidence ac
     const result = await current.client.command('mutate', operation); assert.equal(result.items[0].outcome, 'completed');
     const retained = await current.client.command('loadRecovery', {clientId: 'alice'});
     assert.equal(retained.revision, 1); assert.deepEqual(retained.state, snapshot); assert(retained.errors.some(e => /recovery|publication/i.test(e))); assert.equal(retained.operations.length, 1);
+    await assert.rejects(current.client.command('acknowledgeOperation', {clientId: 'alice', operationClientId: 'alice', id: 'overflow'}), isError('Persistence'));
     await current.runtime.dispose(); current = f.start();
     const restarted = await current.client.command('loadRecovery', {clientId: 'alice'}); assert.deepEqual(restarted.state, snapshot); assert(restarted.errors.length);
     await current.client.command('mutate', operation); assert.equal(readFileSync(count, 'utf8'), 'effect\n');
@@ -114,11 +118,12 @@ for (const competing of [false, true]) test(`R6 interrupted newer Save plus exte
   try {
     const checkout = await current.client.command('openCheckout', {root: f.root}), target = {checkout, path: 'file.txt'}, disk = await current.client.command('readFile', target);
     await current.client.command('persistRecovery', {clientId: 'alice', expectedRevision: 0, state: state(checkout, disk)});
-    await assert.rejects(current.client.command('saveFile', {clientId: 'alice', requestId: 'save', target, expectedVersion: disk.version, text: 'newest admitted text'}), isError('Uncertain'));
+    writeFileSync(join(f.root, 'file.txt'), 'captured admission bytes'); const admittedBaseline = await current.client.command('readFile', target);
+    await assert.rejects(current.client.command('saveFile', {clientId: 'alice', requestId: 'save', target, expectedVersion: admittedBaseline.version, text: 'newest admitted text'}), isError('Uncertain'));
     if (competing) await current.client.command('persistRecovery', {clientId: 'alice', expectedRevision: 1, state: state(checkout, disk, 'later competing text')});
     writeFileSync(join(f.root, 'file.txt'), 'external bytes'); await current.runtime.dispose(); current = f.start();
     const restored = await current.client.command('loadRecovery', {clientId: 'alice'});
-    assert.equal(restored.state.drafts[0].text, competing ? 'later competing text' : 'newest admitted text'); assert.deepEqual(restored.state.drafts[0].disk, disk); assert(restored.errors.some(e => e.includes('Uncertain save')));
+    assert.equal(restored.state.drafts[0].text, competing ? 'later competing text' : 'newest admitted text'); assert.deepEqual(restored.state.drafts[0].disk, competing ? disk : admittedBaseline); assert(restored.errors.some(e => e.includes('Uncertain save')));
     assert.equal(readFileSync(join(f.root, 'file.txt'), 'utf8'), 'external bytes');
   } finally { await current.runtime.dispose(); f.cleanup(); }
 });
@@ -156,4 +161,23 @@ test('R7 expiry cannot close a native descriptor after its operation has claimed
     assert.equal((await pending).outcome, 'completed');
     for (const name of ['external-one', 'external-two']) assert.equal(readFileSync(join(f.root, 'imports', name), 'utf8'), 'native bytes');
   } finally { mock.restoreAll(); writeFileSync(resume, 'continue'); await runtime.dispose(); f.cleanup(); }
+});
+
+for (const kind of ['move', 'copy'] as const) test(`known closed checkout ${kind} metadata reconciles without probing its unavailable directory`, async () => {
+  const f = fixture(), marker = join(f.base, 'closed'), count = join(f.base, 'io');
+  const helper = f.wrapper(`if [ -e ${quote(marker)} ]; then printf 'io\\n' >> ${quote(count)}; fi`); let current = f.start(helper);
+  try {
+    const checkout = await current.client.command('openCheckout', {root: f.root}), disk = await current.client.command('readFile', {checkout, path: 'file.txt'});
+    const snapshot: EditorRecovery = {...state(checkout, disk), openCheckoutIds: [], recentFiles: [{checkout, path: 'file.txt'}], views: {[checkout.checkoutId]: {openFiles: ['file.txt'], active: 'file.txt', preview: null, fileViews: {'file.txt': 'file'}, positions: {}, tree: {expanded: [], selected: [], focus: '', scroll: 0, hideIgnored: false}}}};
+    await current.client.command('persistRecovery', {clientId: 'alice', expectedRevision: 0, state: snapshot});
+    const sources = await current.client.command('inspectEntries', {checkout, paths: ['file.txt']});
+    await current.client.command('mutate', {id: 'closed-operation', clientId: 'alice', checkout, kind, sources, destination: 'moved.txt'});
+    await current.runtime.dispose();
+    const {renameSync} = await import('node:fs'); renameSync(f.root, f.root + '-unavailable'); writeFileSync(marker, 'closed'); current = f.start(helper);
+    const loaded = await current.client.command('loadRecovery', {clientId: 'alice'});
+    assert(!existsSync(count)); assert.deepEqual(loaded.errors, []); assert.deepEqual(loaded.state.checkouts, [checkout]); assert.deepEqual(loaded.state.openCheckoutIds, []);
+    assert.equal(loaded.state.views[checkout.checkoutId].active, kind === 'move' ? 'moved.txt' : 'file.txt'); assert.equal(loaded.state.recentFiles[0].path, kind === 'move' ? 'moved.txt' : 'file.txt'); assert(loaded.state.drafts.some(d => d.target.path === 'moved.txt')); for (const d of loaded.state.drafts) assert.deepEqual(d.disk, disk);
+    for (const invalid of [{...loaded.state, openCheckoutIds: [checkout.checkoutId, checkout.checkoutId]}, {...loaded.state, openCheckoutIds: ['unknown']}, {...loaded.state, selectedCheckoutId: checkout.checkoutId}, {...loaded.state, views: {'composite checkout key': loaded.state.views[checkout.checkoutId]}}])
+      await assert.rejects(current.client.command('persistRecovery', {clientId: 'alice', expectedRevision: loaded.revision, state: invalid}), isError('InvalidInput'));
+  } finally { await current.runtime.dispose(); f.cleanup(); }
 });

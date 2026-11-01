@@ -485,7 +485,7 @@ class LocalWorkspace {
       const retained = [...new Map([...(committed?.result.recoveryChanges ?? []), ...record.result.recoveryChanges, ...changes].map(change => [canonical(change), change])).values()];
       const updated: OperationRecord = {...record, publicationRevisions, acknowledgedBy: [...new Set([...(committed?.acknowledgedBy ?? []), ...record.acknowledgedBy])], publishedItems: [...published, ...fresh.map(canonical)], result: {...record.result, items: mergedItems, outcome, recoveryChanges: retained}};
       delete updated.publicationError;
-      if (updated.result.outcome !== 'uncertain' && record.publicationError) delete updated.result.message;
+      if (updated.result.outcome !== 'uncertain' && (record.publicationError || committed?.result.outcome === 'uncertain')) delete updated.result.message;
       this.store.put('operations', id, updated); this.store.db.exec('COMMIT'); delete record.publicationError; Object.assign(record, updated); this.volatileOperations.delete(id);
     } catch (error) { this.store.db.exec('ROLLBACK'); throw error; }
   }
@@ -518,7 +518,7 @@ class LocalWorkspace {
       this.store.put('saves', id, updated); this.store.db.exec('COMMIT'); Object.assign(record, updated); this.volatileSaves.delete(id);
     } catch (error) { this.store.db.exec('ROLLBACK'); throw error; }
   }
-  async recoverEvidence() {
+  async recoverEvidence(openIds?: Set<string>) {
     for (const [id, record] of this.volatileSaves) if (record.result) { try { this.publishSave(id, record); } catch (error) { record.message = 'Recovery publication pending. ' + errorText(error); } }
     for (const record of this.operations()) {
       if (this.active(record.input.checkout.checkoutId)) continue;
@@ -530,7 +530,7 @@ class LocalWorkspace {
       }
       if (record.result.outcome !== 'uncertain' || this.active(record.input.checkout.checkoutId)) continue;
       const kind = record.input.kind;
-      if (kind !== 'move') continue;
+      if (kind !== 'move' || openIds && !openIds.has(record.input.checkout.checkoutId)) continue;
       let directory: Directory;
       try { directory = await this.directory(record.input.checkout); } catch { continue; }
       for (const source of record.input.sources) {
@@ -553,18 +553,25 @@ class LocalWorkspace {
     for (const record of this.store.all<SaveRecord>('saves')) {
       if (record.result || this.active(record.input.target.checkout.checkoutId)) continue;
       try {
-        const disk = await (await this.directory(record.input.target.checkout)).read(record.input.target.path);
-        if (disk.version === textDocument(record.input.text).version) record.result = {kind: 'saved', disk, recoveryChanges: []};
-        else if (disk.version === record.input.expectedVersion) record.result = {kind: 'conflict', disk};
+        if (!openIds || openIds.has(record.input.target.checkout.checkoutId)) {
+          try {
+            const disk = await (await this.directory(record.input.target.checkout)).read(record.input.target.path);
+            if (disk.version === textDocument(record.input.text).version) record.result = {kind: 'saved', disk, recoveryChanges: []};
+            else if (disk.version === record.input.expectedVersion) record.result = {kind: 'conflict', disk};
+          } catch { /* Restore admitted text without guessing an unavailable disk outcome. */ }
+        }
         this.publishSave(key(record.input.clientId, record.input.requestId), record, true);
-      } catch { /* Unavailable/changed path retains save intent. */ }
+      } catch (error) { record.message = 'Admitted Save recovery publication pending. ' + errorText(error); this.volatileSaves.set(key(record.input.clientId, record.input.requestId), record); }
     }
   }
   async load(clientId: string) {
-    identifier(clientId); await this.recoverEvidence();
+    identifier(clientId);
+    const before = this.store.readRecovery(clientId);
+    if (before) recovery(before.state as EditorRecovery, clientId);
+    await this.recoverEvidence(new Set((before?.state as EditorRecovery | undefined)?.openCheckoutIds ?? []));
     const stored = this.store.readRecovery(clientId), state = (stored?.state ?? emptyRecovery(clientId)) as EditorRecovery;
     recovery(state, clientId); const errors: string[] = [];
-    for (const target of state.checkouts) { try { await this.directory(target); } catch (error) { errors.push(target.root + ': ' + errorText(error)); } }
+    for (const target of state.checkouts.filter(c => state.openCheckoutIds.includes(c.checkoutId))) { try { await this.directory(target); } catch (error) { errors.push(target.root + ': ' + errorText(error)); } }
     const relevant = this.operations().filter(r => !r.acknowledgedBy.includes(clientId) && (r.input.clientId === clientId || state.checkouts.some(c => same(c, r.input.checkout))));
     for (const record of relevant) if (record.publicationRevisions[clientId] === undefined) { record.publicationRevisions[clientId] = stored?.revision ?? 0; this.store.put('operations', key(record.input.clientId, record.input.id), record); }
     const operations = relevant.map(r => r.result);
@@ -612,7 +619,7 @@ class LocalWorkspace {
     path(input.target.path); ensure(['staged', 'unstaged', 'untracked'].includes(input.area), 'Invalid comparison area.');
     const directory = await this.directory(input.target.checkout), p = input.target.path;
     let working = null;
-    try { working = await directory.read(p, signal); } catch (error) { if (!errorText(error).includes('No such file')) throw error; }
+    try { working = await directory.read(p, signal); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT' && !errorText(error).includes('No such file')) throw error; }
     try {
       let original = '';
       if (input.area === 'staged') {
@@ -664,11 +671,11 @@ class LocalWorkspace {
       });
       const candidates = [...new Set(bytes.toString().split('\0').filter(Boolean).map(p => p.replace(/^\.\//, '')))];
       if (candidates.length > 20000) partial = true;
-      const eligible: string[] = [];
+      const eligible: string[] = [], spellings = new Map<string, Set<string>>();
       for (const p of candidates.slice(0, 20000)) {
         if (signal.aborted) fail('Cancelled', 'Lookup cancelled.');
         path(p);
-        try { if (!(await directory.entry(p, signal)).directory) eligible.push(p); } catch { partial = true; }
+        try { if (!(await directory.entry(p, signal, spellings)).directory) eligible.push(p); } catch { partial = true; }
         if (eligible.length % 32 === 0) await new Promise<void>(done => setImmediate(done));
       }
       // Exact entered paths have a scoped no-follow exception to discovery ignore/exclusions.

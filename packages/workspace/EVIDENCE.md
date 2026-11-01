@@ -1,6 +1,8 @@
 # Workspace evidence
 
-Technical module checks pass. Independent PR review and human acceptance remain **PENDING**. The dependency base is `68aa035b9c283a65cac6e78ab02865e99882d15b` on `chore/application-coordination`, PR #2, which depends on foundation PR #1 (`bb5c5d0b366f43e5406fc328d5bd5ec7ee154e58`). Only `packages/workspace/**` is changed by this task.
+R1 corrections pass the available automated module checks; a **new independent review and human acceptance remain PENDING**. Astra R1 reviewed `271920d48ae377aa8671c3a569ede429d43cc38f` and reproduced seven blocking defects; the public regressions below reproduce and fix them. Runtime fixes own only `packages/workspace/**`.
+
+The current dependency base is `6e58c1c4ea6944e8ca25eadc46e35c843f0f9fbe` on `chore/checkout-recovery-contract`, PR #5, normally merged into this published branch without rewriting its history. Prerequisites remain foundation #1 (`bb5c5d0b366f43e5406fc328d5bd5ec7ee154e58`) and shared #2 (`68aa035b9c283a65cac6e78ab02865e99882d15b`). Authorized coordinator lockfile/CI commits `271920d` and `9cb6723` remain intact. The earlier missing-lockfile/ripgrep CI setup is repaired; the lead verified hosted CI at `9cb6723` before these fixes. New-head hosted CI is pending.
 
 Environment: macOS 26.3.1 (25D2128), arm64 Darwin 25.3.0, Node 26.13.0, Bun 1.4.4, Apple clang 21.0.0 (clang-2100.1.1.101), pinned Effect 4.1.0 and TypeScript 7.0.2. Native production builds use `-std=c11 -Wall -Wextra -Werror -O2 -framework CoreServices`, without test pause macros.
 
@@ -15,7 +17,7 @@ bun run --cwd packages/application test
 git diff --check
 ```
 
-Results: workspace **41 passed, 0 failed/skipped**; application public-client **14 passed**; typecheck/lint and source hash checks passed. The test target builds the actual production native executable before running Node strip-types tests. Root foundation verification checks all 40 source-snapshot hashes, active UI copies and browser-safe contracts. No live escode source/state was used or modified.
+Results: workspace **55 passed, 0 failed/skipped**; application public-client **14 passed**; typecheck/lint and source hash checks passed. The test target builds the actual production native executable before running Node strip-types tests. Root foundation verification checks all 40 source-snapshot hashes, active UI copies and browser-safe contracts. No live escode source/state was used or modified.
 
 `test/workspace.test.ts` exercises the shared application client and real scoped `WorkspaceLive`, temporary files, Git repositories and independent SQLite persistence:
 
@@ -30,6 +32,10 @@ Results: workspace **41 passed, 0 failed/skipped**; application public-client **
 - Standalone official ripgrep tests local/nested `.gitignore`, `.ignore`, `.rgignore`, ignore preflight rejection, ranking/highlights, every query piece, quoted contiguous pieces, separate filtered/deduplicated history, capped results and the scoped exact-path exclusion exception.
 - External watch notification, unsubscribe, pending acquisition plus concurrent runtime disposal; native watcher handles return to baseline. Release uses the shared normalization helper. Cancelling an admitted native copy is typed and preserves its source; unrelated reads and saves in the same checkout remain usable.
 - A separate child process uses copied helper/ripgrep files under `Packaged Resources` and PATH `/usr/bin:/bin` for real read/save/lookup. It needs no Electron, editor, React, chat database, agent/provider package or Codex executable path.
+
+`test/review-regressions.test.ts` adds **14 public regressions**. Before implementation, probes reproduced all seven findings: two alias saves returned saved, self/descendant imports reached replacement Trash, changed-payload actor IDs produced two effects, concurrent lost-response recovery replaced a `1 → 2` receipt with `[]`, a copy committed 514 drafts and made load fail, admitted text was hidden by an older draft after external change, and one native token admitted two imports. A tightened two-item expiry probe also reproduced loss of the later descriptor. The regression Trash helper now records/refuses unsafe invocation before touching fixtures; the original pre-fix self-import probe used only isolated test-owned files.
+
+The passing regressions prove actual-spelling rejection plus deliberate case-only rename; native self/descendant/ancestor rejection before Trash; one counted effect for conflicting concurrent save/move IDs; durable receipt/ack bounds under concurrent recovery; valid 257-draft retention with visible pending copy publication across restart and no replay/ack hiding; newer captured Save text/baseline restoration while later competing publications survive; atomic native-token ownership and cancellation of pending expiry for a two-item admitted import; and known closed-checkout move/copy metadata retention without probing its unavailable directory. Invalid/duplicate open membership, closed selection and non-checkoutId view keys reject. A connected Git-comparison regression verifies deleted working files still return the index original with a null working document after the stricter spelling check. Internal recovery limits are unchanged; no draft is truncated or discarded to satisfy validation.
 
 `test/native-races.test.ts` ports **14** verified user-authored deterministic source fixtures. Separate test-only native builds pause recursive preflight/publication to replace or relocate source, destination parent, checkout root, external import ancestry or staging objects. Assertions inspect actual bytes/identities and reject publication/cleanup of replacements. These test macros are absent from the production executable.
 
