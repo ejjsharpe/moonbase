@@ -64,7 +64,9 @@ Build before desktop tests; package before package tests. Tests use fresh tempor
 
 Build-generated resources/notices live only in ignored `dist`/`release`. The workspace helper is resolved through `@moonbase/workspace/filesystem`; rg's pinned upstream release supplies its own notices. Bundled dependency notices are collected automatically from the actual graphs and installed package files. StyleX0.19.1 omits LICENSE from npm, so the build fetches the exact upstream release-commit license and checks its SHA256. Electron's supplied license/Chromium notices remain in the generated package. No copied source notice bundle is maintained.
 
-Prerequisites: #1 → #2 → #5 → #7 → reviewed workspace#3/editor#4 → integration#11 at80b → import followup#13 at71f. The filename-map/menu follow-up PR16 at473e0fe is normally merged; this app PR is now based on `fix/editor-filename-maps-and-menu`; coordinator root registration4e32 adds only the lockfile/workflow changes. Module followups were normal-merged, not rewritten or repaired inside this app task.
+Historical standalone editor checkpoint (PR14): #1 → #2 → #5 → #7 → reviewed workspace#3/editor#4 → integration#11 at80b → import followup#13 at71f. PR14 is based on `fix/editor-filename-maps-and-menu` (PR16 at473e0fe); coordinator registration4e32 supplied its lockfile/workflow changes. Module followups were normal-merged, not rewritten or repaired inside that app task.
+
+Current composition PR20 is based on `chore/workbench-integration` (PR19) at `d79d1e9b8347f7f5f19cdbe9aad0233a0c47be8d`, the successor to the original DFF base. Its ancestry adds reviewed chat PR18 at `dbd06a6d3f8c8f310868349e7ed099468db9b9ba`. The qualified production code is at `b4f514d682927a2d65a08af0d08bfe7adb7534e3`; qualification commit `7147a1352c7d699a8f60eb62815775b963eb764d` changes tests only after that production checkpoint. Source/artifact mappings and later report-only commits are recorded in the composition evidence.
 
 PENDING: independent app review/hosted checks, including an unexplained initial rapid Open→Find dismissal (original failure and separate probes retained in the evidence); real OS directory-picker/clipboard/drag gestures, Finder Put Back, signing/notarization/distribution, VoiceOver/full accessibility, physical full-volume/power-loss durability, performance qualification and human visual/product acceptance. Controlled fixtures and unsigned local execution do not establish those gates.
 
@@ -86,9 +88,10 @@ View switching, closing a file/chat view, Hide, Disconnect and client Quit never
 The editor-only checkpoint is preserved at `feat/standalone-editor` (`4dd148a`); the independent chat app remains unchanged in this tree:
 
 ```sh
+bun run --cwd apps/chat-probe build
 MOONBASE_CHAT_CONFIG=/absolute/owner-only/host.json \
 MOONBASE_CHAT_DATA="$(mktemp -d -t moonbase-independent-chat)" \
-  NX_DAEMON=false bunx nx run @moonbase/chat-probe:dev
+  bun run --cwd apps/chat-probe start
 ```
 
 Composition tests add to the existing editor/native suites:
