@@ -18,6 +18,20 @@ export async function until<T>(get: () => Promise<T>, ready: (v: T) => boolean) 
   }
   throw Error("Controlled state did not settle");
 }
+export type FixtureStats = {
+  calls: number;
+  tools: number;
+  commands: string[];
+  heldReplies: string[];
+  replyOperation?: string;
+  mutations: { operation: string; input: unknown; result: unknown }[];
+};
+export type CleanupReport = {
+  hostPids: number[];
+  forwardPids: number[];
+  processGroups: number[];
+  reboundPorts: number[];
+};
 export async function fixture(hold = false) {
   const directory = await realpath(await mkdtemp(join(tmpdir(), "moonbase-chat-proof-"))),
     cwd = join(directory, "remote-folder");
@@ -50,7 +64,9 @@ export async function fixture(hold = false) {
   process.env.MOONBASE_CHAT_FORWARD_LOG = log;
   process.env.MOONBASE_CHAT_DROP_SEND = drop;
   const roots: { dispose: () => Promise<void> }[] = [],
-    requests = new Map<string, (v: { calls: number; tools: number; commands: string[] }) => void>();
+    requests = new Map<string, (v: FixtureStats) => void>();
+  const hostPids: number[] = [],
+    hostPorts: number[] = [];
   let host: ChildProcess | undefined,
     origin = "";
   async function startHost() {
@@ -63,10 +79,11 @@ export async function fixture(hold = false) {
         ),
       ),
     });
+    hostPids.push(host.pid!);
     host.stderr?.resume();
     host.stdout?.resume();
     host.on("message", (m: unknown) => {
-      const v = m as { id?: string; calls: number; tools: number; commands: string[] };
+      const v = m as FixtureStats & { id?: string };
       if (v.id) {
         requests.get(v.id)?.(v);
         requests.delete(v.id);
@@ -93,6 +110,7 @@ export async function fixture(hold = false) {
         reject(Error("Host early exit"));
       });
     });
+    hostPorts.push(Number(new URL(origin).port));
     await writeFile(
       clientConfig,
       JSON.stringify({
@@ -153,18 +171,41 @@ export async function fixture(hold = false) {
             .map((l) => JSON.parse(l) as { pid: number; port?: number }),
         () => [],
       );
-      for (const pid of new Set(records.map((r) => r.pid)))
-        assert.throws(
-          () => process.kill(pid, 0),
-          (e: NodeJS.ErrnoException) => e.code === "ESRCH",
-        );
-      for (const port of new Set(records.flatMap((r) => (r.port ? [r.port] : []))))
+      const forwardPids = [...new Set(records.map((r) => r.pid))],
+        reboundPorts = [
+          ...new Set([...hostPorts, ...records.flatMap((r) => (r.port ? [r.port] : []))]),
+        ];
+      for (const pid of [...hostPids, ...forwardPids])
+        await until(async () => {
+          try {
+            process.kill(pid, 0);
+            return false;
+          } catch (e) {
+            return (e as NodeJS.ErrnoException).code === "ESRCH";
+          }
+        }, Boolean);
+      for (const group of forwardPids)
+        await until(async () => {
+          try {
+            process.kill(-group, 0);
+            return false;
+          } catch (e) {
+            return (e as NodeJS.ErrnoException).code === "ESRCH";
+          }
+        }, Boolean);
+      for (const port of reboundPorts)
         await new Promise<void>((resolve, reject) => {
           const server = createServer();
           server.once("error", reject);
           server.listen(port, "127.0.0.1", () => server.close((e) => (e ? reject(e) : resolve())));
         });
       for (const r of results) if (r.status === "rejected") throw r.reason;
+      return {
+        hostPids,
+        forwardPids,
+        processGroups: forwardPids,
+        reboundPorts,
+      } satisfies CleanupReport;
     } finally {
       if (oldLog === undefined) delete process.env.MOONBASE_CHAT_FORWARD_LOG;
       else process.env.MOONBASE_CHAT_FORWARD_LOG = oldLog;
@@ -173,7 +214,25 @@ export async function fixture(hold = false) {
       await rm(directory, { recursive: true, force: true });
     }
   }
-  await startHost();
+  try {
+    await startHost();
+  } catch (error) {
+    await close();
+    throw error;
+  }
+  const stats = () =>
+    new Promise<FixtureStats>((resolve, reject) => {
+      const id = randomUUID(),
+        timer = setTimeout(() => {
+          requests.delete(id);
+          reject(Error("Stats deadline"));
+        }, 2000);
+      requests.set(id, (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      });
+      host!.send({ type: "stats", id });
+    });
   return {
     directory,
     session,
@@ -188,18 +247,11 @@ export async function fixture(hold = false) {
     close,
     release: () => host!.send({ type: "release" }),
     loseNextSend: () => writeFile(drop, ""),
-    stats: () =>
-      new Promise<{ calls: number; tools: number; commands: string[] }>((resolve, reject) => {
-        const id = randomUUID(),
-          timer = setTimeout(() => {
-            requests.delete(id);
-            reject(Error("Stats deadline"));
-          }, 2000);
-        requests.set(id, (v) => {
-          clearTimeout(timer);
-          resolve(v);
-        });
-        host!.send({ type: "stats", id });
-      }),
+    holdReply: async (operation: string) => {
+      host!.send({ type: "hold-reply", operation });
+      await until(stats, (s) => s.replyOperation === operation);
+    },
+    releaseReply: () => host!.send({ type: "release-reply" }),
+    stats,
   };
 }

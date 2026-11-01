@@ -76,10 +76,11 @@ bun run --cwd apps/chat-probe lint
 bun run --cwd apps/chat-probe test
 bun run --cwd apps/chat-probe package
 bun run --cwd apps/chat-probe test:desktop
+node apps/chat-probe/scripts/check-artifacts.mjs
 ```
 
 Native tests need an explicitly coordinated foreground slot. They use a separate Node 26 host, real SQLite/production HTTP and a controlled TCP forwarding child, not a real SSH host or provider. The build rejects host/editor code in the privileged client and all privileged code in the renderer. Packaging creates an unsigned macOS directory app using the installed Electron version. Upstream notices are generated from the actual client graph/package release files into output; no manual license bundle is maintained. Host/SDK distribution notices are a separate pending gate, because the SDK is not shipped in this desktop app.
 
 See [evidence](EVIDENCE.md) and [provenance](PROVENANCE.md). **PENDING HUMAN ACCEPTANCE.** Real SSH/host-key/agent/ProxyJump, real provider, signed/notarized distribution, VoiceOver/native manual acceptance and power loss remain unqualified.
 
-Current qualification note: the fixed Pi adapter (`235eb27`) and coordinator registration (`84923f2`) are adopted on base `chore/chat-integration` at `132d273`. Headless proof26/build/frozen checks pass. The three source/package Electron passes and screenshots belong to prior own checkpoint `3e2ad6b` / integration `478ab94`; current-head native rerun is pending the explicitly reserved foreground slot. Independent review and human acceptance remain pending.
+Current qualification note: the fixed Pi adapter (`235eb27`) and coordinator registration (`84923f2`) are adopted on base `chore/chat-integration` at `132d273`. Current proof26/type/lint/build/frozen and **11 actual source/package Electron checks** pass, with refreshed screenshots/build/archive hashes. Six native cases cover postcommit Create/Send/Stop replies lost on connection teardown; reconnect keeps original identities and never resends. The historical Create-disabled observation did not reproduce in 24 reload/fill/refresh cycles and remains unattributed. Foreground resources are confirmed stopped; fresh independent review and human acceptance remain pending.

@@ -1,0 +1,53 @@
+{
+  "operation": "stopChat",
+  "retainedInput": {
+    "stop": {
+      "target": {
+        "host": {
+          "hostId": "controlled-host",
+          "storeId": "controlled-store"
+        },
+        "actorId": "personal",
+        "conversationId": "4"
+      },
+      "submissionId": "13",
+      "taskId": "14"
+    },
+    "requestId": "9e390b0f-31d8-463f-b4cd-29d706965b7e"
+  },
+  "lossMessage": "Uncertain: Connection changed after a chat mutation may have dispatched. Preserve its original request and reconcile through its authority.; Chat reply was lost. Query the original request; do not invent another Send.",
+  "mutationInputs": [
+    {
+      "stop": {
+        "target": {
+          "host": {
+            "hostId": "controlled-host",
+            "storeId": "controlled-store"
+          },
+          "actorId": "personal",
+          "conversationId": "4"
+        },
+        "submissionId": "13",
+        "taskId": "14"
+      },
+      "requestId": "9e390b0f-31d8-463f-b4cd-29d706965b7e"
+    },
+    {
+      "stop": {
+        "target": {
+          "host": {
+            "hostId": "controlled-host",
+            "storeId": "controlled-store"
+          },
+          "actorId": "personal",
+          "conversationId": "4"
+        },
+        "submissionId": "13",
+        "taskId": "14"
+      },
+      "requestId": "9e390b0f-31d8-463f-b4cd-29d706965b7e"
+    }
+  ],
+  "sendDispatches": 1,
+  "tools": 1
+}

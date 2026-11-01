@@ -1,0 +1,45 @@
+
+Running 1 test using 1 worker
+
+(node:42577) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘  1 apps/chat-probe/test/desktop.spec.ts:86:1 › actual Electron proof: lost response, streamed tools, reload, captured Stop, reconnect and keyboard/constrained UI (6.3s)
+
+
+  1) apps/chat-probe/test/desktop.spec.ts:86:1 › actual Electron proof: lost response, streamed tools, reload, captured Stop, reconnect and keyboard/constrained UI
+
+    Error: expect(locator).toHaveCSS(expected) failed
+
+    Locator:  getByRole('complementary', { name: 'Saved chats' })
+    Expected: "1px"
+    Received: "0px"
+    Timeout:  5000ms
+
+    Call log:
+      - Expect "toHaveCSS" getByRole('complementary', { name: 'Saved chats' }) with timeout 5000ms
+      - waiting for getByRole('complementary', { name: 'Saved chats' })
+        14 × locator resolved to <aside aria-label="Saved chats" class="x1adv37w x1ad05lz x1odjw0f x78zum5 xdt5ytf x1unyfie">…</aside>
+           - unexpected value "0px"
+
+
+       97 |     expect(versions.node).toBe("24.22.1");
+       98 |     expect((await f.stats()).calls).toBe(0);
+    >  99 |     await expect(page.getByRole('complementary',{name:'Saved chats'})).toHaveCSS('border-right-width','1px');
+          |                                                                        ^
+      100 |     await expect(page.getByLabel('Message',{exact:true}).locator('..')).toHaveCSS('border-top-width','1px');
+      101 |     await page.getByRole("button", { name: "Connect", exact: true }).click();
+      102 |     await expect(page.getByText("Verified host.", { exact: false })).toBeVisible();
+        at /Users/elliotsharpe/.t3/worktrees/moonbase/t3-541038a5/apps/chat-probe/test/desktop.spec.ts:99:72
+
+    Error Context: apps/chat-probe/test-results/desktop-actual-Electron-pr-3673b-and-keyboard-constrained-UI/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    apps/chat-probe/test-results/desktop-actual-Electron-pr-3673b-and-keyboard-constrained-UI/trace.zip
+    Usage:
+
+        npx playwright show-trace apps/chat-probe/test-results/desktop-actual-Electron-pr-3673b-and-keyboard-constrained-UI/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    apps/chat-probe/test/desktop.spec.ts:86:1 › actual Electron proof: lost response, streamed tools, reload, captured Stop, reconnect and keyboard/constrained UI

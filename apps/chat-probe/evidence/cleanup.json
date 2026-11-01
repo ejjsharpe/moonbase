@@ -1,0 +1,132 @@
+{
+  "electron": [
+    {
+      "pids": [43086, 43087, 43088, 43089],
+      "confirmedAbsent": true
+    },
+    {
+      "pids": [43107, 43111, 43112, 43113],
+      "confirmedAbsent": true
+    },
+    {
+      "pids": [43119, 43130, 43131, 43133],
+      "confirmedAbsent": true
+    },
+    {
+      "pids": [43152, 43153, 43154, 43155],
+      "confirmedAbsent": true
+    },
+    {
+      "pids": [43185, 43190, 43191, 43193],
+      "confirmedAbsent": true
+    },
+    {
+      "pids": [43206, 43208, 43209, 43210],
+      "confirmedAbsent": true
+    },
+    {
+      "pids": [43243, 43245, 43246, 43250],
+      "confirmedAbsent": true
+    },
+    {
+      "pids": [43290, 43293, 43294, 43295],
+      "confirmedAbsent": true
+    },
+    {
+      "pids": [43305, 43306, 43307, 43308],
+      "confirmedAbsent": true
+    },
+    {
+      "pids": [43344, 43345, 43346, 43347],
+      "confirmedAbsent": true
+    },
+    {
+      "pids": [43359, 43360, 43361, 43362],
+      "confirmedAbsent": true
+    },
+    {
+      "pids": [43372, 43373, 43374, 43375],
+      "confirmedAbsent": true
+    },
+    {
+      "pids": [43383, 43384, 43385, 43386],
+      "confirmedAbsent": true
+    }
+  ],
+  "services": [
+    {
+      "hostPids": [43085],
+      "forwardPids": [43090, 43093, 43105, 43106],
+      "processGroups": [43090, 43093, 43105, 43106],
+      "reboundPorts": [57474, 57480, 57544]
+    },
+    {
+      "hostPids": [43115],
+      "forwardPids": [43137, 43138],
+      "processGroups": [43137, 43138],
+      "reboundPorts": [57568, 57574]
+    },
+    {
+      "hostPids": [43150],
+      "forwardPids": [43172, 43175, 43196, 43197],
+      "processGroups": [43172, 43175, 43196, 43197],
+      "reboundPorts": [57620, 57626, 57710]
+    },
+    {
+      "hostPids": [43200],
+      "forwardPids": [43213, 43217, 43221, 43222],
+      "processGroups": [43213, 43217, 43221, 43222],
+      "reboundPorts": [57808, 57846, 57862]
+    },
+    {
+      "hostPids": [43232],
+      "forwardPids": [43266, 43275, 43276, 43277],
+      "processGroups": [43266, 43275, 43276, 43277],
+      "reboundPorts": [57960, 57978, 58006]
+    },
+    {
+      "hostPids": [43282],
+      "forwardPids": [43296, 43297, 43298, 43299],
+      "processGroups": [43296, 43297, 43298, 43299],
+      "reboundPorts": [58030, 58035, 58071]
+    },
+    {
+      "hostPids": [43301],
+      "forwardPids": [43311, 43324, 43334, 43338],
+      "processGroups": [43311, 43324, 43334, 43338],
+      "reboundPorts": [58099, 58106, 58122]
+    },
+    {
+      "hostPids": [43339],
+      "forwardPids": [43349, 43350, 43353, 43354],
+      "processGroups": [43349, 43350, 43353, 43354],
+      "reboundPorts": [58151, 58156, 58184]
+    },
+    {
+      "hostPids": [43355],
+      "forwardPids": [43363, 43364, 43366, 43367],
+      "processGroups": [43363, 43364, 43366, 43367],
+      "reboundPorts": [58211, 58216, 58252]
+    },
+    {
+      "hostPids": [43368],
+      "forwardPids": [43376, 43377],
+      "processGroups": [43376, 43377],
+      "reboundPorts": [58282, 58287]
+    },
+    {
+      "hostPids": [43379],
+      "forwardPids": [43387, 43388],
+      "processGroups": [43387, 43388],
+      "reboundPorts": [58683, 58688]
+    }
+  ],
+  "summary": {
+    "electronPidsConfirmedAbsent": 52,
+    "hostPidsConfirmedAbsent": 11,
+    "forwardPidsConfirmedAbsent": 38,
+    "forwardGroupsConfirmedAbsent": 38,
+    "uniquePortsRebound": 30,
+    "ownershipSpecificProcessInventory": []
+  }
+}

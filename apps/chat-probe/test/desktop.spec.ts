@@ -10,7 +10,21 @@ async function launch(f: Awaited<ReturnType<typeof fixture>>, data: string, pack
   const env: Record<string, string> = {
     ...Object.fromEntries(
       Object.entries(process.env).filter(
-        (entry): entry is [string, string] => entry[1] !== undefined,
+        (entry): entry is [string, string] =>
+          entry[1] !== undefined &&
+          [
+            "PATH",
+            "HOME",
+            "TMPDIR",
+            "TEMP",
+            "TMP",
+            "LANG",
+            "LC_ALL",
+            "LC_CTYPE",
+            "__CF_USER_TEXT_ENCODING",
+            "MOONBASE_CHAT_FORWARD_LOG",
+            "MOONBASE_CHAT_DROP_SEND",
+          ].includes(entry[0]),
       ),
     ),
     MOONBASE_CHAT_CONFIG: f.clientConfig,
@@ -30,23 +44,44 @@ async function launch(f: Awaited<ReturnType<typeof fixture>>, data: string, pack
   return {
     app,
     page,
-    async quit() {
-      await app.evaluate(({ app }) => app.quit());
-      await app.process().exitCode;
-    },
   };
 }
+const electronCleanup: { pids: number[]; confirmedAbsent: boolean }[] = [];
+const serviceCleanup: unknown[] = [];
 async function shutdown(app: ElectronApplication) {
   if (app.process().exitCode !== null) return;
+  const pids = await app.evaluate(({ app }) => app.getAppMetrics().map((m) => m.pid));
   await app.evaluate(({ app }) => app.quit());
-  if (app.process().exitCode !== null) return;
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(Error("Preserved Quit deadline")), 10000);
-    app.process().once("close", () => {
-      clearTimeout(timer);
-      resolve();
+  if (app.process().exitCode === null)
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(Error("Preserved Quit deadline")), 10000);
+      app.process().once("close", () => {
+        clearTimeout(timer);
+        resolve();
+      });
     });
-  });
+  for (const pid of pids)
+    await until(async () => {
+      try {
+        process.kill(pid, 0);
+        return false;
+      } catch (e) {
+        return (e as NodeJS.ErrnoException).code === "ESRCH";
+      }
+    }, Boolean);
+  electronCleanup.push({ pids, confirmedAbsent: true });
+  await writeFile(
+    join(evidence, "cleanup.json"),
+    JSON.stringify({ electron: electronCleanup, services: serviceCleanup }, null, 2),
+  );
+}
+async function closeFixture(f: Awaited<ReturnType<typeof fixture>>) {
+  serviceCleanup.push(await f.close());
+  await mkdir(evidence, { recursive: true });
+  await writeFile(
+    join(evidence, "cleanup.json"),
+    JSON.stringify({ electron: electronCleanup, services: serviceCleanup }, null, 2),
+  );
 }
 test("actual Electron proof: lost response, streamed tools, reload, captured Stop, reconnect and keyboard/constrained UI", async () => {
   const f = await fixture(true);
@@ -61,11 +96,19 @@ test("actual Electron proof: lost response, streamed tools, reload, captured Sto
     expect(versions.electron).toBe("45.1.0");
     expect(versions.node).toBe("24.22.1");
     expect((await f.stats()).calls).toBe(0);
+    await expect(page.getByRole("complementary", { name: "Saved chats" })).toHaveCSS(
+      "border-right-width",
+      "1px",
+    );
+    await expect(page.getByLabel("Message", { exact: true }).locator("..")).toHaveCSS(
+      "border-top-width",
+      "1px",
+    );
     await page.getByRole("button", { name: "Connect", exact: true }).click();
     await expect(page.getByText("Verified host.", { exact: false })).toBeVisible();
     await page.getByLabel("New saved chat").fill("Remote workflow proof");
     await expect(page.getByLabel("New saved chat")).toHaveValue("Remote workflow proof");
-    await expect(page.getByRole('button',{name:'Create chat',exact:true})).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Create chat", exact: true })).toBeEnabled();
     await page.getByRole("button", { name: "Create chat", exact: true }).click();
     await expect(
       page.getByRole("heading", { name: "Remote workflow proof", exact: true }),
@@ -160,12 +203,19 @@ test("actual Electron proof: lost response, streamed tools, reload, captured Sto
     );
     await shutdown(second.app);
     current = undefined;
-  } catch(error) {
-    const page=current?.windows()[0];if(page&&!page.isClosed()){await page.screenshot({path:join(root,'test-results/native-failure.png')});await writeFile(join(root,'test-results/native-failure.txt'),await page.locator('body').innerText());}
+  } catch (error) {
+    const page = current?.windows()[0];
+    if (page && !page.isClosed()) {
+      await page.screenshot({ path: join(root, "test-results/native-failure.png") });
+      await writeFile(
+        join(root, "test-results/native-failure.txt"),
+        await page.locator("body").innerText(),
+      );
+    }
     throw error;
   } finally {
     if (current) await current.close();
-    await f.close();
+    await closeFixture(f);
   }
 });
 
@@ -196,7 +246,7 @@ test("packaged actual client starts disconnected, uses public production transpo
     current = undefined;
   } finally {
     if (current) await current.close();
-    await f.close();
+    await closeFixture(f);
   }
 });
 
@@ -235,6 +285,220 @@ test("actual Hide/Quit detach the client while remote work continues; a fresh cl
     current = undefined;
   } finally {
     if (current) await current.close();
-    await f.close();
+    await closeFixture(f);
   }
 });
+
+for (const packaged of [false, true])
+  for (const operation of ["createChat", "sendChat", "stopChat"] as const)
+    test(`${packaged ? "packaged" : "source"} ${operation}: committed reply lost on Disconnect retains original identity and never resends`, async () => {
+      const f = await fixture(true);
+      let current: ElectronApplication | undefined;
+      try {
+        const { app, page } = await launch(f, join(f.directory, "generation-data"), packaged);
+        current = app;
+        await page.getByRole("button", { name: "Connect", exact: true }).click();
+        await expect(page.getByText("Verified host.", { exact: false })).toBeVisible();
+        if (operation !== "createChat") {
+          await page.getByLabel("New saved chat").fill("Exact generation");
+          await page.getByRole("button", { name: "Create chat", exact: true }).click();
+          await expect(
+            page.getByRole("heading", { name: "Exact generation", exact: true }),
+          ).toBeVisible();
+        }
+        if (operation === "stopChat") {
+          await page
+            .getByLabel("Message", { exact: true })
+            .fill("One admitted task before exact Stop");
+          await page.getByRole("button", { name: "Send message", exact: true }).click();
+          await expect(page.getByRole("article", { name: "Live response" })).toContainText(
+            "Controlled remote tool activity",
+          );
+        }
+        await f.holdReply(operation);
+        if (operation === "createChat") {
+          await page.getByLabel("New saved chat").fill("Captured creation");
+          await page.getByRole("button", { name: "Create chat", exact: true }).click();
+        } else if (operation === "sendChat") {
+          await page
+            .getByLabel("Message", { exact: true })
+            .fill("Captured text at original generation");
+          await page.getByRole("button", { name: "Send message", exact: true }).click();
+        } else await page.getByRole("button", { name: "Stop", exact: true }).click();
+        await until(f.stats, (s) => s.heldReplies.includes(operation));
+        const retained = await page.evaluate(
+          (op) =>
+            JSON.parse(localStorage.getItem("moonbase.chat-proof.v1")!).pending.find(
+              (p: { operation: string }) => p.operation === op,
+            ),
+          operation,
+        );
+        expect(retained.operation).toBe(operation);
+        const originalConnection = await page.evaluate(
+          async () =>
+            await window.moonbaseChat.call("connection", "getConnection", {}, crypto.randomUUID()),
+        );
+        await page.getByRole("button", { name: "Disconnect", exact: true }).click();
+        await expect(page.getByRole("button", { name: "Connect", exact: true })).toBeEnabled();
+        await expect(page.getByRole("region", { name: "Retained commands" })).toContainText(
+          "Uncertain",
+        );
+        const afterLoss = await page.evaluate(
+          (op) =>
+            JSON.parse(localStorage.getItem("moonbase.chat-proof.v1")!).pending.find(
+              (p: { operation: string }) => p.operation === op,
+            ),
+          operation,
+        );
+        expect(afterLoss.input).toEqual(retained.input);
+        if (operation === "sendChat")
+          await page
+            .getByLabel("Message", { exact: true })
+            .fill("Newer unsent edit after disconnect");
+        f.releaseReply();
+        await page.reload();
+        await page.getByRole("button", { name: "Connect", exact: true }).click();
+        await expect(page.getByRole("button", { name: "Disconnect", exact: true })).toBeEnabled();
+        await expect(page.locator("main").getByText(f.cwd, { exact: false })).toBeVisible();
+        if (operation === "sendChat") {
+          await expect(page.getByRole("region", { name: "Retained commands" })).toHaveCount(0);
+          await expect(page.getByLabel("Message", { exact: true })).toHaveValue(
+            "Newer unsent edit after disconnect",
+          );
+        } else {
+          const region = page.getByRole("region", { name: "Retained commands" });
+          await region.locator("summary").click();
+          await region
+            .getByRole("button", {
+              name: operation === "createChat" ? "Retry original Create" : "Retry original Stop",
+              exact: true,
+            })
+            .click();
+          await expect(region).toHaveCount(0);
+        }
+        const stats = await f.stats(),
+          mutations = stats.mutations.filter((m) => m.operation === operation);
+        expect(mutations.length).toBe(operation === "sendChat" ? 1 : 2);
+        for (const call of mutations) expect(call.input).toEqual(retained.input);
+        if (operation === "createChat") {
+          expect(mutations[1].result).toEqual(mutations[0].result);
+          expect(stats.calls).toBe(0);
+        } else {
+          expect(stats.commands.filter((c) => c === "sendChat")).toHaveLength(1);
+          expect(stats.tools).toBe(1);
+        }
+        const latestConnection = await page.evaluate(
+          async () =>
+            await window.moonbaseChat.call("connection", "getConnection", {}, crypto.randomUUID()),
+        );
+        expect(latestConnection.ok && originalConnection.ok && latestConnection.value).not.toEqual(
+          originalConnection.ok && originalConnection.value,
+        );
+        await writeFile(
+          join(evidence, `${packaged ? "packaged" : "source"}-${operation}-generation.json`),
+          JSON.stringify(
+            {
+              operation,
+              retainedInput: retained.input,
+              lossMessage: afterLoss.message,
+              mutationInputs: mutations.map((m) => m.input),
+              matchingReceipt:
+                operation === "createChat"
+                  ? JSON.stringify(mutations[0].result) === JSON.stringify(mutations[1].result)
+                  : undefined,
+              sendDispatches: stats.commands.filter((c) => c === "sendChat").length,
+              tools: stats.tools,
+            },
+            null,
+            2,
+          ),
+        );
+        await shutdown(app);
+        current = undefined;
+      } finally {
+        if (current) await current.close();
+        await closeFixture(f);
+      }
+    });
+
+for (const packaged of [false, true])
+  test(`${packaged ? "packaged" : "source"} Create readiness: repeated reload/fill/refresh records the disabled-button symptom without bypass`, async () => {
+    const f = await fixture(false);
+    let current: ElectronApplication | undefined;
+    const observations: unknown[] = [];
+    try {
+      const { app, page } = await launch(f, join(f.directory, "create-readiness"), packaged);
+      current = app;
+      await page.getByRole("button", { name: "Connect", exact: true }).click();
+      await expect(page.getByText("Verified host.", { exact: false })).toBeVisible();
+      for (let i = 0; i < 12; i++) {
+        if (i) {
+          await page.reload();
+          await expect(page.getByText("Verified host.", { exact: false })).toBeVisible();
+        }
+        await page.evaluate(() => {
+          const events: { type: string; value: string; trusted: boolean; visibility: string }[] =
+            [];
+          (window as unknown as { createEvents: unknown }).createEvents = events;
+          for (const type of ["input", "change"])
+            document.getElementById("chat-title")!.addEventListener(type, (e) => {
+              events.push({
+                type: e.type,
+                value: (e.target as HTMLInputElement).value,
+                trusted: e.isTrusted,
+                visibility: document.visibilityState,
+              });
+            });
+        });
+        const title = "Readiness " + i;
+        await page.getByLabel("New saved chat").fill(title);
+        if (i % 3 === 0) await page.getByRole("button", { name: "Refresh", exact: true }).click();
+        await expect(page.getByLabel("New saved chat")).toHaveValue(title);
+        await expect(page.getByRole("button", { name: "Create chat", exact: true })).toBeEnabled({
+          timeout: 2000,
+        });
+        observations.push(
+          await page.evaluate(
+            (i) => ({
+              iteration: i,
+              title: (document.getElementById("chat-title") as HTMLInputElement).value,
+              disabled: Array.from(document.querySelectorAll("button")).find(
+                (b) => b.textContent === "Create chat",
+              )?.disabled,
+              events: (window as unknown as { createEvents: unknown }).createEvents,
+              visibility: document.visibilityState,
+            }),
+            i,
+          ),
+        );
+        await page.getByRole("button", { name: "Create chat", exact: true }).click();
+        await expect(page.getByRole("heading", { name: title, exact: true })).toBeVisible();
+      }
+      expect((await f.stats()).commands.filter((c) => c === "createChat")).toHaveLength(12);
+      expect((await f.stats()).calls).toBe(0);
+      await shutdown(app);
+      current = undefined;
+    } catch (error) {
+      const page = current?.windows()[0];
+      if (page && !page.isClosed()) {
+        await page.screenshot({
+          path: join(evidence, `${packaged ? "packaged" : "source"}-create-readiness-failure.png`),
+        });
+        observations.push(
+          await page.evaluate(() => ({
+            body: document.body.innerText,
+            title: (document.getElementById("chat-title") as HTMLInputElement)?.value,
+            events: (window as unknown as { createEvents: unknown }).createEvents,
+          })),
+        );
+      }
+      throw error;
+    } finally {
+      await writeFile(
+        join(evidence, `${packaged ? "packaged" : "source"}-create-readiness.json`),
+        JSON.stringify(observations, null, 2),
+      );
+      if (current) await current.close();
+      await closeFixture(f);
+    }
+  });

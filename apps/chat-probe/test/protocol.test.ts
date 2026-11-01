@@ -13,7 +13,9 @@ class Storage implements DraftStorage {
 }
 async function setup(t: { after: (f: () => Promise<void>) => void }, hold = false) {
   const f = await fixture(hold);
-  t.after(() => f.close());
+  t.after(async () => {
+    await f.close();
+  });
   const root = f.root(),
     storage = new Storage(),
     controller = new ChatProofController(root.chat, root.connection, f.session, storage);

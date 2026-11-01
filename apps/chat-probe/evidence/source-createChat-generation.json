@@ -1,0 +1,42 @@
+{
+  "operation": "createChat",
+  "retainedInput": {
+    "session": {
+      "host": {
+        "hostId": "controlled-host",
+        "storeId": "controlled-store"
+      },
+      "actorId": "personal"
+    },
+    "requestId": "20212443-3f56-4bf3-afd3-dee95f994c5d",
+    "title": "Captured creation"
+  },
+  "lossMessage": "Uncertain: Connection changed after a chat mutation may have dispatched. Preserve its original request and reconcile through its authority.; Chat reply was lost. Query the original request; do not invent another Send.",
+  "mutationInputs": [
+    {
+      "session": {
+        "host": {
+          "hostId": "controlled-host",
+          "storeId": "controlled-store"
+        },
+        "actorId": "personal"
+      },
+      "requestId": "20212443-3f56-4bf3-afd3-dee95f994c5d",
+      "title": "Captured creation"
+    },
+    {
+      "session": {
+        "host": {
+          "hostId": "controlled-host",
+          "storeId": "controlled-store"
+        },
+        "actorId": "personal"
+      },
+      "requestId": "20212443-3f56-4bf3-afd3-dee95f994c5d",
+      "title": "Captured creation"
+    }
+  ],
+  "matchingReceipt": true,
+  "sendDispatches": 0,
+  "tools": 0
+}

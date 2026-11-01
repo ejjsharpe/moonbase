@@ -1,0 +1,24 @@
+{
+  "source": "current Pi235/integration132; same UI source hash as build-checkpoint.json",
+  "visuallyInspected": true,
+  "screenshots": [
+    {
+      "path": "normal.png",
+      "width": 2360,
+      "height": 1576,
+      "sha256": "092446acce3075bb2eb7de0b41a8a727710f9812d43a887c3d78c970f2fb5312"
+    },
+    {
+      "path": "constrained-keyboard.png",
+      "width": 1400,
+      "height": 1236,
+      "sha256": "6defdf0847ee643abc1c928811c8962e6ca8be9dfc5a2117be4a6a79835747ef"
+    },
+    {
+      "path": "packaged.png",
+      "width": 2360,
+      "height": 1576,
+      "sha256": "65662f201acfc3a03afa5a0b3573f764572832c9717c92181c465d3dc2dbc028"
+    }
+  ]
+}

@@ -2,9 +2,38 @@
   "registration": "84923f29331dd1458301f1a5a74002ab19a08955",
   "integrationBase": "132d273073889bd0702cf96b1fc2a62d5027598c",
   "piRepair": "235eb27a448635a995bb65e67147e99119830b92",
-  "qualification": "headless production build only; current native source/package execution PENDING",
-  "nativeHistoricalOwnCheckpoint": "3e2ad6b745fa0345c9bbfad6c79d89772f9d6885",
-  "nativeHistoricalBase": "478ab94f1f434f27c4a8115e2e4a7de7ea1d84c1",
+  "qualifiedSourceBase": "0b087c067fde4203635825abb395307a02c6b26d plus own source hashes below",
+  "qualification": "11 current source/package Electron checks and 26 public proof tests pass; independent review and human acceptance PENDING",
+  "sources": [
+    {
+      "path": "src/ui.tsx",
+      "sha256": "efac2861bde771560d0a90c140881079ffd0c44148674372efd52fde293ae4be"
+    },
+    {
+      "path": "src/main.ts",
+      "sha256": "7f4fa14125bb4a81767c80857582e0e0a65fa4cefa8bbf868398aac960b180b0"
+    },
+    {
+      "path": "src/controller.ts",
+      "sha256": "ab9c799e1c3e245d90aebbf11f3ca157acf9c38cd66a6829cbd1f2019f378d73"
+    },
+    {
+      "path": "src/session.ts",
+      "sha256": "86017be4a4ed89c13e8b23132d04a0f0eb303560fb8299cb118dc348d97ad391"
+    },
+    {
+      "path": "test/desktop.spec.ts",
+      "sha256": "4cdf66c0f7559167e3062ec9c9214ab4f5f72e845c0cbf687938b563599385fe"
+    },
+    {
+      "path": "test/fixture.ts",
+      "sha256": "11763cb35ec22aacea1f0e53ab6fcf7dee1ead5bff4b3c50c781c322a2001ec0"
+    },
+    {
+      "path": "test/host.mjs",
+      "sha256": "1845f447f9f645c6045a29678ffe5e3dcf94c42acfa7b2c8a77a425ddbecf1e8"
+    }
+  ],
   "files": [
     {
       "path": "dist/main.mjs",
@@ -19,7 +48,7 @@
     {
       "path": "dist/renderer/index.html",
       "bytes": 400,
-      "sha256": "623c44d233c5fe02d6eeb1ad0788799b08037f833e71c1b6730cc0ffcbe9e3b1"
+      "sha256": "6692788a730b3a8ab8f737a82be66dbb881e886298fa03d632999c97d03ac0a3"
     },
     {
       "path": "dist/inputs.json",
@@ -32,9 +61,9 @@
       "sha256": "d469bb246c96be0baea1fa72f8cc38d454f260510586eabeab7170c414f9e593"
     },
     {
-      "path": "dist/renderer/assets/index-XnxU6hfZ.js",
-      "bytes": 260954,
-      "sha256": "17659fcebe995553e39113313170e75e7465be9c102e875edb0d2d7c0754716a"
+      "path": "dist/renderer/assets/index-BbV-TeAl.js",
+      "bytes": 261134,
+      "sha256": "ec9630611539305749289d839e13f07dac0a68942fb6bddf74bae8bf2d074a7e"
     },
     {
       "path": "dist/renderer/assets/index-cN05CcEa.css",
