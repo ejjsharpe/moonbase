@@ -120,7 +120,7 @@ class EditorModelState {
   private closePrompt: ClosePrompt | null = null;
   private closeAnswer?: Deferred.Deferred<CloseChoice>;
   private cleanup?: Promise<void>;
-  private cleanupFailures: ApplicationError[] = [];
+  private observationClosures = new Set<ObservationClose>();
   private releaseStarted = false;
   private releaseDone = Deferred.makeUnsafe<Exit.Exit<void>>();
   private bound = false;
@@ -205,10 +205,13 @@ class EditorModelState {
     const observation = this.stops.get(key);
     if (!observation) return Promise.resolve();
     this.stops.delete(key);
-    return this.runEffect(Scope.close(observation.scope, Exit.void)).catch((error) => {
-      this.cleanupFailures.push(ApplicationError.fromUnknown(error));
-      throw error;
-    });
+    return this.runEffect(
+      Scope.close(observation.scope, Exit.void).pipe(
+        Effect.flatMap(() =>
+          Effect.tryPromise({ try: observation.close, catch: ApplicationError.fromUnknown }),
+        ),
+      ),
+    );
   }
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
@@ -363,7 +366,15 @@ class EditorModelState {
               ? Effect.tryPromise({
                   try: close,
                   catch: ApplicationError.fromUnknown,
-                }).pipe(Effect.orDie)
+                }).pipe(
+                  Effect.exit,
+                  Effect.tap((exit) =>
+                    Effect.sync(() => {
+                      if (Exit.isSuccess(exit) && close) this.observationClosures.delete(close);
+                    }),
+                  ),
+                  Effect.asVoid,
+                )
               : Effect.void,
           ),
         );
@@ -387,6 +398,7 @@ class EditorModelState {
           },
           this.report,
         );
+        this.observationClosures.add(close);
         this.stops.set(key, { scope, close });
       }),
     );
@@ -1235,11 +1247,15 @@ class EditorModelState {
       expanded: string[] = [];
     for (let i = 0; i < parts.length; i++) {
       const path = parts.slice(0, i + 1).join('/');
-      const listing = await this.command('listDirectory', {
-        checkout: target.checkout,
-        path: parts.slice(0, i).join('/'),
-        hideIgnored: false,
-      });
+      const listing = await this.command(
+        'listDirectory',
+        {
+          checkout: target.checkout,
+          path: parts.slice(0, i).join('/'),
+          hideIgnored: false,
+        },
+        this.stops.get(checkoutKey(target.checkout))?.scope,
+      );
       const entry = listing.entries.find((item) => item.path === path);
       if (!entry) throw Error(listing.error ?? 'Active file unavailable. Refresh and retry.');
       if (entry.ignored && selected.tree.hideIgnored && !showIgnored)
@@ -1322,7 +1338,7 @@ class EditorModelState {
         const comparison = await this.command(
           'readComparison',
           { target, area: mode },
-          this.stops.get(checkoutKey(checkout))?.scope,
+          this.selection ?? this.stops.get(checkoutKey(checkout))?.scope,
         );
         if (
           !this.closing &&
@@ -1842,16 +1858,17 @@ class EditorModelState {
         return Effect.flatMap(Deferred.await(this.releaseDone), (exit) => exit);
       this.releaseStarted = true;
       return Scope.close(this.scope, Exit.void).pipe(
+        // A child scope detaches when close starts; join closures still settling outside it.
         Effect.ensuring(
           Effect.suspend(() =>
-            this.cleanupFailures.length
-              ? Effect.die(
-                  new ApplicationError({
-                    code: this.cleanupFailures[0].code,
-                    message: this.cleanupFailures.map((error) => error.message).join('; '),
-                  }),
-                )
-              : Effect.void,
+            Effect.all(
+              [...this.observationClosures].map((close) =>
+                Effect.tryPromise({ try: close, catch: ApplicationError.fromUnknown }).pipe(
+                  Effect.exit,
+                ),
+              ),
+              { concurrency: 'unbounded' },
+            ).pipe(Effect.flatMap(Exit.asVoidAll), Effect.orDie),
           ),
         ),
         Effect.tap(() =>

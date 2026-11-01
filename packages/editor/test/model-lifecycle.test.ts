@@ -364,3 +364,125 @@ test('checkout close cancels its in-flight observer refresh without reporting ob
     await runtime.dispose();
   }
 });
+
+test('selected file replacement cancels held comparison refresh and checkout close cancels held reveal reads', async () => {
+  const memory = memoryWorkspace([
+    {
+      checkout,
+      files: { 'a.ts': 'A', 'b.ts': 'B', 'folder/c.ts': 'C' },
+      head: { 'a.ts': 'HEAD A' },
+      index: { 'a.ts': 'INDEX A' },
+    },
+  ]);
+  const runtime = ManagedRuntime.make(memory.layer),
+    raw = makeEditorClient(runtime);
+  let heldName = '',
+    entered = gate(),
+    release = gate(),
+    signal: AbortSignal | undefined;
+  const wasAborted = () => signal?.aborted;
+  const client: EditorClient = {
+    ...raw,
+    async command(name, input, options) {
+      if (name === heldName) {
+        signal = options?.signal;
+        entered.release();
+        await release.promise;
+      }
+      return raw.command(name, input, options);
+    },
+  };
+  const editor = await acquireEditor(runtime, { client, clientId: 'owned-read-scopes' });
+  try {
+    await editor.load();
+    await editor.openCheckout(checkout.root);
+    await editor.open(target('a.ts'), { view: 'staged' });
+    heldName = 'readComparison';
+    const refresh = editor.refresh(checkout);
+    await entered.promise;
+    await editor.open(target('b.ts'));
+    assert.equal(wasAborted(), true);
+    release.release();
+    await refresh;
+    entered = gate();
+    release = gate();
+    heldName = 'listDirectory';
+    signal = undefined;
+    const reveal = editor.reveal(target('folder/c.ts'));
+    const cancelled = assert.rejects(
+      reveal,
+      (error) => ApplicationError.is(error) && error.code === 'Cancelled',
+    );
+    await entered.promise;
+    assert.equal(await editor.closeCheckout(checkout), true);
+    assert.equal(wasAborted(), true);
+    release.release();
+    await cancelled;
+  } finally {
+    release.release();
+    await editor.dispose();
+    await runtime.dispose();
+  }
+});
+
+test('model disposal joins an already-detached checkout watch close and retains its failed outcome', async () => {
+  const memory = memoryWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
+  const runtime = ManagedRuntime.make(memory.layer),
+    raw = makeEditorClient(runtime),
+    entered = gate(),
+    release = gate();
+  const client: EditorClient = {
+    ...raw,
+    watch(input, receive, onError) {
+      const close = raw.watch(input, receive, onError);
+      let completion: Promise<void> | undefined;
+      return () =>
+        (completion ??= (async () => {
+          await close();
+          entered.release();
+          await release.promise;
+          throw new ApplicationError({
+            code: 'Persistence',
+            message: 'Detached observation release failed',
+          });
+        })());
+    },
+  };
+  const editor = await acquireEditor(runtime, { client, clientId: 'detached-close' });
+  try {
+    await editor.load();
+    await editor.openCheckout(checkout.root);
+    const checkoutClose = editor.closeCheckout(checkout);
+    await entered.promise;
+    const closing = editor.dispose();
+    assert.strictEqual(editor.dispose(), closing);
+    const failed = assert.rejects(
+      closing,
+      (error) =>
+        ApplicationError.is(error) &&
+        error.code === 'Persistence' &&
+        /Detached observation release failed/.test(error.message),
+    );
+    let settled = false;
+    void closing.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await runtime.runPromise(Effect.yieldNow);
+    assert.equal(settled, false);
+    assert.equal(editor.getSnapshot().disposed, false);
+    release.release();
+    await failed;
+    assert.equal(await checkoutClose, true);
+    assert.equal(editor.getSnapshot().disposed, false);
+    await assert.rejects(editor.dispose(), /Detached observation release failed/);
+  } finally {
+    release.release();
+    await editor.dispose().catch(() => {});
+    await runtime.dispose();
+  }
+});
