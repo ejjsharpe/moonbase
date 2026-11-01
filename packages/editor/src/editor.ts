@@ -381,7 +381,9 @@ class EditorModelState {
             if (event.ready) return;
             this.discoveryRevision++;
             void this.reconcileRecovery().catch(this.report);
-            void this.refresh(checkout).catch(this.report);
+            void this.refresh(checkout).catch((error) => {
+              if (this.stops.get(key)?.scope === scope) this.report(error);
+            });
           },
           this.report,
         );
