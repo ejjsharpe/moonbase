@@ -223,7 +223,7 @@ test('unsubscribe rejects with a failing finalizer without duplicate active deli
     (error) =>
       ApplicationError.is(error) &&
       error.code === 'Unavailable' &&
-      /Watch cleanup failed/.test(error.message),
+      /Application resource cleanup failed/.test(error.message),
   );
   await runtime.dispose();
   assert.equal(counts.unsubscribed, 1);
@@ -239,7 +239,7 @@ test('command cancellation preserves a failing cleanup instead of labelling it c
     (error) =>
       error instanceof ApplicationError &&
       error.code === 'Unavailable' &&
-      /Read cleanup failed/.test(error.message),
+      /Application resource cleanup failed/.test(error.message),
   );
   try {
     await started;
@@ -270,7 +270,7 @@ for (const concurrentDispose of [false, true])
       },
     );
     await acquiring;
-    const close = assert.rejects(stop(), /Pending watch cleanup failed/);
+    const close = assert.rejects(stop(), /Application resource cleanup failed/);
     const disposal = concurrentDispose ? runtime.dispose() : undefined;
     release();
     await disposal;
@@ -376,7 +376,7 @@ for (const cleanup of ['ensuring', 'scoped'])
           assert(error instanceof ApplicationError);
           assert.equal(error.code, 'Uncertain');
           assert.deepEqual(error.target, target);
-          assert.match(error.message, /Cleanup also failed/);
+          assert.match(error.message, /Application resource cleanup failed/);
           return true;
         });
         const errors: ApplicationError[] = [];
@@ -391,7 +391,7 @@ for (const cleanup of ['ensuring', 'scoped'])
         assert.equal(errors.length, 1);
         assert.equal(errors[0].code, 'Uncertain');
         assert.deepEqual(errors[0].target, target);
-        assert.match(errors[0].message, /Cleanup also failed/);
+        assert.match(errors[0].message, /Application resource cleanup failed/);
       } finally {
         await runtime.dispose();
       }
