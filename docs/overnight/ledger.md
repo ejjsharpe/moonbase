@@ -16,7 +16,7 @@ All PRs are private, linked and unmerged. Older entries below are historical evi
 | [#8 connection boundary](https://github.com/ejjsharpe/moonbase/pull/8) | `09b21f2ee8556c54ef4f8238f0be2ee88fd990c3` | #6 | Ready; Astra R1 no boundary blockers, 29 tests/11 probes/import graphs and CI pass; SSH implementation separate |
 
 | [#9 SSH](https://github.com/ejjsharpe/moonbase/pull/9) | `d1a28745362c5f9cf5c164f3ef19fc8ac8af983b` | #8 | DRAFT; 25 controlled child/loopback tests +29 app and exact-head CI pass; Astra R1 three blockers, owner fixing |
-| [#10 chat contract](https://github.com/ejjsharpe/moonbase/pull/10) | `4c0c2969d2ff506a122de2825cb79561a2825ed6` | #8 | DRAFT; 33 application tests/four new boundary cases/source checks/exact-head CI pass; independent review queued |
+| [#10 chat contract](https://github.com/ejjsharpe/moonbase/pull/10) | `d38833db81c5d97a1aa60f25e0dc27dd670af60f` | #8 | DRAFT; executable checkpoint4c0c296:33 tests/CI pass; new wire-doc replay clarification pending CI/independent review |
 
 Production editor fan-in, standalone Electron proof, Pi module, chat proof and composition remain unfinished. Independent SSH task 06 is active under the explicit technical-failure exception; it depends only on checked #8 and does not use failing editor behavior. Published Pi 1.4.0 controlled research is preparatory evidence only. No human/manual acceptance is inferred.
 
@@ -79,6 +79,8 @@ One post-publication inspection confirmed both hosted jobs green at SSH #9 `d1a2
 SSH Astra R1 reproduces two P1s (early Disconnect strands Connect; actual OpenSSH host-authentication bypass flags pass preflight) and a P2 (waiting for pipe close hides SSH exit and leaves a proxy helper/endpoint alive). See `reviews/ssh-r1.md`. Original owner is fixing all three through controlled public-client/process/policy regressions; no actual host or user SSH configuration is touched. Fresh implementation review is required; #9 remains DRAFT.
 
 Editor R7 repair is published at `c31bb41` (source `836b843`): owner reports both recreated-file modes editable after background return and active Refresh, with version-specific failure settling, dirty-baseline and empty/missing controls. All82 public/fourteen shared and24 isolated Chromium journeys/required checks pass; inspected captures are committed. Fresh Astra xhigh R8 runs exact head/base #7 with all seven prior reports and responses; model/options verified. Chat contract review remains queued after this higher-priority editor gate.
+
+Lead refined only draft #10 protocol documentation at `d38833d`: verifier-enforced one-use server challenges reject repeated/statefully replayed RPC, including a previously reserved/unadmitted Send. A bounded server-scope expiring grant cache is authentication metadata, not another durable execution store. The client verifies a signed challenge/health before sending input; both directions cover nonce/challenge/method/path/status/body. Actual implementation and replay/concurrency/expiry/restart/capacity tests remain required. Primary replay guidance is linked in CHAT.md; no RFC9421 wire-format compliance is claimed. Executable source/tests remain the checked4c0c296 checkpoint; this docs-only revision gets fresh contract review after active editor R8.
 
 ## Setup
 
