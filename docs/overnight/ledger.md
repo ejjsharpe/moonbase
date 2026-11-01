@@ -15,8 +15,8 @@ All PRs are private, linked and unmerged. Older entries below are historical evi
 | [#7 recovery publications](https://github.com/ejjsharpe/moonbase/pull/7) | `8557fdd0d7a71f93a6584c77430e6fde57668580` | #5 | Ready; contract-only clearance, 14 tests/five independent probes and CI pass; both adapters published |
 | [#8 connection boundary](https://github.com/ejjsharpe/moonbase/pull/8) | `09b21f2ee8556c54ef4f8238f0be2ee88fd990c3` | #6 | Ready; Astra R1 no boundary blockers, 29 tests/11 probes/import graphs and CI pass; SSH implementation separate |
 
-| [#9 SSH](https://github.com/ejjsharpe/moonbase/pull/9) | `d1a28745362c5f9cf5c164f3ef19fc8ac8af983b` | #8 | DRAFT; 25 controlled child/loopback tests +29 app pass; fresh Astra R1 running |
-| [#10 chat contract](https://github.com/ejjsharpe/moonbase/pull/10) | `4c0c2969d2ff506a122de2825cb79561a2825ed6` | #8 | DRAFT; 33 application tests/four new boundary cases and source checks pass; independent review queued |
+| [#9 SSH](https://github.com/ejjsharpe/moonbase/pull/9) | `d1a28745362c5f9cf5c164f3ef19fc8ac8af983b` | #8 | DRAFT; 25 controlled child/loopback tests +29 app and exact-head CI pass; fresh Astra R1 running |
+| [#10 chat contract](https://github.com/ejjsharpe/moonbase/pull/10) | `4c0c2969d2ff506a122de2825cb79561a2825ed6` | #8 | DRAFT; 33 application tests/four new boundary cases/source checks/exact-head CI pass; independent review queued |
 
 Production editor fan-in, standalone Electron proof, Pi module, chat proof and composition remain unfinished. Independent SSH task 06 is active under the explicit technical-failure exception; it depends only on checked #8 and does not use failing editor behavior. Published Pi 1.4.0 controlled research is preparatory evidence only. No human/manual acceptance is inferred.
 
@@ -73,6 +73,8 @@ SSH #9 is now published at exact `d1a2874` after the coordinator lock registrati
 Lead published independent contract-only draft #10 at `4c0c296`, based on checked #8. It adds browser-safe ChatService commands/client, bounded projection shapes and centrally documented immutable actor-scoped request binding, public Pi 1.4 two-phase reservation/admission, exact captured Stop and stateful nonce/body/status HMAC wire rules. No Pi execution, HTTP server/proxy, SSH change or editor dependency is implemented. Frozen install, three uncached tasks/33 application tests, four new public boundary cases, forty frozen hashes/UI copies/four browser contracts and diff checks pass. Independent review queues behind current SSH R1; no Pi module implementation dispatch before this contract is stable.
 
 Coordinator additionally qualified public Pi 1.4 atomic saved-chat creation in a real temporary SQLite probe: creation/model/cwd/metadata/request receipt commit together; concurrent and restarted retries return the same conversation; injected rollback leaves no partial creation; zero model calls. Source and limits are retained in `docs/research/pi-durable-1.4-create-probe.mjs` and evidence section8. This checks feasibility for contract #10 only, not a Pi implementation or atomic Send.
+
+One post-publication inspection confirmed both hosted jobs green at SSH #9 `d1a2874` ([41275707654](https://github.com/ejjsharpe/moonbase/actions/runs/41275707654), [41275668842](https://github.com/ejjsharpe/moonbase/actions/runs/41275668842)) and chat contract #10 `4c0c296` ([41276094708](https://github.com/ejjsharpe/moonbase/actions/runs/41276094708), [41276090542](https://github.com/ejjsharpe/moonbase/actions/runs/41276090542)). Both remain DRAFT for independent review. CI success does not establish production protocol, remote host or editor acceptance.
 
 ## Setup
 
