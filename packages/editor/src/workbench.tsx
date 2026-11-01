@@ -14,22 +14,22 @@ import { checkoutKey, fileKey, type ChooseClose, type CloseChoice, type EditorBu
 import { MonacoView } from "./monaco-view.tsx";
 import { styles } from "./styles.ts";
 
-function Popup({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
+function Popup({ title, children, onClose, finalFocus }: { title: string; children: ReactNode; onClose: () => void; finalFocus?: () => boolean | HTMLElement | null }) {
   return <Dialog.Root open onOpenChange={open => { if (!open) onClose(); }}>
     <Dialog.Portal><Dialog.Backdrop {...stylex.props(styles.backdrop)} />
-      <Dialog.Popup {...stylex.props(overlays.dialog, styles.popup)}>
+      <Dialog.Popup finalFocus={finalFocus} {...stylex.props(overlays.dialog, styles.popup)}>
         <Dialog.Title {...stylex.props(overlays.dialogTitle)}>{title}</Dialog.Title>{children}
       </Dialog.Popup>
     </Dialog.Portal>
   </Dialog.Root>;
 }
 
-function FileLookup({ controller, state, checkout, close }: { controller: EditorController; state: EditorSnapshot; checkout: CheckoutTarget; close: () => void }) {
+function FileLookup({ controller, state, checkout, close, editorFocus }: { controller: EditorController; state: EditorSnapshot; checkout: CheckoutTarget; close: () => void; editorFocus: () => HTMLElement | null }) {
   const [query, setQuery] = useState(""), [all, setAll] = useState(false), [refresh, setRefresh] = useState(0);
   const [rows, setRows] = useState<(LookupMatch & { checkout: CheckoutTarget; recent: boolean })[]>([]);
   const [index, setIndex] = useState(0), [message, setMessage] = useState("Type a filename or path."), [busy, setBusy] = useState(false);
-  const active = useRef(true), request = useRef(0), id = useId();
-  const scope = all ? state.recovery.checkouts : [checkout], scopeKey = JSON.stringify(scope);
+  const active = useRef(true), request = useRef(0), activated = useRef(false), id = useId();
+  const scope = all ? state.recovery.checkouts.filter(target => state.recovery.openCheckoutIds.includes(target.checkoutId)) : [checkout], scopeKey = JSON.stringify(scope);
   useEffect(() => () => { active.current = false; request.current++; }, []);
   useEffect(() => {
     const generation = ++request.current; setRows([]); setIndex(0);
@@ -59,13 +59,13 @@ function FileLookup({ controller, state, checkout, close }: { controller: Editor
     try {
       if (!row && all) { setMessage("Choose one exact checkout result, or search in the active checkout."); return; }
       const target = row ? { checkout: row.checkout, path: row.path } : { checkout, path: query };
-      const current = () => active.current && generation === request.current && controller.getSnapshot().recovery.checkouts.some(item => checkoutKey(item) === checkoutKey(target.checkout));
-      if (await controller.open(target, { view: "file", intent: "keep", current }) && current()) close();
+      const current = () => active.current && generation === request.current && controller.getSnapshot().recovery.openCheckoutIds.includes(target.checkout.checkoutId) && controller.getSnapshot().recovery.checkouts.some(item => checkoutKey(item) === checkoutKey(target.checkout));
+      if (await controller.open(target, { view: "file", intent: "keep", current }) && current()) { activated.current = true; close(); }
       else setMessage("File unavailable. Your current selection and edits are retained. Edit the path or retry.");
     } catch (error) { setMessage(String(error)); }
     finally { setBusy(false); }
   }
-  return <Popup title="Find file" onClose={close}>
+  return <Popup title="Find file" onClose={close} finalFocus={() => activated.current ? editorFocus() ?? false : true}>
     <Dialog.Description {...stylex.props(styles.path)}>{all ? "Search exactly the open checkouts." : checkout.root}</Dialog.Description>
     <label {...stylex.props(styles.label)}>Filename or exact relative path
       <input {...stylex.props(controls.field)} value={query} autoFocus role="combobox" aria-controls={id} aria-expanded={rows.length > 0}
@@ -95,7 +95,7 @@ function FileLookup({ controller, state, checkout, close }: { controller: Editor
 }
 
 function FilesTree({ controller, state, checkout, active }: { controller: EditorController; state: EditorSnapshot; checkout: CheckoutTarget; active: string }) {
-  const tree = state.recovery.views[checkoutKey(checkout)].tree, treeElement = useRef<HTMLDivElement>(null), id = useId();
+  const tree = state.recovery.views[checkout.checkoutId].tree, treeElement = useRef<HTMLDivElement>(null), id = useId();
   const [geometry, setGeometry] = useState({ top: tree.scroll, height: 500 });
   const rows: { path: string; directory: boolean; level: number; ignored?: boolean; position: number; size: number }[] = [];
   function visit(parent: string, level: number) {
@@ -217,8 +217,9 @@ export type EditorWorkbenchProps = {
 };
 export const EditorWorkbench = forwardRef<EditorWorkbenchHandle, EditorWorkbenchProps>(function EditorWorkbench({ controller, selectCheckout, selectNativeImports }, ref) {
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
-  const checkout = state.recovery.checkouts.find(target => target.checkoutId === state.recovery.selectedCheckoutId);
-  const selected = checkout && state.recovery.views[checkoutKey(checkout)], target = checkout && selected?.active ? { checkout, path: selected.active } : undefined;
+  const openCheckouts = state.recovery.checkouts.filter(target => state.recovery.openCheckoutIds.includes(target.checkoutId));
+  const checkout = openCheckouts.find(target => target.checkoutId === state.recovery.selectedCheckoutId);
+  const selected = checkout && state.recovery.views[checkout.checkoutId], target = checkout && selected?.active ? { checkout, path: selected.active } : undefined;
   const buffer = target && state.buffers.find(buffer => fileKey(buffer.target) === fileKey(target));
   const mode = target && selected?.fileViews[target.path] || "file";
   const [lookup, setLookup] = useState(false), [panel, setPanel] = useState("files"), [action, setAction] = useState<Action | null>(null);
@@ -250,9 +251,9 @@ export const EditorWorkbench = forwardRef<EditorWorkbenchHandle, EditorWorkbench
         if (paths.length) setRecent({ paths, index: ((recent?.index ?? 0) + (event.shiftKey ? paths.length - 1 : 1)) % paths.length });
       } else if (event.key === "Escape" && recent) { event.preventDefault(); setRecent(null); }
     }} onKeyUp={event => { if (event.key === "Control" && recent && checkout) { const path = recent.paths[recent.index]; setRecent(null); run(controller.open({ checkout, path })); } }}>
-    <Tabs.Root value={checkout?.checkoutId ?? ""} onValueChange={value => { const target = state.recovery.checkouts.find(item => item.checkoutId === value); if (target) controller.selectCheckout(target); }} {...stylex.props(styles.panel)}>
+    <Tabs.Root value={checkout?.checkoutId ?? ""} onValueChange={value => { const target = openCheckouts.find(item => item.checkoutId === value); if (target) controller.selectCheckout(target); }} {...stylex.props(styles.panel)}>
       <Tabs.List {...stylex.props(workbench.projectTabs, styles.checkoutTabs)} aria-label="Checkouts">
-        {state.recovery.checkouts.map(item => <div key={checkoutKey(item)} {...stylex.props(workbench.fileTab)}>
+        {openCheckouts.map(item => <div key={checkoutKey(item)} {...stylex.props(workbench.fileTab)}>
           <Tabs.Tab value={item.checkoutId} title={`${item.hostId} · ${item.branch} · ${item.root}`} {...stylex.props(controls.button, checkout?.checkoutId === item.checkoutId && workbench.fileSelected)}>{item.root.split("/").at(-1)} · {item.branch}</Tabs.Tab>
           <Button {...stylex.props(controls.button)} aria-label={`Close checkout ${item.root}`} disabled={state.preserving} onClick={() => run(controller.closeCheckout(item, choose))}>
             <svg width="12" height="12" viewBox="0 0 16 16" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="m4 4 8 8 M12 4l-8 8" /></svg>
@@ -335,7 +336,7 @@ export const EditorWorkbench = forwardRef<EditorWorkbenchHandle, EditorWorkbench
     </Tabs.Root>
     {!!state.errors.length && <div role="alert" {...stylex.props(controls.status, controls.alert)}>{state.errors.at(-1)} <Button {...stylex.props(controls.button)} onClick={() => controller.clearErrors()}>Dismiss error</Button></div>}
     {state.operations.map(operation => <p key={JSON.stringify([operation.clientId, operation.id])} role="status" {...stylex.props(controls.status)}>{operation.kind}: {operation.outcome}. {operation.message}<Button {...stylex.props(controls.button)} onClick={() => run(controller.resolveOperation(operation.id, operation.clientId))}>Resolve operation status</Button></p>)}
-    {lookup && checkout && <FileLookup controller={controller} state={state} checkout={checkout} close={() => setLookup(false)} />}
+    {lookup && checkout && <FileLookup controller={controller} state={state} checkout={checkout} close={() => setLookup(false)} editorFocus={() => root.current?.querySelector<HTMLElement>('.monaco-editor textarea[role="textbox"]') ?? null} />}
     {action && checkout && <Mutation controller={controller} checkout={checkout} action={action} close={() => setAction(null)} />}
     {choice && <Popup title="Save changes before closing?" onClose={() => answer("cancel")}><Dialog.Description>{choice.file.target.path} has unsaved changes.</Dialog.Description>
       <div {...stylex.props(styles.dialogActions)}>{(["save", "discard", "cancel"] as const).map(value => <Button key={value} {...stylex.props(controls.button)} onClick={() => answer(value)}>{value[0].toUpperCase() + value.slice(1)}</Button>)}</div></Popup>}

@@ -60,11 +60,13 @@ export function MonacoView({ controller, state, target, mode }: {
     if (!element || !target || state.disposed || !buffer && !comparison) return;
     const working = models.current.get(key)?.model;
     const track = (editor: monaco.editor.ICodeEditor, selected: FileView | `${FileView}:original`) => {
-      const position = controller.getSnapshot().recovery.views[checkoutKey(target.checkout)]?.positions[target.path]?.[selected];
+      const position = controller.getSnapshot().recovery.views[target.checkout.checkoutId]?.positions[target.path]?.[selected];
       if (position) { editor.setPosition({ lineNumber: position.line, column: position.column }); editor.setScrollPosition({ scrollTop: position.top, scrollLeft: position.left }); }
       const record = () => {
-        const cursor = editor.getPosition();
-        if (cursor) controller.position(target, selected, { line: cursor.lineNumber, column: cursor.column, top: editor.getScrollTop(), left: editor.getScrollLeft() });
+        try {
+          const cursor = editor.getPosition();
+          if (cursor) controller.position(target, selected, { line: cursor.lineNumber, column: cursor.column, top: editor.getScrollTop(), left: editor.getScrollLeft() });
+        } catch (error) { controller.report(error); }
       };
       const cursor = editor.onDidChangeCursorPosition(record), scroll = editor.onDidScrollChange(record);
       return () => { record(); cursor.dispose(); scroll.dispose(); };

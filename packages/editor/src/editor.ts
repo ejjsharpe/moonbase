@@ -93,11 +93,11 @@ export class EditorController {
   private assertReady() {
     if (this.disposed || !this.ready) throw Error(this.disposed ? "Editor disposed." : "Load editor recovery first.");
   }
-  private checkout(target: CheckoutTarget) {
+  private checkout(target: CheckoutTarget, requireOpen = true) {
     this.assertReady();
-    if (!this.recovery.checkouts.some(item => sameCheckout(item, target)))
+    if (!this.recovery.checkouts.some(item => sameCheckout(item, target)) || requireOpen && !this.recovery.openCheckoutIds.includes(target.checkoutId))
       throw Error("This exact checkout is not open in this editor.");
-    return this.recovery.views[checkoutKey(target)] ??= view();
+    return this.recovery.views[target.checkoutId] ??= view();
   }
   private async command<K extends WorkspaceCommand>(name: K, input: CommandInput<K>): Promise<CommandOutput<K>> {
     if (this.disposed) throw Error("Editor disposed.");
@@ -118,7 +118,7 @@ export class EditorController {
     this.errors.push(...loaded.errors);
     for (const draft of this.recovery.drafts) {
       this.buffers.set(fileKey(draft.target), { ...structuredClone(draft), saving: false });
-      const selected = this.recovery.views[checkoutKey(draft.target.checkout)] ??= view();
+      const selected = this.recovery.views[draft.target.checkout.checkoutId] ??= view();
       if (!selected.openFiles.includes(draft.target.path)) selected.openFiles.push(draft.target.path);
       if (selected.preview === draft.target.path) selected.preview = null;
     }
@@ -126,11 +126,12 @@ export class EditorController {
     this.ready = true;
     if (loaded.operations.length) try { await this.publishFacts([], undefined, loaded); } catch (error) { this.report(error); }
     const selectedCheckoutId = this.recovery.selectedCheckoutId;
-    for (const checkout of this.recovery.checkouts) {
+    for (const checkout of this.recovery.checkouts.filter(target => this.recovery.openCheckoutIds.includes(target.checkoutId))) {
       if (this.disposed) break;
       this.observe(checkout);
-      const selected = this.recovery.views[checkoutKey(checkout)];
+      const selected = this.recovery.views[checkout.checkoutId];
       if (selected?.active) await this.open({ checkout, path: selected.active }, { view: selected.fileViews[selected.active] ?? "file" });
+      await this.refresh(checkout);
     }
     this.recovery.selectedCheckoutId = selectedCheckoutId;
     this.loading = false;
@@ -140,7 +141,7 @@ export class EditorController {
     const key = checkoutKey(checkout);
     this.stops.get(key)?.();
     this.stops.set(key, this.client.watch({ checkout, paths: [""] }, event => {
-      if (this.disposed || !sameCheckout(event.checkout, checkout)) return;
+      if (this.disposed || !this.recovery.openCheckoutIds.includes(checkout.checkoutId) || !sameCheckout(event.checkout, checkout)) return;
       if (event.error) this.report(event.error);
       if (event.ready) return;
       this.discoveryRevision++;
@@ -156,15 +157,19 @@ export class EditorController {
     if (collision) throw Error("Checkout identity changed; retained work has not been rebound.");
     if (!this.recovery.checkouts.some(item => sameCheckout(item, target))) {
       this.recovery.checkouts.push(target);
-      this.recovery.views[checkoutKey(target)] = view();
-      this.observe(target);
+      this.recovery.views[target.checkoutId] = view();
     }
+    const reopening = !this.recovery.openCheckoutIds.includes(target.checkoutId);
+    if (reopening) { this.recovery.openCheckoutIds.push(target.checkoutId); this.observe(target); }
     this.selectCheckout(target);
+    const selected = this.checkout(target);
+    if (reopening && selected.active) await this.open({ checkout: target, path: selected.active });
     await this.refresh(target);
     return target;
   }
   selectCheckout(target: CheckoutTarget) {
     this.checkout(target);
+    this.activation++;
     this.recovery.selectedCheckoutId = target.checkoutId;
     this.changed();
   }
@@ -217,14 +222,27 @@ export class EditorController {
     if (this.preserving) return false;
     const generation = ++this.activation;
     const current = () => !this.disposed && generation === this.activation && (options.current?.() ?? true) &&
-      this.recovery.checkouts.some(item => sameCheckout(item, target.checkout));
+      this.recovery.openCheckoutIds.includes(target.checkout.checkoutId) && this.recovery.checkouts.some(item => sameCheckout(item, target.checkout));
     const key = fileKey(target), mode = options.view ?? selected.fileViews[target.path] ?? "file";
     try {
       let disk: FileDocument | null, comparison: Comparison | undefined;
-      if (mode === "file" || mode === "conflict") disk = await this.command("readFile", target);
+      if (mode === "file" || mode === "conflict") {
+        try { disk = await this.command("readFile", target); }
+        catch (error) {
+          if (!current() || !this.buffers.has(key)) throw error;
+          this.report("File unavailable on disk. Retained buffer and edits remain accessible.");
+          disk = null;
+        }
+      }
       else {
-        comparison = await this.command("readComparison", { target, area: mode });
-        disk = comparison.working;
+        try {
+          comparison = await this.command("readComparison", { target, area: mode });
+          disk = comparison.working;
+        } catch (error) {
+          if (!current() || !this.buffers.has(key)) throw error;
+          this.report("Comparison unavailable. Retained buffer and edits remain accessible.");
+          disk = null; comparison = this.comparisons[key];
+        }
       }
       if (!current()) return false;
       let buffer = this.buffers.get(key);
@@ -233,7 +251,7 @@ export class EditorController {
         buffer.disk = disk; buffer.text = disk.text;
       }
       if (buffer && disk && buffer.disk.version !== disk.version) buffer.conflict = disk;
-      if (mode === "conflict") comparison = { original: disk!.text, working: disk, title: "Disk versus your edits" };
+      if (mode === "conflict") comparison = disk ? { original: disk.text, working: disk, title: "Disk versus your edits" } : this.comparisons[key];
       if (comparison) this.comparisons[key] = comparison;
       else delete this.comparisons[key];
       if (comparison?.error) this.report(comparison.error);
@@ -280,6 +298,9 @@ export class EditorController {
       buffer.disk = result.disk; buffer.pendingSave = undefined; buffer.conflict = undefined;
       await this.publishFacts(result.recoveryChanges, undefined, undefined, true);
       return buffer.text === result.disk.text;
+    } catch (error) {
+      if (ApplicationError.is(error) && error.code === "InvalidInput") buffer.pendingSave = undefined;
+      throw error;
     } finally { buffer.saving = false; this.emit(); }
   }
   async reload(target: FileTarget) {
@@ -306,7 +327,9 @@ export class EditorController {
   }
   position(target: FileTarget, mode: FileView | `${FileView}:original`, position: EditorPosition) {
     if (this.disposed || this.preserving) return;
-    const selected = this.checkout(target.checkout);
+    if (!this.recovery.openCheckoutIds.includes(target.checkout.checkoutId) || !this.recovery.checkouts.some(item => sameCheckout(item, target.checkout))) return;
+    const selected = this.recovery.views[target.checkout.checkoutId];
+    if (!selected) return;
     if (!selected.openFiles.includes(target.path)) return;
     (selected.positions[target.path] ??= {})[mode] = position;
     this.changed();
@@ -357,8 +380,8 @@ export class EditorController {
       const keys = new Set(captured.map(fileKey));
       state.drafts = state.drafts.filter(draft => !discarded.has(fileKey(draft.target)) && (kind === "quit" || !keys.has(fileKey(draft.target))));
       const history: ClosedAction[] = [];
-      if (kind !== "quit") for (const target of state.checkouts) {
-        const selected = state.views[checkoutKey(target)];
+      if (kind === "files") for (const target of state.checkouts) {
+        const selected = state.views[target.checkoutId];
         const closing = selected.openFiles.filter(path => keys.has(fileKey({ checkout: target, path })));
         if (!closing.length) continue;
         history.push({ checkout: target, active: closing.includes(selected.active) ? selected.active : closing.at(-1)!,
@@ -370,8 +393,8 @@ export class EditorController {
         if (selected.preview && closing.includes(selected.preview)) selected.preview = null;
       }
       if (kind === "checkout" && checkout) {
-        state.checkouts = state.checkouts.filter(item => !sameCheckout(item, checkout)); delete state.views[checkoutKey(checkout)];
-        if (state.selectedCheckoutId === checkout.checkoutId) state.selectedCheckoutId = state.checkouts[0]?.checkoutId ?? null;
+        state.openCheckoutIds = state.openCheckoutIds.filter(id => id !== checkout.checkoutId);
+        if (state.selectedCheckoutId === checkout.checkoutId) state.selectedCheckoutId = state.openCheckoutIds[0] ?? null;
       }
       await this.publish(state);
       this.recovery = state;
@@ -412,7 +435,7 @@ export class EditorController {
   async list(checkout: CheckoutTarget, path = "") {
     const selected = this.checkout(checkout); validPath(path, true);
     const listing = await this.command("listDirectory", { checkout, path, hideIgnored: selected.tree.hideIgnored });
-    if (this.disposed) return listing;
+    if (this.disposed || !this.recovery.openCheckoutIds.includes(checkout.checkoutId)) return listing;
     this.listings[JSON.stringify([checkoutKey(checkout), path])] = listing; this.emit();
     return listing;
   }
@@ -442,7 +465,7 @@ export class EditorController {
     if (existing) { this.refreshPending.add(key); return existing; }
     const pending = this.refreshOnce(checkout).finally(() => {
       this.refreshing.delete(key);
-      if (this.refreshPending.delete(key) && !this.disposed && this.recovery.checkouts.some(target => sameCheckout(target, checkout)))
+      if (this.refreshPending.delete(key) && !this.disposed && this.recovery.openCheckoutIds.includes(checkout.checkoutId))
         void this.refresh(checkout).catch(this.report);
     });
     this.refreshing.set(key, pending); return pending;
@@ -452,7 +475,7 @@ export class EditorController {
     await Promise.allSettled(paths.map(path => this.list(checkout, path)));
     try { this.git[checkoutKey(checkout)] = await this.command("gitStatus", { checkout }); }
     catch { /* The public command already reported the error; retained buffers stay usable. */ }
-    if (this.disposed) return;
+    if (this.disposed || !this.recovery.openCheckoutIds.includes(checkout.checkoutId)) return;
     const selected = this.checkout(checkout), mode = selected.fileViews[selected.active], generation = this.activation;
     if (selected.active && mode && mode !== "file" && mode !== "conflict" && !this.preserving) {
       const target = { checkout, path: selected.active }, key = fileKey(target);
@@ -501,7 +524,7 @@ export class EditorController {
       const result = await this.command("mutate", operation);
       if (result.clientId !== operation.clientId || result.id !== operation.id || result.kind !== operation.kind || !sameCheckout(result.checkout, operation.checkout))
         throw Error("Operation response identity mismatch. Original pending evidence retained.");
-      await this.publishFacts([], result); await this.refresh(operation.checkout); return result;
+      await this.publishFacts([], result); if (this.recovery.openCheckoutIds.includes(operation.checkout.checkoutId)) await this.refresh(operation.checkout); return result;
     } catch (error) { this.report("Operation outcome unconfirmed. Resolve status before taking further action."); throw error; }
   }
   async resolveOperation(id: string, operationClientId = this.clientId) {
@@ -510,7 +533,7 @@ export class EditorController {
     const result = await this.command("operationStatus", { clientId: operationClientId, id });
     if (!result) { this.report("Operation status unavailable; drafts and original references retained."); return null; }
     if (result.clientId !== operationClientId || result.id !== id) throw Error("Operation status identity mismatch.");
-    await this.publishFacts([], result); await this.refresh(result.checkout); return result;
+    await this.publishFacts([], result); if (this.recovery.openCheckoutIds.includes(result.checkout.checkoutId)) await this.refresh(result.checkout); return result;
   }
   async reconcileRecovery() { this.assertReady(); if (!this.preserving) await this.publishFacts([]); }
   private uncertainAffects(target: FileTarget) {
@@ -530,23 +553,26 @@ export class EditorController {
       known.result.kind !== result.kind || !sameCheckout(known.result.checkout, result.checkout) || !this.recovery.checkouts.some(item => sameCheckout(item, result.checkout)))
       throw Error("Operation checkout identity unavailable or changed. Evidence and drafts retained without rebinding.");
     known.result = result;
+    let reconciled = true;
     for (const item of result.items.filter(item => item.outcome === "completed")) {
       const itemKey = JSON.stringify([item.source, item.destination]);
       if (known.applied.has(itemKey)) continue;
       if (operation && !operation.sources.some(source => source.target.path === item.source)) continue;
-      if (result.kind === "move" && item.destination) this.moveReferences(result.checkout, item.source, item.destination);
+      if (result.kind === "move" && item.destination && !this.moveReferences(result.checkout, item.source, item.destination)) {
+        reconciled = false; continue;
+      }
       if (result.kind === "copy" && item.destination) {
         const durableCopies = durable.drafts.filter(draft => sameCheckout(draft.target.checkout, result.checkout) && affected(draft.target.path, item.destination!));
         for (const draft of durableCopies) if (!this.buffers.has(fileKey(draft.target))) {
           this.buffers.set(fileKey(draft.target), { ...structuredClone(draft), saving: false });
-          const selected = this.checkout(result.checkout); if (!selected.openFiles.includes(draft.target.path)) selected.openFiles.push(draft.target.path);
+          const selected = this.checkout(result.checkout, false); if (!selected.openFiles.includes(draft.target.path)) selected.openFiles.push(draft.target.path);
         }
         for (const buffer of known.copies ?? []) if (sameCheckout(buffer.target.checkout, result.checkout) && affected(buffer.target.path, item.source) && buffer.text !== buffer.disk.text) {
           const target = { checkout: result.checkout, path: item.destination + buffer.target.path.slice(item.source.length) };
           if (!this.buffers.has(fileKey(target))) {
             const disk = await this.command("readFile", target);
             this.buffers.set(fileKey(target), { target, disk, text: buffer.text, saving: false });
-            const selected = this.checkout(result.checkout);
+            const selected = this.checkout(result.checkout, false);
             if (!selected.openFiles.includes(target.path)) selected.openFiles.push(target.path);
           }
         }
@@ -559,6 +585,7 @@ export class EditorController {
       });
       known.applied.add(itemKey);
     }
+    return reconciled;
   }
   private publishFacts(changes: RecoveryChange[], result?: OperationResult, initial?: RecoveryLoad, forcePublication = false): Promise<void> {
     const pending = this.factsTail.catch(() => {}).then(async () => {
@@ -569,7 +596,8 @@ export class EditorController {
       const facts = [...new Map([...loaded.operations, ...(result ? [result] : [])].map(fact => [operationKey(fact.clientId, fact.id), fact])).values()];
       const before = (fact: OperationResult) => fact.recoveryChanges.find(change => change.clientId === this.clientId)?.previousRevision ?? Infinity;
       facts.sort((a, b) => before(a) - before(b));
-      for (const fact of facts) await this.applyOperationFacts(fact, loaded.state);
+      const reconciled = new Set<string>();
+      for (const fact of facts) if (await this.applyOperationFacts(fact, loaded.state)) reconciled.add(operationKey(fact.clientId, fact.id));
       const transitions = [...changes, ...facts.flatMap(fact => fact.recoveryChanges)].filter(change => change.clientId === this.clientId)
         .sort((a, b) => a.previousRevision - b.previousRevision);
       for (const transition of transitions) {
@@ -580,7 +608,7 @@ export class EditorController {
       }
       if (!facts.length && !changes.length && !forcePublication) return;
       await this.flush();
-      for (const fact of facts) if (fact.outcome !== "uncertain") {
+      for (const fact of facts) if (fact.outcome !== "uncertain" && reconciled.has(operationKey(fact.clientId, fact.id))) {
         await this.command("acknowledgeOperation", { clientId: this.clientId, operationClientId: fact.clientId, id: fact.id });
         const known = this.operations.get(operationKey(fact.clientId, fact.id))!;
         known.acknowledged = true; known.copies = undefined;
@@ -590,22 +618,32 @@ export class EditorController {
     this.factsTail = pending; return pending;
   }
   private moveReferences(checkout: CheckoutTarget, source: string, destination: string) {
-    this.referenceRevision++;
     const move = (path: string) => affected(path, source) ? destination + path.slice(source.length) : path;
-    const selected = this.checkout(checkout);
+    const incoming = [...this.buffers.values()].filter(buffer => sameCheckout(buffer.target.checkout, checkout) && affected(buffer.target.path, source));
+    if (incoming.some(buffer => [...this.buffers.values()].some(other => sameCheckout(other.target.checkout, checkout) && !incoming.includes(other) &&
+      other.target.path.normalize("NFC").toLowerCase() === move(buffer.target.path).normalize("NFC").toLowerCase()))) {
+      this.report("Move destination has another open buffer. Both drafts and operation evidence are retained. Close one through Save/Discard/Cancel, then resolve operation status.");
+      return false;
+    }
+    this.referenceRevision++;
+    const selected = this.checkout(checkout, false);
     for (const [key, buffer] of [...this.buffers]) if (sameCheckout(buffer.target.checkout, checkout) && affected(buffer.target.path, source)) {
       this.buffers.delete(key); buffer.target = { checkout, path: move(buffer.target.path) }; this.buffers.set(fileKey(buffer.target), buffer);
       if (this.comparisons[key]) { this.comparisons[fileKey(buffer.target)] = this.comparisons[key]; delete this.comparisons[key]; }
     }
-    selected.openFiles = selected.openFiles.map(move); selected.active = move(selected.active);
+    selected.openFiles = [...new Set(selected.openFiles.map(move))]; selected.active = move(selected.active);
     if (selected.preview) selected.preview = move(selected.preview);
-    selected.fileViews = Object.fromEntries(Object.entries(selected.fileViews).map(([path, mode]) => [move(path), mode]));
-    selected.positions = Object.fromEntries(Object.entries(selected.positions).map(([path, positions]) => [move(path), positions]));
-    selected.tree.expanded = selected.tree.expanded.map(move); selected.tree.selected = selected.tree.selected.map(move); selected.tree.focus = move(selected.tree.focus);
-    this.recovery.recentFiles = this.recovery.recentFiles.map(item => sameCheckout(item.checkout, checkout) ? { checkout, path: move(item.path) } : item);
+    const movedViews = Object.entries(selected.fileViews).sort(([a], [b]) => Number(affected(b, source)) - Number(affected(a, source)));
+    const movedPositions = Object.entries(selected.positions).sort(([a], [b]) => Number(affected(b, source)) - Number(affected(a, source)));
+    selected.fileViews = Object.fromEntries(movedViews.map(([path, mode]) => [move(path), mode]));
+    selected.positions = Object.fromEntries(movedPositions.map(([path, positions]) => [move(path), positions]));
+    selected.tree.expanded = [...new Set(selected.tree.expanded.map(move))]; selected.tree.selected = [...new Set(selected.tree.selected.map(move))]; selected.tree.focus = move(selected.tree.focus);
+    const recentFiles = this.recovery.recentFiles.map(item => sameCheckout(item.checkout, checkout) ? { checkout, path: move(item.path) } : item);
+    this.recovery.recentFiles = [...new Map(recentFiles.map(item => [fileKey(item), item])).values()];
     for (const action of this.history) if (sameCheckout(action.checkout, checkout)) {
       action.active = move(action.active); action.files = action.files.map(file => ({ ...file, path: move(file.path) }));
     }
+    return true;
   }
   /** Release resources after a successful close/Quit gate. Hiding a view must not call this. */
   dispose() {

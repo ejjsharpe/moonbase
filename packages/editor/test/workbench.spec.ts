@@ -71,6 +71,7 @@ test("lookup groups/highlights, previews, tree actions and constrained layout", 
   await expect(page.locator('[role="option"] mark')).toHaveCount(4);
   await page.getByRole("combobox").press("Enter");
   await expect(first(page).getByRole("tab", { name: "src/example.ts", exact: true })).toBeVisible();
+  await expect(first(page).getByRole("textbox", { name: "src/example.ts editor", exact: true })).toBeFocused();
   await first(page).getByRole("button", { name: "New File", exact: true }).click();
   await page.getByLabel("Destination relative path").fill("created.txt");
   await page.getByRole("dialog").getByRole("button", { name: "New File", exact: true }).click();
@@ -79,4 +80,17 @@ test("lookup groups/highlights, previews, tree actions and constrained layout", 
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   const sidebar = first(page).getByRole("separator", { name: "Resize sidebar" });
   await sidebar.focus(); await sidebar.press("Home"); await expect(sidebar).toHaveAttribute("aria-valuenow", "190");
+  await first(page).getByRole("treeitem", { name: "README.md", exact: true }).click();
+  await expect(first(page).getByRole("tree", { name: "Files", exact: true })).toBeFocused();
+});
+
+test("R1 real close-checkout removes its Monaco models without a teardown exception", async ({ page }) => {
+  const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
+  await page.goto("/"); await expect(first(page).getByRole("textbox", { name: "welcome.ts editor", exact: true })).toBeVisible();
+  const before = await page.evaluate(() => window.demo.modelCount());
+  await first(page).getByRole("button", { name: "Close checkout /demo/moonbase", exact: true }).click();
+  await expect(first(page).getByText("Open a checkout to browse files and edit. Unsaved changes belong to this editor instance.")).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.demo.modelCount())).toBe(before - 1);
+  expect(errors).toEqual([]);
+  await page.screenshot({ path: "test-results/editor-checkout-closed.png", fullPage: true });
 });

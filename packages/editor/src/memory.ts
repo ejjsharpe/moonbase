@@ -78,7 +78,7 @@ export function memoryWorkspace(seeds: Seed[]) {
           const move = (path: string) => item.destination && affected(path, item.source) ? item.destination + path.slice(item.source.length) : path;
           if (result.kind === "move") {
             state.drafts = state.drafts.map(draft => checkoutKey(draft.target.checkout) === checkoutKey(result.checkout) ? { ...draft, target: { ...draft.target, path: move(draft.target.path) } } : draft);
-            const selected = state.views[checkoutKey(result.checkout)];
+            const selected = state.views[result.checkout.checkoutId];
             if (selected) {
               selected.openFiles = selected.openFiles.map(move); selected.active = move(selected.active); if (selected.preview) selected.preview = move(selected.preview);
               selected.fileViews = Object.fromEntries(Object.entries(selected.fileViews).map(([path, mode]) => [move(path), mode]));
@@ -223,7 +223,23 @@ export function memoryWorkspace(seeds: Seed[]) {
     persistRecovery: ({ clientId, expectedRevision, state }) => call("persistRecovery", () => {
       if (!clientId || state.clientId !== clientId || state.version !== 1) fail("Recovery client mismatch.");
       if ((recoveries.get(clientId)?.revision ?? 0) !== expectedRevision) fail("Recovery revision changed.", "Conflict");
-      for (const draft of state.drafts) { exact(draft.target.checkout); pathCheck(draft.target.path); if (new TextEncoder().encode(draft.text).length > maximumFileBytes) fail("Draft too large."); }
+      const known = new Map(state.checkouts.map(checkout => [checkout.checkoutId, checkout]));
+      if (known.size !== state.checkouts.length) fail("Duplicate known checkout ID.");
+      for (const checkout of state.checkouts) exact(checkout);
+      if (new Set(state.openCheckoutIds).size !== state.openCheckoutIds.length || state.openCheckoutIds.some(id => !known.has(id))) fail("Open checkout IDs must be a unique subset of known targets.");
+      if (state.selectedCheckoutId !== null && !state.openCheckoutIds.includes(state.selectedCheckoutId)) fail("Selected checkout must be open.");
+      for (const [id, view] of Object.entries(state.views)) {
+        if (!known.has(id)) fail("View key must be a known checkoutId.");
+        for (const path of [...view.openFiles, ...Object.keys(view.fileViews), ...Object.keys(view.positions), ...view.tree.expanded, ...view.tree.selected]) pathCheck(path);
+        if (view.active && !view.openFiles.includes(view.active) || view.preview !== null && !view.openFiles.includes(view.preview)) fail("Active/preview file must belong to its retained checkout view.");
+        pathCheck(view.tree.focus, true);
+      }
+      for (const target of [...state.drafts.map(draft => draft.target), ...state.recentFiles]) {
+        if (!known.has(target.checkout.checkoutId) || checkoutKey(known.get(target.checkout.checkoutId)!) !== checkoutKey(target.checkout)) fail("Recovery file target must match its known exact checkout.");
+        pathCheck(target.path);
+      }
+      if (new Set(state.drafts.map(draft => fileKey(draft.target))).size !== state.drafts.length) fail("Duplicate recovery draft.");
+      for (const draft of state.drafts) if (new TextEncoder().encode(draft.text).length > maximumFileBytes) fail("Draft too large.");
       const revision = expectedRevision + 1; recoveries.set(clientId, { revision, state: structuredClone(state) }); stats.publications++;
       return { revision };
     }),

@@ -92,7 +92,7 @@ test("captured close defers Discards; earlier Save remains a fact after later Ca
     for (const path of ["a.ts", "b.ts", "c.ts"]) { await f.editor.open(target(path)); f.editor.edit(target(path), "edit " + path); }
     const choices: CloseChoice[] = ["save", "discard", "cancel"];
     assert.equal(await f.editor.close([target("a.ts"), target("b.ts"), target("c.ts")], async () => choices.shift()!), false);
-    assert.equal(f.editor.getSnapshot().recovery.views[checkoutKey(checkout)].openFiles.length, 3);
+    assert.equal(f.editor.getSnapshot().recovery.views[checkout.checkoutId].openFiles.length, 3);
     assert.equal(f.editor.buffer(target("a.ts"))!.disk.text, "edit a.ts");
     assert.equal(f.editor.buffer(target("b.ts"))!.text, "edit b.ts");
     assert.equal(f.editor.buffer(target("c.ts"))!.text, "edit c.ts");
@@ -110,13 +110,13 @@ test("preview replacement follows successful activation; dirty, Keep Open and re
   try {
     await f.editor.open(target("a.ts"), { intent: "preview" });
     f.memory.failNext("readFile"); assert.equal(await f.editor.open(target("b.ts"), { intent: "preview" }), false);
-    assert.equal(f.editor.getSnapshot().recovery.views[checkoutKey(checkout)].active, "a.ts");
+    assert.equal(f.editor.getSnapshot().recovery.views[checkout.checkoutId].active, "a.ts");
     await f.editor.open(target("b.ts"), { intent: "preview" });
     assert.equal(f.editor.buffer(target("a.ts")), undefined);
     f.editor.edit(target("b.ts"), "dirty"); await f.editor.open(target("c.ts"), { intent: "preview" });
     f.editor.reorder(checkout, "c.ts", 0); await f.editor.open(target("a.ts"), { intent: "preview" });
-    assert.deepEqual(f.editor.getSnapshot().recovery.views[checkoutKey(checkout)].openFiles, ["c.ts", "a.ts", "b.ts"]);
-    f.editor.keepOpen(target("a.ts")); assert.equal(f.editor.getSnapshot().recovery.views[checkoutKey(checkout)].preview, null);
+    assert.deepEqual(f.editor.getSnapshot().recovery.views[checkout.checkoutId].openFiles, ["c.ts", "a.ts", "b.ts"]);
+    f.editor.keepOpen(target("a.ts")); assert.equal(f.editor.getSnapshot().recovery.views[checkout.checkoutId].preview, null);
   } finally { await f.dispose(); }
 });
 
@@ -128,11 +128,11 @@ test("reopen restores batch order/view/position and reads current source rather 
     await f.editor.close([target("a.ts"), target("b.ts")], async () => "discard");
     f.memory.externalWrite(target("b.ts"), "latest source");
     await f.editor.reopen(checkout);
-    const selected = f.editor.getSnapshot().recovery.views[checkoutKey(checkout)];
+    const selected = f.editor.getSnapshot().recovery.views[checkout.checkoutId];
     assert.deepEqual(selected.openFiles, ["a.ts", "b.ts"]); assert.equal(selected.fileViews["a.ts"], "staged");
     assert.equal(selected.positions["a.ts"].staged?.column, 4);
     assert.equal(f.editor.buffer(target("b.ts"))!.text, "latest source");
-    await f.editor.navigate(checkout, -1); assert.equal(f.editor.getSnapshot().recovery.views[checkoutKey(checkout)].active, "a.ts");
+    await f.editor.navigate(checkout, -1); assert.equal(f.editor.getSnapshot().recovery.views[checkout.checkoutId].active, "a.ts");
   } finally { await f.dispose(); }
 });
 
@@ -145,8 +145,8 @@ test("two editor instances isolate buffers, positions, selection and recovery; r
     f.editor.position(target("a.ts"), "file", { line: 1, column: 3, top: 9, left: 0 });
     await other.open(target("b.ts")); await f.editor.flush(); await other.flush();
     assert.notEqual(f.editor.instanceId, other.instanceId);
-    assert.equal(other.getSnapshot().recovery.views[checkoutKey(checkout)].active, "b.ts");
-    assert.equal(other.getSnapshot().recovery.views[checkoutKey(checkout)].positions["a.ts"], undefined);
+    assert.equal(other.getSnapshot().recovery.views[checkout.checkoutId].active, "b.ts");
+    assert.equal(other.getSnapshot().recovery.views[checkout.checkoutId].positions["a.ts"], undefined);
     f.editor.dispose();
     const restored = createEditor({ client: f.client, clientId: "editor-one" });
     try { await restored.load(); assert.equal(restored.buffer(target("a.ts"))!.text, "one"); }
@@ -173,7 +173,7 @@ test("tree ignore filtering/reveal and bounded lookup expose their real results"
     assert.equal((await f.editor.list(checkout)).entries.some(entry => entry.path === "c.ts"), false);
     await assert.rejects(f.editor.reveal(target("c.ts")), /hidden/);
     await f.editor.reveal(target("folder/nested.ts"));
-    assert.deepEqual(f.editor.getSnapshot().recovery.views[checkoutKey(checkout)].tree.selected, ["folder/nested.ts"]);
+    assert.deepEqual(f.editor.getSnapshot().recovery.views[checkout.checkoutId].tree.selected, ["folder/nested.ts"]);
     assert.deepEqual((await f.editor.lookup(checkout, "nested")).matches.map(row => row.path), ["folder/nested.ts"]);
     await assert.rejects(f.editor.open(target("../escape")), /relative path/);
   } finally { await f.dispose(); }
@@ -322,7 +322,7 @@ test("stale file activation cannot replace a later successful comparison", async
     await editor.load(); await editor.openCheckout(checkout.root);
     const slow = editor.open(target("b.ts")); await started;
     await editor.open(target("a.ts"), { view: "staged" }); release(); assert.equal(await slow, false);
-    assert.equal(editor.getSnapshot().recovery.views[checkoutKey(checkout)].active, "a.ts");
+    assert.equal(editor.getSnapshot().recovery.views[checkout.checkoutId].active, "a.ts");
     assert.equal(editor.buffer(target("b.ts")), undefined);
   } finally { release(); editor.dispose(); await f.dispose(); }
 });
@@ -443,5 +443,168 @@ test("clean tabs restore current disk content while dirty tabs retain their orig
     const restored = createEditor({ client: f.client, clientId: "restore" });
     try { await restored.load(); assert.equal(restored.buffer(target("a.ts"))!.text, "latest disk"); }
     finally { restored.dispose(); }
+  } finally { await f.dispose(); }
+});
+
+for (const origin of ["own", "foreign"] as const) test(`R1 move collision retains both drafts and evidence for ${origin} outcome`, async () => {
+  const f = await fixture("collision", false); f.editor.dispose();
+  let admit!: () => void, release!: () => void;
+  const admitted = new Promise<void>(resolve => { admit = resolve; }), wait = new Promise<void>(resolve => { release = resolve; });
+  const client: EditorClient = { ...f.client, watch: () => () => {}, async command(name, input, options) {
+    const result = await f.client.command(name, input, options);
+    if (origin === "own" && name === "mutate") { admit(); await wait; }
+    return result;
+  } };
+  let editor = createEditor({ client, clientId: "collision-observer" });
+  try {
+    await editor.load(); await editor.openCheckout(checkout.root); await editor.open(target("a.ts")); editor.edit(target("a.ts"), "source edits"); await editor.flush();
+    const sources = await editor.inspect(checkout, ["a.ts"]);
+    let operation: Promise<unknown>;
+    if (origin === "own") { operation = editor.mutate({ id: "collision", checkout, sources, kind: "move", destination: "destination.ts" }); await admitted; }
+    else { await f.client.command("mutate", { id: "collision", clientId: "foreign", checkout, sources, kind: "move", destination: "destination.ts" }); operation = Promise.resolve(); }
+    await editor.open(target("destination.ts")); editor.edit(target("destination.ts"), "destination edits");
+    release(); await operation; if (origin === "foreign") await editor.reconcileRecovery();
+    assert.equal(editor.buffer(target("a.ts"))!.text, "source edits");
+    assert.equal(editor.buffer(target("destination.ts"))!.text, "destination edits");
+    const retained = await f.client.command("loadRecovery", { clientId: editor.clientId });
+    assert.deepEqual(retained.state.drafts.map(draft => draft.text).sort(), ["destination edits", "source edits"]);
+    assert.equal(retained.operations.length, 1); assert.equal(f.memory.stats.mutations, 1);
+    editor.dispose(); editor = createEditor({ client, clientId: "collision-observer" }); await editor.load();
+    assert.equal(editor.buffer(target("a.ts"))!.text, "source edits");
+    assert.equal(editor.buffer(target("destination.ts"))!.text, "destination edits");
+    await editor.resolveOperation("collision", origin === "own" ? editor.clientId : "foreign");
+    assert.equal((await f.client.command("loadRecovery", { clientId: editor.clientId })).operations.length, 1);
+    assert.equal(await editor.close([target("a.ts")], async () => "discard"), true);
+    await editor.resolveOperation("collision", origin === "own" ? editor.clientId : "foreign");
+    assert.equal(editor.buffer(target("destination.ts"))!.text, "destination edits");
+    const recent = editor.getSnapshot().recovery.recentFiles.map(fileKey); assert.equal(new Set(recent).size, recent.length);
+    assert.equal((await f.client.command("loadRecovery", { clientId: editor.clientId })).operations.length, 0);
+  } finally { release(); editor.dispose(); await f.dispose(); }
+});
+
+test("R1 removed checkout ignores late position recording", async () => {
+  const f = await fixture();
+  try {
+    await f.editor.open(target("a.ts")); assert.equal(await f.editor.closeCheckout(checkout, async () => "discard"), true);
+    assert.doesNotThrow(() => f.editor.position(target("a.ts"), "file", { line: 1, column: 2, top: 0, left: 0 }));
+  } finally { await f.dispose(); }
+});
+
+test("R1 definitive InvalidInput Save frees the captured request while uncertain retries remain immutable", async () => {
+  const f = await fixture("invalid-save", false);
+  try {
+    await f.editor.open(target("a.ts")); f.editor.edit(target("a.ts"), "bad\0text");
+    await assert.rejects(f.editor.save(target("a.ts")), error => ApplicationError.is(error) && error.code === "InvalidInput");
+    assert.equal(f.editor.buffer(target("a.ts"))!.pendingSave, undefined);
+    assert.equal(f.memory.stats.saves, 0); f.editor.edit(target("a.ts"), "corrected"); assert.equal(await f.editor.save(target("a.ts")), true);
+    f.editor.edit(target("a.ts"), "another\0invalid"); await assert.rejects(f.editor.save(target("a.ts")));
+    assert.equal(await f.editor.prepareQuit(async () => "discard"), true);
+  } finally { await f.dispose(); }
+});
+
+test("R1 missing retained dirty tab stays accessible after Trash and new missing opens leave selection alone", async () => {
+  const f = await fixture("trash-activation", false);
+  try {
+    await f.editor.open(target("a.ts")); f.editor.edit(target("a.ts"), "recover these edits");
+    await f.editor.mutate({ checkout, sources: await f.editor.inspect(checkout, ["a.ts"]), kind: "trash" });
+    await f.editor.open(target("b.ts")); assert.equal(await f.editor.open(target("a.ts")), true);
+    assert.equal(f.editor.buffer(target("a.ts"))!.text, "recover these edits");
+    assert.equal(await f.editor.open(target("missing.ts")), false);
+    assert.equal(f.editor.getSnapshot().recovery.views[checkout.checkoutId].active, "a.ts");
+    assert.match(f.editor.getSnapshot().errors.join(" "), /unavailable|retained/i);
+  } finally { await f.dispose(); }
+});
+
+test("R1 restored open roots populate initial tree and Git including expanded folders", async () => {
+  const f = await fixture("discover-restore", false);
+  try {
+    await f.editor.openCheckout(second.root); f.editor.tree(checkout, { expanded: ["folder"] }); await f.editor.flush(); f.editor.dispose();
+    const restored = createEditor({ client: f.client, clientId: "discover-restore" });
+    try {
+      await restored.load(); const state = restored.getSnapshot();
+      for (const c of [checkout, second]) { assert(state.listings[JSON.stringify([checkoutKey(c), ""])]?.entries.length); assert(state.git[checkoutKey(c)]); }
+      assert(state.listings[JSON.stringify([checkoutKey(checkout), "folder"])]?.entries.length);
+    } finally { restored.dispose(); }
+  } finally { await f.dispose(); }
+});
+
+test("R1 a newer explicit checkout selection defeats a delayed file activation in another checkout", async () => {
+  const f = await fixture("unused", false); f.editor.dispose(); let admit!: () => void, release!: () => void;
+  const admitted = new Promise<void>(resolve => { admit = resolve; }), wait = new Promise<void>(resolve => { release = resolve; });
+  const editor = createEditor({ clientId: "checkout-race", client: { ...f.client, watch: () => () => {}, async command(name, input, options) {
+    if (name === "readFile") { admit(); await wait; } return f.client.command(name, input, options);
+  } } });
+  try {
+    await editor.load(); await editor.openCheckout(checkout.root); await editor.openCheckout(second.root); editor.selectCheckout(checkout);
+    const opening = editor.open(target("a.ts")); await admitted; editor.selectCheckout(second); release();
+    assert.equal(await opening, false); assert.equal(editor.getSnapshot().recovery.selectedCheckoutId, second.checkoutId);
+  } finally { release(); editor.dispose(); await f.dispose(); }
+});
+
+test("R1 checkout close retains exact metadata and reopens its order, comparison, positions and active file", async () => {
+  const f = await fixture("checkout-memory", false);
+  try {
+    await f.editor.open(target("a.ts"), { view: "staged" }); await f.editor.open(target("b.ts"));
+    f.editor.position(target("a.ts"), "staged", { line: 1, column: 5, top: 12, left: 2 });
+    f.editor.reorder(checkout, "b.ts", 0); const before = f.editor.getSnapshot().recovery.views[checkout.checkoutId];
+    assert(before); assert.deepEqual(f.editor.getSnapshot().recovery.openCheckoutIds, [checkout.checkoutId]);
+    await f.editor.closeCheckout(checkout, async () => "discard"); const closed = f.editor.getSnapshot().recovery;
+    assert.deepEqual(closed.checkouts, [checkout]); assert.deepEqual(closed.openCheckoutIds, []);
+    assert.deepEqual(closed.views[checkout.checkoutId], before); assert(closed.recentFiles.length);
+    await f.editor.openCheckout(checkout.root);
+    assert.deepEqual(f.editor.getSnapshot().recovery.views[checkout.checkoutId], before);
+    assert.equal(f.editor.buffer(target("b.ts"))!.text, "second");
+    assert.equal(await f.editor.reopen(checkout), false);
+  } finally { await f.dispose(); }
+});
+
+test("R1 memory persistence rejects composite view keys and invalid open membership", async () => {
+  const f = await fixture("schema", false);
+  try {
+    await f.editor.flush(); const loaded = await f.client.command("loadRecovery", { clientId: f.editor.clientId });
+    const state = structuredClone(loaded.state), selected = state.views[checkout.checkoutId];
+    assert(selected); delete state.views[checkout.checkoutId]; state.views[checkoutKey(checkout)] = selected;
+    await assert.rejects(f.client.command("persistRecovery", { clientId: f.editor.clientId, expectedRevision: loaded.revision, state }));
+    for (const openCheckoutIds of [["not-known"], [checkout.checkoutId, checkout.checkoutId], []])
+      await assert.rejects(f.client.command("persistRecovery", { clientId: f.editor.clientId, expectedRevision: loaded.revision, state: { ...loaded.state, openCheckoutIds } }));
+  } finally { await f.dispose(); }
+});
+
+test("R1 closed checkout metadata receives operation facts without discovery or reopening", async () => {
+  const f = await fixture("closed-facts", false);
+  try {
+    await f.editor.open(target("a.ts")); await f.editor.openCheckout(second.root); await f.editor.closeCheckout(checkout, async () => "discard");
+    const sources = await f.client.command("inspectEntries", { checkout, paths: ["a.ts"] });
+    await f.client.command("mutate", { id: "closed-move", clientId: "foreign", checkout, kind: "move", sources, destination: "moved.ts" });
+    f.editor.dispose();
+    const observed: string[] = [];
+    const restored = createEditor({ clientId: "closed-facts", client: { ...f.client,
+      watch(input, receive, error) { observed.push("watch:" + input.checkout.checkoutId); return f.client.watch(input, receive, error); },
+      command(name, input, options) {
+        if (["readFile", "listDirectory", "gitStatus", "readComparison"].includes(name)) {
+          const scoped = input as { checkout?: CheckoutTarget; target?: { checkout: CheckoutTarget } };
+          observed.push(name + ":" + (scoped.checkout ?? scoped.target?.checkout)?.checkoutId);
+        }
+        return f.client.command(name, input, options);
+      },
+    } });
+    try {
+      await restored.load(); const state = restored.getSnapshot();
+      assert.equal(state.recovery.views[checkout.checkoutId].active, "moved.ts");
+      assert.deepEqual(state.recovery.openCheckoutIds, [second.checkoutId]);
+      assert(observed.length); assert.equal(observed.some(value => value.endsWith(":" + checkout.checkoutId)), false);
+      assert.equal((await f.client.command("loadRecovery", { clientId: restored.clientId })).operations.length, 0);
+    } finally { restored.dispose(); }
+  } finally { await f.dispose(); }
+});
+
+test("R1 an unavailable retained comparison activates its buffer while a new comparison failure preserves selection", async () => {
+  const f = await fixture("retained-comparison", false);
+  try {
+    await f.editor.open(target("a.ts"), { view: "staged" }); f.editor.edit(target("a.ts"), "retain in any view"); await f.editor.open(target("b.ts"));
+    f.memory.failNext("readComparison"); assert.equal(await f.editor.open(target("a.ts")), true);
+    assert.equal(f.editor.buffer(target("a.ts"))!.text, "retain in any view");
+    f.memory.failNext("readComparison"); assert.equal(await f.editor.open(target("new.ts"), { view: "staged" }), false);
+    assert.equal(f.editor.getSnapshot().recovery.views[checkout.checkoutId].active, "a.ts");
   } finally { await f.dispose(); }
 });
