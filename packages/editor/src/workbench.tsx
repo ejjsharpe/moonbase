@@ -168,14 +168,16 @@ function FilesTree({ controller, state, checkout, active }: { controller: Editor
   </>;
 }
 
-type Action = { kind: WorkspaceOperation["kind"]; paths: string[] };
-function Mutation({ controller, checkout, action, close }: { controller: EditorController; checkout: CheckoutTarget; action: Action; close: () => void }) {
+type Action = { checkout: CheckoutTarget; kind: WorkspaceOperation["kind"]; paths: string[]; nativeReferences?: string[] };
+function Mutation({ controller, action, close }: { controller: EditorController; action: Action; close: () => void }) {
+  const checkout = action.checkout, batchImport = action.kind === "import" && action.nativeReferences!.length > 1;
   const [destination, setDestination] = useState(action.kind === "move" ? action.paths[0] ?? "" : ""), [error, setError] = useState("");
+  const [replacementPaths, setReplacementPaths] = useState("");
   const [replacements, setReplacements] = useState<EntryReference[] | null>(null), [sources, setSources] = useState<EntryReference[] | null>(null), [busy, setBusy] = useState(false);
   const [operationId] = useState(() => crypto.randomUUID());
-  const title = action.kind === "trash" ? "Move to Trash" : action.kind === "move" ? "Rename or move" : action.kind === "copy" ? "Copy" : action.kind === "create-file" ? "New File" : "New Folder";
+  const title = action.kind === "trash" ? "Move to Trash" : action.kind === "move" ? "Rename or move" : action.kind === "copy" ? "Copy" : action.kind === "import" ? "Import files" : action.kind === "create-file" ? "New File" : "New Folder";
   async function apply(consent = false) {
-    if (busy) return; setBusy(true); setError("");
+    if (busy || action.kind !== "trash" && !batchImport && !destination) return; setBusy(true); setError("");
     try {
       if (controller.getSnapshot().operations.some(operation => operation.clientId === controller.clientId && operation.id === operationId)) {
         const result = await controller.resolveOperation(operationId);
@@ -183,15 +185,21 @@ function Mutation({ controller, checkout, action, close }: { controller: EditorC
         else setError("Operation remains unresolved. Its original identity is retained; no effects were repeated.");
         return;
       }
-      const captured = sources ?? await controller.inspect(checkout, action.paths); setSources(captured);
+      const captured = sources ?? (action.paths.length ? await controller.inspect(checkout, action.paths) : []); setSources(captured);
       let replace = replacements;
       if (action.kind !== "trash" && replace === null) {
-        const parent = destination.split("/").slice(0, -1).join("/"), listing = await controller.list(checkout, parent);
-        const collision = listing.entries.find(entry => entry.path.normalize("NFC").toLowerCase() === destination.normalize("NFC").toLowerCase());
-        replace = collision ? await controller.inspect(checkout, [collision.path]) : []; setReplacements(replace);
+        if (batchImport) {
+          const paths = replacementPaths.split("\n").filter(Boolean);
+          replace = paths.length ? await controller.inspect(checkout, paths) : [];
+        } else {
+          const parent = destination.split("/").slice(0, -1).join("/"), listing = await controller.list(checkout, parent);
+          const collision = listing.entries.find(entry => entry.path.normalize("NFC").toLowerCase() === destination.normalize("NFC").toLowerCase());
+          replace = collision ? await controller.inspect(checkout, [collision.path]) : [];
+        }
+        setReplacements(replace);
       }
       if (replace?.length && !consent) return;
-      const result = await controller.mutate({ id: operationId, checkout, kind: action.kind, sources: captured, ...(action.kind === "trash" ? {} : { destination }), replacements: replace ?? [] });
+      const result = await controller.mutate({ id: operationId, checkout, kind: action.kind, sources: captured, ...(action.kind === "trash" ? {} : { destination }), ...(action.nativeReferences ? { nativeReferences: action.nativeReferences } : {}), replacements: replace ?? [] });
       if (result.outcome !== "completed") { setError(result.message ?? "Operation incomplete. Review the recorded outcome before continuing."); return; }
       if (action.kind === "create-file") await controller.open({ checkout, path: destination }, { view: "file", intent: "keep" });
       close();
@@ -199,19 +207,23 @@ function Mutation({ controller, checkout, action, close }: { controller: EditorC
     finally { setBusy(false); }
   }
   return <Popup title={title} onClose={() => { if (!busy) close(); }}>
-    <Dialog.Description {...stylex.props(styles.path)}>{action.paths.length ? action.paths.join(", ") : checkout.root}{action.kind === "trash" ? ". Unsaved text remains in recovery at its original path." : action.kind === "move" ? ". Text and positions are preserved; text undo history resets." : ""}</Dialog.Description>
-    {action.kind !== "trash" && <label {...stylex.props(styles.label)}>Destination relative path
-      <input {...stylex.props(controls.field)} autoFocus value={destination} onChange={event => { setDestination(event.target.value); setReplacements(null); }}
+    <Dialog.Description {...stylex.props(styles.path)}>{action.nativeReferences ? `${action.nativeReferences.length} selected item(s) → ${checkout.root}` : action.paths.length ? action.paths.join(", ") : checkout.root}{action.kind === "trash" ? ". Unsaved text remains in recovery at its original path." : action.kind === "move" ? ". Text and positions are preserved; text undo history resets." : ""}</Dialog.Description>
+    {action.kind !== "trash" && <label {...stylex.props(styles.label)}>{batchImport ? "Destination folder (blank for checkout root)" : "Destination relative path"}
+      <input {...stylex.props(controls.field)} autoFocus disabled={busy} value={destination} onChange={event => { setDestination(event.target.value); setReplacements(null); }}
         onKeyDown={event => { if (event.key === "Enter" && !event.nativeEvent.isComposing) void apply(); }} /></label>}
+    {batchImport && <label {...stylex.props(styles.label)}>Existing destination paths to replace (optional, one per line)
+      <textarea {...stylex.props(controls.field)} disabled={busy} value={replacementPaths} onChange={event => { setReplacementPaths(event.target.value); setReplacements(null); }} />
+      Only paths matching imported filenames can be replaced; each is captured and confirmed before importing.
+    </label>}
     {!!replacements?.length && <p role="alert" {...stylex.props(controls.alert)}>Replace {replacements.map(item => item.target.path).join(", ")}? Existing destination files will be replaced.</p>}
     {error && <p role="alert" {...stylex.props(controls.alert)}>{error}</p>}
-    <div {...stylex.props(styles.dialogActions)}><Button {...stylex.props(controls.button)} disabled={busy || action.kind !== "trash" && !destination}
+    <div {...stylex.props(styles.dialogActions)}><Button {...stylex.props(controls.button)} disabled={busy || action.kind !== "trash" && !batchImport && !destination}
       onClick={() => void apply(!!replacements?.length)}>{replacements?.length ? "Replace captured destination" : title}</Button>
       <Button {...stylex.props(controls.button)} disabled={busy} onClick={close}>Cancel</Button></div>
   </Popup>;
 }
 
-export type EditorWorkbenchHandle = { prepareQuit(): Promise<boolean> };
+export type EditorWorkbenchHandle = { prepareQuit(): Promise<boolean>; importFiles(checkout: CheckoutTarget, references: string[]): void };
 export type EditorWorkbenchProps = {
   controller: EditorController;
   /** Native/user-authorized selection belongs to the shell. A renderer path alone grants no access. */
@@ -225,7 +237,9 @@ export const EditorWorkbench = forwardRef<EditorWorkbenchHandle, EditorWorkbench
   const selected = checkout && state.recovery.views[checkout.checkoutId], target = checkout && selected?.active ? { checkout, path: selected.active } : undefined;
   const buffer = target && state.buffers.find(buffer => fileKey(buffer.target) === fileKey(target));
   const mode = target && selected?.fileViews[target.path] || "file";
-  const [lookup, setLookup] = useState(false), [panel, setPanel] = useState("files"), [action, setAction] = useState<Action | null>(null);
+  const [lookup, setLookup] = useState(false), [panel, setPanel] = useState("files"), [action, updateAction] = useState<Action | null>(null);
+  const actionRef = useRef<Action | null>(null), lookupRef = useRef(lookup); lookupRef.current = lookup;
+  function setAction(value: Action | null) { actionRef.current = value; updateAction(value); }
   const [choice, setChoice] = useState<{ file: Readonly<EditorBuffer>; resolve: (choice: CloseChoice) => void } | null>(null);
   const pendingChoice = useRef<((choice: CloseChoice) => void) | null>(null);
   const [recent, setRecent] = useState<{ paths: string[]; index: number; origin: FocusOrigin } | null>(null), dragged = useRef<string | null>(null);
@@ -256,7 +270,14 @@ export const EditorWorkbench = forwardRef<EditorWorkbenchHandle, EditorWorkbench
   const choose: ChooseClose = file => new Promise(resolve => { pendingChoice.current = resolve; setChoice({ file, resolve }); });
   function answer(value: CloseChoice) { pendingChoice.current?.(value); pendingChoice.current = null; setChoice(null); }
   useEffect(() => () => { pendingChoice.current?.("cancel"); }, []);
-  useImperativeHandle(ref, () => ({ prepareQuit: () => controller.prepareQuit(choose) }), [controller]);
+  function importFiles(checkout: CheckoutTarget, references: string[]) {
+    if (!references.length) return;
+    const snapshot = controller.getSnapshot();
+    if (snapshot.preserving || actionRef.current || pendingChoice.current || lookupRef.current) { controller.report(new Error("Finish the current editor dialog or preservation before importing files.")); return; }
+    if (!snapshot.recovery.openCheckoutIds.includes(checkout.checkoutId) || !snapshot.recovery.checkouts.some(item => checkoutKey(item) === checkoutKey(checkout))) { controller.report(new Error("Open the exact import checkout before importing files.")); return; }
+    setAction({ checkout: { ...checkout }, kind: "import", paths: [], nativeReferences: [...references] });
+  }
+  useImperativeHandle(ref, () => ({ prepareQuit: () => controller.prepareQuit(choose), importFiles }), [controller]);
   const run = (work: Promise<unknown>) => { void work.catch(controller.report); };
   async function requestOpen() { const root = await selectCheckout?.(); if (root) await controller.openCheckout(root); }
   const selectedPaths = selected?.tree.selected ?? [];
@@ -302,12 +323,12 @@ export const EditorWorkbench = forwardRef<EditorWorkbenchHandle, EditorWorkbench
               <p {...stylex.props(workbench.directory)}>{checkout.branch} · {checkout.root}</p>
               <Button {...stylex.props(controls.button)} onClick={() => run(controller.refresh(checkout))}>Refresh</Button>
               {panel === "files" ? <>
-                <div {...stylex.props(filesUI.tools)}>{(["create-file", "create-directory"] as const).map(kind => <Button key={kind} {...stylex.props(controls.button)} disabled={state.preserving} onClick={() => setAction({ kind, paths: [] })}>{kind === "create-file" ? "New File" : "New Folder"}</Button>)}</div>
+                <div {...stylex.props(filesUI.tools)}>{(["create-file", "create-directory"] as const).map(kind => <Button key={kind} {...stylex.props(controls.button)} disabled={state.preserving} onClick={() => setAction({ checkout: { ...checkout }, kind, paths: [] })}>{kind === "create-file" ? "New File" : "New Folder"}</Button>)}</div>
                 <Button {...stylex.props(controls.button)} aria-pressed={selected.tree.hideIgnored} onClick={() => { controller.tree(checkout, { hideIgnored: !selected.tree.hideIgnored }); run(controller.refresh(checkout)); }}>Hide Git-ignored files</Button>
                 <Button {...stylex.props(controls.button)} disabled={!target} onClick={() => { if (target) run(controller.reveal(target)); }}>Reveal Active File</Button>
                 <FilesTree controller={controller} state={state} checkout={checkout} active={selected.active} />
-                <div {...stylex.props(filesUI.tools)}>{(["move", "copy", "trash"] as const).map(kind => <Button key={kind} {...stylex.props(controls.button)} disabled={state.preserving || !selectedPaths.length || kind !== "trash" && selectedPaths.length !== 1} onClick={() => setAction({ kind, paths: [...selectedPaths] })}>{kind === "move" ? "Rename / Move" : kind === "trash" ? "Trash" : "Copy"}</Button>)}</div>
-                {selectNativeImports && <Button {...stylex.props(controls.button)} onClick={() => run((async () => { const references = await selectNativeImports(checkout); if (references.length) await controller.mutate({ checkout, kind: "import", sources: [], destination: "", nativeReferences: references }); })())}>Import files</Button>}
+                <div {...stylex.props(filesUI.tools)}>{(["move", "copy", "trash"] as const).map(kind => <Button key={kind} {...stylex.props(controls.button)} disabled={state.preserving || !selectedPaths.length || kind !== "trash" && selectedPaths.length !== 1} onClick={() => setAction({ checkout: { ...checkout }, kind, paths: [...selectedPaths] })}>{kind === "move" ? "Rename / Move" : kind === "trash" ? "Trash" : "Copy"}</Button>)}</div>
+                {selectNativeImports && <Button {...stylex.props(controls.button)} disabled={state.preserving} onClick={() => run((async () => { const target = { ...checkout }; importFiles(target, await selectNativeImports(target)); })())}>Import files</Button>}
               </> : <>
                 {state.git[checkoutKey(checkout)]?.error && <p role="status" {...stylex.props(controls.alert)}>{state.git[checkoutKey(checkout)].error}</p>}
                 {(["staged", "unstaged", "untracked"] as const).map(area => <section key={area}><h2 {...stylex.props(controls.heading)}>{area}</h2><ul {...stylex.props(controls.list)}>
@@ -365,7 +386,7 @@ export const EditorWorkbench = forwardRef<EditorWorkbenchHandle, EditorWorkbench
       <Button {...stylex.props(controls.button)} onClick={() => run(withFocus(controller.resolveRecoveryPublication(), focusRequest?.origin ?? "editor", true))}>Resolve recovery publication</Button></p>}
     {state.operations.map(operation => <p key={JSON.stringify([operation.clientId, operation.id])} role="status" {...stylex.props(controls.status)}>{operation.kind}: {operation.outcome}. {operation.message}<Button {...stylex.props(controls.button)} onClick={() => run(controller.resolveOperation(operation.id, operation.clientId))}>Resolve operation status</Button></p>)}
     {lookup && checkout && <FileLookup controller={controller} state={state} checkout={checkout} close={() => setLookup(false)} editorFocus={() => root.current?.querySelector<HTMLElement>('.monaco-editor textarea[role="textbox"]') ?? null} />}
-    {action && checkout && <Mutation controller={controller} checkout={checkout} action={action} close={() => setAction(null)} />}
+    {action && <Mutation controller={controller} action={action} close={() => setAction(null)} />}
     {choice && <Popup title="Save changes before closing?" onClose={() => answer("cancel")}><Dialog.Description>{choice.file.target.path} has unsaved changes.</Dialog.Description>
       <div {...stylex.props(styles.dialogActions)}>{(["save", "discard", "cancel"] as const).map(value => <Button key={value} {...stylex.props(controls.button)} onClick={() => answer(value)}>{value[0].toUpperCase() + value.slice(1)}</Button>)}</div></Popup>}
     {recent && <div role="listbox" aria-label="Recent tabs" {...stylex.props(overlays.recent)}>{recent.paths.map((path, index) => <div key={path} role="option" aria-selected={recent.index === index} {...stylex.props(overlays.recentOption, recent.index === index && workbench.fileSelected)}>{path}</div>)}</div>}

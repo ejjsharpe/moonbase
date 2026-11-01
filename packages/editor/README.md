@@ -23,6 +23,9 @@ configureMonacoWorkers();
   selectCheckout={selectAnAuthorizedCheckout}
   selectNativeImports={pickOpaqueScopedNativeReferences} />;
 
+// Clipboard/drop entry uses the same module destination/replacement dialog:
+editorView.current.importFiles(exactOpenCheckout, opaqueScopedNativeReferences);
+
 // Native Quit, menu Quit and window-close confirmation use this same gate:
 if (await editorView.current.prepareQuit()) {
   editor.dispose();
@@ -32,9 +35,11 @@ if (await editorView.current.prepareQuit()) {
 
 For an isolated renderer, construct the controller with the shell's validated browser-safe `EditorClient` instead of importing the runtime adapter into the renderer. Native selection callbacks are optional shell capabilities, not filesystem authority granted to renderer path strings. Native imports accept opaque references from the privileged workspace service, never raw OS paths.
 
+`EditorWorkbenchHandle.importFiles(checkout, references): void` is a synchronous UI entry. It copies the exact open checkout and opaque references into the same dialog used by the picker. Clipboard/drop callers supply approved references, never raw source paths. Single-item imports require a full relative destination including its filename; batches choose an existing folder (blank means the checkout root). Batch replacement paths are entered explicitly, inspected and confirmed; the service checks that they name actual import destinations. Busy dialogs/preservation and unavailable exact checkouts reject visibly rather than queueing another import. Cancel dispatches no mutation; privileged token expiry/disposal remains with the workspace. `prepareQuit()` is unchanged.
+
 Exports:
 
-- `.`: `EditorWorkbench`, its props/Quit handle, `createEditor`, `EditorController`, state types and exact target key helpers.
+- `.`: `EditorWorkbench`, its props/Quit/import handle, `createEditor`, `EditorController`, state types and exact target key helpers.
 - `./state`: ordinary TypeScript controller/types, usable without React or Monaco.
 - `./workers`: optional Vite-compatible Monaco worker configuration, installed once by the browser root.
 - `./memory`: `memoryWorkspace(seeds)` returns a focused `WorkspaceService` layer. Only tests/demo composition roots construct a runtime. This volatile second adapter has no native import/Trash durability or filesystem safety qualification.

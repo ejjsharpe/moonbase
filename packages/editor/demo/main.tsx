@@ -1,8 +1,8 @@
 import { createRoot } from "react-dom/client";
-import { useState } from "react";
+import { createRef, useState } from "react";
 import { ManagedRuntime } from "effect";
 import { makeEditorClient } from "@moonbase/application/runtime-client";
-import { EditorWorkbench, createEditor } from "../src/index.ts";
+import { EditorWorkbench, createEditor, type EditorWorkbenchHandle } from "../src/index.ts";
 import { configureMonacoWorkers } from "../src/workers.ts";
 import { memoryWorkspace } from "../src/memory.ts";
 import * as monaco from "monaco-editor";
@@ -21,10 +21,12 @@ const memory = memoryWorkspace([{ checkout, files: {
   "README.md": "# Volatile demo\n\nTwo editors share a workspace, with independent buffers and recovery identities.\n",
   "src/example.ts": "export function double(value: number) {\n  return value * 2;\n}\n",
   "ignored.txt": "Hidden when Git-ignored files are filtered.\n",
-}, head: { "welcome.ts": "export const greeting = 'Hello';\n" }, index: { "welcome.ts": "export const greeting = 'Hello staged';\n" }, ignored: ["ignored.txt"] }]);
+}, head: { "welcome.ts": "export const greeting = 'Hello';\n" }, index: { "welcome.ts": "export const greeting = 'Hello staged';\n" }, ignored: ["ignored.txt"] },
+{ checkout: { ...checkout, checkoutId: "other", root: "/demo/other" }, files: { "elsewhere.ts": "export const other = true;\n" } }]);
 // One demo composition root. Feature packages do not construct runtimes.
 const runtime = ManagedRuntime.make(memory.layer), client = makeEditorClient(runtime);
 const first = createEditor({ client, clientId: "demo-first" }), second = createEditor({ client, clientId: "demo-second" });
+const firstHandle = createRef<EditorWorkbenchHandle>();
 await Promise.all([first, second].map(async editor => { await editor.load(); await editor.openCheckout(checkout.root); await editor.open({ checkout, path: "welcome.ts" }, { intent: "keep" }); }));
 const styles = stylex.create({
   app: { height: "100dvh", display: "flex", flexDirection: "column", overflow: "hidden" },
@@ -43,12 +45,12 @@ function Demo() {
       <Button {...stylex.props(controls.button)} onClick={() => setVisible(value => !value)}>{visible ? "Hide" : "Show"} first editor</Button>
       <Button {...stylex.props(controls.button)} onClick={() => { second.dispose(); setDisposed(true); }}>Dispose second editor</Button>
     </div>
-    <div {...stylex.props(styles.editors)}><section aria-label="First editor" hidden={!visible} {...stylex.props(styles.editor)}><EditorWorkbench controller={first} /></section>
+    <div {...stylex.props(styles.editors)}><section aria-label="First editor" hidden={!visible} {...stylex.props(styles.editor)}><EditorWorkbench ref={firstHandle} controller={first} selectNativeImports={() => window.demo.selectNativeImports()} /></section>
       {!disposed && <section aria-label="Second editor" {...stylex.props(styles.editor, styles.second)}><EditorWorkbench controller={second} /></section>}</div>
   </main>;
 }
 createRoot(document.getElementById("root")!).render(<Demo />);
 declare global { interface Window { demo: { first: typeof first; second: typeof second; checkout: typeof checkout; memory: typeof memory;
-  modelCount(): number; runtime: typeof runtime } } }
-window.demo = { first, second, checkout, memory, modelCount: () => monaco.editor.getModels().length, runtime };
+  workbench(): EditorWorkbenchHandle; selectNativeImports(): Promise<string[]>; modelCount(): number; runtime: typeof runtime } } }
+window.demo = { first, second, checkout, memory, workbench: () => firstHandle.current!, selectNativeImports: async () => [], modelCount: () => monaco.editor.getModels().length, runtime };
 window.addEventListener("pagehide", () => { first.dispose(); second.dispose(); void runtime.dispose(); }, { once: true });
