@@ -32,6 +32,28 @@
         "vite-plus": "1.4.0",
       },
     },
+    "apps/chat-probe": {
+      "name": "@moonbase/chat-probe",
+      "version": "0.1.0",
+      "dependencies": {
+        "@base-ui/react": "1.9.0",
+        "@moonbase/application": "workspace:*",
+        "@moonbase/pi-runtime": "workspace:*",
+        "@moonbase/ssh": "workspace:*",
+        "@moonbase/ui": "workspace:*",
+        "@stylexjs/stylex": "0.19.1",
+        "effect": "4.1.0",
+        "react": "19.3.1",
+        "react-dom": "19.3.1",
+      },
+      "devDependencies": {
+        "@earendil-works/pi-ai": "1.4.0",
+        "@earendil-works/pi-durable": "1.4.0",
+        "electron": "45.1.0",
+        "electron-builder": "26.18.0",
+        "typebox": "1.3.27",
+      },
+    },
     "packages/application": {
       "name": "@moonbase/application",
       "dependencies": {
@@ -304,6 +326,7 @@
 
     "@moonbase/application": ["@moonbase/application@workspace:packages/application"],
 
+    "@moonbase/chat-probe": ["@moonbase/chat-probe@workspace:apps/chat-probe"],
 
 
     "@moonbase/editor": ["@moonbase/editor@workspace:packages/editor"],
