@@ -1,5 +1,7 @@
 # Review R3 corrections
 
+Historical response: R4 cleared the reported original selection/normal-file focus cases but found three connected blockers. The [current R4 record](review-r4.md) supersedes the destructive-publication ordering described here.
+
 Reviewed head: `8e95e18a1823246e2859b5e9ae731c08d90539b8`. Base remains `6e58c1c4ea6944e8ca25eadc46e35c843f0f9fbe` (`chore/checkout-recovery-contract`, #5). Executable/test source: `3ff979cca6206fc19416150b189b211fcc6de86b`. The following evidence-only commit records these checks/README links and inspected captures. All changes are within `packages/editor`; public exports, dependencies, root/shared contracts and resource conventions are unchanged.
 
 Independent R3 cleared the eight R1 and four R2 scenarios, then found these two P2 blockers. PR #4 remains **DRAFT** for fresh independent R4; implementation checks do not constitute approval.
