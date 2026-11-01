@@ -10,11 +10,17 @@ const bridge: ChatBridge = {
     active.add(id);
     try {
       const reply: Reply = await ipcRenderer.invoke(channels.call, { kind, operation, input, id });
-      if (!kind.startsWith("watch-") || !reply.ok) active.delete(id);
+      if ((kind !== "watch-chat" && kind !== "watch-connection") || !reply.ok) active.delete(id);
       return reply;
-    } catch (error) { active.delete(id); throw error; }
+    } catch (error) {
+      active.delete(id);
+      throw error;
+    }
   },
-  cancel(id) { active.delete(id); ipcRenderer.send(channels.cancel, id); },
+  cancel(id) {
+    active.delete(id);
+    ipcRenderer.send(channels.cancel, id);
+  },
   events(receive) {
     const listener = (_: unknown, id: string, result: Reply) => receive(id, result);
     ipcRenderer.on(channels.event, listener);
@@ -26,5 +32,8 @@ const bridge: ChatBridge = {
   ready: () => {},
 };
 // A committed document unload releases waits/observations, never remote execution.
-window.addEventListener("unload", () => { for (const id of active) ipcRenderer.send(channels.cancel, id); active.clear(); });
+window.addEventListener("unload", () => {
+  for (const id of active) ipcRenderer.send(channels.cancel, id);
+  active.clear();
+});
 contextBridge.exposeInMainWorld("moonbaseChat", bridge);
