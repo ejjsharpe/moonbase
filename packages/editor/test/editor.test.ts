@@ -891,8 +891,14 @@ for (const outcome of ["not committed", "committed", "competing CAS"] as const)
       const writes = f.memory.stats.publications;
       assert.equal(await editor.resolveRecoveryPublication(), outcome !== "competing CAS");
       if (outcome === "competing CAS") {
-        assert.equal(editor.getSnapshot().publication?.requestId, pending?.requestId); assert.equal(await editor.prepareQuit(async () => "discard"), false);
-        assert.equal((await f.client.command("loadRecovery", { clientId: editor.clientId })).state.drafts[0].text, "consented captured draft");
+        // The identical retry's Conflict proves non-commit; the unrelated revision still cannot be adopted.
+        assert.equal(editor.getSnapshot().publication, undefined); assert.equal(editor.getSnapshot().preserving, false);
+        assert.equal(editor.buffer(target("b.ts"))?.text, "consented captured draft");
+        let choices = 0; assert.equal(await editor.close([target("b.ts")], async () => { choices++; return "cancel"; }), false); assert.equal(choices, 1);
+        assert.equal(await editor.prepareQuit(async () => "discard"), false);
+        const retained = await f.client.command("loadRecovery", { clientId: editor.clientId });
+        assert.equal(retained.state.drafts[0].text, "consented captured draft"); assert.equal(retained.state.sidebarWidth, 356); assert.equal(f.memory.stats.publications, writes);
+        assert.equal(await f.client.command("getRecoveryPublication", { clientId: editor.clientId, requestId: pending!.requestId }), null);
       } else {
         assert.equal(editor.getSnapshot().publication, undefined); assert.equal(editor.getSnapshot().preserving, false);
         assert.equal(editor.buffer(target("b.ts")), undefined);
