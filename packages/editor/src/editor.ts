@@ -52,7 +52,7 @@ export class EditorController {
   private listings: Record<string, DirectoryListing> = {};
   private git: Record<string, GitStatus> = {};
   private errors: string[] = [];
-  private operations = new Map<string, { operation?: WorkspaceOperation; result: OperationResult }>();
+  private operations = new Map<string, { operation?: WorkspaceOperation; result: OperationResult; applied: Set<string> }>();
   private history: ClosedAction[] = [];
   private listeners = new Set<() => void>();
   private stops = new Map<string, () => void>();
@@ -114,8 +114,12 @@ export class EditorController {
       if (!selected.openFiles.includes(draft.target.path)) selected.openFiles.push(draft.target.path);
       if (selected.preview === draft.target.path) selected.preview = null;
     }
-    for (const result of loaded.operations) this.operations.set(result.id, { result });
+    for (const result of loaded.operations) this.operations.set(result.id, { result, applied: new Set() });
     this.ready = true;
+    for (const result of loaded.operations) {
+      try { await this.reconcileOperation(undefined, result); }
+      catch (error) { this.report(error); }
+    }
     for (const checkout of this.recovery.checkouts) this.observe(checkout);
     this.emit();
   }
@@ -434,14 +438,18 @@ export class EditorController {
       validPath(source.target.path);
       if (!sameCheckout(source.target.checkout, operation.checkout)) throw Error("A file operation must use one exact checkout.");
     }
-    const replacementPaths = (operation.replacements ?? []).map(item => item.target.path);
+    const replacementPaths = [...(operation.replacements ?? []).map(item => item.target.path), ...(operation.destination ? [operation.destination] : [])];
     if ([...this.buffers.values()].some(buffer => sameCheckout(buffer.target.checkout, operation.checkout) &&
+      !operation.sources.some(source => affected(buffer.target.path, source.target.path)) &&
       replacementPaths.some(path => affected(buffer.target.path.normalize("NFC").toLowerCase(), path.normalize("NFC").toLowerCase()))))
       throw Error("Replacement has open buffers. Close them safely before replacing their files.");
+    if ([...this.buffers.values()].some(buffer => sameCheckout(buffer.target.checkout, operation.checkout) &&
+      operation.sources.some(source => affected(buffer.target.path, source.target.path)) && (buffer.saving || buffer.pendingSave)))
+      throw Error("Resolve the source Save before moving or copying it.");
     // Publish dirty source drafts before any external mutation, including Trash.
     await this.flush();
-    const uncertain: OperationResult = { id: operation.id, kind: operation.kind, outcome: "uncertain", items: [], message: "Awaiting operation status." };
-    this.operations.set(operation.id, { operation, result: uncertain }); this.emit();
+    const uncertain: OperationResult = { id: operation.id, checkout: operation.checkout, kind: operation.kind, outcome: "uncertain", items: [], message: "Awaiting operation status." };
+    this.operations.set(operation.id, { operation, result: uncertain, applied: new Set() }); this.emit();
     try {
       const result = await this.command("mutate", operation);
       return await this.reconcileOperation(operation, result);
@@ -452,27 +460,41 @@ export class EditorController {
     if (!known) throw Error("Unknown operation.");
     const result = await this.command("operationStatus", { clientId: this.clientId, id });
     if (!result) { this.report("Operation status unavailable; drafts and original references retained."); return null; }
-    if (!known.operation) { known.result = result; this.emit(); return result; }
     return this.reconcileOperation(known.operation, result);
   }
-  private async reconcileOperation(operation: WorkspaceOperation, result: OperationResult) {
-    if (result.id !== operation.id || result.kind !== operation.kind) throw Error("Operation identity mismatch.");
-    const known = this.operations.get(operation.id)!;
-    if (known.result.outcome === "completed" && known.result === result) return result;
+  private async reconcileOperation(operation: WorkspaceOperation | undefined, result: OperationResult) {
+    const known = this.operations.get(result.id);
+    if (!known || operation && (result.id !== operation.id || result.kind !== operation.kind || !sameCheckout(result.checkout, operation.checkout)) ||
+      !sameCheckout(known.result.checkout, result.checkout) || !this.recovery.checkouts.some(item => sameCheckout(item, result.checkout)))
+      throw Error("Operation checkout identity unavailable or changed. Evidence and drafts retained without rebinding.");
     known.result = result;
     for (const item of result.items.filter(item => item.outcome === "completed")) {
-      if (!operation.sources.some(source => source.target.path === item.source)) continue;
-      if (operation.kind === "move" && item.destination) this.moveReferences(operation.checkout, item.source, item.destination);
+      const itemKey = JSON.stringify([item.source, item.destination]);
+      if (known.applied.has(itemKey)) continue;
+      if (operation && !operation.sources.some(source => source.target.path === item.source)) continue;
+      if (result.kind === "move" && item.destination) this.moveReferences(result.checkout, item.source, item.destination);
+      if (result.kind === "copy" && item.destination) {
+        for (const buffer of [...this.buffers.values()]) if (sameCheckout(buffer.target.checkout, result.checkout) && affected(buffer.target.path, item.source) && buffer.text !== buffer.disk.text) {
+          const target = { checkout: result.checkout, path: item.destination + buffer.target.path.slice(item.source.length) };
+          if (!this.buffers.has(fileKey(target))) {
+            const disk = await this.command("readFile", target);
+            this.buffers.set(fileKey(target), { target, disk, text: buffer.text, saving: false });
+            const selected = this.checkout(result.checkout);
+            if (!selected.openFiles.includes(target.path)) selected.openFiles.push(target.path);
+          }
+        }
+      }
       // Trash keeps dirty drafts visible at their original target for manual recovery.
-      if (operation.kind === "trash") this.history = this.history.flatMap(action => {
-        if (!sameCheckout(action.checkout, operation.checkout)) return [action];
+      if (result.kind === "trash") this.history = this.history.flatMap(action => {
+        if (!sameCheckout(action.checkout, result.checkout)) return [action];
         action.files = action.files.filter(file => !affected(file.path, item.source));
         return action.files.length ? [action] : [];
       });
+      known.applied.add(itemKey);
     }
     await this.flush();
     if (result.outcome !== "uncertain") await this.command("acknowledgeOperation", { clientId: this.clientId, id: result.id });
-    this.emit(); await this.refresh(operation.checkout);
+    this.emit(); await this.refresh(result.checkout);
     return result;
   }
   private moveReferences(checkout: CheckoutTarget, source: string, destination: string) {

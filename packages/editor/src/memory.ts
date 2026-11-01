@@ -114,7 +114,7 @@ export function memoryWorkspace(seeds: Seed[]) {
       if (previous) return previous.payload === payload ? previous.result : fail("Operation ID reused with changed payload.", "Conflict");
       if (!operation.id || !operation.clientId) fail("Operation requires immutable IDs.");
       const map = entries(operation.checkout);
-      const result: OperationResult = { id: operation.id, kind: operation.kind, outcome: "completed", items: [] };
+      const result: OperationResult = { id: operation.id, checkout: operation.checkout, kind: operation.kind, outcome: "completed", items: [] };
       for (const ref of [...operation.sources, ...(operation.replacements ?? [])]) {
         pathCheck(ref.target.path);
         if (checkoutKey(ref.target.checkout) !== checkoutKey(operation.checkout) || map.get(ref.target.path)?.version !== ref.identity) fail("Entry identity changed.", "Conflict");
@@ -166,7 +166,7 @@ export function memoryWorkspace(seeds: Seed[]) {
       watchers.add(watcher); stats.subscriptions++; stats.active++;
       watcher.notify({ checkout, paths: [], ready: true });
       return watcher;
-    }), watcher => Effect.sync(() => { watchers.delete(watcher); stats.released++; stats.active--; })), { bufferSize: 1 }),
+    }), watcher => Effect.sync(() => { watchers.delete(watcher); stats.released++; stats.active--; })), { bufferSize: 1, strategy: "sliding" }),
   };
   return {
     layer: Layer.succeed(WorkspaceService, service), stats,
