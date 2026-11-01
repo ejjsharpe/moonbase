@@ -32,7 +32,7 @@ async function setup(t:{after:(fn:()=>Promise<void>)=>void}) {
   const connections=Layer.succeed(ConnectionService,{getConnection:unavailable,connect:unavailable,disconnect:unavailable,watch:()=>Stream.empty,endpoint:({host:expected})=>Effect.suspend(()=>available&&expected.hostId===host.hostId&&expected.storeId===host.storeId?Effect.succeed(structuredClone(endpoint)):unavailable())});
   const remoteRuntime=ManagedRuntime.make(RemoteChatLive.pipe(Layer.provide(connections))),remote=makeChatClient(remoteRuntime);
   t.after(async()=>{await remoteRuntime.dispose();await runtime.runPromise(Scope.close(scope,Exit.void));await runtime.dispose();await rm(dir,{recursive:true,force:true});});
-  return {client,remote,faux,token,calls,get origin(){return server.origin;},set intercept(value:typeof intercept){intercept=value;},set afterDispatch(value:typeof afterDispatch){afterDispatch=value;},set endpoint(value:VerifiedChatEndpoint){endpoint=value;},get endpoint(){return endpoint;},disconnect(){available=false;},async restartServer(){await runtime.runPromise(Scope.close(scope,Exit.void));scope=Effect.runSync(Scope.make());server=await runtime.runPromise(serveChat({host,token,port:0},bound).pipe(Effect.provideService(Scope.Scope,scope)));endpoint={...endpoint,origin:server.origin,connectionId:'two'};}};
+  return {client,remote,faux,token,calls,get origin(){return server.origin;},set intercept(value:typeof intercept){intercept=value;},set afterDispatch(value:typeof afterDispatch){afterDispatch=value;},set endpoint(value:VerifiedChatEndpoint){endpoint=value;},get endpoint(){return endpoint;},disconnect(){available=false;},reconnect(){available=true;endpoint={...endpoint,connectionId:nonce()};},async restartServer(){await runtime.runPromise(Scope.close(scope,Exit.void));scope=Effect.runSync(Scope.make());server=await runtime.runPromise(serveChat({host,token,port:0},bound).pipe(Effect.provideService(Scope.Scope,scope)));endpoint={...endpoint,origin:server.origin,connectionId:'two'};}};
 }
 async function grant(f:{origin:string;token:string},clientNonce=nonce()) {
   const response=await fetch(f.origin+'/v1/chat/challenge',{headers:{'X-Moonbase-Nonce':clientNonce,Authorization:auth(mac(f.token,'challenge-request',clientNonce,'GET','/v1/chat/challenge'))}});
@@ -74,6 +74,47 @@ test('remote drops successful and error responses from a stale connection genera
     const call=f.remote.command('listChats',{session});await waiting;f.endpoint={...f.endpoint,connectionId:nonce()};release();await assert.rejects(call,{code:'Unavailable'});
   }
   f.intercept=undefined;
+});
+
+for(const operation of ['createChat','sendChat','stopChat'] as const) for(const loss of ['disconnect','replacement'] as const) test(`R3 ${operation} generation ${loss} after dispatch preserves uncertainty and original identity`,{timeout:10000},async t=>{
+  const f=await setup(t);let release=()=>{},releaseModel=()=>{},entered=()=>{};
+  const held=new Promise<void>(resolve=>release=resolve),admitted=new Promise<void>(resolve=>entered=resolve);
+  t.signal.addEventListener('abort',()=>{release();releaseModel();},{once:true});
+  try {
+    const target=operation==='createChat'?undefined:(await f.remote.command('createChat',{session,requestId:'setup',title:'Existing'})).conversation.target;
+    let stop:import('@moonbase/application/chat-client').ChatStopTarget|undefined;
+    if(operation==='stopChat') {
+      const modelGate=new Promise<void>(resolve=>releaseModel=resolve);f.faux.setResponses([async()=>{await modelGate;return fauxAssistantMessage('Stopped work');}]);
+      await f.remote.command('sendChat',{target:target!,requestId:'setup-send',text:'Held work'});
+      for(let i=0;i<100;i++){const state=await f.client.command('getChat',{target:target!});if(state.run?.stop.taskId&&f.faux.state.callCount===1){stop=state.run.stop;break;}await new Promise(resolve=>setTimeout(resolve,10));}
+      assert(stop,'a captured actual task is required');
+    } else f.faux.setResponses([fauxAssistantMessage('Saved once')]);
+    f.afterDispatch=async name=>{if(name===operation){entered();await held;}};
+    const input=operation==='createChat'?{session,requestId:'original-create',title:'Captured create'}:operation==='sendChat'?{target:target!,requestId:'original-send',text:'Captured Send'}:{stop:stop!,requestId:'original-stop'};
+    const pending=f.remote.command(operation,input);
+    await admitted;if(loss==='disconnect')f.disconnect();else f.endpoint={...f.endpoint,connectionId:nonce()};release();
+    await assert.rejects(pending,{code:'Uncertain'});f.afterDispatch=undefined;f.reconnect();
+    assert.equal(f.calls.filter(name=>name===operation).length,1);
+    if(operation==='createChat') {
+      const saved=await f.client.command('listChats',{session});assert.equal(saved.conversations.length,1);
+      const retry=await f.remote.command('createChat',input as import('@moonbase/application/chat-client').ChatInput<'createChat'>);assert.deepEqual(retry.conversation.target,saved.conversations[0].target);
+    } else if(operation==='sendChat') {
+      const receipt=await f.remote.command('getChatSend',{target:target!,requestId:input.requestId});assert.equal(receipt?.admission,'admitted');
+      assert.deepEqual(await f.remote.command('sendChat',input as import('@moonbase/application/chat-client').ChatInput<'sendChat'>),receipt);assert.equal(f.faux.state.callCount,1);
+    } else {
+      const retry=await f.remote.command('stopChat',input as import('@moonbase/application/chat-client').ChatInput<'stopChat'>);assert.deepEqual(retry.stop,stop);assert.equal(f.faux.state.callCount,1);
+    }
+  } finally {release();releaseModel();f.afterDispatch=undefined;}
+});
+
+test('R3 disconnect during challenge keeps pre-dispatch Unavailable and discloses no mutation',async t=>{
+  const f=await setup(t),original=globalThis.fetch;let release=()=>{},entered=()=>{};
+  const held=new Promise<void>(resolve=>release=resolve),received=new Promise<void>(resolve=>entered=resolve);
+  mock.method(globalThis,'fetch',async(input:Parameters<typeof fetch>[0],init?:RequestInit)=>{const response=await original(input,init);if(String(input).endsWith('/v1/chat/challenge')){entered();await held;}return response;});
+  try {
+    const pending=f.remote.command('createChat',{session,requestId:'not-disclosed',title:'Private'});await received;f.disconnect();release();await assert.rejects(pending,{code:'Unavailable'});
+    assert.equal(f.calls.filter(name=>['createChat','sendChat','stopChat'].includes(name)).length,0);assert.equal((await f.client.command('listChats',{session})).conversations.length,0);
+  } finally {release();mock.restoreAll();}
 });
 test('remote rejects wrong listener proof or health before disclosing prompt',async t=>{
   const f=await setup(t),requests:string[]=[];const impostor=createServer(async(req,res)=>{let body='';for await(const chunk of req)body+=chunk;requests.push(body);res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({challenge:nonce(),health}));});
@@ -135,15 +176,16 @@ for(const deadline of [false,true]) test(`remote ${deadline?'whole-request deadl
   if(deadline){const elapsed=performance.now()-time;assert(elapsed>=19500&&elapsed<21000,'challenge and RPC used separate deadlines');}
   assert.equal((await f.client.command('getChatHost',{host})).actorId,'personal');
 });
-test('unknown failing reader release retains uncertain mutation evidence and sanitizes the cleanup defect',async t=>{
+for(const generationLost of [false,true])test(generationLost?'R3 generation loss retains reader cleanup failure alongside mutation uncertainty':'unknown failing reader release retains uncertain mutation evidence and sanitizes the cleanup defect',async t=>{
   const f=await setup(t),original=fetch,canary='private-reader-cleanup-canary';let once=true;
   mock.method(globalThis,'fetch',async(...args:Parameters<typeof fetch>)=>{
     const response=await original(...args);
-    if(String(args[0]).endsWith('/v1/chat')&&once){once=false;const reader=response.body!.getReader();Object.defineProperty(response,'body',{value:{getReader:()=>({read:async()=>{await reader.read();throw Error('Lost response after commit');},cancel:async()=>{await reader.cancel();throw new Proxy({}, {get(){throw canary;}});},releaseLock:()=>reader.releaseLock()})}});}
+    if(String(args[0]).endsWith('/v1/chat')&&once){once=false;const reader=response.body!.getReader();Object.defineProperty(response,'body',{value:{getReader:()=>({read:async()=>{await reader.read();if(generationLost)f.disconnect();throw Error('Lost response after commit');},cancel:async()=>{await reader.cancel();throw new Proxy({}, {get(){throw canary;}});},releaseLock:()=>reader.releaseLock()})}});}
     return response;
   });
-  try{await assert.rejects(f.remote.command('createChat',{session,requestId:'uncertain-create',title:'Retained'}),e=>!!e&&typeof e==='object'&&'code'in e&&e.code==='Uncertain'&&!JSON.stringify(e).includes(canary));}
+  try{await assert.rejects(f.remote.command('createChat',{session,requestId:'uncertain-create',title:'Retained'}),e=>ApplicationError.is(e)&&e.code==='Uncertain'&&e.message.includes('reader release failed')&&!JSON.stringify(e).includes(canary));}
   finally{mock.restoreAll();}
+  if(generationLost)f.reconnect();
   const recovered=await f.remote.command('createChat',{session,requestId:'uncertain-create',title:'Retained'});assert.equal((await f.client.command('listChats',{session})).conversations.length,1);assert.equal(recovered.requestId,'uncertain-create');assert.equal(f.faux.state.callCount,0);
 });
 
