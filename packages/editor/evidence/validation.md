@@ -1,6 +1,6 @@
 # Editor module validation
 
-Validated executable/test source: `def3159f872866af694b52e3739df72eead8b2d4`.
+Validated executable/test source: `1e010afff23facf07759e1dddeffce2b248372c9`.
 Exact committed dependency: `68aa035b9c283a65cac6e78ab02865e99882d15b` on `chore/application-coordination` (#2, after foundation #1). The follow-up evidence commit only updates this record, README links and the inspected PNGs; final checks are repeated against the final PR head and reported in its description/handoff.
 
 Checks completed on 2026-11-01:
@@ -10,7 +10,7 @@ Checks completed on 2026-11-01:
 - `bun run check:foundation`: 40 frozen source hashes, active shared UI and browser boundary verified.
 - `bun run --cwd packages/editor check:renderer`: browser bundle, **1,569 inputs**; no Node/Electron, Effect runtime, workspace/Pi/SSH implementation or frozen application source in the renderer entry.
 - `bun run --cwd packages/editor build`: passed, compiling StyleX and all five Monaco workers/font assets. Vite reports Monaco chunks over 500 kB; no bundle-size/performance qualification is claimed.
-- `bun run --cwd packages/editor test:ui`: **4/4 passed** in actual Chromium 156 through the development demo. Typed Monaco edits, explicit Save, shared working/diff buffer, independent second instance, external conflict Compare/Cancel, failed Save, close Cancel/Discard, current-source reopen, model/subscription disposal, hide/show retention, lookup history/highlights, new file, constrained layout and keyboard sidebar resize.
+- `bun run --cwd packages/editor test:ui`: **4/4 passed** in actual Chromium 156 through the development demo. Typed Monaco edits, explicit Save, shared working/diff buffer, independent second instance, external conflict Compare/Cancel, failed Save, close Cancel/Discard, current-source reopen, model/subscription disposal, hide/show retention, lookup history/highlights, new file, constrained layout and keyboard sidebar resize. A comparison-teardown worker rejection observed in one earlier run was fixed by explicitly disposing Monaco's diff view model before its text models; the same final four journeys pass with page-error assertions and no rejection logged.
 - Impeccable mechanical detector on workbench/Monaco/styles returned `[]`; `git diff --check` passed.
 
 The public tests include dirty conflict baseline retention; immutable lost-response Save retry; Save/Discard/Cancel batch rollback; preview replacement/promotion/reorder; order/reopen/view positions; independent recovery namespaces/CAS; exact host/checkout identities with equal paths; uncertain-operation status with one mutation; dirty copies/Trash preservation; restart; disposal; per-observer acknowledgement; newer live edits during Save/move/copy; and unrelated same-client publication gaps that veto close.
