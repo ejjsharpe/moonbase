@@ -17,4 +17,6 @@ jobs:
       - run: bun run check:foundation
       - run: bun run typecheck
       - run: bun run lint
+      - run: node scripts/prepare-ripgrep.mjs
+      - run: echo "MOONBASE_TEST_RIPGREP=$PWD/dist/tools/ripgrep/rg" >> "$GITHUB_ENV"
       - run: bun run test
