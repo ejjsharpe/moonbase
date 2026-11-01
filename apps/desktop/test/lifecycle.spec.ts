@@ -11,7 +11,7 @@ declare global {
 const packaged = !!process.env.MOONBASE_PACKAGED_TEST;
 const evidence = resolve(process.env.MOONBASE_NATIVE_OUTPUT ?? "test-results", "lifecycle");
 for (const mode of ["reload", "veto", "fresh-veto", "crash"])
-  test(`native document ${mode === "veto" ? "veto retains" : mode + " releases"} observers and waits without replacing the root or stopping work`, async () => {
+  test(`native document ${mode.endsWith("veto") ? mode + " retains" : mode + " releases"} observers and waits without replacing the root or stopping work`, async () => {
     const veto = mode === "veto" || mode === "fresh-veto",
       crash = mode === "crash";
     const f = await fixture(true);
