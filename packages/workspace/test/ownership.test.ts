@@ -580,3 +580,79 @@ test('public workspace IO normalizes unknown helper failures without rebranding 
     f.cleanup();
   }
 });
+
+test('malformed saved recovery domain values block later direct publication without replacing the original row', async () => {
+  const f = fixture(),
+    { runtime, client } = f.start();
+  try {
+    const checkout = await client.command('openCheckout', { root: f.root }),
+      target = { checkout, path: 'file.txt' },
+      disk = await client.command('readFile', target);
+    const state = {
+      ...emptyRecovery('alice'),
+      checkouts: [checkout],
+      openCheckoutIds: [checkout.checkoutId],
+      drafts: [{ target, text: 'retained draft', disk }],
+    };
+    await client.command('persistRecovery', {
+      clientId: 'alice',
+      requestId: 'initial-domain',
+      expectedRevision: 0,
+      state,
+    });
+    const invalid = [
+      { ...state, drafts: [{ ...state.drafts[0], disk: { ...disk, version: '0'.repeat(64) } }] },
+      {
+        ...state,
+        drafts: [
+          {
+            ...state.drafts[0],
+            target: { ...target, checkout: { ...checkout, checkoutId: 'foreign-checkout' } },
+          },
+        ],
+      },
+      { ...state, drafts: [{ ...state.drafts[0], target: { ...target, path: '../escape' } }] },
+      { ...state, checkouts: [checkout, checkout] },
+    ];
+    const database = new DatabaseSync(join(f.base, 'state/moonbase-workspace-v1.sqlite'));
+    try {
+      for (const [index, prior] of invalid.entries()) {
+        const body = JSON.stringify(prior);
+        database.prepare('UPDATE recovery SET body=? WHERE client=?').run(body, 'alice');
+        const before = database
+          .prepare('SELECT revision,body FROM recovery WHERE client=?')
+          .get('alice');
+        await assert.rejects(
+          client.command('loadRecovery', { clientId: 'alice' }),
+          isError('Persistence'),
+        );
+        await assert.rejects(
+          client.command('persistRecovery', {
+            clientId: 'alice',
+            requestId: 'replace-domain-' + index,
+            expectedRevision: 1,
+            state,
+          }),
+          isError('Persistence'),
+        );
+        assert.deepEqual(
+          database.prepare('SELECT revision,body FROM recovery WHERE client=?').get('alice'),
+          before,
+        );
+        assert.equal(
+          await client.command('getRecoveryPublication', {
+            clientId: 'alice',
+            requestId: 'replace-domain-' + index,
+          }),
+          null,
+        );
+      }
+      assert.equal(readFileSync(join(f.root, 'file.txt'), 'utf8'), 'original');
+    } finally {
+      database.close();
+    }
+  } finally {
+    await runtime.dispose();
+    f.cleanup();
+  }
+});
