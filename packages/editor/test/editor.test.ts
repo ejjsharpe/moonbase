@@ -19,6 +19,14 @@ async function fixture(clientId = "editor-one", observe = true) {
   return { memory, runtime, client, editor, async dispose() { editor.dispose(); await runtime.dispose(); } };
 }
 
+test("memory inspection rejects empty and oversized selections like the production service", async () => {
+  const f = await fixture();
+  try {
+    for (const paths of [[], Array(257).fill("a.ts")]) await assert.rejects(f.client.command("inspectEntries", { checkout, paths }), error => ApplicationError.is(error) && error.code === "InvalidInput");
+    assert.equal((await f.client.command("inspectEntries", { checkout, paths: ["a.ts"] })).length, 1);
+  } finally { await f.dispose(); }
+});
+
 test("open/edit/save and staged/unstaged views use one working buffer and distinct baselines", async () => {
   const f = await fixture();
   try {

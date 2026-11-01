@@ -7,11 +7,11 @@ import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { createRequire } from "node:module";
-import { ManagedRuntime } from "effect";
+import { Effect, ManagedRuntime } from "effect";
 import { ApplicationError, type EditorClient, type FileTarget, type WorkspaceEvent } from "@moonbase/application/client";
 import { makeEditorClient } from "@moonbase/application/runtime-client";
 import { createEditor, fileKey, type EditorController } from "@moonbase/editor/state";
-import { WorkspaceLive } from "@moonbase/workspace";
+import { WorkspaceLive, WorkspaceNative } from "@moonbase/workspace";
 
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
 function fixture() {
@@ -43,6 +43,35 @@ function fixture() {
   } };
 }
 const code = (expected: ApplicationError["code"]) => (error: unknown) => ApplicationError.is(error) && error.code === expected;
+
+test("create and native import consumer payloads need no empty inspection and retain explicit destination/replacement authority", async () => {
+  const f = fixture();
+  try {
+    const editor = await f.editor("import-consumer"), checkout = await editor.openCheckout(f.roots[0]);
+    await assert.rejects(f.client.command("inspectEntries", { checkout, paths: [] }), code("InvalidInput"));
+    for (const [kind, destination] of [["create-file", "created.ts"], ["create-directory", "created-folder"]] as const) {
+      assert.equal((await editor.mutate({ kind, checkout, sources: [], destination })).outcome, "completed");
+    }
+    assert.equal(readFileSync(join(f.roots[0], "created.ts"), "utf8"), "");
+    assert.equal(statSync(join(f.roots[0], "created-folder")).isDirectory(), true);
+    const outside = join(f.base, "outside.txt"); writeFileSync(outside, "NATIVE SOURCE\n");
+    const capture = (paths: string[]) => f.runtime.runPromise(Effect.flatMap(WorkspaceNative, native => native.capture({ checkout, clientId: editor.clientId, paths })));
+    const references = await capture([outside]);
+    await assert.rejects(editor.mutate({ kind: "import", checkout, sources: [], destination: "", nativeReferences: references }), code("InvalidInput"));
+    const replacements = await editor.inspect(checkout, ["b.ts"]);
+    const single = await editor.mutate({ kind: "import", checkout, sources: [], destination: "b.ts", nativeReferences: references, replacements });
+    assert.equal(single.outcome, "completed"); assert.equal(readFileSync(join(f.roots[0], "b.ts"), "utf8"), "NATIVE SOURCE\n");
+    assert.equal(readFileSync(outside, "utf8"), "NATIVE SOURCE\n");
+    await assert.rejects(editor.mutate({ kind: "import", checkout, sources: [], destination: "replayed.txt", nativeReferences: references }), code("Unauthorized"));
+    const second = join(f.base, "second.txt"); writeFileSync(second, "SECOND SOURCE\n");
+    writeFileSync(join(f.roots[0], "outside.txt"), "OLD DESTINATION\n");
+    const batch = await capture([outside, second]);
+    const result = await editor.mutate({ kind: "import", checkout, sources: [], destination: "", nativeReferences: batch, replacements: await editor.inspect(checkout, ["outside.txt"]) });
+    assert.equal(result.outcome, "completed");
+    assert.equal(readFileSync(join(f.roots[0], "outside.txt"), "utf8"), "NATIVE SOURCE\n");
+    assert.equal(readFileSync(join(f.roots[0], "second.txt"), "utf8"), "SECOND SOURCE\n");
+  } finally { await f.close(); }
+});
 
 test("real Git comparisons share a working buffer and exact-checkout recovery survives a fresh runtime", { timeout: 30000 }, async () => {
   const f = fixture();

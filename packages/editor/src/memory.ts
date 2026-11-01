@@ -211,10 +211,13 @@ export function memoryWorkspace(seeds: Seed[]) {
         .map(path => match(path, query)).filter((row): row is LookupMatch => !!row).sort((a, b) => b.score - a.score || a.path.localeCompare(b.path)) : [];
       return { matches: matches.slice(0, Math.max(1, Math.min(limit, 100))), history: recent.slice(0, 100), partial: matches.length > limit || recent.length > 100 };
     }),
-    inspectEntries: ({ checkout, paths }) => call("inspectEntries", () => paths.map(path => {
-      pathCheck(path); const entry = entries(checkout).get(path) ?? fail("Entry unavailable.", "Unavailable");
-      return { target: { checkout, path }, identity: entry.version, directory: entry.directory };
-    })),
+    inspectEntries: ({ checkout, paths }) => call("inspectEntries", () => {
+      if (!Array.isArray(paths) || paths.length < 1 || paths.length > 256) fail("Inspect between 1 and 256 entries.");
+      return paths.map(path => {
+        pathCheck(path); const entry = entries(checkout).get(path) ?? fail("Entry unavailable.", "Unavailable");
+        return { target: { checkout, path }, identity: entry.version, directory: entry.directory };
+      });
+    }),
     mutate: operation => call("mutate", () => {
       const key = JSON.stringify([operation.clientId, operation.id]), payload = JSON.stringify(operation), previous = operations.get(key);
       if (previous) return previous.payload === payload ? previous.result : fail("Operation ID reused with changed payload.", "Conflict");
