@@ -2395,7 +2395,8 @@
       "originalAsar": "overwritten before digest recorded; no originalbinaryequivalence claim",
       "reconstruction": "must labelfresharchivebuild digest separately; compare SAMEcorrecteddriverold/new",
       "fixtureCorrection": "firstfocusedgreen also needed separatekeyboardsequencingcorrection; retained distinctfromproductred"
-    }
+    },
+    "reloadFinding": "correctedreloadprobe foundsurvivingrendererviewsubscriptions; unloadteardownwithoutStop +unresolvededitorpreservationveto qualification active"
   },
   "review-workbench-integration-r1": {
     "taskId": "node:delegated-task:command%3Amcp%3A8185ba6c-62ae-4571-ad0b-9688ad5a1b92%3Adelegate-task%3Afresh-lead-workbench19-dff-review-astra",
@@ -2419,5 +2420,12 @@
       "portsRebound": 8,
       "fixtureDirectoriesRemoved": 2
     }
+  },
+  "morning-handoff": {
+    "path": "docs/overnight/handoff.md",
+    "state": "WORKING DRAFT; notcomplete",
+    "sourcePrCheckpoint": 18,
+    "composition": "pendingfinalhead/newindependentreview",
+    "finalAudit": "pending"
   }
 }
