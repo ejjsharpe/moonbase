@@ -13,6 +13,7 @@
     "build": "nx run-many -t build",
     "check:foundation": "node scripts/check-foundation.mjs",
     "test:editor-integration": "tsc --noEmit -p tests/editor-workspace/tsconfig.json && node packages/workspace/scripts/build-native.mjs && node --experimental-strip-types --test --test-concurrency=1 tests/editor-workspace/*.test.ts",
+    "test:chat-integration": "tsc --noEmit -p tests/chat/tsconfig.json && node --experimental-strip-types --test --test-concurrency=1 tests/chat/*.test.ts",
     "lint:fix": "bun run lint --fix --ignore-pattern \"packages/ui/**\"",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check ."
@@ -45,8 +46,9 @@
     "@moonbase/application": "workspace:*",
     "@moonbase/editor": "workspace:*",
     "@moonbase/workspace": "workspace:*",
-    "@earendil-works/pi-ai": "1.4.0",
     "@moonbase/ssh": "workspace:*",
+    "@earendil-works/pi-ai": "1.4.0",
+    "@moonbase/pi-runtime": "workspace:*",
     "oxlint": "1.90.0",
     "oxfmt": "0.75.0",
     "@moonbase/config": "workspace:*"
