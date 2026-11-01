@@ -42,6 +42,8 @@ These are real dependency branches, not T3's derived display order. Additional f
 
 R1 nevertheless passed392 shipped tests (370 module +15 real editor +7 controlled chat),35 Chromium journeys,11 source/10 unsigned-package composition cases,25 preserved editor journeys and one packaged-resource journey. These passing checks do not clear the new findings. Prior keyboard activation and committed-unload resource defects are independently cleared within the limits below. [Full R1, all prior dispositions and artifact audit](reviews/composition-r1.md), [commands](reviews/composition-r1-commands.md), [cleanup](reviews/composition-r1-cleanup.json).
 
+The committed reports preserve their originating evidence references. For R1's local probes, raw traces and native captures, open the [original report and artifact tree](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-95174512/apps/desktop/test-results/review-task08-r1/REPORT.md); exact source refs and archive hashes are also retained in the committed copy.
+
 ## Findings and disposition
 
 | Scope | Concrete findings / current disposition |
@@ -116,10 +118,10 @@ git worktree add --detach /tmp/moonbase-workbench-proof 8a1636902b129f2fd6e04d26
 cd /tmp/moonbase-workbench-proof
 bun install --frozen-lockfile
 node scripts/prepare-ripgrep.mjs
-MOONBASE_USER_DATA="$(mktemp -d -t moonbase-workbench)" NX_DAEMON=false bunx nx run @moonbase/desktop:dev
+env -u MOONBASE_CHAT_CONFIG MOONBASE_USER_DATA="$(mktemp -d -t moonbase-workbench)" NX_DAEMON=false bunx nx run @moonbase/desktop:dev
 ```
 
-This starts the local editor with Chat unconfigured. To enable optional chat, additionally set `MOONBASE_CHAT_CONFIG=/absolute/private/chat-client.json` to the separately prepared owner-only client configuration; Connect stays explicit. Package with `NX_DAEMON=false bunx nx run @moonbase/desktop:package`, then launch the same Moonbase binary path with fresh `MOONBASE_USER_DATA` and optional configuration. Source/package composed tests: `MOONBASE_COMPOSITION_TEST=1 bun run --cwd apps/desktop test:desktop` and add `MOONBASE_PACKAGED_TEST=1` for the actual package, after build/package and with the foreground free. [Current guide](https://github.com/ejjsharpe/moonbase/blob/8a1636902b129f2fd6e04d26cfa75dd2e90ee415/apps/desktop/README.md). Independent R1 is blocked on the two findings; follow-up repair/new exact-head review remains pending.
+This explicitly removes any inherited chat configuration for the launched process and starts the local editor with Chat unconfigured. To enable optional chat, additionally set `MOONBASE_CHAT_CONFIG=/absolute/private/chat-client.json` to the separately prepared owner-only client configuration; Connect stays explicit. Package with `NX_DAEMON=false bunx nx run @moonbase/desktop:package`, then launch the same Moonbase binary path with fresh `MOONBASE_USER_DATA` and optional configuration. Source/package composed tests: `MOONBASE_COMPOSITION_TEST=1 bun run --cwd apps/desktop test:desktop` and add `MOONBASE_PACKAGED_TEST=1` for the actual package, after build/package and with the foreground free. [Current guide](https://github.com/ejjsharpe/moonbase/blob/8a1636902b129f2fd6e04d26cfa75dd2e90ee415/apps/desktop/README.md). Independent R1 is blocked on the two findings; follow-up repair/new exact-head review remains pending.
 
 ## Human merge/retarget order
 

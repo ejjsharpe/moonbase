@@ -2424,7 +2424,9 @@
     "readmeOnlyFix": "new8a corrects standalonechat build/start andcompositiondependencyparagraph;code/evidencebyteequal903",
     "ownerGoalStatus": "ownbroadgoalblockedwaitingcoordinator; NOTprojectblock; sourceworkeridleavailable",
     "ownReport": "docs/overnight/reviews/composition-owning-evidence.md",
-    "contractApproval": "Smallest module-owned public exact-publication unload readiness surface authorized in packages/editor. Must cover queued/in-flight/newer edits, failed/uncertain writes and confirmed dirty positive control; no root/shared application contract change."
+    "contractApproval": "Smallest module-owned public exact-publication unload readiness surface authorized in packages/editor. Must cover queued/in-flight/newer edits, failed/uncertain writes and confirmed dirty positive control; no root/shared application contract change.",
+    "archivedBaseline8a": "Original qualified asar96d74c67389db0c3d41083d6b39b01f79844b60ddfeada48619625c1351e74e3 copied and rehashed before any rebuild; no reconstruction claim.",
+    "archivedBaseline4dd": "Read-only copy of reviewer rebuild; asar37ad94c692afbde6b2b9a6afabfda6272425e98470e5557419e1b83818ba2f8d matches original qualified standalone artifact."
   },
   "review-workbench-integration-r1": {
     "taskId": "node:delegated-task:command%3Amcp%3A8185ba6c-62ae-4571-ad0b-9688ad5a1b92%3Adelegate-task%3Afresh-lead-workbench19-dff-review-astra",
@@ -2477,6 +2479,7 @@
     "verdict": "NOT CLEARED PR20: P1 fresh-edit native Reload loss, including exact standalone4dd; P2 present-empty config treated absent. D79 fixture seam delta has no blockers; inherited unload not approved.",
     "report": "docs/overnight/reviews/composition-r1.md",
     "commands": "docs/overnight/reviews/composition-r1-commands.md",
-    "cleanup": "docs/overnight/reviews/composition-r1-cleanup.json"
+    "cleanup": "docs/overnight/reviews/composition-r1-cleanup.json",
+    "artifactRoot": "/Users/elliotsharpe/.t3/worktrees/moonbase/t3-95174512/apps/desktop/test-results/review-task08-r1"
   }
 }
