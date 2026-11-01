@@ -486,3 +486,114 @@ test('model disposal joins an already-detached checkout watch close and retains 
     await runtime.dispose();
   }
 });
+
+test('cached and implicit checkout selection retain an exact owner for comparison refresh cancellation', async () => {
+  const other = { ...checkout, checkoutId: 'other', root: '/memory/other' };
+  const memory = memoryWorkspace(
+    [checkout, other].map((checkout) => ({
+      checkout,
+      files: { 'a.ts': 'A', 'b.ts': 'B' },
+      head: { 'a.ts': 'HEAD A' },
+      index: { 'a.ts': 'INDEX A' },
+    })),
+  );
+  const runtime = ManagedRuntime.make(memory.layer),
+    raw = makeEditorClient(runtime);
+  let held = false,
+    entered = gate(),
+    release = gate(),
+    observed: AbortSignal | undefined;
+  const aborted = () => observed?.aborted;
+  const client: EditorClient = {
+    ...raw,
+    async command(name, input, options) {
+      if (held && name === 'readComparison') {
+        observed = options?.signal;
+        entered.release();
+        await release.promise;
+      }
+      return raw.command(name, input, options);
+    },
+  };
+  const editor = await acquireEditor(runtime, { client, clientId: 'cached-selection' });
+  try {
+    await editor.load();
+    await editor.openCheckout(checkout.root);
+    await editor.open(target('a.ts'), { view: 'staged' });
+    await editor.openCheckout(other.root);
+    await editor.open({ checkout: other, path: 'a.ts' }, { view: 'staged' });
+    await editor.selectCheckout(checkout);
+    held = true;
+    const refresh = editor.refresh(checkout);
+    await entered.promise;
+    await editor.selectCheckout(other);
+    assert.equal(aborted(), true);
+    release.release();
+    await refresh;
+    held = false;
+    await editor.closeCheckout(other); // Implicitly selects cached checkout A.
+    entered = gate();
+    release = gate();
+    observed = undefined;
+    held = true;
+    const implicit = editor.refresh(checkout);
+    await entered.promise;
+    await editor.open(target('b.ts'));
+    assert.equal(aborted(), true);
+    release.release();
+    await implicit;
+    assert.deepEqual(editor.getSnapshot().errors, []);
+  } finally {
+    release.release();
+    await editor.dispose();
+    await runtime.dispose();
+  }
+});
+
+test('UI report callbacks ignore only cancellation from a closed captured read owner', async () => {
+  const memory = memoryWorkspace([{ checkout, files: { 'a.ts': 'A', 'folder/c.ts': 'C' } }]);
+  const runtime = ManagedRuntime.make(memory.layer),
+    raw = makeEditorClient(runtime),
+    entered = gate(),
+    release = gate();
+  let held = false;
+  const client: EditorClient = {
+    ...raw,
+    async command(name, input, options) {
+      if (held && name === 'listDirectory') {
+        entered.release();
+        await release.promise;
+      }
+      return raw.command(name, input, options);
+    },
+  };
+  const editor = await acquireEditor(runtime, { client, clientId: 'ui-read-errors' });
+  try {
+    await editor.load();
+    await editor.openCheckout(checkout.root);
+    await editor.open(target('a.ts'));
+    await editor.flush();
+    held = true;
+    const reveal = editor.reveal(target('folder/c.ts')).catch(editor.report);
+    const refresh = editor.refresh(checkout).catch(editor.report);
+    const tree = editor.list(checkout, 'folder').catch(editor.report);
+    await entered.promise;
+    assert.equal(await editor.closeCheckout(checkout), true);
+    release.release();
+    await Promise.all([reveal, refresh, tree]);
+    assert.deepEqual(editor.getSnapshot().errors, []);
+    editor.report(new ApplicationError({ code: 'Persistence', message: 'Real cleanup failure' }));
+    assert.deepEqual(editor.getSnapshot().errors, ['Real cleanup failure']);
+    editor.report(
+      new ApplicationError({ code: 'Cancelled', message: 'Unrelated active cancellation' }),
+    );
+    assert.deepEqual(editor.getSnapshot().errors, [
+      'Real cleanup failure',
+      'Unrelated active cancellation',
+    ]);
+  } finally {
+    release.release();
+    await editor.dispose();
+    await runtime.dispose();
+  }
+});

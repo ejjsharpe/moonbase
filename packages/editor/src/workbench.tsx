@@ -433,9 +433,17 @@ export const EditorWorkbench = forwardRef<EditorWorkbenchHandle, EditorWorkbench
                           onClick={() => {
                             if (target)
                               run(
-                                controller
-                                  .reveal(target)
-                                  .finally(() => setAnchorReset((value) => value + 1)),
+                                controller.reveal(target).then(() => {
+                                  const current = controller.getSnapshot().recovery;
+                                  if (
+                                    current.selectedCheckoutId === checkout.checkoutId &&
+                                    current.openCheckoutIds.includes(checkout.checkoutId) &&
+                                    current.checkouts.some(
+                                      (item) => checkoutKey(item) === checkoutKey(checkout),
+                                    )
+                                  )
+                                    setAnchorReset((value) => value + 1);
+                                }),
                               );
                           }}>
                           Reveal Active File

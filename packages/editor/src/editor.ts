@@ -128,6 +128,8 @@ class EditorModelState {
   private recoveryLock = Semaphore.makeUnsafe(1);
   private factsLock = Semaphore.makeUnsafe(1);
   private selection?: Scope.Closeable;
+  private selectionCheckout?: string;
+  private obsoleteReadErrors = new WeakSet<ApplicationError>();
   private preserving = false;
   private buffers = new Map<string, EditorBuffer>();
   private saveResults = new Map<string, Extract<SaveResult, { kind: 'saved' }>>();
@@ -196,6 +198,25 @@ class EditorModelState {
       Effect.flatMap(Effect.forkIn(effect, scope, { startImmediately: true }), Fiber.join),
     );
   }
+  private selectReadScope(checkout: CheckoutTarget, replace = false) {
+    const key = checkoutKey(checkout);
+    if (
+      !replace &&
+      this.selectionCheckout === key &&
+      this.selection &&
+      this.selection.state._tag !== 'Closed'
+    )
+      return this.selection;
+    const previous = this.selection;
+    const scope = (this.selection = Scope.forkUnsafe(this.stops.get(key)?.scope ?? this.scope));
+    this.selectionCheckout = key;
+    if (previous) void this.runEffect(Scope.close(previous, Exit.void)).catch(this.report);
+    return scope;
+  }
+  private markObsoleteRead(error: unknown, scope: Scope.Scope) {
+    if (ApplicationError.is(error) && error.code === 'Cancelled' && scope.state._tag === 'Closed')
+      this.obsoleteReadErrors.add(error);
+  }
   private cancelScheduled() {
     this.scheduleGeneration++;
     if (this.scheduled) void this.runEffect(Fiber.interrupt(this.scheduled)).catch(this.report);
@@ -255,7 +276,7 @@ class EditorModelState {
     for (const listener of this.listeners) listener();
   }
   report = (error: unknown) => {
-    if (this.closing) return;
+    if (this.closing || (ApplicationError.is(error) && this.obsoleteReadErrors.has(error))) return;
     this.errors = [...this.errors.slice(-19), ApplicationError.fromUnknown(error).message];
     this.emit();
   };
@@ -295,6 +316,7 @@ class EditorModelState {
         scope,
       );
     } catch (error) {
+      this.markObsoleteRead(error, scope);
       if (!ApplicationError.is(error) || error.code !== 'Cancelled') this.report(error);
       throw error;
     }
@@ -426,10 +448,7 @@ class EditorModelState {
   }
   selectCheckout(target: CheckoutTarget) {
     this.checkout(target);
-    if (this.selection) {
-      void this.runEffect(Scope.close(this.selection, Exit.void)).catch(this.report);
-      this.selection = undefined;
-    }
+    this.selectReadScope(target, true);
     this.activation++;
     this.recovery.selectedCheckoutId = target.checkoutId;
     this.changed();
@@ -441,7 +460,15 @@ class EditorModelState {
       (target) => target.checkoutId === this.recovery.selectedCheckoutId,
     );
     const path = checkout && readOwn(this.recovery.views, checkout.checkoutId)?.active;
-    if (!checkout || !path) return true;
+    if (!checkout) {
+      if (this.selection)
+        void this.runEffect(Scope.close(this.selection, Exit.void)).catch(this.report);
+      this.selection = undefined;
+      this.selectionCheckout = undefined;
+      return true;
+    }
+    this.selectReadScope(checkout);
+    if (!path) return true;
     const key = fileKey({ checkout, path }),
       mode = readOwn(this.checkout(checkout).fileViews, path) ?? 'file';
     const attempt = this.comparisonAttempts.get(key),
@@ -764,9 +791,7 @@ class EditorModelState {
     validPath(target.path);
     if (this.preserving) return false;
     const generation = ++this.activation;
-    const previous = this.selection;
-    const selection = (this.selection = Scope.forkUnsafe(this.scope));
-    if (previous) void this.runEffect(Scope.close(previous, Exit.void)).catch(this.report);
+    const selection = this.selectReadScope(target.checkout, true);
     const current = () =>
       !this.closing &&
       !this.preserving &&
@@ -1243,6 +1268,7 @@ class EditorModelState {
   async reveal(target: FileTarget, showIgnored = false) {
     const selected = this.checkout(target.checkout);
     validPath(target.path);
+    const scope = this.stops.get(checkoutKey(target.checkout))?.scope ?? this.scope;
     const parts = target.path.split('/'),
       expanded: string[] = [];
     for (let i = 0; i < parts.length; i++) {
@@ -1254,7 +1280,7 @@ class EditorModelState {
           path: parts.slice(0, i).join('/'),
           hideIgnored: false,
         },
-        this.stops.get(checkoutKey(target.checkout))?.scope,
+        scope,
       );
       const entry = listing.entries.find((item) => item.path === path);
       if (!entry) throw Error(listing.error ?? 'Active file unavailable. Refresh and retry.');
@@ -1284,6 +1310,7 @@ class EditorModelState {
   refresh(checkout: CheckoutTarget): Promise<void> {
     this.checkout(checkout);
     const key = checkoutKey(checkout);
+    const scope = this.stops.get(key)?.scope ?? this.scope;
     return this.runEffect(
       Effect.suspend(() => {
         const existing = this.refreshing.get(key);
@@ -1291,7 +1318,6 @@ class EditorModelState {
           this.refreshPending.add(key);
           return Fiber.join(existing);
         }
-        const scope = this.stops.get(key)?.scope ?? this.scope;
         const work = Effect.tryPromise({
           try: async () => {
             do {
@@ -1310,7 +1336,10 @@ class EditorModelState {
           return Fiber.join(fiber);
         });
       }),
-    );
+    ).catch((error) => {
+      this.markObsoleteRead(error, scope);
+      throw error;
+    });
   }
   private async refreshOnce(checkout: CheckoutTarget) {
     const paths = ['', ...this.checkout(checkout).tree.expanded];
@@ -1338,7 +1367,9 @@ class EditorModelState {
         const comparison = await this.command(
           'readComparison',
           { target, area: mode },
-          this.selection ?? this.stops.get(checkoutKey(checkout))?.scope,
+          this.selectionCheckout === checkoutKey(checkout)
+            ? this.selection
+            : this.stops.get(checkoutKey(checkout))?.scope,
         );
         if (
           !this.closing &&
