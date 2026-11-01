@@ -2240,5 +2240,21 @@
       "reasoningEffort": "xhigh",
       "serviceTier": "default"
     }
+  },
+  "review-pi-r3-integration-r2": {
+    "taskId": "node:delegated-task:command%3Amcp%3A8185ba6c-62ae-4571-ad0b-9688ad5a1b92%3Adelegate-task%3Afresh-lead-pi235-r3-integration132-r2-astra",
+    "childThreadId": "thread:delegated-task:command%3Amcp%3A8185ba6c-62ae-4571-ad0b-9688ad5a1b92%3Adelegate-task%3Afresh-lead-pi235-r3-integration132-r2-astra",
+    "status": "running",
+    "model": "gpt-6-astra",
+    "options": {
+      "reasoningEffort": "xhigh",
+      "serviceTier": "default"
+    },
+    "heads": {
+      "pi": "235eb27a448635a995bb65e67147e99119830b92",
+      "integration": "132d273073889bd0702cf96b1fc2a62d5027598c"
+    },
+    "foreground": "headless only; chat owns native slot",
+    "brief": "complete common/05/06/09 plus full PiR1/response/R2, integrationR1, SSHR1/R2/R3 supplied in new delegation"
   }
 }
