@@ -1,7 +1,7 @@
 import { test, expect, _electron as electron, type ElectronApplication } from "@playwright/test";
 import { fixture, until } from "@moonbase/chat-probe/test-fixture";
 import { join, resolve } from "node:path";
-import { mkdir, writeFile, appendFile } from "node:fs/promises";
+import { mkdir, writeFile, appendFile, readFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 
@@ -152,9 +152,11 @@ for (const mode of ["reload", "veto", "crash"])
           )
           .toBe(0);
       }
-      await current.evaluate(({ BrowserWindow }) =>
-        BrowserWindow.getAllWindows()[0].webContents.reload(),
-      );
+      if (veto) await current.evaluate(({ BrowserWindow }) => new Promise<void>(resolve => {
+        const contents = BrowserWindow.getAllWindows()[0].webContents;
+        contents.once("will-prevent-unload", () => resolve()); contents.reload();
+      }));
+      else await Promise.all([p.waitForEvent("domcontentloaded"), current.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.reload())]);
       await p.evaluate(
         () =>
           new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
@@ -240,15 +242,26 @@ for (const mode of ["reload", "veto", "crash"])
       } else await current.evaluate(({ app }) => app.quit());
       await until(async () => child!.exitCode !== null || child!.signalCode !== null, Boolean);
       app = undefined;
+    } catch (error) {
+      await mkdir(evidence, { recursive: true }); await writeFile(join(evidence, `${packaged ? "package" : "source"}-${mode}-failure.txt`), String(error)); throw error;
     } finally {
       f.releaseReply();
       if (app && child?.exitCode === null && child?.signalCode === null) {
         await app.windows()[0].evaluate(async () => {
           const r = await window.moonbaseChat.call("connection", "getConnection", {}, crypto.randomUUID());
           if (r.ok && (r.value as { connectionId: string | null }).connectionId) await window.moonbaseChat.call("connection", "disconnect", { connectionId: (r.value as { connectionId: string }).connectionId }, crypto.randomUUID());
-        });
+        }).catch(() => {});
         await app.evaluate(({ app }) => app.exit(0));
         await until(async () => child!.exitCode !== null || child!.signalCode !== null, Boolean);
+        const records = (await readFile(f.log, "utf8").catch(() => "")).split("\n").filter(Boolean).map(line => JSON.parse(line) as {pid:number});
+        for (const pid of new Set(records.map(record => record.pid))) {
+          try { process.kill(-pid, 0); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") continue; throw error; }
+          const command = execFileSync("/bin/ps", ["-p", String(pid), "-o", "command="], {encoding:"utf8"});
+          if (!command.includes(join(f.directory, "controlled-ssh"))) throw Error("Refusing to signal an unverified group.");
+          process.kill(-pid, "SIGTERM");
+          await until(async () => { try { process.kill(-pid, 0); return false; } catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; } }, Boolean);
+          await appendFile(join(evidence,"forced-failure-cleanup.jsonl"), JSON.stringify({pid,command,signal:"TERM",confirmedAbsent:true})+"\n");
+        }
       }
       const cleanup = await f.close();
       for (const pid of pids)
