@@ -132,7 +132,7 @@ test('lookup groups/highlights, previews, tree actions and constrained layout', 
   await expect(first(page).getByRole('tree', { name: 'Files', exact: true })).toBeFocused();
 });
 
-test('R1 real close-checkout removes its Monaco models without a teardown exception', async ({
+test('real close-checkout removes its Monaco models without a teardown exception', async ({
   page,
 }) => {
   const errors: string[] = [];
@@ -155,9 +155,7 @@ test('R1 real close-checkout removes its Monaco models without a teardown except
   await page.screenshot({ path: 'test-results/editor-checkout-closed.png', fullPage: true });
 });
 
-test('R2 rejected unchanged Rename/Move leaves explicit Save and Close usable', async ({
-  page,
-}) => {
+test('rejected unchanged Rename/Move leaves explicit Save and Close usable', async ({ page }) => {
   await page.goto('/');
   await first(page).getByRole('treeitem', { name: 'welcome.ts', exact: true }).click();
   await first(page).getByRole('button', { name: 'Rename / Move', exact: true }).click();
@@ -177,7 +175,7 @@ test('R2 rejected unchanged Rename/Move leaves explicit Save and Close usable', 
   await expect(first(page).getByRole('tab', { name: 'welcome.ts', exact: true })).toHaveCount(0);
 });
 
-test('R2 close-all/reopen/close-active loads the surviving file instead of an unavailable placeholder', async ({
+test('close-all/reopen/close-active loads the surviving file instead of an unavailable placeholder', async ({
   page,
 }) => {
   await page.goto('/');
@@ -197,7 +195,7 @@ test('R2 close-all/reopen/close-active loads the surviving file instead of an un
 });
 
 for (const navigation of ['visual', 'recent'] as const)
-  test(`R2 ${navigation} keyboard navigation restores typing focus and keeps tab-strip focus`, async ({
+  test(`${navigation} keyboard navigation restores typing focus and keeps tab-strip focus`, async ({
     page,
   }) => {
     await page.goto('/');
@@ -233,7 +231,7 @@ for (const navigation of ['visual', 'recent'] as const)
     await expect(first(page).getByRole('tab', { name: 'welcome.ts', exact: true })).toBeFocused();
   });
 
-test('R3 a checkout clicked during close publication remains selected live and durably', async ({
+test('a checkout clicked during close publication remains selected live and durably', async ({
   page,
 }) => {
   await page.goto('/recovery-race.html');
@@ -257,7 +255,7 @@ test('R3 a checkout clicked during close publication remains selected live and d
 });
 
 for (const shortcut of ['close', 'reopen'] as const)
-  test(`R3 keyboard ${shortcut} hands off typing focus`, async ({ page }) => {
+  test(`keyboard ${shortcut} hands off typing focus`, async ({ page }) => {
     await page.goto('/');
     await first(page).getByRole('treeitem', { name: 'README.md', exact: true }).dblclick();
     if (shortcut === 'reopen')
@@ -283,7 +281,7 @@ for (const shortcut of ['close', 'reopen'] as const)
     await page.screenshot({ path: `test-results/editor-keyboard-${shortcut}.png`, fullPage: true });
   });
 
-test('R3 keyboard close cancellation and failed publication preserve typing focus and dialog scope', async ({
+test('keyboard close cancellation and failed publication preserve typing focus and dialog scope', async ({
   page,
 }) => {
   await page.goto('/');
@@ -314,7 +312,7 @@ test('R3 keyboard close cancellation and failed publication preserve typing focu
   ).toContain('after failed close');
 });
 
-test('R3 keyboard close/reopen retains tree or strip origin and meaningful empty-editor focus', async ({
+test('keyboard close/reopen retains tree or strip origin and meaningful empty-editor focus', async ({
   page,
 }) => {
   await page.goto('/');
@@ -349,7 +347,7 @@ test('R3 keyboard close/reopen retains tree or strip origin and meaningful empty
   expect(await page.evaluate(() => window.demo.first.getSnapshot().recovery)).toEqual(before);
 });
 
-test('R4 returning to a background-closed checkout loads the survivor', async ({ page }) => {
+test('returning to a background-closed checkout loads the survivor', async ({ page }) => {
   await page.goto('/recovery-race.html');
   await expect(page.getByRole('textbox', { name: 'b.ts editor', exact: true })).toBeVisible();
   await page.evaluate(() => window.recoveryRace.hold());
@@ -366,7 +364,7 @@ test('R4 returning to a background-closed checkout loads the survivor', async ({
 });
 
 for (const area of ['staged', 'unstaged'] as const)
-  test(`R4 actual typing after close into remembered ${area} comparison`, async ({ page }) => {
+  test(`actual typing after close into remembered ${area} comparison`, async ({ page }) => {
     await page.goto('/');
     await first(page).getByLabel('File view', { exact: true }).selectOption(area);
     await first(page).getByRole('treeitem', { name: 'README.md', exact: true }).dblclick();
@@ -392,7 +390,7 @@ for (const area of ['staged', 'unstaged'] as const)
     await page.screenshot({ path: `test-results/editor-${area}-close.png`, fullPage: true });
   });
 
-test('R4 uncertain final close is visible, blocks Quit and resolves by exact receipt before focusing its survivor', async ({
+test('uncertain final close is visible, blocks Quit and resolves by exact receipt before focusing its survivor', async ({
   page,
 }) => {
   await page.goto('/recovery-race.html');
@@ -448,7 +446,7 @@ test('R4 uncertain final close is visible, blocks Quit and resolves by exact rec
   ).toHaveCount(0);
 });
 
-test('R5 selecting an absent survivor during another close loads it after preservation releases', async ({
+test('selecting an absent survivor during another close loads it after preservation releases', async ({
   page,
 }) => {
   await page.goto('/recovery-race.html?both');
@@ -483,7 +481,7 @@ test('R5 selecting an absent survivor during another close loads it after preser
   await page.screenshot({ path: 'test-results/editor-preservation-selection.png', fullPage: true });
 });
 
-test('R6 delayed public Copy cannot reopen a destination closed through Monaco UI', async ({
+test('delayed public Copy cannot reopen a destination closed through Monaco UI', async ({
   page,
 }) => {
   const errors: string[] = [];
@@ -531,7 +529,7 @@ test('R6 delayed public Copy cannot reopen a destination closed through Monaco U
 });
 
 for (const area of ['staged', 'unstaged'] as const)
-  test(`R6 restored dirty ${area} survivor shows its original and accepts typing`, async ({
+  test(`restored dirty ${area} survivor shows its original and accepts typing`, async ({
     page,
   }) => {
     await page.goto('/recovery-race.html?dirty=' + area);
@@ -570,7 +568,7 @@ for (const area of ['staged', 'unstaged'] as const)
   });
 
 for (const area of ['staged', 'unstaged'] as const)
-  test(`R7 recreated ${area} working file becomes editable with Save enabled`, async ({ page }) => {
+  test(`recreated ${area} working file becomes editable with Save enabled`, async ({ page }) => {
     await page.goto('/recovery-race.html?missing=' + area);
     const original = page.getByRole('textbox', { name: area + ' · a.ts original', exact: true }),
       modified = page.getByRole('textbox', { name: 'a.ts editor', exact: true });
@@ -622,7 +620,7 @@ for (const area of ['staged', 'unstaged'] as const)
     await page.screenshot({ path: `test-results/editor-recreated-${area}.png`, fullPage: true });
   });
 
-test('R9 lost and reordered Save receipts keep Retry Save visible until exact recovery settles', async ({
+test('lost and reordered Save receipts keep Retry Save visible until exact recovery settles', async ({
   page,
 }) => {
   await page.goto('/');
@@ -722,7 +720,7 @@ test('R9 lost and reordered Save receipts keep Retry Save visible until exact re
   await page.screenshot({ path: 'test-results/save-receipts.png', fullPage: true });
 });
 
-test('R10 Resolve recovers a rejected metadata publication after an already-started Save', async ({
+test('Resolve recovers a rejected metadata publication after an already-started Save', async ({
   page,
 }) => {
   await page.goto('/save-race.html');
@@ -945,4 +943,99 @@ test('delayed Create reply after disposal does not open the created file', async
         ).text,
     ),
   ).toBe('');
+});
+
+test('StrictMode lookup searches and opens a result after effect replay', async ({ page }) => {
+  await page.goto('/?strict');
+  await first(page).getByRole('button', { name: 'Find file', exact: true }).click();
+  await page.getByRole('combobox').fill('README');
+  await expect(page.getByRole('option', { name: 'README.md', exact: true })).toBeVisible();
+  await page.screenshot({ path: 'test-results/strict-lookup.png', fullPage: true });
+  await page.getByRole('combobox').press('Enter');
+  await expect(page.getByRole('dialog', { name: 'Find file', exact: true })).toHaveCount(0);
+  await expect(first(page).getByRole('tab', { name: 'README.md', exact: true })).toBeVisible();
+});
+
+test('Shift tree ranges extend and shrink from a stable anchor before Trash', async ({ page }) => {
+  await page.goto('/');
+  const tree = first(page).getByRole('tree', { name: 'Files', exact: true });
+  await tree.focus();
+  await tree.press('Home');
+  const paths = await tree
+    .getByRole('treeitem')
+    .evaluateAll((items) => items.map((item) => item.getAttribute('aria-label')));
+  const selected = () =>
+    tree
+      .locator('[role="treeitem"][aria-selected="true"]')
+      .evaluateAll((items) => items.map((item) => item.getAttribute('aria-label')));
+  await tree.press('Shift+ArrowDown');
+  expect(await selected()).toEqual(paths.slice(0, 2));
+  await tree.press('Shift+ArrowDown');
+  expect(await selected()).toEqual(paths.slice(0, 3));
+  await tree.press('Shift+ArrowUp');
+  expect(await selected()).toEqual(paths.slice(0, 2));
+  await tree.press('Shift+End');
+  expect(await selected()).toEqual(paths);
+  await tree.press('Shift+ArrowUp');
+  expect(await selected()).toEqual(paths.slice(0, -1));
+  await tree.press('Home');
+  await tree.press('Shift+ArrowDown');
+  expect(await selected()).toEqual(paths.slice(0, 2));
+  await first(page).getByRole('button', { name: 'Trash', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: 'Move to Trash', exact: true })).toContainText(
+    paths.slice(0, 2).join(', '),
+  );
+  await page.screenshot({ path: 'test-results/tree-range-trash.png', fullPage: true });
+  await page
+    .getByRole('dialog', { name: 'Move to Trash', exact: true })
+    .getByRole('button', { name: 'Cancel', exact: true })
+    .click();
+  await tree.getByRole('treeitem', { name: 'README.md', exact: true }).click();
+  await tree.press('Shift+ArrowDown');
+  expect(await selected()).toEqual(paths.slice(2));
+  await page.evaluate(async () => {
+    const { first, checkout } = window.demo;
+    await first.openCheckout('/demo/other');
+    await first.selectCheckout(checkout);
+  });
+  await tree.focus();
+  await tree.press('Shift+ArrowUp');
+  expect(await selected()).toEqual(paths.slice(2));
+  await tree.press('ArrowUp');
+  await tree.press('Shift+ArrowDown');
+  expect(await selected()).toEqual(paths.slice(1, 3));
+});
+
+test('Reveal starts a new Shift tree range and captures only that Trash batch', async ({
+  page,
+}) => {
+  await page.goto('/');
+  const tree = first(page).getByRole('tree', { name: 'Files', exact: true });
+  const selected = () =>
+    tree
+      .locator('[role="treeitem"][aria-selected="true"]')
+      .evaluateAll((items) => items.map((item) => item.getAttribute('aria-label')));
+  await tree.focus();
+  await tree.press('Home');
+  await tree.press('Shift+ArrowDown');
+  await first(page).getByRole('button', { name: 'Reveal Active File', exact: true }).click();
+  await expect.poll(selected).toEqual(['welcome.ts']);
+  await tree.focus();
+  await tree.press('Shift+ArrowUp');
+  expect(await selected()).toEqual(['README.md', 'welcome.ts']);
+  await tree.press('Shift+ArrowDown');
+  expect(await selected()).toEqual(['welcome.ts']);
+  await tree.press('Shift+ArrowUp');
+  expect(await selected()).toEqual(['README.md', 'welcome.ts']);
+  await first(page).getByRole('button', { name: 'Trash', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Move to Trash', exact: true });
+  await expect(dialog).toContainText('README.md, welcome.ts');
+  await expect(dialog).not.toContainText('ignored.txt');
+  await expect(dialog).not.toContainText('src');
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await tree.focus();
+  await tree.press('Shift+ArrowDown');
+  expect(await selected()).toEqual(['welcome.ts']);
+  await tree.press('Shift+ArrowUp');
+  expect(await selected()).toEqual(['README.md', 'welcome.ts']);
 });

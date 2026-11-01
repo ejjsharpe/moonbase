@@ -1,5 +1,5 @@
 import { createRoot } from 'react-dom/client';
-import { createRef, useState } from 'react';
+import { createRef, StrictMode, useState } from 'react';
 import { ManagedRuntime } from 'effect';
 import { makeEditorClient } from '@moonbase/application/runtime-client';
 import { EditorWorkbench, createEditor, type EditorWorkbenchHandle } from '../src/index.ts';
@@ -146,7 +146,15 @@ function Demo() {
     </main>
   );
 }
-createRoot(document.getElementById('root')!).render(<Demo />);
+createRoot(document.getElementById('root')!).render(
+  new URLSearchParams(location.search).has('strict') ? (
+    <StrictMode>
+      <Demo />
+    </StrictMode>
+  ) : (
+    <Demo />
+  ),
+);
 declare global {
   interface Window {
     demo: {
