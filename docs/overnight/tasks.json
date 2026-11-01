@@ -678,7 +678,7 @@
     "head": "42836b0421898b963e67f02795edc35f5e546173",
     "base": "6e58c1c4ea6944e8ca25eadc46e35c843f0f9fbe",
     "branch": "chore/host-health-contract",
-    "status": "draft R1 security fix published; R2 queued after module reviews",
+    "status": "ready; independent R2 and exact-head CI pass; actual module adoption pending",
     "checks": "25 tests, typecheck, uncached lint, frozen install, 40 source hashes and both browser bundles, diff pass; exact repair-head hosted runs 41270384552 and 41270381679 pass"
   },
   "editorFixR4": {
@@ -727,7 +727,7 @@
     "url": "https://github.com/ejjsharpe/moonbase/pull/7",
     "base": "6e58c1c4ea6944e8ca25eadc46e35c843f0f9fbe",
     "branch": "chore/recovery-publication-contract",
-    "status": "draft; independent contract review queued after workspace R5; adapter adoption active"
+    "status": "ready; independent contract review and both published adapters; editor full flow still under repair"
   },
   "workspaceRecoveryPublications": {
     "threadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-03-workspace-module-r1-bb5c5d0",
@@ -879,7 +879,7 @@
     "childThreadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-host-health-r2-42836b0",
     "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-host-health-r2-42836b0:ordinal:1",
     "childNodeId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-host-health-r2-42836b0",
-    "status": "running",
+    "status": "completed",
     "workState": "working",
     "hasPendingChildRuns": false,
     "latestTerminalRunId": null,
@@ -902,6 +902,8 @@
     "resultContextTransferId": null,
     "hasPendingQuestion": false,
     "pendingApproval": null,
-    "waitTimedOut": false
+    "waitTimedOut": false,
+    "findings": "docs/overnight/reviews/host-health-r2.md",
+    "verdict": "no blocking findings for source boundary; health only, live relay/read-only replay possible"
   }
 }

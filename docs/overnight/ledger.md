@@ -11,8 +11,8 @@ All PRs are private, linked and unmerged. Older entries below are historical evi
 | [#5 checkout contract](https://github.com/ejjsharpe/moonbase/pull/5) | `6e58c1c4ea6944e8ca25eadc46e35c843f0f9fbe` | #2 | Astra: no contract blockers; actual adoption/fan-in pending |
 | [#3 workspace](https://github.com/ejjsharpe/moonbase/pull/3) | `38c6c551ff0ab1108077275d223a32967f32b9f6` | #7 | Ready for review; Astra R6 no blockers, 91+14 tests/10 independent probes and exact-head CI pass |
 | [#4 editor](https://github.com/ejjsharpe/moonbase/pull/4) | `4c1e319d810ed4673765a008ae4c7101ee8b9f57` | #7 | DRAFT; R5 found one P1/two related races and one P2 deferred activation; owner fixing |
-| [#6 host health](https://github.com/ejjsharpe/moonbase/pull/6) | `42836b0421898b963e67f02795edc35f5e546173` | #5 | DRAFT; 25 tests/checks and hosted CI pass; fresh Astra security R2 running |
-| [#7 recovery publications](https://github.com/ejjsharpe/moonbase/pull/7) | `8557fdd0d7a71f93a6584c77430e6fde57668580` | #5 | DRAFT for coordinated adoption; Astra contract-only no blockers, 14 tests plus five independent probes and CI pass |
+| [#6 host health](https://github.com/ejjsharpe/moonbase/pull/6) | `42836b0421898b963e67f02795edc35f5e546173` | #5 | Ready; Astra R2 no source-boundary blockers, 25 tests/11 independent probes and CI pass |
+| [#7 recovery publications](https://github.com/ejjsharpe/moonbase/pull/7) | `8557fdd0d7a71f93a6584c77430e6fde57668580` | #5 | Ready; contract-only clearance, 14 tests/five independent probes and CI pass; both adapters published |
 
 Production editor fan-in, standalone Electron proof, independent Pi/SSH modules, chat proof and composition remain unfinished. Published Pi 1.4.0 controlled research is preparatory evidence only. No human/manual acceptance is inferred.
 
@@ -43,6 +43,8 @@ Workspace R6 clears current `38c6c55`/base #7 with no blockers; all thirteen pri
 After T3's notification, one inspection verified both hosted #6 repair runs at `42836b0421898b963e67f02795edc35f5e546173` passed ([41270384552](https://github.com/ejjsharpe/moonbase/actions/runs/41270384552), [41270381679](https://github.com/ejjsharpe/moonbase/actions/runs/41270381679)). This clears CI only; independent R2 remains queued and no authenticated host/module acceptance is inferred.
 
 Editor R5 verifies the original reported repairs but finds a new P1 in-flight-observation/preservation race (Reload loses dirty recovery; pending Close can resurrect discarded moved text) and a P2 latest-selection activation missed during another preservation. See `reviews/editor-r5.md`. Original owner is fixing after-await gates and deferred activation; source composition remains gated. Fresh host-health R2 now occupies the reviewer slot while editor repairs run. Workspace backend clearance is unchanged.
+
+Host-health R2 independently clears `42836b0` with no source-boundary blockers; R1 credential capture/reuse reproduced on old code and rejected on current. Eleven independent probes include WebCrypto wire verification; see `reviews/host-health-r2.md`. Read-only request replay/live relay remain possible and health authorizes no Send/Stop. Lead marked #6 and the separately cleared #7 contract ready with exact scope/remaining gates in their bodies. No PR is merged. Lead is preparing the independent connection service/command/client boundary from the checked health base; no SSH process, remote contact or Pi/editor composition is introduced during this preparation.
 
 ## Setup
 
