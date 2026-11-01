@@ -38,6 +38,8 @@
 - T3 CI notification confirmed all hosted checks pass for workspace PR #3 at `9cb6723e65ddd3d9fe16d12e2702fe7671103dbd`; the lead verified the exact current head and check result. Frozen-install and standalone-tool prerequisites are cleared. Independent review and actual editor/workspace fan-in remain pending.
 - Workspace R1 found seven reproduced runtime defects (six P1, one P2), and editor R1 found eight (two P1, six P2); both are assigned to the original Sol `xhigh` owners. CI success is not technical module approval. Reports: `reviews/workspace-r1.md` and `reviews/editor-r1.md`.
 - Coordinator found persisted view-key incompatibility and missing closed-metadata/open-membership separation. Focused shared PR #5 at `6e58c1c4ea6944e8ca25eadc46e35c843f0f9fbe`, based on #2, corrects the shape; Astra independent review and exact-head CI pass with no blocking findings. Both owners are normal-merging this dependency without force pushes and retargeting #3/#4 to its branch. Reports: `reviews/checkout-contract-r1.md`. New dependency order is #1 → #2 → #5 → sibling #3/#4 → reviewed fan-in/proof.
+- Owners report focused repair progress: workspace reproduced nine initial failures and passes eleven new focused regressions while completing open-membership/full-suite adoption; editor reports 36 public controller scenarios passing and affected Chromium checks in progress. These reports remain awaiting published exact heads and independent re-review.
+- A bounded, read-only Sol `xhigh` research task is checking published Pi Durable 1.4.0 API seams for the later coordinator contracts. It owns one research note only; no Pi/SSH/chat implementation or startup dependency is being added before the editor proof gate.
 
 ## Pending checks and constraints
 
