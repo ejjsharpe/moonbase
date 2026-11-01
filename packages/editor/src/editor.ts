@@ -414,7 +414,8 @@ export class EditorController {
   }
   async lookup(checkout: CheckoutTarget, query: string) {
     this.checkout(checkout);
-    return this.command("lookupFiles", { checkout, query, limit: 100 });
+    return this.command("lookupFiles", { checkout, query, limit: 100,
+      history: this.recovery.recentFiles.filter(item => sameCheckout(item.checkout, checkout)).map(item => item.path) });
   }
   async refresh(checkout: CheckoutTarget) {
     this.checkout(checkout);

@@ -1,7 +1,7 @@
 import { Effect, Layer, Queue, Stream } from "effect";
 import { WorkspaceService, type WorkspaceServiceShape } from "@moonbase/application/services";
 import { ApplicationError, emptyRecovery, maximumFileBytes, type CheckoutTarget, type FileDocument,
-  type FileTarget, type WorkspaceCommand, type EditorRecovery, type OperationResult, type SaveResult, type WorkspaceEvent,
+  type FileTarget, type WorkspaceCommand, type EditorRecovery, type OperationResult, type SaveResult, type WorkspaceEvent, type LookupMatch,
 } from "@moonbase/application/client";
 import { checkoutKey, fileKey } from "./editor.ts";
 
@@ -13,6 +13,24 @@ const pathCheck = (path: string, directory = false) => {
   if (!path || path.startsWith("/") || /[\\\0]/.test(path) || path.split("/").some(part => !part || part === "." || part === ".." || part.toLowerCase() === ".git")) fail("Invalid relative path.");
 };
 const affected = (path: string, source: string) => path === source || path.startsWith(source + "/");
+
+// Independent subsequence matching, with quoted contiguous terms and basename/adjacency preference.
+function match(path: string, query: string): LookupMatch | undefined {
+  const value = path.toLocaleLowerCase(), positions: number[] = [];
+  for (const term of query.matchAll(/"([^"]+)"|(\S+)/g)) {
+    const text = (term[1] ?? term[2]).toLocaleLowerCase();
+    if (term[1]) {
+      const start = value.indexOf(text); if (start < 0) return;
+      for (let i = 0; i < text.length; i++) positions.push(start + i);
+    } else {
+      let start = 0;
+      for (const character of text) { const found = value.indexOf(character, start); if (found < 0) return; positions.push(found); start = found + 1; }
+    }
+  }
+  const sorted = [...new Set(positions)].sort((a, b) => a - b);
+  return { path, positions: sorted, score: sorted.reduce((score, position, index) => score +
+    (index && position === sorted[index - 1] + 1 ? 8 : 0) + (position > path.lastIndexOf("/") ? 4 : 0), -path.length) };
+}
 
 /** Concrete volatile adapter for demos/tests. It makes no filesystem or durability claim. */
 export function memoryWorkspace(seeds: Seed[]) {
@@ -99,11 +117,13 @@ export function memoryWorkspace(seeds: Seed[]) {
       const working = entries(target.checkout).get(target.path);
       return { original: original!, working: working && !working.directory ? read(target) : null, title: `${area} · ${target.path}` };
     }),
-    lookupFiles: ({ checkout, query, limit = 100 }) => call("lookupFiles", () => {
+    lookupFiles: ({ checkout, query, limit = 100, history = [] }) => call("lookupFiles", () => {
       const seed = exact(checkout);
-      // Independent substring lookup; the excluded Microsoft scorer is never used.
-      const matches = [...entries(checkout)].filter(([path, entry]) => !entry.directory && path.toLocaleLowerCase().includes(query.toLocaleLowerCase()) && !seed.ignored?.some(item => affected(path, item))).map(([path]) => path).sort();
-      return { paths: matches.slice(0, Math.max(1, Math.min(limit, 100))), partial: matches.length > limit };
+      const eligible = (path: string) => entries(checkout).has(path) && !entries(checkout).get(path)!.directory && !seed.ignored?.some(item => affected(path, item));
+      const recent = [...new Set(history)].filter(eligible).map(path => match(path, query)).filter((row): row is LookupMatch => !!row);
+      const matches = query.trim() ? [...entries(checkout).keys()].filter(path => eligible(path) && !history.includes(path))
+        .map(path => match(path, query)).filter((row): row is LookupMatch => !!row).sort((a, b) => b.score - a.score || a.path.localeCompare(b.path)) : [];
+      return { matches: matches.slice(0, Math.max(1, Math.min(limit, 100))), history: recent.slice(0, 100), partial: matches.length > limit || recent.length > 100 };
     }),
     inspectEntries: ({ checkout, paths }) => call("inspectEntries", () => paths.map(path => {
       pathCheck(path); const entry = entries(checkout).get(path) ?? fail("Entry unavailable.", "Unavailable");
@@ -161,12 +181,16 @@ export function memoryWorkspace(seeds: Seed[]) {
       const revision = expectedRevision + 1; recoveries.set(clientId, { revision, state: structuredClone(state) }); stats.publications++;
       return { revision };
     }),
-    watch: ({ checkout }) => Stream.callback(queue => Effect.acquireRelease(Effect.sync(() => {
-      exact(checkout); const watcher = { checkout, notify: (event: WorkspaceEvent) => { Queue.offerUnsafe(queue, event); } };
-      watchers.add(watcher); stats.subscriptions++; stats.active++;
-      watcher.notify({ checkout, paths: [], ready: true });
-      return watcher;
-    }), watcher => Effect.sync(() => { watchers.delete(watcher); stats.released++; stats.active--; })), { bufferSize: 1, strategy: "sliding" }),
+    watch: ({ checkout }) => Stream.unwrap(Effect.gen(function* () {
+      const queue = yield* Queue.sliding<WorkspaceEvent>(1);
+      yield* Effect.acquireRelease(Effect.sync(() => {
+        exact(checkout); const watcher = { checkout, notify: (event: WorkspaceEvent) => { Queue.offerUnsafe(queue, event); } };
+        watchers.add(watcher); stats.subscriptions++; stats.active++;
+        watcher.notify({ checkout, paths: [], ready: true });
+        return watcher;
+      }), watcher => Effect.sync(() => { watchers.delete(watcher); stats.released++; stats.active--; }));
+      return Stream.fromQueue(queue);
+    })),
   };
   return {
     layer: Layer.succeed(WorkspaceService, service), stats,

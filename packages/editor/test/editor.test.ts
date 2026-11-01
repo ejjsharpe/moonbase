@@ -174,7 +174,7 @@ test("tree ignore filtering/reveal and bounded lookup expose their real results"
     await assert.rejects(f.editor.reveal(target("c.ts")), /hidden/);
     await f.editor.reveal(target("folder/nested.ts"));
     assert.deepEqual(f.editor.getSnapshot().recovery.views[checkoutKey(checkout)].tree.selected, ["folder/nested.ts"]);
-    assert.deepEqual((await f.editor.lookup(checkout, "nested")).paths, ["folder/nested.ts"]);
+    assert.deepEqual((await f.editor.lookup(checkout, "nested")).matches.map(row => row.path), ["folder/nested.ts"]);
     await assert.rejects(f.editor.open(target("../escape")), /relative path/);
   } finally { await f.dispose(); }
 });

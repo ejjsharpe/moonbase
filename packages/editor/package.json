@@ -2,14 +2,15 @@
   "name": "@moonbase/editor",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts", "./state": "./src/editor.ts", "./memory": "./src/memory.ts" },
+  "exports": { ".": "./src/index.ts", "./state": "./src/editor.ts", "./memory": "./src/memory.ts", "./workers": "./src/workers.ts" },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "tsc --noEmit -p tsconfig.json",
     "test": "node --experimental-strip-types --test test/*.test.ts",
     "build": "vp build --config vite.config.ts",
     "demo": "vp dev --config vite.config.ts --host 127.0.0.1",
-    "test:ui": "playwright test --config playwright.config.ts"
+    "test:ui": "playwright test --config playwright.config.ts",
+    "check:renderer": "node test/renderer-imports.mjs"
   },
   "dependencies": {
     "@moonbase/application": "workspace:*", "@moonbase/ui": "workspace:*",
