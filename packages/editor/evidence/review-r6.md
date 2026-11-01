@@ -1,5 +1,7 @@
 # Review R6 corrections
 
+Historical response: independent R7 cleared those reported cases but found a newly available working-buffer variant. See the [current R7 response](review-r7.md).
+
 Reviewed head: `677ea50b625e213f074afd4d914bd8e993b15785`. Exact base remains `8557fdd0d7a71f93a6584c77430e6fde57668580` (`chore/recovery-publication-contract`, #7). Implementation/test fix: `f8f36651c63d2ad6cbe262f7af379955e12fb7ef`. Final test source: `fda139e1f4183bc0e3f3418f9a3d63665805cd59`, tightening the restored comparison capture to wait for the rendered inline baseline. The following evidence-only commit adds this record, README links and inspected PNGs. PR #4 remains **DRAFT** for fresh independent R7; stack #1 → #2 → #5 → #7 → #4 is unchanged.
 
 Only `packages/editor` was authored in this round. No root/shared/sibling/dependency/export/runtime boundary changed. The shared #7 publication contract and prior cancellation/receipt/preservation conventions remain intact. No new feature, global time-based cancellation, command queue, authority mapping or browser store was introduced.
