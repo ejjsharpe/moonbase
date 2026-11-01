@@ -1119,7 +1119,7 @@
     "head": "1aec1a438ba0d5592b0e6c3f0e1be835cf3c034b",
     "base": "09b21f2ee8556c54ef4f8238f0be2ee88fd990c3",
     "url": "https://github.com/ejjsharpe/moonbase/pull/9",
-    "status": "DRAFT R2 repaired; R3 queued behind editor paired review",
+    "status": "READY after AstraR3, all4priorfindings cleared; controlledsource/transport only",
     "tests": {
       "ssh": 43,
       "application": 29
@@ -1256,19 +1256,19 @@
     "verdict": "no blockers; contract-only cleared for downstream implementation"
   },
   "editorIntegration": {
-    "head": "2f9f516f29df5299091cf7546b04c8077645e188",
+    "head": "80b0ede184205b9fff1d633d19426c2bf9671688",
     "url": "https://github.com/ejjsharpe/moonbase/pull/11",
-    "base": "449496961c29c90c7a2e3c44d0618f08ef504947",
+    "base": "3c7f0c3daf337753bbca10df495264af28b280eb",
     "workspace": "38c6c551ff0ab1108077275d223a32967f32b9f6",
     "common": "8557fdd0d7a71f93a6584c77430e6fde57668580",
     "tests": {
       "application": 14,
-      "editor": 92,
+      "editor": 102,
       "workspace": 91,
-      "realIntegration": 11
+      "realIntegration": 14
     },
     "branch": "chore/editor-integration",
-    "status": "DRAFT repaired2f9 candidate; 208tests and exacthead CI pass; paired R9/R2 pending",
+    "status": "DRAFT, 221tests pass; pairedR10/faninR3 and newheadCI pending",
     "ci": [
       "https://github.com/ejjsharpe/moonbase/actions/runs/41279421646/job/124768096522",
       "https://github.com/ejjsharpe/moonbase/actions/runs/41279416797/job/124768083195",
@@ -1416,11 +1416,11 @@
     "childThreadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-editor-r9-fanin-r2-2f9f516",
     "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-editor-r9-fanin-r2-2f9f516:ordinal:1",
     "childNodeId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-editor-r9-fanin-r2-2f9f516",
-    "status": "running",
-    "workState": "working",
+    "status": "completed",
+    "workState": "result_available",
     "hasPendingChildRuns": false,
-    "latestTerminalRunId": null,
-    "latestTerminalStatus": null,
+    "latestTerminalRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-editor-r9-fanin-r2-2f9f516:ordinal:1",
+    "latestTerminalStatus": "completed",
     "latestTerminalSummary": null,
     "latestTerminalResultContextTransferId": null,
     "providerInstanceId": "codex",
@@ -1435,11 +1435,13 @@
         "value": "default"
       }
     ],
-    "summary": null,
-    "resultContextTransferId": null,
+    "summary": "**Both PRs remain blocked for task04 technical continuation.**\n\n1. **P1 \u2014 Failed recovery publication strands subsequent Saves and Quit** at [editor.ts:270](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-9935acd4/packages/editor/src/editor.ts:270). If A\u2019s recovery publication fails before commit, an already-started Save B can advance recovery. Retrying the original publication then conflicts forever. Newer edits remain live but disappear on restart. Reproduced with real SQLite contention, both exact controller artifacts, and Chromium. Retire only definitively rejected publications while retaining Save receipts, then reconcile contiguous known transitions and publish fresh recovery.\n\n2. **P2 \u2014 New browser regression depends on a transient error message** at [workbench.spec.ts:315](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-9935acd4/packages/editor/test/workbench.spec.ts:315). A scheduled flush replaces the expected last alert. Full run: **24/25**; focused repeats: **2/3**. Assert stable pending identities and Retry Save behavior.\n\nReviewed exact refs:\n\n- [PR #4](https://github.com/ejjsharpe/moonbase/pull/4): HEAD `449496961c29c90c7a2e3c44d0618f08ef504947`; BASE `8557fdd0d7a71f93a6584c77430e6fde57668580`.\n- [PR #11](https://github.com/ejjsharpe/moonbase/pull/11): HEAD `2f9f516f29df5299091cf7546b04c8077645e188`; BASE `449496961c29c90c7a2e3c44d0618f08ef504947`.\n\n**The original 22 findings pass their regressions; the original lost/reordered Save P1 is causally cleared.** All 208 repository tests, nine uncached Nx tasks, renderer/build/provenance checks and 21 additional real-adapter cases pass.\n\n[Full review, dispositions, reproduction commands and artifacts](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-9935acd4/dist/paired-review/REVIEW.txt). Exact editor-tree equality verified; tracked files clean; seven PRs linked; owned servers stopped.\n\nNot checked: Electron/IPC, packaged/native UI, signing, physical durability, performance or VoiceOver. Human acceptance remains **PENDING**.",
+    "resultContextTransferId": "context-transfer:type:subagent_result:source-thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-editor-r9-fanin-r2-2f9f516:target-thread:63122af4-017b-4b66-bcae-a905f2b1659d:cef3a068-4dd1-4285-aca6-17a01e064873",
     "hasPendingQuestion": false,
     "pendingApproval": null,
-    "waitTimedOut": false
+    "waitTimedOut": false,
+    "findings": "docs/overnight/reviews/editor-r9-fanin-r2.md",
+    "verdict": "original22+lost/reorderedSave cleared; new P1 definitive publication rejection and P2 flaky browser assertion"
   },
   "standalonePreserved": {
     "head": "f33ed9004643a530aed7f04408751d933f3e9b52",
@@ -1541,5 +1543,121 @@
     "branch": "feat/pi-runtime",
     "preserved": "cef64eee5f8fd9e0572e4c0dc380358485a650ee",
     "state": "owner returned after SSH repair publication; task05 continues; no final manifest/root registration/PR"
+  },
+  "editorFixR10": {
+    "threadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-02-editor-module-r1-bb5c5d0",
+    "messageId": "message:mcp:809f45ac-99a5-4d58-a1ba-08cc0a77c997:thread-send:editor-fix-r10-fanin-r2-rejected-publication",
+    "runId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-02-editor-module-r1-bb5c5d0:ordinal:12",
+    "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Athread-send%3Aeditor-fix-r10-fanin-r2-rejected-publication",
+    "status": "starting",
+    "delivery": "started"
+  },
+  "editorRepairR10": {
+    "head": "3c7f0c3daf337753bbca10df495264af28b280eb",
+    "base": "8557fdd0d7a71f93a6584c77430e6fde57668580",
+    "tests": {
+      "editor": 102,
+      "application": 14,
+      "browser": 26,
+      "focusedRepeats": 6
+    },
+    "status": "DRAFT freshpairedR10/fan-inR3 running; real14pass",
+    "evidence": "packages/editor/evidence/review-r10.md"
+  },
+  "editorPublicationRegressions": {
+    "red": "8614f92f5a95d92a586c07510a86a4468b935bc5",
+    "base": "2f9f516f29df5299091cf7546b04c8077645e188",
+    "redCounts": {
+      "pass": 13,
+      "fail": 1
+    },
+    "candidate": "80b0ede184205b9fff1d633d19426c2bf9671688",
+    "greenCounts": {
+      "integration": 14,
+      "application": 14,
+      "editor": 102,
+      "workspace": 91,
+      "total": 221
+    },
+    "logs": [
+      "/tmp/moonbase-editor-publication-red.log",
+      "/tmp/moonbase-editor-publication-repair-nx.log"
+    ]
+  },
+  "editorR10FaninR3": {
+    "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-editor-r10-fanin-r3-80b0ede",
+    "childThreadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-editor-r10-fanin-r3-80b0ede",
+    "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-editor-r10-fanin-r3-80b0ede:ordinal:1",
+    "childNodeId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-editor-r10-fanin-r3-80b0ede",
+    "status": "running",
+    "workState": "working",
+    "hasPendingChildRuns": false,
+    "latestTerminalRunId": null,
+    "latestTerminalStatus": null,
+    "latestTerminalSummary": null,
+    "latestTerminalResultContextTransferId": null,
+    "providerInstanceId": "codex",
+    "model": "gpt-6-astra",
+    "options": [
+      {
+        "id": "reasoningEffort",
+        "value": "xhigh"
+      },
+      {
+        "id": "serviceTier",
+        "value": "default"
+      }
+    ],
+    "summary": null,
+    "resultContextTransferId": null,
+    "hasPendingQuestion": false,
+    "pendingApproval": null,
+    "waitTimedOut": false
+  },
+  "sshReviewR3": {
+    "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-ssh-r3-1aec1a4",
+    "childThreadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-ssh-r3-1aec1a4",
+    "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-ssh-r3-1aec1a4:ordinal:1",
+    "childNodeId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-ssh-r3-1aec1a4",
+    "status": "completed",
+    "workState": "result_available",
+    "hasPendingChildRuns": false,
+    "latestTerminalRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-ssh-r3-1aec1a4:ordinal:1",
+    "latestTerminalStatus": "completed",
+    "latestTerminalSummary": null,
+    "latestTerminalResultContextTransferId": null,
+    "providerInstanceId": "codex",
+    "model": "gpt-6-astra",
+    "options": [
+      {
+        "id": "reasoningEffort",
+        "value": "xhigh"
+      },
+      {
+        "id": "serviceTier",
+        "value": "default"
+      }
+    ],
+    "summary": "What this change does: [PR #9](https://github.com/ejjsharpe/moonbase/pull/9) adds scoped SSH forwarding with authenticated host verification. **No blocking findings remain at this exact head.**\n\nAll prior findings are resolved:\n\n1. **R1 early Disconnect:** twelve coalesced Connect waiters settle on early Disconnect/root disposal, with zero children spawned.\n2. **R1 authentication bypass:** actual `ssh -G` enabled-bypass cases reject; disabled controls pass.\n3. **R1 exit versus inherited pipes:** endpoint invalidation and cleanup pass for stderr, stdout, both-pipe and no-pipe helpers. Unrelated runtimes survive.\n4. **R2 macOS `EPERM`:** transient denial recovers; persistent denial fails after one ~2.5-second budget, blocks endpoint/reconnect, and recovers through explicit release. Old-source controls fail as expected.\n\nFresh evidence:\n\n- **43 SSH + 29 application tests passed**, plus **17 independent probes**.\n- Passive OS comparison: one old-head trial failed and another passed; both new-head trials passed despite **six natural `EPERM` results**.\n- Typecheck, lint, build diagnostics, foundation checks and the 253-input bundle audit passed. Both exact-head hosted checks passed.\n- Cleanup audited 394 recorded PID/group identities: none remain. Ports rebind; tracked files remain clean.\n- PRs #1, #2, #5, #6, #8 and #9 are linked without watches.\n\n**HEAD:** `1aec1a438ba0d5592b0e6c3f0e1be835cf3c034b`  \n**BASE:** `09b21f2ee8556c54ef4f8238f0be2ee88fd990c3`\n\n[Full report and evidence](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-10bafc84/test-results/review-task06-r3/REPORT.txt) \u00b7 [Runnable independent probes](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-10bafc84/test-results/review-task06-r3/review.test.ts)\n\n**Verdict: technical clearance for source and controlled transport only.** PR remains draft.\n\nNot checked: real SSH/agent/ProxyJump hosts, remote Pi/provider persistence, packaged/native/manual execution or power loss. Human acceptance remains **PENDING**.",
+    "resultContextTransferId": "context-transfer:type:subagent_result:source-thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-ssh-r3-1aec1a4:target-thread:63122af4-017b-4b66-bcae-a905f2b1659d:c0ea2fda-e89f-4a35-938a-3a804faedf08",
+    "hasPendingQuestion": false,
+    "pendingApproval": null,
+    "waitTimedOut": false,
+    "findings": "docs/overnight/reviews/ssh-r3.md",
+    "verdict": "no blockers, all4prior findings cleared; controlledtransport sourceonly"
+  },
+  "piNodeRuntimeRequest": {
+    "hostMinimum": "26.13.0",
+    "ciPin": "actions/setup-node selecting26.13.0 when final committed manifest arrives",
+    "remoteQualification": "owner actualcompiled ./remote in Electron45.1/Node24.22.1 against separateNode26.13HTTP/fauxhost passed getHost/create/send/receipt; noPi/Chord/provider/SQLite imports/clientengine init; no nativepackage claim",
+    "source": "partial task05progress, not yet final committed manifest",
+    "followup": {
+      "threadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-03-workspace-module-r1-bb5c5d0",
+      "messageId": "message:mcp:809f45ac-99a5-4d58-a1ba-08cc0a77c997:thread-send:pi-ci-node26-host-vs-electron-remote-qualification",
+      "runId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-03-workspace-module-r1-bb5c5d0:ordinal:11",
+      "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Athread-send%3Amoonbase-05-pi-runtime-r1-7bfc776",
+      "status": "running",
+      "delivery": "steered"
+    }
   }
 }
