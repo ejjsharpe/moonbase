@@ -18,6 +18,11 @@ test("real Monaco edits/save, shared diff model and isolated second instance", a
   expect(await page.evaluate(() => window.demo.second.buffer({ checkout: window.demo.checkout, path: "welcome.ts" })!.text)).toContain("Hello Moonbase");
   await first(page).getByRole("button", { name: "Save", exact: true }).click();
   await expect(first(page).getByText("welcome.ts · Unsaved", { exact: true })).toHaveCount(0);
+  const modelCount = await page.evaluate(() => window.demo.modelCount());
+  await page.getByRole("button", { name: "Hide first editor", exact: true }).click();
+  expect(await page.evaluate(() => window.demo.modelCount())).toBe(modelCount);
+  await page.getByRole("button", { name: "Show first editor", exact: true }).click();
+  await expect(first(page).getByRole("textbox", { name: "welcome.ts editor", exact: true })).toBeVisible();
   await page.screenshot({ path: "test-results/editor-two-instances.png", fullPage: true });
   expect(errors).toEqual([]);
 });

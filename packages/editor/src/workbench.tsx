@@ -174,7 +174,7 @@ function Mutation({ controller, checkout, action, close }: { controller: EditorC
   async function apply(consent = false) {
     if (busy) return; setBusy(true); setError("");
     try {
-      if (controller.getSnapshot().operations.some(operation => operation.id === operationId)) {
+      if (controller.getSnapshot().operations.some(operation => operation.clientId === controller.clientId && operation.id === operationId)) {
         const result = await controller.resolveOperation(operationId);
         if (result?.outcome === "completed") close();
         else setError("Operation remains unresolved. Its original identity is retained; no effects were repeated.");
@@ -196,7 +196,7 @@ function Mutation({ controller, checkout, action, close }: { controller: EditorC
     finally { setBusy(false); }
   }
   return <Popup title={title} onClose={() => { if (!busy) close(); }}>
-    <Dialog.Description {...stylex.props(styles.path)}>{action.paths.length ? action.paths.join(", ") : checkout.root}{action.kind === "trash" ? ". Unsaved text remains in recovery at its original path." : ""}</Dialog.Description>
+    <Dialog.Description {...stylex.props(styles.path)}>{action.paths.length ? action.paths.join(", ") : checkout.root}{action.kind === "trash" ? ". Unsaved text remains in recovery at its original path." : action.kind === "move" ? ". Text and positions are preserved; text undo history resets." : ""}</Dialog.Description>
     {action.kind !== "trash" && <label {...stylex.props(styles.label)}>Destination relative path
       <input {...stylex.props(controls.field)} autoFocus value={destination} onChange={event => { setDestination(event.target.value); setReplacements(null); }}
         onKeyDown={event => { if (event.key === "Enter" && !event.nativeEvent.isComposing) void apply(); }} /></label>}
@@ -334,7 +334,7 @@ export const EditorWorkbench = forwardRef<EditorWorkbenchHandle, EditorWorkbench
       </Tabs.Panel>}
     </Tabs.Root>
     {!!state.errors.length && <div role="alert" {...stylex.props(controls.status, controls.alert)}>{state.errors.at(-1)} <Button {...stylex.props(controls.button)} onClick={() => controller.clearErrors()}>Dismiss error</Button></div>}
-    {state.operations.filter(operation => operation.outcome !== "completed").map(operation => <p key={operation.id} role="status" {...stylex.props(controls.status)}>{operation.kind}: {operation.outcome}. {operation.message}<Button {...stylex.props(controls.button)} onClick={() => run(controller.resolveOperation(operation.id))}>Resolve operation status</Button></p>)}
+    {state.operations.map(operation => <p key={JSON.stringify([operation.clientId, operation.id])} role="status" {...stylex.props(controls.status)}>{operation.kind}: {operation.outcome}. {operation.message}<Button {...stylex.props(controls.button)} onClick={() => run(controller.resolveOperation(operation.id, operation.clientId))}>Resolve operation status</Button></p>)}
     {lookup && checkout && <FileLookup controller={controller} state={state} checkout={checkout} close={() => setLookup(false)} />}
     {action && checkout && <Mutation controller={controller} checkout={checkout} action={action} close={() => setAction(null)} />}
     {choice && <Popup title="Save changes before closing?" onClose={() => answer("cancel")}><Dialog.Description>{choice.file.target.path} has unsaved changes.</Dialog.Description>

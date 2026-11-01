@@ -3,7 +3,7 @@ import {
   type CheckoutTarget, type CheckoutView, type Comparison, type DirectoryListing,
   type EditorClient, type EditorPosition, type EditorRecovery, type EntryReference,
   type FileDocument, type FileTarget, type FileView, type GitStatus,
-  type OperationResult, type WorkspaceCommand, type CommandInput, type CommandOutput, type WorkspaceOperation,
+  type OperationResult, type RecoveryChange, type RecoveryLoad, type WorkspaceCommand, type CommandInput, type CommandOutput, type WorkspaceOperation,
 } from "@moonbase/application/client";
 
 export const checkoutKey = (target: CheckoutTarget) => JSON.stringify([
@@ -11,6 +11,7 @@ export const checkoutKey = (target: CheckoutTarget) => JSON.stringify([
 ]);
 export const fileKey = (target: FileTarget) => JSON.stringify([checkoutKey(target.checkout), target.path]);
 const sameCheckout = (a: CheckoutTarget, b: CheckoutTarget) => checkoutKey(a) === checkoutKey(b);
+const operationKey = (clientId: string, id: string) => JSON.stringify([clientId, id]);
 const affected = (path: string, parent: string) => path === parent || path.startsWith(parent + "/");
 const validPath = (path: string, directory = false) => {
   if (directory && path === "") return;
@@ -53,16 +54,18 @@ export class EditorController {
   private listings: Record<string, DirectoryListing> = {};
   private git: Record<string, GitStatus> = {};
   private errors: string[] = [];
-  private operations = new Map<string, { operation?: WorkspaceOperation; result: OperationResult; applied: Set<string> }>();
+  private operations = new Map<string, { operation?: WorkspaceOperation; result: OperationResult; applied: Set<string>; copies?: EditorBuffer[]; acknowledged?: boolean }>();
   private history: ClosedAction[] = [];
   private listeners = new Set<() => void>();
   private stops = new Map<string, () => void>();
   private requests = new Set<AbortController>();
   private activation = 0;
   private discoveryRevision = 0;
+  private referenceRevision = 0;
   private refreshing = new Map<string, Promise<void>>();
   private refreshPending = new Set<string>();
   private recoveryTail: Promise<unknown> = Promise.resolve();
+  private factsTail: Promise<unknown> = Promise.resolve();
   private scheduled?: ReturnType<typeof setTimeout>;
   private snapshot!: EditorSnapshot;
   constructor(options: { client: EditorClient; clientId?: string }) {
@@ -78,12 +81,12 @@ export class EditorController {
     this.snapshot = { ready: this.ready, disposed: this.disposed, preserving: this.preserving, discoveryRevision: this.discoveryRevision,
       recovery: structuredClone(this.recovery), buffers: structuredClone([...this.buffers.values()]),
       comparisons: { ...this.comparisons }, listings: { ...this.listings }, git: { ...this.git },
-      errors: [...this.errors], operations: [...this.operations.values()].map(value => structuredClone(value.result)) };
+      errors: [...this.errors], operations: [...this.operations.values()].filter(value => !value.acknowledged).map(value => structuredClone(value.result)) };
     for (const listener of this.listeners) listener();
   }
   report = (error: unknown) => {
     if (this.disposed) return;
-    this.errors = [...this.errors.slice(-19), error instanceof Error ? error.message : String(error)];
+    this.errors = [...this.errors.slice(-19), ApplicationError.fromUnknown(error).message];
     this.emit();
   };
   clearErrors() { this.errors = []; this.emit(); }
@@ -119,12 +122,9 @@ export class EditorController {
       if (!selected.openFiles.includes(draft.target.path)) selected.openFiles.push(draft.target.path);
       if (selected.preview === draft.target.path) selected.preview = null;
     }
-    for (const result of loaded.operations) this.operations.set(result.id, { result, applied: new Set() });
+    for (const result of loaded.operations) this.operations.set(operationKey(result.clientId, result.id), { result, applied: new Set() });
     this.ready = true;
-    for (const result of loaded.operations) {
-      try { await this.reconcileOperation(undefined, result); }
-      catch (error) { this.report(error); }
-    }
+    if (loaded.operations.length) try { await this.publishFacts([], undefined, loaded); } catch (error) { this.report(error); }
     const selectedCheckoutId = this.recovery.selectedCheckoutId;
     for (const checkout of this.recovery.checkouts) {
       if (this.disposed) break;
@@ -144,6 +144,7 @@ export class EditorController {
       if (event.error) this.report(event.error);
       if (event.ready) return;
       this.discoveryRevision++;
+      void this.reconcileRecovery().catch(this.report);
       void this.refresh(checkout).catch(this.report);
     }, this.report));
   }
@@ -277,7 +278,7 @@ export class EditorController {
         return false;
       }
       buffer.disk = result.disk; buffer.pendingSave = undefined; buffer.conflict = undefined;
-      await this.flush();
+      await this.publishFacts(result.recoveryChanges, undefined, undefined, true);
       return buffer.text === result.disk.text;
     } finally { buffer.saving = false; this.emit(); }
   }
@@ -340,6 +341,7 @@ export class EditorController {
     const captured = [...new Map(targets.map(target => [fileKey(target), structuredClone(target)])).values()];
     if (captured.some(target => this.uncertainAffects(target))) { this.report("Resolve pending file operations before closing their files."); return false; }
     this.preserving = true; this.activation++; clearTimeout(this.scheduled); this.emit();
+    const referenceRevision = this.referenceRevision;
     const discarded = new Set<string>();
     try {
       for (const target of captured) {
@@ -350,6 +352,7 @@ export class EditorController {
         if (choice === "discard") discarded.add(fileKey(target));
         else if (!await this.save(target)) return false;
       }
+      if (referenceRevision !== this.referenceRevision) throw Error("Files moved during the captured close. Edits retained; review their new paths and retry.");
       const state = this.capture();
       const keys = new Set(captured.map(fileKey));
       state.drafts = state.drafts.filter(draft => !discarded.has(fileKey(draft.target)) && (kind === "quit" || !keys.has(fileKey(draft.target))));
@@ -474,7 +477,7 @@ export class EditorController {
     this.checkout(input.checkout);
     if (this.preserving) throw Error("Finish the captured preservation action first.");
     const operation: WorkspaceOperation = { ...structuredClone(input), clientId: this.clientId, id: input.id ?? crypto.randomUUID() };
-    if (this.operations.has(operation.id)) throw Error("Operation already submitted. Resolve its status instead of dispatching it again.");
+    if (this.operations.has(operationKey(this.clientId, operation.id))) throw Error("Operation already submitted. Resolve its status instead of dispatching it again.");
     if (operation.destination !== undefined) validPath(operation.destination, operation.kind === "import");
     if (operation.sources.some(source => this.uncertainAffects(source.target)) || operation.destination && this.uncertainAffects({ checkout: operation.checkout, path: operation.destination }))
       throw Error("Resolve the pending operation on these entries before applying another.");
@@ -492,20 +495,24 @@ export class EditorController {
       throw Error("Resolve the source Save before moving or copying it.");
     // Publish dirty source drafts before any external mutation, including Trash.
     await this.flush();
-    const uncertain: OperationResult = { id: operation.id, checkout: operation.checkout, kind: operation.kind, outcome: "uncertain", items: [], message: "Awaiting operation status." };
-    this.operations.set(operation.id, { operation, result: uncertain, applied: new Set() }); this.emit();
+    const uncertain: OperationResult = { id: operation.id, clientId: this.clientId, recoveryChanges: [], checkout: operation.checkout, kind: operation.kind, outcome: "uncertain", items: [], message: "Awaiting operation status." };
+    this.operations.set(operationKey(this.clientId, operation.id), { operation, result: uncertain, applied: new Set(), copies: structuredClone([...this.buffers.values()]) }); this.emit();
     try {
       const result = await this.command("mutate", operation);
-      return await this.reconcileOperation(operation, result);
+      if (result.clientId !== operation.clientId || result.id !== operation.id || result.kind !== operation.kind || !sameCheckout(result.checkout, operation.checkout))
+        throw Error("Operation response identity mismatch. Original pending evidence retained.");
+      await this.publishFacts([], result); await this.refresh(operation.checkout); return result;
     } catch (error) { this.report("Operation outcome unconfirmed. Resolve status before taking further action."); throw error; }
   }
-  async resolveOperation(id: string) {
-    const known = this.operations.get(id);
+  async resolveOperation(id: string, operationClientId = this.clientId) {
+    const known = this.operations.get(operationKey(operationClientId, id));
     if (!known) throw Error("Unknown operation.");
-    const result = await this.command("operationStatus", { clientId: this.clientId, id });
+    const result = await this.command("operationStatus", { clientId: operationClientId, id });
     if (!result) { this.report("Operation status unavailable; drafts and original references retained."); return null; }
-    return this.reconcileOperation(known.operation, result);
+    if (result.clientId !== operationClientId || result.id !== id) throw Error("Operation status identity mismatch.");
+    await this.publishFacts([], result); await this.refresh(result.checkout); return result;
   }
+  async reconcileRecovery() { this.assertReady(); if (!this.preserving) await this.publishFacts([]); }
   private uncertainAffects(target: FileTarget) {
     return [...this.operations.values()].some(({ operation, result }) => {
       if (result.outcome !== "uncertain" || !sameCheckout(result.checkout, target.checkout)) return false;
@@ -514,10 +521,13 @@ export class EditorController {
       return !paths.length || paths.some(path => affected(target.path, path) || affected(path, target.path));
     });
   }
-  private async reconcileOperation(operation: WorkspaceOperation | undefined, result: OperationResult) {
-    const known = this.operations.get(result.id);
-    if (!known || operation && (result.id !== operation.id || result.kind !== operation.kind || !sameCheckout(result.checkout, operation.checkout)) ||
-      !sameCheckout(known.result.checkout, result.checkout) || !this.recovery.checkouts.some(item => sameCheckout(item, result.checkout)))
+  private async applyOperationFacts(result: OperationResult, durable: EditorRecovery) {
+    const key = operationKey(result.clientId, result.id);
+    let known = this.operations.get(key);
+    if (!known) { known = { result, applied: new Set() }; this.operations.set(key, known); }
+    const operation = known.operation;
+    if (operation && (result.clientId !== operation.clientId || result.id !== operation.id || result.kind !== operation.kind || !sameCheckout(result.checkout, operation.checkout)) ||
+      known.result.kind !== result.kind || !sameCheckout(known.result.checkout, result.checkout) || !this.recovery.checkouts.some(item => sameCheckout(item, result.checkout)))
       throw Error("Operation checkout identity unavailable or changed. Evidence and drafts retained without rebinding.");
     known.result = result;
     for (const item of result.items.filter(item => item.outcome === "completed")) {
@@ -526,7 +536,12 @@ export class EditorController {
       if (operation && !operation.sources.some(source => source.target.path === item.source)) continue;
       if (result.kind === "move" && item.destination) this.moveReferences(result.checkout, item.source, item.destination);
       if (result.kind === "copy" && item.destination) {
-        for (const buffer of [...this.buffers.values()]) if (sameCheckout(buffer.target.checkout, result.checkout) && affected(buffer.target.path, item.source) && buffer.text !== buffer.disk.text) {
+        const durableCopies = durable.drafts.filter(draft => sameCheckout(draft.target.checkout, result.checkout) && affected(draft.target.path, item.destination!));
+        for (const draft of durableCopies) if (!this.buffers.has(fileKey(draft.target))) {
+          this.buffers.set(fileKey(draft.target), { ...structuredClone(draft), saving: false });
+          const selected = this.checkout(result.checkout); if (!selected.openFiles.includes(draft.target.path)) selected.openFiles.push(draft.target.path);
+        }
+        for (const buffer of known.copies ?? []) if (sameCheckout(buffer.target.checkout, result.checkout) && affected(buffer.target.path, item.source) && buffer.text !== buffer.disk.text) {
           const target = { checkout: result.checkout, path: item.destination + buffer.target.path.slice(item.source.length) };
           if (!this.buffers.has(fileKey(target))) {
             const disk = await this.command("readFile", target);
@@ -544,12 +559,38 @@ export class EditorController {
       });
       known.applied.add(itemKey);
     }
-    await this.flush();
-    if (result.outcome !== "uncertain") await this.command("acknowledgeOperation", { clientId: this.clientId, id: result.id });
-    this.emit(); await this.refresh(result.checkout);
-    return result;
+  }
+  private publishFacts(changes: RecoveryChange[], result?: OperationResult, initial?: RecoveryLoad, forcePublication = false): Promise<void> {
+    const pending = this.factsTail.catch(() => {}).then(async () => {
+      if (this.preserving && !result && !changes.length && !initial && !forcePublication) return;
+      await this.recoveryTail.catch(() => {});
+      const loaded = initial ?? await this.command("loadRecovery", { clientId: this.clientId });
+      if (loaded.state.clientId !== this.clientId) throw Error("Recovery belongs to another editor client.");
+      const facts = [...new Map([...loaded.operations, ...(result ? [result] : [])].map(fact => [operationKey(fact.clientId, fact.id), fact])).values()];
+      const before = (fact: OperationResult) => fact.recoveryChanges.find(change => change.clientId === this.clientId)?.previousRevision ?? Infinity;
+      facts.sort((a, b) => before(a) - before(b));
+      for (const fact of facts) await this.applyOperationFacts(fact, loaded.state);
+      const transitions = [...changes, ...facts.flatMap(fact => fact.recoveryChanges)].filter(change => change.clientId === this.clientId)
+        .sort((a, b) => a.previousRevision - b.previousRevision);
+      for (const transition of transitions) {
+        if (transition.revision <= this.revision) continue;
+        if (transition.previousRevision !== this.revision || transition.revision <= transition.previousRevision)
+          throw new ApplicationError({ code: "Conflict", message: "Recovery revision gap. Retained facts cannot replace another publication; close/discard remains blocked." });
+        this.revision = transition.revision;
+      }
+      if (!facts.length && !changes.length && !forcePublication) return;
+      await this.flush();
+      for (const fact of facts) if (fact.outcome !== "uncertain") {
+        await this.command("acknowledgeOperation", { clientId: this.clientId, operationClientId: fact.clientId, id: fact.id });
+        const known = this.operations.get(operationKey(fact.clientId, fact.id))!;
+        known.acknowledged = true; known.copies = undefined;
+      }
+      this.emit();
+    });
+    this.factsTail = pending; return pending;
   }
   private moveReferences(checkout: CheckoutTarget, source: string, destination: string) {
+    this.referenceRevision++;
     const move = (path: string) => affected(path, source) ? destination + path.slice(source.length) : path;
     const selected = this.checkout(checkout);
     for (const [key, buffer] of [...this.buffers]) if (sameCheckout(buffer.target.checkout, checkout) && affected(buffer.target.path, source)) {

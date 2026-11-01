@@ -1,7 +1,7 @@
 import { Effect, Layer, Queue, Stream } from "effect";
 import { WorkspaceService, type WorkspaceServiceShape } from "@moonbase/application/services";
 import { ApplicationError, emptyRecovery, maximumFileBytes, type CheckoutTarget, type FileDocument,
-  type FileTarget, type WorkspaceCommand, type EditorRecovery, type OperationResult, type SaveResult, type WorkspaceEvent, type LookupMatch,
+  type FileTarget, type WorkspaceCommand, type EditorRecovery, type OperationResult, type SaveResult, type WorkspaceEvent, type LookupMatch, type RecoveryChange,
 } from "@moonbase/application/client";
 import { checkoutKey, fileKey } from "./editor.ts";
 
@@ -17,19 +17,21 @@ const affected = (path: string, source: string) => path === source || path.start
 // Independent subsequence matching, with quoted contiguous terms and basename/adjacency preference.
 function match(path: string, query: string): LookupMatch | undefined {
   const value = path.toLocaleLowerCase(), positions: number[] = [];
+  let casing = 0;
   for (const term of query.matchAll(/"([^"]+)"|(\S+)/g)) {
-    const text = (term[1] ?? term[2]).toLocaleLowerCase();
+    const requested = term[1] ?? term[2], text = requested.toLocaleLowerCase();
     if (term[1]) {
       const start = value.indexOf(text); if (start < 0) return;
-      for (let i = 0; i < text.length; i++) positions.push(start + i);
+      for (let i = 0; i < text.length; i++) { positions.push(start + i); if (path[start + i] === requested[i]) casing += 2; }
     } else {
       let start = 0;
-      for (const character of text) { const found = value.indexOf(character, start); if (found < 0) return; positions.push(found); start = found + 1; }
+      for (let i = 0; i < text.length; i++) { const found = value.indexOf(text[i], start); if (found < 0) return; positions.push(found); if (path[found] === requested[i]) casing += 2; start = found + 1; }
     }
   }
   const sorted = [...new Set(positions)].sort((a, b) => a - b);
   return { path, positions: sorted, score: sorted.reduce((score, position, index) => score +
-    (index && position === sorted[index - 1] + 1 ? 8 : 0) + (position > path.lastIndexOf("/") ? 4 : 0), -path.length) };
+    (index && position === sorted[index - 1] + 1 ? 8 : 0) + (position > path.lastIndexOf("/") ? 4 : 0) +
+    (position === 0 || /[/_. -]/.test(path[position - 1]) || /[a-z]/.test(path[position - 1]) && /[A-Z]/.test(path[position]) ? 6 : 0), casing - path.length) };
 }
 
 /** Concrete volatile adapter for demos/tests. It makes no filesystem or durability claim. */
@@ -38,7 +40,7 @@ export function memoryWorkspace(seeds: Seed[]) {
   const files = new Map<string, Map<string, Entry>>();
   const recoveries = new Map<string, { revision: number; state: EditorRecovery }>();
   const saves = new Map<string, { payload: string; result: SaveResult }>();
-  const operations = new Map<string, { payload: string; result: OperationResult; clientId: string; ack: boolean }>();
+  const operations = new Map<string, { payload: string; result: OperationResult; bounds: Map<string, number>; acks: Set<string> }>();
   const watchers = new Set<{ checkout: CheckoutTarget; notify: (event: WorkspaceEvent) => void }>();
   const faults = new Map<WorkspaceCommand, { error: ApplicationError; after: boolean }>();
   const stats = { subscriptions: 0, released: 0, active: 0, mutations: 0, saves: 0, publications: 0 };
@@ -60,6 +62,42 @@ export function memoryWorkspace(seeds: Seed[]) {
   const notify = (checkout: CheckoutTarget, paths: string[]) => {
     for (const watcher of watchers) if (checkoutKey(watcher.checkout) === checkoutKey(checkout)) watcher.notify({ checkout, paths });
   };
+  function revise(clientId: string, transform: (state: EditorRecovery) => void): RecoveryChange[] {
+    const previous = recoveries.get(clientId); if (!previous) return [];
+    const state = structuredClone(previous.state); transform(state);
+    if (JSON.stringify(state) === JSON.stringify(previous.state)) return [];
+    const revision = previous.revision + 1; recoveries.set(clientId, { revision, state });
+    return [{ clientId, previousRevision: previous.revision, revision }];
+  }
+  function operationRecovery(result: OperationResult) {
+    const bounds = new Map<string, number>();
+    for (const [clientId, stored] of recoveries) {
+      if (clientId !== result.clientId && !stored.state.checkouts.some(checkout => checkoutKey(checkout) === checkoutKey(result.checkout))) continue;
+      result.recoveryChanges.push(...revise(clientId, state => {
+        for (const item of result.items.filter(item => item.outcome === "completed")) {
+          const move = (path: string) => item.destination && affected(path, item.source) ? item.destination + path.slice(item.source.length) : path;
+          if (result.kind === "move") {
+            state.drafts = state.drafts.map(draft => checkoutKey(draft.target.checkout) === checkoutKey(result.checkout) ? { ...draft, target: { ...draft.target, path: move(draft.target.path) } } : draft);
+            const selected = state.views[checkoutKey(result.checkout)];
+            if (selected) {
+              selected.openFiles = selected.openFiles.map(move); selected.active = move(selected.active); if (selected.preview) selected.preview = move(selected.preview);
+              selected.fileViews = Object.fromEntries(Object.entries(selected.fileViews).map(([path, mode]) => [move(path), mode]));
+              selected.positions = Object.fromEntries(Object.entries(selected.positions).map(([path, positions]) => [move(path), positions]));
+              selected.tree.expanded = selected.tree.expanded.map(move); selected.tree.selected = selected.tree.selected.map(move); selected.tree.focus = move(selected.tree.focus);
+            }
+            state.recentFiles = state.recentFiles.map(target => checkoutKey(target.checkout) === checkoutKey(result.checkout) ? { ...target, path: move(target.path) } : target);
+          }
+          if (result.kind === "copy" && item.destination) for (const draft of [...state.drafts]) {
+            if (checkoutKey(draft.target.checkout) !== checkoutKey(result.checkout) || !affected(draft.target.path, item.source)) continue;
+            const target = { checkout: result.checkout, path: move(draft.target.path) };
+            if (!state.drafts.some(existing => fileKey(existing.target) === fileKey(target))) state.drafts.push({ target, disk: read(target), text: draft.text });
+          }
+        }
+      }));
+      bounds.set(clientId, recoveries.get(clientId)!.revision);
+    }
+    return bounds;
+  }
   for (const seed of seeds) {
     const map = new Map<string, Entry>(); files.set(checkoutKey(seed.checkout), map);
     for (const [path, text] of Object.entries(seed.files)) {
@@ -85,10 +123,13 @@ export function memoryWorkspace(seeds: Seed[]) {
       const key = JSON.stringify([input.clientId, input.requestId]), payload = JSON.stringify(input), previous = saves.get(key);
       if (previous) return previous.payload === payload ? previous.result : fail("Save ID reused with changed payload.", "Conflict");
       const disk = read(input.target);
-      const result: SaveResult = disk.version !== input.expectedVersion ? { kind: "conflict", disk } : { kind: "saved", disk: document(input.text) };
+      const result: SaveResult = disk.version !== input.expectedVersion ? { kind: "conflict", disk } : { kind: "saved", disk: document(input.text), recoveryChanges: [] };
       saves.set(key, { payload, result });
       if (result.kind === "saved") {
         entries(input.target.checkout).set(input.target.path, { ...result.disk, directory: false }); stats.saves++;
+        result.recoveryChanges = revise(input.clientId, state => {
+          state.drafts = state.drafts.flatMap(draft => fileKey(draft.target) !== fileKey(input.target) ? [draft] : draft.text === input.text ? [] : [{ ...draft, disk: result.disk }]);
+        });
         notify(input.target.checkout, [input.target.path]);
       }
       return result;
@@ -120,7 +161,7 @@ export function memoryWorkspace(seeds: Seed[]) {
     lookupFiles: ({ checkout, query, limit = 100, history = [] }) => call("lookupFiles", () => {
       const seed = exact(checkout);
       const eligible = (path: string) => entries(checkout).has(path) && !entries(checkout).get(path)!.directory && !seed.ignored?.some(item => affected(path, item));
-      const recent = [...new Set(history)].filter(eligible).map(path => match(path, query)).filter((row): row is LookupMatch => !!row);
+      const recent = [...new Set(history)].filter(path => entries(checkout).has(path) && !entries(checkout).get(path)!.directory).map(path => match(path, query)).filter((row): row is LookupMatch => !!row);
       const matches = query.trim() ? [...entries(checkout).keys()].filter(path => eligible(path) && !history.includes(path))
         .map(path => match(path, query)).filter((row): row is LookupMatch => !!row).sort((a, b) => b.score - a.score || a.path.localeCompare(b.path)) : [];
       return { matches: matches.slice(0, Math.max(1, Math.min(limit, 100))), history: recent.slice(0, 100), partial: matches.length > limit || recent.length > 100 };
@@ -134,7 +175,7 @@ export function memoryWorkspace(seeds: Seed[]) {
       if (previous) return previous.payload === payload ? previous.result : fail("Operation ID reused with changed payload.", "Conflict");
       if (!operation.id || !operation.clientId) fail("Operation requires immutable IDs.");
       const map = new Map(entries(operation.checkout));
-      const result: OperationResult = { id: operation.id, checkout: operation.checkout, kind: operation.kind, outcome: "completed", items: [] };
+      const result: OperationResult = { id: operation.id, clientId: operation.clientId, recoveryChanges: [], checkout: operation.checkout, kind: operation.kind, outcome: "completed", items: [] };
       for (const ref of [...operation.sources, ...(operation.replacements ?? [])]) {
         pathCheck(ref.target.path);
         if (checkoutKey(ref.target.checkout) !== checkoutKey(operation.checkout) || map.get(ref.target.path)?.version !== ref.identity) fail("Entry identity changed.", "Conflict");
@@ -166,16 +207,19 @@ export function memoryWorkspace(seeds: Seed[]) {
         result.items.push({ source: source.target.path, ...(destination ? { destination } : {}), outcome: "completed" });
       }
       files.set(checkoutKey(operation.checkout), map);
-      operations.set(key, { payload, result, clientId: operation.clientId, ack: false }); stats.mutations++;
+      operations.set(key, { payload, result, bounds: operationRecovery(result), acks: new Set() }); stats.mutations++;
       notify(operation.checkout, result.items.map(item => item.destination ?? item.source));
       return result;
     }),
     operationStatus: ({ clientId, id }) => call("operationStatus", () => operations.get(JSON.stringify([clientId, id]))?.result ?? null),
-    acknowledgeOperation: ({ clientId, id }) => call("acknowledgeOperation", () => {
-      const entry = operations.get(JSON.stringify([clientId, id])); if (!entry) fail("Unknown operation."); entry!.ack = true;
+    acknowledgeOperation: ({ clientId, operationClientId, id }) => call("acknowledgeOperation", () => {
+      const entry = operations.get(JSON.stringify([operationClientId, id])); if (!entry) fail("Unknown operation.");
+      if (entry!.acks.has(clientId)) return;
+      if (!entry!.bounds.has(clientId) || (recoveries.get(clientId)?.revision ?? 0) <= entry!.bounds.get(clientId)!) fail("Publish reconciled recovery before acknowledging.", "Conflict");
+      entry!.acks.add(clientId);
     }),
     loadRecovery: ({ clientId }) => call("loadRecovery", () => ({ ...(recoveries.get(clientId) ?? { revision: 0, state: emptyRecovery(clientId) }), errors: [],
-      operations: [...operations.values()].filter(item => item.clientId === clientId && !item.ack).map(item => item.result) })),
+      operations: [...operations.values()].filter(item => item.bounds.has(clientId) && !item.acks.has(clientId)).map(item => item.result) })),
     persistRecovery: ({ clientId, expectedRevision, state }) => call("persistRecovery", () => {
       if (!clientId || state.clientId !== clientId || state.version !== 1) fail("Recovery client mismatch.");
       if ((recoveries.get(clientId)?.revision ?? 0) !== expectedRevision) fail("Recovery revision changed.", "Conflict");
