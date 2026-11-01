@@ -37,9 +37,9 @@ test("unsigned macOS package runs with only system PATH, SQLite, native/rg resou
       await Promise.all(workers.map(name => new Promise<void>(resolve => { const worker = new Worker(new URL("./assets/" + name, location.href)); worker.onerror = event => failures.push(event.message); setTimeout(() => { worker.terminate(); resolve(); }, 300); })));
       return failures;
     }, workers); expect(workerErrors).toEqual([]); expect(errors).toEqual([]);
-    await page.screenshot({ path: "test-results/packaged-editor.png", fullPage: true });
+    await page.screenshot({ path: "test-results/packaged-editor.png", fullPage: true, scale: "css" });
     mkdirSync("evidence", { recursive: true });
-    writeFileSync("evidence/packaged-resources.json", JSON.stringify({ ...resource, notices: undefined, workerErrors, asarSha256: createHash("sha256").update(readFileSync(resolve(`release/mac-${process.arch === "arm64" ? "arm64" : "x64"}/Moonbase.app/Contents/Resources/app.asar`))).digest("hex"), fixture: "fresh temporary Git repository with package.ts and lookup-native-resource.txt; no provider environment", viewport: await page.evaluate(() => ({ width: innerWidth, height: innerHeight })) }, null, 2) + "\n");
+    writeFileSync("evidence/packaged-resources.json", JSON.stringify({ ...resource, notices: undefined, workerErrors, asarSha256: createHash("sha256").update(readFileSync(resolve(`release/mac-${process.arch === "arm64" ? "arm64" : "x64"}/Moonbase.app/Contents/Resources/app.asar`))).digest("hex"), fixture: "fresh temporary Git repository with package.ts and lookup-native-resource.txt; no provider environment", viewport: await page.evaluate(() => ({ width: innerWidth, height: innerHeight, devicePixelRatio })) }, null, 2) + "\n");
     const closed = app.waitForEvent("close"); await app.evaluate(({ app }) => app.quit()); await closed;
   } finally {
     if (child.exitCode === null && child.signalCode === null) { const exited = new Promise<void>(resolve => child.once("exit", () => resolve())); child.kill("SIGKILL"); await exited; }

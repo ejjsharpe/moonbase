@@ -6,6 +6,7 @@ import * as stylex from "@stylexjs/stylex";
 import { EditorWorkbench, createEditor, type EditorWorkbenchHandle } from "@moonbase/editor";
 import { configureMonacoWorkers } from "@moonbase/editor/workers";
 import { controls } from "@moonbase/ui/controls";
+import { workbench } from "@moonbase/ui/workbench";
 import { colors, space } from "@moonbase/ui/tokens.stylex";
 import { bridgeClient, unwrap, type DesktopBridge } from "../wire.ts";
 import "@moonbase/ui/reset.css";
@@ -30,7 +31,7 @@ function Desktop() {
     if (action === "dispose") { controller.dispose(); root.unmount(); bridge.quitResult(id, true); }
   }), []);
   const run = (task: Promise<unknown>) => { void task.catch(controller.report); };
-  return <main inert={closing} {...stylex.props(styles.shell)} onDragOver={event => { if (event.dataTransfer.types.includes("Files")) event.preventDefault(); }} onDrop={event => {
+  return <main inert={closing} {...stylex.props(workbench.document, styles.shell)} onDragOver={event => { if (event.dataTransfer.types.includes("Files")) event.preventDefault(); }} onDrop={event => {
     if (!event.dataTransfer.files.length) return;
     event.preventDefault(); if (!selected) { controller.report(Error("Open a checkout before importing files.")); return; }
     run((async () => { const refs = unwrap(await bridge.drop(selected, [...event.dataTransfer.files])); if (refs.length) await controller.mutate({ checkout: selected, kind: "import", sources: [], destination: "", nativeReferences: refs }); })());

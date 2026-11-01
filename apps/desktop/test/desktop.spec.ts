@@ -34,7 +34,7 @@ async function forceStop() {
 }
 async function open(path = "a.ts") {
   if (!await page.getByRole("button", { name: "Find file", exact: true }).count()) await page.getByRole("button", { name: "Open checkout", exact: true }).click();
-  await page.getByRole("button", { name: "Find file", exact: true }).click(); await page.getByRole("combobox").fill(path); await page.getByRole("combobox").press("Enter");
+  await page.getByRole("button", { name: "Find file", exact: true }).click(); await page.getByRole("combobox").fill(path); await expect(page.getByRole("option", { name: path, exact: true })).toBeVisible(); await page.getByRole("combobox").press("Enter");
   await expect(page.getByRole("textbox", { name: `${path} editor`, exact: true })).toBeVisible();
 }
 async function edit(text: string, path = "a.ts") { const input = page.getByRole("textbox", { name: `${path} editor`, exact: true }); await input.focus(); await input.press("Meta+a"); await input.pressSequentially(text); }
@@ -42,7 +42,7 @@ test("actual sandboxed custom-scheme editor reads, edits and saves through SQLit
   await open(); await edit("export const saved = 42;"); await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect.poll(() => readFileSync(join(checkout, "a.ts"), "utf8")).toBe("export const saved = 42;");
   expect(await page.evaluate(() => ({ node: typeof (window as unknown as {require: unknown}).require, process: typeof (window as unknown as {process: unknown}).process, url: location.href }))).toEqual({ node: "undefined", process: "undefined", url: "moonbase://editor/index.html" });
-  await page.screenshot({ path: "test-results/desktop-normal.png" }); expect(errors).toEqual([]);
+  await page.screenshot({ path: "test-results/desktop-normal.png", scale: "css" }); expect(errors).toEqual([]);
 });
 
 async function checkoutTarget() {
@@ -284,4 +284,32 @@ test("unknown final Quit publication retains the window and resolves only the ex
   await expect(page.locator('.view-line').filter({ hasText: "WORKING" }).first()).toBeVisible();
   const exited = app.waitForEvent("close"); await quit(); await exited;
   expect(readFileSync(join(checkout, "a.ts"), "utf8")).toContain("WORKING");
+});
+
+test("a command cancelled over real IPC keeps typed cancellation and leaves unrelated IO usable", async () => {
+  await open(); const approved = await checkoutTarget();
+  const cancelled = await page.evaluate(async checkout => {
+    const id = crypto.randomUUID(), pending = window.moonbase.call("command", { operation: "readFile", input: { checkout, path: "a.ts" } }, id);
+    window.moonbase.cancel("some-other-request"); window.moonbase.cancel(id); return pending;
+  }, approved);
+  expect(cancelled.ok).toBe(false); if (!cancelled.ok) expect(cancelled.error.code).toBe("Cancelled");
+  const next = await page.evaluate(async checkout => window.moonbase.call("command", { operation: "readFile", input: { checkout, path: "b.ts" } }, crypto.randomUUID()), approved);
+  expect(next.ok).toBe(true); expect(await app.evaluate(() => globalThis.desktopTest.cancels)).toBeGreaterThanOrEqual(2);
+});
+
+test("exact checkout tabs preserve independent dirty paths, views and closed metadata through native approval", async () => {
+  await open(); await edit("alpha dirty a");
+  const beta = join(base, "second-checkout"); execFileSync("/usr/bin/git", ["-C", checkout, "worktree", "add", "-q", "-b", "beta", beta, "HEAD"]);
+  await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [path] })) as typeof dialog.showOpenDialog; }, beta);
+  await page.getByRole("button", { name: "Open checkout", exact: true }).click(); await open(); await edit("beta dirty a");
+  await expect.poll(async () => (await recovery()).state.drafts.length).toBe(2);
+  const first = page.getByRole("tab", { name: "checkout · main", exact: true }); await first.click();
+  await expect(page.locator('.view-line').filter({ hasText: "alpha dirty a" }).first()).toBeVisible();
+  await page.getByRole("button", { name: `Close checkout ${checkout}`, exact: true }).click(); await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(first).toBeVisible(); await page.getByRole("button", { name: `Close checkout ${checkout}`, exact: true }).click(); await page.getByRole("button", { name: "Discard", exact: true }).click(); await expect(first).toHaveCount(0);
+  const closed = await recovery(); expect(closed.state.checkouts).toHaveLength(2); expect(closed.state.openCheckoutIds).toHaveLength(1); expect(Object.values(closed.state.views).some(v => v.openFiles.includes("a.ts"))).toBe(true);
+  await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [path] })) as typeof dialog.showOpenDialog; }, checkout);
+  await page.getByRole("button", { name: "Open checkout", exact: true }).click(); await expect(first).toBeVisible();
+  await expect(page.locator('.view-line').filter({ hasText: "WORKING" }).first()).toBeVisible();
+  await expect.poll(async () => (await recovery()).state.drafts.find(d => d.target.checkout.root === beta)?.text).toBe("beta dirty a");
 });
