@@ -4,7 +4,7 @@ const output = new URL('../dist/', import.meta.url);
 const inputs = JSON.parse(await readFile(new URL('renderer/module-inputs.json', output), 'utf8'));
 assert.deepEqual(
   inputs.filter((p) =>
-    /(?:^|\/)node_modules\/(?:electron|effect|@moonbase\/(?:workspace|pi-runtime|ssh|connection))\/|packages\/(?:workspace|pi-runtime|ssh|connection)\/|apps\/desktop\/src\/(?:main|session|preload|chat-preload|chat\/(?:config|session))\.ts|@earendil-works|pi-ai|pi-durable|node:sqlite|source-snapshot|node:/.test(
+    /(?:^|\/)node_modules\/(?:electron|@moonbase\/(?:workspace|pi-runtime|ssh|connection))\/|packages\/(?:workspace|pi-runtime|ssh|connection)\/|packages\/application\/src\/(?:services|handlers|runtime-client|host-health)\.ts|apps\/desktop\/src\/(?:main|session|preload|chat-preload|chat\/(?:config|session))\.ts|@earendil-works|pi-ai|pi-durable|node:sqlite|source-snapshot|node:/.test(
       p,
     ),
   ),
@@ -22,5 +22,5 @@ assert.equal(
 );
 assert(assets.some((name) => name.endsWith('.ttf')));
 console.log(
-  `Actual Vite desktop renderer: ${inputs.length} inputs, five workers/font, no privileged modules or feature runtime.`,
+  `Actual Vite desktop renderer: ${inputs.length} inputs, five workers/font, browser-safe Effect permitted, no privileged modules.`,
 );
