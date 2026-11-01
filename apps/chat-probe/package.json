@@ -14,7 +14,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "lint": "tsc --noEmit -p tsconfig.json",
+    "lint": "oxlint .",
     "test": "node --experimental-strip-types --test --test-concurrency=1 test/*.test.ts",
     "build": "node scripts/build.mjs",
     "start": "electron dist/main.mjs",

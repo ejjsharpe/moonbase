@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "lint": "tsc --noEmit -p tsconfig.json",
+    "lint": "oxlint .",
     "test": "node --experimental-strip-types --test test/*.test.ts",
     "build": "node scripts/build.mjs",
     "package": "node scripts/package.mjs",

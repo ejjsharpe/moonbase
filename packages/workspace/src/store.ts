@@ -2,7 +2,11 @@ import { DatabaseSync } from 'node:sqlite';
 import { chmodSync, constants, closeSync, mkdirSync, openSync, realpathSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { canonical, ensure, fail, hash } from './validation.ts';
-import { ApplicationError, type CommandInput, type RecoveryPublication } from '@moonbase/application/client';
+import {
+  ApplicationError,
+  type CommandInput,
+  type RecoveryPublication,
+} from '@moonbase/application/client';
 
 type PublicationRecord = { digest: string; receipt: RecoveryPublication };
 
@@ -24,60 +28,131 @@ export class Store {
       this.db.exec('PRAGMA busy_timeout=0; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;');
       const application = this.db.prepare('PRAGMA application_id').get()!.application_id;
       const tables = this.db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all();
-      ensure(application === 1296193363 || (application === 0 && tables.length === 0), 'This is not a Moonbase workspace store. Existing data retained.');
-      this.db.exec('PRAGMA application_id=1296193363; CREATE TABLE IF NOT EXISTS records (bucket TEXT NOT NULL, key TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(bucket,key)); CREATE TABLE IF NOT EXISTS recovery (client TEXT PRIMARY KEY, revision INTEGER NOT NULL, body TEXT NOT NULL);');
+      ensure(
+        application === 1296193363 || (application === 0 && tables.length === 0),
+        'This is not a Moonbase workspace store. Existing data retained.',
+      );
+      this.db.exec(
+        'PRAGMA application_id=1296193363; CREATE TABLE IF NOT EXISTS records (bucket TEXT NOT NULL, key TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(bucket,key)); CREATE TABLE IF NOT EXISTS recovery (client TEXT PRIMARY KEY, revision INTEGER NOT NULL, body TEXT NOT NULL);',
+      );
       chmodSync(file, 0o600);
       const identity = this.get<string>('meta', 'host');
       ensure(!identity || identity === hostId, 'Workspace store belongs to a different host.');
       if (!identity) this.put('meta', 'host', hostId);
-    } catch (error) { this.db.close(); throw error; }
+    } catch (error) {
+      this.db.close();
+      throw error;
+    }
   }
   get<T>(bucket: string, key: string): T | null {
-    const row = this.db.prepare('SELECT body FROM records WHERE bucket=? AND key=?').get(bucket, key);
-    return row ? JSON.parse(row.body as string) as T : null;
+    const row = this.db
+      .prepare('SELECT body FROM records WHERE bucket=? AND key=?')
+      .get(bucket, key);
+    return row ? (JSON.parse(row.body as string) as T) : null;
   }
-  all<T>(bucket: string): T[] { return this.db.prepare('SELECT body FROM records WHERE bucket=? ORDER BY rowid').all(bucket).map(r => JSON.parse(r.body as string) as T); }
+  all<T>(bucket: string): T[] {
+    return this.db
+      .prepare('SELECT body FROM records WHERE bucket=? ORDER BY rowid')
+      .all(bucket)
+      .map((r) => JSON.parse(r.body as string) as T);
+  }
   put(bucket: string, key: string, value: unknown) {
-    try { this.db.prepare('INSERT INTO records VALUES(?,?,?) ON CONFLICT(bucket,key) DO UPDATE SET body=excluded.body').run(bucket, key, JSON.stringify(value)); }
-    catch (error) { throw new ApplicationError({code: 'Persistence', message: 'Workspace journal publication failed; retain drafts and retry. ' + ApplicationError.fromUnknown(error).message}); }
+    try {
+      this.db
+        .prepare(
+          'INSERT INTO records VALUES(?,?,?) ON CONFLICT(bucket,key) DO UPDATE SET body=excluded.body',
+        )
+        .run(bucket, key, JSON.stringify(value));
+    } catch (error) {
+      throw new ApplicationError({
+        code: 'Persistence',
+        message:
+          'Workspace journal publication failed; retain drafts and retry. ' +
+          ApplicationError.fromUnknown(error).message,
+      });
+    }
   }
   reserve<T>(bucket: string, key: string, value: T): T | null {
     try {
-      const result = this.db.prepare('INSERT INTO records VALUES(?,?,?) ON CONFLICT(bucket,key) DO NOTHING').run(bucket, key, JSON.stringify(value));
+      const result = this.db
+        .prepare('INSERT INTO records VALUES(?,?,?) ON CONFLICT(bucket,key) DO NOTHING')
+        .run(bucket, key, JSON.stringify(value));
       return Number(result.changes) === 0 ? this.get<T>(bucket, key) : null;
-    } catch (error) { throw new ApplicationError({code: 'Persistence', message: 'Workspace request reservation failed; no mutation admitted. ' + ApplicationError.fromUnknown(error).message}); }
+    } catch (error) {
+      throw new ApplicationError({
+        code: 'Persistence',
+        message:
+          'Workspace request reservation failed; no mutation admitted. ' +
+          ApplicationError.fromUnknown(error).message,
+      });
+    }
   }
   readRecovery(client: string): { revision: number; state: unknown } | null {
     const row = this.db.prepare('SELECT revision, body FROM recovery WHERE client=?').get(client);
     return row ? { revision: Number(row.revision), state: JSON.parse(row.body as string) } : null;
   }
-  publication(client: string): number { return this.get<number>('publications', client) ?? 0; }
-  recoveryPublication(clientId: string, requestId: string) {
-    return this.get<PublicationRecord>('recovery-publications', hash(canonical([clientId, requestId])));
+  publication(client: string): number {
+    return this.get<number>('publications', client) ?? 0;
   }
-  replayPublication(input: CommandInput<'persistRecovery'>, digest: string): RecoveryPublication | null {
+  recoveryPublication(clientId: string, requestId: string) {
+    return this.get<PublicationRecord>(
+      'recovery-publications',
+      hash(canonical([clientId, requestId])),
+    );
+  }
+  replayPublication(
+    input: CommandInput<'persistRecovery'>,
+    digest: string,
+  ): RecoveryPublication | null {
     const previous = this.recoveryPublication(input.clientId, input.requestId);
-    if (previous && previous.digest !== digest) fail('InvalidInput', 'Recovery request ID already belongs to a different immutable publication.');
+    if (previous && previous.digest !== digest)
+      fail(
+        'InvalidInput',
+        'Recovery request ID already belongs to a different immutable publication.',
+      );
     return previous?.receipt ?? null;
   }
   /** Caller owns the transaction; module facts advance CAS without impersonating a client publication. */
   writeInternalRecovery(client: string, revision: number, state: unknown) {
-    this.db.prepare('INSERT INTO recovery VALUES(?,?,?) ON CONFLICT(client) DO UPDATE SET revision=excluded.revision, body=excluded.body').run(client, revision + 1, JSON.stringify(state));
+    this.db
+      .prepare(
+        'INSERT INTO recovery VALUES(?,?,?) ON CONFLICT(client) DO UPDATE SET revision=excluded.revision, body=excluded.body',
+      )
+      .run(client, revision + 1, JSON.stringify(state));
   }
   persist(input: CommandInput<'persistRecovery'>, digest: string): RecoveryPublication {
     this.db.exec('BEGIN IMMEDIATE');
     try {
       const previous = this.replayPublication(input, digest);
-      if (previous) { this.db.exec('COMMIT'); return previous; }
-      const {clientId: client, requestId, expectedRevision: expected, state} = input;
+      if (previous) {
+        this.db.exec('COMMIT');
+        return previous;
+      }
+      const { clientId: client, requestId, expectedRevision: expected, state } = input;
       const revision = this.readRecovery(client)?.revision ?? 0;
-      if (revision !== expected) fail('Conflict', 'Recovery changed in another window. Reload before publishing.');
-      const receipt = {clientId: client, requestId, previousRevision: revision, revision: revision + 1};
-      this.db.prepare('INSERT INTO recovery VALUES(?,?,?) ON CONFLICT(client) DO UPDATE SET revision=excluded.revision, body=excluded.body').run(client, revision + 1, JSON.stringify(state));
+      if (revision !== expected)
+        fail('Conflict', 'Recovery changed in another window. Reload before publishing.');
+      const receipt = {
+        clientId: client,
+        requestId,
+        previousRevision: revision,
+        revision: revision + 1,
+      };
+      this.db
+        .prepare(
+          'INSERT INTO recovery VALUES(?,?,?) ON CONFLICT(client) DO UPDATE SET revision=excluded.revision, body=excluded.body',
+        )
+        .run(client, revision + 1, JSON.stringify(state));
       this.put('publications', client, revision + 1);
-      this.put('recovery-publications', hash(canonical([client, requestId])), {digest, receipt});
-      this.db.exec('COMMIT'); return receipt;
-    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+      this.put('recovery-publications', hash(canonical([client, requestId])), { digest, receipt });
+      this.db.exec('COMMIT');
+      return receipt;
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
   }
-  close() { this.db.close(); }
+  close() {
+    this.db.close();
+  }
 }

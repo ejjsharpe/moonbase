@@ -1,2 +1,13 @@
-import { defineConfig } from "@playwright/test";
-export default defineConfig({ testDir: "./test", outputDir: process.env.MOONBASE_NATIVE_OUTPUT ?? "test-results", testMatch: process.env.MOONBASE_COMPOSITION_TEST ? ["composition.spec.ts", "lifecycle.spec.ts"] : process.env.MOONBASE_PACKAGED_TEST ? "packaged.spec.ts" : "desktop.spec.ts", workers: 1, fullyParallel: false, timeout: 45000, use: { trace: "retain-on-failure" } });
+import { defineConfig } from '@playwright/test';
+let testMatch: string | string[] = 'desktop.spec.ts';
+if (process.env.MOONBASE_COMPOSITION_TEST) testMatch = ['composition.spec.ts', 'lifecycle.spec.ts'];
+else if (process.env.MOONBASE_PACKAGED_TEST) testMatch = 'packaged.spec.ts';
+export default defineConfig({
+  testDir: './test',
+  outputDir: process.env.MOONBASE_NATIVE_OUTPUT ?? 'test-results',
+  testMatch,
+  workers: 1,
+  fullyParallel: false,
+  timeout: 45000,
+  use: { trace: 'retain-on-failure' },
+});

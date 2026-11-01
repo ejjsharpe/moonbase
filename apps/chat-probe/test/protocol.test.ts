@@ -1,7 +1,7 @@
-import assert from "node:assert/strict";
-import { test } from "node:test";
-import { ChatProofController, type DraftStorage } from "../src/controller.ts";
-import { fixture, until } from "./fixture.ts";
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { ChatProofController, type DraftStorage } from '../src/controller.ts';
+import { fixture, until } from './fixture.ts';
 class Storage implements DraftStorage {
   value: string | null = null;
   getItem() {
@@ -26,14 +26,14 @@ async function setup(t: { after: (f: () => Promise<void>) => void }, hold = fals
     async () => controller.getSnapshot(),
     (s) => !!s.host,
   );
-  await controller.create("Production protocol chat");
+  await controller.create('Production protocol chat');
   return { ...f, clientRoot: root, controller, storage };
 }
-test("public proof controller creates, lists, opens, streams real tool output and captures exact Stop through SSH/HTTP/Pi", async (t) => {
+test('public proof controller creates, lists, opens, streams real tool output and captures exact Stop through SSH/HTTP/Pi', async (t) => {
   const f = await setup(t, true);
   const target = f.controller.getSnapshot().selected!;
   assert.equal(f.controller.getSnapshot().host!.cwd, f.cwd);
-  f.controller.setDraft("Inspect controlled context");
+  f.controller.setDraft('Inspect controlled context');
   await f.controller.send();
   const active = await until(
     async () => f.controller.getSnapshot(),
@@ -44,11 +44,11 @@ test("public proof controller creates, lists, opens, streams real tool output an
   const stop = structuredClone(active.snapshot!.run!.stop);
   await f.controller.stop();
   assert(
-    f.controller.getSnapshot().notice.includes("Stop") ||
-      f.controller.getSnapshot().pending.some((p) => p.operation === "stopChat"),
+    f.controller.getSnapshot().notice.includes('Stop') ||
+      f.controller.getSnapshot().pending.some((p) => p.operation === 'stopChat'),
   );
   await until(
-    () => f.clientRoot.chat.command("getChat", { target }),
+    () => f.clientRoot.chat.command('getChat', { target }),
     (s) => !s.run,
   );
   assert.equal((await f.stats()).tools, 1);
@@ -56,19 +56,19 @@ test("public proof controller creates, lists, opens, streams real tool output an
   assert.equal(f.controller.getSnapshot().selected, null);
   await f.controller.select(target);
   assert.deepEqual(f.controller.getSnapshot().selected, target);
-  assert.equal((await f.stats()).commands.filter((op) => op === "sendChat").length, 1);
+  assert.equal((await f.stats()).commands.filter((op) => op === 'sendChat').length, 1);
   assert(stop.taskId);
 });
-test("lost actual HTTP Send response + newer draft + controller reload/client closure/reconnect/store reopen never resends", async (t) => {
+test('lost actual HTTP Send response + newer draft + controller reload/client closure/reconnect/store reopen never resends', async (t) => {
   const f = await setup(t, true),
     target = f.controller.getSnapshot().selected!;
   await f.loseNextSend();
-  f.controller.setDraft("Original lost-response text");
+  f.controller.setDraft('Original lost-response text');
   await f.controller.send();
   const pending = f.controller.getSnapshot().pending[0];
-  assert.equal(pending.operation, "sendChat");
-  assert(pending.message.startsWith("Uncertain"));
-  f.controller.setDraft("Newer unsent edit");
+  assert.equal(pending.operation, 'sendChat');
+  assert(pending.message.startsWith('Uncertain'));
+  f.controller.setDraft('Newer unsent edit');
   f.controller.dispose();
   await f.clientRoot.runtime.dispose();
   await until(f.stats, (s) => s.tools === 1);
@@ -82,12 +82,12 @@ test("lost actual HTTP Send response + newer draft + controller reload/client cl
     async () => next.getSnapshot(),
     (s) => s.pending.length === 0,
   );
-  assert.equal(next.getSnapshot().draft, "Newer unsent edit");
-  assert.equal((await f.stats()).commands.filter((op) => op === "sendChat").length, 1);
+  assert.equal(next.getSnapshot().draft, 'Newer unsent edit');
+  assert.equal((await f.stats()).commands.filter((op) => op === 'sendChat').length, 1);
   f.release();
   await until(
-    () => second.chat.command("getChat", { target }),
-    (s) => !s.run && s.entries.some((e) => e.text.includes("Remote response finished")),
+    () => second.chat.command('getChat', { target }),
+    (s) => !s.run && s.entries.some((e) => e.text.includes('Remote response finished')),
   );
   next.dispose();
   await second.runtime.dispose();
@@ -102,33 +102,33 @@ test("lost actual HTTP Send response + newer draft + controller reload/client cl
     async () => last.getSnapshot(),
     (s) => !!s.snapshot,
   );
-  assert.equal(last.getSnapshot().draft, "Newer unsent edit");
-  const receipt = await third.chat.command("getChatSend", {
+  assert.equal(last.getSnapshot().draft, 'Newer unsent edit');
+  const receipt = await third.chat.command('getChatSend', {
     target,
     requestId: pending.input.requestId,
   });
-  assert.equal(receipt?.admission, "admitted");
+  assert.equal(receipt?.admission, 'admitted');
   assert.equal((await f.stats()).calls, 0);
   assert.equal((await f.stats()).tools, 0);
   assert.equal(
     last
       .getSnapshot()
       .snapshot!.entries.filter(
-        (e) => e.role === "user" && e.text === "Original lost-response text",
+        (e) => e.role === 'user' && e.text === 'Original lost-response text',
       ).length,
     1,
   );
 });
-test("view detach and Disconnect leave remote tool running; reopen queries same chat without Send", async (t) => {
+test('view detach and Disconnect leave remote tool running; reopen queries same chat without Send', async (t) => {
   const f = await setup(t, true);
   const target = f.controller.getSnapshot().selected!;
-  f.controller.setDraft("Keep remote work");
+  f.controller.setDraft('Keep remote work');
   await f.controller.send();
   await until(f.stats, (s) => s.tools === 1);
   f.controller.closeView();
   await f.controller.disconnect();
-  assert.equal(f.controller.getSnapshot().connection!.state, "disconnected");
-  assert.equal((await f.stats()).commands.filter((s) => s === "stopChat").length, 0);
+  assert.equal(f.controller.getSnapshot().connection!.state, 'disconnected');
+  assert.equal((await f.stats()).commands.filter((s) => s === 'stopChat').length, 0);
   await f.controller.connect();
   await until(
     async () => f.controller.getSnapshot(),
@@ -140,10 +140,10 @@ test("view detach and Disconnect leave remote tool running; reopen queries same 
     (s) => !!s.snapshot?.run?.tools.length,
   );
   assert.equal((await f.stats()).tools, 1);
-  assert.equal((await f.stats()).commands.filter((s) => s === "sendChat").length, 1);
+  assert.equal((await f.stats()).commands.filter((s) => s === 'sendChat').length, 1);
   f.release();
   await until(
-    () => f.clientRoot.chat.command("getChat", { target }),
+    () => f.clientRoot.chat.command('getChat', { target }),
     (s) => !s.run,
   );
 });

@@ -1,14 +1,14 @@
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
-import { Button } from "@base-ui/react/button";
-import * as stylex from "@stylexjs/stylex";
-import { controls } from "@moonbase/ui/controls";
-import { workbench } from "@moonbase/ui/workbench";
-import { colors, layout, radius, space, type } from "@moonbase/ui/tokens.stylex";
-import type { ChatClient, ChatEntry, ChatSession } from "@moonbase/application/chat-client";
-import type { ConnectionClient } from "@moonbase/application/connection-client";
-import { ChatProofController, type DraftStorage } from "./controller.ts";
-export { ChatProofController } from "./controller.ts";
-export type { ChatProofState, Pending, DraftStorage } from "./controller.ts";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { Button } from '@base-ui/react/button';
+import * as stylex from '@stylexjs/stylex';
+import { controls } from '@moonbase/ui/controls';
+import { workbench } from '@moonbase/ui/workbench';
+import { colors, layout, radius, space, type } from '@moonbase/ui/tokens.stylex';
+import type { ChatClient, ChatEntry, ChatSession } from '@moonbase/application/chat-client';
+import type { ConnectionClient } from '@moonbase/application/connection-client';
+import { ChatProofController, type DraftStorage } from './controller.ts';
+export { ChatProofController } from './controller.ts';
+export type { ChatProofState, Pending, DraftStorage } from './controller.ts';
 
 export type ChatProofProps = {
   chat: ChatClient;
@@ -19,8 +19,8 @@ export type ChatProofProps = {
 /** The consumer owns the clients/runtime and controller lifetime; this view installs no capabilities. */
 export function ChatProof({ controller }: { controller: ChatProofController }) {
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot),
-    [title, setTitle] = useState("");
-  const connected = state.connection?.state === "connected",
+    [title, setTitle] = useState('');
+  const connected = state.connection?.state === 'connected',
     busy = (id: string) => state.active.includes(id);
   const snapshot = state.snapshot,
     run = snapshot?.run;
@@ -44,25 +44,23 @@ export function ChatProof({ controller }: { controller: ChatProofController }) {
         </strong>
         <div {...stylex.props(controls.row)}>
           <span role="status" {...stylex.props(styles.connection)}>
-            {state.connection?.state ?? "Loading configuration"}
+            {state.connection?.state ?? 'Loading configuration'}
           </span>
-          {connected || state.connection?.state === "connecting" ? (
+          {connected || state.connection?.state === 'connecting' ? (
             <Button
               {...stylex.props(controls.button)}
-              disabled={busy("disconnect")}
-              onClick={() => void controller.disconnect()}
-            >
+              disabled={busy('disconnect')}
+              onClick={() => void controller.disconnect()}>
               Disconnect
             </Button>
           ) : (
             <Button
               {...stylex.props(controls.button, styles.primary)}
               disabled={
-                !state.connection || busy("connect") || state.connection.state === "disconnecting"
+                !state.connection || busy('connect') || state.connection.state === 'disconnecting'
               }
-              onClick={() => void controller.connect()}
-            >
-              {busy("connect") ? "Connecting…" : "Connect"}
+              onClick={() => void controller.connect()}>
+              {busy('connect') ? 'Connecting…' : 'Connect'}
             </Button>
           )}
         </div>
@@ -71,10 +69,10 @@ export function ChatProof({ controller }: { controller: ChatProofController }) {
         <aside aria-label="Saved chats" {...stylex.props(styles.sidebar)}>
           <section {...stylex.props(styles.profile)}>
             <h1 {...stylex.props(styles.heading)}>
-              {state.connection?.profile.label ?? "Configured host"}
+              {state.connection?.profile.label ?? 'Configured host'}
             </h1>
             <p {...stylex.props(styles.small)}>
-              {state.connection?.profile.destination ?? "Loading…"}
+              {state.connection?.profile.destination ?? 'Loading…'}
             </p>
             <p {...stylex.props(styles.small)}>
               Host {controller.context.host.hostId}
@@ -89,8 +87,7 @@ export function ChatProof({ controller }: { controller: ChatProofController }) {
             onSubmit={(e) => {
               e.preventDefault();
               void controller.create(title);
-            }}
-          >
+            }}>
             <label htmlFor="chat-title" {...stylex.props(styles.label)}>
               New saved chat
             </label>
@@ -105,8 +102,7 @@ export function ChatProof({ controller }: { controller: ChatProofController }) {
             <Button
               type="submit"
               {...stylex.props(controls.button)}
-              disabled={!connected || busy("create") || !!state.storageError || !title.trim()}
-            >
+              disabled={!connected || busy('create') || !!state.storageError || !title.trim()}>
               Create chat
             </Button>
           </form>
@@ -114,16 +110,15 @@ export function ChatProof({ controller }: { controller: ChatProofController }) {
             <h2 {...stylex.props(styles.label)}>Saved chats</h2>
             <Button
               {...stylex.props(controls.button)}
-              disabled={!connected || busy("refresh")}
-              onClick={() => void controller.firstChats()}
-            >
+              disabled={!connected || busy('refresh')}
+              onClick={() => void controller.firstChats()}>
               Refresh
             </Button>
           </div>
           <nav {...stylex.props(styles.chatList)}>
             {!state.chats.length ? (
               <p {...stylex.props(styles.small)}>
-                {connected ? "No saved chats in this page." : "Connect to read saved chats."}
+                {connected ? 'No saved chats in this page.' : 'Connect to read saved chats.'}
               </p>
             ) : (
               state.chats.map((c) => (
@@ -136,9 +131,8 @@ export function ChatProof({ controller }: { controller: ChatProofController }) {
                     styles.chat,
                     state.selected?.conversationId === c.target.conversationId && styles.selected,
                   )}
-                  disabled={!connected || busy("open")}
-                  onClick={() => void controller.select(c.target)}
-                >
+                  disabled={!connected || busy('open')}
+                  onClick={() => void controller.select(c.target)}>
                   {c.title}
                   <span {...stylex.props(styles.chatDate)}>
                     {new Date(c.createdAt).toLocaleDateString()}
@@ -150,9 +144,8 @@ export function ChatProof({ controller }: { controller: ChatProofController }) {
           {state.nextChats && (
             <Button
               {...stylex.props(controls.button)}
-              disabled={!connected || busy("chats")}
-              onClick={() => void controller.moreChats()}
-            >
+              disabled={!connected || busy('chats')}
+              onClick={() => void controller.moreChats()}>
               Next saved chats
             </Button>
           )}
@@ -167,12 +160,12 @@ export function ChatProof({ controller }: { controller: ChatProofController }) {
             <div>
               <h2 {...stylex.props(styles.title)}>
                 {snapshot?.conversation.title ??
-                  (state.selected ? "Saved chat selected" : "Remote chat")}
+                  (state.selected ? 'Saved chat selected' : 'Remote chat')}
               </h2>
               <p {...stylex.props(styles.small)}>
                 {state.host
                   ? `${state.host.cwd} · ${state.host.model}`
-                  : "Fixed working folder and model are read from the verified remote host."}
+                  : 'Fixed working folder and model are read from the verified remote host.'}
               </p>
             </div>
             {run && (
@@ -182,8 +175,7 @@ export function ChatProof({ controller }: { controller: ChatProofController }) {
                   follow.current = true;
                   if (transcript.current)
                     transcript.current.scrollTop = transcript.current.scrollHeight;
-                }}
-              >
+                }}>
                 Latest output
               </Button>
             )}
@@ -211,45 +203,42 @@ export function ChatProof({ controller }: { controller: ChatProofController }) {
           {state.pending.length > 0 && (
             <section aria-label="Retained commands" {...stylex.props(styles.pending)}>
               <h3 {...stylex.props(styles.label)}>Retained command identities</h3>
-              {state.pending.map((p) => (
-                <details key={p.input.requestId} {...stylex.props(styles.pendingItem)}>
-                  <summary {...stylex.props(controls.summary)}>
-                    {p.operation} · {p.message}
-                  </summary>
-                  <p {...stylex.props(styles.identity)}>
-                    {p.input.requestId}
-                    {p.operation === "sendChat"
-                      ? ` · chat ${p.input.target.conversationId}`
-                      : p.operation === "stopChat"
-                        ? ` · submission ${p.input.stop.submissionId} · task ${p.input.stop.taskId ?? "queued"}`
-                        : ""}
-                  </p>
-                  {p.operation === "sendChat" && (
-                    <pre {...stylex.props(controls.pre, styles.pendingText)}>{p.input.text}</pre>
-                  )}
-                  <div {...stylex.props(controls.row)}>
-                    <Button
-                      {...stylex.props(controls.button)}
-                      disabled={!connected || busy("query:" + p.input.requestId)}
-                      onClick={() => void controller.query(p.input.requestId)}
-                    >
-                      Query outcome
-                    </Button>
-                    <Button
-                      {...stylex.props(controls.button)}
-                      disabled={!connected || busy(p.input.requestId) || !!state.storageError}
-                      onClick={() => void controller.retry(p.input.requestId)}
-                    >
-                      Retry original{" "}
-                      {p.operation === "stopChat"
-                        ? "Stop"
-                        : p.operation === "sendChat"
-                          ? "Send"
-                          : "Create"}
-                    </Button>
-                  </div>
-                </details>
-              ))}
+              {state.pending.map((p) => {
+                let identity = '';
+                if (p.operation === 'sendChat')
+                  identity = ` · chat ${p.input.target.conversationId}`;
+                else if (p.operation === 'stopChat')
+                  identity = ` · submission ${p.input.stop.submissionId} · task ${p.input.stop.taskId ?? 'queued'}`;
+                return (
+                  <details key={p.input.requestId} {...stylex.props(styles.pendingItem)}>
+                    <summary {...stylex.props(controls.summary)}>
+                      {p.operation} · {p.message}
+                    </summary>
+                    <p {...stylex.props(styles.identity)}>
+                      {p.input.requestId}
+                      {identity}
+                    </p>
+                    {p.operation === 'sendChat' && (
+                      <pre {...stylex.props(controls.pre, styles.pendingText)}>{p.input.text}</pre>
+                    )}
+                    <div {...stylex.props(controls.row)}>
+                      <Button
+                        {...stylex.props(controls.button)}
+                        disabled={!connected || busy('query:' + p.input.requestId)}
+                        onClick={() => void controller.query(p.input.requestId)}>
+                        Query outcome
+                      </Button>
+                      <Button
+                        {...stylex.props(controls.button)}
+                        disabled={!connected || busy(p.input.requestId) || !!state.storageError}
+                        onClick={() => void controller.retry(p.input.requestId)}>
+                        Retry original{' '}
+                        {{ stopChat: 'Stop', sendChat: 'Send', createChat: 'Create' }[p.operation]}
+                      </Button>
+                    </div>
+                  </details>
+                );
+              })}
             </section>
           )}
           <section
@@ -262,47 +251,47 @@ export function ChatProof({ controller }: { controller: ChatProofController }) {
               }
             }}
             onKeyDown={(event) => {
-              if (["PageUp", "Home", "ArrowUp"].includes(event.key)) follow.current = false;
-              if (event.key === "End") follow.current = true;
+              if (['PageUp', 'Home', 'ArrowUp'].includes(event.key)) follow.current = false;
+              if (event.key === 'End') follow.current = true;
             }}
             onPointerDown={() => {
               follow.current = false;
             }}
             aria-label="Chat transcript"
-            {...stylex.props(styles.transcript)}
-          >
-            {!state.selected ? (
+            {...stylex.props(styles.transcript)}>
+            {!state.selected && (
               <div {...stylex.props(styles.empty)}>
                 <h2 {...stylex.props(styles.emptyTitle)}>A saved conversation, on your host.</h2>
                 <p>
                   {connected
-                    ? "Create a chat or open one from the sidebar."
-                    : "Connect to your configured host to begin."}
+                    ? 'Create a chat or open one from the sidebar.'
+                    : 'Connect to your configured host to begin.'}
                 </p>
                 <p {...stylex.props(styles.small)}>
                   Messages and tools run remotely. Reconnecting reads the current chat and never
                   resends your input.
                 </p>
               </div>
-            ) : !snapshot ? (
+            )}
+            {state.selected && !snapshot && (
               <div {...stylex.props(styles.empty)}>
                 <p>
                   {connected
-                    ? "Reading the saved chat…"
-                    : "This view is offline. Its draft and unresolved command identities are retained."}
+                    ? 'Reading the saved chat…'
+                    : 'This view is offline. Its draft and unresolved command identities are retained.'}
                 </p>
               </div>
-            ) : (
+            )}
+            {state.selected && snapshot && (
               <div {...stylex.props(styles.measure)}>
                 {state.olderCursor && (
                   <Button
                     {...stylex.props(controls.button)}
-                    disabled={!connected || busy("history")}
+                    disabled={!connected || busy('history')}
                     onClick={() => {
                       follow.current = false;
                       void controller.older();
-                    }}
-                  >
+                    }}>
                     Read older page
                   </Button>
                 )}
@@ -321,7 +310,7 @@ export function ChatProof({ controller }: { controller: ChatProofController }) {
                       <strong>Assistant</strong>
                       <span>{run.state}</span>
                     </div>
-                    <p {...stylex.props(styles.messageText)}>{run.text || "Working…"}</p>
+                    <p {...stylex.props(styles.messageText)}>{run.text || 'Working…'}</p>
                     {run.truncated && (
                       <p {...stylex.props(styles.small)}>Live preview truncated to 4 KiB.</p>
                     )}
@@ -331,7 +320,7 @@ export function ChatProof({ controller }: { controller: ChatProofController }) {
                           {t.name} · {t.state}
                         </summary>
                         <pre {...stylex.props(controls.pre, styles.toolText)}>
-                          {t.text || "Tool activity in progress…"}
+                          {t.text || 'Tool activity in progress…'}
                         </pre>
                         {t.truncated && (
                           <p {...stylex.props(styles.small)}>Tool preview truncated.</p>
@@ -342,7 +331,7 @@ export function ChatProof({ controller }: { controller: ChatProofController }) {
                 )}
                 <p role="status" {...stylex.props(styles.small)}>
                   Chat {snapshot.state}
-                  {snapshot.message ? ` · ${snapshot.message}` : ""}
+                  {snapshot.message ? ` · ${snapshot.message}` : ''}
                 </p>
               </div>
             )}
@@ -352,8 +341,7 @@ export function ChatProof({ controller }: { controller: ChatProofController }) {
             onSubmit={(e) => {
               e.preventDefault();
               void controller.send();
-            }}
-          >
+            }}>
             <label htmlFor="message" {...stylex.props(styles.label)}>
               Message
             </label>
@@ -365,7 +353,7 @@ export function ChatProof({ controller }: { controller: ChatProofController }) {
               disabled={!state.selected}
               onChange={(e) => controller.setDraft(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                   e.preventDefault();
                   void controller.send();
                 }
@@ -379,9 +367,8 @@ export function ChatProof({ controller }: { controller: ChatProofController }) {
               <div {...stylex.props(controls.row)}>
                 <Button
                   {...stylex.props(controls.button)}
-                  disabled={!connected || !run || busy("stop") || !!state.storageError}
-                  onClick={() => void controller.stop()}
-                >
+                  disabled={!connected || !run || busy('stop') || !!state.storageError}
+                  onClick={() => void controller.stop()}>
                   Stop
                 </Button>
                 <Button
@@ -391,15 +378,14 @@ export function ChatProof({ controller }: { controller: ChatProofController }) {
                     !connected ||
                     !state.selected ||
                     !state.draft.trim() ||
-                    busy("send") ||
+                    busy('send') ||
                     !!state.storageError ||
                     state.pending.some(
                       (p) =>
-                        p.operation === "sendChat" &&
+                        p.operation === 'sendChat' &&
                         p.input.target.conversationId === state.selected?.conversationId,
                     )
-                  }
-                >
+                  }>
                   Send message
                 </Button>
               </div>
@@ -415,16 +401,13 @@ export function ChatProof({ controller }: { controller: ChatProofController }) {
   );
 }
 function Entry({ entry: e }: { entry: ChatEntry }) {
+  let label = e.toolName ?? e.role;
+  if (e.role === 'user') label = 'You';
+  else if (e.role === 'assistant') label = 'Assistant';
   return (
     <article {...stylex.props(styles.message)}>
       <div {...stylex.props(styles.messageHeader)}>
-        <strong>
-          {e.role === "user"
-            ? "You"
-            : e.role === "assistant"
-              ? "Assistant"
-              : (e.toolName ?? e.role)}
-        </strong>
+        <strong>{label}</strong>
         {e.isError && <span>Failed</span>}
       </div>
       <p {...stylex.props(styles.messageText)}>{e.text}</p>
@@ -443,16 +426,16 @@ const styles = stylex.create({
   page: { fontFamily: type.sans },
   header: { minHeight: 56 },
   muted: { color: colors.secondary, fontWeight: 400 },
-  connection: { textTransform: "capitalize", color: colors.secondary },
+  connection: { textTransform: 'capitalize', color: colors.secondary },
   primary: {
-    backgroundColor: { default: colors.accent, ":hover:not(:disabled)": colors.link },
+    backgroundColor: { default: colors.accent, ':hover:not(:disabled)': colors.link },
     color: colors.onAccent,
   },
   workspace: {
-    display: "grid",
+    display: 'grid',
     gridTemplateColumns: {
-      default: "256px minmax(0, 1fr)",
-      "@media (max-width: 760px)": "190px minmax(0, 1fr)",
+      default: '256px minmax(0, 1fr)',
+      '@media (max-width: 760px)': '190px minmax(0, 1fr)',
     },
     flex: 1,
     minHeight: 0,
@@ -460,99 +443,99 @@ const styles = stylex.create({
   sidebar: {
     backgroundColor: colors.surface,
     borderRightWidth: 1,
-    borderRightStyle: "solid",
+    borderRightStyle: 'solid',
     borderRightColor: colors.border,
     padding: space.lg,
-    overflowY: "auto",
-    display: "flex",
-    flexDirection: "column",
+    overflowY: 'auto',
+    display: 'flex',
+    flexDirection: 'column',
     gap: space.lg,
   },
   profile: {
     borderBottomWidth: 1,
-    borderBottomStyle: "solid",
+    borderBottomStyle: 'solid',
     borderBottomColor: colors.border,
     paddingBottom: space.sm,
   },
-  heading: { fontSize: type.body, margin: "0 0 4px", overflowWrap: "anywhere" },
+  heading: { fontSize: type.body, margin: '0 0 4px', overflowWrap: 'anywhere' },
   small: {
     color: colors.secondary,
     fontSize: type.small,
     lineHeight: 1.6,
-    margin: "4px 0",
-    overflowWrap: "anywhere",
+    margin: '4px 0',
+    overflowWrap: 'anywhere',
   },
   label: { fontSize: type.small, fontWeight: 600, margin: 0, color: colors.secondary },
-  create: { display: "flex", flexDirection: "column", alignItems: "stretch", gap: space.sm },
-  listHeader: { justifyContent: "space-between" },
-  chatList: { display: "flex", flexDirection: "column", gap: space.xs },
-  chat: { padding: "10px 8px", borderRadius: radius.row },
+  create: { display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: space.sm },
+  listHeader: { justifyContent: 'space-between' },
+  chatList: { display: 'flex', flexDirection: 'column', gap: space.xs },
+  chat: { padding: '10px 8px', borderRadius: radius.row },
   selected: {
-    backgroundColor: { default: colors.selected, ":hover:not(:disabled)": colors.selectedHover },
+    backgroundColor: { default: colors.selected, ':hover:not(:disabled)': colors.selectedHover },
   },
-  chatDate: { display: "block", color: colors.muted, fontSize: type.caption, marginTop: space.xs },
-  sidebarFoot: { marginTop: "auto" },
+  chatDate: { display: 'block', color: colors.muted, fontSize: type.caption, marginTop: space.xs },
+  sidebarFoot: { marginTop: 'auto' },
   content: {
-    display: "flex",
-    flexDirection: "column",
+    display: 'flex',
+    flexDirection: 'column',
     minWidth: 0,
     minHeight: 0,
-    overflowY: "auto",
+    overflowY: 'auto',
   },
   context: {
-    display: "flex",
-    alignItems: "start",
-    justifyContent: "space-between",
+    display: 'flex',
+    alignItems: 'start',
+    justifyContent: 'space-between',
     gap: space.sm,
-    padding: "16px 24px",
+    padding: '16px 24px',
     borderBottomWidth: 1,
-    borderBottomStyle: "solid",
+    borderBottomStyle: 'solid',
     borderBottomColor: colors.border,
     flexShrink: 0,
   },
-  title: { fontSize: type.heading, margin: 0, overflowWrap: "anywhere" },
-  notices: { padding: "8px 24px", flexShrink: 0 },
+  title: { fontSize: type.heading, margin: 0, overflowWrap: 'anywhere' },
+  notices: { padding: '8px 24px', flexShrink: 0 },
   warning: {
     backgroundColor: colors.warningSurface,
     color: colors.warningText,
     padding: space.md,
     borderWidth: 1,
-    borderStyle: "solid",
+    borderStyle: 'solid',
     borderColor: colors.warningBorder,
     borderRadius: radius.control,
-    overflowWrap: "anywhere",
-    margin: "4px 0",
+    overflowWrap: 'anywhere',
+    margin: '4px 0',
   },
   pending: {
-    padding: "8px 24px",
-    maxHeight: "30vh",
-    overflowY: "auto",
+    padding: '8px 24px',
+    maxHeight: '30vh',
+    overflowY: 'auto',
     flexShrink: 0,
     borderBottomWidth: 1,
-    borderBottomStyle: "solid",
+    borderBottomStyle: 'solid',
     borderBottomColor: colors.border,
   },
-  pendingItem: { margin: "8px 0", color: colors.warningText },
-  pendingText: { maxHeight: 100, overflowY: "auto", color: colors.text },
+  pendingItem: { margin: '8px 0', color: colors.warningText },
+  pendingText: { maxHeight: 100, overflowY: 'auto', color: colors.text },
   identity: {
     fontFamily: type.mono,
     fontSize: type.caption,
-    overflowWrap: "anywhere",
+    overflowWrap: 'anywhere',
     color: colors.secondary,
   },
-  transcript: { overflowY: "auto", flex: 1, minHeight: 60, padding: "8px 24px" },
+  transcript: { overflowY: 'auto', flex: 1, minHeight: 60, padding: '8px 24px' },
   empty: {
     maxWidth: layout.conversation,
-    margin: "48px auto",
+    margin: '48px auto',
     lineHeight: 1.7,
     color: colors.secondary,
   },
   emptyTitle: { fontSize: type.heading, color: colors.text, fontWeight: 500 },
-  measure: { maxWidth: layout.conversation, margin: "0 auto" },
-  message: { margin: "24px 0" },
+  measure: { maxWidth: layout.conversation, margin: '0 auto' },
+  message: { margin: '24px 0' },
   messageHeader: {
-    display: "flex",
-    justifyContent: "space-between",
+    display: 'flex',
+    justifyContent: 'space-between',
     gap: space.sm,
     fontSize: type.small,
     color: colors.secondary,
@@ -560,9 +543,9 @@ const styles = stylex.create({
   messageText: {
     fontSize: type.message,
     lineHeight: 1.7,
-    whiteSpace: "pre-wrap",
-    overflowWrap: "anywhere",
-    margin: "8px 0",
+    whiteSpace: 'pre-wrap',
+    overflowWrap: 'anywhere',
+    margin: '8px 0',
   },
   tool: {
     backgroundColor: colors.surface,
@@ -570,30 +553,30 @@ const styles = stylex.create({
     padding: space.md,
     marginTop: space.md,
   },
-  toolText: { maxHeight: 96, overflowY: "auto" },
+  toolText: { maxHeight: 96, overflowY: 'auto' },
   composer: {
     flexShrink: 0,
-    display: "flex",
-    flexDirection: "column",
+    display: 'flex',
+    flexDirection: 'column',
     gap: space.sm,
-    width: "calc(100% - 48px)",
+    width: 'calc(100% - 48px)',
     maxWidth: layout.conversation,
-    margin: "12px auto 16px",
+    margin: '12px auto 16px',
     padding: space.lg,
     backgroundColor: colors.surface,
     borderWidth: 1,
-    borderStyle: "solid",
+    borderStyle: 'solid',
     borderColor: colors.controlBorder,
     borderRadius: radius.composer,
   },
   textarea: {
-    width: "100%",
-    resize: "vertical",
+    width: '100%',
+    resize: 'vertical',
     minHeight: 76,
-    maxHeight: "25vh",
+    maxHeight: '25vh',
     fontSize: type.body,
     lineHeight: 1.6,
     backgroundColor: colors.surface,
   },
-  composeActions: { justifyContent: "space-between" },
+  composeActions: { justifyContent: 'space-between' },
 });

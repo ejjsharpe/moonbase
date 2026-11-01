@@ -1,14 +1,13 @@
-import assert from "node:assert/strict";
-import { fork, type ChildProcess } from "node:child_process";
-import { randomBytes, randomUUID } from "node:crypto";
-import { mkdtemp, mkdir, realpath, readFile, writeFile, chmod, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { createServer } from "node:net";
-import { ManagedRuntime, Layer } from "effect";
-import { makeChatClient, makeConnectionClient } from "@moonbase/application/runtime-client";
-import { RemoteChatLive } from "@moonbase/pi-runtime/remote";
-import { SshLive } from "@moonbase/ssh";
+import { fork, type ChildProcess } from 'node:child_process';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { mkdtemp, mkdir, realpath, readFile, writeFile, chmod, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createServer } from 'node:net';
+import { ManagedRuntime, Layer } from 'effect';
+import { makeChatClient, makeConnectionClient } from '@moonbase/application/runtime-client';
+import { RemoteChatLive } from '@moonbase/pi-runtime/remote';
+import { SshLive } from '@moonbase/ssh';
 export async function until<T>(get: () => Promise<T>, ready: (v: T) => boolean) {
   const end = Date.now() + 15000;
   while (Date.now() < end) {
@@ -16,7 +15,7 @@ export async function until<T>(get: () => Promise<T>, ready: (v: T) => boolean) 
     if (ready(v)) return v;
     await new Promise((r) => setTimeout(r, 25));
   }
-  throw Error("Controlled state did not settle");
+  throw Error('Controlled state did not settle');
 }
 export type FixtureStats = {
   calls: number;
@@ -33,30 +32,30 @@ export type CleanupReport = {
   reboundPorts: number[];
 };
 export async function fixture(hold = false) {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), "moonbase-chat-proof-"))),
-    cwd = join(directory, "remote-folder");
+  const directory = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-chat-proof-'))),
+    cwd = join(directory, 'remote-folder');
   await mkdir(cwd);
   const session = {
-      host: { hostId: "controlled-host", storeId: "controlled-store" },
-      actorId: "personal",
+      host: { hostId: 'controlled-host', storeId: 'controlled-store' },
+      actorId: 'personal',
     },
-    token = randomBytes(32).toString("hex"),
-    configuration = join(directory, "host.json"),
-    log = join(directory, "forward.jsonl"),
-    drop = join(directory, "drop-send"),
-    executable = join(directory, "controlled-ssh"),
-    clientConfig = join(directory, "client.json");
+    token = randomBytes(32).toString('hex'),
+    configuration = join(directory, 'host.json'),
+    log = join(directory, 'forward.jsonl'),
+    drop = join(directory, 'drop-send'),
+    executable = join(directory, 'controlled-ssh'),
+    clientConfig = join(directory, 'client.json');
   await writeFile(
     configuration,
-    JSON.stringify({ session, token, cwd, databasePath: join(directory, "chat.sqlite"), hold }),
+    JSON.stringify({ session, token, cwd, databasePath: join(directory, 'chat.sqlite'), hold }),
     { mode: 0o600 },
   );
   await writeFile(
     executable,
-    "#!" +
+    '#!' +
       process.execPath +
-      "\n" +
-      (await readFile(new URL("../../../tests/chat/forward.mjs", import.meta.url), "utf8")),
+      '\n' +
+      (await readFile(new URL('../../../tests/chat/forward.mjs', import.meta.url), 'utf8')),
   );
   await chmod(executable, 0o700);
   const oldLog = process.env.MOONBASE_CHAT_FORWARD_LOG,
@@ -68,21 +67,21 @@ export async function fixture(hold = false) {
   const hostPids: number[] = [],
     hostPorts: number[] = [];
   let host: ChildProcess | undefined,
-    origin = "";
+    origin = '';
   async function startHost() {
-    host = fork(new URL("./host.mjs", import.meta.url), [configuration], {
-      execArgv: ["--experimental-strip-types"],
+    host = fork(new URL('./host.mjs', import.meta.url), [configuration], {
+      execArgv: ['--experimental-strip-types'],
       silent: true,
       env: Object.fromEntries(
         Object.entries(process.env).filter(([k]) =>
-          ["PATH", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "LC_CTYPE"].includes(k),
+          ['PATH', 'TMPDIR', 'TEMP', 'TMP', 'LANG', 'LC_ALL', 'LC_CTYPE'].includes(k),
         ),
       ),
     });
     hostPids.push(host.pid!);
     host.stderr?.resume();
     host.stdout?.resume();
-    host.on("message", (m: unknown) => {
+    host.on('message', (m: unknown) => {
       const v = m as FixtureStats & { id?: string };
       if (v.id) {
         requests.get(v.id)?.(v);
@@ -91,23 +90,23 @@ export async function fixture(hold = false) {
     });
     const child = host;
     origin = await new Promise<string>((resolve, reject) => {
-      const timer = setTimeout(() => reject(Error("Host startup deadline")), 10000);
+      const timer = setTimeout(() => reject(Error('Host startup deadline')), 10000);
       const receive = (m: unknown) => {
         const v = m as { event: string; origin: string };
-        if (v.event === "ready") {
+        if (v.event === 'ready') {
           clearTimeout(timer);
-          child.off("message", receive);
+          child.off('message', receive);
           resolve(v.origin);
         }
-        if (v.event === "failed") {
+        if (v.event === 'failed') {
           clearTimeout(timer);
-          reject(Error("Controlled host failed"));
+          reject(Error('Controlled host failed'));
         }
       };
-      child.on("message", receive);
-      child.once("exit", () => {
+      child.on('message', receive);
+      child.once('exit', () => {
         clearTimeout(timer);
-        reject(Error("Host early exit"));
+        reject(Error('Host early exit'));
       });
     });
     hostPorts.push(Number(new URL(origin).port));
@@ -124,9 +123,9 @@ export async function fixture(hold = false) {
   }
   function profile() {
     return {
-      id: "proof",
-      label: "Controlled remote host",
-      destination: "controlled",
+      id: 'proof',
+      label: 'Controlled remote host',
+      destination: 'controlled',
       remotePort: Number(new URL(origin).port),
       expected: session.host,
     };
@@ -138,14 +137,14 @@ export async function fixture(hold = false) {
     if (child.exitCode !== null || child.signalCode !== null) return;
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
-        child.kill("SIGKILL");
-        reject(Error("Host shutdown deadline"));
+        child.kill('SIGKILL');
+        reject(Error('Host shutdown deadline'));
       }, 10000);
-      child.once("close", () => {
+      child.once('close', () => {
         clearTimeout(timer);
         resolve();
       });
-      child.send({ type: "shutdown" });
+      child.send({ type: 'shutdown' });
     });
   }
   function root() {
@@ -159,14 +158,14 @@ export async function fixture(hold = false) {
   }
   async function close() {
     try {
-      host?.send({ type: "release" });
+      host?.send({ type: 'release' });
       const results = await Promise.allSettled(roots.map((r) => r.dispose()));
       await stopHost();
-      const records = await readFile(log, "utf8").then(
+      const records = await readFile(log, 'utf8').then(
         (s) =>
           s
             .trim()
-            .split("\n")
+            .split('\n')
             .filter(Boolean)
             .map((l) => JSON.parse(l) as { pid: number; port?: number }),
         () => [],
@@ -181,7 +180,7 @@ export async function fixture(hold = false) {
             process.kill(pid, 0);
             return false;
           } catch (e) {
-            return (e as NodeJS.ErrnoException).code === "ESRCH";
+            return (e as NodeJS.ErrnoException).code === 'ESRCH';
           }
         }, Boolean);
       for (const group of forwardPids)
@@ -190,16 +189,16 @@ export async function fixture(hold = false) {
             process.kill(-group, 0);
             return false;
           } catch (e) {
-            return (e as NodeJS.ErrnoException).code === "ESRCH";
+            return (e as NodeJS.ErrnoException).code === 'ESRCH';
           }
         }, Boolean);
       for (const port of reboundPorts)
         await new Promise<void>((resolve, reject) => {
           const server = createServer();
-          server.once("error", reject);
-          server.listen(port, "127.0.0.1", () => server.close((e) => (e ? reject(e) : resolve())));
+          server.once('error', reject);
+          server.listen(port, '127.0.0.1', () => server.close((e) => (e ? reject(e) : resolve())));
         });
-      for (const r of results) if (r.status === "rejected") throw r.reason;
+      for (const r of results) if (r.status === 'rejected') throw r.reason;
       return {
         hostPids,
         forwardPids,
@@ -225,13 +224,13 @@ export async function fixture(hold = false) {
       const id = randomUUID(),
         timer = setTimeout(() => {
           requests.delete(id);
-          reject(Error("Stats deadline"));
+          reject(Error('Stats deadline'));
         }, 2000);
       requests.set(id, (v) => {
         clearTimeout(timer);
         resolve(v);
       });
-      host!.send({ type: "stats", id });
+      host!.send({ type: 'stats', id });
     });
   return {
     directory,
@@ -245,13 +244,13 @@ export async function fixture(hold = false) {
     startHost,
     stopHost,
     close,
-    release: () => host!.send({ type: "release" }),
-    loseNextSend: () => writeFile(drop, ""),
+    release: () => host!.send({ type: 'release' }),
+    loseNextSend: () => writeFile(drop, ''),
     holdReply: async (operation: string) => {
-      host!.send({ type: "hold-reply", operation });
+      host!.send({ type: 'hold-reply', operation });
       await until(stats, (s) => s.replyOperation === operation);
     },
-    releaseReply: () => host!.send({ type: "release-reply" }),
+    releaseReply: () => host!.send({ type: 'release-reply' }),
     stats,
   };
 }
