@@ -322,3 +322,45 @@ test('dismissing inspection admits no mutation; dismissing after dispatch retain
     await runtime.dispose();
   }
 });
+
+test('checkout close cancels its in-flight observer refresh without reporting obsolete read cancellation', async () => {
+  const memory = memoryWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
+  const runtime = ManagedRuntime.make(memory.layer),
+    raw = makeEditorClient(runtime),
+    entered = gate(),
+    release = gate();
+  let held = false,
+    signal: AbortSignal | undefined;
+  const client: EditorClient = {
+    ...raw,
+    async command(name, input, options) {
+      if (held && name === 'listDirectory') {
+        signal = options?.signal;
+        entered.release();
+        await release.promise;
+      }
+      return raw.command(name, input, options);
+    },
+  };
+  const editor = await acquireEditor(runtime, { client, clientId: 'closing-refresh' });
+  try {
+    await editor.load();
+    await editor.openCheckout(checkout.root);
+    await editor.open(target('a.ts'));
+    await editor.flush();
+    held = true;
+    memory.externalWrite(target('a.ts'), 'B');
+    await entered.promise;
+    assert.equal(await editor.closeCheckout(checkout), true);
+    assert.equal(signal?.aborted, true);
+    assert.deepEqual(editor.getSnapshot().errors, []);
+    const snapshot = editor.getSnapshot();
+    release.release();
+    await runtime.runPromise(Effect.yieldNow);
+    assert.strictEqual(editor.getSnapshot(), snapshot);
+  } finally {
+    release.release();
+    await editor.dispose();
+    await runtime.dispose();
+  }
+});
