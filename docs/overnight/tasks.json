@@ -1256,7 +1256,7 @@
     "verdict": "no blockers; contract-only cleared for downstream implementation"
   },
   "editorIntegration": {
-    "head": "f44d698d9fc09fd3b0b075a2bbe05fc8dd8fd102",
+    "head": "a7a0d8861346e869a7fb8013ed2522cf2f578642",
     "url": "https://github.com/ejjsharpe/moonbase/pull/11",
     "base": "c31bb4164d2ff18031e2b391a83198bb5e40d027",
     "workspace": "38c6c551ff0ab1108077275d223a32967f32b9f6",
@@ -1268,7 +1268,7 @@
       "realIntegration": 9
     },
     "branch": "chore/editor-integration",
-    "status": "DRAFT fresh independent review/CI pending; lead real boundary passed"
+    "status": "DRAFT; old f44 CI pass/R1 reviewing; public asset follow-up9tests pass needs changed-head review/CI"
   },
   "editorIntegrationReviewR1": {
     "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-editor-integration-r1-f44d698",
@@ -1329,5 +1329,42 @@
     "hasPendingQuestion": false,
     "pendingApproval": null,
     "waitTimedOut": false
+  },
+  "piRuntimeBase": {
+    "head": "7bfc7764b8950f93ee8fd41cc8ca86914b434f86",
+    "parent": "d38833db81c5d97a1aa60f25e0dc27dd670af60f",
+    "branch": "chore/pi-runtime-base",
+    "scope": "three coordinator research evidence/probe files only; no runtime implementation; Node syntax checks passed"
+  },
+  "nativeHelperExport": {
+    "head": "a7a0d8861346e869a7fb8013ed2522cf2f578642",
+    "parent": "f44d698d9fc09fd3b0b075a2bbe05fc8dd8fd102",
+    "branch": "chore/editor-integration",
+    "checks": [
+      "frozen install no changes",
+      "nine typed real public export integration cases",
+      "diff"
+    ],
+    "followup": {
+      "threadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-02-editor-module-r1-bb5c5d0",
+      "messageId": "message:mcp:809f45ac-99a5-4d58-a1ba-08cc0a77c997:thread-send:standalone-adopt-native-asset-a7a0d88",
+      "runId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-02-editor-module-r1-bb5c5d0:ordinal:10",
+      "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Athread-send%3Amoonbase-04-standalone-editor-r1-f44d698",
+      "status": "running",
+      "delivery": "steered"
+    },
+    "review": "fresh changed-head review needed after fixed f44 R1"
+  },
+  "standaloneBinding": {
+    "path": "/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c",
+    "branch": "feat/standalone-editor",
+    "base": "f44d698d9fc09fd3b0b075a2bbe05fc8dd8fd102",
+    "preservedEditor": "c31bb4164d2ff18031e2b391a83198bb5e40d027",
+    "measuredRuntime": {
+      "electron": "45.1.0",
+      "node": "24.22.1",
+      "sqlite": "3.53.4",
+      "source": "owner measured run-as-node DatabaseSync; package not yet qualified"
+    }
   }
 }
