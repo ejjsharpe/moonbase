@@ -1,5 +1,7 @@
 # Review R4 corrections
 
+Historical response: R5 cleared the reported R4 cases but found connected in-flight observation and selection-during-preservation defects. See the [current R5 response](review-r5.md).
+
 Reviewed head: `2ff2a6b70e43a4558fd4347a287802ca8b9bcb46`, former base `6e58c1c4ea6944e8ca25eadc46e35c843f0f9fbe`. New exact prerequisite/base: `8557fdd0d7a71f93a6584c77430e6fde57668580` on `chore/recovery-publication-contract` (#7), normally merged without rewriting published history. Stack: #1 → #2 → #5 → #7 → #4. Executable/test source: `a777c4169655bd5c3b3924be8ee3cf189185254c`; the following evidence-only commit adds this record, README links and inspected PNGs.
 
 Only `packages/editor` was authored here. Shared types/docs/handler routing arrived from the coordinator commit; the PR's historical lock registration remains coordinator-authored. No dependency, root authoring, sibling implementation, manual notice bundle, child delegation, merge of a PR or watch/poll was added. PR #4 remains **DRAFT** for independent R5. The separate contract review cleared #7's shape; it does not qualify this implementation or real workspace fan-in.
