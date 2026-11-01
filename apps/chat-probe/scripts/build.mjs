@@ -4,7 +4,7 @@ import { rm, writeFile, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
-import { notices } from './notices.mjs';
+import { notices } from '../../../scripts/notices.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url));
 await rm(join(root, 'dist'), { recursive: true, force: true });
 const main = await build({
