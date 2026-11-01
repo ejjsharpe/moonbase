@@ -1,5 +1,7 @@
 # Review R2 corrections
 
+Historical response: independent R3 cleared these four scenarios and found two further defects. See the [current R3 response](review-r3.md).
+
 Reviewed head: `46bae019450dc600f50142e82c8c3e61da6388f3`. Base remains `6e58c1c4ea6944e8ca25eadc46e35c843f0f9fbe` (`chore/checkout-recovery-contract`, #5). New executable/test source: `d166c15d39b085ceb700d12e8f0c152e4c8b7d5b`. The following evidence-only commit adds this record/README links and the inspected capture. No root, contract, dependency, sibling implementation or export changes.
 
 PR #4 remains draft for fresh independent R3. Independent R2 cleared the original R1 scenarios; these four additional findings are addressed in implementation, with approval still pending.
