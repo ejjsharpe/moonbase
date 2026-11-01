@@ -9,14 +9,14 @@ All PRs are private, linked and unmerged. Older entries below are historical evi
 | [#1 foundation](https://github.com/ejjsharpe/moonbase/pull/1) | `8ef20b06222db32b54b4bdf9e6c2223a1ebd4da4` | main `c89e4db` | Source provenance checked; boundary findings repaired in #2 |
 | [#2 shared boundary](https://github.com/ejjsharpe/moonbase/pull/2) | `68aa035b9c283a65cac6e78ab02865e99882d15b` | #1 | Astra R5: no blockers; 14 public tests plus independent probes |
 | [#5 checkout contract](https://github.com/ejjsharpe/moonbase/pull/5) | `6e58c1c4ea6944e8ca25eadc46e35c843f0f9fbe` | #2 | Astra: no contract blockers; actual adoption/fan-in pending |
-| [#3 workspace](https://github.com/ejjsharpe/moonbase/pull/3) | `6495a2576f30f33035158e47143d29dcace75bf3` | #5 | DRAFT; owner 76+14 tests pass; hosted CI green; fresh Astra R4 running |
-| [#4 editor](https://github.com/ejjsharpe/moonbase/pull/4) | `2ff2a6b70e43a4558fd4347a287802ca8b9bcb46` | #5 | DRAFT; R3 repairs published; owner 46+14 tests and 14 browser journeys pass; R4 queued after workspace review |
+| [#3 workspace](https://github.com/ejjsharpe/moonbase/pull/3) | `6495a2576f30f33035158e47143d29dcace75bf3` | #5 | DRAFT; current-format repairs pass, R4 found two old-format compatibility defects; owner fixing; CI green |
+| [#4 editor](https://github.com/ejjsharpe/moonbase/pull/4) | `2ff2a6b70e43a4558fd4347a287802ca8b9bcb46` | #5 | DRAFT; owner 46+14 tests and 14 browser journeys pass; fresh Astra R4 running |
 
 Production editor fan-in, standalone Electron proof, independent Pi/SSH modules, chat proof and composition remain unfinished. Published Pi 1.4.0 controlled research is preparatory evidence only. No human/manual acceptance is inferred.
 
-Current workspace CI was verified after T3's notification: both module runs at `6495a2576f30f33035158e47143d29dcace75bf3` passed ([41267431002](https://github.com/ejjsharpe/moonbase/actions/runs/41267431002), [41267427892](https://github.com/ejjsharpe/moonbase/actions/runs/41267427892)). This clears hosted checks only; R4 remains pending.
+Current workspace CI was verified after T3's notification: both module runs at `6495a2576f30f33035158e47143d29dcace75bf3` passed ([41267431002](https://github.com/ejjsharpe/moonbase/actions/runs/41267431002), [41267427892](https://github.com/ejjsharpe/moonbase/actions/runs/41267427892)). This clears hosted checks only; R4 defects remain unresolved.
 
-Editor R3 repair source/tests are `3ff979cca6206fc19416150b189b211fcc6de86b`; final head adds inspected evidence only. Owner reports exact-head hosted checks green. The fresh R4 prompt must include all three prior reports and `packages/editor/evidence/review-r1.md`, `review-r2.md`, `review-r3.md`. Do not start a second reviewer while workspace R4 is running.
+Editor R3 repair source/tests are `3ff979cca6206fc19416150b189b211fcc6de86b`; final head adds inspected evidence only. Owner reports exact-head hosted checks green. Fresh R4 includes all three prior reports/responses and began after workspace R4 completed. Workspace's two new defects are confined to unsafe old-format ordering/publication inference; its original owner is removing optimistic inference and retaining snapshots/evidence conservatively. See `reviews/workspace-r4.md`.
 
 ## Setup
 
