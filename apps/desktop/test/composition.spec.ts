@@ -1,3 +1,4 @@
+import { captureNative } from './editor-regressions.ts';
 import type { CheckoutTarget } from '@moonbase/application/client';
 import {
   test,
@@ -10,7 +11,6 @@ import { fixture, until } from '@moonbase/chat-probe/test-fixture';
 import { mkdir, writeFile, readFile, appendFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
-import { createHash } from 'node:crypto';
 
 type Fixture = Awaited<ReturnType<typeof fixture>>;
 const packaged = !!process.env.MOONBASE_PACKAGED_TEST;
@@ -122,41 +122,7 @@ async function recovery(p: Page) {
     .then(JSON.parse);
 }
 async function screen(app: ElectronApplication, p: Page, name: string) {
-  await p.evaluate(
-    () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
-  );
-  const native = await app.evaluate(async ({ BrowserWindow }) => {
-    const w = BrowserWindow.getAllWindows()[0];
-    return {
-      png: (await w.webContents.capturePage()).toPNG().toString('base64'),
-      bounds: w.getBounds(),
-      content: w.getContentBounds(),
-      zoom: w.webContents.getZoomFactor(),
-    };
-  });
-  const bytes = Buffer.from(native.png, 'base64'),
-    file = join(output, `${packaged ? 'package' : 'source'}-${name}.png`);
-  await mkdir(output, { recursive: true });
-  await writeFile(file, bytes);
-  await writeFile(
-    file + '.json',
-    JSON.stringify(
-      {
-        ...native,
-        png: undefined,
-        viewport: await p.evaluate(() => ({
-          width: innerWidth,
-          height: innerHeight,
-          devicePixelRatio,
-        })),
-        size: { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) },
-        sha256: createHash('sha256').update(bytes).digest('hex'),
-        fixture: test.info().title,
-      },
-      null,
-      2,
-    ),
-  );
+  await captureNative(app, p, join(output, `${packaged ? 'package' : 'source'}-${name}.png`));
 }
 async function stop(app: ElectronApplication, fault = false) {
   const child = children.get(app)!;

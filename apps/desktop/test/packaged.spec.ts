@@ -1,3 +1,4 @@
+import { captureNative } from './editor-regressions.ts';
 import {
   filenameCases,
   checkFilenameMaps,
@@ -68,31 +69,7 @@ test('unsigned macOS package runs with only system PATH, SQLite, native/rg resou
     }
   };
   const screen = async (name: string) => {
-    const capture = await app.evaluate(async ({ BrowserWindow }) => {
-      const window = BrowserWindow.getAllWindows()[0];
-      return {
-        bounds: window.getBounds(),
-        zoom: window.webContents.getZoomFactor(),
-        bytes: (await window.webContents.capturePage()).toPNG().toString('base64'),
-      };
-    });
-    writeFileSync('test-results/packaged-' + name + '.png', Buffer.from(capture.bytes, 'base64'));
-    writeFileSync(
-      'test-results/packaged-' + name + '.png.json',
-      JSON.stringify(
-        {
-          window: capture.bounds,
-          zoom: capture.zoom,
-          viewport: await page.evaluate(() => ({
-            width: innerWidth,
-            height: innerHeight,
-            devicePixelRatio,
-          })),
-        },
-        null,
-        2,
-      ) + '\n',
-    );
+    await captureNative(app, page, test.info().outputPath(`packaged-${name}.png`));
   };
   try {
     const resource = await app.evaluate(async ({ app }) => {

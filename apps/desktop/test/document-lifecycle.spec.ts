@@ -1,3 +1,4 @@
+import { prepareCrashRecovery, recoverCrashedWorkbench } from './editor-regressions.ts';
 import type { RecoveryLoad } from '@moonbase/application/client';
 import { test, expect, _electron as electron } from '@playwright/test';
 import { mkdtempSync, realpathSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
@@ -163,6 +164,7 @@ for (const mode of ['reload', 'veto', 'crash'])
             ({ app }, path) => app.setPath('crashDumps', path),
             join(base, 'crash-dumps'),
           );
+          await prepareCrashRecovery(app);
           await app.evaluate(({ BrowserWindow }) =>
             BrowserWindow.getAllWindows()[0].webContents.forcefullyCrashRenderer(),
           );
@@ -214,15 +216,7 @@ for (const mode of ['reload', 'veto', 'crash'])
             }
           })
           .toBe(true);
-        if (mode === 'crash')
-          await app.evaluate(
-            ({ BrowserWindow }) =>
-              new Promise<void>((resolve) => {
-                const c = BrowserWindow.getAllWindows()[0].webContents;
-                c.once('did-finish-load', () => resolve());
-                c.reload();
-              }),
-          );
+        if (mode === 'crash') await recoverCrashedWorkbench(app);
         await expect
           .poll(() =>
             app.evaluate(async ({ BrowserWindow }) =>

@@ -1,10 +1,10 @@
+import { captureNative } from './editor-regressions.ts';
 import type { RecoveryLoad } from '@moonbase/application/client';
 import { test, expect, _electron as electron } from '@playwright/test';
 import { mkdtempSync, realpathSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { createHash } from 'node:crypto';
 
 test('native Reload retains text painted before ordinary recovery debounce', async () => {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-reload-'))),
@@ -135,31 +135,7 @@ test('native Reload retains text painted before ordinary recovery debounce', asy
     const after = await page.evaluate(() =>
       document.querySelector('.view-lines')?.textContent?.replace(/\u00a0/g, ' '),
     );
-    const native = await app.evaluate(async ({ BrowserWindow }) => {
-      const w = BrowserWindow.getAllWindows()[0];
-      return {
-        png: (await w.webContents.capturePage()).toPNG().toString('base64'),
-        bounds: w.getBounds(),
-        zoom: w.webContents.getZoomFactor(),
-      };
-    });
-    const png = Buffer.from(native.png, 'base64'),
-      file = test.info().outputPath('fresh-reload.png');
-    writeFileSync(file, png);
-    writeFileSync(
-      file + '.json',
-      JSON.stringify(
-        {
-          ...native,
-          png: undefined,
-          width: png.readUInt32BE(16),
-          height: png.readUInt32BE(20),
-          sha256: createHash('sha256').update(png).digest('hex'),
-        },
-        null,
-        2,
-      ),
-    );
+    await captureNative(app, page, test.info().outputPath('fresh-reload.png'));
     writeFileSync(
       test.info().outputPath('fresh-reload.json'),
       JSON.stringify({ before, outcome, after, recovery: await recovery() }, null, 2),

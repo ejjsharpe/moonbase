@@ -1,6 +1,8 @@
-import { expect, type Page, type ElectronApplication } from '@playwright/test';
+import { dirname } from 'node:path';
+import { createHash } from 'node:crypto';
+import { test, expect, type Page, type ElectronApplication } from '@playwright/test';
 import type { RecoveryLoad } from '@moonbase/application/client';
-import { writeFileSync, readFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 
 export const filenameCases = ['__proto__', 'constructor', 'toString', 'hasOwnProperty'];
 export const recoveryState = async (page: Page): Promise<RecoveryLoad> =>
@@ -194,4 +196,61 @@ export async function checkTabMenu(
     records.push({ name, width, height, zoom, geometry });
   }
   writeFileSync('test-results/menu-geometry.json', JSON.stringify(records, null, 2) + '\n');
+}
+
+export async function captureNative(app: ElectronApplication, page: Page, file: string) {
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
+  const native = await app.evaluate(async ({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0];
+    return {
+      png: (await window.webContents.capturePage()).toPNG().toString('base64'),
+      bounds: window.getBounds(),
+      content: window.getContentBounds(),
+      zoom: window.webContents.getZoomFactor(),
+    };
+  });
+  const bytes = Buffer.from(native.png, 'base64');
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, bytes);
+  writeFileSync(
+    file + '.json',
+    JSON.stringify(
+      {
+        ...native,
+        png: undefined,
+        viewport: await page.evaluate(() => ({
+          width: innerWidth,
+          height: innerHeight,
+          devicePixelRatio,
+        })),
+        size: { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) },
+        sha256: createHash('sha256').update(bytes).digest('hex'),
+        fixture: test.info().title,
+      },
+      null,
+      2,
+    ) + '\n',
+  );
+}
+
+export async function prepareCrashRecovery(app: ElectronApplication) {
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = ((_window: unknown, options: { buttons: string[] }) => {
+      globalThis.recoveryButtons = options.buttons;
+      return new Promise((resolve) => {
+        globalThis.recoveryChoice = resolve;
+      });
+    }) as typeof dialog.showMessageBox;
+  });
+}
+export async function recoverCrashedWorkbench(app: ElectronApplication) {
+  await expect
+    .poll(() => app.evaluate(() => globalThis.recoveryButtons))
+    .toEqual(['Recover workbench', 'Quit Moonbase']);
+  await app.evaluate(() => globalThis.recoveryChoice!({ response: 0, checkboxChecked: false }));
 }

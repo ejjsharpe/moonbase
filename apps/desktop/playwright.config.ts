@@ -1,13 +1,17 @@
 import { defineConfig } from '@playwright/test';
-let testMatch: string | string[] = 'desktop.spec.ts';
-if (process.env.MOONBASE_COMPOSITION_TEST) testMatch = ['composition.spec.ts', 'lifecycle.spec.ts'];
-else if (process.env.MOONBASE_PACKAGED_TEST) testMatch = 'packaged.spec.ts';
 export default defineConfig({
   testDir: './test',
   outputDir: process.env.MOONBASE_NATIVE_OUTPUT ?? 'test-results',
-  testMatch,
   workers: 1,
   fullyParallel: false,
   timeout: 45000,
   use: { trace: 'retain-on-failure' },
+  projects: [
+    { name: 'editor', testMatch: 'desktop.spec.ts' },
+    { name: 'configuration', testMatch: 'configuration.spec.ts' },
+    { name: 'reload', testMatch: ['reload.spec.ts', 'document-lifecycle.spec.ts'] },
+    { name: 'composition', testMatch: ['composition.spec.ts', 'lifecycle.spec.ts'] },
+    { name: 'recovery', testMatch: 'recovery.spec.ts' },
+    { name: 'packaged', testMatch: 'packaged.spec.ts' },
+  ],
 });

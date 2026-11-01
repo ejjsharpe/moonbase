@@ -1,3 +1,4 @@
+import { prepareCrashRecovery, recoverCrashedWorkbench } from './editor-regressions.ts';
 import type { RecoveryLoad } from '@moonbase/application/client';
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
 import { fixture, until } from '@moonbase/chat-probe/test-fixture';
@@ -144,6 +145,7 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
           ({ app }, path) => app.setPath('crashDumps', path),
           join(f.directory, 'crash-dumps'),
         );
+        await prepareCrashRecovery(current);
         await current.evaluate(({ BrowserWindow }) =>
           BrowserWindow.getAllWindows()[0].webContents.forcefullyCrashRenderer(),
         );
@@ -158,14 +160,7 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
       }
       if (crash) {
         // Playwright retains a crashed Page flag; inspect the recovered real renderer through native APIs.
-        await current.evaluate(
-          ({ BrowserWindow }) =>
-            new Promise<void>((resolve) => {
-              const contents = BrowserWindow.getAllWindows()[0].webContents;
-              contents.once('did-finish-load', () => resolve());
-              contents.reload();
-            }),
-        );
+        await recoverCrashedWorkbench(current);
         const read = () =>
           current.evaluate(async ({ BrowserWindow }) =>
             BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(`(async () => {

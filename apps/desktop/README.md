@@ -54,7 +54,8 @@ Window close hides the mounted editor, retaining models, selection and undo. Doc
 NX_DAEMON=false bunx nx run @moonbase/desktop:typecheck
 NX_DAEMON=false bunx nx run @moonbase/desktop:lint
 NX_DAEMON=false bunx nx run @moonbase/desktop:test
-bun run --cwd apps/desktop test:desktop
+bun run --cwd apps/desktop test:native
+bun run --cwd apps/desktop check:package
 bun run --cwd apps/desktop test:package
 ```
 
@@ -77,7 +78,20 @@ Use the [chat proof's private configuration format](../chat-probe/README.md); no
 
 View switching, closing a file/chat view, Hide, Disconnect and client Quit never Stop remote work. Stop keeps the public controller's exact captured submission/task. Quit preserves chat first, asks the existing editor gate, then preserves the latest chat snapshot before disposal. Unknown editor publications retain live work and block Quit/reload until exact resolution. A committed reload releases old document observations/waits and restores persisted drafts on the same root; a veto keeps the mounted document. Renderer loss releases its transport resources, without disposing the root or stopping the host. Recovery covers observed durable snapshots, not instruction-by-instruction crash or power-loss durability.
 
-The editor-only checkpoint is preserved at `feat/standalone-editor` (`4dd148a`); the independent chat app remains unchanged in this tree:
+`test:native` is a separate required macOS qualification gate: it enumerates editor,
+configuration, reload/document lifecycle, composed chat, and recovery/cleanup suites
+with one worker. `test:package` covers package resources plus packaged reload and
+composition; configuration and injected cleanup checks remain source tests.
+Run both gates before desktop qualification; CI build checks alone do not qualify it.
+`test:desktop`, `test:composition`, and `test:reload` select named projects for focused runs.
+
+A renderer crash offers native **Recover workbench** and **Quit Moonbase** actions.
+Recovery reloads the same window/runtime and approved roots from persisted state;
+Quit uses that persisted recovery. Changes since the last publication can be lost.
+Once renderer disposal is acknowledged, cleanup errors are reported natively and
+Moonbase exits after attempting all cleanup; it never returns to the disposed UI.
+
+The editor-only checkpoint is preserved at `feat/standalone-editor` (`4dd148a`); the chat app remains independently launchable:
 
 ```sh
 bun run --cwd apps/chat-probe build
@@ -89,17 +103,15 @@ MOONBASE_CHAT_DATA="$(mktemp -d -t moonbase-independent-chat)" \
 Composition tests add to the existing editor/native suites:
 
 ```sh
-MOONBASE_COMPOSITION_TEST=1 bun run --cwd apps/desktop test:desktop
-MOONBASE_COMPOSITION_TEST=1 MOONBASE_PACKAGED_TEST=1 bun run --cwd apps/desktop test:desktop
+bun run --cwd apps/desktop test:composition
+MOONBASE_PACKAGED_TEST=1 bun run --cwd apps/desktop test:composition
 ```
 
 ### Reload checks
 
 Targeted native command (after build/package):
-`cd apps/desktop && bunx playwright test --config reload.config.ts`.
+`bun run --cwd apps/desktop test:reload`.
 Set `MOONBASE_PACKAGED_TEST=1` and `MOONBASE_RELOAD_EXECUTABLE` to the absolute
 unsigned executable for the same packaged checks. Outputs default to
-`apps/desktop/test-results/reload` when launched from that app directory; set
-`MOONBASE_RELOAD_OUTPUT` explicitly when preserving separate phases.
-
-### Composition R1 repair qualification
+`apps/desktop/test-results` when launched from that app directory; set
+`MOONBASE_NATIVE_OUTPUT` explicitly when preserving separate phases.
