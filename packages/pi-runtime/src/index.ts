@@ -517,31 +517,14 @@ class Host {
       )
     ).items[0];
     let state: ChatSnapshot['state'];
-    if (parked) {
+    if (parked) state = 'failed';
+    else if (run) state = 'running';
+    else if (meta.pending) state = 'uncertain';
+    else if (latest?.state.status === 'terminal' && latest.state.outcome.status === 'aborted')
+      state = 'stopped';
+    else if (latest?.state.status === 'terminal' && latest.state.outcome.status !== 'completed')
       state = 'failed';
-    } else {
-      if (run) {
-        state = 'running';
-      } else {
-        if (meta.pending) {
-          state = 'uncertain';
-        } else {
-          if (latest?.state.status === 'terminal') {
-            if (latest.state.outcome.status === 'aborted') {
-              state = 'stopped';
-            } else {
-              if (latest.state.outcome.status === 'completed') {
-                state = 'idle';
-              } else {
-                state = 'failed';
-              }
-            }
-          } else {
-            state = 'idle';
-          }
-        }
-      }
-    }
+    else state = 'idle';
     let message: string | undefined;
     if (parked)
       message =
@@ -577,15 +560,9 @@ class Host {
         context,
         cid(d.stop.target.conversationId),
       );
-      if (result === 'aborted') {
-        outcome = 'stopped';
-      } else {
-        if (result === 'settled') {
-          outcome = 'terminal';
-        } else {
-          outcome = 'superseded';
-        }
-      }
+      if (result === 'aborted') outcome = 'stopped';
+      else if (result === 'settled') outcome = 'terminal';
+      else outcome = 'superseded';
     } else {
       const live = await this.harness.snapshot(LiveDoc, cid(d.stop.target.conversationId), context),
         task = await this.harness.getTask(tid(d.stop.taskId), context);

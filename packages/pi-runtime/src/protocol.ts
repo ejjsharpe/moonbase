@@ -98,7 +98,10 @@ export function responseBytes(
       catch: () =>
         new ApplicationError({
           code: unavailableCode,
-          message: 'Chat response reader is unavailable.',
+          message:
+            unavailableCode === 'Uncertain'
+              ? 'Chat response reader is unavailable; preserve the original request.'
+              : 'Chat response reader is unavailable; retry the read.',
         }),
     }),
     (reader) =>
@@ -129,7 +132,10 @@ export function responseBytes(
             ? error
             : new ApplicationError({
                 code: unavailableCode,
-                message: 'Chat response could not be read.',
+                message:
+                  unavailableCode === 'Uncertain'
+                    ? 'Chat response could not be read; preserve the original request.'
+                    : 'Chat response could not be read; retry the read.',
               }),
       }),
     (reader) =>
@@ -143,7 +149,10 @@ export function responseBytes(
         } catch {
           throw new ApplicationError({
             code: unavailableCode,
-            message: 'Chat response reader release failed; preserve the original request.',
+            message:
+              unavailableCode === 'Uncertain'
+                ? 'Chat response reader release failed; preserve the original request.'
+                : 'Chat response reader release failed; retry the read.',
           });
         }
       }),

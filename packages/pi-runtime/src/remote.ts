@@ -152,12 +152,18 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
                 },
                 catch: () =>
                   new ApplicationError({
-                    code: 'Uncertain',
-                    message:
-                      'Chat reply was lost. Query the original request; do not invent another Send.',
+                    code: mutation ? 'Uncertain' : 'Unavailable',
+                    message: mutation
+                      ? 'Chat reply was lost. Query the original request; do not invent another Send.'
+                      : 'Chat reply was lost. Retry the read through the selected authority.',
                   }),
               });
-              const bytes = yield* P.responseBytes(response, 256 * 1024, 'Uncertain', mutation);
+              const bytes = yield* P.responseBytes(
+                response,
+                256 * 1024,
+                mutation ? 'Uncertain' : 'Unavailable',
+                mutation,
+              );
               const result = yield* Effect.try({
                 try: () => {
                   const invalid = (code: 'Unauthorized' | 'Incompatible', message: string): never =>
@@ -215,9 +221,10 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
                   ApplicationError.is(error)
                     ? error
                     : new ApplicationError({
-                        code: 'Uncertain',
-                        message:
-                          'Chat reply was lost. Query the original request; do not invent another Send.',
+                        code: mutation ? 'Uncertain' : 'Unavailable',
+                        message: mutation
+                          ? 'Chat reply was lost. Query the original request; do not invent another Send.'
+                          : 'Chat reply was lost. Retry the read through the selected authority.',
                       }),
               });
               return result;
