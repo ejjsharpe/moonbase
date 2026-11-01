@@ -24,7 +24,8 @@ test('Universe rules, Electron scopes and standalone formatting', () => {
       'packages/shared/unused.ts': 'const unused: Array<string> = [];',
       'packages/shared/declarations.d.ts':
         'import z from "z";\nimport a from "a";\nexport { z, a };',
-      'scripts/node.js': 'console.log(process.pid, __dirname); Buffer(1); new Buffer(1);',
+      'scripts/node.js': 'console.log(process.pid, __dirname); new Buffer(1);',
+      'scripts/buffer-call.js': 'export const buffer = Buffer(1);',
       'scripts/browser.js': 'window.alert("not a browser");',
       'apps/desktop/src/renderer/browser.jsx':
         'export const view = <div>{window.location.href}</div>;',
@@ -55,10 +56,8 @@ test('Universe rules, Electron scopes and standalone formatting', () => {
     assert(codes('unused.ts').includes('typescript(array-type)'));
     assert(codes('unused.ts').includes('eslint(no-unused-vars)'));
     assert(!codes('declarations.d.ts').includes('import-js(order)'));
-    assert.equal(
-      codes('node.js').filter((code) => code === 'universe-compat(no-buffer-constructor)').length,
-      2,
-    );
+    assert.equal(codes('node.js').filter((code) => code === 'unicorn(no-new-buffer)').length, 1);
+    assert(!codes('buffer-call.js').includes('unicorn(no-new-buffer)'));
     assert(!codes('node.js').includes('eslint(no-undef)'));
     assert(codes('browser.js').includes('eslint(no-undef)'));
     assert(!codes('browser.jsx').includes('eslint(no-undef)'));

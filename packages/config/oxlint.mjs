@@ -7,9 +7,8 @@ export const base = {
   categories: {
     correctness: 'off',
   },
-  plugins: ['eslint', 'typescript', 'import', 'node', 'react'],
+  plugins: ['eslint', 'typescript', 'import', 'node', 'react', 'unicorn'],
   jsPlugins: [
-    { name: 'universe-compat', specifier: require.resolve('./compat.mjs') },
     {
       name: 'import-js',
       specifier: require.resolve('eslint-plugin-import'),
@@ -36,9 +35,6 @@ export const base = {
     },
   },
   rules: {
-    'universe-compat/no-dupe-args': 'error',
-    'universe-compat/no-octal': 'warn',
-    'universe-compat/no-octal-escape': 'warn',
     'eslint/constructor-super': 'warn',
     'eslint/eqeqeq': ['warn', 'smart'],
     'eslint/getter-return': 'warn',
@@ -241,7 +237,7 @@ export const node = {
     node: true,
   },
   rules: {
-    'universe-compat/no-buffer-constructor': 'warn',
+    'unicorn/no-new-buffer': 'warn',
     'node/no-path-concat': 'warn',
   },
 };
