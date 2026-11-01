@@ -4,11 +4,11 @@ import { createServer, type RequestListener } from "node:http";
 import { test, type TestContext } from "node:test";
 import { Cause, Effect, Exit } from "effect";
 import { ApplicationError, type ApplicationErrorCode } from "../src/client.ts";
-import { chatHostVersion, chatProtocolVersion } from "../src/host-client.ts";
-import { checkHostHealth, type ChatHostEndpoint } from "../src/host-health.ts";
+import { chatHostVersion, chatProtocolVersion, type ChatHostHealth } from "../src/host-client.ts";
+import { checkHostHealth, createHostHealthReply, type ChatHostEndpoint, type HostHealthReply } from "../src/host-health.ts";
 
 const expected = { hostId: "host-a", storeId: "store-a" };
-const health = { ...expected, protocol: chatProtocolVersion, version: chatHostVersion, capabilities: ["chat-v0"] };
+const health: ChatHostHealth = { ...expected, protocol: chatProtocolVersion, version: chatHostVersion, capabilities: ["chat-v0"] };
 const token = "synthetic-health-test-token";
 async function endpoint(t: TestContext, handler: RequestListener): Promise<ChatHostEndpoint> {
   const server = createServer(handler);
@@ -30,10 +30,50 @@ test("health authenticates the loopback request and retains the exact configured
   let requests = 0;
   const input = await endpoint(t, (request, response) => {
     requests++; assert.equal(request.method, "GET"); assert.equal(request.url, "/v1/health");
-    assert.equal(request.headers.authorization, `Bearer ${token}`);
-    response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" }); response.end(JSON.stringify(health));
+    assert.match(request.headers.authorization ?? "", /^Moonbase-HMAC-SHA256 [a-f0-9]{64}$/);
+    assert(!JSON.stringify(request.headers).includes(token));
+    const reply = createHostHealthReply({ token, health, nonce: request.headers["x-moonbase-nonce"] as string, authorization: request.headers.authorization });
+    response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" }); response.end(JSON.stringify(reply));
   });
   assert.deepEqual(await Effect.runPromise(checkHostHealth(input)), health); assert.equal(requests, 1);
+});
+
+test("an unsigned impostor cannot learn a reusable credential or pass health", async t => {
+  let captured = "";
+  const input = await endpoint(t, (request, response) => {
+    captured = JSON.stringify({ url: request.url, headers: request.headers });
+    response.writeHead(200, { "Content-Type": "application/json" }); response.end(JSON.stringify(health));
+  });
+  const result = await Effect.runPromiseExit(checkHostHealth(input));
+  assert(!captured.includes(token), "a listener without the configured key must not receive it");
+  assert(Exit.isFailure(result), "unsigned public identity is not host authentication");
+});
+
+test("health rejects reflected requests, replayed replies and tampered signed metadata", async t => {
+  let mode = "valid", original: HostHealthReply | undefined;
+  const nonces = new Set<string>();
+  const input = await endpoint(t, (request, response) => {
+    const nonce = request.headers["x-moonbase-nonce"] as string;
+    assert(!nonces.has(nonce)); nonces.add(nonce);
+    const valid = createHostHealthReply({ token, health, nonce, authorization: request.headers.authorization });
+    original ??= valid;
+    const reply = mode === "replay" ? original : mode === "reflection" ? { ...valid, proof: request.headers.authorization!.split(" ")[1] } :
+      mode === "tampered" ? { ...valid, capabilities: [...valid.capabilities, "changed"] } : valid;
+    response.writeHead(200, { "Content-Type": "application/json" }); response.end(JSON.stringify(reply));
+  });
+  assert.deepEqual(await Effect.runPromise(checkHostHealth(input)), health);
+  for (const changed of ["reflection", "replay", "tampered"]) { mode = changed; await fails(input, "Unauthorized"); }
+  mode = "valid";
+  const effect = checkHostHealth(input);
+  assert.deepEqual(await Promise.all([Effect.runPromise(effect), Effect.runPromise(effect)]), [health, health]);
+  assert.equal(nonces.size, 6);
+});
+
+test("the server health helper rejects an unproved client without returning a signed reply", () => {
+  for (const authorization of [undefined, `Bearer ${token}`, "Moonbase-HMAC-SHA256 " + "0".repeat(64)]) {
+    assert.throws(() => createHostHealthReply({ token, health, nonce: "A".repeat(43), authorization }),
+      error => ApplicationError.is(error) && error.code === "Unauthorized");
+  }
 });
 
 test("wrong authentication is a typed rejection without including the token in errors", async t => {

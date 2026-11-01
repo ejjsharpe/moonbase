@@ -1,3 +1,4 @@
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { Effect } from "effect";
 import { ApplicationError } from "./client.ts";
 import { chatHostVersion, chatProtocolVersion, type ChatHostHealth, type ChatHostTarget } from "./host-client.ts";
@@ -5,9 +6,31 @@ import { releaseResource } from "./services.ts";
 
 /** Privileged configuration; never expose this shape through a renderer bridge. */
 export type ChatHostEndpoint = { origin: string; token: string; expected: ChatHostTarget };
+export type HostHealthReply = ChatHostHealth & { nonce: string; proof: string };
 const maximumHealthBytes = 8 * 1024;
 const fail = (code: "InvalidInput" | "Incompatible" | "Unauthorized", message: string): never => { throw new ApplicationError({ code, message }); };
 const identity = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9._:-]{1,256}$/.test(value);
+const nonceValid = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9_-]{43}$/.test(value) && Buffer.from(value, "base64url").toString("base64url") === value;
+function configuredToken(value: string) {
+  if (typeof value !== "string" || !/^[\x21-\x7e]{16,4096}$/.test(value)) fail("InvalidInput", "Configure a valid host key outside the renderer.");
+}
+function signature(token: string, phase: "request" | "response", nonce: string, health?: ChatHostHealth) {
+  const fields = health ? [health.protocol, health.hostId, health.storeId, health.version, health.capabilities] : [];
+  return createHmac("sha256", token).update(JSON.stringify(["moonbase-health-v1", phase, nonce, ...fields])).digest("hex");
+}
+function matchesProof(value: unknown, expected: string) {
+  return typeof value === "string" && /^[a-f0-9]{64}$/.test(value) && timingSafeEqual(Buffer.from(value, "hex"), Buffer.from(expected, "hex"));
+}
+
+/** Server-side health handler: authenticate the client and prove the configured host identity. */
+export function createHostHealthReply(input: { token: string; nonce: string | undefined; authorization: string | undefined; health: ChatHostHealth }): HostHealthReply {
+  configuredToken(input.token);
+  const requestProof = input.authorization?.match(/^Moonbase-HMAC-SHA256 ([a-f0-9]{64})$/)?.[1];
+  if (!nonceValid(input.nonce) || !matchesProof(requestProof, signature(input.token, "request", input.nonce)))
+    return fail("Unauthorized", "Chat host rejected health authentication.");
+  const health = validateHostHealth(input.health, input.health);
+  return { ...health, nonce: input.nonce, proof: signature(input.token, "response", input.nonce, health) };
+}
 
 function endpointOrigin(endpoint: ChatHostEndpoint): string {
   let url: URL;
@@ -15,7 +38,7 @@ function endpointOrigin(endpoint: ChatHostEndpoint): string {
   if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || url.username || url.password || url.pathname !== "/" || url.search || url.hash)
     return fail("InvalidInput", "Chat endpoints must be plain 127.0.0.1 origins without credentials, paths or queries.");
   if (!identity(endpoint.expected?.hostId) || !identity(endpoint.expected?.storeId)) return fail("InvalidInput", "Configure the expected chat host and store identities.");
-  if (typeof endpoint.token !== "string" || !/^[\x21-\x7e]{16,4096}$/.test(endpoint.token)) return fail("InvalidInput", "Configure a valid host token outside the renderer.");
+  configuredToken(endpoint.token);
   return url.origin;
 }
 
@@ -32,10 +55,13 @@ export function validateHostHealth(value: unknown, expected: ChatHostTarget): Ch
 
 /** Verification is an Effect in the caller's existing process scope, never a runtime. */
 export const checkHostHealth = (endpoint: ChatHostEndpoint): Effect.Effect<ChatHostHealth, ApplicationError> =>
-  Effect.flatMap(Effect.try({ try: () => endpointOrigin(endpoint), catch: ApplicationError.fromUnknown }), origin =>
+  Effect.flatMap(Effect.try({ try: () => {
+    const origin = endpointOrigin(endpoint), nonce = randomBytes(32).toString("base64url");
+    return { origin, nonce, authorization: `Moonbase-HMAC-SHA256 ${signature(endpoint.token, "request", nonce)}` };
+  }, catch: ApplicationError.fromUnknown }), ({ origin, nonce, authorization }) =>
     Effect.flatMap(Effect.tryPromise({
       try: signal => fetch(`${origin}/v1/health`, {
-        headers: { Authorization: `Bearer ${endpoint.token}`, Accept: "application/json" },
+        headers: { Authorization: authorization, "X-Moonbase-Nonce": nonce, Accept: "application/json" },
         redirect: "error", credentials: "omit", cache: "no-store",
         signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]),
       }),
@@ -60,7 +86,10 @@ export const checkHostHealth = (endpoint: ChatHostEndpoint): Effect.Effect<ChatH
           let value: unknown;
           try { value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); }
           catch { return fail("Incompatible", "Chat host returned malformed health JSON."); }
-          return validateHostHealth(value, endpoint.expected);
+          const health = validateHostHealth(value, endpoint.expected), reply = value as Record<string, unknown>;
+          if (reply.nonce !== nonce || !matchesProof(reply.proof, signature(endpoint.token, "response", nonce, health)))
+            return fail("Unauthorized", "Chat host did not prove the configured health identity.");
+          return health;
         },
         catch: error => ApplicationError.is(error) ? error : new ApplicationError({ code: "Unavailable", message: "Chat host health could not be read." }),
       }),
