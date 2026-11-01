@@ -743,9 +743,9 @@ export class EditorController {
         check();
         for (const fact of facts) if (fact.outcome !== "uncertain" && reconciled.has(operationKey(fact.clientId, fact.id))) {
           await this.command("acknowledgeOperation", { clientId: this.clientId, operationClientId: fact.clientId, id: fact.id });
-          check();
           const known = this.operations.get(operationKey(fact.clientId, fact.id))!;
           known.acknowledged = true; known.copies = undefined;
+          check();
         }
         this.emit();
       } catch (error) {

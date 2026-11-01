@@ -1043,3 +1043,26 @@ test("R5 a captured Save remains a fact while new foreign remaps wait for preser
     assert.equal(stored.operations.length, 0); assert.equal(f.memory.stats.saves, 1); assert.equal(f.memory.stats.mutations, 1);
   } finally { await f.dispose(); }
 });
+
+test("R5 an admitted observer acknowledgement stays completed when its response crosses a Reload lock", async () => {
+  const f = await observedFixture("r5-ack-boundary"), acked = held(), releaseAck = held(), reading = held(), releaseRead = held();
+  try {
+    await f.editor.open(target("a.ts")); f.editor.edit(target("a.ts"), "acknowledged dirty draft"); await f.editor.flush();
+    const sources = await f.raw.command("inspectEntries", { checkout, paths: ["a.ts"] });
+    await f.raw.command("mutate", { checkout, clientId: "foreign", id: "ack-before-capture", sources, kind: "move", destination: "renamed.ts" });
+    let holdAck = true, holdRead = true;
+    f.transport.command = async (name, input, options) => {
+      const result = await f.clientCommand(name, input, options);
+      if (name === "acknowledgeOperation" && holdAck) { holdAck = false; acked.release(); await releaseAck.promise; }
+      if (name === "readFile" && holdRead) { holdRead = false; reading.release(); await releaseRead.promise; }
+      return result;
+    };
+    const observing = f.editor.reconcileRecovery(); await acked.promise;
+    const reloading = f.editor.reload(target("b.ts")); await reading.promise; releaseAck.release(); await observing;
+    releaseRead.release(); assert.equal(await reloading, true); await f.editor.reconcileRecovery();
+    assert.equal(f.editor.getSnapshot().operations.length, 0);
+    const durable = await f.raw.command("loadRecovery", { clientId: f.editor.clientId });
+    assert.equal(durable.operations.length, 0); assert.equal(durable.state.drafts[0].text, "acknowledged dirty draft");
+    assert.equal(f.memory.stats.mutations, 1);
+  } finally { releaseAck.release(); releaseRead.release(); await f.dispose(); }
+});
