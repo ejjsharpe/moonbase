@@ -48,7 +48,7 @@ test('Native correctness and project rules reject violations and preserve docume
       'scripts/builtin.mjs': 'import path from "path"; export const joined = path.join("a", "b");',
       'scripts/order.mjs':
         'import z from "node:zlib";\nimport a from "node:assert";\nconsole.log(z, a);',
-      'docs/source-snapshot/invalid.js': 'const = broken;',
+      'dist/invalid.js': 'const = broken;',
     };
     for (const [name, source] of Object.entries(fixtures)) {
       const file = path.join(directory, name);

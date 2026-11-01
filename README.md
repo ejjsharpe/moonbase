@@ -2,7 +2,19 @@
 
 A macOS Electron workbench with a local React/Monaco editor and optional remote Pi Durable chat. Workspace, editor, SSH and Pi services share the application contracts and one scoped Effect runtime per process.
 
-This foundation contains shared application contracts, UI recipes and tool configuration. See [module boundaries](MODULES.md), [design rules](DESIGN.md) and [source provenance](docs/source-snapshot/README.md). Desktop and standalone chat setup, native prerequisites and integration commands belong to the later module PRs that add those applications.
+Each application and package keeps its setup and public interface in its README:
+
+| Package | Purpose |
+| --- | --- |
+| [Desktop](apps/desktop/README.md) | Electron workbench and native packaging |
+| [Chat probe](apps/chat-probe/README.md) | Standalone remote chat application |
+| [Application](packages/application/README.md) | Shared commands, clients and Effect service contracts |
+| [Editor](packages/editor/README.md) | React/Monaco workbench |
+| [Workspace](packages/workspace/README.md) | Local files, Git and recovery |
+| [Pi runtime](packages/pi-runtime/README.md) | Chat host and remote adapter |
+| [SSH](packages/ssh/README.md) | Scoped SSH connections |
+| [UI](packages/ui/README.md) | Shared StyleX tokens and recipes |
+| [Config](packages/config/README.md) | Shared lint, format and TypeScript configuration |
 
 Run the foundation checks with Bun 1.4.4 and Node 26.13.0:
 
@@ -19,6 +31,4 @@ Lint runs oxlint; typecheck runs TypeScript through Nx. Generated test output be
 
 The desktop remains pending human acceptance. Real SSH/provider, signing/notarization, VoiceOver, physical durability and Intel execution require separate qualification.
 
-The frozen snapshot documents the extraction baseline; active `packages/ui` recipes evolve independently while the archived sources and hashes remain unchanged.
-
-The [originating brief](docs/agents/prompts/OVERNIGHT.txt) is retained as historical requirements.
+The [editor/workspace](tests/editor-workspace/README.md) and [chat](tests/chat/README.md) integration suites exercise public module boundaries.

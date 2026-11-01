@@ -3,7 +3,7 @@ import { defineConfig } from 'oxlint';
 
 export default defineConfig({
   ...base,
-  ignorePatterns: ['docs/source-snapshot/**', '**/dist/**', '**/release/**', '**/coverage/**'],
+  ignorePatterns: ['**/dist/**', '**/release/**', '**/coverage/**'],
   overrides: [
     {
       ...node,

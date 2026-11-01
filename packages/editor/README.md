@@ -75,9 +75,9 @@ bun run --cwd packages/editor test:ui
 bun run --cwd packages/editor demo
 ```
 
-The demo creates one scoped application runtime with the memory service and two editor clients. Its controlled failure/external-writer controls are demo-only. Playwright needs its pinned Chromium installation (`bun x playwright install chromium`). Source checks/lint currently use TypeScript diagnostics, matching the foundation.
+The demo creates one scoped application runtime with the memory service and two editor clients. Its controlled failure/external-writer controls are demo-only. Playwright needs its pinned Chromium installation (`bun x playwright install chromium`). Typechecking uses TypeScript; lint uses oxlint.
 
-Recovery uses the [exact identity/receipt contract](../application/RECOVERY-PUBLICATIONS.md). `getSnapshot().publication` exposes unresolved identity/kind; `resolveRecoveryPublication()` performs bounded exact lookup/original-input retry. Null lookup does not prove non-admission. Save, Reload, mutations, Close and Quit remain blocked until that identity resolves. Uncertain destructive publications retain their captured lock and live buffers; false Close/Quit means pending, not failed Discard. Restart follows the authoritative committed state. Neither equal state nor a latest revision proves receipt ownership. Save/move/copy facts bridge only contiguous known `recoveryChanges`; unrelated same-client CAS gaps veto close. Operation evidence binds origin client and ID, and acknowledgements bind the observing client separately.
+Recovery uses the [application identity and receipt types](../application/src/client.ts). `getSnapshot().publication` exposes unresolved identity/kind; `resolveRecoveryPublication()` performs bounded exact lookup/original-input retry. Null lookup does not prove non-admission. Save, Reload, mutations, Close and Quit remain blocked until that identity resolves. Uncertain destructive publications retain their captured lock and live buffers; false Close/Quit means pending, not failed Discard. Restart follows the authoritative committed state. Neither equal state nor a latest revision proves receipt ownership. Save/move/copy facts bridge only contiguous known `recoveryChanges`; unrelated same-client CAS gaps veto close. Operation evidence binds origin client and ID, and acknowledgements bind the observing client separately.
 
 Observations recheck capture boundaries after IO and before publication. Immutable facts wait through preservation; release fetches fresh recovery. Reload captures its exact target and rechecks buffer/reference/revision before destructive publication. Completed Saves and observer acknowledgements remain facts across these boundaries. A confirmed close invalidates older Copy materialization for that exact target, including delayed reads/retries; cancelled/rejected close leaves it available, unrelated targets continue, and later explicit reopening retains newer edits. Filesystem results remain immutable and are acknowledged only after valid recovery publication.
 
@@ -85,9 +85,9 @@ Observations recheck capture boundaries after IO and before publication. Immutab
 
 The separate `bun run test:editor-integration` suite exercises the real workspace/controller boundary. Browser and memory tests do not qualify packaged Electron, native picker/Trash interaction, complete-app keyboard/focus, physical durability or VoiceOver; those require workspace/desktop qualification. Human acceptance is **PENDING**. No provider, SSH, deployment or legacy-state work is included.
 
-## Provenance and distribution
+## Distribution
 
-Behavior was read only from the immutable `docs/source-snapshot`, whose manifest records source revision `181097195a026d48b82758cee841ed8dd326db70` and per-file hashes/history. The frozen main entry, activation/close/memory helpers, tree/model/viewport/lookup/sidebar and UI recipes informed requirements. This package implements its state, matching, service demo and UI independently; it copies no frozen implementation file, old host type, application helper, schema or fixture. Shared UI recipes are consumed from `@moonbase/ui`. Source imports do not authorize excluded dependencies. The live escode checkout was never accessed or modified.
+The workbench and matcher are independently implemented and consume shared UI recipes from `@moonbase/ui`.
 
 The active renderer uses the pinned React/React DOM, Monaco, Base UI and StyleX stack. The memory-only composition also uses Effect. The coordinator owns generation of distribution notices from package-provided licenses/notices for actual bundled assets, including Monaco workers/fonts. No manually copied notice bundle is added by this module.
 

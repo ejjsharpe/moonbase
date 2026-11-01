@@ -18,7 +18,6 @@
           "{workspaceRoot}/oxlint.config.mts",
           "{workspaceRoot}/oxfmt.config.mts",
           "{workspaceRoot}/scripts/check-foundation.mjs",
-          "{workspaceRoot}/docs/source-snapshot/**/*",
           "{workspaceRoot}/packages/application/src/**/*",
           {
             "externalDependencies": [
