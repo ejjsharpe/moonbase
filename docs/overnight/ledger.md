@@ -15,7 +15,7 @@ All PRs are private, linked and unmerged. Older entries below are historical evi
 | [#7 recovery publications](https://github.com/ejjsharpe/moonbase/pull/7) | `8557fdd0d7a71f93a6584c77430e6fde57668580` | #5 | Ready; contract-only clearance, 14 tests/five independent probes and CI pass; both adapters published |
 | [#8 connection boundary](https://github.com/ejjsharpe/moonbase/pull/8) | `09b21f2ee8556c54ef4f8238f0be2ee88fd990c3` | #6 | Ready; Astra R1 no boundary blockers, 29 tests/11 probes/import graphs and CI pass; SSH implementation separate |
 
-| [#9 SSH](https://github.com/ejjsharpe/moonbase/pull/9) | `1aec1a438ba0d5592b0e6c3f0e1be835cf3c034b` | #8 | DRAFT; 43+29 tests; R2 EPERM repair published, R3 queued/CI pending |
+| [#9 SSH](https://github.com/ejjsharpe/moonbase/pull/9) | `1aec1a438ba0d5592b0e6c3f0e1be835cf3c034b` | #8 | DRAFT; 43+29 tests/CI pass; R2 EPERM repair published, R3 queued |
 | [#10 chat contract](https://github.com/ejjsharpe/moonbase/pull/10) | `d38833db81c5d97a1aa60f25e0dc27dd670af60f` | #8 | Ready; AstraR1 contract-only clear atd38833d; 33 tests/five fresh typedprobes/source/CI pass |
 
 | [#11 real editor fan-in](https://github.com/ejjsharpe/moonbase/pull/11) | `2f9f516f29df5299091cf7546b04c8077645e188` | #4(449) + #3, common #7 | DRAFT; 208 real/module tests and exacthead CI pass on repair candidate; paired review pending |
@@ -163,3 +163,5 @@ T3 notified CI success on #10 exact `d38833db81c5d97a1aa60f25e0dc27dd670af60f`; 
 T3 CI wake for #11 exact `a7a0d8861346e869a7fb8013ed2522cf2f578642`: one metadata read confirms both hosted jobs green. Frozen/public-asset integration is clear; independent R1 remains fixed to f44 and new asset review stays pending. Runs: https://github.com/ejjsharpe/moonbase/actions/runs/41278133678/job/124764390065, https://github.com/ejjsharpe/moonbase/actions/runs/41278130156/job/124764380688
 
 T3 notified #11 exact `2f9f516f29df5299091cf7546b04c8077645e188` CI success; one metadata inspection verifies all three reported jobs passed. Paired module449/integration2f9 review remains active and neither editor nor fan-in clearance is inferred from CI. Runs: https://github.com/ejjsharpe/moonbase/actions/runs/41279421646/job/124768096522, https://github.com/ejjsharpe/moonbase/actions/runs/41279416797/job/124768083195, https://github.com/ejjsharpe/moonbase/actions/runs/41279417940/job/124768086192
+
+T3 notified SSH #9 exact `1aec1a438ba0d5592b0e6c3f0e1be835cf3c034b` CI success; one metadata read confirms all reported jobs passed. Independent R3 stays queued; no real SSH peer/host-key/provider/native qualification is inferred. Runs: https://github.com/ejjsharpe/moonbase/actions/runs/41279987758/job/124769767326, https://github.com/ejjsharpe/moonbase/actions/runs/41279983337/job/124769754753

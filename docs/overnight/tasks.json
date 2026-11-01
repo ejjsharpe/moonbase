@@ -1530,8 +1530,12 @@
       "ssh": 43,
       "application": 29
     },
-    "status": "DRAFT, fresh R3 queued behind paired editor review; CI pending",
-    "evidence": "public/realchild transient EPERM and persistent-budget controls red\u2192green; passive trace saw2naturalEPERM; no automatic second cleanup budget"
+    "status": "DRAFT exact1aec CI green; R3 queued behind paired editor review",
+    "evidence": "public/realchild transient EPERM and persistent-budget controls red\u2192green; passive trace saw2naturalEPERM; no automatic second cleanup budget",
+    "ci": [
+      "https://github.com/ejjsharpe/moonbase/actions/runs/41279987758/job/124769767326",
+      "https://github.com/ejjsharpe/moonbase/actions/runs/41279983337/job/124769754753"
+    ]
   },
   "piResumed": {
     "branch": "feat/pi-runtime",
