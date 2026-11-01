@@ -1,0 +1,26 @@
+{
+  "electron": [
+    {
+      "pids": [67898, 67903, 67904, 67910],
+      "confirmedAbsent": true
+    },
+    {
+      "pids": [67966, 67989, 67990, 67991],
+      "confirmedAbsent": true
+    }
+  ],
+  "services": [
+    {
+      "hostPids": [67894],
+      "forwardPids": [67915, 67922],
+      "processGroups": [67915, 67922],
+      "reboundPorts": [55618, 55627]
+    },
+    {
+      "hostPids": [67945],
+      "forwardPids": [67995, 68009],
+      "processGroups": [67995, 68009],
+      "reboundPorts": [55670, 55676]
+    }
+  ]
+}

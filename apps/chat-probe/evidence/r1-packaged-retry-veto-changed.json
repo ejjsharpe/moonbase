@@ -1,0 +1,246 @@
+{
+  "pending": {
+    "operation": "sendChat",
+    "input": {
+      "target": {
+        "host": {
+          "hostId": "controlled-host",
+          "storeId": "controlled-store"
+        },
+        "actorId": "personal",
+        "conversationId": "4"
+      },
+      "requestId": "51c91f60-577f-47a6-bcaf-7e2f9dc7206f",
+      "text": "Captured second busy intent"
+    },
+    "message": "Conflict: Chat is busy; retain this request and retry explicitly."
+  },
+  "reserved": {
+    "ok": true,
+    "value": {
+      "target": {
+        "host": {
+          "hostId": "controlled-host",
+          "storeId": "controlled-store"
+        },
+        "actorId": "personal",
+        "conversationId": "4"
+      },
+      "requestId": "51c91f60-577f-47a6-bcaf-7e2f9dc7206f",
+      "admission": "reserved",
+      "submissionId": null
+    }
+  },
+  "receipt": {
+    "ok": true,
+    "value": {
+      "target": {
+        "host": {
+          "hostId": "controlled-host",
+          "storeId": "controlled-store"
+        },
+        "actorId": "personal",
+        "conversationId": "4"
+      },
+      "requestId": "51c91f60-577f-47a6-bcaf-7e2f9dc7206f",
+      "admission": "reserved",
+      "submissionId": null
+    }
+  },
+  "before": {
+    "id": "a5398fcf-5872-4d1f-b5fe-8a8f3c559aff",
+    "calls": 2,
+    "tools": 1,
+    "commands": [
+      "getChatHost",
+      "getChatHost",
+      "getChatHost",
+      "getChatHost",
+      "getChatHost",
+      "listChats",
+      "getChatHost",
+      "createChat",
+      "getChatHost",
+      "getChatHost",
+      "getChat",
+      "getChat",
+      "getChatHost",
+      "sendChat",
+      "getChatHost",
+      "getChat",
+      "getChatHost",
+      "sendChat",
+      "getChatHost",
+      "getChat",
+      "getChatHost",
+      "getChat",
+      "getChatHost",
+      "getChat",
+      "getChatHost",
+      "getChatSend"
+    ],
+    "mutations": [
+      {
+        "operation": "createChat",
+        "input": {
+          "session": {
+            "host": {
+              "hostId": "controlled-host",
+              "storeId": "controlled-store"
+            },
+            "actorId": "personal"
+          },
+          "requestId": "f974cd11-1c7a-4df8-bacf-16e050153aac",
+          "title": "Retry preservation"
+        },
+        "result": {
+          "requestId": "f974cd11-1c7a-4df8-bacf-16e050153aac",
+          "conversation": {
+            "target": {
+              "host": {
+                "hostId": "controlled-host",
+                "storeId": "controlled-store"
+              },
+              "actorId": "personal",
+              "conversationId": "4"
+            },
+            "title": "Retry preservation",
+            "createdAt": "2026-11-01T10:29:21.117Z",
+            "cwd": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-chat-proof-ZAY3lW/remote-folder",
+            "model": "faux/faux-1"
+          }
+        }
+      },
+      {
+        "operation": "sendChat",
+        "input": {
+          "target": {
+            "host": {
+              "hostId": "controlled-host",
+              "storeId": "controlled-store"
+            },
+            "actorId": "personal",
+            "conversationId": "4"
+          },
+          "requestId": "14598309-6723-47d7-8d13-4fe61eaf1ebb",
+          "text": "First admitted input keeps chat busy"
+        },
+        "result": {
+          "target": {
+            "host": {
+              "hostId": "controlled-host",
+              "storeId": "controlled-store"
+            },
+            "actorId": "personal",
+            "conversationId": "4"
+          },
+          "requestId": "14598309-6723-47d7-8d13-4fe61eaf1ebb",
+          "admission": "admitted",
+          "submissionId": "13"
+        }
+      }
+    ],
+    "heldReplies": []
+  },
+  "after": {
+    "id": "33b62283-bfb8-45bc-abce-b5bd03da580e",
+    "calls": 2,
+    "tools": 1,
+    "commands": [
+      "getChatHost",
+      "getChatHost",
+      "getChatHost",
+      "getChatHost",
+      "getChatHost",
+      "listChats",
+      "getChatHost",
+      "createChat",
+      "getChatHost",
+      "getChatHost",
+      "getChat",
+      "getChat",
+      "getChatHost",
+      "sendChat",
+      "getChatHost",
+      "getChat",
+      "getChatHost",
+      "sendChat",
+      "getChatHost",
+      "getChat",
+      "getChatHost",
+      "getChat",
+      "getChatHost",
+      "getChat",
+      "getChatHost",
+      "getChatSend",
+      "getChatHost",
+      "getChatSend",
+      "getChatHost",
+      "getChatSend"
+    ],
+    "mutations": [
+      {
+        "operation": "createChat",
+        "input": {
+          "session": {
+            "host": {
+              "hostId": "controlled-host",
+              "storeId": "controlled-store"
+            },
+            "actorId": "personal"
+          },
+          "requestId": "f974cd11-1c7a-4df8-bacf-16e050153aac",
+          "title": "Retry preservation"
+        },
+        "result": {
+          "requestId": "f974cd11-1c7a-4df8-bacf-16e050153aac",
+          "conversation": {
+            "target": {
+              "host": {
+                "hostId": "controlled-host",
+                "storeId": "controlled-store"
+              },
+              "actorId": "personal",
+              "conversationId": "4"
+            },
+            "title": "Retry preservation",
+            "createdAt": "2026-11-01T10:29:21.117Z",
+            "cwd": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-chat-proof-ZAY3lW/remote-folder",
+            "model": "faux/faux-1"
+          }
+        }
+      },
+      {
+        "operation": "sendChat",
+        "input": {
+          "target": {
+            "host": {
+              "hostId": "controlled-host",
+              "storeId": "controlled-store"
+            },
+            "actorId": "personal",
+            "conversationId": "4"
+          },
+          "requestId": "14598309-6723-47d7-8d13-4fe61eaf1ebb",
+          "text": "First admitted input keeps chat busy"
+        },
+        "result": {
+          "target": {
+            "host": {
+              "hostId": "controlled-host",
+              "storeId": "controlled-store"
+            },
+            "actorId": "personal",
+            "conversationId": "4"
+          },
+          "requestId": "14598309-6723-47d7-8d13-4fe61eaf1ebb",
+          "admission": "admitted",
+          "submissionId": "13"
+        }
+      }
+    ],
+    "heldReplies": []
+  },
+  "replacement": "{\"version\":1,\"session\":{\"host\":{\"hostId\":\"controlled-host\",\"storeId\":\"controlled-store\"},\"actorId\":\"personal\"},\"selected\":{\"host\":{\"hostId\":\"controlled-host\",\"storeId\":\"controlled-store\"},\"actorId\":\"personal\",\"conversationId\":\"4\"},\"drafts\":[{\"target\":{\"host\":{\"hostId\":\"controlled-host\",\"storeId\":\"controlled-store\"},\"actorId\":\"personal\",\"conversationId\":\"4\"},\"text\":\"Newer external publication\"}],\"pending\":[]}",
+  "stored": "{\"version\":1,\"session\":{\"host\":{\"hostId\":\"controlled-host\",\"storeId\":\"controlled-store\"},\"actorId\":\"personal\"},\"selected\":{\"host\":{\"hostId\":\"controlled-host\",\"storeId\":\"controlled-store\"},\"actorId\":\"personal\",\"conversationId\":\"4\"},\"drafts\":[{\"target\":{\"host\":{\"hostId\":\"controlled-host\",\"storeId\":\"controlled-store\"},\"actorId\":\"personal\",\"conversationId\":\"4\"},\"text\":\"Newer external publication\"}],\"pending\":[]}"
+}

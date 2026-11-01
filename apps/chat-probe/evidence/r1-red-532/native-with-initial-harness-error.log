@@ -1,0 +1,131 @@
+
+Running 4 tests using 1 worker
+
+(node:60489) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘  1 apps/chat-probe/test/desktop.spec.ts:507:3 › R1 source 200% normal/constrained controls have a usable scrolling and keyboard path (3.4s)
+(node:60512) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘  2 apps/chat-probe/test/desktop.spec.ts:507:3 › R1 packaged 200% normal/constrained controls have a usable scrolling and keyboard path (4.6s)
+(node:60747) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘  3 apps/chat-probe/test/desktop.spec.ts:606:3 › R1 source reserved Send retry must veto a changed snapshot before production admission (32.7s)
+Worker teardown timeout of 60000ms exceeded.
+
+Failed worker ran 1 test:
+apps/chat-probe/test/desktop.spec.ts:606:3 › R1 source reserved Send retry must veto a changed snapshot before production admission
+(node:61046) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘  4 apps/chat-probe/test/desktop.spec.ts:606:3 › R1 packaged reserved Send retry must veto a changed snapshot before production admission (33.7s)
+
+
+  1) apps/chat-probe/test/desktop.spec.ts:507:3 › R1 source 200% normal/constrained controls have a usable scrolling and keyboard path
+
+    Error: expect(received).toBeLessThanOrEqual(expected)
+
+    Expected: <= 394
+    Received:    524.39453125
+
+      577 |         for (const control of row.after.controls) {
+      578 |           expect(control.top).toBeGreaterThanOrEqual(0);
+    > 579 |           expect(control.bottom).toBeLessThanOrEqual(row.after.viewportHeight);
+          |                                  ^
+      580 |         }
+      581 |       await page.getByLabel("Message", { exact: true }).focus();
+      582 |       await page.keyboard.press("Tab");
+        at /Users/elliotsharpe/.t3/worktrees/moonbase/t3-541038a5/apps/chat-probe/test/desktop.spec.ts:579:34
+
+    Error Context: apps/chat-probe/test-results/desktop-R1-source-200-norm-3da71-scrolling-and-keyboard-path/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    apps/chat-probe/test-results/desktop-R1-source-200-norm-3da71-scrolling-and-keyboard-path/trace.zip
+    Usage:
+
+        npx playwright show-trace apps/chat-probe/test-results/desktop-R1-source-200-norm-3da71-scrolling-and-keyboard-path/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  2) apps/chat-probe/test/desktop.spec.ts:507:3 › R1 packaged 200% normal/constrained controls have a usable scrolling and keyboard path
+
+    Error: expect(received).toBeLessThanOrEqual(expected)
+
+    Expected: <= 394
+    Received:    524.39453125
+
+      577 |         for (const control of row.after.controls) {
+      578 |           expect(control.top).toBeGreaterThanOrEqual(0);
+    > 579 |           expect(control.bottom).toBeLessThanOrEqual(row.after.viewportHeight);
+          |                                  ^
+      580 |         }
+      581 |       await page.getByLabel("Message", { exact: true }).focus();
+      582 |       await page.keyboard.press("Tab");
+        at /Users/elliotsharpe/.t3/worktrees/moonbase/t3-541038a5/apps/chat-probe/test/desktop.spec.ts:579:34
+
+    Error Context: apps/chat-probe/test-results/desktop-R1-packaged-200-no-0c6d9-scrolling-and-keyboard-path/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    apps/chat-probe/test-results/desktop-R1-packaged-200-no-0c6d9-scrolling-and-keyboard-path/trace.zip
+    Usage:
+
+        npx playwright show-trace apps/chat-probe/test-results/desktop-R1-packaged-200-no-0c6d9-scrolling-and-keyboard-path/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  3) apps/chat-probe/test/desktop.spec.ts:606:3 › R1 source reserved Send retry must veto a changed snapshot before production admission
+
+    TimeoutError: page.reload: Timeout 30000ms exceeded.
+    Call log:
+      - waiting for navigation until "load"
+
+
+      689 |       if (current) {
+      690 |         const page = current.windows()[0];
+    > 691 |         if (page && !page.isClosed()) await page.reload();
+          |                                                  ^
+      692 |         await shutdown(current);
+      693 |       }
+      694 |       await closeFixture(f);
+        at /Users/elliotsharpe/.t3/worktrees/moonbase/t3-541038a5/apps/chat-probe/test/desktop.spec.ts:691:50
+
+    Error Context: apps/chat-probe/test-results/desktop-R1-source-reserved-760cd-before-production-admission/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    apps/chat-probe/test-results/desktop-R1-source-reserved-760cd-before-production-admission/trace.zip
+    Usage:
+
+        npx playwright show-trace apps/chat-probe/test-results/desktop-R1-source-reserved-760cd-before-production-admission/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  4) apps/chat-probe/test/desktop.spec.ts:606:3 › R1 packaged reserved Send retry must veto a changed snapshot before production admission
+
+    TimeoutError: page.reload: Timeout 30000ms exceeded.
+    Call log:
+      - waiting for navigation until "load"
+
+
+      689 |       if (current) {
+      690 |         const page = current.windows()[0];
+    > 691 |         if (page && !page.isClosed()) await page.reload();
+          |                                                  ^
+      692 |         await shutdown(current);
+      693 |       }
+      694 |       await closeFixture(f);
+        at /Users/elliotsharpe/.t3/worktrees/moonbase/t3-541038a5/apps/chat-probe/test/desktop.spec.ts:691:50
+
+    Error Context: apps/chat-probe/test-results/desktop-R1-packaged-reserv-0e5dd-before-production-admission/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    apps/chat-probe/test-results/desktop-R1-packaged-reserv-0e5dd-before-production-admission/trace.zip
+    Usage:
+
+        npx playwright show-trace apps/chat-probe/test-results/desktop-R1-packaged-reserv-0e5dd-before-production-admission/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  4 failed
+    apps/chat-probe/test/desktop.spec.ts:507:3 › R1 source 200% normal/constrained controls have a usable scrolling and keyboard path
+    apps/chat-probe/test/desktop.spec.ts:507:3 › R1 packaged 200% normal/constrained controls have a usable scrolling and keyboard path
+    apps/chat-probe/test/desktop.spec.ts:606:3 › R1 source reserved Send retry must veto a changed snapshot before production admission
+    apps/chat-probe/test/desktop.spec.ts:606:3 › R1 packaged reserved Send retry must veto a changed snapshot before production admission
+  1 error was not a part of any test, see above for details

@@ -1,0 +1,66 @@
+
+Running 2 tests using 1 worker
+
+(node:63650) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘  1 apps/chat-probe/test/desktop.spec.ts:631:5 › R1 source reserved Send retry must veto failing writes during query before production admission (3.6s)
+(node:63662) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘  2 apps/chat-probe/test/desktop.spec.ts:631:5 › R1 packaged reserved Send retry must veto failing writes during query before production admission (2.8s)
+
+
+  1) apps/chat-probe/test/desktop.spec.ts:631:5 › R1 source reserved Send retry must veto failing writes during query before production admission
+
+    Error: expect(received).toBe(expected) // Object.is equality
+
+    Expected: 2
+    Received: 3
+
+      729 |           "Newer live draft remains",
+      730 |         );
+    > 731 |         expect(after.commands.filter((c) => c === "sendChat").length).toBe(
+          |                                                                       ^
+      732 |           before.commands.filter((c) => c === "sendChat").length,
+      733 |         );
+      734 |         expect(receipt.ok && (receipt.value as { admission: string }).admission).toBe("reserved");
+        at /Users/elliotsharpe/.t3/worktrees/moonbase/t3-541038a5/apps/chat-probe/test/desktop.spec.ts:731:71
+
+    Error Context: apps/chat-probe/test-results/desktop-R1-source-reserved-364bf-before-production-admission/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    apps/chat-probe/test-results/desktop-R1-source-reserved-364bf-before-production-admission/trace.zip
+    Usage:
+
+        npx playwright show-trace apps/chat-probe/test-results/desktop-R1-source-reserved-364bf-before-production-admission/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  2) apps/chat-probe/test/desktop.spec.ts:631:5 › R1 packaged reserved Send retry must veto failing writes during query before production admission
+
+    Error: expect(received).toBe(expected) // Object.is equality
+
+    Expected: 2
+    Received: 3
+
+      729 |           "Newer live draft remains",
+      730 |         );
+    > 731 |         expect(after.commands.filter((c) => c === "sendChat").length).toBe(
+          |                                                                       ^
+      732 |           before.commands.filter((c) => c === "sendChat").length,
+      733 |         );
+      734 |         expect(receipt.ok && (receipt.value as { admission: string }).admission).toBe("reserved");
+        at /Users/elliotsharpe/.t3/worktrees/moonbase/t3-541038a5/apps/chat-probe/test/desktop.spec.ts:731:71
+
+    Error Context: apps/chat-probe/test-results/desktop-R1-packaged-reserv-91c08-before-production-admission/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    apps/chat-probe/test-results/desktop-R1-packaged-reserv-91c08-before-production-admission/trace.zip
+    Usage:
+
+        npx playwright show-trace apps/chat-probe/test-results/desktop-R1-packaged-reserv-91c08-before-production-admission/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  2 failed
+    apps/chat-probe/test/desktop.spec.ts:631:5 › R1 source reserved Send retry must veto failing writes during query before production admission
+    apps/chat-probe/test/desktop.spec.ts:631:5 › R1 packaged reserved Send retry must veto failing writes during query before production admission

@@ -1,0 +1,68 @@
+{
+  "integrationBase": "132d273073889bd0702cf96b1fc2a62d5027598c",
+  "piRepair": "235eb27a448635a995bb65e67147e99119830b92",
+  "package": "unsigned macOS arm64 Electron45.1.0",
+  "noticePackages": [
+    "@base-ui/react@1.9.0",
+    "@base-ui/utils@0.5.0",
+    "@floating-ui/utils@0.2.12",
+    "@stylexjs/stylex@0.19.1",
+    "effect@4.1.0",
+    "electron@45.1.0",
+    "react-dom@19.3.1",
+    "react@19.3.1",
+    "scheduler@0.28.0"
+  ],
+  "files": [
+    {
+      "path": "main.mjs",
+      "bytes": 554748,
+      "sha256": "5526b0fa73d0fcc1aed9c1393b4487bbd517aad3dc27e060f6679d6736a9513b"
+    },
+    {
+      "path": "preload.cjs",
+      "bytes": 2591,
+      "sha256": "f31ad30f5d368f5d0b23428a5af7e32c299083f85a505da3cbe59009f26edb67"
+    },
+    {
+      "path": "renderer/index.html",
+      "bytes": 400,
+      "sha256": "174d6dd6f1a5a5eb4c9532eda88e5d404a8ead702913478ceaae6dd116c91274"
+    },
+    {
+      "path": "dependency-notices.txt",
+      "bytes": 10527,
+      "sha256": "d469bb246c96be0baea1fa72f8cc38d454f260510586eabeab7170c414f9e593"
+    },
+    {
+      "path": "notice-packages.json",
+      "bytes": 215,
+      "sha256": "d77d81b943521aa9b4c7546ccee4e59087c1b7bb611266db70ec2e8c11b0df90"
+    },
+    {
+      "path": "renderer/assets/index-BeMCfOhG.js",
+      "bytes": 261184,
+      "sha256": "8192a408925ee872843f61b31a4283de9f05b2091b2d8c81183699f2c7821cc6"
+    },
+    {
+      "path": "renderer/assets/index-cN05CcEa.css",
+      "bytes": 13692,
+      "sha256": "b744f7eedffe14e08632d023be53ef8fa058bdba26ffca47728b7c2d04401a3d"
+    },
+    {
+      "path": "LICENSE.electron.txt",
+      "bytes": 1096,
+      "sha256": "5154e165bd6c2cc0cfbcd8916498c7abab0497923bafcd5cb07673fe8480087d"
+    },
+    {
+      "path": "LICENSES.chromium.html",
+      "bytes": 5598206,
+      "sha256": "214152f78cc0b611f63ff8faefcc6670c4605ffbff05f092bb671e6df80ce741"
+    },
+    {
+      "path": "app.asar",
+      "bytes": 845641,
+      "sha256": "baabf3fc9734aea731d83d19ae1ec6392f264fc4a311e14381752dc178946990"
+    }
+  ]
+}

@@ -1,0 +1,194 @@
+[
+  {
+    "iteration": 0,
+    "title": "Readiness 0",
+    "disabled": false,
+    "events": [
+      {
+        "type": "input",
+        "value": "Readiness 0",
+        "trusted": true,
+        "visibility": "visible"
+      },
+      {
+        "type": "change",
+        "value": "Readiness 0",
+        "trusted": true,
+        "visibility": "visible"
+      }
+    ],
+    "visibility": "visible"
+  },
+  {
+    "iteration": 1,
+    "title": "Readiness 1",
+    "disabled": false,
+    "events": [
+      {
+        "type": "input",
+        "value": "Readiness 1",
+        "trusted": true,
+        "visibility": "visible"
+      }
+    ],
+    "visibility": "visible"
+  },
+  {
+    "iteration": 2,
+    "title": "Readiness 2",
+    "disabled": false,
+    "events": [
+      {
+        "type": "input",
+        "value": "Readiness 2",
+        "trusted": true,
+        "visibility": "visible"
+      }
+    ],
+    "visibility": "visible"
+  },
+  {
+    "iteration": 3,
+    "title": "Readiness 3",
+    "disabled": false,
+    "events": [
+      {
+        "type": "input",
+        "value": "Readiness 3",
+        "trusted": true,
+        "visibility": "visible"
+      },
+      {
+        "type": "change",
+        "value": "Readiness 3",
+        "trusted": true,
+        "visibility": "visible"
+      }
+    ],
+    "visibility": "visible"
+  },
+  {
+    "iteration": 4,
+    "title": "Readiness 4",
+    "disabled": false,
+    "events": [
+      {
+        "type": "input",
+        "value": "Readiness 4",
+        "trusted": true,
+        "visibility": "visible"
+      }
+    ],
+    "visibility": "visible"
+  },
+  {
+    "iteration": 5,
+    "title": "Readiness 5",
+    "disabled": false,
+    "events": [
+      {
+        "type": "input",
+        "value": "Readiness 5",
+        "trusted": true,
+        "visibility": "visible"
+      }
+    ],
+    "visibility": "visible"
+  },
+  {
+    "iteration": 6,
+    "title": "Readiness 6",
+    "disabled": false,
+    "events": [
+      {
+        "type": "input",
+        "value": "Readiness 6",
+        "trusted": true,
+        "visibility": "visible"
+      },
+      {
+        "type": "change",
+        "value": "Readiness 6",
+        "trusted": true,
+        "visibility": "visible"
+      }
+    ],
+    "visibility": "visible"
+  },
+  {
+    "iteration": 7,
+    "title": "Readiness 7",
+    "disabled": false,
+    "events": [
+      {
+        "type": "input",
+        "value": "Readiness 7",
+        "trusted": true,
+        "visibility": "visible"
+      }
+    ],
+    "visibility": "visible"
+  },
+  {
+    "iteration": 8,
+    "title": "Readiness 8",
+    "disabled": false,
+    "events": [
+      {
+        "type": "input",
+        "value": "Readiness 8",
+        "trusted": true,
+        "visibility": "visible"
+      }
+    ],
+    "visibility": "visible"
+  },
+  {
+    "iteration": 9,
+    "title": "Readiness 9",
+    "disabled": false,
+    "events": [
+      {
+        "type": "input",
+        "value": "Readiness 9",
+        "trusted": true,
+        "visibility": "visible"
+      },
+      {
+        "type": "change",
+        "value": "Readiness 9",
+        "trusted": true,
+        "visibility": "visible"
+      }
+    ],
+    "visibility": "visible"
+  },
+  {
+    "iteration": 10,
+    "title": "Readiness 10",
+    "disabled": false,
+    "events": [
+      {
+        "type": "input",
+        "value": "Readiness 10",
+        "trusted": true,
+        "visibility": "visible"
+      }
+    ],
+    "visibility": "visible"
+  },
+  {
+    "iteration": 11,
+    "title": "Readiness 11",
+    "disabled": false,
+    "events": [
+      {
+        "type": "input",
+        "value": "Readiness 11",
+        "trusted": true,
+        "visibility": "visible"
+      }
+    ],
+    "visibility": "visible"
+  }
+]

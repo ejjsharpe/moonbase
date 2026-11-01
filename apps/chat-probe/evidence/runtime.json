@@ -1,0 +1,13 @@
+{
+  "electron": "45.1.0",
+  "node": "24.22.1",
+  "dimensions": {
+    "width": 700,
+    "scroll": 700,
+    "font": "-apple-system, \"system-ui\", \"Segoe UI\", sans-serif",
+    "focus": "solid"
+  },
+  "sendDispatches": 1,
+  "toolCalls": 1,
+  "retainedRequestId": "ddd46429-f678-4871-9905-042cbf0b3f98"
+}

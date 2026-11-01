@@ -1,0 +1,47 @@
+$ node --experimental-strip-types --test --test-concurrency=1 test/*.test.ts
+✔ private configuration is owner-only, bounded, explicit and projected; bad files never initialize transport (4.930375ms)
+✔ startup only observes; every mutation is durably captured before disclosure (11.456083ms)
+✔ lost reply, null query, reload and reconnect retain original input without auto Send (4.974667ms)
+✔ matching Send recovery clears only captured draft text and preserves newer edits (3.8845ms)
+✔ createChat never discloses when pending metadata write fails (1.893208ms)
+✔ sendChat never discloses when pending metadata write fails (1.687041ms)
+✔ stopChat never discloses when pending metadata write fails (1.796792ms)
+✔ corruption/foreign context remains untouched and blocks admission on reload: {broken (1.321625ms)
+✔ corruption/foreign context remains untouched and blocks admission on reload: {"version":1 (0.172041ms)
+✔ write failure preserves latest live edit and blocks Quit instead of claiming reload safety (1.890042ms)
+✔ same-input retry queries first, keeps original Create/Send/Stop identities, and never adopts successor (2.806125ms)
+✔ pending Send does not block captured Stop or status and detach never stops work (3.305417ms)
+✔ read-only admitted lookup resolves without Send; foreign storage writes are never overwritten (1.822875ms)
+✔ replacement watch snapshots and one older page keep output bounded (3.014625ms)
+✔ bounds reject oversized/invalid Unicode input without replacing retained draft or issuing Send (1.594708ms)
+✔ Create and captured Stop are written before disclosure; lost replies recover exact inputs after reload (1.884958ms)
+✔ hide/detach releases observations, resume is read-only, and draft capacity failure blocks Quit (9.125625ms)
+✔ createChat retains the captured identity when Disconnect makes a dispatched reply Unavailable (4.425125ms)
+✔ sendChat retains the captured identity when Disconnect makes a dispatched reply Unavailable (4.539584ms)
+✔ stopChat retains the captured identity when Disconnect makes a dispatched reply Unavailable (4.348625ms)
+✔ createChat retry vetoes changed local storage before retry before mutating redisclosure (1.859542ms)
+✔ createChat retry vetoes unwritable local storage before retry before mutating redisclosure (1.6495ms)
+✔ createChat retry vetoes changed local storage during query before mutating redisclosure (1.610292ms)
+✔ createChat retry vetoes unwritable local storage during query before mutating redisclosure (0.671959ms)
+✔ sendChat retry vetoes changed local storage before retry before mutating redisclosure (1.620875ms)
+✔ sendChat retry vetoes unwritable local storage before retry before mutating redisclosure (1.699125ms)
+✔ sendChat retry vetoes changed local storage during query before mutating redisclosure (0.484709ms)
+✔ sendChat retry vetoes unwritable local storage during query before mutating redisclosure (1.601333ms)
+✔ stopChat retry vetoes changed local storage before retry before mutating redisclosure (0.350542ms)
+✔ stopChat retry vetoes unwritable local storage before retry before mutating redisclosure (1.970875ms)
+✔ stopChat retry vetoes changed local storage during query before mutating redisclosure (1.630083ms)
+✔ stopChat retry vetoes unwritable local storage during query before mutating redisclosure (1.609208ms)
+✔ public proof controller creates, lists, opens, streams real tool output and captures exact Stop through SSH/HTTP/Pi (1141.274709ms)
+✔ lost actual HTTP Send response + newer draft + controller reload/client closure/reconnect/store reopen never resends (1677.54725ms)
+✔ view detach and Disconnect leave remote tool running; reopen queries same chat without Send (1140.717459ms)
+✔ IPC rejects unknown fields/operations/foreign authority before dispatch (1.268ms)
+✔ public bridge preserves Uncertain and exact pending payload; preaborted calls do not dispatch (2.162459ms)
+✔ IPC cancellation/disposal releases only owned waiters/observations, never Stop or Disconnect (0.224458ms)
+ℹ tests 38
+ℹ suites 0
+ℹ pass 38
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4539.23225

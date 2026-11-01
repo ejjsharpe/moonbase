@@ -1,0 +1,38 @@
+[
+  {
+    "pid": 60790,
+    "group": 60790,
+    "ownedGeneratedFixtureVerified": true,
+    "signal": "SIGTERM"
+  },
+  {
+    "pid": 61089,
+    "group": 61089,
+    "ownedGeneratedFixtureVerified": true,
+    "signal": "SIGTERM"
+  },
+  {
+    "pid": 61058,
+    "ownedFixtureAppVerified": true,
+    "signal": "SIGTERM"
+  },
+  {
+    "group": 61058,
+    "memberPids": [61058, 61074, 61075, 61076],
+    "everyMemberOwnedAppVerified": true,
+    "signal": "SIGKILL",
+    "reason": "intentional preserved-storage fixture cannot consent to normal Quit"
+  },
+  {
+    "pid": 61046,
+    "ownedTestWorkerVerified": true,
+    "signal": "SIGTERM",
+    "reason": "failed fixture teardown"
+  },
+  {
+    "confirmedAbsentPids": [60790, 61046, 61053, 61058, 61074, 61075, 61076, 61089],
+    "confirmedAbsentGroups": [60790, 61089, 61058],
+    "reboundPorts": [65531, 49152, 50681, 50686],
+    "ownedFailedFixtureDirectoriesRemoved": true
+  }
+]

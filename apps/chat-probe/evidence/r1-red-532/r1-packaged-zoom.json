@@ -1,0 +1,86 @@
+[
+  {
+    "width": 1180,
+    "before": {
+      "viewport": {
+        "width": 590,
+        "height": 394
+      },
+      "controls": [
+        {
+          "name": "Stop",
+          "top": 494.39453125,
+          "bottom": 524.39453125
+        },
+        {
+          "name": "Send message",
+          "top": 494.39453125,
+          "bottom": 524.39453125
+        }
+      ]
+    },
+    "after": {
+      "mainScroll": 0,
+      "overflow": "visible",
+      "viewportHeight": 394,
+      "controls": [
+        {
+          "name": "Stop",
+          "top": 494.39453125,
+          "bottom": 524.39453125,
+          "left": 231,
+          "right": 279.33203125
+        },
+        {
+          "name": "Send message",
+          "top": 494.39453125,
+          "bottom": 524.39453125,
+          "left": 287.33203125,
+          "right": 392.11328125
+        }
+      ]
+    }
+  },
+  {
+    "width": 700,
+    "before": {
+      "viewport": {
+        "width": 350,
+        "height": 309
+      },
+      "controls": [
+        {
+          "name": "Stop",
+          "top": 2011.1484375,
+          "bottom": 2041.1484375
+        },
+        {
+          "name": "Send message",
+          "top": 2049.1484375,
+          "bottom": 2097.1484375
+        }
+      ]
+    },
+    "after": {
+      "mainScroll": 0,
+      "overflow": "visible",
+      "viewportHeight": 309,
+      "controls": [
+        {
+          "name": "Stop",
+          "top": 2011.1484375,
+          "bottom": 2041.1484375,
+          "left": 231,
+          "right": 279.33203125
+        },
+        {
+          "name": "Send message",
+          "top": 2049.1484375,
+          "bottom": 2097.1484375,
+          "left": 231,
+          "right": 309
+        }
+      ]
+    }
+  }
+]
