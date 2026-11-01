@@ -9,7 +9,8 @@
     "./controller": "./src/controller.ts",
     "./bridge": "./src/wire.ts",
     "./native-session": "./src/session.ts",
-    "./native-config": "./src/config.ts"
+    "./native-config": "./src/config.ts",
+    "./test-fixture": "./test/fixture.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",

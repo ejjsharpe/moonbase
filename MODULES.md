@@ -60,3 +60,5 @@ Foundation → independent editor/workspace siblings → reviewed editor fan-in 
 ## Desktop composition adapters
 
 Task08 reuses the existing chat bridge and exact-host/actor IPC session through public exports. `./native-config` reads only the explicit owner-private configuration; the desktop still authenticates its owned main frame before entering `./native-session`. These adapters create no runtime. The composition root supplies clients from its one shared runtime. Import `./bridge`/`./ui`/`./controller` in the renderer, and keep the native configuration/session in main. The standalone proof remains independently runnable.
+
+The `@moonbase/chat-probe/test-fixture` export exposes the existing controlled `fixture`, `FixtureStats` and `CleanupReport` solely to test consumers. It creates scoped synthetic host/forward resources when explicitly called. Production main/preload/renderer/build graphs must not import this entry or its SDK/host fixture dependencies.
