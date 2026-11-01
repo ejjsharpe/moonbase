@@ -7,6 +7,9 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: "26.13.0"
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
@@ -18,3 +21,5 @@ jobs:
       - run: echo "MOONBASE_TEST_RIPGREP=$PWD/dist/tools/ripgrep/rg" >> "$GITHUB_ENV"
       - run: bun run test
       - run: bun run test:editor-integration
+      - run: bunx nx run @moonbase/desktop:build
+      - run: node apps/desktop/scripts/check-renderer.mjs
