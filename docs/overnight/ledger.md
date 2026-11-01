@@ -11,8 +11,8 @@ All PRs are private, linked and unmerged. Older entries below are historical evi
 | [#5 checkout contract](https://github.com/ejjsharpe/moonbase/pull/5) | `6e58c1c4ea6944e8ca25eadc46e35c843f0f9fbe` | #2 | Astra: no contract blockers; actual adoption/fan-in pending |
 | [#3 workspace](https://github.com/ejjsharpe/moonbase/pull/3) | `1fc969227e98dc56b66985675910663ec51759a6` | #5; adopting #7 next | DRAFT for new receipt adoption; R5 clears all 13 earlier findings at this head, 84+14+11 probes and CI pass |
 | [#4 editor](https://github.com/ejjsharpe/moonbase/pull/4) | `2ff2a6b70e43a4558fd4347a287802ca8b9bcb46` | #5; adopting #7 next | DRAFT; R4 found one P1/two P2; owner fixing close, activation, diff focus |
-| [#6 host health](https://github.com/ejjsharpe/moonbase/pull/6) | `eba354cc4062eee3575facad0d774f08d897f75a` | #5 | DRAFT; 22 application tests/checks and hosted CI pass; independent review/adoption pending |
-| [#7 recovery publications](https://github.com/ejjsharpe/moonbase/pull/7) | `8557fdd0d7a71f93a6584c77430e6fde57668580` | #5 | DRAFT; 14 shared tests/checks and hosted CI pass; Astra contract review and adapter adoption running |
+| [#6 host health](https://github.com/ejjsharpe/moonbase/pull/6) | `eba354cc4062eee3575facad0d774f08d897f75a` | #5 | DRAFT; 22 application tests/checks and hosted CI pass; fresh Astra R1 running |
+| [#7 recovery publications](https://github.com/ejjsharpe/moonbase/pull/7) | `8557fdd0d7a71f93a6584c77430e6fde57668580` | #5 | DRAFT for coordinated adoption; Astra contract-only no blockers, 14 tests plus five independent probes and CI pass |
 
 Production editor fan-in, standalone Electron proof, independent Pi/SSH modules, chat proof and composition remain unfinished. Published Pi 1.4.0 controlled research is preparatory evidence only. No human/manual acceptance is inferred.
 
@@ -31,6 +31,8 @@ Editor R4 found a P1 recovery rollback defect plus two P2 activation/comparison-
 Workspace R5 completed with no blockers at `1fc9692`/base #5; all thirteen prior findings cleared, 84+14 supplied tests and eleven independent probes passed, exact-head CI green. See `reviews/workspace-r5.md`. That approval is a preserved checkpoint, not approval of ongoing #7 receipt adoption. A fresh Astra review of the #7 contract is now running; owners continue its coordinated implementation before changed-head module reviews/fan-in.
 
 After T3's notification, one exact-head inspection verified both hosted #7 runs at `8557fdd0d7a71f93a6584c77430e6fde57668580` passed ([41269232732](https://github.com/ejjsharpe/moonbase/actions/runs/41269232732), [41269213538](https://github.com/ejjsharpe/moonbase/actions/runs/41269213538)). This verifies the shared shape and existing boundary checks, not atomic workspace receipts or editor close correctness.
+
+PR #7 fresh Astra review completed with no contract blockers; see `reviews/recovery-publication-contract-r1.md`. Both owners retain that narrow scope distinction. Unpublished adoption progress: workspace reports 91 real module/native tests and seven new receipt/fence/failure probes passing; editor reports 59 public cases and seventeen browser journeys passing with the final eighteen-journey run in progress. Await exact pushed heads before independent implementation review. Host-health #6 R1 now uses the reviewer slot while owners finish; no second reviewer runs concurrently.
 
 ## Setup
 
