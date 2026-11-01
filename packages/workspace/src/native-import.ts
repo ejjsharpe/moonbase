@@ -11,10 +11,12 @@ export class NativeImport {
   readonly directory: boolean;
   readonly parents: string;
   readonly fd: number;
+  readonly path: string;
   constructor(
-    readonly path: string,
+    path: string,
     protectedPath: (path: string) => void,
   ) {
+    this.path = path;
     if (
       !isAbsolute(path) ||
       path.includes("\0") ||

@@ -1,7 +1,7 @@
 import { Context, Effect, Layer, Queue, Stream } from 'effect';
 import { WorkspaceService, type WorkspaceServiceShape } from '@moonbase/application/services';
 import { ApplicationError, emptyRecovery, type CheckoutTarget, type CommandInput, type CommandOutput, type EditorRecovery, type OperationResult, type SaveResult, type WorkspaceCommand, type WorkspaceOperation, type WorkspaceEvent } from '@moonbase/application/client';
-import { closeSync, constants, fstatSync, openSync, realpathSync, watch as fsWatch, type FSWatcher } from 'node:fs';
+import { accessSync, closeSync, constants, fstatSync, openSync, readFileSync, realpathSync, watch as fsWatch, type FSWatcher } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -20,10 +20,12 @@ export type WorkspaceConfiguration = {
   /** Absolute paths allow the packaged shell to ship the native asset and select system Git. */
   filesystemHelper?: string;
   gitExecutable?: string;
+  /** Packaged standalone ripgrep; PATH discovery is a development convenience. */
+  ripgrepExecutable?: string;
 };
-type Approval = { target: CheckoutTarget; identity: string };
-type SaveRecord = { input: CommandInput<'saveFile'>; result?: SaveResult; started: boolean; message?: string };
-type OperationRecord = { input: WorkspaceOperation; result: OperationResult; revision: number; acknowledged: boolean };
+type Approval = { target: CheckoutTarget; identity: string; common: {path: string; identity: string}; gitEntry: {identity: string; pointer: string | null} };
+type SaveRecord = { published?: boolean; temporary?: string; input: CommandInput<'saveFile'>; result?: SaveResult; started: boolean; message?: string };
+type OperationRecord = { publishedItems?: string[]; input: WorkspaceOperation; result: OperationResult; revision: number; acknowledged: boolean };
 const key = (clientId: string, id: string) => hash(canonical([clientId, id]));
 const affected = (p: string, source: string) => p === source || p.startsWith(source + '/');
 const folded = (p: string) => p.normalize('NFC').toLowerCase();
@@ -62,12 +64,17 @@ class LocalWorkspace {
   readonly volatileSaves = new Map<string, SaveRecord>();
   readonly volatileOperations = new Map<string, OperationRecord>();
   readonly run;
+  readonly ripgrep: string | undefined;
   closed = false;
-  constructor(readonly config: WorkspaceConfiguration) {
+  readonly config: WorkspaceConfiguration;
+  constructor(config: WorkspaceConfiguration) {
+    this.config = config;
     ensure(process.platform === 'darwin', 'Workspace native implementation requires macOS.');
     identifier(config.hostId);
     const helper = config.filesystemHelper ?? fileURLToPath(new URL('../dist/filesystem', import.meta.url));
     ensure(isAbsolute(helper) && isAbsolute(config.gitExecutable ?? '/usr/bin/git'), 'Filesystem/Git executables must be absolute.');
+    this.ripgrep = config.ripgrepExecutable ?? (process.env.PATH ?? '').split(':').map(p => join(p, 'rg')).find(p => { try { accessSync(p, constants.X_OK); return isAbsolute(p); } catch { return false; } });
+    ensure(this.ripgrep === undefined || isAbsolute(this.ripgrep), 'Ripgrep executable must be absolute.');
     this.store = new Store(config.dataDirectory, config.hostId);
     this.run = makeRunner(helper, this.children);
     const call = <K extends WorkspaceCommand>(fn: (input: CommandInput<K>, signal: AbortSignal) => Promise<CommandOutput<K>>, persistence = false) =>
@@ -75,7 +82,7 @@ class LocalWorkspace {
     this.service = {
       openCheckout: call<'openCheckout'>((input, signal) => this.open(input.root, signal)),
       readFile: call<'readFile'>(async (target, signal) => (await this.directory(target.checkout)).read(target.path, signal)),
-      saveFile: call<'saveFile'>(input => this.serial(input.target.checkout.checkoutId, () => this.save(input))),
+      saveFile: call<'saveFile'>((input, signal) => this.serial(input.target.checkout.checkoutId, () => { if (signal.aborted) fail('Cancelled', 'Save cancelled before admission.'); return this.save(input); })),
       listDirectory: call<'listDirectory'>((input, signal) => this.list(input, signal)),
       gitStatus: call<'gitStatus'>((input, signal) => this.status(input.checkout, signal)),
       readComparison: call<'readComparison'>((input, signal) => this.comparison(input, signal)),
@@ -101,7 +108,6 @@ class LocalWorkspace {
         recovery(input.state, input.clientId);
         for (const target of input.state.checkouts) this.approval(target);
         const state = structuredClone(input.state);
-        this.reconcile(state);
         return {revision: this.store.persist(input.clientId, input.expectedRevision, state)};
       }, true),
       watch: input => this.watch(input),
@@ -147,7 +153,27 @@ class LocalWorkspace {
       directory = new Directory(target.root, approved.identity, this.run, this.config.gitExecutable ?? '/usr/bin/git');
       this.directories.set(target.checkoutId, directory);
     }
-    directory.check(); return directory;
+    directory.check();
+    ensure(same(this.gitEntry(target.root), approved.gitEntry), 'Checkout Git metadata identity changed. Restore the original repository.');
+    const fd = openSync(approved.common.path, constants.O_RDONLY | constants.O_DIRECTORY | 0x20000000);
+    try { ensure(identity(fstatSync(fd)) === approved.common.identity, 'Repository common directory identity changed.'); } finally { closeSync(fd); }
+    return directory;
+  }
+  gitEntry(root: string) {
+    const fd = openSync(join(root, '.git'), constants.O_RDONLY | constants.O_NONBLOCK | 0x20000000);
+    try {
+      const info = fstatSync(fd); ensure(info.isDirectory() || info.isFile() && info.size < 4096 && info.nlink === 1, 'Invalid checkout Git metadata.');
+      return {identity: identity(info), pointer: info.isFile() ? readFileSync(fd, 'utf8') : null};
+    } finally { closeSync(fd); }
+  }
+  policy(target: CheckoutTarget) {
+    const common = this.approval(target).common;
+    for (const p of ['info', 'info/exclude']) {
+      let fd: number;
+      try { fd = openSync(join(common.path, p), constants.O_RDONLY | constants.O_NONBLOCK | 0x20000000); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue; throw error; }
+      try { const info = fstatSync(fd); ensure(p === 'info' ? info.isDirectory() : info.isFile(), 'Invalid repository ignore policy.'); } finally { closeSync(fd); }
+    }
   }
   async open(root: string, signal: AbortSignal) {
     ensure(typeof root === 'string' && isAbsolute(root) && !root.includes('\0'), 'Choose an absolute checkout root through the native picker.');
@@ -160,12 +186,13 @@ class LocalWorkspace {
       ensure(realpathSync(top) === root, 'Choose the repository checkout root.');
       const common = realpathSync(resolve(root, (await directory.git(['rev-parse', '--git-common-dir'], undefined, signal)).toString().trim()));
       const commonFd = openSync(common, constants.O_RDONLY | constants.O_DIRECTORY | 0x20000000);
-      const projectId = hash(canonical([this.config.hostId, common, identity(fstatSync(commonFd))])); closeSync(commonFd);
+      const commonIdentity = identity(fstatSync(commonFd));
+      const projectId = hash(canonical([this.config.hostId, common, commonIdentity])); closeSync(commonFd);
       const previous = this.store.all<Approval>('approvals').find(a => a.target.root === root);
       if (previous) { ensure(previous.identity === id && previous.target.projectId === projectId, 'Checkout or repository identity changed. Restore the original directory.'); return previous.target; }
       const branch = await this.branch(directory, signal);
       const target = {hostId: this.config.hostId, checkoutId: hash(canonical([this.config.hostId, root, id])), projectId, root, branch};
-      this.store.put('approvals', target.checkoutId, { target, identity: id }); return target;
+      this.store.put('approvals', target.checkoutId, { target, identity: id, common: {path: common, identity: commonIdentity}, gitEntry: this.gitEntry(root) }); return target;
     } finally { directory.close(); }
   }
   async branch(directory: Directory, signal?: AbortSignal) {
@@ -197,15 +224,15 @@ class LocalWorkspace {
       const result = {kind: 'conflict', disk} as const;
       this.store.put('saves', id, {input, result, started: false}); return result;
     }
-    const record: SaveRecord = {input, started: true};
-    this.store.put('saves', id, record);
     const temporary = join(dirname(input.target.path), '.moonbase-save-' + randomUUID());
+    const record: SaveRecord = {input, started: true, temporary};
+    this.store.put('saves', id, record);
     try {
       await directory.io(['stage', input.target.path, temporary], input.text);
       const current = await directory.read(input.target.path);
       if (current.version !== input.expectedVersion) record.result = {kind: 'conflict', disk: current};
-      else { await directory.io(['replace', input.target.path, temporary]); record.result = {kind: 'saved', disk: proposed}; }
-      try { this.store.put('saves', id, record); }
+      else { await directory.io(['replace', input.target.path, temporary, (await directory.entry(temporary)).identity]); record.result = {kind: 'saved', disk: proposed}; }
+      try { this.publishSave(id, record); }
       catch (error) {
         if (record.result.kind === 'saved') record.result = {...record.result, persistencePending: true, message: 'Saved to disk; durable request publication failed: ' + errorText(error)};
         this.volatileSaves.set(id, record);
@@ -214,9 +241,6 @@ class LocalWorkspace {
     } catch (error) {
       record.message = errorText(error); this.volatileSaves.set(id, record);
       return fail('Uncertain', 'Save may have changed disk. Request retained; inspect disk and recovery. ' + errorText(error));
-    } finally {
-      // Remove only a successfully staged save temp; missing temp after replacement is harmless.
-      try { await directory.io(['remove', temporary]); } catch { /* Retain evidence; never remove a different directory tree. */ }
     }
   }
   async capture(input: { checkout: CheckoutTarget; clientId: string; paths: string[] }, signal: AbortSignal) {
@@ -304,11 +328,7 @@ class LocalWorkspace {
             this.store.put('operations', id, record);
           }
           if (create) {
-            await directory.io(['create', dirname(destination!) === '.' ? '.' : dirname(destination!), basename(destination!), source.directory ? 'folder' : 'file', await directory.destination(destination!)], undefined, signal);
-            if (input.text) {
-              const temporary = join(dirname(destination!), '.moonbase-save-' + randomUUID());
-              await directory.io(['stage', destination!, temporary], input.text, signal); await directory.io(['replace', destination!, temporary], undefined, signal);
-            }
+            await directory.io(['create', dirname(destination!) === '.' ? '.' : dirname(destination!), basename(destination!), source.directory ? 'folder' : 'file', await directory.destination(destination!)], input.text, signal);
           } else if (input.kind === 'move') {
             await directory.io(['move', source.path, destination!, source.identity], undefined, signal);
             ensure((await directory.entry(destination!)).identity === source.identity, 'Move destination identity changed after native success.');
@@ -334,14 +354,14 @@ class LocalWorkspace {
         if (record.result.items.some(item => item.outcome === 'uncertain')) break;
       }
       record.result.outcome = record.result.items.some(i => i.outcome === 'uncertain') || record.result.items.length < sources.length ? 'uncertain' : record.result.items.every(i => i.outcome === 'completed') ? 'completed' : 'failed';
-      record.result.message = record.result.outcome === 'uncertain' ? 'Inspect original, destination, staging and Finder Trash. Drafts and journal retained; no automatic retry.' : undefined;
-      try { this.store.put('operations', id, record); } catch (error) { record.result.message = 'Filesystem results known; persistence pending: ' + errorText(error); this.volatileOperations.set(id, record); }
+      if (record.result.outcome === 'uncertain') record.result.message = 'Inspect original, destination, staging and Finder Trash. Drafts and journal retained; no automatic retry.'; else delete record.result.message;
+      try { this.publishOperation(id, record); } catch (error) { record.result.message = 'Filesystem results known; persistence pending: ' + errorText(error); this.volatileOperations.set(id, record); }
       return record.result;
     } finally { tokens.forEach(token => this.releaseNative(token)); }
   }
-  reconcile(state: EditorRecovery) {
-    for (const record of this.operations()) {
-      if (record.acknowledged || !state.checkouts.some(c => same(c, record.input.checkout))) continue;
+  reconcile(state: EditorRecovery, records: OperationRecord[]) {
+    for (const record of records) {
+      if (!state.checkouts.some(c => same(c, record.input.checkout))) continue;
       for (const item of record.result.items) {
         if (item.outcome !== 'completed') continue;
         const kind = record.input.kind;
@@ -369,10 +389,37 @@ class LocalWorkspace {
         }
       }
     }
-    for (const record of [...this.store.all<SaveRecord>('saves'), ...this.volatileSaves.values()]) {
-      if (record.result?.kind !== 'saved') continue;
-      for (const draft of state.drafts) if (same(draft.target, record.input.target) && draft.disk.version === record.input.expectedVersion) draft.disk = record.result.disk;
-    }
+  }
+  publishOperation(id: string, record: OperationRecord) {
+    const fresh = record.result.items.filter(item => item.outcome === 'completed' && !(record.publishedItems ?? []).includes(canonical(item)));
+    this.store.db.exec('BEGIN IMMEDIATE');
+    try {
+      if (fresh.length) {
+        for (const row of this.store.db.prepare('SELECT client, revision, body FROM recovery').all()) {
+          const state = JSON.parse(row.body as string) as EditorRecovery;
+          this.reconcile(state, [{...record, result: {...record.result, items: fresh}}]);
+          if (JSON.stringify(state) !== row.body) this.store.db.prepare('UPDATE recovery SET revision=revision+1, body=? WHERE client=?').run(JSON.stringify(state), row.client as string);
+        }
+        record.publishedItems = [...(record.publishedItems ?? []), ...fresh.map(canonical)];
+        record.revision = this.store.readRecovery(record.input.clientId)?.revision ?? 0;
+      }
+      this.store.put('operations', id, record); this.store.db.exec('COMMIT'); this.volatileOperations.delete(id);
+    } catch (error) { this.store.db.exec('ROLLBACK'); throw error; }
+  }
+  publishSave(id: string, record: SaveRecord) {
+    this.store.db.exec('BEGIN IMMEDIATE');
+    try {
+      if (!record.published && record.result?.kind === 'saved') {
+        const saved = record.result.disk;
+        for (const row of this.store.db.prepare('SELECT client, body FROM recovery').all()) {
+          const state = JSON.parse(row.body as string) as EditorRecovery;
+          for (const draft of state.drafts) if (same(draft.target, record.input.target) && draft.disk.version === record.input.expectedVersion) draft.disk = saved;
+          if (JSON.stringify(state) !== row.body) this.store.db.prepare('UPDATE recovery SET revision=revision+1, body=? WHERE client=?').run(JSON.stringify(state), row.client as string);
+        }
+        record.published = true;
+      }
+      this.store.put('saves', id, record); this.store.db.exec('COMMIT'); this.volatileSaves.delete(id);
+    } catch (error) { this.store.db.exec('ROLLBACK'); throw error; }
   }
   async recoverEvidence() {
     for (const record of this.operations()) {
@@ -395,7 +442,7 @@ class LocalWorkspace {
         }
       }
       if (record.result.items.length >= record.input.sources.length && !record.result.items.some(i => i.outcome === 'uncertain')) record.result.outcome = record.result.items.every(i => i.outcome === 'completed') ? 'completed' : 'failed';
-      this.store.put('operations', key(record.input.clientId, record.input.id), record);
+      this.publishOperation(key(record.input.clientId, record.input.id), record);
     }
     for (const record of this.store.all<SaveRecord>('saves')) {
       if (record.result || this.locks.has(record.input.target.checkout.checkoutId)) continue;
@@ -404,7 +451,7 @@ class LocalWorkspace {
         if (disk.version === textDocument(record.input.text).version) record.result = {kind: 'saved', disk};
         else if (disk.version === record.input.expectedVersion) record.result = {kind: 'conflict', disk};
         else continue;
-        this.store.put('saves', key(record.input.clientId, record.input.requestId), record);
+        this.publishSave(key(record.input.clientId, record.input.requestId), record);
       } catch { /* Unavailable/changed path retains save intent. */ }
     }
   }
@@ -413,7 +460,6 @@ class LocalWorkspace {
     const stored = this.store.readRecovery(clientId), state = (stored?.state ?? emptyRecovery(clientId)) as EditorRecovery;
     recovery(state, clientId); const errors: string[] = [];
     for (const target of state.checkouts) { try { await this.directory(target); } catch (error) { errors.push(target.root + ': ' + errorText(error)); } }
-    this.reconcile(state);
     const operations = this.operations().filter(r => !r.acknowledged && (r.input.clientId === clientId || state.checkouts.some(c => same(c, r.input.checkout)))).map(r => r.result);
     for (const operation of operations) if (operation.outcome === 'uncertain') errors.push('Uncertain operation ' + operation.id + ': inspect original, destination, staging and Finder Trash; drafts retained.');
     for (const record of this.store.all<SaveRecord>('saves')) if (record.input.clientId === clientId && !record.result) errors.push('Uncertain save ' + record.input.requestId + ' for ' + record.input.target.path + ': inspect disk; saved draft and intent retained.');
@@ -424,6 +470,7 @@ class LocalWorkspace {
     const entries = (await directory.io(['list', input.path || '.'], undefined, signal)).toString().split('\0').filter(Boolean).slice(0, 20000).map(row => ({path: input.path ? input.path + '/' + row.slice(1) : row.slice(1), directory: row[0] === 'd', ignored: false}));
     let error: string | undefined;
     try {
+      this.policy(input.checkout);
       const output = await directory.io(['lookup', this.config.gitExecutable ?? '/usr/bin/git', '-c', 'core.excludesFile=/dev/null', 'check-ignore', '-z', '--stdin'], entries.map(e => e.path).join('\0') + (entries.length ? '\0' : ''), signal).catch(error => { if (error.status === 1) return Buffer.alloc(0); throw error; });
       const ignored = new Set(output.toString().split('\0')); entries.forEach(e => { e.ignored = ignored.has(e.path); });
     } catch (failure) { error = 'Git ignore policy unavailable; all entries shown. ' + errorText(failure); }
@@ -463,16 +510,19 @@ class LocalWorkspace {
     ensure(typeof input.query === 'string' && input.query.length <= 256 && !input.query.includes('\0') && (input.limit === undefined || Number.isInteger(input.limit) && input.limit > 0 && input.limit <= 100), 'Invalid lookup query/limit.');
     const directory = await this.directory(input.checkout), limit = input.limit ?? 100;
     try {
-      // Native policy preflight rejects redirected ignore files before Git reads them.
-      const bytes = await directory.io(['lookup', this.config.gitExecutable ?? '/usr/bin/git', '-c', 'core.excludesFile=/dev/null', 'ls-files', '-z', '--cached', '--others', '--exclude-standard'], undefined, signal);
-      const candidates = [...new Set(bytes.toString().split('\0').filter(Boolean))];
+      // Native preflight validates local policies; repository excludes are checked here.
+      this.policy(input.checkout);
+      if (!this.ripgrep) fail('Unavailable', 'Standalone ripgrep is unavailable. Supply the packaged ripgrepExecutable asset.');
+      const args = ['--files', '--hidden', '--null', '--no-config', '--no-ignore-parent', '--no-ignore-global', '--threads', '1'];
+      for (const excluded of ['.git', '.svn', '.hg', '.jj', '.DS_Store', 'Thumbs.db', 'node_modules', 'bower_components', '*.code-search']) args.push('--glob', '!**/' + excluded);
+      const bytes = await directory.io(['lookup', this.ripgrep!, ...args, '.'], undefined, signal);
+      const candidates = [...new Set(bytes.toString().split('\0').filter(Boolean).map(p => p.replace(/^\.\//, '')))];
       const paths: {path: string; score: number}[] = [];
-      let partial = candidates.length > 20000, unsupported = false;
+      let partial = candidates.length > 20000;
       const query = input.query.trim().toLowerCase();
       for (const p of candidates.slice(0, 20000)) {
         if (signal.aborted) fail('Cancelled', 'Lookup cancelled.');
         path(p);
-        if (/(^|\/)(\.ignore|\.rgignore)$/.test(p)) unsupported = true;
         if (p.split('/').some(c => ['.svn', '.hg', '.jj', '.DS_Store', 'Thumbs.db', 'node_modules', 'bower_components'].includes(c) || c.endsWith('.code-search'))) continue;
         // Independent bounded subsequence matching; no Microsoft lookup scorer.
         const lower = p.toLowerCase(); let cursor = 0, matched = true;
@@ -482,7 +532,7 @@ class LocalWorkspace {
         }
       }
       paths.sort((a,b) => a.score - b.score || a.path.length - b.path.length || a.path.localeCompare(b.path));
-      return {paths: unsupported ? [] : paths.slice(0, limit).map(x => x.path), partial: partial || paths.length > limit || unsupported, error: unsupported ? '.ignore/.rgignore policy is unavailable with the system Git enumerator. Use the tree or remove those policies before discovery.' : partial ? 'Discovery capped or entries unavailable; refine query.' : undefined};
+      return {paths: paths.slice(0, limit).map(x => x.path), partial: partial || paths.length > limit, error: partial ? 'Discovery capped or entries unavailable; refine query.' : undefined};
     } catch (error) { return {paths: [], partial: true, error: 'Discovery or ignore policy unavailable. ' + errorText(error)}; }
   }
   watch(input: {checkout: CheckoutTarget; paths: string[]}) {

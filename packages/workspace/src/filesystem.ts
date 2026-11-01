@@ -29,7 +29,9 @@ export function makeRunner(helper: string, children: Set<ChildProcess>): Run {
 }
 export class Directory {
   readonly fd: number;
-  constructor(readonly root: string, readonly expected: string, readonly run: Run, readonly gitExecutable: string) {
+  readonly root: string; readonly expected: string; readonly run: Run; readonly gitExecutable: string;
+  constructor(root: string, expected: string, run: Run, gitExecutable: string) {
+    this.root = root; this.expected = expected; this.run = run; this.gitExecutable = gitExecutable;
     this.fd = openSync(root, flags);
     try { ensure(identity(fstatSync(this.fd)) === expected && realpathSync(root) === root, 'Checkout directory changed. Restore its original identity.'); }
     catch (error) { closeSync(this.fd); throw error; }
@@ -49,17 +51,16 @@ export class Directory {
   async entry(p: string, signal?: AbortSignal) {
     path(p, true);
     if (p) ensure(relative(this.root, realpathSync(resolve(this.root, p))) === p, 'Use exact paths without case, mount or Unicode aliases.');
-    const id = (await this.io(['identity', p || '.'], undefined, signal)).toString();
-    return { identity: id, directory: fstatDirectory(this.root, p) };
+    const fd = openSync(resolve(this.root, p), constants.O_RDONLY | constants.O_NONBLOCK | 0x20000000);
+    try {
+      const info = fstatSync(fd); ensure(info.isFile() || info.isDirectory(), 'Unsupported filesystem object.');
+      return {identity: identity(info), directory: info.isDirectory()};
+    } finally { closeSync(fd); }
   }
+
   async read(p: string, signal?: AbortSignal): Promise<FileDocument> { path(p); return document(await this.io(['read', p], undefined, signal)); }
   async destination(p: string) {
     path(p); const parent = dirname(p); const item = await this.entry(parent === '.' ? '' : parent);
     ensure(item.directory, 'Destination parent must be a directory.'); return item.identity;
   }
-}
-function fstatDirectory(root: string, p: string) {
-  const fd = openSync(resolve(root, p), constants.O_RDONLY | constants.O_NONBLOCK | 0x20000000);
-  try { const info = fstatSync(fd); ensure(info.isFile() || info.isDirectory(), 'Unsupported filesystem object.'); return info.isDirectory(); }
-  finally { closeSync(fd); }
 }

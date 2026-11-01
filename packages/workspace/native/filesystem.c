@@ -10,6 +10,8 @@
 #include <unistd.h>
 
 #define LIMIT (2 * 1024 * 1024)
+#define COPY_LIMIT (512ULL * 1024 * 1024)
+#define TREE_LIMIT 20000
 #define SCOPED (O_NOFOLLOW_ANY | O_RESOLVE_BENEATH | O_NONBLOCK)
 
 static const char *owned_temp;
@@ -166,11 +168,18 @@ static void transfer(int from, int to) {
   }
 }
 
+static unsigned tree_entries;
+static unsigned long long tree_bytes;
+static unsigned tree_depth;
 static void safe_tree(int fd) {
+  if (++tree_entries > TREE_LIMIT || ++tree_depth > 128) { errno = EOVERFLOW; fail("Native selection size/depth limit exceeded"); }
   struct stat info;
   if (fstat(fd, &info)) fail("Inspect operation source");
   if (S_ISREG(info.st_mode)) {
     if (info.st_nlink != 1) { errno = ENOTSUP; fail("Operation unavailable: hard-linked file"); }
+    tree_bytes += info.st_size;
+    if (tree_bytes > COPY_LIMIT) { errno = EFBIG; fail("Native selection exceeds 512 MiB"); }
+    tree_depth--;
     return;
   }
   if (!S_ISDIR(info.st_mode)) { errno = ENOTSUP; fail("Unsupported source"); }
@@ -200,6 +209,7 @@ static void safe_tree(int fd) {
   }
   if (errno) fail("Inspect operation folder");
   closedir(dir);
+  tree_depth--;
 }
 
 static int same_name(const char *a, const char *b) {
@@ -232,11 +242,16 @@ static void free_case_name(const char *path, const char *excluded) {
   closedir(dir);
 }
 
+static unsigned copied_entries;
+static unsigned long long copied_bytes;
 static void copy_tree(int from, int to) {
+  if (++copied_entries > TREE_LIMIT) { errno = EOVERFLOW; fail("Copy entry limit exceeded"); }
   struct stat info;
   if (fstat(from, &info)) fail("Inspect copy source");
   if (S_ISREG(info.st_mode)) {
     if (info.st_nlink != 1) { errno = ENOTSUP; fail("Hard-linked copy source"); }
+    copied_bytes += info.st_size;
+    if (copied_bytes > COPY_LIMIT) { errno = EFBIG; fail("Copy exceeds 512 MiB"); }
     if (fcopyfile(from, to, NULL, COPYFILE_DATA) || fchmod(to, info.st_mode & 0777) || fsync(to))
       fail("Copy file bytes");
     return;
@@ -319,6 +334,9 @@ int main(int argc, char **argv) {
         !strcmp(argv[3], ".") || !strcmp(argv[3], "..") || !strcasecmp(argv[3], ".git")) {
       errno = EINVAL; fail("Invalid basename");
     }
+    char destination[PATH_MAX];
+    snprintf(destination, sizeof(destination), "%s/%s", argv[2], argv[3]);
+    free_case_name(destination, NULL);
     int parent = scoped_open(3, argv[2], O_RDONLY | O_DIRECTORY);
     struct stat info;
     if (fstat(parent, &info)) fail("Inspect create parent");
@@ -330,6 +348,8 @@ int main(int argc, char **argv) {
       if (mkdirat(parent, argv[3], 0700)) fail("Create folder (name must be free)");
     } else if (!strcmp(argv[4], "file")) {
       int fd = scoped_open(parent, argv[3], O_WRONLY | O_CREAT | O_EXCL);
+      transfer(STDIN_FILENO, fd);
+      if (fsync(fd)) fail("Sync created file");
       if (close(fd)) fail("Close new file");
     } else { errno = EINVAL; fail("Invalid create kind"); }
     return 0;
@@ -460,6 +480,18 @@ int main(int argc, char **argv) {
       fail("Remove temporary file");
     return 0;
   }
+  if (!strcmp(operation, "replace")) {
+    if (argc != 5) { errno = EINVAL; fail("Invalid replacement identity"); }
+    int fd = scoped_open(3, argv[3], O_RDONLY);
+    struct stat info;
+    if (fstat(fd, &info)) fail("Inspect save staging object");
+    char expected[100];
+    snprintf(expected, sizeof(expected), "%llu:%llu", (unsigned long long)info.st_dev, (unsigned long long)info.st_ino);
+    if (!S_ISREG(info.st_mode) || info.st_nlink != 1 || strcmp(expected, argv[4])) { errno = ESTALE; fail("Save staging object replaced"); }
+    revalidate_source(argv[3], &info);
+    if (renameatx_np(3, argv[3], 3, argv[2], RENAME_NOFOLLOW_ANY | RENAME_RESOLVE_BENEATH)) fail("Replace file");
+    return 0;
+  }
   if (argc != 4 || !argv[3][0]) {
     errno = EINVAL;
     fail("Invalid save request");
@@ -477,12 +509,6 @@ int main(int argc, char **argv) {
     if (fcopyfile(original, temp, NULL, COPYFILE_METADATA) ||
         fchmod(temp, info.st_mode & 07777) || fsync(temp) || close(temp))
       fail("Stage file");
-    return 0;
-  }
-  if (!strcmp(operation, "replace")) {
-    if (renameatx_np(3, argv[3], 3, argv[2],
-                     RENAME_NOFOLLOW_ANY | RENAME_RESOLVE_BENEATH))
-      fail("Replace file");
     return 0;
   }
   errno = EINVAL;
