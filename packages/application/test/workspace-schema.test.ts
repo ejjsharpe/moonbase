@@ -183,6 +183,10 @@ test('all saved objects reject unfamiliar nested fields before reply projection'
 test('reply projection, dynamic keys, optional omission and mutable DTOs remain supported', () => {
   const decoded = decodeEditorRecovery(state);
   decoded.drafts.push({ target, text: '', disk });
+  decoded.views['another'] = structuredClone(state.views[checkout.checkoutId]);
+  decoded.views[checkout.checkoutId].fileViews['another.txt'] = 'staged';
+  decoded.views[checkout.checkoutId].positions['another.txt'] = {};
+  delete decoded.views['another'];
   decoded.views[checkout.checkoutId].positions[target.path].file = {
     line: 2,
     column: 3,
