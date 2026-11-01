@@ -1,7 +1,7 @@
 import { Schema, Struct } from 'effect';
 import { isAbsolute } from 'node:path';
 import { ApplicationError } from '@moonbase/application/client';
-import { hash } from './validation.ts';
+import { hash, recovery } from './validation.ts';
 import {
   CheckoutTargetSchema,
   FileDocumentSchema,
@@ -128,7 +128,7 @@ export function parseRecord<T>(bucket: string, body: string): T {
 export function parseRecovery(body: string, clientId: string) {
   try {
     const state = decodeEditorRecovery(JSON.parse(body));
-    if (state.clientId !== clientId) throw Error();
+    recovery(state, clientId);
     return state;
   } catch {
     throw invalidStored();
