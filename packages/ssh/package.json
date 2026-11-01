@@ -1,11 +1,18 @@
 {
-  "name": "@moonbase/ssh", "private": true, "type": "module",
-  "exports": { ".": "./src/index.ts" },
+  "name": "@moonbase/ssh",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "scripts": {
     "build": "tsc --noEmit -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "lint": "tsc --noEmit -p tsconfig.json",
+    "lint": "oxlint .",
     "test": "node --experimental-strip-types --test test/*.test.ts"
   },
-  "dependencies": { "@moonbase/application": "workspace:*", "effect": "4.1.0" }
+  "dependencies": {
+    "@moonbase/application": "workspace:*",
+    "effect": "4.1.0"
+  }
 }
