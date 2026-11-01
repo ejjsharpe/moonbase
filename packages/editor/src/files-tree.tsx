@@ -1,7 +1,7 @@
 import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
 import { styles } from './styles.ts';
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { filesUI } from '@moonbase/ui/files';
 import type { CheckoutTarget } from '@moonbase/application/client';
 import { checkoutKey, fileKey, type EditorController, type EditorSnapshot } from './editor.ts';
@@ -12,16 +12,21 @@ export function FilesTree({
   state,
   checkout,
   active,
+  anchorReset,
 }: {
   controller: EditorController;
   state: EditorSnapshot;
   checkout: CheckoutTarget;
   active: string;
+  anchorReset: number;
 }) {
   const tree = readOwn(state.recovery.views, checkout.checkoutId)!.tree,
     treeElement = useRef<HTMLDivElement>(null),
     anchor = useRef<string | null>(null),
     id = useId();
+  useLayoutEffect(() => {
+    anchor.current = null;
+  }, [anchorReset]);
   const [geometry, setGeometry] = useState({ top: tree.scroll, height: 500 });
   const rows: {
     path: string;

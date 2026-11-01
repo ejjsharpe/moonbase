@@ -69,6 +69,7 @@ export const EditorWorkbench = forwardRef<EditorWorkbenchHandle, EditorWorkbench
     const buffer =
       target && state.buffers.find((buffer) => fileKey(buffer.target) === fileKey(target));
     const mode = (target && readOwn(selected?.fileViews, target.path)) || 'file';
+    const [anchorReset, setAnchorReset] = useState(0);
     const [lookup, setLookup] = useState(false),
       [panel, setPanel] = useState('files'),
       [action, updateAction] = useState<Action | null>(null);
@@ -454,7 +455,12 @@ export const EditorWorkbench = forwardRef<EditorWorkbenchHandle, EditorWorkbench
                           {...stylex.props(controls.button)}
                           disabled={!target}
                           onClick={() => {
-                            if (target) run(controller.reveal(target));
+                            if (target)
+                              run(
+                                controller
+                                  .reveal(target)
+                                  .finally(() => setAnchorReset((value) => value + 1)),
+                              );
                           }}>
                           Reveal Active File
                         </Button>
@@ -464,6 +470,7 @@ export const EditorWorkbench = forwardRef<EditorWorkbenchHandle, EditorWorkbench
                           state={state}
                           checkout={checkout}
                           active={selected.active}
+                          anchorReset={anchorReset}
                         />
                         <div {...stylex.props(filesUI.tools)}>
                           {(['move', 'copy', 'trash'] as const).map((kind) => (

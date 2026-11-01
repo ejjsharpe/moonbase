@@ -1005,3 +1005,37 @@ test('Shift tree ranges extend and shrink from a stable anchor before Trash', as
   await tree.press('Shift+ArrowDown');
   expect(await selected()).toEqual(paths.slice(1, 3));
 });
+
+test('Reveal starts a new Shift tree range and captures only that Trash batch', async ({
+  page,
+}) => {
+  await page.goto('/');
+  const tree = first(page).getByRole('tree', { name: 'Files', exact: true });
+  const selected = () =>
+    tree
+      .locator('[role="treeitem"][aria-selected="true"]')
+      .evaluateAll((items) => items.map((item) => item.getAttribute('aria-label')));
+  await tree.focus();
+  await tree.press('Home');
+  await tree.press('Shift+ArrowDown');
+  await first(page).getByRole('button', { name: 'Reveal Active File', exact: true }).click();
+  await expect.poll(selected).toEqual(['welcome.ts']);
+  await tree.focus();
+  await tree.press('Shift+ArrowUp');
+  expect(await selected()).toEqual(['README.md', 'welcome.ts']);
+  await tree.press('Shift+ArrowDown');
+  expect(await selected()).toEqual(['welcome.ts']);
+  await tree.press('Shift+ArrowUp');
+  expect(await selected()).toEqual(['README.md', 'welcome.ts']);
+  await first(page).getByRole('button', { name: 'Trash', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Move to Trash', exact: true });
+  await expect(dialog).toContainText('README.md, welcome.ts');
+  await expect(dialog).not.toContainText('ignored.txt');
+  await expect(dialog).not.toContainText('src');
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await tree.focus();
+  await tree.press('Shift+ArrowDown');
+  expect(await selected()).toEqual(['welcome.ts']);
+  await tree.press('Shift+ArrowUp');
+  expect(await selected()).toEqual(['README.md', 'welcome.ts']);
+});
