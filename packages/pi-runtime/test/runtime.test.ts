@@ -53,9 +53,14 @@ test('busy reservation stays visible; view unsubscribe and caller cancellation n
   await until(()=>f.client.command('getChat',{target}),s=>!!s.run);off();const count=events.length;
   await assert.rejects(f.client.command('sendChat',{target,requestId:'two',text:'Busy'}),{code:'Conflict'});
   assert.equal((await f.client.command('getChatSend',{target,requestId:'two'}))?.admission,'reserved');
+  const busy=await f.client.command('getChat',{target});
+  assert.equal(busy.state,'running');
+  assert.equal(busy.message,'Pending Send intent is retained; query or retry its original request explicitly.');
   const abort=new AbortController();abort.abort();await assert.rejects(f.client.command('sendChat',{target,requestId:'never',text:'Never'},{signal:abort.signal}),{code:'Cancelled'});
   assert.equal(await f.client.command('getChatSend',{target,requestId:'never'}),null);
-  release();await until(()=>f.client.command('getChat',{target}),s=>s.run===null&&s.entries.some(e=>e.text==='Detached completion'));assert.equal(events.length,count);assert.equal(f.faux.state.callCount,1);
+  release();const completed=await until(()=>f.client.command('getChat',{target}),s=>s.run===null&&s.entries.some(e=>e.text==='Detached completion'));
+  assert.equal(completed.state,'uncertain');assert.equal(completed.message,busy.message);
+  assert.equal(events.length,count);assert.equal(f.faux.state.callCount,1);
 });
 test('exact task Stop settles and cannot abort a later task',async t=>{
   const f=await fixture(t),target=await f.create();f.faux.setResponses([fauxAssistantMessage('a'.repeat(10000))]);

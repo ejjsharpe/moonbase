@@ -1,5 +1,5 @@
 import { ApplicationError } from '@moonbase/application/client';
-import { maximumChatInputBytes, maximumChatReplyBytes, type ChatCommand, type ChatInput, type ChatOutput, type ChatSession, type ChatTarget, type ChatSummary, type ChatHistoryPage, type ChatSnapshot, type ChatSendReceipt, type ChatStopTarget } from '@moonbase/application/chat-client';
+import { chatPageSize, chatPreviewBytes, maximumChatInputBytes, maximumChatReplyBytes, type ChatCommand, type ChatInput, type ChatOutput, type ChatSession, type ChatTarget, type ChatSummary, type ChatHistoryPage, type ChatSnapshot, type ChatSendReceipt, type ChatStopTarget } from '@moonbase/application/chat-client';
 import type { ChatHostTarget } from '@moonbase/application/host-client';
 
 export const fail = (code: ApplicationError['code'], message: string): never => { throw new ApplicationError({code, message}); };
@@ -55,11 +55,11 @@ export function input<K extends ChatCommand>(operation: K, value: unknown): Chat
   return result as ChatInput<K>;
 }
 export function sized<T>(value:T):T { if(Buffer.byteLength(JSON.stringify(value))>maximumChatReplyBytes-256) fail('InvalidInput','Chat reply exceeds its delivery limit.'); return value; }
-export function preview(text: string, bytes = 4096) {
+export function preview(text: string, bytes = chatPreviewBytes) {
   let result='', used=0; for(const char of text.toWellFormed()) {const size=Buffer.byteLength(char); if(used+size>bytes) break; result+=char; used+=size;}
   return {text:result,truncated:result.length<text.length};
 }
-function outputText(value:unknown):string {if(typeof value!=='string'||!value.isWellFormed()||Buffer.byteLength(value)>4096)return fail('Incompatible','Invalid chat preview.');return value;}
+function outputText(value:unknown):string {if(typeof value!=='string'||!value.isWellFormed()||Buffer.byteLength(value)>chatPreviewBytes)return fail('Incompatible','Invalid chat preview.');return value;}
 function bool(value: unknown): boolean { if(typeof value!=='boolean') return fail('Incompatible','Invalid chat flag.'); return value; }
 function one<T extends string>(value:unknown, options:readonly T[]):T {if(!options.includes(value as T)) return fail('Incompatible','Invalid chat status.'); return value as T;}
 function array(value: unknown, max: number):unknown[] {if(!Array.isArray(value)||value.length>max) return fail('Incompatible','Chat list exceeds its limit.'); return value;}
@@ -70,7 +70,7 @@ function summary(value: unknown): ChatSummary {
   const d=object(value); const createdAt=string(d.createdAt,64); if(!Number.isFinite(Date.parse(createdAt))) fail('Incompatible','Invalid chat timestamp.');
   return {target:outputTarget(d.target),title:string(d.title,200),createdAt,cwd:string(d.cwd,4096),model:string(d.model,512)};
 }
-function history(value:unknown):ChatHistoryPage {const d=object(value); return {entries:array(d.entries,32).map(value=>{
+function history(value:unknown):ChatHistoryPage {const d=object(value); return {entries:array(d.entries,chatPageSize).map(value=>{
   const e=object(value); return {id:id(e.id),role:one(e.role,['user','assistant','tool','system'] as const),text:outputText(e.text),truncated:bool(e.truncated),...(e.toolName===undefined?{}:{toolName:string(e.toolName,128)}),...(e.isError===undefined?{}:{isError:bool(e.isError)})};
 }),olderCursor:d.olderCursor===null?null:cursor(d.olderCursor)};}
 function snapshot(value:unknown):ChatSnapshot {
@@ -89,7 +89,7 @@ export function output<K extends ChatCommand>(operation:K,value:unknown,request:
   const d=value===null?null:object(value); let result:unknown;
   switch(operation) {
     case 'getChatHost': {const x=d!; result={...session({host:outputHost(x.host),actorId:x.actorId}),cwd:string(x.cwd,4096),model:string(x.model,512)}; break;}
-    case 'listChats': result={conversations:array(d!.conversations,32).map(summary),nextCursor:d!.nextCursor===null?null:cursor(d!.nextCursor)}; break;
+    case 'listChats': result={conversations:array(d!.conversations,chatPageSize).map(summary),nextCursor:d!.nextCursor===null?null:cursor(d!.nextCursor)}; break;
     case 'createChat': result={requestId:id(d!.requestId),conversation:summary(d!.conversation)}; break;
     case 'getChat': result=snapshot(value); break;
     case 'getChatHistory': result=history(value); break;

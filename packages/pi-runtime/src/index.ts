@@ -9,7 +9,7 @@ import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node';
 import type { Models } from '@earendil-works/pi-ai/models';
 import { Effect, Layer, Queue, Stream } from 'effect';
 import { ApplicationError } from '@moonbase/application/client';
-import type { ChatCommand, ChatInput, ChatOutput, ChatSnapshot, ChatSummary, ChatTarget, ChatSession, ChatHistoryPage, ChatSendReceipt, ChatRun, ChatStopTarget } from '@moonbase/application/chat-client';
+import { chatPageSize, type ChatCommand, type ChatInput, type ChatOutput, type ChatSnapshot, type ChatSummary, type ChatTarget, type ChatSession, type ChatHistoryPage, type ChatSendReceipt, type ChatRun, type ChatStopTarget } from '@moonbase/application/chat-client';
 import { ChatService, releaseResource, type ChatServiceShape } from '@moonbase/application/services';
 import * as V from './validation.ts';
 
@@ -76,7 +76,7 @@ class Host {
         conversations.push(summary);
       }
       scan=page.next;
-    }while(scan&&++scanned<32);
+    }while(scan&&++scanned<chatPageSize);
     return {conversations,nextCursor:writeCursor(scan,'list',this.cursorIdentity)};
   }
   async create(d:ChatInput<'createChat'>):Promise<ChatOutput<'createChat'>> {
@@ -146,7 +146,7 @@ class Host {
       const entry=entryPreview(row); const candidate={...base as object,entries:entry?[...entries,entry]:entries,olderCursor:writeCursor(page.next,'history',this.cursorIdentity+':'+target.conversationId)};
       if(Buffer.byteLength(JSON.stringify(candidate))>250*1024) return {entries,olderCursor:writeCursor(scan??{start:true},'history',this.cursorIdentity+':'+target.conversationId)};
       if(entry)entries.push(entry); scan=page.next;
-    }while(scan&&++scanned<32);
+    }while(scan&&++scanned<chatPageSize);
     return {entries,olderCursor:writeCursor(scan??undefined,'history',this.cursorIdentity+':'+target.conversationId)};
   }
   async snapshot(target:ChatTarget):Promise<ChatSnapshot> {
@@ -167,8 +167,21 @@ class Host {
         ...V.preview(live.generation?.message?.content.filter(part=>part.type==='text').map(part=>part.text).join('')??''),tools};
     }
     const latest=(await this.harness.commit(tx=>tx.scanTasks({conversationId:cid(target.conversationId),kind:'pi.generation',order:'descending'},1),context)).items[0];
-    const state:ChatSnapshot['state']=parked?'failed':run?'running':meta.pending?'uncertain':latest?.state.status==='terminal'?(latest.state.outcome.status==='aborted'?'stopped':latest.state.outcome.status==='completed'?'idle':'failed'):'idle';
-    const base={conversation:this.summary(target.conversationId,meta),run,state,...(parked?{message:'Pi parked this task after repeated interruption. Preserve its receipt and resolve the host failure.'}:meta.pending?{message:'Pending Send intent is retained; query or retry its original request explicitly.'}:state==='failed'?{message:'Pi could not complete the last submission.'}:{})};
+    let state:ChatSnapshot['state'];
+    if(parked) state='failed';
+    else if(run) state='running';
+    else if(meta.pending) state='uncertain';
+    else if(latest?.state.status==='terminal') {
+      if(latest.state.outcome.status==='aborted') state='stopped';
+      else if(latest.state.outcome.status==='completed') state='idle';
+      else state='failed';
+    } else state='idle';
+
+    let message:string|undefined;
+    if(parked) message='Pi parked this task after repeated interruption. Preserve its receipt and resolve the host failure.';
+    else if(meta.pending) message='Pending Send intent is retained; query or retry its original request explicitly.';
+    else if(state==='failed') message='Pi could not complete the last submission.';
+    const base={conversation:this.summary(target.conversationId,meta),run,state,...(message===undefined?{}:{message})};
     return {...base,...await this.history(target,undefined,base)};
   }
   async stop(d:ChatInput<'stopChat'>):Promise<ChatOutput<'stopChat'>> {
