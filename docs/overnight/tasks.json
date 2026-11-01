@@ -1981,11 +1981,11 @@
     "childThreadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-desktop-r1-8f4a3e9",
     "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-desktop-r1-8f4a3e9:ordinal:1",
     "childNodeId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-desktop-r1-8f4a3e9",
-    "status": "running",
-    "workState": "working",
+    "status": "completed",
+    "workState": "result_available",
     "hasPendingChildRuns": false,
-    "latestTerminalRunId": null,
-    "latestTerminalStatus": null,
+    "latestTerminalRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-desktop-r1-8f4a3e9:ordinal:1",
+    "latestTerminalStatus": "completed",
     "latestTerminalSummary": null,
     "latestTerminalResultContextTransferId": null,
     "providerInstanceId": "codex",
@@ -2000,8 +2000,8 @@
         "value": "default"
       }
     ],
-    "summary": null,
-    "resultContextTransferId": null,
+    "summary": "**Two P2 findings block technical clearance of [PR #14](https://github.com/ejjsharpe/moonbase/pull/14).** Both reproduce in the actual packaged app and require editor-owner follow-ups:\n\n- [editor.ts:456](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-23880320/packages/editor/src/editor.ts:456): opening `__proto__` and moving the caret mutates `Object.prototype`, disrupting editing. Make filename-map reads and writes own-property safe.\n- [workbench.tsx:361](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-23880320/packages/editor/src/workbench.tsx:361): at 760\u00d7650 and 140% zoom, Tab actions places Close above the viewport, unreachable by click. Bound and scroll the menu.\n\nHEAD: `8f4a3e9daa6733b023cf84ac040943241c0bd712`  \nBASE: `71f272d354359f8d5e1cff7a9f57159325eeabc5`\n\nExisting **228 repository/integration tests, 22 Electron journeys, packaged smoke, and six rapid-flow repeats pass**. New packaged regressions fail. Rebuilt asar matches the recorded hash exactly. The original rapid-lookup dismissal remains **unexplained**.\n\n[Full report, runnable reproductions, hashes and trace locations](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-23880320/dist/astra-r1-review/REVIEW.txt).\n\nAll nine PRs linked; tracked tree clean; review processes stopped.\n\nNot checked: real OS gestures, signing/Intel, VoiceOver, performance or physical durability. Human acceptance remains **PENDING**.",
+    "resultContextTransferId": "context-transfer:type:subagent_result:source-thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-desktop-r1-8f4a3e9:target-thread:63122af4-017b-4b66-bcae-a905f2b1659d:32843bda-0fde-434f-8ae2-ea58270a8df0",
     "hasPendingQuestion": false,
     "pendingApproval": null,
     "waitTimedOut": false
@@ -2043,15 +2043,68 @@
     "waitTimedOut": false
   },
   "review-chat-integration-r1": {
-    "status": "queued_after_app14_round",
-    "head": "478ab94f1f434f27c4a8115e2e4a7de7ea1d84c1",
-    "base": "cbe9478e61fca354cb23d5f6bfb92ff256214ba4",
-    "additionalDependency": "1aec1a438ba0d5592b0e6c3f0e1be835cf3c034b",
+    "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-chat-integration-r1-478ab94",
+    "childThreadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-chat-integration-r1-478ab94",
+    "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-chat-integration-r1-478ab94:ordinal:1",
+    "childNodeId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-chat-integration-r1-478ab94",
+    "status": "running",
+    "workState": "working",
+    "hasPendingChildRuns": false,
+    "latestTerminalRunId": null,
+    "latestTerminalStatus": null,
+    "latestTerminalSummary": null,
+    "latestTerminalResultContextTransferId": null,
+    "providerInstanceId": "codex",
     "model": "gpt-6-astra",
-    "options": {
-      "reasoningEffort": "xhigh",
-      "serviceTier": "default"
-    },
-    "mustUseNewDelegateTask": true
+    "options": [
+      {
+        "id": "reasoningEffort",
+        "value": "xhigh"
+      },
+      {
+        "id": "serviceTier",
+        "value": "default"
+      }
+    ],
+    "summary": null,
+    "resultContextTransferId": null,
+    "hasPendingQuestion": false,
+    "pendingApproval": null,
+    "waitTimedOut": false
+  },
+  "editor-fix-desktop-r1": {
+    "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Athread-send%3Aeditor-owner-fix-app-r1-proto-menu",
+    "childThreadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-02-editor-module-r1-bb5c5d0",
+    "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-02-editor-module-r1-bb5c5d0:ordinal:14",
+    "childNodeId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Athread-send%3Aeditor-owner-fix-app-r1-proto-menu",
+    "status": "running",
+    "workState": "working",
+    "hasPendingChildRuns": false,
+    "latestTerminalRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-02-editor-module-r1-bb5c5d0:ordinal:13",
+    "latestTerminalStatus": "completed",
+    "latestTerminalSummary": "Published [draft PR #14](https://github.com/ejjsharpe/moonbase/pull/14), linked with its prerequisites.\n\n- **Head:** `8f4a3e9daa6733b023cf84ac040943241c0bd712`\n- **Base:** `fix/editor-native-import-dialog` \u2014 `71f272d354359f8d5e1cff7a9f57159325eeabc5`\n- **Passed:** 228 public/integration tests, 22 Electron journeys, focused repeats, Nx diagnostics, frozen install, provenance, renderer audit, build and unsigned package execution.\n- **Package:** ARM64 app runs with system-only PATH, real SQLite/files/Git, native imports, five Monaco workers and no provider environment.\n\n[Runnable commands](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/README.md) \u00b7 [Evidence, screenshots and limits](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/evidence/validation.md)\n\nIndependent review/CI, signing, real OS gestures, VoiceOver and human acceptance remain pending.  \nThe original rapid-lookup dismissal remains unexplained despite passing bounded probes; its failure evidence is preserved.",
+    "latestTerminalResultContextTransferId": "context-transfer:type:subagent_result:source-thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-02-editor-module-r1-bb5c5d0:target-thread:63122af4-017b-4b66-bcae-a905f2b1659d:cf68b9c7-54a3-4e43-8166-4ccfe9fb96ba",
+    "providerInstanceId": "codex",
+    "model": "gpt-6.1-sol",
+    "options": [
+      {
+        "id": "reasoningEffort",
+        "value": "xhigh"
+      },
+      {
+        "id": "serviceTier",
+        "value": "default"
+      }
+    ],
+    "summary": null,
+    "resultContextTransferId": null,
+    "hasPendingQuestion": false,
+    "pendingApproval": null,
+    "waitTimedOut": false
+  },
+  "foreground-test-slot": {
+    "owner": "07-chat-proof",
+    "reason": "app14 reviewer and owning packaged reds stopped; editor headless followup; chat source/package phase active",
+    "releaseRequires": "explicit owned process stop report"
   }
 }
