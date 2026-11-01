@@ -1,83 +1,30 @@
 import type { ApplicationError, CommandOptions } from './client.ts';
-import type { ChatHostTarget } from './host-client.ts';
+import type * as Contracts from './chat-schema.ts';
 
 export const maximumChatInputBytes = 32 * 1024;
 export const maximumChatReplyBytes = 256 * 1024;
 export const chatPageSize = 32;
 export const chatPreviewBytes = 4096;
-export type ChatSession = { host: ChatHostTarget; actorId: string };
-export type ChatTarget = ChatSession & { conversationId: string };
-export type ChatHostConfiguration = ChatSession & { cwd: string; model: string };
-export type ChatSummary = {
-  target: ChatTarget;
-  title: string;
-  createdAt: string;
-  cwd: string;
-  model: string;
-};
-export type ChatEntry = {
-  id: string;
-  role: 'user' | 'assistant' | 'tool' | 'system';
-  text: string;
-  truncated: boolean;
-  toolName?: string;
-  isError?: boolean;
-};
+export type ChatSession = typeof Contracts.ChatSessionSchema.Type;
+export type ChatTarget = typeof Contracts.ChatTargetSchema.Type;
+export type ChatHostConfiguration = typeof Contracts.ChatHostConfigurationSchema.Type;
+export type ChatSummary = typeof Contracts.ChatSummarySchema.Type;
+export type ChatEntry = typeof Contracts.ChatEntrySchema.Type;
 /** Newest first, with an opaque cursor for the next older page. */
-export type ChatHistoryPage = { entries: ChatEntry[]; olderCursor: string | null };
-export type ChatStopTarget = { target: ChatTarget; submissionId: string; taskId: string | null };
-export type ChatToolActivity = {
-  taskId: string;
-  name: string;
-  state: 'running' | 'completed' | 'failed';
-  text: string;
-  truncated: boolean;
-};
-export type ChatRun = {
-  stop: ChatStopTarget;
-  state: 'running' | 'stopping' | 'deferred';
-  text: string;
-  truncated: boolean;
-  tools: ChatToolActivity[];
-};
+export type ChatHistoryPage = typeof Contracts.ChatHistoryPageSchema.Type;
+export type ChatStopTarget = typeof Contracts.ChatStopTargetSchema.Type;
+export type ChatToolActivity = typeof Contracts.ChatToolActivitySchema.Type;
+export type ChatRun = typeof Contracts.ChatRunSchema.Type;
 /** A bounded replacement snapshot, never an unbounded append-only event feed. */
-export type ChatSnapshot = ChatHistoryPage & {
-  conversation: ChatSummary;
-  run: ChatRun | null;
-  state: 'idle' | 'running' | 'stopped' | 'failed' | 'uncertain';
-  message?: string;
-};
-export type ChatSendReceipt = { target: ChatTarget; requestId: string } & (
-  | { admission: 'reserved'; submissionId: null }
-  | { admission: 'admitted'; submissionId: string }
-);
+export type ChatSnapshot = typeof Contracts.ChatSnapshotSchema.Type;
+export type ChatSendReceipt = typeof Contracts.ChatSendReceiptSchema.Type;
+export type ChatCommand = keyof typeof Contracts.chatInputSchemas;
 export type ChatCommands = {
-  getChatHost: { input: { host: ChatHostTarget }; output: ChatHostConfiguration };
-  listChats: {
-    input: { session: ChatSession; cursor?: string };
-    output: { conversations: ChatSummary[]; nextCursor: string | null };
-  };
-  createChat: {
-    input: { session: ChatSession; requestId: string; title: string };
-    output: { requestId: string; conversation: ChatSummary };
-  };
-  getChat: { input: { target: ChatTarget }; output: ChatSnapshot };
-  getChatHistory: { input: { target: ChatTarget; cursor: string }; output: ChatHistoryPage };
-  sendChat: {
-    input: { target: ChatTarget; requestId: string; text: string };
-    output: ChatSendReceipt;
-  };
-  getChatSend: { input: { target: ChatTarget; requestId: string }; output: ChatSendReceipt | null };
-  stopChat: {
-    input: { stop: ChatStopTarget; requestId: string };
-    output: {
-      stop: ChatStopTarget;
-      requestId: string;
-      outcome: 'stopped' | 'terminal' | 'superseded' | 'pending';
-    };
+  [K in ChatCommand]: {
+    input: (typeof Contracts.chatInputSchemas)[K]['Type'];
+    output: (typeof Contracts.chatOutputSchemas)[K]['Type'];
   };
 };
-export type ChatCommand = keyof ChatCommands;
 export type ChatInput<K extends ChatCommand> = ChatCommands[K]['input'];
 export type ChatOutput<K extends ChatCommand> = ChatCommands[K]['output'];
 export interface ChatClient {

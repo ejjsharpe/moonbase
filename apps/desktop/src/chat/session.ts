@@ -1,8 +1,8 @@
+import { decodeChatInput, isChatCommand } from '@moonbase/application/chat-schema';
 import { ApplicationError } from '@moonbase/application/client';
 import type { ChatClient, ChatCommand, ChatSession } from '@moonbase/application/chat-client';
 import type { ConnectionClient, ConnectionCommand } from '@moonbase/application/connection-client';
 import {
-  chatFields,
   connectionFields,
   fields,
   record,
@@ -50,12 +50,10 @@ export class ChatIpcSession {
     requestId(id);
     if (this.work.has(id) || this.work.size >= 64) invalid();
     if (typeof operation !== 'string' || JSON.stringify(input).length > 65536) return invalid();
-    const v = record(input);
+    let v = record(input);
     if (kind === 'chat') {
-      if (!Object.hasOwn(chatFields, operation)) invalid();
-      const spec = chatFields[operation as ChatCommand];
-      if (!spec) invalid();
-      fields(v, spec[0], spec[1]);
+      if (!isChatCommand(operation)) return invalid();
+      v = decodeChatInput(operation, v);
       this.authority(v);
     } else if (kind === 'connection') {
       if (!Object.hasOwn(connectionFields, operation)) invalid();
@@ -64,7 +62,7 @@ export class ChatIpcSession {
       fields(v, spec);
     } else if (kind === 'watch-chat') {
       if (operation !== '') invalid();
-      fields(v, ['target']);
+      v = decodeChatInput('getChat', v);
       this.authority(v);
     } else if (kind === 'watch-connection') {
       if (operation !== '') invalid();

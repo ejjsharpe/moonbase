@@ -24,6 +24,37 @@ test('private configuration is owner-only, bounded, explicit and projected; bad 
   assert.deepEqual(result.context, { host: value.profile.expected, actorId: 'owner' });
   assert(!JSON.stringify(result.context).includes(value.token));
   assert.equal(result.ssh.sshExecutable, undefined);
+  await writeFile(path, JSON.stringify({ ...value, sshExecutable: '/usr/bin/ssh' }));
+  assert.equal((await readConfiguration(path)).ssh.sshExecutable, '/usr/bin/ssh');
+  for (const invalid of [
+    null,
+    [],
+    { ...value, profile: { ...value.profile, extra: value.token } },
+    {
+      ...value,
+      profile: {
+        ...value.profile,
+        expected: { ...value.profile.expected, privateKey: value.token },
+      },
+    },
+    { ...value, token: { secret: value.token } },
+    { ...value, token: value.token.repeat(150) },
+    { ...value, actorId: 'invalid actor' },
+    { ...value, sshExecutable: 'relative/ssh' },
+    { ...value, sshExecutable: null },
+    { ...value, profile: { ...value.profile, remotePort: '8787' } },
+    { ...value, profile: { ...value.profile, label: 1 } },
+    { ...value, profile: { ...value.profile, destination: null } },
+  ]) {
+    await writeFile(path, JSON.stringify(invalid));
+    await assert.rejects(readConfiguration(path), (error: unknown) => {
+      assert.equal((error as { code: string }).code, 'InvalidInput');
+      assert(!String(error).includes(value.token));
+      assert(!String(error).includes(path));
+      return true;
+    });
+  }
+  await writeFile(path, JSON.stringify(value));
   await chmod(path, 0o644);
   await assert.rejects(readConfiguration(path));
   await chmod(path, 0o600);

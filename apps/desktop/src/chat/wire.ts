@@ -1,5 +1,5 @@
 import { ApplicationError, type ApplicationErrorCode } from '@moonbase/application/client';
-import type { ChatClient, ChatCommand, ChatSession } from '@moonbase/application/chat-client';
+import type { ChatClient, ChatSession } from '@moonbase/application/chat-client';
 import type { ConnectionClient, ConnectionCommand } from '@moonbase/application/connection-client';
 
 export const channels = {
@@ -134,16 +134,6 @@ function unwrapError(r: Reply) {
   }
   return Error('Invalid reply');
 }
-export const chatFields: Record<ChatCommand, [string[], string[]?]> = {
-  getChatHost: [['host']],
-  listChats: [['session', 'cursor'], ['session']],
-  createChat: [['session', 'requestId', 'title']],
-  getChat: [['target']],
-  getChatHistory: [['target', 'cursor']],
-  sendChat: [['target', 'requestId', 'text']],
-  getChatSend: [['target', 'requestId']],
-  stopChat: [['stop', 'requestId']],
-};
 export const connectionFields: Record<ConnectionCommand, string[]> = {
   getConnection: [],
   connect: ['profileId'],

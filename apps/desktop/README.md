@@ -80,6 +80,8 @@ View switching, closing a file/chat view, Hide, Disconnect and client Quit never
 
 Desktop binds the shared chat controller's synchronous storage interface to LocalStorage under `moonbase.chat.v1`. The shared module owns the saved schema and preservation rules; desktop owns this namespace and keeps it fixed for the controller's lifetime. No saved-state migration or import occurs.
 
+Privileged chat IPC validates inputs through `@moonbase/application/chat-schema`, then checks the configured host/store/actor before dispatch. Private configuration uses a local Effect schema with the shared identity definitions; file ownership, permissions, no-follow checks and credential-safe errors remain enforced. Schema code stays out of the renderer and preload; browser client types use type-only imports.
+
 `test:native` is a separate required macOS qualification gate: it enumerates editor,
 configuration, reload/document lifecycle, composed chat, and recovery/cleanup suites
 with one worker. `test:package` covers package resources plus packaged reload and

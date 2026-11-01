@@ -10,7 +10,8 @@
     "./host-client": "./src/host-client.ts",
     "./host-health": "./src/host-health.ts",
     "./connection-client": "./src/connection-client.ts",
-    "./chat-client": "./src/chat-client.ts"
+    "./chat-client": "./src/chat-client.ts",
+    "./chat-schema": "./src/chat-schema.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",

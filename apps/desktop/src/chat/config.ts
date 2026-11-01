@@ -3,7 +3,26 @@ import { constants } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import type { SshConfiguration } from '@moonbase/ssh';
 import type { ChatSession } from '@moonbase/application/chat-client';
-import { fields, record, requestId, invalid } from './wire.ts';
+import * as Schema from 'effect/Schema';
+import { ChatIdentifierSchema, ChatHostTargetSchema } from '@moonbase/application/chat-schema';
+import { invalid } from './wire.ts';
+
+const configurationSchema = Schema.Struct({
+  profile: Schema.Struct({
+    id: ChatIdentifierSchema,
+    label: Schema.String,
+    destination: Schema.String,
+    remotePort: Schema.Number,
+    expected: ChatHostTargetSchema,
+  }),
+  token: Schema.String.check(Schema.isBetweenLength(32, 4096)),
+  actorId: ChatIdentifierSchema,
+  sshExecutable: Schema.optional(Schema.String.check(Schema.makeFilter(isAbsolute))),
+});
+const decodeConfiguration = Schema.decodeUnknownSync(configurationSchema, {
+  onExcessProperty: 'error',
+  reportInput: false,
+});
 export type ChatConfiguration = { ssh: SshConfiguration; context: ChatSession };
 export async function readConfiguration(path: string | undefined): Promise<ChatConfiguration> {
   if (!path || !isAbsolute(path))
@@ -24,27 +43,14 @@ export async function readConfiguration(path: string | undefined): Promise<ChatC
     } catch {
       throw Error('Chat configuration is not valid JSON.');
     }
-    const v = record(value);
-    fields(v, ['profile', 'token', 'actorId', 'sshExecutable'], ['profile', 'token', 'actorId']);
-    requestId(v.actorId);
-    const p = record(v.profile);
-    fields(p, ['id', 'label', 'destination', 'remotePort', 'expected']);
-    const h = record(p.expected);
-    fields(h, ['hostId', 'storeId']);
-    requestId(h.hostId);
-    requestId(h.storeId);
-    if (
-      typeof v.token !== 'string' ||
-      v.token.length < 32 ||
-      v.token.length > 4096 ||
-      typeof p.label !== 'string' ||
-      typeof p.destination !== 'string' ||
-      typeof p.remotePort !== 'number' ||
-      (v.sshExecutable !== undefined &&
-        (typeof v.sshExecutable !== 'string' || !isAbsolute(v.sshExecutable)))
-    )
+    let v: typeof configurationSchema.Type;
+    try {
+      v = decodeConfiguration(value);
+    } catch {
       return invalid();
-    requestId(p.id);
+    }
+    const p = v.profile,
+      h = p.expected;
     // Project the private file explicitly; no private extras enter public snapshots or renderer context.
     return {
       ssh: {
@@ -56,7 +62,7 @@ export async function readConfiguration(path: string | undefined): Promise<ChatC
           expected: { hostId: h.hostId, storeId: h.storeId },
         },
         token: v.token,
-        ...(v.sshExecutable ? { sshExecutable: v.sshExecutable as string } : {}),
+        ...(v.sshExecutable ? { sshExecutable: v.sshExecutable } : {}),
       },
       context: { host: { hostId: h.hostId, storeId: h.storeId }, actorId: v.actorId },
     };

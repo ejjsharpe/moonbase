@@ -90,6 +90,27 @@ test('public bridge preserves Uncertain and exact pending payload; preaborted ca
   assert.equal(f.calls, 1);
   f.owner.dispose();
 });
+test('shared IPC schemas reject malformed nested data before dispatch and retain authority errors', async () => {
+  const f = fixture();
+  for (const input of [
+    { target, requestId: 'send', text: 1 },
+    { target: { ...target, extra: 'private' }, requestId: 'send', text: 'message' },
+    { target, requestId: 'send', text: 'x'.repeat(32769) },
+  ])
+    await assert.rejects(f.owner.call('chat', 'sendChat', input, 'id'), { code: 'InvalidInput' });
+  await assert.rejects(
+    f.owner.call('chat', 'getChat', { target: { ...target, actorId: 'other' } }, 'id'),
+    { code: 'Unauthorized' },
+  );
+  await assert.rejects(
+    f.owner.call('watch-chat', '', { target: { ...target, extra: 'private' } }, 'id'),
+    { code: 'InvalidInput' },
+  );
+  assert.equal(f.calls, 0);
+  assert.equal(f.observers, 0);
+  assert.equal(f.owner.count, 0);
+  f.owner.dispose();
+});
 test('IPC cancellation/disposal releases only owned waiters/observations, never Stop or Disconnect', async () => {
   const f = fixture();
   await f.owner.call('watch-chat', '', { target }, 'watch');

@@ -203,6 +203,35 @@ test('production remote/server route shared commands and immutable retries witho
   await assert.rejects(f.remote.command('getChat', { target }), { code: 'Unavailable' });
   assert.equal(f.calls.length, count);
 });
+test('signed malformed-reply errors consistently report Incompatible without rejected values', async (t) => {
+  const f = await setup(t);
+  const { conversation } = await f.client.command('createChat', {
+    session,
+    requestId: 'malformed-reply',
+    title: 'Saved chat',
+  });
+  const command = f.client.command.bind(f.client);
+  let reply: unknown;
+  t.mock.method(f.client, 'command', async (...args: Parameters<ChatClient['command']>) =>
+    args[0] === 'listChats' ? (reply as never) : command(...args),
+  );
+  const secret = 'synthetic-private-value-not-for-errors';
+  for (const changed of [
+    { title: 1 },
+    { target: { ...conversation.target, actorId: secret + ' invalid' } },
+    { cwd: { secret } },
+    { createdAt: 'invalid date' },
+  ] as const) {
+    reply = { conversations: [{ ...conversation, ...changed }], nextCursor: null };
+    await assert.rejects(f.remote.command('listChats', { session }), (error: unknown) => {
+      assert(error instanceof ApplicationError);
+      assert.equal(error.code, 'Incompatible');
+      assert(!String(error).includes(secret));
+      assert(!JSON.stringify(error).includes(secret));
+      return true;
+    });
+  }
+});
 test('single-use challenges reject concurrent replay, tampering, unknown operation/shapes and wrong actors before mutations', async (t) => {
   const f = await setup(t),
     g = await grant(f);
