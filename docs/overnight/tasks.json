@@ -679,7 +679,7 @@
     "base": "6e58c1c4ea6944e8ca25eadc46e35c843f0f9fbe",
     "branch": "chore/host-health-contract",
     "status": "draft; independent review queued after editor/workspace",
-    "checks": "frozen install, uncached Nx 3 tasks, 22 application tests, 40 source hashes and both browser bundles, diff pass; hosted pending"
+    "checks": "frozen install, uncached Nx 3 tasks, 22 application tests, 40 source hashes and both browser bundles, diff pass; exact-head hosted runs 41268693491 and 41268678488 pass"
   },
   "editorFixR4": {
     "threadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-02-editor-module-r1-bb5c5d0",
