@@ -4,12 +4,15 @@ export {
   type EditorWorkbenchHandle,
 } from './workbench.tsx';
 export {
-  createEditor,
-  EditorController,
+  makeEditorModel,
+  makeEditorController,
+  type EditorController,
+  type EditorModel,
+  type EditorDependencies,
   checkoutKey,
   fileKey,
   type EditorSnapshot,
   type EditorBuffer,
-  type ChooseClose,
+  type ClosePrompt,
   type CloseChoice,
 } from './editor.ts';

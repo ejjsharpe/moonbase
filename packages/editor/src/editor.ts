@@ -1,3 +1,7 @@
+import { EditorLookup, EditorMutation, type MutationAction } from './workflows.ts';
+import { Deferred, Effect, Exit, Fiber, Scope, Semaphore, type ManagedRuntime } from 'effect';
+import { runApplicationEffect } from '@moonbase/application/effect-client';
+import { decodeEditorRecovery } from '@moonbase/application/workspace-schema';
 import {
   ApplicationError,
   emptyRecovery,
@@ -7,6 +11,7 @@ import {
   type Comparison,
   type DirectoryListing,
   type EditorClient,
+  type ObservationClose,
   type EditorPosition,
   type EditorRecovery,
   type FileDocument,
@@ -69,11 +74,12 @@ export type EditorBuffer = {
   saving: boolean;
 };
 export type CloseChoice = 'save' | 'discard' | 'cancel';
-export type ChooseClose = (file: Readonly<EditorBuffer>) => Promise<CloseChoice>;
+export type ClosePrompt = { id: string; buffer: Readonly<EditorBuffer> };
 export type EditorSnapshot = {
   ready: boolean;
   recoveryReady: boolean;
   disposed: boolean;
+  closePrompt: ClosePrompt | null;
   preserving: boolean;
   discoveryRevision: number;
   recovery: EditorRecovery;
@@ -97,7 +103,7 @@ type ClosedAction = {
 };
 
 /** One editor instance; IO always enters the application's injected command client. */
-export class EditorController {
+class EditorModelState {
   readonly clientId: string;
   readonly instanceId = crypto.randomUUID();
   private client: EditorClient;
@@ -108,7 +114,20 @@ export class EditorController {
   private publications = 0;
   private ready = false;
   private loading = false;
+  private closing = false;
   private disposed = false;
+  private workflows = new Set<{ stop(): void }>();
+  private closePrompt: ClosePrompt | null = null;
+  private closeAnswer?: Deferred.Deferred<CloseChoice>;
+  private cleanup?: Promise<void>;
+  private cleanupFailures: ApplicationError[] = [];
+  private releaseStarted = false;
+  private releaseDone = Deferred.makeUnsafe<Exit.Exit<void>>();
+  private bound = false;
+  private runEffect!: <A>(effect: Effect.Effect<A, ApplicationError>) => Promise<A>;
+  private recoveryLock = Semaphore.makeUnsafe(1);
+  private factsLock = Semaphore.makeUnsafe(1);
+  private selection?: Scope.Closeable;
   private preserving = false;
   private buffers = new Map<string, EditorBuffer>();
   private saveResults = new Map<string, Extract<SaveResult, { kind: 'saved' }>>();
@@ -130,8 +149,7 @@ export class EditorController {
   >();
   private history: ClosedAction[] = [];
   private listeners = new Set<() => void>();
-  private stops = new Map<string, () => void>();
-  private requests = new Set<AbortController>();
+  private stops = new Map<string, { scope: Scope.Closeable; close: ObservationClose }>();
   private activation = 0;
   private discoveryRevision = 0;
   private referenceRevision = 0;
@@ -141,7 +159,7 @@ export class EditorController {
     result?: OperationResult;
     forcePublication: boolean;
   }[] = [];
-  private refreshing = new Map<string, Promise<void>>();
+  private refreshing = new Map<string, Fiber.Fiber<void, ApplicationError>>();
   private refreshPending = new Set<string>();
   private pendingPublication?: {
     request: CommandInput<'persistRecovery'>;
@@ -150,17 +168,47 @@ export class EditorController {
     savedRequests: string[];
     captureRevision: number;
   };
-  private recoveryTail: Promise<unknown> = Promise.resolve();
-  private factsTail: Promise<unknown> = Promise.resolve();
-  private scheduled?: ReturnType<typeof setTimeout>;
+  private scheduled?: Fiber.Fiber<void, ApplicationError>;
+  private scheduleGeneration = 0;
   private snapshot!: EditorSnapshot;
-  constructor(options: { client: EditorClient; clientId?: string }) {
+  private scope: Scope.Closeable;
+  constructor(scope: Scope.Closeable, options: EditorDependencies) {
+    this.scope = scope;
     this.client = options.client;
     this.clientId = options.clientId ?? crypto.randomUUID();
     if (!this.clientId.trim())
       throw Error('An editor requires its own nonempty recovery client ID.');
     this.recovery = emptyRecovery(this.clientId);
     this.emit();
+  }
+  bind<R, E extends ApplicationError>(runtime: ManagedRuntime.ManagedRuntime<R, E>) {
+    if (this.bound)
+      throw new ApplicationError({ code: 'InvalidInput', message: 'Editor model already bound.' });
+    this.bound = true;
+    this.runEffect = (effect) => runApplicationEffect(runtime, effect);
+    return this;
+  }
+  private run<A>(
+    effect: Effect.Effect<A, ApplicationError>,
+    scope: Scope.Scope = this.scope,
+  ): Promise<A> {
+    return this.runEffect(
+      Effect.flatMap(Effect.forkIn(effect, scope, { startImmediately: true }), Fiber.join),
+    );
+  }
+  private cancelScheduled() {
+    this.scheduleGeneration++;
+    if (this.scheduled) void this.runEffect(Fiber.interrupt(this.scheduled)).catch(this.report);
+    this.scheduled = undefined;
+  }
+  private releaseObservation(key: string): Promise<void> {
+    const observation = this.stops.get(key);
+    if (!observation) return Promise.resolve();
+    this.stops.delete(key);
+    return this.runEffect(Scope.close(observation.scope, Exit.void)).catch((error) => {
+      this.cleanupFailures.push(ApplicationError.fromUnknown(error));
+      throw error;
+    });
   }
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
@@ -169,13 +217,14 @@ export class EditorController {
     };
   };
   getSnapshot = () => this.snapshot;
-  private emit() {
+  private emit(force = false) {
+    if (this.closing && !force) return;
     this.snapshot = {
       ready: this.ready,
       recoveryReady:
         this.ready &&
         !this.loading &&
-        !this.disposed &&
+        !this.closing &&
         !this.preserving &&
         this.captureRevision === this.confirmedCapture &&
         this.publications === 0 &&
@@ -183,6 +232,7 @@ export class EditorController {
         ![...this.buffers.values()].some((buffer) => buffer.saving || buffer.pendingSave) &&
         ![...this.operations.values()].some((value) => !value.acknowledged),
       disposed: this.disposed,
+      closePrompt: this.closePrompt && structuredClone(this.closePrompt),
       preserving: this.preserving,
       discoveryRevision: this.discoveryRevision,
       recovery: structuredClone(this.recovery),
@@ -202,7 +252,7 @@ export class EditorController {
     for (const listener of this.listeners) listener();
   }
   report = (error: unknown) => {
-    if (this.disposed) return;
+    if (this.closing) return;
     this.errors = [...this.errors.slice(-19), ApplicationError.fromUnknown(error).message];
     this.emit();
   };
@@ -211,8 +261,8 @@ export class EditorController {
     this.emit();
   }
   private assertReady() {
-    if (this.disposed || !this.ready)
-      throw Error(this.disposed ? 'Editor disposed.' : 'Load editor recovery first.');
+    if (this.closing || !this.ready)
+      throw Error(this.closing ? 'Editor disposed.' : 'Load editor recovery first.');
   }
   private checkout(target: CheckoutTarget, requireOpen = true) {
     this.assertReady();
@@ -229,27 +279,37 @@ export class EditorController {
   private async command<K extends WorkspaceCommand>(
     name: K,
     input: CommandInput<K>,
+    scope: Scope.Scope = this.scope,
   ): Promise<CommandOutput<K>> {
-    if (this.disposed) throw Error('Editor disposed.');
-    const abort = new AbortController();
-    this.requests.add(abort);
+    if (this.closing)
+      throw new ApplicationError({ code: 'Unavailable', message: 'Editor disposed.' });
     try {
-      return await this.client.command(name, input, { signal: abort.signal });
+      return await this.run(
+        Effect.tryPromise({
+          try: (signal) => this.client.command(name, input, { signal }),
+          catch: ApplicationError.fromUnknown,
+        }),
+        scope,
+      );
     } catch (error) {
-      this.report(error);
+      if (!ApplicationError.is(error) || error.code !== 'Cancelled') this.report(error);
       throw error;
-    } finally {
-      this.requests.delete(abort);
     }
   }
   async load() {
     if (this.ready) return;
     this.loading = true;
     const loaded = await this.command('loadRecovery', { clientId: this.clientId });
-    if (this.disposed) return;
+    try {
+      decodeEditorRecovery(loaded.state);
+    } catch (error) {
+      this.report(error);
+      throw error;
+    }
+    if (this.closing) return;
     if (loaded.state.clientId !== this.clientId)
       throw Error('Recovery belongs to another editor client.');
-    this.recovery = structuredClone(loaded.state);
+    this.recovery = decodeEditorRecovery(loaded.state);
     this.revision = loaded.revision;
     this.errors.push(...loaded.errors);
     for (const draft of this.recovery.drafts) {
@@ -274,8 +334,8 @@ export class EditorController {
     for (const checkout of this.recovery.checkouts.filter((target) =>
       this.recovery.openCheckoutIds.includes(target.checkoutId),
     )) {
-      if (this.disposed) break;
-      this.observe(checkout);
+      if (this.closing) break;
+      await this.observe(checkout);
       const selected = readOwn(this.recovery.views, checkout.checkoutId);
       if (selected?.active)
         await this.open(
@@ -288,34 +348,51 @@ export class EditorController {
     this.loading = false;
     this.changed();
   }
-  private observe(checkout: CheckoutTarget) {
+  private async observe(checkout: CheckoutTarget) {
     const key = checkoutKey(checkout);
-    this.stops.get(key)?.();
-    this.stops.set(
-      key,
-      this.client.watch(
-        { checkout, paths: [''] },
-        (event) => {
-          if (
-            this.disposed ||
-            !this.recovery.openCheckoutIds.includes(checkout.checkoutId) ||
-            !sameCheckout(event.checkout, checkout)
-          )
-            return;
-          if (event.error) this.report(event.error);
-          if (event.ready) return;
-          this.discoveryRevision++;
-          void this.reconcileRecovery().catch(this.report);
-          void this.refresh(checkout).catch(this.report);
-        },
-        this.report,
-      ),
+    await this.releaseObservation(key);
+    if (this.closing) return;
+    const scope = Scope.forkUnsafe(this.scope);
+    let close: ObservationClose | undefined;
+    await this.runEffect(
+      Effect.gen({ self: this }, function* () {
+        yield* Scope.addFinalizer(
+          scope,
+          Effect.suspend(() =>
+            close
+              ? Effect.tryPromise({
+                  try: close,
+                  catch: ApplicationError.fromUnknown,
+                }).pipe(Effect.orDie)
+              : Effect.void,
+          ),
+        );
+        close = this.client.watch(
+          { checkout, paths: [''] },
+          (event) => {
+            if (
+              this.closing ||
+              !this.recovery.openCheckoutIds.includes(checkout.checkoutId) ||
+              !sameCheckout(event.checkout, checkout) ||
+              this.stops.get(key)?.scope !== scope
+            )
+              return;
+            if (event.error) this.report(event.error);
+            if (event.ready) return;
+            this.discoveryRevision++;
+            void this.reconcileRecovery().catch(this.report);
+            void this.refresh(checkout).catch(this.report);
+          },
+          this.report,
+        );
+        this.stops.set(key, { scope, close });
+      }),
     );
   }
   async openCheckout(root: string) {
     this.assertReady();
     const target = await this.command('openCheckout', { root });
-    if (this.disposed) return target;
+    if (this.closing) return target;
     const collision = this.recovery.checkouts.find(
       (item) => item.checkoutId === target.checkoutId && !sameCheckout(item, target),
     );
@@ -327,7 +404,7 @@ export class EditorController {
     const reopening = !this.recovery.openCheckoutIds.includes(target.checkoutId);
     if (reopening) {
       this.recovery.openCheckoutIds.push(target.checkoutId);
-      this.observe(target);
+      await this.observe(target);
     }
     await this.selectCheckout(target);
     await this.refresh(target);
@@ -341,7 +418,7 @@ export class EditorController {
     return this.activateSelected();
   }
   private async activateSelected() {
-    if (this.disposed || this.preserving) return false;
+    if (this.closing || this.preserving) return false;
     const checkout = this.recovery.checkouts.find(
       (target) => target.checkoutId === this.recovery.selectedCheckoutId,
     );
@@ -368,7 +445,7 @@ export class EditorController {
     );
   }
   private resumeFacts() {
-    if (this.disposed || this.preserving || this.pendingPublication) return;
+    if (this.closing || this.preserving || this.pendingPublication) return;
     // A pre-capture recovery snapshot may predate a committed Discard; fetch fresh state.
     for (const request of this.deferredFacts.splice(0))
       void this.publishFacts(
@@ -379,6 +456,7 @@ export class EditorController {
       ).catch(this.report);
   }
   private async releasePreservation() {
+    if (this.closing) return;
     if (this.pendingPublication?.onConfirmed) return;
     this.preserving = false;
     this.emit();
@@ -395,13 +473,31 @@ export class EditorController {
     this.schedule();
   }
   private schedule() {
-    if (!this.ready || this.loading || this.disposed || this.preserving || this.pendingPublication)
+    if (!this.ready || this.loading || this.closing || this.preserving || this.pendingPublication)
       return;
-    clearTimeout(this.scheduled);
-    this.scheduled = setTimeout(() => {
-      this.scheduled = undefined;
-      void this.flush().catch(this.report);
-    }, 150);
+    this.cancelScheduled();
+    const generation = this.scheduleGeneration;
+    void this.runEffect(
+      Effect.forkIn(
+        Effect.sleep('150 millis').pipe(
+          Effect.flatMap(() => {
+            if (generation !== this.scheduleGeneration || this.closing) return Effect.void;
+            this.scheduled = undefined;
+            return Effect.tryPromise({
+              try: () => this.flush(),
+              catch: ApplicationError.fromUnknown,
+            });
+          }),
+          Effect.catch((error) => Effect.sync(() => this.report(error))),
+        ),
+        this.scope,
+      ),
+    )
+      .then((fiber) => {
+        if (!this.closing && generation === this.scheduleGeneration) this.scheduled = fiber;
+        else void this.runEffect(Fiber.interrupt(fiber)).catch(this.report);
+      })
+      .catch(this.report);
   }
   private capture(savedRequests: string[] = []): EditorRecovery {
     const state = structuredClone(this.recovery);
@@ -421,6 +517,8 @@ export class EditorController {
     savedRequests: string[],
     captureRevision: number,
   ) {
+    if (this.closing)
+      throw new ApplicationError({ code: 'Cancelled', message: 'Editor disposed.' });
     if (
       receipt.clientId !== request.clientId ||
       receipt.requestId !== request.requestId ||
@@ -470,126 +568,140 @@ export class EditorController {
       captureRevision = this.captureRevision;
     this.publications++;
     this.emit();
-    const next = this.recoveryTail
-      .catch(() => {})
-      .then(async () => {
-        before?.();
-        if (this.publicationBlocked())
-          throw new ApplicationError({
-            code: 'Uncertain',
-            message: 'Resolve the pending recovery publication first.',
-          });
-        const request = {
-          clientId: this.clientId,
-          requestId: crypto.randomUUID(),
-          expectedRevision: this.revision,
-          state: captured,
-        };
-        let receipt: RecoveryPublication;
-        try {
-          receipt = await this.command('persistRecovery', request);
-        } catch (error) {
-          if (ApplicationError.is(error) && ['InvalidInput', 'Conflict'].includes(error.code))
-            throw error;
-          this.pendingPublication = {
-            request,
-            onConfirmed,
-            kind: onConfirmed ? kind : 'recovery',
-            savedRequests,
-            captureRevision,
-          };
-          this.emit();
-          const known = await this.command('getRecoveryPublication', {
-            clientId: request.clientId,
-            requestId: request.requestId,
-          }).catch(() => null);
-          if (!known) {
-            this.report(
-              'Recovery publication PENDING/UNCERTAIN. Live work and the immutable request are retained; null status does not prove failure.',
-            );
-            throw error;
-          }
-          receipt = known;
-        }
-        // Retain identity even when a malformed/mismatched receipt cannot be accepted.
-        this.pendingPublication = {
-          request,
-          onConfirmed,
-          kind: onConfirmed ? kind : 'recovery',
-          savedRequests,
-          captureRevision,
-        };
-        await this.confirmPublication(
-          request,
-          receipt,
-          onConfirmed,
-          savedRequests,
-          captureRevision,
-        );
-      })
-      .catch((error) => {
-        this.confirmedCapture = -1;
-        throw error;
-      })
-      .finally(() => {
-        this.publications--;
-        this.emit();
-      });
-    this.recoveryTail = next;
-    return next;
-  }
-  async resolveRecoveryPublication(): Promise<boolean> {
-    let rejected = false;
-    const next = this.recoveryTail
-      .catch(() => {})
-      .then(async () => {
-        const pending = this.pendingPublication;
-        if (!pending || this.disposed) return !this.disposed;
-        try {
-          const { request, onConfirmed, savedRequests, captureRevision } = pending;
-          let receipt = await this.command('getRecoveryPublication', {
-            clientId: request.clientId,
-            requestId: request.requestId,
-          });
-          if (!receipt) {
+    const next = this.run(
+      this.recoveryLock.withPermits(1)(
+        Effect.tryPromise({
+          try: async () => {
+            if (this.closing)
+              throw new ApplicationError({ code: 'Cancelled', message: 'Editor disposed.' });
+            before?.();
+            if (this.publicationBlocked())
+              throw new ApplicationError({
+                code: 'Uncertain',
+                message: 'Resolve the pending recovery publication first.',
+              });
+            const request = {
+              clientId: this.clientId,
+              requestId: crypto.randomUUID(),
+              expectedRevision: this.revision,
+              state: captured,
+            };
+            let receipt: RecoveryPublication;
             try {
               receipt = await this.command('persistRecovery', request);
             } catch (error) {
-              // Matching committed requests return their receipt before CAS; only this retry's Conflict proves rejection.
-              if (this.disposed || !ApplicationError.is(error) || error.code !== 'Conflict')
+              if (this.closing) throw error;
+              if (ApplicationError.is(error) && ['InvalidInput', 'Conflict'].includes(error.code))
                 throw error;
-              this.pendingPublication = undefined;
-              rejected = true;
-              this.report(
-                onConfirmed
-                  ? 'The original Close/Reload publication did not commit. Drafts retained; choose the action again.'
-                  : 'The original recovery publication did not commit. Retained facts will reconcile into a fresh capture.',
-              );
-              if (onConfirmed) await this.releasePreservation();
-              else this.resumeFacts();
-              return !onConfirmed;
+              this.pendingPublication = {
+                request,
+                onConfirmed,
+                kind: onConfirmed ? kind : 'recovery',
+                savedRequests,
+                captureRevision,
+              };
+              this.emit();
+              const known = await this.command('getRecoveryPublication', {
+                clientId: request.clientId,
+                requestId: request.requestId,
+              }).catch(() => null);
+              if (!known) {
+                this.report(
+                  'Recovery publication PENDING/UNCERTAIN. Live work and the immutable request are retained; null status does not prove failure.',
+                );
+                throw error;
+              }
+              receipt = known;
             }
-          }
-          if (this.disposed) return false;
-          await this.confirmPublication(
-            request,
-            receipt,
-            onConfirmed,
-            savedRequests,
-            captureRevision,
-          );
-          this.schedule();
-          return true;
-        } catch (error) {
-          this.report(error);
-          this.publicationBlocked();
-          return false;
+            // Retain identity even when a malformed/mismatched receipt cannot be accepted.
+            this.pendingPublication = {
+              request,
+              onConfirmed,
+              kind: onConfirmed ? kind : 'recovery',
+              savedRequests,
+              captureRevision,
+            };
+            await this.confirmPublication(
+              request,
+              receipt,
+              onConfirmed,
+              savedRequests,
+              captureRevision,
+            );
+          },
+          catch: ApplicationError.fromUnknown,
+        }),
+      ),
+    )
+      .catch((error) => {
+        if (!this.closing) this.confirmedCapture = -1;
+        throw error;
+      })
+      .finally(() => {
+        if (!this.closing) {
+          this.publications--;
+          this.emit();
         }
       });
-    this.recoveryTail = next;
+    return next;
+  }
+  async resolveRecoveryPublication(): Promise<boolean> {
+    if (this.closing) return false;
+    let rejected = false;
+    const next = this.run(
+      this.recoveryLock.withPermits(1)(
+        Effect.tryPromise({
+          try: async () => {
+            const pending = this.pendingPublication;
+            if (!pending || this.closing) return !this.closing;
+            try {
+              const { request, onConfirmed, savedRequests, captureRevision } = pending;
+              let receipt = await this.command('getRecoveryPublication', {
+                clientId: request.clientId,
+                requestId: request.requestId,
+              });
+              if (!receipt) {
+                try {
+                  receipt = await this.command('persistRecovery', request);
+                } catch (error) {
+                  // Matching committed requests return their receipt before CAS; only this retry's Conflict proves rejection.
+                  if (this.closing || !ApplicationError.is(error) || error.code !== 'Conflict')
+                    throw error;
+                  this.pendingPublication = undefined;
+                  rejected = true;
+                  this.report(
+                    onConfirmed
+                      ? 'The original Close/Reload publication did not commit. Drafts retained; choose the action again.'
+                      : 'The original recovery publication did not commit. Retained facts will reconcile into a fresh capture.',
+                  );
+                  if (onConfirmed) await this.releasePreservation();
+                  else this.resumeFacts();
+                  return !onConfirmed;
+                }
+              }
+              if (this.closing) return false;
+              await this.confirmPublication(
+                request,
+                receipt,
+                onConfirmed,
+                savedRequests,
+                captureRevision,
+              );
+              this.schedule();
+              return true;
+            } catch (error) {
+              this.report(error);
+              this.publicationBlocked();
+              return false;
+            }
+          },
+          catch: ApplicationError.fromUnknown,
+        }),
+      ),
+    );
     const resolved = await next;
     // Rejoin after the publication tail settles; never run a rejected destructive callback.
-    if (rejected && !this.disposed)
+    if (rejected && !this.closing)
       try {
         await this.publishFacts([], undefined, undefined, true);
       } catch (error) {
@@ -601,8 +713,7 @@ export class EditorController {
   async flush() {
     this.assertReady();
     if (this.preserving) throw Error('Finish the captured preservation action before flushing.');
-    clearTimeout(this.scheduled);
-    this.scheduled = undefined;
+    this.cancelScheduled();
     await this.publish(this.capture());
   }
   buffer(target: FileTarget): Readonly<EditorBuffer> | undefined {
@@ -635,8 +746,11 @@ export class EditorController {
     validPath(target.path);
     if (this.preserving) return false;
     const generation = ++this.activation;
+    const previous = this.selection;
+    const selection = (this.selection = Scope.forkUnsafe(this.scope));
+    if (previous) void this.runEffect(Scope.close(previous, Exit.void)).catch(this.report);
     const current = () =>
-      !this.disposed &&
+      !this.closing &&
       !this.preserving &&
       generation === this.activation &&
       (options.current?.() ?? true) &&
@@ -648,7 +762,7 @@ export class EditorController {
       let disk: FileDocument | null, comparison: Comparison | undefined;
       if (mode === 'file' || mode === 'conflict') {
         try {
-          disk = await this.command('readFile', target);
+          disk = await this.command('readFile', target, selection);
         } catch (error) {
           if (!current() || !this.buffers.has(key)) throw error;
           this.report('File unavailable on disk. Retained buffer and edits remain accessible.');
@@ -656,7 +770,7 @@ export class EditorController {
         }
       } else {
         try {
-          comparison = await this.command('readComparison', { target, area: mode });
+          comparison = await this.command('readComparison', { target, area: mode }, selection);
           disk = comparison.working;
         } catch (error) {
           if (!current() || !this.buffers.has(key)) throw error;
@@ -750,10 +864,10 @@ export class EditorController {
       const result =
         this.saveResults.get(request.requestId) ??
         (await this.command('saveFile', request).catch((error) => {
-          if (definitiveNonAdmission(error)) buffer.pendingSave = undefined;
+          if (!this.closing && definitiveNonAdmission(error)) buffer.pendingSave = undefined;
           throw error;
         }));
-      if (this.disposed) return false;
+      if (this.closing) return false;
       if (result.kind === 'conflict') {
         buffer.pendingSave = undefined;
         buffer.conflict = result.disk;
@@ -776,8 +890,10 @@ export class EditorController {
       await this.publishFacts([], undefined, undefined, true, preservation);
       return !buffer.pendingSave && buffer.text === result.disk.text;
     } finally {
-      buffer.saving = false;
-      this.emit();
+      if (!this.closing) {
+        buffer.saving = false;
+        this.emit();
+      }
     }
   }
   async reload(target: FileTarget) {
@@ -797,7 +913,7 @@ export class EditorController {
       fileKey(buffer.target) === key &&
       this.referenceRevision === reference;
     const guard = () => {
-      if (!sameBuffer() || this.revision !== revision)
+      if (this.closing || !sameBuffer() || this.revision !== revision)
         throw Error(
           'Captured Reload target or recovery revision changed. Edits retained; reconcile and retry.',
         );
@@ -841,11 +957,11 @@ export class EditorController {
     if (buffer) buffer.conflict = undefined;
     const selected = this.checkout(target.checkout);
     if (readOwn(selected.fileViews, target.path) === 'conflict')
-      writeOwn(selected.fileViews, target.path, 'file');
+      writeOwn<FileView>(selected.fileViews, target.path, 'file');
     this.changed();
   }
   position(target: FileTarget, mode: FileView | `${FileView}:original`, position: EditorPosition) {
-    if (this.disposed || this.preserving) return;
+    if (this.closing || this.preserving) return;
     if (
       !this.recovery.openCheckoutIds.includes(target.checkout.checkoutId) ||
       !this.recovery.checkouts.some((item) => sameCheckout(item, target.checkout))
@@ -874,28 +990,34 @@ export class EditorController {
     const next = (paths.indexOf(selected.active) + direction + paths.length) % paths.length;
     return this.open({ checkout, path: paths[next] });
   }
-  async close(targets: FileTarget[], choose: ChooseClose) {
-    return this.preserve(targets, choose, 'files');
+  answerClose(promptId: string, choice: CloseChoice) {
+    if (
+      !this.closeAnswer ||
+      this.closePrompt?.id !== promptId ||
+      !['save', 'discard', 'cancel'].includes(choice)
+    )
+      return;
+    Deferred.doneUnsafe(this.closeAnswer, Effect.succeed(choice));
   }
-  async closeCheckout(checkout: CheckoutTarget, choose: ChooseClose) {
+  async close(targets: FileTarget[]) {
+    return this.preserve(targets, 'files');
+  }
+  async closeCheckout(checkout: CheckoutTarget) {
     const selected = this.checkout(checkout);
     return this.preserve(
       selected.openFiles.map((path) => ({ checkout, path })),
-      choose,
       'checkout',
       checkout,
     );
   }
-  async prepareQuit(choose: ChooseClose) {
+  async prepareQuit() {
     return this.preserve(
       [...this.buffers.values()].map((buffer) => buffer.target),
-      choose,
       'quit',
     );
   }
   private async preserve(
     targets: FileTarget[],
-    choose: ChooseClose,
     kind: 'files' | 'checkout' | 'quit',
     checkout?: CheckoutTarget,
   ) {
@@ -916,7 +1038,7 @@ export class EditorController {
     this.preserving = true;
     this.preservationRevision++;
     this.activation++;
-    clearTimeout(this.scheduled);
+    this.cancelScheduled();
     this.emit();
     let committed = false;
     let commitClose: (() => Promise<void>) | undefined;
@@ -926,7 +1048,18 @@ export class EditorController {
       for (const target of captured) {
         const buffer = this.buffers.get(fileKey(target));
         if (!buffer || buffer.text === buffer.disk.text) continue;
-        const choice = await choose(structuredClone(buffer));
+        const answer = Deferred.makeUnsafe<CloseChoice>();
+        const prompt = { id: crypto.randomUUID(), buffer: structuredClone(buffer) };
+        this.closeAnswer = answer;
+        this.closePrompt = prompt;
+        this.emit();
+        const choice = await this.run(Deferred.await(answer));
+        if (this.closePrompt?.id === prompt.id) {
+          this.closePrompt = null;
+          this.closeAnswer = undefined;
+          this.emit();
+        }
+        if (this.closing) return false;
         if (choice === 'cancel') return false;
         if (choice === 'discard') discarded.add(fileKey(target));
         else if (!(await this.saveFile(target, false, this.preservationRevision))) return false;
@@ -1017,7 +1150,7 @@ export class EditorController {
           }
           if (kind === 'checkout' && checkout) {
             try {
-              this.stops.get(checkoutKey(checkout))?.();
+              await this.releaseObservation(checkoutKey(checkout));
             } catch (error) {
               this.report(error);
             }
@@ -1064,18 +1197,26 @@ export class EditorController {
     this.changed();
   }
   resizeSidebar(width: number) {
+    if (this.closing) return;
     this.recovery.sidebarWidth = Math.max(190, Math.min(380, Math.round(width)));
     this.changed();
   }
-  async list(checkout: CheckoutTarget, path = '') {
+  list(checkout: CheckoutTarget, path = '') {
+    return this.listIn(checkout, path, this.stops.get(checkoutKey(checkout))?.scope ?? this.scope);
+  }
+  private async listIn(checkout: CheckoutTarget, path: string, scope: Scope.Scope) {
     const selected = this.checkout(checkout);
     validPath(path, true);
-    const listing = await this.command('listDirectory', {
-      checkout,
-      path,
-      hideIgnored: selected.tree.hideIgnored,
-    });
-    if (this.disposed || !this.recovery.openCheckoutIds.includes(checkout.checkoutId))
+    const listing = await this.command(
+      'listDirectory',
+      {
+        checkout,
+        path,
+        hideIgnored: selected.tree.hideIgnored,
+      },
+      scope,
+    );
+    if (this.closing || !this.recovery.openCheckoutIds.includes(checkout.checkoutId))
       return listing;
     this.listings[JSON.stringify([checkoutKey(checkout), path])] = listing;
     this.emit();
@@ -1118,35 +1259,48 @@ export class EditorController {
         .map((item) => item.path),
     });
   }
-  refresh(checkout: CheckoutTarget): Promise<void> {
+  async refresh(checkout: CheckoutTarget): Promise<void> {
     this.checkout(checkout);
-    const key = checkoutKey(checkout),
-      existing = this.refreshing.get(key);
+    const key = checkoutKey(checkout);
+    const existing = this.refreshing.get(key);
     if (existing) {
       this.refreshPending.add(key);
-      return existing;
+      return this.runEffect(Fiber.join(existing));
     }
-    const pending = this.refreshOnce(checkout).finally(() => {
-      this.refreshing.delete(key);
-      if (
-        this.refreshPending.delete(key) &&
-        !this.disposed &&
-        this.recovery.openCheckoutIds.includes(checkout.checkoutId)
-      )
-        void this.refresh(checkout).catch(this.report);
-    });
-    this.refreshing.set(key, pending);
-    return pending;
+    const scope = this.stops.get(key)?.scope ?? this.scope;
+    const work = Effect.tryPromise({
+      try: async () => {
+        do {
+          this.refreshPending.delete(key);
+          await this.refreshOnce(checkout);
+        } while (
+          this.refreshPending.has(key) &&
+          !this.closing &&
+          this.recovery.openCheckoutIds.includes(checkout.checkoutId)
+        );
+      },
+      catch: ApplicationError.fromUnknown,
+    }).pipe(Effect.ensuring(Effect.sync(() => this.refreshing.delete(key))));
+    const fiber = await this.runEffect(Effect.forkIn(work, scope));
+    this.refreshing.set(key, fiber);
+    return this.runEffect(Fiber.join(fiber));
   }
   private async refreshOnce(checkout: CheckoutTarget) {
     const paths = ['', ...this.checkout(checkout).tree.expanded];
     await Promise.allSettled(paths.map((path) => this.list(checkout, path)));
+    if (this.closing || !this.recovery.openCheckoutIds.includes(checkout.checkoutId)) return;
     try {
-      this.git[checkoutKey(checkout)] = await this.command('gitStatus', { checkout });
+      const status = await this.command(
+        'gitStatus',
+        { checkout },
+        this.stops.get(checkoutKey(checkout))?.scope,
+      );
+      if (!this.closing && this.recovery.openCheckoutIds.includes(checkout.checkoutId))
+        this.git[checkoutKey(checkout)] = status;
     } catch {
       /* The public command already reported the error; retained buffers stay usable. */
     }
-    if (this.disposed || !this.recovery.openCheckoutIds.includes(checkout.checkoutId)) return;
+    if (this.closing || !this.recovery.openCheckoutIds.includes(checkout.checkoutId)) return;
     const selected = this.checkout(checkout),
       mode = readOwn(selected.fileViews, selected.active),
       generation = this.activation;
@@ -1156,7 +1310,7 @@ export class EditorController {
       try {
         const comparison = await this.command('readComparison', { target, area: mode });
         if (
-          !this.disposed &&
+          !this.closing &&
           !this.preserving &&
           generation === this.activation &&
           selected.active === target.path &&
@@ -1184,12 +1338,66 @@ export class EditorController {
         /* A failed refresh retains the last comparison and current edits. */
       }
     }
-    if (!this.disposed) this.emit();
+    if (!this.closing) this.emit();
   }
-  async inspect(checkout: CheckoutTarget, paths: string[]) {
+  createLookup() {
+    this.assertReady();
+    const lookup = new EditorLookup(
+      this.scope,
+      (effect) => this.runEffect(effect),
+      (checkout, query, signal) => {
+        this.checkout(checkout);
+        return this.client.command(
+          'lookupFiles',
+          {
+            checkout,
+            query,
+            limit: 100,
+            history: this.recovery.recentFiles
+              .filter((item) => sameCheckout(item.checkout, checkout))
+              .map((item) => item.path),
+          },
+          { signal },
+        );
+      },
+    );
+    this.workflows.add(lookup);
+    const stop = lookup.stop.bind(lookup);
+    lookup.stop = () => {
+      this.workflows.delete(lookup);
+      stop();
+    };
+    return lookup;
+  }
+  createMutation(action: MutationAction) {
+    this.checkout(action.checkout);
+    const mutation = new EditorMutation(
+      this.scope,
+      (effect) => this.runEffect(effect),
+      {
+        inspect: (checkout, paths, scope) => this.inspectIn(checkout, paths, scope),
+        list: (checkout, path, scope) => this.listIn(checkout, path, scope),
+        mutate: (operation) => this.mutate(operation),
+        resolve: (id) => this.resolveOperation(id),
+        pending: (id) => this.operations.has(operationKey(this.clientId, id)),
+      },
+      action,
+    );
+    this.workflows.add(mutation);
+    const stop = mutation.stop.bind(mutation);
+    mutation.stop = () => {
+      this.workflows.delete(mutation);
+      stop();
+    };
+    return mutation;
+  }
+  inspect(checkout: CheckoutTarget, paths: string[]) {
+    return this.inspectIn(checkout, paths, this.scope);
+  }
+  private async inspectIn(checkout: CheckoutTarget, paths: string[], scope: Scope.Scope) {
     this.checkout(checkout);
     paths.forEach((path) => validPath(path));
-    return this.command('inspectEntries', { checkout, paths });
+    return this.command('inspectEntries', { checkout, paths }, scope);
   }
   async mutate(input: Omit<WorkspaceOperation, 'clientId' | 'id'> & { id?: string }) {
     this.checkout(input.checkout);
@@ -1265,7 +1473,7 @@ export class EditorController {
     this.emit();
     try {
       const result = await this.command('mutate', operation).catch((error) => {
-        if (definitiveNonAdmission(error)) {
+        if (!this.closing && definitiveNonAdmission(error)) {
           this.operations.delete(operationKey(this.clientId, operation.id));
           this.emit();
         }
@@ -1429,125 +1637,129 @@ export class EditorController {
     forcePublication = false,
     preservation?: number,
   ): Promise<void> {
-    const pending = this.factsTail
-      .catch(() => {})
-      .then(async () => {
-        const boundary = this.preservationRevision;
-        const check = () => {
-          if (
-            this.disposed ||
-            this.pendingPublication ||
-            boundary !== this.preservationRevision ||
-            (this.preserving && preservation !== boundary)
-          )
-            throw deferObservation;
-        };
-        try {
-          check();
-          await this.recoveryTail.catch(() => {});
-          check();
-          const loaded =
-            initial ?? (await this.command('loadRecovery', { clientId: this.clientId }));
-          check();
-          if (loaded.state.clientId !== this.clientId)
-            throw Error('Recovery belongs to another editor client.');
-          const facts = [
-            ...new Map(
-              [...loaded.operations, ...(result ? [result] : [])].map((fact) => [
-                operationKey(fact.clientId, fact.id),
-                fact,
-              ]),
-            ).values(),
-          ];
-          const before = (fact: OperationResult) =>
-            fact.recoveryChanges.find((change) => change.clientId === this.clientId)
-              ?.previousRevision ?? Infinity;
-          facts.sort((a, b) => before(a) - before(b));
-          const reconciled = new Set<string>();
-          if (this.preserving) {
-            // A captured Save may publish its own known revision, never remap another captured draft.
-            if (
-              facts.some((fact) =>
-                fact.recoveryChanges.some(
-                  (change) => change.clientId === this.clientId && change.revision > this.revision,
-                ),
+    return this.run(
+      this.factsLock.withPermits(1)(
+        Effect.tryPromise({
+          try: async () => {
+            const boundary = this.preservationRevision;
+            const check = () => {
+              if (
+                this.closing ||
+                this.pendingPublication ||
+                boundary !== this.preservationRevision ||
+                (this.preserving && preservation !== boundary)
               )
-            )
-              throw deferObservation;
-            if (
-              facts.length &&
-              !this.deferredFacts.some((request) => !request.result && !request.changes.length)
-            )
-              this.deferredFacts.push({ changes: [], forcePublication: false });
-          } else
-            for (const fact of facts) {
-              if (await this.applyOperationFacts(fact, loaded.state, check))
-                reconciled.add(operationKey(fact.clientId, fact.id));
+                throw deferObservation;
+            };
+            try {
               check();
-            }
-          // Keep each known Save until its exact receipt chain and recovery publication succeed.
-          const savedRequests = [...this.saveResults.keys()];
-          const transitions = [
-            ...changes,
-            ...facts.flatMap((fact) => fact.recoveryChanges),
-            ...[...this.saveResults.values()].flatMap((result) => result.recoveryChanges),
-          ]
-            .filter((change) => change.clientId === this.clientId)
-            .sort((a, b) => a.previousRevision - b.previousRevision);
-          for (const transition of transitions) {
-            if (transition.revision <= this.revision) continue;
-            if (
-              transition.previousRevision !== this.revision ||
-              transition.revision <= transition.previousRevision
-            )
-              throw new ApplicationError({
-                code: 'Conflict',
-                message:
-                  'Recovery revision gap. Retained facts cannot replace another publication; close/discard remains blocked.',
-              });
-            this.revision = transition.revision;
-          }
-          if (!facts.length && !changes.length && !savedRequests.length && !forcePublication)
-            return;
-          await this.publish(this.capture(savedRequests), { before: check, savedRequests });
-          check();
-          for (const fact of facts)
-            if (
-              fact.outcome !== 'uncertain' &&
-              reconciled.has(operationKey(fact.clientId, fact.id))
-            ) {
-              await this.command('acknowledgeOperation', {
-                clientId: this.clientId,
-                operationClientId: fact.clientId,
-                id: fact.id,
-              });
-              const known = this.operations.get(operationKey(fact.clientId, fact.id))!;
-              known.acknowledged = true;
-              known.copies = undefined;
-              known.closedCopyTargets = undefined;
+              await this.run(this.recoveryLock.withPermits(1)(Effect.void));
               check();
+              const loaded =
+                initial ?? (await this.command('loadRecovery', { clientId: this.clientId }));
+              check();
+              if (loaded.state.clientId !== this.clientId)
+                throw Error('Recovery belongs to another editor client.');
+              const facts = [
+                ...new Map(
+                  [...loaded.operations, ...(result ? [result] : [])].map((fact) => [
+                    operationKey(fact.clientId, fact.id),
+                    fact,
+                  ]),
+                ).values(),
+              ];
+              const before = (fact: OperationResult) =>
+                fact.recoveryChanges.find((change) => change.clientId === this.clientId)
+                  ?.previousRevision ?? Infinity;
+              facts.sort((a, b) => before(a) - before(b));
+              const reconciled = new Set<string>();
+              if (this.preserving) {
+                // A captured Save may publish its own known revision, never remap another captured draft.
+                if (
+                  facts.some((fact) =>
+                    fact.recoveryChanges.some(
+                      (change) =>
+                        change.clientId === this.clientId && change.revision > this.revision,
+                    ),
+                  )
+                )
+                  throw deferObservation;
+                if (
+                  facts.length &&
+                  !this.deferredFacts.some((request) => !request.result && !request.changes.length)
+                )
+                  this.deferredFacts.push({ changes: [], forcePublication: false });
+              } else
+                for (const fact of facts) {
+                  if (await this.applyOperationFacts(fact, loaded.state, check))
+                    reconciled.add(operationKey(fact.clientId, fact.id));
+                  check();
+                }
+              // Keep each known Save until its exact receipt chain and recovery publication succeed.
+              const savedRequests = [...this.saveResults.keys()];
+              const transitions = [
+                ...changes,
+                ...facts.flatMap((fact) => fact.recoveryChanges),
+                ...[...this.saveResults.values()].flatMap((result) => result.recoveryChanges),
+              ]
+                .filter((change) => change.clientId === this.clientId)
+                .sort((a, b) => a.previousRevision - b.previousRevision);
+              for (const transition of transitions) {
+                if (transition.revision <= this.revision) continue;
+                if (
+                  transition.previousRevision !== this.revision ||
+                  transition.revision <= transition.previousRevision
+                )
+                  throw new ApplicationError({
+                    code: 'Conflict',
+                    message:
+                      'Recovery revision gap. Retained facts cannot replace another publication; close/discard remains blocked.',
+                  });
+                this.revision = transition.revision;
+              }
+              if (!facts.length && !changes.length && !savedRequests.length && !forcePublication)
+                return;
+              await this.publish(this.capture(savedRequests), { before: check, savedRequests });
+              check();
+              for (const fact of facts)
+                if (
+                  fact.outcome !== 'uncertain' &&
+                  reconciled.has(operationKey(fact.clientId, fact.id))
+                ) {
+                  await this.command('acknowledgeOperation', {
+                    clientId: this.clientId,
+                    operationClientId: fact.clientId,
+                    id: fact.id,
+                  });
+                  const known = this.operations.get(operationKey(fact.clientId, fact.id))!;
+                  known.acknowledged = true;
+                  known.copies = undefined;
+                  known.closedCopyTargets = undefined;
+                  check();
+                }
+              this.emit();
+            } catch (error) {
+              if (error !== deferObservation) throw error;
+              if (!this.closing) {
+                const observation =
+                  !changes.length &&
+                  !result &&
+                  this.deferredFacts.find((request) => !request.result && !request.changes.length);
+                if (observation) observation.forcePublication ||= forcePublication;
+                else
+                  this.deferredFacts.push({
+                    changes: structuredClone(changes),
+                    result: result && structuredClone(result),
+                    forcePublication,
+                  });
+              }
+              this.resumeFacts();
             }
-          this.emit();
-        } catch (error) {
-          if (error !== deferObservation) throw error;
-          if (!this.disposed) {
-            const observation =
-              !changes.length &&
-              !result &&
-              this.deferredFacts.find((request) => !request.result && !request.changes.length);
-            if (observation) observation.forcePublication ||= forcePublication;
-            else
-              this.deferredFacts.push({
-                changes: structuredClone(changes),
-                result: result && structuredClone(result),
-                forcePublication,
-              });
-          }
-          this.resumeFacts();
-        }
-      });
-    this.factsTail = pending;
-    return pending;
+          },
+          catch: ApplicationError.fromUnknown,
+        }),
+      ),
+    );
   }
   private moveReferences(checkout: CheckoutTarget, source: string, destination: string) {
     const move = (path: string) =>
@@ -1594,23 +1806,79 @@ export class EditorController {
       }
     return true;
   }
-  /** Release resources after a successful close/Quit gate. Hiding a view must not call this. */
-  dispose() {
-    if (this.disposed) return;
-    this.disposed = true;
+  /** Immediately stop admissions; cleanup is owned by the caller outside this model scope. */
+  private beginDisposal() {
+    if (this.closing) return;
+    this.closing = true;
     this.activation++;
-    clearTimeout(this.scheduled);
+    this.closePrompt = null;
+    if (this.closeAnswer) Deferred.doneUnsafe(this.closeAnswer, Effect.succeed('cancel'));
+    this.closeAnswer = undefined;
     this.deferredFacts = [];
-    this.comparisonAttempts.clear();
-    this.saveResults.clear();
-    for (const stop of this.stops.values()) stop();
-    this.stops.clear();
-    for (const abort of this.requests) abort.abort();
-    this.requests.clear();
-    this.emit();
+    for (const workflow of this.workflows) workflow.stop();
+    this.emit(true);
     this.listeners.clear();
+  }
+  release(): Effect.Effect<void> {
+    return Effect.suspend(() => {
+      this.beginDisposal();
+      if (this.releaseStarted)
+        return Effect.flatMap(Deferred.await(this.releaseDone), (exit) => exit);
+      this.releaseStarted = true;
+      return Scope.close(this.scope, Exit.void).pipe(
+        Effect.ensuring(
+          Effect.suspend(() =>
+            this.cleanupFailures.length
+              ? Effect.die(
+                  new ApplicationError({
+                    code: this.cleanupFailures[0].code,
+                    message: this.cleanupFailures.map((error) => error.message).join('; '),
+                  }),
+                )
+              : Effect.void,
+          ),
+        ),
+        Effect.tap(() =>
+          Effect.sync(() => {
+            this.disposed = true;
+            this.emit(true);
+          }),
+        ),
+        Effect.exit,
+        Effect.flatMap((exit) =>
+          Deferred.succeed(this.releaseDone, exit).pipe(Effect.flatMap(() => exit)),
+        ),
+        Effect.uninterruptible,
+      );
+    });
+  }
+  dispose(): Promise<void> {
+    this.beginDisposal();
+    return (this.cleanup ??= this.runEffect(this.release()));
   }
 }
 
-export const createEditor = (options: ConstructorParameters<typeof EditorController>[0]) =>
-  new EditorController(options);
+export type EditorDependencies = { client: EditorClient; clientId?: string };
+export type EditorModel = EditorModelState;
+export type EditorController = Omit<EditorModelState, 'bind' | 'release'>;
+
+/** Acquire once under the composition root's scope; no runtime or backend is installed. */
+export const makeEditorModel = (
+  dependencies: EditorDependencies,
+): Effect.Effect<EditorModel, ApplicationError, Scope.Scope> =>
+  Effect.gen(function* () {
+    const scope = yield* Scope.make();
+    const model = yield* Effect.try({
+      try: () => new EditorModelState(scope, dependencies),
+      catch: ApplicationError.fromUnknown,
+    });
+    yield* Effect.addFinalizer(() => model.release());
+    return model;
+  });
+
+export function makeEditorController<R, E extends ApplicationError>(
+  runtime: ManagedRuntime.ManagedRuntime<R, E>,
+  model: EditorModel,
+): EditorController {
+  return model.bind(runtime);
+}

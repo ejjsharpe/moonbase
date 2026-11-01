@@ -1,8 +1,8 @@
+import { acquireEditor, answering } from './model-fixture.ts';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ManagedRuntime } from 'effect';
 import { makeEditorClient } from '@moonbase/application/runtime-client';
-import { createEditor } from '@moonbase/editor/state';
 import { memoryWorkspace } from '@moonbase/editor/memory';
 
 const checkout = {
@@ -45,7 +45,10 @@ test('filename caret state never mutates inherited prototypes', async () => {
     { checkout, files: Object.fromEntries([['__proto__', 'baseline']]) },
   ]);
   const runtime = ManagedRuntime.make(memory.layer),
-    editor = createEditor({ client: makeEditorClient(runtime), clientId: 'prototype' });
+    editor = await acquireEditor(runtime, {
+      client: makeEditorClient(runtime),
+      clientId: 'prototype',
+    });
   try {
     await editor.load();
     await editor.openCheckout(checkout.root);
@@ -58,7 +61,7 @@ test('filename caret state never mutates inherited prototypes', async () => {
     assert.deepEqual(view.positions.__proto__.file, cursor);
   } finally {
     prototypes.restore();
-    editor.dispose();
+    await editor.dispose();
     await runtime.dispose();
   }
 });
@@ -69,7 +72,7 @@ test('prototype-shaped filenames keep own JSON view keys through Save, reopen, r
   const memory = memoryWorkspace([{ checkout, files, head: files, index: files }]);
   const runtime = ManagedRuntime.make(memory.layer),
     client = makeEditorClient(runtime);
-  let editor = createEditor({ client, clientId: 'filenames' });
+  let editor = await acquireEditor(runtime, { client, clientId: 'filenames' });
   try {
     await editor.load();
     await editor.openCheckout(checkout.root);
@@ -92,8 +95,8 @@ test('prototype-shaped filenames keep own JSON view keys through Save, reopen, r
       assert(Object.hasOwn(json.views[checkout.checkoutId].fileViews, path));
       assert(Object.hasOwn(json.views[checkout.checkoutId].positions, path));
     }
-    editor.dispose();
-    editor = createEditor({ client, clientId: 'filenames' });
+    await editor.dispose();
+    editor = await acquireEditor(runtime, { client, clientId: 'filenames' });
     await editor.load();
     for (const path of names) {
       assert.equal(await editor.open(target(path)), true);
@@ -103,7 +106,14 @@ test('prototype-shaped filenames keep own JSON view keys through Save, reopen, r
         editor.getSnapshot().recovery.views[checkout.checkoutId].positions[path].staged,
         cursor,
       );
-      assert.equal(await editor.close([target(path)], async () => 'save'), true);
+      assert.equal(
+        await answering(
+          editor,
+          () => editor.close([target(path)]),
+          async () => 'save',
+        ),
+        true,
+      );
       assert.equal(await editor.reopen(checkout), true);
       assert.equal(
         editor.getSnapshot().recovery.views[checkout.checkoutId].fileViews[path],
@@ -126,8 +136,8 @@ test('prototype-shaped filenames keep own JSON view keys through Save, reopen, r
       destination: '__proto__',
     });
     await editor.flush();
-    editor.dispose();
-    editor = createEditor({ client, clientId: 'filenames' });
+    await editor.dispose();
+    editor = await acquireEditor(runtime, { client, clientId: 'filenames' });
     await editor.load();
     assert.equal(editor.buffer(source)?.text, 'dirty moved text');
     assert.deepEqual(
@@ -160,7 +170,7 @@ test('prototype-shaped filenames keep own JSON view keys through Save, reopen, r
     prototypes.assertUnchanged();
   } finally {
     prototypes.restore();
-    editor.dispose();
+    await editor.dispose();
     await runtime.dispose();
   }
 });

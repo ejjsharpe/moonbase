@@ -1,8 +1,8 @@
+import { acquireEditor } from './model-fixture.ts';
 import { ManagedRuntime } from 'effect';
 import { makeEditorClient } from '@moonbase/application/runtime-client';
 import { type CheckoutTarget } from '@moonbase/application/client';
-import { createEditor } from '../src/editor.ts';
-import { memoryWorkspace } from '../src/memory.ts';
+import { memoryWorkspace } from '@moonbase/editor/memory';
 
 export const checkout: CheckoutTarget = {
   hostId: 'local',
@@ -36,8 +36,8 @@ export async function fixture(clientId = 'editor-one', observe = true) {
   );
   const runtime = ManagedRuntime.make(memory.layer),
     client = makeEditorClient(runtime);
-  const editor = createEditor({
-    client: observe ? client : { ...client, watch: () => () => {} },
+  const editor = await acquireEditor(runtime, {
+    client: observe ? client : { ...client, watch: () => async () => {} },
     clientId,
   });
   await editor.load();
@@ -48,7 +48,7 @@ export async function fixture(clientId = 'editor-one', observe = true) {
     client,
     editor,
     async dispose() {
-      editor.dispose();
+      await editor.dispose();
       await runtime.dispose();
     },
   };
