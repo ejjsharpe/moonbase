@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test, mock } from 'node:test';
-import { ChildProcess, execFileSync } from 'node:child_process';
+import { ChildProcess, execFile, execFileSync } from 'node:child_process';
 import { createServer as httpServer } from 'node:http';
 import { createServer as tcpServer } from 'node:net';
 import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -224,5 +224,19 @@ test('a child that never opens its forward cannot keep startup pending beyond th
   try {
     await assert.rejects(f.client.command('connect', {profileId: 'configured'}), e => failure('Unavailable')(e) && /startup deadline/.test((e as ApplicationError).message));
     assert(Date.now() - began < 23000); assert.equal((await f.client.command('getConnection', {})).state, 'failed');
+  } finally { await f.close(); }
+});
+
+test('runnable consumer composition root uses the public package and never prints its private configuration', async () => {
+  const f = await fixture(), configuration = join(f.base, 'private-config.json');
+  const execute = () => new Promise<{error: Error | null; stdout: string; stderr: string}>(resolve => {
+    execFile(process.execPath, ['--experimental-strip-types', fileURLToPath(new URL('../examples/connect.ts', import.meta.url)), configuration], {timeout: 10000}, (error, stdout, stderr) => resolve({error, stdout, stderr}));
+  });
+  try {
+    writeFileSync(configuration, JSON.stringify(f.config), {mode: 0o600});
+    const good = await execute(); assert.equal(good.error, null); assert(good.stdout.includes('"profile"')); assert(!good.stdout.includes(f.key)); assert(!good.stderr.includes(f.key)); assert(!good.stdout.includes('http://127.0.0.1:'));
+    assert.equal(f.forwards().length, 1); assert(f.spawned().every(child => !alive(child.pid)));
+    writeFileSync(configuration, '{ malformed private JSON ' + f.key);
+    const bad = await execute(); assert(bad.error); assert.match(bad.stderr, /Could not read the private connection configuration JSON/); assert(!bad.stderr.includes(f.key)); assert.equal(f.forwards().length, 1);
   } finally { await f.close(); }
 });

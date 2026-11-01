@@ -20,6 +20,8 @@ git diff --check
 
 **24 SSH tests passed, zero failures/skips; 29 application tests passed**, plus package typecheck/lint/build diagnostics, foundation40-hash/browser-boundary checks and diff checks. The installed SSH syntax assertion was corrected to the actual `-G` representation (`ControlPath=none` is omitted, loopback addresses are bracketed). No production behavior was changed to accommodate the assertion.
 
+A separate focused test ran the actual `examples/connect.ts` composition-root process against the controlled host, verified public-only output and cleanup, and rejected malformed private JSON without echoing its contents. An esbuild Node bundle/import-graph check succeeded with 253 inputs and zero editor/workspace/Pi/React/Electron implementation imports (462,668 output bytes, held in memory only; not a packaged application).
+
 The controlled suite uses actual temporary executable paths containing spaces, real child processes/TCP forwards/Node HTTP, and nonce/HMAC replies from the shared host helper:
 
 - Initial status and privileged endpoint lookup spawn nothing. Two public clients share one generation: one preflight and one actual forwarding child. Config/endpoint projection drops private extras; output mutation cannot change the private authority. The application key is absent from argv, public snapshot/error objects, inherited subprocess environment and observed health request bytes; only nonce-bound proofs travel.
