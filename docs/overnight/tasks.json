@@ -637,8 +637,9 @@
     "messageId": "message:mcp:809f45ac-99a5-4d58-a1ba-08cc0a77c997:thread-send:workspace-fix-review-r4-conservative-metadata",
     "runId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-03-workspace-module-r1-bb5c5d0:ordinal:7",
     "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Athread-send%3Aworkspace-fix-review-r4-conservative-metadata",
-    "status": "starting",
-    "delivery": "started"
+    "status": "completed",
+    "delivery": "started",
+    "head": "1fc969227e98dc56b66985675910663ec51759a6"
   },
   "editorReviewR4": {
     "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-editor-r4-2ff2a6b",
@@ -677,5 +678,16 @@
     "branch": "chore/host-health-contract",
     "status": "draft; independent review queued after editor/workspace",
     "checks": "frozen install, uncached Nx 3 tasks, 22 application tests, 40 source hashes and both browser bundles, diff pass; hosted pending"
+  },
+  "workspaceReviewNext": {
+    "round": 5,
+    "head": "1fc969227e98dc56b66985675910663ec51759a6",
+    "base": "6e58c1c4ea6944e8ca25eadc46e35c843f0f9fbe",
+    "status": "queued behind editor R4, before host-health R1",
+    "model": "gpt-6-astra",
+    "options": {
+      "reasoningEffort": "xhigh",
+      "serviceTier": "default"
+    }
   }
 }
