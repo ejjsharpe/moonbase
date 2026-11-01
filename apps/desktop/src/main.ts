@@ -1,7 +1,7 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, net, protocol, session, type IpcMainEvent, type IpcMainInvokeEvent } from "electron";
-import { ManagedRuntime, Effect } from "effect";
+import { ManagedRuntime, Effect, Layer } from "effect";
 import { WorkspaceLive, WorkspaceNative } from "@moonbase/workspace";
-import { makeEditorClient } from "@moonbase/application/runtime-client";
+import { makeEditorClient, makeChatClient, makeConnectionClient } from "@moonbase/application/runtime-client";
 import { ApplicationError, type CheckoutTarget } from "@moonbase/application/client";
 import { randomUUID } from "node:crypto";
 import { realpathSync, mkdirSync } from "node:fs";
@@ -10,6 +10,12 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { execFileSync } from "node:child_process";
 import { EditorSession } from "./session.ts";
 import { channels, errorDTO, keys, record, requestId } from "./wire.ts";
+
+import { RemoteChatLive } from "@moonbase/pi-runtime/remote";
+import { SshLive } from "@moonbase/ssh";
+import { readConfiguration } from "@moonbase/chat-probe/native-config";
+import { ProofSession } from "@moonbase/chat-probe/native-session";
+import { channels as chatChannels, record as chatRecord, fields, errorDTO as chatError } from "@moonbase/chat-probe/bridge";
 
 const directory = fileURLToPath(new URL(".", import.meta.url));
 
@@ -25,10 +31,18 @@ async function main() {
   const csp = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; worker-src 'self' blob:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'none'";
   await app.whenReady();
   const assets = app.isPackaged ? join(process.resourcesPath, "workspace") : join(directory, "workspace");
-  const runtime = ManagedRuntime.make(WorkspaceLive({ hostId: "moonbase-local", dataDirectory: join(userData, "workspace-v1"), filesystemHelper: join(assets, "filesystem"), ripgrepExecutable: join(assets, "ripgrep/rg"), gitExecutable: "/usr/bin/git" }));
+  const chatConfiguration = process.env.MOONBASE_CHAT_CONFIG ? await readConfiguration(process.env.MOONBASE_CHAT_CONFIG) : null;
+  const workspace = WorkspaceLive({ hostId: "moonbase-local", dataDirectory: join(userData, "workspace-v1"), filesystemHelper: join(assets, "filesystem"), ripgrepExecutable: join(assets, "ripgrep/rg"), gitExecutable: "/usr/bin/git" });
+  // Exactly one of these capability sets is acquired, once for this process.
+  const root = chatConfiguration ? (() => {
+    const runtime = ManagedRuntime.make(Layer.merge(workspace, RemoteChatLive.pipe(Layer.provideMerge(SshLive(chatConfiguration.ssh)))));
+    return { runtime, chat: makeChatClient(runtime), connection: makeConnectionClient(runtime) };
+  })() : { runtime: ManagedRuntime.make(workspace), chat: null, connection: null };
+  const { runtime, chat, connection } = root;
   const client = makeEditorClient(runtime);
   // Acquire once now so SQLite/runtime incompatibility is visible before showing the editor.
   await runtime.runPromise(Effect.asVoid(WorkspaceNative));
+  if (connection) await connection.command("getConnection", {}); // Acquire without connecting.
   const rendererRoot = join(directory, "renderer");
   protocol.handle("moonbase", async request => {
     const url = new URL(request.url);
@@ -73,6 +87,27 @@ async function main() {
     catch (error) { return { ok: false, error: errorDTO(error) }; }
   });
   ipcMain.on(channels.cancel, (event, id: unknown) => { try { requireTrusted(event); editorSession.cancel(id); } catch (e) { console.error(ApplicationError.fromUnknown(e).message); } });
+  const chatSession = chatConfiguration && chat && connection ? new ProofSession(chat, connection, chatConfiguration.context,
+    (id, result) => { if (!window.isDestroyed()) window.webContents.send(chatChannels.event, id, result); }) : null;
+  ipcMain.handle(channels.configured, (event, ...args: unknown[]) => {
+    try { requireTrusted(event); if (args.length !== 1 || args[0] !== null) throw new ApplicationError({ code: "InvalidInput", message: "Unexpected configuration query input." }); return { ok: true, value: chatSession !== null }; }
+    catch (error) { return { ok: false, error: errorDTO(error) }; }
+  });
+  ipcMain.handle(chatChannels.call, async (event, value: unknown) => {
+    try {
+      requireTrusted(event);
+      const v = chatRecord(value);
+      if (v.kind === "context") {
+        fields(v, ["kind"]);
+        if (!chatSession) throw new ApplicationError({ code: "Unavailable", message: "Remote chat is not configured. Launch with an explicit MOONBASE_CHAT_CONFIG to use a host. Local editing is available." });
+        return { ok: true, value: chatSession.context };
+      }
+      fields(v, ["kind", "operation", "input", "id"]);
+      if (!chatSession) throw new ApplicationError({ code: "Unavailable", message: "Remote chat is not configured." });
+      return await chatSession.call(v.kind, v.operation, v.input, v.id);
+    } catch (error) { return chatError(error); }
+  });
+  ipcMain.on(chatChannels.cancel, (event, id: unknown) => { try { requireTrusted(event); chatSession?.cancel(id); } catch (error) { console.error(ApplicationError.fromUnknown(error).message); } });
   let quit: { id: string; stage: "preserve" | "dispose" } | undefined, exiting = false, rendererReady = false, quitRequested = false;
   function show() { if (!window.isDestroyed()) { window.show(); window.focus(); } }
   function requestQuit() { quitRequested = true; show(); if (!rendererReady) return; if (!quit) { quit = { id: randomUUID(), stage: "preserve" }; window.webContents.send(channels.action, "quit", quit.id); } }
@@ -83,8 +118,9 @@ async function main() {
       if (!quit || v.id !== quit.id || typeof v.consent !== "boolean") throw new ApplicationError({ code: "Unauthorized", message: "No matching Quit request." });
       if (!v.consent) { quit = undefined; quitRequested = false; show(); return; }
       if (quit.stage === "preserve") { quit = { id: randomUUID(), stage: "dispose" }; window.webContents.send(channels.action, "dispose", quit.id); return; }
-      editorSession.dispose(); await runtime.dispose(); exiting = true;
+      chatSession?.dispose(); editorSession.dispose(); await runtime.dispose(); exiting = true;
       ipcMain.removeHandler(channels.call); ipcMain.removeAllListeners(channels.cancel); ipcMain.removeAllListeners(channels.quit); ipcMain.removeAllListeners(channels.ready);
+      ipcMain.removeHandler(channels.configured); ipcMain.removeHandler(chatChannels.call); ipcMain.removeAllListeners(chatChannels.cancel);
       window.destroy(); protocol.unhandle("moonbase"); app.quit();
     } catch (error) { quit = undefined; show(); console.error("Quit failed:", ApplicationError.fromUnknown(error).message); }
   });
@@ -102,7 +138,7 @@ async function main() {
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     { label: "Moonbase", submenu: [{ role: "about" }, { type: "separator" }, { role: "hide" }, { role: "hideOthers" }, { role: "unhide" }, { type: "separator" }, { label: "Quit Moonbase", accelerator: "CmdOrCtrl+Q", click: requestQuit }] },
     { label: "Edit", submenu: [{ role: "undo" }, { role: "redo" }, { type: "separator" }, { role: "cut" }, { role: "copy" }, { role: "paste" }, { role: "selectAll" }] },
-    { label: "View", submenu: [{ role: "resetZoom" }, { role: "zoomIn" }, { role: "zoomOut" }, { type: "separator" }, { label: "Show editor", click: show }, { label: "Hide editor", accelerator: "CmdOrCtrl+Shift+H", click: () => window.hide() }] },
+    { label: "View", submenu: [{ role: "resetZoom" }, { role: "zoomIn" }, { role: "zoomOut" }, { type: "separator" }, { label: "Show workbench", click: show }, { label: "Hide workbench", accelerator: "CmdOrCtrl+Shift+H", click: () => window.hide() }] },
     { role: "windowMenu" },
   ]));
   window.once("ready-to-show", show);

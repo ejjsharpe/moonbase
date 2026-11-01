@@ -1,6 +1,6 @@
 import { ApplicationError, type ApplicationErrorCode, type CheckoutTarget, type EditorClient, type FileTarget, type WorkspaceCommand } from "@moonbase/application/client";
 
-export const channels = { call: "moonbase:call", cancel: "moonbase:cancel", event: "moonbase:event", action: "moonbase:action", quit: "moonbase:quit-result", ready: "moonbase:ready" } as const;
+export const channels = { call: "moonbase:call", cancel: "moonbase:cancel", event: "moonbase:event", action: "moonbase:action", quit: "moonbase:quit-result", ready: "moonbase:ready", configured: "moonbase:chat-configured" } as const;
 export type ErrorDTO = { code: ApplicationErrorCode; message: string; target?: FileTarget };
 export type Reply<T = unknown> = { ok: true; value: T } | { ok: false; error: ErrorDTO };
 export type DesktopAction = "quit" | "dispose";
@@ -12,6 +12,7 @@ export interface DesktopBridge {
   actions(receive: (action: DesktopAction, id: string) => void): () => void;
   quitResult(id: string, consent: boolean): void;
   ready(): void;
+  chatConfigured(): Promise<Reply<boolean>>;
   drop(checkout: CheckoutTarget, files: File[]): Promise<Reply<string[]>>;
 }
 const codes: ApplicationErrorCode[] = ["InvalidInput", "Unavailable", "Conflict", "Persistence", "Uncertain", "Cancelled", "Unauthorized", "Incompatible"];

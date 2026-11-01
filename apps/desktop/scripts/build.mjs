@@ -19,5 +19,5 @@ await cp(require.resolve("@moonbase/workspace/filesystem"), join(resources, "fil
 const rg = process.env.MOONBASE_RIPGREP_ASSETS ? resolve(process.env.MOONBASE_RIPGREP_ASSETS) : fileURLToPath(new URL("../../../dist/tools/ripgrep", import.meta.url));
 for (const file of ["rg", "COPYING", "LICENSE-MIT", "UNLICENSE"]) await stat(join(rg, file));
 await cp(rg, join(resources, "ripgrep"), { recursive: true });
-await writeFile(join(root, "dist/package.json"), JSON.stringify({ name: "moonbase", version: "0.1.0", private: true, main: "main.mjs", description: "Moonbase standalone editor", author: "Elliot Sharpe" }));
+await writeFile(join(root, "dist/package.json"), JSON.stringify({ name: "moonbase", version: "0.1.0", private: true, main: "main.mjs", description: "Moonbase editor and remote chat workbench", author: "Elliot Sharpe" }));
 console.log(`Collected upstream notices for ${packages.length} bundled packages.`);
