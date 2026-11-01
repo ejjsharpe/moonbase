@@ -989,12 +989,34 @@
     "verdict": "no blocking findings, source boundary only; real SSH pending"
   },
   "sshModule": {
-    "threadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-03-workspace-module-r1-bb5c5d0",
-    "messageId": "message:mcp:809f45ac-99a5-4d58-a1ba-08cc0a77c997:thread-send:moonbase-06-ssh-module-r1-09b21f2",
-    "runId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-03-workspace-module-r1-bb5c5d0:ordinal:9",
     "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Athread-send%3Amoonbase-06-ssh-module-r1-09b21f2",
-    "status": "starting",
-    "delivery": "started"
+    "childThreadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-03-workspace-module-r1-bb5c5d0",
+    "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-03-workspace-module-r1-bb5c5d0:ordinal:9",
+    "childNodeId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Athread-send%3Amoonbase-06-ssh-module-r1-09b21f2",
+    "status": "completed",
+    "workState": "result_available",
+    "hasPendingChildRuns": false,
+    "latestTerminalRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-03-workspace-module-r1-bb5c5d0:ordinal:9",
+    "latestTerminalStatus": "completed",
+    "latestTerminalSummary": null,
+    "latestTerminalResultContextTransferId": null,
+    "providerInstanceId": "codex",
+    "model": "gpt-6.1-sol",
+    "options": [
+      {
+        "id": "reasoningEffort",
+        "value": "xhigh"
+      },
+      {
+        "id": "serviceTier",
+        "value": "default"
+      }
+    ],
+    "summary": "Opened [draft PR #9](https://github.com/ejjsharpe/moonbase/pull/9) for scoped SSH forwarding, verified health, status and generation-safe cleanup.\n\n- Head: `d1a28745362c5f9cf5c164f3ef19fc8ac8af983b`\n- Base: `09b21f2ee8556c54ef4f8238f0be2ee88fd990c3`\n- **25 SSH + 29 application tests pass**, plus root Nx checks, frozen install, provenance and diff checks.\n- Coordinator registration merged exactly; worktree clean. Previous workspace branch preserved.\n\n[Evidence and limits](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-541038a5/packages/ssh/EVIDENCE.md) are recorded.\n\nIndependent review and hosted CI remain pending. Real SSH/host-key, remote Pi/provider, packaged/manual and crash/power-loss checks remain unrun.",
+    "resultContextTransferId": "context-transfer:type:subagent_result:source-thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-03-workspace-module-r1-bb5c5d0:target-thread:63122af4-017b-4b66-bcae-a905f2b1659d:fd65131c-8b5d-4523-b49a-96209ae0ad2b",
+    "hasPendingQuestion": false,
+    "pendingApproval": null,
+    "waitTimedOut": false
   },
   "sshSelection": {
     "providerInstanceId": "codex",
