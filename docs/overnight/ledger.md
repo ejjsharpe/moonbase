@@ -16,7 +16,7 @@ All PRs are private, linked and unmerged. Older entries below are historical evi
 | [#8 connection boundary](https://github.com/ejjsharpe/moonbase/pull/8) | `09b21f2ee8556c54ef4f8238f0be2ee88fd990c3` | #6 | Ready; Astra R1 no boundary blockers, 29 tests/11 probes/import graphs and CI pass; SSH implementation separate |
 
 | [#9 SSH](https://github.com/ejjsharpe/moonbase/pull/9) | `d1a28745362c5f9cf5c164f3ef19fc8ac8af983b` | #8 | DRAFT; 25 controlled child/loopback tests +29 app and exact-head CI pass; Astra R1 three blockers, owner fixing |
-| [#10 chat contract](https://github.com/ejjsharpe/moonbase/pull/10) | `d38833db81c5d97a1aa60f25e0dc27dd670af60f` | #8 | DRAFT; executable checkpoint4c0c296:33 tests/CI pass; new wire-doc replay clarification pending CI/independent review |
+| [#10 chat contract](https://github.com/ejjsharpe/moonbase/pull/10) | `d38833db81c5d97a1aa60f25e0dc27dd670af60f` | #8 | DRAFT; executable checkpoint4c0c296:33 tests/CI pass; new wire-doc replay clarification CI pass; independent review pending |
 
 Production editor fan-in, standalone Electron proof, Pi module, chat proof and composition remain unfinished. Independent SSH task 06 is active under the explicit technical-failure exception; it depends only on checked #8 and does not use failing editor behavior. Published Pi 1.4.0 controlled research is preparatory evidence only. No human/manual acceptance is inferred.
 
@@ -135,3 +135,5 @@ Lead refined only draft #10 protocol documentation at `d38833d`: verifier-enforc
 ## Pending checks and constraints
 
 No explicit real-provider quota authorization or SSH test host has been supplied. Real-provider/SSH smoke, native Finder/Trash, VoiceOver, human visual acceptance and power-loss qualification are not claimed. Continue controlled independent checks without changing those gates. No PR merges, deployment or source-checkout modifications are authorized.
+
+T3 notified CI success on #10 exact `d38833db81c5d97a1aa60f25e0dc27dd670af60f`; one metadata inspection confirmed both hosted module jobs green. It remains a contract-only DRAFT awaiting Astra after editor R8; no implementation/security/remote acceptance is inferred.
