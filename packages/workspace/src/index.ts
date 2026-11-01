@@ -25,7 +25,7 @@ export type WorkspaceConfiguration = {
   ripgrepExecutable?: string;
 };
 type Approval = { target: CheckoutTarget; identity: string; common: {path: string; identity: string}; gitEntry: {identity: string; pointer: string | null} };
-type SaveRecord = { restorePending?: boolean; recoveryRestored?: boolean; recoveryPublication?: number; recoveryRevision?: number; baseline?: import('@moonbase/application/client').FileDocument; published?: boolean; temporary?: string; input: CommandInput<'saveFile'>; result?: SaveResult; started: boolean; message?: string };
+type SaveRecord = { restorePending?: boolean; recoveryRestored?: boolean; recoveryPublication?: number; baseline?: import('@moonbase/application/client').FileDocument; published?: boolean; temporary?: string; input: CommandInput<'saveFile'>; result?: SaveResult; started: boolean; message?: string };
 type OperationRecord = { paths?: string[]; publicationError?: string; staging?: string[]; publishedItems?: string[]; input: WorkspaceOperation; result: OperationResult; publicationRevisions: Record<string, number>; acknowledgedBy: string[] };
 const key = (clientId: string, id: string) => hash(canonical([clientId, id]));
 const affected = (p: string, source: string) => p === source || p.startsWith(source + '/');
@@ -501,18 +501,6 @@ class LocalWorkspace {
       this.store.put('operations', id, updated); this.store.db.exec('COMMIT'); delete record.publicationError; Object.assign(record, updated); this.volatileOperations.delete(id);
     } catch (error) { this.store.db.exec('ROLLBACK'); throw error; }
   }
-  restorationEligible(record: SaveRecord, revision: number, publication: number) {
-    if (record.recoveryPublication !== undefined) return record.recoveryPublication === publication;
-    // Older Moonbase intents need a complete retained receipt chain; gaps remain client-publication fences.
-    const changes = [...this.store.all<SaveRecord>('saves').flatMap(r => r.result?.kind === 'saved' ? r.result.recoveryChanges : []), ...this.store.all<OperationRecord>('operations').flatMap(r => r.result.recoveryChanges)].filter(c => c.clientId === record.input.clientId);
-    let admitted = record.recoveryRevision;
-    while (admitted !== undefined && admitted < revision) {
-      const next = changes.find(c => c.previousRevision === admitted && c.revision > c.previousRevision);
-      if (!next) return false;
-      admitted = next.revision;
-    }
-    return admitted === revision;
-  }
   publishSaves(records: SaveRecord[], restore = false) {
     if (!records.length) return;
     const clientId = records[0].input.clientId;
@@ -534,7 +522,8 @@ class LocalWorkspace {
         const knownResult = committed?.published ? committed.result : record.result;
         const result: SaveResult | undefined = knownResult?.kind === 'saved' ? {kind: 'saved', disk: knownResult.disk, recoveryChanges: knownResult.recoveryChanges} : knownResult;
         const wantsRestore = restore || record.restorePending || committed?.restorePending;
-        const restored = !!(wantsRestore && !committed?.recoveryRestored && record.baseline && this.restorationEligible(committed ?? record, revision, publication));
+        const intent = committed ?? record, hasFence = intent.recoveryPublication !== undefined;
+        const restored = !!(wantsRestore && !committed?.recoveryRestored && record.baseline && hasFence && intent.recoveryPublication === publication);
         const entryBefore = JSON.stringify(state);
         if (restored) {
           if (!state.checkouts.some(c => same(c, record.input.target.checkout))) state.checkouts.push(record.input.target.checkout);
@@ -542,7 +531,7 @@ class LocalWorkspace {
           if (existing) { existing.text = record.input.text; existing.disk = record.baseline!; }
           else state.drafts.push({target: record.input.target, text: record.input.text, disk: record.baseline!});
         }
-        if (!committed?.published && result?.kind === 'saved') for (const draft of state.drafts) if (same(draft.target, record.input.target)) draft.disk = result.disk;
+        if (hasFence && !committed?.published && result?.kind === 'saved') for (const draft of state.drafts) if (same(draft.target, record.input.target)) draft.disk = result.disk;
         const updated: SaveRecord = {...record, result, published: !!result, recoveryRestored: !!committed?.recoveryRestored || restored,
           restorePending: !!wantsRestore && !committed?.recoveryRestored && !restored};
         return {id, record, committed, updated, changed: entryBefore !== JSON.stringify(state)};
@@ -627,7 +616,7 @@ class LocalWorkspace {
     for (const record of relevant) if (record.publicationError) errors.push(record.publicationError);
     for (const operation of operations) if (operation.outcome === 'uncertain') errors.push('Uncertain operation ' + operation.id + ': ' + (operation.message ?? 'inspect original, destination, staging and Finder Trash; drafts retained.'));
     for (const record of this.saveRecords()) if (record.input.clientId === clientId && (!record.result || record.restorePending && !record.recoveryRestored)) {
-      errors.push((record.result ? 'Save restoration pending ' : 'Uncertain save ') + record.input.requestId + ' for ' + record.input.target.path + ': inspect disk and staging ' + record.temporary + '; journal text retained.' + (record.message ? ' ' + record.message : ''));
+      errors.push((record.result ? 'Save restoration pending ' : 'Uncertain save ') + record.input.requestId + ' for ' + record.input.target.path + ': inspect disk and staging ' + record.temporary + '; journal text retained.' + (record.message ? ' ' + record.message : '') + (record.recoveryPublication === undefined ? ' Earlier Save ordering is unknown: no command-start publication fence. Keep the published draft and inspect retained journal text before deliberate reconciliation.' : ''));
     }
     return {revision: stored?.revision ?? 0, state, errors, operations};
   }
