@@ -1,0 +1,74 @@
+import { expect, type Page, type ElectronApplication } from "@playwright/test";
+import type { RecoveryLoad } from "@moonbase/application/client";
+import { writeFileSync, readFileSync } from "node:fs";
+
+export const filenameCases = ["__proto__", "constructor", "toString", "hasOwnProperty"];
+export const recoveryState = async (page: Page): Promise<RecoveryLoad> => JSON.parse(await page.evaluate(async () => {
+  const reply = await window.moonbase.call("command", { operation: "loadRecovery", input: { clientId: window.moonbase.clientId } }, crypto.randomUUID());
+  if (!reply.ok) throw Error(reply.error.message);
+  // Preserve own __proto__ keys across Playwright's evaluation-result serializer.
+  return JSON.stringify(reply.value);
+}));
+const prototypes = (page: Page) => page.evaluate(() => JSON.stringify(
+  [Object.prototype, Object, Object.prototype.toString, Object.prototype.hasOwnProperty].map(value => Object.getOwnPropertyDescriptors(value)),
+  (_key, value) => typeof value === "function" ? Function.prototype.toString.call(value) : value,
+));
+
+/** Actual UI and bridge observations, shared by built-Electron and packaged journeys. */
+export async function checkFilenameMaps(page: Page, checkout: string, sibling: string, restart: () => Promise<Page>) {
+  const before = await prototypes(page);
+  const edit = async (path: string, text: string) => { const input = page.getByRole("textbox", { name: path + " editor", exact: true }); await input.focus(); await input.press("Meta+a"); await input.pressSequentially(text); };
+  await edit(sibling, "retained sibling draft");
+  for (const path of filenameCases) {
+    await page.getByRole("button", { name: "Find file", exact: true }).click(); await page.getByRole("combobox").fill(path);
+    await expect(page.getByRole("option", { name: path, exact: true })).toBeVisible(); await page.getByRole("option", { name: path, exact: true }).click();
+    const input = page.getByRole("textbox", { name: path + " editor", exact: true }); await input.focus(); await input.press("ArrowRight"); expect(await prototypes(page)).toBe(before);
+    await edit(path, "saved " + path); await page.getByRole("button", { name: "Save", exact: true }).click(); await expect.poll(() => readFileSync(checkout + "/" + path, "utf8")).toBe("saved " + path);
+    await page.getByLabel("File view", { exact: true }).selectOption("staged"); await expect(page.getByRole("textbox", { name: / original$/ })).toHaveJSProperty("readOnly", true);
+    await edit(path, "dirty " + path); await input.press("ArrowLeft");
+  }
+  await expect.poll(async () => (await recoveryState(page)).state.drafts.length).toBe(5);
+  for (const path of filenameCases) {
+    await expect.poll(async () => (await recoveryState(page)).state.views[(await recoveryState(page)).state.selectedCheckoutId!].positions[path]?.staged?.column).toBeGreaterThan(1);
+  }
+  const persisted = (await recoveryState(page)).state, view = persisted.views[persisted.selectedCheckoutId!];
+  for (const path of filenameCases) { expect(Object.hasOwn(view.fileViews, path)).toBe(true); expect(Object.hasOwn(view.positions, path)).toBe(true); }
+  expect(await prototypes(page)).toBe(before);
+  page = await restart();
+  await expect(page.getByRole("textbox", { name: "hasOwnProperty editor", exact: true })).toBeVisible();
+  const restarted = (await recoveryState(page)).state, restored = restarted.views[restarted.selectedCheckoutId!];
+  for (const path of filenameCases) {
+    await page.getByRole("tab", { name: path, exact: true }).click(); await expect(page.getByLabel("File view", { exact: true })).toHaveValue("staged");
+    await expect(page.getByRole("textbox", { name: / original$/ })).toHaveJSProperty("readOnly", true);
+    await expect(page.locator('.view-line').filter({ hasText: "dirty " + path }).first()).toBeVisible();
+    expect(restarted.drafts.find(draft => draft.target.path === path)?.disk.text).toBe("saved " + path);
+    expect(restored.positions[path].staged).toEqual(view.positions[path].staged);
+  }
+  expect(await prototypes(page)).toBe(before);
+  await page.getByRole("tab", { name: sibling, exact: true }).click(); await expect(page.locator('.view-line').filter({ hasText: "retained sibling draft" }).first()).toBeVisible();
+  const protoTab = page.getByRole("tab", { name: "__proto__", exact: true }); await protoTab.click(); await expect(protoTab).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("textbox", { name: "__proto__ editor", exact: true })).toBeVisible(); await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect.poll(() => readFileSync(checkout + "/__proto__", "utf8")).toBe("dirty __proto__");
+  await expect.poll(async () => (await recoveryState(page)).state.drafts.length).toBe(4);
+  return { unchangedPrototypes: true, persisted, restarted, afterSave: (await recoveryState(page)).state };
+}
+
+export async function checkTabMenu(app: ElectronApplication, page: Page, capture: (name: string) => Promise<void>, reopened = "b.ts") {
+  const records = [];
+  for (const [name, width, height, zoom] of [["normal", 1280, 850, 1], ["small", 760, 650, 1], ["zoom", 760, 650, 1.4]] as const) {
+    await app.evaluate(({ BrowserWindow }, size) => { const window = BrowserWindow.getAllWindows()[0]; window.setSize(size.width, size.height); window.webContents.setZoomFactor(size.zoom); }, { width, height, zoom });
+    await expect.poll(() => page.evaluate(() => innerWidth)).toBe(Math.round(width / zoom));
+    const trigger = page.getByRole("button", { name: "Tab actions", exact: true }); await trigger.focus(); await trigger.press("Enter"); await page.keyboard.press("Home");
+    const first = page.getByRole("menuitem", { name: "Keep Open", exact: true }); await expect(first).toBeFocused();
+    expect(await first.evaluate(element => { const r = element.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight; })).toBe(true); await capture("menu-first-" + name);
+    await page.keyboard.press("Enter"); await expect(page.getByRole("menu")).toHaveCount(0); await expect(trigger).toBeFocused();
+    await trigger.press("Enter"); await expect(first).toBeFocused(); await page.keyboard.press("End");
+    const last = page.getByRole("menuitem", { name: "Reopen Closed Files", exact: true }); await expect(last, name).toBeFocused();
+    expect(await last.evaluate(element => { const r = element.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight; })).toBe(true); await capture("menu-last-" + name);
+    const geometry = await page.getByRole("menu").evaluate(element => ({ viewport: { width: innerWidth, height: innerHeight }, popup: element.getBoundingClientRect().toJSON(), overflowY: getComputedStyle(element).overflowY }));
+    await page.keyboard.press("Enter"); await expect(page.getByRole("menu")).toHaveCount(0); await expect(page.getByRole("tab", { name: reopened, exact: true })).toHaveAttribute("aria-selected", "true"); await expect(page.getByRole("textbox", { name: reopened + " editor", exact: true })).toBeVisible();
+    await trigger.click(); await page.getByRole("menuitem", { name: "Close", exact: true }).click(); await expect(page.getByRole("menu")).toHaveCount(0); await expect(page.getByRole("tab", { name: reopened, exact: true })).toHaveCount(0);
+    records.push({ name, width, height, zoom, geometry });
+  }
+  writeFileSync("test-results/menu-geometry.json", JSON.stringify(records, null, 2) + "\n");
+}

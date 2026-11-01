@@ -22,4 +22,6 @@ jobs:
       - run: bun run test
       - run: bun run test:editor-integration
       - run: bun run test:chat-integration
+      - run: bunx nx run @moonbase/desktop:build
+      - run: node apps/desktop/scripts/check-renderer.mjs
       - run: bunx nx run @moonbase/chat-probe:build
