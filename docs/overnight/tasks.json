@@ -2113,10 +2113,8 @@
     "waitTimedOut": false
   },
   "foreground-test-slot": {
-    "owner": "chat-current-native",
-    "threadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-03-workspace-module-r1-bb5c5d0",
-    "state": "explicitly released by desktop reviewer then assigned to chat owner",
-    "runOrdinal": 15
+    "owner": "review-chat-proof-r1",
+    "state": "exclusive actual native review; prior owner explicitly cleaned up"
   },
   "review-desktop-r2": {
     "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-desktop-r2-module16-4dd148a",
@@ -2163,7 +2161,7 @@
     "sharedTests": 33,
     "sourceGraphInputs": 255,
     "sourceGraphBytes": 498940,
-    "independentReview": "pending"
+    "independentReview": "Astra R3 clear exact235; hostedCI/distribution/manual gates remain"
   },
   "chat-proof-registration": {
     "source": "3e2ad6b745fa0345c9bbfad6c79d89772f9d6885",
@@ -2214,11 +2212,11 @@
   },
   "chat-proof-pr": {
     "url": "https://github.com/ejjsharpe/moonbase/pull/18",
-    "head": "0b087c067fde4203635825abb395307a02c6b26d",
+    "head": "5321ae5b4ff3d3c4ed4cfb5b67b6a7139288b6bf",
     "base": "132d273073889bd0702cf96b1fc2a62d5027598c",
     "state": "draft",
-    "nativeCurrentHead": "pending foreground release",
-    "sourceChecks": "26/frozen/type/build graph263/50/foundation40/diff pass"
+    "nativeCurrentHead": "11/11 source/package actual Electron pass;26public;24readiness iterations pass; original transient unattributed",
+    "sourceChecks": "frozen/type/lint26/build263/50/artifact7/notices9/foundation40/diff pass"
   },
   "fresh-context-handoff": {
     "requestedBy": "user",
@@ -2232,19 +2230,22 @@
   },
   "chat-proof-current-native": {
     "requestId": "fresh-lead-chat-current-native-0b087-foreground-released",
-    "status": "running",
+    "status": "completed",
     "sourceHead": "0b087c067fde4203635825abb395307a02c6b26d",
     "base": "132d273073889bd0702cf96b1fc2a62d5027598c",
     "model": "gpt-6.1-sol",
     "options": {
       "reasoningEffort": "xhigh",
       "serviceTier": "default"
-    }
+    },
+    "head": "5321ae5b4ff3d3c4ed4cfb5b67b6a7139288b6bf",
+    "ownedUiRepair": "six unsupported StyleX border shorthands to longhands; native0pxred/1pxgreen",
+    "cleanup": "52Electronhelpers+11hosts+38forwardPIDs/38PGIDs absent;30ports rebound"
   },
   "review-pi-r3-integration-r2": {
     "taskId": "node:delegated-task:command%3Amcp%3A8185ba6c-62ae-4571-ad0b-9688ad5a1b92%3Adelegate-task%3Afresh-lead-pi235-r3-integration132-r2-astra",
     "childThreadId": "thread:delegated-task:command%3Amcp%3A8185ba6c-62ae-4571-ad0b-9688ad5a1b92%3Adelegate-task%3Afresh-lead-pi235-r3-integration132-r2-astra",
-    "status": "running",
+    "status": "completed",
     "model": "gpt-6-astra",
     "options": {
       "reasoningEffort": "xhigh",
@@ -2255,6 +2256,29 @@
       "integration": "132d273073889bd0702cf96b1fc2a62d5027598c"
     },
     "foreground": "headless only; chat owns native slot",
-    "brief": "complete common/05/06/09 plus full PiR1/response/R2, integrationR1, SSHR1/R2/R3 supplied in new delegation"
+    "brief": "complete common/05/06/09 plus full PiR1/response/R2, integrationR1, SSHR1/R2/R3 supplied in new delegation",
+    "verdict": "no blocking source/public runtime/controlled integration findings",
+    "report": "docs/overnight/reviews/pi-r3-chat-integration-r2.md",
+    "tests": 136,
+    "independentProbes": 22,
+    "historicalExpectedFailures": 21,
+    "cleanup": {
+      "pidsAbsent": 106,
+      "groupsAbsent": 84,
+      "portsRebound": 64
+    },
+    "hostedCi": "blocked before execution: account billing/spending"
+  },
+  "review-chat-proof-r1": {
+    "taskId": "node:delegated-task:command%3Amcp%3A8185ba6c-62ae-4571-ad0b-9688ad5a1b92%3Adelegate-task%3Afresh-lead-chat5321-proof-r1-astra",
+    "childThreadId": "thread:delegated-task:command%3Amcp%3A8185ba6c-62ae-4571-ad0b-9688ad5a1b92%3Adelegate-task%3Afresh-lead-chat5321-proof-r1-astra",
+    "head": "5321ae5b4ff3d3c4ed4cfb5b67b6a7139288b6bf",
+    "base": "132d273073889bd0702cf96b1fc2a62d5027598c",
+    "status": "running",
+    "model": "gpt-6-astra",
+    "options": {
+      "reasoningEffort": "xhigh",
+      "serviceTier": "default"
+    }
   }
 }
