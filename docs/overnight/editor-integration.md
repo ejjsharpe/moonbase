@@ -2,7 +2,7 @@
 
 This non-default working branch normal-merges reviewed workspace `38c6c551ff0ab1108077275d223a32967f32b9f6` (PR #3, Astra R6) and editor `c31bb4164d2ff18031e2b391a83198bb5e40d027` (PR #4, Astra R8). Both depend on publication contract #7 `8557fdd0d7a71f93a6584c77430e6fde57668580`. The parent merge commits are `c15bc16` (workspace) and `1e7c442` (editor). No GitHub PR/default-branch merge or source rewrite occurred.
 
-The coordinator adds only the real boundary tests, test imports/lock registration, CI invocation and this evidence. Module source, public interfaces and pinned versions are unchanged. Root test dependencies reference application/editor/workspace through their workspace exports; no private helpers or memory adapter are used. This branch contains no chat, connection or SSH implementation.
+The coordinator adds only the real boundary tests, test imports/lock registration, CI invocation and this evidence. Module source, public interfaces and pinned versions are unchanged. A coordinator follow-up adds the public `@moonbase/workspace/filesystem` asset export for require.resolve-based packaging, with no executable JavaScript import or native source change. The real fixture resolves that public asset rather than a sibling implementation path. Root test dependencies reference application/editor/workspace through their workspace exports; no private helpers or memory adapter are used. This branch contains no chat, connection or SSH implementation.
 
 ## Public production-adapter proof
 

@@ -1,6 +1,6 @@
 {
   "name": "@moonbase/workspace", "private": true, "type": "module",
-  "exports": { ".": "./src/index.ts" },
+  "exports": { ".": "./src/index.ts", "./filesystem": "./dist/filesystem" },
   "scripts": {
     "build": "node scripts/build-native.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
