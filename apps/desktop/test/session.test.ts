@@ -62,31 +62,24 @@ test("long-lived watches cannot consume command capacity or prevent disposal", a
 test("a lost renderer releases document work without losing approvals or accepting late observations", async () => {
   const receives: ((event: WorkspaceEvent) => void)[] = [], emitted: WorkspaceEvent[] = [];
   let stopped = 0;
-  const client: EditorClient = { command: async () => ({ state: { checkouts: [target] }, operations: [] }) as never,
+  let signal: AbortSignal | undefined;
+  const client: EditorClient = { command: async (operation, _input, options) => {
+    if (operation === "readFile") {
+      signal = options?.signal;
+      return await new Promise((_resolve, reject) => signal?.addEventListener("abort", () => reject(new ApplicationError({ code: "Cancelled", message: "cancelled" })))) as never;
+    }
+    return { state: { checkouts: [target] }, operations: [] } as never;
+  },
     watch: (_input, receive) => { receives.push(receive); return () => stopped++; } };
   const owner = new EditorSession(client, { chooseCheckout: async () => null, imports: async () => [] }, (_id, r) => { if (r.ok) emitted.push(r.value); });
   await owner.call("command", { operation: "loadRecovery", input: { clientId: owner.clientId } }, "load");
   assert((await owner.call("watch", { checkout: target, paths: [] }, "same-id")).ok);
+  const pending = owner.call("command", { operation: "readFile", input: { checkout: target, path: "a.ts" } }, "wait");
   owner.releaseDocument(); assert.equal(stopped, 1);
+  assert.equal(signal?.aborted, true);
+  const cancelled = await pending; assert(!cancelled.ok); assert.equal(cancelled.error.code, "Cancelled");
   assert((await owner.call("watch", { checkout: target, paths: [] }, "same-id")).ok);
   receives[0]({ checkout: target, paths: ["late-old"] }); assert.equal(emitted.length, 0);
   receives[1]({ checkout: target, paths: ["current"] }); assert.equal(emitted[0].paths[0], "current");
   owner.dispose(); assert.equal(stopped, 2);
-});
-
-test("document release retains approvals but cancels waits and isolates reused observer IDs", async () => {
-  const receives: ((event: import("@moonbase/application/client").WorkspaceEvent) => void)[] = [];
-  let stops = 0, sends = 0;
-  const f = fixture(); await f.call("loadRecovery", { clientId: "desktop-primary" });
-  const pending = f.call("readFile", { checkout: target, path: "a.ts" }, "wait"); f.session.releaseDocument();
-  assert.equal(f.signal?.aborted, true); assert.equal((await pending).ok, false);
-  assert((await f.call("loadRecovery", { clientId: "desktop-primary" })).ok); f.session.dispose();
-  const client: EditorClient = { command: async () => ({ state: { checkouts: [target] }, operations: [] }) as never, watch: (_input, receive) => { receives.push(receive); return () => stops++; } };
-  const owner = new EditorSession(client, { chooseCheckout: async () => null, imports: async () => [] }, () => sends++);
-  await owner.call("command", { operation: "loadRecovery", input: { clientId: owner.clientId } }, "load");
-  await owner.call("watch", { checkout: target, paths: [] }, "reused"); owner.releaseDocument();
-  await owner.call("watch", { checkout: target, paths: [] }, "reused");
-  receives[0]({ checkout: target, paths: ["old"] }); assert.equal(sends, 0);
-  receives[1]({ checkout: target, paths: ["new"] }); assert.equal(sends, 1);
-  owner.dispose(); assert.equal(stops, 2);
 });

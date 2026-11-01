@@ -1,3 +1,4 @@
+import { recoveryState } from "./editor-regressions.ts";
 import {
   test,
   expect,
@@ -102,19 +103,6 @@ async function create(p: Page, title: string) {
 }
 async function saved(p: Page) {
   return p.evaluate(() => JSON.parse(localStorage.getItem("moonbase.chat-proof.v1")!));
-}
-async function recovery(p: Page) {
-  return p
-    .evaluate(async () => {
-      const r = await window.moonbase.call(
-        "command",
-        { operation: "loadRecovery", input: { clientId: window.moonbase.clientId } },
-        crypto.randomUUID(),
-      );
-      if (!r.ok) throw Error(r.error.message);
-      return JSON.stringify(r.value);
-    })
-    .then(JSON.parse);
 }
 async function screen(app: ElectronApplication, p: Page, name: string) {
   await p.evaluate(
@@ -252,25 +240,17 @@ test("dirty editor/live chat, two drafts, no-resend reconnect, view close and cl
     await editor(p).press("End");
     await editor(p).pressSequentially(" + live tool editing");
     await expect
-      .poll(async () => (await recovery(p)).state.drafts[0]?.text)
+      .poll(async () => (await recoveryState(p)).state.drafts[0]?.text)
       .toBe("local dirty draft + live tool editing");
     // Remote cwd is never authority to the local editor, even with an equal root string.
-    const rejected = await p.evaluate(async (host) => {
-      const r = await window.moonbase.call(
-        "command",
-        { operation: "loadRecovery", input: { clientId: window.moonbase.clientId } },
-        crypto.randomUUID(),
-      );
-      if (!r.ok) throw Error(r.error.message);
-      const local = (
-        r.value as { state: { checkouts: import("@moonbase/application/client").CheckoutTarget[] } }
-      ).state.checkouts[0];
+    const localCheckout = (await recoveryState(p)).state.checkouts[0];
+    const rejected = await p.evaluate(async ({ host, local }) => {
       return window.moonbase.call(
         "command",
         { operation: "readFile", input: { checkout: { ...local, hostId: host }, path: "a.ts" } },
         crypto.randomUUID(),
       );
-    }, f.session.host.hostId);
+    }, { host: f.session.host.hostId, local: localCheckout });
     expect(rejected).toMatchObject({ ok: false, error: { code: "Unauthorized" } });
     expect(await readFile(join(f.cwd, "a.ts"), "utf8")).toContain("original");
     await screen(app, p, "dirty-editor");
@@ -407,7 +387,7 @@ for (const change of ["external", "write-failure"])
         p.locator(".view-line").filter({ hasText: "local dirty draft" }).first(),
       ).toBeVisible();
       await expect
-        .poll(async () => (await recovery(p)).state.drafts[0]?.text)
+        .poll(async () => (await recoveryState(p)).state.drafts[0]?.text)
         .toBe("local dirty draft");
       const bytes = await p.evaluate(() => localStorage.getItem("moonbase.chat-proof.v1"));
       expect(bytes).toBe(change === "external" ? "external bytes" : prior);
@@ -541,7 +521,7 @@ test("captured Quit keeps chat/newer drafts and editor conflicts usable; Cancel 
     expect(await readFile(join(f.cwd, "a.ts"), "utf8")).toBe("external conflicting change");
     const next = await launch(f);
     current = next.app;
-    await expect.poll(async () => (await recovery(next.page)).state.drafts.length).toBe(0);
+    await expect.poll(async () => (await recoveryState(next.page)).state.drafts.length).toBe(0);
     await connect(next.page);
     await expect(next.page.getByLabel("Message", { exact: true })).toHaveValue(
       "newer draft after cancelled Quit",
@@ -592,7 +572,7 @@ if (!packaged)
       await editor(p).press("End");
       await editor(p).pressSequentially(" newer pending recovery");
       await expect
-        .poll(async () => (await recovery(p)).state.drafts[0]?.text)
+        .poll(async () => (await recoveryState(p)).state.drafts[0]?.text)
         .toContain("newer pending recovery");
       await app.evaluate(() => {
         globalThis.desktopTest.fault = "final-publication";
@@ -602,7 +582,7 @@ if (!packaged)
       await expect(
         p.getByRole("button", { name: "Resolve recovery publication", exact: true }),
       ).toBeVisible();
-      expect((await recovery(p)).state.drafts).toEqual([]);
+      expect((await recoveryState(p)).state.drafts).toEqual([]);
       await expect(editor(p)).toBeVisible();
       expect(children.get(app)!.exitCode).toBeNull();
       await tab(p, "Chat").click();
@@ -657,7 +637,7 @@ test("held admitted Send leaves local Save/read/status and exact Stop independen
     await tab(p, "Editor").click();
     await p.getByRole("button", { name: "Save", exact: true }).click();
     await expect.poll(() => readFile(join(f.cwd, "a.ts"), "utf8")).toBe("local dirty draft");
-    expect((await recovery(p)).state.checkouts).toHaveLength(1);
+    expect((await recoveryState(p)).state.checkouts).toHaveLength(1);
     await tab(p, "Chat").click();
     const status = await p.evaluate(() =>
       window.moonbaseChat.call("connection", "getConnection", {}, crypto.randomUUID()),

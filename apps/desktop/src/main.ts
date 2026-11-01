@@ -19,6 +19,63 @@ import { channels as chatChannels, record as chatRecord, fields, errorDTO as cha
 
 const directory = fileURLToPath(new URL(".", import.meta.url));
 
+function coordinateQuit({ window, requireTrusted, show, dispose, releaseDocument }: {
+  window: BrowserWindow;
+  requireTrusted: (event: IpcMainEvent | IpcMainInvokeEvent) => void;
+  show: () => void;
+  dispose: () => Promise<void>;
+  releaseDocument: () => void;
+}) {
+  let quit: { id: string; stage: "preserve" | "dispose" } | undefined;
+  let exiting = false, rendererReady = false, quitRequested = false;
+  function requestQuit() {
+    quitRequested = true;
+    show();
+    if (!rendererReady || quit) return;
+    quit = { id: randomUUID(), stage: "preserve" };
+    window.webContents.send(channels.action, "quit", quit.id);
+  }
+  ipcMain.on(channels.ready, event => {
+    try {
+      requireTrusted(event);
+      rendererReady = true;
+      if (quitRequested) requestQuit();
+    } catch (error) { console.error(ApplicationError.fromUnknown(error).message); }
+  });
+  ipcMain.on(channels.quit, async (event, value: unknown) => {
+    try {
+      requireTrusted(event);
+      const v = record(value);
+      keys(v, ["id", "consent"]);
+      requestId(v.id);
+      if (!quit || v.id !== quit.id || typeof v.consent !== "boolean") throw new ApplicationError({ code: "Unauthorized", message: "No matching Quit request." });
+      if (!v.consent) {
+        quit = undefined;
+        quitRequested = false;
+        show();
+        return;
+      }
+      if (quit.stage === "preserve") {
+        quit = { id: randomUUID(), stage: "dispose" };
+        window.webContents.send(channels.action, "dispose", quit.id);
+        return;
+      }
+      await dispose();
+      exiting = true;
+      ipcMain.removeHandler(channels.call); ipcMain.removeAllListeners(channels.cancel); ipcMain.removeAllListeners(channels.quit); ipcMain.removeAllListeners(channels.ready);
+      ipcMain.removeHandler(channels.configured); ipcMain.removeHandler(chatChannels.call); ipcMain.removeAllListeners(chatChannels.cancel);
+      window.destroy(); protocol.unhandle("moonbase"); app.quit();
+    } catch (error) { quit = undefined; show(); console.error("Quit failed:", ApplicationError.fromUnknown(error).message); }
+  });
+  window.on("close", event => { if (!exiting) { event.preventDefault(); window.hide(); } });
+  window.webContents.on("render-process-gone", (_event, details) => {
+    releaseDocument(); rendererReady = false; quit = undefined; quitRequested = false;
+    console.error("Workbench renderer exited:", details.reason);
+  });
+  app.on("before-quit", event => { if (!exiting) { event.preventDefault(); requestQuit(); } });
+  return requestQuit;
+}
+
 async function main() {
   const requestedData = process.env.MOONBASE_USER_DATA ?? (app.isPackaged ? join(app.getPath("appData"), "Moonbase") : undefined);
   if (!requestedData || !isAbsolute(requestedData)) throw Error("Set MOONBASE_USER_DATA to an explicit new Moonbase user-data directory.");
@@ -108,31 +165,20 @@ async function main() {
     } catch (error) { return chatError(error); }
   });
   ipcMain.on(chatChannels.cancel, (event, id: unknown) => { try { requireTrusted(event); chatSession?.cancel(id); } catch (error) { console.error(ApplicationError.fromUnknown(error).message); } });
-  let quit: { id: string; stage: "preserve" | "dispose" } | undefined, exiting = false, rendererReady = false, quitRequested = false;
   function show() { if (!window.isDestroyed()) { window.show(); window.focus(); } }
-  function requestQuit() { quitRequested = true; show(); if (!rendererReady) return; if (!quit) { quit = { id: randomUUID(), stage: "preserve" }; window.webContents.send(channels.action, "quit", quit.id); } }
-  ipcMain.on(channels.ready, event => { try { requireTrusted(event); rendererReady = true; if (quitRequested) requestQuit(); } catch (error) { console.error(ApplicationError.fromUnknown(error).message); } });
-  ipcMain.on(channels.quit, async (event, value: unknown) => {
-    try {
-      requireTrusted(event); const v = record(value); keys(v, ["id", "consent"]); requestId(v.id);
-      if (!quit || v.id !== quit.id || typeof v.consent !== "boolean") throw new ApplicationError({ code: "Unauthorized", message: "No matching Quit request." });
-      if (!v.consent) { quit = undefined; quitRequested = false; show(); return; }
-      if (quit.stage === "preserve") { quit = { id: randomUUID(), stage: "dispose" }; window.webContents.send(channels.action, "dispose", quit.id); return; }
-      chatSession?.dispose(); editorSession.dispose(); await runtime.dispose(); exiting = true;
-      ipcMain.removeHandler(channels.call); ipcMain.removeAllListeners(channels.cancel); ipcMain.removeAllListeners(channels.quit); ipcMain.removeAllListeners(channels.ready);
-      ipcMain.removeHandler(channels.configured); ipcMain.removeHandler(chatChannels.call); ipcMain.removeAllListeners(chatChannels.cancel);
-      window.destroy(); protocol.unhandle("moonbase"); app.quit();
-    } catch (error) { quit = undefined; show(); console.error("Quit failed:", ApplicationError.fromUnknown(error).message); }
+  const requestQuit = coordinateQuit({
+    window, requireTrusted, show,
+    releaseDocument: () => { editorSession.releaseDocument(); chatSession?.dispose(); },
+    dispose: async () => {
+      chatSession?.dispose(); editorSession.dispose(); await runtime.dispose();
+    },
   });
-  window.on("close", event => { if (!exiting) { event.preventDefault(); window.hide(); } });
   window.webContents.on("will-navigate", event => event.preventDefault());
   window.webContents.on("will-frame-navigate", event => event.preventDefault());
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-attach-webview", event => event.preventDefault());
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
-  window.webContents.on("render-process-gone", (_event, details) => { editorSession.releaseDocument(); chatSession?.dispose(); rendererReady = false; quit = undefined; quitRequested = false; console.error("Workbench renderer exited:", details.reason); });
-  app.on("before-quit", event => { if (!exiting) { event.preventDefault(); requestQuit(); } });
   app.on("activate", show);
   app.on("second-instance", show);
   Menu.setApplicationMenu(Menu.buildFromTemplate([

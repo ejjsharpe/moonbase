@@ -1,4 +1,4 @@
-import { ApplicationError, type CheckoutTarget, type EditorClient, type WorkspaceCommand, type WorkspaceEvent } from "@moonbase/application/client";
+import { ApplicationError, type CheckoutTarget, type EditorClient, type RecoveryLoad, type WorkspaceCommand, type WorkspaceEvent } from "@moonbase/application/client";
 import { checkout, commandFields, errorDTO, invalid, keys, record, requestId, string, type Reply } from "./wire.ts";
 
 const exact = (a: CheckoutTarget, b: CheckoutTarget) => ["hostId", "checkoutId", "projectId", "root", "branch"].every(k => a[k as keyof CheckoutTarget] === b[k as keyof CheckoutTarget]);
@@ -74,7 +74,7 @@ export class EditorSession {
         value = await this.client.command(operation, validated as never, { signal: abort.signal });
         if (operation === "openCheckout") { checkout(value); this.known.set(value.checkoutId, value); }
         if (operation === "loadRecovery") {
-          const load = value as Awaited<ReturnType<EditorClient["command"]>> & {state: {checkouts: CheckoutTarget[]}; operations: {clientId: string; id: string}[]};
+          const load = value as RecoveryLoad;
           for (const target of load.state.checkouts) { checkout(target); this.known.set(target.checkoutId, target); }
           for (const fact of load.operations) this.operations.add(JSON.stringify([fact.clientId, fact.id]));
         }

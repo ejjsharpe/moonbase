@@ -557,7 +557,7 @@ export class ChatProofController {
             ...this.state.chats.filter((c) => !same(c.target, r.conversation.target)),
           ].slice(0, 32),
         });
-        if (this.state.connection?.state === "connected")
+        if (this.attached && !this.closed && this.state.connection?.state === "connected")
           await this.observe(r.conversation.target, this.epoch);
       } else if (p.operation === "sendChat") {
         const r = await this.chat.command(p.operation, p.input);

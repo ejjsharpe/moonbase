@@ -583,3 +583,29 @@ for (const operation of ["createChat", "sendChat", "stopChat"] as const)
         assert.equal(f.calls.filter((c) => c.operation === operation).length, before);
         f.controller.dispose();
       });
+
+for (const release of ["detach", "dispose"] as const)
+  test(`a delayed Create reply after ${release} records success without restarting observations`, async () => {
+    const f = fixture();
+    await ready(f);
+    let reply!: (value: unknown) => void;
+    f.answers.set("createChat", () => new Promise(resolve => { reply = resolve; }));
+    const pending = f.controller.create("Delayed creation");
+    const original = f.controller.getSnapshot().pending[0];
+    f.controller[release]();
+    assert.equal(f.subscriptions, 0);
+    const reads = f.calls.filter(c => c.operation === "getChat").length;
+    reply({ requestId: original.input.requestId, conversation: summary });
+    await pending;
+    assert.equal(f.subscriptions, 0);
+    assert.equal(f.calls.filter(c => c.operation === "getChat").length, reads);
+    const saved = JSON.parse(f.storage.value!);
+    assert.deepEqual(saved.selected, target);
+    assert.deepEqual(saved.pending, []);
+    if (release === "detach") {
+      await f.controller.start();
+      assert.equal(f.subscriptions, 1);
+      assert.equal(f.calls.filter(c => c.operation === "createChat").length, 1);
+    }
+    f.controller.dispose();
+  });

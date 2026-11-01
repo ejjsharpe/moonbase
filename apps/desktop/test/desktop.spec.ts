@@ -1,4 +1,4 @@
-import { filenameCases, checkFilenameMaps, checkTabMenu } from "./editor-regressions.ts";
+import { filenameCases, checkFilenameMaps, checkTabMenu, recoveryState } from "./editor-regressions.ts";
 import { test, expect, _electron as electron } from "@playwright/test";
 import type { ElectronApplication, Page } from "@playwright/test";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync, existsSync, statSync } from "node:fs";
@@ -98,19 +98,9 @@ test("actual sandboxed custom-scheme editor reads, edits and saves through SQLit
 
 async function checkoutTarget() {
   await expect.poll(async () => (await recovery()).state.checkouts.length).toBeGreaterThan(0);
-  return page.evaluate(async () => {
-    const r = await window.moonbase.call("command", { operation: "loadRecovery", input: { clientId: window.moonbase.clientId } }, crypto.randomUUID());
-    if (!r.ok) throw Error(r.error.message);
-    return (r.value as import("@moonbase/application/client").RecoveryLoad).state.checkouts[0];
-  });
+  return (await recoveryState(page)).state.checkouts[0];
 }
-async function recovery() {
-  return page.evaluate(async () => {
-    const r = await window.moonbase.call("command", { operation: "loadRecovery", input: { clientId: window.moonbase.clientId } }, crypto.randomUUID());
-    if (!r.ok) throw Error(r.error.message);
-    return r.value as import("@moonbase/application/client").RecoveryLoad;
-  });
-}
+const recovery = () => recoveryState(page);
 async function quit() { await app.evaluate(({ app }) => { app.quit(); }); }
 
 test("actual conflict Compare, Cancel, Overwrite and Reload retain one dirty working buffer and Git index", async () => {
