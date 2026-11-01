@@ -31,7 +31,7 @@ function fixture(failures: { watchCleanup?: Error; commandCleanup?: Error; watch
     loadRecovery: ({ clientId }) => Effect.succeed({ revision: 0, state: emptyRecovery(clientId), errors: [], operations: [] }),
     saveFile: unavailable, listDirectory: unavailable, gitStatus: unavailable,
     readComparison: unavailable, lookupFiles: unavailable, inspectEntries: unavailable,
-    mutate: unavailable, operationStatus: unavailable, acknowledgeOperation: unavailable, persistRecovery: unavailable,
+    mutate: unavailable, operationStatus: unavailable, acknowledgeOperation: unavailable, persistRecovery: unavailable, getRecoveryPublication: unavailable,
     watch: () => Stream.unwrap(Effect.as(Effect.acquireRelease(
       Effect.gen(function* () {
         yield* Effect.sync(() => { counts.subscriptions++; entering(); });
