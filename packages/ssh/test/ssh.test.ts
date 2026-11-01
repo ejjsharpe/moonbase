@@ -346,3 +346,40 @@ test('R1 cancellation during admitted teardown cannot strand the owned helper gr
     abort.abort(); for (const row of f.helpers()) if (alive(row.pid)) process.kill(row.pid, 'SIGKILL'); await f.close();
   }
 });
+
+for (const persistent of [false, true]) test(`R2 ${persistent ? 'persistent' : 'transient'} EPERM during owned-group exit requires confirmed absence`, async () => {
+  const f = await fixture('held-both'), other = f.start(), originalKill = process.kill.bind(process);
+  let observations = 0, term = false;
+  const deniedSignals = new Set<NodeJS.Signals | number>();
+  try {
+    const connected = await f.client.command('connect', {profileId: 'configured'});
+    await until(() => f.helpers().length === 1); const leader = f.forwards()[0], helper = f.helpers()[0];
+    f.setMode('normal'); const independent = await other.client.command('connect', {profileId: 'configured'});
+    mock.method(process, 'kill', function(pid: number, signal?: NodeJS.Signals | number) {
+      if (!persistent && pid === -leader.pid && (signal === 'SIGTERM' || signal === 'SIGKILL') && !deniedSignals.has(signal)) {
+        deniedSignals.add(signal); throw Object.assign(new Error('Controlled transient group-signal ambiguity'), {code: 'EPERM'});
+      }
+      if (pid === -leader.pid && signal === 0 && term && (persistent || observations < 3)) {
+        observations++; throw Object.assign(new Error('Controlled Darwin exit-window observation'), {code: 'EPERM'});
+      }
+      const result = originalKill(pid, signal); if (pid === -leader.pid && signal === 'SIGTERM') term = true; return result;
+    });
+    const started = performance.now(), releasing = f.client.command('disconnect', {connectionId: connected.connectionId!});
+    if (persistent) {
+      await assert.rejects(releasing, failure('Unavailable'));
+      assert(performance.now() - started >= 2400, 'persistent ambiguity failed before the existing cleanup budget');
+      assert(performance.now() - started < 3500, 'persistent ambiguity exceeded its bound');
+      assert.equal((await f.client.command('getConnection', {})).state, 'disconnecting');
+      await assert.rejects(f.client.command('connect', {profileId: 'configured'}), failure('Conflict'));
+      await assert.rejects(f.endpoint(), failure('Unavailable'));
+      mock.restoreAll(); await f.client.command('disconnect', {connectionId: connected.connectionId!});
+    } else { await releasing; assert.equal(observations, 3); assert.deepEqual([...deniedSignals], ['SIGTERM', 'SIGKILL']); }
+    mock.restoreAll();
+    assert.equal((await f.client.command('getConnection', {})).state, 'disconnected');
+    assert(!alive(leader.pid)); assert(!alive(helper.pid));
+    assert.throws(() => originalKill(-leader.pid, 0), (e: any) => e.code === 'ESRCH');
+    for (const port of [...f.ports().slice(0, 1), helper.port]) await free(port);
+    assert(alive(f.forwards()[1].pid)); assert.equal((await other.client.command('getConnection', {})).connectionId, independent.connectionId);
+    const reconnected = await f.client.command('connect', {profileId: 'configured'}); assert.notEqual(reconnected.connectionId, connected.connectionId);
+  } finally { mock.restoreAll(); await other.runtime.dispose(); await f.close(); }
+});

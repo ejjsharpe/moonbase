@@ -69,15 +69,26 @@ export class SshProcess {
     if (this.stopping) return this.stopping;
     this.stopping = (async () => {
       const deadline = Date.now() + 2500;
+      const attempt = (signal: NodeJS.Signals | 0) => {
+        try { return this.signal(signal); }
+        catch (e) { if ((e as NodeJS.ErrnoException).code === 'EPERM') return undefined; throw e; }
+      };
+      const send = async (signal: NodeJS.Signals) => {
+        while (attempt(signal) === undefined) {
+          if (Date.now() >= deadline) throw unavailable('Owned SSH process group access remained unresolved.');
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+      };
       const gone = async (milliseconds: number) => {
         const until = Date.now() + milliseconds;
-        while (this.signal(0)) { if (Date.now() >= until) return false; await new Promise(resolve => setTimeout(resolve, 10)); }
+        // Darwin can report EPERM for an exiting group; only ESRCH confirms absence.
+        while (attempt(0) !== false) { if (Date.now() >= until) return false; await new Promise(resolve => setTimeout(resolve, 10)); }
         return true;
       };
       // An exited main PID does not release its proxy/helper group, including closed-pipe helpers.
-      if (this.signal(0)) {
-        this.signal('SIGTERM');
-        if (!await gone(500)) { this.signal('SIGKILL'); if (!await gone(Math.max(0, deadline - Date.now()))) throw unavailable('Owned SSH process group did not terminate.'); }
+      if (attempt(0) !== false) {
+        await send('SIGTERM');
+        if (!await gone(Math.min(500, Math.max(0, deadline - Date.now())))) { await send('SIGKILL'); if (!await gone(Math.max(0, deadline - Date.now()))) throw unavailable('Owned SSH process group did not terminate.'); }
       }
       const drained = async (milliseconds: number) => {
         let timer: ReturnType<typeof setTimeout> | undefined;

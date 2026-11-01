@@ -120,7 +120,11 @@ class Connection {
   private release(g: Generation) {
     const self = this;
     return Effect.uninterruptible(Effect.gen(function* () {
+      const interrupted = g.fiber && g.fiber.pollUnsafe() === undefined;
       if (g.fiber) yield* Fiber.interrupt(g.fiber);
+      const exit = g.fiber?.pollUnsafe();
+      // An interrupted attempt already spent its release budget; retry only on a later explicit release.
+      if (interrupted && exit && Exit.isFailure(exit) && exit.cause.reasons.some(Cause.isDieReason)) return yield* Effect.failCause(exit.cause).pipe(Effect.orDie);
       const cancelled = error('Cancelled', 'SSH connection generation was released.');
       const cleanup = yield* Effect.exit(releaseResource(async () => { await Promise.all([...g.processes].map(child => child.stop())); }));
       if (Exit.isFailure(cleanup)) {
