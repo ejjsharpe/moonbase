@@ -1,4 +1,5 @@
-import { randomUUID } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
+import { createHash, randomUUID } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { execFileSync } from 'node:child_process';
@@ -380,8 +381,9 @@ test('batch move reports partial success and explicit replacement revalidates th
     const replaced = await f.client.command('mutate', {id: 'replacement', clientId: 'alice', checkout, kind: 'move', sources: remaining, replacements: fresh, destination: 'target/second'});
     assert.equal(replaced.outcome, 'completed'); assert.equal(readFileSync(join(f.root, 'target/second'), 'utf8'), 'second');
     // The production result exposes actual native Trash location for ordinary Trash; replacement preserves bytes there too.
-    assert.equal(replaced.items[0].outcome, 'completed');
-    const trashed = replaced.items[0].message!.replace('Explicit replacement moved to macOS Trash: ', '');
+    const replacementTrash = replaced.items.find(item => item.destination === undefined)!;
+    assert.equal(replacementTrash.outcome, 'completed');
+    const trashed = replacementTrash.message!.slice(replacementTrash.message!.indexOf('/'));
     assert(trashed.includes('/.Trash/')); trashPaths.push(trashed); assert.equal(readFileSync(trashed, 'utf8'), 'replacement changed');
   } finally { trashPaths.forEach(p => { if (p.includes('/.Trash/') && existsSync(p)) rmSync(p); }); await f.close(); }
 });
@@ -533,4 +535,31 @@ test('restart recovers the admitted Save text even when no earlier draft publica
       assert.equal((await restarted.client.command('loadRecovery', {clientId: 'alice'})).revision, restored.revision + 1);
     } finally { await restarted.runtime.dispose(); }
   } finally { await runtime.dispose(); await f.close(); }
+});
+
+test('restart counts transfer and Trash results by structure regardless of display wording', async () => {
+  const f = fixture();
+  try {
+    writeFileSync(join(f.root, 'source'), 'bytes');
+    const checkout = await f.client.command('openCheckout', {root: f.root});
+    const sources = await f.client.command('inspectEntries', {checkout, paths: ['source']});
+    await f.runtime.dispose();
+    const db = new DatabaseSync(join(f.dataDirectory, 'moonbase-workspace-v1.sqlite'));
+    try {
+      for (const kind of ['move', 'trash'] as const) {
+        const items = kind === 'move'
+          ? [{source: 'destination', outcome: 'completed', message: 'Replacement retained in Trash.'}, {source: 'source', destination: 'destination', outcome: 'completed', message: 'Explicit replacement wording is display only.'}]
+          : [{source: 'source', outcome: 'completed', message: 'Explicit replacement wording is display only.'}];
+        const record = {input: {id: kind, clientId: 'alice', checkout, kind, sources, ...(kind === 'move' ? {destination: 'destination'} : {})}, publicationRevisions: {}, acknowledgedBy: [],
+          result: {id: kind, clientId: 'alice', checkout, kind, outcome: 'uncertain', items, recoveryChanges: []}};
+        db.prepare('INSERT INTO records VALUES(?,?,?)').run('operations', createHash('sha256').update(JSON.stringify(['alice', kind])).digest('hex'), JSON.stringify(record));
+      }
+    } finally { db.close(); }
+    const restarted = f.start();
+    try {
+      const loaded = await restarted.client.command('loadRecovery', {clientId: 'alice'});
+      assert.equal(loaded.operations.length, 2);
+      assert(loaded.operations.every(result => result.outcome === 'completed'));
+    } finally { await restarted.runtime.dispose(); }
+  } finally { await f.close(); }
 });

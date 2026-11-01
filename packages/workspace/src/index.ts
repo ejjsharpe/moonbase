@@ -27,6 +27,8 @@ export type WorkspaceConfiguration = {
 type Approval = { target: CheckoutTarget; identity: string; common: {path: string; identity: string}; gitEntry: {identity: string; pointer: string | null} };
 type SaveRecord = { restorePending?: boolean; recoveryRestored?: boolean; recoveryPublication?: number; baseline?: import('@moonbase/application/client').FileDocument; published?: boolean; temporary?: string; input: CommandInput<'saveFile'>; result?: SaveResult; started: boolean; message?: string };
 type OperationRecord = { paths?: string[]; publicationError?: string; staging?: string[]; publishedItems?: string[]; input: WorkspaceOperation; result: OperationResult; publicationRevisions: Record<string, number>; acknowledgedBy: string[] };
+type OperationSource = {path: string; identity: string; directory: boolean; native?: NativeImport};
+const isOriginalResult = (kind: WorkspaceOperation['kind'], item: OperationResult['items'][number]) => kind === 'trash' || item.destination !== undefined;
 const key = (clientId: string, id: string) => hash(canonical([clientId, id]));
 const affected = (p: string, source: string) => p === source || p.startsWith(source + '/');
 const folded = (p: string) => p.normalize('NFC').toLowerCase();
@@ -328,12 +330,68 @@ class LocalWorkspace {
     this.assertSettled(input.checkout, this.footprint(input), input.clientId);
     if (signal.aborted) fail('Cancelled', 'Operation cancelled before admission.');
     const directory = await this.directory(input.checkout);
+    const {items, tokens, replacements} = await this.prepareMutation(input, directory, signal);
+    const create = input.kind.startsWith('create-');
+    const importing = input.kind === 'import';
+    const staging = items.map(item => item.staging);
+    const publicationRevisions: Record<string, number> = {[input.clientId]: this.store.readRecovery(input.clientId)?.revision ?? 0};
+    for (const row of this.store.db.prepare('SELECT client, revision, body FROM recovery').all()) if ((JSON.parse(row.body as string) as EditorRecovery).checkouts.some(c => same(c, input.checkout))) publicationRevisions[row.client as string] = Number(row.revision);
+    const record: OperationRecord = { input, paths: [...input.sources.map(source => source.target.path), ...items.flatMap(item => item.destination === undefined ? [] : [item.destination])], staging, publicationRevisions, acknowledgedBy: [],
+      result: {id: input.id, clientId: input.clientId, recoveryChanges: [], checkout: input.checkout, kind: input.kind, outcome: 'uncertain', items: [], message: 'Admitted operation. Interrupted items must be inspected, never repeated automatically.'} };
+    // The complete immutable selection is durable before the first native mutation.
+    const claims = tokens.map(token => { const ref = this.native.get(token); if (!ref || ref.clientId !== input.clientId || ref.checkoutId !== input.checkout.checkoutId) fail('Unauthorized', 'Native reference expired, used or belongs to another client/checkout.'); ref!.source.validate(); return {token, ref: ref!}; });
+    const occupied = this.store.reserve('operations', id, record);
+    if (occupied) return this.replayOperation(id, input, this.operation(id) ?? occupied);
+    for (const {token, ref} of claims) { clearTimeout(ref.expires); this.native.delete(token); }
+    this.activeNative += claims.length;
+    try {
+      for (const {source, destination, staging: temporary} of items) {
+        if (signal.aborted) { record.result.items.push({source: source.path, destination, outcome: 'failed', message: 'Cancelled before this item started.'}); continue; }
+        const replacement = replacements.find(r => r.target.path === destination);
+        try {
+          if (replacement) {
+            const trashLocation = (await directory.io(['trash', replacement.target.path, '-', replacement.identity], undefined, signal)).toString();
+            record.result.items.push({source: replacement.target.path, outcome: 'completed', message: 'Explicit replacement moved to macOS Trash: ' + trashLocation});
+            this.store.put('operations', id, record);
+          }
+          if (create) {
+            await directory.io(['create', dirname(destination!) === '.' ? '.' : dirname(destination!), basename(destination!), source.directory ? 'folder' : 'file', await directory.destination(destination!)], input.text, signal);
+          } else if (input.kind === 'move') {
+            await directory.io(['move', source.path, destination!, source.identity], undefined, signal);
+            ensure((await directory.entry(destination!)).identity === source.identity, 'Move destination identity changed after native success.');
+          } else if (input.kind === 'trash') {
+            const trashPath = (await directory.io(['trash', source.path, '-', source.identity], undefined, signal)).toString();
+            record.result.items.push({source: source.path, outcome: 'completed', message: trashPath ? 'macOS Trash: ' + trashPath : 'Moved to macOS Trash.'});
+            this.store.put('operations', id, record); continue;
+          } else {
+            await directory.io([importing ? 'import' : 'copy', source.path, destination!, source.identity, temporary, await directory.destination(destination!), ...(source.native ? [source.native.path, source.native.parents, input.checkout.root] : [])], undefined, signal, source.native ? [source.native.fd] : []);
+          }
+          record.result.items.push({source: source.path, destination, outcome: 'completed'});
+        } catch (error) {
+          let outcome: 'failed' | 'uncertain' = 'uncertain';
+          // A preflight error is known only while the original object still occupies its exact path.
+          if (!(error as {uncertain?: boolean}).uncertain && !create && !['copy', 'import'].includes(input.kind) && !replacement) {
+            try { if ((await directory.entry(source.path)).identity === source.identity) outcome = 'failed'; } catch { /* Keep uncertain evidence. */ }
+          }
+          record.result.items.push({source: source.path, destination, outcome, message: errorText(error)});
+        }
+        try { this.store.put('operations', id, record); }
+        catch (error) { record.result.message = 'Filesystem outcome retained in memory; durable publication failed: ' + errorText(error); this.volatileOperations.set(id, record); return record.result; }
+        if (record.result.items.some(item => item.outcome === 'uncertain')) break;
+      }
+      record.result.outcome = record.result.items.some(i => i.outcome === 'uncertain') || record.result.items.length < items.length ? 'uncertain' : record.result.items.every(i => i.outcome === 'completed') ? 'completed' : 'failed';
+      if (record.result.outcome === 'uncertain') record.result.message = 'Inspect original, destination, Finder Trash and staging: ' + staging.filter(Boolean).join(', ') + '. Drafts and journal retained; no automatic retry.'; else delete record.result.message;
+      try { this.publishOperation(id, record); } catch (error) { this.retainPublication(id, record, error); }
+      return record.result;
+    } finally { for (const {ref} of claims) ref.source.close(); this.activeNative -= claims.length; }
+  }
+  private async prepareMutation(input: WorkspaceOperation, directory: Directory, signal: AbortSignal) {
     const create = input.kind.startsWith('create-');
     const importing = input.kind === 'import';
     const tokens = input.nativeReferences ?? [];
     ensure(Array.isArray(tokens) && tokens.length <= 128 && new Set(tokens).size === tokens.length, 'Invalid native references.');
     ensure(importing ? input.sources.length === 0 && tokens.length > 0 : tokens.length === 0 && (create ? input.sources.length === 0 : input.sources.length > 0), 'Invalid operation source selection.');
-    const sources: {path: string; identity: string; directory: boolean; native?: NativeImport}[] = [];
+    const sources: OperationSource[] = [];
     for (const entry of input.sources) {
       ensure(entry && same(entry.target.checkout, input.checkout), 'Source target belongs to another checkout.'); path(entry.target.path);
       const actual = await directory.entry(entry.target.path, signal);
@@ -359,8 +417,12 @@ class LocalWorkspace {
       if (!same(actual, {identity: replacement.identity, directory: replacement.directory})) fail('Conflict', 'Replacement changed. Confirm a freshly captured destination.');
       ensure(!sources.some(source => containsSelectedSource({path: replacement.target.path, ...actual}, source)), 'A replacement cannot contain or replace a selected source.');
     }
-    for (let i = 0; i < sources.length; i++) {
-      const source = sources[i], destination = destinations[i];
+    const items = sources.map((source, i) => {
+      const destination = destinations[i];
+      const staging = destination && ['copy', 'import'].includes(input.kind) ? join(dirname(destination), '.moonbase-copy-' + randomUUID()) : '';
+      return {source, destination, staging};
+    });
+    for (const {source, destination} of items) {
       if (!destination) continue;
       path(destination); await directory.destination(destination);
       for (const selected of sources.filter(s => s.native)) {
@@ -377,59 +439,7 @@ class LocalWorkspace {
         ensure(!state.drafts.some(d => d.target.checkout.checkoutId === input.checkout.checkoutId && affected(folded(d.target.path), folded(destination)) && (source.native || !affected(d.target.path, source.path))), 'Destination has recovery drafts. Preserve them before replacement.');
       }
     }
-    const staging = destinations.map(destination => destination && ['copy', 'import'].includes(input.kind) ? join(dirname(destination), '.moonbase-copy-' + randomUUID()) : '');
-    const publicationRevisions: Record<string, number> = {[input.clientId]: this.store.readRecovery(input.clientId)?.revision ?? 0};
-    for (const row of this.store.db.prepare('SELECT client, revision, body FROM recovery').all()) if ((JSON.parse(row.body as string) as EditorRecovery).checkouts.some(c => same(c, input.checkout))) publicationRevisions[row.client as string] = Number(row.revision);
-    const record: OperationRecord = { input, paths: [...input.sources.map(source => source.target.path), ...destinations.filter((p): p is string => p !== undefined)], staging, publicationRevisions, acknowledgedBy: [],
-      result: {id: input.id, clientId: input.clientId, recoveryChanges: [], checkout: input.checkout, kind: input.kind, outcome: 'uncertain', items: [], message: 'Admitted operation. Interrupted items must be inspected, never repeated automatically.'} };
-    // The complete immutable selection is durable before the first native mutation.
-    const claims = tokens.map(token => { const ref = this.native.get(token); if (!ref || ref.clientId !== input.clientId || ref.checkoutId !== input.checkout.checkoutId) fail('Unauthorized', 'Native reference expired, used or belongs to another client/checkout.'); ref!.source.validate(); return {token, ref: ref!}; });
-    const occupied = this.store.reserve('operations', id, record);
-    if (occupied) return this.replayOperation(id, input, this.operation(id) ?? occupied);
-    for (const {token, ref} of claims) { clearTimeout(ref.expires); this.native.delete(token); }
-    this.activeNative += claims.length;
-    try {
-      for (let i = 0; i < sources.length; i++) {
-        const source = sources[i], destination = destinations[i];
-        if (signal.aborted) { record.result.items.push({source: source.path, destination, outcome: 'failed', message: 'Cancelled before this item started.'}); continue; }
-        const replacement = replacements.find(r => r.target.path === destination);
-        try {
-          if (replacement) {
-            const trashLocation = (await directory.io(['trash', replacement.target.path, '-', replacement.identity], undefined, signal)).toString();
-            record.result.items.push({source: replacement.target.path, outcome: 'completed', message: 'Explicit replacement moved to macOS Trash: ' + trashLocation});
-            this.store.put('operations', id, record);
-          }
-          if (create) {
-            await directory.io(['create', dirname(destination!) === '.' ? '.' : dirname(destination!), basename(destination!), source.directory ? 'folder' : 'file', await directory.destination(destination!)], input.text, signal);
-          } else if (input.kind === 'move') {
-            await directory.io(['move', source.path, destination!, source.identity], undefined, signal);
-            ensure((await directory.entry(destination!)).identity === source.identity, 'Move destination identity changed after native success.');
-          } else if (input.kind === 'trash') {
-            const trashPath = (await directory.io(['trash', source.path, '-', source.identity], undefined, signal)).toString();
-            record.result.items.push({source: source.path, outcome: 'completed', message: trashPath ? 'macOS Trash: ' + trashPath : 'Moved to macOS Trash.'});
-            this.store.put('operations', id, record); continue;
-          } else {
-            const temporary = staging[i];
-            await directory.io([importing ? 'import' : 'copy', source.path, destination!, source.identity, temporary, await directory.destination(destination!), ...(source.native ? [source.native.path, source.native.parents, input.checkout.root] : [])], undefined, signal, source.native ? [source.native.fd] : []);
-          }
-          record.result.items.push({source: source.path, destination, outcome: 'completed'});
-        } catch (error) {
-          let outcome: 'failed' | 'uncertain' = 'uncertain';
-          // A preflight error is known only while the original object still occupies its exact path.
-          if (!(error as {uncertain?: boolean}).uncertain && !create && !['copy', 'import'].includes(input.kind) && !replacement) {
-            try { if ((await directory.entry(source.path)).identity === source.identity) outcome = 'failed'; } catch { /* Keep uncertain evidence. */ }
-          }
-          record.result.items.push({source: source.path, destination, outcome, message: errorText(error)});
-        }
-        try { this.store.put('operations', id, record); }
-        catch (error) { record.result.message = 'Filesystem outcome retained in memory; durable publication failed: ' + errorText(error); this.volatileOperations.set(id, record); return record.result; }
-        if (record.result.items.some(item => item.outcome === 'uncertain')) break;
-      }
-      record.result.outcome = record.result.items.some(i => i.outcome === 'uncertain') || record.result.items.length < sources.length ? 'uncertain' : record.result.items.every(i => i.outcome === 'completed') ? 'completed' : 'failed';
-      if (record.result.outcome === 'uncertain') record.result.message = 'Inspect original, destination, Finder Trash and staging: ' + staging.filter(Boolean).join(', ') + '. Drafts and journal retained; no automatic retry.'; else delete record.result.message;
-      try { this.publishOperation(id, record); } catch (error) { this.retainPublication(id, record, error); }
-      return record.result;
-    } finally { for (const {ref} of claims) ref.source.close(); this.activeNative -= claims.length; }
+    return {items, tokens, replacements};
   }
   reconcile(state: EditorRecovery, records: OperationRecord[]) {
     for (const record of records) {
@@ -478,7 +488,7 @@ class LocalWorkspace {
         const itemKey = canonical([item.source, item.destination]), previous = items.get(itemKey);
         if (previous?.outcome !== 'completed') items.set(itemKey, item);
       }
-      const mergedItems = [...items.values()], originals = mergedItems.filter(item => !item.message?.startsWith('Explicit replacement'));
+      const mergedItems = [...items.values()], originals = mergedItems.filter(item => isOriginalResult(record.input.kind, item));
       const expected = record.input.sources.length || record.input.nativeReferences?.length || 1;
       const outcome = originals.length !== expected || originals.some(item => item.outcome === 'uncertain') ? 'uncertain' : originals.every(item => item.outcome === 'completed') ? 'completed' : 'failed';
       const published = new Set([...(committed?.publishedItems ?? []), ...(record.publishedItems ?? [])]);
@@ -579,7 +589,7 @@ class LocalWorkspace {
     }
     for (const record of this.operations()) {
       if (this.active(record.input.checkout.checkoutId)) continue;
-      const items = record.result.items.filter(item => !item.message?.startsWith('Explicit replacement'));
+      const items = record.result.items.filter(item => isOriginalResult(record.input.kind, item));
       if (items.length === (record.input.sources.length || record.input.nativeReferences?.length || 1) && items.every(item => item.outcome !== 'uncertain')) {
         const outcome = items.every(item => item.outcome === 'completed') ? 'completed' : 'failed';
         const id = key(record.input.clientId, record.input.id);
