@@ -22,7 +22,7 @@ Both `react/rules-of-hooks` and `react/exhaustive-deps` are enabled as errors. T
 
 ## Oxfmt
 
-`oxfmt.json` keeps Universe's documented formatting options: width 100, two spaces, single quotes and same-line JSX brackets, with Prettier 3's trailing commas. Formatting runs separately from linting. Import and package JSON sorting are not added. The Expo MIT notice is retained in `LICENSE` for the adapted formatting options.
+`oxfmt.json` keeps Universe's documented formatting options: width 100, two spaces, single quotes and same-line JSX brackets, with Prettier 3's trailing commas. Formatting runs separately from linting. Import and package JSON sorting are not added.
 
 Source snapshots and their exact active UI copies remain unchanged. Oxfmt and lint auto-fixes exclude `packages/ui` because `check:foundation` compares those files byte-for-byte with the immutable source snapshot; remove those exclusions when the provenance check permits formatting changes. Existing documentation is excluded from this code-formatting adoption.
 
