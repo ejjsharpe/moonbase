@@ -1,13 +1,18 @@
 import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
 import { styles } from './styles.ts';
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
 import { Button } from '@base-ui/react/button';
 import { Dialog } from '@base-ui/react/dialog';
 import { overlays } from '@moonbase/ui/overlays';
-import type { CheckoutTarget, LookupMatch } from '@moonbase/application/client';
+import type { CheckoutTarget } from '@moonbase/application/client';
 import { checkoutKey, fileKey, type EditorController, type EditorSnapshot } from './editor.ts';
+import type { EditorLookup } from './workflows.ts';
 import { Popup } from './popup.tsx';
+
+const empty = { rows: [], message: 'Type a filename or path.', busy: false };
+const emptySnapshot = () => empty;
+const noSubscription = () => () => {};
 
 export function FileLookup({
   controller,
@@ -25,15 +30,13 @@ export function FileLookup({
   const [query, setQuery] = useState(''),
     [all, setAll] = useState(false),
     [refresh, setRefresh] = useState(0);
-  const [rows, setRows] = useState<(LookupMatch & { checkout: CheckoutTarget; recent: boolean })[]>(
-    [],
+  const [lookup, setLookup] = useState<EditorLookup | null>(null);
+  const { rows, message, busy } = useSyncExternalStore(
+    lookup?.subscribe ?? noSubscription,
+    lookup?.getSnapshot ?? emptySnapshot,
   );
-  const [index, setIndex] = useState(0),
-    [message, setMessage] = useState('Type a filename or path.'),
-    [busy, setBusy] = useState(false);
-  const active = useRef(true),
-    request = useRef(0),
-    activated = useRef(false),
+  const [index, setIndex] = useState(0);
+  const activated = useRef(false),
     id = useId();
   const scope = all
       ? state.recovery.checkouts.filter((target) =>
@@ -42,89 +45,44 @@ export function FileLookup({
       : [checkout],
     scopeKey = JSON.stringify(scope);
   useEffect(() => {
-    const requestCounter = request;
-    active.current = true;
+    const acquired = controller.createLookup();
+    // oxlint-disable-next-line react/set-state-in-effect -- React owns this popup attachment; the model owns its async work.
+    setLookup(acquired);
     return () => {
-      active.current = false;
-      requestCounter.current++;
+      void acquired.dispose().catch(controller.report);
     };
-  }, []);
+  }, [controller]);
   useEffect(() => {
-    const requestCounter = request;
-    const scope: CheckoutTarget[] = JSON.parse(scopeKey);
-    const generation = ++requestCounter.current;
-    // oxlint-disable-next-line react/set-state-in-effect -- A new search must hide stale selectable results before its async reply.
-    setRows([]);
+    lookup?.query(query, JSON.parse(scopeKey));
+    // oxlint-disable-next-line react/set-state-in-effect -- Reset keyboard selection when model query inputs change.
     setIndex(0);
-    const timer = setTimeout(() => {
-      void Promise.allSettled(
-        scope.slice(0, 8).map(async (checkout) => ({
-          checkout,
-          result: await controller.lookup(checkout, query),
-        })),
-      ).then((results) => {
-        if (!active.current || generation !== request.current) return;
-        const rows: (LookupMatch & { checkout: CheckoutTarget; recent: boolean })[] = [],
-          errors: string[] = [];
-        let partial = scope.length > 8;
-        for (const result of results) {
-          if (result.status === 'rejected') {
-            errors.push(String(result.reason));
-            continue;
-          }
-          const { checkout, result: value } = result.value;
-          partial ||= value.partial;
-          if (value.error) errors.push(value.error);
-          for (const recent of value.history) rows.push({ ...recent, checkout, recent: true });
-          for (const match of value.matches) rows.push({ ...match, checkout, recent: false });
-        }
-        const unique = [
-          ...new Map(
-            rows.map((row) => [fileKey({ checkout: row.checkout, path: row.path }), row]),
-          ).values(),
-        ];
-        unique.sort(
-          (a, b) => Number(b.recent) - Number(a.recent) || (a.recent ? 0 : b.score - a.score),
-        );
-        setRows(unique.slice(0, 100));
-        setMessage(
-          `${Math.min(unique.length, 100)} results${partial || unique.length > 100 ? '; partial coverage. Refine the query or Refresh.' : ''}${errors.length ? '; ' + errors.join('; ') : ''}`,
-        );
-      });
-    }, 120);
-    return () => {
-      clearTimeout(timer);
-      requestCounter.current++;
-    };
-  }, [query, scopeKey, refresh, controller, state.discoveryRevision]);
+  }, [query, scopeKey, refresh, lookup, state.discoveryRevision]);
   async function open(row = rows[index]) {
-    if (busy) return;
-    setBusy(true);
-    const generation = ++request.current;
-    try {
-      if (!row && all) {
-        setMessage('Choose one exact checkout result, or search in the active checkout.');
-        return;
-      }
-      const target = row ? { checkout: row.checkout, path: row.path } : { checkout, path: query };
-      const current = () =>
-        active.current &&
-        generation === request.current &&
-        controller.getSnapshot().recovery.openCheckoutIds.includes(target.checkout.checkoutId) &&
-        controller
-          .getSnapshot()
-          .recovery.checkouts.some((item) => checkoutKey(item) === checkoutKey(target.checkout));
-      if ((await controller.open(target, { view: 'file', intent: 'keep', current })) && current()) {
-        activated.current = true;
-        close();
-      } else
-        setMessage(
-          'File unavailable. Your current selection and edits are retained. Edit the path or retry.',
-        );
-    } catch (error) {
-      setMessage(String(error));
-    } finally {
-      setBusy(false);
+    if (!row && all) {
+      lookup?.message('Choose one exact checkout result, or search in the active checkout.');
+      return;
+    }
+    const target = row ? { checkout: row.checkout, path: row.path } : { checkout, path: query };
+    if (
+      await lookup?.open((current) =>
+        controller.open(target, {
+          view: 'file',
+          intent: 'keep',
+          current: () =>
+            current() &&
+            controller
+              .getSnapshot()
+              .recovery.openCheckoutIds.includes(target.checkout.checkoutId) &&
+            controller
+              .getSnapshot()
+              .recovery.checkouts.some(
+                (item) => checkoutKey(item) === checkoutKey(target.checkout),
+              ),
+        }),
+      )
+    ) {
+      activated.current = true;
+      close();
     }
   }
   return (
@@ -146,7 +104,6 @@ export function FileLookup({
           aria-expanded={rows.length > 0}
           aria-activedescendant={rows[index] ? `${id}-${index}` : undefined}
           onChange={(event) => {
-            request.current++;
             setQuery(event.target.value);
           }}
           maxLength={4096}

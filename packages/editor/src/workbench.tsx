@@ -23,14 +23,7 @@ import { filesUI } from '@moonbase/ui/files';
 import { workbench } from '@moonbase/ui/workbench';
 import { overlays } from '@moonbase/ui/overlays';
 import type { CheckoutTarget, FileView } from '@moonbase/application/client';
-import {
-  checkoutKey,
-  fileKey,
-  type ChooseClose,
-  type CloseChoice,
-  type EditorBuffer,
-  type EditorController,
-} from './editor.ts';
+import { checkoutKey, fileKey, type CloseChoice, type EditorController } from './editor.ts';
 import { MonacoView } from './monaco-view.tsx';
 import { styles } from './styles.ts';
 
@@ -82,11 +75,7 @@ export const EditorWorkbench = forwardRef<EditorWorkbenchHandle, EditorWorkbench
       actionRef.current = value;
       updateAction(value);
     }
-    const [choice, setChoice] = useState<{
-      file: Readonly<EditorBuffer>;
-      resolve: (choice: CloseChoice) => void;
-    } | null>(null);
-    const pendingChoice = useRef<((choice: CloseChoice) => void) | null>(null);
+    const choice = state.closePrompt;
     const [recent, setRecent] = useState<{
         paths: string[];
         index: number;
@@ -162,32 +151,21 @@ export const EditorWorkbench = forwardRef<EditorWorkbenchHandle, EditorWorkbench
         },
       );
     };
-    const choose: ChooseClose = (file) =>
-      new Promise((resolve) => {
-        pendingChoice.current = resolve;
-        setChoice({ file, resolve });
-      });
     function answer(value: CloseChoice) {
-      pendingChoice.current?.(value);
-      pendingChoice.current = null;
-      setChoice(null);
+      if (choice) controller.answerClose(choice.id, value);
     }
     useEffect(
       () => () => {
-        pendingChoice.current?.('cancel');
+        const prompt = controller.getSnapshot().closePrompt;
+        if (prompt) controller.answerClose(prompt.id, 'cancel');
       },
-      [],
+      [controller],
     );
     const importFiles = useCallback(
       (checkout: CheckoutTarget, references: string[]) => {
         if (!references.length) return;
         const snapshot = controller.getSnapshot();
-        if (
-          snapshot.preserving ||
-          actionRef.current ||
-          pendingChoice.current ||
-          lookupRef.current
-        ) {
+        if (snapshot.preserving || actionRef.current || snapshot.closePrompt || lookupRef.current) {
           controller.report(
             new Error('Finish the current editor dialog or preservation before importing files.'),
           );
@@ -209,11 +187,10 @@ export const EditorWorkbench = forwardRef<EditorWorkbenchHandle, EditorWorkbench
       },
       [controller],
     );
-    useImperativeHandle(
-      ref,
-      () => ({ prepareQuit: () => controller.prepareQuit(choose), importFiles }),
-      [controller, importFiles],
-    );
+    useImperativeHandle(ref, () => ({ prepareQuit: () => controller.prepareQuit(), importFiles }), [
+      controller,
+      importFiles,
+    ]);
     const run = (work: Promise<unknown>) => {
       void work.catch(controller.report);
     };
@@ -252,8 +229,7 @@ export const EditorWorkbench = forwardRef<EditorWorkbenchHandle, EditorWorkbench
           } else if (event.metaKey && key === 'w' && !event.shiftKey) {
             event.preventDefault();
             event.stopPropagation();
-            if (target)
-              run(withFocus(controller.close([target], choose), focusOrigin(element), true));
+            if (target) run(withFocus(controller.close([target]), focusOrigin(element), true));
           } else if (event.metaKey && event.shiftKey && key === 't') {
             event.preventDefault();
             event.stopPropagation();
@@ -329,7 +305,7 @@ export const EditorWorkbench = forwardRef<EditorWorkbenchHandle, EditorWorkbench
                   {...stylex.props(controls.button)}
                   aria-label={`Close checkout ${item.root}`}
                   disabled={state.preserving}
-                  onClick={() => run(controller.closeCheckout(item, choose))}>
+                  onClick={() => run(controller.closeCheckout(item))}>
                   <svg
                     width="12"
                     height="12"
@@ -619,7 +595,7 @@ export const EditorWorkbench = forwardRef<EditorWorkbenchHandle, EditorWorkbench
                                 {...stylex.props(controls.button)}
                                 aria-label={`Close ${path}`}
                                 disabled={state.preserving}
-                                onClick={() => run(controller.close([file], choose))}>
+                                onClick={() => run(controller.close([file]))}>
                                 <svg
                                   width="12"
                                   height="12"
@@ -726,7 +702,6 @@ export const EditorWorkbench = forwardRef<EditorWorkbenchHandle, EditorWorkbench
                                           run(
                                             controller.close(
                                               paths.map((path) => ({ checkout, path })),
-                                              choose,
                                             ),
                                           );
                                         }}>
@@ -880,7 +855,9 @@ export const EditorWorkbench = forwardRef<EditorWorkbenchHandle, EditorWorkbench
         )}
         {choice && (
           <Popup title="Save changes before closing?" onClose={() => answer('cancel')}>
-            <Dialog.Description>{choice.file.target.path} has unsaved changes.</Dialog.Description>
+            <Dialog.Description>
+              {choice.buffer.target.path} has unsaved changes.
+            </Dialog.Description>
             <div {...stylex.props(styles.dialogActions)}>
               {(['save', 'discard', 'cancel'] as const).map((value) => (
                 <Button
