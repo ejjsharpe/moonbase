@@ -1,71 +1,41 @@
-# Independent Moonbase editor
+# Editor
 
-`@moonbase/editor` is a reusable React/Monaco workbench. An editor instance owns its buffers, checkout/file tabs, preview, view positions, recent navigation, close history and recovery client ID. All IO enters the injected `@moonbase/application/client` commands. The renderer entry imports no filesystem, Electron, Effect runtime, workspace implementation or provider code.
+`@moonbase/editor` is a reusable React/Monaco workbench with an ordinary TypeScript controller. It owns buffers, tabs, previews, navigation, view positions and recovery coordination. All IO uses an injected `EditorClient`; the renderer imports no filesystem, Electron, Effect runtime, workspace implementation or provider code.
 
-## Public interface
+## Use
 
-```tsx
-import { makeEditorClient } from "@moonbase/application/runtime-client";
-import { createEditor, EditorWorkbench } from "@moonbase/editor";
-import { configureMonacoWorkers } from "@moonbase/editor/workers";
+```ts
+import { createEditor } from '@moonbase/editor/state';
 
-// runtime is the process root's already composed scoped workspace runtime.
-const editor = createEditor({
-  client: makeEditorClient(runtime),
-  clientId: "a-stable-unique-editor-window-id",
-});
+const editor = createEditor({ client, clientId: stableUniqueEditorId });
 await editor.load();
-await editor.openCheckout(rootFromAuthorizedNativeSelection);
-
-// In the browser composition root (a bundler with ?worker support):
-configureMonacoWorkers();
-<EditorWorkbench controller={editor} ref={editorView}
-  selectCheckout={selectAnAuthorizedCheckout}
-  selectNativeImports={pickOpaqueScopedNativeReferences} />;
-
-// Clipboard/drop entry uses the same module destination/replacement dialog:
-editorView.current.importFiles(exactOpenCheckout, opaqueScopedNativeReferences);
-
-// Native Quit, menu Quit and window-close confirmation use this same gate:
-if (await editorView.current.prepareQuit()) {
-  editor.dispose();
-  // The composition root may now unmount and dispose its scoped runtime.
-}
+await editor.openCheckout(approvedRoot);
 ```
 
-For an isolated renderer, construct the controller with the shell's validated browser-safe `EditorClient` instead of importing the runtime adapter into the renderer. Native selection callbacks are optional shell capabilities, not filesystem authority granted to renderer path strings. Native imports accept opaque references from the privileged workspace service, never raw OS paths.
+Mount `EditorWorkbench` from `@moonbase/editor` with `controller={editor}`. Shells may supply `selectCheckout` and `selectNativeImports`; native imports use approved opaque references, never raw OS source paths. Picker, clipboard and drop share `EditorWorkbenchHandle.importFiles(checkout, references)` and its destination/replacement dialog.
 
-`EditorWorkbenchHandle.importFiles(checkout, references): void` is a synchronous UI entry. It copies the exact open checkout and opaque references into the same dialog used by the picker. Clipboard/drop callers supply approved references, never raw source paths. Single-item imports require a full relative destination including its filename; batches choose an existing folder (blank means the checkout root). Batch replacement paths are entered explicitly, inspected and confirmed; the service checks that they name actual import destinations. Busy dialogs/preservation and unavailable exact checkouts reject visibly rather than queueing another import. Cancel dispatches no mutation; privileged token expiry/disposal remains with the workspace. `prepareQuit()` is unchanged.
+| Export | Purpose |
+| --- | --- |
+| `.` | Workbench, UI handle, controller, state types and target key helpers |
+| `./state` | Controller/types without React or Monaco |
+| `./workers` | `configureMonacoWorkers()` for a browser root with Vite-compatible `?worker` support |
+| `./memory` | Volatile `memoryWorkspace(seeds)` service layer for demos/tests |
 
-Exports:
+Applications supply clients and own runtime disposal. A privileged composition root can use `makeEditorClient(runtime)` from `@moonbase/application/runtime-client`; isolated renderers receive a validated bridge client. Each live editor needs a distinct recovery `clientId`; reuse it only to restore that editor after shutdown. Omission generates a random ID.
 
-- `.`: `EditorWorkbench`, its props/Quit/import handle, `createEditor`, `EditorController`, state types and exact target key helpers.
-- `./state`: ordinary TypeScript controller/types, usable without React or Monaco.
-- `./workers`: optional Vite-compatible Monaco worker configuration, installed once by the browser root.
-- `./memory`: `memoryWorkspace(seeds)` returns a focused `WorkspaceService` layer. Only tests/demo composition roots construct a runtime. This volatile second adapter has no native import/Trash durability or filesystem safety qualification.
+## Preservation and lifecycle
 
-Call `await editor.load()` before other operations. The supplied client ID is the recovery namespace; distinct live editor instances must have distinct IDs. The default is a new random ID. Reuse one ID only to restore that editor after shutdown. Monaco URIs also include a separate random instance ID, so even accidental namespace duplication never aliases models.
+Save captures an immutable target, request, text and version. Conflicts retain the draft and offer Compare, Overwrite, Reload or Cancel. Lost responses retain original inputs for exact reconciliation; newer edits remain separate. File mutations preserve affected drafts before effects, require explicit replacement consent and keep uncertain outcomes visible. Unresolved destination collisions retain both drafts.
 
-## Preserved behavior
+Recovery uses [exact publication receipts](../application/docs/RECOVERY-PUBLICATIONS.md). `getSnapshot().publication` exposes an unresolved publication; `resolveRecoveryPublication()` reconciles it. Uncertainty blocks destructive actions and Quit. Consumers must honor the workbench's `prepareQuit()` Save/Discard/Cancel gate before disposing or unmounting. Completed Saves and confirmed Discards remain facts if a later step fails.
 
-Normal, staged (HEAD), unstaged (index), untracked and Save-conflict views share each file's working buffer. Explicit Save captures an immutable request/target/text/version. A lost response retains that request for retry and retains newer live text separately. Conflict keeps the original baseline and offers Compare, Overwrite against the observed version, Reload and Cancel. Reload and captured Save/Discard/Cancel batches publish recovery before removing drafts. A later Cancel leaves earlier successful Saves as facts and defers every proposed Discard.
+`getSnapshot().recoveryReady` is the synchronous document-unload gate: veto reload while false and keep publication/retry controls available. It does not replace `prepareQuit()`. Keep a hidden editor mounted to retain Monaco models and undo history. Unmount releases models/listeners; controller disposal releases observations without disposing the process runtime or deleting recovery. Force-kill and physical power loss are outside these gates.
 
-Preview replacement happens only after successful activation. Editing, Keep Open, tab reorder and explicit opening retain a preview. File order, MRU/visual navigation, a bounded 20-action session file-close history, current-source reopen, per-view cursor/scroll and checkout/file tabs belong to the instance. Recovery retains known exact checkout targets/views separately from `openCheckoutIds`; persisted view keys are `checkoutId`. Closing a checkout retains its order, active file, comparison and positions without adding a file-close action. Restored open checkouts receive initial tree/Git discovery; closed metadata does not acquire IO/watch resources. Ctrl+Tab commits on Control release; Escape cancels. Cmd+Option+Left/Right follows visual order; Cmd+W, Cmd+Shift+T, Cmd+P and Cmd+S are scoped to the focused workbench and avoid other inputs/dialogs.
+## Checks
 
-The tree has fixed 28px virtual rows, keyboard navigation, multiple selection, ignore filtering, reveal, create, rename/move, copy and explicit Trash. Lookup displays independently filtered recent history and ranked/highlighted matches, bound to the selected checkout or exactly the open checkouts (eight-checkout/100-result display bound). Discovery/IO errors and partial results stay visible. No Microsoft lookup scorer or old application helper is imported.
-
-Mutations publish source drafts before effects. Only recorded successful items change references. Lost responses query the original operation status instead of redispatching; affected Save/close/mutations stay blocked while outcomes are uncertain. Dirty copies retain a separate destination draft, and dirty Trash text remains recoverable at its original target. Replacements require captured destination identity and explicit consent, and cannot replace an open destination buffer. Move resets Monaco undo history while retaining text and positions.
-
-If a delayed or foreign move collides with another open destination buffer, both drafts are published and the operation stays unacknowledged, including after restart. The UI reports the collision. Close one retained file through Save/Discard/Cancel, then resolve the original operation status; retries never replay the mutation or overwrite the other buffer. Retained unavailable file/comparison buffers remain selectable. A definitive InvalidInput Save rejection releases its request for corrected edits, while genuine uncertainty retains the immutable request.
-
-The memory adapter validates prospective recovery changes before committing. When both replacement drafts already existed in persisted recovery, it retains both original targets/text/baselines and pending evidence; restart cannot overwrite a duplicate destination. Save and mutation dispatch share the definitive InvalidInput non-admission policy, while admitted outcomes and later publication failures retain their original identities. A successful active-file close opens its survivor through the guarded activation path, restoring its remembered comparison/current contents. Close keeps every captured draft through non-destructive preflight/metadata convergence, then makes one final destructive publication. Its exact receipt commits the consented close; later metadata failures report separately and cannot veto it. The controller applies only captured close deltas to current metadata. Only the actual current survivor is activated; returning to a background checkout loads its absent retained buffer through the same guarded opening path, with its remembered view and current source. Visual/recent navigation and keyboard Close/Reopen share the post-mount focus handoff: editor typing, tree or tab-strip origin, and Find file when the editor becomes empty. Dialogs and hidden editors retain their scope.
-
-Hide an editor using `hidden` while keeping it mounted to preserve its models and undo history. Unmount releases Monaco models/listeners; it retains controller text/state but resets Monaco undo. Explicit `dispose()` ends subscriptions and pending observations, without disposing the process runtime or silently deleting published recovery. Consumers must run the preservation gate before destructive teardown; the module cannot veto an OS force-kill.
-
-## Run and evidence
+From the repository root:
 
 ```sh
-bun install --frozen-lockfile
 bun run --cwd packages/editor typecheck
 bun run --cwd packages/editor lint
 bun run --cwd packages/editor test
@@ -75,28 +45,4 @@ bun run --cwd packages/editor test:ui
 bun run --cwd packages/editor demo
 ```
 
-The demo creates one scoped application runtime with the memory service and two editor clients. Its controlled failure/external-writer controls are demo-only. Playwright needs its pinned Chromium installation (`bun x playwright install chromium`). Typechecking uses TypeScript; lint uses oxlint.
-
-Recovery uses the [application identity and receipt types](../application/src/client.ts). `getSnapshot().publication` exposes unresolved identity/kind; `resolveRecoveryPublication()` performs bounded exact lookup/original-input retry. Null lookup does not prove non-admission. Save, Reload, mutations, Close and Quit remain blocked until that identity resolves. Uncertain destructive publications retain their captured lock and live buffers; false Close/Quit means pending, not failed Discard. Restart follows the authoritative committed state. Neither equal state nor a latest revision proves receipt ownership. Save/move/copy facts bridge only contiguous known `recoveryChanges`; unrelated same-client CAS gaps veto close. Operation evidence binds origin client and ID, and acknowledgements bind the observing client separately.
-
-Observations recheck capture boundaries after IO and before publication. Immutable facts wait through preservation; release fetches fresh recovery. Reload captures its exact target and rechecks buffer/reference/revision before destructive publication. Completed Saves and observer acknowledgements remain facts across these boundaries. A confirmed close invalidates older Copy materialization for that exact target, including delayed reads/retries; cancelled/rejected close leaves it available, unrelated targets continue, and later explicit reopening retains newer edits. Filesystem results remain immutable and are acknowledged only after valid recovery publication.
-
-`selectCheckout(target)` selects immediately and returns guarded activation for an absent retained buffer. Await it when the caller needs that buffer. Remembered comparisons load without replacing dirty text/baselines; original inputs remain read-only and modified inputs retain typing focus. Settled failures do not retry on every release, and an empty original is valid. Refresh/checkout return can activate a newly available working document; persistent missing files remain read-only until availability/version changes or explicit retry.
-
-The separate `bun run test:editor-integration` suite exercises the real workspace/controller boundary. Browser and memory tests do not qualify packaged Electron, native picker/Trash interaction, complete-app keyboard/focus, physical durability or VoiceOver; those require workspace/desktop qualification. Human acceptance is **PENDING**. No provider, SSH, deployment or legacy-state work is included.
-
-## Distribution
-
-The workbench and matcher are independently implemented and consume shared UI recipes from `@moonbase/ui`.
-
-The active renderer uses the pinned React/React DOM, Monaco, Base UI and StyleX stack. The memory-only composition also uses Effect. The coordinator owns generation of distribution notices from package-provided licenses/notices for actual bundled assets, including Monaco workers/fonts. No manually copied notice bundle is added by this module.
-
-`controller.getSnapshot().recoveryReady` is the synchronous document-unload gate.
-It becomes false on a new capture (including caret/view metadata), while an ordinary
-publication is queued or in flight, or while preservation/immutable work is unresolved.
-Only the existing exact publication receipt confirms the generation it captured;
-a later edit invalidates that confirmation even if its text equals an older draft.
-A successfully published dirty draft may be reloaded without Save or Discard.
-Veto unload while false; keep the controller mounted and its normal publication/retry
-path available. Dispose observers/waits only after committed unload. This flag is not
-permission to skip `prepareQuit` and its Save/Discard/Cancel choices.
+Playwright requires its pinned Chromium (`bun x playwright install chromium`). The demo composes one memory-service runtime and two editor clients; it does not qualify filesystem safety or durability. The [editor/workspace suite](../../tests/editor-workspace/README.md) tests real IO through public boundaries. Packaged/native interaction, VoiceOver and human acceptance require desktop qualification. Distribution must retain notices for actual bundled dependencies, including Monaco workers/fonts.

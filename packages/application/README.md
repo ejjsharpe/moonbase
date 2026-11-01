@@ -1,24 +1,24 @@
 # Application contracts
 
-`@moonbase/application` owns shared typed commands, queries, subscriptions, dispatch, cancellation and errors. Feature packages implement its Effect service contracts; each process composes those services into one scoped root runtime.
+`@moonbase/application` owns shared typed commands, queries, subscriptions, dispatch, cancellation and errors. Feature packages implement its Effect service contracts; client process roots compose only the services they need into one scoped runtime.
 
 | Export | Purpose |
 | --- | --- |
 | `./client` | Browser-safe editor commands and workspace types |
 | `./chat-client` | Browser-safe chat commands and types |
-| `./chat-schema` | Shared Effect schemas and synchronous chat input/output decoders |
 | `./connection-client` | Browser-safe connection commands and types |
 | `./host-client` | Browser-safe host identity and health types |
+| `./chat-schema` | Effect schemas and synchronous chat input/output decoders |
 | `./services` | Effect service contracts and resource cleanup helpers |
 | `./handlers` | Shared command dispatch and subscriptions |
-| `./runtime-client` | Clients bound to the existing process runtime |
+| `./runtime-client` | Clients bound to an existing process runtime |
 | `./host-health` | Privileged host authentication helpers |
 
-Renderers receive browser-safe clients. Native and transport entry points validate and authorize unknown inputs before entering the same handlers. Checkout, client, request, host, store and task identities remain exact across retries and uncertain outcomes.
+Renderers receive browser-safe clients. Native and transport adapters validate and authorize unknown inputs before invoking shared handlers; feature services retain domain validation and resource ownership. Chat DTO types use type-only schema imports so browser clients emit no Effect code. Request decoders reject unknown fields; reply decoders project known fields. Shape validation grants no authority.
 
-Chat DTO and command types derive from `./chat-schema` through type-only imports. The client exports emit no Effect code; privileged consumers import the schema entry explicitly. Its decoders reject unexpected request fields and project replies to known fields, retaining the existing text, identity and delivery bounds. Invalid requests report `InvalidInput`; malformed replies consistently report `Incompatible`, replacing the old field-specific reply codes. Both use safe messages without rejected values. Domain errors keep their own codes, and mutation uncertainty remains with the consuming module. Authority checks remain with the consuming module; decoding a shape grants no permission to use its identities. Schemas create no service graph or application runtime.
+Read the relevant contract when changing [chat admission or RPC](docs/CHAT.md), [connection lifecycle](../ssh/README.md#lifecycle-and-authority), [host authentication](docs/HOST-PROTOCOL.md) or [recovery publications](docs/RECOVERY-PUBLICATIONS.md).
 
-Run package checks from the repository root:
+From the repository root:
 
 ```sh
 bun run --cwd packages/application typecheck

@@ -2,7 +2,7 @@
 
 Moonbase is a macOS workbench for editing files and working with agents. Its UI is an
 **Operate** surface: keep controls familiar, content readable and state clear. Use
-one dark workbench language across Agents, checkout Chats, Files and Source Control.
+one dark workbench language across editor and chat surfaces.
 
 ## Source of truth
 
@@ -46,7 +46,7 @@ focus management and accessibility; StyleX owns appearance.
 | Buttons and fields | `controls.button`, `controls.field` | Same font, padding, border, disabled and keyboard-focus treatment everywhere |
 | Popovers | `overlays.popup`, `option`, `search` | Shared surface, radius and focus treatment, including portal-rendered content |
 | File tree | `filesUI.row`, `selected`, `focused`, `drop` | Selection, keyboard focus, active file and drop target remain distinct |
-| Workbench | `workbench.workspace`, `sidebar`, `viewNav` | One persisted sidebar width and common Files/Diff/Chats navigation |
+| Workbench | `workbench.workspace`, `sidebar`, `viewNav` | Consistent workbench/sidebar/navigation layout |
 
 ## Authoring
 
@@ -71,11 +71,9 @@ Before adding a shared variant, find its existing uses and update all surfaces
 with the same intent. A local override should describe a layout or meaning, not
 the current page name. Avoid view-specific palettes and descendant overrides.
 
-`bun run lint` runs oxlint correctness rules; `bun run typecheck` runs TypeScript
-through Nx. `bun run format:check` checks formatting. These checks do not enforce
-the visual rules above. Keep the document reset limited to its stated purpose.
+Automated lint/type/format checks do not enforce visual consistency.
 
 Manual expectations for consuming apps: inspect compiled StyleX borders, keyboard
 focus, portal styling and dynamic sidebar sizing; check constrained windows and
-200% zoom. Build and run the relevant app checks when those modules are available.
+200% zoom. Build and run the relevant app checks.
 Inspect screenshots as well as assertions. Native VoiceOver checks remain manual.

@@ -1,22 +1,24 @@
 # Moonbase
 
-A macOS Electron workbench with a local React/Monaco editor and optional remote Pi Durable chat. Workspace, editor, SSH and Pi services share the application contracts and one scoped Effect runtime per process.
+A macOS workbench for local editing and optional remote Pi Durable chat. Reusable packages own feature behavior; clients compose them through public interfaces and supply platform capabilities.
 
-Each application and package keeps its setup and public interface in its README:
-
-| Package | Purpose |
+| Module | Owns |
 | --- | --- |
-| [Desktop](apps/desktop/README.md) | Electron workbench and native packaging |
-| [Chat](packages/chat/README.md) | Headless client chat state and preservation |
-| [Application](packages/application/README.md) | Shared commands, clients and Effect service contracts |
-| [Editor](packages/editor/README.md) | React/Monaco workbench |
-| [Workspace](packages/workspace/README.md) | Local files, Git and recovery |
-| [Pi runtime](packages/pi-runtime/README.md) | Chat host and remote adapter |
-| [SSH](packages/ssh/README.md) | Scoped SSH connections |
+| [Application](packages/application/README.md) | Shared commands, browser clients and Effect service contracts |
+| [Editor](packages/editor/README.md) | React/Monaco workbench and independent editor state |
+| [Chat](packages/chat/README.md) | Headless chat state and draft preservation |
+| [Workspace](packages/workspace/README.md) | Local files, Git and recovery persistence |
+| [Pi runtime](packages/pi-runtime/README.md) | Pi chat execution, host transport and remote adapter |
+| [SSH](packages/ssh/README.md) | Scoped, authenticated SSH connectivity |
 | [UI](packages/ui/README.md) | Shared StyleX tokens and recipes |
-| [Config](packages/config/README.md) | Shared lint, format and TypeScript configuration |
+| [Config](packages/config/README.md) | Lint, formatting and TypeScript defaults |
+| [Desktop](apps/desktop/README.md) | Electron composition, native authority and packaging |
 
-Run the foundation checks with Bun 1.4.4 and Node 26.13.0:
+Packages consume public exports, accept injected dependencies and stay independent of client applications. Each process owns one scoped Effect runtime; standalone clients acquire only the capabilities they use. See [AGENTS.md](AGENTS.md) for contribution rules and [DESIGN.md](docs/DESIGN.md) for UI guidance.
+
+## Development
+
+Use Bun 1.4.4 and Node 26.13.0. Workspace/native desktop builds require macOS and Xcode command-line tools.
 
 ```sh
 bun install --frozen-lockfile
@@ -27,8 +29,6 @@ bun run test
 bun run format:check
 ```
 
-Lint runs oxlint; typecheck runs TypeScript through Nx. Generated test output belongs in ignored `test-results/`; build and package output belongs in `dist/` and `release/`.
+Package READMEs cover setup and focused checks. The [editor/workspace](tests/editor-workspace/README.md) and [chat](tests/chat/README.md) suites test cross-module integration. Generated test output belongs in ignored `test-results/`; build/package output belongs in `dist/` and `release/`.
 
-The desktop remains pending human acceptance. Real SSH/provider, signing/notarization, VoiceOver, physical durability and Intel execution require separate qualification.
-
-The [editor/workspace](tests/editor-workspace/README.md) and [chat](tests/chat/README.md) integration suites exercise public module boundaries.
+Human acceptance remains pending. Controlled tests do not qualify real SSH/providers, packaged/native interaction, signing/notarization, VoiceOver, physical durability or Intel execution.

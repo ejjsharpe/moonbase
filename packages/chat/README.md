@@ -1,30 +1,29 @@
 # Headless chat client
 
-`@moonbase/chat` exports `ChatController`, `ChatState`, `Pending` and `DraftStorage` through one public entry. It is ordinary TypeScript: no UI, platform integration, runtime or service acquisition. Applications supply their own layout, navigation, focus, storage and lifecycle. Execution, transcripts and tasks remain in Pi Durable through the shared application handlers.
+`@moonbase/chat` exports `ChatController`, `ChatState`, `Pending` and `DraftStorage`. It is ordinary TypeScript with no UI, platform integration or runtime acquisition. Clients supply layout, navigation, storage and lifecycle; Pi Durable owns execution, transcripts and tasks through the application handlers.
 
 ```ts
 import { ChatController } from '@moonbase/chat';
 
-const controller = new ChatController(chat, connection, context, storage);
+const controller = new ChatController(chat, connection, session, storage);
 const unsubscribe = controller.subscribe(render);
-await controller.start(); // Observes only; Connect and Send remain explicit.
-// Before a destructive close: require controller.preserve() to succeed.
-// Hide: controller.detach(); show: await controller.start();
+await controller.start(); // Observe only; Connect and Send are explicit.
+// Before destructive close, require controller.preserve() to succeed.
 unsubscribe();
-controller.dispose(); // Releases observations; remote work continues.
+controller.dispose();
 ```
 
-The constructor receives `ChatClient`, `ConnectionClient`, the exact `ChatSession` (host/store/actor), synchronous storage with `read(): string | null` and `write(value): void`, and an optional ID generator. The application binds storage to its chosen key or location before passing it to chat. The caller owns client/runtime disposal. A view must preserve before unmounting or closing; failed preservation keeps the live view available so the latest text can be copied. `detach()` releases connection/chat observations; `start()` reads again. `dispose()` permanently releases observations and listeners. Neither method Stops remote work.
+Supply `ChatClient`, `ConnectionClient`, an exact host/store/actor `ChatSession`, synchronous storage (`read(): string | null`, `write(value): void`) and optionally an ID generator. The caller owns clients/runtime disposal. `detach()` releases observations for a hidden view; `start()` reads again. `dispose()` permanently releases observations/listeners. None Stops remote work.
 
-## Preservation and recovery
+## Preservation
 
-Chat owns the version-1 schema, serialization, validation and preservation of drafts and pending command identities. The application owns the storage namespace; chat reads and writes only the supplied storage and performs no migration, legacy import or deletion. Storage must retain its exact namespace/context for the controller's lifetime, return the current serialized value on each read and synchronously write before returning. Read and write failures must throw so preservation can block mutations and destructive close. Use one client per storage namespace; external-change detection is a preservation fence, not an atomic multi-process database. Ordinary storage provides no physical power-loss guarantee. A renderer crash or forced termination can lose edits after the last successful write.
+Chat owns the versioned saved schema and draft/pending-command preservation. The application binds one fixed storage namespace/context for the controller's lifetime. Use one client per namespace; storage must return current data, complete writes synchronously and throw on failure. There is no migration, legacy import or deletion, atomic multi-process storage or power-loss guarantee.
 
-Create/Send/Stop capture their full immutable input before disclosure. At most 16 unresolved commands and 32 nonempty drafts (32 KiB each) are retained, scoped to exact host/store/actor/conversation. Successful Send resolution clears only its captured draft text, preserving newer edits. Corrupt, foreign-context, full, externally changed or unwritable storage stays untouched and blocks new mutations and destructive close. Failed live edits remain visible in memory; callers must honor `preserve()` returning false.
+Corrupt, foreign, full, externally changed or unwritable storage stays untouched and blocks new mutations and destructive close. Honor `preserve()` returning false and keep live text available for copying. At most 16 unresolved commands and 32 nonempty drafts (32 KiB each) are retained. Successful Send resolution clears only its captured draft, preserving newer edits.
 
-Reconnect is observational and never resends. Outcome queries retain unresolved original inputs; an explicit retry queries first and repeats only that captured input. Create has no read-only receipt query, so a matching original Create retry recovers its exact conversation. Stop captures the submission/task, including a null queued task, and never follows a successor. Pending cancellation does not prove remote work ended or tool effects were undone.
+Create/Send/Stop retain immutable original inputs across uncertain outcomes. Reconnect only observes; explicit retry queries first and repeats the captured input. Create recovers through a matching original retry. Stop captures the exact submission/task, including a null queued task, and never follows a successor. Cancellation does not prove remote termination or undo tool effects. See the [chat contract](../application/docs/CHAT.md).
 
-Snapshots replace output rather than appending an event feed. State holds at most 32 current and 32 older host-bounded previews (4 KiB each), with at most eight live tool previews; another older page replaces the previous page. Stored transcripts are never deleted.
+Snapshots replace output. State retains at most 32 current and 32 older 4 KiB previews and eight live tool previews; another older page replaces the previous page. Stored transcripts remain in Pi.
 
 ## Checks
 
@@ -34,4 +33,4 @@ bun run --cwd packages/chat test
 bun run check:foundation
 ```
 
-Controller tests consume the public entry. Protocol tests use the controlled tool host in `tests/chat`, exercising real HTTP/SQLite and a TCP forwarding child without a real provider or SSH host. The foundation browser-bundle audit permits only this package and application contracts, excluding UI frameworks and privileged implementations. Desktop owns private configuration, IPC and native/package qualification; see [desktop setup](../../apps/desktop/README.md).
+Tests use the public entry and controlled [HTTP/SQLite fixtures](../../tests/chat/README.md). The foundation audit checks browser independence from UI frameworks and privileged implementations. [Desktop](../../apps/desktop/README.md) owns IPC, private configuration and native/package qualification.

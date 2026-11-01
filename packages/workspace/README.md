@@ -1,12 +1,12 @@
 # Local workspace
 
-`@moonbase/workspace` is the editor’s local macOS backend. It handles:
+`@moonbase/workspace` is a reusable local macOS workspace service, independent of the editor UI or client shell. It handles:
 
 - Files: reading, version-checked saves, create/move/copy and Finder Trash.
 - Discovery: Git status/comparisons, file lookup and filesystem watching.
 - Recovery: SQLite storage for drafts, editor state and interrupted operation results.
 
-It implements the contracts in [`@moonbase/application`](../application/README.md). The [editor](../editor/README.md) owns buffers, rendering and Save/Discard/Cancel decisions; workspace owns local IO, validation and persistence.
+It implements the contracts in [`@moonbase/application`](../application/README.md). Clients such as the [editor](../editor/README.md) own buffers, rendering and Save/Discard/Cancel decisions; workspace owns local IO, validation and persistence.
 
 ## Integration
 
@@ -18,7 +18,7 @@ See the [standalone example](examples/local.ts) for runtime/client wiring and [p
 
 ## Safety
 
-Only native/user-approved exact checkout identities grant filesystem access. Saves check content versions; replacements require explicit consent and use Trash. Consumers must preserve affected dirty drafts before mutations, retain immutable request identities across retries, and block destructive actions while outcomes are uncertain. Recovery uses compare-and-swap revisions and exact publication receipts.
+Only native/user-approved exact checkout identities grant filesystem access. Saves check content versions; replacements require explicit consent and use Trash. Consumers must preserve affected dirty drafts before mutations, retain immutable request identities across retries, and block destructive actions while outcomes are uncertain. Recovery uses compare-and-swap revisions and [exact publication receipts](../application/docs/RECOVERY-PUBLICATIONS.md).
 
 Files must be strict UTF-8 text up to 2 MiB. The journal retains saved text without compaction. Filesystem changes and SQLite commits are not one atomic transaction. Power-loss survival, packaged Electron behavior and human accessibility acceptance require separate qualification.
 
