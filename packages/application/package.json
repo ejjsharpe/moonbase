@@ -14,8 +14,13 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "lint": "tsc --noEmit -p tsconfig.json",
+    "lint": "oxlint .",
     "test": "node --experimental-strip-types --test test/*.test.ts"
   },
-  "dependencies": { "effect": "4.1.0" }
+  "dependencies": {
+    "effect": "4.1.0"
+  },
+  "devDependencies": {
+    "@moonbase/config": "workspace:*"
+  }
 }
