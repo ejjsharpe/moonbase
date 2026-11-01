@@ -11,6 +11,7 @@
 - Foundation PR: https://github.com/ejjsharpe/moonbase/pull/1, head `bb5c5d0b366f43e5406fc328d5bd5ec7ee154e58`, base main `c89e4db`. GitHub macOS checks passed at this exact head (runs 41258433992 and 41258434814).
 - Parallel Sol `xhigh` workers: `feat/editor-module` and `feat/workspace-module`, exact foundation verified; independent Astra `xhigh` foundation review running. Task IDs/options are persisted in `tasks.json`.
 - A direct StyleX MIT notice omitted from the installed npm tarballs has been obtained from the primary project; exact release-source matching remains part of distribution verification. Follow-up coordination changes are kept separately from the fixed review head.
+- Editor worker identified missing checkout binding in recovered operation evidence. Coordinator added mandatory `OperationResult.checkout` centrally; workspace journal/recovery and editor reconciliation must preserve it. Both workers consume the committed shared-contract follow-up and keep missing/unbound evidence visible instead of guessing.
 
 ## Planned dependency order
 

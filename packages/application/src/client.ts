@@ -34,7 +34,7 @@ export type WorkspaceOperation = {
   replacements?: EntryReference[]; nativeReferences?: string[];
 };
 export type OperationResult = {
-  id: string; kind: WorkspaceOperation["kind"];
+  id: string; checkout: CheckoutTarget; kind: WorkspaceOperation["kind"];
   outcome: "completed" | "failed" | "uncertain";
   items: { source: string; destination?: string; outcome: "completed" | "failed" | "uncertain"; message?: string }[];
   message?: string;
