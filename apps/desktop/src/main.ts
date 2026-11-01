@@ -31,7 +31,7 @@ async function main() {
   const csp = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; worker-src 'self' blob:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'none'";
   await app.whenReady();
   const assets = app.isPackaged ? join(process.resourcesPath, "workspace") : join(directory, "workspace");
-  const chatConfiguration = process.env.MOONBASE_CHAT_CONFIG ? await readConfiguration(process.env.MOONBASE_CHAT_CONFIG) : null;
+  const chatConfiguration = process.env.MOONBASE_CHAT_CONFIG === undefined ? null : await readConfiguration(process.env.MOONBASE_CHAT_CONFIG);
   const workspace = WorkspaceLive({ hostId: "moonbase-local", dataDirectory: join(userData, "workspace-v1"), filesystemHelper: join(assets, "filesystem"), ripgrepExecutable: join(assets, "ripgrep/rg"), gitExecutable: "/usr/bin/git" });
   // Exactly one of these capability sets is acquired, once for this process.
   const root = chatConfiguration ? (() => {
