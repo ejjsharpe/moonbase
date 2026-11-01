@@ -12,7 +12,7 @@ All PRs are private, linked and unmerged. Older entries below are historical evi
 | [#3 workspace](https://github.com/ejjsharpe/moonbase/pull/3) | `1fc969227e98dc56b66985675910663ec51759a6` | #5; adopting #7 next | DRAFT for new receipt adoption; R5 clears all 13 earlier findings at this head, 84+14+11 probes and CI pass |
 | [#4 editor](https://github.com/ejjsharpe/moonbase/pull/4) | `2ff2a6b70e43a4558fd4347a287802ca8b9bcb46` | #5; adopting #7 next | DRAFT; R4 found one P1/two P2; owner fixing close, activation, diff focus |
 | [#6 host health](https://github.com/ejjsharpe/moonbase/pull/6) | `eba354cc4062eee3575facad0d774f08d897f75a` | #5 | DRAFT; 22 application tests/checks and hosted CI pass; independent review/adoption pending |
-| [#7 recovery publications](https://github.com/ejjsharpe/moonbase/pull/7) | `8557fdd0d7a71f93a6584c77430e6fde57668580` | #5 | DRAFT; 14 shared tests/checks pass; fresh Astra contract review and adapter adoption running |
+| [#7 recovery publications](https://github.com/ejjsharpe/moonbase/pull/7) | `8557fdd0d7a71f93a6584c77430e6fde57668580` | #5 | DRAFT; 14 shared tests/checks and hosted CI pass; Astra contract review and adapter adoption running |
 
 Production editor fan-in, standalone Electron proof, independent Pi/SSH modules, chat proof and composition remain unfinished. Published Pi 1.4.0 controlled research is preparatory evidence only. No human/manual acceptance is inferred.
 
@@ -29,6 +29,8 @@ Workspace R4 corrections at `1fc9692` delete receipt-chain inference and use pub
 Editor R4 found a P1 recovery rollback defect plus two P2 activation/comparison-focus defects; see `reviews/editor-r4.md`. The original owner identified CAS-only publication ambiguity. Lead committed PR #7 with mandatory immutable `persistRecovery.requestId`, exact `{clientId,requestId,previousRevision,revision}` receipts and read-only `getRecoveryPublication`; matching retries return original receipts before CAS without republishing or advancing fences. Shared type/lint/test, frozen install, forty hashes/browser boundary and diff checks pass; these do not qualify adapter behavior. Both owners are normal-merging exact `8557fdd` and retargeting their existing PRs to #7, with no force pushes. Final destructive close is committed only by that exact receipt; unresolved delivery retains live text/pending evidence and blocks destructive actions rather than falsely vetoing an already committed Discard. No second browser store or workflow engine is added. Review order: active workspace R5 at old exact head, #7 contract, new adapter heads, #6 host health; all current/draft scopes stay explicit.
 
 Workspace R5 completed with no blockers at `1fc9692`/base #5; all thirteen prior findings cleared, 84+14 supplied tests and eleven independent probes passed, exact-head CI green. See `reviews/workspace-r5.md`. That approval is a preserved checkpoint, not approval of ongoing #7 receipt adoption. A fresh Astra review of the #7 contract is now running; owners continue its coordinated implementation before changed-head module reviews/fan-in.
+
+After T3's notification, one exact-head inspection verified both hosted #7 runs at `8557fdd0d7a71f93a6584c77430e6fde57668580` passed ([41269232732](https://github.com/ejjsharpe/moonbase/actions/runs/41269232732), [41269213538](https://github.com/ejjsharpe/moonbase/actions/runs/41269213538)). This verifies the shared shape and existing boundary checks, not atomic workspace receipts or editor close correctness.
 
 ## Setup
 
