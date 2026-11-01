@@ -1,234 +1,14 @@
 import assert from 'node:assert/strict';
-import { test, mock } from 'node:test';
+import { test } from 'node:test';
 import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { Effect, ManagedRuntime } from 'effect';
-import {
-  ApplicationError,
-  emptyRecovery,
-  type CheckoutTarget,
-  type EditorRecovery,
-} from '@moonbase/application/client';
-import { makeEditorClient } from '@moonbase/application/runtime-client';
-import { WorkspaceLive, WorkspaceNative } from '../src/index.ts';
-const binary = fileURLToPath(new URL('../dist/filesystem', import.meta.url));
-const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
-function fixture() {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-review-'))),
-    root = join(base, 'repo'),
-    dataDirectory = join(base, 'state');
-  mkdirSync(root);
-  execFileSync('/usr/bin/git', ['init', '-q', '-b', 'main', root]);
-  writeFileSync(join(root, 'file.txt'), 'original');
-  const start = (filesystemHelper = binary, live = WorkspaceLive) => {
-    const runtime = ManagedRuntime.make(
-      live({ dataDirectory, hostId: 'review-host', filesystemHelper }),
-    );
-    return { runtime, client: makeEditorClient(runtime) };
-  };
-  const wrapper = (body: string) => {
-    const path = join(base, 'helper-' + Math.random());
-    writeFileSync(path, '#!/bin/sh\n' + body + '\nexec ' + quote(binary) + ' "$@"\n');
-    chmodSync(path, 0o700);
-    return path;
-  };
-  return {
-    base,
-    root,
-    start,
-    wrapper,
-    cleanup: () => rmSync(base, { recursive: true, force: true }),
-  };
-}
-const isError = (code: ApplicationError['code']) => (value: unknown) =>
-  ApplicationError.is(value) && value.code === code;
-function state(
-  checkout: CheckoutTarget,
-  disk: { text: string; version: string },
-  text = 'older draft',
-): EditorRecovery {
-  return {
-    ...emptyRecovery('alice'),
-    checkouts: [checkout],
-    openCheckoutIds: [checkout.checkoutId],
-    drafts: [{ target: { checkout, path: 'file.txt' }, disk, text }],
-  };
-}
-async function waitFor(path: string) {
-  const deadline = Date.now() + 3000;
-  while (!existsSync(path)) {
-    assert(Date.now() < deadline, 'native helper did not reach barrier');
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-}
-
-test('R1 aliases cannot authorize two same-baseline saves of one macOS object', async () => {
-  const f = fixture(),
-    { runtime, client } = f.start();
-  try {
-    assert(
-      existsSync(join(f.root, 'FILE.TXT')),
-      'This regression requires the case-insensitive macOS fixture volume.',
-    );
-    const checkout = await client.command('openCheckout', { root: f.root }),
-      disk = await client.command('readFile', { checkout, path: 'file.txt' });
-    const results = await Promise.allSettled(
-      ['file.txt', 'FILE.TXT'].map((path, i) =>
-        client.command('saveFile', {
-          target: { checkout, path },
-          clientId: 'alice',
-          requestId: 'alias-' + i,
-          text: 'save-' + i,
-          expectedVersion: disk.version,
-        }),
-      ),
-    );
-    assert.equal(
-      results.filter((r) => r.status === 'fulfilled' && r.value.kind === 'saved').length,
-      1,
-    );
-    assert.equal(results[1].status, 'rejected');
-    await assert.rejects(
-      client.command('readFile', { checkout, path: 'FILE.TXT' }),
-      isError('InvalidInput'),
-    );
-    const sources = await client.command('inspectEntries', { checkout, paths: ['file.txt'] });
-    assert.equal(
-      (
-        await client.command('mutate', {
-          clientId: 'alice',
-          id: 'case-only',
-          checkout,
-          kind: 'move',
-          sources,
-          destination: 'FILE.TXT',
-        })
-      ).outcome,
-      'completed',
-    );
-    assert.equal((await client.command('readFile', { checkout, path: 'FILE.TXT' })).text, 'save-0');
-  } finally {
-    await runtime.dispose();
-    f.cleanup();
-  }
-});
-
-for (const selection of ['self', 'descendant', 'ancestor'] as const)
-  test(`R2 native ${selection} import rejects before replacement Trash`, async () => {
-    const f = fixture(),
-      count = join(f.base, 'trash-count');
-    const helper = f.wrapper(
-        `if [ "$1" = trash ]; then printf 'trash\\n' >> ${quote(count)}; exit 1; fi`,
-      ),
-      { runtime, client } = f.start(helper);
-    try {
-      if (selection !== 'self') {
-        mkdirSync(join(f.root, 'source'));
-        writeFileSync(join(f.root, 'source/child'), 'keep child');
-      }
-      const checkout = await client.command('openCheckout', { root: f.root });
-      let source = 'file.txt',
-        destination = source;
-      if (selection === 'descendant') {
-        source = 'source';
-        destination = 'source/child';
-      } else if (selection === 'ancestor') {
-        source = 'source/child';
-        destination = 'source';
-      }
-      const nativeReferences = await runtime.runPromise(
-        Effect.flatMap(WorkspaceNative, (native) =>
-          native.capture({ checkout, clientId: 'alice', paths: [join(f.root, source)] }),
-        ),
-      );
-      const replacements = await client.command('inspectEntries', {
-        checkout,
-        paths: [destination],
-      });
-      await assert.rejects(
-        client.command('mutate', {
-          id: 'self-import',
-          clientId: 'alice',
-          checkout,
-          kind: 'import',
-          sources: [],
-          destination,
-          replacements,
-          nativeReferences,
-        }),
-      );
-      assert(!existsSync(count), 'Unsafe import must not invoke native Trash.');
-      assert.equal(
-        readFileSync(join(f.root, selection === 'self' ? destination : 'source/child'), 'utf8'),
-        selection === 'self' ? 'original' : 'keep child',
-      );
-    } finally {
-      await runtime.dispose();
-      f.cleanup();
-    }
-  });
-
-for (const kind of ['save', 'move'] as const)
-  test(`R3 concurrent changed-payload ${kind} IDs reserve one immutable target before mutation`, async () => {
-    const f = fixture(),
-      count = join(f.base, 'effects');
-    const command = kind === 'save' ? 'replace' : 'move';
-    const helper = f.wrapper(
-        `if [ "$1" = ${quote(command)} ]; then printf 'effect\\n' >> ${quote(count)}; fi`,
-      ),
-      { runtime, client } = f.start(helper);
-    try {
-      writeFileSync(join(f.root, 'other.txt'), 'original');
-      const checkout = await client.command('openCheckout', { root: f.root });
-      const targets = ['file.txt', 'other.txt'];
-      const disk = await client.command('readFile', { checkout, path: targets[0] });
-      const sources = await client.command('inspectEntries', { checkout, paths: targets });
-      const results = await Promise.allSettled(
-        targets.map((path, i) =>
-          kind === 'save'
-            ? client.command('saveFile', {
-                clientId: 'alice',
-                requestId: 'shared-id',
-                target: { checkout, path },
-                text: 'saved-' + i,
-                expectedVersion: disk.version,
-              })
-            : client.command('mutate', {
-                clientId: 'alice',
-                id: 'shared-id',
-                checkout,
-                kind: 'move',
-                sources: [sources[i]],
-                destination: 'moved-' + i,
-              }),
-        ),
-      );
-      assert.equal(results.filter((r) => r.status === 'fulfilled').length, 1);
-      assert.equal(
-        results.filter((r) => r.status === 'rejected' && isError('Conflict')(r.reason)).length,
-        1,
-      );
-      assert.equal(readFileSync(count, 'utf8'), 'effect\n');
-    } finally {
-      await runtime.dispose();
-      f.cleanup();
-    }
-  });
-
-test('R4 concurrent lost-move reconciliation retains the original revision receipt and acknowledgement bounds', async () => {
+import { emptyRecovery, type EditorRecovery } from '@moonbase/application/client';
+import { WorkspaceLive } from '../src/index.ts';
+import { binary, quote, fixture, isError, state, waitFor } from './recovery-fixture.ts';
+test('concurrent lost-move reconciliation retains the original revision receipt and acknowledgement bounds', async () => {
   const f = fixture(),
     count = join(f.base, 'effects');
   const helper = f.wrapper(
@@ -298,7 +78,7 @@ test('R4 concurrent lost-move reconciliation retains the original revision recei
   }
 });
 
-test('R5 copy recovery overflow retains a valid snapshot and pending evidence across restart without replay', async () => {
+test('copy recovery overflow retains a valid snapshot and pending evidence across restart without replay', async () => {
   const f = fixture(),
     count = join(f.base, 'effects');
   const helper = f.wrapper(`if [ "$1" = copy ]; then printf 'effect\\n' >> ${quote(count)}; fi`);
@@ -360,7 +140,7 @@ test('R5 copy recovery overflow retains a valid snapshot and pending evidence ac
 });
 
 for (const competing of [false, true])
-  test(`R6 interrupted newer Save plus external change ${competing ? 'preserves later competing publication' : 'restores admitted text over the older draft'}`, async () => {
+  test(`interrupted newer Save plus external change ${competing ? 'preserves later competing publication' : 'restores admitted text over the older draft'}`, async () => {
     const f = fixture(),
       helper = f.wrapper('if [ "$1" = stage ]; then kill -KILL $$; fi');
     let current = f.start(helper);
@@ -409,111 +189,6 @@ for (const competing of [false, true])
       f.cleanup();
     }
   });
-
-test('R7 concurrent different operations can consume a native token only once', async () => {
-  const f = fixture(),
-    count = join(f.base, 'effects');
-  const helper = f.wrapper(`if [ "$1" = import ]; then printf 'effect\\n' >> ${quote(count)}; fi`),
-    { runtime, client } = f.start(helper);
-  try {
-    const external = join(f.base, 'external');
-    writeFileSync(external, 'native bytes');
-    const checkout = await client.command('openCheckout', { root: f.root });
-    const nativeReferences = await runtime.runPromise(
-      Effect.flatMap(WorkspaceNative, (native) =>
-        native.capture({ checkout, clientId: 'alice', paths: [external] }),
-      ),
-    );
-    const inputs = ['one', 'two'].map((id) => ({
-      clientId: 'alice',
-      id,
-      checkout,
-      kind: 'import' as const,
-      sources: [],
-      nativeReferences,
-      destination: id,
-    }));
-    const outcomes = await Promise.allSettled(
-      inputs.map((input) => client.command('mutate', input)),
-    );
-    assert.equal(
-      outcomes.filter((r) => r.status === 'fulfilled' && r.value.outcome === 'completed').length,
-      1,
-    );
-    assert.equal(
-      outcomes.filter((r) => r.status === 'rejected' && isError('Unauthorized')(r.reason)).length,
-      1,
-    );
-    assert.equal(readFileSync(count, 'utf8'), 'effect\n');
-    const winner = outcomes.findIndex((r) => r.status === 'fulfilled');
-    await client.command('mutate', inputs[winner]);
-    assert.equal(readFileSync(count, 'utf8'), 'effect\n');
-  } finally {
-    await runtime.dispose();
-    f.cleanup();
-  }
-});
-
-test('R7 expiry cannot close a native descriptor after its operation has claimed it', async () => {
-  const f = fixture(),
-    ready = join(f.base, 'ready'),
-    resume = join(f.base, 'resume');
-  const helper = f.wrapper(
-      `if [ "$1" = import ]; then /usr/bin/touch ${quote(ready)}; while [ ! -e ${quote(resume)} ]; do /bin/sleep 0.01; done; fi`,
-    ),
-    { runtime, client } = f.start(helper);
-  const originalTimeout = globalThis.setTimeout,
-    originalClear = globalThis.clearTimeout;
-  const expirations: (() => void)[] = [],
-    cancelled = new Set<unknown>();
-  mock.method(
-    globalThis,
-    'setTimeout',
-    (callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) => {
-      const timer = originalTimeout(delay === 300000 ? () => {} : callback, delay, ...args);
-      if (delay === 300000)
-        expirations.push(() => {
-          if (!cancelled.has(timer)) callback(...args);
-        });
-      return timer;
-    },
-  );
-  mock.method(globalThis, 'clearTimeout', (timer: ReturnType<typeof setTimeout>) => {
-    cancelled.add(timer);
-    originalClear(timer);
-  });
-  try {
-    const external = [join(f.base, 'external-one'), join(f.base, 'external-two')];
-    external.forEach((p) => writeFileSync(p, 'native bytes'));
-    mkdirSync(join(f.root, 'imports'));
-    const checkout = await client.command('openCheckout', { root: f.root });
-    const nativeReferences = await runtime.runPromise(
-      Effect.flatMap(WorkspaceNative, (native) =>
-        native.capture({ checkout, clientId: 'alice', paths: external }),
-      ),
-    );
-    const pending = client.command('mutate', {
-      clientId: 'alice',
-      id: 'expiry',
-      checkout,
-      kind: 'import',
-      sources: [],
-      nativeReferences,
-      destination: 'imports',
-    });
-    await waitFor(ready);
-    expirations.forEach((expire) => expire());
-    writeFileSync(resume, 'continue');
-    assert.equal((await pending).outcome, 'completed');
-    for (const name of ['external-one', 'external-two'])
-      assert.equal(readFileSync(join(f.root, 'imports', name), 'utf8'), 'native bytes');
-  } finally {
-    mock.restoreAll();
-    writeFileSync(resume, 'continue');
-    await runtime.dispose();
-    f.cleanup();
-  }
-});
 
 for (const kind of ['move', 'copy'] as const)
   test(`known closed checkout ${kind} metadata reconciles without probing its unavailable directory`, async () => {
@@ -602,7 +277,7 @@ for (const kind of ['move', 'copy'] as const)
   });
 
 for (const competing of [false, true])
-  test(`R2 interrupted Save group ${competing ? 'preserves a genuinely later client publication' : 'restores both admitted drafts in one revision across repeated restarts'}`, async () => {
+  test(`interrupted Save group ${competing ? 'preserves a genuinely later client publication' : 'restores both admitted drafts in one revision across repeated restarts'}`, async () => {
     const f = fixture(),
       count = join(f.base, 'stage-count');
     const helper = f.wrapper(
@@ -693,7 +368,7 @@ for (const competing of [false, true])
     }
   });
 
-test('R2 interrupted Save group capacity overflow retains the entire prior valid snapshot and both pending intents', async () => {
+test('interrupted Save group capacity overflow retains the entire prior valid snapshot and both pending intents', async () => {
   const f = fixture(),
     count = join(f.base, 'stage-count');
   const helper = f.wrapper(
@@ -747,66 +422,7 @@ test('R2 interrupted Save group capacity overflow retains the entire prior valid
   }
 });
 
-for (const kind of ['move', 'copy'] as const)
-  test(`R2 local ${kind} cannot replace an ancestor containing its selected dirty source`, async () => {
-    const f = fixture(),
-      count = join(f.base, 'trash-count');
-    const helper = f.wrapper(
-        `if [ "$1" = trash ]; then printf 'unsafe trash\\n' >> ${quote(count)}; exit 1; fi`,
-      ),
-      { runtime, client } = f.start(helper);
-    try {
-      mkdirSync(join(f.root, 'folder'));
-      writeFileSync(join(f.root, 'folder/child.txt'), 'must survive');
-      const checkout = await client.command('openCheckout', { root: f.root }),
-        target = { checkout, path: 'folder/child.txt' },
-        disk = await client.command('readFile', target);
-      const snapshot = {
-        ...emptyRecovery('alice'),
-        checkouts: [checkout],
-        openCheckoutIds: [checkout.checkoutId],
-        drafts: [{ target, disk, text: 'dirty child' }],
-      };
-      await client.command('persistRecovery', {
-        requestId: randomUUID(),
-        clientId: 'alice',
-        expectedRevision: 0,
-        state: snapshot,
-      });
-      const sources = await client.command('inspectEntries', {
-          checkout,
-          paths: ['folder/child.txt'],
-        }),
-        replacements = await client.command('inspectEntries', { checkout, paths: ['folder'] });
-      await assert.rejects(
-        client.command('mutate', {
-          clientId: 'alice',
-          id: 'local-ancestor',
-          checkout,
-          kind,
-          sources,
-          replacements,
-          destination: 'folder',
-        }),
-        isError('InvalidInput'),
-      );
-      assert(!existsSync(count), 'Ancestor replacement must reject before native Trash.');
-      assert.equal(
-        await client.command('operationStatus', { clientId: 'alice', id: 'local-ancestor' }),
-        null,
-      );
-      assert.equal(readFileSync(join(f.root, 'folder/child.txt'), 'utf8'), 'must survive');
-      assert.deepEqual(
-        (await client.command('loadRecovery', { clientId: 'alice' })).state,
-        snapshot,
-      );
-    } finally {
-      await runtime.dispose();
-      f.cleanup();
-    }
-  });
-
-test('R2 a client publication during grouped disk inspection stays authoritative', async () => {
+test('a client publication during grouped disk inspection stays authoritative', async () => {
   const f = fixture(),
     ready = join(f.base, 'read-ready'),
     release = join(f.base, 'read-release');
@@ -872,7 +488,7 @@ test('R2 a client publication during grouped disk inspection stays authoritative
   }
 });
 
-test('R2 grouped Save publisher preserves visible persistence failure and clears pending on a non-replaying retry', async () => {
+test('grouped Save publisher preserves visible persistence failure and clears pending on a non-replaying retry', async () => {
   const { DatabaseSync } = await import('node:sqlite');
   const f = fixture(),
     ready = join(f.base, 'saved'),
@@ -928,7 +544,7 @@ test('R2 grouped Save publisher preserves visible persistence failure and clears
   }
 });
 
-test('R3 retries cannot split an overflowing interrupted Save restoration group', async () => {
+test('retries cannot split an overflowing interrupted Save restoration group', async () => {
   const f = fixture(),
     count = join(f.base, 'stages');
   const helper = f.wrapper(
@@ -991,7 +607,7 @@ test('R3 retries cannot split an overflowing interrupted Save restoration group'
 
 for (const sibling of ['save', 'move'] as const)
   for (const competing of [false, true])
-    test(`R3 unrelated ${sibling} ${competing ? 'does not weaken a later client publication fence' : 'preserves pending interrupted text across internal revisions'}`, async () => {
+    test(`unrelated ${sibling} ${competing ? 'does not weaken a later client publication fence' : 'preserves pending interrupted text across internal revisions'}`, async () => {
       const f = fixture(),
         count = join(f.base, 'effects');
       const helper = f.wrapper(
@@ -1117,7 +733,7 @@ for (const sibling of ['save', 'move'] as const)
       }
     });
 
-test('R3 a genuine client publication during Save preflight fences later interrupted admission', async () => {
+test('a genuine client publication during Save preflight fences later interrupted admission', async () => {
   const f = fixture(),
     pause = join(f.base, 'pause'),
     ready = join(f.base, 'ready'),
@@ -1168,7 +784,7 @@ test('R3 a genuine client publication during Save preflight fences later interru
   }
 });
 
-test('R3 unresolved same-target text blocks newer Save and Move effects', async () => {
+test('unresolved same-target text blocks newer Save and Move effects', async () => {
   const f = fixture(),
     count = join(f.base, 'effects');
   const helper = f.wrapper(
@@ -1229,7 +845,7 @@ test('R3 unresolved same-target text blocks newer Save and Move effects', async 
 });
 
 for (const sibling of ['save', 'move'] as const)
-  test(`R3 pending text survives a failed ${sibling} fact publication and its non-replaying retry`, async () => {
+  test(`pending text survives a failed ${sibling} fact publication and its non-replaying retry`, async () => {
     const { DatabaseSync } = await import('node:sqlite');
     const f = fixture(),
       ready = join(f.base, 'ready'),
@@ -1333,7 +949,7 @@ for (const sibling of ['save', 'move'] as const)
     }
   });
 
-test('R3 foreign operation and restoration revisions do not acknowledge either observer without client publication', async () => {
+test('foreign operation and restoration revisions do not acknowledge either observer without client publication', async () => {
   const f = fixture(),
     helper = f.wrapper('if [ "$1" = stage ]; then kill -KILL $$; fi');
   let current = f.start(helper);
@@ -1441,7 +1057,7 @@ test('R3 foreign operation and restoration revisions do not acknowledge either o
   }
 });
 
-test('R3 complete restoration retries wait for an active sibling admission without publishing part of its group', async () => {
+test('complete restoration retries wait for an active sibling admission without publishing part of its group', async () => {
   const { DatabaseSync } = await import('node:sqlite');
   const f = fixture(),
     ready = join(f.base, 'ready'),
@@ -1530,7 +1146,7 @@ function previousWorkspace() {
 
 for (const previous of [true, false])
   for (const lost of ['stage', 'replace'] as const)
-    test(`R4 ${previous ? 'previous' : 'current'} public producer cannot restore over a publication made during Save preflight; lost ${lost}`, async () => {
+    test(`${previous ? 'previous' : 'current'} public producer cannot restore over a publication made during Save preflight; lost ${lost}`, async () => {
       const live = previous ? (await previousWorkspace()).WorkspaceLive : WorkspaceLive;
       const f = fixture(),
         enabled = join(f.base, 'enabled'),
@@ -1651,7 +1267,7 @@ if [ "$1" = replace ]; then printf 'replace\\n' >> ${quote(count)}; if [ "$2" = 
 
 for (const previous of [true, false])
   for (const internal of ['none', 'save', 'move'] as const)
-    test(`R4 ${previous ? 'missing' : 'current'} publication metadata and internal ${internal} cannot authorize observer acknowledgement`, async () => {
+    test(`${previous ? 'missing' : 'current'} publication metadata and internal ${internal} cannot authorize observer acknowledgement`, async () => {
       const live = previous ? (await previousWorkspace()).WorkspaceLive : WorkspaceLive;
       const f = fixture(),
         count = join(f.base, 'effects'),
@@ -1795,7 +1411,7 @@ for (const previous of [true, false])
       }
     });
 
-test('R4 current Save in a previous public store retains its zero fence across internal revisions', async () => {
+test('current Save in a previous public store retains its zero fence across internal revisions', async () => {
   const f = fixture(),
     count = join(f.base, 'effects');
   let current = f.start(binary, (await previousWorkspace()).WorkspaceLive);

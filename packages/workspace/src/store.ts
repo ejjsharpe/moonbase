@@ -1,4 +1,4 @@
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { chmodSync, constants, closeSync, mkdirSync, openSync, realpathSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { canonical, ensure, fail, hash } from './validation.ts';
@@ -7,6 +7,10 @@ import {
   type CommandInput,
   type RecoveryPublication,
 } from '@moonbase/application/client';
+
+// shortcut: immutable receipts still grow on disk; compact only with proven replay and recovery compatibility.
+export const pendingSaves =
+  "(json_extract(body, '$.result') IS NULL OR json_extract(body, '$.published') IS NOT 1 OR json_extract(body, '$.restorePending') = 1)";
 
 type PublicationRecord = { digest: string; receipt: RecoveryPublication };
 
@@ -35,6 +39,9 @@ export class Store {
       this.db.exec(
         'PRAGMA application_id=1296193363; CREATE TABLE IF NOT EXISTS records (bucket TEXT NOT NULL, key TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(bucket,key)); CREATE TABLE IF NOT EXISTS recovery (client TEXT PRIMARY KEY, revision INTEGER NOT NULL, body TEXT NOT NULL);',
       );
+      this.db.exec(
+        `CREATE INDEX IF NOT EXISTS pending_saves ON records(bucket) WHERE bucket='saves' AND ${pendingSaves}`,
+      );
       chmodSync(file, 0o600);
       const identity = this.get<string>('meta', 'host');
       ensure(!identity || identity === hostId, 'Workspace store belongs to a different host.');
@@ -50,10 +57,10 @@ export class Store {
       .get(bucket, key);
     return row ? (JSON.parse(row.body as string) as T) : null;
   }
-  all<T>(bucket: string): T[] {
+  all<T>(bucket: string, predicate = '1', parameters: SQLInputValue[] = []): T[] {
     return this.db
-      .prepare('SELECT body FROM records WHERE bucket=? ORDER BY rowid')
-      .all(bucket)
+      .prepare(`SELECT body FROM records WHERE bucket=? AND (${predicate}) ORDER BY rowid`)
+      .all(bucket, ...parameters)
       .map((r) => JSON.parse(r.body as string) as T);
   }
   put(bucket: string, key: string, value: unknown) {

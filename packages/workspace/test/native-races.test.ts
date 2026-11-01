@@ -2,13 +2,6 @@ import type { Writable } from 'node:stream';
 import assert from 'node:assert/strict';
 import { after as afterAll, before as beforeAll, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-const expect = (actual: unknown) => ({
-  toBe: (expected: unknown) => assert.equal(actual, expected),
-  not: { toBe: (expected: unknown) => assert.notEqual(actual, expected) },
-  toContain: (expected: string) => assert.ok(String(actual).includes(expected)),
-  toMatch: (expected: RegExp) => assert.match(String(actual), expected),
-  toThrow: (expected: RegExp) => assert.throws(actual as () => unknown, expected),
-});
 import { execFileSync, spawn } from 'node:child_process';
 import { once } from 'node:events';
 import {
@@ -97,7 +90,7 @@ for (const [kind, replacement] of [
           timeout = setTimeout(() => reject(Error('Native helper did not reach preflight')), 3000);
         }),
       ]);
-      expect(String(ready[0])).toBe('ready');
+      assert.equal(String(ready[0]), 'ready');
       // The original source is already open; preflight will continue through that fd.
       renameSync(source, outside);
       if (replacement) {
@@ -107,15 +100,15 @@ for (const [kind, replacement] of [
       }
       (child.stdio.at(5) as Writable).end('continue');
       const [code] = await closed;
-      expect(code).not.toBe(0);
-      expect(stderr).toMatch(/Source changed after preflight|Open checkout path/);
-      expect(stdout).toBe('');
-      expect(existsSync(join(root, 'destination'))).toBe(false);
-      expect(statSync(outside).ino).toBe(original.ino);
-      expect(readFileSync(join(outside, 'edits.txt'), 'utf8')).toBe('original disk bytes');
+      assert.notEqual(code, 0);
+      assert.match(stderr, /Source changed after preflight|Open checkout path/);
+      assert.equal(stdout, '');
+      assert.equal(existsSync(join(root, 'destination')), false);
+      assert.equal(statSync(outside).ino, original.ino);
+      assert.equal(readFileSync(join(outside, 'edits.txt'), 'utf8'), 'original disk bytes');
       if (replacement)
-        expect(readFileSync(join(source, '.git/protected'), 'utf8')).toBe('replacement metadata');
-      else expect(existsSync(source)).toBe(false);
+        assert.equal(readFileSync(join(source, '.git/protected'), 'utf8'), 'replacement metadata');
+      else assert.equal(existsSync(source), false);
     } finally {
       clearTimeout(timeout);
       child.kill('SIGKILL');
@@ -165,10 +158,10 @@ test('copy rejects destination-parent replacement during native recursive prefli
     renameSync(join(root, 'target'), join(fixture, 'original-target'));
     mkdirSync(join(root, 'target'));
     (child.stdio.at(5) as Writable).end('continue');
-    expect((await closed)[0]).not.toBe(0);
-    expect(error).toContain('Copy destination parent replaced');
-    expect(existsSync(join(root, 'target/copy'))).toBe(false);
-    expect(existsSync(join(fixture, 'original-target/copy'))).toBe(false);
+    assert.notEqual((await closed)[0], 0);
+    assert.ok(error.includes('Copy destination parent replaced'));
+    assert.equal(existsSync(join(root, 'target/copy')), false);
+    assert.equal(existsSync(join(fixture, 'original-target/copy')), false);
   } finally {
     clearTimeout(timeout);
     child.kill('SIGKILL');
@@ -216,7 +209,7 @@ for (const kind of ['folder', 'file'] as const) {
           timeout = setTimeout(() => reject(Error('No staging pause')), 10000);
         }),
       ]);
-      expect(String(ready[0])).toBe('staged');
+      assert.equal(String(ready[0]), 'staged');
       const original = statSync(join(root, '.stage'));
       renameSync(join(root, '.stage'), join(root, 'retained-stage'));
       if (kind === 'folder') {
@@ -224,21 +217,23 @@ for (const kind of ['folder', 'file'] as const) {
         writeFileSync(join(root, '.stage/WRONG'), 'replacement bytes');
       } else writeFileSync(join(root, '.stage'), 'replacement bytes');
       (child.stdio.at(5) as Writable).end('continue');
-      expect((await closed)[0]).not.toBe(0);
-      expect(error).toContain('Source changed after preflight');
-      expect(output).toBe(`staged:${original.dev}:${original.ino}\n`);
-      expect(existsSync(join(root, 'destination'))).toBe(false);
-      expect(readFileSync(join(root, kind === 'folder' ? '.stage/WRONG' : '.stage'), 'utf8')).toBe(
+      assert.notEqual((await closed)[0], 0);
+      assert.ok(error.includes('Source changed after preflight'));
+      assert.equal(output, `staged:${original.dev}:${original.ino}\n`);
+      assert.equal(existsSync(join(root, 'destination')), false);
+      assert.equal(
+        readFileSync(join(root, kind === 'folder' ? '.stage/WRONG' : '.stage'), 'utf8'),
         'replacement bytes',
       );
-      expect(statSync(join(root, 'retained-stage')).ino).toBe(original.ino);
+      assert.equal(statSync(join(root, 'retained-stage')).ino, original.ino);
       if (kind === 'folder')
         for (let i = 0; i < 2000; i++)
-          expect(readFileSync(join(root, `retained-stage/${i}.txt`), 'utf8')).toBe(`correct ${i}`);
+          assert.equal(readFileSync(join(root, `retained-stage/${i}.txt`), 'utf8'), `correct ${i}`);
       else
-        expect(
+        assert.equal(
           readFileSync(join(root, 'retained-stage')).equals(Buffer.alloc(4 * 1024 * 1024, 173)),
-        ).toBe(true);
+          true,
+        );
     } finally {
       clearTimeout(timeout);
       child.kill('SIGKILL');
@@ -312,13 +307,13 @@ for (const swap of ['source', 'ancestor', 'parent', 'root', 'stage'] as const) {
         writeFileSync(join(root, 'target/.stage'), 'replacement stage');
       }
       (child.stdio.at(6) as Writable).end('continue');
-      expect((await closed)[0]).not.toBe(0);
-      expect(error).toMatch(/replaced|changed/);
-      expect(existsSync(join(root, 'target/result'))).toBe(false);
-      expect(existsSync(join(root + '-old', 'target/result'))).toBe(false);
-      expect(existsSync(join(root, 'old-target/result'))).toBe(false);
+      assert.notEqual((await closed)[0], 0);
+      assert.match(error, /replaced|changed/);
+      assert.equal(existsSync(join(root, 'target/result')), false);
+      assert.equal(existsSync(join(root + '-old', 'target/result')), false);
+      assert.equal(existsSync(join(root, 'old-target/result')), false);
       if (swap === 'stage')
-        expect(readFileSync(join(root, 'target/.stage'), 'utf8')).toBe('replacement stage');
+        assert.equal(readFileSync(join(root, 'target/.stage'), 'utf8'), 'replacement stage');
     } finally {
       clearTimeout(timeout);
       child.kill('SIGKILL');
@@ -338,26 +333,28 @@ test('native helper rejects destination ancestry before any staging even without
   const parent = statSync(join(root, 'source/child'));
   const fd = openSync(root, constants.O_RDONLY | constants.O_DIRECTORY | 0x20000000);
   try {
-    expect(() =>
-      execFileSync(
-        stagingHelper,
-        [
-          'import',
-          'source',
-          'source/child/result',
-          source.identity,
-          'source/child/.stage',
-          `${parent.dev}:${parent.ino}`,
-          source.path,
-          source.parents,
-          root,
-        ],
-        { stdio: ['ignore', 'pipe', 'pipe', fd, source.fd], timeout: 2000 },
-      ),
-    ).toThrow(/outside the source folder/);
-    expect(existsSync(join(root, 'source/child/.stage'))).toBe(false);
-    expect(existsSync(join(root, 'source/child/result'))).toBe(false);
-    expect(readFileSync(join(root, 'source/child/original'), 'utf8')).toBe('original bytes');
+    assert.throws(
+      () =>
+        execFileSync(
+          stagingHelper,
+          [
+            'import',
+            'source',
+            'source/child/result',
+            source.identity,
+            'source/child/.stage',
+            `${parent.dev}:${parent.ino}`,
+            source.path,
+            source.parents,
+            root,
+          ],
+          { stdio: ['ignore', 'pipe', 'pipe', fd, source.fd], timeout: 2000 },
+        ),
+      /outside the source folder/,
+    );
+    assert.equal(existsSync(join(root, 'source/child/.stage')), false);
+    assert.equal(existsSync(join(root, 'source/child/result')), false);
+    assert.equal(readFileSync(join(root, 'source/child/original'), 'utf8'), 'original bytes');
   } finally {
     closeSync(fd);
     source.close();

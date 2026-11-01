@@ -10,6 +10,7 @@ import { Effect, Layer, ManagedRuntime } from 'effect';
 import { ApplicationError, emptyRecovery, type CommandInput } from '@moonbase/application/client';
 import { WorkspaceService } from '@moonbase/application/services';
 import { makeEditorClient } from '@moonbase/application/runtime-client';
+import { pendingSaves } from '../src/store.ts';
 import { WorkspaceLive } from '../src/index.ts';
 const binary = fileURLToPath(new URL('../dist/filesystem', import.meta.url));
 const isError = (code: ApplicationError['code']) => (e: unknown) =>
@@ -479,6 +480,81 @@ test('matching receipt replay precedes later uncertain-operation preservation gu
     const loaded = await client.command('loadRecovery', { clientId: 'alice' });
     assert.equal(loaded.revision, 2);
     assert.deepEqual(loaded.state, state);
+  } finally {
+    await runtime.dispose();
+    f.cleanup();
+  }
+});
+
+test('growing settled Save history is not parsed by later Save or recovery load', async () => {
+  const f = fixture();
+  const { runtime, client } = f.start();
+  try {
+    const checkout = await client.command('openCheckout', { root: f.root });
+    const target = { checkout, path: 'a.txt' };
+    let disk = await client.command('readFile', target);
+    const inputs = [];
+    for (let i = 0; i < 12; i++) {
+      const input = {
+        target,
+        clientId: 'alice',
+        requestId: `large-${i}`,
+        text: String(i) + 'x'.repeat(256 * 1024),
+        expectedVersion: disk.version,
+      };
+      const result = await client.command('saveFile', input);
+      assert.equal(result.kind, 'saved');
+      disk = result.disk;
+      inputs.push({ input, result });
+    }
+    const database = f.database();
+    try {
+      const plan = database
+        .prepare(
+          `EXPLAIN QUERY PLAN SELECT body FROM records WHERE bucket=? AND ${pendingSaves} ORDER BY rowid`,
+        )
+        .all('saves');
+      assert.ok(
+        plan.some((row) => String(row.detail).includes('pending_saves')),
+        'pending reads must use the partial index rather than scan settled text in SQLite',
+      );
+    } finally {
+      database.close();
+    }
+    const parse = JSON.parse;
+    let historyBytes = 0;
+    JSON.parse = (body, ...args) => {
+      const value = parse(body, ...args);
+      if (value?.input?.requestId?.startsWith('large-')) historyBytes += body.length;
+      return value;
+    };
+    try {
+      await client.command('saveFile', {
+        target,
+        clientId: 'alice',
+        requestId: 'next',
+        text: 'next',
+        expectedVersion: disk.version,
+      });
+      await client.command('loadRecovery', { clientId: 'alice' });
+    } finally {
+      JSON.parse = parse;
+    }
+    assert.equal(historyBytes, 0, 'settled Save bodies must be filtered before JSON.parse');
+    await runtime.dispose();
+    const restarted = f.start();
+    try {
+      assert.deepEqual(
+        await restarted.client.command('saveFile', inputs[0].input),
+        inputs[0].result,
+      );
+      await assert.rejects(
+        restarted.client.command('saveFile', { ...inputs[0].input, text: 'changed' }),
+        isError('Conflict'),
+      );
+    } finally {
+      await restarted.runtime.dispose();
+    }
   } finally {
     await runtime.dispose();
     f.cleanup();
