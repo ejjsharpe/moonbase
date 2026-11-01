@@ -3,7 +3,7 @@ import {
   type CheckoutTarget, type CheckoutView, type Comparison, type DirectoryListing,
   type EditorClient, type EditorPosition, type EditorRecovery, type EntryReference,
   type FileDocument, type FileTarget, type FileView, type GitStatus,
-  type OperationResult, type RecoveryChange, type RecoveryLoad, type WorkspaceCommand, type CommandInput, type CommandOutput, type WorkspaceOperation,
+  type OperationResult, type RecoveryChange, type RecoveryPublication, type RecoveryLoad, type WorkspaceCommand, type CommandInput, type CommandOutput, type WorkspaceOperation,
 } from "@moonbase/application/client";
 
 export const checkoutKey = (target: CheckoutTarget) => JSON.stringify([
@@ -34,6 +34,7 @@ export type EditorSnapshot = {
   ready: boolean; disposed: boolean; preserving: boolean; discoveryRevision: number; recovery: EditorRecovery;
   buffers: readonly EditorBuffer[]; comparisons: Readonly<Record<string, Comparison>>;
   listings: Readonly<Record<string, DirectoryListing>>; git: Readonly<Record<string, GitStatus>>;
+  publication?: { requestId: string; kind: "recovery" | "close" | "reload" };
   errors: readonly string[]; operations: readonly OperationResult[];
 };
 type ClosedAction = { checkout: CheckoutTarget; files: { path: string; index: number; view: FileView;
@@ -65,6 +66,7 @@ export class EditorController {
   private referenceRevision = 0;
   private refreshing = new Map<string, Promise<void>>();
   private refreshPending = new Set<string>();
+  private pendingPublication?: { request: CommandInput<"persistRecovery">; onConfirmed?: () => Promise<void>; kind: "recovery" | "close" | "reload" };
   private recoveryTail: Promise<unknown> = Promise.resolve();
   private factsTail: Promise<unknown> = Promise.resolve();
   private scheduled?: ReturnType<typeof setTimeout>;
@@ -82,6 +84,7 @@ export class EditorController {
     this.snapshot = { ready: this.ready, disposed: this.disposed, preserving: this.preserving, discoveryRevision: this.discoveryRevision,
       recovery: structuredClone(this.recovery), buffers: structuredClone([...this.buffers.values()]),
       comparisons: { ...this.comparisons }, listings: { ...this.listings }, git: { ...this.git },
+      publication: this.pendingPublication && { requestId: this.pendingPublication.request.requestId, kind: this.pendingPublication.kind },
       errors: [...this.errors], operations: [...this.operations.values()].filter(value => !value.acknowledged).map(value => structuredClone(value.result)) };
     for (const listener of this.listeners) listener();
   }
@@ -162,21 +165,21 @@ export class EditorController {
     }
     const reopening = !this.recovery.openCheckoutIds.includes(target.checkoutId);
     if (reopening) { this.recovery.openCheckoutIds.push(target.checkoutId); this.observe(target); }
-    this.selectCheckout(target);
-    const selected = this.checkout(target);
-    if (reopening && selected.active) await this.open({ checkout: target, path: selected.active });
+    await this.selectCheckout(target);
     await this.refresh(target);
     return target;
   }
   selectCheckout(target: CheckoutTarget) {
-    this.checkout(target);
+    const selected = this.checkout(target);
     this.activation++;
     this.recovery.selectedCheckoutId = target.checkoutId;
     this.changed();
+    return selected.active && !this.buffers.has(fileKey({ checkout: target, path: selected.active }))
+      ? this.open({ checkout: target, path: selected.active }) : Promise.resolve(true);
   }
   private changed() { this.emit(); this.schedule(); }
   private schedule() {
-    if (!this.ready || this.loading || this.disposed || this.preserving) return;
+    if (!this.ready || this.loading || this.disposed || this.preserving || this.pendingPublication) return;
     clearTimeout(this.scheduled);
     this.scheduled = setTimeout(() => { this.scheduled = undefined; void this.flush().catch(this.report); }, 150);
   }
@@ -186,18 +189,63 @@ export class EditorController {
       .map(({ target, text, disk }) => structuredClone({ target, text, disk }));
     return state;
   }
-  private publish(state: EditorRecovery) {
+  private async confirmPublication(request: CommandInput<"persistRecovery">, receipt: RecoveryPublication, onConfirmed?: () => Promise<void>) {
+    if (receipt.clientId !== request.clientId || receipt.requestId !== request.requestId || receipt.previousRevision !== request.expectedRevision ||
+      receipt.revision !== receipt.previousRevision + 1 || this.revision !== receipt.previousRevision)
+      throw new ApplicationError({ code: "Uncertain", message: "Recovery receipt does not confirm this exact pending publication/revision. Live work retained." });
+    this.revision = receipt.revision;
+    this.pendingPublication = undefined;
+    await onConfirmed?.();
+    this.emit();
+  }
+  private publicationBlocked() {
+    if (!this.pendingPublication) return false;
+    this.report("Recovery publication PENDING/UNCERTAIN. Resolve its exact identity before Save, Reload, file operations, Close or Quit.");
+    return true;
+  }
+  private publish(state: EditorRecovery, onConfirmed?: () => Promise<void>, kind: "close" | "reload" = "close") {
     const captured = structuredClone(state);
     const next = this.recoveryTail.catch(() => {}).then(async () => {
-      const result = await this.command("persistRecovery", { clientId: this.clientId,
-        expectedRevision: this.revision, state: captured });
-      this.revision = result.revision;
+      if (this.publicationBlocked()) throw new ApplicationError({ code: "Uncertain", message: "Resolve the pending recovery publication first." });
+      const request = { clientId: this.clientId, requestId: crypto.randomUUID(), expectedRevision: this.revision, state: captured };
+      let receipt: RecoveryPublication;
+      try { receipt = await this.command("persistRecovery", request); }
+      catch (error) {
+        if (ApplicationError.is(error) && ["InvalidInput", "Conflict"].includes(error.code)) throw error;
+        this.pendingPublication = { request, onConfirmed, kind: onConfirmed ? kind : "recovery" }; this.emit();
+        const known = await this.command("getRecoveryPublication", { clientId: request.clientId, requestId: request.requestId }).catch(() => null);
+        if (!known) {
+          this.report("Recovery publication PENDING/UNCERTAIN. Live work and the immutable request are retained; null status does not prove failure.");
+          throw error;
+        }
+        receipt = known;
+      }
+      // Retain identity even when a malformed/mismatched receipt cannot be accepted.
+      this.pendingPublication = { request, onConfirmed, kind: onConfirmed ? kind : "recovery" };
+      await this.confirmPublication(request, receipt, onConfirmed);
+    });
+    this.recoveryTail = next;
+    return next;
+  }
+  async resolveRecoveryPublication(): Promise<boolean> {
+    const next = this.recoveryTail.catch(() => {}).then(async () => {
+      const pending = this.pendingPublication;
+      if (!pending) return true;
+      try {
+        const { request, onConfirmed } = pending;
+        const receipt = await this.command("getRecoveryPublication", { clientId: request.clientId, requestId: request.requestId }) ??
+          await this.command("persistRecovery", request);
+        await this.confirmPublication(request, receipt, onConfirmed);
+        this.schedule();
+        return true;
+      } catch (error) { this.report(error); this.publicationBlocked(); return false; }
     });
     this.recoveryTail = next;
     return next;
   }
   async flush() {
     this.assertReady();
+    if (this.preserving) throw Error("Finish the captured preservation action before flushing.");
     clearTimeout(this.scheduled); this.scheduled = undefined;
     await this.publish(this.capture());
   }
@@ -278,6 +326,7 @@ export class EditorController {
   }
   async save(target: FileTarget, overwrite = false): Promise<boolean> {
     this.checkout(target.checkout);
+    if (this.publicationBlocked()) return false;
     if (this.uncertainAffects(target)) { this.report("Resolve the pending file operation before saving this file."); return false; }
     const buffer = this.buffers.get(fileKey(target));
     if (!buffer || buffer.saving) return false;
@@ -307,17 +356,19 @@ export class EditorController {
   async reload(target: FileTarget) {
     this.checkout(target.checkout);
     const buffer = this.buffers.get(fileKey(target));
-    if (!buffer || buffer.pendingSave || this.preserving) return false;
+    if (!buffer || buffer.pendingSave || this.preserving || this.publicationBlocked()) return false;
     this.preserving = true; this.emit();
     try {
       const disk = await this.command("readFile", target);
       const state = this.capture(); state.drafts = state.drafts.filter(item => fileKey(item.target) !== fileKey(target));
-      await this.publish(state);
-      buffer.disk = disk; buffer.text = disk.text; buffer.conflict = undefined;
-      if (this.checkout(target.checkout).fileViews[target.path] === "conflict")
-        this.comparisons[fileKey(target)] = { original: disk.text, working: disk, title: "Disk versus your edits" };
+      await this.publish(state, async () => {
+        buffer.disk = disk; buffer.text = disk.text; buffer.conflict = undefined;
+        if (this.checkout(target.checkout).fileViews[target.path] === "conflict")
+          this.comparisons[fileKey(target)] = { original: disk.text, working: disk, title: "Disk versus your edits" };
+        this.preserving = false; this.emit(); this.schedule();
+      }, "reload");
       return true;
-    } finally { this.preserving = false; this.emit(); }
+    } finally { if (!this.pendingPublication?.onConfirmed) { this.preserving = false; this.emit(); } }
   }
   cancelConflict(target: FileTarget) {
     const buffer = this.buffers.get(fileKey(target));
@@ -361,12 +412,13 @@ export class EditorController {
   }
   private async preserve(targets: FileTarget[], choose: ChooseClose, kind: "files" | "checkout" | "quit", checkout?: CheckoutTarget) {
     this.assertReady();
-    if (this.preserving || [...this.buffers.values()].some(buffer => buffer.saving || buffer.pendingSave)) return false;
+    if (this.publicationBlocked() || this.preserving || [...this.buffers.values()].some(buffer => buffer.saving || buffer.pendingSave)) return false;
     const captured = [...new Map(targets.map(target => [fileKey(target), structuredClone(target)])).values()];
     if (captured.some(target => this.uncertainAffects(target))) { this.report("Resolve pending file operations before closing their files."); return false; }
     this.preserving = true; this.activation++; clearTimeout(this.scheduled); this.emit();
     let activation = this.activation, committed = false;
     let survivor: FileTarget | undefined;
+    let commitClose: (() => Promise<void>) | undefined;
     const referenceRevision = this.referenceRevision;
     const discarded = new Set<string>();
     try {
@@ -401,38 +453,45 @@ export class EditorController {
         }
         return state;
       };
-      let state = applyClose(this.capture(), true);
+      let preflight = this.capture();
       for (;;) {
-        await this.publish(state);
+        await this.publish(preflight);
         if (referenceRevision !== this.referenceRevision) throw Error("Files moved during the captured close. Edits retained; review their new paths and retry.");
-        const latest = applyClose(this.capture());
-        if (JSON.stringify(latest) === JSON.stringify(state)) break;
-        // Retain metadata changed during publication, using the actual acknowledged CAS revision.
-        state = latest;
+        const latest = this.capture();
+        if (JSON.stringify(latest) === JSON.stringify(preflight)) break;
+        preflight = latest;
       }
-      const activeCheckout = this.recovery.checkouts.find(target => target.checkoutId === this.recovery.selectedCheckoutId);
-      const previous = activeCheckout && this.recovery.views[activeCheckout.checkoutId].active;
-      applyClose(this.recovery); this.recovery.drafts = state.drafts;
-      if (kind === "files" && activeCheckout && previous && keys.has(fileKey({ checkout: activeCheckout, path: previous }))) {
-        const next = this.recovery.views[activeCheckout.checkoutId].active;
-        if (next) survivor = { checkout: activeCheckout, path: next };
-      }
-      activation = this.activation;
-      committed = true;
-      if (kind === "quit") for (const key of discarded) {
-        const buffer = this.buffers.get(key)!; buffer.text = buffer.disk.text; buffer.conflict = undefined;
-      }
-      else {
-        this.history = [...this.history, ...history].slice(-20);
-        for (const key of keys) { this.buffers.delete(key); delete this.comparisons[key]; }
-        if (kind === "checkout" && checkout) { this.stops.get(checkoutKey(checkout))?.(); this.stops.delete(checkoutKey(checkout)); }
-      }
+      const state = applyClose(this.capture(), true);
+      commitClose = async () => {
+        committed = true; // The exact final receipt is the close outcome; later IO cannot veto it.
+        const activeCheckout = this.recovery.checkouts.find(target => target.checkoutId === this.recovery.selectedCheckoutId);
+        const previous = activeCheckout && this.recovery.views[activeCheckout.checkoutId].active;
+        applyClose(this.recovery); this.recovery.drafts = state.drafts;
+        if (kind === "files" && activeCheckout && previous && keys.has(fileKey({ checkout: activeCheckout, path: previous }))) {
+          const next = this.recovery.views[activeCheckout.checkoutId].active;
+          if (next) survivor = { checkout: activeCheckout, path: next };
+        }
+        activation = this.activation;
+        if (kind === "quit") for (const key of discarded) {
+          const buffer = this.buffers.get(key)!; buffer.text = buffer.disk.text; buffer.conflict = undefined;
+        }
+        else {
+          this.history = [...this.history, ...history].slice(-20);
+          for (const key of keys) { this.buffers.delete(key); delete this.comparisons[key]; }
+          if (kind === "checkout" && checkout) {
+            try { this.stops.get(checkoutKey(checkout))?.(); } catch (error) { this.report(error); }
+            this.stops.delete(checkoutKey(checkout));
+          }
+        }
+        this.preserving = false; this.emit();
+        if (survivor && activation === this.activation) await this.open(survivor).catch(this.report);
+        this.schedule();
+      };
+      await this.publish(state, commitClose);
       return true;
-    } catch (error) { this.report(error); return false; }
+    } catch (error) { this.report(error); return committed; }
     finally {
-      this.preserving = false; this.emit();
-      if (!committed) this.schedule();
-      if (survivor && activation === this.activation) await this.open(survivor).catch(this.report);
+      if (!this.pendingPublication?.onConfirmed) { this.preserving = false; this.emit(); if (!committed) this.schedule(); }
     }
   }
   async reopen(checkout: CheckoutTarget) {
@@ -523,7 +582,7 @@ export class EditorController {
   }
   async mutate(input: Omit<WorkspaceOperation, "clientId" | "id"> & { id?: string }) {
     this.checkout(input.checkout);
-    if (this.preserving) throw Error("Finish the captured preservation action first.");
+    if (this.preserving || this.publicationBlocked()) throw Error("Finish the captured preservation/publication action first.");
     const operation: WorkspaceOperation = { ...structuredClone(input), clientId: this.clientId, id: input.id ?? crypto.randomUUID() };
     if (this.operations.has(operationKey(this.clientId, operation.id))) throw Error("Operation already submitted. Resolve its status instead of dispatching it again.");
     if (operation.destination !== undefined) validPath(operation.destination, operation.kind === "import");
@@ -620,6 +679,7 @@ export class EditorController {
   }
   private publishFacts(changes: RecoveryChange[], result?: OperationResult, initial?: RecoveryLoad, forcePublication = false): Promise<void> {
     const pending = this.factsTail.catch(() => {}).then(async () => {
+      if (this.publicationBlocked()) throw new ApplicationError({ code: "Uncertain", message: "Resolve the pending recovery publication before reconciling facts." });
       if (this.preserving && !result && !changes.length && !initial && !forcePublication) return;
       await this.recoveryTail.catch(() => {});
       const loaded = initial ?? await this.command("loadRecovery", { clientId: this.clientId });
@@ -638,7 +698,7 @@ export class EditorController {
         this.revision = transition.revision;
       }
       if (!facts.length && !changes.length && !forcePublication) return;
-      await this.flush();
+      await this.publish(this.capture());
       for (const fact of facts) if (fact.outcome !== "uncertain" && reconciled.has(operationKey(fact.clientId, fact.id))) {
         await this.command("acknowledgeOperation", { clientId: this.clientId, operationClientId: fact.clientId, id: fact.id });
         const known = this.operations.get(operationKey(fact.clientId, fact.id))!;

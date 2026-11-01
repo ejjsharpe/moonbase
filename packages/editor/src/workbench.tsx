@@ -277,7 +277,7 @@ export const EditorWorkbench = forwardRef<EditorWorkbenchHandle, EditorWorkbench
         if (paths.length) setRecent({ paths, index: ((recent?.index ?? 0) + (event.shiftKey ? paths.length - 1 : 1)) % paths.length, origin: recent?.origin ?? focusOrigin(element) });
       } else if (event.key === "Escape" && recent) { event.preventDefault(); setRecent(null); }
     }} onKeyUp={event => { if (event.key === "Control" && recent && checkout) { const path = recent.paths[recent.index]; setRecent(null); run(withFocus(controller.open({ checkout, path }), recent.origin)); } }}>
-    <Tabs.Root value={checkout?.checkoutId ?? ""} onValueChange={value => { const target = openCheckouts.find(item => item.checkoutId === value); if (target) controller.selectCheckout(target); }} {...stylex.props(styles.panel)}>
+    <Tabs.Root value={checkout?.checkoutId ?? ""} onValueChange={value => { const target = openCheckouts.find(item => item.checkoutId === value); if (target) run(controller.selectCheckout(target)); }} {...stylex.props(styles.panel)}>
       <Tabs.List {...stylex.props(workbench.projectTabs, styles.checkoutTabs)} aria-label="Checkouts">
         {openCheckouts.map(item => <div key={checkoutKey(item)} {...stylex.props(workbench.fileTab)}>
           <Tabs.Tab value={item.checkoutId} title={`${item.hostId} · ${item.branch} · ${item.root}`} {...stylex.props(controls.button, checkout?.checkoutId === item.checkoutId && workbench.fileSelected)}>{item.root.split("/").at(-1)} · {item.branch}</Tabs.Tab>
@@ -361,6 +361,8 @@ export const EditorWorkbench = forwardRef<EditorWorkbenchHandle, EditorWorkbench
       </Tabs.Panel>}
     </Tabs.Root>
     {!!state.errors.length && <div role="alert" {...stylex.props(controls.status, controls.alert)}>{state.errors.at(-1)} <Button {...stylex.props(controls.button)} onClick={() => controller.clearErrors()}>Dismiss error</Button></div>}
+    {state.publication && <p role="status" {...stylex.props(controls.status)}>Recovery publication PENDING/UNCERTAIN ({state.publication.kind}): {state.publication.requestId}. Live work is retained.
+      <Button {...stylex.props(controls.button)} onClick={() => run(withFocus(controller.resolveRecoveryPublication(), focusRequest?.origin ?? "editor", true))}>Resolve recovery publication</Button></p>}
     {state.operations.map(operation => <p key={JSON.stringify([operation.clientId, operation.id])} role="status" {...stylex.props(controls.status)}>{operation.kind}: {operation.outcome}. {operation.message}<Button {...stylex.props(controls.button)} onClick={() => run(controller.resolveOperation(operation.id, operation.clientId))}>Resolve operation status</Button></p>)}
     {lookup && checkout && <FileLookup controller={controller} state={state} checkout={checkout} close={() => setLookup(false)} editorFocus={() => root.current?.querySelector<HTMLElement>('.monaco-editor textarea[role="textbox"]') ?? null} />}
     {action && checkout && <Mutation controller={controller} checkout={checkout} action={action} close={() => setAction(null)} />}

@@ -191,3 +191,45 @@ test("R3 keyboard close/reopen retains tree or strip origin and meaningful empty
   const before = await page.evaluate(() => window.demo.first.getSnapshot().recovery);
   await page.keyboard.press("Meta+Shift+t"); expect(await page.evaluate(() => window.demo.first.getSnapshot().recovery)).toEqual(before);
 });
+
+test("R4 returning to a background-closed checkout loads the survivor", async ({ page }) => {
+  await page.goto("/recovery-race.html"); await expect(page.getByRole("textbox", { name: "b.ts editor", exact: true })).toBeVisible();
+  await page.evaluate(() => window.recoveryRace.hold()); await page.getByRole("button", { name: "Close b.ts", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.recoveryRace.waiting)).toBe(true);
+  await page.getByRole("tab", { name: "beta · main", exact: true }).click(); await page.evaluate(() => window.recoveryRace.release());
+  await expect.poll(() => page.evaluate(() => window.recoveryRace.editor.getSnapshot().preserving)).toBe(false);
+  await page.getByRole("tab", { name: "alpha · main", exact: true }).click();
+  await expect(page.getByRole("textbox", { name: "a.ts editor", exact: true })).toBeVisible();
+  await page.screenshot({ path: "test-results/editor-background-return.png", fullPage: true });
+});
+
+for (const area of ["staged", "unstaged"] as const) test(`R4 actual typing after close into remembered ${area} comparison`, async ({ page }) => {
+  await page.goto("/"); await first(page).getByLabel("File view", { exact: true }).selectOption(area);
+  await first(page).getByRole("treeitem", { name: "README.md", exact: true }).dblclick();
+  await first(page).getByRole("textbox", { name: "README.md editor", exact: true }).focus(); await page.keyboard.press("Meta+w");
+  const input = first(page).getByRole("textbox", { name: "welcome.ts editor", exact: true });
+  await expect(input).toBeFocused(); await page.keyboard.type("typing into " + area + " survivor ");
+  await expect.poll(() => page.evaluate(() => window.demo.first.buffer({ checkout: window.demo.checkout, path: "welcome.ts" })!.text)).toContain("typing into " + area + " survivor");
+  const original = first(page).getByRole("textbox", { name: area + " · welcome.ts original", exact: true });
+  await expect(original).toHaveJSProperty("readOnly", true);
+  await expect(input).toHaveJSProperty("readOnly", false);
+  await page.screenshot({ path: `test-results/editor-${area}-close.png`, fullPage: true });
+});
+
+test("R4 uncertain final close is visible, blocks Quit and resolves by exact receipt before focusing its survivor", async ({ page }) => {
+  await page.goto("/recovery-race.html"); await expect(page.getByRole("textbox", { name: "b.ts editor", exact: true })).toBeVisible();
+  await page.evaluate(async () => {
+    const editor = window.recoveryRace.editor, checkout = editor.getSnapshot().recovery.checkouts.find(target => target.checkoutId === "alpha")!;
+    editor.edit({ checkout, path: "b.ts" }, "captured pending close draft"); await editor.flush(); window.recoveryRace.loseFinalResponse();
+  });
+  await page.getByRole("textbox", { name: "b.ts editor", exact: true }).focus(); await page.keyboard.press("Meta+w");
+  await page.getByRole("dialog", { name: "Save changes before closing?", exact: true }).getByRole("button", { name: "Discard", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Resolve recovery publication", exact: true })).toBeVisible();
+  expect(await page.evaluate(() => window.recoveryRace.editor.prepareQuit(async () => "discard"))).toBe(false);
+  expect(await page.evaluate(() => window.recoveryRace.editor.getSnapshot().buffers.find(buffer => buffer.target.path === "b.ts")?.text)).toBe("captured pending close draft");
+  await page.screenshot({ path: "test-results/editor-pending-publication.png", fullPage: true });
+  await page.getByRole("button", { name: "Resolve recovery publication", exact: true }).click();
+  await expect(page.getByRole("textbox", { name: "a.ts editor", exact: true })).toBeFocused(); await page.keyboard.type("after exact close resolution ");
+  await expect.poll(() => page.evaluate(() => window.recoveryRace.editor.getSnapshot().buffers.find(buffer => buffer.target.checkout.checkoutId === "alpha" && buffer.target.path === "a.ts")?.text)).toContain("after exact close resolution");
+  await expect(page.getByRole("button", { name: "Resolve recovery publication", exact: true })).toHaveCount(0);
+});

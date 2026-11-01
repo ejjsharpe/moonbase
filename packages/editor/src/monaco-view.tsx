@@ -78,7 +78,8 @@ export function MonacoView({ controller, state, target, mode }: {
     if (mode !== "file" && comparison) {
       const original = monaco.editor.createModel(comparison.original, "plaintext");
       const modified = working ?? monaco.editor.createModel(comparison.working?.text ?? "", "plaintext");
-      const editor = monaco.editor.createDiffEditor(element, { ...options, originalEditable: false, renderSideBySide: false });
+      const editor = monaco.editor.createDiffEditor(element, { ...options, originalEditable: false, renderSideBySide: false,
+        originalAriaLabel: comparison.title + " original", modifiedAriaLabel: target.path + " editor" });
       const viewModel = editor.createViewModel({ original, modified });
       editor.setModel(viewModel); mounted.current = editor;
       editor.getOriginalEditor().updateOptions({ ariaLabel: comparison.title + " original", readOnly: true, domReadOnly: true });
@@ -97,7 +98,15 @@ export function MonacoView({ controller, state, target, mode }: {
   }, [controller, key, mode, !!buffer, comparison?.original, comparison?.title, state.disposed]);
   useLayoutEffect(() => {
     const editor = mounted.current;
-    if (editor) editor.updateOptions({ readOnly: state.preserving || !buffer });
-  }, [state.preserving, !!buffer]);
+    if (editor) {
+      const readOnly = state.preserving || !buffer;
+      if ("getModifiedEditor" in editor) {
+        const diffOptions: monaco.editor.IDiffEditorConstructionOptions = { readOnly,
+          originalAriaLabel: comparison?.title + " original", modifiedAriaLabel: target?.path + " editor" };
+        editor.updateOptions(diffOptions);
+      }
+      else editor.updateOptions({ readOnly });
+    }
+  }, [state.preserving, !!buffer, comparison?.title, target?.path]);
   return <div ref={container} {...stylex.props(workbench.editor)} data-editor-instance={controller.instanceId} />;
 }

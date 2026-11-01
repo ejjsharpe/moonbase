@@ -1,7 +1,7 @@
 import { Effect, Layer, Queue, Stream } from "effect";
 import { WorkspaceService, type WorkspaceServiceShape } from "@moonbase/application/services";
 import { ApplicationError, emptyRecovery, maximumFileBytes, type CheckoutTarget, type FileDocument,
-  type FileTarget, type WorkspaceCommand, type EditorRecovery, type OperationResult, type SaveResult, type WorkspaceEvent, type LookupMatch, type RecoveryChange,
+  type FileTarget, type WorkspaceCommand, type EditorRecovery, type OperationResult, type SaveResult, type WorkspaceEvent, type LookupMatch, type RecoveryChange, type RecoveryPublication,
 } from "@moonbase/application/client";
 import { checkoutKey, fileKey } from "./editor.ts";
 
@@ -38,7 +38,8 @@ function match(path: string, query: string): LookupMatch | undefined {
 export function memoryWorkspace(seeds: Seed[]) {
   let version = 0;
   const files = new Map<string, Map<string, Entry>>();
-  const recoveries = new Map<string, { revision: number; state: EditorRecovery }>();
+  const recoveries = new Map<string, { revision: number; state: EditorRecovery; publishedRevision: number }>();
+  const publications = new Map<string, { payload: string; receipt: RecoveryPublication }>();
   const saves = new Map<string, { payload: string; result: SaveResult }>();
   const operations = new Map<string, { payload: string; result: OperationResult; bounds: Map<string, number>; acks: Set<string> }>();
   const watchers = new Set<{ checkout: CheckoutTarget; notify: (event: WorkspaceEvent) => void }>();
@@ -86,7 +87,7 @@ export function memoryWorkspace(seeds: Seed[]) {
     const state = structuredClone(previous.state); transform(state);
     validateRecovery(state);
     if (JSON.stringify(state) === JSON.stringify(previous.state)) return [];
-    const revision = previous.revision + 1; recoveries.set(clientId, { revision, state });
+    const revision = previous.revision + 1; recoveries.set(clientId, { ...previous, revision, state });
     return [{ clientId, previousRevision: previous.revision, revision }];
   }
   function remapCollides(state: EditorRecovery, result: OperationResult) {
@@ -101,7 +102,7 @@ export function memoryWorkspace(seeds: Seed[]) {
   }
   function operationRecovery(result: OperationResult, proposed: Map<string, Entry>) {
     const bounds = new Map<string, number>();
-    const updates = new Map<string, { revision: number; state: EditorRecovery }>();
+    const updates = new Map<string, { revision: number; state: EditorRecovery; publishedRevision: number }>();
     for (const [clientId, stored] of recoveries) {
       if (clientId !== result.clientId && !stored.state.checkouts.some(checkout => checkoutKey(checkout) === checkoutKey(result.checkout))) continue;
       const state = structuredClone(stored.state);
@@ -135,7 +136,7 @@ export function memoryWorkspace(seeds: Seed[]) {
       validateRecovery(state);
       const revision = stored.revision + Number(JSON.stringify(state) !== JSON.stringify(stored.state));
       if (revision !== stored.revision) {
-        updates.set(clientId, { revision, state });
+        updates.set(clientId, { ...stored, revision, state });
         result.recoveryChanges.push({ clientId, previousRevision: stored.revision, revision });
       }
       bounds.set(clientId, revision);
@@ -263,17 +264,30 @@ export function memoryWorkspace(seeds: Seed[]) {
       if (entry!.acks.has(clientId)) return;
       const state = recoveries.get(clientId)?.state;
       if (state && remapCollides(state, entry!.result)) fail("Resolve the retained recovery collision before acknowledging.", "Conflict");
-      if (!entry!.bounds.has(clientId) || (recoveries.get(clientId)?.revision ?? 0) <= entry!.bounds.get(clientId)!) fail("Publish reconciled recovery before acknowledging.", "Conflict");
+      if (!entry!.bounds.has(clientId) || (recoveries.get(clientId)?.publishedRevision ?? 0) <= entry!.bounds.get(clientId)!) fail("Publish reconciled recovery before acknowledging.", "Conflict");
       entry!.acks.add(clientId);
     }),
-    loadRecovery: ({ clientId }) => call("loadRecovery", () => ({ ...(recoveries.get(clientId) ?? { revision: 0, state: emptyRecovery(clientId) }), errors: [],
-      operations: [...operations.values()].filter(item => item.bounds.has(clientId) && !item.acks.has(clientId)).map(item => item.result) })),
-    persistRecovery: ({ clientId, expectedRevision, state }) => call("persistRecovery", () => {
-      if (!clientId || state.clientId !== clientId || state.version !== 1) fail("Recovery client mismatch.");
-      if ((recoveries.get(clientId)?.revision ?? 0) !== expectedRevision) fail("Recovery revision changed.", "Conflict");
+    loadRecovery: ({ clientId }) => call("loadRecovery", () => {
+      const { revision, state } = recoveries.get(clientId) ?? { revision: 0, state: emptyRecovery(clientId) };
+      return { revision, state, errors: [], operations: [...operations.values()].filter(item => item.bounds.has(clientId) && !item.acks.has(clientId)).map(item => item.result) };
+    }),
+    persistRecovery: input => call("persistRecovery", () => {
+      const { clientId, requestId, expectedRevision, state } = input;
+      if (typeof clientId !== "string" || !clientId.trim() || typeof requestId !== "string" || !requestId.trim() || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0 || !state || state.clientId !== clientId || state.version !== 1) fail("Invalid recovery publication identity.");
       validateRecovery(state);
-      const revision = expectedRevision + 1; recoveries.set(clientId, { revision, state: structuredClone(state) }); stats.publications++;
-      return { revision };
+      const payload = JSON.stringify(input, (_key, value) => value && typeof value === "object" && !Array.isArray(value)
+        ? Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]])) : value);
+      const key = JSON.stringify([clientId, requestId]), previous = publications.get(key);
+      if (previous) return previous.payload === payload ? previous.receipt : fail("Recovery request ID reused with changed input.");
+      if ((recoveries.get(clientId)?.revision ?? 0) !== expectedRevision) fail("Recovery revision changed.", "Conflict");
+      const revision = expectedRevision + 1, receipt = { clientId, requestId, previousRevision: expectedRevision, revision };
+      recoveries.set(clientId, { revision, state: structuredClone(state), publishedRevision: revision });
+      publications.set(key, { payload, receipt }); stats.publications++;
+      return receipt;
+    }),
+    getRecoveryPublication: ({ clientId, requestId }) => call("getRecoveryPublication", () => {
+      if (typeof clientId !== "string" || !clientId.trim() || typeof requestId !== "string" || !requestId.trim()) fail("Invalid recovery publication identity.");
+      return publications.get(JSON.stringify([clientId, requestId]))?.receipt ?? null;
     }),
     watch: ({ checkout }) => Stream.unwrap(Effect.gen(function* () {
       const queue = yield* Queue.sliding<WorkspaceEvent>(1);

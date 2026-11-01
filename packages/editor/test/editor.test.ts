@@ -61,7 +61,10 @@ test("Reload persistence failure vetoes loss; Cancel keeps the edits", async () 
     f.memory.externalWrite(target("a.ts"), "external"); await f.editor.save(target("a.ts"));
     f.memory.failNext("persistRecovery"); await assert.rejects(f.editor.reload(target("a.ts")));
     assert.equal(f.editor.buffer(target("a.ts"))!.text, "dirty");
+    assert(f.editor.getSnapshot().publication);
     f.editor.cancelConflict(target("a.ts")); assert.equal(f.editor.buffer(target("a.ts"))!.text, "dirty");
+    assert.equal(await f.editor.resolveRecoveryPublication(), true);
+    assert.equal(f.editor.buffer(target("a.ts"))!.text, "external");
     assert.equal(await f.editor.reload(target("a.ts")), true);
     assert.equal(f.editor.buffer(target("a.ts"))!.text, "external");
   } finally { await f.dispose(); }
@@ -99,6 +102,7 @@ test("captured close defers Discards; earlier Save remains a fact after later Ca
     f.memory.failNext("persistRecovery");
     assert.equal(await f.editor.close([target("b.ts")], async () => "discard"), false);
     assert.equal(f.editor.buffer(target("b.ts"))!.text, "edit b.ts");
+    assert.equal(await f.editor.resolveRecoveryPublication(), true);
     assert.equal(await f.editor.close([target("b.ts")], async () => "discard"), true);
     assert.equal(f.editor.buffer(target("b.ts")), undefined);
     await f.editor.reopen(checkout); assert.equal(f.editor.buffer(target("b.ts"))!.text, "second");
@@ -305,6 +309,7 @@ test("mutation persistence failure precedes effects; acknowledgement waits for r
     f.memory.failNext("persistRecovery");
     await assert.rejects(f.editor.mutate({ checkout, sources, kind: "move", destination: "moved.ts" }));
     assert.equal(f.memory.stats.mutations, 0);
+    assert.equal(await f.editor.resolveRecoveryPublication(), true);
     await f.editor.mutate({ checkout, sources, kind: "move", destination: "moved.ts" });
     assert.equal((await f.client.command("loadRecovery", { clientId: f.editor.clientId })).operations.length, 0);
   } finally { await f.dispose(); }
@@ -346,6 +351,7 @@ test("Quit uses the same deferred preservation gate and persistence failure keep
     assert.equal(await f.editor.prepareQuit(async () => "cancel"), false);
     f.memory.failNext("persistRecovery"); assert.equal(await f.editor.prepareQuit(async () => "discard"), false);
     assert.equal(f.editor.buffer(target("a.ts"))!.text, "dirty");
+    assert.equal(await f.editor.resolveRecoveryPublication(), true);
     assert.equal(await f.editor.prepareQuit(async () => "save"), true);
     assert.equal(f.editor.buffer(target("a.ts"))!.text, "dirty");
   } finally { await f.dispose(); }
@@ -381,7 +387,7 @@ test("Save receipts advance only known own revisions; a competing same-client pu
     if (name === "saveFile") {
       const { clientId } = input as CommandInput<"saveFile">;
       const loaded = await f.client.command("loadRecovery", { clientId });
-      await f.client.command("persistRecovery", { clientId, expectedRevision: loaded.revision, state: { ...loaded.state, sidebarWidth: 333 } });
+      await f.client.command("persistRecovery", { requestId: crypto.randomUUID(), clientId, expectedRevision: loaded.revision, state: { ...loaded.state, sidebarWidth: 333 } });
       const result = await f.client.command(name, input, options); ready(); await wait; return result;
     }
     return f.client.command(name, input, options);
@@ -564,9 +570,9 @@ test("R1 memory persistence rejects composite view keys and invalid open members
     await f.editor.flush(); const loaded = await f.client.command("loadRecovery", { clientId: f.editor.clientId });
     const state = structuredClone(loaded.state), selected = state.views[checkout.checkoutId];
     assert(selected); delete state.views[checkout.checkoutId]; state.views[checkoutKey(checkout)] = selected;
-    await assert.rejects(f.client.command("persistRecovery", { clientId: f.editor.clientId, expectedRevision: loaded.revision, state }));
+    await assert.rejects(f.client.command("persistRecovery", { requestId: crypto.randomUUID(), clientId: f.editor.clientId, expectedRevision: loaded.revision, state }));
     for (const openCheckoutIds of [["not-known"], [checkout.checkoutId, checkout.checkoutId], []])
-      await assert.rejects(f.client.command("persistRecovery", { clientId: f.editor.clientId, expectedRevision: loaded.revision, state: { ...loaded.state, openCheckoutIds } }));
+      await assert.rejects(f.client.command("persistRecovery", { requestId: crypto.randomUUID(), clientId: f.editor.clientId, expectedRevision: loaded.revision, state: { ...loaded.state, openCheckoutIds } }));
   } finally { await f.dispose(); }
 });
 
@@ -688,7 +694,7 @@ for (const kind of ["files", "checkout", "quit"] as const) test(`R3 ${kind} pres
       assert.deepEqual(state.views[second.checkoutId].tree.expanded, ["folder"]);
     }
     assert.equal(editor.buffer(target("a.ts")), undefined);
-    assert.equal(publications, 2); // Closing facts and retained newer metadata each use normal CAS.
+    assert.equal(publications, 3); // Retained drafts/metadata converge before one final close publication.
     if (kind === "files") { assert.equal(await editor.open(target("a.ts")), true); assert.equal(editor.buffer(target("a.ts"))!.text, "const a = 1;"); }
   } finally { release(); editor.dispose(); await f.dispose(); }
 });
@@ -706,7 +712,7 @@ test("R3 failed close publication keeps drafts and newer metadata without bypass
     const closing = editor.close([target("a.ts")], async () => "discard"); await admitted;
     editor.selectCheckout(second); editor.tree(second, { focus: "folder" });
     const competing = await f.client.command("loadRecovery", { clientId: editor.clientId });
-    await f.client.command("persistRecovery", { clientId: editor.clientId, expectedRevision: competing.revision, state: { ...competing.state, sidebarWidth: 333 } });
+    await f.client.command("persistRecovery", { requestId: crypto.randomUUID(), clientId: editor.clientId, expectedRevision: competing.revision, state: { ...competing.state, sidebarWidth: 333 } });
     release(); assert.equal(await closing, false);
     assert.equal(editor.buffer(target("a.ts"))!.text, "retained dirty text");
     assert.equal(editor.getSnapshot().recovery.selectedCheckoutId, second.checkoutId);
@@ -734,9 +740,187 @@ test("R3 later close publication failure retains dirty buffers and can publish n
     editor.selectCheckout(second); editor.resizeSidebar(319); release(); assert.equal(await closing, false);
     assert.equal(editor.buffer(target("a.ts"))!.text, "keep until all publications succeed");
     assert.equal(editor.getSnapshot().recovery.selectedCheckoutId, second.checkoutId);
+    assert.equal(await editor.resolveRecoveryPublication(), true);
     await editor.flush(); const durable = await f.client.command("loadRecovery", { clientId: editor.clientId });
     assert.equal(durable.state.selectedCheckoutId, second.checkoutId); assert.equal(durable.state.sidebarWidth, 319);
     assert.equal(durable.state.drafts[0].text, "keep until all publications succeed");
     assert.deepEqual(durable.state.views[checkout.checkoutId].openFiles, ["a.ts"]);
   } finally { release(); editor.dispose(); await f.dispose(); }
+});
+
+for (const kind of ["files", "checkout", "quit"] as const) for (const failure of ["conflict", "lost response"] as const)
+  test(`R4 ${kind} ${failure} at second publication cannot lose a persisted draft after failed close`, async () => {
+    const f = await fixture("r4-durable-" + kind + failure, false); let hold = false, admit!: () => void, release!: () => void, calls = 0;
+    const admitted = new Promise<void>(resolve => { admit = resolve; }), wait = new Promise<void>(resolve => { release = resolve; });
+    const editor = createEditor({ clientId: f.editor.clientId, client: { ...f.client, watch: () => () => {}, async command(name, input, options) {
+      if (hold && name === "persistRecovery") {
+        if (++calls === 1) { admit(); await wait; }
+        else if (calls === 2) {
+          if (failure === "lost response") f.memory.failNext("persistRecovery", "Lost second publication response", true);
+          else {
+            const loaded = await f.client.command("loadRecovery", { clientId: editor.clientId });
+            await f.client.command("persistRecovery", { requestId: crypto.randomUUID(), clientId: editor.clientId, expectedRevision: loaded.revision, state: { ...loaded.state, sidebarWidth: 355 } });
+          }
+        }
+      }
+      return f.client.command(name, input, options);
+    } } });
+    try {
+      f.editor.dispose(); await editor.load(); await editor.openCheckout(checkout.root); await editor.open(target("b.ts")); editor.edit(target("b.ts"), "previously persisted dirty draft");
+      await editor.openCheckout(second.root); editor.selectCheckout(checkout); await editor.flush(); hold = true;
+      const closing = kind === "files" ? editor.close([target("b.ts")], async () => "discard") :
+        kind === "checkout" ? editor.closeCheckout(checkout, async () => "discard") : editor.prepareQuit(async () => "discard");
+      await admitted; editor.selectCheckout(second); editor.resizeSidebar(329); release(); const closed = await closing;
+      if (failure === "conflict") assert.equal(closed, false);
+      const durable = await f.client.command("loadRecovery", { clientId: editor.clientId });
+      if (!closed) {
+        assert.equal(durable.state.drafts.find(draft => draft.target.path === "b.ts")?.text, "previously persisted dirty draft");
+      } else {
+        assert.equal(editor.buffer(target("b.ts"))?.text === "previously persisted dirty draft", false);
+        assert.equal(durable.state.drafts.length, 0);
+      }
+      editor.dispose(); const restarted = createEditor({ clientId: editor.clientId, client: { ...f.client, watch: () => () => {} } });
+      try {
+        await restarted.load();
+        if (closed) assert.notEqual(restarted.buffer(target("b.ts"))?.text, "previously persisted dirty draft");
+        else assert.equal(restarted.buffer(target("b.ts"))?.text, "previously persisted dirty draft");
+      } finally { restarted.dispose(); }
+    } finally { release(); editor.dispose(); await f.dispose(); }
+  });
+
+test("R4 selecting a background-closed checkout loads its absent survivor in its remembered view", async () => {
+  const f = await fixture("r4-background", false); let hold = false, admit!: () => void, release!: () => void;
+  const admitted = new Promise<void>(resolve => { admit = resolve; }), wait = new Promise<void>(resolve => { release = resolve; });
+  let delayRead = false, reading!: () => void, finishRead!: () => void;
+  const readStarted = new Promise<void>(resolve => { reading = resolve; }), readWait = new Promise<void>(resolve => { finishRead = resolve; });
+  let editor = createEditor({ clientId: f.editor.clientId, client: { ...f.client, watch: () => () => {}, async command(name, input, options) {
+    if (hold && name === "persistRecovery") { admit(); await wait; }
+    return f.client.command(name, input, options);
+  } } });
+  try {
+    f.editor.dispose(); await editor.load(); await editor.openCheckout(checkout.root); await editor.open(target("a.ts"), { view: "staged" }); await editor.open(target("b.ts"));
+    await editor.openCheckout(second.root); editor.selectCheckout(checkout); await editor.flush(); editor.dispose();
+    editor = createEditor({ clientId: editor.clientId, client: { ...f.client, watch: () => () => {}, async command(name, input, options) {
+      if (hold && name === "persistRecovery") { admit(); await wait; }
+      if (delayRead && name === "readComparison") { reading(); await readWait; }
+      return f.client.command(name, input, options);
+    } } }); await editor.load(); assert.equal(editor.buffer(target("a.ts")), undefined); hold = true;
+    const closing = editor.close([target("b.ts")], async () => "discard"); await admitted; editor.selectCheckout(second); release(); assert.equal(await closing, true);
+    f.memory.externalWrite(target("a.ts"), "current source after close");
+    delayRead = true; const selecting = editor.selectCheckout(checkout); await readStarted;
+    await editor.selectCheckout(second); finishRead(); assert.equal(await selecting, false);
+    assert.equal(editor.getSnapshot().recovery.selectedCheckoutId, second.checkoutId);
+    assert.equal(editor.buffer(target("a.ts")), undefined);
+    delayRead = false; await editor.selectCheckout(checkout);
+    assert.equal(editor.buffer(target("a.ts"))?.text, "current source after close");
+    assert.equal(editor.getSnapshot().recovery.views[checkout.checkoutId].fileViews["a.ts"], "staged");
+    assert.equal(editor.getSnapshot().comparisons[fileKey(target("a.ts"))].original, "const a = 0;");
+  } finally { release(); finishRead(); editor.dispose(); await f.dispose(); }
+});
+
+test("R4 recovery publications bind canonical immutable input; retries/status do not write or adopt newer CAS", async () => {
+  const f = await fixture("r4-publication-binding", false);
+  try {
+    await f.editor.flush(); const loaded = await f.client.command("loadRecovery", { clientId: f.editor.clientId });
+    const request = { clientId: f.editor.clientId, requestId: "original", expectedRevision: loaded.revision, state: loaded.state };
+    const first = await f.client.command("persistRecovery", request);
+    await f.client.command("persistRecovery", { ...request, requestId: "later", expectedRevision: first.revision, state: { ...loaded.state, sidebarWidth: 351 } });
+    const writes = f.memory.stats.publications;
+    const reordered = { ...request, state: Object.fromEntries(Object.entries(request.state).reverse()) as typeof request.state };
+    assert.deepEqual(await f.client.command("persistRecovery", reordered), first);
+    assert.deepEqual(await f.client.command("getRecoveryPublication", { clientId: request.clientId, requestId: request.requestId }), first);
+    assert.equal(await f.client.command("getRecoveryPublication", { clientId: "another", requestId: request.requestId }), null);
+    assert.equal(f.memory.stats.publications, writes);
+    for (const changed of [{ ...request, expectedRevision: first.revision }, { ...request, state: { ...request.state, sidebarWidth: 299 } }])
+      await assert.rejects(f.client.command("persistRecovery", changed), error => ApplicationError.is(error) && error.code === "InvalidInput");
+    await assert.rejects(f.client.command("persistRecovery", { ...request, requestId: "different" }), error => ApplicationError.is(error) && error.code === "Conflict");
+    assert.equal((await f.client.command("loadRecovery", { clientId: request.clientId })).state.sidebarWidth, 351);
+  } finally { await f.dispose(); }
+});
+
+test("R4 retry/status of an old publication cannot acknowledge a newer foreign operation", async () => {
+  const f = await fixture("r4-publication-fence", false);
+  try {
+    await f.editor.open(target("a.ts")); await f.editor.flush(); const loaded = await f.client.command("loadRecovery", { clientId: f.editor.clientId });
+    const request = { clientId: f.editor.clientId, requestId: "before-move", expectedRevision: loaded.revision, state: loaded.state };
+    await f.client.command("persistRecovery", request);
+    const sources = await f.client.command("inspectEntries", { checkout, paths: ["a.ts"] });
+    await f.client.command("mutate", { id: "foreign-after-publication", clientId: "foreign", checkout, sources, kind: "move", destination: "moved.ts" });
+    await f.client.command("persistRecovery", request); await f.client.command("getRecoveryPublication", { clientId: request.clientId, requestId: request.requestId });
+    const ack = { clientId: request.clientId, operationClientId: "foreign", id: "foreign-after-publication" };
+    await assert.rejects(f.client.command("acknowledgeOperation", ack), error => ApplicationError.is(error) && error.code === "Conflict");
+    const latest = await f.client.command("loadRecovery", { clientId: request.clientId });
+    await f.client.command("persistRecovery", { ...request, requestId: "observed-move", expectedRevision: latest.revision, state: latest.state });
+    await f.client.command("acknowledgeOperation", ack);
+  } finally { await f.dispose(); }
+});
+
+for (const outcome of ["not committed", "committed", "competing CAS"] as const)
+  test(`R4 exact resolution of an uncertain final close (${outcome}) preserves the durable outcome and original request`, async () => {
+    const f = await fixture("r4-final-" + outcome, false); let armed = false, failed = false;
+    const requests: CommandInput<"persistRecovery">[] = [];
+    const editor = createEditor({ clientId: f.editor.clientId, client: { ...f.client, watch: () => () => {}, async command(name, input, options) {
+      if (armed && name === "persistRecovery") {
+        const request = input as CommandInput<"persistRecovery">; requests.push(structuredClone(request));
+        if (!request.state.drafts.length && !failed) {
+          failed = true;
+          if (outcome === "committed") await f.client.command(name, input, options);
+          f.memory.failNext("getRecoveryPublication");
+          throw new ApplicationError({ code: "Unavailable", message: "Final close response unavailable" });
+        }
+      }
+      return f.client.command(name, input, options);
+    } } });
+    try {
+      f.editor.dispose(); await editor.load(); await editor.openCheckout(checkout.root); await editor.open(target("b.ts"));
+      editor.edit(target("b.ts"), "consented captured draft"); await editor.flush(); armed = true;
+      assert.equal(await editor.close([target("b.ts")], async () => "discard"), false);
+      const pending = editor.getSnapshot().publication; assert.equal(pending?.kind, "close"); assert.equal(editor.getSnapshot().preserving, true);
+      assert.equal(editor.buffer(target("b.ts"))?.text, "consented captured draft");
+      assert.equal(await editor.prepareQuit(async () => "discard"), false); assert.equal(await editor.save(target("b.ts")), false);
+      assert.equal(await editor.reload(target("b.ts")), false); await assert.rejects(editor.flush());
+      assert.throws(() => editor.edit(target("b.ts"), "must not be silently discarded"));
+      await assert.rejects(editor.mutate({ checkout, kind: "create-file", sources: [], destination: "blocked.ts" }));
+      const stored = await f.client.command("loadRecovery", { clientId: editor.clientId });
+      const restarted = createEditor({ clientId: editor.clientId, client: { ...f.client, watch: () => () => {} } });
+      try {
+        await restarted.load();
+        assert.equal(restarted.buffer(target("b.ts"))?.text, outcome === "committed" ? undefined : "consented captured draft");
+      } finally { restarted.dispose(); }
+      if (outcome === "competing CAS") await f.client.command("persistRecovery", { clientId: editor.clientId, requestId: "competitor", expectedRevision: stored.revision, state: { ...stored.state, sidebarWidth: 356 } });
+      const writes = f.memory.stats.publications;
+      assert.equal(await editor.resolveRecoveryPublication(), outcome !== "competing CAS");
+      if (outcome === "competing CAS") {
+        assert.equal(editor.getSnapshot().publication?.requestId, pending?.requestId); assert.equal(await editor.prepareQuit(async () => "discard"), false);
+        assert.equal((await f.client.command("loadRecovery", { clientId: editor.clientId })).state.drafts[0].text, "consented captured draft");
+      } else {
+        assert.equal(editor.getSnapshot().publication, undefined); assert.equal(editor.getSnapshot().preserving, false);
+        assert.equal(editor.buffer(target("b.ts")), undefined);
+        assert.equal(f.memory.stats.publications, writes + Number(outcome === "not committed"));
+      }
+      const final = requests.filter(request => !request.state.drafts.length);
+      assert.equal(final.length, outcome === "committed" ? 1 : 2);
+      assert(final.every(request => JSON.stringify(request) === JSON.stringify(final[0])));
+      assert.equal(final[0].requestId, pending?.requestId);
+    } finally { editor.dispose(); await f.dispose(); }
+  });
+
+test("R4 later metadata failure cannot veto a final close already confirmed by exact receipt", async () => {
+  const f = await fixture("r4-committed-close", false); let armed = false, publications = 0;
+  const editor = createEditor({ clientId: f.editor.clientId, client: { ...f.client, watch: () => () => {}, async command(name, input, options) {
+    if (armed && name === "persistRecovery" && ++publications === 2) {
+      const receipt = await f.client.command(name, input, options);
+      editor.resizeSidebar(318); f.memory.failNext("persistRecovery", "Later unrelated metadata unavailable");
+      return receipt;
+    }
+    return f.client.command(name, input, options);
+  } } });
+  try {
+    f.editor.dispose(); await editor.load(); await editor.openCheckout(checkout.root); await editor.open(target("b.ts")); editor.edit(target("b.ts"), "committed discard"); await editor.flush();
+    armed = true; assert.equal(await editor.close([target("b.ts")], async () => "discard"), true);
+    assert.equal(editor.buffer(target("b.ts")), undefined); assert.equal(editor.getSnapshot().recovery.sidebarWidth, 318);
+    await assert.rejects(editor.flush());
+    assert.equal(editor.buffer(target("b.ts")), undefined);
+    assert.equal((await f.client.command("loadRecovery", { clientId: editor.clientId })).state.drafts.length, 0);
+  } finally { editor.dispose(); await f.dispose(); }
 });
