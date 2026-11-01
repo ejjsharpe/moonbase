@@ -55,3 +55,31 @@
 **Inference:** register invalidation before initial reads; coalesce a dirty flag and refresh paginated `conversation.entries(...)` plus projected `snapshot(LiveDoc,...)` outside callbacks. Bound delivered counts/bytes, retained pages and progress projection. Scope unsubscribes/watch cleanup to the viewer; never close Harness on view disposal. This avoids `Conversation.watch` and bounds app delivery, not total Pi cache.
 
 **3 — Evidence:** `handOver` replaces only `run.taskId`, preserving `run.inputs`; post-tools may append steered IDs. `endRun` settles all inputs and removes the run. **Inference:** capture immutable submission identity with host/store/conversation; observe LiveDoc, abort only its captured task when inputs contain that submission, await `waitForTask`, then reread across handover. If absent, stop following; never select a later unrelated run. Queued input instead uses `abortSubmission` as above. Handover may outrun Stop; cancellation is cooperative and cannot undo effects. Shared steers/batches mean abort affects every input in that run, so strict “touch no later input” requires preventing co-admission; this is not an unconditional guarantee. No internal task writes or conversation-wide abort fallback. [Published handover/abort behavior](https://unpkg.com/@earendil-works/pi-durable@1.4.0/dist/harness/generation.js).
+
+## 7. Controlled execution: published 1.4.0 alternatives
+
+2026-11-01. **Execution evidence**, separate from the preceding source findings: [first-party assert-based probe](pi-durable-1.4-probe.mjs) passed on Node **26.13.0**, npm **11.20.0**, macOS **arm64**. Only public package exports are imported. Dependencies/state stay outside the repository; `fetch` throws during probes, only faux models are registered, and no network server is opened. Direct pins: Durable, pi-ai, Chord, pi-codemode, pi-telemetry **1.4.0**, photon **0.3.3**, diff **8.0.4**, typebox **1.3.27**. npm lock integrity matches the earlier verified Durable SHA-512. Installation used `--ignore-scripts`; no codemode/image initialization or manually copied notices.
+
+Reproduce from the repository root:
+
+```sh
+probe_dir=$(mktemp -d /tmp/moonbase-pi-probe.XXXXXX)
+npm install --prefix "$probe_dir" --save-exact --ignore-scripts --no-audit --no-fund \
+  @earendil-works/pi-durable@1.4.0 @earendil-works/pi-ai@1.4.0 \
+  @earendil-works/chord@1.4.0 @earendil-works/pi-codemode@1.4.0 \
+  @earendil-works/pi-telemetry@1.4.0 @silvia-odwyer/photon@0.3.3 \
+  diff@8.0.4 typebox@1.3.27
+cp docs/research/pi-durable-1.4-probe.mjs "$probe_dir/probe.mjs"
+node --check "$probe_dir/probe.mjs"
+node "$probe_dir/probe.mjs" >"$probe_dir/results.json" 2>"$probe_dir/stderr.log"
+```
+
+**Results:**
+
+- **Reservation/admission:** committed a session-family receipt with immutable actor/host/store/conversation/request/payload, submitted once, executed two faux model requests and one counted tool. Deliberately omitted the receipt's returned submission ID, then closed/reopened real SQLite/Harness. Public `tx.submissionByRequest` recovered submission **10**, `done`, and bound its ID in a later receipt commit. Reopened model calls **0**, total tools **1**. A changed-payload reservation threw the app's equality assertion; the original binding remained readable and the Session usable. This qualifies the controlled lost-binding gap, not atomic receipt+admission or exactly-once external effects.
+- **Ownership:** child A used public Chord facade → EXCLUSIVE pragma → forced transactional table write → `SqliteStorage.open`, then signalled ready. Concurrent child B failed before ready: **“database is locked”, `ERR_SQLITE_ERROR`, errcode 5**. With `busyTimeoutMs: 30`, failure took **79 ms**, including configuration/cleanup; this is no whole-startup deadline. After A's **SIGKILL**, child C acquired the same file and closed normally. The probe table forces writes; its contents never grant ownership. No sentinel or lock product was added.
+- **Bounded observation/handover:** `subscribeCommits` produced **13** callbacks coalesced into **6** refreshes. `entries(...,2,...)` plus `snapshot(LiveDoc,...)` delivered at most **2** entries and **276 bytes** (512-byte assertion, ASCII fixtures). Projection retained capped entry/partial text, first-tool output/status and task ID; omitted large details. Both `generation.message.content[].text` and `tools[].output` were observed. Unsubscribed while the tool was gated; callbacks stopped and work completed afterward. Generation task **10 → 15** retained submission **9** in `run.inputs`. `whenBusy:"reject"` threw `ConversationBusy`, with no matching admission. No full conversation watch was mounted.
+
+Artifacts: `/tmp/moonbase-pi-probe.mBU3Js/{probe.mjs,results.json,stderr.log,package.json,package-lock.json,node_modules}`; stderr empty. Executed script SHA-256 `a304147ac05573bcebe56f05313499b369c86fb1b0fb3dedf3353f820c691f32`. Temporary SQLite directory `…/T/pi-durable-state-6Kd7kp` was removed by `finally`; removal verified afterward. Children are joined/killed by cleanup. Dependencies/logs remain for inspection; remove the task-specific temp project when finished. Fresh npm installs can resolve transitive ranges differently; the retained temp lock records this run.
+
+**Contract consequences/inference:** public primitives support the two-phase candidate and bounded app delivery; no claim bounds Pi's cache/history. No unexpected package API failure was observed. Still unqualified: minimum Node 22.19, other platforms/filesystems, power loss, Harness crash during active execution, exhaustive Stop/steering races, Unicode delivery limits, real providers, SSH and packaging. The ownership result covers one controlled local-file contention/crash sequence, not every deployment. No module/host or application contract was implemented.
