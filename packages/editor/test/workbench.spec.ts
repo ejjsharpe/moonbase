@@ -233,3 +233,17 @@ test("R4 uncertain final close is visible, blocks Quit and resolves by exact rec
   await expect.poll(() => page.evaluate(() => window.recoveryRace.editor.getSnapshot().buffers.find(buffer => buffer.target.checkout.checkoutId === "alpha" && buffer.target.path === "a.ts")?.text)).toContain("after exact close resolution");
   await expect(page.getByRole("button", { name: "Resolve recovery publication", exact: true })).toHaveCount(0);
 });
+
+test("R5 selecting an absent survivor during another close loads it after preservation releases", async ({ page }) => {
+  await page.goto("/recovery-race.html?both"); await expect(page.getByRole("textbox", { name: "b.ts editor", exact: true })).toBeVisible();
+  for (const next of ["beta", "alpha"]) {
+    await page.evaluate(() => window.recoveryRace.hold()); await page.getByRole("button", { name: "Close b.ts", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.recoveryRace.waiting)).toBe(true);
+    await page.getByRole("tab", { name: next + " · main", exact: true }).click(); await page.evaluate(() => window.recoveryRace.release());
+    await expect.poll(() => page.evaluate(() => window.recoveryRace.editor.getSnapshot().preserving)).toBe(false);
+  }
+  const input = page.getByRole("textbox", { name: "a.ts editor", exact: true }); await expect(input).toBeVisible();
+  await input.focus(); await page.keyboard.type("after deferred selection ");
+  await expect.poll(() => page.evaluate(() => window.recoveryRace.editor.getSnapshot().buffers.find(buffer => buffer.target.checkout.checkoutId === "alpha" && buffer.target.path === "a.ts")?.text)).toContain("after deferred selection");
+  await page.screenshot({ path: "test-results/editor-preservation-selection.png", fullPage: true });
+});

@@ -924,3 +924,122 @@ test("R4 later metadata failure cannot veto a final close already confirmed by e
     assert.equal((await f.client.command("loadRecovery", { clientId: editor.clientId })).state.drafts.length, 0);
   } finally { editor.dispose(); await f.dispose(); }
 });
+
+const held = () => { let release!: () => void; const promise = new Promise<void>(resolve => { release = resolve; }); return { promise, release }; };
+async function observedFixture(clientId: string) {
+  const f = await fixture(clientId, false);
+  await f.editor.open(target("a.ts"), { view: "staged" }); await f.editor.open(target("b.ts"));
+  await f.editor.openCheckout(second.root); await f.editor.open(target("a.ts", second)); await f.editor.open(target("b.ts", second));
+  await f.editor.selectCheckout(checkout); await f.editor.flush(); f.editor.dispose();
+  const transport: { command?: EditorClient["command"] } = {};
+  const client: EditorClient = { ...f.client, watch: () => () => {}, command(name, input, options) {
+    return transport.command ? transport.command(name, input, options) : f.client.command(name, input, options);
+  } };
+  const editor = createEditor({ client, clientId }); await editor.load();
+  return { ...f, raw: f.client, clientCommand: f.client.command, editor, client, transport, async dispose() { editor.dispose(); await f.dispose(); } };
+}
+
+test("R5 an observation already awaiting recovery cannot remap Reload's captured draft or erase it on restart", async () => {
+  const f = await observedFixture("r5-reload-observation"), observing = held(), allowObservation = held(), reading = held(), allowRead = held();
+  try {
+    await f.editor.open(target("a.ts"), { view: "file" }); f.editor.edit(target("a.ts"), "precious moved draft"); await f.editor.flush();
+    let delayObservation = true, delayRead = true;
+    f.transport.command = async (name, input, options) => {
+      if (name === "loadRecovery" && delayObservation) { delayObservation = false; observing.release(); await allowObservation.promise; }
+      const result = await f.clientCommand(name, input, options);
+      if (name === "readFile" && delayRead) { delayRead = false; reading.release(); await allowRead.promise; }
+      return result;
+    };
+    const observation = f.editor.reconcileRecovery(); await observing.promise;
+    const reload = f.editor.reload(target("a.ts")); await reading.promise;
+    const sources = await f.raw.command("inspectEntries", { checkout, paths: ["a.ts"] });
+    await f.raw.command("mutate", { checkout, clientId: "foreign", id: "during-reload", sources, kind: "move", destination: "renamed.ts" });
+    allowObservation.release(); await observation; allowRead.release(); await reload.catch(() => false);
+    await f.editor.reconcileRecovery(); await f.editor.flush();
+    assert.equal(f.editor.buffer(target("renamed.ts"))?.text, "precious moved draft");
+    assert.equal((await f.raw.command("loadRecovery", { clientId: f.editor.clientId })).state.drafts[0].text, "precious moved draft");
+    f.editor.dispose(); const restarted = createEditor({ clientId: f.editor.clientId, client: { ...f.raw, watch: () => () => {} } });
+    try { await restarted.load(); assert.equal(restarted.buffer(target("renamed.ts"))?.text, "precious moved draft"); }
+    finally { restarted.dispose(); }
+    assert.equal(f.memory.stats.mutations, 1);
+  } finally { allowObservation.release(); allowRead.release(); await f.dispose(); }
+});
+
+test("R5 an older observation cannot resurrect a consented draft around an uncertain final close receipt", async () => {
+  const f = await observedFixture("r5-close-observation"), observing = held(), allowObservation = held();
+  try {
+    await f.editor.open(target("a.ts")); f.editor.edit(target("a.ts"), "consented captured draft"); await f.editor.flush();
+    let delayObservation = true, loseFinal = true, statusDown = true;
+    f.transport.command = async (name, input, options) => {
+      if (name === "loadRecovery" && delayObservation) { delayObservation = false; observing.release(); await allowObservation.promise; }
+      if (name === "persistRecovery" && loseFinal && !(input as CommandInput<"persistRecovery">).state.views[checkout.checkoutId].openFiles.includes("a.ts")) {
+        loseFinal = false; await f.clientCommand(name, input, options); throw new ApplicationError({ code: "Uncertain", message: "Lost final receipt" });
+      }
+      if (name === "getRecoveryPublication" && statusDown) throw Error("Status unavailable");
+      return f.clientCommand(name, input, options);
+    };
+    const observation = f.editor.reconcileRecovery(); await observing.promise;
+    assert.equal(await f.editor.close([target("a.ts")], async () => "discard"), false);
+    const sources = await f.raw.command("inspectEntries", { checkout, paths: ["a.ts"] });
+    await f.raw.command("mutate", { checkout, clientId: "foreign", id: "after-commit", sources, kind: "move", destination: "renamed.ts" });
+    allowObservation.release(); await observation.catch(() => {}); statusDown = false;
+    assert.equal(await f.editor.resolveRecoveryPublication(), true); await f.editor.reconcileRecovery(); await f.editor.flush();
+    assert.equal(f.editor.getSnapshot().buffers.some(buffer => buffer.text === "consented captured draft"), false);
+    assert.equal(f.editor.getSnapshot().recovery.views[checkout.checkoutId].openFiles.includes("renamed.ts"), false);
+    const durable = await f.raw.command("loadRecovery", { clientId: f.editor.clientId }); assert.equal(durable.state.drafts.length, 0); assert.equal(durable.operations.length, 0);
+    f.editor.dispose(); const restarted = createEditor({ clientId: f.editor.clientId, client: { ...f.raw, watch: () => () => {} } });
+    try { await restarted.load(); assert.equal(restarted.getSnapshot().buffers.some(buffer => buffer.text === "consented captured draft"), false); }
+    finally { restarted.dispose(); }
+    assert.equal(f.memory.stats.mutations, 1);
+  } finally { allowObservation.release(); await f.dispose(); }
+});
+
+for (const outcome of ["success", "cancel", "failure", "unknown"] as const)
+  test(`R5 a selected absent survivor activates after another preservation releases (${outcome})`, async () => {
+    const f = await observedFixture("r5-selected-" + outcome); let entered = held(), release = held(), delay = true, phase = 1, lost = false;
+    try {
+      f.transport.command = async (name, input, options) => {
+        if (name === "persistRecovery" && delay) { delay = false; entered.release(); await release.promise;
+          if (phase === 2 && outcome === "failure") throw new ApplicationError({ code: "Conflict", message: "Definitive preflight conflict" });
+        }
+        if (name === "persistRecovery" && phase === 2 && outcome === "unknown" && !(input as CommandInput<"persistRecovery">).state.views[second.checkoutId].openFiles.includes("b.ts") && !lost) {
+          lost = true; await f.clientCommand(name, input, options); f.memory.failNext("getRecoveryPublication"); throw Error("Lost final reply");
+        }
+        return f.clientCommand(name, input, options);
+      };
+      const firstClose = f.editor.close([target("b.ts")], async () => "discard"); await entered.promise; await f.editor.selectCheckout(second); release.release(); assert.equal(await firstClose, true);
+      assert.equal(f.editor.buffer(target("a.ts")), undefined);
+      phase = 2; entered = held(); release = held(); delay = true;
+      if (outcome === "cancel") { delay = false; f.editor.edit(target("b.ts", second), "retain on cancel"); }
+      const secondClose = f.editor.close([target("b.ts", second)], async () => { if (outcome === "cancel") { entered.release(); await release.promise; return "cancel"; } return "discard"; });
+      await entered.promise; await f.editor.selectCheckout(checkout); f.memory.externalWrite(target("a.ts"), "latest selected source"); release.release();
+      assert.equal(await secondClose, outcome === "success");
+      if (outcome === "unknown") { assert.equal(f.editor.buffer(target("a.ts")), undefined); assert.equal(await f.editor.resolveRecoveryPublication(), true); }
+      assert.equal(f.editor.getSnapshot().recovery.selectedCheckoutId, checkout.checkoutId);
+      assert.equal(f.editor.buffer(target("a.ts"))?.text, "latest selected source");
+      assert.equal(f.editor.getSnapshot().recovery.views[checkout.checkoutId].fileViews["a.ts"], "staged");
+    } finally { release.release(); await f.dispose(); }
+  });
+
+test("R5 a captured Save remains a fact while new foreign remaps wait for preservation release", async () => {
+  const f = await observedFixture("r5-captured-save"); let move = true;
+  try {
+    await f.editor.open(target("a.ts")); f.editor.edit(target("a.ts"), "saved before cancel"); f.editor.edit(target("b.ts"), "retained moved sibling"); await f.editor.flush();
+    f.transport.command = async (name, input, options) => {
+      const result = await f.clientCommand(name, input, options);
+      if (name === "saveFile" && move) {
+        move = false; const sources = await f.raw.command("inspectEntries", { checkout, paths: ["b.ts"] });
+        await f.raw.command("mutate", { checkout, clientId: "foreign", id: "during-captured-save", sources, kind: "move", destination: "renamed.ts" });
+      }
+      return result;
+    };
+    assert.equal(await f.editor.close([target("a.ts"), target("b.ts")], async buffer => buffer.target.path === "a.ts" ? "save" : "cancel"), false);
+    await f.editor.reconcileRecovery();
+    assert.equal(f.editor.buffer(target("a.ts"))?.disk.text, "saved before cancel");
+    assert.equal((await f.raw.command("readFile", target("a.ts"))).text, "saved before cancel");
+    assert.equal(f.editor.buffer(target("renamed.ts"))?.text, "retained moved sibling");
+    const stored = await f.raw.command("loadRecovery", { clientId: f.editor.clientId });
+    assert.equal(stored.state.drafts.find(draft => draft.target.path === "renamed.ts")?.text, "retained moved sibling");
+    assert.equal(stored.operations.length, 0); assert.equal(f.memory.stats.saves, 1); assert.equal(f.memory.stats.mutations, 1);
+  } finally { await f.dispose(); }
+});
