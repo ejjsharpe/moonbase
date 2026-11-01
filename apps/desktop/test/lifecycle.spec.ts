@@ -152,6 +152,33 @@ for (const mode of ["reload", "veto", "crash"])
           )
           .toBe(0);
       }
+      if (crash) {
+        // Playwright retains a crashed Page flag; inspect the recovered real renderer through native APIs.
+        await current.evaluate(({ BrowserWindow }) => new Promise<void>(resolve => {
+          const contents = BrowserWindow.getAllWindows()[0].webContents;
+          contents.once("did-finish-load", () => resolve()); contents.reload();
+        }));
+        const read = () => current.evaluate(async ({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(`(async () => {
+          if (!document.querySelector('[aria-label="a.ts editor"]')) return null;
+          const r = await window.moonbase.call("command", { operation: "loadRecovery", input: { clientId: window.moonbase.clientId } }, crypto.randomUUID());
+          return { recovery: r, saved: JSON.parse(localStorage.getItem("moonbase.chat-proof.v1")), connection: await window.moonbaseChat.call("connection", "getConnection", {}, crypto.randomUUID()) };
+        })()`));
+        const restored = await until(read, Boolean) as {recovery:{value:import("@moonbase/application/client").RecoveryLoad};saved:{drafts:{text:string}[]};connection:unknown};
+        expect(restored.recovery.value.state.drafts[0].text).toBe("retained local draft at reload");
+        expect(restored.saved.drafts[0].text).toBe("newer chat draft across reload"); expect(restored.connection).toEqual(connection);
+        f.releaseReply();
+        await current.evaluate(async ({ BrowserWindow }) => {
+          const c = BrowserWindow.getAllWindows()[0].webContents;
+          await c.executeJavaScript(`document.querySelector('[aria-label="a.ts editor"]').focus()`);
+          c.sendInputEvent({type:"keyDown",keyCode:"s",modifiers:["meta"]}); c.sendInputEvent({type:"keyUp",keyCode:"s",modifiers:["meta"]});
+        });
+        await expect.poll(() => readFile(join(f.cwd,"a.ts"),"utf8")).toBe("retained local draft at reload");
+        await until(() => current.evaluate(async ({BrowserWindow}) => BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(`(() => { const b = [...document.querySelectorAll("button")].find(b=>b.textContent==="Save"); return !!b && !b.disabled; })()`)), Boolean);
+        const stats = await f.stats(); expect(stats.commands.filter(v => v === "sendChat")).toHaveLength(1); expect(stats.commands.filter(v => v === "stopChat")).toHaveLength(0);
+        for(const pid of await current.evaluate(({app})=>app.getAppMetrics().map(v=>v.pid)))pids.add(pid);
+        await mkdir(evidence,{recursive:true}); await writeFile(join(evidence,`${packaged?"package":"source"}-crash.json`),JSON.stringify({restored,stats,oldWatchersReleased:true},null,2));
+        await current.evaluate(({app})=>app.quit()); await until(async()=>child!.exitCode!==null||child!.signalCode!==null,Boolean);app=undefined;return;
+      }
       if (veto) await current.evaluate(({ BrowserWindow }) => new Promise<void>(resolve => {
         const contents = BrowserWindow.getAllWindows()[0].webContents;
         contents.once("will-prevent-unload", () => resolve()); contents.reload();
