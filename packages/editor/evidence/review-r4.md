@@ -1,0 +1,40 @@
+# Review R4 corrections
+
+Historical response: R5 cleared the reported R4 cases but found connected in-flight observation and selection-during-preservation defects. See the [current R5 response](review-r5.md).
+
+Reviewed head: `2ff2a6b70e43a4558fd4347a287802ca8b9bcb46`, former base `6e58c1c4ea6944e8ca25eadc46e35c843f0f9fbe`. New exact prerequisite/base: `8557fdd0d7a71f93a6584c77430e6fde57668580` on `chore/recovery-publication-contract` (#7), normally merged without rewriting published history. Stack: #1 → #2 → #5 → #7 → #4. Executable/test source: `a777c4169655bd5c3b3924be8ee3cf189185254c`; the following evidence-only commit adds this record, README links and inspected PNGs.
+
+Only `packages/editor` was authored here. Shared types/docs/handler routing arrived from the coordinator commit; the PR's historical lock registration remains coordinator-authored. No dependency, root authoring, sibling implementation, manual notice bundle, child delegation, merge of a PR or watch/poll was added. PR #4 remains **DRAFT** for independent R5. The separate contract review cleared #7's shape; it does not qualify this implementation or real workspace fan-in.
+
+## R4 responses
+
+1. **P1 recovery loss after a vetoed close.** All captured drafts remain in every fallible preflight/metadata-convergence publication. One final destructive publication is the commit point. Confirmation applies only captured local close deltas to current metadata, preserves newer unrelated metadata and completes the close immediately; later metadata publication reports its own error and cannot veto the committed Discard. There is no fallible rollback after removing persisted text.
+
+   Publications have immutable request IDs and exact `{clientId, requestId, previousRevision, revision}` receipts. The controller accepts only its original contiguous transition, never an arbitrary loaded revision. A lost response gets one exact read-only status lookup. If unresolved, the immutable request and close callback remain pending with live buffers/captured lock, visible PENDING/UNCERTAIN evidence, and Save/Reload/mutation/Close/Quit blocked. Resolve performs a bounded exact lookup or original-input retry; null status does not prove non-admission. Committed and uncommitted unknown writes are tested separately. On process restart durable recovery represents either the consented committed close or the prior retained drafts. No IPC/power-loss exactly-once claim is made.
+
+   The memory adapter canonically binds the validated input and original receipt in its existing in-memory recovery authority. Same-input retry returns the original receipt before CAS without another write or publication-fence advance; changed reuse rejects. Exact status is read-only. Explicit publication fences stay separate from automatic save/move recovery revisions, and old receipts cannot acknowledge newer foreign evidence.
+
+   Public regressions inspect backend state AND restarted controllers for second-publication conflicts/lost responses across **File Close, Checkout Close and Quit**. Other cases cover immutable retries/canonical key order, observer fences, final response/status outages before and after commit, competing same-client CAS that stays unresolved, and later unrelated metadata failure after confirmed close. Earlier completed Saves remain facts in the retained original tests. The caller audit applies destructive confirmation to Reload too; public flush cannot enqueue an old snapshot during a captured preservation. Existing failure cases now explicitly resolve the mandated pending identity before retrying, and the R3 count accounts for retained-text preflight plus final commit.
+
+2. **P2 background checkout survivor.** `selectCheckout` activates a retained active file through the existing guarded `open` when its buffer is absent, preserving its exact identity and remembered comparison. `openCheckout` awaits that path instead of duplicating activation; checkout tabs use its reported promise. The public test restores only active `b.ts`, closes it in the background, changes the survivor on disk, returns to its remembered staged view and verifies current contents. A delayed comparison response loses to a newer checkout choice before a subsequent successful activation. Chromium returns to alpha after beta was selected during close and renders alpha's actual `a.ts` buffer.
+
+3. **P2 comparison typing focus.** The diff owner receives stable `originalAriaLabel`/`modifiedAriaLabel` at construction and read-only option updates. The post-mount handoff can still identify the modified editor after preservation changes. Actual Chromium TYPE assertions pass after Close into BOTH remembered staged and unstaged comparisons, with original `readOnly=true`, modified `readOnly=false`, and the second editor unchanged. Normal-file focus/tree/strip/dialog/hidden-editor tests remain green. Pending-close UI resolution also hands focus to the confirmed survivor, then verifies typed input reaches it.
+
+## Checks and evidence
+
+- Before fixes: backend/restart probes reproduced second-publication CAS/loss recovery deletion; the public absent-survivor case failed; all three new background/staged/unstaged Chromium journeys failed. The corrected publication-kind fixture forces metadata change for Checkout Close too. Browser read-only assertions were corrected from an empty HTML attribute spelling to the actual boolean DOM property; no implementation behavior was waived.
+- **59/59** public editor tests, **14/14** application tests, **18/18** actual Chromium journeys, no skips. All original R1/R2/R3 scenarios remain represented, including lost filesystem responses, exact receipts/CAS/observer isolation, dirty collision restart, cancellation, choices, previews/order/reopen, lookup/tree and disposal.
+- `bun install --frozen-lockfile`: 486 installs/619 packages checked, no changes.
+- `NX_DAEMON=false bun x nx run-many -t typecheck lint test --skip-nx-cache`: all six tasks pass, cache skipped. Lint is TypeScript diagnostics. Direct editor public suite also reports 59 passing cases.
+- `bun run check:foundation`: 40 immutable source hashes/UI/client checks pass.
+- `bun run --cwd packages/editor check:renderer`: 1,569 browser inputs, no privileged module or feature runtime.
+- `bun run --cwd packages/editor build`: StyleX, Monaco font and five workers pass. Existing >500 kB chunk warning remains; startup/performance qualification is unrun.
+- Impeccable static detector on changed workbench/Monaco returns `[]`; whitespace passes.
+
+All new captures below were opened for inspection at **1600×1000 CSS px**:
+
+- [background-return.png](background-return.png): two-root/two-files-per-root volatile fixture `demo/recovery-race.tsx`; alpha is selected again and its surviving `a.ts` is loaded.
+- [staged-close.png](staged-close.png), [unstaged-close.png](unstaged-close.png): four-file two-instance `demo/main.tsx`; typed text is in the modified `welcome.ts` comparison after Close, while the second editor retains its independent original buffer.
+- [pending-publication.png](pending-publication.png): the volatile race fixture retains the captured dirty `b.ts` and shows PENDING/UNCERTAIN identity/Resolve action while destructive actions and Quit remain blocked. The journey resolves the exact receipt and actually types into survivor `a.ts` afterward.
+
+Fresh independent R5, actual controller/production-workspace filesystem/Git/SQLite fan-in, native picker/drop/Trash, packaged Electron/signing, complete-app accessibility/VoiceOver and human acceptance remain **PENDING**. Controlled memory/Chromium checks do not establish production durability, native execution or product acceptance. No real provider, SSH host, legacy state, deployment, history rewrite or additional browser store/workflow engine was used.

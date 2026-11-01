@@ -1,0 +1,24 @@
+import * as stylex from "@stylexjs/stylex";
+import { colors, space, type } from "@moonbase/ui/tokens.stylex";
+
+export const styles = stylex.create({
+  root: { display: "flex", flexDirection: "column", minHeight: 200, height: "100%", minWidth: 0, overflow: "hidden" },
+  checkoutTabs: { padding: "6px 12px", height: "auto", minHeight: 40, WebkitAppRegion: "no-drag" },
+  tabPanel: { display: "flex", flexDirection: "column", flex: 1, minHeight: 0, minWidth: 0 },
+  panel: { display: "flex", flexDirection: "column", flex: 1, minHeight: 0 },
+  toolbar: { display: "flex", gap: space.sm, alignItems: "center", flexWrap: "wrap" },
+  label: { display: "flex", flexDirection: "column", gap: space.xs, marginBottom: space.md },
+  empty: { margin: space.xl, maxWidth: 540, color: colors.secondary, fontSize: type.body },
+  backdrop: { position: "fixed", inset: 0, backgroundColor: colors.backdrop, zIndex: 50 },
+  popup: { position: "fixed", top: "50%", left: "50%", transform: "translate(-50%, -50%)", zIndex: 51, overflowY: "auto" },
+  dialogActions: { display: "flex", flexWrap: "wrap", gap: space.sm, marginTop: space.lg },
+  treeLabel: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  treeAction: { width: "100%", borderWidth: 0, backgroundColor: "transparent", textAlign: "left", padding: 0 },
+  path: { overflowWrap: "anywhere", fontSize: type.small, color: colors.secondary },
+  lookupList: { maxHeight: "40vh", overflowY: "auto", margin: "12px 0", padding: 0, listStyle: "none" },
+  lookupResult: { display: "block", width: "100%", textAlign: "left" },
+  scroll: { overflow: "auto", minHeight: 0 },
+  treeExtent: (height: number) => ({ height, position: "relative", minWidth: "100%" }),
+  treeRow: (top: number) => ({ position: "absolute", top, width: "100%" }),
+  invalid: { color: colors.danger },
+});
