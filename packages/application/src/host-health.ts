@@ -55,18 +55,23 @@ export function validateHostHealth(value: unknown, expected: ChatHostTarget): Ch
 
 /** Verification is an Effect in the caller's existing process scope, never a runtime. */
 export const checkHostHealth = (endpoint: ChatHostEndpoint): Effect.Effect<ChatHostHealth, ApplicationError> =>
-  Effect.flatMap(Effect.try({ try: () => {
-    const origin = endpointOrigin(endpoint), nonce = randomBytes(32).toString("base64url");
-    return { origin, nonce, authorization: `Moonbase-HMAC-SHA256 ${signature(endpoint.token, "request", nonce)}` };
-  }, catch: ApplicationError.fromUnknown }), ({ origin, nonce, authorization }) =>
-    Effect.flatMap(Effect.tryPromise({
+  Effect.gen(function* () {
+    const { origin, nonce, authorization } = yield* Effect.try({
+      try: () => {
+        const origin = endpointOrigin(endpoint), nonce = randomBytes(32).toString("base64url");
+        return { origin, nonce, authorization: `Moonbase-HMAC-SHA256 ${signature(endpoint.token, "request", nonce)}` };
+      },
+      catch: ApplicationError.fromUnknown,
+    });
+    const response = yield* Effect.tryPromise({
       try: signal => fetch(`${origin}/v1/health`, {
         headers: { Authorization: authorization, "X-Moonbase-Nonce": nonce, Accept: "application/json" },
         redirect: "error", credentials: "omit", cache: "no-store",
         signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]),
       }),
       catch: () => new ApplicationError({ code: "Unavailable", message: "Chat host health could not be reached within its deadline." }),
-    }), response => Effect.acquireUseRelease(
+    });
+    return yield* Effect.acquireUseRelease(
       Effect.sync(() => response.body?.getReader()),
       reader => Effect.tryPromise({
         try: async () => {
@@ -94,4 +99,5 @@ export const checkHostHealth = (endpoint: ChatHostEndpoint): Effect.Effect<ChatH
         catch: error => ApplicationError.is(error) ? error : new ApplicationError({ code: "Unavailable", message: "Chat host health could not be read." }),
       }),
       reader => releaseResource(async () => { try { await reader?.cancel(); } finally { reader?.releaseLock(); } }),
-    )));
+    );
+  });

@@ -51,20 +51,109 @@ export type SaveResult =
   | { kind: "conflict"; disk: FileDocument };
 export type WorkspaceEvent = { checkout: CheckoutTarget; paths: string[]; ready?: boolean; error?: string };
 export type WorkspaceCommands = {
-  openCheckout: { input: { root: string }; output: CheckoutTarget };
-  readFile: { input: FileTarget; output: FileDocument };
-  saveFile: { input: { target: FileTarget; clientId: string; requestId: string; text: string; expectedVersion: string }; output: SaveResult };
-  listDirectory: { input: { checkout: CheckoutTarget; path: string; hideIgnored?: boolean }; output: DirectoryListing };
-  gitStatus: { input: { checkout: CheckoutTarget }; output: GitStatus };
-  readComparison: { input: { target: FileTarget; area: "staged" | "unstaged" | "untracked" }; output: Comparison };
-  lookupFiles: { input: { checkout: CheckoutTarget; query: string; limit?: number; history?: string[] }; output: { matches: LookupMatch[]; history: LookupMatch[]; partial: boolean; error?: string } };
-  inspectEntries: { input: { checkout: CheckoutTarget; paths: string[] }; output: EntryReference[] };
-  mutate: { input: WorkspaceOperation; output: OperationResult };
-  operationStatus: { input: { clientId: string; id: string }; output: OperationResult | null };
-  acknowledgeOperation: { input: { clientId: string; operationClientId: string; id: string }; output: void };
-  loadRecovery: { input: { clientId: string }; output: RecoveryLoad };
-  persistRecovery: { input: { clientId: string; requestId: string; expectedRevision: number; state: EditorRecovery }; output: RecoveryPublication };
-  getRecoveryPublication: { input: { clientId: string; requestId: string }; output: RecoveryPublication | null };
+  openCheckout: {
+    input: {
+      root: string;
+    };
+    output: CheckoutTarget;
+  };
+  readFile: {
+    input: FileTarget;
+    output: FileDocument;
+  };
+  saveFile: {
+    input: {
+      target: FileTarget;
+      clientId: string;
+      requestId: string;
+      text: string;
+      expectedVersion: string;
+    };
+    output: SaveResult;
+  };
+  listDirectory: {
+    input: {
+      checkout: CheckoutTarget;
+      path: string;
+      hideIgnored?: boolean;
+    };
+    output: DirectoryListing;
+  };
+  gitStatus: {
+    input: {
+      checkout: CheckoutTarget;
+    };
+    output: GitStatus;
+  };
+  readComparison: {
+    input: {
+      target: FileTarget;
+      area: "staged" | "unstaged" | "untracked";
+    };
+    output: Comparison;
+  };
+  lookupFiles: {
+    input: {
+      checkout: CheckoutTarget;
+      query: string;
+      limit?: number;
+      history?: string[];
+    };
+    output: {
+      matches: LookupMatch[];
+      history: LookupMatch[];
+      partial: boolean;
+      error?: string;
+    };
+  };
+  inspectEntries: {
+    input: {
+      checkout: CheckoutTarget;
+      paths: string[];
+    };
+    output: EntryReference[];
+  };
+  mutate: {
+    input: WorkspaceOperation;
+    output: OperationResult;
+  };
+  operationStatus: {
+    input: {
+      clientId: string;
+      id: string;
+    };
+    output: OperationResult | null;
+  };
+  acknowledgeOperation: {
+    input: {
+      clientId: string;
+      operationClientId: string;
+      id: string;
+    };
+    output: void;
+  };
+  loadRecovery: {
+    input: {
+      clientId: string;
+    };
+    output: RecoveryLoad;
+  };
+  persistRecovery: {
+    input: {
+      clientId: string;
+      requestId: string;
+      expectedRevision: number;
+      state: EditorRecovery;
+    };
+    output: RecoveryPublication;
+  };
+  getRecoveryPublication: {
+    input: {
+      clientId: string;
+      requestId: string;
+    };
+    output: RecoveryPublication | null;
+  };
 };
 export type WorkspaceCommand = keyof WorkspaceCommands;
 export type CommandInput<K extends WorkspaceCommand> = WorkspaceCommands[K]["input"];

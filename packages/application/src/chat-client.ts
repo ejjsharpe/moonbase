@@ -31,14 +31,72 @@ export type ChatSendReceipt = { target: ChatTarget; requestId: string } & (
   | { admission: "admitted"; submissionId: string }
 );
 export type ChatCommands = {
-  getChatHost: { input: { host: ChatHostTarget }; output: ChatHostConfiguration };
-  listChats: { input: { session: ChatSession; cursor?: string }; output: { conversations: ChatSummary[]; nextCursor: string | null } };
-  createChat: { input: { session: ChatSession; requestId: string; title: string }; output: { requestId: string; conversation: ChatSummary } };
-  getChat: { input: { target: ChatTarget }; output: ChatSnapshot };
-  getChatHistory: { input: { target: ChatTarget; cursor: string }; output: ChatHistoryPage };
-  sendChat: { input: { target: ChatTarget; requestId: string; text: string }; output: ChatSendReceipt };
-  getChatSend: { input: { target: ChatTarget; requestId: string }; output: ChatSendReceipt | null };
-  stopChat: { input: { stop: ChatStopTarget; requestId: string }; output: { stop: ChatStopTarget; requestId: string; outcome: "stopped" | "terminal" | "superseded" | "pending" } };
+  getChatHost: {
+    input: {
+      host: ChatHostTarget;
+    };
+    output: ChatHostConfiguration;
+  };
+  listChats: {
+    input: {
+      session: ChatSession;
+      cursor?: string;
+    };
+    output: {
+      conversations: ChatSummary[];
+      nextCursor: string | null;
+    };
+  };
+  createChat: {
+    input: {
+      session: ChatSession;
+      requestId: string;
+      title: string;
+    };
+    output: {
+      requestId: string;
+      conversation: ChatSummary;
+    };
+  };
+  getChat: {
+    input: {
+      target: ChatTarget;
+    };
+    output: ChatSnapshot;
+  };
+  getChatHistory: {
+    input: {
+      target: ChatTarget;
+      cursor: string;
+    };
+    output: ChatHistoryPage;
+  };
+  sendChat: {
+    input: {
+      target: ChatTarget;
+      requestId: string;
+      text: string;
+    };
+    output: ChatSendReceipt;
+  };
+  getChatSend: {
+    input: {
+      target: ChatTarget;
+      requestId: string;
+    };
+    output: ChatSendReceipt | null;
+  };
+  stopChat: {
+    input: {
+      stop: ChatStopTarget;
+      requestId: string;
+    };
+    output: {
+      stop: ChatStopTarget;
+      requestId: string;
+      outcome: "stopped" | "terminal" | "superseded" | "pending";
+    };
+  };
 };
 export type ChatCommand = keyof ChatCommands;
 export type ChatInput<K extends ChatCommand> = ChatCommands[K]["input"];
