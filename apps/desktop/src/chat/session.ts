@@ -14,7 +14,22 @@ import {
 
 /** A window's bounded IPC waits and observations; commands still enter shared application handlers. */
 export class ChatIpcSession {
-  private work = new Map<string, () => void>();
+  private work = new Map<
+    string,
+    {
+      stop: () => void | Promise<void>;
+      complete: () => void;
+      completion: Promise<void>;
+      watch: boolean;
+      closing?: Promise<void>;
+      cancelled: boolean;
+    }
+  >();
+  private generation = 0;
+  private closed = false;
+  private cleanup: Promise<void> = Promise.resolve();
+  private disposal?: Promise<void>;
+  private closing = new Map<string, Promise<Reply>>();
   private chat: ChatClient;
   private connection: ConnectionClient;
   readonly context: ChatSession;
@@ -48,7 +63,14 @@ export class ChatIpcSession {
   }
   async call(kind: unknown, operation: unknown, input: unknown, id: unknown): Promise<Reply> {
     requestId(id);
-    if (this.work.has(id) || this.work.size >= 64) invalid();
+    const watch = kind === 'watch-chat' || kind === 'watch-connection';
+    if (
+      this.closed ||
+      this.work.has(id) ||
+      this.closing.has(id) ||
+      [...this.work.values()].filter((request) => request.watch === watch).length >= 64
+    )
+      invalid();
     if (typeof operation !== 'string' || JSON.stringify(input).length > 65536) return invalid();
     let v = record(input);
     if (kind === 'chat') {
@@ -69,16 +91,31 @@ export class ChatIpcSession {
       fields(v, []);
     } else invalid();
     const abort = new AbortController();
-    let stop = () => abort.abort();
-    this.work.set(id, () => stop());
+    const generation = this.generation,
+      done = Promise.withResolvers<void>(),
+      request = {
+        stop: (): void | Promise<void> => abort.abort(),
+        complete: () => done.resolve(),
+        completion: done.promise,
+        watch: kind === 'watch-chat' || kind === 'watch-connection',
+        cancelled: false,
+        closing: undefined as Promise<void> | undefined,
+      };
+    const live = () => !this.closed && generation === this.generation && !request.cancelled;
+    this.work.set(id, request);
     try {
       if (kind === 'watch-chat' || kind === 'watch-connection') {
-        const receive = (value: unknown) => this.emit(id, { ok: true, value }),
-          error = (e: ApplicationError) => this.emit(id, errorDTO(e));
-        stop =
+        const receive = (value: unknown) => {
+            if (live()) this.emit(id, { ok: true, value });
+          },
+          error = (e: ApplicationError) => {
+            if (live()) this.emit(id, errorDTO(e));
+          };
+        request.stop =
           kind === 'watch-chat'
             ? this.chat.watch(v as never, receive, error)
             : this.connection.watch(receive, error);
+        if (!live()) await this.closeRequest(id, request);
         return { ok: true, value: null };
       }
       const value =
@@ -89,19 +126,75 @@ export class ChatIpcSession {
             });
       return { ok: true, value };
     } catch (e) {
+      if (!request.closing) request.watch = false;
       return errorDTO(e);
     } finally {
-      if (kind !== 'watch-chat' && kind !== 'watch-connection') this.work.delete(id);
+      if (!request.watch) {
+        if (this.work.get(id) === request) this.work.delete(id);
+        request.complete();
+      }
     }
   }
-  cancel(id: unknown) {
+  private closeRequest(
+    id: string,
+    request: {
+      stop: () => void | Promise<void>;
+      complete: () => void;
+      completion: Promise<void>;
+      watch: boolean;
+      cancelled: boolean;
+      closing?: Promise<void>;
+    },
+  ): Promise<void> {
+    if (!request.closing) {
+      request.cancelled = true;
+      request.closing = (async () => {
+        try {
+          await request.stop();
+          if (!request.watch) await request.completion;
+        } finally {
+          if (this.work.get(id) === request) this.work.delete(id);
+        }
+      })();
+    }
+    return request.closing;
+  }
+  cancel(id: unknown): Promise<Reply> {
     requestId(id);
-    this.work.get(id)?.();
-    this.work.delete(id);
+    const previous = this.closing.get(id);
+    if (previous) return previous;
+    const request = this.work.get(id);
+    if (!request) return Promise.resolve({ ok: true, value: null });
+    const completion = this.closeRequest(id, request).then<Reply, Reply>(
+      () => ({ ok: true, value: null }),
+      errorDTO,
+    );
+    this.closing.set(id, completion);
+    return completion;
+  }
+  releaseDocument() {
+    this.generation++;
+    const pending = [...this.work].map(([id, request]) => this.closeRequest(id, request));
+    this.work.clear();
+    this.closing.clear();
+    const previous = this.cleanup;
+    this.cleanup = (async () => {
+      const results = await Promise.allSettled([previous, ...pending]);
+      const failures = results.flatMap((r) => (r.status === 'rejected' ? [r.reason] : []));
+      if (failures.length)
+        throw new ApplicationError({
+          code: 'Unavailable',
+          message: failures.map((error) => ApplicationError.fromUnknown(error).message).join('; '),
+        });
+    })();
+    return this.cleanup;
   }
   dispose() {
-    for (const stop of this.work.values()) stop();
-    this.work.clear();
+    if (!this.disposal) {
+      this.closed = true;
+      this.disposal = this.releaseDocument();
+    }
+    return this.disposal;
   }
   get count() {
     return this.work.size;

@@ -14,7 +14,7 @@ const call = async <T = unknown>(method: string, input: unknown, id: string) => 
   }
 };
 window.addEventListener('unload', () => {
-  for (const id of active) ipcRenderer.send(channels.cancel, id);
+  for (const id of active) void bridge.cancel(id).catch(() => {});
   active.clear();
 });
 const bridge: DesktopBridge = {
@@ -28,9 +28,12 @@ const bridge: DesktopBridge = {
       return Promise.reject(Error('Unsupported bridge method.'));
     return call(method, input, id);
   },
-  cancel: (id) => {
-    active.delete(id);
-    ipcRenderer.send(channels.cancel, id);
+  cancel: async (id) => {
+    try {
+      return await ipcRenderer.invoke(channels.cancel, id);
+    } finally {
+      active.delete(id);
+    }
   },
   events(receive) {
     const listener = (_: unknown, id: string, result: Reply) => receive(id, result);
@@ -44,7 +47,8 @@ const bridge: DesktopBridge = {
   },
   chatConfigured: () => ipcRenderer.invoke(channels.configured, null),
   ready: () => ipcRenderer.send(channels.ready),
-  quitResult: (id, consent) => ipcRenderer.send(channels.quit, { id, consent }),
+  quitResult: (id, consent, cleanupError) =>
+    ipcRenderer.send(channels.quit, { id, consent, ...(cleanupError ? { cleanupError } : {}) }),
   drop: (checkout, files) =>
     call<string[]>(
       'dropped-imports',

@@ -26,10 +26,10 @@ export interface DesktopBridge {
     input: unknown,
     id: string,
   ): Promise<Reply>;
-  cancel(id: string): void;
+  cancel(id: string): Promise<Reply<null>>;
   events(receive: (id: string, result: Reply) => void): () => void;
   actions(receive: (action: DesktopAction, id: string) => void): () => void;
-  quitResult(id: string, consent: boolean): void;
+  quitResult(id: string, consent: boolean, cleanupError?: ErrorDTO): void;
   ready(): void;
   chatConfigured(): Promise<Reply<boolean>>;
   drop(checkout: CheckoutTarget, files: File[]): Promise<Reply<string[]>>;
@@ -105,13 +105,38 @@ export function unwrap<T>(value: Reply<T>): T {
   if (value.ok) return value.value;
   throw failure(value.error);
 }
+export function cancellation(value: unknown): void {
+  let error: ApplicationError;
+  try {
+    const v = record(value);
+    if (v.ok === true) {
+      keys(v, ['ok', 'value']);
+      if (v.value !== null) invalid('Invalid cancellation acknowledgment.');
+      return;
+    }
+    keys(v, ['ok', 'error']);
+    if (v.ok !== false) invalid('Invalid cancellation acknowledgment.');
+    error = failure(v.error);
+  } catch {
+    throw new ApplicationError({
+      code: 'Incompatible',
+      message: 'Malformed cancellation acknowledgment.',
+    });
+  }
+  throw error;
+}
 export function bridgeClient(bridge: DesktopBridge): EditorClient {
   return {
     async command(operation, input, options) {
       if (options?.signal?.aborted)
         throw new ApplicationError({ code: 'Cancelled', message: 'Command cancelled' });
       const id = crypto.randomUUID(),
-        cancel = () => bridge.cancel(id);
+        cancel = () => {
+          void bridge
+            .cancel(id)
+            .then(cancellation)
+            .catch(() => {});
+        };
       options?.signal?.addEventListener('abort', cancel, { once: true });
       try {
         return unwrap(await bridge.call('command', { operation, input }, id)) as never;
@@ -131,7 +156,8 @@ export function bridgeClient(bridge: DesktopBridge): EditorClient {
           }
         }
       });
-      void bridge.call('watch', input, id).then(
+      const started = bridge.call('watch', input, id);
+      void started.then(
         (result) => {
           if (active && !result.ok) onError(failure(result.error));
         },
@@ -139,12 +165,23 @@ export function bridgeClient(bridge: DesktopBridge): EditorClient {
           if (active) onError(ApplicationError.fromUnknown(e));
         },
       );
+      let completion: Promise<void> | undefined;
       return () => {
-        if (active) {
-          active = false;
-          stop();
-          bridge.cancel(id);
-        }
+        active = false;
+        completion ??= started.then(
+          async () => {
+            try {
+              cancellation(await bridge.cancel(id));
+            } finally {
+              stop();
+            }
+          },
+          (error) => {
+            stop();
+            throw ApplicationError.fromUnknown(error);
+          },
+        );
+        return completion;
       };
     },
   };

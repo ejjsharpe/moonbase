@@ -25,7 +25,7 @@ import { isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { EditorSession } from './session.ts';
-import { channels, errorDTO, keys, record, requestId } from './wire.ts';
+import { channels, errorDTO, failure, keys, record, requestId } from './wire.ts';
 
 import { RemoteChatLive } from '@moonbase/pi-runtime/remote';
 import { SshLive } from '@moonbase/ssh';
@@ -157,7 +157,12 @@ async function main() {
       });
       return result.canceled ? null : (result.filePaths[0] ?? null);
     },
-    async imports(checkout: CheckoutTarget, kind: 'picker' | 'clipboard', paths?: string[]) {
+    async imports(
+      checkout: CheckoutTarget,
+      kind: 'picker' | 'clipboard',
+      paths?: string[],
+      signal?: AbortSignal,
+    ) {
       if (!paths && kind === 'picker') {
         const result = await dialog.showOpenDialog(window, {
           title: 'Import files into ' + checkout.root,
@@ -204,11 +209,18 @@ async function main() {
           });
         paths = parsed;
       }
+      if (signal?.aborted)
+        throw new ApplicationError({ code: 'Cancelled', message: 'Native request cancelled.' });
       if (!paths?.length) return [];
       return runtime.runPromise(
         Effect.flatMap(WorkspaceNative, (service) =>
           service.capture({ checkout, clientId: 'desktop-primary', paths }),
         ),
+      );
+    },
+    release(input: { checkout: CheckoutTarget; clientId: string; references: string[] }) {
+      return runtime.runPromise(
+        Effect.flatMap(WorkspaceNative, (service) => service.release(input)),
       );
     },
   };
@@ -225,12 +237,12 @@ async function main() {
       return { ok: false, error: errorDTO(error) };
     }
   });
-  ipcMain.on(channels.cancel, (event, id: unknown) => {
+  ipcMain.handle(channels.cancel, async (event, id: unknown) => {
     try {
       requireTrusted(event);
-      editorSession.cancel(id);
+      return await editorSession.cancel(id);
     } catch (e) {
-      console.error(ApplicationError.fromUnknown(e).message);
+      return { ok: false, error: errorDTO(e) };
     }
   });
   const chatSession =
@@ -277,14 +289,26 @@ async function main() {
       return chatError(error);
     }
   });
-  ipcMain.on(chatChannels.cancel, (event, id: unknown) => {
+  ipcMain.handle(chatChannels.cancel, async (event, id: unknown) => {
     try {
       requireTrusted(event);
-      chatSession?.cancel(id);
+      if (!chatSession)
+        throw new ApplicationError({
+          code: 'Unavailable',
+          message: 'Remote chat is not configured.',
+        });
+      return await chatSession.cancel(id);
     } catch (error) {
-      console.error(ApplicationError.fromUnknown(error).message);
+      return chatError(error);
     }
   });
+  const backgroundFailures: unknown[] = [];
+  const reportCleanup = (cleanup: Promise<void>) => {
+    void cleanup.catch((error) => {
+      backgroundFailures.push(error);
+      console.error('Document cleanup failed:', ApplicationError.fromUnknown(error).message);
+    });
+  };
   let quit: { id: string; stage: 'preserve' | 'dispose' } | undefined,
     exiting = false,
     rendererReady = false,
@@ -300,7 +324,7 @@ async function main() {
     if (terminating) return;
     terminating = true;
     rendererReady = false;
-    const failures: unknown[] = [];
+    const failures: unknown[] = backgroundFailures.splice(0);
     for (const cleanup of [
       () => chatSession?.dispose(),
       () => editorSession.dispose(),
@@ -330,12 +354,12 @@ async function main() {
     } finally {
       exiting = true;
       ipcMain.removeHandler(channels.call);
-      ipcMain.removeAllListeners(channels.cancel);
+      ipcMain.removeHandler(channels.cancel);
       ipcMain.removeAllListeners(channels.quit);
       ipcMain.removeAllListeners(channels.ready);
       ipcMain.removeHandler(channels.configured);
       ipcMain.removeHandler(chatChannels.call);
-      ipcMain.removeAllListeners(chatChannels.cancel);
+      ipcMain.removeHandler(chatChannels.cancel);
       window.destroy();
       protocol.unhandle('moonbase');
       if (failures.length) app.exit(1);
@@ -365,10 +389,29 @@ async function main() {
     try {
       requireTrusted(event);
       const v = record(value);
-      keys(v, ['id', 'consent']);
+      keys(v, ['id', 'consent', 'cleanupError'], ['id', 'consent']);
       requestId(v.id);
       if (!quit || v.id !== quit.id || typeof v.consent !== 'boolean')
         throw new ApplicationError({ code: 'Unauthorized', message: 'No matching Quit request.' });
+      if (v.cleanupError !== undefined) {
+        if (quit.stage !== 'dispose')
+          throw new ApplicationError({
+            code: 'InvalidInput',
+            message: 'Cleanup acknowledgment requires disposal.',
+          });
+        const error = failure(v.cleanupError);
+        if (error.code === 'Incompatible' || error.message.length > 512)
+          throw new ApplicationError({
+            code: 'InvalidInput',
+            message: 'Malformed cleanup acknowledgment.',
+          });
+        backgroundFailures.push(error);
+      }
+      if (quit.stage === 'dispose' && !v.consent)
+        throw new ApplicationError({
+          code: 'InvalidInput',
+          message: 'Disposal cannot return to the live workbench.',
+        });
       if (!v.consent) {
         quit = undefined;
         quitRequested = false;
@@ -401,10 +444,16 @@ async function main() {
     callback(false),
   );
   session.defaultSession.setPermissionCheckHandler(() => false);
+  window.webContents.on('did-frame-navigate', (_event, _url, _code, _status, isMainFrame) => {
+    if (!isMainFrame) return;
+    rendererReady = false;
+    reportCleanup(editorSession.releaseDocument());
+    if (chatSession) reportCleanup(chatSession.releaseDocument());
+  });
   window.webContents.on('render-process-gone', async (_event, details) => {
     if (terminating || exiting) return;
-    editorSession.releaseDocument();
-    chatSession?.dispose();
+    reportCleanup(editorSession.releaseDocument());
+    if (chatSession) reportCleanup(chatSession.releaseDocument());
     rendererReady = false;
     quit = undefined;
     quitRequested = false;

@@ -1,3 +1,4 @@
+import { cancellation } from '../wire.ts';
 import { ApplicationError, type ApplicationErrorCode } from '@moonbase/application/client';
 import type { ChatClient, ChatSession } from '@moonbase/application/chat-client';
 import type { ConnectionClient, ConnectionCommand } from '@moonbase/application/connection-client';
@@ -18,7 +19,7 @@ export interface ChatBridge {
     input: unknown,
     id: string,
   ): Promise<Reply>;
-  cancel(id: string): void;
+  cancel(id: string): Promise<Reply>;
   events(receive: (id: string, result: Reply) => void): () => void;
 }
 export const invalid = (): never => {
@@ -75,7 +76,12 @@ export function browserClients(bridge: ChatBridge): {
     if (options?.signal?.aborted)
       throw new ApplicationError({ code: 'Cancelled', message: 'Command cancelled' });
     const id = crypto.randomUUID(),
-      cancel = () => bridge.cancel(id);
+      cancel = () => {
+        void bridge
+          .cancel(id)
+          .then(cancellation)
+          .catch(() => {});
+      };
     options?.signal?.addEventListener('abort', cancel, { once: true });
     try {
       return unwrap(await bridge.call(kind, operation, input, id));
@@ -99,7 +105,8 @@ export function browserClients(bridge: ChatBridge): {
           onError(ApplicationError.fromUnknown(e));
         }
     });
-    void bridge.call(kind, '', input, id).then(
+    const started = bridge.call(kind, '', input, id);
+    void started.then(
       (r) => {
         if (active && !r.ok) onError(ApplicationError.fromUnknown(unwrapError(r)));
       },
@@ -107,12 +114,23 @@ export function browserClients(bridge: ChatBridge): {
         if (active) onError(ApplicationError.fromUnknown(e));
       },
     );
+    let completion: Promise<void> | undefined;
     return () => {
-      if (active) {
-        active = false;
-        off();
-        bridge.cancel(id);
-      }
+      active = false;
+      completion ??= started.then(
+        async () => {
+          try {
+            cancellation(await bridge.cancel(id));
+          } finally {
+            off();
+          }
+        },
+        (error) => {
+          off();
+          throw ApplicationError.fromUnknown(error);
+        },
+      );
+      return completion;
     };
   };
   return {
