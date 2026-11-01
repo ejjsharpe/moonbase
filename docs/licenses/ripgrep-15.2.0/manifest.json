@@ -1,0 +1,32 @@
+{
+  "package": "ripgrep",
+  "version": "15.2.0",
+  "platform": "aarch64-apple-darwin",
+  "release": "https://github.com/BurntSushi/ripgrep/releases/tag/15.2.0",
+  "archive": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-aarch64-apple-darwin.tar.gz",
+  "archiveSha256": "3750b2e93f37e0c692657da574d7019a101c0084da05a790c83fd335bad973e4",
+  "executableSha256": "a326a1fb48074202e9ad41e4cd1e389eeea372c8c6f7d7e80da81176d5d9430e",
+  "notices": [
+    {
+      "file": "COPYING",
+      "sha256": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f"
+    },
+    {
+      "file": "LICENSE-MIT",
+      "sha256": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f"
+    },
+    {
+      "file": "UNLICENSE",
+      "sha256": "7e12e5df4bae12cb21581ba157ced20e1986a0508dd10d0e8a4ab9a4cf94e85c"
+    }
+  ],
+  "checks": [
+    "download matches official GitHub release digest",
+    "standalone rg --version executed successfully"
+  ],
+  "limits": [
+    "packaged asset extraction/copy/executable-bit and restricted-PATH startup not yet checked",
+    "no Intel/universal binary qualified",
+    "release COPYING and licenses preserved; actual distribution closure requires final artifact inventory"
+  ]
+}
