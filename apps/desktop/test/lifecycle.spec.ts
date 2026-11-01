@@ -243,6 +243,10 @@ for (const mode of ["reload", "veto", "crash"])
     } finally {
       f.releaseReply();
       if (app && child?.exitCode === null && child?.signalCode === null) {
+        await app.windows()[0].evaluate(async () => {
+          const r = await window.moonbaseChat.call("connection", "getConnection", {}, crypto.randomUUID());
+          if (r.ok && (r.value as { connectionId: string | null }).connectionId) await window.moonbaseChat.call("connection", "disconnect", { connectionId: (r.value as { connectionId: string }).connectionId }, crypto.randomUUID());
+        });
         await app.evaluate(({ app }) => app.exit(0));
         await until(async () => child!.exitCode !== null || child!.signalCode !== null, Boolean);
       }
