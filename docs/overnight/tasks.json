@@ -5,7 +5,7 @@
     "childThreadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-02-editor-module-r1-bb5c5d0",
     "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-02-editor-module-r1-bb5c5d0:ordinal:1",
     "childNodeId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-02-editor-module-r1-bb5c5d0",
-    "status": "running",
+    "status": "completed",
     "workState": "working",
     "hasPendingChildRuns": false,
     "latestTerminalRunId": null,
@@ -28,14 +28,17 @@
     "resultContextTransferId": null,
     "hasPendingQuestion": false,
     "pendingApproval": null,
-    "waitTimedOut": false
+    "waitTimedOut": false,
+    "url": "https://github.com/ejjsharpe/moonbase/pull/4",
+    "sourceHead": "86289092882d163981576c92a87dd5ae5ebe7ead",
+    "head": "0556678460b139abb961b4a67f23ce8383e2136e"
   },
   "workspace": {
     "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-03-workspace-module-r1-bb5c5d0",
     "childThreadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-03-workspace-module-r1-bb5c5d0",
     "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-03-workspace-module-r1-bb5c5d0:ordinal:1",
     "childNodeId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-03-workspace-module-r1-bb5c5d0",
-    "status": "running",
+    "status": "completed",
     "workState": "working",
     "hasPendingChildRuns": false,
     "latestTerminalRunId": null,
@@ -58,7 +61,10 @@
     "resultContextTransferId": null,
     "hasPendingQuestion": false,
     "pendingApproval": null,
-    "waitTimedOut": false
+    "waitTimedOut": false,
+    "url": "https://github.com/ejjsharpe/moonbase/pull/3",
+    "sourceHead": "173f5d8252782e86f05c787d12b2a59c70d6d8e2",
+    "head": "9cb6723e65ddd3d9fe16d12e2702fe7671103dbd"
   },
   "foundationReview": {
     "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-foundation-r1-bb5c5d0",
@@ -217,5 +223,59 @@
     "verdict": "no blocking findings",
     "reviewedHead": "68aa035b9c283a65cac6e78ab02865e99882d15b",
     "findings": "docs/overnight/reviews/boundary-r5.md"
+  },
+  "workspaceRegistration": {
+    "threadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-03-workspace-module-r1-bb5c5d0",
+    "messageId": "message:mcp:809f45ac-99a5-4d58-a1ba-08cc0a77c997:thread-send:workspace-apply-root-registration-271920d",
+    "runId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-03-workspace-module-r1-bb5c5d0:ordinal:2",
+    "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Athread-send%3Aworkspace-apply-root-registration-271920d",
+    "status": "completed",
+    "delivery": "started"
+  },
+  "editorRegistration": {
+    "threadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-02-editor-module-r1-bb5c5d0",
+    "messageId": "message:mcp:809f45ac-99a5-4d58-a1ba-08cc0a77c997:thread-send:editor-apply-root-registration-0556678",
+    "runId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-02-editor-module-r1-bb5c5d0:ordinal:2",
+    "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Athread-send%3Aeditor-apply-root-registration-0556678",
+    "status": "completed",
+    "delivery": "started"
+  },
+  "workspaceCi": {
+    "threadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-03-workspace-module-r1-bb5c5d0",
+    "messageId": "message:mcp:809f45ac-99a5-4d58-a1ba-08cc0a77c997:thread-send:workspace-apply-qualified-ci-ripgrep-9cb6723",
+    "runId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-03-workspace-module-r1-bb5c5d0:ordinal:3",
+    "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Athread-send%3Aworkspace-apply-qualified-ci-ripgrep-9cb6723",
+    "status": "completed",
+    "delivery": "started"
+  },
+  "workspaceReviewR1": {
+    "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-workspace-r1-271920d",
+    "childThreadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-workspace-r1-271920d",
+    "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-workspace-r1-271920d:ordinal:1",
+    "childNodeId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-workspace-r1-271920d",
+    "status": "running",
+    "workState": "working",
+    "hasPendingChildRuns": false,
+    "latestTerminalRunId": null,
+    "latestTerminalStatus": null,
+    "latestTerminalSummary": null,
+    "latestTerminalResultContextTransferId": null,
+    "providerInstanceId": "codex",
+    "model": "gpt-6-astra",
+    "options": [
+      {
+        "id": "reasoningEffort",
+        "value": "xhigh"
+      },
+      {
+        "id": "serviceTier",
+        "value": "default"
+      }
+    ],
+    "summary": null,
+    "resultContextTransferId": null,
+    "hasPendingQuestion": false,
+    "pendingApproval": null,
+    "waitTimedOut": false
   }
 }
