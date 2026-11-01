@@ -1,3 +1,4 @@
+import { normalizeApplicationError } from '@moonbase/application/effect-client';
 import { type SaveRecordSchema, type OperationRecordSchema, parseRecovery } from './schema.ts';
 import type { LocalWorkspace } from './workspace.ts';
 import {
@@ -20,14 +21,13 @@ import {
 } from './validation.ts';
 import { type Directory } from './filesystem.ts';
 import { basename, join } from 'node:path';
-import { ApplicationError } from '@moonbase/application/client';
 export const key = (clientId: string, id: string) => hash(canonical([clientId, id]));
 export const affected = (p: string, source: string) => p === source || p.startsWith(source + '/');
 export const isOriginalResult = (
   kind: WorkspaceOperation['kind'],
   item: OperationResult['items'][number],
 ) => kind === 'trash' || item.destination !== undefined;
-export const errorText = (error: unknown) => ApplicationError.fromUnknown(error).message;
+export const errorText = (error: unknown) => normalizeApplicationError(error).message;
 export type SaveRecord = typeof SaveRecordSchema.Type;
 export type OperationRecord = typeof OperationRecordSchema.Type;
 export function reconcile(this: LocalWorkspace, state: EditorRecovery, records: OperationRecord[]) {
