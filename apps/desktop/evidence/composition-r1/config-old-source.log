@@ -1,0 +1,35 @@
+
+Running 1 test using 1 worker
+
+(node:21355) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘  1 apps/desktop/test/configuration.spec.ts:13:1 › every present invalid configuration including empty fails startup (5.0s)
+
+
+  1) apps/desktop/test/configuration.spec.ts:13:1 › every present invalid configuration including empty fails startup 
+
+    Error: expect(received).toEqual(expected) // deep equality
+
+    - Expected  - 2
+    + Received  + 2
+
+      Object {
+    -   "code": 1,
+    -   "signal": null,
+    +   "code": null,
+    +   "signal": "SIGKILL",
+      }
+
+      23 |       records.push({ value, pid: child.pid, group: child.pid, outcome, stderr, expired, groupAbsent: true });
+      24 |       writeFileSync(test.info().outputPath("invalid-config.json"), JSON.stringify(records, null, 2));
+    > 25 |       expect(outcome).toEqual({ code: 1, signal: null }); expect(expired).toBe(false);
+         |                       ^
+      26 |       if (!value) expect(stderr).toContain("Set MOONBASE_CHAT_CONFIG to an absolute private configuration file.");
+      27 |     }
+      28 |   } finally { rmSync(base, { recursive: true }); }
+        at /Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/test/configuration.spec.ts:25:23
+
+    Error Context: .overnight-artifacts/reload-r1/dist/config-old-source/configuration-every-presen-23b6d-cluding-empty-fails-startup/error-context.md
+
+  1 failed
+    apps/desktop/test/configuration.spec.ts:13:1 › every present invalid configuration including empty fails startup 

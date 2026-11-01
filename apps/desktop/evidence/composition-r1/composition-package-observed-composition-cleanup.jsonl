@@ -1,0 +1,15 @@
+{"phase":"package","pids":[31771,31772,31773,31774],"absent":true,"faultTeardown":false}
+{"phase":"package","pids":[31804,31805,31806,31807],"absent":true,"faultTeardown":false}
+{"hostPids":[31752],"forwardPids":[31785,31787,31794,31795,31829,31830],"processGroups":[31785,31787,31794,31795,31829,31830],"reboundPorts":[61589,61595,61679,61723]}
+{"phase":"package","pids":[31855,31858,31859,31860],"absent":true,"faultTeardown":true}
+{"hostPids":[31831],"forwardPids":[31894,31900],"processGroups":[31894,31900],"reboundPorts":[61754,61761]}
+{"phase":"package","pids":[31943,31944,31945,31946],"absent":true,"faultTeardown":true}
+{"hostPids":[31917],"forwardPids":[31970,31972],"processGroups":[31970,31972],"reboundPorts":[61809,61814]}
+{"phase":"package","pids":[31995,31996,31997,31998],"absent":true,"faultTeardown":false}
+{"hostPids":[31973],"forwardPids":[32022,32024],"processGroups":[32022,32024],"reboundPorts":[61839,61844]}
+{"phase":"package","pids":[32087,32088,32089,32090],"absent":true,"faultTeardown":false}
+{"hostPids":[32030],"forwardPids":[32079,32081,32105],"processGroups":[32079,32081,32105],"reboundPorts":[61896,61903]}
+{"phase":"package","pids":[32119,32120,32121,32122],"absent":true,"faultTeardown":false}
+{"hostPids":[32109],"forwardPids":[32161,32163],"processGroups":[32161,32163],"reboundPorts":[61933,61938]}
+{"phase":"package","pids":[32201,32202,32203,32204],"absent":true,"faultTeardown":false}
+{"hostPids":[32185],"forwardPids":[],"processGroups":[],"reboundPorts":[61976]}

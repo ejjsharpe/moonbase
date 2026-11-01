@@ -1,0 +1,10 @@
+
+Running 3 tests using 1 worker
+
+(node:26112) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  1 apps/desktop/test/configuration.spec.ts:13:1 › every present invalid configuration including empty fails startup (1.9s)
+  ✓  2 apps/desktop/test/configuration.spec.ts:31:41 › absent configuration starts without automatic Connect or Send (1.1s)
+  ✓  3 apps/desktop/test/configuration.spec.ts:31:41 › valid private configuration starts without automatic Connect or Send (1.4s)
+
+  3 passed (5.0s)

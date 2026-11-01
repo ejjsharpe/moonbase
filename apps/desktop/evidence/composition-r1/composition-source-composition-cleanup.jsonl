@@ -1,0 +1,17 @@
+{"phase":"source","pids":[26552,26553,26554,26555],"absent":true,"faultTeardown":true}
+{"hostPids":[26546],"forwardPids":[26566,26568],"processGroups":[26566,26568],"reboundPorts":[59629,59634]}
+{"phase":"source","pids":[26588,26603,26604,26606],"absent":true,"faultTeardown":true}
+{"hostPids":[26579],"forwardPids":[26634,26645],"processGroups":[26634,26645],"reboundPorts":[59780,59789]}
+{"phase":"source","pids":[26673,26674,26675,26676],"absent":true,"faultTeardown":true}
+{"hostPids":[26648],"forwardPids":[26687,26690],"processGroups":[26687,26690],"reboundPorts":[59816,59826]}
+{"phase":"source","pids":[26724,26725,26726,26727],"absent":true,"faultTeardown":false}
+{"hostPids":[26703],"forwardPids":[26755,26757],"processGroups":[26755,26757],"reboundPorts":[59850,59855]}
+{"phase":"source","pids":[26822,26823,26824,26825],"absent":true,"faultTeardown":false}
+{"hostPids":[26763],"forwardPids":[26800,26816,26848],"processGroups":[26800,26816,26848],"reboundPorts":[59909,59916]}
+{"phase":"source","pids":[26868,26884,26885,26886],"absent":true,"faultTeardown":false}
+{"phase":"source","pids":[26921,26922,26923,26924],"absent":true,"faultTeardown":false}
+{"hostPids":[26849],"forwardPids":[26910,26912],"processGroups":[26910,26912],"reboundPorts":[59945,59950]}
+{"phase":"source","pids":[26981,26982,26983,26984],"absent":true,"faultTeardown":false}
+{"hostPids":[26947],"forwardPids":[27008,27010],"processGroups":[27008,27010],"reboundPorts":[60004,60010]}
+{"phase":"source","pids":[27025,27070,27071,27102],"absent":true,"faultTeardown":false}
+{"hostPids":[27019],"forwardPids":[],"processGroups":[],"reboundPorts":[60047]}

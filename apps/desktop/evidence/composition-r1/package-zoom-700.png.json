@@ -1,0 +1,26 @@
+{
+  "bounds": {
+    "x": 116,
+    "y": 66,
+    "width": 700,
+    "height": 650
+  },
+  "content": {
+    "x": 116,
+    "y": 98,
+    "width": 700,
+    "height": 618
+  },
+  "zoom": 2,
+  "viewport": {
+    "width": 350,
+    "height": 309,
+    "devicePixelRatio": 4
+  },
+  "size": {
+    "width": 1400,
+    "height": 1236
+  },
+  "sha256": "d10f6563267b0a2da6be2a47b601b5e0815fe186fb6a8fe174bed981681a3686",
+  "fixture": "native 200% normal/constrained live chat keeps wheel/Tab Stop and Send reachable beside a dirty editor"
+}

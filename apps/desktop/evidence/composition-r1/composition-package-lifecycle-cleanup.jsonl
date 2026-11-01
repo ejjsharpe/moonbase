@@ -1,0 +1,4 @@
+{"packaged":true,"mode":"reload","veto":false,"pids":[27787,27788,27789,27790],"absent":true,"hostPids":[27770],"forwardPids":[27821,27822],"processGroups":[27821,27822],"reboundPorts":[60597,60605]}
+{"packaged":true,"mode":"veto","veto":true,"pids":[27835,27836,27837,27838],"absent":true,"hostPids":[27833],"forwardPids":[27861,27875],"processGroups":[27861,27875],"reboundPorts":[60663,60669]}
+{"packaged":true,"mode":"fresh-veto","veto":true,"pids":[27906,27907,27908,27909],"absent":true,"hostPids":[27876],"forwardPids":[27933,27934],"processGroups":[27933,27934],"reboundPorts":[60697,60702]}
+{"packaged":true,"mode":"crash","veto":false,"pids":[27960,27961,27962,27963,27992],"absent":true,"hostPids":[27942],"forwardPids":[27988,27989],"processGroups":[27988,27989],"reboundPorts":[60737,60744]}

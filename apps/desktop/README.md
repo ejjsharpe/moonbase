@@ -123,3 +123,21 @@ unsigned executable for the same packaged checks. Outputs default to
 
 The focused response, old/new native captures, exact source/archive hashes and
 explicit evidence-loss correction are in [reload-preservation evidence](evidence/reload-preservation/response.md).
+
+### Composition R1 repair qualification
+
+Current PR20 still targets `chore/workbench-integration`#19 at exact
+`d79d1e9b8347f7f5f19cdbe9aad0233a0c47be8d`, with additional normal-merge prerequisite
+[PR21](https://github.com/ejjsharpe/moonbase/pull/21) at
+`fc547673c519871136388f6e5cc0e4fdc1d9bd6a`. That branch is the Reload-safe independent
+standalone editor proof; original standalone4dd remains a preserved historical checkpoint.
+Only absent (`undefined`) `MOONBASE_CHAT_CONFIG` selects local-editor fallback; every
+present string, including empty, must pass the private configuration validator.
+
+[Full R1 response](evidence/composition-r1/response.md) records current source/package
+checks, new captures/hashes, exact cleanup, initial veto uncertainty and evidence loss.
+It supplements the original composition evidence without rewriting its historical claims.
+Both proofs remain DRAFT/PENDING HUMAN ACCEPTANCE. The independent chat commands above
+remain unchanged. Targeted configuration proof from this app directory:
+`bunx playwright test --config configuration.config.ts`; use explicit unique
+`MOONBASE_RELOAD_OUTPUT` and keep logs/artifact archives outside every runner outputDir.

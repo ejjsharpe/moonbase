@@ -1,0 +1,6 @@
+{
+  "original": "/Users/elliotsharpe/.t3/worktrees/moonbase/t3-95174512/apps/desktop/test-results/review-task08-r1/public-real.mjs",
+  "originalSha256": "28bb6d22686d40f59faf9b68686e0487dae7b84cae4fcf87dd414960289efb9d",
+  "adaptation": "Only exact relative import of own EditorSession updated to same bound worktree; evidence output follows import.meta.url. All behavioral assertions unchanged.",
+  "setupCorrection": "Initial generated location at repository root could not resolve app-only workspace dependency before fixture setup. Execute generated file within apps/desktop using normal existing workspace links; no aliases/lock/root edits. Update only relative own session import and output destination."
+}

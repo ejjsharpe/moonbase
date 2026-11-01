@@ -1,0 +1,39 @@
+{
+  "before": {
+    "id": "8b542360-d058-491b-804e-d1343722e1e2",
+    "calls": 0,
+    "tools": 0,
+    "commands": [
+      "getChatHost"
+    ],
+    "mutations": [],
+    "heldReplies": []
+  },
+  "stats": {
+    "id": "399cc0a9-4f4d-4a0d-9026-67b25a7a35fd",
+    "calls": 0,
+    "tools": 0,
+    "commands": [
+      "getChatHost"
+    ],
+    "mutations": [],
+    "heldReplies": []
+  },
+  "status": {
+    "ok": true,
+    "value": {
+      "profile": {
+        "id": "proof",
+        "label": "Controlled remote host",
+        "destination": "controlled",
+        "remotePort": 59597,
+        "expected": {
+          "hostId": "controlled-host",
+          "storeId": "controlled-store"
+        }
+      },
+      "state": "disconnected",
+      "connectionId": null
+    }
+  }
+}

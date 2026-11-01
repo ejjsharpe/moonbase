@@ -1,0 +1,62 @@
+[
+  {
+    "value": "",
+    "pid": 24191,
+    "group": 24191,
+    "outcome": {
+      "code": 1,
+      "signal": null
+    },
+    "stderr": "Error: Set MOONBASE_CHAT_CONFIG to an absolute private configuration file.\n    at readConfiguration (file:///Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/dist/main.mjs:16547:11)\n    at main (file:///Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/dist/main.mjs:16694:88)\n",
+    "expired": false,
+    "groupAbsent": true
+  },
+  {
+    "value": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-config-repair-otDH51/missing.json",
+    "pid": 24196,
+    "group": 24196,
+    "outcome": {
+      "code": 1,
+      "signal": null
+    },
+    "stderr": "Error: ENOENT: no such file or directory, open '/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-config-repair-otDH51/missing.json'\n    at async open (node:internal/fs/promises:1345:25)\n    at async readConfiguration (file:///Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/dist/main.mjs:16548:16)\n    at async main (file:///Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/dist/main.mjs:16694:82) {\n  errno: -2,\n  code: 'ENOENT',\n  syscall: 'open',\n  path: '/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-config-repair-otDH51/missing.json'\n}\n",
+    "expired": false,
+    "groupAbsent": true
+  },
+  {
+    "value": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-config-repair-otDH51/malformed.json",
+    "pid": 24204,
+    "group": 24204,
+    "outcome": {
+      "code": 1,
+      "signal": null
+    },
+    "stderr": "Error: Chat configuration is not valid JSON.\n    at readConfiguration (file:///Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/dist/main.mjs:16557:13)\n    at async main (file:///Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/dist/main.mjs:16694:82)\n",
+    "expired": false,
+    "groupAbsent": true
+  },
+  {
+    "value": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-config-repair-otDH51/insecure.json",
+    "pid": 24211,
+    "group": 24211,
+    "outcome": {
+      "code": 1,
+      "signal": null
+    },
+    "stderr": "Error: Chat configuration must be an owner-only regular file, at most 16 KiB.\n    at readConfiguration (file:///Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/dist/main.mjs:16552:13)\n    at async main (file:///Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/dist/main.mjs:16694:82)\n",
+    "expired": false,
+    "groupAbsent": true
+  },
+  {
+    "value": "/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-config-repair-otDH51/symlink.json",
+    "pid": 24216,
+    "group": 24216,
+    "outcome": {
+      "code": 1,
+      "signal": null
+    },
+    "stderr": "Error: ELOOP: too many symbolic links encountered, open '/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-config-repair-otDH51/symlink.json'\n    at async open (node:internal/fs/promises:1345:25)\n    at async readConfiguration (file:///Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/dist/main.mjs:16548:16)\n    at async main (file:///Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/dist/main.mjs:16694:82) {\n  errno: -62,\n  code: 'ELOOP',\n  syscall: 'open',\n  path: '/private/var/folders/n4/62rjd1sj31s9v1gv1x74fr000000gn/T/moonbase-config-repair-otDH51/symlink.json'\n}\n",
+    "expired": false,
+    "groupAbsent": true
+  }
+]

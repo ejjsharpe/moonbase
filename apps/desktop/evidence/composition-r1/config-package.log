@@ -1,0 +1,36 @@
+
+Running 3 tests using 1 worker
+
+(node:24266) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  1 test/configuration.spec.ts:13:1 › every present invalid configuration including empty fails startup (3.3s)
+  ✓  2 test/configuration.spec.ts:31:41 › absent configuration starts without automatic Connect or Send (804ms)
+  ✘  3 test/configuration.spec.ts:31:41 › valid private configuration starts without automatic Connect or Send (1.5s)
+
+
+  1) test/configuration.spec.ts:31:41 › valid private configuration starts without automatic Connect or Send 
+
+    Error: expect(received).toEqual(expected) // deep equality
+
+    - Expected  - 1
+    + Received  + 3
+
+    - Array []
+    + Array [
+    +   "getChatHost",
+    + ]
+
+      40 |     if (configured) {
+      41 |       await expect(page.getByRole("button", { name: "Connect", exact: true })).toBeEnabled();
+    > 42 |       const stats = await f!.stats(); expect(stats.calls).toBe(0); expect(stats.tools).toBe(0); expect(stats.commands).toEqual([]);
+         |                                                                                                                        ^
+      43 |       const status = await page.evaluate(() => window.moonbaseChat.call("connection", "getConnection", {}, crypto.randomUUID()));
+      44 |       expect(status.ok).toBe(true); writeFileSync(test.info().outputPath("configured-no-connect.json"), JSON.stringify({ stats, status }, null, 2));
+      45 |     } else await expect(page.getByLabel("Remote chat configuration")).toContainText("not configured");
+        at /Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/test/configuration.spec.ts:42:120
+
+    Error Context: ../../.overnight-artifacts/reload-r1/dist/config-package/configuration-valid-privat-e47ec-t-automatic-Connect-or-Send/error-context.md
+
+  1 failed
+    test/configuration.spec.ts:31:41 › valid private configuration starts without automatic Connect or Send 
+  2 passed (6.1s)

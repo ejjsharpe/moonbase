@@ -1,0 +1,22 @@
+red-4dd-source 4 0 0 0 0
+red-4dd-package 4 0 0 0 0
+red-4dd-package-isolated 4 0 0 0 0
+red-8a-source 4 0 0 0 0
+red-8a-package 4 0 0 0 0
+standalone-source 20 0 0 0 0
+standalone-package 20 0 0 0 0
+config-old-source 1 0 0 1 0
+config-old-package 1 0 0 1 0
+config-source 13 1 0 5 1
+config-package 13 1 0 5 1
+config-source-qualified 13 1 0 5 1
+config-package-qualified 13 1 0 5 1
+composition-source 53 12 23 23 23
+composition-package 45 11 20 20 21
+composition-editor-source 20 0 0 0 0
+composition-editor-package 20 0 0 0 0
+composition-source-observed 57 12 26 26 25
+composition-package-observed 49 11 25 25 23
+public-native-adapters 0 1 2 2 2
+wrong-cwd-interrupted 0 0 0 0 1
+distinctports 100

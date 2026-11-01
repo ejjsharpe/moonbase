@@ -1,0 +1,28 @@
+
+Running 12 tests using 1 worker
+
+(node:28983) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+  ✘   1 apps/desktop/test/composition.spec.ts:208:1 › dirty editor/live chat, two drafts, no-resend reconnect, view close and client Quit stay independent (45.0s)
+(node:29292) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+
+  1) apps/desktop/test/composition.spec.ts:208:1 › dirty editor/live chat, two drafts, no-resend reconnect, view close and client Quit stay independent 
+
+    Test timeout of 45000ms exceeded.
+
+    Error Context: .overnight-artifacts/reload-r1/dist/composition-source-qualified/runner/composition-dirty-editor-l-15107-lient-Quit-stay-independent/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    .overnight-artifacts/reload-r1/dist/composition-source-qualified/runner/composition-dirty-editor-l-15107-lient-Quit-stay-independent/trace.zip
+    Usage:
+
+        npx playwright show-trace .overnight-artifacts/reload-r1/dist/composition-source-qualified/runner/composition-dirty-editor-l-15107-lient-Quit-stay-independent/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    apps/desktop/test/composition.spec.ts:208:1 › dirty editor/live chat, two drafts, no-resend reconnect, view close and client Quit stay independent 
+  11 did not run

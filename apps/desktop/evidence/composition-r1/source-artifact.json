@@ -1,0 +1,142 @@
+{
+  "productCommit": "e65a0551db7e9c9e75efd1bc07773c4dd590217b",
+  "qualificationCommit": "f66deaa246f956f6318f3da7a44f1536ee72b230",
+  "additionalStandaloneHead": "fc547673c519871136388f6e5cc0e4fdc1d9bd6a",
+  "merge": "0efb222e424f5a46bdc52fa8aa7181ba8ba3a41b",
+  "base": "d79d1e9b8347f7f5f19cdbe9aad0233a0c47be8d",
+  "sourceFiles": [
+    {
+      "path": "apps/desktop/src/chat-preload.ts",
+      "sha256": "72dd3f656bcc4aa29aa620ef0a5b1bb2c0a9fc4ebca4b6893933b2e867e6cbc5"
+    },
+    {
+      "path": "apps/desktop/src/main.ts",
+      "sha256": "1552915baf5c666ab6f9e01fcc487fa12ed74e0eef5ca2ad2e1f58f939b73a97"
+    },
+    {
+      "path": "apps/desktop/src/preload.ts",
+      "sha256": "9c9447ab3fe4e02fd55483e000b690350a4717599f545cd0d31347443465e6a2"
+    },
+    {
+      "path": "apps/desktop/src/renderer/env.d.ts",
+      "sha256": "74871f48f45c9e7ae08150df02317cf13fd1ad46a7cff3c01cc8e537c0073856"
+    },
+    {
+      "path": "apps/desktop/src/renderer/index.html",
+      "sha256": "667913478ad77390896bbf48d6fbd207e5d48083aa75f14c1dc01821c1fe3363"
+    },
+    {
+      "path": "apps/desktop/src/renderer/main.tsx",
+      "sha256": "3e0c39e3309865747fbd91ca48c22511f1b261c690810d056cac3c69e06c2eaf"
+    },
+    {
+      "path": "apps/desktop/src/session.ts",
+      "sha256": "b740c45eac33e93cddbf56944af43ff3c22ab08b24b2f6e56053fbdaacde4eb2"
+    },
+    {
+      "path": "apps/desktop/src/wire.ts",
+      "sha256": "bedfdf51ad45b2c826d8de085c7297811c06e70ecba96fdb4620b1afa7f354fe"
+    },
+    {
+      "path": "apps/desktop/test/composition.spec.ts",
+      "sha256": "bfcf4c1ea19aacf8d591fdabcd34507b28fd77a0aab8f7f5d58028f0adc25cd8"
+    },
+    {
+      "path": "apps/desktop/test/configuration.spec.ts",
+      "sha256": "60fca17cc2bf60e0e486bb0b3e0a5298412fbb6f4a921e52217a12fed5b93dd5"
+    },
+    {
+      "path": "apps/desktop/test/desktop.spec.ts",
+      "sha256": "e515a0ad98deb5d84ab85453e04b34d6190582b38b9e4e7ef9cf9d499ba5f460"
+    },
+    {
+      "path": "apps/desktop/test/document-lifecycle.spec.ts",
+      "sha256": "3ed5d993d24a0eca4de312e341aeed341a72642833ae5e3064c597d171025286"
+    },
+    {
+      "path": "apps/desktop/test/editor-regressions.ts",
+      "sha256": "d17c744d4293a3050692f84683bd1ace6389fabdd477c997b6012ea4f205caa2"
+    },
+    {
+      "path": "apps/desktop/test/harness.mjs",
+      "sha256": "9ab76b92887822318d9bfa449810101b384b2ab5b1f24116a5fe4d8cb74a7e0d"
+    },
+    {
+      "path": "apps/desktop/test/lifecycle.spec.ts",
+      "sha256": "538dfdcb60a10098a62e2fdcbb8ce31f14cab24e311cd3bc0a9942f82d6340bb"
+    },
+    {
+      "path": "apps/desktop/test/packaged.spec.ts",
+      "sha256": "77cfbd5c4cc419781b70c43ea5f5c929922f4c95d3ce888a15c989c82f394622"
+    },
+    {
+      "path": "apps/desktop/test/reload.spec.ts",
+      "sha256": "a2d0ff20a65548214f8f8a95ac0eb106989dd9296c9f32e7160a4fe479250d6f"
+    },
+    {
+      "path": "apps/desktop/test/session.test.ts",
+      "sha256": "ca3966d33f00c883153a75c6e699ff94ebf37d88f5c6b9e91fd972a88a77688d"
+    },
+    {
+      "path": "apps/desktop/scripts/build.mjs",
+      "sha256": "6d2cdc40a6dd28a931b5297b4a579c63fa33026d856a5cd7c9c0ab55d6ce300f"
+    },
+    {
+      "path": "apps/desktop/scripts/check-package.mjs",
+      "sha256": "360b3151d4d95feecde0fa5a74439ad53b9cc38fca1603059510ff76fb891b5e"
+    },
+    {
+      "path": "apps/desktop/scripts/check-renderer.mjs",
+      "sha256": "6f79478b12165c94ffbdd1e1fc4fa0ce894805dbc032746531590f8c22ac8fdc"
+    },
+    {
+      "path": "apps/desktop/scripts/dev.mjs",
+      "sha256": "422ab4d25205c5a75f99ab916e1e4c126b4b4575ca62ae7447caac0f9ebbd102"
+    },
+    {
+      "path": "apps/desktop/scripts/notices.mjs",
+      "sha256": "76d5207203cc8a2d63fadb4f8f179e8ad910d0d410664232899df4206b6edbcb"
+    },
+    {
+      "path": "apps/desktop/scripts/package.mjs",
+      "sha256": "91d479e7aa1a388c1601b6c2767f098fd0d2d971ec19e43dacefe29f7cde5608"
+    },
+    {
+      "path": "packages/editor/src/editor.ts",
+      "sha256": "cc864a49d7477e45feda5652c7db469fb583b4fd36b1543812d813b638027d5e"
+    },
+    {
+      "path": "packages/editor/src/index.ts",
+      "sha256": "4e26980d932b7d0ac379dd26775704d393031e823f1fbe0fe8a032ca1362b09b"
+    },
+    {
+      "path": "packages/editor/src/memory.ts",
+      "sha256": "789ea1c9acee435701b3f9f711d0638a2dbfb96a4e995dea08ac5e5ba596c77b"
+    },
+    {
+      "path": "packages/editor/src/monaco-view.tsx",
+      "sha256": "8606cc6faaa3b9b40bc8e9278ee57c5ba443a0b36d822e18901d42e2c3f30f42"
+    },
+    {
+      "path": "packages/editor/src/record.ts",
+      "sha256": "67cd7a76ba033d6f4f72afad2be16ba21952f139987749a1bb00fa020fd02665"
+    },
+    {
+      "path": "packages/editor/src/styles.ts",
+      "sha256": "a54e7f0826232557bab9fa1bd028033166e7f429002285bc76eab16954f76326"
+    },
+    {
+      "path": "packages/editor/src/workbench.tsx",
+      "sha256": "dc36e869a2dd3e4b33a52a2d12c5bef9ad51765e7958efe4f2fbcaf079b96e92"
+    },
+    {
+      "path": "packages/editor/src/workers.ts",
+      "sha256": "78a91571bfdfaba83a2bf15f21249b45aefd9fd29f865df6917daf63ee94d5bc"
+    }
+  ],
+  "archive": {
+    "path": "/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/apps/desktop/release/mac-arm64/Moonbase.app/Contents/Resources/app.asar",
+    "sha256": "f0f7380cad57d5abd733ff28f02117d3c58e970453af78080dc0391c36cd55eb"
+  },
+  "unchangedProductionAfterProductCommit": true
+}
