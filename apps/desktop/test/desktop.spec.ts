@@ -197,10 +197,11 @@ test("controlled clipboard fixtures require native consent and capture real file
     const xml = `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><array><string>${source}</string></array></plist>`;
     clipboard.read = async () => [new ClipboardItem({ 'electron application/osclipboard;format="NSFilenamesPboardType"': new Blob([xml]) })];
   }, source);
-  refs = await page.evaluate(async checkout => window.moonbase.call("clipboard-imports", { checkout }, crypto.randomUUID()), approved); expect(refs.ok).toBe(true); if (!refs.ok) throw Error(refs.error.message);
-  const tokens = refs.value as string[];
-  const imported = await page.evaluate(async ({ checkout, tokens }) => window.moonbase.call("command", { operation: "mutate", input: { id: crypto.randomUUID(), clientId: window.moonbase.clientId, checkout, kind: "import", sources: [], destination: "clipboard.txt", nativeReferences: tokens } }, crypto.randomUUID()), { checkout: approved, tokens });
-  expect(imported.ok).toBe(true); expect(readFileSync(join(checkout, "clipboard.txt"), "utf8")).toBe("CONTROLLED CLIPBOARD IMPORT");
+  await page.getByRole("button", { name: "Import clipboard files", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Import files", exact: true })).toBeVisible();
+  await expect(page.getByRole("dialog").getByRole("button", { name: "Import files", exact: true })).toBeDisabled();
+  await page.getByLabel("Destination relative path").fill("clipboard.txt"); await page.getByRole("dialog").getByRole("button", { name: "Import files", exact: true }).click();
+  await expect.poll(() => existsSync(join(checkout, "clipboard.txt"))).toBe(true); expect(readFileSync(join(checkout, "clipboard.txt"), "utf8")).toBe("CONTROLLED CLIPBOARD IMPORT");
 });
 
 test("real create, dirty move and copy use native operations; lost move reply resolves status without replay", async () => {
@@ -312,4 +313,19 @@ test("exact checkout tabs preserve independent dirty paths, views and closed met
   await page.getByRole("button", { name: "Open checkout", exact: true }).click(); await expect(first).toBeVisible();
   await expect(page.locator('.view-line').filter({ hasText: "WORKING" }).first()).toBeVisible();
   await expect.poll(async () => (await recovery()).state.drafts.find(d => d.target.checkout.root === beta)?.text).toBe("beta dirty a");
+});
+
+test("single-file picker and File-backed drop share the editor's destination dialog", async () => {
+  await open(); const source = join(base, "picked.txt"); writeFileSync(source, "ONE PICKED NATIVE FILE");
+  await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [path] })) as typeof dialog.showOpenDialog; }, source);
+  await page.getByRole("button", { name: "Import files", exact: true }).click();
+  await expect(page.getByRole("dialog").getByRole("button", { name: "Import files", exact: true })).toBeDisabled();
+  await page.getByLabel("Destination relative path").fill("picker.txt"); await page.getByRole("dialog").getByRole("button", { name: "Import files", exact: true }).click();
+  await expect.poll(() => existsSync(join(checkout, "picker.txt"))).toBe(true); expect(readFileSync(join(checkout, "picker.txt"), "utf8")).toBe("ONE PICKED NATIVE FILE");
+  await page.evaluate(() => { const input = document.createElement("input"); input.type = "file"; input.id = "drop-fixture"; document.body.append(input); });
+  await page.locator("#drop-fixture").setInputFiles(source);
+  await page.evaluate(() => { const transfer = new DataTransfer(); transfer.items.add(document.querySelector<HTMLInputElement>("#drop-fixture")!.files![0]); document.querySelector("main")!.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: transfer })); });
+  await expect(page.getByRole("dialog", { name: "Import files", exact: true })).toBeVisible();
+  await page.getByLabel("Destination relative path").fill("drop.txt"); await page.getByRole("dialog").getByRole("button", { name: "Import files", exact: true }).click();
+  await expect.poll(() => existsSync(join(checkout, "drop.txt"))).toBe(true); expect(readFileSync(join(checkout, "drop.txt"), "utf8")).toBe("ONE PICKED NATIVE FILE");
 });
