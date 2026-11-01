@@ -67,7 +67,7 @@ function Desktop() {
   const run = (task: Promise<unknown>) => { void task.catch(controller.report); };
   return <Tabs.Root aria-label="Moonbase workbench" value={view} onValueChange={(value, details) => {
     const next = String(value); setView(next);
-    if (details.event.type === "click") requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (details.event instanceof MouseEvent && details.event.detail > 0) requestAnimationFrame(() => requestAnimationFrame(() => {
       const element = focus.current[next]; if (currentView.current === next && element?.isConnected && panels.current[next]?.contains(element)) element.focus();
     }));
   }} inert={closing} {...stylex.props(workbench.document, styles.shell)} onDragOver={event => { if (event.dataTransfer.types.includes("Files")) event.preventDefault(); }} onDrop={event => {
