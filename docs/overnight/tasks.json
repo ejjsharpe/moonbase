@@ -2113,8 +2113,8 @@
     "waitTimedOut": false
   },
   "foreground-test-slot": {
-    "owner": "review-composition-r1",
-    "state": "exclusive actualsource/package review; ownerexplicitrelease"
+    "owner": "08-workbench-composition original Sol owner",
+    "state": "exclusive causal repair source/package qualification; Astra R1 completed/released; no competing browser/native jobs"
   },
   "review-desktop-r2": {
     "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-desktop-r2-module16-4dd148a",
@@ -2375,8 +2375,8 @@
     "base": "d79d1e9b8347f7f5f19cdbe9aad0233a0c47be8d",
     "baseBranch": "chore/workbench-integration",
     "branch": "feat/workbench-composition",
-    "runOrdinal": 16,
-    "status": "Published clean 8a; headless inspection complete/idle awaiting full independent R1 report and authorized fix.",
+    "runOrdinal": 17,
+    "status": "AUTHORIZED R1 repairs: new focused standalone follow-up from4dd, normal merge into composition, empty-config fix; exact final heads/native requalification pending",
     "model": "gpt-6.1-sol",
     "options": {
       "reasoningEffort": "xhigh",
@@ -2423,7 +2423,8 @@
     "initialPublishedHead": "903ece141847d64544681d2a73f61b9f404b026e",
     "readmeOnlyFix": "new8a corrects standalonechat build/start andcompositiondependencyparagraph;code/evidencebyteequal903",
     "ownerGoalStatus": "ownbroadgoalblockedwaitingcoordinator; NOTprojectblock; sourceworkeridleavailable",
-    "ownReport": "docs/overnight/reviews/composition-owning-evidence.md"
+    "ownReport": "docs/overnight/reviews/composition-owning-evidence.md",
+    "contractApproval": "Smallest module-owned public exact-publication unload readiness surface authorized in packages/editor. Must cover queued/in-flight/newer edits, failed/uncertain writes and confirmed dirty positive control; no root/shared application contract change."
   },
   "review-workbench-integration-r1": {
     "taskId": "node:delegated-task:command%3Amcp%3A8185ba6c-62ae-4571-ad0b-9688ad5a1b92%3Adelegate-task%3Afresh-lead-workbench19-dff-review-astra",
@@ -2452,13 +2453,14 @@
     "path": "docs/overnight/handoff.md",
     "state": "WORKING DRAFT; notcomplete",
     "sourcePrCheckpoint": 19,
-    "composition": "PR20 8a published; independent R1 active with fresh-edit Reload blocker.",
-    "finalAudit": "pending"
+    "composition": "PR20 8a blocked by R1 P1/P2; original owner repairing both affected apps; final new exact refs and review pending",
+    "finalAudit": "pending",
+    "visualInspection": "Root read actual owning package-live-chat-normal, package-dirty-editor and package-zoom-700 images. Actual200% cramped scrolling accepted only with measured native reachability; no independent review clearance inferred."
   },
   "review-composition-r1": {
     "taskId": "node:delegated-task:command%3Amcp%3A8185ba6c-62ae-4571-ad0b-9688ad5a1b92%3Adelegate-task%3Afresh-lead-composition20-8a16369-r1-astra",
     "childThreadId": "thread:delegated-task:command%3Amcp%3A8185ba6c-62ae-4571-ad0b-9688ad5a1b92%3Adelegate-task%3Afresh-lead-composition20-8a16369-r1-astra",
-    "status": "running",
+    "status": "completed",
     "heads": {
       "composition20": "8a1636902b129f2fd6e04d26cfa75dd2e90ee415",
       "seam19": "d79d1e9b8347f7f5f19cdbe9aad0233a0c47be8d"
@@ -2469,7 +2471,12 @@
       "serviceTier": "default"
     },
     "brief": "completecommon08/09+fullDesktopR2/ChatR2/PR19DFFreview+ownfullreport+allpriorlimits/corrections",
-    "foreground": "exclusive review slot",
-    "interimFinding": "Fresh visible edit followed by native Reload loses tail before150ms recovery debounce: actual SOURCE and PACKAGE reproduced. Complete report/baseline comparison pending; reviewer retains exclusive foreground."
+    "foreground": "explicitly released; full cleanup per phase in report; no launches after release",
+    "interimFinding": "Fresh visible edit -> native Reload loses tail before150ms recovery debounce in composition8a SOURCE/PACKAGE and exact standalone4dd SOURCE/PACKAGE. Rebuilt4dd asar matches original37ad94c. Full report pending; editor Reload gate reopened.",
+    "seamVerdict": "Exact DFF->D79 fixture export delta no blockers; inherited desktop unload bug also present atD79 and NOT approved by seam verdict.",
+    "verdict": "NOT CLEARED PR20: P1 fresh-edit native Reload loss, including exact standalone4dd; P2 present-empty config treated absent. D79 fixture seam delta has no blockers; inherited unload not approved.",
+    "report": "docs/overnight/reviews/composition-r1.md",
+    "commands": "docs/overnight/reviews/composition-r1-commands.md",
+    "cleanup": "docs/overnight/reviews/composition-r1-cleanup.json"
   }
 }
