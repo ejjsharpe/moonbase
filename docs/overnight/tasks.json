@@ -1659,5 +1659,190 @@
       "status": "running",
       "delivery": "steered"
     }
+  },
+  "review-editor-r10-fanin-r3": {
+    "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-editor-r10-fanin-r3-80b0ede",
+    "childThreadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-editor-r10-fanin-r3-80b0ede",
+    "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-editor-r10-fanin-r3-80b0ede:ordinal:1",
+    "childNodeId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-editor-r10-fanin-r3-80b0ede",
+    "status": "completed",
+    "workState": "result_available",
+    "hasPendingChildRuns": false,
+    "latestTerminalRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-editor-r10-fanin-r3-80b0ede:ordinal:1",
+    "latestTerminalStatus": "completed",
+    "latestTerminalSummary": null,
+    "latestTerminalResultContextTransferId": null,
+    "providerInstanceId": "codex",
+    "model": "gpt-6-astra",
+    "options": [
+      {
+        "id": "reasoningEffort",
+        "value": "xhigh"
+      },
+      {
+        "id": "serviceTier",
+        "value": "default"
+      }
+    ],
+    "summary": "What this change does: resolves definitively rejected recovery publications while preserving drafts and immutable Save receipts, and stabilizes the browser regression.\n\n**No blocking findings. Both exact heads are technically clear for task04 continuation.**\n\n- [PR #4](https://github.com/ejjsharpe/moonbase/pull/4)  \n  HEAD `3c7f0c3daf337753bbca10df495264af28b280eb`  \n  BASE `8557fdd0d7a71f93a6584c77430e6fde57668580`\n- [PR #11](https://github.com/ejjsharpe/moonbase/pull/11)  \n  HEAD `80b0ede184205b9fff1d633d19426c2bf9671688`  \n  BASE `3c7f0c3daf337753bbca10df495264af28b280eb`\n\nVerified private origin, isolated Moonbase binding, ancestry and exact editor-tree equality. Both remain **DRAFT**.\n\nAll **22 original findings**, the original fan-in P1, and the latest paired P1/P2 are cleared. The publication race fails against old `4494969` and passes against exact `3c7f0c3` through memory, real SQLite/native IO and Chromium.\n\nFresh evidence:\n\n- **221 repository tests** and nine uncached Nx tasks pass.\n- **38 additional real-adapter cases** pass.\n- **26 Chromium journeys**, ten focused repeats and independent old/current browser probes pass their expected outcomes.\n- Provenance hashes, renderer isolation, build and probe typechecks pass; screenshots inspected.\n- Both exact heads\u2019 hosted checks succeeded in one inspection.\n\n[Full review, individual dispositions, reproductions and logs](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-8ef923da/dist/paired-r10-review/REVIEW.txt).\n\nNonblocking handoff correction: PR #11\u2019s description still names the previous candidate and test counts.\n\nAll seven requested PRs are linked. Servers/browser resources stopped; tracked files unchanged. No children, merges or polling.\n\nNot checked: Electron/IPC/native UI, packaging/signing, physical durability, performance or VoiceOver. Human acceptance remains **PENDING**.",
+    "resultContextTransferId": "context-transfer:type:subagent_result:source-thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-editor-r10-fanin-r3-80b0ede:target-thread:63122af4-017b-4b66-bcae-a905f2b1659d:6cf80e68-10f1-40e1-8c32-7ebacdd3dd81",
+    "hasPendingQuestion": false,
+    "pendingApproval": null,
+    "waitTimedOut": false
+  },
+  "04-standalone-editor-resume": {
+    "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Athread-send%3Amoonbase-04-resume-reviewed-editor-80b0ede",
+    "childThreadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-02-editor-module-r1-bb5c5d0",
+    "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-02-editor-module-r1-bb5c5d0:ordinal:13",
+    "childNodeId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Athread-send%3Amoonbase-04-resume-reviewed-editor-80b0ede",
+    "status": "running",
+    "workState": "working",
+    "hasPendingChildRuns": false,
+    "latestTerminalRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-02-editor-module-r1-bb5c5d0:ordinal:12",
+    "latestTerminalStatus": "completed",
+    "latestTerminalSummary": "Pushed both fixes to [PR #4](https://github.com/ejjsharpe/moonbase/pull/4), still **DRAFT**.\n\n- Head: `3c7f0c3daf337753bbca10df495264af28b280eb`\n- Base: `8557fdd0d7a71f93a6584c77430e6fde57668580`\n- Passed: 102 editor +14 application tests, 26 Chromium journeys, six focused repeats, frozen install, Nx checks, provenance, renderer isolation and build.\n- [Responses and inspected evidence](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/packages/editor/evidence/review-r10.md)\n\nFresh paired review and real SQLite fan-in remain pending. Task04 is unchanged and unfinished; native/package/manual acceptance remains unqualified.",
+    "latestTerminalResultContextTransferId": "context-transfer:type:subagent_result:source-thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-02-editor-module-r1-bb5c5d0:target-thread:63122af4-017b-4b66-bcae-a905f2b1659d:ee68ae4c-027d-4550-abc6-1b23961d7525",
+    "providerInstanceId": "codex",
+    "model": "gpt-6.1-sol",
+    "options": [
+      {
+        "id": "reasoningEffort",
+        "value": "xhigh"
+      },
+      {
+        "id": "serviceTier",
+        "value": "default"
+      }
+    ],
+    "summary": null,
+    "resultContextTransferId": null,
+    "hasPendingQuestion": false,
+    "pendingApproval": null,
+    "waitTimedOut": false
+  },
+  "05-pi-runtime": {
+    "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Athread-send%3Amoonbase-05-pi-runtime-r1-7bfc776",
+    "childThreadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-03-workspace-module-r1-bb5c5d0",
+    "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-03-workspace-module-r1-bb5c5d0:ordinal:11",
+    "childNodeId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Athread-send%3Amoonbase-05-pi-runtime-r1-7bfc776",
+    "status": "running",
+    "workState": "working",
+    "hasPendingChildRuns": false,
+    "latestTerminalRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-03-workspace-module-r1-bb5c5d0:ordinal:10",
+    "latestTerminalStatus": "completed",
+    "latestTerminalSummary": "Pushed all three fixes to [PR #9](https://github.com/ejjsharpe/moonbase/pull/9), still **DRAFT**.\n\n- Head: `115c30b81b3f5845cb8aced8f03f47543f37d7a9`\n- Base: `09b21f2ee8556c54ef4f8238f0be2ee88fd990c3`\n- Fixed early Connect settlement, authentication-bypass rejection, and exited SSH/helper-group cleanup.\n- Eight failing probes now pass. Full suite: **41 SSH + 29 application tests pass**, plus frozen install, type/lint/build, foundation and diff checks. PID/group/port cleanup verified; worktree clean.\n\nFresh R2 review and new-head CI remain pending. Real SSH handshake, remote Pi/provider, packaged/manual and power-loss checks remain unrun.",
+    "latestTerminalResultContextTransferId": "context-transfer:type:subagent_result:source-thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-03-workspace-module-r1-bb5c5d0:target-thread:63122af4-017b-4b66-bcae-a905f2b1659d:2bf5fcba-d95f-4e1a-b715-be131ea9f83d",
+    "providerInstanceId": "codex",
+    "model": "gpt-6.1-sol",
+    "options": [
+      {
+        "id": "reasoningEffort",
+        "value": "xhigh"
+      },
+      {
+        "id": "serviceTier",
+        "value": "default"
+      }
+    ],
+    "summary": null,
+    "resultContextTransferId": null,
+    "hasPendingQuestion": false,
+    "pendingApproval": null,
+    "waitTimedOut": false
+  },
+  "pi-runtime-registration": {
+    "head": "f6c081dab4ddabbc2c86ee42cdd5637fdba6ef47",
+    "base": "8bee720445621de20f6a2639808f83d4757377bf",
+    "result": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"threadId\":\"thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-03-workspace-module-r1-bb5c5d0\",\"messageId\":\"message:mcp:809f45ac-99a5-4d58-a1ba-08cc0a77c997:thread-send:pi-apply-root-registration-f6c081d\",\"runId\":\"run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-03-workspace-module-r1-bb5c5d0:ordinal:11\",\"taskId\":\"node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Athread-send%3Amoonbase-05-pi-runtime-r1-7bfc776\",\"status\":\"running\",\"delivery\":\"steered\"}"
+        }
+      ],
+      "structuredContent": {
+        "threadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-03-workspace-module-r1-bb5c5d0",
+        "messageId": "message:mcp:809f45ac-99a5-4d58-a1ba-08cc0a77c997:thread-send:pi-apply-root-registration-f6c081d",
+        "runId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-03-workspace-module-r1-bb5c5d0:ordinal:11",
+        "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Athread-send%3Amoonbase-05-pi-runtime-r1-7bfc776",
+        "status": "running",
+        "delivery": "steered"
+      },
+      "isError": false
+    }
+  },
+  "desktop-registration": {
+    "head": "4e32f72d999247d3f3c25e97e06da551f0b5cb98",
+    "base": "7d7945dbd4bda374eb4f34eda2233b293b24ca72",
+    "result": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"threadId\":\"thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-02-editor-module-r1-bb5c5d0\",\"messageId\":\"message:mcp:809f45ac-99a5-4d58-a1ba-08cc0a77c997:thread-send:desktop-apply-registration-4e32f72\",\"runId\":\"run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-02-editor-module-r1-bb5c5d0:ordinal:13\",\"taskId\":\"node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Athread-send%3Amoonbase-04-resume-reviewed-editor-80b0ede\",\"status\":\"running\",\"delivery\":\"steered\"}"
+        }
+      ],
+      "structuredContent": {
+        "threadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-02-editor-module-r1-bb5c5d0",
+        "messageId": "message:mcp:809f45ac-99a5-4d58-a1ba-08cc0a77c997:thread-send:desktop-apply-registration-4e32f72",
+        "runId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-02-editor-module-r1-bb5c5d0:ordinal:13",
+        "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Athread-send%3Amoonbase-04-resume-reviewed-editor-80b0ede",
+        "status": "running",
+        "delivery": "steered"
+      },
+      "isError": false
+    },
+    "checks": "12 Nx pass; build pass; frozen/foundation/diff pass; renderer-audit source script failed IIFE top-level await, sent owner"
+  },
+  "review-pi-r1": {
+    "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-pi-r1-f6c081d",
+    "childThreadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-pi-r1-f6c081d",
+    "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-pi-r1-f6c081d:ordinal:1",
+    "childNodeId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-pi-r1-f6c081d",
+    "status": "running",
+    "workState": "working",
+    "hasPendingChildRuns": false,
+    "latestTerminalRunId": null,
+    "latestTerminalStatus": null,
+    "latestTerminalSummary": null,
+    "latestTerminalResultContextTransferId": null,
+    "providerInstanceId": "codex",
+    "model": "gpt-6-astra",
+    "options": [
+      {
+        "id": "reasoningEffort",
+        "value": "xhigh"
+      },
+      {
+        "id": "serviceTier",
+        "value": "default"
+      }
+    ],
+    "summary": null,
+    "resultContextTransferId": null,
+    "hasPendingQuestion": false,
+    "pendingApproval": null,
+    "waitTimedOut": false
+  },
+  "editor-native-import-followup": {
+    "url": "https://github.com/ejjsharpe/moonbase/pull/13",
+    "head": "71f272d354359f8d5e1cff7a9f57159325eeabc5",
+    "base": "80b0ede184205b9fff1d633d19426c2bf9671688",
+    "status": "draft_awaiting_independent_review",
+    "checks": {
+      "base": "80b0ede184205b9fff1d633d19426c2bf9671688",
+      "nx": "9 uncached tasks passed: application14/editor103/workspace91",
+      "integration": 15,
+      "chromium": 31,
+      "renderer": 1569,
+      "red": "memory inspection regression missing rejection; existing New File Chromium journey failed after strict memory validation, before dialog fix",
+      "logs": [
+        "/tmp/moonbase-import-memory-red.log",
+        "/tmp/moonbase-import-create-red.log",
+        "/tmp/moonbase-import-nx.log",
+        "/tmp/moonbase-import-integration.log",
+        "/tmp/moonbase-import-ui-full.log"
+      ]
+    },
+    "implementationOwner": "lead"
   }
 }

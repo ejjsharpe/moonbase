@@ -1,5 +1,33 @@
 # Overnight delivery ledger
 
+## Current technical status (supersedes historical entries below)
+
+All PRs are private, open and unmerged. READY means technically reviewed for the stated source scope, not human/product acceptance. Original escode and target main remain untouched. Implementation workers use verified Sol `xhigh`; independent reviews use verified Astra `xhigh`, service tier `default`.
+
+| PR | Exact current head / dependency | Current evidence and gate |
+| --- | --- | --- |
+| [#1](https://github.com/ejjsharpe/moonbase/pull/1) | `8ef20b06222db32b54b4bdf9e6c2223a1ebd4da4` / main | Foundation/provenance; READY. Manual source notice bundles removed per user; generated release/package notices remain. |
+| [#2](https://github.com/ejjsharpe/moonbase/pull/2) | `68aa035b9c283a65cac6e78ab02865e99882d15b` / #1 | Shared boundary R5 clear, 14 tests +56 probes; READY. |
+| [#5](https://github.com/ejjsharpe/moonbase/pull/5) | `6e58c1c4ea6944e8ca25eadc46e35c843f0f9fbe` / #2 | Retained closed checkout contract clear; READY. |
+| [#7](https://github.com/ejjsharpe/moonbase/pull/7) | `8557fdd0d7a71f93a6584c77430e6fde57668580` / #5 | Exact immutable recovery publication contract clear; READY. |
+| [#3](https://github.com/ejjsharpe/moonbase/pull/3) | `38c6c551ff0ab1108077275d223a32967f32b9f6` / #7 | Workspace R6 clear, all 13 findings resolved; 91 native/module +14 shared +10 fresh probes, CI green; READY backend. |
+| [#4](https://github.com/ejjsharpe/moonbase/pull/4) | `3c7f0c3daf337753bbca10df495264af28b280eb` / #7 | Paired R10 clear; 22 original findings and Save/publication regressions clear; READY checkpoint. New actual-desktop create/import UI mismatches require focused #13 before task04 completion. |
+| [#11](https://github.com/ejjsharpe/moonbase/pull/11) | `80b0ede184205b9fff1d633d19426c2bf9671688` / #4, plus #3 | Paired R10/fan-in R3 clear; 221 repository tests, nine uncached tasks, 38 fresh real-adapter cases, 26 Chromium +10 focused repeats, exact-head CI; READY integration. Public native asset export retained. |
+| [#6](https://github.com/ejjsharpe/moonbase/pull/6) | `42836b0421898b963e67f02795edc35f5e546173` / #5 | Nonce-HMAC health R2 clear; credential-disclosure defect resolved; READY source boundary. Health does not authorize stateful RPC. |
+| [#8](https://github.com/ejjsharpe/moonbase/pull/8) | `09b21f2ee8556c54ef4f8238f0be2ee88fd990c3` / #6 | Connection contract/runtime R1 clear; 29 tests +11 probes; READY. |
+| [#9](https://github.com/ejjsharpe/moonbase/pull/9) | `1aec1a438ba0d5592b0e6c3f0e1be835cf3c034b` / #8 | SSH R3 clear, all four findings resolved; 43 SSH +29 shared +17 probes, natural EPERM/new-source comparisons, 394 PID/group cleanup audit, CI; READY controlled transport. No real host handshake. |
+| [#10](https://github.com/ejjsharpe/moonbase/pull/10) | `d38833db81c5d97a1aa60f25e0dc27dd670af60f` / #8 | Personal chat/bounded RPC contract R1 clear, 33 shared tests; READY contract only. |
+| [#12](https://github.com/ejjsharpe/moonbase/pull/12) | `f6c081dab4ddabbc2c86ee42cdd5637fdba6ef47` / #10 | Pi runtime first DRAFT; frozen source `8bee720445621de20f6a2639808f83d4757377bf` + coordinator root registration/Node26.13 CI. Owner37 Pi +33 shared tests; parent six uncached tasks/frozen/hash40 pass. Fresh Astra R1 active; no implementation approval inferred. |
+| [#13](https://github.com/ejjsharpe/moonbase/pull/13) | `71f272d354359f8d5e1cff7a9f57159325eeabc5` / #11 | Focused owning editor import/create UI DRAFT. Public `importFiles(checkout,references): void`, shared destination/consent, no empty source inspection, strict memory parity. 223 repository tests incl15 real integration, 31 Chromium +5 affected repeats, renderer1,569/build/hash pass; fresh review queued after Pi R1. |
+
+- Latest paired review is retained in `reviews/editor-r10-fanin-r3.md`. The PR #11 stale-description correction was applied and checked; #4/#11 subsequently marked ready for their reviewed scopes. Prior findings/review artifacts remain historical evidence.
+- Task04 resumed in the original isolated worker by normal merge of exact reviewed #11 into its preserved unfinished app branch. Frozen manifest/source checkpoint `7d7945dbd4bda374eb4f34eda2233b293b24ca72` includes actual unsigned `.app` restricted-PATH launch/edit/Save/Git/lookup/SQLite/worker/font/resource proof reported by owner; no first app PR or independent packaged approval yet. Module #13 is normal-merged for actual Electron picker/drop/clipboard/create qualification; no parallel app dialog or feature-runtime workaround.
+- Coordinator app registration `4e32f72d999247d3f3c25e97e06da551f0b5cb98` on `chore/desktop-registration` descends exact7d source, changing only 22 lock lines and five workflow lines (Node26.13, desktop build/renderer audit). Frozen install, foundation40, 12 uncached Nx tasks (4 desktop/14 application/102 editor/91 workspace tests), desktop build+two dependencies and diff pass. Old renderer audit failed IIFE/top-level-await; owner has an independent actual-built-graph repair pending final source publication. Do not report that old audit as passed.
+- Pi host/CLI baseline is explicitly Node26.13.0, with runtime guard restricted to host entry. Actual compiled remote under Electron45.1/Node24.22.1 against separate controlled Node26 host passes; engine/provider/SQLite absent from client graph. Node CI pin uses setup-node v7 commit `949feb2413d6458794dcd2491c4babbbce0c15c1`, official Node26.13 release/checksums checked. No optional untrusted scripts were newly enabled.
+- Next: fix/review Pi findings; independently review #13; finish/qualify/review task04 app; then reviewed Pi+SSH fan-in and task07 standalone chat. Prepare task08 composition only after independent technical gates. Do not wait for GitHub merges or manual acceptance; do not infer them from controlled proofs.
+
+## Historical execution record
+
 ## Current checkpoint
 
 All PRs are private, linked and unmerged. Older entries below are historical evidence, not current approval. The editor and workspace remain independent siblings.
