@@ -5,7 +5,7 @@ import { cp, mkdir, rm, writeFile, readFile, stat } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { join, resolve } from 'node:path';
-import { notices } from './notices.mjs';
+import { notices } from '../../../scripts/notices.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url)),
   require = createRequire(import.meta.url);
 await rm(join(root, 'dist'), { recursive: true, force: true });

@@ -288,14 +288,62 @@ async function main() {
   let quit: { id: string; stage: 'preserve' | 'dispose' } | undefined,
     exiting = false,
     rendererReady = false,
-    quitRequested = false;
+    quitRequested = false,
+    terminating = false;
   function show() {
     if (!window.isDestroyed()) {
       window.show();
       window.focus();
     }
   }
+  async function finishQuit() {
+    if (terminating) return;
+    terminating = true;
+    rendererReady = false;
+    const failures: unknown[] = [];
+    for (const cleanup of [
+      () => chatSession?.dispose(),
+      () => editorSession.dispose(),
+      () => runtime.dispose(),
+    ]) {
+      try {
+        await cleanup();
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    try {
+      if (failures.length) {
+        const detail = failures
+          .map((error) => ApplicationError.fromUnknown(error).message)
+          .join('\n');
+        console.error('Quit cleanup failed:', detail);
+        await dialog.showMessageBox(window, {
+          type: 'error',
+          message: 'Moonbase could not finish cleanup.',
+          detail:
+            'Preserved recovery remains available on next launch. Moonbase will now quit.\n' +
+            detail,
+          buttons: ['Quit Moonbase'],
+        });
+      }
+    } finally {
+      exiting = true;
+      ipcMain.removeHandler(channels.call);
+      ipcMain.removeAllListeners(channels.cancel);
+      ipcMain.removeAllListeners(channels.quit);
+      ipcMain.removeAllListeners(channels.ready);
+      ipcMain.removeHandler(channels.configured);
+      ipcMain.removeHandler(chatChannels.call);
+      ipcMain.removeAllListeners(chatChannels.cancel);
+      window.destroy();
+      protocol.unhandle('moonbase');
+      if (failures.length) app.exit(1);
+      else app.quit();
+    }
+  }
   function requestQuit() {
+    if (terminating) return;
     quitRequested = true;
     show();
     if (!rendererReady) return;
@@ -332,20 +380,7 @@ async function main() {
         window.webContents.send(channels.action, 'dispose', quit.id);
         return;
       }
-      chatSession?.dispose();
-      editorSession.dispose();
-      await runtime.dispose();
-      exiting = true;
-      ipcMain.removeHandler(channels.call);
-      ipcMain.removeAllListeners(channels.cancel);
-      ipcMain.removeAllListeners(channels.quit);
-      ipcMain.removeAllListeners(channels.ready);
-      ipcMain.removeHandler(channels.configured);
-      ipcMain.removeHandler(chatChannels.call);
-      ipcMain.removeAllListeners(chatChannels.cancel);
-      window.destroy();
-      protocol.unhandle('moonbase');
-      app.quit();
+      await finishQuit();
     } catch (error) {
       quit = undefined;
       show();
@@ -366,13 +401,28 @@ async function main() {
     callback(false),
   );
   session.defaultSession.setPermissionCheckHandler(() => false);
-  window.webContents.on('render-process-gone', (_event, details) => {
+  window.webContents.on('render-process-gone', async (_event, details) => {
+    if (terminating || exiting) return;
     editorSession.releaseDocument();
     chatSession?.dispose();
     rendererReady = false;
     quit = undefined;
     quitRequested = false;
     console.error('Workbench renderer exited:', details.reason);
+    const recovery = await dialog.showMessageBox(window, {
+      type: 'error',
+      message: 'The workbench stopped unexpectedly.',
+      detail:
+        'Recover the workbench from its last persisted state, or quit. Recent changes may not have been preserved.',
+      buttons: ['Recover workbench', 'Quit Moonbase'],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    });
+    if (recovery.response === 0) {
+      show();
+      window.webContents.reload();
+    } else await finishQuit();
   });
   app.on('before-quit', (event) => {
     if (!exiting) {

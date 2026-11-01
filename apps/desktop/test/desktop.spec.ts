@@ -1,3 +1,4 @@
+import { captureNative } from './editor-regressions.ts';
 import type { RecoveryLoad } from '@moonbase/application/client';
 import { filenameCases, checkFilenameMaps, checkTabMenu } from './editor-regressions.ts';
 import { test, expect, _electron as electron } from '@playwright/test';
@@ -120,35 +121,7 @@ test.afterEach(async ({}, info) => {
   }
 });
 async function capture(name: string) {
-  const file = `test-results/${name}.png`;
-  const window = await app.evaluate(({ BrowserWindow }) => {
-    const window = BrowserWindow.getAllWindows()[0],
-      { width, height } = window.getBounds();
-    return { width, height, zoom: window.webContents.getZoomFactor() };
-  });
-  const viewport = await page.evaluate(() => ({
-    width: innerWidth,
-    height: innerHeight,
-    devicePixelRatio,
-  }));
-  const bytes = await app.evaluate(async ({ BrowserWindow }) =>
-    (await BrowserWindow.getAllWindows()[0].webContents.capturePage()).toPNG().toString('base64'),
-  );
-  writeFileSync(file, Buffer.from(bytes, 'base64'));
-  const png = readFileSync(file);
-  writeFileSync(
-    file + '.json',
-    JSON.stringify(
-      {
-        window,
-        viewport,
-        png: { width: png.readUInt32BE(16), height: png.readUInt32BE(20) },
-        fixture: test.info().title,
-      },
-      null,
-      2,
-    ) + '\n',
-  );
+  await captureNative(app, page, test.info().outputPath(`${name}.png`));
 }
 async function forceStop() {
   if (child.exitCode !== null || child.signalCode !== null) return;
