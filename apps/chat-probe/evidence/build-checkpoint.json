@@ -1,0 +1,45 @@
+{
+  "registration": "84923f29331dd1458301f1a5a74002ab19a08955",
+  "integrationBase": "132d273073889bd0702cf96b1fc2a62d5027598c",
+  "piRepair": "235eb27a448635a995bb65e67147e99119830b92",
+  "qualification": "headless production build only; current native source/package execution PENDING",
+  "nativeHistoricalOwnCheckpoint": "3e2ad6b745fa0345c9bbfad6c79d89772f9d6885",
+  "nativeHistoricalBase": "478ab94f1f434f27c4a8115e2e4a7de7ea1d84c1",
+  "files": [
+    {
+      "path": "dist/main.mjs",
+      "bytes": 554748,
+      "sha256": "5526b0fa73d0fcc1aed9c1393b4487bbd517aad3dc27e060f6679d6736a9513b"
+    },
+    {
+      "path": "dist/preload.cjs",
+      "bytes": 2591,
+      "sha256": "f31ad30f5d368f5d0b23428a5af7e32c299083f85a505da3cbe59009f26edb67"
+    },
+    {
+      "path": "dist/renderer/index.html",
+      "bytes": 400,
+      "sha256": "623c44d233c5fe02d6eeb1ad0788799b08037f833e71c1b6730cc0ffcbe9e3b1"
+    },
+    {
+      "path": "dist/inputs.json",
+      "bytes": 29269,
+      "sha256": "c87b823bd7a6376b9081418106447e0746fccefd0bed99eb1d6ab904f6fd5ffc"
+    },
+    {
+      "path": "dist/dependency-notices.txt",
+      "bytes": 10527,
+      "sha256": "d469bb246c96be0baea1fa72f8cc38d454f260510586eabeab7170c414f9e593"
+    },
+    {
+      "path": "dist/renderer/assets/index-XnxU6hfZ.js",
+      "bytes": 260954,
+      "sha256": "17659fcebe995553e39113313170e75e7465be9c102e875edb0d2d7c0754716a"
+    },
+    {
+      "path": "dist/renderer/assets/index-cN05CcEa.css",
+      "bytes": 13692,
+      "sha256": "b744f7eedffe14e08632d023be53ef8fa058bdba26ffca47728b7c2d04401a3d"
+    }
+  ]
+}
