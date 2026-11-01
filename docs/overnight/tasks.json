@@ -1166,7 +1166,7 @@
     "head": "d38833db81c5d97a1aa60f25e0dc27dd670af60f",
     "base": "09b21f2ee8556c54ef4f8238f0be2ee88fd990c3",
     "url": "https://github.com/ejjsharpe/moonbase/pull/10",
-    "status": "DRAFT, exact d38833d CI green; independent review queued behind editor R8",
+    "status": "READY, AstraR1 no contract blockers; all production implementation gates separate",
     "tests": {
       "application": 33,
       "newBoundary": 4
@@ -1228,6 +1228,53 @@
     "childThreadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-chat-contract-r1-d38833d",
     "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-chat-contract-r1-d38833d:ordinal:1",
     "childNodeId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-chat-contract-r1-d38833d",
+    "status": "completed",
+    "workState": "result_available",
+    "hasPendingChildRuns": false,
+    "latestTerminalRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-chat-contract-r1-d38833d:ordinal:1",
+    "latestTerminalStatus": "completed",
+    "latestTerminalSummary": null,
+    "latestTerminalResultContextTransferId": null,
+    "providerInstanceId": "codex",
+    "model": "gpt-6-astra",
+    "options": [
+      {
+        "id": "reasoningEffort",
+        "value": "xhigh"
+      },
+      {
+        "id": "serviceTier",
+        "value": "default"
+      }
+    ],
+    "summary": "What this change does: [PR #10](https://github.com/ejjsharpe/moonbase/pull/10) adds browser-safe chat contracts and shared Effect dispatch, plus requirements for durable admission and authenticated RPC.\n\n**No blocking findings at the reviewed head. Contract cleared for downstream implementation.**\n\n- **HEAD:** `d38833db81c5d97a1aa60f25e0dc27dd670af60f`\n- **BASE:** `09b21f2ee8556c54ef4f8238f0be2ee88fd990c3` \u2014 `chore/connection-contract`, PR #8.\n- Verified private `ejjsharpe/moonbase`, the supplied Moonbase project binding, assigned worktree, exact ancestry, and unchanged tracked files. PRs #1, #2, #5, #6, #8 and #10 are linked to this thread.\n\nThe coordinator\u2019s replay objection is addressed **in the specification**: server-issued grants expire, are consumed atomically before dispatch, and cannot survive restart or authorize a second RPC. Signed request bodies, response bodies/status, separate proof domains, and authentication before input disclosure cover the identified failure scenario. This follows the verifier-enforced replay protection principle described in [RFC 9421 \u00a77.2.2](https://www.rfc-editor.org/rfc/rfc9421.html#section-7.2.2).\n\nI inspected the installed published Pi Durable 1.4.0 APIs and admission implementation. The contract correctly accounts for ordinary two-phase submission, weaker Pi deduplication, read-only admission lookup, queued withdrawal, and changing task IDs. Captured Stop targets never authorize adopting a successor or later input.\n\nValidation passed:\n\n- Frozen dependency installation; uncached Nx typecheck, lint and tests.\n- Foundation checks: 40 frozen source hashes, UI copies and four isolated browser contracts; `git diff --check`.\n- Five fresh, typechecked [public-interface probes](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-355adc48/.review-pr10/probe.test.ts): nullable receipts, queued Stop forwarding, combined capability/runtime sharing, nonblocking Stop, cancellation, acquisition/disposal races and retained uncertainty.\n- Both hosted CI jobs were successful at the exact head.\n\nThe probe file is untracked; production source was not edited.\n\nNot checked: production Pi/SQLite admission, HTTP authentication, Stop races, remote/provider execution, packaging or manual acceptance. Those remain pending implementation gates; fixture success does not qualify them.",
+    "resultContextTransferId": "context-transfer:type:subagent_result:source-thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-chat-contract-r1-d38833d:target-thread:63122af4-017b-4b66-bcae-a905f2b1659d:460eb711-5ec0-4218-a5fe-c3fe35a29c7a",
+    "hasPendingQuestion": false,
+    "pendingApproval": null,
+    "waitTimedOut": false,
+    "findings": "docs/overnight/reviews/chat-contract-r1.md",
+    "verdict": "no blockers; contract-only cleared for downstream implementation"
+  },
+  "editorIntegration": {
+    "head": "f44d698d9fc09fd3b0b075a2bbe05fc8dd8fd102",
+    "url": "https://github.com/ejjsharpe/moonbase/pull/11",
+    "base": "c31bb4164d2ff18031e2b391a83198bb5e40d027",
+    "workspace": "38c6c551ff0ab1108077275d223a32967f32b9f6",
+    "common": "8557fdd0d7a71f93a6584c77430e6fde57668580",
+    "tests": {
+      "application": 14,
+      "editor": 82,
+      "workspace": 91,
+      "realIntegration": 9
+    },
+    "branch": "chore/editor-integration",
+    "status": "DRAFT fresh independent review/CI pending; lead real boundary passed"
+  },
+  "editorIntegrationReviewR1": {
+    "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-editor-integration-r1-f44d698",
+    "childThreadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-editor-integration-r1-f44d698",
+    "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-editor-integration-r1-f44d698:ordinal:1",
+    "childNodeId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-editor-integration-r1-f44d698",
     "status": "running",
     "workState": "working",
     "hasPendingChildRuns": false,
@@ -1237,6 +1284,36 @@
     "latestTerminalResultContextTransferId": null,
     "providerInstanceId": "codex",
     "model": "gpt-6-astra",
+    "options": [
+      {
+        "id": "reasoningEffort",
+        "value": "xhigh"
+      },
+      {
+        "id": "serviceTier",
+        "value": "default"
+      }
+    ],
+    "summary": null,
+    "resultContextTransferId": null,
+    "hasPendingQuestion": false,
+    "pendingApproval": null,
+    "waitTimedOut": false
+  },
+  "standaloneEditor": {
+    "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Athread-send%3Amoonbase-04-standalone-editor-r1-f44d698",
+    "childThreadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-02-editor-module-r1-bb5c5d0",
+    "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-02-editor-module-r1-bb5c5d0:ordinal:10",
+    "childNodeId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Athread-send%3Amoonbase-04-standalone-editor-r1-f44d698",
+    "status": "running",
+    "workState": "working",
+    "hasPendingChildRuns": false,
+    "latestTerminalRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-02-editor-module-r1-bb5c5d0:ordinal:9",
+    "latestTerminalStatus": "completed",
+    "latestTerminalSummary": "R7 fix pushed to [PR #4](https://github.com/ejjsharpe/moonbase/pull/4), still **DRAFT** for R8.\n\n- Head: `c31bb4164d2ff18031e2b391a83198bb5e40d027`\n- Base: `8557fdd0d7a71f93a6584c77430e6fde57668580`\n- Passing: 82 editor tests, 14 application tests, 24 Chromium journeys, normal checks and hosted CI.\n- [Responses and inspected screenshots](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-a011646c/packages/editor/evidence/review-r7.md) committed; worktree clean.\n\nPending: independent R8, production workspace fan-in, native/package/signing, VoiceOver and human acceptance. No composition dispatched.",
+    "latestTerminalResultContextTransferId": "context-transfer:type:subagent_result:source-thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-02-editor-module-r1-bb5c5d0:target-thread:63122af4-017b-4b66-bcae-a905f2b1659d:dc0c1944-db09-4b78-8847-2c638e6f3cb2",
+    "providerInstanceId": "codex",
+    "model": "gpt-6.1-sol",
     "options": [
       {
         "id": "reasoningEffort",
