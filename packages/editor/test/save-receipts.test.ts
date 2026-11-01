@@ -1,5 +1,6 @@
+import * as controllerFixture from './editor-fixture.ts';
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { test, describe } from 'node:test';
 import { ManagedRuntime } from 'effect';
 import { makeEditorClient } from '@moonbase/application/runtime-client';
 import {
@@ -62,7 +63,7 @@ async function fixture(wrap: (raw: EditorClient) => EditorClient = (raw) => raw)
   };
 }
 for (const observe of [false, true])
-  test(`R9 lost A reply retains B receipt until A retry bridges the exact chain (watch=${observe})`, async () => {
+  test(`lost A reply retains B receipt until A retry bridges the exact chain (watch=${observe})`, async () => {
     let lose = true;
     const requests: CommandInput<'saveFile'>[] = [];
     const f = await fixture((raw) => ({
@@ -123,7 +124,7 @@ for (const observe of [false, true])
     }
   });
 for (const observe of [false, true])
-  test(`R9 reversed three Save replies reconcile retained receipts without repeating writes (watch=${observe})`, async () => {
+  test(`reversed three Save replies reconcile retained receipts without repeating writes (watch=${observe})`, async () => {
     const admitted = [gate(), gate()],
       reply = [gate(), gate()];
     const f = await fixture((raw) => ({
@@ -168,7 +169,7 @@ for (const observe of [false, true])
     }
   });
 for (const committed of [false, true])
-  test(`R9 reconciliation publication uncertainty retains all known requests until its exact receipt (committed=${committed})`, async () => {
+  test(`reconciliation publication uncertainty retains all known requests until its exact receipt (committed=${committed})`, async () => {
     let loseA = true,
       fault = false,
       unavailable = false;
@@ -233,7 +234,7 @@ for (const committed of [false, true])
       await f.dispose();
     }
   });
-test('R9 a real unrelated same-client publication cannot be bridged by retained own Save receipts', async () => {
+test('a real unrelated same-client publication cannot be bridged by retained own Save receipts', async () => {
   let loseA = true;
   const f = await fixture((raw) => ({
     ...raw,
@@ -279,7 +280,7 @@ test('R9 a real unrelated same-client publication cannot be bridged by retained 
   }
 });
 for (const outcome of ['cancel', 'conflict'] as const)
-  test(`R9 exact Save chain clears the gate but a later captured-close ${outcome} retains completed Saves and proposed drafts`, async () => {
+  test(`exact Save chain clears the gate but a later captured-close ${outcome} retains completed Saves and proposed drafts`, async () => {
     let lose = true;
     const f = await fixture((raw) => ({
       ...raw,
@@ -329,7 +330,7 @@ for (const outcome of ['cancel', 'conflict'] as const)
       await f.dispose();
     }
   });
-test('R9 disposal releases observations and prevents a late missing Save receipt from publishing', async () => {
+test('disposal releases observations and prevents a late missing Save receipt from publishing', async () => {
   const admitted = gate(),
     reply = gate();
   const f = await fixture((raw) => ({
@@ -363,7 +364,7 @@ test('R9 disposal releases observations and prevents a late missing Save receipt
 
 for (const committed of [false, true])
   for (const observe of [false, true])
-    test(`R10 an in-flight B Save cannot strand A's uncertain publication (committed=${committed}, watch=${observe})`, async () => {
+    test(`an in-flight B Save cannot strand A's uncertain publication (committed=${committed}, watch=${observe})`, async () => {
       const entered = gate(),
         release = gate();
       let holdB = false,
@@ -471,7 +472,7 @@ for (const committed of [false, true])
       }
     });
 
-test('R10 retiring a rejected publication cannot bridge an unrelated same-client CAS gap', async () => {
+test('retiring a rejected publication cannot bridge an unrelated same-client CAS gap', async () => {
   const entered = gate(),
     release = gate();
   let holdB = false;
@@ -533,7 +534,7 @@ test('R10 retiring a rejected publication cannot bridge an unrelated same-client
   }
 });
 for (const kind of ['close', 'reload'] as const)
-  test(`R10 a definitively rejected final ${kind} releases preservation without executing its old destructive callback`, async () => {
+  test(`a definitively rejected final ${kind} releases preservation without executing its old destructive callback`, async () => {
     let rejectFinal = true;
     const f = await fixture((raw) => ({
       ...raw,
@@ -618,7 +619,7 @@ for (const kind of ['close', 'reload'] as const)
       await f.dispose();
     }
   });
-test('R10 a status-query Conflict does not prove publication rejection', async () => {
+test('a status-query Conflict does not prove publication rejection', async () => {
   let queryFails = true;
   const f = await fixture((raw) => ({
     ...raw,
@@ -643,7 +644,7 @@ test('R10 a status-query Conflict does not prove publication rejection', async (
     await f.dispose();
   }
 });
-test("R10 a committed publication clears only its captured A identity when B's later publication is uncertain", async () => {
+test("a committed publication clears only its captured A identity when B's later publication is uncertain", async () => {
   const entered = gate(),
     release = gate();
   let holdB = false,
@@ -693,7 +694,7 @@ test("R10 a committed publication clears only its captured A identity when B's l
     await f.dispose();
   }
 });
-test('R10 disposal during publication uncertainty cancels a later B admission without publishing or replay', async () => {
+test('disposal during publication uncertainty cancels a later B admission without publishing or replay', async () => {
   const entered = gate(),
     release = gate();
   let holdB = false;
@@ -730,4 +731,87 @@ test('R10 disposal during publication uncertainty cancels a later B admission wi
     release.release();
     await f.dispose();
   }
+});
+
+describe('controller Save receipts', () => {
+  const { checkout, target, fixture } = controllerFixture;
+  test('Save receipts advance only known own revisions; a competing same-client publication gap stays visible', async () => {
+    const f = await fixture('unused', false);
+    f.editor.dispose();
+    let ready!: () => void, release!: () => void;
+    const admitted = new Promise<void>((resolve) => {
+        ready = resolve;
+      }),
+      wait = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    const client: EditorClient = {
+      ...f.client,
+      watch: () => () => {},
+      async command(name, input, options) {
+        if (name === 'saveFile') {
+          const { clientId } = input as CommandInput<'saveFile'>;
+          const loaded = await f.client.command('loadRecovery', { clientId });
+          await f.client.command('persistRecovery', {
+            requestId: crypto.randomUUID(),
+            clientId,
+            expectedRevision: loaded.revision,
+            state: { ...loaded.state, sidebarWidth: 333 },
+          });
+          const result = await f.client.command(name, input, options);
+          ready();
+          await wait;
+          return result;
+        }
+        return f.client.command(name, input, options);
+      },
+    };
+    const editor = createEditor({ client, clientId: 'receipt-gap' });
+    try {
+      await editor.load();
+      await editor.openCheckout(checkout.root);
+      await editor.open(target('a.ts'));
+      editor.edit(target('a.ts'), 'captured');
+      await editor.flush();
+      const save = editor.save(target('a.ts'));
+      const rejection = assert.rejects(save, /revision gap/);
+      await admitted;
+      editor.edit(target('a.ts'), 'newer live text');
+      release();
+      await rejection;
+      assert.equal(editor.buffer(target('a.ts'))!.text, 'newer live text');
+      assert.equal(editor.buffer(target('a.ts'))!.disk.text, 'captured');
+      assert.equal(await editor.close([target('a.ts')], async () => 'discard'), false);
+      assert.equal(f.memory.stats.saves, 1);
+      assert.equal(
+        (await f.client.command('loadRecovery', { clientId: editor.clientId })).state.sidebarWidth,
+        333,
+      );
+    } finally {
+      release();
+      editor.dispose();
+      await f.dispose();
+    }
+  });
+
+  test('definitive InvalidInput Save frees the captured request while uncertain retries remain immutable', async () => {
+    const f = await fixture('invalid-save', false);
+    try {
+      await f.editor.open(target('a.ts'));
+      f.editor.edit(target('a.ts'), 'bad\0text');
+      await assert.rejects(
+        f.editor.save(target('a.ts')),
+        (error) => ApplicationError.is(error) && error.code === 'InvalidInput',
+      );
+      assert.equal(f.editor.buffer(target('a.ts'))!.pendingSave, undefined);
+      assert.equal(f.memory.stats.saves, 0);
+      f.editor.edit(target('a.ts'), 'corrected');
+      assert.equal(await f.editor.save(target('a.ts')), true);
+      f.editor.edit(target('a.ts'), 'another\0invalid');
+      await assert.rejects(f.editor.save(target('a.ts')));
+      assert.equal(await f.editor.prepareQuit(async () => 'discard'), true);
+    } finally {
+      await f.dispose();
+    }
+  });
 });
