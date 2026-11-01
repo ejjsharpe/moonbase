@@ -4,6 +4,8 @@ A fresh project for an independent editor and Pi Durable chat modules, retaining
 
 This repository currently contains the overnight orchestration brief only. Application implementation and GitHub repository setup are tasks for the lead agent.
 
+The brief requires one shared Effect application command center, with focused module services and one runtime per process. The architecture and task ownership are defined in `docs/agents/prompts/OVERNIGHT.txt`.
+
 ## Start the overnight run
 
 Open this checkout as the **Moonbase** project in T3 Code, start a new chat there, and send:
