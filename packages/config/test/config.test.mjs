@@ -35,7 +35,7 @@ test('Native correctness and project rules reject violations and preserve docume
       'packages/shared/model.ts': 'export interface Entry { readonly value: string }',
       'packages/shared/type-import.ts':
         'import { Entry } from "./model"; export const read = (entry: Entry) => entry.value;',
-      'packages/shared/BadName.ts': 'export const value = 1;',
+      'packages/shared/Panel.tsx': 'export const Panel = () => <div />;',
       'packages/shared/ternary.js':
         'export const choose = (first, second) => first ? (second ? 1 : 2) : 3;',
       'packages/shared/switch.js':
@@ -78,7 +78,7 @@ test('Native correctness and project rules reject violations and preserve docume
     );
     assert.deepEqual(codes('allowed-directive.ts'), []);
     assert(codes('type-import.ts').includes('typescript(consistent-type-imports)'));
-    assert(codes('BadName.ts').includes('unicorn(filename-case)'));
+    assert.deepEqual(codes('Panel.tsx'), []);
     assert(codes('ternary.js').includes('eslint(no-nested-ternary)'));
     assert(codes('switch.js').includes('eslint(no-fallthrough)'));
     assert(codes('switch.js').includes('eslint(no-case-declarations)'));

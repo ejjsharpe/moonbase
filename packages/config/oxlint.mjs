@@ -27,7 +27,6 @@ export const base = {
       { prefer: 'type-imports', fixStyle: 'inline-type-imports' },
     ],
     'typescript/array-type': ['error', { default: 'array' }],
-    'unicorn/filename-case': ['error', { case: 'kebabCase' }],
     'eslint/no-nested-ternary': 'error',
     'unicorn/prefer-node-protocol': 'error',
   },

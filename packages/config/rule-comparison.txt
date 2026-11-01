@@ -5,8 +5,8 @@ Versions and scope
   Oxlint 1.90.0; eslint-config-universe legacy default/node/web at Expo e180d5676641699581298683ba7854c8b0d36771;
   eslint-plugin-unicorn recommended 79.0.0 (JavaScript/TypeScript recommended, not other-language presets).
   Baseline: oxlint --init correctness:error; default TypeScript/Unicorn/Oxc plugins and implicit ESLint core, plus native React.
-  Fourteen approved safety/consistency rules are added below; no JavaScript plugins, import/node plugins, or type-aware mode.
-  Selected native rules: 156; syntax/semantic rules active without type-aware mode: 141.
+  Thirteen approved safety/consistency rules are added below; no JavaScript plugins, import/node plugins, or type-aware mode.
+  Selected native rules: 155; syntax/semantic rules active without type-aware mode: 140.
   Availability is compared by native rule names, with the explicit core TypeScript-extension aliases shown below.
   Matching names are not proof of identical implementation behavior. No claim of exact upstream parity is made.
 
@@ -17,7 +17,7 @@ Important changes
   Formatting remains in Oxfmt. ESLint rules disabled by Universe’s final Prettier config are not counted as missing active lint checks.
   No-floating-promises and other typed rules require separately enabling type-aware mode; TypeScript typechecking is a separate task.
 
-APPROVED SAFETY AND CONSISTENCY RULES (14)
+APPROVED SAFETY AND CONSISTENCY RULES (13)
   react/rules-of-hooks: "error"
   eslint/eqeqeq: ["error","always",{"null":"ignore"}]
   eslint/no-fallthrough: "error"
@@ -29,7 +29,6 @@ APPROVED SAFETY AND CONSISTENCY RULES (14)
   typescript/ban-ts-comment: ["error",{"ts-ignore":true,"ts-nocheck":true,"ts-check":false,"ts-expect-error":"allow-with-description","minimumDescriptionLength":10}]
   typescript/consistent-type-imports: ["error",{"prefer":"type-imports","fixStyle":"inline-type-imports"}]
   typescript/array-type: ["error",{"default":"array"}]
-  unicorn/filename-case: ["error",{"case":"kebabCase"}]
   eslint/no-nested-ternary: "error"
   unicorn/prefer-node-protocol: "error"
   eslint/no-nested-ternary bans all nesting; this also covers the less restrictive Unicorn rule.
@@ -182,8 +181,7 @@ UNIVERSE: OPTIONAL TYPESCRIPT-ANALYSIS PRESET (not part of default/node/web)
   @typescript-eslint/prefer-ts-expect-error -> typescript/prefer-ts-expect-error: pedantic; not enabled; upstream "warn"
   @typescript-eslint/return-await -> typescript/return-await: pedantic; requires type-aware mode; not enabled; upstream ["error","always"]
 
-UNICORN RECOMMENDED: ENABLED OR COVERED (16 of 350)
-  unicorn/filename-case (error)
+UNICORN RECOMMENDED: ENABLED OR COVERED (15 of 350)
   unicorn/no-await-in-promise-methods (error)
   unicorn/no-empty-file (error)
   unicorn/no-invalid-fetch-options (error)
@@ -200,7 +198,7 @@ UNICORN RECOMMENDED: ENABLED OR COVERED (16 of 350)
   unicorn/prefer-set-size (error)
   unicorn/prefer-string-starts-ends-with (error)
 
-UNICORN RECOMMENDED: AVAILABLE NATIVELY BUT NOT ENABLED (114)
+UNICORN RECOMMENDED: AVAILABLE NATIVELY BUT NOT ENABLED (115)
   unicorn/catch-error-name (style)
   unicorn/consistent-assert (pedantic)
   unicorn/consistent-date-clone (style)
@@ -213,6 +211,7 @@ UNICORN RECOMMENDED: AVAILABLE NATIVELY BUT NOT ENABLED (114)
   unicorn/escape-case (pedantic)
   unicorn/explicit-length-check (pedantic)
   unicorn/explicit-timer-delay (style)
+  unicorn/filename-case (style)
   unicorn/import-style (restriction)
   unicorn/max-nested-calls (style)
   unicorn/new-for-builtins (pedantic)
