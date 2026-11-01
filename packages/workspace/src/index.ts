@@ -25,7 +25,7 @@ export type WorkspaceConfiguration = {
   ripgrepExecutable?: string;
 };
 type Approval = { target: CheckoutTarget; identity: string; common: {path: string; identity: string}; gitEntry: {identity: string; pointer: string | null} };
-type SaveRecord = { restorePending?: boolean; recoveryRestored?: boolean; recoveryRevision?: number; baseline?: import('@moonbase/application/client').FileDocument; published?: boolean; temporary?: string; input: CommandInput<'saveFile'>; result?: SaveResult; started: boolean; message?: string };
+type SaveRecord = { restorePending?: boolean; recoveryRestored?: boolean; recoveryPublication?: number; recoveryRevision?: number; baseline?: import('@moonbase/application/client').FileDocument; published?: boolean; temporary?: string; input: CommandInput<'saveFile'>; result?: SaveResult; started: boolean; message?: string };
 type OperationRecord = { paths?: string[]; publicationError?: string; staging?: string[]; publishedItems?: string[]; input: WorkspaceOperation; result: OperationResult; publicationRevisions: Record<string, number>; acknowledgedBy: string[] };
 const key = (clientId: string, id: string) => hash(canonical([clientId, id]));
 const affected = (p: string, source: string) => p === source || p.startsWith(source + '/');
@@ -66,6 +66,7 @@ class LocalWorkspace {
   readonly native = new Map<string, { source: NativeImport; clientId: string; checkoutId: string; expires: ReturnType<typeof setTimeout> }>();
   activeNative = 0;
   readonly volatileSaves = new Map<string, SaveRecord>();
+  readonly activeSaves = new Set<string>();
   readonly volatileOperations = new Map<string, OperationRecord>();
   readonly run;
   readonly ripgrep: string | undefined;
@@ -86,7 +87,10 @@ class LocalWorkspace {
     this.service = {
       openCheckout: call<'openCheckout'>((input, signal) => this.open(input.root, signal)),
       readFile: call<'readFile'>(async (target, signal) => (await this.directory(target.checkout)).read(target.path, signal)),
-      saveFile: call<'saveFile'>((input, signal) => this.serial(input.target.checkout.checkoutId, [input.target.path], () => { if (signal.aborted) fail('Cancelled', 'Save cancelled before admission.'); return this.save(input); })),
+      saveFile: call<'saveFile'>((input, signal) => {
+        identifier(input.clientId); const publication = this.store.publication(input.clientId);
+        return this.serial(input.target.checkout.checkoutId, [input.target.path], () => { if (signal.aborted) fail('Cancelled', 'Save cancelled before admission.'); return this.save(input, publication); });
+      }),
       listDirectory: call<'listDirectory'>((input, signal) => this.list(input, signal)),
       gitStatus: call<'gitStatus'>((input, signal) => this.status(input.checkout, signal)),
       readComparison: call<'readComparison'>((input, signal) => this.comparison(input, signal)),
@@ -106,7 +110,7 @@ class LocalWorkspace {
         if (input.clientId !== input.operationClientId && !(observation?.state as EditorRecovery | undefined)?.checkouts.some(c => same(c, record.input.checkout))) fail('Unauthorized', 'Observer has not opened this exact checkout.');
         if (record.publicationError || record.result.items.some(item => item.outcome === 'completed' && !(record.publishedItems ?? []).includes(canonical(item)))) fail('Persistence', 'Known operation recovery publication is pending. Preserve the prior valid snapshot before acknowledgement.');
         if (record.result.outcome === 'uncertain') fail('Uncertain', 'Uncertain operation evidence cannot be acknowledged away. Inspect the affected paths.');
-        if ((observation?.revision ?? 0) <= (record.publicationRevisions[input.clientId] ?? observation?.revision ?? 0)) fail('Persistence', 'Publish reconciled recovery before acknowledging this operation.');
+        if (this.store.publication(input.clientId) <= (record.publicationRevisions[input.clientId] ?? observation?.revision ?? 0)) fail('Persistence', 'Publish reconciled recovery before acknowledging this operation.');
         this.store.put('operations', id, {...record, acknowledgedBy: [...record.acknowledgedBy, input.clientId]}); this.volatileOperations.delete(id);
       }, true),
       loadRecovery: call<'loadRecovery'>(async input => this.load(input.clientId), true),
@@ -243,9 +247,9 @@ class LocalWorkspace {
   replaySave(id: string, input: CommandInput<'saveFile'>, record: SaveRecord): SaveResult {
     if (!same(record.input, input)) fail('Conflict', 'Save request ID already belongs to a different payload or target.');
     if (record.result) {
-      if (this.volatileSaves.has(id)) {
+      if (this.volatileSaves.has(id) || record.restorePending) {
         try { this.publishSaves([record]); }
-        catch (error) { if (record.result.kind !== 'saved') throw error; record.result = {...record.result, persistencePending: true, message: 'Saved to disk; recovery publication pending. ' + errorText(error)}; }
+        catch (error) { if (record.result.kind !== 'saved') return fail('Persistence', 'Admitted Save recovery publication pending; previous valid snapshot retained. ' + errorText(error)); record.result = {...record.result, persistencePending: true, message: 'Saved to disk; recovery publication pending. ' + errorText(error)}; }
       }
       return record.result;
     }
@@ -256,7 +260,7 @@ class LocalWorkspace {
     if (this.volatileOperations.has(id)) { try { this.publishOperation(id, record); } catch (error) { this.retainPublication(id, record, error); } }
     return record.result;
   }
-  async save(input: CommandInput<'saveFile'>): Promise<SaveResult> {
+  async save(input: CommandInput<'saveFile'>, publication: number): Promise<SaveResult> {
     identifier(input.clientId); identifier(input.requestId); path(input.target.path); this.approval(input.target.checkout);
     const proposed = textDocument(input.text); ensure(typeof input.expectedVersion === 'string' && /^[a-f0-9]{64}$/.test(input.expectedVersion), 'Invalid expected content version.');
     const id = key(input.clientId, input.requestId), previous = this.saveRecord(id);
@@ -269,9 +273,10 @@ class LocalWorkspace {
       return previous ? this.replaySave(id, input, this.saveRecord(id) ?? previous) : result;
     }
     const temporary = join(dirname(input.target.path), '.moonbase-save-' + randomUUID());
-    const record: SaveRecord = {input, started: true, temporary, baseline: disk, recoveryRevision: this.store.readRecovery(input.clientId)?.revision ?? 0};
+    const record: SaveRecord = {input, started: true, temporary, baseline: disk, recoveryPublication: publication};
     const occupied = this.store.reserve('saves', id, record);
     if (occupied) return this.replaySave(id, input, this.saveRecord(id) ?? occupied);
+    this.activeSaves.add(id);
     try {
       const stagingIdentity = (await directory.io(['stage', input.target.path, temporary], input.text)).toString();
       const current = await directory.read(input.target.path);
@@ -286,7 +291,7 @@ class LocalWorkspace {
     } catch (error) {
       record.message = errorText(error); this.volatileSaves.set(id, record);
       return fail('Uncertain', 'Save may have changed disk. Request retained; inspect disk and recovery. ' + errorText(error));
-    }
+    } finally { this.activeSaves.delete(id); }
   }
   async capture(input: { checkout: CheckoutTarget; clientId: string; paths: string[] }, signal: AbortSignal) {
     identifier(input.clientId); const directory = await this.directory(input.checkout);
@@ -484,7 +489,7 @@ class LocalWorkspace {
         if (fresh.length) this.reconcile(state, [{...record, result: {...record.result, items: fresh}}]);
         recovery(state, clientId);
         if (JSON.stringify(state) !== row.body) {
-          this.store.db.prepare('UPDATE recovery SET revision=revision+1, body=? WHERE client=?').run(JSON.stringify(state), clientId);
+          this.store.writeInternalRecovery(clientId, revision, state);
           changes.push({clientId, previousRevision: revision, revision: revision + 1}); revision++;
         }
         publicationRevisions[clientId] = revision;
@@ -496,14 +501,32 @@ class LocalWorkspace {
       this.store.put('operations', id, updated); this.store.db.exec('COMMIT'); delete record.publicationError; Object.assign(record, updated); this.volatileOperations.delete(id);
     } catch (error) { this.store.db.exec('ROLLBACK'); throw error; }
   }
+  restorationEligible(record: SaveRecord, revision: number, publication: number) {
+    if (record.recoveryPublication !== undefined) return record.recoveryPublication === publication;
+    // Older Moonbase intents need a complete retained receipt chain; gaps remain client-publication fences.
+    const changes = [...this.store.all<SaveRecord>('saves').flatMap(r => r.result?.kind === 'saved' ? r.result.recoveryChanges : []), ...this.store.all<OperationRecord>('operations').flatMap(r => r.result.recoveryChanges)].filter(c => c.clientId === record.input.clientId);
+    let admitted = record.recoveryRevision;
+    while (admitted !== undefined && admitted < revision) {
+      const next = changes.find(c => c.previousRevision === admitted && c.revision > c.previousRevision);
+      if (!next) return false;
+      admitted = next.revision;
+    }
+    return admitted === revision;
+  }
   publishSaves(records: SaveRecord[], restore = false) {
     if (!records.length) return;
     const clientId = records[0].input.clientId;
     ensure(records.every(record => record.input.clientId === clientId), 'A Save publication group belongs to one client.');
     this.store.db.exec('BEGIN IMMEDIATE');
     try {
-      // A sibling restoration must not look like a competing client publication.
+      if (restore || records.some(r => r.restorePending || this.store.get<SaveRecord>('saves', key(clientId, r.input.requestId))?.restorePending)) {
+        const group = new Map(this.saveRecords().filter(r => r.input.clientId === clientId && r.started && (!r.published || r.restorePending)).map(r => [key(clientId, r.input.requestId), r]));
+        for (const record of records) group.set(key(clientId, record.input.requestId), record);
+        records = [...group.values()]; restore = true;
+        if ([...group.keys()].some(id => this.activeSaves.has(id))) fail('Persistence', 'A Save in the complete recovery group is still running. Retry recovery after it settles.');
+      }
       const stored = this.store.readRecovery(clientId), revision = stored?.revision ?? 0;
+      const publication = this.store.publication(clientId);
       const state = (stored?.state ?? emptyRecovery(clientId)) as EditorRecovery, before = JSON.stringify(state);
       const updates = records.map(record => {
         const id = key(clientId, record.input.requestId), committed = this.store.get<SaveRecord>('saves', id);
@@ -511,7 +534,7 @@ class LocalWorkspace {
         const knownResult = committed?.published ? committed.result : record.result;
         const result: SaveResult | undefined = knownResult?.kind === 'saved' ? {kind: 'saved', disk: knownResult.disk, recoveryChanges: knownResult.recoveryChanges} : knownResult;
         const wantsRestore = restore || record.restorePending || committed?.restorePending;
-        const restored = !!(wantsRestore && !committed?.recoveryRestored && record.baseline && revision === record.recoveryRevision);
+        const restored = !!(wantsRestore && !committed?.recoveryRestored && record.baseline && this.restorationEligible(committed ?? record, revision, publication));
         const entryBefore = JSON.stringify(state);
         if (restored) {
           if (!state.checkouts.some(c => same(c, record.input.target.checkout))) state.checkouts.push(record.input.target.checkout);
@@ -526,7 +549,7 @@ class LocalWorkspace {
       });
       recovery(state, clientId);
       const changed = JSON.stringify(state) !== before;
-      if (changed) this.store.db.prepare('INSERT INTO recovery VALUES(?,?,?) ON CONFLICT(client) DO UPDATE SET revision=excluded.revision, body=excluded.body').run(clientId, revision + 1, JSON.stringify(state));
+      if (changed) this.store.writeInternalRecovery(clientId, revision, state);
       for (const entry of updates) {
         if (changed && entry.changed && entry.updated.result?.kind === 'saved') entry.updated.result = {...entry.updated.result,
           recoveryChanges: [...entry.updated.result.recoveryChanges, {clientId, previousRevision: revision, revision: revision + 1}]};

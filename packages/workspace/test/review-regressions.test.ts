@@ -287,3 +287,212 @@ test('R2 grouped Save publisher preserves visible persistence failure and clears
     assert.deepEqual(await client.command('saveFile', input), result); assert.equal(readFileSync(count, 'utf8'), 'replace\n');
   } finally { writeFileSync(release, 'continue'); await runtime.dispose(); f.cleanup(); }
 });
+
+test('R3 retries cannot split an overflowing interrupted Save restoration group', async () => {
+  const f = fixture(), count = join(f.base, 'stages');
+  const helper = f.wrapper(`if [ "$1" = stage ]; then printf 'stage\\n' >> ${quote(count)}; kill -KILL $$; fi`); let current = f.start(helper);
+  try {
+    for (const path of ['a.txt', 'b.txt']) writeFileSync(join(f.root, path), 'original');
+    const checkout = await current.client.command('openCheckout', {root: f.root}), disk = await current.client.command('readFile', {checkout, path: 'a.txt'});
+    const snapshot = {...emptyRecovery('alice'), checkouts: [checkout], openCheckoutIds: [checkout.checkoutId], drafts: Array.from({length: 511}, (_, i) => ({target: {checkout, path: 'old/' + i}, text: 'old ' + i, disk}))};
+    await current.client.command('persistRecovery', {clientId: 'alice', expectedRevision: 0, state: snapshot});
+    const inputs = ['a.txt', 'b.txt'].map(path => ({clientId: 'alice', requestId: path, target: {checkout, path}, expectedVersion: disk.version, text: 'admitted ' + path}));
+    for (const input of inputs) await assert.rejects(current.client.command('saveFile', input), isError('Uncertain'));
+    for (let restart = 0; restart < 2; restart++) {
+      await current.runtime.dispose(); current = f.start();
+      const before = await current.client.command('loadRecovery', {clientId: 'alice'});
+      assert.equal(before.revision, 1); assert.deepEqual(before.state, snapshot);
+      const retries = await Promise.allSettled(inputs.map(input => current.client.command('saveFile', input)));
+      assert(retries.every(r => r.status === 'rejected' && isError('Persistence')(r.reason)), 'Every retry must preserve the complete rejected group and report its persistence failure.');
+      const after = await current.client.command('loadRecovery', {clientId: 'alice'});
+      assert.equal(after.revision, 1); assert.deepEqual(after.state, snapshot); assert.equal(after.errors.length, 2);
+    }
+    assert.equal(readFileSync(count, 'utf8'), 'stage\nstage\n');
+  } finally { await current.runtime.dispose(); f.cleanup(); }
+});
+
+for (const sibling of ['save', 'move'] as const) for (const competing of [false, true]) test(`R3 unrelated ${sibling} ${competing ? 'does not weaken a later client publication fence' : 'preserves pending interrupted text across internal revisions'}`, async () => {
+  const f = fixture(), count = join(f.base, 'effects');
+  const helper = f.wrapper(`if [ "$1" = stage ] && [ "$2" = a.txt ]; then printf 'interrupted\\n' >> ${quote(count)}; kill -KILL $$; fi\nif [ "$1" = replace ] || [ "$1" = move ]; then printf '%s\\n' "$1" >> ${quote(count)}; fi`); let current = f.start(helper);
+  try {
+    for (const path of ['a.txt', 'b.txt']) writeFileSync(join(f.root, path), 'original');
+    const checkout = await current.client.command('openCheckout', {root: f.root});
+    const drafts = await Promise.all(['a.txt', 'b.txt'].map(async path => { const target = {checkout, path}; return {target, disk: await current.client.command('readFile', target), text: 'old ' + path}; }));
+    const snapshot = {...emptyRecovery('alice'), checkouts: [checkout], openCheckoutIds: [checkout.checkoutId], drafts};
+    await current.client.command('persistRecovery', {clientId: 'alice', expectedRevision: 0, state: snapshot});
+    await assert.rejects(current.client.command('saveFile', {clientId: 'alice', requestId: 'a', target: drafts[0].target, expectedVersion: drafts[0].disk.version, text: 'admitted a'}), isError('Uncertain'));
+    writeFileSync(join(f.root, 'a.txt'), 'external');
+    if (sibling === 'save') {
+      const result = await current.client.command('saveFile', {clientId: 'alice', requestId: 'b', target: drafts[1].target, expectedVersion: drafts[1].disk.version, text: 'saved b'});
+      assert.equal(result.kind, 'saved'); assert.deepEqual(result.kind === 'saved' && result.recoveryChanges, [{clientId: 'alice', previousRevision: 1, revision: 2}]);
+    } else {
+      const sources = await current.client.command('inspectEntries', {checkout, paths: ['b.txt']});
+      const result = await current.client.command('mutate', {clientId: 'alice', id: 'b', checkout, kind: 'move', sources, destination: 'moved-b.txt'});
+      assert.equal(result.outcome, 'completed'); assert.deepEqual(result.recoveryChanges, [{clientId: 'alice', previousRevision: 1, revision: 2}]);
+    }
+    if (competing) await current.client.command('persistRecovery', {clientId: 'alice', expectedRevision: 2, state: {...snapshot, drafts: drafts.map(d => ({...d, text: 'later ' + d.target.path}))}});
+    for (let restart = 0; restart < 2; restart++) {
+      await current.runtime.dispose(); current = f.start();
+      const loaded = await current.client.command('loadRecovery', {clientId: 'alice'});
+      assert.equal(loaded.revision, 3); assert.equal(loaded.state.drafts.find(d => d.target.path === 'a.txt')?.text, competing ? 'later a.txt' : 'admitted a');
+      assert.deepEqual(loaded.state.drafts.find(d => d.target.path === 'a.txt')?.disk, drafts[0].disk);
+      if (!competing) {
+        const b = loaded.state.drafts.find(d => d.target.path === (sibling === 'move' ? 'moved-b.txt' : 'b.txt'));
+        assert(b); assert.equal(b.text, 'old b.txt'); assert.equal(b.disk.text, sibling === 'save' ? 'saved b' : 'original');
+      }
+      assert.equal(loaded.errors.length, 1);
+      await assert.rejects(current.client.command('persistRecovery', {clientId: 'alice', expectedRevision: 1, state: snapshot}), isError('Conflict'));
+    }
+    assert.equal(readFileSync(count, 'utf8'), 'interrupted\n' + (sibling === 'save' ? 'replace' : 'move') + '\n');
+    assert.equal(readFileSync(join(f.root, 'a.txt'), 'utf8'), 'external');
+  } finally { await current.runtime.dispose(); f.cleanup(); }
+});
+
+test('R3 a genuine client publication during Save preflight fences later interrupted admission', async () => {
+  const f = fixture(), pause = join(f.base, 'pause'), ready = join(f.base, 'ready'), release = join(f.base, 'release');
+  const helper = f.wrapper(`if [ "$1" = read ] && [ -e ${quote(pause)} ]; then /usr/bin/touch ${quote(ready)}; while [ ! -e ${quote(release)} ]; do /bin/sleep 0.01; done; fi\nif [ "$1" = stage ]; then kill -KILL $$; fi`); let current = f.start(helper);
+  try {
+    const checkout = await current.client.command('openCheckout', {root: f.root}), target = {checkout, path: 'file.txt'}, disk = await current.client.command('readFile', target);
+    await current.client.command('persistRecovery', {clientId: 'alice', expectedRevision: 0, state: state(checkout, disk)});
+    writeFileSync(pause, 'pause');
+    const saving = current.client.command('saveFile', {clientId: 'alice', requestId: 'preflight', target, expectedVersion: disk.version, text: 'admitted before publication'});
+    await waitFor(ready);
+    const later = state(checkout, disk, 'newer client publication');
+    await current.client.command('persistRecovery', {clientId: 'alice', expectedRevision: 1, state: later});
+    writeFileSync(release, 'continue'); await assert.rejects(saving, isError('Uncertain'));
+    writeFileSync(join(f.root, 'file.txt'), 'external'); await current.runtime.dispose(); current = f.start();
+    const loaded = await current.client.command('loadRecovery', {clientId: 'alice'});
+    assert.equal(loaded.revision, 2); assert.deepEqual(loaded.state, later); assert.equal(loaded.errors.length, 1);
+  } finally { writeFileSync(release, 'continue'); await current.runtime.dispose(); f.cleanup(); }
+});
+
+test('R3 unresolved same-target text blocks newer Save and Move effects', async () => {
+  const f = fixture(), count = join(f.base, 'effects');
+  const helper = f.wrapper(`if [ "$1" = stage ]; then printf 'interrupted\\n' >> ${quote(count)}; kill -KILL $$; fi\nif [ "$1" = replace ] || [ "$1" = move ]; then printf 'unsafe\\n' >> ${quote(count)}; fi`), {runtime, client} = f.start(helper);
+  try {
+    const checkout = await client.command('openCheckout', {root: f.root}), target = {checkout, path: 'file.txt'}, disk = await client.command('readFile', target);
+    await client.command('persistRecovery', {clientId: 'alice', expectedRevision: 0, state: state(checkout, disk)});
+    await assert.rejects(client.command('saveFile', {clientId: 'alice', requestId: 'old', target, expectedVersion: disk.version, text: 'pending text'}), isError('Uncertain'));
+    await assert.rejects(client.command('saveFile', {clientId: 'alice', requestId: 'new', target, expectedVersion: disk.version, text: 'later text'}), isError('Uncertain'));
+    const sources = await client.command('inspectEntries', {checkout, paths: ['file.txt']});
+    await assert.rejects(client.command('mutate', {clientId: 'alice', id: 'move', checkout, kind: 'move', sources, destination: 'moved.txt'}), isError('Uncertain'));
+    assert.equal(readFileSync(count, 'utf8'), 'interrupted\n');
+    assert.equal((await client.command('loadRecovery', {clientId: 'alice'})).state.drafts[0].text, 'pending text');
+  } finally { await runtime.dispose(); f.cleanup(); }
+});
+
+for (const sibling of ['save', 'move'] as const) test(`R3 pending text survives a failed ${sibling} fact publication and its non-replaying retry`, async () => {
+  const {DatabaseSync} = await import('node:sqlite');
+  const f = fixture(), ready = join(f.base, 'ready'), release = join(f.base, 'release'), count = join(f.base, 'effects'), command = sibling === 'save' ? 'replace' : 'move';
+  const helper = f.wrapper(`if [ "$1" = stage ] && [ "$2" = file.txt ]; then printf 'interrupted\\n' >> ${quote(count)}; kill -KILL $$; fi\nif [ "$1" = ${command} ]; then printf 'effect\\n' >> ${quote(count)}; ${quote(binary)} "$@" || exit $?; /usr/bin/touch ${quote(ready)}; while [ ! -e ${quote(release)} ]; do /bin/sleep 0.01; done; exit 0; fi`); let current = f.start(helper);
+  try {
+    writeFileSync(join(f.root, 'b.txt'), 'original');
+    const checkout = await current.client.command('openCheckout', {root: f.root}), target = {checkout, path: 'file.txt'}, disk = await current.client.command('readFile', target);
+    const snapshot = {...state(checkout, disk), drafts: [...state(checkout, disk).drafts, {target: {checkout, path: 'b.txt'}, disk, text: 'dirty b'}]};
+    await current.client.command('persistRecovery', {clientId: 'alice', expectedRevision: 0, state: snapshot});
+    await assert.rejects(current.client.command('saveFile', {clientId: 'alice', requestId: 'a', target, expectedVersion: disk.version, text: 'pending a'}), isError('Uncertain'));
+    writeFileSync(join(f.root, 'file.txt'), 'external');
+    const saveInput = {clientId: 'alice', requestId: 'b', target: {checkout, path: 'b.txt'}, expectedVersion: disk.version, text: 'saved b'};
+    const moveInput = {clientId: 'alice', id: 'b', checkout, kind: 'move' as const, sources: await current.client.command('inspectEntries', {checkout, paths: ['b.txt']}), destination: 'moved-b.txt'};
+    const pending = sibling === 'save' ? current.client.command('saveFile', saveInput) : current.client.command('mutate', moveInput);
+    await waitFor(ready); const lock = new DatabaseSync(join(f.base, 'state/moonbase-workspace-v1.sqlite'));
+    try {
+      lock.exec('BEGIN IMMEDIATE'); writeFileSync(release, 'continue'); const result = await pending;
+      if ('outcome' in result) { assert.equal(result.items[0].outcome, 'completed'); assert.match(result.message!, /publication (?:failed|pending)/i); }
+      else assert(result.kind === 'saved' && result.persistencePending);
+    } finally { lock.exec('ROLLBACK'); lock.close(); }
+    const retried = sibling === 'save' ? await current.client.command('saveFile', saveInput) : await current.client.command('mutate', moveInput);
+    assert.deepEqual('recoveryChanges' in retried && retried.recoveryChanges, [{clientId: 'alice', previousRevision: 1, revision: 2}]);
+    for (let restart = 0; restart < 2; restart++) {
+      await current.runtime.dispose(); current = f.start();
+      const loaded = await current.client.command('loadRecovery', {clientId: 'alice'});
+      assert.equal(loaded.revision, 3); assert.equal(loaded.state.drafts.find(d => d.target.path === 'file.txt')?.text, 'pending a'); assert.equal(loaded.errors.length, 1);
+      const replay = sibling === 'save' ? await current.client.command('saveFile', saveInput) : await current.client.command('mutate', moveInput);
+      assert.deepEqual(replay, retried);
+    }
+    assert.equal(readFileSync(count, 'utf8'), 'interrupted\neffect\n');
+  } finally { writeFileSync(release, 'continue'); await current.runtime.dispose(); f.cleanup(); }
+});
+
+test('R3 foreign operation and restoration revisions do not acknowledge either observer without client publication', async () => {
+  const f = fixture(), helper = f.wrapper('if [ "$1" = stage ]; then kill -KILL $$; fi'); let current = f.start(helper);
+  try {
+    writeFileSync(join(f.root, 'b.txt'), 'original');
+    const checkout = await current.client.command('openCheckout', {root: f.root}), target = {checkout, path: 'file.txt'}, disk = await current.client.command('readFile', target);
+    for (const clientId of ['alice', 'bob']) await current.client.command('persistRecovery', {clientId, expectedRevision: 0, state: {...state(checkout, disk), clientId, drafts: [...state(checkout, disk).drafts, {target: {checkout, path: 'b.txt'}, disk, text: clientId + ' dirty b'}]}});
+    await assert.rejects(current.client.command('saveFile', {clientId: 'alice', requestId: 'a', target, expectedVersion: disk.version, text: 'pending a'}), isError('Uncertain'));
+    writeFileSync(join(f.root, 'file.txt'), 'external');
+    const sources = await current.client.command('inspectEntries', {checkout, paths: ['b.txt']});
+    const moved = await current.client.command('mutate', {clientId: 'bob', id: 'move', checkout, kind: 'move', sources, destination: 'moved-b.txt'});
+    assert.equal(moved.outcome, 'completed');
+    await current.runtime.dispose(); current = f.start();
+    const loads = await Promise.all(['alice', 'bob'].map(clientId => current.client.command('loadRecovery', {clientId})));
+    assert.equal(loads[0].state.drafts.find(d => d.target.path === 'file.txt')?.text, 'pending a'); assert.equal(loads[0].revision, 3); assert.equal(loads[1].revision, 2);
+    for (const clientId of ['alice', 'bob']) await assert.rejects(current.client.command('acknowledgeOperation', {clientId, operationClientId: 'bob', id: 'move'}), isError('Persistence'));
+    await current.client.command('persistRecovery', {clientId: 'alice', expectedRevision: 3, state: loads[0].state});
+    await current.client.command('acknowledgeOperation', {clientId: 'alice', operationClientId: 'bob', id: 'move'});
+    assert.equal((await current.client.command('loadRecovery', {clientId: 'alice'})).operations.length, 0);
+    assert.equal((await current.client.command('loadRecovery', {clientId: 'bob'})).operations.length, 1);
+    await assert.rejects(current.client.command('acknowledgeOperation', {clientId: 'bob', operationClientId: 'bob', id: 'move'}), isError('Persistence'));
+    await current.client.command('persistRecovery', {clientId: 'bob', expectedRevision: 2, state: loads[1].state});
+    await current.client.command('acknowledgeOperation', {clientId: 'bob', operationClientId: 'bob', id: 'move'});
+  } finally { await current.runtime.dispose(); f.cleanup(); }
+});
+
+test('R3 complete restoration retries wait for an active sibling admission without publishing part of its group', async () => {
+  const {DatabaseSync} = await import('node:sqlite');
+  const f = fixture(), ready = join(f.base, 'ready'), release = join(f.base, 'release'), count = join(f.base, 'effects');
+  const helper = f.wrapper(`if [ "$1" = stage ]; then printf '%s\\n' "$2" >> ${quote(count)}; if [ "$2" = file.txt ]; then kill -KILL $$; fi; /usr/bin/touch ${quote(ready)}; while [ ! -e ${quote(release)} ]; do /bin/sleep 0.01; done; fi`), {runtime, client} = f.start(helper);
+  try {
+    writeFileSync(join(f.root, 'b.txt'), 'original');
+    const checkout = await client.command('openCheckout', {root: f.root}), target = {checkout, path: 'file.txt'}, disk = await client.command('readFile', target);
+    const snapshot = {...state(checkout, disk), drafts: [...state(checkout, disk).drafts, {target: {checkout, path: 'b.txt'}, disk, text: 'dirty b'}]};
+    await client.command('persistRecovery', {clientId: 'alice', expectedRevision: 0, state: snapshot});
+    const input = {clientId: 'alice', requestId: 'a', target, expectedVersion: disk.version, text: 'pending a'};
+    await assert.rejects(client.command('saveFile', input), isError('Uncertain'));
+    const lock = new DatabaseSync(join(f.base, 'state/moonbase-workspace-v1.sqlite'));
+    try { lock.exec('BEGIN IMMEDIATE'); assert.equal((await client.command('loadRecovery', {clientId: 'alice'})).revision, 1); }
+    finally { lock.exec('ROLLBACK'); lock.close(); }
+    const saving = client.command('saveFile', {clientId: 'alice', requestId: 'b', target: {checkout, path: 'b.txt'}, expectedVersion: disk.version, text: 'saved b'});
+    await waitFor(ready);
+    await assert.rejects(client.command('saveFile', input), isError('Persistence'));
+    const during = await client.command('loadRecovery', {clientId: 'alice'}); assert.equal(during.revision, 1); assert.deepEqual(during.state, snapshot);
+    writeFileSync(release, 'continue'); assert.equal((await saving).kind, 'saved');
+    assert.equal((await client.command('saveFile', input)).kind, 'conflict');
+    const after = await client.command('loadRecovery', {clientId: 'alice'});
+    assert.equal(after.revision, 3); assert.equal(after.state.drafts[0].text, 'pending a'); assert.equal(readFileSync(count, 'utf8'), 'file.txt\nb.txt\n');
+  } finally { writeFileSync(release, 'continue'); await runtime.dispose(); f.cleanup(); }
+});
+
+for (const sibling of ['save', 'move', 'later-publication'] as const) test(`R3 pre-fence Moonbase journal ${sibling} uses only complete internal receipt chains`, async () => {
+  const {DatabaseSync} = await import('node:sqlite');
+  const f = fixture(), count = join(f.base, 'effects'), helper = f.wrapper(`if [ "$1" = stage ] && [ "$2" = file.txt ]; then printf 'interrupted\\n' >> ${quote(count)}; kill -KILL $$; fi\nif [ "$1" = replace ] || [ "$1" = move ]; then printf 'effect\\n' >> ${quote(count)}; fi`); let current = f.start(helper);
+  try {
+    writeFileSync(join(f.root, 'b.txt'), 'original');
+    const checkout = await current.client.command('openCheckout', {root: f.root}), target = {checkout, path: 'file.txt'}, disk = await current.client.command('readFile', target);
+    const snapshot = {...state(checkout, disk), drafts: [...state(checkout, disk).drafts, {target: {checkout, path: 'b.txt'}, disk, text: 'dirty b'}]};
+    await current.client.command('persistRecovery', {clientId: 'alice', expectedRevision: 0, state: snapshot});
+    await assert.rejects(current.client.command('saveFile', {clientId: 'alice', requestId: 'a', target, expectedVersion: disk.version, text: 'pending a'}), isError('Uncertain'));
+    writeFileSync(join(f.root, 'file.txt'), 'external');
+    if (sibling === 'move') await current.client.command('mutate', {clientId: 'alice', id: 'b', checkout, kind: 'move', sources: await current.client.command('inspectEntries', {checkout, paths: ['b.txt']}), destination: 'moved-b.txt'});
+    else await current.client.command('saveFile', {clientId: 'alice', requestId: 'b', target: {checkout, path: 'b.txt'}, expectedVersion: disk.version, text: 'saved b'});
+    if (sibling === 'later-publication') await current.client.command('persistRecovery', {clientId: 'alice', expectedRevision: 2, state: {...snapshot, drafts: snapshot.drafts.map(d => ({...d, text: 'later client text'}))}});
+    await current.runtime.dispose();
+    const db = new DatabaseSync(join(f.base, 'state/moonbase-workspace-v1.sqlite'));
+    try {
+      // Recreate the previous module's private journal format; no application/legacy source state is imported.
+      db.prepare('DELETE FROM records WHERE bucket=?').run('publications');
+      for (const row of db.prepare('SELECT key, body FROM records WHERE bucket=?').all('saves')) {
+        const record = JSON.parse(row.body as string); if (record.input.requestId !== 'a') continue;
+        delete record.recoveryPublication; record.recoveryRevision = 1;
+        db.prepare('UPDATE records SET body=? WHERE bucket=? AND key=?').run(JSON.stringify(record), 'saves', row.key);
+      }
+    } finally { db.close(); }
+    for (let restart = 0; restart < 2; restart++) {
+      current = f.start(); const loaded = await current.client.command('loadRecovery', {clientId: 'alice'});
+      assert.equal(loaded.revision, 3); assert.equal(loaded.state.drafts[0].text, sibling === 'later-publication' ? 'later client text' : 'pending a'); assert.equal(loaded.errors.length, 1);
+      await current.runtime.dispose();
+    }
+    assert.equal(readFileSync(count, 'utf8'), 'interrupted\neffect\n');
+  } finally { await current.runtime.dispose(); f.cleanup(); }
+});

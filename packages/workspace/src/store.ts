@@ -49,12 +49,19 @@ export class Store {
     const row = this.db.prepare('SELECT revision, body FROM recovery WHERE client=?').get(client);
     return row ? { revision: Number(row.revision), state: JSON.parse(row.body as string) } : null;
   }
+  publication(client: string): number { return this.get<number>('publications', client) ?? this.readRecovery(client)?.revision ?? 0; }
+  /** Caller owns the transaction; module facts advance CAS without impersonating a client publication. */
+  writeInternalRecovery(client: string, revision: number, state: unknown) {
+    if (this.get<number>('publications', client) === null) this.put('publications', client, revision);
+    this.db.prepare('INSERT INTO recovery VALUES(?,?,?) ON CONFLICT(client) DO UPDATE SET revision=excluded.revision, body=excluded.body').run(client, revision + 1, JSON.stringify(state));
+  }
   persist(client: string, expected: number, state: unknown) {
     this.db.exec('BEGIN IMMEDIATE');
     try {
       const revision = this.readRecovery(client)?.revision ?? 0;
       if (revision !== expected) fail('Conflict', 'Recovery changed in another window. Reload before publishing.');
       this.db.prepare('INSERT INTO recovery VALUES(?,?,?) ON CONFLICT(client) DO UPDATE SET revision=excluded.revision, body=excluded.body').run(client, revision + 1, JSON.stringify(state));
+      this.put('publications', client, revision + 1);
       this.db.exec('COMMIT'); return revision + 1;
     } catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
