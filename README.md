@@ -6,7 +6,7 @@ The foundation defines the shared browser-safe editor interface, Effect service/
 
 The brief requires one shared Effect application command center, with focused module services and one runtime per process. The architecture and task ownership are defined in `docs/agents/prompts/OVERNIGHT.txt`.
 
-Read [MODULES.md](MODULES.md) for boundaries and acceptance, [DESIGN.md](DESIGN.md) for UI rules and [the delivery ledger](docs/overnight/ledger.md) for exact PR dependencies and evidence. Run `bun install --frozen-lockfile`, `bun run check:foundation`, `bun run typecheck`, `bun run lint` and `bun run test` for bootstrap checks. At this stage lint is an explicit TypeScript diagnostic check, not a separate style-lint qualification. Public command-client tests establish runtime sharing, cancellation, errors and disposal only.
+Read [MODULES.md](MODULES.md) for boundaries and acceptance, [DESIGN.md](DESIGN.md) for UI rules and [the delivery ledger](docs/overnight/ledger.md) for exact PR dependencies and evidence. Run `bun install --frozen-lockfile`, `bun run check:foundation`, `bun run typecheck`, `bun run lint`, `bun run format:check` and `bun run test` for bootstrap checks. `typecheck` checks TypeScript diagnostics, `lint` runs Oxlint rules, and `format:check` verifies Oxfmt formatting. Public command-client tests establish runtime sharing, cancellation, errors and disposal only.
 
 T3 Code is development tooling only. The brief excludes T3/Pocket/Codex application-code reuse, checks provenance before retaining your editor code, and keeps required notices for Pi Durable and the actual stack/dependencies.
 

@@ -16,9 +16,7 @@ test('Native correctness and project rules reject violations and preserve docume
     symlinkSync(path.join(root, 'node_modules'), path.join(directory, 'node_modules'), 'dir');
     writeFileSync(path.join(directory, '.gitignore'), 'node_modules/\n');
     writeFileSync(path.join(directory, 'package.json'), '{"private": true, "type": "module"}');
-    for (const config of ['oxlint.config.mts', 'oxfmt.config.mts']) {
-      copyFileSync(path.join(root, config), path.join(directory, config));
-    }
+    copyFileSync(path.join(root, 'oxlint.config.mts'), path.join(directory, 'oxlint.config.mts'));
     const fixtures = {
       'packages/shared/constants.js': 'const value = 1; value = 2; console.log(value);',
       'packages/shared/unused.ts': 'const unused: Array<string> = [];',
@@ -94,7 +92,16 @@ test('Native correctness and project rules reject violations and preserve docume
       JSON.stringify(diagnostics),
     );
     assert.deepEqual(codes('invalid.js'), []);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
+test('Oxfmt applies shared JSX layout and quote settings', () => {
+  const directory = mkdtempSync(path.join(tmpdir(), 'moonbase-format-'));
+  try {
+    symlinkSync(path.join(root, 'node_modules'), path.join(directory, 'node_modules'), 'dir');
+    copyFileSync(path.join(root, 'oxfmt.config.mts'), path.join(directory, 'oxfmt.config.mts'));
     const format = spawnSync(process.execPath, [tools('oxfmt'), '--stdin-filepath=example.tsx'], {
       cwd: directory,
       input:
