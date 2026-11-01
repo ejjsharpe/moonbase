@@ -1,11 +1,34 @@
 {
   "analytics": false,
   "targetDefaults": {
-    "typecheck": { "cache": true },
-    "lint": { "cache": true },
-    "test": { "cache": true },
-    "build": { "cache": true, "outputs": ["{projectRoot}/dist"] },
-    "package": { "dependsOn": ["build"], "cache": false },
-    "smoke": { "dependsOn": ["package"], "cache": false }
+    "typecheck": {
+      "cache": true
+    },
+    "lint": {
+      "cache": true,
+      "inputs": [
+        "default",
+        "{workspaceRoot}/oxlint.config.mts",
+        "{workspaceRoot}/packages/code-style/**/*",
+        {
+          "externalDependencies": ["oxlint"]
+        }
+      ]
+    },
+    "test": {
+      "cache": true
+    },
+    "build": {
+      "cache": true,
+      "outputs": ["{projectRoot}/dist"]
+    },
+    "package": {
+      "dependsOn": ["build"],
+      "cache": false
+    },
+    "smoke": {
+      "dependsOn": ["package"],
+      "cache": false
+    }
   }
 }

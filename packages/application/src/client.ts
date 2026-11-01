@@ -1,78 +1,172 @@
 /** Browser-safe application boundary. Privileged implementations use ./services. */
 export const maximumFileBytes = 2 * 1024 * 1024;
-export type CheckoutTarget = { hostId: string; checkoutId: string; projectId: string; root: string; branch: string };
+export type CheckoutTarget = {
+  hostId: string;
+  checkoutId: string;
+  projectId: string;
+  root: string;
+  branch: string;
+};
 export type FileTarget = { checkout: CheckoutTarget; path: string };
 export type FileDocument = { text: string; version: string };
-export type FileView = "file" | "staged" | "unstaged" | "untracked" | "conflict";
+export type FileView = 'file' | 'staged' | 'unstaged' | 'untracked' | 'conflict';
 export type EditorPosition = { line: number; column: number; top: number; left: number };
 export type CheckoutView = {
-  openFiles: string[]; active: string; preview: string | null;
+  openFiles: string[];
+  active: string;
+  preview: string | null;
   fileViews: Record<string, FileView>;
   positions: Record<string, Partial<Record<FileView | `${FileView}:original`, EditorPosition>>>;
-  tree: { expanded: string[]; selected: string[]; focus: string; scroll: number; hideIgnored: boolean };
+  tree: {
+    expanded: string[];
+    selected: string[];
+    focus: string;
+    scroll: number;
+    hideIgnored: boolean;
+  };
 };
 export type RecoveryDraft = { target: FileTarget; text: string; disk: FileDocument };
 export type EditorRecovery = {
-  version: 1; clientId: string; checkouts: CheckoutTarget[]; selectedCheckoutId: string | null;
-  views: Record<string, CheckoutView>; drafts: RecoveryDraft[];
-  recentFiles: FileTarget[]; sidebarWidth: number;
+  version: 1;
+  clientId: string;
+  checkouts: CheckoutTarget[];
+  selectedCheckoutId: string | null;
+  views: Record<string, CheckoutView>;
+  drafts: RecoveryDraft[];
+  recentFiles: FileTarget[];
+  sidebarWidth: number;
 };
 export const emptyRecovery = (clientId: string): EditorRecovery => ({
-  version: 1, clientId, checkouts: [], selectedCheckoutId: null, views: {}, drafts: [], recentFiles: [], sidebarWidth: 270,
+  version: 1,
+  clientId,
+  checkouts: [],
+  selectedCheckoutId: null,
+  views: {},
+  drafts: [],
+  recentFiles: [],
+  sidebarWidth: 270,
 });
-export type RecoveryLoad = { revision: number; state: EditorRecovery; errors: string[]; operations: OperationResult[] };
+export type RecoveryLoad = {
+  revision: number;
+  state: EditorRecovery;
+  errors: string[];
+  operations: OperationResult[];
+};
 export type DirectoryEntry = { path: string; directory: boolean; ignored?: boolean };
 export type DirectoryListing = { entries: DirectoryEntry[]; partial: boolean; error?: string };
-export type GitChange = { path: string; area: "staged" | "unstaged" | "untracked" };
+export type GitChange = { path: string; area: 'staged' | 'unstaged' | 'untracked' };
 export type GitStatus = { branch: string; changes: GitChange[]; error?: string };
-export type Comparison = { original: string; title: string; working: FileDocument | null; error?: string };
+export type Comparison = {
+  original: string;
+  title: string;
+  working: FileDocument | null;
+  error?: string;
+};
 export type EntryReference = { target: FileTarget; identity: string; directory: boolean };
 export type WorkspaceOperation = {
-  id: string; clientId: string; checkout: CheckoutTarget;
-  kind: "create-file" | "create-directory" | "move" | "copy" | "trash" | "import";
-  sources: EntryReference[]; destination?: string; text?: string;
-  replacements?: EntryReference[]; nativeReferences?: string[];
+  id: string;
+  clientId: string;
+  checkout: CheckoutTarget;
+  kind: 'create-file' | 'create-directory' | 'move' | 'copy' | 'trash' | 'import';
+  sources: EntryReference[];
+  destination?: string;
+  text?: string;
+  replacements?: EntryReference[];
+  nativeReferences?: string[];
 };
 export type OperationResult = {
-  id: string; kind: WorkspaceOperation["kind"];
-  outcome: "completed" | "failed" | "uncertain";
-  items: { source: string; destination?: string; outcome: "completed" | "failed" | "uncertain"; message?: string }[];
+  id: string;
+  kind: WorkspaceOperation['kind'];
+  outcome: 'completed' | 'failed' | 'uncertain';
+  items: {
+    source: string;
+    destination?: string;
+    outcome: 'completed' | 'failed' | 'uncertain';
+    message?: string;
+  }[];
   message?: string;
 };
 export type SaveResult =
-  | { kind: "saved"; disk: FileDocument; persistencePending?: boolean; message?: string }
-  | { kind: "conflict"; disk: FileDocument };
-export type WorkspaceEvent = { checkout: CheckoutTarget; paths: string[]; ready?: boolean; error?: string };
+  | { kind: 'saved'; disk: FileDocument; persistencePending?: boolean; message?: string }
+  | { kind: 'conflict'; disk: FileDocument };
+export type WorkspaceEvent = {
+  checkout: CheckoutTarget;
+  paths: string[];
+  ready?: boolean;
+  error?: string;
+};
 export type WorkspaceCommands = {
   openCheckout: { input: { root: string }; output: CheckoutTarget };
   readFile: { input: FileTarget; output: FileDocument };
-  saveFile: { input: { target: FileTarget; clientId: string; requestId: string; text: string; expectedVersion: string }; output: SaveResult };
-  listDirectory: { input: { checkout: CheckoutTarget; path: string; hideIgnored?: boolean }; output: DirectoryListing };
+  saveFile: {
+    input: {
+      target: FileTarget;
+      clientId: string;
+      requestId: string;
+      text: string;
+      expectedVersion: string;
+    };
+    output: SaveResult;
+  };
+  listDirectory: {
+    input: { checkout: CheckoutTarget; path: string; hideIgnored?: boolean };
+    output: DirectoryListing;
+  };
   gitStatus: { input: { checkout: CheckoutTarget }; output: GitStatus };
-  readComparison: { input: { target: FileTarget; area: "staged" | "unstaged" | "untracked" }; output: Comparison };
-  lookupFiles: { input: { checkout: CheckoutTarget; query: string; limit?: number }; output: { paths: string[]; partial: boolean; error?: string } };
-  inspectEntries: { input: { checkout: CheckoutTarget; paths: string[] }; output: EntryReference[] };
+  readComparison: {
+    input: { target: FileTarget; area: 'staged' | 'unstaged' | 'untracked' };
+    output: Comparison;
+  };
+  lookupFiles: {
+    input: { checkout: CheckoutTarget; query: string; limit?: number };
+    output: { paths: string[]; partial: boolean; error?: string };
+  };
+  inspectEntries: {
+    input: { checkout: CheckoutTarget; paths: string[] };
+    output: EntryReference[];
+  };
   mutate: { input: WorkspaceOperation; output: OperationResult };
   operationStatus: { input: { clientId: string; id: string }; output: OperationResult | null };
   acknowledgeOperation: { input: { clientId: string; id: string }; output: void };
   loadRecovery: { input: { clientId: string }; output: RecoveryLoad };
-  persistRecovery: { input: { clientId: string; expectedRevision: number; state: EditorRecovery }; output: { revision: number } };
+  persistRecovery: {
+    input: { clientId: string; expectedRevision: number; state: EditorRecovery };
+    output: { revision: number };
+  };
 };
 export type WorkspaceCommand = keyof WorkspaceCommands;
-export type CommandInput<K extends WorkspaceCommand> = WorkspaceCommands[K]["input"];
-export type CommandOutput<K extends WorkspaceCommand> = WorkspaceCommands[K]["output"];
-export type ApplicationErrorCode = "InvalidInput" | "Unavailable" | "Conflict" | "Persistence" | "Uncertain" | "Cancelled" | "Unauthorized" | "Incompatible";
+export type CommandInput<K extends WorkspaceCommand> = WorkspaceCommands[K]['input'];
+export type CommandOutput<K extends WorkspaceCommand> = WorkspaceCommands[K]['output'];
+export type ApplicationErrorCode =
+  | 'InvalidInput'
+  | 'Unavailable'
+  | 'Conflict'
+  | 'Persistence'
+  | 'Uncertain'
+  | 'Cancelled'
+  | 'Unauthorized'
+  | 'Incompatible';
 export class ApplicationError extends Error {
-  readonly _tag = "ApplicationError";
+  readonly _tag = 'ApplicationError';
   readonly code: ApplicationErrorCode;
   readonly target?: FileTarget;
   constructor(options: { code: ApplicationErrorCode; message: string; target?: FileTarget }) {
-    super(options.message); this.name = "ApplicationError"; this.code = options.code; this.target = options.target;
+    super(options.message);
+    this.name = 'ApplicationError';
+    this.code = options.code;
+    this.target = options.target;
   }
 }
 export type CommandOptions = { signal?: AbortSignal };
 export interface EditorClient {
-  command<K extends WorkspaceCommand>(operation: K, input: CommandInput<K>, options?: CommandOptions): Promise<CommandOutput<K>>;
-  watch(input: { checkout: CheckoutTarget; paths: string[] }, receive: (event: WorkspaceEvent) => void,
-    onError: (error: ApplicationError) => void): () => void;
+  command<K extends WorkspaceCommand>(
+    operation: K,
+    input: CommandInput<K>,
+    options?: CommandOptions,
+  ): Promise<CommandOutput<K>>;
+  watch(
+    input: { checkout: CheckoutTarget; paths: string[] },
+    receive: (event: WorkspaceEvent) => void,
+    onError: (error: ApplicationError) => void,
+  ): () => void;
 }

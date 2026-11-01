@@ -1,0 +1,34 @@
+{
+  "name": "@moonbase/code-style",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./oxlint": "./oxlint.mjs",
+    "./oxfmt": "./oxfmt.json"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "eslint-plugin-import": "2.32.0",
+    "eslint-plugin-react": "7.37.5",
+    "eslint": "9.39.5"
+  },
+  "nx": {
+    "targets": {
+      "test": {
+        "inputs": [
+          "default",
+          "{workspaceRoot}/oxlint.config.mts",
+          "{workspaceRoot}/oxfmt.config.mts",
+          {
+            "externalDependencies": [
+              "oxlint",
+              "oxfmt"
+            ]
+          }
+        ]
+      }
+    }
+  }
+}
