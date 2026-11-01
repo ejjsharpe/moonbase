@@ -32,8 +32,9 @@ async function main() {
   const rendererRoot = join(directory, "renderer");
   protocol.handle("moonbase", async request => {
     const url = new URL(request.url);
+    // Asset cache-busting queries do not grant document/IPC authority.
     const path = resolve(rendererRoot, "." + decodeURIComponent(url.pathname));
-    if (url.host !== "editor" || url.search || url.hash || path !== rendererRoot && !path.startsWith(rendererRoot + sep)) return new Response("Forbidden", { status: 403 });
+    if (url.host !== "editor" || url.hash || path !== rendererRoot && !path.startsWith(rendererRoot + sep)) return new Response("Forbidden", { status: 403 });
     try {
       const response = await net.fetch(pathToFileURL(path).href);
       const headers = new Headers(response.headers); headers.set("Content-Security-Policy", csp); headers.set("X-Content-Type-Options", "nosniff");
@@ -72,17 +73,18 @@ async function main() {
     catch (error) { return { ok: false, error: errorDTO(error) }; }
   });
   ipcMain.on(channels.cancel, (event, id: unknown) => { try { requireTrusted(event); editorSession.cancel(id); } catch (e) { console.error(ApplicationError.fromUnknown(e).message); } });
-  let quit: { id: string; stage: "preserve" | "dispose" } | undefined, exiting = false;
+  let quit: { id: string; stage: "preserve" | "dispose" } | undefined, exiting = false, rendererReady = false, quitRequested = false;
   function show() { if (!window.isDestroyed()) { window.show(); window.focus(); } }
-  function requestQuit() { show(); if (!quit) { quit = { id: randomUUID(), stage: "preserve" }; window.webContents.send(channels.action, "quit", quit.id); } }
+  function requestQuit() { quitRequested = true; show(); if (!rendererReady) return; if (!quit) { quit = { id: randomUUID(), stage: "preserve" }; window.webContents.send(channels.action, "quit", quit.id); } }
+  ipcMain.on(channels.ready, event => { try { requireTrusted(event); rendererReady = true; if (quitRequested) requestQuit(); } catch (error) { console.error(ApplicationError.fromUnknown(error).message); } });
   ipcMain.on(channels.quit, async (event, value: unknown) => {
     try {
       requireTrusted(event); const v = record(value); keys(v, ["id", "consent"]); requestId(v.id);
       if (!quit || v.id !== quit.id || typeof v.consent !== "boolean") throw new ApplicationError({ code: "Unauthorized", message: "No matching Quit request." });
-      if (!v.consent) { quit = undefined; show(); return; }
+      if (!v.consent) { quit = undefined; quitRequested = false; show(); return; }
       if (quit.stage === "preserve") { quit = { id: randomUUID(), stage: "dispose" }; window.webContents.send(channels.action, "dispose", quit.id); return; }
       editorSession.dispose(); await runtime.dispose(); exiting = true;
-      ipcMain.removeHandler(channels.call); ipcMain.removeAllListeners(channels.cancel); ipcMain.removeAllListeners(channels.quit);
+      ipcMain.removeHandler(channels.call); ipcMain.removeAllListeners(channels.cancel); ipcMain.removeAllListeners(channels.quit); ipcMain.removeAllListeners(channels.ready);
       window.destroy(); protocol.unhandle("moonbase"); app.quit();
     } catch (error) { quit = undefined; show(); console.error("Quit failed:", ApplicationError.fromUnknown(error).message); }
   });

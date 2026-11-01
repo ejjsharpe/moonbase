@@ -10,6 +10,7 @@ const bridge: DesktopBridge = {
   cancel: id => ipcRenderer.send(channels.cancel, id),
   events(receive) { const listener = (_: unknown, id: string, result: Reply) => receive(id, result); ipcRenderer.on(channels.event, listener); return () => ipcRenderer.removeListener(channels.event, listener); },
   actions(receive) { const listener = (_: unknown, action: DesktopAction, id: string) => receive(action, id); ipcRenderer.on(channels.action, listener); return () => ipcRenderer.removeListener(channels.action, listener); },
+  ready: () => ipcRenderer.send(channels.ready),
   quitResult: (id, consent) => ipcRenderer.send(channels.quit, { id, consent }),
   drop: (checkout, files) => call("dropped-imports", { checkout, paths: files.map(file => webUtils.getPathForFile(file)).filter(Boolean) }, crypto.randomUUID()),
 };

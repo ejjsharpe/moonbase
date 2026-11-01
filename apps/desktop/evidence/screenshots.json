@@ -1,0 +1,150 @@
+{
+  "normal.png": {
+    "window": {
+      "width": 1280,
+      "height": 850,
+      "zoom": 1
+    },
+    "viewport": {
+      "width": 1280,
+      "height": 818,
+      "devicePixelRatio": 2
+    },
+    "png": {
+      "width": 2560,
+      "height": 1636
+    },
+    "fixture": "actual sandboxed custom-scheme editor reads, edits and saves through SQLite workspace"
+  },
+  "restored-diff.png": {
+    "window": {
+      "width": 1280,
+      "height": 850,
+      "zoom": 1
+    },
+    "viewport": {
+      "width": 1280,
+      "height": 818,
+      "devicePixelRatio": 2
+    },
+    "png": {
+      "width": 2560,
+      "height": 1636
+    },
+    "fixture": "dirty recovery and comparison metadata restore across actual process restart"
+  },
+  "constrained-tabs.png": {
+    "window": {
+      "width": 760,
+      "height": 650,
+      "zoom": 1
+    },
+    "viewport": {
+      "width": 760,
+      "height": 618,
+      "devicePixelRatio": 2
+    },
+    "png": {
+      "width": 1520,
+      "height": 1236
+    },
+    "fixture": "previews, Keep Open, order, keyboard Close/Reopen and overflow remain useful at small size and zoom"
+  },
+  "zoom.png": {
+    "window": {
+      "width": 760,
+      "height": 650,
+      "zoom": 1.4
+    },
+    "viewport": {
+      "width": 543,
+      "height": 441,
+      "devicePixelRatio": 2.799999952316284
+    },
+    "png": {
+      "width": 1520,
+      "height": 1236
+    },
+    "fixture": "previews, Keep Open, order, keyboard Close/Reopen and overflow remain useful at small size and zoom"
+  },
+  "keyboard.png": {
+    "window": {
+      "width": 760,
+      "height": 650,
+      "zoom": 1.4
+    },
+    "viewport": {
+      "width": 543,
+      "height": 441,
+      "devicePixelRatio": 2.799999952316284
+    },
+    "png": {
+      "width": 1520,
+      "height": 1236
+    },
+    "fixture": "previews, Keep Open, order, keyboard Close/Reopen and overflow remain useful at small size and zoom"
+  },
+  "keyboard-dialog.png": {
+    "window": {
+      "width": 760,
+      "height": 650,
+      "zoom": 1.4
+    },
+    "viewport": {
+      "width": 543,
+      "height": 441,
+      "devicePixelRatio": 2.799999952316284
+    },
+    "png": {
+      "width": 1520,
+      "height": 1236
+    },
+    "fixture": "previews, Keep Open, order, keyboard Close/Reopen and overflow remain useful at small size and zoom"
+  },
+  "keyboard-menu.png": {
+    "window": {
+      "width": 760,
+      "height": 650,
+      "zoom": 1.4
+    },
+    "viewport": {
+      "width": 543,
+      "height": 441,
+      "devicePixelRatio": 2.799999952316284
+    },
+    "png": {
+      "width": 1520,
+      "height": 1236
+    },
+    "fixture": "previews, Keep Open, order, keyboard Close/Reopen and overflow remain useful at small size and zoom"
+  },
+  "collision.png": {
+    "window": {
+      "width": 1280,
+      "height": 850,
+      "zoom": 1
+    },
+    "viewport": {
+      "width": 1280,
+      "height": 818,
+      "devicePixelRatio": 2
+    },
+    "png": {
+      "width": 2560,
+      "height": 1636
+    },
+    "fixture": "replacement consent cannot overwrite another open dirty draft or admit a native mutation"
+  },
+  "packaged-editor.png": {
+    "viewport": {
+      "width": 1280,
+      "height": 818,
+      "devicePixelRatio": 2
+    },
+    "png": {
+      "width": 2560,
+      "height": 1636
+    },
+    "fixture": "fresh temporary Git repository with package.ts and lookup-native-resource.txt, UI-created packaged-created.txt and token-imported packaged-import.txt; no provider environment"
+  }
+}

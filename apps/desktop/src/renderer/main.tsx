@@ -10,12 +10,13 @@ import { workbench } from "@moonbase/ui/workbench";
 import { colors, space } from "@moonbase/ui/tokens.stylex";
 import { bridgeClient, unwrap, type DesktopBridge } from "../wire.ts";
 import "@moonbase/ui/reset.css";
-import "virtual:stylex:runtime";
 
 declare global { interface Window { moonbase: DesktopBridge } }
+document.body.className = stylex.props(workbench.document).className ?? "";
 configureMonacoWorkers();
 const bridge = window.moonbase, controller = createEditor({ client: bridgeClient(bridge), clientId: bridge.clientId });
 const root = createRoot(document.getElementById("root")!);
+const loaded = controller.load().catch(controller.report);
 const styles = stylex.create({
   shell: { height: "100dvh", display: "flex", flexDirection: "column", overflow: "hidden", backgroundColor: colors.canvas, color: colors.text },
   toolbar: { display: "flex", alignItems: "center", gap: space.sm, padding: space.sm, flexWrap: "wrap", borderBottomWidth: 1, borderBottomStyle: "solid", borderBottomColor: colors.border, backgroundColor: colors.chrome },
@@ -26,10 +27,10 @@ function Desktop() {
   const [closing, setClosing] = useState(false);
   const handle = useRef<EditorWorkbenchHandle>(null), state = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
   const selected = state.recovery.checkouts.find(c => c.checkoutId === state.recovery.selectedCheckoutId);
-  useEffect(() => bridge.actions((action, id) => {
+  useEffect(() => { const stop = bridge.actions((action, id) => {
     if (action === "quit") void (async () => { try { const consent = await handle.current?.prepareQuit() ?? false; if (consent) flushSync(() => setClosing(true)); bridge.quitResult(id, consent); } catch (error) { controller.report(error); bridge.quitResult(id, false); } })();
     if (action === "dispose") { controller.dispose(); root.unmount(); bridge.quitResult(id, true); }
-  }), []);
+  }); void loaded.then(() => bridge.ready()); return stop; }, []);
   const run = (task: Promise<unknown>) => { void task.catch(controller.report); };
   return <main inert={closing} {...stylex.props(workbench.document, styles.shell)} onDragOver={event => { if (event.dataTransfer.types.includes("Files")) event.preventDefault(); }} onDrop={event => {
     if (!event.dataTransfer.files.length) return;
@@ -49,4 +50,4 @@ function Desktop() {
   </main>;
 }
 root.render(<Desktop />);
-await controller.load().catch(controller.report);
+await loaded;

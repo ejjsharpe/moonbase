@@ -1,0 +1,101 @@
+Root 12 uncached Nx tasks
+/tmp/moonbase-task04-nx.log
+ℹ tests 14
+ℹ pass 14
+ℹ fail 0
+ℹ skipped 0
+ℹ tests 103
+ℹ pass 103
+ℹ fail 0
+ℹ skipped 0
+ℹ tests 5
+ℹ pass 5
+ℹ fail 0
+ℹ skipped 0
+ℹ tests 91
+ℹ pass 91
+ℹ fail 0
+ℹ skipped 0
+ NX   Successfully ran targets typecheck, lint, test for 4 projects
+
+Real integration
+/tmp/moonbase-task04-integration.log
+ℹ tests 15
+ℹ pass 15
+ℹ fail 0
+ℹ skipped 0
+
+Electron 22
+/tmp/moonbase-task04-desktop-final.log
+Running 22 tests using 1 worker
+  ✓   1 test/desktop.spec.ts:59:44 › rapid native Open to Find retains the dialog (immediate) (2.4s)
+  ✓   2 test/desktop.spec.ts:59:44 › rapid native Open to Find retains the dialog (held discovery) (1.4s)
+  ✓   3 test/desktop.spec.ts:87:1 › actual sandboxed custom-scheme editor reads, edits and saves through SQLite workspace (1.6s)
+  ✓   4 test/desktop.spec.ts:111:1 › actual conflict Compare, Cancel, Overwrite and Reload retain one dirty working buffer and Git index (2.3s)
+  ✓   5 test/desktop.spec.ts:136:1 › window close hides mounted Monaco; Quit Cancel preserves undo, then Save quits and releases resources (2.4s)
+  ✓   6 test/desktop.spec.ts:163:1 › SQLite contention vetoes Quit Discard; exact resolution and fresh choice keep window usable (2.0s)
+  ✓   7 test/desktop.spec.ts:178:1 › dirty recovery and comparison metadata restore across actual process restart (2.6s)
+  ✓   8 test/desktop.spec.ts:188:1 › lost real Save reply retries original identity without replacing the native file again (1.8s)
+  ✓   9 test/desktop.spec.ts:202:1 › actual IPC rejects unapproved roots, foreign callers/targets, unknown inputs and navigation (1.4s)
+  ✓  10 test/desktop.spec.ts:241:1 › native picker creates scoped single-use tokens through the actual bridge; fake File paths grant no authority (1.2s)
+  ✓  11 test/desktop.spec.ts:263:1 › controlled clipboard fixtures require native consent and capture real files without accessing user's clipboard (1.3s)
+  ✓  12 test/desktop.spec.ts:282:1 › real create, dirty move and copy use native operations; lost move reply resolves status without replay (2.6s)
+  ✓  13 test/desktop.spec.ts:305:1 › previews, Keep Open, order, keyboard Close/Reopen and overflow remain useful at small size and zoom (4.3s)
+  ✓  14 test/desktop.spec.ts:341:1 › native Trash moves only a captured temporary fixture and leaves its dirty draft available (1.8s)
+  ✓  15 test/desktop.spec.ts:360:1 › unknown final Quit publication retains the window and resolves only the exact committed receipt (1.8s)
+  ✓  16 test/desktop.spec.ts:376:1 › a command cancelled over real IPC keeps typed cancellation and leaves unrelated IO usable (1.2s)
+  ✓  17 test/desktop.spec.ts:387:1 › exact checkout tabs preserve independent dirty paths, views and closed metadata through native approval (2.4s)
+  ✓  18 test/desktop.spec.ts:404:1 › single-file picker and File-backed drop share the editor's destination dialog (1.6s)
+  ✓  19 test/desktop.spec.ts:420:1 › unacknowledged real move evidence restores dirty text on process restart without another mutation (2.6s)
+  ✓  20 test/desktop.spec.ts:434:1 › replacement consent cannot overwrite another open dirty draft or admit a native mutation (2.2s)
+  ✓  21 test/desktop.spec.ts:446:1 › a file named checkout remains data when its view and draft cross the authority boundary (1.8s)
+  ✓  22 test/desktop.spec.ts:454:1 › an explicit native Quit arriving before renderer startup is not lost (1.2s)
+  22 passed (44.5s)
+
+Unsigned package build
+/tmp/moonbase-task04-package.log
+ NX   Successfully ran target package for project @moonbase/desktop and 2 tasks it depends on
+
+Packaged execution
+/tmp/moonbase-task04-packaged.log
+  ✓  1 test/packaged.spec.ts:8:1 › unsigned macOS package runs with only system PATH, SQLite, native/rg resources and CSP workers (5.1s)
+  1 passed (5.5s)
+
+Rapid lookup repeats
+/tmp/moonbase-task04-rapid-lookup.log
+Running 10 tests using 1 worker
+  ✓   1 test/desktop.spec.ts:59:44 › rapid native Open to Find retains the dialog (immediate) (2.3s)
+  ✓   2 test/desktop.spec.ts:59:44 › rapid native Open to Find retains the dialog (held discovery) (1.4s)
+  ✓   3 test/desktop.spec.ts:59:44 › rapid native Open to Find retains the dialog (immediate) (1.5s)
+  ✓   4 test/desktop.spec.ts:59:44 › rapid native Open to Find retains the dialog (held discovery) (1.5s)
+  ✓   5 test/desktop.spec.ts:59:44 › rapid native Open to Find retains the dialog (immediate) (1.6s)
+  ✓   6 test/desktop.spec.ts:59:44 › rapid native Open to Find retains the dialog (held discovery) (1.5s)
+  ✓   7 test/desktop.spec.ts:59:44 › rapid native Open to Find retains the dialog (immediate) (1.4s)
+  ✓   8 test/desktop.spec.ts:59:44 › rapid native Open to Find retains the dialog (held discovery) (1.4s)
+  ✓   9 test/desktop.spec.ts:59:44 › rapid native Open to Find retains the dialog (immediate) (1.4s)
+  ✓  10 test/desktop.spec.ts:59:44 › rapid native Open to Find retains the dialog (held discovery) (1.4s)
+  10 passed (16.8s)
+
+Explicit status repeats
+/tmp/moonbase-task04-status-repeat.log
+Running 3 tests using 1 worker
+  ✓  1 test/desktop.spec.ts:273:1 › real create, dirty move and copy use native operations; lost move reply resolves status without replay (3.0s)
+  ✓  2 test/desktop.spec.ts:273:1 › real create, dirty move and copy use native operations; lost move reply resolves status without replay (2.8s)
+  ✓  3 test/desktop.spec.ts:273:1 › real create, dirty move and copy use native operations; lost move reply resolves status without replay (2.7s)
+  3 passed (9.4s)
+
+Frame policy repeats
+/tmp/moonbase-task04-frame-repeat.log
+Running 3 tests using 1 worker
+  ✓  1 test/desktop.spec.ts:202:1 › actual IPC rejects unapproved roots, foreign callers/targets, unknown inputs and navigation (1.7s)
+  ✓  2 test/desktop.spec.ts:202:1 › actual IPC rejects unapproved roots, foreign callers/targets, unknown inputs and navigation (1.5s)
+  ✓  3 test/desktop.spec.ts:202:1 › actual IPC rejects unapproved roots, foreign callers/targets, unknown inputs and navigation (1.6s)
+  3 passed (5.7s)
+
+SQLite contention repeats
+/tmp/moonbase-task04-contention-repeat.log
+Running 3 tests using 1 worker
+  ✓  1 test/desktop.spec.ts:135:1 › SQLite contention vetoes Quit Discard; exact resolution and fresh choice keep window usable (2.7s)
+  ✓  2 test/desktop.spec.ts:135:1 › SQLite contention vetoes Quit Discard; exact resolution and fresh choice keep window usable (2.0s)
+  ✓  3 test/desktop.spec.ts:135:1 › SQLite contention vetoes Quit Discard; exact resolution and fresh choice keep window usable (2.0s)
+  3 passed (7.7s)

@@ -37,8 +37,8 @@
     "html-RMGzLAmU.js",
     "html.worker-D9ugpX4y.js",
     "htmlMode-D71tr5wz.js",
+    "index-DpafypsJ.js",
     "index-Dq5RUqpG.css",
-    "index-X4SvUScU.js",
     "ini-sBoK_t0W.js",
     "java-BEtHBSE6.js",
     "javascript-3OmBWpVs.js",
@@ -142,13 +142,26 @@
       "bytes": 80669,
       "mode": 420,
       "sha256": "7d947781e53597a8e9ef08eba28f9e0184ad08370036ddc2e28405d77c118d42"
+    },
+    {
+      "name": "LICENSE.electron.txt",
+      "bytes": 1096,
+      "mode": 420,
+      "sha256": "5154e165bd6c2cc0cfbcd8916498c7abab0497923bafcd5cb07673fe8480087d"
+    },
+    {
+      "name": "LICENSES.chromium.html",
+      "bytes": 5598206,
+      "mode": 420,
+      "sha256": "214152f78cc0b611f63ff8faefcc6670c4605ffbff05f092bb671e6df80ce741"
     }
   ],
   "workerErrors": [],
-  "asarSha256": "e41ca101cc35f76ec50a94fc507b2829a1cdc614132f0faf4b050ce610fe8b92",
-  "fixture": "fresh temporary Git repository with package.ts and lookup-native-resource.txt; no provider environment",
+  "asarSha256": "7a24f8ea0d9386307318ab8bf12b5cfee5eb855443ce16fd56e5312c785e6d6b",
+  "fixture": "fresh temporary Git repository with package.ts and lookup-native-resource.txt, UI-created packaged-created.txt and token-imported packaged-import.txt; no provider environment",
   "viewport": {
     "width": 1280,
-    "height": 818
+    "height": 818,
+    "devicePixelRatio": 2
   }
 }

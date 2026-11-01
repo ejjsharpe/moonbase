@@ -29,18 +29,15 @@ export class EditorSession {
     if (value === null || typeof value === "boolean" || typeof value === "number" && Number.isFinite(value)) return;
     if (Array.isArray(value)) { if (value.length > 8192) invalid("Input array too large."); for (const item of value) this.inspect(item, depth + 1); return; }
     const object = record(value);
-    for (const [key, item] of Object.entries(object)) {
-      if (["__proto__", "constructor", "prototype"].includes(key)) invalid("Invalid object key.");
-      if (key === "checkout") this.approved(item);
-      if (key === "checkouts") { if (Array.isArray(item)) { for (const target of item) this.approved(target); } else invalid("Invalid checkout registry."); }
-      this.inspect(item, depth + 1);
-    }
+    for (const item of Object.values(object)) this.inspect(item, depth + 1);
   }
   private validate(operation: WorkspaceCommand, input: unknown) {
     const v = record(input), [allowed, required] = commandFields[operation]; keys(v, allowed, required ?? allowed);
     // Domain/path/state validation remains in WorkspaceService; this boundary additionally binds caller and approval.
     if (JSON.stringify(v).length > 32 * 1024 * 1024) invalid("Command input is too large.");
     this.inspect(v);
+    if ("checkout" in v) this.approved(v.checkout);
+    if ("target" in v) { const target = record(v.target); keys(target, ["checkout", "path"]); this.approved(target.checkout); }
     if (operation === "operationStatus") {
       requestId(v.clientId); requestId(v.id);
       if (v.clientId !== this.clientId && !this.operations.has(JSON.stringify([v.clientId, v.id]))) this.own(v.clientId);
@@ -49,7 +46,11 @@ export class EditorSession {
       requestId(v.operationClientId); requestId(v.id);
       if (v.operationClientId !== this.clientId && !this.operations.has(JSON.stringify([v.operationClientId, v.id]))) this.own(v.operationClientId);
     }
-    if (operation === "persistRecovery") this.own(record(v.state).clientId);
+    if (operation === "persistRecovery") {
+      const state = record(v.state); this.own(state.clientId);
+      if (!Array.isArray(state.checkouts)) invalid("Invalid checkout registry.");
+      for (const target of state.checkouts as unknown[]) this.approved(target);
+    }
     if (operation === "openCheckout") {
       string(v.root);
       if (!this.rootGrants.delete(v.root) && ![...this.known.values()].some(t => t.root === v.root)) throw new ApplicationError({ code: "Unauthorized", message: "A renderer path is not native root approval." });
@@ -62,7 +63,7 @@ export class EditorSession {
       requestId(id);
       if (this.closed) throw new ApplicationError({ code: "Unavailable", message: "Editor session disposed." });
       if (this.active.has(id)) invalid("Request is already active.");
-      if (this.active.size >= 128) invalid("Too many active requests.");
+      if ([...this.active.values()].filter(request => request.watch === (method === "watch")).length >= 128) invalid("Too many active requests of this kind.");
       const abort = new AbortController(); reserved = { cancel: () => abort.abort(), watch: false }; this.active.set(id, reserved);
       let value: unknown;
       if (method === "command") {

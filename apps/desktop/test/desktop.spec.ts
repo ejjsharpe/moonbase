@@ -8,8 +8,8 @@ import { DatabaseSync } from "node:sqlite";
 import { execFileSync } from "node:child_process";
 
 let app: ElectronApplication, child: ChildProcess, page: Page, base: string, checkout: string;
-const errors: string[] = [];
-declare global { var desktopTest: { calls: {method: string; input: {operation?: string; input?: Record<string, unknown>}}[]; results: { operation?: string; reply: {ok: boolean; value?: {items: {message?: string}[]}} }[]; fault: string | null; noStatus: boolean; held: string | null; release(): void; cancels: number }; }
+const errors: string[] = [], consoleErrors: string[] = [];
+declare global { var desktopTest: { calls: {method: string; input: {operation?: string; input?: Record<string, unknown>}}[]; results: { operation?: string; reply: {ok: boolean; value?: {items: {message?: string}[]}} }[]; fault: string | null; noStatus: boolean; outage: string | null; restoreOn: string | null; held: string | null; release(): void; cancels: number }; }
 test.beforeEach(async () => {
   base = realpathSync(mkdtempSync(join(tmpdir(), "moonbase-desktop-"))); checkout = join(base, "checkout"); mkdirSync(checkout);
   const git = (...args: string[]) => execFileSync("/usr/bin/git", ["-C", checkout, "-c", "user.name=Moonbase Test", "-c", "user.email=test@example.invalid", ...args], { env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" } });
@@ -18,31 +18,77 @@ test.beforeEach(async () => {
   await launch();
 });
 async function launch() {
-  errors.length = 0;
+  errors.length = 0; consoleErrors.length = 0;
   const env = { ...process.env, MOONBASE_USER_DATA: join(base, "user-data"), MOONBASE_TEST_REPORT: join(base, "quit-report.json"), GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } as Record<string, string>; delete env.ELECTRON_RUN_AS_NODE;
   app = await electron.launch({ args: [resolve("test/harness.mjs")], env, timeout: 20000 });
   child = app.process();
   child.stderr?.on("data", value => console.log(String(value)));
   page = await app.firstWindow(); page.on("pageerror", e => errors.push(e.message));
+  page.on("response", response => { if (response.status() >= 400) console.log("Renderer HTTP:", response.status(), response.url()); });
+  page.on("console", message => { if (message.type() === "error") { consoleErrors.push(message.text()); console.log("Renderer console:", message.text()); } });
   await expect(page.getByRole("button", { name: "Open checkout", exact: true })).toBeVisible();
   await app.evaluate(({ dialog }, root) => { dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [root] })) as typeof dialog.showOpenDialog; }, checkout);
 }
-test.afterEach(async () => { if (child && child.exitCode === null && child.signalCode === null) { await forceStop(); } rmSync(base, { recursive: true, force: true }); });
+test.afterEach(async ({}, info) => {
+  try { expect(errors).toEqual([]); expect(consoleErrors.filter(text => !(info.title.includes("actual IPC rejects") && text.includes("frame-src")))).toEqual([]); }
+  finally { if (child && child.exitCode === null && child.signalCode === null) await forceStop(); rmSync(base, { recursive: true, force: true }); }
+});
+async function capture(name: string) {
+  const file = `test-results/${name}.png`;
+  const window = await app.evaluate(({ BrowserWindow }) => { const window = BrowserWindow.getAllWindows()[0], { width, height } = window.getBounds(); return { width, height, zoom: window.webContents.getZoomFactor() }; });
+  const viewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight, devicePixelRatio }));
+  const bytes = await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0].webContents.capturePage()).toPNG().toString("base64"));
+  writeFileSync(file, Buffer.from(bytes, "base64"));
+  const png = readFileSync(file);
+  writeFileSync(file + ".json", JSON.stringify({ window, viewport, png: { width: png.readUInt32BE(16), height: png.readUInt32BE(20) }, fixture: test.info().title }, null, 2) + "\n");
+}
 async function forceStop() {
   if (child.exitCode !== null || child.signalCode !== null) return;
   const exit = new Promise<void>(resolve => child.once("exit", () => resolve())); child.kill("SIGKILL"); await exit;
 }
 async function open(path = "a.ts") {
-  if (!await page.getByRole("button", { name: "Find file", exact: true }).count()) await page.getByRole("button", { name: "Open checkout", exact: true }).click();
+  if (!await page.getByRole("button", { name: "Find file", exact: true }).count()) {
+    await page.getByRole("button", { name: "Open checkout", exact: true }).click();
+    await expect(page.getByRole("tab", { name: "checkout · main", exact: true })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("treeitem").first()).toBeVisible();
+  }
   await page.getByRole("button", { name: "Find file", exact: true }).click(); await page.getByRole("combobox").fill(path); await expect(page.getByRole("option", { name: path, exact: true })).toBeVisible(); await page.getByRole("combobox").press("Enter");
   await expect(page.getByRole("textbox", { name: `${path} editor`, exact: true })).toBeVisible();
 }
 async function edit(text: string, path = "a.ts") { const input = page.getByRole("textbox", { name: `${path} editor`, exact: true }); await input.focus(); await input.press("Meta+a"); await input.pressSequentially(text); }
+for (const holdDiscovery of [false, true]) test(`rapid native Open to Find retains the dialog (${holdDiscovery ? "held discovery" : "immediate"})`, async () => {
+  await app.context().tracing.start({ screenshots: true, snapshots: true, sources: true });
+  await page.evaluate(() => {
+    const events: unknown[] = []; let previous = "";
+    Object.assign(window, { rapidLookupEvents: events });
+    const record = () => { const active = document.activeElement, state = JSON.stringify({ dialogs: document.querySelectorAll('[role="dialog"]').length, focus: active?.getAttribute("aria-label") ?? active?.getAttribute("role") ?? active?.tagName, selected: document.querySelector('[aria-label="Checkouts"] [aria-selected="true"]')?.textContent }); if (state !== previous) { previous = state; events.push({ time: performance.now(), state: JSON.parse(state) }); } };
+    new MutationObserver(record).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["aria-selected"] }); document.addEventListener("focusin", record); record();
+  });
+  try {
+    if (holdDiscovery) await app.evaluate(() => { globalThis.desktopTest.held = "listDirectory"; });
+    await page.getByRole("button", { name: "Open checkout", exact: true }).click();
+    await page.getByRole("button", { name: "Find file", exact: true }).click();
+    await page.getByRole("combobox").fill("a.ts");
+    if (holdDiscovery) { await expect.poll(() => app.evaluate(() => globalThis.desktopTest.held)).toBe("waiting"); await app.evaluate(() => { globalThis.desktopTest.release(); }); }
+    await expect(page.getByRole("option", { name: "a.ts", exact: true })).toBeVisible();
+    await page.getByRole("combobox").press("Enter");
+    await expect(page.getByRole("textbox", { name: "a.ts editor", exact: true })).toBeFocused();
+    await page.getByRole("textbox", { name: "a.ts editor", exact: true }).pressSequentially("rapid flow typing"); await expect(page.locator('.view-line').filter({ hasText: "rapid flow typing" }).first()).toBeVisible();
+  } finally {
+    const evidence = { holdDiscovery, events: await page.evaluate(() => (window as unknown as { rapidLookupEvents: unknown[] }).rapidLookupEvents), io: await app.evaluate(() => ({ calls: globalThis.desktopTest.calls, results: globalThis.desktopTest.results })) };
+    const eventsPath = test.info().outputPath("rapid-lookup-events.json"); writeFileSync(eventsPath, JSON.stringify(evidence, null, 2) + "\n");
+    await test.info().attach("rapid-lookup-events", { path: eventsPath, contentType: "application/json" });
+    const png = await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0].webContents.capturePage()).toPNG().toString("base64"));
+    const screenshotPath = test.info().outputPath("rapid-lookup-screen.png"); writeFileSync(screenshotPath, Buffer.from(png, "base64"));
+    await test.info().attach("rapid-lookup-screen", { path: screenshotPath, contentType: "image/png" });
+    await app.context().tracing.stop({ path: test.info().outputPath("rapid-lookup-trace.zip") });
+  }
+});
 test("actual sandboxed custom-scheme editor reads, edits and saves through SQLite workspace", async () => {
   await open(); await edit("export const saved = 42;"); await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect.poll(() => readFileSync(join(checkout, "a.ts"), "utf8")).toBe("export const saved = 42;");
   expect(await page.evaluate(() => ({ node: typeof (window as unknown as {require: unknown}).require, process: typeof (window as unknown as {process: unknown}).process, url: location.href }))).toEqual({ node: "undefined", process: "undefined", url: "moonbase://editor/index.html" });
-  await page.screenshot({ path: "test-results/desktop-normal.png", scale: "css" }); expect(errors).toEqual([]);
+  await capture("desktop-normal"); expect(errors).toEqual([]);
 });
 
 async function checkoutTarget() {
@@ -80,6 +126,8 @@ test("actual conflict Compare, Cancel, Overwrite and Reload retain one dirty wor
     await edit("shared " + area); await page.getByLabel("File view", { exact: true }).selectOption("file");
     await expect(page.locator('.view-line').filter({ hasText: "shared " + area }).first()).toBeVisible();
   }
+  await page.getByRole("button", { name: "Diff", exact: true }).click(); await expect(page.locator('.view-line').filter({ hasText: "shared unstaged" }).first()).toBeVisible();
+  await page.getByRole("button", { name: "Files", exact: true }).click(); await expect(page.locator('.view-line').filter({ hasText: "shared unstaged" }).first()).toBeVisible();
   writeFileSync(join(checkout, "a.ts"), "latest external"); await page.getByRole("button", { name: "Save", exact: true }).click(); await page.getByRole("button", { name: "Reload", exact: true }).click();
   await expect(page.locator('.view-line').filter({ hasText: "latest external" }).first()).toBeVisible();
   expect(execFileSync("/usr/bin/git", ["-C", checkout, "show", ":a.ts"], { encoding: "utf8" })).toContain("INDEX"); expect(errors).toEqual([]);
@@ -91,12 +139,22 @@ test("window close hides mounted Monaco; Quit Cancel preserves undo, then Save q
   expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible())).toBe(false);
   await app.evaluate(({ app }) => { app.emit("activate", {} as never, false); });
   const input = page.getByRole("textbox", { name: "a.ts editor", exact: true }); await expect(input).toBeVisible();
-  await input.focus(); await input.press("End"); await input.pressSequentially(" extra"); await input.press("Meta+z");
+  await input.focus();
+  for (let step = 0; step < 8 && !await page.locator('.view-line').filter({ hasText: "WORKING" }).count(); step++) await input.press("Meta+z");
+  await expect(page.locator('.view-line').filter({ hasText: "WORKING" }).first()).toBeVisible();
+  for (let step = 0; step < 8 && !await page.locator('.view-line').filter({ hasText: "retained across hide" }).count(); step++) await input.press("Meta+Shift+z");
+  await expect(page.locator('.view-line').filter({ hasText: "retained across hide" }).first()).toBeVisible();
+  await input.press("End"); await input.pressSequentially(" extra"); await input.press("Meta+z");
   await expect(page.locator('.view-line').filter({ hasText: "retained across hide" }).first()).toBeVisible();
   await quit(); await page.getByRole("button", { name: "Cancel", exact: true }).click();
   await input.focus(); await input.press("End"); await input.pressSequentially(" after cancel");
-  const exited = app.waitForEvent("close"); await quit(); await page.getByRole("dialog").getByRole("button", { name: "Save", exact: true }).click(); await exited;
+  await open("b.ts"); await edit("second draft after cancel", "b.ts");
+  await quit(); await page.getByRole("dialog").getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByRole("dialog")).toContainText("b.ts has unsaved changes"); await page.getByRole("dialog").getByRole("button", { name: "Cancel", exact: true }).click();
   expect(readFileSync(join(checkout, "a.ts"), "utf8")).toContain("after cancel");
+  await expect(page.locator('.view-line').filter({ hasText: "second draft after cancel" }).first()).toBeVisible();
+  const exited = app.waitForEvent("close"); await quit(); await page.getByRole("dialog").getByRole("button", { name: "Save", exact: true }).click(); await exited;
+  expect(readFileSync(join(checkout, "a.ts"), "utf8")).toContain("after cancel"); expect(readFileSync(join(checkout, "b.ts"), "utf8")).toBe("second draft after cancel");
   const report = JSON.parse(readFileSync(join(base, "quit-report.json"), "utf8"));
   expect(report.resources.filter((name: string) => /FSWatcher/.test(name))).toEqual([]); expect(report.cancelListeners).toBe(0);
   const db = new DatabaseSync(join(base, "user-data/workspace-v1/moonbase-workspace-v1.sqlite")); db.exec("BEGIN IMMEDIATE; ROLLBACK"); db.close();
@@ -124,18 +182,21 @@ test("dirty recovery and comparison metadata restore across actual process resta
   await expect(page.getByRole("textbox", { name: "a.ts editor", exact: true })).toBeVisible(); await expect(page.getByLabel("File view", { exact: true })).toHaveValue("staged");
   await expect(page.locator('.view-line').filter({ hasText: "dirty restored staged" }).first()).toBeVisible();
   expect((await recovery()).state.drafts[0].disk.text).toContain("WORKING");
-  await page.screenshot({ path: "test-results/desktop-restored-diff.png" }); expect(errors).toEqual([]);
+  await capture("desktop-restored-diff"); expect(errors).toEqual([]);
 });
 
 test("lost real Save reply retries original identity without replacing the native file again", async () => {
   await open(); await edit("captured Save"); await expect.poll(async () => (await recovery()).state.drafts[0]?.text).toBe("captured Save");
   await app.evaluate(() => { globalThis.desktopTest.fault = "saveFile"; });
   await page.getByRole("button", { name: "Save", exact: true }).click(); await expect(page.getByRole("button", { name: "Retry Save", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Retry Save", exact: true })).toBeEnabled();
+  await expect.poll(() => readFileSync(join(checkout, "a.ts"), "utf8")).toBe("captured Save");
+  const savedInode = statSync(join(checkout, "a.ts")).ino;
   await edit("newer after lost reply"); await page.getByRole("button", { name: "Retry Save", exact: true }).click();
   await expect(page.getByRole("button", { name: "Save", exact: true })).toBeVisible();
   await expect.poll(async () => (await recovery()).state.drafts[0]?.text).toBe("newer after lost reply");
   const saves = await app.evaluate(() => globalThis.desktopTest.calls.filter(call => call.input?.operation === "saveFile"));
-  expect(saves).toHaveLength(2); expect(saves[0].input.input).toEqual(saves[1].input.input); expect(readFileSync(join(checkout, "a.ts"), "utf8")).toBe("captured Save");
+  expect(saves).toHaveLength(2); expect(saves[0].input.input).toEqual(saves[1].input.input); expect(readFileSync(join(checkout, "a.ts"), "utf8")).toBe("captured Save"); expect(statSync(join(checkout, "a.ts")).ino).toBe(savedInode);
 });
 
 test("actual IPC rejects unapproved roots, foreign callers/targets, unknown inputs and navigation", async () => {
@@ -159,8 +220,22 @@ test("actual IPC rejects unapproved roots, foreign callers/targets, unknown inpu
   await page.evaluate(() => { window.open("https://example.invalid/"); }); expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(windows);
   await page.evaluate(() => { location.href = "https://example.invalid/"; }); await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.getURL())).toBe("moonbase://editor/index.html");
   expect(await page.evaluate(() => location.href)).toBe("moonbase://editor/index.html");
-  await page.evaluate(() => { const frame = document.createElement("iframe"); frame.srcdoc = "<p>blocked</p>"; document.body.append(frame); });
-  expect(await page.evaluate(() => document.querySelector("iframe")?.contentDocument?.body?.textContent ?? "")).not.toContain("blocked");
+  const localFrame = await page.evaluate(async () => {
+    const frame = document.createElement("iframe"), loaded = new Promise<void>(resolve => frame.onload = () => resolve());
+    frame.srcdoc = "<p>Local frame</p>"; document.body.append(frame); await loaded;
+    return typeof (frame.contentWindow as Window & { moonbase?: unknown } | null)?.moonbase;
+  });
+  expect(localFrame).toBe("undefined");
+  const framePolicy = await page.evaluate(async () => {
+    const violation = new Promise<string>(resolve => document.addEventListener("securitypolicyviolation", event => resolve(event.effectiveDirective), { once: true }));
+    const frame = document.createElement("iframe"); frame.src = "moonbase://editor/index.html"; document.body.append(frame); return violation;
+  });
+  expect(framePolicy).toBe("frame-src");
+  const wrongDocument = await app.evaluate(async ({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0]; await window.loadURL("about:blank");
+    return window.webContents.executeJavaScript('window.moonbase.call("command", {operation:"loadRecovery", input:{clientId:window.moonbase.clientId}}, "wrong-document")');
+  });
+  expect(wrongDocument.ok).toBe(false); expect(wrongDocument.error.code).toBe("Unauthorized");
 });
 
 test("native picker creates scoped single-use tokens through the actual bridge; fake File paths grant no authority", async () => {
@@ -210,7 +285,8 @@ test("real create, dirty move and copy use native operations; lost move reply re
   await expect(page.getByRole("tab", { name: "created.ts", exact: true })).toBeVisible(); await edit("dirty created buffer", "created.ts");
   await page.getByRole("treeitem", { name: "created.ts, unsaved", exact: true }).click();
   await page.getByRole("button", { name: "Rename / Move", exact: true }).click(); await page.getByLabel("Destination relative path").fill("renamed.ts");
-  await app.evaluate(() => { globalThis.desktopTest.fault = "mutate"; });
+  // Keep live observation from resolving the fact before the explicit status gesture.
+  await app.evaluate(() => { globalThis.desktopTest.fault = "mutate"; globalThis.desktopTest.outage = "loadRecovery"; globalThis.desktopTest.restoreOn = "operationStatus"; });
   await page.getByRole("dialog").getByRole("button", { name: "Rename or move", exact: true }).click();
   await expect.poll(() => existsSync(join(checkout, "renamed.ts"))).toBe(true);
   await page.getByRole("dialog").getByRole("button", { name: "Cancel", exact: true }).click();
@@ -232,24 +308,34 @@ test("previews, Keep Open, order, keyboard Close/Reopen and overflow remain usef
   await expect(page.getByRole("button", { name: "Keep Open", exact: true })).toBeVisible(); await page.getByRole("button", { name: "Keep Open", exact: true }).click();
   for (let i = 0; i < 7; i++) await open(`long-component-name-for-overflow-${i}.ts`);
   await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].setSize(760, 650); });
-  await page.screenshot({ path: "test-results/desktop-constrained-tabs.png" });
+  await capture("desktop-constrained-tabs");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   const selected = "long-component-name-for-overflow-6.ts";
   const input = page.getByRole("textbox", { name: `${selected} editor`, exact: true }); await input.focus(); await input.press("Meta+w");
   await expect(page.getByRole("tab", { name: selected, exact: true })).toHaveCount(0);
   await page.getByRole("textbox", { name: "long-component-name-for-overflow-5.ts editor", exact: true }).press("Meta+Shift+t");
   await expect(page.getByRole("tab", { name: selected, exact: true })).toBeVisible(); await expect(input).toBeFocused(); await input.press("End"); await input.pressSequentially(" typed after reopen");
-  await input.press("Control+Tab"); await input.press("Control");
-  await page.keyboard.press("Escape");
+  await input.press("Control+Tab");
+  const previous = page.getByRole("textbox", { name: "long-component-name-for-overflow-5.ts editor", exact: true });
+  await expect(previous).toBeFocused(); await previous.press("End"); await previous.pressSequentially(" mru typing");
+  await previous.press("Meta+Alt+ArrowRight"); await expect(input).toBeFocused(); await input.press("End"); await input.pressSequentially(" visual typing");
+  const tabs = page.getByRole("tablist", { name: "Open files", exact: true }).getByRole("tab");
+  const before = await tabs.evaluateAll(elements => elements.map(element => element.getAttribute("aria-label")));
+  await page.getByRole("button", { name: "Tab actions", exact: true }).click(); await page.getByRole("menuitem", { name: "Move tab left", exact: true }).click();
+  const after = await tabs.evaluateAll(elements => elements.map(element => element.getAttribute("aria-label")));
+  expect(after.indexOf(selected)).toBe(before.indexOf(selected) - 1);
   await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(1.4); });
-  await page.screenshot({ path: "test-results/desktop-zoom.png" });
+  await capture("desktop-zoom");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.getByRole("button", { name: "Tab actions", exact: true }).focus(); await page.keyboard.press("Enter"); await expect(page.getByRole("menu")).toBeVisible();
+  await capture("desktop-keyboard-menu");
   await page.keyboard.press("Escape"); await page.getByRole("button", { name: "Find file", exact: true }).focus(); await page.keyboard.press("Enter");
-  await page.getByRole("combobox").fill("a.ts"); await page.getByRole("combobox").press("Enter");
+  await page.getByRole("combobox").fill("a.ts"); await expect(page.getByRole("option", { name: "a.ts", exact: true })).toBeVisible();
+  expect(await page.getByRole("dialog").evaluate(element => getComputedStyle(element).fontFamily)).toBe(await page.locator("main").evaluate(element => getComputedStyle(element).fontFamily));
+  await capture("desktop-keyboard-dialog"); await page.getByRole("combobox").press("Enter");
   await expect(page.getByRole("textbox", { name: "a.ts editor", exact: true })).toBeFocused();
   await page.getByRole("textbox", { name: "a.ts editor", exact: true }).pressSequentially("keyboard lookup typing");
-  await page.screenshot({ path: "test-results/desktop-keyboard.png" }); expect(errors).toEqual([]);
+  await capture("desktop-keyboard"); expect(errors).toEqual([]);
 });
 
 test("native Trash moves only a captured temporary fixture and leaves its dirty draft available", async () => {
@@ -302,7 +388,7 @@ test("exact checkout tabs preserve independent dirty paths, views and closed met
   await open(); await edit("alpha dirty a");
   const beta = join(base, "second-checkout"); execFileSync("/usr/bin/git", ["-C", checkout, "worktree", "add", "-q", "-b", "beta", beta, "HEAD"]);
   await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [path] })) as typeof dialog.showOpenDialog; }, beta);
-  await page.getByRole("button", { name: "Open checkout", exact: true }).click(); await open(); await edit("beta dirty a");
+  await page.getByRole("button", { name: "Open checkout", exact: true }).click(); await expect(page.getByRole("tab", { name: "second-checkout · beta", exact: true })).toHaveAttribute("aria-selected", "true"); await open(); await edit("beta dirty a");
   await expect.poll(async () => (await recovery()).state.drafts.length).toBe(2);
   const first = page.getByRole("tab", { name: "checkout · main", exact: true }); await first.click();
   await expect(page.locator('.view-line').filter({ hasText: "alpha dirty a" }).first()).toBeVisible();
@@ -322,10 +408,52 @@ test("single-file picker and File-backed drop share the editor's destination dia
   await expect(page.getByRole("dialog").getByRole("button", { name: "Import files", exact: true })).toBeDisabled();
   await page.getByLabel("Destination relative path").fill("picker.txt"); await page.getByRole("dialog").getByRole("button", { name: "Import files", exact: true }).click();
   await expect.poll(() => existsSync(join(checkout, "picker.txt"))).toBe(true); expect(readFileSync(join(checkout, "picker.txt"), "utf8")).toBe("ONE PICKED NATIVE FILE");
+  await expect(page.getByRole("dialog", { name: "Import files", exact: true })).toHaveCount(0);
   await page.evaluate(() => { const input = document.createElement("input"); input.type = "file"; input.id = "drop-fixture"; document.body.append(input); });
   await page.locator("#drop-fixture").setInputFiles(source);
   await page.evaluate(() => { const transfer = new DataTransfer(); transfer.items.add(document.querySelector<HTMLInputElement>("#drop-fixture")!.files![0]); document.querySelector("main")!.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: transfer })); });
   await expect(page.getByRole("dialog", { name: "Import files", exact: true })).toBeVisible();
   await page.getByLabel("Destination relative path").fill("drop.txt"); await page.getByRole("dialog").getByRole("button", { name: "Import files", exact: true }).click();
   await expect.poll(() => existsSync(join(checkout, "drop.txt"))).toBe(true); expect(readFileSync(join(checkout, "drop.txt"), "utf8")).toBe("ONE PICKED NATIVE FILE");
+});
+
+test("unacknowledged real move evidence restores dirty text on process restart without another mutation", async () => {
+  await open(); await edit("draft before uncertain move"); await expect.poll(async () => (await recovery()).state.drafts[0]?.text).toBe("draft before uncertain move");
+  const inode = statSync(join(checkout, "a.ts")).ino;
+  await page.getByRole("treeitem", { name: "a.ts, unsaved", exact: true }).click(); await page.getByRole("button", { name: "Rename / Move", exact: true }).click();
+  await page.getByLabel("Destination relative path").fill("moved.ts"); await app.evaluate(() => { globalThis.desktopTest.fault = "mutate"; });
+  await page.getByRole("dialog").getByRole("button", { name: "Rename or move", exact: true }).click(); await expect.poll(() => existsSync(join(checkout, "moved.ts"))).toBe(true);
+  await forceStop(); await launch();
+  await expect(page.getByRole("textbox", { name: "moved.ts editor", exact: true })).toBeVisible(); await expect(page.locator('.view-line').filter({ hasText: "draft before uncertain move" }).first()).toBeVisible();
+  expect(existsSync(join(checkout, "a.ts"))).toBe(false); expect(statSync(join(checkout, "moved.ts")).ino).toBe(inode);
+  expect(await app.evaluate(() => globalThis.desktopTest.calls.filter(call => call.input?.operation === "mutate").length)).toBe(0);
+  await expect.poll(async () => (await recovery()).operations.length).toBe(0);
+  const draft = (await recovery()).state.drafts.find(d => d.target.path === "moved.ts"); expect(draft?.text).toBe("draft before uncertain move"); expect(draft?.disk.text).toContain("WORKING");
+});
+
+test("replacement consent cannot overwrite another open dirty draft or admit a native mutation", async () => {
+  await open(); await edit("SOURCE DRAFT"); await open("b.ts"); await edit("DESTINATION DRAFT", "b.ts"); await expect.poll(async () => (await recovery()).state.drafts.length).toBe(2);
+  await page.getByRole("treeitem", { name: "a.ts, unsaved", exact: true }).click(); await page.getByRole("button", { name: "Rename / Move", exact: true }).click();
+  await page.getByLabel("Destination relative path").fill("b.ts"); await page.getByRole("dialog").getByRole("button", { name: "Rename or move", exact: true }).click();
+  await page.getByRole("button", { name: "Replace captured destination", exact: true }).click();
+  await expect(page.getByRole("dialog").getByRole("alert").last()).toContainText("open buffers"); await page.getByRole("dialog").getByRole("button", { name: "Cancel", exact: true }).click();
+  expect(await app.evaluate(() => globalThis.desktopTest.calls.filter(call => call.input?.operation === "mutate").length)).toBe(0);
+  expect(readFileSync(join(checkout, "a.ts"), "utf8")).toContain("WORKING"); expect(readFileSync(join(checkout, "b.ts"), "utf8")).toContain("b = 2");
+  const drafts = (await recovery()).state.drafts; expect(drafts.find(d => d.target.path === "a.ts")?.text).toBe("SOURCE DRAFT"); expect(drafts.find(d => d.target.path === "b.ts")?.text).toBe("DESTINATION DRAFT");
+  await capture("desktop-collision");
+});
+
+test("a file named checkout remains data when its view and draft cross the authority boundary", async () => {
+  writeFileSync(join(checkout, "checkout"), "ordinary path data");
+  await open("checkout"); await edit("retained reserved-looking filename", "checkout");
+  await expect.poll(async () => (await recovery()).state.drafts.find(d => d.target.path === "checkout")?.text).toBe("retained reserved-looking filename");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect.poll(() => readFileSync(join(checkout, "checkout"), "utf8")).toBe("retained reserved-looking filename");
+});
+
+test("an explicit native Quit arriving before renderer startup is not lost", async () => {
+  await forceStop();
+  const env = { ...process.env, MOONBASE_USER_DATA: join(base, "early-user-data"), MOONBASE_TEST_REPORT: join(base, "early-quit.json"), MOONBASE_TEST_QUIT_EARLY: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } as Record<string, string>; delete env.ELECTRON_RUN_AS_NODE;
+  app = await electron.launch({ args: [resolve("test/harness.mjs")], env, timeout: 20000 }); child = app.process();
+  await app.waitForEvent("close", { timeout: 5000 }); expect(existsSync(join(base, "early-quit.json"))).toBe(true);
 });

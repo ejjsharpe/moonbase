@@ -52,3 +52,10 @@ test("preaborted browser command sends nothing", async () => {
   const client = bridgeClient({ call: async () => { dispatched++; return { ok: true, value: null }; } } as never);
   await assert.rejects(client.command("loadRecovery", { clientId: "desktop-primary" }, { signal }), e => ApplicationError.is(e) && e.code === "Cancelled"); assert.equal(dispatched, 0);
 });
+test("long-lived watches cannot consume command capacity or prevent disposal", async () => {
+  const f = fixture(); await f.call("loadRecovery", { clientId: "desktop-primary" });
+  for (let index = 0; index < 128; index++) assert((await f.session.call("watch", { checkout: target, paths: [] }, `watch-${index}`)).ok);
+  assert.equal((await f.session.call("watch", { checkout: target, paths: [] }, "overflow")).ok, false);
+  assert((await f.call("loadRecovery", { clientId: "desktop-primary" })).ok);
+  f.session.dispose(); assert.equal(f.stops, 128);
+});
