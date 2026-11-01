@@ -1,38 +1,51 @@
-Moonbase native Oxlint baseline: missing rules and policy differences
+Moonbase native Oxlint and project policy: missing rules and differences
 ===================================================================
 
 Versions and scope
   Oxlint 1.90.0; eslint-config-universe legacy default/node/web at Expo e180d5676641699581298683ba7854c8b0d36771;
   eslint-plugin-unicorn recommended 79.0.0 (JavaScript/TypeScript recommended, not other-language presets).
   Baseline: oxlint --init correctness:error; default TypeScript/Unicorn/Oxc plugins and implicit ESLint core, plus native React.
-  No individual lint-rule overrides, JavaScript plugins, import/node plugins, or type-aware mode.
-  Selected native rules: 142; syntax/semantic rules active without type-aware mode: 127.
+  Fourteen approved safety/consistency rules are added below; no JavaScript plugins, import/node plugins, or type-aware mode.
+  Selected native rules: 156; syntax/semantic rules active without type-aware mode: 141.
   Availability is compared by native rule names, with the explicit core TypeScript-extension aliases shown below.
   Matching names are not proof of identical implementation behavior. No claim of exact upstream parity is made.
 
 Important changes
-  react/rules-of-hooks is pedantic and is NOT enabled. react/exhaustive-deps IS enabled as an error (Universe disables it).
+  react/rules-of-hooks and react/exhaustive-deps are enabled as errors (Universe disables exhaustive-deps).
   no-control-regex IS enabled as an error (Universe disables it).
-  Remaining shared lint checks use native defaults and error severity rather than Universe warning severities/options.
+  Explicit options are listed below. Other shared checks use native defaults and error severity rather than Universe warning severities/options.
   Formatting remains in Oxfmt. ESLint rules disabled by Universe’s final Prettier config are not counted as missing active lint checks.
   No-floating-promises and other typed rules require separately enabling type-aware mode; TypeScript typechecking is a separate task.
 
-UNIVERSE: AVAILABLE NATIVELY BUT NOT ENABLED (58 upstream rule names)
-  @typescript-eslint/array-type [TypeScript, React TSX, Node TS] -> typescript/array-type (style)
+APPROVED SAFETY AND CONSISTENCY RULES (14)
+  react/rules-of-hooks: "error"
+  eslint/eqeqeq: ["error","always",{"null":"ignore"}]
+  eslint/no-fallthrough: "error"
+  eslint/no-case-declarations: "error"
+  react/no-unknown-property: "error"
+  eslint/prefer-const: "error"
+  eslint/no-var: "error"
+  typescript/no-explicit-any: "error"
+  typescript/ban-ts-comment: ["error",{"ts-ignore":true,"ts-nocheck":true,"ts-check":false,"ts-expect-error":"allow-with-description","minimumDescriptionLength":10}]
+  typescript/consistent-type-imports: ["error",{"prefer":"type-imports","fixStyle":"inline-type-imports"}]
+  typescript/array-type: ["error",{"default":"array"}]
+  unicorn/filename-case: ["error",{"case":"kebabCase"}]
+  eslint/no-nested-ternary: "error"
+  unicorn/prefer-node-protocol: "error"
+  eslint/no-nested-ternary bans all nesting; this also covers the less restrictive Unicorn rule.
+
+UNIVERSE: AVAILABLE NATIVELY BUT NOT ENABLED (50 upstream rule names)
   @typescript-eslint/consistent-type-assertions [TypeScript, React TSX, Node TS] -> typescript/consistent-type-assertions (style)
   @typescript-eslint/no-empty-object-type [TypeScript, React TSX, Node TS] -> typescript/no-empty-object-type (restriction)
   @typescript-eslint/no-redeclare [TypeScript, React TSX, Node TS] -> eslint/no-redeclare (pedantic)
   @typescript-eslint/no-useless-constructor [TypeScript, React TSX, Node TS] -> eslint/no-useless-constructor (suspicious)
-  eqeqeq [all JS/TS contexts] -> eslint/eqeqeq (pedantic)
   import/export [all JS/TS contexts] -> import/export (nursery; plugin not enabled)
   import/first [all JS/TS contexts] -> import/first (style; plugin not enabled)
   import/namespace [all JS/TS contexts] -> import/namespace (correctness; plugin not enabled)
   import/no-duplicates [all JS/TS contexts] -> import/no-duplicates (style; plugin not enabled)
   no-array-constructor [all JS/TS contexts] -> eslint/no-array-constructor (pedantic)
-  no-case-declarations [all JS/TS contexts] -> eslint/no-case-declarations (pedantic)
   no-extend-native [all JS/TS contexts] -> eslint/no-extend-native (suspicious)
   no-extra-bind [all JS/TS contexts] -> eslint/no-extra-bind (suspicious)
-  no-fallthrough [all JS/TS contexts] -> eslint/no-fallthrough (pedantic)
   no-implied-eval [all JS/TS contexts] -> eslint/no-implied-eval (suspicious)
   no-inner-declarations [all JS/TS contexts] -> eslint/no-inner-declarations (pedantic)
   no-label-var [all JS/TS contexts] -> eslint/no-label-var (style)
@@ -55,23 +68,19 @@ UNIVERSE: AVAILABLE NATIVELY BUT NOT ENABLED (58 upstream rule names)
   no-useless-concat [all JS/TS contexts] -> eslint/no-useless-concat (suspicious)
   no-useless-constructor [JavaScript, React JSX, Node JS] -> eslint/no-useless-constructor (suspicious)
   no-useless-return [all JS/TS contexts] -> eslint/no-useless-return (pedantic)
-  no-var [all JS/TS contexts] -> eslint/no-var (restriction)
   no-void [all JS/TS contexts] -> eslint/no-void (restriction)
   node/handle-callback-err [all JS/TS contexts] -> node/handle-callback-err (restriction; plugin not enabled)
   node/no-new-require [all JS/TS contexts] -> node/no-new-require (restriction; plugin not enabled)
   node/no-path-concat [Node JS, Node TS] -> node/no-path-concat (restriction; plugin not enabled)
   object-shorthand [all JS/TS contexts] -> eslint/object-shorthand (style)
-  prefer-const [all JS/TS contexts] -> eslint/prefer-const (style)
   prefer-promise-reject-errors [all JS/TS contexts] -> eslint/prefer-promise-reject-errors (pedantic)
   prefer-rest-params [all JS/TS contexts] -> eslint/prefer-rest-params (style)
   prefer-spread [all JS/TS contexts] -> eslint/prefer-spread (style)
   radix [all JS/TS contexts] -> eslint/radix (pedantic)
-  react-hooks/rules-of-hooks [React JSX, React TSX] -> react/rules-of-hooks (pedantic)
   react/jsx-boolean-value [React JSX, React TSX] -> react/jsx-boolean-value (style)
   react/jsx-curly-brace-presence [React JSX, React TSX] -> react/jsx-curly-brace-presence (style)
   react/jsx-fragments [React JSX, React TSX] -> react/jsx-fragments (style)
   react/no-redundant-should-component-update [React JSX, React TSX] -> react/no-redundant-should-component-update (style)
-  react/no-unknown-property [React JSX, React TSX] -> react/no-unknown-property (restriction)
   react/require-render-return [React JSX, React TSX] -> react/require-render-return (nursery)
   react/self-closing-comp [React JSX, React TSX] -> react/self-closing-comp (style)
   unicode-bom [all JS/TS contexts] -> eslint/unicode-bom (restriction)
@@ -90,57 +99,65 @@ UNIVERSE: PARSER/VARIABLE TRACKING, NOT SEPARATE LINT RULES (5)
   react/jsx-uses-react [React JSX, React TSX]: variable usage is tracked by Oxlint's parser/semantic analysis.
   react/jsx-uses-vars [React JSX, React TSX]: variable usage is tracked by Oxlint's parser/semantic analysis.
 
-UNIVERSE: ENABLED COVERAGE, BUT NATIVE DEFAULT OPTIONS / SEVERITIES (50)
-  @typescript-eslint/no-dupe-class-members [TypeScript, React TSX, Node TS] -> eslint/no-dupe-class-members; Universe "warn"; native error
-  @typescript-eslint/no-extra-non-null-assertion [TypeScript, React TSX, Node TS] -> typescript/no-extra-non-null-assertion; Universe "warn"; native error
-  @typescript-eslint/no-unused-expressions [TypeScript, React TSX, Node TS] -> eslint/no-unused-expressions; Universe ["warn",{"allowShortCircuit":true,"enforceForJSX":true}]; native error with native default options
-  @typescript-eslint/no-unused-vars [TypeScript, React TSX, Node TS] -> eslint/no-unused-vars; Universe ["warn",{"vars":"all","args":"none","ignoreRestSiblings":true,"caughtErrors":"all"}]; native error with native default options
-  @typescript-eslint/no-wrapper-object-types [TypeScript, React TSX, Node TS] -> typescript/no-wrapper-object-types; Universe "warn"; native error
-  constructor-super [all JS/TS contexts] -> eslint/constructor-super; Universe "warn"; native error
-  getter-return [all JS/TS contexts] -> eslint/getter-return; Universe "warn"; native error
-  no-caller [all JS/TS contexts] -> eslint/no-caller; Universe "warn"; native error
-  no-compare-neg-zero [all JS/TS contexts] -> eslint/no-compare-neg-zero; Universe "warn"; native error
-  no-cond-assign [all JS/TS contexts] -> eslint/no-cond-assign; Universe "warn"; native error
-  no-const-assign [all JS/TS contexts] -> eslint/no-const-assign; Universe "error"; native error
-  no-constant-condition [all JS/TS contexts] -> eslint/no-constant-condition; Universe ["warn",{"checkLoops":false}]; native error with native default options
-  no-debugger [all JS/TS contexts] -> eslint/no-debugger; Universe "warn"; native error
-  no-delete-var [all JS/TS contexts] -> eslint/no-delete-var; Universe "error"; native error
-  no-dupe-class-members [JavaScript, React JSX, Node JS] -> eslint/no-dupe-class-members; Universe "error"; native error
-  no-dupe-keys [all JS/TS contexts] -> eslint/no-dupe-keys; Universe "error"; native error
-  no-duplicate-case [all JS/TS contexts] -> eslint/no-duplicate-case; Universe "error"; native error
-  no-empty-character-class [all JS/TS contexts] -> eslint/no-empty-character-class; Universe "warn"; native error
-  no-empty-pattern [all JS/TS contexts] -> eslint/no-empty-pattern; Universe "warn"; native error
-  no-eval [all JS/TS contexts] -> eslint/no-eval; Universe "warn"; native error
-  no-ex-assign [all JS/TS contexts] -> eslint/no-ex-assign; Universe "warn"; native error
-  no-extra-boolean-cast [all JS/TS contexts] -> eslint/no-extra-boolean-cast; Universe "warn"; native error
-  no-func-assign [all JS/TS contexts] -> eslint/no-func-assign; Universe "error"; native error
-  no-global-assign [all JS/TS contexts] -> eslint/no-global-assign; Universe "warn"; native error
-  no-invalid-regexp [all JS/TS contexts] -> eslint/no-invalid-regexp; Universe "error"; native error
-  no-irregular-whitespace [all JS/TS contexts] -> eslint/no-irregular-whitespace; Universe "warn"; native error
-  no-iterator [all JS/TS contexts] -> eslint/no-iterator; Universe "warn"; native error
-  no-new-symbol [all JS/TS contexts] -> eslint/no-new-native-nonconstructor; Universe "error"; native error
-  no-obj-calls [all JS/TS contexts] -> eslint/no-obj-calls; Universe "warn"; native error
-  no-self-assign [all JS/TS contexts] -> eslint/no-self-assign; Universe "warn"; native error
-  no-shadow-restricted-names [all JS/TS contexts] -> eslint/no-shadow-restricted-names; Universe "warn"; native error
-  no-sparse-arrays [all JS/TS contexts] -> eslint/no-sparse-arrays; Universe "warn"; native error
-  no-this-before-super [all JS/TS contexts] -> eslint/no-this-before-super; Universe "warn"; native error
-  no-unreachable [all JS/TS contexts] -> eslint/no-unreachable; Universe "warn"; native error
-  no-unsafe-negation [all JS/TS contexts] -> eslint/no-unsafe-negation; Universe "warn"; native error
-  no-unused-expressions [JavaScript, React JSX, Node JS] -> eslint/no-unused-expressions; Universe ["warn",{"allowShortCircuit":true,"enforceForJSX":true}]; native error with native default options
-  no-unused-labels [all JS/TS contexts] -> eslint/no-unused-labels; Universe "warn"; native error
-  no-unused-vars [JavaScript, React JSX, Node JS] -> eslint/no-unused-vars; Universe ["warn",{"vars":"all","args":"none","ignoreRestSiblings":true,"caughtErrors":"all","caughtErrorsIgnorePattern":"^_"}]; native error with native default options
-  no-useless-escape [all JS/TS contexts] -> eslint/no-useless-escape; Universe "warn"; native error
-  no-useless-rename [all JS/TS contexts] -> eslint/no-useless-rename; Universe "warn"; native error
-  no-with [all JS/TS contexts] -> eslint/no-with; Universe "warn"; native error
-  react/jsx-no-duplicate-props [React JSX, React TSX] -> react/jsx-no-duplicate-props; Universe "error"; native error
-  react/jsx-no-undef [React JSX, React TSX] -> react/jsx-no-undef; Universe "error"; native error
-  react/no-did-mount-set-state [React JSX, React TSX] -> react/no-did-mount-set-state; Universe "warn"; native error
-  react/no-did-update-set-state [React JSX, React TSX] -> react/no-did-update-set-state; Universe "warn"; native error
-  react/no-direct-mutation-state [React JSX, React TSX] -> react/no-direct-mutation-state; Universe "warn"; native error
-  react/no-this-in-sfc [React JSX, React TSX] -> react/no-this-in-sfc; Universe "warn"; native error
-  react/no-will-update-set-state [React JSX, React TSX] -> react/no-will-update-set-state; Universe "warn"; native error
-  use-isnan [all JS/TS contexts] -> eslint/use-isnan; Universe "error"; native error
-  valid-typeof [all JS/TS contexts] -> eslint/valid-typeof; Universe "error"; native error
+UNIVERSE: ENABLED COVERAGE, WITH EFFECTIVE OPTIONS / SEVERITIES (58)
+  @typescript-eslint/array-type [TypeScript, React TSX, Node TS] -> typescript/array-type; Universe ["warn",{"default":"array"}]; error; configured options [{"default":"array"}]
+  @typescript-eslint/no-dupe-class-members [TypeScript, React TSX, Node TS] -> eslint/no-dupe-class-members; Universe "warn"; error; native default options
+  @typescript-eslint/no-extra-non-null-assertion [TypeScript, React TSX, Node TS] -> typescript/no-extra-non-null-assertion; Universe "warn"; error; native default options
+  @typescript-eslint/no-unused-expressions [TypeScript, React TSX, Node TS] -> eslint/no-unused-expressions; Universe ["warn",{"allowShortCircuit":true,"enforceForJSX":true}]; error; native default options
+  @typescript-eslint/no-unused-vars [TypeScript, React TSX, Node TS] -> eslint/no-unused-vars; Universe ["warn",{"vars":"all","args":"none","ignoreRestSiblings":true,"caughtErrors":"all"}]; error; native default options
+  @typescript-eslint/no-wrapper-object-types [TypeScript, React TSX, Node TS] -> typescript/no-wrapper-object-types; Universe "warn"; error; native default options
+  constructor-super [all JS/TS contexts] -> eslint/constructor-super; Universe "warn"; error; native default options
+  eqeqeq [all JS/TS contexts] -> eslint/eqeqeq; Universe ["warn","smart"]; error; configured options ["always",{"null":"ignore"}]
+  getter-return [all JS/TS contexts] -> eslint/getter-return; Universe "warn"; error; native default options
+  no-caller [all JS/TS contexts] -> eslint/no-caller; Universe "warn"; error; native default options
+  no-case-declarations [all JS/TS contexts] -> eslint/no-case-declarations; Universe "warn"; error; native default options
+  no-compare-neg-zero [all JS/TS contexts] -> eslint/no-compare-neg-zero; Universe "warn"; error; native default options
+  no-cond-assign [all JS/TS contexts] -> eslint/no-cond-assign; Universe "warn"; error; native default options
+  no-const-assign [all JS/TS contexts] -> eslint/no-const-assign; Universe "error"; error; native default options
+  no-constant-condition [all JS/TS contexts] -> eslint/no-constant-condition; Universe ["warn",{"checkLoops":false}]; error; native default options
+  no-debugger [all JS/TS contexts] -> eslint/no-debugger; Universe "warn"; error; native default options
+  no-delete-var [all JS/TS contexts] -> eslint/no-delete-var; Universe "error"; error; native default options
+  no-dupe-class-members [JavaScript, React JSX, Node JS] -> eslint/no-dupe-class-members; Universe "error"; error; native default options
+  no-dupe-keys [all JS/TS contexts] -> eslint/no-dupe-keys; Universe "error"; error; native default options
+  no-duplicate-case [all JS/TS contexts] -> eslint/no-duplicate-case; Universe "error"; error; native default options
+  no-empty-character-class [all JS/TS contexts] -> eslint/no-empty-character-class; Universe "warn"; error; native default options
+  no-empty-pattern [all JS/TS contexts] -> eslint/no-empty-pattern; Universe "warn"; error; native default options
+  no-eval [all JS/TS contexts] -> eslint/no-eval; Universe "warn"; error; native default options
+  no-ex-assign [all JS/TS contexts] -> eslint/no-ex-assign; Universe "warn"; error; native default options
+  no-extra-boolean-cast [all JS/TS contexts] -> eslint/no-extra-boolean-cast; Universe "warn"; error; native default options
+  no-fallthrough [all JS/TS contexts] -> eslint/no-fallthrough; Universe "warn"; error; native default options
+  no-func-assign [all JS/TS contexts] -> eslint/no-func-assign; Universe "error"; error; native default options
+  no-global-assign [all JS/TS contexts] -> eslint/no-global-assign; Universe "warn"; error; native default options
+  no-invalid-regexp [all JS/TS contexts] -> eslint/no-invalid-regexp; Universe "error"; error; native default options
+  no-irregular-whitespace [all JS/TS contexts] -> eslint/no-irregular-whitespace; Universe "warn"; error; native default options
+  no-iterator [all JS/TS contexts] -> eslint/no-iterator; Universe "warn"; error; native default options
+  no-new-symbol [all JS/TS contexts] -> eslint/no-new-native-nonconstructor; Universe "error"; error; native default options
+  no-obj-calls [all JS/TS contexts] -> eslint/no-obj-calls; Universe "warn"; error; native default options
+  no-self-assign [all JS/TS contexts] -> eslint/no-self-assign; Universe "warn"; error; native default options
+  no-shadow-restricted-names [all JS/TS contexts] -> eslint/no-shadow-restricted-names; Universe "warn"; error; native default options
+  no-sparse-arrays [all JS/TS contexts] -> eslint/no-sparse-arrays; Universe "warn"; error; native default options
+  no-this-before-super [all JS/TS contexts] -> eslint/no-this-before-super; Universe "warn"; error; native default options
+  no-unreachable [all JS/TS contexts] -> eslint/no-unreachable; Universe "warn"; error; native default options
+  no-unsafe-negation [all JS/TS contexts] -> eslint/no-unsafe-negation; Universe "warn"; error; native default options
+  no-unused-expressions [JavaScript, React JSX, Node JS] -> eslint/no-unused-expressions; Universe ["warn",{"allowShortCircuit":true,"enforceForJSX":true}]; error; native default options
+  no-unused-labels [all JS/TS contexts] -> eslint/no-unused-labels; Universe "warn"; error; native default options
+  no-unused-vars [JavaScript, React JSX, Node JS] -> eslint/no-unused-vars; Universe ["warn",{"vars":"all","args":"none","ignoreRestSiblings":true,"caughtErrors":"all","caughtErrorsIgnorePattern":"^_"}]; error; native default options
+  no-useless-escape [all JS/TS contexts] -> eslint/no-useless-escape; Universe "warn"; error; native default options
+  no-useless-rename [all JS/TS contexts] -> eslint/no-useless-rename; Universe "warn"; error; native default options
+  no-var [all JS/TS contexts] -> eslint/no-var; Universe "warn"; error; native default options
+  no-with [all JS/TS contexts] -> eslint/no-with; Universe "warn"; error; native default options
+  prefer-const [all JS/TS contexts] -> eslint/prefer-const; Universe ["warn",{"destructuring":"all","ignoreReadBeforeAssign":true}]; error; native default options
+  react-hooks/rules-of-hooks [React JSX, React TSX] -> react/rules-of-hooks; Universe "error"; error; native default options
+  react/jsx-no-duplicate-props [React JSX, React TSX] -> react/jsx-no-duplicate-props; Universe "error"; error; native default options
+  react/jsx-no-undef [React JSX, React TSX] -> react/jsx-no-undef; Universe "error"; error; native default options
+  react/no-did-mount-set-state [React JSX, React TSX] -> react/no-did-mount-set-state; Universe "warn"; error; native default options
+  react/no-did-update-set-state [React JSX, React TSX] -> react/no-did-update-set-state; Universe "warn"; error; native default options
+  react/no-direct-mutation-state [React JSX, React TSX] -> react/no-direct-mutation-state; Universe "warn"; error; native default options
+  react/no-this-in-sfc [React JSX, React TSX] -> react/no-this-in-sfc; Universe "warn"; error; native default options
+  react/no-unknown-property [React JSX, React TSX] -> react/no-unknown-property; Universe "warn"; error; native default options
+  react/no-will-update-set-state [React JSX, React TSX] -> react/no-will-update-set-state; Universe "warn"; error; native default options
+  use-isnan [all JS/TS contexts] -> eslint/use-isnan; Universe "error"; error; native default options
+  valid-typeof [all JS/TS contexts] -> eslint/valid-typeof; Universe "error"; error; native default options
 
 UNIVERSE: UPSTREAM-DISABLED RULES ENABLED BY THIS BASELINE
   no-control-regex -> eslint/no-control-regex (error)
@@ -165,11 +182,13 @@ UNIVERSE: OPTIONAL TYPESCRIPT-ANALYSIS PRESET (not part of default/node/web)
   @typescript-eslint/prefer-ts-expect-error -> typescript/prefer-ts-expect-error: pedantic; not enabled; upstream "warn"
   @typescript-eslint/return-await -> typescript/return-await: pedantic; requires type-aware mode; not enabled; upstream ["error","always"]
 
-UNICORN RECOMMENDED: ALREADY ENABLED (13 of 350)
+UNICORN RECOMMENDED: ENABLED OR COVERED (16 of 350)
+  unicorn/filename-case (error)
   unicorn/no-await-in-promise-methods (error)
   unicorn/no-empty-file (error)
   unicorn/no-invalid-fetch-options (error)
   unicorn/no-invalid-remove-event-listener (error)
+  unicorn/no-nested-ternary (error; covered by stricter eslint/no-nested-ternary)
   unicorn/no-new-array (error)
   unicorn/no-single-promise-in-promise-methods (error)
   unicorn/no-thenable (error)
@@ -177,10 +196,11 @@ UNICORN RECOMMENDED: ALREADY ENABLED (13 of 350)
   unicorn/no-useless-fallback-in-spread (error)
   unicorn/no-useless-length-check (error)
   unicorn/no-useless-spread (error)
+  unicorn/prefer-node-protocol (error)
   unicorn/prefer-set-size (error)
   unicorn/prefer-string-starts-ends-with (error)
 
-UNICORN RECOMMENDED: AVAILABLE NATIVELY BUT NOT ENABLED (117)
+UNICORN RECOMMENDED: AVAILABLE NATIVELY BUT NOT ENABLED (114)
   unicorn/catch-error-name (style)
   unicorn/consistent-assert (pedantic)
   unicorn/consistent-date-clone (style)
@@ -193,7 +213,6 @@ UNICORN RECOMMENDED: AVAILABLE NATIVELY BUT NOT ENABLED (117)
   unicorn/escape-case (pedantic)
   unicorn/explicit-length-check (pedantic)
   unicorn/explicit-timer-delay (style)
-  unicorn/filename-case (style)
   unicorn/import-style (restriction)
   unicorn/max-nested-calls (style)
   unicorn/new-for-builtins (pedantic)
@@ -216,7 +235,6 @@ UNICORN RECOMMENDED: AVAILABLE NATIVELY BUT NOT ENABLED (117)
   unicorn/no-magic-array-flat-depth (restriction)
   unicorn/no-negated-condition (pedantic)
   unicorn/no-negation-in-equality-check (pedantic)
-  unicorn/no-nested-ternary (style)
   unicorn/no-new-buffer (pedantic)
   unicorn/no-null (style)
   unicorn/no-object-as-default-parameter (pedantic)
@@ -268,7 +286,6 @@ UNICORN RECOMMENDED: AVAILABLE NATIVELY BUT NOT ENABLED (117)
   unicorn/prefer-module (restriction)
   unicorn/prefer-native-coercion-functions (pedantic)
   unicorn/prefer-negative-index (style)
-  unicorn/prefer-node-protocol (restriction)
   unicorn/prefer-number-coercion (pedantic)
   unicorn/prefer-number-properties (restriction)
   unicorn/prefer-object-from-entries (style)
