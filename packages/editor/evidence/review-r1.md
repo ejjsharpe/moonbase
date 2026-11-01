@@ -1,5 +1,7 @@
 # Review R1 corrections
 
+Independent R2 cleared the original eight scenarios and found four remaining blockers. The [R2 correction record](review-r2.md) records their owning fixes and new evidence; this file preserves the R1 history.
+
 Reviewed head: `0556678460b139abb961b4a67f23ce8383e2136e`, original base `68aa035b9c283a65cac6e78ab02865e99882d15b`. All eight findings reproduced at public controller/browser seams. New executable/test source: `a376645c58038698089d6b44b7f04fc83c527141`.
 
 The coordinator contract `6e58c1c4ea6944e8ca25eadc46e35c843f0f9fbe` was merged normally, preserving published history. PR #4 now bases on `chore/checkout-recovery-contract` (#5, after foundation #1 and coordination #2). No root files were authored here. PR stays draft for independent re-review and real workspace fan-in.
