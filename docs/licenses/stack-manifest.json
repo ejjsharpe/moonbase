@@ -88,13 +88,27 @@
     "name": "@stylexjs/stylex",
     "version": "0.19.1",
     "license": "MIT",
-    "notices": []
+    "notices": [
+      {
+        "file": "stylex-LICENSE",
+        "sha256": "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93",
+        "source": "https://github.com/facebook/stylex/blob/main/LICENSE",
+        "qualification": "Installed package declares MIT but omits license file; preserved primary project license, exact release-source match remains packaging verification"
+      }
+    ]
   },
   {
     "name": "@stylexjs/unplugin",
     "version": "0.19.1",
     "license": "MIT",
-    "notices": []
+    "notices": [
+      {
+        "file": "stylex-LICENSE",
+        "sha256": "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93",
+        "source": "https://github.com/facebook/stylex/blob/main/LICENSE",
+        "qualification": "Installed package declares MIT but omits license file; preserved primary project license, exact release-source match remains packaging verification"
+      }
+    ]
   },
   {
     "name": "@base-ui/react",

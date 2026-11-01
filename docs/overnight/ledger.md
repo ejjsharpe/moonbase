@@ -8,6 +8,9 @@
 - Source: `181097195a026d48b82758cee841ed8dd326db70` plus hashed working-tree editor/UI changes. Forty selected reference files, exclusions and histories are in `docs/source-snapshot/manifest.json`.
 - Frozen public editor contracts and focused workspace service are in `packages/application`; initial public-client checks cover shared acquisition/disposal, typed failures, subscription disposal and cancellation without blocking unrelated commands.
 - Bootstrap checks do not establish editor acceptance. No app placeholder is presented as a runnable editor.
+- Foundation PR: https://github.com/ejjsharpe/moonbase/pull/1, head `bb5c5d0b366f43e5406fc328d5bd5ec7ee154e58`, base main `c89e4db`. GitHub macOS checks passed at this exact head (runs 41258433992 and 41258434814).
+- Parallel Sol `xhigh` workers: `feat/editor-module` and `feat/workspace-module`, exact foundation verified; independent Astra `xhigh` foundation review running. Task IDs/options are persisted in `tasks.json`.
+- A direct StyleX MIT notice omitted from the installed npm tarballs has been obtained from the primary project; exact release-source matching remains part of distribution verification. Follow-up coordination changes are kept separately from the fixed review head.
 
 ## Planned dependency order
 
