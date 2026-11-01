@@ -491,7 +491,7 @@
     "childThreadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-workspace-r3-53a0996",
     "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-review-workspace-r3-53a0996:ordinal:1",
     "childNodeId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-review-workspace-r3-53a0996",
-    "status": "running",
+    "status": "completed",
     "workState": "working",
     "hasPendingChildRuns": false,
     "latestTerminalRunId": null,
@@ -514,13 +514,46 @@
     "resultContextTransferId": null,
     "hasPendingQuestion": false,
     "pendingApproval": null,
-    "waitTimedOut": false
+    "waitTimedOut": false,
+    "findings": "docs/overnight/reviews/workspace-r3.md",
+    "blocking": 2
   },
   "piApiResearchRuntime": {
-    "threadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-pi-api-contract-research-r1",
-    "messageId": "message:mcp:809f45ac-99a5-4d58-a1ba-08cc0a77c997:thread-send:pi-api-research-runtime-feasibility-r3",
-    "runId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-pi-api-contract-research-r1:ordinal:3",
     "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Athread-send%3Api-api-research-runtime-feasibility-r3",
+    "childThreadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-pi-api-contract-research-r1",
+    "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-pi-api-contract-research-r1:ordinal:3",
+    "childNodeId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Athread-send%3Api-api-research-runtime-feasibility-r3",
+    "status": "completed",
+    "workState": "result_available",
+    "hasPendingChildRuns": false,
+    "latestTerminalRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-pi-api-contract-research-r1:ordinal:3",
+    "latestTerminalStatus": "completed",
+    "latestTerminalSummary": null,
+    "latestTerminalResultContextTransferId": null,
+    "providerInstanceId": "codex",
+    "model": "gpt-6.1-sol",
+    "options": [
+      {
+        "id": "reasoningEffort",
+        "value": "xhigh"
+      },
+      {
+        "id": "serviceTier",
+        "value": "default"
+      }
+    ],
+    "summary": "Pushed `chore/pi-contract-research` at **`caed29486b4b1ab0400b54a12d0ea4ea3f51343c`**.\n\n[Evidence note](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-5e024c93/docs/research/pi-durable-v0-contract-evidence.md) · [Reproducible probe](/Users/elliotsharpe/.t3/worktrees/moonbase/t3-5e024c93/docs/research/pi-durable-1.4-probe.mjs)\n\nControlled probes passed: lost-response recovery without resubmit, changed-payload rejection, two-process exclusive contention and crash recovery, bounded observation/unsubscribe, task handover and busy rejection. Worktree clean; artifacts remain in `/tmp/moonbase-pi-probe.mBU3Js`.\n\nUnrun: minimum Node, packaging, providers/SSH, power loss and exhaustive Stop races. Results qualify these controlled cases, not general host guarantees.",
+    "resultContextTransferId": "context-transfer:type:subagent_result:source-thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-pi-api-contract-research-r1:target-thread:63122af4-017b-4b66-bcae-a905f2b1659d:da70dadc-5b05-4bf1-aa92-ed0aecee4af9",
+    "hasPendingQuestion": false,
+    "pendingApproval": null,
+    "waitTimedOut": false,
+    "head": "caed29486b4b1ab0400b54a12d0ea4ea3f51343c"
+  },
+  "workspaceFixR3": {
+    "threadId": "thread:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Adelegate-task%3Amoonbase-03-workspace-module-r1-bb5c5d0",
+    "messageId": "message:mcp:809f45ac-99a5-4d58-a1ba-08cc0a77c997:thread-send:workspace-fix-review-r3-2findings",
+    "runId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A809f45ac-99a5-4d58-a1ba-08cc0a77c997%253Adelegate-task%253Amoonbase-03-workspace-module-r1-bb5c5d0:ordinal:6",
+    "taskId": "node:delegated-task:command%3Amcp%3A809f45ac-99a5-4d58-a1ba-08cc0a77c997%3Athread-send%3Aworkspace-fix-review-r3-2findings",
     "status": "starting",
     "delivery": "started"
   }
