@@ -62,41 +62,85 @@ export function memoryWorkspace(seeds: Seed[]) {
   const notify = (checkout: CheckoutTarget, paths: string[]) => {
     for (const watcher of watchers) if (checkoutKey(watcher.checkout) === checkoutKey(checkout)) watcher.notify({ checkout, paths });
   };
+  function validateRecovery(state: EditorRecovery) {
+    const known = new Map(state.checkouts.map(checkout => [checkout.checkoutId, checkout]));
+    if (known.size !== state.checkouts.length) fail("Duplicate known checkout ID.");
+    for (const checkout of state.checkouts) exact(checkout);
+    if (new Set(state.openCheckoutIds).size !== state.openCheckoutIds.length || state.openCheckoutIds.some(id => !known.has(id))) fail("Open checkout IDs must be a unique subset of known targets.");
+    if (state.selectedCheckoutId !== null && !state.openCheckoutIds.includes(state.selectedCheckoutId)) fail("Selected checkout must be open.");
+    for (const [id, view] of Object.entries(state.views)) {
+      if (!known.has(id)) fail("View key must be a known checkoutId.");
+      for (const path of [...view.openFiles, ...Object.keys(view.fileViews), ...Object.keys(view.positions), ...view.tree.expanded, ...view.tree.selected]) pathCheck(path);
+      if (view.active && !view.openFiles.includes(view.active) || view.preview !== null && !view.openFiles.includes(view.preview)) fail("Active/preview file must belong to its retained checkout view.");
+      pathCheck(view.tree.focus, true);
+    }
+    for (const target of [...state.drafts.map(draft => draft.target), ...state.recentFiles]) {
+      if (!known.has(target.checkout.checkoutId) || checkoutKey(known.get(target.checkout.checkoutId)!) !== checkoutKey(target.checkout)) fail("Recovery file target must match its known exact checkout.");
+      pathCheck(target.path);
+    }
+    if (new Set(state.drafts.map(draft => fileKey(draft.target))).size !== state.drafts.length) fail("Duplicate recovery draft.");
+    for (const draft of state.drafts) if (new TextEncoder().encode(draft.text).length > maximumFileBytes) fail("Draft too large.");
+  }
   function revise(clientId: string, transform: (state: EditorRecovery) => void): RecoveryChange[] {
     const previous = recoveries.get(clientId); if (!previous) return [];
     const state = structuredClone(previous.state); transform(state);
+    validateRecovery(state);
     if (JSON.stringify(state) === JSON.stringify(previous.state)) return [];
     const revision = previous.revision + 1; recoveries.set(clientId, { revision, state });
     return [{ clientId, previousRevision: previous.revision, revision }];
   }
-  function operationRecovery(result: OperationResult) {
+  function remapCollides(state: EditorRecovery, result: OperationResult) {
+    if (result.kind !== "move") return false;
+    const targets = state.drafts.map(draft => {
+      let target = draft.target;
+      if (checkoutKey(target.checkout) === checkoutKey(result.checkout)) for (const item of result.items)
+        if (item.outcome === "completed" && item.destination && affected(target.path, item.source)) target = { ...target, path: item.destination + target.path.slice(item.source.length) };
+      return fileKey(target);
+    });
+    return new Set(targets).size !== targets.length;
+  }
+  function operationRecovery(result: OperationResult, proposed: Map<string, Entry>) {
     const bounds = new Map<string, number>();
+    const updates = new Map<string, { revision: number; state: EditorRecovery }>();
     for (const [clientId, stored] of recoveries) {
       if (clientId !== result.clientId && !stored.state.checkouts.some(checkout => checkoutKey(checkout) === checkoutKey(result.checkout))) continue;
-      result.recoveryChanges.push(...revise(clientId, state => {
-        for (const item of result.items.filter(item => item.outcome === "completed")) {
-          const move = (path: string) => item.destination && affected(path, item.source) ? item.destination + path.slice(item.source.length) : path;
-          if (result.kind === "move") {
-            state.drafts = state.drafts.map(draft => checkoutKey(draft.target.checkout) === checkoutKey(result.checkout) ? { ...draft, target: { ...draft.target, path: move(draft.target.path) } } : draft);
-            const selected = state.views[result.checkout.checkoutId];
-            if (selected) {
-              selected.openFiles = selected.openFiles.map(move); selected.active = move(selected.active); if (selected.preview) selected.preview = move(selected.preview);
-              selected.fileViews = Object.fromEntries(Object.entries(selected.fileViews).map(([path, mode]) => [move(path), mode]));
-              selected.positions = Object.fromEntries(Object.entries(selected.positions).map(([path, positions]) => [move(path), positions]));
-              selected.tree.expanded = selected.tree.expanded.map(move); selected.tree.selected = selected.tree.selected.map(move); selected.tree.focus = move(selected.tree.focus);
-            }
-            state.recentFiles = state.recentFiles.map(target => checkoutKey(target.checkout) === checkoutKey(result.checkout) ? { ...target, path: move(target.path) } : target);
+      const state = structuredClone(stored.state);
+      if (remapCollides(state, result)) {
+        result.message = "Recovery remap collision. Original drafts retained; resolve them before acknowledging.";
+        bounds.set(clientId, stored.revision); continue;
+      }
+      for (const item of result.items.filter(item => item.outcome === "completed")) {
+        const move = (path: string) => item.destination && affected(path, item.source) ? item.destination + path.slice(item.source.length) : path;
+        if (result.kind === "move") {
+          state.drafts = state.drafts.map(draft => checkoutKey(draft.target.checkout) === checkoutKey(result.checkout) ? { ...draft, target: { ...draft.target, path: move(draft.target.path) } } : draft);
+          const selected = state.views[result.checkout.checkoutId];
+          if (selected) {
+            selected.openFiles = [...new Set(selected.openFiles.map(move))]; selected.active = move(selected.active); if (selected.preview) selected.preview = move(selected.preview);
+            selected.fileViews = Object.fromEntries(Object.entries(selected.fileViews).sort(([a], [b]) => Number(affected(b, item.source)) - Number(affected(a, item.source))).map(([path, mode]) => [move(path), mode]));
+            selected.positions = Object.fromEntries(Object.entries(selected.positions).sort(([a], [b]) => Number(affected(b, item.source)) - Number(affected(a, item.source))).map(([path, positions]) => [move(path), positions]));
+            selected.tree.expanded = [...new Set(selected.tree.expanded.map(move))]; selected.tree.selected = [...new Set(selected.tree.selected.map(move))]; selected.tree.focus = move(selected.tree.focus);
           }
-          if (result.kind === "copy" && item.destination) for (const draft of [...state.drafts]) {
-            if (checkoutKey(draft.target.checkout) !== checkoutKey(result.checkout) || !affected(draft.target.path, item.source)) continue;
-            const target = { checkout: result.checkout, path: move(draft.target.path) };
-            if (!state.drafts.some(existing => fileKey(existing.target) === fileKey(target))) state.drafts.push({ target, disk: read(target), text: draft.text });
+          const recent = state.recentFiles.map(target => checkoutKey(target.checkout) === checkoutKey(result.checkout) ? { ...target, path: move(target.path) } : target);
+          state.recentFiles = [...new Map(recent.map(target => [fileKey(target), target])).values()];
+        }
+        if (result.kind === "copy" && item.destination) for (const draft of [...state.drafts]) {
+          if (checkoutKey(draft.target.checkout) !== checkoutKey(result.checkout) || !affected(draft.target.path, item.source)) continue;
+          const target = { checkout: result.checkout, path: move(draft.target.path) };
+          if (!state.drafts.some(existing => fileKey(existing.target) === fileKey(target))) {
+            const disk = proposed.get(target.path) ?? fail("Copied file unavailable.", "Unavailable");
+            state.drafts.push({ target, disk: { text: disk.text, version: disk.version }, text: draft.text });
           }
         }
-      }));
-      bounds.set(clientId, recoveries.get(clientId)!.revision);
+      }
+      validateRecovery(state);
+      const revision = stored.revision + Number(JSON.stringify(state) !== JSON.stringify(stored.state));
+      if (revision !== stored.revision) {
+        updates.set(clientId, { revision, state });
+        result.recoveryChanges.push({ clientId, previousRevision: stored.revision, revision });
+      }
+      bounds.set(clientId, revision);
     }
-    return bounds;
+    return { bounds, updates };
   }
   for (const seed of seeds) {
     const map = new Map<string, Entry>(); files.set(checkoutKey(seed.checkout), map);
@@ -206,8 +250,10 @@ export function memoryWorkspace(seeds: Seed[]) {
         }
         result.items.push({ source: source.target.path, ...(destination ? { destination } : {}), outcome: "completed" });
       }
+      const recovery = operationRecovery(result, map);
       files.set(checkoutKey(operation.checkout), map);
-      operations.set(key, { payload, result, bounds: operationRecovery(result), acks: new Set() }); stats.mutations++;
+      for (const [clientId, state] of recovery.updates) recoveries.set(clientId, state);
+      operations.set(key, { payload, result, bounds: recovery.bounds, acks: new Set() }); stats.mutations++;
       notify(operation.checkout, result.items.map(item => item.destination ?? item.source));
       return result;
     }),
@@ -215,6 +261,8 @@ export function memoryWorkspace(seeds: Seed[]) {
     acknowledgeOperation: ({ clientId, operationClientId, id }) => call("acknowledgeOperation", () => {
       const entry = operations.get(JSON.stringify([operationClientId, id])); if (!entry) fail("Unknown operation.");
       if (entry!.acks.has(clientId)) return;
+      const state = recoveries.get(clientId)?.state;
+      if (state && remapCollides(state, entry!.result)) fail("Resolve the retained recovery collision before acknowledging.", "Conflict");
       if (!entry!.bounds.has(clientId) || (recoveries.get(clientId)?.revision ?? 0) <= entry!.bounds.get(clientId)!) fail("Publish reconciled recovery before acknowledging.", "Conflict");
       entry!.acks.add(clientId);
     }),
@@ -223,23 +271,7 @@ export function memoryWorkspace(seeds: Seed[]) {
     persistRecovery: ({ clientId, expectedRevision, state }) => call("persistRecovery", () => {
       if (!clientId || state.clientId !== clientId || state.version !== 1) fail("Recovery client mismatch.");
       if ((recoveries.get(clientId)?.revision ?? 0) !== expectedRevision) fail("Recovery revision changed.", "Conflict");
-      const known = new Map(state.checkouts.map(checkout => [checkout.checkoutId, checkout]));
-      if (known.size !== state.checkouts.length) fail("Duplicate known checkout ID.");
-      for (const checkout of state.checkouts) exact(checkout);
-      if (new Set(state.openCheckoutIds).size !== state.openCheckoutIds.length || state.openCheckoutIds.some(id => !known.has(id))) fail("Open checkout IDs must be a unique subset of known targets.");
-      if (state.selectedCheckoutId !== null && !state.openCheckoutIds.includes(state.selectedCheckoutId)) fail("Selected checkout must be open.");
-      for (const [id, view] of Object.entries(state.views)) {
-        if (!known.has(id)) fail("View key must be a known checkoutId.");
-        for (const path of [...view.openFiles, ...Object.keys(view.fileViews), ...Object.keys(view.positions), ...view.tree.expanded, ...view.tree.selected]) pathCheck(path);
-        if (view.active && !view.openFiles.includes(view.active) || view.preview !== null && !view.openFiles.includes(view.preview)) fail("Active/preview file must belong to its retained checkout view.");
-        pathCheck(view.tree.focus, true);
-      }
-      for (const target of [...state.drafts.map(draft => draft.target), ...state.recentFiles]) {
-        if (!known.has(target.checkout.checkoutId) || checkoutKey(known.get(target.checkout.checkoutId)!) !== checkoutKey(target.checkout)) fail("Recovery file target must match its known exact checkout.");
-        pathCheck(target.path);
-      }
-      if (new Set(state.drafts.map(draft => fileKey(draft.target))).size !== state.drafts.length) fail("Duplicate recovery draft.");
-      for (const draft of state.drafts) if (new TextEncoder().encode(draft.text).length > maximumFileBytes) fail("Draft too large.");
+      validateRecovery(state);
       const revision = expectedRevision + 1; recoveries.set(clientId, { revision, state: structuredClone(state) }); stats.publications++;
       return { revision };
     }),

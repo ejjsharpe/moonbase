@@ -94,3 +94,44 @@ test("R1 real close-checkout removes its Monaco models without a teardown except
   expect(errors).toEqual([]);
   await page.screenshot({ path: "test-results/editor-checkout-closed.png", fullPage: true });
 });
+
+test("R2 rejected unchanged Rename/Move leaves explicit Save and Close usable", async ({ page }) => {
+  await page.goto("/");
+  await first(page).getByRole("treeitem", { name: "welcome.ts", exact: true }).click();
+  await first(page).getByRole("button", { name: "Rename / Move", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Rename or move", exact: true }).click();
+  await page.getByRole("button", { name: "Replace captured destination", exact: true }).click();
+  await expect(page.getByRole("dialog").getByRole("alert").last()).toContainText("Cannot transfer an entry into itself");
+  await page.getByRole("dialog").getByRole("button", { name: "Cancel", exact: true }).click();
+  await edit(page, "export const afterRejection = true;"); await first(page).getByRole("button", { name: "Save", exact: true }).click();
+  await expect(first(page).getByText("welcome.ts · Unsaved", { exact: true })).toHaveCount(0);
+  await first(page).getByRole("button", { name: "Close welcome.ts", exact: true }).click();
+  await expect(first(page).getByRole("tab", { name: "welcome.ts", exact: true })).toHaveCount(0);
+});
+
+test("R2 close-all/reopen/close-active loads the surviving file instead of an unavailable placeholder", async ({ page }) => {
+  await page.goto("/"); await first(page).getByRole("treeitem", { name: "README.md", exact: true }).dblclick();
+  await first(page).getByRole("button", { name: "Tab actions", exact: true }).click(); await page.getByRole("menuitem", { name: "Close All", exact: true }).click();
+  await expect(first(page).getByRole("tab", { name: "README.md", exact: true })).toHaveCount(0);
+  await first(page).getByRole("button", { name: "Tab actions", exact: true }).click(); await page.getByRole("menuitem", { name: "Reopen Closed Files", exact: true }).click();
+  await expect(first(page).getByRole("textbox", { name: "README.md editor", exact: true })).toBeVisible();
+  await first(page).getByRole("button", { name: "Close README.md", exact: true }).click();
+  await expect(first(page).getByRole("textbox", { name: "welcome.ts editor", exact: true })).toBeVisible();
+});
+
+for (const navigation of ["visual", "recent"] as const) test(`R2 ${navigation} keyboard navigation restores typing focus and keeps tab-strip focus`, async ({ page }) => {
+  await page.goto("/"); await first(page).getByRole("treeitem", { name: "README.md", exact: true }).dblclick();
+  await first(page).getByRole("tab", { name: "welcome.ts", exact: true }).click();
+  const editor = first(page).getByRole("textbox", { name: "welcome.ts editor", exact: true }); await editor.focus();
+  async function navigate() {
+    if (navigation === "visual") await page.keyboard.press("Meta+Alt+ArrowRight");
+    else { await page.keyboard.down("Control"); await page.keyboard.press("Tab"); await page.keyboard.up("Control"); }
+  }
+  await navigate();
+  await expect(first(page).getByRole("textbox", { name: "README.md editor", exact: true })).toBeFocused();
+  await page.keyboard.type("typed after " + navigation);
+  await expect.poll(() => page.evaluate(() => window.demo.first.buffer({ checkout: window.demo.checkout, path: "README.md" })!.text)).toContain("typed after " + navigation);
+  if (navigation === "visual") await page.screenshot({ path: "test-results/editor-keyboard-typing.png", fullPage: true });
+  await first(page).getByRole("tab", { name: "README.md", exact: true }).focus(); await navigate();
+  await expect(first(page).getByRole("tab", { name: "welcome.ts", exact: true })).toBeFocused();
+});

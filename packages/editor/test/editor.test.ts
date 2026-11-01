@@ -608,3 +608,58 @@ test("R1 an unavailable retained comparison activates its buffer while a new com
     assert.equal(f.editor.getSnapshot().recovery.views[checkout.checkoutId].active, "a.ts");
   } finally { await f.dispose(); }
 });
+
+test("R2 pre-existing persisted replacement drafts survive a foreign move and controller restart", async () => {
+  const f = await fixture("persisted-collision", false);
+  try {
+    await f.editor.open(target("a.ts")); f.editor.edit(target("a.ts"), "original source draft");
+    await f.editor.open(target("b.ts")); f.editor.edit(target("b.ts"), "original destination draft"); await f.editor.flush();
+    const before = await f.client.command("loadRecovery", { clientId: f.editor.clientId });
+    const sources = await f.client.command("inspectEntries", { checkout, paths: ["a.ts"] });
+    const replacements = await f.client.command("inspectEntries", { checkout, paths: ["b.ts"] });
+    const result = await f.client.command("mutate", { id: "persisted-replace", clientId: "foreign", checkout, kind: "move", sources, replacements, destination: "b.ts" });
+    const pending = await f.client.command("loadRecovery", { clientId: f.editor.clientId });
+    assert.deepEqual(pending.state.drafts, before.state.drafts);
+    assert.equal(pending.revision, before.revision); assert.equal(pending.operations.length, 1);
+    assert.equal(result.recoveryChanges.some(change => change.clientId === f.editor.clientId), false);
+    f.editor.dispose(); const restored = createEditor({ client: f.client, clientId: f.editor.clientId });
+    try {
+      await restored.load();
+      assert.equal(restored.buffer(target("a.ts"))!.text, "original source draft");
+      assert.equal(restored.buffer(target("b.ts"))!.text, "original destination draft");
+      const retained = await f.client.command("loadRecovery", { clientId: restored.clientId });
+      assert.equal(new Set(retained.state.drafts.map(draft => fileKey(draft.target))).size, 2); assert.equal(retained.operations.length, 1);
+      await assert.rejects(f.client.command("acknowledgeOperation", { clientId: restored.clientId, operationClientId: "foreign", id: result.id }));
+      assert.equal(f.memory.stats.mutations, 1);
+    } finally { restored.dispose(); }
+  } finally { await f.dispose(); }
+});
+
+test("R2 definitive rejected mutation releases pending state and leaves Save, Close and Quit usable", async () => {
+  const f = await fixture("rejected-move", false);
+  try {
+    await f.editor.open(target("a.ts")); f.editor.edit(target("a.ts"), "retained after rejection");
+    const sources = await f.editor.inspect(checkout, ["a.ts"]);
+    await assert.rejects(f.editor.mutate({ id: "self-move", checkout, kind: "move", sources, replacements: sources, destination: "a.ts" }), error => ApplicationError.is(error) && error.code === "InvalidInput");
+    assert.equal(f.memory.stats.mutations, 0); assert.equal(f.editor.getSnapshot().operations.length, 0);
+    assert.equal(await f.client.command("operationStatus", { clientId: f.editor.clientId, id: "self-move" }), null);
+    assert.equal(await f.editor.save(target("a.ts")), true);
+    assert.equal(await f.editor.close([target("a.ts")], async () => "discard"), true);
+    assert.equal(await f.editor.prepareQuit(async () => "discard"), true);
+  } finally { await f.dispose(); }
+});
+
+test("R2 closing a restored active clean file loads its survivor's remembered comparison", async () => {
+  const f = await fixture("close-survivor", false);
+  try {
+    await f.editor.open(target("a.ts"), { view: "staged" }); await f.editor.open(target("b.ts")); await f.editor.flush(); f.editor.dispose();
+    const restored = createEditor({ client: f.client, clientId: "close-survivor" });
+    try {
+      await restored.load(); assert.equal(restored.buffer(target("a.ts")), undefined);
+      assert.equal(await restored.close([target("b.ts")], async () => "discard"), true);
+      assert.equal(restored.getSnapshot().recovery.views[checkout.checkoutId].active, "a.ts");
+      assert.equal(restored.buffer(target("a.ts"))!.text, "const a = 1;");
+      assert.equal(restored.getSnapshot().comparisons[fileKey(target("a.ts"))].original, "const a = 0;");
+    } finally { restored.dispose(); }
+  } finally { await f.dispose(); }
+});

@@ -12,6 +12,7 @@ export const checkoutKey = (target: CheckoutTarget) => JSON.stringify([
 export const fileKey = (target: FileTarget) => JSON.stringify([checkoutKey(target.checkout), target.path]);
 const sameCheckout = (a: CheckoutTarget, b: CheckoutTarget) => checkoutKey(a) === checkoutKey(b);
 const operationKey = (clientId: string, id: string) => JSON.stringify([clientId, id]);
+const definitiveNonAdmission = (error: unknown) => ApplicationError.is(error) && error.code === "InvalidInput";
 const affected = (path: string, parent: string) => path === parent || path.startsWith(parent + "/");
 const validPath = (path: string, directory = false) => {
   if (directory && path === "") return;
@@ -284,7 +285,10 @@ export class EditorController {
       requestId: crypto.randomUUID(), text: buffer.text, expectedVersion: overwrite && buffer.conflict ? buffer.conflict.version : buffer.disk.version };
     buffer.pendingSave = request; buffer.saving = true; this.emit();
     try {
-      const result = await this.command("saveFile", request);
+      const result = await this.command("saveFile", request).catch(error => {
+        if (definitiveNonAdmission(error)) buffer.pendingSave = undefined;
+        throw error;
+      });
       if (this.disposed) return false;
       if (result.kind === "conflict") {
         buffer.pendingSave = undefined; buffer.conflict = result.disk;
@@ -298,9 +302,6 @@ export class EditorController {
       buffer.disk = result.disk; buffer.pendingSave = undefined; buffer.conflict = undefined;
       await this.publishFacts(result.recoveryChanges, undefined, undefined, true);
       return buffer.text === result.disk.text;
-    } catch (error) {
-      if (ApplicationError.is(error) && error.code === "InvalidInput") buffer.pendingSave = undefined;
-      throw error;
     } finally { buffer.saving = false; this.emit(); }
   }
   async reload(target: FileTarget) {
@@ -364,6 +365,8 @@ export class EditorController {
     const captured = [...new Map(targets.map(target => [fileKey(target), structuredClone(target)])).values()];
     if (captured.some(target => this.uncertainAffects(target))) { this.report("Resolve pending file operations before closing their files."); return false; }
     this.preserving = true; this.activation++; clearTimeout(this.scheduled); this.emit();
+    const activation = this.activation;
+    let survivor: FileTarget | undefined;
     const referenceRevision = this.referenceRevision;
     const discarded = new Set<string>();
     try {
@@ -397,6 +400,11 @@ export class EditorController {
         if (state.selectedCheckoutId === checkout.checkoutId) state.selectedCheckoutId = state.openCheckoutIds[0] ?? null;
       }
       await this.publish(state);
+      const activeCheckout = state.checkouts.find(target => target.checkoutId === state.selectedCheckoutId);
+      if (kind === "files" && activeCheckout) {
+        const previous = this.recovery.views[activeCheckout.checkoutId].active, next = state.views[activeCheckout.checkoutId].active;
+        if (next && keys.has(fileKey({ checkout: activeCheckout, path: previous }))) survivor = { checkout: activeCheckout, path: next };
+      }
       this.recovery = state;
       if (kind === "quit") for (const key of discarded) {
         const buffer = this.buffers.get(key)!; buffer.text = buffer.disk.text; buffer.conflict = undefined;
@@ -408,7 +416,10 @@ export class EditorController {
       }
       return true;
     } catch (error) { this.report(error); return false; }
-    finally { this.preserving = false; this.emit(); }
+    finally {
+      this.preserving = false; this.emit();
+      if (survivor && activation === this.activation) await this.open(survivor).catch(this.report);
+    }
   }
   async reopen(checkout: CheckoutTarget) {
     const selected = this.checkout(checkout);
@@ -521,11 +532,17 @@ export class EditorController {
     const uncertain: OperationResult = { id: operation.id, clientId: this.clientId, recoveryChanges: [], checkout: operation.checkout, kind: operation.kind, outcome: "uncertain", items: [], message: "Awaiting operation status." };
     this.operations.set(operationKey(this.clientId, operation.id), { operation, result: uncertain, applied: new Set(), copies: structuredClone([...this.buffers.values()]) }); this.emit();
     try {
-      const result = await this.command("mutate", operation);
+      const result = await this.command("mutate", operation).catch(error => {
+        if (definitiveNonAdmission(error)) { this.operations.delete(operationKey(this.clientId, operation.id)); this.emit(); }
+        throw error;
+      });
       if (result.clientId !== operation.clientId || result.id !== operation.id || result.kind !== operation.kind || !sameCheckout(result.checkout, operation.checkout))
         throw Error("Operation response identity mismatch. Original pending evidence retained.");
       await this.publishFacts([], result); if (this.recovery.openCheckoutIds.includes(operation.checkout.checkoutId)) await this.refresh(operation.checkout); return result;
-    } catch (error) { this.report("Operation outcome unconfirmed. Resolve status before taking further action."); throw error; }
+    } catch (error) {
+      if (this.operations.has(operationKey(this.clientId, operation.id))) this.report("Operation outcome unconfirmed. Resolve status before taking further action.");
+      throw error;
+    }
   }
   async resolveOperation(id: string, operationClientId = this.clientId) {
     const known = this.operations.get(operationKey(operationClientId, id));
