@@ -18,11 +18,18 @@
     {
       "file": "UNLICENSE",
       "sha256": "7e12e5df4bae12cb21581ba157ced20e1986a0508dd10d0e8a4ab9a4cf94e85c"
+    },
+    {
+      "file": "PCRE2-10.45-LICENCE.md",
+      "sha256": "9cf7ac6976099a1d856826d3ef1b093bd6b84489dc6100628ac79e740cf9885a",
+      "source": "https://github.com/PCRE2Project/pcre2/blob/pcre2-10.45/LICENCE.md",
+      "basis": "Standalone binary --version reports statically linked PCRE2 10.45"
     }
   ],
   "checks": [
     "download matches official GitHub release digest",
-    "standalone rg --version executed successfully"
+    "standalone rg --version executed successfully",
+    "otool -L shows only /usr/lib/libiconv.2.dylib and /usr/lib/libSystem.B.dylib"
   ],
   "limits": [
     "packaged asset extraction/copy/executable-bit and restricted-PATH startup not yet checked",
