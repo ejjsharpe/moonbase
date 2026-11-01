@@ -27,6 +27,7 @@ export type GitChange = { path: string; area: "staged" | "unstaged" | "untracked
 export type GitStatus = { branch: string; changes: GitChange[]; error?: string };
 export type Comparison = { original: string; title: string; working: FileDocument | null; error?: string };
 export type LookupMatch = { path: string; score: number; positions: number[] };
+export type RecoveryChange = { clientId: string; previousRevision: number; revision: number };
 export type EntryReference = { target: FileTarget; identity: string; directory: boolean };
 export type WorkspaceOperation = {
   id: string; clientId: string; checkout: CheckoutTarget;
@@ -35,13 +36,14 @@ export type WorkspaceOperation = {
   replacements?: EntryReference[]; nativeReferences?: string[];
 };
 export type OperationResult = {
-  id: string; checkout: CheckoutTarget; kind: WorkspaceOperation["kind"];
+  id: string; clientId: string; checkout: CheckoutTarget; kind: WorkspaceOperation["kind"];
+  recoveryChanges: RecoveryChange[];
   outcome: "completed" | "failed" | "uncertain";
   items: { source: string; destination?: string; outcome: "completed" | "failed" | "uncertain"; message?: string }[];
   message?: string;
 };
 export type SaveResult =
-  | { kind: "saved"; disk: FileDocument; persistencePending?: boolean; message?: string }
+  | { kind: "saved"; disk: FileDocument; recoveryChanges: RecoveryChange[]; persistencePending?: boolean; message?: string }
   | { kind: "conflict"; disk: FileDocument };
 export type WorkspaceEvent = { checkout: CheckoutTarget; paths: string[]; ready?: boolean; error?: string };
 export type WorkspaceCommands = {
@@ -55,7 +57,7 @@ export type WorkspaceCommands = {
   inspectEntries: { input: { checkout: CheckoutTarget; paths: string[] }; output: EntryReference[] };
   mutate: { input: WorkspaceOperation; output: OperationResult };
   operationStatus: { input: { clientId: string; id: string }; output: OperationResult | null };
-  acknowledgeOperation: { input: { clientId: string; id: string }; output: void };
+  acknowledgeOperation: { input: { clientId: string; operationClientId: string; id: string }; output: void };
   loadRecovery: { input: { clientId: string }; output: RecoveryLoad };
   persistRecovery: { input: { clientId: string; expectedRevision: number; state: EditorRecovery }; output: { revision: number } };
 };
@@ -64,11 +66,15 @@ export type CommandInput<K extends WorkspaceCommand> = WorkspaceCommands[K]["inp
 export type CommandOutput<K extends WorkspaceCommand> = WorkspaceCommands[K]["output"];
 export type ApplicationErrorCode = "InvalidInput" | "Unavailable" | "Conflict" | "Persistence" | "Uncertain" | "Cancelled" | "Unauthorized" | "Incompatible";
 export class ApplicationError extends Error {
+  #applicationError = true;
   readonly _tag = "ApplicationError";
   readonly code: ApplicationErrorCode;
   readonly target?: FileTarget;
   constructor(options: { code: ApplicationErrorCode; message: string; target?: FileTarget }) {
     super(options.message); this.name = "ApplicationError"; this.code = options.code; this.target = options.target;
+  }
+  static is(value: unknown): value is ApplicationError {
+    try { return typeof value === "object" && value !== null && #applicationError in value; } catch { return false; }
   }
 }
 export type CommandOptions = { signal?: AbortSignal };
