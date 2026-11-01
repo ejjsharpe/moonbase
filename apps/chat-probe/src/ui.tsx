@@ -6,7 +6,7 @@ import { workbench } from "@moonbase/ui/workbench";
 import { colors, layout, radius, space, type } from "@moonbase/ui/tokens.stylex";
 import type { ChatClient, ChatEntry, ChatSession } from "@moonbase/application/chat-client";
 import type { ConnectionClient } from "@moonbase/application/connection-client";
-import { ChatProofController, type DraftStorage, type Pending } from "./controller.ts";
+import { ChatProofController, type DraftStorage } from "./controller.ts";
 export { ChatProofController } from "./controller.ts";
 export type { ChatProofState, Pending, DraftStorage } from "./controller.ts";
 
@@ -16,62 +16,6 @@ export type ChatProofProps = {
   context: ChatSession;
   storage: DraftStorage;
 };
-function RetainedCommand({
-  pending: p,
-  controller,
-  connected,
-  querying,
-  retrying,
-  storageError,
-}: {
-  pending: Pending;
-  controller: ChatProofController;
-  connected: boolean;
-  querying: boolean;
-  retrying: boolean;
-  storageError: boolean;
-}) {
-  return (
-    <details {...stylex.props(styles.pendingItem)}>
-      <summary {...stylex.props(controls.summary)}>
-        {p.operation} · {p.message}
-      </summary>
-      <p {...stylex.props(styles.identity)}>
-        {p.input.requestId}
-        {p.operation === "sendChat"
-          ? ` · chat ${p.input.target.conversationId}`
-          : p.operation === "stopChat"
-            ? ` · submission ${p.input.stop.submissionId} · task ${p.input.stop.taskId ?? "queued"}`
-            : ""}
-      </p>
-      {p.operation === "sendChat" && (
-        <pre {...stylex.props(controls.pre, styles.pendingText)}>{p.input.text}</pre>
-      )}
-      <div {...stylex.props(controls.row)}>
-        <Button
-          {...stylex.props(controls.button)}
-          disabled={!connected || querying}
-          onClick={() => void controller.query(p.input.requestId)}
-        >
-          Query outcome
-        </Button>
-        <Button
-          {...stylex.props(controls.button)}
-          disabled={!connected || retrying || storageError}
-          onClick={() => void controller.retry(p.input.requestId)}
-        >
-          Retry original{" "}
-          {p.operation === "stopChat"
-            ? "Stop"
-            : p.operation === "sendChat"
-              ? "Send"
-              : "Create"}
-        </Button>
-      </div>
-    </details>
-  );
-}
-
 /** The consumer owns the clients/runtime and controller lifetime; this view installs no capabilities. */
 export function ChatProof({ controller }: { controller: ChatProofController }) {
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot),
@@ -268,15 +212,43 @@ export function ChatProof({ controller }: { controller: ChatProofController }) {
             <section aria-label="Retained commands" {...stylex.props(styles.pending)}>
               <h3 {...stylex.props(styles.label)}>Retained command identities</h3>
               {state.pending.map((p) => (
-                <RetainedCommand
-                  key={p.input.requestId}
-                  pending={p}
-                  controller={controller}
-                  connected={connected}
-                  querying={busy("query:" + p.input.requestId)}
-                  retrying={busy(p.input.requestId)}
-                  storageError={!!state.storageError}
-                />
+                <details key={p.input.requestId} {...stylex.props(styles.pendingItem)}>
+                  <summary {...stylex.props(controls.summary)}>
+                    {p.operation} · {p.message}
+                  </summary>
+                  <p {...stylex.props(styles.identity)}>
+                    {p.input.requestId}
+                    {p.operation === "sendChat"
+                      ? ` · chat ${p.input.target.conversationId}`
+                      : p.operation === "stopChat"
+                        ? ` · submission ${p.input.stop.submissionId} · task ${p.input.stop.taskId ?? "queued"}`
+                        : ""}
+                  </p>
+                  {p.operation === "sendChat" && (
+                    <pre {...stylex.props(controls.pre, styles.pendingText)}>{p.input.text}</pre>
+                  )}
+                  <div {...stylex.props(controls.row)}>
+                    <Button
+                      {...stylex.props(controls.button)}
+                      disabled={!connected || busy("query:" + p.input.requestId)}
+                      onClick={() => void controller.query(p.input.requestId)}
+                    >
+                      Query outcome
+                    </Button>
+                    <Button
+                      {...stylex.props(controls.button)}
+                      disabled={!connected || busy(p.input.requestId) || !!state.storageError}
+                      onClick={() => void controller.retry(p.input.requestId)}
+                    >
+                      Retry original{" "}
+                      {p.operation === "stopChat"
+                        ? "Stop"
+                        : p.operation === "sendChat"
+                          ? "Send"
+                          : "Create"}
+                    </Button>
+                  </div>
+                </details>
               ))}
             </section>
           )}
