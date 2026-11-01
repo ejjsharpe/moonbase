@@ -302,3 +302,30 @@ for (const area of ["staged", "unstaged"] as const) test(`R7 recreated ${area} w
   await expect(page.locator(".monaco-diff-editor .line-delete-selectable .view-line").filter({ hasText: area === "staged" ? /HEAD\s+A/ : /INDEX\s+A/ }).first()).toBeVisible();
   await page.screenshot({ path: `test-results/editor-recreated-${area}.png`, fullPage: true });
 });
+
+test("R9 lost and reordered Save receipts keep Retry Save visible until exact recovery settles", async ({ page }) => {
+  await page.goto("/"); await edit(page, "captured welcome");
+  await page.evaluate(async () => { const { first, checkout } = window.demo; await first.open({ checkout, path: "README.md" }, { intent: "keep" }); first.edit({ checkout, path: "README.md" }, "captured README"); await first.open({ checkout, path: "welcome.ts" }); await first.flush(); });
+  await page.evaluate(() => window.demo.memory.failNext("saveFile", "Lost committed Save reply", true));
+  await first(page).getByRole("button", { name: "Save", exact: true }).click();
+  await expect(first(page).getByRole("button", { name: "Retry Save", exact: true })).toBeVisible();
+  await edit(page, "newer welcome");
+  await page.evaluate(async () => { const { first, checkout } = window.demo; await first.open({ checkout, path: "README.md" }, { intent: "keep" }); first.edit({ checkout, path: "README.md" }, "captured README"); });
+  await first(page).getByRole("button", { name: "Save", exact: true }).click();
+  await expect(first(page).getByRole("alert").filter({ hasText: "Recovery revision gap" }).first()).toBeVisible();
+  await expect(first(page).getByRole("button", { name: "Retry Save", exact: true })).toBeVisible();
+  const readme = first(page).getByRole("textbox", { name: "README.md editor", exact: true });
+  await readme.focus(); await readme.press("Meta+a"); await readme.pressSequentially("newer README");
+  await first(page).getByRole("tab", { name: "welcome.ts", exact: true }).click();
+  await first(page).getByRole("button", { name: "Retry Save", exact: true }).click();
+  await expect(first(page).getByRole("button", { name: "Save", exact: true })).toBeVisible();
+  await page.evaluate(() => window.demo.first.flush());
+  expect(await page.evaluate(() => window.demo.first.buffer({ checkout: window.demo.checkout, path: "welcome.ts" })?.text)).toBe("newer welcome");
+  expect(await page.evaluate(() => window.demo.first.buffer({ checkout: window.demo.checkout, path: "README.md" })?.text)).toBe("newer README");
+  await first(page).getByRole("tab", { name: "README.md", exact: true }).click();
+  await expect(first(page).getByRole("button", { name: "Save", exact: true })).toBeVisible();
+  await readme.focus(); await readme.press("End"); await readme.pressSequentially(" typed after reconciliation");
+  expect(await page.evaluate(() => window.demo.memory.stats.saves)).toBe(2);
+  for (const dismiss of await first(page).getByRole("button", { name: "Dismiss error", exact: true }).all()) await dismiss.click();
+  await page.screenshot({ path: "test-results/save-receipts.png", fullPage: true });
+});
