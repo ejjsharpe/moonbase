@@ -24,12 +24,12 @@ for (const mode of ["reload", "veto", "crash"])
       const current = await electron.launch({
         ...(packaged
           ? {
-              executablePath: resolve(
+              executablePath: process.env.MOONBASE_NATIVE_EXECUTABLE ?? resolve(
                 `release/${process.arch === "arm64" ? "mac-arm64" : "mac"}/Moonbase.app/Contents/MacOS/Moonbase`,
               ),
             }
           : {}),
-        args: packaged ? [] : [resolve("dist/main.mjs")],
+        args: packaged ? [] : [process.env.MOONBASE_TEST_MAIN ?? resolve("dist/main.mjs")],
         env: {
           PATH: "/usr/bin:/bin",
           HOME: process.env.HOME!,
@@ -159,6 +159,8 @@ for (const mode of ["reload", "veto", "crash"])
         () =>
           new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
       );
+      await mkdir(evidence, { recursive: true });
+      await writeFile(join(evidence, `${packaged ? "package" : "source"}-${mode}-before-check.json`), JSON.stringify({ mode, active, waitId: veto ? null : waitId, cancelled: await current.evaluate(() => globalThis.task08Cancels) }, null, 2));
       if (veto) {
         expect(
           await p.evaluate(() => (window as unknown as { task08Document: string }).task08Document),
