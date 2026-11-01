@@ -19,3 +19,4 @@ jobs:
       - run: bun run lint
       - run: bun run test
       - run: bun run test:chat-integration
+      - run: bunx nx run @moonbase/chat-probe:build
