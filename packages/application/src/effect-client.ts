@@ -2,6 +2,9 @@ import { Cause, Effect, Exit, Stream, type ManagedRuntime } from 'effect';
 import { ApplicationError, type CommandOptions, type ObservationClose } from './client.ts';
 import { safeApplicationFailure } from './failure.ts';
 
+export const normalizeApplicationError = (value: unknown): ApplicationError =>
+  safeApplicationFailure(value, 'Application effect failed');
+
 function applicationFailure(cause: Cause.Cause<ApplicationError>): ApplicationError {
   if (Cause.hasInterruptsOnly(cause))
     return new ApplicationError({ code: 'Cancelled', message: 'Command cancelled' });
@@ -16,9 +19,8 @@ function applicationFailure(cause: Cause.Cause<ApplicationError>): ApplicationEr
     code: typed?.code ?? 'Unavailable',
     target: typed?.target,
     message:
-      failures
-        .map((value) => safeApplicationFailure(value, 'Application effect failed').message)
-        .join('; ') || 'Application effect failed',
+      failures.map((value) => normalizeApplicationError(value).message).join('; ') ||
+      'Application effect failed',
   });
 }
 
@@ -33,7 +35,7 @@ export async function runApplicationEffect<A, R, E extends ApplicationError>(
   try {
     exit = await runtime.runPromiseExit(effect, options);
   } catch (error) {
-    throw safeApplicationFailure(error, 'Application effect failed');
+    throw normalizeApplicationError(error);
   }
   if (Exit.isFailure(exit)) throw applicationFailure(exit.cause);
   return exit.value;
@@ -66,7 +68,7 @@ export function observeApplicationStream<A, R, E extends ApplicationError>(
         Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)
           ? applicationFailure(exit.cause)
           : undefined,
-      (error) => safeApplicationFailure(error, 'Application effect failed'),
+      normalizeApplicationError,
     )
     .then((error) => {
       if (error && !closing) {
