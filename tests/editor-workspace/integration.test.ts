@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
+import { createRequire } from "node:module";
 import { ManagedRuntime } from "effect";
 import { ApplicationError, type EditorClient, type FileTarget, type WorkspaceEvent } from "@moonbase/application/client";
 import { makeEditorClient } from "@moonbase/application/runtime-client";
@@ -27,7 +28,7 @@ function fixture() {
   const runtimes: ReturnType<typeof start>[] = [], editors: EditorController[] = [];
   function start() {
     const runtime = ManagedRuntime.make(WorkspaceLive({ hostId: "fanin-local", dataDirectory,
-      filesystemHelper: resolve("packages/workspace/dist/filesystem"),
+      filesystemHelper: createRequire(import.meta.url).resolve("@moonbase/workspace/filesystem"),
       ripgrepExecutable: process.env.MOONBASE_TEST_RIPGREP ?? resolve("dist/tools/ripgrep/rg"),
     }));
     return { runtime, client: makeEditorClient(runtime) };
