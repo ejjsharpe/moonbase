@@ -26,6 +26,7 @@ export type DirectoryListing = { entries: DirectoryEntry[]; partial: boolean; er
 export type GitChange = { path: string; area: "staged" | "unstaged" | "untracked" };
 export type GitStatus = { branch: string; changes: GitChange[]; error?: string };
 export type Comparison = { original: string; title: string; working: FileDocument | null; error?: string };
+export type LookupMatch = { path: string; score: number; positions: number[] };
 export type EntryReference = { target: FileTarget; identity: string; directory: boolean };
 export type WorkspaceOperation = {
   id: string; clientId: string; checkout: CheckoutTarget;
@@ -50,7 +51,7 @@ export type WorkspaceCommands = {
   listDirectory: { input: { checkout: CheckoutTarget; path: string; hideIgnored?: boolean }; output: DirectoryListing };
   gitStatus: { input: { checkout: CheckoutTarget }; output: GitStatus };
   readComparison: { input: { target: FileTarget; area: "staged" | "unstaged" | "untracked" }; output: Comparison };
-  lookupFiles: { input: { checkout: CheckoutTarget; query: string; limit?: number }; output: { paths: string[]; partial: boolean; error?: string } };
+  lookupFiles: { input: { checkout: CheckoutTarget; query: string; limit?: number; history?: string[] }; output: { matches: LookupMatch[]; history: LookupMatch[]; partial: boolean; error?: string } };
   inspectEntries: { input: { checkout: CheckoutTarget; paths: string[] }; output: EntryReference[] };
   mutate: { input: WorkspaceOperation; output: OperationResult };
   operationStatus: { input: { clientId: string; id: string }; output: OperationResult | null };
