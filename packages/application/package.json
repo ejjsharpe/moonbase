@@ -11,7 +11,12 @@
     "./host-health": "./src/host-health.ts",
     "./connection-client": "./src/connection-client.ts",
     "./chat-client": "./src/chat-client.ts",
-    "./chat-schema": "./src/chat-schema.ts"
+    "./chat-schema": "./src/chat-schema.ts",
+    "./workspace-schema": "./src/workspace-schema.ts",
+    "./connection-schema": "./src/connection-schema.ts",
+    "./host-schema": "./src/host-schema.ts",
+    "./error-schema": "./src/error-schema.ts",
+    "./effect-client": "./src/effect-client.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",

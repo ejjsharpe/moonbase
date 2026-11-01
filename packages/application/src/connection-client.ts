@@ -1,25 +1,13 @@
-import type { ApplicationError, CommandOptions } from './client.ts';
-import type { ChatHostHealth, ChatHostTarget } from './host-client.ts';
+import type { ApplicationError, CommandOptions, ObservationClose } from './client.ts';
 
-/** The configured SSH destination is public; credentials and forwarded origins are not. */
-export type ConnectionProfile = {
-  id: string;
-  label: string;
-  destination: string;
-  remotePort: number;
-  expected: ChatHostTarget;
-};
-export type ConnectionSnapshot = { profile: ConnectionProfile; message?: string } & (
-  | { state: 'disconnected'; connectionId: null }
-  | { state: 'connecting'; connectionId: string }
-  | { state: 'disconnecting'; connectionId: string }
-  | { state: 'connected'; connectionId: string; health: ChatHostHealth }
-  | { state: 'failed'; connectionId: string | null }
-);
+import type * as Contracts from './connection-schema.ts';
+export type ConnectionProfile = typeof Contracts.ConnectionProfileSchema.Type;
+export type ConnectionSnapshot = typeof Contracts.ConnectionSnapshotSchema.Type;
 export type ConnectionCommands = {
-  getConnection: { input: Record<string, never>; output: ConnectionSnapshot };
-  connect: { input: { profileId: string }; output: ConnectionSnapshot };
-  disconnect: { input: { connectionId: string }; output: void };
+  [K in keyof typeof Contracts.connectionInputSchemas]: {
+    input: (typeof Contracts.connectionInputSchemas)[K]['Type'];
+    output: (typeof Contracts.connectionOutputSchemas)[K]['Type'];
+  };
 };
 export type ConnectionCommand = keyof ConnectionCommands;
 export type ConnectionInput<K extends ConnectionCommand> = ConnectionCommands[K]['input'];
@@ -33,5 +21,5 @@ export interface ConnectionClient {
   watch(
     receive: (snapshot: ConnectionSnapshot) => void,
     onError: (error: ApplicationError) => void,
-  ): () => void;
+  ): ObservationClose;
 }
