@@ -39,6 +39,12 @@ export class Store {
     try { this.db.prepare('INSERT INTO records VALUES(?,?,?) ON CONFLICT(bucket,key) DO UPDATE SET body=excluded.body').run(bucket, key, JSON.stringify(value)); }
     catch (error) { throw new ApplicationError({code: 'Persistence', message: 'Workspace journal publication failed; retain drafts and retry. ' + ApplicationError.fromUnknown(error).message}); }
   }
+  reserve<T>(bucket: string, key: string, value: T): T | null {
+    try {
+      const result = this.db.prepare('INSERT INTO records VALUES(?,?,?) ON CONFLICT(bucket,key) DO NOTHING').run(bucket, key, JSON.stringify(value));
+      return Number(result.changes) === 0 ? this.get<T>(bucket, key) : null;
+    } catch (error) { throw new ApplicationError({code: 'Persistence', message: 'Workspace request reservation failed; no mutation admitted. ' + ApplicationError.fromUnknown(error).message}); }
+  }
   readRecovery(client: string): { revision: number; state: unknown } | null {
     const row = this.db.prepare('SELECT revision, body FROM recovery WHERE client=?').get(client);
     return row ? { revision: Number(row.revision), state: JSON.parse(row.body as string) } : null;

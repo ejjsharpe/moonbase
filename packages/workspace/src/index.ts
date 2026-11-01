@@ -25,8 +25,8 @@ export type WorkspaceConfiguration = {
   ripgrepExecutable?: string;
 };
 type Approval = { target: CheckoutTarget; identity: string; common: {path: string; identity: string}; gitEntry: {identity: string; pointer: string | null} };
-type SaveRecord = { recoveryRevision?: number; baseline?: import('@moonbase/application/client').FileDocument; published?: boolean; temporary?: string; input: CommandInput<'saveFile'>; result?: SaveResult; started: boolean; message?: string };
-type OperationRecord = { staging?: string[]; publishedItems?: string[]; input: WorkspaceOperation; result: OperationResult; publicationRevisions: Record<string, number>; acknowledgedBy: string[] };
+type SaveRecord = { recoveryRestored?: boolean; recoveryRevision?: number; baseline?: import('@moonbase/application/client').FileDocument; published?: boolean; temporary?: string; input: CommandInput<'saveFile'>; result?: SaveResult; started: boolean; message?: string };
+type OperationRecord = { paths?: string[]; publicationError?: string; staging?: string[]; publishedItems?: string[]; input: WorkspaceOperation; result: OperationResult; publicationRevisions: Record<string, number>; acknowledgedBy: string[] };
 const key = (clientId: string, id: string) => hash(canonical([clientId, id]));
 const affected = (p: string, source: string) => p === source || p.startsWith(source + '/');
 const folded = (p: string) => p.normalize('NFC').toLowerCase();
@@ -62,6 +62,7 @@ class LocalWorkspace {
   readonly pending = new Set<Promise<unknown>>();
   readonly locks = new Set<{checkoutId: string; paths: string[]; done: Promise<void>}>();
   readonly native = new Map<string, { source: NativeImport; clientId: string; checkoutId: string; expires: ReturnType<typeof setTimeout> }>();
+  activeNative = 0;
   readonly volatileSaves = new Map<string, SaveRecord>();
   readonly volatileOperations = new Map<string, OperationRecord>();
   readonly run;
@@ -101,6 +102,7 @@ class LocalWorkspace {
         if (!record || record.acknowledgedBy.includes(input.clientId)) return;
         const observation = this.store.readRecovery(input.clientId);
         if (input.clientId !== input.operationClientId && !(observation?.state as EditorRecovery | undefined)?.checkouts.some(c => same(c, record.input.checkout))) fail('Unauthorized', 'Observer has not opened this exact checkout.');
+        if (record.publicationError || record.result.items.some(item => item.outcome === 'completed' && !(record.publishedItems ?? []).includes(canonical(item)))) fail('Persistence', 'Known operation recovery publication is pending. Preserve the prior valid snapshot before acknowledgement.');
         if (record.result.outcome === 'uncertain') fail('Uncertain', 'Uncertain operation evidence cannot be acknowledged away. Inspect the affected paths.');
         if ((observation?.revision ?? 0) <= (record.publicationRevisions[input.clientId] ?? observation?.revision ?? 0)) fail('Persistence', 'Publish reconciled recovery before acknowledging this operation.');
         this.store.put('operations', id, {...record, acknowledgedBy: [...record.acknowledgedBy, input.clientId]}); this.volatileOperations.delete(id);
@@ -134,7 +136,7 @@ class LocalWorkspace {
     const names = sources.length ? sources.map(p => basename(p)) : (input.nativeReferences ?? []).map(token => this.native.get(token)?.source.source ?? '');
     return [...sources, ...(names.length > 1 ? names.map(name => name ? join(input.destination!, name) : input.destination!) : [input.destination])];
   }
-  overlaps(a: string[], b: string[]) { return a.some(p => b.some(q => p === '' || q === '' || affected(p, q) || affected(q, p))); }
+  overlaps(a: string[], b: string[]) { return a.some(p => b.some(q => p === '' || q === '' || affected(folded(p), folded(q)) || affected(folded(q), folded(p)))); }
   active(checkoutId: string) { return [...this.locks].some(lock => lock.checkoutId === checkoutId); }
   async serial<A>(checkoutId: string, paths: string[], fn: () => Promise<A>): Promise<A> {
     const previous = [...this.locks].filter(lock => lock.checkoutId === checkoutId && this.overlaps(paths, lock.paths));
@@ -151,6 +153,7 @@ class LocalWorkspace {
     const exits = [...this.children].map(child => once(child, 'close').catch(() => {}));
     for (const child of this.children) child.kill('SIGKILL');
     await Promise.allSettled(exits); await Promise.allSettled([...this.pending]);
+    for (const token of [...this.native.keys()]) this.releaseNative(token);
     for (const stop of this.subscriptions) stop();
     for (const directory of this.directories.values()) directory.close();
     this.store.close();
@@ -228,27 +231,41 @@ class LocalWorkspace {
     for (const [id, record] of this.volatileOperations) records.set(id, record); return [...records.values()];
   }
   assertSettled(target: CheckoutTarget, paths: string[], clientId: string) {
-    if (this.operations().some(r => r.input.checkout.checkoutId === target.checkoutId && this.overlaps(paths, this.footprint(r.input)) && (!r.acknowledgedBy.includes(clientId) || r.result.outcome === 'uncertain')) || this.store.all<SaveRecord>('saves').some(r => r.input.target.checkout.checkoutId === target.checkoutId && this.overlaps(paths, [r.input.target.path]) && !r.result))
+    if (this.operations().some(r => r.input.checkout.checkoutId === target.checkoutId && this.overlaps(paths, r.paths ?? this.footprint(r.input)) && (!r.acknowledgedBy.includes(clientId) || r.result.outcome === 'uncertain')) || this.store.all<SaveRecord>('saves').some(r => r.input.target.checkout.checkoutId === target.checkoutId && this.overlaps(paths, [r.input.target.path]) && !r.result))
       fail('Uncertain', 'An operation awaits recovery publication or inspection. Query its status; do not repeat the mutation.');
+  }
+  replaySave(id: string, input: CommandInput<'saveFile'>, record: SaveRecord): SaveResult {
+    if (!same(record.input, input)) fail('Conflict', 'Save request ID already belongs to a different payload or target.');
+    if (record.result) {
+      if (this.volatileSaves.has(id)) {
+        try { this.publishSave(id, record); }
+        catch (error) { if (record.result.kind !== 'saved') throw error; record.result = {...record.result, persistencePending: true, message: 'Saved to disk; recovery publication pending. ' + errorText(error)}; }
+      }
+      return record.result;
+    }
+    return fail('Uncertain', 'Interrupted save retained its intent. Inspect disk and recovered draft before a new deliberate save.');
+  }
+  replayOperation(id: string, input: WorkspaceOperation, record: OperationRecord) {
+    if (!same(record.input, input)) fail('Conflict', 'Operation ID already belongs to another payload/client/checkout.');
+    if (this.volatileOperations.has(id)) { try { this.publishOperation(id, record); } catch (error) { this.retainPublication(id, record, error); } }
+    return record.result;
   }
   async save(input: CommandInput<'saveFile'>): Promise<SaveResult> {
     identifier(input.clientId); identifier(input.requestId); path(input.target.path); this.approval(input.target.checkout);
     const proposed = textDocument(input.text); ensure(typeof input.expectedVersion === 'string' && /^[a-f0-9]{64}$/.test(input.expectedVersion), 'Invalid expected content version.');
     const id = key(input.clientId, input.requestId), previous = this.saveRecord(id);
-    if (previous) {
-      if (!same(previous.input, input)) fail('Conflict', 'Save request ID already belongs to a different payload or target.');
-      if (previous.result) { if (this.volatileSaves.has(id)) this.publishSave(id, previous); return previous.result; }
-      return fail('Uncertain', 'Interrupted save retained its intent. Inspect disk and recovered draft before a new deliberate save.');
-    }
+    if (previous) return this.replaySave(id, input, previous);
     this.assertSettled(input.target.checkout, [input.target.path], input.clientId);
     const directory = await this.directory(input.target.checkout), disk = await directory.read(input.target.path);
     if (disk.version !== input.expectedVersion) {
       const result = {kind: 'conflict', disk} as const;
-      this.store.put('saves', id, {input, result, started: false}); return result;
+      const previous = this.store.reserve<SaveRecord>('saves', id, {input, result, started: false});
+      return previous ? this.replaySave(id, input, this.saveRecord(id) ?? previous) : result;
     }
     const temporary = join(dirname(input.target.path), '.moonbase-save-' + randomUUID());
     const record: SaveRecord = {input, started: true, temporary, baseline: disk, recoveryRevision: this.store.readRecovery(input.clientId)?.revision ?? 0};
-    this.store.put('saves', id, record);
+    const occupied = this.store.reserve('saves', id, record);
+    if (occupied) return this.replaySave(id, input, this.saveRecord(id) ?? occupied);
     try {
       const stagingIdentity = (await directory.io(['stage', input.target.path, temporary], input.text)).toString();
       const current = await directory.read(input.target.path);
@@ -267,7 +284,7 @@ class LocalWorkspace {
   }
   async capture(input: { checkout: CheckoutTarget; clientId: string; paths: string[] }, signal: AbortSignal) {
     identifier(input.clientId); const directory = await this.directory(input.checkout);
-    ensure(Array.isArray(input.paths) && input.paths.length > 0 && input.paths.length <= 128 && this.native.size + input.paths.length <= 256, 'Native import selection limit reached.');
+    ensure(Array.isArray(input.paths) && input.paths.length > 0 && input.paths.length <= 128 && this.native.size + this.activeNative + input.paths.length <= 256, 'Native import selection limit reached.');
     const references: string[] = [];
     try {
       for (const p of input.paths) {
@@ -289,7 +306,7 @@ class LocalWorkspace {
     ensure(input.text === undefined || input.kind === 'create-file', 'Text belongs only to file creation.');
     if (input.text !== undefined) textDocument(input.text);
     const id = key(input.clientId, input.id), previous = this.operation(id);
-    if (previous) { if (!same(previous.input, input)) fail('Conflict', 'Operation ID already belongs to another payload/client/checkout.'); if (this.volatileOperations.has(id)) this.publishOperation(id, previous); return previous.result; }
+    if (previous) return this.replayOperation(id, input, previous);
     this.assertSettled(input.checkout, this.footprint(input), input.clientId);
     if (signal.aborted) fail('Cancelled', 'Operation cancelled before admission.');
     const directory = await this.directory(input.checkout);
@@ -327,6 +344,13 @@ class LocalWorkspace {
       const source = sources[i], destination = destinations[i];
       if (!destination) continue;
       path(destination); await directory.destination(destination);
+      for (const selected of sources.filter(s => s.native)) {
+        const native = selected.native!; native.validate();
+        ensure(!native.containsDirectory(resolve(input.checkout.root, dirname(destination))), 'Choose a native import destination outside its source directory.');
+        let actual: Awaited<ReturnType<Directory['entry']>> | undefined;
+        try { actual = await directory.entry(destination, signal); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+        ensure(!actual || actual.identity !== native.identity && !(actual.directory && native.parents.split(',').includes(actual.identity)), 'A native import cannot replace itself or an ancestor of its source.');
+      }
       if (!source.native && !create) ensure(!affected(folded(destination), folded(source.path)) || (input.kind === 'move' && destination !== source.path && folded(destination) === folded(source.path)), 'Choose a destination outside the source.');
       ensure(!sources.some(s => s.path !== source.path && affected(folded(destination), folded(s.path))), 'Destination overlaps another selected source.');
       for (const row of this.store.db.prepare('SELECT client, body FROM recovery').all()) {
@@ -337,10 +361,14 @@ class LocalWorkspace {
     const staging = destinations.map(destination => destination && ['copy', 'import'].includes(input.kind) ? join(dirname(destination), '.moonbase-copy-' + randomUUID()) : '');
     const publicationRevisions: Record<string, number> = {[input.clientId]: this.store.readRecovery(input.clientId)?.revision ?? 0};
     for (const row of this.store.db.prepare('SELECT client, revision, body FROM recovery').all()) if ((JSON.parse(row.body as string) as EditorRecovery).checkouts.some(c => same(c, input.checkout))) publicationRevisions[row.client as string] = Number(row.revision);
-    const record: OperationRecord = { input, staging, publicationRevisions, acknowledgedBy: [],
+    const record: OperationRecord = { input, paths: [...input.sources.map(source => source.target.path), ...destinations.filter((p): p is string => p !== undefined)], staging, publicationRevisions, acknowledgedBy: [],
       result: {id: input.id, clientId: input.clientId, recoveryChanges: [], checkout: input.checkout, kind: input.kind, outcome: 'uncertain', items: [], message: 'Admitted operation. Interrupted items must be inspected, never repeated automatically.'} };
     // The complete immutable selection is durable before the first native mutation.
-    this.store.put('operations', id, record);
+    const claims = tokens.map(token => { const ref = this.native.get(token); if (!ref || ref.clientId !== input.clientId || ref.checkoutId !== input.checkout.checkoutId) fail('Unauthorized', 'Native reference expired, used or belongs to another client/checkout.'); ref!.source.validate(); return {token, ref: ref!}; });
+    const occupied = this.store.reserve('operations', id, record);
+    if (occupied) return this.replayOperation(id, input, this.operation(id) ?? occupied);
+    for (const {token, ref} of claims) { clearTimeout(ref.expires); this.native.delete(token); }
+    this.activeNative += claims.length;
     try {
       for (let i = 0; i < sources.length; i++) {
         const source = sources[i], destination = destinations[i];
@@ -380,9 +408,9 @@ class LocalWorkspace {
       }
       record.result.outcome = record.result.items.some(i => i.outcome === 'uncertain') || record.result.items.length < sources.length ? 'uncertain' : record.result.items.every(i => i.outcome === 'completed') ? 'completed' : 'failed';
       if (record.result.outcome === 'uncertain') record.result.message = 'Inspect original, destination, Finder Trash and staging: ' + staging.filter(Boolean).join(', ') + '. Drafts and journal retained; no automatic retry.'; else delete record.result.message;
-      try { this.publishOperation(id, record); } catch (error) { record.result.message = 'Filesystem results known; persistence pending: ' + errorText(error); this.volatileOperations.set(id, record); }
+      try { this.publishOperation(id, record); } catch (error) { this.retainPublication(id, record, error); }
       return record.result;
-    } finally { tokens.forEach(token => this.releaseNative(token)); }
+    } finally { for (const {ref} of claims) ref.source.close(); this.activeNative -= claims.length; }
   }
   reconcile(state: EditorRecovery, records: OperationRecord[]) {
     for (const record of records) {
@@ -415,30 +443,58 @@ class LocalWorkspace {
       }
     }
   }
+  retainPublication(id: string, record: OperationRecord, error: unknown) {
+    const committed = this.store.get<OperationRecord>('operations', id);
+    record.result.recoveryChanges = [...new Map([...(committed?.result.recoveryChanges ?? []), ...record.result.recoveryChanges].map(change => [canonical(change), change])).values()];
+    record.publicationError = 'Recovery publication pending; previous valid snapshot retained. ' + errorText(error);
+    record.result.message = record.publicationError; this.volatileOperations.set(id, record);
+  }
   publishOperation(id: string, record: OperationRecord) {
-    const fresh = record.result.items.filter(item => item.outcome === 'completed' && !(record.publishedItems ?? []).includes(canonical(item)));
     this.store.db.exec('BEGIN IMMEDIATE');
     try {
+      const committed = this.store.get<OperationRecord>('operations', id);
+      if (committed && !same(committed.input, record.input)) fail('Conflict', 'Operation identity changed before recovery publication.');
+      const items = new Map((committed?.result.items ?? []).map(item => [canonical([item.source, item.destination]), item]));
+      for (const item of record.result.items) {
+        const itemKey = canonical([item.source, item.destination]), previous = items.get(itemKey);
+        if (previous?.outcome !== 'completed') items.set(itemKey, item);
+      }
+      const mergedItems = [...items.values()], originals = mergedItems.filter(item => !item.message?.startsWith('Explicit replacement'));
+      const expected = record.input.sources.length || record.input.nativeReferences?.length || 1;
+      const outcome = originals.length !== expected || originals.some(item => item.outcome === 'uncertain') ? 'uncertain' : originals.every(item => item.outcome === 'completed') ? 'completed' : 'failed';
+      const published = new Set([...(committed?.publishedItems ?? []), ...(record.publishedItems ?? [])]);
+      const fresh = mergedItems.filter(item => item.outcome === 'completed' && !published.has(canonical(item)));
+      const changed = !committed || !same(committed.result.items, mergedItems) || committed.result.outcome !== outcome || fresh.length > 0;
+      if (!changed) {
+        this.store.db.exec('COMMIT'); delete record.publicationError; Object.assign(record, committed); this.volatileOperations.delete(id); return;
+      }
       const changes: OperationResult['recoveryChanges'] = [];
-      const publicationRevisions = {...record.publicationRevisions};
+      const publicationRevisions = {...record.publicationRevisions, ...committed?.publicationRevisions};
       for (const row of this.store.db.prepare('SELECT client, revision, body FROM recovery').all()) {
-        const state = JSON.parse(row.body as string) as EditorRecovery;
-        if (row.client !== record.input.clientId && !state.checkouts.some(c => same(c, record.input.checkout))) continue;
+        const state = JSON.parse(row.body as string) as EditorRecovery, clientId = row.client as string;
+        if (clientId !== record.input.clientId && !state.checkouts.some(c => same(c, record.input.checkout))) continue;
         let revision = Number(row.revision);
         if (fresh.length) this.reconcile(state, [{...record, result: {...record.result, items: fresh}}]);
+        recovery(state, clientId);
         if (JSON.stringify(state) !== row.body) {
-          this.store.db.prepare('UPDATE recovery SET revision=revision+1, body=? WHERE client=?').run(JSON.stringify(state), row.client as string);
-          changes.push({clientId: row.client as string, previousRevision: revision, revision: revision + 1}); revision++;
+          this.store.db.prepare('UPDATE recovery SET revision=revision+1, body=? WHERE client=?').run(JSON.stringify(state), clientId);
+          changes.push({clientId, previousRevision: revision, revision: revision + 1}); revision++;
         }
-        publicationRevisions[row.client as string] = revision;
+        publicationRevisions[clientId] = revision;
       }
-      const updated = {...record, publicationRevisions, publishedItems: [...(record.publishedItems ?? []), ...fresh.map(canonical)], result: {...record.result, recoveryChanges: [...record.result.recoveryChanges, ...changes]}};
-      this.store.put('operations', id, updated); this.store.db.exec('COMMIT'); Object.assign(record, updated); this.volatileOperations.delete(id);
+      const retained = [...new Map([...(committed?.result.recoveryChanges ?? []), ...record.result.recoveryChanges, ...changes].map(change => [canonical(change), change])).values()];
+      const updated: OperationRecord = {...record, publicationRevisions, acknowledgedBy: [...new Set([...(committed?.acknowledgedBy ?? []), ...record.acknowledgedBy])], publishedItems: [...published, ...fresh.map(canonical)], result: {...record.result, items: mergedItems, outcome, recoveryChanges: retained}};
+      delete updated.publicationError;
+      if (updated.result.outcome !== 'uncertain' && record.publicationError) delete updated.result.message;
+      this.store.put('operations', id, updated); this.store.db.exec('COMMIT'); delete record.publicationError; Object.assign(record, updated); this.volatileOperations.delete(id);
     } catch (error) { this.store.db.exec('ROLLBACK'); throw error; }
   }
   publishSave(id: string, record: SaveRecord, restore = false) {
     this.store.db.exec('BEGIN IMMEDIATE');
     try {
+      const committed = this.store.get<SaveRecord>('saves', id);
+      if (committed && !same(committed.input, record.input)) fail('Conflict', 'Save identity changed before recovery publication.');
+      if (committed?.published || committed?.recoveryRestored && !record.result) { this.store.db.exec('COMMIT'); Object.assign(record, committed); this.volatileSaves.delete(id); return; }
       const changes: OperationResult['recoveryChanges'] = [];
       if (!record.published) {
         const stored = this.store.readRecovery(record.input.clientId);
@@ -446,10 +502,11 @@ class LocalWorkspace {
         if (restore && record.baseline && (stored?.revision ?? 0) === record.recoveryRevision) {
           if (!state.checkouts.some(c => same(c, record.input.target.checkout))) state.checkouts.push(record.input.target.checkout);
           const existing = state.drafts.find(d => same(d.target, record.input.target));
-          if (existing) existing.text = record.input.text;
+          if (existing) { existing.text = record.input.text; existing.disk = record.baseline; }
           else state.drafts.push({target: record.input.target, text: record.input.text, disk: record.baseline});
         }
         if (record.result?.kind === 'saved') for (const draft of state.drafts) if (same(draft.target, record.input.target)) draft.disk = record.result.disk;
+        recovery(state, record.input.clientId);
         if (JSON.stringify(state) !== before) {
           const previousRevision = stored?.revision ?? 0;
           this.store.db.prepare('INSERT INTO recovery VALUES(?,?,?) ON CONFLICT(client) DO UPDATE SET revision=excluded.revision, body=excluded.body').run(record.input.clientId, previousRevision + 1, JSON.stringify(state));
@@ -457,19 +514,19 @@ class LocalWorkspace {
         }
       }
       const result = record.result?.kind === 'saved' ? {kind: 'saved' as const, disk: record.result.disk, recoveryChanges: [...record.result.recoveryChanges, ...changes]} : record.result;
-      const updated = {...record, result, published: !!result};
+      const updated = {...record, result, published: !!result, recoveryRestored: restore || record.recoveryRestored};
       this.store.put('saves', id, updated); this.store.db.exec('COMMIT'); Object.assign(record, updated); this.volatileSaves.delete(id);
     } catch (error) { this.store.db.exec('ROLLBACK'); throw error; }
   }
   async recoverEvidence() {
-    for (const [id, record] of this.volatileSaves) if (record.result) this.publishSave(id, record);
+    for (const [id, record] of this.volatileSaves) if (record.result) { try { this.publishSave(id, record); } catch (error) { record.message = 'Recovery publication pending. ' + errorText(error); } }
     for (const record of this.operations()) {
       if (this.active(record.input.checkout.checkoutId)) continue;
       const items = record.result.items.filter(item => !item.message?.startsWith('Explicit replacement'));
       if (items.length === (record.input.sources.length || record.input.nativeReferences?.length || 1) && items.every(item => item.outcome !== 'uncertain')) {
         const outcome = items.every(item => item.outcome === 'completed') ? 'completed' : 'failed';
         const id = key(record.input.clientId, record.input.id);
-        if (record.result.outcome !== outcome || record.result.items.some(item => item.outcome === 'completed' && !(record.publishedItems ?? []).includes(canonical(item))) || this.volatileOperations.has(id)) { record.result.outcome = outcome; this.publishOperation(id, record); }
+        if (record.result.outcome !== outcome || record.result.items.some(item => item.outcome === 'completed' && !(record.publishedItems ?? []).includes(canonical(item))) || this.volatileOperations.has(id)) { record.result.outcome = outcome; try { this.publishOperation(id, record); } catch (error) { this.retainPublication(id, record, error); } }
       }
       if (record.result.outcome !== 'uncertain' || this.active(record.input.checkout.checkoutId)) continue;
       const kind = record.input.kind;
@@ -490,7 +547,8 @@ class LocalWorkspace {
         }
       }
       if (record.result.items.length >= record.input.sources.length && !record.result.items.some(i => i.outcome === 'uncertain')) record.result.outcome = record.result.items.every(i => i.outcome === 'completed') ? 'completed' : 'failed';
-      this.publishOperation(key(record.input.clientId, record.input.id), record);
+      const id = key(record.input.clientId, record.input.id);
+      try { this.publishOperation(id, record); } catch (error) { this.retainPublication(id, record, error); }
     }
     for (const record of this.store.all<SaveRecord>('saves')) {
       if (record.result || this.active(record.input.target.checkout.checkoutId)) continue;
@@ -498,7 +556,6 @@ class LocalWorkspace {
         const disk = await (await this.directory(record.input.target.checkout)).read(record.input.target.path);
         if (disk.version === textDocument(record.input.text).version) record.result = {kind: 'saved', disk, recoveryChanges: []};
         else if (disk.version === record.input.expectedVersion) record.result = {kind: 'conflict', disk};
-        else continue;
         this.publishSave(key(record.input.clientId, record.input.requestId), record, true);
       } catch { /* Unavailable/changed path retains save intent. */ }
     }
@@ -511,18 +568,24 @@ class LocalWorkspace {
     const relevant = this.operations().filter(r => !r.acknowledgedBy.includes(clientId) && (r.input.clientId === clientId || state.checkouts.some(c => same(c, r.input.checkout))));
     for (const record of relevant) if (record.publicationRevisions[clientId] === undefined) { record.publicationRevisions[clientId] = stored?.revision ?? 0; this.store.put('operations', key(record.input.clientId, record.input.id), record); }
     const operations = relevant.map(r => r.result);
+    for (const record of relevant) if (record.publicationError) errors.push(record.publicationError);
     for (const operation of operations) if (operation.outcome === 'uncertain') errors.push('Uncertain operation ' + operation.id + ': ' + (operation.message ?? 'inspect original, destination, staging and Finder Trash; drafts retained.'));
     for (const record of this.store.all<SaveRecord>('saves')) if (record.input.clientId === clientId && !record.result) {
       errors.push('Uncertain save ' + record.input.requestId + ' for ' + record.input.target.path + ': inspect disk and staging ' + record.temporary + '; saved draft and intent retained.');
-      if (record.baseline && !state.drafts.some(d => same(d.target, record.input.target))) {
-        if (!state.checkouts.some(c => same(c, record.input.target.checkout))) state.checkouts.push(record.input.target.checkout);
-        state.drafts.push({target: record.input.target, text: record.input.text, disk: record.baseline});
+      if (record.baseline && (stored?.revision ?? 0) === record.recoveryRevision) {
+        const candidate = structuredClone(state);
+        if (!candidate.checkouts.some(c => same(c, record.input.target.checkout))) candidate.checkouts.push(record.input.target.checkout);
+        const existing = candidate.drafts.find(d => same(d.target, record.input.target));
+        if (existing) { existing.text = record.input.text; existing.disk = record.baseline; }
+        else candidate.drafts.push({target: record.input.target, text: record.input.text, disk: record.baseline});
+        try { recovery(candidate, clientId); Object.assign(state, candidate); }
+        catch (error) { errors.push('Admitted Save recovery publication pending; journal text retained. ' + errorText(error)); }
       }
     }
     return {revision: stored?.revision ?? 0, state, errors, operations};
   }
   async list(input: CommandInput<'listDirectory'>, signal: AbortSignal) {
-    path(input.path, true); const directory = await this.directory(input.checkout);
+    path(input.path, true); const directory = await this.directory(input.checkout); await directory.entry(input.path, signal);
     const entries = (await directory.io(['list', input.path || '.'], undefined, signal)).toString().split('\0').filter(Boolean).slice(0, 20000).map(row => ({path: input.path ? input.path + '/' + row.slice(1) : row.slice(1), directory: row[0] === 'd', ignored: false}));
     let error: string | undefined;
     try {

@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { closeSync, constants, fstatSync, openSync, realpathSync } from 'node:fs';
+import { closeSync, constants, fstatSync, openSync, readdirSync, realpathSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import type { FileDocument } from '@moonbase/application/client';
 import { document, ensure, fail, path } from './validation.ts';
@@ -33,7 +33,11 @@ export class Directory {
   constructor(root: string, expected: string, run: Run, gitExecutable: string) {
     this.root = root; this.expected = expected; this.run = run; this.gitExecutable = gitExecutable;
     this.fd = openSync(root, flags);
-    try { ensure(identity(fstatSync(this.fd)) === expected && realpathSync(root) === root, 'Checkout directory changed. Restore its original identity.'); }
+    try {
+      ensure(identity(fstatSync(this.fd)) === expected && realpathSync(root) === root, 'Checkout directory changed. Restore its original identity.');
+      let parent = '/';
+      for (const component of root.split('/').filter(Boolean)) { ensure(readdirSync(parent).includes(component), 'Choose the actual checkout spelling without case or Unicode aliases.'); parent = resolve(parent, component); }
+    }
     catch (error) { closeSync(this.fd); throw error; }
   }
   close() { closeSync(this.fd); }
@@ -50,7 +54,15 @@ export class Directory {
   }
   async entry(p: string, signal?: AbortSignal) {
     path(p, true);
-    if (p) ensure(relative(this.root, realpathSync(resolve(this.root, p))) === p, 'Use exact paths without case, mount or Unicode aliases.');
+    this.check();
+    if (p) {
+      ensure(relative(this.root, realpathSync(resolve(this.root, p))) === p, 'Use exact paths without mount or symbolic-link aliases.');
+      let parent = this.root;
+      for (const component of p.split('/')) {
+        ensure(readdirSync(parent).includes(component), 'Use the actual on-disk spelling without case or Unicode aliases.');
+        parent = resolve(parent, component);
+      }
+    }
     const fd = openSync(resolve(this.root, p), constants.O_RDONLY | constants.O_NONBLOCK | 0x20000000);
     try {
       const info = fstatSync(fd); ensure(info.isFile() || info.isDirectory(), 'Unsupported filesystem object.');
@@ -58,7 +70,7 @@ export class Directory {
     } finally { closeSync(fd); }
   }
 
-  async read(p: string, signal?: AbortSignal): Promise<FileDocument> { path(p); return document(await this.io(['read', p], undefined, signal)); }
+  async read(p: string, signal?: AbortSignal): Promise<FileDocument> { path(p); await this.entry(p, signal); return document(await this.io(['read', p], undefined, signal)); }
   async destination(p: string) {
     path(p); const parent = dirname(p); const item = await this.entry(parent === '.' ? '' : parent);
     ensure(item.directory, 'Destination parent must be a directory.'); return item.identity;
