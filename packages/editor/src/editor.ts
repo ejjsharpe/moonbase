@@ -412,6 +412,10 @@ class EditorModelState {
   }
   selectCheckout(target: CheckoutTarget) {
     this.checkout(target);
+    if (this.selection) {
+      void this.runEffect(Scope.close(this.selection, Exit.void)).catch(this.report);
+      this.selection = undefined;
+    }
     this.activation++;
     this.recovery.selectedCheckoutId = target.checkoutId;
     this.changed();
@@ -1259,31 +1263,36 @@ class EditorModelState {
         .map((item) => item.path),
     });
   }
-  async refresh(checkout: CheckoutTarget): Promise<void> {
+  refresh(checkout: CheckoutTarget): Promise<void> {
     this.checkout(checkout);
     const key = checkoutKey(checkout);
-    const existing = this.refreshing.get(key);
-    if (existing) {
-      this.refreshPending.add(key);
-      return this.runEffect(Fiber.join(existing));
-    }
-    const scope = this.stops.get(key)?.scope ?? this.scope;
-    const work = Effect.tryPromise({
-      try: async () => {
-        do {
-          this.refreshPending.delete(key);
-          await this.refreshOnce(checkout);
-        } while (
-          this.refreshPending.has(key) &&
-          !this.closing &&
-          this.recovery.openCheckoutIds.includes(checkout.checkoutId)
-        );
-      },
-      catch: ApplicationError.fromUnknown,
-    }).pipe(Effect.ensuring(Effect.sync(() => this.refreshing.delete(key))));
-    const fiber = await this.runEffect(Effect.forkIn(work, scope));
-    this.refreshing.set(key, fiber);
-    return this.runEffect(Fiber.join(fiber));
+    return this.runEffect(
+      Effect.suspend(() => {
+        const existing = this.refreshing.get(key);
+        if (existing) {
+          this.refreshPending.add(key);
+          return Fiber.join(existing);
+        }
+        const scope = this.stops.get(key)?.scope ?? this.scope;
+        const work = Effect.tryPromise({
+          try: async () => {
+            do {
+              this.refreshPending.delete(key);
+              await this.refreshOnce(checkout);
+            } while (
+              this.refreshPending.has(key) &&
+              !this.closing &&
+              this.recovery.openCheckoutIds.includes(checkout.checkoutId)
+            );
+          },
+          catch: ApplicationError.fromUnknown,
+        }).pipe(Effect.ensuring(Effect.sync(() => this.refreshing.delete(key))));
+        return Effect.flatMap(Effect.forkIn(work, scope), (fiber) => {
+          this.refreshing.set(key, fiber);
+          return Fiber.join(fiber);
+        });
+      }),
+    );
   }
   private async refreshOnce(checkout: CheckoutTarget) {
     const paths = ['', ...this.checkout(checkout).tree.expanded];
@@ -1308,10 +1317,15 @@ class EditorModelState {
       const target = { checkout, path: selected.active },
         key = fileKey(target);
       try {
-        const comparison = await this.command('readComparison', { target, area: mode });
+        const comparison = await this.command(
+          'readComparison',
+          { target, area: mode },
+          this.stops.get(checkoutKey(checkout))?.scope,
+        );
         if (
           !this.closing &&
           !this.preserving &&
+          this.recovery.openCheckoutIds.includes(checkout.checkoutId) &&
           generation === this.activation &&
           selected.active === target.path &&
           readOwn(selected.fileViews, target.path) === mode
