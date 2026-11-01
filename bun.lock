@@ -10,6 +10,7 @@
         "@effect/platform-node": "4.1.0",
         "@moonbase/application": "workspace:*",
         "@moonbase/editor": "workspace:*",
+        "@moonbase/ssh": "workspace:*",
         "@moonbase/workspace": "workspace:*",
         "@playwright/test": "1.64.1",
         "@stylexjs/stylex": "0.19.1",
@@ -46,6 +47,13 @@
         "effect": "4.1.0",
         "monaco-editor": "0.57.0",
         "react": "19.3.1",
+      },
+    },
+    "packages/ssh": {
+      "name": "@moonbase/ssh",
+      "dependencies": {
+        "@moonbase/application": "workspace:*",
+        "effect": "4.1.0",
       },
     },
     "packages/ui": {
@@ -287,6 +295,7 @@
     "@moonbase/editor": ["@moonbase/editor@workspace:packages/editor"],
 
 
+    "@moonbase/ssh": ["@moonbase/ssh@workspace:packages/ssh"],
 
     "@moonbase/ui": ["@moonbase/ui@workspace:packages/ui"],
 

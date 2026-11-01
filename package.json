@@ -42,6 +42,7 @@
     "@moonbase/application": "workspace:*",
     "@moonbase/editor": "workspace:*",
     "@moonbase/workspace": "workspace:*",
+    "@moonbase/ssh": "workspace:*",
     "@earendil-works/pi-ai": "1.4.0"
   }
 }
