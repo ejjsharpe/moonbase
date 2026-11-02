@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ApplicationError } from '@moonbase/application/client';
+import { Effect } from 'effect';
 import type {
   ChatClient,
   ChatSnapshot,
@@ -8,7 +9,8 @@ import type {
   ChatCommands,
 } from '@moonbase/application/chat-client';
 import type { ConnectionClient, ConnectionSnapshot } from '@moonbase/application/connection-client';
-import { ChatController, type DraftStorage } from '@moonbase/chat';
+import { type DraftStorage } from '@moonbase/chat';
+import { modelRoot } from './model-fixture.ts';
 const context = { host: { hostId: 'host', storeId: 'store' }, actorId: 'owner' },
   target = { ...context, conversationId: 'chat' };
 const summary = {
@@ -37,15 +39,22 @@ const failure = () =>
 class Storage implements DraftStorage {
   value: string | null = null;
   fail = false;
+  writes = 0;
   read() {
     return this.value;
   }
   write(value: string) {
+    this.writes++;
     if (this.fail) throw Error('Controlled full storage');
     this.value = value;
   }
 }
-function fixture(storage = new Storage()) {
+async function fixture(
+  t: { after: (close: () => Promise<void>) => void },
+  storage = new Storage(),
+) {
+  const root = modelRoot();
+  t.after(() => root.close());
   let connectionState: ConnectionSnapshot = { state: 'disconnected', connectionId: null, profile },
     receiveConnection: (v: ConnectionSnapshot) => void = () => {},
     receiveChat: (v: ChatSnapshot) => void = () => {};
@@ -53,8 +62,10 @@ function fixture(storage = new Storage()) {
     id = 0;
   const calls: { operation: string; input: unknown }[] = [];
   const answers = new Map<string, (v: never) => Promise<unknown>>();
+  const signals = new Map<string, AbortSignal[]>();
   const chat: ChatClient = {
-    command: async (op, input) => {
+    command: async (op, input, options) => {
+      if (options?.signal) signals.set(op, [...(signals.get(op) ?? []), options.signal]);
       calls.push({ operation: op, input: structuredClone(input) });
       const handler = answers.get(op);
       if (handler) return (await handler(input as never)) as never;
@@ -88,7 +99,7 @@ function fixture(storage = new Storage()) {
     watch: (_i, receive) => {
       receiveChat = receive;
       subscriptions++;
-      return () => {
+      return async () => {
         subscriptions--;
       };
     },
@@ -113,38 +124,44 @@ function fixture(storage = new Storage()) {
     },
     watch: (receive) => {
       receiveConnection = receive;
-      return () => {};
+      return async () => {};
     },
   };
-  const controller = new ChatController(
+  const controller = await root.make({
     chat,
     connection,
     context,
     storage,
-    () => `request-${++id}`,
-  );
+    newId: () => `request-${++id}`,
+  });
   return {
     controller,
+    root,
     chat,
     connection,
     calls,
     answers,
+    signals,
     storage,
     publish: (v: ChatSnapshot) => receiveChat(v),
+    publishConnection: (v: ConnectionSnapshot) => {
+      connectionState = v;
+      receiveConnection(v);
+    },
     get subscriptions() {
       return subscriptions;
     },
   };
 }
 const turn = () => new Promise((r) => setTimeout(r, 0));
-async function ready(f: ReturnType<typeof fixture>) {
+async function ready(f: Awaited<ReturnType<typeof fixture>>) {
   await f.controller.start();
   await f.controller.connect();
   await turn();
   await f.controller.select(target);
 }
 
-test('existing version-1 drafts and pending identities reopen unchanged through the public entry', () => {
+test('existing version-1 drafts and pending identities reopen unchanged through the public entry', async (t) => {
   const storage = new Storage();
   const saved = {
     version: 1,
@@ -160,17 +177,17 @@ test('existing version-1 drafts and pending identities reopen unchanged through 
     ],
   };
   storage.value = JSON.stringify(saved);
-  const f = fixture(storage);
+  const f = await fixture(t, storage);
   assert.equal(f.controller.getSnapshot().draft, saved.drafts[0].text);
   assert.deepEqual(f.controller.getSnapshot().pending, saved.pending);
   assert.equal(f.controller.preserve(), true);
   assert.equal(storage.value, JSON.stringify(saved));
   assert.deepEqual(f.calls, []);
-  f.controller.dispose();
+  await f.controller.dispose();
 });
 
-test('startup only observes; every mutation is durably captured before disclosure', async () => {
-  const f = fixture();
+test('startup only observes; every mutation is durably captured before disclosure', async (t) => {
+  const f = await fixture(t);
   await f.controller.start();
   assert(
     !f.calls.some((c) => ['connect', 'createChat', 'sendChat', 'stopChat'].includes(c.operation)),
@@ -190,10 +207,10 @@ test('startup only observes; every mutation is durably captured before disclosur
   await f.controller.send();
   assert.equal(f.controller.getSnapshot().draft, '');
   assert.equal(f.controller.getSnapshot().pending.length, 0);
-  f.controller.dispose();
+  await f.controller.dispose();
 });
-test('lost reply, null query, reload and reconnect retain original input without auto Send', async () => {
-  const f = fixture();
+test('lost reply, null query, reload and reconnect retain original input without auto Send', async (t) => {
+  const f = await fixture(t);
   await ready(f);
   f.controller.setDraft('original');
   f.answers.set('sendChat', async () => {
@@ -205,8 +222,13 @@ test('lost reply, null query, reload and reconnect retain original input without
   assert.equal(p.input.text, 'original');
   await f.controller.query(p.input.requestId);
   assert.deepEqual(f.controller.getSnapshot().pending[0].input, p.input);
-  f.controller.dispose();
-  const second = new ChatController(f.chat, f.connection, context, f.storage);
+  await f.controller.dispose();
+  const second = await f.root.make({
+    chat: f.chat,
+    connection: f.connection,
+    context,
+    storage: f.storage,
+  });
   await second.start();
   await turn();
   assert.deepEqual(second.getSnapshot().pending[0].input, p.input);
@@ -215,10 +237,10 @@ test('lost reply, null query, reload and reconnect retain original input without
   await second.connect();
   await turn();
   assert.equal(f.calls.filter((c) => c.operation === 'sendChat').length, 1);
-  second.dispose();
+  await second.dispose();
 });
-test('matching Send recovery clears only captured draft text and preserves newer edits', async () => {
-  const f = fixture();
+test('matching Send recovery clears only captured draft text and preserves newer edits', async (t) => {
+  const f = await fixture(t);
   await ready(f);
   f.controller.setDraft('captured');
   let release!: (v: unknown) => void;
@@ -235,11 +257,11 @@ test('matching Send recovery clears only captured draft text and preserves newer
   await sending;
   assert.equal(f.controller.getSnapshot().draft, 'newer edit');
   assert.equal(f.controller.getSnapshot().pending.length, 0);
-  f.controller.dispose();
+  await f.controller.dispose();
 });
 for (const operation of ['createChat', 'sendChat', 'stopChat'])
-  test(`${operation} never discloses when pending metadata write fails`, async () => {
-    const f = fixture();
+  test(`${operation} never discloses when pending metadata write fails`, async (t) => {
+    const f = await fixture(t);
     await ready(f);
     f.controller.setDraft('retained');
     f.publish({
@@ -262,7 +284,7 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'])
     assert(f.controller.getSnapshot().storageError);
     assert.equal(f.controller.preserve(), false);
     assert.equal(f.controller.getSnapshot().draft, 'retained');
-    f.controller.dispose();
+    await f.controller.dispose();
   });
 for (const value of [
   '{broken',
@@ -277,21 +299,21 @@ for (const value of [
   test(
     'corruption/foreign context remains untouched and blocks admission on reload: ' +
       value.slice(0, 12),
-    async () => {
+    async (t) => {
       const storage = new Storage();
       storage.value = value;
-      const f = fixture(storage);
+      const f = await fixture(t, storage);
       await f.controller.start();
       await f.controller.connect();
       await f.controller.create('Do not send');
       assert(f.controller.getSnapshot().storageError);
       assert.equal(storage.value, value);
       assert(!f.calls.some((c) => c.operation === 'createChat'));
-      f.controller.dispose();
+      await f.controller.dispose();
     },
   );
-test('write failure preserves latest live edit and blocks Quit instead of claiming reload safety', async () => {
-  const f = fixture();
+test('write failure preserves latest live edit and blocks Quit instead of claiming reload safety', async (t) => {
+  const f = await fixture(t);
   await ready(f);
   f.controller.setDraft('saved');
   f.storage.fail = true;
@@ -299,10 +321,10 @@ test('write failure preserves latest live edit and blocks Quit instead of claimi
   assert.equal(f.controller.getSnapshot().draft, 'latest live text');
   assert.equal(f.controller.preserve(), false);
   assert(JSON.parse(f.storage.value!).drafts.some((d: { text: string }) => d.text === 'saved'));
-  f.controller.dispose();
+  await f.controller.dispose();
 });
-test('same-input retry queries first, keeps original Create/Send/Stop identities, and never adopts successor', async () => {
-  const f = fixture();
+test('same-input retry queries first, keeps original Create/Send/Stop identities, and never adopts successor', async (t) => {
+  const f = await fixture(t);
   await ready(f);
   for (const op of ['createChat', 'sendChat', 'stopChat'])
     f.answers.set(op, async () => {
@@ -341,10 +363,10 @@ test('same-input retry queries first, keeps original Create/Send/Stop identities
     f.controller.getSnapshot().pending.map((p) => p.input),
     pending.map((p) => p.input),
   );
-  f.controller.dispose();
+  await f.controller.dispose();
 });
-test('pending Send does not block captured Stop or status and detach never stops work', async () => {
-  const f = fixture();
+test('pending Send does not block captured Stop or status and detach never stops work', async (t) => {
+  const f = await fixture(t);
   await ready(f);
   f.controller.setDraft('wait');
   let release!: (v: unknown) => void;
@@ -365,15 +387,15 @@ test('pending Send does not block captured Stop or status and detach never stops
   await f.controller.stop();
   assert(f.calls.some((c) => c.operation === 'stopChat'));
   const count = f.calls.filter((c) => c.operation === 'stopChat').length;
-  f.controller.closeView();
+  await f.controller.closeView();
   assert.equal(f.subscriptions, 0);
-  f.controller.dispose();
+  await f.controller.dispose();
   assert.equal(f.calls.filter((c) => c.operation === 'stopChat').length, count);
   release({ target, requestId: 'request-2', admission: 'reserved', submissionId: null });
   await sending;
 });
-test('read-only admitted lookup resolves without Send; foreign storage writes are never overwritten', async () => {
-  const f = fixture();
+test('read-only admitted lookup resolves without Send; foreign storage writes are never overwritten', async (t) => {
+  const f = await fixture(t);
   await ready(f);
   f.controller.setDraft('Original');
   f.answers.set('sendChat', async () => {
@@ -395,10 +417,10 @@ test('read-only admitted lookup resolves without Send; foreign storage writes ar
   f.controller.setDraft('third');
   assert.equal(f.storage.value, 'external change');
   assert(f.controller.getSnapshot().storageError);
-  f.controller.dispose();
+  await f.controller.dispose();
 });
-test('replacement watch snapshots and one older page keep output bounded', async () => {
-  const f = fixture();
+test('replacement watch snapshots and one older page keep output bounded', async (t) => {
+  const f = await fixture(t);
   await ready(f);
   for (let i = 0; i < 500; i++)
     f.publish({
@@ -419,20 +441,20 @@ test('replacement watch snapshots and one older page keep output bounded', async
   f.publish({ ...snapshot, olderCursor: 'page' });
   for (let i = 0; i < 4; i++) await f.controller.older();
   assert.equal(f.controller.getSnapshot().older.length, 32);
-  f.controller.dispose();
+  await f.controller.dispose();
 });
-test('bounds reject oversized/invalid Unicode input without replacing retained draft or issuing Send', async () => {
-  const f = fixture();
+test('bounds reject oversized/invalid Unicode input without replacing retained draft or issuing Send', async (t) => {
+  const f = await fixture(t);
   await ready(f);
   f.controller.setDraft('keep');
   f.controller.setDraft('a'.repeat(32769));
   assert.equal(f.controller.getSnapshot().draft, 'keep');
   f.controller.setDraft('\ud800');
   assert.equal(f.controller.getSnapshot().draft, 'keep');
-  f.controller.dispose();
+  await f.controller.dispose();
 });
-test('Create and captured Stop are written before disclosure; lost replies recover exact inputs after reload', async () => {
-  const f = fixture();
+test('Create and captured Stop are written before disclosure; lost replies recover exact inputs after reload', async (t) => {
+  const f = await fixture(t);
   await ready(f);
   const stop = { target, submissionId: 'saved-submission', taskId: null };
   for (const op of ['createChat', 'stopChat'])
@@ -448,15 +470,20 @@ test('Create and captured Stop are written before disclosure; lost replies recov
   });
   await f.controller.stop();
   const retained = structuredClone(f.controller.getSnapshot().pending);
-  f.controller.dispose();
-  const next = new ChatController(f.chat, f.connection, context, f.storage);
+  await f.controller.dispose();
+  const next = await f.root.make({
+    chat: f.chat,
+    connection: f.connection,
+    context,
+    storage: f.storage,
+  });
   assert.deepEqual(next.getSnapshot().pending, retained);
-  next.dispose();
+  await next.dispose();
 });
-test('hide/detach releases observations, resume is read-only, and draft capacity failure blocks Quit', async () => {
-  const f = fixture();
+test('hide/detach releases observations, resume is read-only, and draft capacity failure blocks Quit', async (t) => {
+  const f = await fixture(t);
   await ready(f);
-  f.controller.detach();
+  await f.controller.detach();
   assert.equal(f.subscriptions, 0);
   await f.controller.start();
   assert.equal(f.subscriptions, 1);
@@ -471,11 +498,11 @@ test('hide/detach releases observations, resume is read-only, and draft capacity
   assert(f.controller.getSnapshot().storageError);
   assert.equal(f.controller.preserve(), false);
   assert.equal(JSON.parse(f.storage.value!).drafts.length, 32);
-  f.controller.dispose();
+  await f.controller.dispose();
 });
 for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
-  test(`${operation} retains the captured identity when Disconnect makes a dispatched reply Unavailable`, async () => {
-    const f = fixture();
+  test(`${operation} retains the captured identity when Disconnect makes a dispatched reply Unavailable`, async (t) => {
+    const f = await fixture(t);
     await ready(f);
     f.controller.setDraft('captured before disconnect');
     f.publish({
@@ -514,8 +541,13 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
     release();
     await call;
     assert.deepEqual(f.controller.getSnapshot().pending[0].input, original.input);
-    f.controller.dispose();
-    const next = new ChatController(f.chat, f.connection, context, f.storage);
+    await f.controller.dispose();
+    const next = await f.root.make({
+      chat: f.chat,
+      connection: f.connection,
+      context,
+      storage: f.storage,
+    });
     await next.start();
     await next.connect();
     await turn();
@@ -526,14 +558,14 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
       f.calls.filter((c) => c.operation === operation).at(-1)!.input,
       original.input,
     );
-    next.dispose();
+    await next.dispose();
   });
 
 for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
   for (const duringQuery of [false, true])
     for (const failsWrite of [false, true])
-      test(`${operation} retry vetoes ${failsWrite ? 'unwritable' : 'changed'} local storage ${duringQuery ? 'during query' : 'before retry'} before mutating redisclosure`, async () => {
-        const f = fixture();
+      test(`${operation} retry vetoes ${failsWrite ? 'unwritable' : 'changed'} local storage ${duringQuery ? 'during query' : 'before retry'} before mutating redisclosure`, async (t) => {
+        const f = await fixture(t);
         await ready(f);
         f.controller.setDraft('captured draft');
         f.answers.set(operation, async (input) => {
@@ -618,18 +650,18 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
           'safe read-only query remains available',
         );
         assert.equal(f.calls.filter((c) => c.operation === operation).length, before);
-        f.controller.dispose();
+        await f.controller.dispose();
       });
 
 for (const lifecycle of ['detach', 'dispose'] as const)
-  test(`late Create reply reconciles its receipt without observing after ${lifecycle}`, async () => {
-    const f = fixture();
+  test(`late Create reply reconciles its receipt without observing after ${lifecycle}`, async (t) => {
+    const f = await fixture(t);
     await ready(f);
     let release!: (value: unknown) => void;
     f.answers.set('createChat', () => new Promise((resolve) => (release = resolve)));
     const creating = f.controller.create('Delayed creation');
     const pending = f.controller.getSnapshot().pending[0];
-    f.controller[lifecycle]();
+    await f.controller[lifecycle]();
     assert.equal(f.subscriptions, 0);
     const reads = f.calls.filter((c) => c.operation === 'getChat').length;
     release({ requestId: pending.input.requestId, conversation: summary });
@@ -637,13 +669,13 @@ for (const lifecycle of ['detach', 'dispose'] as const)
     assert.equal(f.subscriptions, 0);
     assert.equal(f.calls.filter((c) => c.operation === 'getChat').length, reads);
     const saved = JSON.parse(f.storage.value!);
-    assert.deepEqual(saved.pending, []);
+    assert.deepEqual(saved.pending, lifecycle === 'dispose' ? [pending] : []);
     assert.deepEqual(saved.selected, target);
-    f.controller.dispose();
+    await f.controller.dispose();
   });
 
 for (const extraField of ['selectedHost', 'createSession'] as const)
-  test(`stored ${extraField} still requires an exact shape`, async () => {
+  test(`stored ${extraField} still requires an exact shape`, async (t) => {
     const storage = new Storage();
     const saved = {
       version: 1,
@@ -663,28 +695,28 @@ for (const extraField of ['selectedHost', 'createSession'] as const)
     else saved.pending[0].input.session = { ...context, extra: true } as typeof context;
     storage.value = JSON.stringify(saved);
     const original = storage.value;
-    const f = fixture(storage);
+    const f = await fixture(t, storage);
     await f.controller.start();
     await f.controller.connect();
     await f.controller.create('Blocked');
     assert(f.controller.getSnapshot().storageError);
     assert.equal(storage.value, original);
     assert(!f.calls.some((c) => c.operation === 'createChat'));
-    f.controller.dispose();
+    await f.controller.dispose();
   });
 
 for (const invalidate of ['resume', 'selection'] as const)
-  test(`obsolete refresh cannot suppress current ${invalidate} reads`, async () => {
-    const f = fixture();
+  test(`obsolete refresh cannot suppress current ${invalidate} reads`, async (t) => {
+    const f = await fixture(t);
     await ready(f);
-    f.controller.detach();
+    await f.controller.detach();
     let release!: (value: unknown) => void;
     f.answers.set('listChats', () => new Promise((resolve) => (release = resolve)));
     const starting = f.controller.start();
     await turn();
     f.answers.delete('listChats');
     if (invalidate === 'resume') {
-      f.controller.detach();
+      await f.controller.detach();
       await f.controller.start();
     } else {
       await f.controller.select(target);
@@ -697,12 +729,12 @@ for (const invalidate of ['resume', 'selection'] as const)
     assert.equal(f.subscriptions, 1);
     assert.equal(f.controller.getSnapshot().chats[0].title, 'Saved');
     assert(!f.calls.some((c) => ['sendChat', 'stopChat'].includes(c.operation)));
-    f.controller.dispose();
+    await f.controller.dispose();
   });
 
 for (const lifecycle of ['detach', 'dispose'] as const)
-  test(`pending refresh leaves Stop concurrent and cannot observe after ${lifecycle}`, async () => {
-    const f = fixture();
+  test(`pending refresh leaves Stop concurrent and cannot observe after ${lifecycle}`, async (t) => {
+    const f = await fixture(t);
     await ready(f);
     let release!: (value: unknown) => void;
     f.answers.set('listChats', () => new Promise((resolve) => (release = resolve)));
@@ -721,7 +753,7 @@ for (const lifecycle of ['detach', 'dispose'] as const)
     });
     await f.controller.stop();
     assert.equal(f.calls.filter((c) => c.operation === 'stopChat').length, 1);
-    f.controller[lifecycle]();
+    await f.controller[lifecycle]();
     const reads = f.calls.filter((c) => c.operation === 'listChats').length;
     release({ conversations: [], nextCursor: null });
     await refreshing;
@@ -729,5 +761,440 @@ for (const lifecycle of ['detach', 'dispose'] as const)
     assert.equal(f.controller.getSnapshot().host, null);
     assert.equal(f.controller.getSnapshot().snapshot, null);
     assert.equal(f.subscriptions, 0);
-    f.controller.dispose();
+    await f.controller.dispose();
   });
+
+function event<A = void>() {
+  let resolve!: (value: A) => void, reject!: (error: unknown) => void;
+  const promise = new Promise<A>((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
+
+test('unfamiliar nested saved draft data stays byte-identical before any automatic write', async (t) => {
+  const storage = new Storage();
+  storage.value = JSON.stringify({
+    version: 1,
+    session: context,
+    selected: target,
+    drafts: [
+      { target, text: 'Preserve prior producer text', futureField: { evidence: 'unknown' } },
+    ],
+    pending: [
+      {
+        operation: 'sendChat',
+        input: { target, requestId: 'original-id', text: 'retained' },
+        message: 'Uncertain',
+      },
+    ],
+  });
+  const original = storage.value,
+    f = await fixture(t, storage);
+  await f.controller.start();
+  await f.controller.connect();
+  await f.controller.create('Blocked');
+  f.controller.setDraft('Cannot publish into incompatible namespace');
+  assert.equal(f.controller.preserve(), false);
+  assert(f.controller.getSnapshot().storageError);
+  assert.equal(storage.value, original);
+  assert.equal(storage.writes, 0);
+  assert(!f.calls.some((call) => ['createChat', 'sendChat', 'stopChat'].includes(call.operation)));
+});
+
+for (const typed of [true, false])
+  test(`two models share one runtime; pending ${typed ? 'typed' : 'unknown'} watch cleanup joins and fences all late writes`, async (t) => {
+    const cleanup: (() => Promise<void>)[] = [];
+    const f = await fixture({
+      after: (close) => {
+        cleanup.push(close);
+      },
+    });
+    const held = event(),
+      entered = event();
+    const failure = typed
+      ? new ApplicationError({ code: 'Persistence', message: 'Controlled watch release failed' })
+      : new Error('SYNTHETIC_PRIVATE_CLEANUP_SENTINEL');
+    t.after(async () => {
+      held.reject(failure);
+      for (const close of cleanup)
+        await assert.rejects(
+          close(),
+          (error) =>
+            ApplicationError.is(error) &&
+            !error.message.includes('SYNTHETIC_PRIVATE_CLEANUP_SENTINEL'),
+        );
+    });
+    await ready(f);
+    await f.controller.closeView();
+    const originalWatch = f.chat.watch;
+    let closes = 0,
+      late!: (snapshot: ChatSnapshot) => void;
+    f.chat.watch = (_input, receive) => {
+      late = receive;
+      return () => {
+        closes++;
+        entered.resolve();
+        return held.promise;
+      };
+    };
+    await f.controller.select(target);
+    f.chat.watch = originalWatch;
+    const other = await f.root.make({
+      chat: f.chat,
+      connection: f.connection,
+      context,
+      storage: new Storage(),
+    });
+    await other.start();
+    await other.select(target);
+    const reply = event<unknown>();
+    f.answers.set('sendChat', async (input) => {
+      const captured = input as ChatCommands['sendChat']['input'];
+      return captured.text === 'first retained'
+        ? reply.promise
+        : {
+            target,
+            requestId: captured.requestId,
+            admission: 'admitted',
+            submissionId: 'other-submission',
+          };
+    });
+    f.controller.setDraft('first retained');
+    const sending = f.controller.send();
+    const pending = structuredClone(f.controller.getSnapshot().pending);
+    const saved = f.storage.value,
+      writes = f.storage.writes;
+    const errors: ApplicationError[] = [];
+    const closing = f.controller.dispose();
+    assert.strictEqual(f.controller.dispose(), closing);
+    let settled = false;
+    const tracked = closing
+      .catch((error) => {
+        errors.push(error);
+      })
+      .finally(() => {
+        settled = true;
+      });
+    await entered.promise;
+    assert.equal(settled, false);
+    assert.equal(f.signals.get('sendChat')!.at(-1)!.aborted, true);
+    other.setDraft('other model remains usable');
+    await other.send();
+    assert.equal(other.getSnapshot().pending.length, 0);
+    f.controller.setDraft('late edit');
+    late({
+      ...snapshot,
+      entries: [{ id: 'late', role: 'assistant', text: 'late output', truncated: false }],
+    });
+    reply.resolve({
+      target,
+      requestId: pending[0].input.requestId,
+      admission: 'admitted',
+      submissionId: 'first',
+    });
+    await sending;
+    assert.equal(f.storage.value, saved);
+    assert.equal(f.storage.writes, writes);
+    assert.deepEqual(JSON.parse(saved!).pending, pending);
+    held.reject(failure);
+    await tracked;
+    assert.equal(closes, 1);
+    assert.equal(errors.length, 1);
+    assert(ApplicationError.is(errors[0]));
+    assert(!errors[0].message.includes('SYNTHETIC_PRIVATE_CLEANUP_SENTINEL'));
+    if (typed) assert.match(errors[0].message, /Controlled watch release failed/);
+    await assert.rejects(f.controller.dispose(), (error) => error === errors[0]);
+    await other.dispose();
+  });
+
+test('A-B-A selection aborts obsolete reads and rejects late callbacks without duplicate observation', async (t) => {
+  const f = await fixture(t);
+  await ready(f);
+  const firstA = event<unknown>(),
+    firstB = event<unknown>();
+  let a = 0;
+  f.answers.set('getChat', async (input) => {
+    const current = (input as ChatCommands['getChat']['input']).target;
+    if (current.conversationId === 'B') return firstB.promise;
+    if (++a === 1) return firstA.promise;
+    return { ...snapshot, conversation: { ...summary, title: 'Current A' } };
+  });
+  const callbacks: ((snapshot: ChatSnapshot) => void)[] = [];
+  const originalWatch = f.chat.watch;
+  f.chat.watch = (input, receive, error) => {
+    callbacks.push(receive);
+    return originalWatch(input, receive, error);
+  };
+  const openingA = f.controller.select(target),
+    openingB = f.controller.select({ ...target, conversationId: 'B' });
+  await f.controller.select(target);
+  assert.equal(f.subscriptions, 1);
+  assert.equal(f.controller.getSnapshot().snapshot!.conversation.title, 'Current A');
+  callbacks[0]({ ...snapshot, conversation: { ...summary, title: 'Obsolete A callback' } });
+  callbacks[1]({ ...snapshot, conversation: { ...summary, title: 'Obsolete B callback' } });
+  firstA.resolve({ ...snapshot, conversation: { ...summary, title: 'Obsolete A read' } });
+  firstB.resolve(snapshot);
+  await Promise.all([openingA, openingB]);
+  assert.equal(f.controller.getSnapshot().snapshot!.conversation.title, 'Current A');
+  assert.equal(f.controller.getSnapshot().error, null);
+  const signals = f.signals.get('getChat')!.slice(-3);
+  assert.deepEqual(
+    signals.map((signal) => signal.aborted),
+    [true, true, false],
+  );
+});
+
+test('generation replacement cancels held host reads and does not accept stale host/list state', async (t) => {
+  const f = await fixture(t);
+  await ready(f);
+  const held = event<unknown>();
+  f.answers.set('getChatHost', () => held.promise);
+  const refreshing = f.controller.refresh();
+  const old = f.signals.get('getChatHost')!.at(-1)!;
+  f.answers.delete('getChatHost');
+  f.publishConnection({
+    state: 'connected',
+    connectionId: 'replacement',
+    profile,
+    health: { ...context.host, protocol: 1, version: '0.1.0', capabilities: ['chat-v0'] },
+  });
+  await f.controller.refresh();
+  assert(old.aborted);
+  held.resolve({ ...context, cwd: '/obsolete', model: 'obsolete' });
+  await refreshing;
+  assert.equal(f.controller.getSnapshot().host!.cwd, summary.cwd);
+  assert.equal(f.controller.getSnapshot().error, null);
+  assert.equal(f.subscriptions, 1);
+  assert(!f.calls.some((call) => ['sendChat', 'stopChat'].includes(call.operation)));
+});
+
+test('detach leaves admitted mutation wait owned by model and preserves newer unsent text on settlement', async (t) => {
+  const f = await fixture(t);
+  await ready(f);
+  const held = event<unknown>();
+  f.answers.set('sendChat', () => held.promise);
+  f.controller.setDraft('captured');
+  const sending = f.controller.send();
+  const pending = f.controller.getSnapshot().pending[0];
+  f.controller.setDraft('newer unsent');
+  await f.controller.detach();
+  assert.equal(f.signals.get('sendChat')!.at(-1)!.aborted, false);
+  held.resolve({
+    target,
+    requestId: pending.input.requestId,
+    admission: 'admitted',
+    submissionId: 'original',
+  });
+  await sending;
+  assert.equal(f.controller.getSnapshot().draft, 'newer unsent');
+  assert.equal(f.controller.getSnapshot().pending.length, 0);
+  assert.equal(f.subscriptions, 0);
+  assert(!f.calls.some((call) => call.operation === 'stopChat'));
+});
+
+test('failed watch acquisition remains observable, releases ownership and redacts unknown diagnostics', async (t) => {
+  const f = await fixture(t);
+  await ready(f);
+  await f.controller.closeView();
+  f.chat.watch = () => {
+    throw new Error('SYNTHETIC_PRIVATE_ACQUISITION_SENTINEL');
+  };
+  await f.controller.select(target);
+  assert.match(f.controller.getSnapshot().error!, /Unavailable/);
+  assert(!f.controller.getSnapshot().error!.includes('SYNTHETIC_PRIVATE_ACQUISITION_SENTINEL'));
+  await f.controller.dispose();
+});
+
+test('synchronous watch callback can dispose before the close handle is returned without abandoning it', async (t) => {
+  const f = await fixture(t);
+  await ready(f);
+  await f.controller.closeView();
+  const entered = event(),
+    held = event();
+  let closes = 0,
+    closing: Promise<void> | undefined;
+  const off = f.controller.subscribe(() => {
+    if (f.controller.getSnapshot().snapshot && !closing) closing = f.controller.dispose();
+  });
+  f.chat.watch = (_input, receive) => {
+    receive(snapshot);
+    return () => {
+      closes++;
+      entered.resolve();
+      return held.promise;
+    };
+  };
+  const opening = f.controller.select(target);
+  await entered.promise;
+  assert(closing);
+  let settled = false;
+  const finished = closing.then(() => {
+    settled = true;
+  });
+  await f.root.runtime.runPromise(Effect.yieldNow);
+  assert.equal(settled, false);
+  held.resolve();
+  await Promise.all([opening, finished]);
+  assert.equal(closes, 1);
+  off();
+});
+
+test('all observation releases are attempted and their typed cleanup failures reach root disposal', async (t) => {
+  const cleanup: (() => Promise<void>)[] = [];
+  const f = await fixture({
+    after: (close) => {
+      cleanup.push(close);
+    },
+  });
+  let released = 0;
+  f.connection.watch = () => async () => {
+    released++;
+    throw new ApplicationError({ code: 'Unavailable', message: 'Connection cleanup failed' });
+  };
+  f.chat.watch = () => async () => {
+    released++;
+    throw new ApplicationError({ code: 'Persistence', message: 'Chat cleanup failed' });
+  };
+  t.after(async () => {
+    for (const close of cleanup)
+      await assert.rejects(
+        close(),
+        /Connection cleanup failed.*Chat cleanup failed|Chat cleanup failed.*Connection cleanup failed/,
+      );
+  });
+  await ready(f);
+  await assert.rejects(
+    f.controller.dispose(),
+    /Connection cleanup failed.*Chat cleanup failed|Chat cleanup failed.*Connection cleanup failed/,
+  );
+  assert.equal(released, 2);
+});
+
+test('Create receipt does not wait for its view read or report obsolete view cancellation as mutation failure', async (t) => {
+  const f = await fixture(t);
+  await ready(f);
+  await f.controller.closeView();
+  const held = event<unknown>();
+  f.answers.set('getChat', async (input) => {
+    const current = (input as ChatCommands['getChat']['input']).target;
+    return current.conversationId === target.conversationId
+      ? held.promise
+      : {
+          ...snapshot,
+          conversation: { ...summary, target: current, title: 'Selected B' },
+        };
+  });
+  await f.controller.create('Captured creation');
+  assert.equal(f.controller.getSnapshot().pending.length, 0);
+  await f.controller.select({ ...target, conversationId: 'B' });
+  held.resolve(snapshot);
+  await f.root.runtime.runPromise(Effect.yieldNow);
+  assert.equal(f.controller.getSnapshot().snapshot!.conversation.title, 'Selected B');
+  assert.equal(f.controller.getSnapshot().error, null);
+  assert.equal(f.calls.filter((call) => call.operation === 'createChat').length, 1);
+});
+
+test('repeated detach and disposal join a watch that is already closing outside its detached scope', async (t) => {
+  const cleanup: (() => Promise<void>)[] = [];
+  const f = await fixture({
+    after: (close) => {
+      cleanup.push(close);
+    },
+  });
+  const held = event(),
+    entered = event();
+  const failure = new ApplicationError({ code: 'Persistence', message: 'Detached watch failed' });
+  t.after(async () => {
+    held.reject(failure);
+    for (const close of cleanup) await assert.rejects(close(), /Detached watch failed/);
+  });
+  f.chat.watch = () => () => {
+    entered.resolve();
+    return held.promise;
+  };
+  await ready(f);
+  const detaching = f.controller.detach();
+  assert.strictEqual(f.controller.detach(), detaching);
+  const detached = detaching.catch(() => {});
+  await entered.promise;
+  let settled = false;
+  const closing = f.controller.dispose();
+  const completed = closing
+    .catch(() => {})
+    .finally(() => {
+      settled = true;
+    });
+  await f.root.runtime.runPromise(Effect.yieldNow);
+  assert.equal(settled, false);
+  held.reject(failure);
+  await Promise.all([detached, completed]);
+  await assert.rejects(closing, /Detached watch failed/);
+});
+
+test('detach during initial status cancels its read and ignores the old attachment callback after resume', async (t) => {
+  const f = await fixture(t),
+    held = event<unknown>();
+  const stale: ConnectionSnapshot = {
+    state: 'connected',
+    connectionId: 'old-attachment',
+    profile,
+    health: { ...context.host, protocol: 1, version: '0.1.0', capabilities: ['chat-v0'] },
+  };
+  const original = f.connection.command,
+    watch = f.connection.watch;
+  const callbacks: ((state: ConnectionSnapshot) => void)[] = [];
+  let initial = true,
+    signal: AbortSignal | undefined;
+  f.connection.watch = (receive, error) => {
+    callbacks.push(receive);
+    return watch(receive, error);
+  };
+  f.connection.command = async (operation, input, options) => {
+    if (operation === 'getConnection' && initial) {
+      initial = false;
+      signal = options?.signal;
+      return (await held.promise) as never;
+    }
+    return original(operation, input, options);
+  };
+  const starting = f.controller.start();
+  await f.controller.detach();
+  assert(signal?.aborted);
+  await f.controller.start();
+  callbacks[0](stale);
+  held.resolve(stale);
+  await starting;
+  assert.equal(f.controller.getSnapshot().connection!.state, 'disconnected');
+  assert.equal(f.controller.getSnapshot().host, null);
+  assert.equal(f.controller.getSnapshot().error, null);
+  assert(
+    !f.calls.some((call) =>
+      ['connect', 'createChat', 'sendChat', 'stopChat'].includes(call.operation),
+    ),
+  );
+});
+
+test('closing the selected view cannot consume the initial host/list refresh', async (t) => {
+  const f = await fixture(t),
+    held = event<unknown>(),
+    fresh = event();
+  await f.controller.start();
+  let lists = 0;
+  f.answers.set('listChats', async () => {
+    if (++lists === 1) return held.promise;
+    fresh.resolve();
+    return { conversations: [summary], nextCursor: null };
+  });
+  await f.controller.connect();
+  await f.controller.closeView();
+  await fresh.promise;
+  await f.root.runtime.runPromise(Effect.yieldNow);
+  held.resolve({ conversations: [{ ...summary, title: 'Obsolete list' }], nextCursor: null });
+  await f.root.runtime.runPromise(Effect.yieldNow);
+  assert(f.controller.getSnapshot().host);
+  assert.equal(f.controller.getSnapshot().chats[0].title, summary.title);
+  assert.equal(f.controller.getSnapshot().selected, null);
+  assert.equal(f.subscriptions, 0);
+});
