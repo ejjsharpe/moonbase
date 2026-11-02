@@ -803,8 +803,8 @@ test('unfamiliar nested saved draft data stays byte-identical before any automat
   assert(!f.calls.some((call) => ['createChat', 'sendChat', 'stopChat'].includes(call.operation)));
 });
 
-for (const typed of [true, false])
-  test(`two models share one runtime; pending ${typed ? 'typed' : 'unknown'} watch cleanup joins and fences all late writes`, async (t) => {
+for (const code of ['Persistence', 'Cancelled', null] as const)
+  test(`two models share one runtime; pending ${code ?? 'unknown'} watch cleanup joins and fences all late writes`, async (t) => {
     const cleanup: (() => Promise<void>)[] = [];
     const f = await fixture({
       after: (close) => {
@@ -813,8 +813,8 @@ for (const typed of [true, false])
     });
     const held = event(),
       entered = event();
-    const failure = typed
-      ? new ApplicationError({ code: 'Persistence', message: 'Controlled watch release failed' })
+    const failure = code
+      ? new ApplicationError({ code, message: 'Controlled watch release failed' })
       : new Error('SYNTHETIC_PRIVATE_CLEANUP_SENTINEL');
     t.after(async () => {
       held.reject(failure);
@@ -904,7 +904,10 @@ for (const typed of [true, false])
     assert.equal(errors.length, 1);
     assert(ApplicationError.is(errors[0]));
     assert(!errors[0].message.includes('SYNTHETIC_PRIVATE_CLEANUP_SENTINEL'));
-    if (typed) assert.match(errors[0].message, /Controlled watch release failed/);
+    if (code) {
+      assert.match(errors[0].message, /Controlled watch release failed/);
+      assert.equal(errors[0].code, code);
+    }
     await assert.rejects(f.controller.dispose(), (error) => error === errors[0]);
     await other.dispose();
   });
@@ -1338,4 +1341,20 @@ test('a failed local failure-note write retains original mutation uncertainty an
   assert.equal(pending.operation, 'sendChat');
   assert.deepEqual(JSON.parse(f.storage.value!).pending[0].input, pending.input);
   assert.equal(f.calls.filter((call) => call.operation === 'sendChat').length, 1);
+});
+
+test('public context copies cannot retarget the model, its saved namespace or subsequent original requests', async (t) => {
+  const f = await fixture(t);
+  const copy = f.controller.context;
+  copy.actorId = 'foreign-actor';
+  copy.host.hostId = 'foreign-host';
+  copy.host.storeId = 'foreign-store';
+  assert.deepEqual(f.controller.context, context);
+  assert.notStrictEqual(f.controller.context, f.controller.context);
+  await ready(f);
+  await f.controller.create('Original authority');
+  const creation = f.calls.find((call) => call.operation === 'createChat')!;
+  assert.deepEqual((creation.input as ChatCommands['createChat']['input']).session, context);
+  assert.deepEqual(JSON.parse(f.storage.value!).session, context);
+  assert.deepEqual(f.controller.context, context);
 });
