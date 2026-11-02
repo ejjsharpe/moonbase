@@ -1,8 +1,13 @@
+import { normalizeApplicationError } from '@moonbase/application/effect-client';
+import {
+  type SaveRecordSchema,
+  type OperationRecordSchema,
+  parseRecovery,
+  savedRevision,
+} from './schema.ts';
 import type { LocalWorkspace } from './workspace.ts';
 import {
   emptyRecovery,
-  type FileDocument,
-  type CommandInput,
   type SaveResult,
   type OperationResult,
   type WorkspaceOperation,
@@ -21,36 +26,15 @@ import {
 } from './validation.ts';
 import { type Directory } from './filesystem.ts';
 import { basename, join } from 'node:path';
-import { ApplicationError } from '@moonbase/application/client';
 export const key = (clientId: string, id: string) => hash(canonical([clientId, id]));
 export const affected = (p: string, source: string) => p === source || p.startsWith(source + '/');
 export const isOriginalResult = (
   kind: WorkspaceOperation['kind'],
   item: OperationResult['items'][number],
 ) => kind === 'trash' || item.destination !== undefined;
-export const errorText = (error: unknown) => ApplicationError.fromUnknown(error).message;
-export type SaveRecord = {
-  restorePending?: boolean;
-  recoveryRestored?: boolean;
-  recoveryPublication?: number;
-  baseline?: FileDocument;
-  published?: boolean;
-  temporary?: string;
-  input: CommandInput<'saveFile'>;
-  result?: SaveResult;
-  started: boolean;
-  message?: string;
-};
-export type OperationRecord = {
-  paths?: string[];
-  publicationError?: string;
-  staging?: string[];
-  publishedItems?: string[];
-  input: WorkspaceOperation;
-  result: OperationResult;
-  publicationRevisions: Record<string, number>;
-  acknowledgedBy: string[];
-};
+export const errorText = (error: unknown) => normalizeApplicationError(error).message;
+export type SaveRecord = typeof SaveRecordSchema.Type;
+export type OperationRecord = typeof OperationRecordSchema.Type;
 export function reconcile(this: LocalWorkspace, state: EditorRecovery, records: OperationRecord[]) {
   for (const record of records) {
     if (!state.checkouts.some((c) => same(c, record.input.checkout))) continue;
@@ -176,14 +160,14 @@ export function publishOperation(this: LocalWorkspace, id: string, record: Opera
       ...committed?.publicationRevisions,
     };
     for (const row of this.store.db.prepare('SELECT client, revision, body FROM recovery').all()) {
-      const state = JSON.parse(row.body as string) as EditorRecovery,
-        clientId = row.client as string;
+      const clientId = row.client as string,
+        state = parseRecovery(row.body, clientId);
       if (
         clientId !== record.input.clientId &&
         !state.checkouts.some((c) => same(c, record.input.checkout))
       )
         continue;
-      let revision = Number(row.revision);
+      let revision = savedRevision(row.revision);
       if (fresh.length)
         this.reconcile(state, [{ ...record, result: { ...record.result, items: fresh } }]);
       recovery(state, clientId);

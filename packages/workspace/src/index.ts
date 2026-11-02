@@ -1,32 +1,55 @@
-import { Context, Effect, Layer } from 'effect';
-import { WorkspaceService, releaseResource } from '@moonbase/application/services';
+import { normalizeApplicationError } from '@moonbase/application/effect-client';
+import { Context, Effect, FiberSet, Layer, Scope } from 'effect';
+import { WorkspaceService } from '@moonbase/application/services';
 import { ApplicationError, type CheckoutTarget } from '@moonbase/application/client';
 import { LocalWorkspace } from './workspace.ts';
+import {
+  decodeConfiguration,
+  decodeNativeCapture,
+  type WorkspaceConfigurationSchema,
+} from './schema.ts';
 const applicationError = (error: unknown, code: ApplicationError['code'] = 'Unavailable') =>
   ApplicationError.is(error)
     ? error
-    : new ApplicationError({ code, message: ApplicationError.fromUnknown(error).message });
-export type WorkspaceConfiguration = {
-  /** Explicit fresh Moonbase namespace, outside approved checkouts. Never a legacy store. */
-  dataDirectory: string;
-  /** Stable identity supplied by this local process's composition root. */
-  hostId: string;
-  /** Absolute paths allow the packaged shell to ship the native asset and select system Git. */
-  filesystemHelper?: string;
-  gitExecutable?: string;
-  /** Packaged standalone ripgrep; PATH discovery is a development convenience. */
-  ripgrepExecutable?: string;
-};
+    : new ApplicationError({ code, message: normalizeApplicationError(error).message });
+export type WorkspaceConfiguration = typeof WorkspaceConfigurationSchema.Type;
 /** Scoped resources only; the shared application composition root supplies the runtime. */
 export function WorkspaceLive(configuration: WorkspaceConfiguration) {
   const resources = Layer.effect(
     LocalResources,
     Effect.acquireRelease(
-      Effect.tryPromise({
-        try: async () => new LocalWorkspace(configuration),
-        catch: (error) => applicationError(error, 'Persistence'),
+      Effect.gen(function* () {
+        const config = yield* Effect.try({
+          try: () => decodeConfiguration(configuration),
+          catch: applicationError,
+        });
+        const parent = yield* Effect.scope;
+        const operationScope = yield* Scope.fork(parent, 'parallel');
+        const helperScope = yield* Scope.fork(parent, 'parallel');
+        const referenceScope = yield* Scope.fork(parent, 'parallel');
+        const observationScope = yield* Scope.fork(parent, 'parallel');
+        const operations = yield* FiberSet.make<unknown, ApplicationError>().pipe(
+          Scope.provide(operationScope),
+        );
+        const helpers = yield* FiberSet.make<unknown, unknown>().pipe(Scope.provide(helperScope));
+        const references = yield* FiberSet.make<void, never>().pipe(Scope.provide(referenceScope));
+        const runHelper = yield* FiberSet.runtimePromise(helpers)();
+        const startExpiry = yield* FiberSet.runtime(references)();
+        return yield* Effect.try({
+          try: () =>
+            new LocalWorkspace(config, {
+              operations,
+              operationScope,
+              helperScope,
+              referenceScope,
+              observationScope,
+              runHelper,
+              startExpiry,
+            }),
+          catch: (error) => applicationError(error, 'Persistence'),
+        });
       }),
-      (workspace) => releaseResource(() => workspace.close()),
+      (workspace) => workspace.close(),
     ),
   );
   return Layer.merge(
@@ -38,7 +61,18 @@ export function WorkspaceLive(configuration: WorkspaceConfiguration) {
       WorkspaceNative,
       Effect.map(LocalResources, (workspace) => ({
         capture: (input: { checkout: CheckoutTarget; clientId: string; paths: string[] }) =>
-          workspace.effect((signal) => workspace.capture(input, signal)),
+          Effect.flatMap(
+            Effect.try({ try: () => decodeNativeCapture(input), catch: applicationError }),
+            (captured) =>
+              workspace.effect(
+                (signal) => workspace.capture(captured, signal),
+                false,
+                undefined,
+                (references) => workspace.release({ ...captured, references }),
+              ),
+          ),
+        release: (input: { checkout: CheckoutTarget; clientId: string; references: string[] }) =>
+          Effect.try({ try: () => workspace.release(input), catch: applicationError }),
       })),
     ),
   ).pipe(Layer.provide(resources));
@@ -53,6 +87,11 @@ export class WorkspaceNative extends Context.Service<
       clientId: string;
       paths: string[];
     }): Effect.Effect<string[], ApplicationError>;
+    release(input: {
+      checkout: CheckoutTarget;
+      clientId: string;
+      references: string[];
+    }): Effect.Effect<void, ApplicationError>;
   }
 >()('moonbase/WorkspaceNative') {}
 class LocalResources extends Context.Service<LocalResources, LocalWorkspace>()(

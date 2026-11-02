@@ -1,4 +1,12 @@
-import { Effect, Queue, Stream } from 'effect';
+import { normalizeApplicationError } from '@moonbase/application/effect-client';
+import { type ApprovalSchema, parseRecovery, savedRevision } from './schema.ts';
+import { Cause, Deferred, Effect, Exit, Fiber, FiberSet, Queue, Scope, Stream } from 'effect';
+import {
+  decodeWorkspaceInput,
+  decodeWorkspaceOutput,
+  decodeWorkspaceEvent,
+  decodeWorkspaceWatchInput,
+} from '@moonbase/application/workspace-schema';
 import { releaseResource, type WorkspaceServiceShape } from '@moonbase/application/services';
 import {
   ApplicationError,
@@ -10,7 +18,6 @@ import {
   type SaveResult,
   type WorkspaceCommand,
   type WorkspaceOperation,
-  type WorkspaceEvent,
 } from '@moonbase/application/client';
 import {
   accessSync,
@@ -21,13 +28,10 @@ import {
   readFileSync,
   realpathSync,
   watch as fsWatch,
-  type FSWatcher,
 } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import type { ChildProcess } from 'node:child_process';
-import { once } from 'node:events';
 import { Store, pendingSaves } from './store.ts';
 import { matchPath, compareMatches } from './lookup.ts';
 import { Directory, identity, makeRunner } from './filesystem.ts';
@@ -60,12 +64,7 @@ import {
   type SaveRecord,
   type OperationRecord,
 } from './recovery.ts';
-type Approval = {
-  target: CheckoutTarget;
-  identity: string;
-  common: { path: string; identity: string };
-  gitEntry: { identity: string; pointer: string | null };
-};
+type Approval = typeof ApprovalSchema.Type;
 type OperationSource = {
   path: string;
   identity: string;
@@ -83,26 +82,47 @@ const containsSelectedSource = (
       ? source.native.parents.split(',').includes(entry.identity)
       : affected(source.path, entry.path)));
 const applicationError = (error: unknown, code: ApplicationError['code'] = 'Unavailable') =>
-  ApplicationError.is(error) ? error : new ApplicationError({ code, message: errorText(error) });
+  ApplicationError.is(error)
+    ? error
+    : new ApplicationError({ code, message: normalizeApplicationError(error).message });
+
+type WorkspaceOwnership = {
+  operations: FiberSet.FiberSet<unknown, ApplicationError>;
+  operationScope: Scope.Closeable;
+  helperScope: Scope.Closeable;
+  referenceScope: Scope.Closeable;
+  observationScope: Scope.Closeable;
+  runHelper: <A>(effect: Effect.Effect<A, unknown>) => Promise<A>;
+  startExpiry: (effect: Effect.Effect<void>) => Fiber.Fiber<void>;
+};
 
 export class LocalWorkspace {
+  readonly ownership: WorkspaceOwnership;
   readonly store: Store;
   readonly service: WorkspaceServiceShape;
-  readonly children = new Set<ChildProcess>();
   readonly directories = new Map<string, Directory>();
-  readonly subscriptions = new Set<() => void>();
-  readonly pending = new Set<Promise<unknown>>();
-  readonly locks = new Set<{ checkoutId: string; paths: string[]; done: Promise<void> }>();
+  readonly subscriptions = new Set<Scope.Closeable>();
+  readonly watcherReleases = new Set<Effect.Effect<void>>();
+  readonly signals = new Set<AbortController>();
+  readonly leases = new Set<{
+    checkoutId: string;
+    paths: string[];
+    done: Deferred.Deferred<void>;
+  }>();
+  readonly cleanupFailures: Cause.Cause<never>[] = [];
+  readonly closeCompletion = Deferred.makeUnsafe<void>();
+  closing = false;
   readonly native = new Map<
     string,
     {
       source: NativeImport;
       clientId: string;
-      checkoutId: string;
-      expires: ReturnType<typeof setTimeout>;
+      checkout: CheckoutTarget;
+      claimed: Deferred.Deferred<void>;
     }
   >();
   activeNative = 0;
+  capturing = 0;
   readonly volatileSaves = new Map<string, SaveRecord>();
   readonly activeSaves = new Set<string>();
   readonly volatileOperations = new Map<string, OperationRecord>();
@@ -110,8 +130,9 @@ export class LocalWorkspace {
   readonly ripgrep: string | undefined;
   closed = false;
   readonly config: WorkspaceConfiguration;
-  constructor(config: WorkspaceConfiguration) {
+  constructor(config: WorkspaceConfiguration, ownership: WorkspaceOwnership) {
     this.config = config;
+    this.ownership = ownership;
     ensure(process.platform === 'darwin', 'Workspace native implementation requires macOS.');
     identifier(config.hostId);
     const helper =
@@ -138,35 +159,64 @@ export class LocalWorkspace {
       'Ripgrep executable must be absolute.',
     );
     this.store = new Store(config.dataDirectory, config.hostId);
-    this.run = makeRunner(helper, this.children);
+    this.run = makeRunner(helper, ownership.runHelper, (cause) => this.cleanupFailures.push(cause));
     const call =
       <K extends WorkspaceCommand>(
+        operation: K,
         fn: (input: CommandInput<K>, signal: AbortSignal) => Promise<CommandOutput<K>>,
         persistence = false,
+        lease?: (input: CommandInput<K>) => { checkoutId: string; paths: string[] },
       ) =>
       (input: CommandInput<K>) =>
-        this.effect(
-          async (signal) => structuredClone(await fn(structuredClone(input), signal)),
-          persistence,
+        Effect.flatMap(
+          Effect.try({
+            try: () => decodeWorkspaceInput(operation, input),
+            catch: applicationError,
+          }),
+          (captured) =>
+            this.effect(
+              async (signal) => decodeWorkspaceOutput(operation, await fn(captured, signal)),
+              persistence,
+              lease?.(captured),
+            ),
         );
     this.service = {
-      openCheckout: call<'openCheckout'>((input, signal) => this.open(input.root, signal)),
-      readFile: call<'readFile'>(async (target, signal) =>
+      openCheckout: call<'openCheckout'>('openCheckout', (input, signal) =>
+        this.open(input.root, signal),
+      ),
+      readFile: call<'readFile'>('readFile', async (target, signal) =>
         (await this.directory(target.checkout)).read(target.path, signal),
       ),
-      saveFile: call<'saveFile'>((input, signal) => {
-        identifier(input.clientId);
-        const publication = this.store.publication(input.clientId);
-        return this.serial(input.target.checkout.checkoutId, [input.target.path], () => {
-          if (signal.aborted) fail('Cancelled', 'Save cancelled before admission.');
-          return this.save(input, publication);
-        });
-      }),
-      listDirectory: call<'listDirectory'>((input, signal) => this.list(input, signal)),
-      gitStatus: call<'gitStatus'>((input, signal) => this.status(input.checkout, signal)),
-      readComparison: call<'readComparison'>((input, signal) => this.comparison(input, signal)),
-      lookupFiles: call<'lookupFiles'>((input, signal) => this.lookup(input, signal)),
-      inspectEntries: call<'inspectEntries'>(async (input, signal) => {
+      saveFile: (input) =>
+        Effect.flatMap(
+          Effect.try({
+            try: () => ({
+              input: decodeWorkspaceInput('saveFile', input),
+              publication: this.store.publication(input.clientId),
+            }),
+            catch: applicationError,
+          }),
+          ({ input: captured, publication }) =>
+            this.effect(
+              async (signal) =>
+                decodeWorkspaceOutput('saveFile', await this.save(captured, publication, signal)),
+              false,
+              { checkoutId: captured.target.checkout.checkoutId, paths: [captured.target.path] },
+            ),
+        ),
+      listDirectory: call<'listDirectory'>('listDirectory', (input, signal) =>
+        this.list(input, signal),
+      ),
+      gitStatus: call<'gitStatus'>('gitStatus', (input, signal) =>
+        this.status(input.checkout, signal),
+      ),
+      readComparison: call<'readComparison'>('readComparison', (input, signal) =>
+        this.comparison(input, signal),
+      ),
+      lookupFiles: call<'lookupFiles'>('lookupFiles', (input, signal) =>
+        this.lookup(input, signal),
+      ),
+      inspectEntries: call<'inspectEntries'>('inspectEntries', async (input, signal) => {
         ensure(
           Array.isArray(input.paths) && input.paths.length > 0 && input.paths.length <= 256,
           'Inspect between 1 and 256 entries.',
@@ -182,119 +232,168 @@ export class LocalWorkspace {
           }),
         );
       }),
-      mutate: call<'mutate'>((input, signal) =>
-        this.serial(input.checkout.checkoutId, this.footprint(input), () =>
-          this.mutate(input, signal),
-        ),
+      mutate: call<'mutate'>(
+        'mutate',
+        (input, signal) => this.mutate(input, signal),
+        false,
+        (input) => ({ checkoutId: input.checkout.checkoutId, paths: this.footprint(input) }),
       ),
-      operationStatus: call<'operationStatus'>(async (input) => {
-        identifier(input.clientId);
-        identifier(input.id);
-        await this.recoverEvidence();
-        return this.operation(key(input.clientId, input.id))?.result ?? null;
-      }, true),
-      acknowledgeOperation: call<'acknowledgeOperation'>(async (input) => {
-        identifier(input.clientId);
-        identifier(input.operationClientId);
-        identifier(input.id);
-        const id = key(input.operationClientId, input.id),
-          record = this.operation(id);
-        if (!record || record.acknowledgedBy.includes(input.clientId)) return;
-        const observation = this.store.readRecovery(input.clientId);
-        if (
-          input.clientId !== input.operationClientId &&
-          !(observation?.state as EditorRecovery | undefined)?.checkouts.some((c) =>
-            same(c, record.input.checkout),
-          )
-        )
-          fail('Unauthorized', 'Observer has not opened this exact checkout.');
-        if (
-          record.publicationError ||
-          record.result.items.some(
-            (item) =>
-              item.outcome === 'completed' &&
-              !(record.publishedItems ?? []).includes(canonical(item)),
-          )
-        )
-          fail(
-            'Persistence',
-            'Known operation recovery publication is pending. Preserve the prior valid snapshot before acknowledgement.',
-          );
-        if (record.result.outcome === 'uncertain')
-          fail(
-            'Uncertain',
-            'Uncertain operation evidence cannot be acknowledged away. Inspect the affected paths.',
-          );
-        if (
-          this.store.publication(input.clientId) <=
-          (record.publicationRevisions[input.clientId] ?? observation?.revision ?? 0)
-        )
-          fail('Persistence', 'Publish reconciled recovery before acknowledging this operation.');
-        this.store.put('operations', id, {
-          ...record,
-          acknowledgedBy: [...record.acknowledgedBy, input.clientId],
-        });
-        this.volatileOperations.delete(id);
-      }, true),
-      loadRecovery: call<'loadRecovery'>(async (input) => this.load(input.clientId), true),
-      getRecoveryPublication: call<'getRecoveryPublication'>(async (input) => {
-        identifier(input.clientId);
-        identifier(input.requestId);
-        return this.store.recoveryPublication(input.clientId, input.requestId)?.receipt ?? null;
-      }, true),
-      persistRecovery: call<'persistRecovery'>(async (input, signal) => {
-        identifier(input.clientId);
-        identifier(input.requestId);
-        ensure(
-          Number.isSafeInteger(input.expectedRevision) && input.expectedRevision >= 0,
-          'Invalid recovery revision.',
-        );
-        recovery(input.state, input.clientId);
-        if (signal.aborted) fail('Cancelled', 'Recovery publication cancelled before commit.');
-        const digest = hash(canonical(input)),
-          previous = this.store.replayPublication(input, digest);
-        if (previous) return previous;
-        for (const target of input.state.checkouts) this.approval(target);
-        const state = structuredClone(input.state);
-        const retained = this.store.readRecovery(input.clientId)?.state as
-          | EditorRecovery
-          | undefined;
-        for (const record of this.operations(
-          "json_extract(body, '$.result.outcome') = 'uncertain'",
-        ).filter((r) => r.result.outcome === 'uncertain')) {
-          for (const draft of retained?.drafts ?? [])
-            if (
-              same(draft.target.checkout, record.input.checkout) &&
-              record.input.sources.some((s) => affected(draft.target.path, s.target.path))
+      operationStatus: call<'operationStatus'>(
+        'operationStatus',
+        async (input) => {
+          identifier(input.clientId);
+          identifier(input.id);
+          await this.recoverEvidence();
+          return this.operation(key(input.clientId, input.id))?.result ?? null;
+        },
+        true,
+      ),
+      acknowledgeOperation: call<'acknowledgeOperation'>(
+        'acknowledgeOperation',
+        async (input) => {
+          identifier(input.clientId);
+          identifier(input.operationClientId);
+          identifier(input.id);
+          const id = key(input.operationClientId, input.id),
+            record = this.operation(id);
+          if (!record || record.acknowledgedBy.includes(input.clientId)) return;
+          const observation = this.store.readRecovery(input.clientId);
+          if (
+            input.clientId !== input.operationClientId &&
+            !(observation?.state as EditorRecovery | undefined)?.checkouts.some((c) =>
+              same(c, record.input.checkout),
             )
-              if (!state.drafts.some((d) => same(d.target, draft.target)))
-                fail(
-                  'Persistence',
-                  'An uncertain operation still owns this recovery draft. Inspect/reconcile the original paths before discarding it.',
-                );
-        }
-        return this.store.persist(input, digest);
-      }, true),
+          )
+            fail('Unauthorized', 'Observer has not opened this exact checkout.');
+          if (
+            record.publicationError ||
+            record.result.items.some(
+              (item) =>
+                item.outcome === 'completed' &&
+                !(record.publishedItems ?? []).includes(canonical(item)),
+            )
+          )
+            fail(
+              'Persistence',
+              'Known operation recovery publication is pending. Preserve the prior valid snapshot before acknowledgement.',
+            );
+          if (record.result.outcome === 'uncertain')
+            fail(
+              'Uncertain',
+              'Uncertain operation evidence cannot be acknowledged away. Inspect the affected paths.',
+            );
+          if (
+            this.store.publication(input.clientId) <=
+            (record.publicationRevisions[input.clientId] ?? observation?.revision ?? 0)
+          )
+            fail('Persistence', 'Publish reconciled recovery before acknowledging this operation.');
+          this.store.put('operations', id, {
+            ...record,
+            acknowledgedBy: [...record.acknowledgedBy, input.clientId],
+          });
+          this.volatileOperations.delete(id);
+        },
+        true,
+      ),
+      loadRecovery: call<'loadRecovery'>(
+        'loadRecovery',
+        async (input) => this.load(input.clientId),
+        true,
+      ),
+      getRecoveryPublication: call<'getRecoveryPublication'>(
+        'getRecoveryPublication',
+        async (input) => {
+          identifier(input.clientId);
+          identifier(input.requestId);
+          return this.store.recoveryPublication(input.clientId, input.requestId)?.receipt ?? null;
+        },
+        true,
+      ),
+      persistRecovery: call<'persistRecovery'>(
+        'persistRecovery',
+        async (input, signal) => {
+          identifier(input.clientId);
+          identifier(input.requestId);
+          ensure(
+            Number.isSafeInteger(input.expectedRevision) && input.expectedRevision >= 0,
+            'Invalid recovery revision.',
+          );
+          recovery(input.state, input.clientId);
+          if (signal.aborted) fail('Cancelled', 'Recovery publication cancelled before commit.');
+          const digest = hash(canonical(input)),
+            previous = this.store.replayPublication(input, digest);
+          if (previous) return previous;
+          for (const target of input.state.checkouts) this.approval(target);
+          const state = structuredClone(input.state);
+          const retained = this.store.readRecovery(input.clientId)?.state as
+            | EditorRecovery
+            | undefined;
+          for (const record of this.operations(
+            "json_extract(body, '$.result.outcome') = 'uncertain'",
+          ).filter((r) => r.result.outcome === 'uncertain')) {
+            for (const draft of retained?.drafts ?? [])
+              if (
+                same(draft.target.checkout, record.input.checkout) &&
+                record.input.sources.some((s) => affected(draft.target.path, s.target.path))
+              )
+                if (!state.drafts.some((d) => same(d.target, draft.target)))
+                  fail(
+                    'Persistence',
+                    'An uncertain operation still owns this recovery draft. Inspect/reconcile the original paths before discarding it.',
+                  );
+          }
+          return this.store.persist(input, digest);
+        },
+        true,
+      ),
       watch: (input) => this.watch(input),
     };
   }
   effect<A>(
     fn: (signal: AbortSignal) => Promise<A>,
     persistence = false,
+    lease?: { checkoutId: string; paths: string[] },
+    abandoned?: (result: A) => void,
   ): Effect.Effect<A, ApplicationError> {
-    return Effect.tryPromise({
-      try: (signal) => {
+    return Effect.uninterruptibleMask((restore) =>
+      Effect.gen({ self: this }, function* () {
         if (this.closed)
-          return Promise.reject(
+          return yield* Effect.fail(
             new ApplicationError({ code: 'Unavailable', message: 'Workspace scope is closed.' }),
           );
-        const task = Promise.resolve().then(() => fn(signal));
-        this.pending.add(task);
-        void task.finally(() => this.pending.delete(task)).catch(() => {});
-        return task;
-      },
-      catch: (error) => applicationError(error, persistence ? 'Persistence' : 'Unavailable'),
-    });
+        const abort = new AbortController();
+        this.signals.add(abort);
+        let result: { value: A } | undefined;
+        const work = Effect.tryPromise({
+          try: async () => {
+            if (abort.signal.aborted)
+              fail('Cancelled', 'Workspace command cancelled before admission.');
+            const value = await fn(abort.signal);
+            result = { value };
+            if (abort.signal.aborted) abandoned?.(value);
+            return value;
+          },
+          catch: (error) => applicationError(error, persistence ? 'Persistence' : 'Unavailable'),
+        });
+        // Raw OS Promises must settle before the lease, descriptors or Store can be released.
+        const owned = (lease ? this.withLease(lease, abort.signal, work) : work).pipe(
+          Effect.uninterruptible,
+          Effect.ensuring(Effect.sync(() => this.signals.delete(abort))),
+        );
+        const fiber = yield* FiberSet.run(this.ownership.operations, owned);
+        return yield* restore(Fiber.join(fiber)).pipe(
+          Effect.onInterrupt(() =>
+            Effect.gen(function* () {
+              abort.abort();
+              if (abandoned) {
+                yield* Fiber.await(fiber);
+                if (result) yield* releaseResource(() => abandoned(result!.value));
+              }
+            }),
+          ),
+        );
+      }),
+    );
   }
   footprint(input: WorkspaceOperation) {
     const sources = input.sources.map((s) => s.target.path);
@@ -318,42 +417,112 @@ export class LocalWorkspace {
     );
   }
   active(checkoutId: string) {
-    return [...this.locks].some((lock) => lock.checkoutId === checkoutId);
+    return [...this.leases].some((lock) => lock.checkoutId === checkoutId);
   }
-  async serial<A>(checkoutId: string, paths: string[], fn: () => Promise<A>): Promise<A> {
-    const previous = [...this.locks].filter(
-      (lock) => lock.checkoutId === checkoutId && this.overlaps(paths, lock.paths),
-    );
-    let release!: () => void;
-    const lock = {
-      checkoutId,
-      paths,
-      done: new Promise<void>((resolve) => {
-        release = resolve;
-      }),
-    };
-    this.locks.add(lock);
-    try {
-      await Promise.all(previous.map((p) => p.done));
-      if (this.closed) fail('Unavailable', 'Workspace scope is closed.');
-      return await fn();
-    } finally {
-      this.locks.delete(lock);
-      release();
-    }
+  withLease<A>(
+    lease: { checkoutId: string; paths: string[] },
+    signal: AbortSignal,
+    work: Effect.Effect<A, ApplicationError>,
+  ) {
+    return Effect.suspend(() => {
+      const previous = [...this.leases].filter(
+        (active) =>
+          active.checkoutId === lease.checkoutId && this.overlaps(lease.paths, active.paths),
+      );
+      const entry = { ...lease, done: Deferred.makeUnsafe<void>() };
+      this.leases.add(entry);
+      const cancelled = Effect.callback<never, ApplicationError>((resume) => {
+        const cancel = () =>
+          resume(
+            Effect.fail(
+              new ApplicationError({
+                code: 'Cancelled',
+                message: 'Workspace command cancelled before admission.',
+              }),
+            ),
+          );
+        signal.addEventListener('abort', cancel, { once: true });
+        if (signal.aborted) cancel();
+        return Effect.sync(() => signal.removeEventListener('abort', cancel));
+      });
+      return Effect.raceFirst(
+        Effect.forEach(previous, (active) => Deferred.await(active.done)),
+        cancelled,
+      ).pipe(
+        Effect.interruptible,
+        Effect.flatMap(() => {
+          if (this.closed)
+            return Effect.fail(
+              new ApplicationError({ code: 'Unavailable', message: 'Workspace scope is closed.' }),
+            );
+          if (signal.aborted)
+            return Effect.fail(
+              new ApplicationError({
+                code: 'Cancelled',
+                message: 'Workspace command cancelled before admission.',
+              }),
+            );
+          return work;
+        }),
+        Effect.ensuring(
+          Effect.sync(() => {
+            this.leases.delete(entry);
+            Deferred.doneUnsafe(entry.done, Effect.void);
+          }),
+        ),
+      );
+    });
   }
-  async close() {
-    this.closed = true;
-    for (const stop of this.subscriptions) stop();
-    for (const token of this.native.keys()) this.releaseNative(token);
-    const exits = [...this.children].map((child) => once(child, 'close').catch(() => {}));
-    for (const child of this.children) child.kill('SIGKILL');
-    await Promise.allSettled(exits);
-    await Promise.allSettled(this.pending);
-    for (const token of this.native.keys()) this.releaseNative(token);
-    for (const stop of this.subscriptions) stop();
-    for (const directory of this.directories.values()) directory.close();
-    this.store.close();
+  close(): Effect.Effect<void> {
+    return Effect.suspend(() => {
+      if (this.closing) return Deferred.await(this.closeCompletion);
+      this.closing = this.closed = true;
+      for (const signal of this.signals) signal.abort();
+      return Effect.gen({ self: this }, function* () {
+        const releases = [
+          Scope.close(this.ownership.observationScope, Exit.void),
+          Effect.suspend(() =>
+            Effect.forEach([...this.watcherReleases], Effect.exit).pipe(
+              Effect.flatMap((outcomes) => {
+                const failures = outcomes.flatMap((exit) =>
+                  Exit.isFailure(exit) ? [exit.cause] : [],
+                );
+                return failures.length
+                  ? Effect.failCause(failures.reduce((all, cause) => Cause.combine(all, cause)))
+                  : Effect.void;
+              }),
+            ),
+          ),
+          Scope.close(this.ownership.referenceScope, Exit.void),
+          Scope.close(this.ownership.operationScope, Exit.void),
+          Scope.close(this.ownership.helperScope, Exit.void),
+          Effect.suspend(() =>
+            Effect.forEach(this.directories.values(), (directory) =>
+              Effect.exit(releaseResource(() => directory.close())),
+            ).pipe(
+              Effect.flatMap((outcomes) => {
+                const failures = outcomes.flatMap((exit) =>
+                  Exit.isFailure(exit) ? [exit.cause] : [],
+                );
+                return failures.length
+                  ? Effect.failCause(failures.reduce((all, cause) => Cause.combine(all, cause)))
+                  : Effect.void;
+              }),
+            ),
+          ),
+          releaseResource(() => this.store.close()),
+        ];
+        const outcomes = yield* Effect.forEach(releases, Effect.exit);
+        const failures = [
+          ...this.cleanupFailures,
+          ...outcomes.flatMap((exit) => (Exit.isFailure(exit) ? [exit.cause] : [])),
+        ];
+        if (failures.length)
+          return yield* Effect.failCause(
+            failures.reduce((combined, cause) => Cause.combine(combined, cause)),
+          );
+      }).pipe(Effect.onExit((exit) => Deferred.done(this.closeCompletion, exit)));
+    }).pipe(Effect.uninterruptible);
   }
   protected(root: string) {
     const inside = (a: string, b: string) => {
@@ -618,7 +787,11 @@ export class LocalWorkspace {
     }
     return record.result;
   }
-  async save(input: CommandInput<'saveFile'>, publication: number): Promise<SaveResult> {
+  async save(
+    input: CommandInput<'saveFile'>,
+    publication: number,
+    signal: AbortSignal,
+  ): Promise<SaveResult> {
     identifier(input.clientId);
     identifier(input.requestId);
     path(input.target.path);
@@ -633,7 +806,8 @@ export class LocalWorkspace {
     if (previous) return this.replaySave(id, input, previous);
     this.assertSettled(input.target.checkout, [input.target.path], input.clientId);
     const directory = await this.directory(input.target.checkout),
-      disk = await directory.read(input.target.path);
+      disk = await directory.read(input.target.path, signal);
+    if (signal.aborted) fail('Cancelled', 'Save cancelled before admission.');
     if (disk.version !== input.expectedVersion) {
       const result = { kind: 'conflict', disk } as const;
       const previous = this.store.reserve<SaveRecord>('saves', id, {
@@ -689,6 +863,39 @@ export class LocalWorkspace {
       this.activeSaves.delete(id);
     }
   }
+  release(input: { checkout: CheckoutTarget; clientId: string; references: string[] }) {
+    identifier(input.clientId);
+    checkout(input.checkout);
+    ensure(
+      Array.isArray(input.references) &&
+        input.references.length <= 128 &&
+        new Set(input.references).size === input.references.length &&
+        input.references.every(
+          (token) => typeof token === 'string' && token.length > 0 && token.length <= 160,
+        ),
+      'Invalid native release references.',
+    );
+    const known = input.references.filter((token) => this.native.has(token));
+    for (const token of known) {
+      const entry = this.native.get(token)!;
+      if (entry.clientId !== input.clientId || !same(entry.checkout, input.checkout))
+        fail('Unauthorized', 'Native reference belongs to another client/checkout.');
+    }
+    if (known.length) this.approval(input.checkout);
+    const failures: string[] = [];
+    for (const token of known) {
+      try {
+        this.releaseNative(token);
+      } catch {
+        failures.push('Native reference cleanup failed.');
+      }
+    }
+    if (failures.length) {
+      const error = new ApplicationError({ code: 'Unavailable', message: failures.join('; ') });
+      this.cleanupFailures.push(Cause.die(error));
+      throw error;
+    }
+  }
   async capture(
     input: { checkout: CheckoutTarget; clientId: string; paths: string[] },
     signal: AbortSignal,
@@ -699,10 +906,11 @@ export class LocalWorkspace {
       Array.isArray(input.paths) &&
         input.paths.length > 0 &&
         input.paths.length <= 128 &&
-        this.native.size + this.activeNative + input.paths.length <= 256,
+        this.native.size + this.activeNative + this.capturing + input.paths.length <= 256,
       'Native import selection limit reached.',
     );
     const references: string[] = [];
+    this.capturing += input.paths.length;
     try {
       for (const p of input.paths) {
         const source = new NativeImport(p, (p) => this.protected(p));
@@ -711,32 +919,65 @@ export class LocalWorkspace {
             source.fd,
           ]);
           const token = randomUUID();
-          const expires = setTimeout(() => this.releaseNative(token), 5 * 60 * 1000);
-          expires.unref();
+          const claimed = Deferred.makeUnsafe<void>();
           this.native.set(token, {
             source,
             clientId: input.clientId,
-            checkoutId: input.checkout.checkoutId,
-            expires,
+            checkout: input.checkout,
+            claimed,
           });
           references.push(token);
+          this.ownership.startExpiry(
+            Effect.raceFirst(Effect.sleep('5 minutes'), Deferred.await(claimed)).pipe(
+              Effect.ensuring(
+                releaseResource(() => this.releaseNative(token)).pipe(
+                  Effect.onExit((exit) =>
+                    Effect.sync(() => {
+                      if (Exit.isFailure(exit)) this.cleanupFailures.push(exit.cause);
+                    }),
+                  ),
+                ),
+              ),
+            ),
+          );
         } catch (error) {
-          source.close();
+          try {
+            source.close();
+          } catch {
+            this.cleanupFailures.push(
+              Cause.die(
+                new ApplicationError({
+                  code: 'Unavailable',
+                  message: 'Native capture cleanup failed.',
+                }),
+              ),
+            );
+          }
           throw error;
         }
       }
+      if (signal.aborted || this.closed)
+        fail('Cancelled', 'Native capture cancelled before handoff.');
       return references;
     } catch (error) {
-      references.forEach((token) => this.releaseNative(token));
+      for (const token of references) {
+        try {
+          this.releaseNative(token);
+        } catch (error) {
+          this.cleanupFailures.push(Cause.die(applicationError(error)));
+        }
+      }
       throw error;
+    } finally {
+      this.capturing -= input.paths.length;
     }
   }
   releaseNative(token: string) {
     const entry = this.native.get(token);
     if (entry) {
-      clearTimeout(entry.expires);
-      entry.source.close();
       this.native.delete(token);
+      Deferred.doneUnsafe(entry.claimed, Effect.void);
+      entry.source.close();
     }
   }
   async mutate(input: WorkspaceOperation, signal: AbortSignal): Promise<OperationResult> {
@@ -770,11 +1011,9 @@ export class LocalWorkspace {
     };
     for (const row of this.store.db.prepare('SELECT client, revision, body FROM recovery').all())
       if (
-        (JSON.parse(row.body as string) as EditorRecovery).checkouts.some((c) =>
-          same(c, input.checkout),
-        )
+        parseRecovery(row.body, row.client as string).checkouts.some((c) => same(c, input.checkout))
       )
-        publicationRevisions[row.client as string] = Number(row.revision);
+        publicationRevisions[row.client as string] = savedRevision(row.revision);
     const record: OperationRecord = {
       input,
       paths: [
@@ -799,7 +1038,7 @@ export class LocalWorkspace {
     // The complete immutable selection is durable before the first native mutation.
     const claims = tokens.map((token) => {
       const ref = this.native.get(token);
-      if (!ref || ref.clientId !== input.clientId || ref.checkoutId !== input.checkout.checkoutId)
+      if (!ref || ref.clientId !== input.clientId || !same(ref.checkout, input.checkout))
         fail(
           'Unauthorized',
           'Native reference expired, used or belongs to another client/checkout.',
@@ -807,11 +1046,12 @@ export class LocalWorkspace {
       ref!.source.validate();
       return { token, ref: ref! };
     });
+    if (signal.aborted) fail('Cancelled', 'Operation cancelled before admission.');
     const occupied = this.store.reserve('operations', id, record);
     if (occupied) return this.replayOperation(id, input, this.operation(id) ?? occupied);
     for (const { token, ref } of claims) {
-      clearTimeout(ref.expires);
       this.native.delete(token);
+      Deferred.doneUnsafe(ref.claimed, Effect.void);
     }
     this.activeNative += claims.length;
     try {
@@ -949,8 +1189,20 @@ export class LocalWorkspace {
       }
       return record.result;
     } finally {
-      for (const { ref } of claims) ref.source.close();
       this.activeNative -= claims.length;
+      const failures: string[] = [];
+      for (const { ref } of claims) {
+        try {
+          ref.source.close();
+        } catch {
+          failures.push('Claimed native reference cleanup failed.');
+        }
+      }
+      if (failures.length)
+        this.cleanupFailures.push(
+          Cause.die(new ApplicationError({ code: 'Unavailable', message: failures.join('; ') })),
+        );
+      if (failures.length) fail('Unavailable', failures.join('; '));
     }
   }
   private async prepareMutation(
@@ -991,7 +1243,7 @@ export class LocalWorkspace {
     }
     for (const token of tokens) {
       const ref = this.native.get(token);
-      if (!ref || ref.clientId !== input.clientId || ref.checkoutId !== input.checkout.checkoutId)
+      if (!ref || ref.clientId !== input.clientId || !same(ref.checkout, input.checkout))
         fail(
           'Unauthorized',
           'Native reference expired, used or belongs to another client/checkout.',
@@ -1087,7 +1339,7 @@ export class LocalWorkspace {
         'Destination overlaps another selected source.',
       );
       for (const row of this.store.db.prepare('SELECT client, body FROM recovery').all()) {
-        const state = JSON.parse(row.body as string) as EditorRecovery;
+        const state = parseRecovery(row.body, row.client as string);
         ensure(
           !state.drafts.some(
             (d) =>
@@ -1200,7 +1452,7 @@ export class LocalWorkspace {
     } catch (error) {
       if (
         (error as NodeJS.ErrnoException).code !== 'ENOENT' &&
-        !errorText(error).includes('No such file')
+        !(error as { stderr?: string }).stderr?.includes('No such file')
       )
         throw error;
     }
@@ -1416,87 +1668,122 @@ export class LocalWorkspace {
     const self = this;
     return Stream.unwrap(
       Effect.gen(function* () {
-        const queue = yield* Queue.sliding<WorkspaceEvent>(1);
-        yield* Effect.acquireRelease(
-          self.effect(async () => {
+        const captured = yield* Effect.try({
+          try: () => decodeWorkspaceWatchInput(input),
+          catch: applicationError,
+        });
+        const scope = yield* Effect.acquireRelease(
+          Scope.fork(self.ownership.observationScope, 'parallel'),
+          (scope) => Scope.close(scope, Exit.void),
+        );
+        const changes = yield* Queue.sliding<boolean>(1);
+        let disposed = false,
+          error: string | undefined;
+        yield* Scope.addFinalizer(
+          scope,
+          Effect.sync(() => {
+            disposed = true;
+            self.subscriptions.delete(scope);
+            Queue.shutdownUnsafe(changes);
+          }),
+        );
+        yield* Effect.try({
+          try: () => {
             ensure(
-              Array.isArray(input.paths) &&
-                input.paths.length > 0 &&
-                input.paths.length <= 128 &&
+              !self.closed &&
+                captured.paths.length > 0 &&
+                captured.paths.length <= 128 &&
                 self.subscriptions.size < 64,
               'Watch subscription limit reached.',
             );
-            const directory = await self.directory(input.checkout);
-            ensure(!self.closed, 'Workspace scope closed during watch acquisition.');
-            const watchers: FSWatcher[] = [];
-            let timer: ReturnType<typeof setTimeout> | undefined,
-              disposed = false,
-              error: string | undefined;
-            const changed = (failure?: string) => {
-              if (disposed) return;
-              error = failure ?? error;
-              if (!timer)
-                timer = setTimeout(() => {
-                  timer = undefined;
-                  if (disposed) return;
-                  try {
-                    directory.check();
-                  } catch (e) {
-                    error = errorText(e);
-                  }
-                  Queue.offerUnsafe(queue, { checkout: input.checkout, paths: input.paths, error });
-                  error = undefined;
-                }, 100);
-            };
-            const stop = () => {
-              if (disposed) return;
-              disposed = true;
-              clearTimeout(timer);
-              watchers.forEach((w) => w.close());
-              self.subscriptions.delete(stop);
-            };
-            try {
-              for (const p of new Set(input.paths)) {
-                path(p, true);
-                const before = await directory.entry(p);
-                ensure(
-                  before.directory,
-                  'Watch directory paths, including parent directories of files.',
-                );
-                const watcher = fsWatch(
-                  resolve(directory.root, p),
-                  { persistent: false, recursive: true },
-                  () => changed(),
-                ).on('error', (e) => changed(errorText(e)));
-                watchers.push(watcher);
-                ensure(
-                  same(before, await directory.entry(p)),
-                  'Watch directory changed during subscription.',
-                );
-              }
-              const common = self.approval(input.checkout).common.path;
-              if (!common.startsWith(directory.root + '/'))
-                watchers.push(
-                  fsWatch(common, { persistent: false, recursive: true }, () => changed()).on(
-                    'error',
-                    (e) => changed(errorText(e)),
-                  ),
-                );
-              self.subscriptions.add(stop);
-              Queue.offerUnsafe(queue, {
-                checkout: input.checkout,
-                paths: input.paths,
-                ready: true,
+            self.subscriptions.add(scope);
+          },
+          catch: applicationError,
+        });
+        const directory = yield* self.effect(() => self.directory(captured.checkout));
+        const changed = (failure?: string) => {
+          if (disposed || self.closed) return;
+          error = failure ?? error;
+          Queue.offerUnsafe(changes, true);
+        };
+        const acquire = (path: string) =>
+          Effect.acquireRelease(
+            Effect.try({
+              try: () => {
+                const closed = Deferred.makeUnsafe<void>();
+                const watcher = fsWatch(path, { persistent: false, recursive: true }, () =>
+                  changed(),
+                ).on('error', (error) => {
+                  changed(errorText(error));
+                  // Node stops a failed watcher without guaranteeing a later close event.
+                  Deferred.doneUnsafe(closed, Effect.void);
+                });
+                watcher.once('close', () => Deferred.doneUnsafe(closed, Effect.void));
+                const release = Effect.gen(function* () {
+                  yield* releaseResource(() => watcher.close());
+                  yield* Deferred.await(closed);
+                  yield* Effect.sync(() => {
+                    watcher.removeAllListeners();
+                    self.watcherReleases.delete(release);
+                  });
+                });
+                self.watcherReleases.add(release);
+                return release;
+              },
+              catch: applicationError,
+            }),
+            (release) =>
+              release.pipe(
+                Effect.onExit((exit) =>
+                  Effect.sync(() => {
+                    if (Exit.isFailure(exit)) self.cleanupFailures.push(exit.cause);
+                  }),
+                ),
+              ),
+          ).pipe(Scope.provide(scope));
+        for (const p of new Set(captured.paths)) {
+          yield* Effect.try({ try: () => path(p, true), catch: applicationError });
+          const before = yield* self.effect(() => directory.entry(p));
+          yield* Effect.try({
+            try: () =>
+              ensure(
+                before.directory,
+                'Watch directory paths, including parent directories of files.',
+              ),
+            catch: applicationError,
+          });
+          yield* acquire(resolve(directory.root, p));
+          const after = yield* self.effect(() => directory.entry(p));
+          yield* Effect.try({
+            try: () => ensure(same(before, after), 'Watch directory changed during subscription.'),
+            catch: applicationError,
+          });
+        }
+        const common = self.approval(captured.checkout).common.path;
+        if (!common.startsWith(directory.root + '/')) yield* acquire(common);
+        const events = Stream.fromQueue(changes).pipe(
+          Stream.mapEffect(() =>
+            Effect.gen(function* () {
+              const timer = yield* Effect.forkIn(Effect.sleep('100 millis'), scope);
+              yield* Fiber.join(timer);
+              yield* Queue.clear(changes);
+              return yield* Effect.sync(() => {
+                try {
+                  directory.check();
+                } catch (failure) {
+                  error = errorText(failure);
+                }
+                const event = decodeWorkspaceEvent({ ...captured, error });
+                error = undefined;
+                return event;
               });
-              return stop;
-            } catch (error) {
-              stop();
-              throw error;
-            }
-          }),
-          (stop) => releaseResource(stop),
+            }),
+          ),
         );
-        return Stream.fromQueue(queue);
+        return Stream.concat(
+          Stream.succeed(decodeWorkspaceEvent({ ...captured, ready: true })),
+          events,
+        );
       }),
     );
   }

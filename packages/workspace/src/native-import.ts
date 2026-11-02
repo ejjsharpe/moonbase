@@ -75,7 +75,10 @@ export class NativeImport {
       closeSync(fd);
     }
   }
+  private closed = false;
   close() {
+    if (this.closed) return;
+    this.closed = true;
     closeSync(this.fd);
   }
 }
