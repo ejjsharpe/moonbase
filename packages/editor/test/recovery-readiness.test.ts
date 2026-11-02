@@ -1,3 +1,5 @@
+import { acquireEditor, answering } from './model-fixture.ts';
+import type { EditorController } from '@moonbase/editor/state';
 import * as controllerFixture from './editor-fixture.ts';
 import assert from 'node:assert/strict';
 import { test, describe } from 'node:test';
@@ -9,8 +11,8 @@ import {
   type EditorClient,
   type CommandInput,
 } from '@moonbase/application/client';
-import { createEditor, fileKey } from '../src/editor.ts';
-import { memoryWorkspace } from '../src/memory.ts';
+import { fileKey } from '@moonbase/editor/state';
+import { memoryWorkspace } from '@moonbase/editor/memory';
 
 const checkout: CheckoutTarget = {
   hostId: 'local',
@@ -55,12 +57,13 @@ async function fixture() {
         : raw.command(name, input, options);
     },
   };
-  const editor = createEditor({ client, clientId: 'readiness' });
+  const editor = await acquireEditor(runtime, { client, clientId: 'readiness' });
   await editor.load();
   await editor.openCheckout(checkout.root);
   await editor.open(target);
   await editor.flush();
   return {
+    runtime,
     memory,
     raw,
     editor,
@@ -76,13 +79,13 @@ async function fixture() {
       return { entered: entered.promise, release: read.release };
     },
     async restart() {
-      editor.dispose();
-      const next = createEditor({ client: raw, clientId: editor.clientId });
+      await editor.dispose();
+      const next = await acquireEditor(runtime, { client: raw, clientId: editor.clientId });
       await next.load();
       return next;
     },
     async dispose() {
-      editor.dispose();
+      await editor.dispose();
       await runtime.dispose();
     },
   };
@@ -108,7 +111,7 @@ test('fresh capture invalidates exact recovery confirmation synchronously; confi
     await f.editor.flush();
     const next = await f.restart();
     assert.equal(next.buffer(target)!.text, 'fresh visible tail');
-    next.dispose();
+    await next.dispose();
   } finally {
     await f.dispose();
   }
@@ -135,7 +138,7 @@ test('ordinary publication stays unready in flight and cannot confirm an edit ma
     assert.equal(f.editor.getSnapshot().recoveryReady, true);
     const next = await f.restart();
     assert.equal(next.buffer(target)!.text, 'newer while publishing');
-    next.dispose();
+    await next.dispose();
   } finally {
     hold.release();
     await f.dispose();
@@ -165,7 +168,7 @@ for (const committed of [false, true])
       assert.equal(f.editor.getSnapshot().recoveryReady, true);
       const next = await f.restart();
       assert.equal(next.buffer(target)!.text, 'later live draft');
-      next.dispose();
+      await next.dispose();
     } finally {
       await f.dispose();
     }
@@ -201,7 +204,7 @@ test('even a publication of an already confirmed capture vetoes unload until its
     hold.release();
     await writing;
     assert.equal(f.editor.getSnapshot().recoveryReady, true);
-    f.editor.dispose();
+    await f.editor.dispose();
     assert.equal(f.editor.getSnapshot().recoveryReady, false);
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(f.memory.stats.active, 0);
@@ -284,7 +287,7 @@ describe('controller preservation and activation', () => {
       let publications = 0;
       const client: EditorClient = {
         ...f.client,
-        watch: () => () => {},
+        watch: () => async () => {},
         async command(name, input, options) {
           if (hold && name === 'persistRecovery') {
             publications++;
@@ -296,9 +299,9 @@ describe('controller preservation and activation', () => {
           return f.client.command(name, input, options);
         },
       };
-      let editor = createEditor({ client, clientId: f.editor.clientId });
+      let editor = await acquireEditor(f.runtime, { client, clientId: f.editor.clientId });
       try {
-        f.editor.dispose();
+        await f.editor.dispose();
         await editor.load();
         await editor.openCheckout(checkout.root);
         await editor.open(target('a.ts'));
@@ -306,19 +309,31 @@ describe('controller preservation and activation', () => {
         await editor.openCheckout(second.root);
         editor.selectCheckout(checkout);
         await editor.flush();
-        editor.dispose();
-        editor = createEditor({ client, clientId: f.editor.clientId });
+        await editor.dispose();
+        editor = await acquireEditor(f.runtime, { client, clientId: f.editor.clientId });
         await editor.load();
         assert.equal(editor.buffer(target('a.ts')), undefined);
         hold = true;
         let closing;
         if (kind === 'files') {
-          closing = editor.close([target('b.ts')], async () => 'discard');
+          closing = answering(
+            editor,
+            () => editor.close([target('b.ts')]),
+            async () => 'discard',
+          );
         } else {
           if (kind === 'checkout') {
-            closing = editor.closeCheckout(checkout, async () => 'discard');
+            closing = answering(
+              editor,
+              () => editor.closeCheckout(checkout),
+              async () => 'discard',
+            );
           } else {
-            closing = editor.prepareQuit(async () => 'discard');
+            closing = answering(
+              editor,
+              () => editor.prepareQuit(),
+              async () => 'discard',
+            );
           }
         }
         await admitted;
@@ -342,7 +357,7 @@ describe('controller preservation and activation', () => {
         }
       } finally {
         release();
-        editor.dispose();
+        await editor.dispose();
         await f.dispose();
       }
     });
@@ -358,11 +373,11 @@ describe('controller preservation and activation', () => {
       wait = new Promise<void>((resolve) => {
         release = resolve;
       });
-    const editor = createEditor({
+    const editor = await acquireEditor(f.runtime, {
       clientId: f.editor.clientId,
       client: {
         ...f.client,
-        watch: () => () => {},
+        watch: () => async () => {},
         async command(name, input, options) {
           if (hold && name === 'persistRecovery') {
             admit();
@@ -373,7 +388,7 @@ describe('controller preservation and activation', () => {
       },
     });
     try {
-      f.editor.dispose();
+      await f.editor.dispose();
       await editor.load();
       await editor.openCheckout(checkout.root);
       await editor.open(target('a.ts'));
@@ -382,7 +397,11 @@ describe('controller preservation and activation', () => {
       editor.selectCheckout(checkout);
       await editor.flush();
       hold = true;
-      const closing = editor.close([target('a.ts')], async () => 'discard');
+      const closing = answering(
+        editor,
+        () => editor.close([target('a.ts')]),
+        async () => 'discard',
+      );
       await admitted;
       editor.selectCheckout(second);
       editor.tree(second, { focus: 'folder' });
@@ -407,7 +426,7 @@ describe('controller preservation and activation', () => {
       assert.equal(durable.state.drafts[0].text, 'retained dirty text');
     } finally {
       release();
-      editor.dispose();
+      await editor.dispose();
       await f.dispose();
     }
   });
@@ -424,11 +443,11 @@ describe('controller preservation and activation', () => {
       wait = new Promise<void>((resolve) => {
         release = resolve;
       });
-    const editor = createEditor({
+    const editor = await acquireEditor(f.runtime, {
       clientId: f.editor.clientId,
       client: {
         ...f.client,
-        watch: () => () => {},
+        watch: () => async () => {},
         async command(name, input, options) {
           if (hold && name === 'persistRecovery') {
             publications++;
@@ -436,14 +455,18 @@ describe('controller preservation and activation', () => {
               admit();
               await wait;
             }
-            if (publications === 2) throw Error('Later metadata publication failed');
+            if (publications === 2)
+              throw new ApplicationError({
+                code: 'Persistence',
+                message: 'Later metadata publication failed',
+              });
           }
           return f.client.command(name, input, options);
         },
       },
     });
     try {
-      f.editor.dispose();
+      await f.editor.dispose();
       await editor.load();
       await editor.openCheckout(checkout.root);
       await editor.open(target('a.ts'));
@@ -452,7 +475,11 @@ describe('controller preservation and activation', () => {
       editor.selectCheckout(checkout);
       await editor.flush();
       hold = true;
-      const closing = editor.close([target('a.ts')], async () => 'discard');
+      const closing = answering(
+        editor,
+        () => editor.close([target('a.ts')]),
+        async () => 'discard',
+      );
       await admitted;
       editor.selectCheckout(second);
       editor.resizeSidebar(319);
@@ -469,7 +496,7 @@ describe('controller preservation and activation', () => {
       assert.deepEqual(durable.state.views[checkout.checkoutId].openFiles, ['a.ts']);
     } finally {
       release();
-      editor.dispose();
+      await editor.dispose();
       await f.dispose();
     }
   });
@@ -477,7 +504,7 @@ describe('controller preservation and activation', () => {
   for (const kind of ['files', 'checkout', 'quit'] as const)
     for (const failure of ['conflict', 'lost response'] as const)
       test(`${kind} ${failure} at second publication cannot lose a persisted draft after failed close`, async () => {
-        const f = await fixture('r4-durable-' + kind + failure, false);
+        const f = await fixture('r4-durable-' + kind + failure.replaceAll(' ', '-'), false);
         let hold = false,
           admit!: () => void,
           release!: () => void,
@@ -488,11 +515,11 @@ describe('controller preservation and activation', () => {
           wait = new Promise<void>((resolve) => {
             release = resolve;
           });
-        const editor = createEditor({
+        const editor = await acquireEditor(f.runtime, {
           clientId: f.editor.clientId,
           client: {
             ...f.client,
-            watch: () => () => {},
+            watch: () => async () => {},
             async command(name, input, options) {
               if (hold && name === 'persistRecovery') {
                 if (++calls === 1) {
@@ -519,7 +546,7 @@ describe('controller preservation and activation', () => {
           },
         });
         try {
-          f.editor.dispose();
+          await f.editor.dispose();
           await editor.load();
           await editor.openCheckout(checkout.root);
           await editor.open(target('b.ts'));
@@ -530,12 +557,24 @@ describe('controller preservation and activation', () => {
           hold = true;
           let closing;
           if (kind === 'files') {
-            closing = editor.close([target('b.ts')], async () => 'discard');
+            closing = answering(
+              editor,
+              () => editor.close([target('b.ts')]),
+              async () => 'discard',
+            );
           } else {
             if (kind === 'checkout') {
-              closing = editor.closeCheckout(checkout, async () => 'discard');
+              closing = answering(
+                editor,
+                () => editor.closeCheckout(checkout),
+                async () => 'discard',
+              );
             } else {
-              closing = editor.prepareQuit(async () => 'discard');
+              closing = answering(
+                editor,
+                () => editor.prepareQuit(),
+                async () => 'discard',
+              );
             }
           }
           await admitted;
@@ -557,10 +596,10 @@ describe('controller preservation and activation', () => {
             );
             assert.equal(durable.state.drafts.length, 0);
           }
-          editor.dispose();
-          const restarted = createEditor({
+          await editor.dispose();
+          const restarted = await acquireEditor(f.runtime, {
             clientId: editor.clientId,
-            client: { ...f.client, watch: () => () => {} },
+            client: { ...f.client, watch: () => async () => {} },
           });
           try {
             await restarted.load();
@@ -575,11 +614,11 @@ describe('controller preservation and activation', () => {
                 'previously persisted dirty draft',
               );
           } finally {
-            restarted.dispose();
+            await restarted.dispose();
           }
         } finally {
           release();
-          editor.dispose();
+          await editor.dispose();
           await f.dispose();
         }
       });
@@ -604,11 +643,11 @@ describe('controller preservation and activation', () => {
       readWait = new Promise<void>((resolve) => {
         finishRead = resolve;
       });
-    let editor = createEditor({
+    let editor = await acquireEditor(f.runtime, {
       clientId: f.editor.clientId,
       client: {
         ...f.client,
-        watch: () => () => {},
+        watch: () => async () => {},
         async command(name, input, options) {
           if (hold && name === 'persistRecovery') {
             admit();
@@ -619,7 +658,7 @@ describe('controller preservation and activation', () => {
       },
     });
     try {
-      f.editor.dispose();
+      await f.editor.dispose();
       await editor.load();
       await editor.openCheckout(checkout.root);
       await editor.open(target('a.ts'), { view: 'staged' });
@@ -627,12 +666,12 @@ describe('controller preservation and activation', () => {
       await editor.openCheckout(second.root);
       editor.selectCheckout(checkout);
       await editor.flush();
-      editor.dispose();
-      editor = createEditor({
+      await editor.dispose();
+      editor = await acquireEditor(f.runtime, {
         clientId: editor.clientId,
         client: {
           ...f.client,
-          watch: () => () => {},
+          watch: () => async () => {},
           async command(name, input, options) {
             if (hold && name === 'persistRecovery') {
               admit();
@@ -649,7 +688,11 @@ describe('controller preservation and activation', () => {
       await editor.load();
       assert.equal(editor.buffer(target('a.ts')), undefined);
       hold = true;
-      const closing = editor.close([target('b.ts')], async () => 'discard');
+      const closing = answering(
+        editor,
+        () => editor.close([target('b.ts')]),
+        async () => 'discard',
+      );
       await admitted;
       editor.selectCheckout(second);
       release();
@@ -677,7 +720,7 @@ describe('controller preservation and activation', () => {
     } finally {
       release();
       finishRead();
-      editor.dispose();
+      await editor.dispose();
       await f.dispose();
     }
   });
@@ -793,15 +836,15 @@ describe('controller preservation and activation', () => {
 
   for (const outcome of ['not committed', 'committed', 'competing CAS'] as const)
     test(`exact resolution of an uncertain final close (${outcome}) preserves the durable outcome and original request`, async () => {
-      const f = await fixture('r4-final-' + outcome, false);
+      const f = await fixture('r4-final-' + outcome.replaceAll(' ', '-'), false);
       let armed = false,
         failed = false;
       const requests: CommandInput<'persistRecovery'>[] = [];
-      const editor = createEditor({
+      const editor = await acquireEditor(f.runtime, {
         clientId: f.editor.clientId,
         client: {
           ...f.client,
-          watch: () => () => {},
+          watch: () => async () => {},
           async command(name, input, options) {
             if (armed && name === 'persistRecovery') {
               const request = input as CommandInput<'persistRecovery'>;
@@ -821,19 +864,33 @@ describe('controller preservation and activation', () => {
         },
       });
       try {
-        f.editor.dispose();
+        await f.editor.dispose();
         await editor.load();
         await editor.openCheckout(checkout.root);
         await editor.open(target('b.ts'));
         editor.edit(target('b.ts'), 'consented captured draft');
         await editor.flush();
         armed = true;
-        assert.equal(await editor.close([target('b.ts')], async () => 'discard'), false);
+        assert.equal(
+          await answering(
+            editor,
+            () => editor.close([target('b.ts')]),
+            async () => 'discard',
+          ),
+          false,
+        );
         const pending = editor.getSnapshot().publication;
         assert.equal(pending?.kind, 'close');
         assert.equal(editor.getSnapshot().preserving, true);
         assert.equal(editor.buffer(target('b.ts'))?.text, 'consented captured draft');
-        assert.equal(await editor.prepareQuit(async () => 'discard'), false);
+        assert.equal(
+          await answering(
+            editor,
+            () => editor.prepareQuit(),
+            async () => 'discard',
+          ),
+          false,
+        );
         assert.equal(await editor.save(target('b.ts')), false);
         assert.equal(await editor.reload(target('b.ts')), false);
         await assert.rejects(editor.flush());
@@ -842,9 +899,9 @@ describe('controller preservation and activation', () => {
           editor.mutate({ checkout, kind: 'create-file', sources: [], destination: 'blocked.ts' }),
         );
         const stored = await f.client.command('loadRecovery', { clientId: editor.clientId });
-        const restarted = createEditor({
+        const restarted = await acquireEditor(f.runtime, {
           clientId: editor.clientId,
-          client: { ...f.client, watch: () => () => {} },
+          client: { ...f.client, watch: () => async () => {} },
         });
         try {
           await restarted.load();
@@ -853,7 +910,7 @@ describe('controller preservation and activation', () => {
             outcome === 'committed' ? undefined : 'consented captured draft',
           );
         } finally {
-          restarted.dispose();
+          await restarted.dispose();
         }
         if (outcome === 'competing CAS')
           await f.client.command('persistRecovery', {
@@ -871,14 +928,25 @@ describe('controller preservation and activation', () => {
           assert.equal(editor.buffer(target('b.ts'))?.text, 'consented captured draft');
           let choices = 0;
           assert.equal(
-            await editor.close([target('b.ts')], async () => {
-              choices++;
-              return 'cancel';
-            }),
+            await answering(
+              editor,
+              () => editor.close([target('b.ts')]),
+              async () => {
+                choices++;
+                return 'cancel';
+              },
+            ),
             false,
           );
           assert.equal(choices, 1);
-          assert.equal(await editor.prepareQuit(async () => 'discard'), false);
+          assert.equal(
+            await answering(
+              editor,
+              () => editor.prepareQuit(),
+              async () => 'discard',
+            ),
+            false,
+          );
           const retained = await f.client.command('loadRecovery', { clientId: editor.clientId });
           assert.equal(retained.state.drafts[0].text, 'consented captured draft');
           assert.equal(retained.state.sidebarWidth, 356);
@@ -901,7 +969,7 @@ describe('controller preservation and activation', () => {
         assert(final.every((request) => JSON.stringify(request) === JSON.stringify(final[0])));
         assert.equal(final[0].requestId, pending?.requestId);
       } finally {
-        editor.dispose();
+        await editor.dispose();
         await f.dispose();
       }
     });
@@ -910,11 +978,11 @@ describe('controller preservation and activation', () => {
     const f = await fixture('r4-committed-close', false);
     let armed = false,
       publications = 0;
-    const editor = createEditor({
+    const editor = await acquireEditor(f.runtime, {
       clientId: f.editor.clientId,
       client: {
         ...f.client,
-        watch: () => () => {},
+        watch: () => async () => {},
         async command(name, input, options) {
           if (armed && name === 'persistRecovery' && ++publications === 2) {
             const receipt = await f.client.command(name, input, options);
@@ -927,14 +995,21 @@ describe('controller preservation and activation', () => {
       },
     });
     try {
-      f.editor.dispose();
+      await f.editor.dispose();
       await editor.load();
       await editor.openCheckout(checkout.root);
       await editor.open(target('b.ts'));
       editor.edit(target('b.ts'), 'committed discard');
       await editor.flush();
       armed = true;
-      assert.equal(await editor.close([target('b.ts')], async () => 'discard'), true);
+      assert.equal(
+        await answering(
+          editor,
+          () => editor.close([target('b.ts')]),
+          async () => 'discard',
+        ),
+        true,
+      );
       assert.equal(editor.buffer(target('b.ts')), undefined);
       assert.equal(editor.getSnapshot().recovery.sidebarWidth, 318);
       await assert.rejects(editor.flush());
@@ -944,7 +1019,7 @@ describe('controller preservation and activation', () => {
         0,
       );
     } finally {
-      editor.dispose();
+      await editor.dispose();
       await f.dispose();
     }
   });
@@ -965,18 +1040,18 @@ describe('controller preservation and activation', () => {
     await f.editor.open(target('b.ts', second));
     await f.editor.selectCheckout(checkout);
     await f.editor.flush();
-    f.editor.dispose();
+    await f.editor.dispose();
     const transport: { command?: EditorClient['command'] } = {};
     const client: EditorClient = {
       ...f.client,
-      watch: () => () => {},
+      watch: () => async () => {},
       command(name, input, options) {
         return transport.command
           ? transport.command(name, input, options)
           : f.client.command(name, input, options);
       },
     };
-    const editor = createEditor({ client, clientId });
+    const editor = await acquireEditor(f.runtime, { client, clientId });
     await editor.load();
     return {
       ...f,
@@ -986,7 +1061,7 @@ describe('controller preservation and activation', () => {
       client,
       transport,
       async dispose() {
-        editor.dispose();
+        await editor.dispose();
         await f.dispose();
       },
     };
@@ -1042,16 +1117,16 @@ describe('controller preservation and activation', () => {
         (await f.raw.command('loadRecovery', { clientId: f.editor.clientId })).state.drafts[0].text,
         'precious moved draft',
       );
-      f.editor.dispose();
-      const restarted = createEditor({
+      await f.editor.dispose();
+      const restarted = await acquireEditor(f.runtime, {
         clientId: f.editor.clientId,
-        client: { ...f.raw, watch: () => () => {} },
+        client: { ...f.raw, watch: () => async () => {} },
       });
       try {
         await restarted.load();
         assert.equal(restarted.buffer(target('renamed.ts'))?.text, 'precious moved draft');
       } finally {
-        restarted.dispose();
+        await restarted.dispose();
       }
       assert.equal(f.memory.stats.mutations, 1);
     } finally {
@@ -1089,12 +1164,20 @@ describe('controller preservation and activation', () => {
           await f.clientCommand(name, input, options);
           throw new ApplicationError({ code: 'Uncertain', message: 'Lost final receipt' });
         }
-        if (name === 'getRecoveryPublication' && statusDown) throw Error('Status unavailable');
+        if (name === 'getRecoveryPublication' && statusDown)
+          throw new ApplicationError({ code: 'Unavailable', message: 'Status unavailable' });
         return f.clientCommand(name, input, options);
       };
       const observation = f.editor.reconcileRecovery();
       await observing.promise;
-      assert.equal(await f.editor.close([target('a.ts')], async () => 'discard'), false);
+      assert.equal(
+        await answering(
+          f.editor,
+          () => f.editor.close([target('a.ts')]),
+          async () => 'discard',
+        ),
+        false,
+      );
       const sources = await f.raw.command('inspectEntries', { checkout, paths: ['a.ts'] });
       await f.raw.command('mutate', {
         checkout,
@@ -1121,10 +1204,10 @@ describe('controller preservation and activation', () => {
       const durable = await f.raw.command('loadRecovery', { clientId: f.editor.clientId });
       assert.equal(durable.state.drafts.length, 0);
       assert.equal(durable.operations.length, 0);
-      f.editor.dispose();
-      const restarted = createEditor({
+      await f.editor.dispose();
+      const restarted = await acquireEditor(f.runtime, {
         clientId: f.editor.clientId,
-        client: { ...f.raw, watch: () => () => {} },
+        client: { ...f.raw, watch: () => async () => {} },
       });
       try {
         await restarted.load();
@@ -1135,7 +1218,7 @@ describe('controller preservation and activation', () => {
           false,
         );
       } finally {
-        restarted.dispose();
+        await restarted.dispose();
       }
       assert.equal(f.memory.stats.mutations, 1);
     } finally {
@@ -1176,11 +1259,15 @@ describe('controller preservation and activation', () => {
             lost = true;
             await f.clientCommand(name, input, options);
             f.memory.failNext('getRecoveryPublication');
-            throw Error('Lost final reply');
+            throw new ApplicationError({ code: 'Uncertain', message: 'Lost final reply' });
           }
           return f.clientCommand(name, input, options);
         };
-        const firstClose = f.editor.close([target('b.ts')], async () => 'discard');
+        const firstClose = answering(
+          f.editor,
+          () => f.editor.close([target('b.ts')]),
+          async () => 'discard',
+        );
         await entered.promise;
         await f.editor.selectCheckout(second);
         release.release();
@@ -1194,14 +1281,18 @@ describe('controller preservation and activation', () => {
           delay = false;
           f.editor.edit(target('b.ts', second), 'retain on cancel');
         }
-        const secondClose = f.editor.close([target('b.ts', second)], async () => {
-          if (outcome === 'cancel') {
-            entered.release();
-            await release.promise;
-            return 'cancel';
-          }
-          return 'discard';
-        });
+        const secondClose = answering(
+          f.editor,
+          () => f.editor.close([target('b.ts', second)]),
+          async () => {
+            if (outcome === 'cancel') {
+              entered.release();
+              await release.promise;
+              return 'cancel';
+            }
+            return 'discard';
+          },
+        );
         await entered.promise;
         await f.editor.selectCheckout(checkout);
         f.memory.externalWrite(target('a.ts'), 'latest selected source');
@@ -1248,8 +1339,10 @@ describe('controller preservation and activation', () => {
         return result;
       };
       assert.equal(
-        await f.editor.close([target('a.ts'), target('b.ts')], async (buffer) =>
-          buffer.target.path === 'a.ts' ? 'save' : 'cancel',
+        await answering(
+          f.editor,
+          () => f.editor.close([target('a.ts'), target('b.ts')]),
+          async (buffer) => (buffer.target.path === 'a.ts' ? 'save' : 'cancel'),
         ),
         false,
       );
@@ -1364,7 +1457,14 @@ describe('controller preservation and activation', () => {
       await reading.promise;
       assert.equal(await f.editor.open(target('copy.ts')), true);
       f.editor.edit(target('copy.ts'), 'destination edits discarded');
-      assert.equal(await f.editor.close([target('copy.ts')], async () => 'discard'), true);
+      assert.equal(
+        await answering(
+          f.editor,
+          () => f.editor.close([target('copy.ts')]),
+          async () => 'discard',
+        ),
+        true,
+      );
       assert.equal(f.editor.buffer(target('copy.ts')), undefined);
       assert.equal(
         (await f.raw.command('loadRecovery', { clientId: f.editor.clientId })).state.drafts.some(
@@ -1378,10 +1478,10 @@ describe('controller preservation and activation', () => {
       await f.editor.flush();
       const live = f.editor.buffer(target('copy.ts')),
         stored = await f.raw.command('loadRecovery', { clientId: f.editor.clientId });
-      f.editor.dispose();
-      const restarted = createEditor({
+      await f.editor.dispose();
+      const restarted = await acquireEditor(f.runtime, {
         clientId: f.editor.clientId,
-        client: { ...f.raw, watch: () => () => {} },
+        client: { ...f.raw, watch: () => async () => {} },
       });
       try {
         await restarted.load();
@@ -1396,7 +1496,7 @@ describe('controller preservation and activation', () => {
         assert.equal(stored.state.views[checkout.checkoutId].openFiles.includes('copy.ts'), false);
         assert.equal((await f.raw.command('readFile', target('copy.ts'))).text, 'const a = 1;');
       } finally {
-        restarted.dispose();
+        await restarted.dispose();
       }
     } finally {
       releasePreflight.release();
@@ -1408,19 +1508,29 @@ describe('controller preservation and activation', () => {
   for (const area of ['staged', 'unstaged'] as const)
     test(`restored dirty ${area} survivor loads its remembered comparison`, async () => {
       const f = await observedFixture('r6-dirty-' + area);
-      let restarted: ReturnType<typeof createEditor> | undefined;
+      let restarted: EditorController | undefined;
       try {
         await f.editor.open(target('a.ts'), { view: area });
         f.editor.edit(target('a.ts'), 'restored dirty comparison');
         const baseline = f.editor.buffer(target('a.ts'))!.disk;
         await f.editor.open(target('b.ts'));
         await f.editor.flush();
-        f.editor.dispose();
+        await f.editor.dispose();
         f.memory.externalWrite(target('a.ts'), 'new external working content');
-        restarted = createEditor({ clientId: f.editor.clientId, client: f.client });
+        restarted = await acquireEditor(f.runtime, {
+          clientId: f.editor.clientId,
+          client: f.client,
+        });
         await restarted.load();
         assert.equal(restarted.getSnapshot().comparisons[fileKey(target('a.ts'))], undefined);
-        assert.equal(await restarted.close([target('b.ts')], async () => 'discard'), true);
+        assert.equal(
+          await answering(
+            restarted,
+            () => restarted!.close([target('b.ts')]),
+            async () => 'discard',
+          ),
+          true,
+        );
         assert.equal(
           restarted.getSnapshot().comparisons[fileKey(target('a.ts'))]?.original,
           area === 'staged' ? 'const a = 0;' : 'const a = 0.5;',
@@ -1432,7 +1542,7 @@ describe('controller preservation and activation', () => {
           'new external working content',
         );
       } finally {
-        restarted?.dispose();
+        await restarted?.dispose();
         await f.dispose();
       }
     });
@@ -1492,8 +1602,10 @@ describe('controller preservation and activation', () => {
         f.editor.edit(target(closing), 'current destination edits');
         failClose = outcome === 'failure';
         assert.equal(
-          await f.editor.close([target(closing)], async () =>
-            outcome === 'cancel' ? 'cancel' : 'discard',
+          await answering(
+            f.editor,
+            () => f.editor.close([target(closing)]),
+            async () => (outcome === 'cancel' ? 'cancel' : 'discard'),
           ),
           outcome === 'reopen' || outcome === 'unrelated',
         );
@@ -1533,25 +1645,42 @@ describe('controller preservation and activation', () => {
   for (const area of ['staged', 'untracked'] as const)
     test(`settled ${area} comparison activation does not retry on every release`, async () => {
       const f = await observedFixture('r6-comparison-ready-' + area);
-      let restarted: ReturnType<typeof createEditor> | undefined,
+      let restarted: EditorController | undefined,
         reads = 0;
       try {
         await f.editor.open(target('a.ts'), { view: area });
         f.editor.edit(target('a.ts'), 'retained dirty text');
         await f.editor.open(target('b.ts'));
         await f.editor.flush();
-        f.editor.dispose();
+        await f.editor.dispose();
         f.transport.command = async (name, input, options) => {
           if (name === 'readComparison') reads++;
           return f.clientCommand(name, input, options);
         };
-        restarted = createEditor({ clientId: f.editor.clientId, client: f.client });
+        restarted = await acquireEditor(f.runtime, {
+          clientId: f.editor.clientId,
+          client: f.client,
+        });
         await restarted.load();
         if (area === 'staged') f.memory.failNext('readComparison', 'Controlled comparison failure');
-        assert.equal(await restarted.close([target('b.ts')], async () => 'discard'), true);
+        assert.equal(
+          await answering(
+            restarted,
+            () => restarted!.close([target('b.ts')]),
+            async () => 'discard',
+          ),
+          true,
+        );
         const attempts = reads;
         await restarted.selectCheckout(checkout);
-        assert.equal(await restarted.prepareQuit(async () => 'cancel'), false);
+        assert.equal(
+          await answering(
+            restarted,
+            () => restarted!.prepareQuit(),
+            async () => 'cancel',
+          ),
+          false,
+        );
         assert.equal(reads, attempts);
         assert.equal(restarted.buffer(target('a.ts'))?.text, 'retained dirty text');
         if (area === 'untracked')
@@ -1570,7 +1699,7 @@ describe('controller preservation and activation', () => {
           );
         }
       } finally {
-        restarted?.dispose();
+        await restarted?.dispose();
         await f.dispose();
       }
     });
@@ -1590,13 +1719,13 @@ describe('controller preservation and activation', () => {
     let reads = 0;
     const client: EditorClient = {
       ...raw,
-      watch: () => () => {},
+      watch: () => async () => {},
       command(name, input, options) {
         if (name === 'readComparison') reads++;
         return raw.command(name, input, options);
       },
     };
-    const editor = createEditor({ client, clientId: 'r7-working-' + area });
+    const editor = await acquireEditor(runtime, { client, clientId: 'r7-working-' + area });
     await editor.load();
     await editor.openCheckout(checkout.root);
     await editor.open(target('a.ts'), { view: area });
@@ -1619,7 +1748,7 @@ describe('controller preservation and activation', () => {
         });
       },
       async dispose() {
-        editor.dispose();
+        await editor.dispose();
         await runtime.dispose();
       },
     };
@@ -1666,7 +1795,14 @@ describe('controller preservation and activation', () => {
       const missingReads = f.reads;
       for (let attempt = 0; attempt < 2; attempt++) {
         await f.editor.selectCheckout(checkout);
-        assert.equal(await f.editor.close([target('b.ts', second)], async () => 'cancel'), false);
+        assert.equal(
+          await answering(
+            f.editor,
+            () => f.editor.close([target('b.ts', second)]),
+            async () => 'cancel',
+          ),
+          false,
+        );
       }
       assert.equal(f.reads, missingReads);
       assert.equal(f.editor.buffer(target('a.ts')), undefined);
@@ -1680,7 +1816,14 @@ describe('controller preservation and activation', () => {
       const failedReads = f.reads;
       for (let attempt = 0; attempt < 2; attempt++) {
         await f.editor.selectCheckout(checkout);
-        assert.equal(await f.editor.close([target('b.ts', second)], async () => 'cancel'), false);
+        assert.equal(
+          await answering(
+            f.editor,
+            () => f.editor.close([target('b.ts', second)]),
+            async () => 'cancel',
+          ),
+          false,
+        );
       }
       assert.equal(f.reads, failedReads);
       assert.equal(f.editor.buffer(target('a.ts')), undefined);

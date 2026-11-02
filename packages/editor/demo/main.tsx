@@ -1,8 +1,14 @@
 import { createRoot } from 'react-dom/client';
 import { createRef, StrictMode, useState } from 'react';
-import { ManagedRuntime } from 'effect';
+import { Effect, Exit, Scope, ManagedRuntime } from 'effect';
+const modelScope = Scope.makeUnsafe();
 import { makeEditorClient } from '@moonbase/application/runtime-client';
-import { EditorWorkbench, createEditor, type EditorWorkbenchHandle } from '../src/index.ts';
+import {
+  EditorWorkbench,
+  makeEditorModel,
+  makeEditorController,
+  type EditorWorkbenchHandle,
+} from '../src/index.ts';
 import { configureMonacoWorkers } from '../src/workers.ts';
 import { memoryWorkspace } from '../src/memory.ts';
 import * as monaco from 'monaco-editor';
@@ -44,8 +50,22 @@ const memory = memoryWorkspace([
 // One demo composition root. Feature packages do not construct runtimes.
 const runtime = ManagedRuntime.make(memory.layer),
   client = makeEditorClient(runtime);
-const first = createEditor({ client, clientId: 'demo-first' }),
-  second = createEditor({ client, clientId: 'demo-second' });
+const first = makeEditorController(
+    runtime,
+    await runtime.runPromise(
+      makeEditorModel({ client, clientId: 'demo-first' }).pipe(
+        Effect.provideService(Scope.Scope, modelScope),
+      ),
+    ),
+  ),
+  second = makeEditorController(
+    runtime,
+    await runtime.runPromise(
+      makeEditorModel({ client, clientId: 'demo-second' }).pipe(
+        Effect.provideService(Scope.Scope, modelScope),
+      ),
+    ),
+  );
 const firstHandle = createRef<EditorWorkbenchHandle>();
 await Promise.all(
   [first, second].map(async (editor) => {
@@ -87,7 +107,8 @@ const styles = stylex.create({
 });
 function Demo() {
   const [visible, setVisible] = useState(true),
-    [disposed, setDisposed] = useState(false);
+    [disposed, setDisposed] = useState(false),
+    [cleanupError, setCleanupError] = useState('');
   return (
     <main {...stylex.props(workbench.document, styles.app)}>
       <div {...stylex.props(styles.tools)}>
@@ -123,12 +144,13 @@ function Demo() {
         <Button
           {...stylex.props(controls.button)}
           onClick={() => {
-            second.dispose();
             setDisposed(true);
+            void second.dispose().catch((error) => setCleanupError(String(error)));
           }}>
           Dispose second editor
         </Button>
       </div>
+      {cleanupError && <p role="alert">{cleanupError}</p>}
       <div {...stylex.props(styles.editors)}>
         <section aria-label="First editor" hidden={!visible} {...stylex.props(styles.editor)}>
           <EditorWorkbench
@@ -184,9 +206,9 @@ window.demo = {
 window.addEventListener(
   'pagehide',
   () => {
-    first.dispose();
-    second.dispose();
-    void runtime.dispose();
+    void runtime
+      .runPromiseExit(Scope.close(modelScope, Exit.void))
+      .finally(() => runtime.dispose());
   },
   { once: true },
 );
