@@ -1244,3 +1244,98 @@ test('disposal fences reentrant snapshot listeners before releasing resources or
   assert.equal(f.controller.getSnapshot().host, null);
   assert.equal(f.controller.getSnapshot().snapshot, null);
 });
+
+test('a held Connect reply cannot resurrect a generation that its watch already lost', async (t) => {
+  const f = await fixture(t),
+    held = event<unknown>();
+  await f.controller.start();
+  const original = f.connection.command;
+  f.connection.command = async (operation, input, options) =>
+    operation === 'connect' ? ((await held.promise) as never) : original(operation, input, options);
+  const connecting = f.controller.connect();
+  const old: ConnectionSnapshot = {
+    state: 'connected',
+    connectionId: 'lost-generation',
+    profile,
+    health: { ...context.host, protocol: 1, version: '0.1.0', capabilities: ['chat-v0'] },
+  };
+  f.publishConnection(old);
+  f.publishConnection({ state: 'disconnected', connectionId: null, profile });
+  held.resolve(old);
+  await connecting;
+  assert.equal(f.controller.getSnapshot().connection!.state, 'disconnected');
+  assert.equal(f.controller.getSnapshot().host, null);
+});
+
+test('a held Disconnect status read cannot replace a newer watched generation', async (t) => {
+  const f = await fixture(t),
+    held = event<unknown>(),
+    entered = event();
+  await ready(f);
+  const original = f.connection.command;
+  f.connection.command = async (operation, input, options) => {
+    if (operation === 'getConnection') {
+      entered.resolve();
+      return (await held.promise) as never;
+    }
+    return original(operation, input, options);
+  };
+  const disconnecting = f.controller.disconnect();
+  await entered.promise;
+  f.publishConnection({
+    state: 'connected',
+    connectionId: 'replacement-after-disconnect',
+    profile,
+    health: { ...context.host, protocol: 1, version: '0.1.0', capabilities: ['chat-v0'] },
+  });
+  await f.controller.refresh();
+  held.resolve({ state: 'disconnected', connectionId: null, profile });
+  await disconnecting;
+  assert.equal(f.controller.getSnapshot().connection!.connectionId, 'replacement-after-disconnect');
+  assert(f.controller.getSnapshot().host);
+});
+
+test('serialized draft envelope bound blocks an unreloadable escaped-text write and retains the latest live edit', async (t) => {
+  const f = await fixture(t);
+  await ready(f);
+  const value = '\u0001'.repeat(32768);
+  for (let i = 0; i < 10; i++) {
+    await f.controller.select({ ...target, conversationId: 'escaped-' + i });
+    f.controller.setDraft(value);
+    assert.equal(f.controller.getSnapshot().storageError, null);
+  }
+  await f.controller.select({ ...target, conversationId: 'escaped-overflow' });
+  const saved = f.storage.value,
+    writes = f.storage.writes;
+  f.controller.setDraft(value);
+  assert.equal(f.controller.preserve(), false);
+  assert(f.controller.getSnapshot().storageError);
+  assert.equal(f.controller.getSnapshot().draft, value);
+  assert.equal(f.storage.value, saved);
+  assert.equal(f.storage.writes, writes);
+  assert.equal(JSON.parse(saved!).drafts.length, 10);
+});
+
+test('a failed local failure-note write retains original mutation uncertainty and cleanup evidence', async (t) => {
+  const f = await fixture(t);
+  await ready(f);
+  f.controller.setDraft('original uncertain input');
+  f.answers.set('sendChat', async () => {
+    f.storage.fail = true;
+    throw new ApplicationError({
+      code: 'Uncertain',
+      message: 'Controlled mutation outcome uncertainty',
+    });
+  });
+  await f.controller.send();
+  assert.match(
+    f.controller.getSnapshot().error!,
+    /^Uncertain: Controlled mutation outcome uncertainty.*Draft preservation failed/,
+  );
+  assert(f.controller.getSnapshot().storageError);
+  assert.equal(f.controller.getSnapshot().pending.length, 1);
+  const pending = f.controller.getSnapshot().pending[0];
+  assert.equal(pending.operation, 'sendChat');
+  assert.deepEqual(JSON.parse(f.storage.value!).pending[0].input, pending.input);
+  assert.equal(f.calls.filter((call) => call.operation === 'sendChat').length, 1);
+});

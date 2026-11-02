@@ -59,6 +59,7 @@ type Observation = {
   ready: Deferred.Deferred<ObservationClose>;
   outcome?: Promise<Exit.Exit<void>>;
 };
+const maximumSavedBytes = 2 * 1024 * 1024;
 const bytes = (value: string) => new TextEncoder().encode(value).length;
 const text = (value: string, limit: number) =>
   value.isWellFormed() && !value.includes('\0') && bytes(value) <= limit;
@@ -79,6 +80,7 @@ class ChatModelState {
   private refreshOwner?: Owner;
   private observations = new Set<Observation>();
   private epoch = 0;
+  private connectionRevision = 0;
   private closed = false;
   private actions = new Map<string, number>();
   private cleanup?: Promise<void>;
@@ -112,7 +114,7 @@ class ChatModelState {
     try {
       this.raw = this.storage.read();
       if (this.raw !== null) {
-        if (bytes(this.raw) > 2 * 1024 * 1024)
+        if (bytes(this.raw) > maximumSavedBytes)
           throw invalid('Saved chat data exceeds its bound. Preserve it for recovery.');
         this.saved = decodeSaved(JSON.parse(this.raw), this.context);
       }
@@ -168,7 +170,7 @@ class ChatModelState {
     decodeSaved(next, this.context);
     const raw = JSON.stringify(next);
     try {
-      if (this.storage.read() !== this.raw) throw Error();
+      if (bytes(raw) > maximumSavedBytes || this.storage.read() !== this.raw) throw Error();
       this.storage.write(raw);
       this.raw = raw;
       this.saved = next;
@@ -296,11 +298,14 @@ class ChatModelState {
         yield* this.observe(owner, () =>
           this.connection.watch(
             (state) => {
-              received = true;
-              if (owner.alive) this.onConnection(state);
+              if (owner.alive && this.attachment === owner) {
+                received = true;
+                this.connectionRevision++;
+                this.onConnection(state);
+              }
             },
             (error) => {
-              if (owner.alive) this.error(error);
+              if (owner.alive && this.attachment === owner) this.error(error);
             },
           ),
         );
@@ -340,12 +345,15 @@ class ChatModelState {
       Effect.gen({ self: this }, function* () {
         const state = this.state.connection;
         if (!state) return;
+        const attachment = this.attachment,
+          revision = this.connectionRevision;
         const connected = yield* Effect.tryPromise({
           try: (signal) =>
             this.connection.command('connect', { profileId: state.profile.id }, { signal }),
           catch: normalizeApplicationError,
         });
-        this.onConnection(connected);
+        if (attachment === this.attachment && revision === this.connectionRevision)
+          this.onConnection(connected);
       }),
     );
   disconnect = () =>
@@ -358,11 +366,14 @@ class ChatModelState {
           try: (signal) => this.connection.command('disconnect', { connectionId: id }, { signal }),
           catch: normalizeApplicationError,
         });
+        const attachment = this.attachment,
+          revision = this.connectionRevision;
         const state = yield* Effect.tryPromise({
           try: (signal) => this.connection.command('getConnection', {}, { signal }),
           catch: normalizeApplicationError,
         });
-        this.onConnection(state);
+        if (attachment === this.attachment && revision === this.connectionRevision)
+          this.onConnection(state);
       }),
     );
   private connected() {
@@ -732,8 +743,10 @@ class ChatModelState {
         }
       }
     }).pipe(
-      Effect.tapError((error) =>
+      Effect.onError((cause) =>
         Effect.sync(() => {
+          const error = cause.reasons.find(Cause.isFailReason)?.error;
+          if (!error) return;
           const message = `${error.code}: ${error.message}`;
           this.note(
             pending,
