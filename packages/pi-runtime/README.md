@@ -44,6 +44,8 @@ Use `makeChatClient(runtime)` and the [chat contract](../application/docs/CHAT.m
 
 The server implements the [health](../application/docs/HOST-PROTOCOL.md) and [challenge/RPC](../application/docs/CHAT.md#stateful-loopback-protocol) protocols. The remote adapter validates replies and exact connection generations. A lost, unproved or malformed mutation response may mean admission and remains `Uncertain`. Keys/endpoints stay privileged. HMAC authenticates messages; SSH supplies transport encryption.
 
+Local SDK work and exact abort requests remain root-owned through settlement; caller cancellation releases only its wait. Shutdown closes observations, drains local admission work, closes Harness, then joins aborts and cleans remaining resources. Private configuration and app-owned saved payloads use strict schemas; malformed/foreign data blocks rewriting or resubmission. See [ownership and private formats](docs/OWNERSHIP.md).
+
 ## Checks
 
 ```sh

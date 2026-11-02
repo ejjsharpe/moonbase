@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
-import { isAbsolute } from 'node:path';
 import { realpath, stat } from 'node:fs/promises';
-import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
+import { BACKGROUND_CONTEXT as context, withCancel } from '@earendil-works/chord/context';
 import { openNodeSqliteDatabase } from '@earendil-works/chord/sqlite/node';
 import {
   Harness,
@@ -21,7 +20,21 @@ import {
 import { SqliteStorage } from '@earendil-works/pi-durable/storage/sqlite';
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node';
 import type { Models } from '@earendil-works/pi-ai/models';
-import { Effect, Layer, Queue, Stream } from 'effect';
+import {
+  Cause,
+  Effect,
+  Exit,
+  Fiber,
+  FiberSet,
+  Layer,
+  Option,
+  Queue,
+  Ref,
+  Scope,
+  Semaphore,
+  Stream,
+} from 'effect';
+import { normalizeApplicationError } from '@moonbase/application/effect-client';
 import { ApplicationError } from '@moonbase/application/client';
 import type {
   ChatCommand,
@@ -41,6 +54,7 @@ import {
   type ChatServiceShape,
 } from '@moonbase/application/services';
 import * as V from './validation.ts';
+import * as S from './private-schema.ts';
 
 export type PiRuntimeConfiguration = ChatSession & {
   databasePath: string;
@@ -54,12 +68,15 @@ const Request = defineDocFamily({
   version: 1,
   scope: 'session',
   family: true,
-  initial: (binding: string) => ({
-    binding,
-    conversationId: null as string | null,
-    submissionId: null as string | null,
-    pending: false as boolean,
-  }),
+  initial: (binding: string) => {
+    const input = S.savedBinding(binding);
+    return {
+      binding,
+      conversationId: input.operation === 'sendChat' ? input.target.conversationId : null,
+      submissionId: null as string | null,
+      pending: false as boolean,
+    };
+  },
   checkpointWhen: () => true,
 });
 const Store = defineDocFamily({
@@ -100,11 +117,15 @@ const unknownOutcome = () =>
   });
 const safeError = (error: unknown, uncertain = false): ApplicationError => {
   if (ApplicationError.is(error)) return error;
-  if (error instanceof ConversationBusy)
-    return new ApplicationError({
-      code: 'Conflict',
-      message: 'Conversation is busy; retain this request and retry explicitly.',
-    });
+  try {
+    if (error instanceof ConversationBusy)
+      return new ApplicationError({
+        code: 'Conflict',
+        message: 'Conversation is busy; retain this request and retry explicitly.',
+      });
+  } catch {
+    /* Unknown SDK diagnostics remain private. */
+  }
   if (uncertain) return unknownOutcome();
   return new ApplicationError({
     code: 'Persistence',
@@ -119,7 +140,11 @@ const readCursor = (
 ): Cursor | undefined => {
   if (value === undefined) return undefined;
   try {
-    const decoded = JSON.parse(Buffer.from(V.cursor(value), 'base64url').toString('utf8'));
+    const decoded = S.cursorEnvelope(
+      JSON.parse(
+        new TextDecoder('utf8', { fatal: true }).decode(Buffer.from(V.cursor(value), 'base64url')),
+      ),
+    );
     if (decoded.kind !== kind || decoded.conversationId !== conversationId) throw Error();
     return decoded.scan === null || decoded.scan?.start === true
       ? undefined
@@ -134,8 +159,7 @@ const writeCursor = (scan: Cursor | undefined, kind: string, conversationId?: st
     : V.cursor(Buffer.from(JSON.stringify({ kind, conversationId, scan })).toString('base64url'));
 
 class Host {
-  readonly pending = new Set<Promise<unknown>>();
-  readonly admissions = new Map<string, Promise<unknown>>();
+  readonly admissions = new Map<string, { semaphore: Semaphore.Semaphore; users: number }>();
   closed = false;
   observers = 0;
   get cursorIdentity() {
@@ -143,18 +167,27 @@ class Host {
   }
   readonly config: PiRuntimeConfiguration;
   readonly harness: Harness;
-  readonly env: NodeExecutionEnv;
   readonly identity: string;
+  readonly work: FiberSet.FiberSet<unknown, ApplicationError>;
+  readonly aborts: RetainedWork;
+  readonly waiters: RetainedWork;
+  readonly observations: Scope.Closeable;
   constructor(
     config: PiRuntimeConfiguration,
     harness: Harness,
-    env: NodeExecutionEnv,
     identity: string,
+    work: FiberSet.FiberSet<unknown, ApplicationError>,
+    aborts: RetainedWork,
+    waiters: RetainedWork,
+    observations: Scope.Closeable,
   ) {
     this.config = config;
     this.harness = harness;
-    this.env = env;
     this.identity = identity;
+    this.work = work;
+    this.aborts = aborts;
+    this.waiters = waiters;
+    this.observations = observations;
   }
   session(value: ChatSession) {
     if (!V.sameHost(value.host, this.config.host))
@@ -172,7 +205,7 @@ class Host {
     );
     if (!meta || meta.identity !== this.identity)
       return V.fail('Unauthorized', 'Conversation does not belong to this configured actor/store.');
-    return meta;
+    return S.savedMetadata(meta);
   }
   summary(conversationId: string, meta: { title: string; createdAt: string }): ChatSummary {
     return {
@@ -183,62 +216,89 @@ class Host {
       model: `${this.config.model.provider}/${this.config.model.modelId}`,
     };
   }
-  track<T>(fn: () => Promise<T>): Promise<T> {
-    if (this.closed) return Promise.reject(safeError(null));
-    const promise = Promise.resolve().then(fn);
-    this.pending.add(promise);
-    promise.then(
-      () => this.pending.delete(promise),
-      () => this.pending.delete(promise),
+  own<A>(effect: Effect.Effect<A, ApplicationError>) {
+    return Effect.uninterruptibleMask((restore) =>
+      Effect.gen({ self: this }, function* () {
+        const fiber = yield* FiberSet.run(this.work, effect);
+        return yield* restore(Fiber.join(fiber)).pipe(
+          Effect.onInterrupt(() => Effect.sync(() => fiber.interruptUnsafe())),
+        );
+      }),
     );
-    return promise;
   }
-  serial<T>(conversationId: string, fn: () => Promise<T>): Promise<T> {
-    const previous = this.admissions.get(conversationId) ?? Promise.resolve();
-    const promise = previous.catch(() => {}).then(fn);
-    this.admissions.set(conversationId, promise);
-    promise
-      .finally(() => {
-        if (this.admissions.get(conversationId) === promise) this.admissions.delete(conversationId);
-      })
-      .catch(() => {});
-    return promise;
-  }
-  async close() {
-    this.closed = true;
-    await Promise.allSettled(this.pending);
-    try {
-      await this.harness.close(context);
-    } finally {
-      await this.env.cleanup(context);
-    }
+  admission<A>(conversationId: string, effect: Effect.Effect<A, ApplicationError>) {
+    return Effect.acquireUseRelease(
+      Effect.sync(() => {
+        let gate = this.admissions.get(conversationId);
+        if (!gate) {
+          gate = { semaphore: Semaphore.makeUnsafe(1), users: 0 };
+          this.admissions.set(conversationId, gate);
+        }
+        gate.users++;
+        return gate;
+      }),
+      (gate) =>
+        gate.semaphore.withPermit(
+          Effect.uninterruptible(
+            Effect.suspend(() => (this.closed ? Effect.fail(safeError(null)) : effect)),
+          ),
+        ),
+      (gate) =>
+        Effect.sync(() => {
+          if (--gate.users === 0) this.admissions.delete(conversationId);
+        }),
+    );
   }
   run<K extends ChatCommand>(
     operation: K,
     value: ChatInput<K>,
-    handle: (data: ChatInput<K>) => Promise<ChatOutput<K>>,
+    handle: (
+      data: ChatInput<K>,
+    ) => Promise<ChatOutput<K>> | Effect.Effect<ChatOutput<K>, ApplicationError>,
   ): Effect.Effect<ChatOutput<K>, ApplicationError> {
     const mutation =
       operation === 'createChat' || operation === 'sendChat' || operation === 'stopChat';
-    return Effect.tryPromise({
-      try: () =>
-        this.track(async () => {
-          const data = V.input(operation, value);
-          const result = await handle(data);
-          try {
-            return V.output(operation, result, data);
-          } catch (error) {
-            if (mutation) throw unknownOutcome();
-            throw error;
-          }
-        }),
-      catch: (error) => safeError(error, mutation),
+    return Effect.gen({ self: this }, function* () {
+      const data = yield* Effect.try({
+        try: () => V.input(operation, value),
+        catch: normalizeApplicationError,
+      });
+      if (this.closed) return yield* Effect.fail(safeError(null));
+      if (operation === 'sendChat') {
+        const { target } = data as ChatInput<'sendChat'>;
+        yield* this.own(
+          Effect.uninterruptible(
+            Effect.tryPromise({
+              try: () => this.metadata(target),
+              catch: safeError,
+            }),
+          ),
+        );
+      }
+      const invoke = Effect.suspend(() => {
+        const result = handle(data);
+        return Effect.isEffect(result)
+          ? result
+          : Effect.tryPromise({ try: () => result, catch: (error) => safeError(error, mutation) });
+      }).pipe(
+        Effect.flatMap((result) =>
+          Effect.try({
+            try: () => V.output(operation, result, data),
+            catch: (error) => (mutation ? unknownOutcome() : safeError(error)),
+          }),
+        ),
+      );
+      return yield* this.own(
+        operation === 'sendChat'
+          ? this.admission((data as ChatInput<'sendChat'>).target.conversationId, invoke)
+          : Effect.uninterruptible(invoke),
+      );
     });
   }
   async getHost(d: ChatInput<'getChatHost'>): Promise<ChatOutput<'getChatHost'>> {
     if (!V.sameHost(d.host, this.config.host))
       V.fail('Incompatible', 'Chat host/store does not match this host.');
-    await this.harness.snapshot(Store, 'identity', context);
+    S.savedStore(await this.harness.snapshot(Store, 'identity', context));
     return {
       host: { ...this.config.host },
       actorId: this.config.actorId,
@@ -263,7 +323,7 @@ class Host {
       }
       const meta = await this.harness.snapshot(Metadata, row.id, 'metadata', context);
       if (meta?.identity === this.identity) {
-        const summary = this.summary(String(row.id), meta);
+        const summary = this.summary(String(row.id), S.savedMetadata(meta));
         if (
           Buffer.byteLength(JSON.stringify({ conversations: [...conversations, summary] })) >
           240 * 1024
@@ -282,6 +342,12 @@ class Host {
     try {
       conversationId = await this.harness.commit(async (tx) => {
         const request = await tx.doc(Request, key(d.session.actorId, d.requestId), binding);
+        try {
+          S.savedRequest(request, d.session.actorId, d.requestId);
+        } catch (error) {
+          definiteRejection = normalizeApplicationError(error);
+          throw definiteRejection;
+        }
         if (request.binding !== binding) {
           definiteRejection = new ApplicationError({
             code: 'InvalidInput',
@@ -317,41 +383,40 @@ class Host {
     }
   }
   async send(d: ChatInput<'sendChat'>): Promise<ChatSendReceipt> {
-    await this.metadata(d.target);
-    return this.serial(d.target.conversationId, async () => {
-      const binding = JSON.stringify({ operation: 'sendChat', ...d }),
-        requestKey = key(d.target.actorId, d.requestId);
-      await this.harness.commit(async (tx) => {
-        const request = await tx.doc(Request, requestKey, binding);
-        if (request.binding !== binding)
-          V.fail('InvalidInput', 'Request ID is already bound to different chat input.');
-        const meta = await tx.doc(Metadata, cid(d.target.conversationId), 'metadata', {
-          identity: this.identity,
-          title: '',
-          createdAt: '',
-        });
-        if (!request.submissionId && !request.pending) {
-          if (
-            !Number.isSafeInteger(meta.pending) ||
-            meta.pending < 0 ||
-            meta.pending === Number.MAX_SAFE_INTEGER
-          )
-            V.fail('Persistence', 'Stored pending-intent metadata is invalid.');
-          meta.pending++;
-          request.pending = true;
-        }
-        request.conversationId = d.target.conversationId;
-      }, context);
-      const existing = await this.lookup(d.target, d.requestId);
-      if (existing?.admission === 'admitted') return existing;
-      const conversation = await this.harness.conversation(cid(d.target.conversationId), context);
-      if (!conversation) return V.fail('InvalidInput', 'Unknown conversation.');
-      await conversation.submit(
-        { type: 'input', requestId: requestKey, content: d.text, whenBusy: 'reject' },
-        context,
-      );
-      return (await this.lookup(d.target, d.requestId))!;
-    });
+    const binding = JSON.stringify({ operation: 'sendChat', ...d }),
+      requestKey = key(d.target.actorId, d.requestId);
+    await this.harness.commit(async (tx) => {
+      const request = await tx.doc(Request, requestKey, binding);
+      S.savedRequest(request, d.target.actorId, d.requestId);
+      if (request.binding !== binding)
+        V.fail('InvalidInput', 'Request ID is already bound to different chat input.');
+      const meta = await tx.doc(Metadata, cid(d.target.conversationId), 'metadata', {
+        identity: this.identity,
+        title: '',
+        createdAt: '',
+      });
+      S.savedMetadata(meta);
+      if (!request.submissionId && !request.pending) {
+        if (
+          !Number.isSafeInteger(meta.pending) ||
+          meta.pending < 0 ||
+          meta.pending === Number.MAX_SAFE_INTEGER
+        )
+          V.fail('Persistence', 'Stored pending-intent metadata is invalid.');
+        meta.pending++;
+        request.pending = true;
+      }
+      request.conversationId = d.target.conversationId;
+    }, context);
+    const existing = await this.lookup(d.target, d.requestId);
+    if (existing?.admission === 'admitted') return existing;
+    const conversation = await this.harness.conversation(cid(d.target.conversationId), context);
+    if (!conversation) return V.fail('InvalidInput', 'Unknown conversation.');
+    await conversation.submit(
+      { type: 'input', requestId: requestKey, content: d.text, whenBusy: 'reject' },
+      context,
+    );
+    return (await this.lookup(d.target, d.requestId))!;
   }
   async getHistory(d: ChatInput<'getChatHistory'>): Promise<ChatHistoryPage> {
     await this.metadata(d.target);
@@ -365,27 +430,28 @@ class Host {
     const requestKey = key(target.actorId, requestId),
       old = await this.harness.snapshot(Request, requestKey, context);
     if (!old) return null;
-    let bound: unknown;
-    try {
-      bound = JSON.parse(old.binding);
-    } catch {
-      return V.fail('Persistence', 'Stored request binding is invalid.');
-    }
-    const value = V.object(bound);
-    if (value.operation !== 'sendChat' || !V.sameTarget(V.target(value.target), target))
+    S.savedRequest(old, target.actorId, requestId);
+    const value = S.savedBinding(old.binding);
+    if (value.operation !== 'sendChat' || !V.sameTarget(value.target, target))
       return V.fail('InvalidInput', 'Request ID is bound to another operation or target.');
+    if (old.conversationId !== target.conversationId)
+      V.fail('Persistence', 'Stored request conversation is invalid.');
     const submissionId = await this.harness.commit(async (tx) => {
       const found = await tx.submissionByRequest(cid(target.conversationId), requestKey);
       const request = await tx.doc(Request, requestKey, old.binding);
+      S.savedRequest(request, target.actorId, requestId);
+      if (request.submissionId && (!found || String(found.id) !== request.submissionId))
+        V.fail('Persistence', 'Stored admission identity is invalid.');
+      if (found && found.type !== 'input')
+        V.fail('Persistence', 'Stored admission has an incompatible type.');
       if (found && !request.submissionId) {
-        if (found.type !== 'input')
-          V.fail('Persistence', 'Stored admission has an incompatible type.');
         request.submissionId = String(found.id);
         const meta = await tx.doc(Metadata, cid(target.conversationId), 'metadata', {
           identity: this.identity,
           title: '',
           createdAt: '',
         });
+        S.savedMetadata(meta);
         if (request.pending) {
           if (!Number.isSafeInteger(meta.pending) || meta.pending < 1)
             V.fail('Persistence', 'Stored pending-intent metadata is invalid.');
@@ -540,104 +606,136 @@ class Host {
     };
     return { ...base, ...(await this.history(target, undefined, base)) };
   }
-  async stop(d: ChatInput<'stopChat'>): Promise<ChatOutput<'stopChat'>> {
-    await this.metadata(d.stop.target);
-    const binding = JSON.stringify({ operation: 'stopChat', ...d }),
-      requestKey = key(d.stop.target.actorId, d.requestId);
-    await this.harness.commit(async (tx) => {
-      const request = await tx.doc(Request, requestKey, binding);
-      if (request.binding !== binding)
-        V.fail('InvalidInput', 'Request ID is already bound to different chat input.');
-    }, context);
-    const submission = await this.harness.submission(sid(d.stop.submissionId), context);
-    const record = await submission?.status(context);
-    if (!record || record.conversationId !== cid(d.stop.target.conversationId))
-      V.fail('InvalidInput', 'Stop submission does not belong to this conversation.');
-    let outcome: ChatOutput<'stopChat'>['outcome'];
-    if (d.stop.taskId === null) {
-      const result = await this.harness.abortSubmission(
-        sid(d.stop.submissionId),
-        context,
-        cid(d.stop.target.conversationId),
-      );
-      if (result === 'aborted') outcome = 'stopped';
-      else if (result === 'settled') outcome = 'terminal';
-      else outcome = 'superseded';
-    } else {
-      const live = await this.harness.snapshot(LiveDoc, cid(d.stop.target.conversationId), context),
-        task = await this.harness.getTask(tid(d.stop.taskId), context);
-      if (!task || task.conversationId !== cid(d.stop.target.conversationId))
-        V.fail('InvalidInput', 'Stop task does not belong to this conversation.');
-      if (task!.state.status === 'terminal') outcome = 'terminal';
-      else if (
-        live?.run?.taskId !== tid(d.stop.taskId) ||
-        !live.run.inputs.includes(sid(d.stop.submissionId))
-      )
-        outcome = 'superseded';
-      else {
-        const abort = this.harness
-          .abortTask(tid(d.stop.taskId), context)
-          .then(() => this.harness.waitForTask(tid(d.stop.taskId!), context));
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        try {
-          outcome = await Promise.race([
-            abort.then(() => 'stopped' as const),
-            new Promise<'pending'>((resolve) => {
-              timer = setTimeout(() => resolve('pending'), 1000);
-            }),
-          ]);
-        } finally {
-          clearTimeout(timer);
-        }
+  stop(d: ChatInput<'stopChat'>): Effect.Effect<ChatOutput<'stopChat'>, ApplicationError> {
+    return Effect.gen({ self: this }, function* () {
+      const captured = yield* Effect.tryPromise({
+        try: async () => {
+          await this.metadata(d.stop.target);
+          const binding = JSON.stringify({ operation: 'stopChat', ...d }),
+            requestKey = key(d.stop.target.actorId, d.requestId);
+          await this.harness.commit(async (tx) => {
+            const request = await tx.doc(Request, requestKey, binding);
+            S.savedRequest(request, d.stop.target.actorId, d.requestId);
+            if (request.binding !== binding)
+              V.fail('InvalidInput', 'Request ID is already bound to different chat input.');
+          }, context);
+          const submission = await this.harness.submission(sid(d.stop.submissionId), context),
+            record = await submission?.status(context);
+          if (!record || record.conversationId !== cid(d.stop.target.conversationId))
+            V.fail('InvalidInput', 'Stop submission does not belong to this conversation.');
+          if (d.stop.taskId === null) {
+            const result = await this.harness.abortSubmission(
+              sid(d.stop.submissionId),
+              context,
+              cid(d.stop.target.conversationId),
+            );
+            if (result === 'aborted') return 'stopped';
+            return result === 'settled' ? 'terminal' : 'superseded';
+          }
+          const live = await this.harness.snapshot(
+              LiveDoc,
+              cid(d.stop.target.conversationId),
+              context,
+            ),
+            task = await this.harness.getTask(tid(d.stop.taskId), context);
+          if (!task || task.conversationId !== cid(d.stop.target.conversationId))
+            V.fail('InvalidInput', 'Stop task does not belong to this conversation.');
+          if (task!.state.status === 'terminal') return 'terminal';
+          if (
+            live?.run?.taskId !== tid(d.stop.taskId) ||
+            !live.run.inputs.includes(sid(d.stop.submissionId))
+          )
+            return 'superseded';
+          return null;
+        },
+        catch: (error) => safeError(error, true),
+      });
+      let outcome: ChatOutput<'stopChat'>['outcome'] = captured ?? 'pending';
+      if (captured === null) {
+        // The deadline owns only this join; the abort request stays with the host through settlement.
+        const joined = yield* Effect.interruptible(
+          Effect.gen({ self: this }, function* () {
+            const abort = yield* this.aborts.run(
+              Effect.tryPromise({
+                try: () => this.harness.abortTask(tid(d.stop.taskId!), context),
+                catch: safeError,
+              }),
+            );
+            yield* Fiber.join(abort);
+            const waiter = yield* this.waiters.run(this.terminal(tid(d.stop.taskId!)));
+            return yield* Fiber.join(waiter).pipe(Effect.ensuring(Fiber.interrupt(waiter)));
+          }).pipe(Effect.timeoutOption('1 second')),
+        );
+        outcome = Option.isSome(joined) ? 'stopped' : 'pending';
       }
-    }
-    return { stop: d.stop, requestId: d.requestId, outcome };
+      return { stop: d.stop, requestId: d.requestId, outcome };
+    });
+  }
+  terminal(taskId: TaskId) {
+    return Effect.acquireUseRelease(
+      Effect.sync(() => {
+        const waiter = withCancel(context);
+        const cancellation = new DOMException('Chat terminal wait closed.', 'AbortError');
+        const settled = this.harness.waitForTask(taskId, waiter.context).then(
+          () => Exit.void,
+          (error) => (error === cancellation ? Exit.void : Exit.fail(safeError(error))),
+        );
+        return { ...waiter, cancellation, settled };
+      }),
+      ({ settled }) => Effect.promise(() => settled).pipe(Effect.flatMap((exit) => exit)),
+      ({ cancel, cancellation, settled }) =>
+        Effect.sync(() => cancel(cancellation)).pipe(
+          Effect.andThen(Effect.promise(() => settled)),
+          Effect.flatMap((exit) => exit.pipe(Effect.orDie)),
+        ),
+    );
   }
   watch(target: ChatTarget) {
-    // oxlint-disable-next-line no-this-alias -- The Effect generator retains the host owner.
-    const self = this;
     return Stream.unwrap(
-      Effect.gen(function* () {
+      Effect.gen({ self: this }, function* () {
         const queue = yield* Queue.sliding<void>(1);
-        yield* Effect.acquireRelease(
-          Effect.try({
-            try: () => {
-              V.target(target);
-              self.session(target);
-              if (self.observers >= 64) V.fail('Unavailable', 'Too many chat observers.');
-              self.observers++;
-              const refresh = () => Queue.offerUnsafe(queue, undefined);
-              let off = () => {};
-              try {
-                off = self.harness.subscribeCommits(refresh);
-                const close = self.harness.subscribeClose(refresh);
-                refresh();
-                return () => {
-                  try {
-                    off();
-                  } finally {
-                    try {
-                      close();
-                    } finally {
-                      self.observers--;
-                    }
-                  }
-                };
-              } catch (error) {
-                try {
-                  off();
-                } finally {
-                  self.observers--;
-                }
-                throw error;
-              }
-            },
-            catch: ApplicationError.fromUnknown,
+        const scope = yield* Effect.acquireRelease(Scope.fork(this.observations), (scope) =>
+          Scope.close(scope, Exit.void),
+        );
+        yield* Scope.provide(scope)(
+          Effect.gen({ self: this }, function* () {
+            yield* Effect.addFinalizer(() => Queue.shutdown(queue));
+            yield* Effect.acquireRelease(
+              Effect.try({
+                try: () => {
+                  V.target(target);
+                  this.session(target);
+                  if (this.closed || this.observers >= 64)
+                    V.fail('Unavailable', 'Chat observation is unavailable.');
+                  this.observers++;
+                },
+                catch: normalizeApplicationError,
+              }),
+              () =>
+                Effect.sync(() => {
+                  this.observers--;
+                }),
+            );
+            const refresh = () => Queue.offerUnsafe(queue, undefined);
+            yield* Effect.acquireRelease(
+              Effect.try({
+                try: () => this.harness.subscribeCommits(refresh),
+                catch: normalizeApplicationError,
+              }),
+              (off) => releaseResource(off),
+            );
+            yield* Effect.acquireRelease(
+              Effect.try({
+                try: () => this.harness.subscribeClose(refresh),
+                catch: normalizeApplicationError,
+              }),
+              (off) => releaseResource(off),
+            );
+            refresh();
           }),
-          (off) => releaseResource(off),
         );
         return Stream.fromQueue(queue).pipe(
-          Stream.mapEffect(() => self.run('getChat', { target }, (d) => self.snapshot(d.target))),
+          Stream.mapEffect(() => this.run('getChat', { target }, (d) => this.snapshot(d.target))),
         );
       }),
     );
@@ -665,84 +763,178 @@ function entryPreview(entry: EntryRecord): ChatHistoryPage['entries'][number] | 
       : {}),
   };
 }
-async function open(config: PiRuntimeConfiguration): Promise<Host> {
-  const [major, minor] = process.versions.node.split('.').map(Number);
-  if (major < 26 || (major === 26 && minor < 13))
-    V.fail(
-      'Incompatible',
-      'The Pi host requires qualified Node 26.13 or newer. The remote client has its own runtime boundary.',
+type RetainedWork = {
+  run<A>(
+    effect: Effect.Effect<A, ApplicationError>,
+  ): Effect.Effect<Fiber.Fiber<A, ApplicationError>>;
+};
+// Abort requests and terminal cleanup failures remain observable after a caller's deadline.
+function retainedWork(kind: 'abort' | 'waiter'): Effect.Effect<RetainedWork, never, Scope.Scope> {
+  return Effect.gen(function* () {
+    const scope = yield* Scope.make();
+    const work = yield* Scope.provide(scope)(FiberSet.make<unknown, ApplicationError>());
+    const failures = yield* Ref.make<Cause.Cause<ApplicationError>>(Cause.empty);
+    yield* Effect.addFinalizer(() =>
+      FiberSet.clear(work).pipe(
+        Effect.ensuring(Scope.close(scope, Exit.void)),
+        Effect.ensuring(
+          Ref.get(failures).pipe(
+            Effect.flatMap((cause) =>
+              cause.reasons.length
+                ? Effect.failCause(
+                    Cause.fromReasons<never>(
+                      cause.reasons.map((reason) =>
+                        Cause.isFailReason(reason) ? Cause.makeDieReason(reason.error) : reason,
+                      ),
+                    ),
+                  )
+                : Effect.void,
+            ),
+          ),
+        ),
+      ),
     );
-  const session = V.session({ host: config.host, actorId: config.actorId });
-  if (!isAbsolute(config.databasePath) || !isAbsolute(config.cwd))
-    V.fail('InvalidInput', 'Configure explicit absolute store and working-directory paths.');
-  const cwd = await realpath(config.cwd);
-  if (!(await stat(cwd)).isDirectory())
-    V.fail('InvalidInput', 'Chat working directory must exist.');
-  const model = {
-    provider: V.id(config.model.provider),
-    modelId: V.string(config.model.modelId, 256),
-  };
-  if (!config.models.getModel(model.provider, model.modelId))
-    V.fail('InvalidInput', 'Configured Pi model is not installed in the host model registry.');
-  const validated = { ...config, ...session, cwd, model };
-  const identity = JSON.stringify({ ...session, cwd, model });
-  const database = await openNodeSqliteDatabase(config.databasePath, { busyTimeoutMs: 30 });
-  let storage: SqliteStorage | undefined, harness: Harness | undefined;
-  const env = new NodeExecutionEnv({ cwd });
-  try {
-    await database.exec('PRAGMA locking_mode=EXCLUSIVE');
-    await database.transaction(async (tx) => {
-      await tx.exec(
-        'CREATE TABLE IF NOT EXISTS moonbase_owner_lock (singleton INTEGER PRIMARY KEY)',
-      );
-      await tx.run('INSERT OR REPLACE INTO moonbase_owner_lock VALUES (1)');
-    });
-    storage = await SqliteStorage.open(database);
-    harness = await Harness.open(
-      storage,
-      {
-        models: config.models,
-        registry: config.registry ?? createRegistry(),
-        env: () => env,
-        settings: { retry: { enabled: false }, compaction: { enabled: false }, restartLimit: 5 },
+    return {
+      run: <A>(effect: Effect.Effect<A, ApplicationError>) => {
+        const observed = effect.pipe(
+          Effect.onExit((exit) =>
+            Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)
+              ? Ref.update(failures, (cause) => Cause.combine(cause, exit.cause))
+              : Effect.void,
+          ),
+        );
+        // Capture abort failure before restoring interruption after the noncancelable SDK call.
+        return FiberSet.run(work, kind === 'abort' ? Effect.uninterruptible(observed) : observed);
       },
-      context,
+    };
+  });
+}
+
+function open(config: PiRuntimeConfiguration) {
+  return Effect.gen(function* () {
+    const validated = yield* Effect.tryPromise({
+      try: async () => {
+        const [major, minor] = process.versions.node.split('.').map(Number);
+        if (major < 26 || (major === 26 && minor < 13))
+          V.fail(
+            'Incompatible',
+            'The Pi host requires qualified Node 26.13 or newer. The remote client has its own runtime boundary.',
+          );
+        const data = S.runtimeConfiguration(config),
+          cwd = await realpath(data.cwd);
+        if (!(await stat(cwd)).isDirectory())
+          V.fail('InvalidInput', 'Chat working directory must exist.');
+        if (!data.models.getModel(data.model.provider, data.model.modelId))
+          V.fail(
+            'InvalidInput',
+            'Configured Pi model is not installed in the host model registry.',
+          );
+        return { ...data, cwd };
+      },
+      catch: safeError,
+    });
+    const session = { host: validated.host, actorId: validated.actorId },
+      identity = JSON.stringify({ ...session, cwd: validated.cwd, model: validated.model });
+    const env = yield* Effect.acquireRelease(
+      Effect.sync(() => new NodeExecutionEnv({ cwd: validated.cwd })),
+      (env) => releaseResource(() => env.cleanup(context)),
     );
-    const existing = await harness.snapshot(Store, 'identity', context);
-    await harness.commit(async (tx) => {
-      if (!existing && (await tx.scanConversations({}, 1)).items.length)
-        V.fail(
-          'Incompatible',
-          'This store contains data without Moonbase ownership metadata; no import is authorized.',
-        );
-      const store = await tx.doc(Store, 'identity', identity);
-      if (store.identity !== identity)
-        V.fail(
-          'Incompatible',
-          'Store is already bound to another host, actor, working directory or model.',
-        );
-    }, context);
-    const host = new Host(validated, harness, env, identity);
+    let databaseOwned = true,
+      storageOwned = true;
+    const database = yield* Effect.acquireRelease(
+      Effect.tryPromise({
+        try: () => openNodeSqliteDatabase(validated.databasePath, { busyTimeoutMs: 30 }),
+        catch: safeError,
+      }),
+      (database) => releaseResource(() => (databaseOwned ? database.close() : undefined)),
+    );
+    yield* Effect.tryPromise({
+      try: async () => {
+        await database.exec('PRAGMA locking_mode=EXCLUSIVE');
+        await database.transaction(async (tx) => {
+          await tx.exec(
+            'CREATE TABLE IF NOT EXISTS moonbase_owner_lock (singleton INTEGER PRIMARY KEY)',
+          );
+          await tx.run('INSERT OR REPLACE INTO moonbase_owner_lock VALUES (1)');
+        });
+      },
+      catch: safeError,
+    });
+    const storage = yield* Effect.acquireRelease(
+      Effect.tryPromise({ try: () => SqliteStorage.open(database), catch: safeError }),
+      (storage) => releaseResource(() => (storageOwned ? storage.close(context) : undefined)),
+    );
+    databaseOwned = false;
+    const aborts = yield* retainedWork('abort');
+    const harness = yield* Effect.acquireRelease(
+      Effect.tryPromise({
+        try: () =>
+          Harness.open(
+            storage,
+            {
+              models: validated.models,
+              registry: validated.registry ?? createRegistry(),
+              env: () => env,
+              settings: {
+                retry: { enabled: false },
+                compaction: { enabled: false },
+                restartLimit: 5,
+              },
+            },
+            context,
+          ),
+        catch: safeError,
+      }),
+      (harness) => releaseResource(() => harness.close(context)),
+    );
+    storageOwned = false;
+    yield* Effect.tryPromise({
+      try: async () => {
+        const existing = await harness.snapshot(Store, 'identity', context);
+        if (existing) S.savedStore(existing);
+        await harness.commit(async (tx) => {
+          if (!existing && (await tx.scanConversations({}, 1)).items.length)
+            V.fail(
+              'Incompatible',
+              'This store contains data without Moonbase ownership metadata; no import is authorized.',
+            );
+          const store = await tx.doc(Store, 'identity', identity);
+          S.savedStore(store);
+          if (store.identity !== identity)
+            V.fail(
+              'Incompatible',
+              'Store is already bound to another host, actor, working directory or model.',
+            );
+        }, context);
+      },
+      catch: safeError,
+    });
+    const workScope = yield* Effect.acquireRelease(Scope.make(), (scope) =>
+        Scope.close(scope, Exit.void),
+      ),
+      work = yield* Scope.provide(workScope)(FiberSet.make<unknown, ApplicationError>()),
+      waiters = yield* retainedWork('waiter'),
+      observations = yield* Effect.acquireRelease(Scope.make(), (scope) =>
+        Scope.close(scope, Exit.void),
+      ),
+      host = new Host(validated, harness, identity, work, aborts, waiters, observations);
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        host.closed = true;
+      }),
+    );
     harness.resume();
     return host;
-  } catch (error) {
-    if (harness) await harness.close(context);
-    else if (storage) await storage.close(context);
-    else await database.close();
-    await env.cleanup(context);
-    throw error;
-  }
+  });
 }
+
 export const PiRuntimeLive = (
   config: PiRuntimeConfiguration,
 ): Layer.Layer<ChatService, ApplicationError> =>
   Layer.effect(
     ChatService,
     Effect.gen(function* () {
-      const host = yield* Effect.acquireRelease(
-        Effect.tryPromise({ try: () => open(config), catch: safeError }),
-        (host) => releaseResource(() => host.close()),
-      );
+      const host = yield* open(config);
       return {
         getChatHost: (d) => host.run('getChatHost', d, (input) => host.getHost(input)),
         listChats: (d) => host.run('listChats', d, (input) => host.list(input)),
