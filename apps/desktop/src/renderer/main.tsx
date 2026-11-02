@@ -2,7 +2,7 @@ import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Tabs } from '@base-ui/react/tabs';
-import { makeChatController, makeChatModel, type ChatController } from '@moonbase/chat';
+import { makeChatController, makeChatModel, type ChatController } from '@moonbase/application/chat';
 import { Effect, Exit, Layer, ManagedRuntime, Scope } from 'effect';
 import {
   normalizeApplicationError,

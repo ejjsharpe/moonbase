@@ -20,13 +20,14 @@
     "./runtime/handlers": "./src/runtime/handlers.ts",
     "./runtime/clients": "./src/runtime/clients.ts",
     "./runtime/effect-client": "./src/runtime/effect-client.ts",
+    "./chat": "./src/features/chat/index.ts",
     "./editor": "./src/features/editor/index.ts",
     "./testing/memory-workspace": "./src/testing/memory-workspace.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "oxlint .",
-    "test": "node --experimental-strip-types --test test/*.test.ts"
+    "test": "node --experimental-strip-types --test --test-concurrency=1 test/*.test.ts"
   },
   "dependencies": {
     "effect": "4.1.0",
@@ -36,5 +37,23 @@
   "devDependencies": {
     "@moonbase/config": "workspace:*",
     "@moonbase/ssh": "workspace:*"
+  },
+  "nx": {
+    "targets": {
+      "test": {
+        "inputs": [
+          "default",
+          "^default",
+          "{workspaceRoot}/tests/chat/**/*",
+          {
+            "input": "default",
+            "projects": [
+              "@moonbase/pi-runtime",
+              "@moonbase/ssh"
+            ]
+          }
+        ]
+      }
+    }
   }
 }

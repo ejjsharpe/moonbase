@@ -1,10 +1,8 @@
 import { Cause, Deferred, Effect, Exit, Fiber, Scope, type ManagedRuntime } from 'effect';
-import { ApplicationError, type ObservationClose } from '@moonbase/application/client';
-import {
-  normalizeApplicationError,
-  runApplicationEffect,
-} from '@moonbase/application/runtime/effect-client';
-import { decodeChatInput } from '@moonbase/application/chat-schema';
+import { ApplicationError } from '@moonbase/contracts/errors';
+import type { ObservationClose } from '@moonbase/contracts/common';
+import { normalizeApplicationError, runApplicationEffect } from '../../runtime/effect-client.ts';
+import { decodeChatInput } from '@moonbase/contracts/chat-schema';
 import type {
   ChatClient,
   ChatCommand,
@@ -17,8 +15,8 @@ import type {
   ChatTarget,
   ChatStopTarget,
   ChatEntry,
-} from '@moonbase/application/chat-client';
-import type { ConnectionClient, ConnectionSnapshot } from '@moonbase/application/connection-client';
+} from '@moonbase/contracts/chat';
+import type { ConnectionClient, ConnectionSnapshot } from '@moonbase/contracts/connection';
 import { decodeSaved, sameSession, sameTarget, type Saved, type Pending } from './saved.ts';
 export type { Pending } from './saved.ts';
 
