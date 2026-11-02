@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createMoonbaseApplication, type MoonbaseApplication } from '@moonbase/application';
 import { ApplicationError } from '@moonbase/contracts/errors';
-import { emptyRecovery, type EditorClient } from '@moonbase/contracts/workspace';
+import { emptyRecovery, type EditorClient, type CommandInput } from '@moonbase/contracts/workspace';
 import type { EditorController, ClosePrompt } from '@moonbase/application/editor';
 import { chatCapabilities, editorCapabilities, checkout, target } from './application-fixture.ts';
 
@@ -797,6 +797,116 @@ test('the first Quit preservation fences storage reentrancy then accepts drafts 
     assert.equal(await quit, true);
     assert.equal(JSON.parse(chat.storage.value!).drafts[0].text, 'accepted during prompt');
   } finally {
+    await app.dispose();
+    await editor.runtime.dispose();
+  }
+});
+
+test('Quit confirms clean view metadata captured by the final Discard notification', async () => {
+  const editor = editorCapabilities();
+  const app = await createMoonbaseApplication({
+    editors: [{ client: editor.client, clientId: 'one' }],
+  });
+  const model = app.editors[0];
+  let off = () => {};
+  try {
+    await model.openCheckout(checkout.root);
+    await model.open(target);
+    model.edit(target, 'discard me');
+    let preserving = false,
+      positioned = false;
+    off = model.subscribe(() => {
+      if (model.getSnapshot().preserving) preserving = true;
+      else if (preserving && !positioned) {
+        positioned = true;
+        model.position(target, 'file', { line: 1, column: 7, top: 20, left: 0 });
+      }
+    });
+    const prompt = closePrompt(model),
+      quit = app.prepareQuit();
+    model.answerClose((await prompt).id, 'discard');
+    assert.equal(await quit, true);
+    assert.equal(positioned, true);
+    assert.equal(model.buffer(target)?.text, 'original');
+    assert.equal(model.getSnapshot().recoveryReady, true);
+    await app.dispose();
+    const saved = await editor.client.command('loadRecovery', { clientId: 'one' });
+    assert.deepEqual(saved.state.drafts, []);
+    assert.deepEqual(saved.state.views[checkout.checkoutId].positions[target.path].file, {
+      line: 1,
+      column: 7,
+      top: 20,
+      left: 0,
+    });
+  } finally {
+    off();
+    await app.dispose();
+    await editor.runtime.dispose();
+  }
+});
+
+test('uncertain final Quit metadata keeps its original publication and vetoes until explicit resolution', async () => {
+  const editor = editorCapabilities();
+  let positioned = false,
+    loseMetadata = true;
+  const publications: CommandInput<'persistRecovery'>[] = [];
+  const client: EditorClient = {
+    ...editor.client,
+    command: async (operation, input, options) => {
+      if (positioned && operation === 'persistRecovery') {
+        publications.push(structuredClone(input as CommandInput<'persistRecovery'>));
+        if (loseMetadata)
+          throw new ApplicationError({
+            code: 'Uncertain',
+            message: 'Controlled metadata response loss',
+          });
+      }
+      if (positioned && loseMetadata && operation === 'getRecoveryPublication')
+        return null as never;
+      return editor.client.command(operation, input, options);
+    },
+  };
+  const app = await createMoonbaseApplication({ editors: [{ client, clientId: 'one' }] });
+  const model = app.editors[0];
+  let off = () => {};
+  try {
+    await model.openCheckout(checkout.root);
+    await model.open(target);
+    model.edit(target, 'discard me');
+    let preserving = false;
+    off = model.subscribe(() => {
+      if (model.getSnapshot().preserving) preserving = true;
+      else if (preserving && !positioned) {
+        positioned = true;
+        model.position(target, 'file', { line: 1, column: 7, top: 20, left: 0 });
+      }
+    });
+    const prompt = closePrompt(model),
+      quit = app.prepareQuit();
+    model.answerClose((await prompt).id, 'discard');
+    assert.equal(await quit, false);
+    assert.equal(app.getSnapshot().phase, 'live');
+    assert.equal(model.buffer(target)?.text, 'original');
+    assert.equal(publications.length, 1);
+    const original = publications[0];
+    assert.equal(model.getSnapshot().publication?.requestId, original.requestId);
+    assert.equal(await app.prepareQuit(), false);
+    assert.equal(publications.length, 1);
+    assert.equal(model.getSnapshot().publication?.requestId, original.requestId);
+    loseMetadata = false;
+    assert.equal(await model.resolveRecoveryPublication(), true);
+    assert.deepEqual(publications, [original, original]);
+    assert.equal(model.getSnapshot().recoveryReady, true);
+    const saved = await editor.client.command('loadRecovery', { clientId: 'one' });
+    assert.deepEqual(saved.state.drafts, []);
+    assert.deepEqual(saved.state.views[checkout.checkoutId].positions[target.path].file, {
+      line: 1,
+      column: 7,
+      top: 20,
+      left: 0,
+    });
+  } finally {
+    off();
     await app.dispose();
     await editor.runtime.dispose();
   }
