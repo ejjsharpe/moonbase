@@ -19,8 +19,8 @@ for (const kind of ['copy', 'import'] as const)
     mkdirSync(join(source, 'nested'), { recursive: true });
     writeFileSync(join(source, 'nested/file.txt'), 'copied bytes');
     chmodSync(join(source, 'nested/file.txt'), 0o444);
-    chmodSync(join(source, 'nested'), 0o550);
-    chmodSync(source, 0o755);
+    chmodSync(join(source, 'nested'), 0o3550);
+    chmodSync(source, 0o1777);
     try {
       const checkout = await client.command('openCheckout', { root: f.root });
       const selection =
@@ -46,8 +46,8 @@ for (const kind of ['copy', 'import'] as const)
       assert.equal(readFileSync(join(destination, 'nested/file.txt'), 'utf8'), 'copied bytes');
       for (const path of ['', 'nested', 'nested/file.txt'])
         assert.equal(
-          statSync(join(destination, path)).mode & 0o777,
-          statSync(join(source, path)).mode & 0o777,
+          statSync(join(destination, path)).mode & 0o7777,
+          statSync(join(source, path)).mode & 0o7777,
           path,
         );
     } finally {

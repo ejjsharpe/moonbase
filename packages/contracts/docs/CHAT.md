@@ -56,7 +56,7 @@ The server validates that proof, then creates an independent random 32-byte cano
 
 SHA-256 hashes the exact raw UTF-8 body bytes. The client verifies this proof and expected health before sending any chat input. Cap challenge replies at 8 KiB. The server keeps at most 128 outstanding challenges in its existing HTTP server scope, each bound to its client nonce and a monotonic 20-second expiry. Expire old grants before accepting new ones; reject capacity exhaustion without evicting a grant into an accepted state. Closing/restarting the server drops outstanding grants, making old challenges invalid. This bounded authentication cache is not a durable command/execution store.
 
-`POST /v1/chat` carries UTF-8 JSON `{operation,input}` for exactly the eight commands above, capped at 196 KiB raw request bytes on both client and server: six times the 32 KiB text bound for worst-case JSON escaping, plus 4 KiB for identifiers and envelope fields. Decoded text retains its 32 KiB UTF-8 limit. Headers carry `X-Moonbase-Nonce`, `X-Moonbase-Challenge` and the RPC Authorization scheme above. Its proof covers:
+`POST /v1/chat` carries UTF-8 JSON `{operation,input}` for exactly the eight commands above, capped at 196 KiB raw request bytes on both client and server: six times the 32 KiB text bound for worst-case JSON escaping, plus 4 KiB for identifiers and envelope fields. The public `maximumChatRequestBytes` constant also bounds serialized desktop IPC input. Decoded text retains its 32 KiB UTF-8 limit. Headers carry `X-Moonbase-Nonce`, `X-Moonbase-Challenge` and the RPC Authorization scheme above. Its proof covers:
 
 `["moonbase-chat-v1", "request", clientNonce, challenge, "POST", "/v1/chat", bodySha256]`
 

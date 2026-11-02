@@ -129,37 +129,43 @@ const code = (expected: ApplicationError['code']) => (error: unknown) =>
   ApplicationError.is(error) && error.code === expected;
 
 for (const kind of ['move', 'copy'] as const)
-  for (const collision of [false, true])
-    test(`batch ${kind} captures only individual destinations (collisions: ${collision})`, async () => {
+  for (const [source, collision] of [
+    ['b.ts', null],
+    ['b.ts', 'b.ts'],
+    ['b.ts', 'B.ts'],
+    ['bé.ts', 'be\u0301.ts'],
+  ] as const)
+    test(`batch ${kind} captures only individual destinations (${source}, collision: ${collision})`, async () => {
       const f = fixture();
       try {
         const editor = await f.editor('batch-' + kind),
           checkout = await editor.openCheckout(f.roots[0]);
+        if (source !== 'b.ts') renameSync(join(f.roots[0], 'b.ts'), join(f.roots[0], source));
         mkdirSync(join(f.roots[0], 'dest'));
         writeFileSync(join(f.roots[0], 'dest/unrelated.ts'), 'RETAIN\n');
-        if (collision) writeFileSync(join(f.roots[0], 'dest/b.ts'), 'REPLACE\n');
-        const workflow = editor.createMutation({ checkout, kind, paths: ['b.ts', 'folder'] });
+        if (collision) writeFileSync(join(f.roots[0], 'dest', collision), 'REPLACE\n');
+        const workflow = editor.createMutation({ checkout, kind, paths: [source, 'folder'] });
         try {
           assert.equal(await workflow.apply('dest', '', false), !collision);
           assert.equal(workflow.getSnapshot().error, '');
           assert.deepEqual(
             workflow.getSnapshot().replacements?.map((entry) => entry.target.path),
-            collision ? ['dest/b.ts'] : [],
+            collision ? ['dest/' + collision] : [],
           );
           if (collision) {
-            assert.equal(readFileSync(join(f.roots[0], 'dest/b.ts'), 'utf8'), 'REPLACE\n');
+            assert.equal(readFileSync(join(f.roots[0], 'dest', collision), 'utf8'), 'REPLACE\n');
             assert.equal(
               await workflow.apply('dest', '', true),
               true,
               workflow.getSnapshot().error,
             );
           }
-          assert.equal(readFileSync(join(f.roots[0], 'dest/b.ts'), 'utf8'), 'B\n');
+          assert.equal(readFileSync(join(f.roots[0], 'dest', source), 'utf8'), 'B\n');
           assert.equal(readFileSync(join(f.roots[0], 'dest/folder/nested.ts'), 'utf8'), 'NESTED\n');
           assert.equal(readFileSync(join(f.roots[0], 'dest/unrelated.ts'), 'utf8'), 'RETAIN\n');
           const sources = await editor.list(checkout, '');
           assert.equal(
-            sources.entries.some((entry) => entry.path === 'b.ts'),
+            sources.entries.some((entry) => entry.path === source),
             kind === 'copy',
           );
           assert.equal(

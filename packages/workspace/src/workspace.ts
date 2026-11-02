@@ -1066,7 +1066,12 @@ export class LocalWorkspace {
           });
           continue;
         }
-        const replacement = replacements.find((r) => r.target.path === destination);
+        const replacement = replacements.find(
+          (r) =>
+            destination !== undefined &&
+            dirname(r.target.path) === dirname(destination) &&
+            folded(r.target.path) === folded(destination),
+        );
         try {
           if (replacement) {
             const trashLocation = (
@@ -1282,7 +1287,12 @@ export class LocalWorkspace {
       ensure(
         replacement &&
           same(replacement.target.checkout, input.checkout) &&
-          destinations.includes(replacement.target.path),
+          destinations.some(
+            (destination) =>
+              destination !== undefined &&
+              dirname(destination) === dirname(replacement.target.path) &&
+              folded(destination) === folded(replacement.target.path),
+          ),
         'Replacement must name the exact captured destination.',
       );
       const actual = await directory.entry(replacement.target.path, signal);

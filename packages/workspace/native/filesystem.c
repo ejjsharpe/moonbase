@@ -274,7 +274,7 @@ static void copy_tree(int from, int to) {
   }
   if (errno) fail("Browse copy source");
   closedir(dir);
-  if (fchmod(to, info.st_mode & 0777)) fail("Copy folder permissions");
+  if (fchmod(to, info.st_mode & 07777)) fail("Copy folder permissions");
 }
 
 int main(int argc, char **argv) {
