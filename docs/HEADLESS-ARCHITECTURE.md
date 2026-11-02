@@ -99,7 +99,7 @@ The configuration test's Nx inputs include all repository module/test/example so
 | `stop-v1.txt` | `3afc970241a178621a3c48a56e427f5b7e08c77502544e6c89b2fb4bd44235ad` |
 | Existing `packages/workspace/test/fixtures/workspace-53a0996.tar.gz` | `4b9e54649f195a18e8d93502f86bf21ba12e070c10261aa47a61d6f6b8aa510b` |
 
-The archived workspace fixture retains prior-producer SQLite records and the existing unfamiliar-nested-data test verifies rejection without overwriting original rows. No saved data is imported, migrated, deleted, reset or projected-and-overwritten by this migration.
+The archived workspace source generates prior-producer SQLite records; its checksum remains fixed, and the harness rewires only extracted dependency imports to contracts/helpers. The existing unfamiliar-nested-data test verifies rejection without overwriting original rows. No saved data is imported, migrated, deleted, reset or projected-and-overwritten by this migration.
 
 ## Application and head ownership
 
