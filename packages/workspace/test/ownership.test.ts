@@ -918,3 +918,126 @@ test('stored publication receipts bind the queried client/request and exact cons
     f.cleanup();
   }
 });
+
+test('SQLite BLOB revisions cannot be coerced into publication revisions or overwrite recovery', async () => {
+  const f = fixture(),
+    { runtime, client } = f.start();
+  try {
+    const state = emptyRecovery('blob-revision');
+    await client.command('persistRecovery', {
+      clientId: state.clientId,
+      requestId: 'initial-blob-revision',
+      expectedRevision: 0,
+      state,
+    });
+    const database = new DatabaseSync(join(f.base, 'state/moonbase-workspace-v1.sqlite'));
+    try {
+      database
+        .prepare('UPDATE recovery SET revision=? WHERE client=?')
+        .run(Buffer.from('1'), state.clientId);
+      const before = database
+        .prepare('SELECT typeof(revision) AS kind,revision,body FROM recovery WHERE client=?')
+        .get(state.clientId);
+      await assert.rejects(
+        client.command('loadRecovery', { clientId: state.clientId }),
+        isError('Persistence'),
+      );
+      await assert.rejects(
+        client.command('getRecoveryPublication', {
+          clientId: state.clientId,
+          requestId: 'initial-blob-revision',
+        }),
+        isError('Persistence'),
+      );
+      for (const expectedRevision of [1, 49])
+        await assert.rejects(
+          client.command('persistRecovery', {
+            clientId: state.clientId,
+            requestId: 'blob-overwrite-' + expectedRevision,
+            expectedRevision,
+            state,
+          }),
+          isError('Persistence'),
+        );
+      assert.deepEqual(
+        database
+          .prepare('SELECT typeof(revision) AS kind,revision,body FROM recovery WHERE client=?')
+          .get(state.clientId),
+        before,
+      );
+    } finally {
+      database.close();
+    }
+  } finally {
+    await runtime.dispose();
+    f.cleanup();
+  }
+});
+
+for (const namespace of ['recovery', 'publications'] as const)
+  test(`SQLite BLOB ${namespace} JSON stays untouched instead of being coerced and republished`, async () => {
+    const f = fixture(),
+      { runtime, client } = f.start();
+    try {
+      const state = emptyRecovery('blob-body');
+      await client.command('persistRecovery', {
+        clientId: state.clientId,
+        requestId: 'initial-blob-body',
+        expectedRevision: 0,
+        state,
+      });
+      const database = new DatabaseSync(join(f.base, 'state/moonbase-workspace-v1.sqlite'));
+      try {
+        if (namespace === 'recovery')
+          database
+            .prepare('UPDATE recovery SET body=? WHERE client=?')
+            .run(Buffer.from(JSON.stringify(state)), state.clientId);
+        else
+          database
+            .prepare("UPDATE records SET body=? WHERE bucket='publications' AND key=?")
+            .run(Buffer.from('1'), state.clientId);
+        const recoveryRows = database
+          .prepare('SELECT client,revision,typeof(body) AS kind,body FROM recovery')
+          .all();
+        const records = database
+          .prepare('SELECT bucket,key,typeof(body) AS kind,body FROM records ORDER BY bucket,key')
+          .all();
+        if (namespace === 'recovery')
+          await assert.rejects(
+            client.command('loadRecovery', { clientId: state.clientId }),
+            isError('Persistence'),
+          );
+        await assert.rejects(
+          client.command('persistRecovery', {
+            clientId: state.clientId,
+            requestId: 'blob-body-overwrite',
+            expectedRevision: 1,
+            state,
+          }),
+          isError('Persistence'),
+        );
+        assert.deepEqual(
+          database.prepare('SELECT client,revision,typeof(body) AS kind,body FROM recovery').all(),
+          recoveryRows,
+        );
+        assert.deepEqual(
+          database
+            .prepare('SELECT bucket,key,typeof(body) AS kind,body FROM records ORDER BY bucket,key')
+            .all(),
+          records,
+        );
+        assert.equal(
+          await client.command('getRecoveryPublication', {
+            clientId: state.clientId,
+            requestId: 'blob-body-overwrite',
+          }),
+          null,
+        );
+      } finally {
+        database.close();
+      }
+    } finally {
+      await runtime.dispose();
+      f.cleanup();
+    }
+  });

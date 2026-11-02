@@ -1,5 +1,5 @@
 import { normalizeApplicationError } from '@moonbase/application/effect-client';
-import { type ApprovalSchema, parseRecovery } from './schema.ts';
+import { type ApprovalSchema, parseRecovery, savedRevision } from './schema.ts';
 import { Cause, Deferred, Effect, Exit, Fiber, FiberSet, Queue, Scope, Stream } from 'effect';
 import {
   decodeWorkspaceInput,
@@ -1011,11 +1011,9 @@ export class LocalWorkspace {
     };
     for (const row of this.store.db.prepare('SELECT client, revision, body FROM recovery').all())
       if (
-        parseRecovery(row.body as string, row.client as string).checkouts.some((c) =>
-          same(c, input.checkout),
-        )
+        parseRecovery(row.body, row.client as string).checkouts.some((c) => same(c, input.checkout))
       )
-        publicationRevisions[row.client as string] = Number(row.revision);
+        publicationRevisions[row.client as string] = savedRevision(row.revision);
     const record: OperationRecord = {
       input,
       paths: [
@@ -1341,7 +1339,7 @@ export class LocalWorkspace {
         'Destination overlaps another selected source.',
       );
       for (const row of this.store.db.prepare('SELECT client, body FROM recovery').all()) {
-        const state = parseRecovery(row.body as string, row.client as string);
+        const state = parseRecovery(row.body, row.client as string);
         ensure(
           !state.drafts.some(
             (d) =>

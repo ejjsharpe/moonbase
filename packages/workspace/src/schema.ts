@@ -117,16 +117,22 @@ export const invalidStored = () =>
     code: 'Persistence',
     message: 'Invalid workspace saved data. Original data retained; publication blocked.',
   });
-export function parseRecord<T>(bucket: string, body: string): T {
+export function savedRevision(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) throw invalidStored();
+  return value;
+}
+export function parseRecord<T>(bucket: string, body: unknown): T {
   try {
+    if (typeof body !== 'string') throw Error();
     if (!Object.hasOwn(decoders, bucket)) throw Error();
     return decoders[bucket](JSON.parse(body)) as T;
   } catch {
     throw invalidStored();
   }
 }
-export function parseRecovery(body: string, clientId: string) {
+export function parseRecovery(body: unknown, clientId: string) {
   try {
+    if (typeof body !== 'string') throw Error();
     const state = decodeEditorRecovery(JSON.parse(body));
     recovery(state, clientId);
     return state;

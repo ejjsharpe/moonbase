@@ -3,7 +3,7 @@ import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { chmodSync, constants, closeSync, mkdirSync, openSync, realpathSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { canonical, ensure, fail, hash } from './validation.ts';
-import { invalidStored, parseRecord, parseRecovery } from './schema.ts';
+import { invalidStored, parseRecord, parseRecovery, savedRevision } from './schema.ts';
 import {
   ApplicationError,
   type CommandInput,
@@ -57,13 +57,13 @@ export class Store {
     const row = this.db
       .prepare('SELECT body FROM records WHERE bucket=? AND key=?')
       .get(bucket, key);
-    return row ? parseRecord<T>(bucket, row.body as string) : null;
+    return row ? parseRecord<T>(bucket, row.body) : null;
   }
   all<T>(bucket: string, predicate = '1', parameters: SQLInputValue[] = []): T[] {
     return this.db
       .prepare(`SELECT body FROM records WHERE bucket=? AND (${predicate}) ORDER BY rowid`)
       .all(bucket, ...parameters)
-      .map((r) => parseRecord<T>(bucket, r.body as string));
+      .map((r) => parseRecord<T>(bucket, r.body));
   }
   put(bucket: string, key: string, value: unknown) {
     try {
@@ -100,9 +100,8 @@ export class Store {
   readRecovery(client: string): { revision: number; state: unknown } | null {
     const row = this.db.prepare('SELECT revision, body FROM recovery WHERE client=?').get(client);
     if (!row) return null;
-    const revision = Number(row.revision);
-    if (!Number.isSafeInteger(revision) || revision < 0) throw invalidStored();
-    return { revision, state: parseRecovery(row.body as string, client) };
+    const revision = savedRevision(row.revision);
+    return { revision, state: parseRecovery(row.body, client) };
   }
   publication(client: string): number {
     return this.get<number>('publications', client) ?? 0;
@@ -115,7 +114,7 @@ export class Store {
     if (record) {
       const receipt = record.receipt;
       const row = this.db.prepare('SELECT revision FROM recovery WHERE client=?').get(clientId);
-      const currentRevision = row ? Number(row.revision) : -1;
+      const currentRevision = row ? savedRevision(row.revision) : -1;
       if (
         receipt.clientId !== clientId ||
         receipt.requestId !== requestId ||
