@@ -3,11 +3,11 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 
-for (const entry of ['handlers', 'clients', 'effect-client'])
-  test(`runtime/${entry} bundles without privileged or UI implementations`, async () => {
+for (const entry of ['', '/runtime/handlers', '/runtime/clients', '/runtime/effect-client'])
+  test(`application${entry} bundles without privileged or UI implementations`, async () => {
     const bundle = await build({
       absWorkingDir: fileURLToPath(new URL('../../../', import.meta.url)),
-      entryPoints: [`@moonbase/application/runtime/${entry}`],
+      entryPoints: [`@moonbase/application${entry}`],
       bundle: true,
       platform: 'browser',
       write: false,

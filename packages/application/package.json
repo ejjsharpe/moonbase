@@ -22,7 +22,8 @@
     "./runtime/effect-client": "./src/runtime/effect-client.ts",
     "./chat": "./src/features/chat/index.ts",
     "./editor": "./src/features/editor/index.ts",
-    "./testing/memory-workspace": "./src/testing/memory-workspace.ts"
+    "./testing/memory-workspace": "./src/testing/memory-workspace.ts",
+    ".": "./src/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
