@@ -12,6 +12,7 @@ import { releaseResource } from '@moonbase/application/services';
 import { ApplicationError } from '@moonbase/application/client';
 import * as P from './protocol.ts';
 import * as V from './validation.ts';
+import * as S from './private-schema.ts';
 
 export type ChatServerConfiguration = { host: ChatHostTarget; token: string; port: number };
 /** The injected client is bound to the consumer's process root and shared handlers. */
@@ -19,10 +20,9 @@ export const serveChat = (config: ChatServerConfiguration, client: ChatClient) =
   Effect.acquireRelease(
     Effect.tryPromise({
       try: async () => {
-        const expected = V.host(config.host),
-          token = P.token(config.token);
-        if (!Number.isInteger(config.port) || config.port < 0 || config.port > 65535)
-          V.fail('InvalidInput', 'Choose a valid loopback host port.');
+        const settings = S.serverConfiguration(config),
+          expected = settings.host,
+          token = settings.token;
         const health = validateHostHealth(
           {
             ...expected,
@@ -208,7 +208,7 @@ export const serveChat = (config: ChatServerConfiguration, client: ChatClient) =
         }
         await new Promise<void>((resolve, reject) => {
           server.once('error', reject);
-          server.listen(config.port, '127.0.0.1', () => {
+          server.listen(settings.port, '127.0.0.1', () => {
             server.off('error', reject);
             resolve();
           });
