@@ -39,9 +39,16 @@ for (const name of [
 }
 const main = Object.keys(JSON.parse(await readFile(join(root, 'dist/main-inputs.json'), 'utf8'))),
   renderer = JSON.parse(await readFile(join(root, 'dist/renderer/module-inputs.json'), 'utf8'));
+
+for (const entry of ['shell/workbench.tsx', 'editor/workbench.tsx', 'chat/view.tsx'])
+  assert(
+    renderer.some((p) => p.endsWith(`workbench/src/${entry}`)),
+    `Shared frontend missing: ${entry}`,
+  );
+assert(!renderer.some((p) => /packages\/editor\/|desktop\/src\/chat\/view\.tsx$/.test(p)));
 assert.deepEqual(
   [...main, ...renderer].filter((p) =>
-    /(?:^|\/)(?:test|tests)\/|test-fixture|host\.mjs|@earendil-works|pi-runtime\/src\/(?:runtime|server|index)\.ts/.test(
+    /(?:^|\/)(?:test|tests)\/|packages\/workbench\/demo\/|test-fixture|host\.mjs|@earendil-works|pi-runtime\/src\/(?:runtime|server|index)\.ts/.test(
       p,
     ),
   ),

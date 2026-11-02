@@ -40,17 +40,16 @@ const focusOrigin = (element: HTMLElement): FocusOrigin => {
 };
 
 export type EditorWorkbenchHandle = {
-  prepareQuit(): Promise<boolean>;
   importFiles(checkout: CheckoutTarget, references: string[]): void;
 };
 export type EditorWorkbenchProps = {
   controller: EditorController;
+  visible: boolean;
   /** Native/user-authorized selection belongs to the shell. A renderer path alone grants no access. */
-  selectCheckout?: () => Promise<string | null>;
   selectNativeImports?: (checkout: CheckoutTarget) => Promise<string[]>;
 };
 export const EditorWorkbench = forwardRef<EditorWorkbenchHandle, EditorWorkbenchProps>(
-  function EditorWorkbench({ controller, selectCheckout, selectNativeImports }, ref) {
+  function EditorWorkbench({ controller, visible, selectNativeImports }, ref) {
     const state = useSyncExternalStore(
       controller.subscribe,
       controller.getSnapshot,
@@ -192,17 +191,10 @@ export const EditorWorkbench = forwardRef<EditorWorkbenchHandle, EditorWorkbench
       },
       [controller],
     );
-    useImperativeHandle(ref, () => ({ prepareQuit: () => controller.prepareQuit(), importFiles }), [
-      controller,
-      importFiles,
-    ]);
+    useImperativeHandle(ref, () => ({ importFiles }), [importFiles]);
     const run = (work: Promise<unknown>) => {
       void work.catch(controller.report);
     };
-    async function requestOpen() {
-      const root = await selectCheckout?.();
-      if (root) await controller.openCheckout(root);
-    }
     const selectedPaths = selected?.tree.selected ?? [];
     return (
       <div
@@ -285,50 +277,7 @@ export const EditorWorkbench = forwardRef<EditorWorkbenchHandle, EditorWorkbench
             run(withFocus(controller.open({ checkout, path }), recent.origin));
           }
         }}>
-        <Tabs.Root
-          value={checkout?.checkoutId ?? ''}
-          onValueChange={(value) => {
-            const target = openCheckouts.find((item) => item.checkoutId === value);
-            if (target) run(controller.selectCheckout(target));
-          }}
-          {...stylex.props(styles.panel)}>
-          <Tabs.List
-            {...stylex.props(workbench.projectTabs, styles.checkoutTabs)}
-            aria-label="Checkouts">
-            {openCheckouts.map((item) => (
-              <div key={checkoutKey(item)} {...stylex.props(workbench.fileTab)}>
-                <Tabs.Tab
-                  value={item.checkoutId}
-                  title={`${item.hostId} · ${item.branch} · ${item.root}`}
-                  {...stylex.props(
-                    controls.button,
-                    checkout?.checkoutId === item.checkoutId && workbench.fileSelected,
-                  )}>
-                  {item.root.split('/').at(-1)} · {item.branch}
-                </Tabs.Tab>
-                <Button
-                  {...stylex.props(controls.button)}
-                  aria-label={`Close checkout ${item.root}`}
-                  disabled={state.preserving}
-                  onClick={() => run(controller.closeCheckout(item))}>
-                  <svg
-                    width="12"
-                    height="12"
-                    viewBox="0 0 16 16"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                    aria-hidden="true">
-                    <path d="m4 4 8 8 M12 4l-8 8" />
-                  </svg>
-                </Button>
-              </div>
-            ))}
-            {selectCheckout && (
-              <Button {...stylex.props(controls.button)} onClick={() => run(requestOpen())}>
-                Open checkout
-              </Button>
-            )}
-          </Tabs.List>
+        <div {...stylex.props(styles.panel)}>
           {!state.ready && (
             <p role="status" {...stylex.props(styles.empty)}>
               Load editor recovery before opening a checkout.
@@ -341,7 +290,7 @@ export const EditorWorkbench = forwardRef<EditorWorkbenchHandle, EditorWorkbench
             </p>
           )}
           {checkout && selected && (
-            <Tabs.Panel value={checkout.checkoutId} {...stylex.props(styles.tabPanel)}>
+            <div {...stylex.props(styles.tabPanel)}>
               <div {...stylex.props(workbench.sidebarLayout(state.recovery.sidebarWidth))}>
                 <div {...stylex.props(workbench.workspace)}>
                   <div
@@ -803,14 +752,15 @@ export const EditorWorkbench = forwardRef<EditorWorkbenchHandle, EditorWorkbench
                         state={state}
                         target={target}
                         mode={mode}
+                        visible={visible}
                       />
                     </Tabs.Root>
                   </section>
                 </div>
               </div>
-            </Tabs.Panel>
+            </div>
           )}
-        </Tabs.Root>
+        </div>
         {!!state.errors.length && (
           <div role="alert" {...stylex.props(controls.status, controls.alert)}>
             {state.errors.at(-1)}{' '}

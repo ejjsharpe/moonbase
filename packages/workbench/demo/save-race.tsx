@@ -1,11 +1,10 @@
-import { makeEditorModel, makeEditorController } from '@moonbase/application/editor';
+import { createMoonbaseApplication } from '@moonbase/application';
 import { createRoot } from 'react-dom/client';
-import { Effect, Exit, Scope, ManagedRuntime } from 'effect';
-const modelScope = Scope.makeUnsafe();
+import { ManagedRuntime } from 'effect';
 import * as stylex from '@stylexjs/stylex';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import type { CommandInput, EditorClient } from '@moonbase/contracts/workspace';
-import { EditorWorkbench } from '../src/index.ts';
+import { Workbench } from '../src/index.ts';
 import { configureMonacoWorkers } from '../src/workers.ts';
 import { memoryWorkspace } from '@moonbase/application/testing/memory-workspace';
 import '@moonbase/ui/reset.css';
@@ -46,15 +45,8 @@ const client: EditorClient = {
     return raw.command(name, input, options);
   },
 };
-let editor = makeEditorController(
-  runtime,
-  await runtime.runPromise(
-    makeEditorModel({ client, clientId: 'save-race' }).pipe(
-      Effect.provideService(Scope.Scope, modelScope),
-    ),
-  ),
-);
-await editor.load();
+let application = await createMoonbaseApplication({ editors: [{ client, clientId: 'save-race' }] }),
+  editor = application.editors[0]!;
 await editor.openCheckout(checkout.root);
 for (const path of ['a.ts', 'b.ts']) {
   await editor.open({ checkout, path });
@@ -67,7 +59,7 @@ const styles = stylex.create({ root: { height: '100dvh' } }),
 const render = () =>
   root.render(
     <div {...stylex.props(styles.root)}>
-      <EditorWorkbench key={editor.instanceId} controller={editor} />
+      <Workbench key={editor.instanceId} application={application} />
     </div>,
   );
 render();
@@ -89,16 +81,11 @@ window.saveRace = {
   },
   load: () => raw.command('loadRecovery', { clientId: editor.clientId }),
   async restart() {
-    await editor.dispose();
-    editor = makeEditorController(
-      runtime,
-      await runtime.runPromise(
-        makeEditorModel({ client: raw, clientId: 'save-race' }).pipe(
-          Effect.provideService(Scope.Scope, modelScope),
-        ),
-      ),
-    );
-    await editor.load();
+    await application.dispose();
+    application = await createMoonbaseApplication({
+      editors: [{ client: raw, clientId: 'save-race' }],
+    });
+    editor = application.editors[0]!;
     render();
   },
 };
@@ -120,9 +107,7 @@ window.addEventListener(
   'pagehide',
   () => {
     release();
-    void runtime
-      .runPromiseExit(Scope.close(modelScope, Exit.void))
-      .finally(() => runtime.dispose());
+    void application.dispose().finally(() => runtime.dispose());
   },
   { once: true },
 );

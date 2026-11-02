@@ -10,7 +10,6 @@ export const styles = stylex.create({
     minWidth: 0,
     overflow: 'hidden',
   },
-  checkoutTabs: { padding: '6px 12px', height: 'auto', minHeight: 40, WebkitAppRegion: 'no-drag' },
   tabPanel: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 },
   panel: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 },
   toolbar: { display: 'flex', gap: space.sm, alignItems: 'center', flexWrap: 'wrap' },

@@ -17,7 +17,7 @@ const result = await build({
 });
 const inputs = Object.keys(result.metafile.inputs);
 const prohibited = inputs.filter((path) =>
-  /node_modules[/\\](?:electron|@moonbase[/\\](?:workspace|pi-runtime|ssh))[/\\]|packages[/\\](?:workspace|pi-runtime|ssh)[/\\]|source-snapshot|(?:^|[/\\])host[/\\]|node:/.test(
+  /node_modules[/\\](?:electron|@moonbase[/\\](?:workspace|pi-runtime|ssh))[/\\]|packages[/\\](?:workspace|pi-runtime|ssh)[/\\]|workbench[/\\](?:demo|test)[/\\]|apps[/\\]desktop[/\\]|contracts[/\\]src[/\\]services\.ts|application[/\\]src[/\\]testing[/\\]|@earendil-works|source-snapshot|(?:^|[/\\])host[/\\]|node:/.test(
     path,
   ),
 );
@@ -31,6 +31,8 @@ assert.deepEqual(
   [],
 );
 assert(inputs.some((path) => path.includes('monaco-editor')));
+for (const entry of ['src/shell/workbench.tsx', 'src/editor/workbench.tsx', 'src/chat/view.tsx'])
+  assert(inputs.includes(entry), `Missing shared presentation: ${entry}`);
 console.log(
   `Renderer browser bundle checked: ${inputs.length} inputs, browser-safe Effect permitted, no privileged implementations; ${result.outputFiles.reduce((size, file) => size + file.contents.length, 0)} emitted bytes.`,
 );

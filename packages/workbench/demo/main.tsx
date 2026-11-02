@@ -1,10 +1,10 @@
-import { makeEditorModel, makeEditorController } from '@moonbase/application/editor';
+import { createMoonbaseApplication } from '@moonbase/application';
+import { chatCapabilities } from './chat.ts';
 import { createRoot } from 'react-dom/client';
 import { createRef, StrictMode, useState } from 'react';
-import { Effect, Exit, Scope, ManagedRuntime } from 'effect';
-const modelScope = Scope.makeUnsafe();
+import { ManagedRuntime } from 'effect';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
-import { EditorWorkbench, type EditorWorkbenchHandle } from '../src/index.ts';
+import { Workbench, type WorkbenchHandle } from '../src/index.ts';
 import { configureMonacoWorkers } from '../src/workers.ts';
 import { memoryWorkspace } from '@moonbase/application/testing/memory-workspace';
 import * as monaco from 'monaco-editor';
@@ -46,26 +46,23 @@ const memory = memoryWorkspace([
 // One demo composition root. Feature packages do not construct runtimes.
 const runtime = ManagedRuntime.make(memory.layer),
   client = makeEditorClient(runtime);
-const first = makeEditorController(
-    runtime,
-    await runtime.runPromise(
-      makeEditorModel({ client, clientId: 'demo-first' }).pipe(
-        Effect.provideService(Scope.Scope, modelScope),
-      ),
-    ),
-  ),
-  second = makeEditorController(
-    runtime,
-    await runtime.runPromise(
-      makeEditorModel({ client, clientId: 'demo-second' }).pipe(
-        Effect.provideService(Scope.Scope, modelScope),
-      ),
-    ),
-  );
-const firstHandle = createRef<EditorWorkbenchHandle>();
+const chat = chatCapabilities();
+let failChat = new URLSearchParams(location.search).has('fail-chat');
+const firstApplication = await createMoonbaseApplication({
+    editors: [{ client, clientId: 'demo-first' }],
+    chat: async () => {
+      if (failChat) throw Error('Controlled Chat initialization failure');
+      return new URLSearchParams(location.search).has('chat') ? chat.dependencies : null;
+    },
+  }),
+  secondApplication = await createMoonbaseApplication({
+    editors: [{ client, clientId: 'demo-second' }],
+  }),
+  first = firstApplication.editors[0]!,
+  second = secondApplication.editors[0]!;
+const firstHandle = createRef<WorkbenchHandle>();
 await Promise.all(
   [first, second].map(async (editor) => {
-    await editor.load();
     await editor.openCheckout(checkout.root);
     await editor.open({ checkout, path: 'welcome.ts' }, { intent: 'keep' });
   }),
@@ -141,7 +138,7 @@ function Demo() {
           {...stylex.props(controls.button)}
           onClick={() => {
             setDisposed(true);
-            void second.dispose().catch((error) => setCleanupError(String(error)));
+            void secondApplication.dispose().catch((error) => setCleanupError(String(error)));
           }}>
           Dispose second editor
         </Button>
@@ -149,15 +146,20 @@ function Demo() {
       {cleanupError && <p role="alert">{cleanupError}</p>}
       <div {...stylex.props(styles.editors)}>
         <section aria-label="First editor" hidden={!visible} {...stylex.props(styles.editor)}>
-          <EditorWorkbench
+          <Workbench
             ref={firstHandle}
-            controller={first}
+            application={firstApplication}
+            selectCheckout={() => window.demo.selectCheckout()}
+            selectClipboardImports={(checkout) => window.demo.selectClipboardImports(checkout)}
+            selectDroppedImports={(checkout, files) =>
+              window.demo.selectDroppedImports(checkout, files)
+            }
             selectNativeImports={() => window.demo.selectNativeImports()}
           />
         </section>
         {!disposed && (
           <section aria-label="Second editor" {...stylex.props(styles.editor, styles.second)}>
-            <EditorWorkbench controller={second} />
+            <Workbench application={secondApplication} />
           </section>
         )}
       </div>
@@ -180,9 +182,16 @@ declare global {
       second: typeof second;
       checkout: typeof checkout;
       memory: typeof memory;
-      workbench(): EditorWorkbenchHandle;
+      workbench(): WorkbenchHandle;
+      application: typeof firstApplication;
+      chat: typeof chat;
+      retryChat(): void;
+      selectCheckout(): Promise<string | null>;
+      selectClipboardImports(target: typeof checkout): Promise<string[]>;
+      selectDroppedImports(target: typeof checkout, files: File[]): Promise<string[]>;
       selectNativeImports(): Promise<string[]>;
       modelCount(): number;
+      diffReady(): boolean;
       client: typeof client;
       runtime: typeof runtime;
     };
@@ -191,20 +200,30 @@ declare global {
 window.demo = {
   first,
   second,
+  application: firstApplication,
+  chat,
+  retryChat: () => {
+    failChat = false;
+  },
+  selectCheckout: async () => null,
+  selectClipboardImports: async () => [],
+  selectDroppedImports: async () => [],
   checkout,
   memory,
   workbench: () => firstHandle.current!,
   selectNativeImports: async () => [],
   modelCount: () => monaco.editor.getModels().length,
+  diffReady: () =>
+    monaco.editor.getDiffEditors().every((editor) => editor.getLineChanges() !== null),
   client,
   runtime,
 };
 window.addEventListener(
   'pagehide',
   () => {
-    void runtime
-      .runPromiseExit(Scope.close(modelScope, Exit.void))
-      .finally(() => runtime.dispose());
+    void Promise.allSettled([firstApplication.dispose(), secondApplication.dispose()]).finally(() =>
+      runtime.dispose(),
+    );
   },
   { once: true },
 );

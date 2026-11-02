@@ -4,7 +4,7 @@ const output = new URL('../dist/', import.meta.url);
 const inputs = JSON.parse(await readFile(new URL('renderer/module-inputs.json', output), 'utf8'));
 assert.deepEqual(
   inputs.filter((p) =>
-    /(?:^|\/)node_modules\/(?:electron|@moonbase\/(?:workspace|pi-runtime|ssh|connection))\/|packages\/(?:workspace|pi-runtime|ssh|connection)\/|packages\/contracts\/src\/services\.ts|packages\/application\/src\/testing\/|packages\/application\/src\/runtime\/(?:handlers|clients)\.ts|apps\/desktop\/src\/(?:main|session|preload|chat-preload|chat\/(?:config|session))\.ts|@earendil-works|pi-ai|pi-durable|node:sqlite|source-snapshot|node:/.test(
+    /(?:^|\/)node_modules\/(?:electron|@moonbase\/(?:workspace|pi-runtime|ssh|connection))\/|packages\/(?:workspace|pi-runtime|ssh|connection)\/|packages\/workbench\/(?:demo|test)\/|packages\/contracts\/src\/services\.ts|packages\/application\/src\/testing\/|packages\/application\/src\/runtime\/(?:handlers|clients)\.ts|apps\/desktop\/src\/(?:main|session|preload|chat-preload|chat\/(?:config|session))\.ts|@earendil-works|pi-ai|pi-durable|node:sqlite|source-snapshot|node:/.test(
       p,
     ),
   ),
@@ -16,7 +16,9 @@ assert(inputs.some((p) => p.endsWith('application/src/features/editor/editor.ts'
 assert(!inputs.some((p) => p.endsWith('desktop/src/renderer/cleanup.ts')));
 assert(inputs.some((p) => p.endsWith('contracts/src/errors.ts')));
 assert(inputs.some((p) => p.includes('monaco-editor')));
-assert(inputs.some((p) => p.endsWith('desktop/src/chat/view.tsx')));
+for (const entry of ['shell/workbench.tsx', 'editor/workbench.tsx', 'chat/view.tsx'])
+  assert(inputs.some((p) => p.endsWith(`workbench/src/${entry}`)));
+assert(!inputs.some((p) => /packages\/editor\//.test(p)));
 assert(inputs.some((p) => p.endsWith('application/src/features/chat/controller.ts')));
 const assets = await readdir(new URL('renderer/assets/', output));
 assert.equal(

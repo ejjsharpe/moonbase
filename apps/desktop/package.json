@@ -21,7 +21,7 @@
   },
   "dependencies": {
     "@moonbase/application": "workspace:*",
-    "@moonbase/editor": "workspace:*",
+    "@moonbase/workbench": "workspace:*",
     "@moonbase/workspace": "workspace:*",
     "@moonbase/ui": "workspace:*",
     "effect": "4.1.0",

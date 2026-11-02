@@ -25,6 +25,6 @@ jobs:
       - run: bun run test:chat-integration
       - run: bunx nx run @moonbase/desktop:build
       - run: node apps/desktop/scripts/check-renderer.mjs
-      - run: bun run --cwd packages/editor check:renderer
+      - run: bun run --cwd packages/workbench check:renderer
       - run: bunx playwright install chromium
-      - run: bun run --cwd packages/editor test:ui
+      - run: bun run --cwd packages/workbench test:ui

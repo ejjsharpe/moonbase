@@ -9,7 +9,13 @@ const packages = new Map([
       exports: { '.': './src/index.ts', './runtime/clients': './src/index.ts' },
     },
   ],
-  ['@moonbase/contracts', { directory: 'packages/contracts', exports: { '.': './src/index.ts' } }],
+  [
+    '@moonbase/contracts',
+    {
+      directory: 'packages/contracts',
+      exports: { '.': './src/index.ts', './services': './src/services.ts' },
+    },
+  ],
   [
     '@moonbase/pi-runtime',
     { directory: 'packages/pi-runtime', exports: { '.': './src/index.ts' } },
@@ -42,16 +48,32 @@ assert(
     (error) => error.includes('public package export'),
   ),
 );
-for (const specifier of ['@moonbase/chat', '@moonbase/application/client'])
+for (const specifier of ['@moonbase/chat', '@moonbase/editor', '@moonbase/application/client'])
   assert(
     check({ 'apps/desktop/src/main.ts': `import '${specifier}';` }).some((error) =>
       error.includes('public package export'),
     ),
   );
 assert(
-  check({ 'packages/editor/src/index.ts': "import type {} from '@moonbase/pi-runtime';" }).some(
+  check({ 'packages/workbench/src/index.ts': "import type {} from '@moonbase/pi-runtime';" }).some(
     (error) => error.includes('presentation depends on infrastructure'),
   ),
+);
+for (const source of [
+  "import type {} from 'node:fs';",
+  "type Backend = import('fs/promises').Backend;",
+  "await import('electron');",
+  "import type {} from '@effect/platform-node';",
+  "import type {} from '@moonbase/desktop';",
+  "import type {} from '@moonbase/contracts/services';",
+  "import type {} from '@moonbase/application/runtime/clients';",
+])
+  assert(check({ 'packages/workbench/src/index.ts': source }).length, source);
+assert(
+  check({
+    'packages/workbench/src/index.ts': "import type {} from '../demo/chat.ts';",
+    'packages/workbench/demo/chat.ts': '',
+  }).some((error) => error.includes('demo/test capability')),
 );
 assert(
   check({

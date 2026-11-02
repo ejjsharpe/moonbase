@@ -26,14 +26,14 @@ await runtime.runPromise(Scope.close(scope, Exit.void));
 await runtime.dispose();
 ```
 
-Mount `EditorWorkbench` from `@moonbase/editor` with `controller={editor}`. Shells may supply `selectCheckout` and `selectNativeImports`; native imports use approved opaque references, never raw OS source paths. Picker, clipboard and drop share `EditorWorkbenchHandle.importFiles(checkout, references)` and its destination/replacement dialog.
+Browser clients mount `Workbench` from `@moonbase/workbench` with their acquired `application`. The shared shell derives project tabs from this editor controller and keeps file/tree/Monaco presentation internal. Native callbacks return approved opaque references, never raw OS source paths; picker, clipboard and drop share `WorkbenchHandle.importFiles(checkout, references)` and the internal editor destination/replacement dialog. Direct headless consumers continue using the factories above without UI.
 
 | Export | Purpose |
 | --- | --- |
 | `@moonbase/application/editor` | Model/controller factories, types, target keys and concrete presentation helpers |
 | `@moonbase/application/testing/memory-workspace` | Injected volatile workspace service for tests and demos; excluded from the editor entry graph |
-| `@moonbase/editor` | React/Monaco presentation receiving a supplied controller |
-| `@moonbase/editor/workers` | Browser-root Monaco worker configuration |
+| `@moonbase/workbench` | Shared browser shell receiving a supplied application; editor presentation is internal |
+| `@moonbase/workbench/workers` | Browser-root Monaco worker configuration |
 
 Applications supply clients, acquire models in their aggregate scope and own runtime disposal. Multiple models share that runtime; each has a separate model scope, recovery identity and Monaco instance identity. Binding never acquires a second model or backend. Factory acquisition installs a finalizer even if the model is never bound. A privileged composition root can use `makeEditorClient(runtime)` from `@moonbase/application/runtime/clients`; isolated renderers receive a validated bridge client. Each live editor needs a distinct recovery `clientId`; reuse it only to restore that editor after shutdown. Omission generates a random ID.
 
