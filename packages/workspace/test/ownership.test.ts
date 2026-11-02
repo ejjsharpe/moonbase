@@ -656,3 +656,234 @@ test('malformed saved recovery domain values block later direct publication with
     f.cleanup();
   }
 });
+
+test(
+  'continuous filesystem writes still deliver a coalesced watch event before the writer becomes quiet',
+  { timeout: 5000 },
+  async () => {
+    const f = fixture(),
+      { runtime, client } = f.start();
+    let close = async () => {};
+    try {
+      const checkout = await client.command('openCheckout', { root: f.root });
+      let ready!: () => void,
+        writing = true,
+        deliveredDuringWrites = 0;
+      const initial = new Promise<void>((done) => {
+        ready = done;
+      });
+      const failures: unknown[] = [];
+      close = client.watch(
+        { checkout, paths: [''] },
+        (event) => {
+          if (event.ready) ready();
+          else if (writing) deliveredDuringWrites++;
+        },
+        (error) => failures.push(error),
+      );
+      await initial;
+      for (let i = 0; i < 50; i++) {
+        writeFileSync(join(f.root, 'burst-' + i), 'changed');
+        await new Promise<void>((done) => setTimeout(done, 25));
+      }
+      writing = false;
+      assert(
+        deliveredDuringWrites > 0,
+        '100ms coalescing must not wait indefinitely for a quiet filesystem',
+      );
+      await close();
+      assert.deepEqual(failures, []);
+    } finally {
+      await close();
+      await runtime.dispose();
+      f.cleanup();
+    }
+  },
+);
+
+test('mutation cancellation during preflight reserves no ID and consumes no native reference', async () => {
+  const f = fixture(),
+    { runtime, client } = f.start();
+  try {
+    const checkout = await client.command('openCheckout', { root: f.root });
+    await client.command('readFile', { checkout, path: 'file.txt' });
+    writeFileSync(join(f.base, 'unclaimed-external'), 'native bytes');
+    const references = await native(runtime).capture({
+      checkout,
+      clientId: 'alice',
+      paths: [join(f.base, 'unclaimed-external')],
+    });
+    for (const kind of ['create-file', 'import'] as const) {
+      const input = {
+        checkout,
+        clientId: 'alice',
+        id: 'preflight-' + kind,
+        kind,
+        sources: [],
+        destination: 'after-' + kind,
+        ...(kind === 'import' ? { nativeReferences: references } : { text: 'created' }),
+      };
+      const abort = new AbortController();
+      const pending = client.command('mutate', input, { signal: abort.signal });
+      const rejected = assert.rejects(pending, isError('Cancelled'));
+      queueMicrotask(() => abort.abort());
+      await rejected;
+      await client.command('readFile', { checkout, path: 'file.txt' });
+      assert.equal(
+        await client.command('operationStatus', { clientId: 'alice', id: input.id }),
+        null,
+      );
+      assert.equal(
+        (await client.command('mutate', input)).outcome,
+        'completed',
+        'original ID and native selection must remain usable after preflight cancellation',
+      );
+      assert.equal(
+        readFileSync(join(f.root, input.destination), 'utf8'),
+        kind === 'import' ? 'native bytes' : 'created',
+      );
+    }
+  } finally {
+    await runtime.dispose();
+    f.cleanup();
+  }
+});
+
+test('failed observation release stays root-owned, is retried, and remains visible while siblings close', async () => {
+  const f = fixture(),
+    { runtime, client } = f.start();
+  const actualWatch = fs.watch;
+  let restored = false,
+    firstFailure = true,
+    attempts = 0,
+    closed = 0;
+  const handles: fs.FSWatcher[] = [];
+  const closeOriginal: (() => void)[] = [];
+  let off = async () => {};
+  try {
+    const checkout = await client.command('openCheckout', { root: f.root });
+    mock.method(fs, 'watch', (...args: Parameters<typeof fs.watch>) => {
+      const watcher: fs.FSWatcher = Reflect.apply(actualWatch, fs, args);
+      const close = watcher.close.bind(watcher);
+      handles.push(watcher);
+      closeOriginal.push(close);
+      watcher.once('close', () => closed++);
+      watcher.close = () => {
+        attempts++;
+        if (firstFailure) {
+          firstFailure = false;
+          throw new ApplicationError({
+            code: 'Unavailable',
+            message: 'Controlled watcher release failure',
+          });
+        }
+        close();
+      };
+      return watcher;
+    });
+    syncBuiltinESMExports();
+    const start = () =>
+      new Promise<() => Promise<void>>((resolve, reject) => {
+        const stop = client.watch(
+          { checkout, paths: [''] },
+          (event) => {
+            if (event.ready) resolve(stop);
+          },
+          reject,
+        );
+      });
+    off = await start();
+    await start();
+    await assert.rejects(off(), /Controlled watcher release failure/);
+    assert.equal(closed, 0);
+    await assert.rejects(runtime.dispose(), /Controlled watcher release failure/);
+    assert.equal(
+      closed,
+      handles.length,
+      'root retries the failed native close and still closes sibling observations',
+    );
+    assert(attempts > handles.length);
+    mock.restoreAll();
+    syncBuiltinESMExports();
+    restored = true;
+  } finally {
+    if (!restored) {
+      mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+    for (const close of closeOriginal) close();
+    await off().catch(() => {});
+    await runtime.dispose().catch(() => {});
+    f.cleanup();
+  }
+});
+
+test('stored publication receipts bind the queried client/request and exact consecutive transition before replay', async () => {
+  const f = fixture(),
+    { runtime, client } = f.start();
+  try {
+    const input = {
+      clientId: 'alice',
+      requestId: 'owned-receipt',
+      expectedRevision: 0,
+      state: emptyRecovery('alice'),
+    };
+    await client.command('persistRecovery', input);
+    const database = new DatabaseSync(join(f.base, 'state/moonbase-workspace-v1.sqlite'));
+    try {
+      const row = database
+        .prepare("SELECT key,body FROM records WHERE bucket='recovery-publications'")
+        .get()!;
+      const record = JSON.parse(row.body as string);
+      const states = database.prepare('SELECT client,revision,body FROM recovery').all();
+      for (const receipt of [
+        { ...record.receipt, clientId: 'bob' },
+        { ...record.receipt, requestId: 'foreign' },
+        { ...record.receipt, revision: 42 },
+      ]) {
+        const body = JSON.stringify({ ...record, receipt });
+        database
+          .prepare("UPDATE records SET body=? WHERE bucket='recovery-publications' AND key=?")
+          .run(body, row.key!);
+        await assert.rejects(
+          client.command('getRecoveryPublication', {
+            clientId: 'alice',
+            requestId: 'owned-receipt',
+          }),
+          isError('Persistence'),
+        );
+        await assert.rejects(client.command('persistRecovery', input), isError('Persistence'));
+        assert.equal(
+          database
+            .prepare("SELECT body FROM records WHERE bucket='recovery-publications' AND key=?")
+            .get(row.key!)!.body,
+          body,
+        );
+        assert.deepEqual(
+          database.prepare('SELECT client,revision,body FROM recovery').all(),
+          states,
+        );
+      }
+      const body = JSON.stringify({
+        ...record,
+        receipt: { ...record.receipt, previousRevision: 10, revision: 11 },
+      });
+      database
+        .prepare("UPDATE records SET body=? WHERE bucket='recovery-publications' AND key=?")
+        .run(body, row.key!);
+      await assert.rejects(client.command('persistRecovery', input), isError('Persistence'));
+      assert.equal(
+        database
+          .prepare("SELECT body FROM records WHERE bucket='recovery-publications' AND key=?")
+          .get(row.key!)!.body,
+        body,
+      );
+      assert.deepEqual(database.prepare('SELECT client,revision,body FROM recovery').all(), states);
+    } finally {
+      database.close();
+    }
+  } finally {
+    await runtime.dispose();
+    f.cleanup();
+  }
+});

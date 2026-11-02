@@ -102,6 +102,7 @@ export class LocalWorkspace {
   readonly service: WorkspaceServiceShape;
   readonly directories = new Map<string, Directory>();
   readonly subscriptions = new Set<Scope.Closeable>();
+  readonly watcherReleases = new Set<Effect.Effect<void>>();
   readonly signals = new Set<AbortController>();
   readonly leases = new Set<{
     checkoutId: string;
@@ -480,6 +481,18 @@ export class LocalWorkspace {
       return Effect.gen({ self: this }, function* () {
         const releases = [
           Scope.close(this.ownership.observationScope, Exit.void),
+          Effect.suspend(() =>
+            Effect.forEach([...this.watcherReleases], Effect.exit).pipe(
+              Effect.flatMap((outcomes) => {
+                const failures = outcomes.flatMap((exit) =>
+                  Exit.isFailure(exit) ? [exit.cause] : [],
+                );
+                return failures.length
+                  ? Effect.failCause(failures.reduce((all, cause) => Cause.combine(all, cause)))
+                  : Effect.void;
+              }),
+            ),
+          ),
           Scope.close(this.ownership.referenceScope, Exit.void),
           Scope.close(this.ownership.operationScope, Exit.void),
           Scope.close(this.ownership.helperScope, Exit.void),
@@ -1035,6 +1048,7 @@ export class LocalWorkspace {
       ref!.source.validate();
       return { token, ref: ref! };
     });
+    if (signal.aborted) fail('Cancelled', 'Operation cancelled before admission.');
     const occupied = this.store.reserve('operations', id, record);
     if (occupied) return this.replayOperation(id, input, this.operation(id) ?? occupied);
     for (const { token, ref } of claims) {
@@ -1707,16 +1721,27 @@ export class LocalWorkspace {
                   Deferred.doneUnsafe(closed, Effect.void);
                 });
                 watcher.once('close', () => Deferred.doneUnsafe(closed, Effect.void));
-                return { watcher, closed };
+                const release = Effect.gen(function* () {
+                  yield* releaseResource(() => watcher.close());
+                  yield* Deferred.await(closed);
+                  yield* Effect.sync(() => {
+                    watcher.removeAllListeners();
+                    self.watcherReleases.delete(release);
+                  });
+                });
+                self.watcherReleases.add(release);
+                return release;
               },
               catch: applicationError,
             }),
-            ({ watcher, closed }) =>
-              Effect.gen(function* () {
-                yield* releaseResource(() => watcher.close());
-                yield* Deferred.await(closed);
-                yield* Effect.sync(() => watcher.removeAllListeners());
-              }),
+            (release) =>
+              release.pipe(
+                Effect.onExit((exit) =>
+                  Effect.sync(() => {
+                    if (Exit.isFailure(exit)) self.cleanupFailures.push(exit.cause);
+                  }),
+                ),
+              ),
           ).pipe(Scope.provide(scope));
         for (const p of new Set(captured.paths)) {
           yield* Effect.try({ try: () => path(p, true), catch: applicationError });
@@ -1739,17 +1764,23 @@ export class LocalWorkspace {
         const common = self.approval(captured.checkout).common.path;
         if (!common.startsWith(directory.root + '/')) yield* acquire(common);
         const events = Stream.fromQueue(changes).pipe(
-          Stream.debounce('100 millis'),
-          Stream.map(() => {
-            try {
-              directory.check();
-            } catch (failure) {
-              error = errorText(failure);
-            }
-            const event = decodeWorkspaceEvent({ ...captured, error });
-            error = undefined;
-            return event;
-          }),
+          Stream.mapEffect(() =>
+            Effect.gen(function* () {
+              const timer = yield* Effect.forkIn(Effect.sleep('100 millis'), scope);
+              yield* Fiber.join(timer);
+              yield* Queue.clear(changes);
+              return yield* Effect.sync(() => {
+                try {
+                  directory.check();
+                } catch (failure) {
+                  error = errorText(failure);
+                }
+                const event = decodeWorkspaceEvent({ ...captured, error });
+                error = undefined;
+                return event;
+              });
+            }),
+          ),
         );
         return Stream.concat(
           Stream.succeed(decodeWorkspaceEvent({ ...captured, ready: true })),
