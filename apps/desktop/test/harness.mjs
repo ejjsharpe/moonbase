@@ -3,6 +3,7 @@ import { app, ipcMain } from 'electron';
 import { writeFileSync } from 'node:fs';
 const register = ipcMain.handle.bind(ipcMain);
 const control = {
+  startupFailure: process.env.MOONBASE_TEST_STARTUP_FAILURE ?? null,
   calls: [],
   chatCalls: [],
   cancelIds: [],
@@ -53,9 +54,24 @@ ipcMain.handle = (name, listener) =>
         };
       return reply;
     }
-    if (name === 'moonbase-chat:call') control.chatCalls.push(structuredClone(input));
+    if (name === 'moonbase-chat:call') {
+      control.chatCalls.push(structuredClone(input));
+      if (control.startupFailure === 'chat-context' && input?.kind === 'context')
+        return {
+          ok: false,
+          error: { code: 'Unavailable', message: 'Controlled chat context initialization failure' },
+        };
+    }
     if (name !== 'moonbase:call') return listener(event, input);
     control.calls.push(structuredClone(input));
+    if (control.startupFailure === 'editor' && input?.input?.operation === 'loadRecovery')
+      return {
+        ok: false,
+        error: {
+          code: 'Persistence',
+          message: 'Controlled editor recovery initialization failure',
+        },
+      };
     if (control.restoreOn === input?.input?.operation) {
       control.outage = null;
       control.restoreOn = null;

@@ -46,7 +46,7 @@
       "dependencies": {
         "@base-ui/react": "1.9.0",
         "@moonbase/application": "workspace:*",
-        "@moonbase/chat": "workspace:*",
+        "@moonbase/contracts": "workspace:*",
         "@moonbase/editor": "workspace:*",
         "@moonbase/pi-runtime": "workspace:*",
         "@moonbase/ssh": "workspace:*",
@@ -59,6 +59,7 @@
         "react-dom": "19.3.1",
       },
       "devDependencies": {
+        "@moonbase/effect": "workspace:*",
         "electron": "45.1.0",
         "electron-builder": "26.18.0",
       },

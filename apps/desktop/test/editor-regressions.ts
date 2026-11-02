@@ -1,7 +1,7 @@
 import { dirname } from 'node:path';
 import { createHash } from 'node:crypto';
 import { test, expect, type Page, type ElectronApplication } from '@playwright/test';
-import type { RecoveryLoad } from '@moonbase/application/client';
+import type { RecoveryLoad } from '@moonbase/contracts/workspace';
 import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 
 export const filenameCases = ['__proto__', 'constructor', 'toString', 'hasOwnProperty'];

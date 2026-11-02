@@ -1,5 +1,5 @@
 import { captureNative } from './editor-regressions.ts';
-import type { RecoveryLoad } from '@moonbase/application/client';
+import type { RecoveryLoad } from '@moonbase/contracts/workspace';
 import { filenameCases, checkFilenameMaps, checkTabMenu } from './editor-regressions.ts';
 import { test, expect, _electron as electron } from '@playwright/test';
 import type { ElectronApplication, Page } from '@playwright/test';
@@ -24,6 +24,7 @@ const errors: string[] = [],
   consoleErrors: string[] = [];
 declare global {
   var desktopTest: {
+    startupFailure: string | null;
     chatCalls: { kind: string; id: string }[];
     cancelIds: string[];
     chatCancelIds: string[];

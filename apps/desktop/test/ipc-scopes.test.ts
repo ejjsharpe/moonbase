@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Effect, Layer, ManagedRuntime, Stream } from 'effect';
-import { ApplicationError } from '@moonbase/application/client';
-import type { ChatClient } from '@moonbase/application/chat-client';
-import { ConnectionService, releaseResource } from '@moonbase/application/services';
+import { ApplicationError } from '@moonbase/contracts/workspace';
+import type { ChatClient } from '@moonbase/contracts/chat';
+import { ConnectionService } from '@moonbase/contracts/services';
+import { releaseResource } from '@moonbase/effect';
 import { makeConnectionClient } from '@moonbase/application/runtime/clients';
 import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
 import { cancellation } from '../src/wire.ts';

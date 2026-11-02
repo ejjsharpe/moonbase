@@ -1,16 +1,13 @@
 import { Effect, Exit, Scope, type ManagedRuntime } from 'effect';
-import {
-  decodeConnectionInput,
-  isConnectionCommand,
-} from '@moonbase/application/connection-schema';
+import { decodeConnectionInput, isConnectionCommand } from '@moonbase/contracts/connection-schema';
 import {
   normalizeApplicationError,
   runApplicationEffect,
 } from '@moonbase/application/runtime/effect-client';
-import { decodeChatInput, isChatCommand } from '@moonbase/application/chat-schema';
-import { ApplicationError, type ObservationClose } from '@moonbase/application/client';
-import type { ChatClient, ChatCommand, ChatSession } from '@moonbase/application/chat-client';
-import type { ConnectionClient, ConnectionCommand } from '@moonbase/application/connection-client';
+import { decodeChatInput, isChatCommand } from '@moonbase/contracts/chat-schema';
+import { ApplicationError, type ObservationClose } from '@moonbase/contracts/workspace';
+import type { ChatClient, ChatCommand, ChatSession } from '@moonbase/contracts/chat';
+import type { ConnectionClient, ConnectionCommand } from '@moonbase/contracts/connection';
 import { fields, record, requestId, errorDTO, invalid, type Reply } from './wire.ts';
 
 /** A window's bounded IPC waits and observations; commands still enter shared application handlers. */

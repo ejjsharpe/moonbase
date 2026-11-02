@@ -4,7 +4,7 @@ import {
   decodeWorkspaceOutput,
   decodeWorkspaceWatchInput,
   isWorkspaceCommand,
-} from '@moonbase/application/workspace-schema';
+} from '@moonbase/contracts/workspace-schema';
 import {
   normalizeApplicationError,
   runApplicationEffect,
@@ -16,7 +16,7 @@ import {
   type WorkspaceCommand,
   type WorkspaceEvent,
   type ObservationClose,
-} from '@moonbase/application/client';
+} from '@moonbase/contracts/workspace';
 import {
   checkout,
   errorDTO,
