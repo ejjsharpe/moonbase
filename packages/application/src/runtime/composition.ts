@@ -317,7 +317,7 @@ class Application {
         return false;
       }
       model.setAdmissionsOpen(false);
-      if (!controller.getSnapshot().recoveryReady) {
+      if (!(await model.finishQuitPreparation())) {
         this.restore();
         return false;
       }
