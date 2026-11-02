@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { createMoonbaseApplication, type MoonbaseApplication } from '@moonbase/application';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { emptyRecovery, type EditorClient } from '@moonbase/contracts/workspace';
+import type { EditorController, ClosePrompt } from '@moonbase/application/editor';
 import { chatCapabilities, editorCapabilities, checkout, target } from './application-fixture.ts';
 
 async function tick() {
@@ -19,6 +20,17 @@ async function cleanupSettled(app: MoonbaseApplication) {
   } finally {
     off();
   }
+}
+
+function closePrompt(editor: EditorController): Promise<ClosePrompt> {
+  const current = editor.getSnapshot().closePrompt;
+  if (current) return Promise.resolve(current);
+  const prompt = Promise.withResolvers<ClosePrompt>();
+  const off = editor.subscribe(() => {
+    const current = editor.getSnapshot().closePrompt;
+    if (current) prompt.resolve(current);
+  });
+  return prompt.promise.finally(off);
 }
 
 test('public factory composes independent editors and optional chat without remote admissions', async () => {
@@ -610,6 +622,180 @@ test('the synchronous unload preservation check fences reentrant edits and resto
     app.chat!.setDraft('live again');
     assert.equal(model.buffer(target)?.text, 'live again');
     assert.equal(app.chat!.getSnapshot().draft, 'live again');
+  } finally {
+    await app.dispose();
+    await editor.runtime.dispose();
+  }
+});
+
+for (const choice of ['discard', 'cancel'] as const)
+  test(`an editor that completed Quit stays fenced while another prompt waits (${choice})`, async () => {
+    const editor = editorCapabilities();
+    const app = await createMoonbaseApplication({
+      editors: [
+        { client: editor.client, clientId: 'one' },
+        { client: editor.client, clientId: 'two' },
+      ],
+    });
+    try {
+      const [first, second] = app.editors;
+      for (const model of app.editors) {
+        await model.openCheckout(checkout.root);
+        await model.open(target);
+        model.edit(target, 'initial dirty');
+      }
+      const firstPrompt = closePrompt(first),
+        quit = app.prepareQuit();
+      first.answerClose((await firstPrompt).id, 'discard');
+      const prompt = await closePrompt(second);
+      let blocked = false;
+      try {
+        first.edit(target, 'late first draft');
+      } catch (error) {
+        assert(ApplicationError.is(error));
+        assert.equal(error.code, 'Unavailable');
+        blocked = true;
+      }
+      second.answerClose(prompt.id, choice);
+      const consent = await quit;
+      assert.equal(blocked, true);
+      assert.equal(consent, choice === 'discard');
+      assert.equal(first.buffer(target)?.text, 'original');
+      if (consent) {
+        assert(app.editors.every((model) => model.getSnapshot().recoveryReady));
+        await app.dispose();
+        assert.deepEqual(
+          (await editor.client.command('loadRecovery', { clientId: 'one' })).state.drafts,
+          [],
+        );
+      } else {
+        assert.equal(app.getSnapshot().phase, 'live');
+        first.edit(target, 'accepted after veto');
+        await first.flush();
+        assert.equal(
+          (await editor.client.command('loadRecovery', { clientId: 'one' })).state.drafts[0].text,
+          'accepted after veto',
+        );
+      }
+    } finally {
+      await app.dispose();
+      await editor.runtime.dispose();
+    }
+  });
+
+test('a synchronous edit during the final editor notification vetoes stale Quit consent', async () => {
+  const editor = editorCapabilities();
+  const app = await createMoonbaseApplication({
+    editors: [{ client: editor.client, clientId: 'one' }],
+  });
+  const model = app.editors[0];
+  let off = () => {};
+  try {
+    await model.openCheckout(checkout.root);
+    await model.open(target);
+    model.edit(target, 'initial dirty');
+    let preserving = false,
+      edited = false;
+    off = model.subscribe(() => {
+      if (model.getSnapshot().preserving) preserving = true;
+      else if (preserving && !edited) {
+        edited = true;
+        model.edit(target, 'accepted in final notification');
+      }
+    });
+    const prompt = closePrompt(model),
+      quit = app.prepareQuit();
+    model.answerClose((await prompt).id, 'discard');
+    assert.equal(await quit, false);
+    assert.equal(edited, true);
+    assert.equal(app.getSnapshot().phase, 'live');
+    assert.equal(model.buffer(target)?.text, 'accepted in final notification');
+    off();
+    await model.flush();
+    assert.equal(
+      (await editor.client.command('loadRecovery', { clientId: 'one' })).state.drafts[0].text,
+      'accepted in final notification',
+    );
+  } finally {
+    off();
+    await app.dispose();
+    await editor.runtime.dispose();
+  }
+});
+
+for (const fail of [false, true])
+  test(`closing chat fences storage reentrancy and restores admissions on veto (failure ${fail})`, async () => {
+    const chat = chatCapabilities();
+    const app = await createMoonbaseApplication({ chat: async () => chat.dependencies });
+    try {
+      const controller = app.chat!;
+      await controller.start();
+      await controller.connect();
+      await controller.select(chat.target);
+      controller.setDraft('before close');
+      let reentered = false,
+        reentrantDraft: string | undefined;
+      chat.storage.write = () => {
+        if (!reentered) {
+          reentered = true;
+          controller.setDraft('during preservation');
+          reentrantDraft = controller.getSnapshot().draft;
+        }
+        if (fail) throw Error('Controlled storage failure');
+      };
+      assert.equal(app.closeChat(), !fail);
+      assert.equal(reentered, true);
+      assert.equal(reentrantDraft, 'before close');
+      assert.equal(controller.getSnapshot().draft, 'before close');
+      assert.equal(JSON.parse(chat.storage.value!).drafts[0].text, 'before close');
+      if (fail) {
+        assert.equal(app.chat, controller);
+        assert(controller.getSnapshot().storageError);
+        chat.storage.write = () => {};
+        controller.setDraft('accepted after veto');
+        assert.equal(controller.getSnapshot().draft, 'accepted after veto');
+      } else {
+        assert.equal(app.chat, null);
+        assert.equal(controller.getSnapshot().storageError, null);
+      }
+    } finally {
+      await app.dispose();
+    }
+  });
+
+test('the first Quit preservation fences storage reentrancy then accepts drafts during editor prompts', async () => {
+  const editor = editorCapabilities(),
+    chat = chatCapabilities();
+  const app = await createMoonbaseApplication({
+    editors: [{ client: editor.client, clientId: 'one' }],
+    chat: async () => chat.dependencies,
+  });
+  try {
+    const model = app.editors[0],
+      controller = app.chat!;
+    await model.openCheckout(checkout.root);
+    await model.open(target);
+    model.edit(target, 'dirty editor');
+    await controller.start();
+    await controller.connect();
+    await controller.select(chat.target);
+    controller.setDraft('before Quit');
+    let reentrantDraft: string | undefined;
+    chat.storage.write = () => {
+      if (reentrantDraft !== undefined) return;
+      reentrantDraft = 'checking';
+      controller.setDraft('during preservation');
+      reentrantDraft = controller.getSnapshot().draft;
+    };
+    const prompt = closePrompt(model),
+      quit = app.prepareQuit();
+    const current = await prompt;
+    assert.equal(reentrantDraft, 'before Quit');
+    controller.setDraft('accepted during prompt');
+    assert.equal(controller.getSnapshot().draft, 'accepted during prompt');
+    model.answerClose(current.id, 'discard');
+    assert.equal(await quit, true);
+    assert.equal(JSON.parse(chat.storage.value!).drafts[0].text, 'accepted during prompt');
   } finally {
     await app.dispose();
     await editor.runtime.dispose();
