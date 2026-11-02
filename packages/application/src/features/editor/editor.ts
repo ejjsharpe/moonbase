@@ -1130,6 +1130,31 @@ class EditorModelState {
       'quit',
     );
   }
+  /** Confirm clean post-close view metadata only after the application fences admissions. */
+  async finishQuitPreparation(): Promise<boolean> {
+    if (
+      this.admissionsOpen ||
+      !this.ready ||
+      this.loading ||
+      this.closing ||
+      this.preserving ||
+      this.pendingPublication ||
+      this.publications !== 0 ||
+      [...this.buffers.values()].some(
+        (buffer) => buffer.text !== buffer.disk.text || buffer.saving || buffer.pendingSave,
+      ) ||
+      [...this.operations.values()].some((operation) => !operation.acknowledged)
+    )
+      return false;
+    if (this.snapshot.recoveryReady) return true;
+    try {
+      await this.flushRecovery();
+    } catch (error) {
+      this.report(error);
+      return false;
+    }
+    return this.snapshot.recoveryReady;
+  }
   private async preserve(
     targets: FileTarget[],
     kind: 'files' | 'checkout' | 'quit',
@@ -2019,7 +2044,10 @@ class EditorModelState {
 
 export type EditorDependencies = { client: EditorClient; clientId?: string };
 export type EditorModel = EditorModelState;
-export type EditorController = Omit<EditorModelState, 'bind' | 'release' | 'setAdmissionsOpen'>;
+export type EditorController = Omit<
+  EditorModelState,
+  'bind' | 'release' | 'setAdmissionsOpen' | 'finishQuitPreparation'
+>;
 
 /** Acquire once under the composition root's scope; no runtime or backend is installed. */
 export const makeEditorModel = (
