@@ -23,6 +23,8 @@ The [architecture and baseline](docs/HEADLESS-ARCHITECTURE.md) records enforced 
 
 ## Development
 
+Use Conventional Commit PR titles, for example `fix(editor): retain drafts` or `feat: add workspace search`. The required `conventional-commits` check validates titles, and PRs use squash merging with the PR title as the commit subject. Keep that generated subject when merging.
+
 Use Bun 1.4.4 and Node 26.13.0. Workspace/native desktop builds require macOS and Xcode command-line tools.
 
 ```sh
