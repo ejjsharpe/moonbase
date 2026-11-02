@@ -16,6 +16,8 @@ A macOS workbench for local editing and optional remote Pi Durable chat. Reusabl
 
 Packages consume public exports, accept injected dependencies and stay independent of client applications. Each process owns one scoped Effect runtime; standalone clients acquire only the capabilities they use. See [AGENTS.md](AGENTS.md) for contribution rules and [DESIGN.md](docs/DESIGN.md) for UI guidance.
 
+The [headless migration architecture and baseline](docs/HEADLESS-ARCHITECTURE.md) records the target ownership, temporary import edges, helper decisions and ticket handoffs for [epic #63](https://github.com/ejjsharpe/moonbase/issues/63).
+
 ## Development
 
 Use Bun 1.4.4 and Node 26.13.0. Workspace/native desktop builds require macOS and Xcode command-line tools.
