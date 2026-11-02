@@ -77,9 +77,9 @@ const request = Schema.Struct({
   submissionId: Schema.NullOr(recordId),
   pending: Schema.Boolean,
 });
-const store = Schema.Struct({ identity: text(8192) });
+const store = Schema.Struct({ identity: Schema.String });
 const metadata = Schema.Struct({
-  identity: text(8192),
+  identity: Schema.String,
   title: text(200),
   createdAt: text(64).check(Schema.makeFilter((value) => Number.isFinite(Date.parse(value)))),
   pending: integer.check(Schema.makeFilter((value) => value >= 0)),
@@ -130,11 +130,7 @@ export function savedRequest(value: unknown, actorId: string, requestId: string)
   let session;
   if (bound.operation === 'createChat') session = bound.session;
   else session = bound.operation === 'sendChat' ? bound.target : bound.stop.target;
-  if (
-    bound.operation === 'sendChat' &&
-    result.conversationId !== null &&
-    result.conversationId !== bound.target.conversationId
-  )
+  if (bound.operation === 'sendChat' && result.conversationId !== bound.target.conversationId)
     fail('Persistence', 'Stored Moonbase request conversation is invalid.');
   if (
     (bound.operation !== 'sendChat' && (result.pending || result.submissionId !== null)) ||
