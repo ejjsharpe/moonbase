@@ -277,7 +277,10 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
           await p.evaluate(() => (window as unknown as { task08Document: string }).task08Document),
         ).toBe(oldDocument);
         const cancelled = await current.evaluate(() => globalThis.task08Cancels);
-        expect(active.some((id) => cancelled.includes(id))).toBe(false);
+        // Fresh editing switches to Editor, which deliberately detaches Chat before the reload veto.
+        const retained =
+          mode === 'fresh-veto' ? active.filter((id) => id.startsWith('moonbase:')) : active;
+        expect(retained.some((id) => cancelled.includes(id))).toBe(false);
         if (mode === 'fresh-veto') {
           await expect(
             p.locator('.view-line').filter({ hasText: 'fresh visible tail' }).first(),

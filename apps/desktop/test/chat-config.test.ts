@@ -5,6 +5,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readConfiguration } from '../src/chat/config.ts';
 test('private configuration is owner-only, bounded, explicit and projected; bad files never initialize transport', async (t) => {
+  await assert.rejects(readConfiguration(''), {
+    code: 'InvalidInput',
+    message: 'Set MOONBASE_CHAT_CONFIG to an absolute private configuration file.',
+  });
   const directory = await mkdtemp(join(tmpdir(), 'moonbase-chat-config-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'private.json'),

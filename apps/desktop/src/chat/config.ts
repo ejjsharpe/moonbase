@@ -1,3 +1,4 @@
+import { ApplicationError } from '@moonbase/application/client';
 import { open } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { isAbsolute } from 'node:path';
@@ -24,7 +25,10 @@ const decodeConfiguration = Schema.decodeUnknownSync(configurationSchema, {
 export type ChatConfiguration = { ssh: SshConfiguration; context: ChatSession };
 export async function readConfiguration(path: string | undefined): Promise<ChatConfiguration> {
   if (!path || !isAbsolute(path))
-    throw Error('Set MOONBASE_CHAT_CONFIG to an absolute private configuration file.');
+    throw new ApplicationError({
+      code: 'InvalidInput',
+      message: 'Set MOONBASE_CHAT_CONFIG to an absolute private configuration file.',
+    });
   const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const stat = await file.stat();
@@ -34,12 +38,18 @@ export async function readConfiguration(path: string | undefined): Promise<ChatC
       (stat.mode & 0o077) !== 0 ||
       stat.uid !== process.getuid?.()
     )
-      throw Error('Chat configuration must be an owner-only regular file, at most 16 KiB.');
+      throw new ApplicationError({
+        code: 'InvalidInput',
+        message: 'Chat configuration must be an owner-only regular file, at most 16 KiB.',
+      });
     let value: unknown;
     try {
       value = JSON.parse(await file.readFile('utf8'));
     } catch {
-      throw Error('Chat configuration is not valid JSON.');
+      throw new ApplicationError({
+        code: 'InvalidInput',
+        message: 'Chat configuration is not valid JSON.',
+      });
     }
     let v: typeof configurationSchema.Type;
     try {
