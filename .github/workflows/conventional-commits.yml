@@ -1,0 +1,29 @@
+name: conventional commits
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+permissions:
+  contents: read
+concurrency:
+  group: conventional-commits-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  conventional-commits:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate squash commit title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          const conventional = /^[a-z][a-z0-9]*(\([^\r\n()]+\))?!?: [^\r\n]+$/;
+          for (const title of ['feat: add editor', 'fix(editor): retain drafts', 'refactor!: remove aliases', 'feat(api)!: change API']) {
+            assert(conventional.test(title));
+          }
+          for (const title of ['', 'Add editor', 'feat:add editor', 'feat: ', 'feat: add editor\nextra']) {
+            assert(!conventional.test(title));
+          }
+          assert(conventional.test(process.env.PR_TITLE ?? ''), 'Use a Conventional Commit PR title, for example fix(editor): retain drafts');
+          JS
