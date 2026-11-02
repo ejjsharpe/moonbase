@@ -36,7 +36,7 @@ Snapshots are serializable data: `{ phase, chat: { state, error }, cleanup: { pe
 
 ## Quit and head handoff
 
-Quit checks chat preservation, waits for each editor's exact Save/Discard/Cancel protocol, then synchronously fences every model admission before preserving latest chat state again. The head renders `closePrompt` and supplies `answerClose`. Edits and admitted results during the editor gate remain included in final chat preservation. Veto or failed final preservation restores admissions without reversing completed Saves/Discards. Duplicate Quit joins its current attempt. Panel open/close is blocked during preparation; an existing open settles before the first preservation pass.
+Quit checks chat preservation, waits for each editor's exact Save/Discard/Cancel protocol and fences each successful editor before moving to the next. It rejects stale readiness after a final editor notification or admitted result, then synchronously fences every model before preserving latest chat state again. The head renders `closePrompt` and supplies `answerClose`. Chat is temporarily fenced during its first preservation write, then accepts drafts during editor prompts for the final pass. Veto or failed final preservation restores admissions without reversing completed Saves/Discards. Duplicate Quit joins its current attempt. Panel open/close is blocked during preparation; an existing open settles before the first preservation pass.
 
 Admission setters publish no callbacks between models. The final storage write may reenter the application, but controllers and retained workflow handles cannot admit new actions or draft edits. Already-admitted save/mutation/publication continuations retain their existing resource scopes and reconciliation. Position/prompt teardown setters safely do nothing after fencing.
 
@@ -48,7 +48,7 @@ On head/document loss, call `dispose()` directly. It cancels prompt owners immed
 
 ## Panels, cleanup and Hide
 
-`closeChat()` preserves first, removes the current controller promptly, and disposes it outside its removable scope. Root cleanup retains pending/failing outcomes, fences late writes and prevents overlapping namespace reuse. Other editors stay usable while release is held. Reopen requires actual successful finalization. Failed cleanup stays visible and keeps its lease; controlled Quit can still obtain consent and drain/report the failure.
+`closeChat()` fences that model before preserving, removes the current controller promptly on success, and disposes it outside its removable scope. A veto restores admissions while it remains live/current. Root cleanup retains pending/failing outcomes, fences late writes and prevents overlapping namespace reuse. Other editors stay usable while release is held. Reopen requires actual successful finalization. Failed cleanup stays visible and keeps its lease; controlled Quit can still obtain consent and drain/report the failure.
 
 Disposal attempts every instance release, waits for pending acquisition and cleanup, closes the aggregate scope and finally disposes the shared runtime. Failure rejects with a safe bounded aggregate error and phase `failed`, never `disposed`. Initialization uses the same unwind, including held/failing finalizers. No saved recovery is deleted.
 
