@@ -1198,3 +1198,49 @@ test('closing the selected view cannot consume the initial host/list refresh', a
   assert.equal(f.controller.getSnapshot().selected, null);
   assert.equal(f.subscriptions, 0);
 });
+
+test('a connection watch supersedes an older initial status reply within the same attachment', async (t) => {
+  const f = await fixture(t),
+    held = event<unknown>();
+  const original = f.connection.command;
+  f.connection.command = async (operation, input, options) =>
+    operation === 'getConnection'
+      ? ((await held.promise) as never)
+      : original(operation, input, options);
+  const starting = f.controller.start();
+  f.publishConnection({
+    state: 'connected',
+    connectionId: 'newer-observed-generation',
+    profile,
+    health: { ...context.host, protocol: 1, version: '0.1.0', capabilities: ['chat-v0'] },
+  });
+  await f.controller.refresh();
+  held.resolve({ state: 'disconnected', connectionId: null, profile });
+  await starting;
+  assert.equal(f.controller.getSnapshot().connection!.connectionId, 'newer-observed-generation');
+  assert(f.controller.getSnapshot().host);
+  assert.equal(f.controller.getSnapshot().error, null);
+  assert(!f.calls.some((call) => call.operation === 'connect'));
+});
+
+test('disposal fences reentrant snapshot listeners before releasing resources or emitting cleared view state', async (t) => {
+  const f = await fixture(t);
+  await ready(f);
+  f.controller.setDraft('preserved before disposal');
+  const saved = f.storage.value,
+    writes = f.storage.writes;
+  let reentered = false;
+  f.controller.subscribe(() => {
+    if (reentered) return;
+    reentered = true;
+    f.controller.setDraft('reentrant edit after disposal began');
+    void f.controller.create('reentrant admission after disposal began');
+  });
+  await f.controller.dispose();
+  assert.equal(f.storage.value, saved);
+  assert.equal(f.storage.writes, writes);
+  assert(!f.calls.some((call) => call.operation === 'createChat'));
+  assert.equal(f.controller.getSnapshot().draft, 'preserved before disposal');
+  assert.equal(f.controller.getSnapshot().host, null);
+  assert.equal(f.controller.getSnapshot().snapshot, null);
+});

@@ -289,12 +289,14 @@ class ChatModelState {
   start(): Promise<void> {
     if (this.attachment?.alive || this.closed) return Promise.resolve();
     const owner = (this.attachment = this.owner());
+    let received = false;
     return this.action(
       'status',
       Effect.gen({ self: this }, function* () {
         yield* this.observe(owner, () =>
           this.connection.watch(
             (state) => {
+              received = true;
               if (owner.alive) this.onConnection(state);
             },
             (error) => {
@@ -306,7 +308,7 @@ class ChatModelState {
           try: (signal) => this.connection.command('getConnection', {}, { signal }),
           catch: normalizeApplicationError,
         });
-        if (owner.alive) this.onConnection(state);
+        if (owner.alive && !received) this.onConnection(state);
       }),
       owner,
       false,
@@ -770,9 +772,17 @@ class ChatModelState {
   }
   private beginDisposal() {
     if (this.closed) return;
-    void this.detach();
     this.closed = true;
     this.listeners.clear();
+    this.state = {
+      ...this.state,
+      host: null,
+      snapshot: null,
+      older: [],
+      olderCursor: null,
+      active: [],
+    };
+    void this.detach();
   }
   release(): Effect.Effect<void> {
     return Effect.suspend(() => {
