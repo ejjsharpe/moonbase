@@ -403,3 +403,15 @@ test('browser watch close fences immediately and keeps completion handling until
   await assert.rejects(pending, { code: 'Persistence' });
   assert.equal(removed, 1);
 });
+
+test('desktop errors redact unknown private diagnostics and reply envelopes remain strict', async () => {
+  const secret = 'private-token-and-path-must-not-escape';
+  const result = errorDTO(new Error(secret));
+  assert(!result.message.includes(secret));
+  const client = bridgeClient({
+    call: async () => ({ ok: 'forged', value: { revision: 0 } }),
+  } as never);
+  await assert.rejects(client.command('loadRecovery', { clientId: 'desktop-primary' }), {
+    code: 'Incompatible',
+  });
+});
