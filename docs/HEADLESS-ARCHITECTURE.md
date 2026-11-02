@@ -129,3 +129,29 @@ Ticket 02 validation used Node `v26.13.0` and explicit pinned Bun `1.4.4` on mac
 | `bun run --cwd apps/desktop check:renderer` | Pass, 1860 actual inputs; workers/font retained, no privileged graph |
 
 The build initially lacked ripgrep notice files after copying only its verified executable. Copying the complete baseline `prepare-ripgrep.mjs` output, including COPYING/LICENSE-MIT/UNLICENSE, fixed generated setup and the actual desktop build passed. No source workaround or notice omission was introduced. Native foreground/package execution and real/manual checks remain for final integration; the final default root source run must also report or resolve the timing-sensitive watch failure.
+
+## Ticket 03 runtime handoff
+
+Application now implements dispatch, runtime-bound clients and invocation in `src/runtime/{handlers,clients,effect-client}.ts`, exported as `@moonbase/application/runtime/{handlers,clients,effect-client}`. Existing callers, examples, process roots, fixtures and public-import smoke use these canonical paths. The old `handlers`, `runtime-client` and `effect-client` entries reexport the same functions until #72; identity assertions cover the aliases. Executable dispatch/invocation algorithms are unchanged. All service ports/data/errors come from contracts, and normalization/release remain the single implementations in `@moonbase/effect`. The application privileged host-health alias remains the previously recorded #72 exception.
+
+The runtime API signatures and ownership are documented in [application invocation](../packages/application/docs/SCHEMAS.md). #67 owns `src/features/chat`, its tests and chat export; #68 owns `src/features/editor`, its tests and editor export. They may import the internal `../../runtime/effect-client.ts` implementation, preserving acquisition in the supplied runtime and binding of the already-acquired model. Neither ticket changes the shared runtime helpers. #69 owns composition/lifecycle; this step introduces no factory runtime, scheduler, serialization adapter or backend acquisition.
+
+Named infrastructure process roots are restricted to the three canonical runtime subpaths. Reusable service exports remain unable to conceal application dependencies behind those roots. Source/browser audits account for the new implementation paths, including erased edges. The existing chat migration exception follows only its renamed runtime import and retains #67 ownership; no new allowed dependency was added. All four baseline JSON fixtures and the prior-producer workspace archive remain unchanged.
+
+Validation used Node `v26.13.0` and pinned Bun `1.4.4` on macOS arm64 against this ticket's delivery tree. Logs are `/private/tmp/moonbase-66-{typecheck,lint,foundation,desktop-focused,editor-focused,chat-focused,graphs,renderer,editor-integration,chat-integration}.log`.
+
+| Command/evidence | Result |
+| --- | --- |
+| `bun install --frozen-lockfile` | Pass, lockfile unchanged |
+| `NX_DAEMON=false bun run typecheck` | Pass, all 9 tasks |
+| `bun run --cwd packages/application test` | Pass, 38/38; canonical facades, pre-abort, isolated cancellation, held/failing finalizers, repeat close, safe errors, thrown/reentrant callbacks and three portable runtime bundles |
+| Desktop `node --experimental-strip-types --test test/cleanup.test.ts test/ipc-scopes.test.ts` | Pass, 8/8 |
+| Editor `node --experimental-strip-types --test test/model-lifecycle.test.ts` | Pass, 16/16 |
+| Chat `node --experimental-strip-types --test test/controller.test.ts` | Pass, 63/63 |
+| Root `node --experimental-strip-types --test --test-name-pattern='bundles\|schema entry\|configuration subpath' packages/contracts/test/*.test.ts packages/ssh/test/configuration.test.ts` | Pass, 13/13 selected graph checks |
+| `bun run --cwd packages/editor check:renderer` | Pass, 1830 actual browser inputs, no privileged graph |
+| `bun run test:editor-integration` | Pass, 16/16; native helper build and controlled local filesystem/SQLite |
+| `bun run test:chat-integration` | Pass, 7/7; controlled providers/loopback fixtures |
+| Foundation, root lint, formatting and `git diff --check` | Pass |
+
+The controlled integration suites ran serially. Full default source tests and desktop build/package/native foreground suites were not repeated for this mechanical relocation; #72 must run final integrated checks, with the #65 workspace parallel-watch timing failure still explicit. No real SSH/provider, manual interaction, accessibility, signing or deployment qualification is claimed.

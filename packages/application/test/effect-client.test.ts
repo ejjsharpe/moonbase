@@ -6,8 +6,9 @@ import {
   normalizeApplicationError,
   runApplicationEffect,
   observeApplicationStream,
-} from '@moonbase/application/effect-client';
+} from '@moonbase/application/runtime/effect-client';
 import { releaseResource } from '@moonbase/application/services';
+import type { ObservationClose } from '@moonbase/contracts/common';
 
 function event() {
   let resolve!: () => void;
@@ -399,5 +400,97 @@ test('public error normalizer preserves typed identity and safely adapts unknown
       for (const reason of exit.cause.reasons)
         if (Cause.isFailReason(reason)) safeFailure(reason.error, 'Application effect failed');
     }
+  }
+});
+
+test('a throwing receiver retains its failure when onError reenters close and throws', async () => {
+  const runtime = ManagedRuntime.make(Layer.empty);
+  const reported = event();
+  const received: number[] = [];
+  let closed: Promise<void> | undefined;
+  let close: ObservationClose = async () => {};
+  let failure: ApplicationError | undefined;
+  close = observeApplicationStream(
+    runtime,
+    Stream.fromIterable([1, 2]),
+    (value) => {
+      received.push(value);
+      throw new Error(privateDiagnostic);
+    },
+    (error) => {
+      failure = error;
+      closed = close();
+      void closed.catch(() => {});
+      reported.resolve();
+      throw new Error(privateDiagnostic);
+    },
+  );
+  try {
+    await reported.promise;
+    assert.deepEqual(received, [1]);
+    assert.strictEqual(close(), closed);
+    safeFailure(failure, 'Application effect failed');
+    await assert.rejects(closed!, (error) => error === failure);
+    assert.equal(await runApplicationEffect(runtime, Effect.succeed('still live')), 'still live');
+  } finally {
+    await close().catch(() => {});
+    await runtime.dispose();
+  }
+});
+
+test('receiver-driven close fences later events and joins held release without reacquisition', async () => {
+  const runtime = ManagedRuntime.make(Layer.empty);
+  const releasing = event(),
+    gate = event();
+  const received: number[] = [];
+  let acquisitions = 0,
+    releases = 0;
+  let closed: Promise<void> | undefined;
+  let close: ObservationClose = async () => {};
+  close = observeApplicationStream(
+    runtime,
+    Stream.unwrap(
+      Effect.gen(function* () {
+        yield* Effect.acquireRelease(
+          Effect.sync(() => {
+            acquisitions++;
+          }),
+          () =>
+            releaseResource(async () => {
+              releases++;
+              releasing.resolve();
+              await gate.promise;
+            }),
+        );
+        return Stream.concat(Stream.fromIterable([1, 2]), Stream.never);
+      }),
+    ),
+    (value) => {
+      received.push(value);
+      closed = close();
+    },
+    (error) => {
+      throw error;
+    },
+  );
+  try {
+    await releasing.promise;
+    assert.strictEqual(close(), closed);
+    let settled = false;
+    const completion = closed!.then(() => {
+      settled = true;
+    });
+    await runtime.runPromise(Effect.yieldNow);
+    assert.equal(settled, false);
+    assert.deepEqual(received, [1]);
+    assert.equal(acquisitions, 1);
+    gate.resolve();
+    await completion;
+    assert.equal(releases, 1);
+    assert.equal(await runApplicationEffect(runtime, Effect.succeed('still live')), 'still live');
+  } finally {
+    gate.resolve();
+    await close();
+    await runtime.dispose();
   }
 });

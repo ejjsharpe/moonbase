@@ -196,13 +196,7 @@ test('the configuration subpath has no SSH process or application service graph'
   const inputs = Object.keys(result.metafile.inputs);
   assert(inputs.some((path) => path.endsWith('packages/ssh/src/configuration.ts')));
   assert(!inputs.some((path) => /packages\/ssh\/src\/(?:index|process)\.ts$/.test(path)));
-  assert(
-    !inputs.some((path) =>
-      /packages\/application\/src\/(?:services|handlers|runtime-client|host-health)\.ts$/.test(
-        path,
-      ),
-    ),
-  );
+  assert(!inputs.some((path) => /packages\/application\//.test(path)));
   assert(!inputs.some((path) => /packages\/(?:pi-runtime|workspace)|@earendil-works/.test(path)));
   assert(!result.outputFiles[0].text.includes('node:child_process'));
 });

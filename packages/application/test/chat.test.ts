@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { Effect, Layer, ManagedRuntime, Stream } from 'effect';
 import { ApplicationError } from '../src/client.ts';
 import type { ChatSnapshot, ChatTarget } from '../src/chat-client.ts';
-import { makeChatClient } from '../src/runtime-client.ts';
+import { makeChatClient } from '@moonbase/application/runtime/clients';
 import { ChatService, releaseResource, type ChatServiceShape } from '../src/services.ts';
 
 const session = { host: { hostId: 'remote', storeId: 'store' }, actorId: 'personal' };

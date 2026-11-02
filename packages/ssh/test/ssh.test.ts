@@ -14,7 +14,7 @@ import type { ConnectionSnapshot } from '@moonbase/contracts/connection';
 import { chatHostVersion, chatProtocolVersion } from '@moonbase/contracts/host';
 import { createHostHealthReply } from '@moonbase/ssh/host-health';
 import { ConnectionService } from '@moonbase/contracts/services';
-import { makeConnectionClient } from '@moonbase/application/runtime-client';
+import { makeConnectionClient } from '@moonbase/application/runtime/clients';
 import { SshLive, type SshConfiguration } from '@moonbase/ssh';
 const failure = (code: ApplicationError['code']) => (e: unknown) =>
   ApplicationError.is(e) && e.code === code;

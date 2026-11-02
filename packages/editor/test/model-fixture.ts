@@ -1,6 +1,6 @@
 import { Effect, Exit, Scope, type ManagedRuntime } from 'effect';
 import type { ApplicationError } from '@moonbase/application/client';
-import { runApplicationEffect } from '@moonbase/application/effect-client';
+import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
 import {
   makeEditorController,
   makeEditorModel,

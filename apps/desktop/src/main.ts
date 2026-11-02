@@ -2,7 +2,7 @@ import { decodeApplicationErrorDTO } from '@moonbase/application/error-schema';
 import {
   normalizeApplicationError,
   runApplicationEffect,
-} from '@moonbase/application/effect-client';
+} from '@moonbase/application/runtime/effect-client';
 import {
   app,
   BrowserWindow,
@@ -22,7 +22,7 @@ import {
   makeEditorClient,
   makeChatClient,
   makeConnectionClient,
-} from '@moonbase/application/runtime-client';
+} from '@moonbase/application/runtime/clients';
 import { ApplicationError, type CheckoutTarget } from '@moonbase/application/client';
 import { randomUUID } from 'node:crypto';
 import { realpathSync, mkdirSync } from 'node:fs';

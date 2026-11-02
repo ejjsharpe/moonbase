@@ -3,7 +3,7 @@ import * as controllerFixture from './editor-fixture.ts';
 import assert from 'node:assert/strict';
 import { test, describe } from 'node:test';
 import { ManagedRuntime } from 'effect';
-import { makeEditorClient } from '@moonbase/application/runtime-client';
+import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import {
   ApplicationError,
   type CheckoutTarget,

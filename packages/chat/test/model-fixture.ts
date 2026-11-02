@@ -1,6 +1,6 @@
 import { Effect, Exit, Layer, ManagedRuntime, Scope } from 'effect';
 import { makeChatModel, makeChatController, type ChatDependencies } from '@moonbase/chat';
-import { runApplicationEffect } from '@moonbase/application/effect-client';
+import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
 
 export function modelRoot() {
   const runtime = ManagedRuntime.make(Layer.empty),

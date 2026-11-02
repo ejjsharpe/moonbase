@@ -2,7 +2,7 @@ import { ManagedRuntime, Layer } from 'effect';
 import type { ConnectionService } from '@moonbase/contracts/services';
 import type { ApplicationError } from '@moonbase/contracts/workspace';
 import type { ChatSession } from '@moonbase/contracts/chat';
-import { makeChatClient } from '@moonbase/application/runtime-client';
+import { makeChatClient } from '@moonbase/application/runtime/clients';
 import { RemoteChatLive } from '@moonbase/pi-runtime/remote';
 
 /** Consumer process composition root; supply the application's existing connection capability. */

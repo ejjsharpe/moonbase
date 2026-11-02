@@ -14,7 +14,7 @@ import { Effect, Layer, ManagedRuntime, Stream } from 'effect';
 import { checkHostHealth } from '@moonbase/ssh/host-health';
 import { ConnectionService } from '@moonbase/contracts/services';
 import { ApplicationError } from '@moonbase/contracts/workspace';
-import { makeChatClient } from '@moonbase/application/runtime-client';
+import { makeChatClient } from '@moonbase/application/runtime/clients';
 import { RemoteChatLive } from '../src/remote.ts';
 import { createRequire } from 'node:module';
 
@@ -284,7 +284,7 @@ test('compiled remote entry runs on Electron Node24 against the separate Node26 
   const source = `import {readFileSync} from 'node:fs';
     import {Effect,Layer,ManagedRuntime,Stream} from 'effect';
     import { ConnectionService } from '@moonbase/contracts/services';
-    import {makeChatClient} from '@moonbase/application/runtime-client';
+    import {makeChatClient} from '@moonbase/application/runtime/clients';
     import {RemoteChatLive} from './src/remote.ts';
     async function main(){
       const config=JSON.parse(readFileSync(process.argv[2],'utf8'));

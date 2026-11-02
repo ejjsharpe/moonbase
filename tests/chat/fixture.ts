@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:net';
 import { ManagedRuntime, Layer } from 'effect';
-import { makeChatClient, makeConnectionClient } from '@moonbase/application/runtime-client';
+import { makeChatClient, makeConnectionClient } from '@moonbase/application/runtime/clients';
 import { RemoteChatLive } from '@moonbase/pi-runtime/remote';
 import { SshLive } from '@moonbase/ssh';
 export async function until<T>(get: () => Promise<T>, ready: (v: T) => boolean) {
