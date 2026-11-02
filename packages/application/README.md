@@ -1,9 +1,10 @@
 # Application runtime
 
-`@moonbase/application` owns shared typed dispatch and runtime-bound Promise clients. Independent definitions, schemas and Effect service ports live in [`@moonbase/contracts`](../contracts/README.md); reusable infrastructure implements those ports without depending on application behavior. Process roots compose only their needed capabilities in one scoped runtime.
+`@moonbase/application` owns shared typed dispatch, runtime-bound Promise clients and reusable headless feature behavior. Independent definitions, schemas and Effect service ports live in [`@moonbase/contracts`](../contracts/README.md); reusable infrastructure implements those ports without depending on application behavior. Process roots compose only their needed capabilities in one scoped runtime.
 
 | Export | Purpose |
 | --- | --- |
+| `chat` | Scoped headless chat model, bound controller and synchronous draft preservation |
 | `runtime/handlers` | Shared command dispatch and subscriptions |
 | `runtime/clients` | Editor/chat/connection clients bound to an existing process runtime |
 | `runtime/effect-client` | Invocation and awaitable observation close bound to a supplied runtime |
@@ -15,7 +16,7 @@
 
 The compatibility exports retain the exact canonical error brand, decoder functions and service tags; they are removed after all migration callers move. `@moonbase/effect` owns shared safe normalization/release behavior; application preserves its existing public normalizer reexport. Application invocation creates no runtime, retries no operation and leaves injected resource ownership with its caller.
 
-Use the public runtime entries directly from TypeScript. `makeEditorClient`, `makeChatClient` and `makeConnectionClient` bind the process root's existing runtime to the same typed handlers; they acquire no second service graph. Headless features use a caller-supplied runtime and bind their already-acquired models. Command cancellation affects that invocation; observation close fences delivery immediately and awaits its actual finalizers. Synchronous snapshot subscriptions retain their separate synchronous unsubscribe API. See the [runtime API handoff](docs/SCHEMAS.md) for exact signatures and ownership.
+Use the public runtime entries directly from TypeScript. `makeEditorClient`, `makeChatClient` and `makeConnectionClient` bind the process root's existing runtime to the same typed handlers; they acquire no second service graph. Headless features use a caller-supplied runtime and bind their already-acquired models. The [chat API](docs/CHAT.md) preserves synchronous snapshots/drafts/storage and reports awaitable observation cleanup; importing or acquiring it neither installs backend capabilities nor Connects, Sends or Stops. Command cancellation affects that invocation; observation close fences delivery immediately and awaits its actual finalizers. Synchronous snapshot subscriptions retain their separate synchronous unsubscribe API. See the [runtime API handoff](docs/SCHEMAS.md) for exact signatures and ownership.
 
 Renderers receive browser-safe clients. Native/transport adapters validate and authorize unknown inputs before shared handlers; infrastructure retains domain validation and resource ownership. DTO types use erased schema imports. Shape validation grants no authority, and privileged endpoint credentials never belong in renderer bridges.
 

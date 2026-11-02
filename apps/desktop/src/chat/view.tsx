@@ -4,8 +4,8 @@ import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
 import { workbench } from '@moonbase/ui/workbench';
 import { colors, layout, radius, space, type } from '@moonbase/ui/tokens.stylex';
-import type { ChatEntry } from '@moonbase/application/chat-client';
-import type { ChatController } from '@moonbase/chat';
+import type { ChatEntry } from '@moonbase/contracts/chat';
+import type { ChatController } from '@moonbase/application/chat';
 /** The consumer owns the clients/runtime and controller lifetime; this view installs no capabilities. */
 export function ChatView({ controller }: { controller: ChatController }) {
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot),
