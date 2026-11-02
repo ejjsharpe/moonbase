@@ -6,7 +6,12 @@ import {
 } from '@moonbase/application/runtime/effect-client';
 import { decodeChatInput, isChatCommand } from '@moonbase/contracts/chat-schema';
 import { ApplicationError, type ObservationClose } from '@moonbase/contracts/workspace';
-import type { ChatClient, ChatCommand, ChatSession } from '@moonbase/contracts/chat';
+import {
+  maximumChatRequestBytes,
+  type ChatClient,
+  type ChatCommand,
+  type ChatSession,
+} from '@moonbase/contracts/chat';
 import type { ConnectionClient, ConnectionCommand } from '@moonbase/contracts/connection';
 import { fields, record, requestId, errorDTO, invalid, type Reply } from './wire.ts';
 
@@ -77,7 +82,7 @@ export class ChatIpcSession {
       invalid();
     if (typeof operation !== 'string') invalid();
     try {
-      if ((JSON.stringify(input)?.length ?? Infinity) > 65536) invalid();
+      if (Buffer.byteLength(JSON.stringify(input)) > maximumChatRequestBytes) invalid();
     } catch {
       invalid();
     }
