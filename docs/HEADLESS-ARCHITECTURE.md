@@ -87,6 +87,8 @@ Negative fixtures prove rejection of Node, UI type-only imports, dynamic Electro
 
 The configuration test's Nx inputs include all repository module/test/example source, package exports, boundary scripts and unchanged baseline fixtures, so cached checks cannot conceal a changed transitive edge.
 
+The root source test command runs package suites serially. Simultaneous native/process fixtures delayed the unchanged workspace watch test beyond its two-second deadline, while the default workspace suite alone passed all 114 tests. Package-local concurrency, assertions and deadlines remain unchanged; qualification uses the actual root command with this resource scheduling.
+
 ## Fixed compatibility evidence
 
 `docs/fixtures/headless-baseline/*.txt` contains literal compact JSON bytes captured before extraction from the baseline public APIs: chat restore+preserve with an uncertain original Send and newer draft, empty editor recovery, whitespace-preserving Send and exact Stop with `taskId: null`. `scripts/check-compatibility.mjs` reopens/preserves chat through its public factory with capabilities that throw if invoked, and verifies decoded data serializes to the same bytes. Keep these files unchanged; move only consumer imports. Rejected saved-data and full recovery behavior remain covered by the existing feature/integration suites, not this small smoke check.

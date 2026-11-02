@@ -9,7 +9,7 @@
   "scripts": {
     "typecheck": "nx run-many -t typecheck",
     "lint": "oxlint . --report-unused-disable-directives",
-    "test": "nx run-many -t test",
+    "test": "nx run-many -t test --parallel=1",
     "build": "nx run-many -t build",
     "check:foundation": "node scripts/check-foundation.mjs",
     "test:editor-integration": "tsc --noEmit -p tests/editor-workspace/tsconfig.json && node packages/workspace/scripts/build-native.mjs && node --experimental-strip-types --test --test-concurrency=1 tests/editor-workspace/*.test.ts",
