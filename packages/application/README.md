@@ -4,6 +4,8 @@
 
 The root `createMoonbaseApplication` factory composes supplied editor/chat capabilities into one headless application with direct controllers, synchronous unload preservation and coordinated Quit/disposal. It supports independent and combined features, with visible optional-chat degradation. See [application lifecycle and usage](docs/LIFECYCLE.md) for the API, admission fence, prompt handoff and root-owned panel cleanup.
 
+The [direct headless consumer](docs/HEADLESS-CONSUMER.md) runs all three compositions without Electron through public APIs. Foundation checks audit its browser bundle and execute its emitted JavaScript; the guide records the data/runtime seam and the separate qualification a future process/language adapter would require.
+
 | Export | Purpose |
 | --- | --- |
 | `.` | Headless application factory, lifecycle snapshots and types |
