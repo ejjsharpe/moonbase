@@ -169,3 +169,62 @@ test('chat cancellation waits for finalizers, fences callbacks and leaves comman
   assert.equal(closes, 1);
   await assert.rejects(owner.dispose(), { code: 'Persistence' });
 });
+
+for (const failure of ['none', 'release', 'acquisition'] as const) {
+  test(`reentrant chat watch cancellation joins the acquired close (${failure})`, async () => {
+    const releasing = Promise.withResolvers<void>(),
+      gate = Promise.withResolvers<void>();
+    let acknowledgment: ReturnType<ChatIpcSession['cancel']> | undefined,
+      releases = 0,
+      delivered = 0;
+    const expected = new ApplicationError({
+      code: 'Persistence',
+      message: 'Owned reentrant chat watch failure',
+    });
+    const chat: ChatClient = {
+      command: async () => null as never,
+      watch: (_input, receive) => {
+        receive({} as never);
+        if (failure === 'acquisition') throw expected;
+        receive({} as never);
+        return async () => {
+          releases++;
+          releasing.resolve();
+          await gate.promise;
+        };
+      },
+    };
+    const connection: ConnectionClient = {
+      command: async () => undefined as never,
+      watch: () => async () => {},
+    };
+    const owner = new ChatIpcSession(runtime, chat, connection, context, () => {
+      delivered++;
+      acknowledgment = owner.cancel('watch');
+    });
+    const watching = owner.call('watch-chat', '', { target }, 'watch');
+    assert(acknowledgment);
+    let settled = false;
+    void acknowledgment.then(() => {
+      settled = true;
+    });
+    if (failure !== 'acquisition') {
+      await releasing.promise;
+      assert.equal(settled, false);
+      assert.equal(releases, 1);
+      if (failure === 'release') gate.reject(expected);
+      else gate.resolve();
+    }
+    const reply = await acknowledgment;
+    const watchReply = await watching;
+    assert.equal(reply.ok, failure === 'none');
+    assert.equal(watchReply.ok, failure === 'none');
+    assert.equal(delivered, 1);
+    if (failure === 'none') await owner.dispose();
+    else {
+      assert(!reply.ok);
+      assert.equal(reply.error.code, 'Persistence');
+      await assert.rejects(owner.dispose(), { code: 'Persistence' });
+    }
+  });
+}

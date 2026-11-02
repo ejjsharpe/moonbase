@@ -510,3 +510,74 @@ test('cancelling native capture in a live document releases unpublished referenc
   assert((await acknowledgment).ok);
   await owner.dispose();
 });
+
+for (const failure of ['none', 'release', 'acquisition'] as const) {
+  test(`reentrant editor watch cancellation joins the acquired close (${failure})`, async () => {
+    const releasing = Promise.withResolvers<void>(),
+      gate = Promise.withResolvers<void>();
+    let acknowledgment: ReturnType<EditorSession['cancel']> | undefined,
+      releases = 0,
+      delivered = 0;
+    const expected = new ApplicationError({
+      code: 'Persistence',
+      message: 'Owned reentrant editor watch failure',
+    });
+    const client: EditorClient = {
+      command: async () =>
+        ({
+          revision: 0,
+          state: { ...emptyRecovery('desktop-primary'), checkouts: [target] },
+          operations: [],
+          errors: [],
+        }) as never,
+      watch: (_input, receive) => {
+        receive({ checkout: target, paths: [] });
+        if (failure === 'acquisition') throw expected;
+        receive({ checkout: target, paths: ['late'] });
+        return async () => {
+          releases++;
+          releasing.resolve();
+          await gate.promise;
+        };
+      },
+    };
+    const owner = new EditorSession(
+      runtime,
+      client,
+      { chooseCheckout: async () => null, imports: async () => [], release: async () => {} },
+      () => {
+        delivered++;
+        acknowledgment = owner.cancel('watch');
+      },
+    );
+    await owner.call(
+      'command',
+      { operation: 'loadRecovery', input: { clientId: owner.clientId } },
+      'load',
+    );
+    const watching = owner.call('watch', { checkout: target, paths: [] }, 'watch');
+    assert(acknowledgment);
+    let settled = false;
+    void acknowledgment.then(() => {
+      settled = true;
+    });
+    if (failure !== 'acquisition') {
+      await releasing.promise;
+      assert.equal(settled, false);
+      assert.equal(releases, 1);
+      if (failure === 'release') gate.reject(expected);
+      else gate.resolve();
+    }
+    const reply = await acknowledgment;
+    const watchReply = await watching;
+    assert.equal(reply.ok, failure === 'none');
+    assert.equal(watchReply.ok, failure === 'none');
+    assert.equal(delivered, 1);
+    if (failure === 'none') await owner.dispose();
+    else {
+      assert(!reply.ok);
+      assert.equal(reply.error.code, 'Persistence');
+      await assert.rejects(owner.dispose(), { code: 'Persistence' });
+    }
+  });
+}

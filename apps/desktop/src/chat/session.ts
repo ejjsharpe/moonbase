@@ -8,7 +8,7 @@ import {
   runApplicationEffect,
 } from '@moonbase/application/effect-client';
 import { decodeChatInput, isChatCommand } from '@moonbase/application/chat-schema';
-import { ApplicationError } from '@moonbase/application/client';
+import { ApplicationError, type ObservationClose } from '@moonbase/application/client';
 import type { ChatClient, ChatCommand, ChatSession } from '@moonbase/application/chat-client';
 import type { ConnectionClient, ConnectionCommand } from '@moonbase/application/connection-client';
 import { fields, record, requestId, errorDTO, invalid, type Reply } from './wire.ts';
@@ -132,10 +132,24 @@ export class ChatIpcSession {
           error = (e: ApplicationError) => {
             if (live()) this.emit(id, errorDTO(e));
           };
-        request.stop =
-          kind === 'watch-chat'
-            ? this.chat.watch(v as never, receive, error)
-            : this.connection.watch(receive, error);
+        const ready = Promise.withResolvers<
+          { close: ObservationClose } | { error: ApplicationError }
+        >();
+        request.stop = async () => {
+          const acquired = await ready.promise;
+          if ('error' in acquired) throw acquired.error;
+          await acquired.close();
+        };
+        try {
+          const stop =
+            kind === 'watch-chat'
+              ? this.chat.watch(v as never, receive, error)
+              : this.connection.watch(receive, error);
+          ready.resolve({ close: stop });
+        } catch (error) {
+          ready.resolve({ error: normalizeApplicationError(error) });
+          throw error;
+        }
         if (!live()) await this.closeRequest(id, request);
         return { ok: true, value: null };
       }

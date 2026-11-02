@@ -15,6 +15,7 @@ import {
   type EditorClient,
   type WorkspaceCommand,
   type WorkspaceEvent,
+  type ObservationClose,
 } from '@moonbase/application/client';
 import {
   checkout,
@@ -287,18 +288,31 @@ export class EditorSession {
           v.paths.some((p) => typeof p !== 'string')
         )
           invalid('Invalid watch paths.');
-        const stop = this.client.watch(
-          v as never,
-          (event) => {
-            if (live() && this.active.get(id) === reserved)
-              this.send(id, { ok: true, value: event });
-          },
-          (error) => {
-            if (live() && this.active.get(id) === reserved)
-              this.send(id, { ok: false, error: errorDTO(error) });
-          },
-        );
-        reserved.cancel = stop;
+        const ready = Promise.withResolvers<
+          { close: ObservationClose } | { error: ApplicationError }
+        >();
+        reserved.cancel = async () => {
+          const acquired = await ready.promise;
+          if ('error' in acquired) throw acquired.error;
+          await acquired.close();
+        };
+        try {
+          const stop = this.client.watch(
+            v as never,
+            (event) => {
+              if (live() && this.active.get(id) === reserved)
+                this.send(id, { ok: true, value: event });
+            },
+            (error) => {
+              if (live() && this.active.get(id) === reserved)
+                this.send(id, { ok: false, error: errorDTO(error) });
+            },
+          );
+          ready.resolve({ close: stop });
+        } catch (error) {
+          ready.resolve({ error: normalizeApplicationError(error) });
+          throw error;
+        }
         if (!live()) await this.closeRequest(id, reserved);
         return { ok: true, value: null };
       } else invalid('Unknown desktop method.');
