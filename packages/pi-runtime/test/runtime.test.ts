@@ -1,4 +1,4 @@
-import type { ConversationId } from '@earendil-works/pi-durable';
+import type { TaskId, ConversationId } from '@earendil-works/pi-durable';
 import assert from 'node:assert/strict';
 import { test, mock } from 'node:test';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -18,14 +18,19 @@ import {
   createRegistry,
   defineExtension,
   defineTool,
+  defineDocFamily,
   type Registry,
 } from '@earendil-works/pi-durable';
 import { Type } from 'typebox';
-import { NodeSqliteDatabase } from '@earendil-works/chord/sqlite/node';
+import { NodeSqliteDatabase, openNodeSqliteDatabase } from '@earendil-works/chord/sqlite/node';
 import { CodingTools } from '@earendil-works/pi-durable/tools';
 import { readFile } from 'node:fs/promises';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { PiRuntimeLive } from '../src/index.ts';
+import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node';
+import { SqliteStorage } from '@earendil-works/pi-durable/storage/sqlite';
+import { Effect, Layer } from 'effect';
+import { runApplicationEffect } from '@moonbase/application/effect-client';
 import type { ChatSnapshot } from '@moonbase/application/chat-client';
 
 const session = { host: { hostId: 'test-host', storeId: 'test-store' }, actorId: 'personal' };
@@ -57,8 +62,11 @@ async function fixture(
   };
   let runtime = ManagedRuntime.make(PiRuntimeLive(config));
   t.after(async () => {
-    await runtime.dispose();
-    await rm(directory, { recursive: true, force: true });
+    try {
+      await runtime.dispose();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
   return {
     faux,
@@ -157,7 +165,7 @@ test('busy reservation stays visible; view unsubscribe and caller cancellation n
     () => f.client.command('getChat', { target }),
     (s) => !!s.run,
   );
-  off();
+  await off();
   const count = events.length;
   await assert.rejects(f.client.command('sendChat', { target, requestId: 'two', text: 'Busy' }), {
     code: 'Conflict',
@@ -530,7 +538,7 @@ test('ten actual tools retain only eight live previews and view disposal never s
     );
     assert.equal(view.run!.tools.length, 8);
     assert(Buffer.byteLength(JSON.stringify(view)) <= 256 * 1024);
-    off();
+    await off();
     const before = snapshots.length;
     release();
     await until(
@@ -628,10 +636,10 @@ test('watch limits, pending unsubscribe/root disposal and arbitrary failing rele
         (e) => errors.push(e),
       );
     await entered;
-    off();
+    const observationClosed = off();
     const closing = f.dispose();
     release();
-    await closing;
+    await Promise.all([observationClosed, closing]);
     assert.equal(subscriptions, 0);
     assert.equal(errors.length, 0);
   } finally {
@@ -653,7 +661,8 @@ test('watch limits, pending unsubscribe/root disposal and arbitrary failing rele
     (n) => n === 1,
   );
   assert.equal((errors[0] as { code: string }).code, 'Unavailable');
-  for (const off of stops) off();
+  const closed = await Promise.allSettled(stops.map((off) => off()));
+  assert.equal(closed.filter((result) => result.status === 'rejected').length, 1);
   await f.restart();
   const canary = 'private-throwing-unsubscribe-canary';
   mock.method(Harness, 'open', async (...args: Parameters<typeof original>) => {
@@ -684,12 +693,12 @@ test('watch limits, pending unsubscribe/root disposal and arbitrary failing rele
       (e) => failures.push(e),
     );
   await until(() => Promise.resolve(observed), Boolean);
-  off();
-  await until(
-    () => Promise.resolve(failures.length),
-    (n) => n === 1,
-  );
-  assert(!JSON.stringify(failures).includes(canary));
+  await assert.rejects(off(), (error: unknown) => {
+    assert(ApplicationError.is(error));
+    assert(!error.message.includes(canary));
+    return true;
+  });
+  assert.equal(failures.length, 0);
   mock.restoreAll();
 });
 
@@ -924,7 +933,7 @@ for (const typed of [false, true])
       });
     } finally {
       mock.restoreAll();
-      off();
+      await off();
     }
     assert.equal(committed.length, 1);
     assert.equal((await f.client.command('listChats', { session })).conversations.length, 1);
@@ -983,7 +992,7 @@ test('R1 lost typed commit acknowledgement stays uncertain while proven create v
     await assert.rejects(f.client.command('createChat', input), { code: 'Uncertain' });
   } finally {
     mock.restoreAll();
-    off();
+    await off();
   }
   assert.equal(committed.length, 1);
   await f.restart();
@@ -994,4 +1003,768 @@ test('R1 lost typed commit acknowledgement stays uncertain while proven create v
   });
   assert.equal((await f.client.command('listChats', { session })).conversations.length, 1);
   assert.equal(f.faux.state.callCount, 0);
+});
+
+test('queued admission cancellation releases its lease without overtaking held SDK work or blocking other conversations and Stop', async (t) => {
+  const original = Harness.open;
+  let entered!: () => void, release!: () => void;
+  const held = new Promise<void>((resolve) => (entered = resolve)),
+    gate = new Promise<void>((resolve) => (release = resolve));
+  const submissions: string[] = [];
+  mock.method(Harness, 'open', async (...args: Parameters<typeof original>) => {
+    const harness = await original(...args),
+      get = harness.conversation.bind(harness);
+    harness.conversation = async (...args: Parameters<typeof get>) => {
+      const conversation = await get(...args);
+      if (conversation) {
+        const submit = conversation.submit.bind(conversation);
+        conversation.submit = async (...args: Parameters<typeof submit>) => {
+          const requestId = args[0].requestId!;
+          submissions.push(requestId);
+          if (requestId.includes('held-admission')) {
+            entered();
+            await gate;
+          }
+          return submit(...args);
+        };
+      }
+      return conversation;
+    };
+    return harness;
+  });
+  t.after(() => {
+    release();
+    mock.restoreAll();
+  });
+  const f = await fixture(t),
+    target = await f.create(),
+    other = await f.create('other-create');
+  const input = { target, requestId: 'held-admission', text: 'Original' },
+    abort = new AbortController(),
+    first = f.client.command('sendChat', input, { signal: abort.signal });
+  await held;
+  const queuedAbort = new AbortController(),
+    queued = f.client.command(
+      'sendChat',
+      {
+        target,
+        requestId: 'cancelled-gate',
+        text: 'Never submit',
+      },
+      { signal: queuedAbort.signal },
+    );
+  await delay(10);
+  queuedAbort.abort();
+  await assert.rejects(queued, { code: 'Cancelled' });
+  abort.abort();
+  await assert.rejects(first, { code: 'Cancelled' });
+  const successor = f.client.command('sendChat', input);
+  f.faux.setResponses([
+    async (_messages, options) => {
+      await new Promise<void>((resolve) => {
+        if (options?.signal?.aborted) return resolve();
+        options?.signal?.addEventListener('abort', () => resolve(), { once: true });
+      });
+      return fauxAssistantMessage('Stopped separately');
+    },
+    fauxAssistantMessage('Original completed'),
+  ]);
+  await f.client.command('sendChat', {
+    target: other,
+    requestId: 'unrelated',
+    text: 'Independent',
+  });
+  const current = await until(
+    () => f.client.command('getChat', { target: other }),
+    (value) => !!value.run,
+  );
+  assert.equal(
+    (await f.client.command('stopChat', { stop: current.run!.stop, requestId: 'independent-stop' }))
+      .outcome,
+    'stopped',
+  );
+  assert.equal(
+    await f.client.command('getChatSend', { target, requestId: 'cancelled-gate' }),
+    null,
+  );
+  assert.equal(submissions.filter((id) => id.includes('held-admission')).length, 1);
+  release();
+  const receipt = await successor;
+  assert.equal(receipt.admission, 'admitted');
+  assert.deepEqual(
+    await f.client.command('getChatSend', { target, requestId: input.requestId }),
+    receipt,
+  );
+  await until(
+    () => f.client.command('getChat', { target }),
+    (value) => !value.run && value.entries.some((entry) => entry.text === 'Original completed'),
+  );
+  assert.equal(submissions.filter((id) => id.includes('held-admission')).length, 1);
+  assert.equal(f.faux.state.callCount, 2);
+});
+
+for (const failure of [false, true])
+  test(`Stop deadline covers a held abort join and retains its ${failure ? 'late failure' : 'exact request'} at the root`, async (t) => {
+    const original = Harness.open;
+    let entered!: () => void, release!: () => void;
+    const held = new Promise<void>((resolve) => (entered = resolve)),
+      gate = new Promise<void>((resolve) => (release = resolve));
+    const canary = 'private-abort-diagnostic-canary';
+    let calls = 0;
+    mock.method(Harness, 'open', async (...args: Parameters<typeof original>) => {
+      const harness = await original(...args),
+        abort = harness.abortTask.bind(harness);
+      harness.abortTask = async (...args: Parameters<typeof abort>) => {
+        calls++;
+        entered();
+        await gate;
+        if (failure)
+          throw new Proxy(
+            {},
+            {
+              getPrototypeOf() {
+                throw canary;
+              },
+            },
+          );
+        return abort(...args);
+      };
+      return harness;
+    });
+    const cleanup: (() => Promise<void>)[] = [];
+    const f = await fixture({ after: (fn) => cleanup.push(fn) }),
+      target = await f.create();
+    t.after(async () => {
+      release();
+      mock.restoreAll();
+      for (const close of cleanup) {
+        await close();
+      }
+    });
+    f.faux.setResponses([
+      async (_messages, options) => {
+        await new Promise<void>((resolve) => {
+          if (options?.signal?.aborted) return resolve();
+          options?.signal?.addEventListener('abort', () => resolve(), { once: true });
+        });
+        return fauxAssistantMessage('Exact abort completed');
+      },
+    ]);
+    await f.client.command('sendChat', { target, requestId: 'active', text: 'Wait' });
+    const current = await until(
+      () => f.client.command('getChat', { target }),
+      (value) => !!value.run,
+    );
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const stop = f.client.command('stopChat', {
+      stop: current.run!.stop,
+      requestId: 'bounded-stop',
+    });
+    await held;
+    await Promise.resolve();
+    t.mock.timers.tick(1001);
+    assert.equal((await stop).outcome, 'pending');
+    t.mock.timers.reset();
+    assert.equal(calls, 1);
+    release();
+    if (failure) {
+      await assert.rejects(f.dispose(), (error: unknown) => {
+        assert(!String(error).includes(canary));
+        assert(String(error).includes('Pi storage or execution is unavailable'));
+        return true;
+      });
+    } else {
+      await until(
+        () => f.client.command('getChat', { target }),
+        (value) => !value.run,
+      );
+      f.faux.setResponses([fauxAssistantMessage('Successor survives')]);
+      await f.client.command('sendChat', { target, requestId: 'successor', text: 'Next' });
+      const old = await f.client.command('stopChat', {
+        stop: current.run!.stop,
+        requestId: 'bounded-stop',
+      });
+      assert.ok(['terminal', 'superseded'].includes(old.outcome));
+      await until(
+        () => f.client.command('getChat', { target }),
+        (value) => !value.run && value.entries.some((entry) => entry.text === 'Successor survives'),
+      );
+      assert.equal(calls, 1);
+    }
+  });
+
+test('root shutdown drains held admission before closing Harness and reopens its original receipt', async (t) => {
+  const original = Harness.open;
+  let entered!: () => void, release!: () => void;
+  const held = new Promise<void>((resolve) => (entered = resolve)),
+    gate = new Promise<void>((resolve) => (release = resolve));
+  const order: string[] = [];
+  mock.method(Harness, 'open', async (...args: Parameters<typeof original>) => {
+    const harness = await original(...args),
+      get = harness.conversation.bind(harness),
+      close = harness.close.bind(harness);
+    harness.conversation = async (...args: Parameters<typeof get>) => {
+      const conversation = await get(...args);
+      if (conversation) {
+        const submit = conversation.submit.bind(conversation);
+        conversation.submit = async (...args: Parameters<typeof submit>) => {
+          entered();
+          await gate;
+          const result = await submit(...args);
+          order.push('admitted');
+          return result;
+        };
+      }
+      return conversation;
+    };
+    harness.close = async (...args: Parameters<typeof close>) => {
+      order.push('harness-close');
+      await close(...args);
+      order.push('closed');
+    };
+    return harness;
+  });
+  t.after(() => {
+    release();
+    mock.restoreAll();
+  });
+  const f = await fixture(t),
+    target = await f.create();
+  f.faux.setResponses([
+    async (_messages, options) => {
+      await new Promise<void>((resolve) => {
+        if (options?.signal?.aborted) return resolve();
+        options?.signal?.addEventListener(
+          'abort',
+          () => {
+            order.push('model-abort');
+            resolve();
+          },
+          { once: true },
+        );
+      });
+      return fauxAssistantMessage('Shutdown interruption');
+    },
+  ]);
+  const send = f.client
+    .command('sendChat', { target, requestId: 'shutdown-admission', text: 'Hold admission' })
+    .catch((error: unknown) => error);
+  await held;
+  const closing = f.dispose();
+  await delay(10);
+  assert.equal(order.length, 0);
+  release();
+  await Promise.allSettled([send, closing]);
+  await closing;
+  assert(order.indexOf('admitted') < order.indexOf('harness-close'));
+  assert(order.includes('closed'));
+  mock.restoreAll();
+  await f.restart();
+  assert.equal(
+    (await f.client.command('getChatSend', { target, requestId: 'shutdown-admission' }))?.admission,
+    'admitted',
+  );
+});
+
+for (const failure of [false, true])
+  test(`Stop timeout joins its independently cancelled terminal waiter${failure ? ' and retains a late waiter failure' : ''}`, async (t) => {
+    const canary = 'private-terminal-wait-canary';
+    const original = Harness.open;
+    let entered!: () => void,
+      release!: () => void,
+      waiters = 0,
+      cancelled = 0;
+    const waiting = new Promise<void>((resolve) => (entered = resolve)),
+      gate = new Promise<void>((resolve) => (release = resolve));
+    mock.method(Harness, 'open', async (...args: Parameters<typeof original>) => {
+      const harness = await original(...args),
+        wait = harness.waitForTask.bind(harness);
+      harness.abortTask = async () => 'marked';
+      harness.waitForTask = async <R>(id: TaskId<R>, context: Parameters<typeof wait>[1]) => {
+        waiters++;
+        entered();
+        context.abortSignal?.addEventListener(
+          'abort',
+          () => {
+            cancelled++;
+          },
+          { once: true },
+        );
+        try {
+          return await wait(id, context);
+        } catch (error) {
+          if (failure) throw Error(canary);
+          throw error;
+        } finally {
+          waiters--;
+        }
+      };
+      return harness;
+    });
+    t.after(() => {
+      release();
+      mock.restoreAll();
+    });
+    const f = await fixture(t),
+      target = await f.create();
+    f.faux.setResponses([
+      async () => {
+        await gate;
+        return fauxAssistantMessage('Waiter did not stop execution');
+      },
+    ]);
+    await f.client.command('sendChat', { target, requestId: 'active', text: 'Hold model' });
+    const current = await until(
+      () => f.client.command('getChat', { target }),
+      (value) => !!value.run,
+    );
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const stop = f.client.command('stopChat', {
+      stop: current.run!.stop,
+      requestId: 'waiter-stop',
+    });
+    await waiting;
+    t.mock.timers.tick(1001);
+    assert.equal((await stop).outcome, 'pending');
+    t.mock.timers.reset();
+    assert.equal(waiters, 0);
+    assert.equal(cancelled, 1);
+    assert.deepEqual((await f.client.command('getChat', { target })).run!.stop, current.run!.stop);
+    release();
+    await until(
+      () => f.client.command('getChat', { target }),
+      (value) =>
+        !value.run && value.entries.some((entry) => entry.text === 'Waiter did not stop execution'),
+    );
+    if (failure)
+      await assert.rejects(f.dispose(), (error: unknown) => {
+        assert(!String(error).includes(canary));
+        assert(String(error).includes('Pi storage or execution is unavailable'));
+        return true;
+      });
+  });
+
+test('shutdown closes Harness before joining an outstanding abort and releases a held model', async (t) => {
+  const original = Harness.open;
+  let entered!: () => void, release!: () => void, modelEntered!: () => void;
+  const held = new Promise<void>((resolve) => (entered = resolve)),
+    gate = new Promise<void>((resolve) => (release = resolve)),
+    model = new Promise<void>((resolve) => (modelEntered = resolve));
+  const order: string[] = [];
+  mock.method(Harness, 'open', async (...args: Parameters<typeof original>) => {
+    const harness = await original(...args),
+      close = harness.close.bind(harness),
+      abort = harness.abortTask.bind(harness);
+    harness.abortTask = async (...args: Parameters<typeof abort>) => {
+      entered();
+      await gate;
+      order.push('abort-settled');
+      return abort(...args);
+    };
+    harness.close = async (...args: Parameters<typeof close>) => {
+      order.push('harness-close');
+      release();
+      await close(...args);
+      order.push('closed');
+    };
+    return harness;
+  });
+  t.after(() => {
+    release();
+    mock.restoreAll();
+  });
+  const f = await fixture(t),
+    target = await f.create();
+  f.faux.setResponses([
+    async (_messages, options) => {
+      modelEntered();
+      await new Promise<void>((resolve) =>
+        options?.signal?.addEventListener(
+          'abort',
+          () => {
+            order.push('model-abort');
+            resolve();
+          },
+          { once: true },
+        ),
+      );
+      return fauxAssistantMessage('Interrupted on shutdown');
+    },
+  ]);
+  await f.client.command('sendChat', { target, requestId: 'active', text: 'Hold model' });
+  await model;
+  const current = await until(
+    () => f.client.command('getChat', { target }),
+    (value) => !!value.run,
+  );
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const stop = f.client.command('stopChat', {
+    stop: current.run!.stop,
+    requestId: 'shutdown-stop',
+  });
+  await held;
+  t.mock.timers.tick(1001);
+  assert.equal((await stop).outcome, 'pending');
+  t.mock.timers.reset();
+  await assert.rejects(f.dispose(), (error: unknown) => {
+    assert(String(error).includes('Pi storage or execution is unavailable'));
+    return true;
+  });
+  assert(order.indexOf('harness-close') < order.indexOf('abort-settled'));
+  assert(order.includes('model-abort'));
+  assert(order.includes('closed'));
+});
+
+for (const family of ['store', 'metadata', 'request', 'binding'] as const)
+  test(`strict ${family} saved payload preserves its exact bytes and refuses admission/reconciliation`, async (t) => {
+    const original = Harness.open;
+    let harness!: Harness;
+    mock.method(
+      Harness,
+      'open',
+      async (...args: Parameters<typeof original>) => (harness = await original(...args)),
+    );
+    t.after(() => mock.restoreAll());
+    const f = await fixture(t),
+      target = await f.create();
+    f.faux.setResponses([fauxAssistantMessage('Original completed')]);
+    await f.client.command('sendChat', { target, requestId: 'saved-send', text: 'Original' });
+    await until(
+      () => f.client.command('getChat', { target }),
+      (value) => !value.run,
+    );
+    const kind = family === 'binding' ? 'request' : family;
+    const initial = () => ({ binding: '', future: null as { nested: boolean } | null });
+    const sessionDoc = defineDocFamily({
+      kind: 'moonbase.chat.' + kind,
+      version: 1,
+      scope: 'session',
+      family: true,
+      initial,
+      checkpointWhen: () => true,
+    });
+    const metadataDoc = defineDocFamily({
+      kind: 'moonbase.chat.metadata',
+      version: 1,
+      scope: 'conversation',
+      family: true,
+      history: 'latest',
+      fork: 'current',
+      initial,
+      checkpointWhen: () => true,
+    });
+    let docKey = JSON.stringify([session.actorId, 'saved-send']);
+    if (kind === 'store') docKey = 'identity';
+    if (kind === 'metadata') docKey = 'metadata';
+    // Fixture edits only Moonbase-owned payloads through the public document API.
+    const get = () =>
+      kind === 'metadata'
+        ? harness.snapshot(
+            metadataDoc,
+            Number(target.conversationId) as ConversationId,
+            docKey,
+            BACKGROUND_CONTEXT,
+          )
+        : harness.snapshot(sessionDoc, docKey, BACKGROUND_CONTEXT);
+    await harness.commit(async (tx) => {
+      const value =
+        kind === 'metadata'
+          ? await tx.doc(metadataDoc, Number(target.conversationId) as ConversationId, docKey, null)
+          : await tx.doc(sessionDoc, docKey, null);
+      if (family === 'binding') {
+        const bound = JSON.parse(value.binding);
+        bound.target.host.future = { nested: true };
+        value.binding = JSON.stringify(bound);
+      } else value.future = { nested: true };
+    }, BACKGROUND_CONTEXT);
+    const before = JSON.stringify(await get());
+    let commits = 0;
+    const off = harness.subscribeCommits(() => {
+      commits++;
+    });
+    try {
+      if (kind === 'store')
+        await assert.rejects(f.client.command('getChatHost', { host: session.host }), {
+          code: 'Persistence',
+        });
+      else {
+        await assert.rejects(
+          f.client.command('sendChat', { target, requestId: 'saved-send', text: 'Original' }),
+          { code: 'Persistence' },
+        );
+        await assert.rejects(f.client.command('getChatSend', { target, requestId: 'saved-send' }), {
+          code: 'Persistence',
+        });
+      }
+      assert.equal(commits, 0);
+      assert.equal(JSON.stringify(await get()), before);
+      assert.equal(f.faux.state.callCount, 1);
+    } finally {
+      off();
+    }
+    await f.restart();
+    if (kind === 'store')
+      await assert.rejects(f.client.command('getChatHost', { host: session.host }), {
+        code: 'Persistence',
+      });
+    else
+      await assert.rejects(f.client.command('getChatSend', { target, requestId: 'saved-send' }), {
+        code: 'Persistence',
+      });
+    await f.dispose();
+    const database = await openNodeSqliteDatabase(f.config.databasePath),
+      storage = await SqliteStorage.open(database);
+    try {
+      const page = await storage.scanDocuments(
+        {
+          scope:
+            kind === 'metadata'
+              ? {
+                  kind: 'conversation',
+                  conversationId: Number(target.conversationId) as ConversationId,
+                }
+              : { kind: 'session' },
+          at: 'current',
+          kind: 'moonbase.chat.' + kind,
+        },
+        32,
+        undefined,
+        BACKGROUND_CONTEXT,
+      );
+      const record = page.items.find((record) => record.key === docKey);
+      assert(record);
+      assert.equal(
+        JSON.stringify((await storage.document(record.id, 'current', BACKGROUND_CONTEXT))!.value),
+        before,
+      );
+    } finally {
+      await storage.close(BACKGROUND_CONTEXT);
+    }
+    assert.equal(f.faux.state.callCount, 1);
+  });
+
+test('partial acquisition attempts each transferred resource release once and preserves safe composite failures', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'moonbase-pi-release-')),
+    models = createModels(),
+    faux = fauxProvider();
+  models.setProvider(faux.provider);
+  const root = ManagedRuntime.make(Layer.empty),
+    counts = { database: 0, storage: 0, env: 0 },
+    canary = 'private-construction-canary';
+  const closeDatabase = NodeSqliteDatabase.prototype.close,
+    closeStorage = SqliteStorage.prototype.close,
+    cleanupEnv = NodeExecutionEnv.prototype.cleanup;
+  mock.method(Harness, 'open', async () => {
+    throw Error(canary);
+  });
+  mock.method(NodeSqliteDatabase.prototype, 'close', async function (this: NodeSqliteDatabase) {
+    counts.database++;
+    return closeDatabase.call(this);
+  });
+  mock.method(
+    SqliteStorage.prototype,
+    'close',
+    async function (this: SqliteStorage, context: Parameters<typeof closeStorage>[0]) {
+      counts.storage++;
+      await closeStorage.call(this, context);
+      throw new ApplicationError({
+        code: 'Persistence',
+        message: 'Controlled storage cleanup failure',
+      });
+    },
+  );
+  mock.method(
+    NodeExecutionEnv.prototype,
+    'cleanup',
+    async function (this: NodeExecutionEnv, context: Parameters<typeof cleanupEnv>[0]) {
+      counts.env++;
+      await cleanupEnv.call(this, context);
+      throw new ApplicationError({
+        code: 'Unavailable',
+        message: 'Controlled environment cleanup failure',
+      });
+    },
+  );
+  t.after(async () => {
+    mock.restoreAll();
+    await root.dispose();
+    await rm(directory, { recursive: true, force: true });
+  });
+  await assert.rejects(
+    runApplicationEffect(
+      root,
+      Effect.scoped(
+        Layer.build(
+          PiRuntimeLive({
+            ...session,
+            cwd: directory,
+            databasePath: join(directory, 'chat.sqlite'),
+            models,
+            model: { provider: faux.provider.id, modelId: faux.getModel().id },
+          }),
+        ),
+      ),
+    ),
+    (error: unknown) => {
+      assert(ApplicationError.is(error));
+      assert.equal(error.code, 'Persistence');
+      assert(error.message.includes('Controlled storage cleanup failure'));
+      assert(error.message.includes('Controlled environment cleanup failure'));
+      assert(!error.message.includes(canary));
+      assert(!error.message.includes(directory));
+      return true;
+    },
+  );
+  assert.deepEqual(counts, { database: 1, storage: 1, env: 1 });
+});
+
+test('unsupported app-owned document version is rejected unchanged before resume or automatic publication', async (t) => {
+  const f = await fixture(t);
+  await f.create();
+  await f.dispose();
+  const change = async (write: boolean) => {
+    const database = await openNodeSqliteDatabase(f.config.databasePath),
+      storage = await SqliteStorage.open(database);
+    try {
+      const page = await storage.scanDocuments(
+        { scope: { kind: 'session' }, kind: 'moonbase.chat.store', at: 'current' },
+        1,
+        undefined,
+        BACKGROUND_CONTEXT,
+      );
+      const document = await storage.document(page.items[0].id, 'current', BACKGROUND_CONTEXT);
+      assert(document);
+      if (write)
+        await storage.commit(
+          [
+            {
+              type: 'document.change',
+              id: document.record.id,
+              content: { kind: 'base', version: 2, value: document.value },
+            },
+          ],
+          BACKGROUND_CONTEXT,
+        );
+      return { value: JSON.stringify(document.value), version: document.version };
+    } finally {
+      await storage.close(BACKGROUND_CONTEXT);
+    }
+  };
+  const original = await change(true);
+  await f.restart();
+  await assert.rejects(f.client.command('getChatHost', { host: session.host }), {
+    code: 'Persistence',
+  });
+  await f.dispose();
+  assert.deepEqual(await change(false), { value: original.value, version: 2 });
+  assert.equal(f.faux.state.callCount, 0);
+});
+
+test('strict programmatic configuration and cursor envelopes reject nested unfamiliar fields without diagnostics or execution', async (t) => {
+  const f = await fixture(t),
+    canary = 'private-config-field-canary';
+  for (const change of [
+    { future: canary },
+    { host: { ...session.host, future: canary } },
+    { model: { ...f.config.model, future: canary } },
+    { cwd: canary },
+    { databasePath: '/private/' + 'x'.repeat(4096) },
+  ]) {
+    const runtime = ManagedRuntime.make(PiRuntimeLive({ ...f.config, ...change }));
+    try {
+      await assert.rejects(
+        makeChatClient(runtime).command('getChatHost', { host: session.host }),
+        (error: unknown) => {
+          assert(ApplicationError.is(error));
+          assert.equal(error.code, 'InvalidInput');
+          assert(!error.message.includes(canary));
+          assert(!error.message.includes(f.config.cwd));
+          return true;
+        },
+      );
+    } finally {
+      await runtime.dispose();
+    }
+  }
+  const target = await f.create();
+  for (const payload of [
+    { kind: 'history', scan: null, future: canary },
+    { kind: 'history', scan: { start: true, future: canary } },
+    { kind: 'history', scan: [] },
+    { kind: 'unknown', scan: null },
+  ])
+    await assert.rejects(
+      f.client.command('getChatHistory', {
+        target,
+        cursor: Buffer.from(JSON.stringify(payload)).toString('base64url'),
+      }),
+      { code: 'InvalidInput' },
+    );
+  assert.equal(f.faux.state.callCount, 0);
+});
+
+test('Harness release failure still releases the environment and reports both typed cleanup failures', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'moonbase-pi-release-')),
+    models = createModels(),
+    faux = fauxProvider();
+  models.setProvider(faux.provider);
+  const root = ManagedRuntime.make(Layer.empty),
+    original = Harness.open,
+    cleanupEnv = NodeExecutionEnv.prototype.cleanup;
+  let closes = 0,
+    cleanups = 0;
+  mock.method(Harness, 'open', async (...args: Parameters<typeof original>) => {
+    const harness = await original(...args),
+      close = harness.close.bind(harness);
+    harness.close = async (...args: Parameters<typeof close>) => {
+      closes++;
+      await close(...args);
+      throw new ApplicationError({
+        code: 'Persistence',
+        message: 'Controlled Harness cleanup failure',
+      });
+    };
+    return harness;
+  });
+  mock.method(
+    NodeExecutionEnv.prototype,
+    'cleanup',
+    async function (this: NodeExecutionEnv, context: Parameters<typeof cleanupEnv>[0]) {
+      cleanups++;
+      await cleanupEnv.call(this, context);
+      throw new ApplicationError({
+        code: 'Unavailable',
+        message: 'Controlled environment cleanup failure',
+      });
+    },
+  );
+  t.after(async () => {
+    mock.restoreAll();
+    await root.dispose();
+    await rm(directory, { recursive: true, force: true });
+  });
+  await assert.rejects(
+    runApplicationEffect(
+      root,
+      Effect.scoped(
+        Layer.build(
+          PiRuntimeLive({
+            ...session,
+            cwd: directory,
+            databasePath: join(directory, 'chat.sqlite'),
+            models,
+            model: { provider: faux.provider.id, modelId: faux.getModel().id },
+          }),
+        ),
+      ),
+    ),
+    (error: unknown) => {
+      assert(ApplicationError.is(error));
+      assert(error.message.includes('Controlled Harness cleanup failure'));
+      assert(error.message.includes('Controlled environment cleanup failure'));
+      return true;
+    },
+  );
+  assert.equal(closes, 1);
+  assert.equal(cleanups, 1);
 });

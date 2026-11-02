@@ -12,6 +12,7 @@ import { PiRuntimeLive } from './index.ts';
 import { serveChat } from './server.ts';
 import * as V from './validation.ts';
 import * as P from './protocol.ts';
+import * as S from './private-schema.ts';
 
 /** Standalone process composition root; feature services never create runtimes. */
 async function main() {
@@ -19,21 +20,12 @@ async function main() {
     V.fail('InvalidInput', 'Supply an absolute private host configuration file.');
   const bytes = await readFile(process.argv[2]);
   if (bytes.length > 64 * 1024) V.fail('InvalidInput', 'Host configuration exceeds its bound.');
-  const data = V.object(P.json(bytes), [
-    'host',
-    'actorId',
-    'cwd',
-    'databasePath',
-    'model',
-    'token',
-    'port',
-  ]);
-  const session = V.session({ host: data.host, actorId: data.actorId }),
-    model = V.object(data.model, ['provider', 'modelId']);
+  const data = S.cliConfiguration(P.json(bytes));
+  const session = { host: data.host, actorId: data.actorId };
   const models = createModels();
   models.setProvider(openaiProvider());
   models.setProvider(anthropicProvider());
-  const selected = { provider: V.id(model.provider), modelId: V.string(model.modelId, 256) },
+  const selected = data.model,
     configured = models.getModel(selected.provider, selected.modelId);
   if (!configured || !(await models.getAuth(configured)))
     V.fail(
@@ -44,15 +36,13 @@ async function main() {
   registry.install(CodingTools);
   const config = {
     ...session,
-    cwd: V.string(data.cwd, 4096),
-    databasePath: V.string(data.databasePath, 4096),
+    cwd: data.cwd,
+    databasePath: data.databasePath,
     model: selected,
     models,
     registry,
   };
-  if (!Number.isInteger(data.port) || Number(data.port) < 1 || Number(data.port) > 65535)
-    V.fail('InvalidInput', 'Configure an explicit loopback host port.');
-  const token = P.token(data.token),
+  const token = data.token,
     runtime = ManagedRuntime.make(PiRuntimeLive(config)),
     client = makeChatClient(runtime);
   try {
