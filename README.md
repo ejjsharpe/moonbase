@@ -1,19 +1,34 @@
 # Moonbase
 
-A fresh project for an independent editor and Pi Durable chat modules, retaining Nx, Bun, Electron, React, TypeScript, Monaco, StyleX, Base UI and Effect.
+A macOS workbench for local editing and optional remote Pi Durable chat. Reusable packages own feature behavior; clients compose them through public interfaces and supply platform capabilities.
 
-This repository currently contains the overnight orchestration brief only. Application implementation and GitHub repository setup are tasks for the lead agent.
+| Module | Owns |
+| --- | --- |
+| [Application](packages/application/README.md) | Shared commands, browser clients and Effect service contracts |
+| [Editor](packages/editor/README.md) | React/Monaco workbench and independent editor state |
+| [Chat](packages/chat/README.md) | Headless chat state and draft preservation |
+| [Workspace](packages/workspace/README.md) | Local files, Git and recovery persistence |
+| [Pi runtime](packages/pi-runtime/README.md) | Pi chat execution, host transport and remote adapter |
+| [SSH](packages/ssh/README.md) | Scoped, authenticated SSH connectivity |
+| [UI](packages/ui/README.md) | Shared StyleX tokens and recipes |
+| [Config](packages/config/README.md) | Lint, formatting and TypeScript defaults |
+| [Desktop](apps/desktop/README.md) | Electron composition, native authority and packaging |
 
-The brief requires one shared Effect application command center, with focused module services and one runtime per process. The architecture and task ownership are defined in `docs/agents/prompts/OVERNIGHT.txt`.
+Packages consume public exports, accept injected dependencies and stay independent of client applications. Each process owns one scoped Effect runtime; standalone clients acquire only the capabilities they use. See [AGENTS.md](AGENTS.md) for contribution rules and [DESIGN.md](docs/DESIGN.md) for UI guidance.
 
-T3 Code is development tooling only. The brief excludes T3/Pocket/Codex application-code reuse, checks provenance before retaining your editor code, and keeps required notices for Pi Durable and the actual stack/dependencies.
+## Development
 
-## Start the overnight run
+Use Bun 1.4.4 and Node 26.13.0. Workspace/native desktop builds require macOS and Xcode command-line tools.
 
-Open this checkout as the **Moonbase** project in T3 Code, start a new chat there, and send:
+```sh
+bun install --frozen-lockfile
+bun run check:foundation
+bun run typecheck
+bun run lint
+bun run test
+bun run format:check
+```
 
-> Read `docs/agents/prompts/OVERNIGHT.txt` and run the overnight task described there.
+Package READMEs cover setup and focused checks. The [editor/workspace](tests/editor-workspace/README.md) and [chat](tests/chat/README.md) suites test cross-module integration. Generated test output belongs in ignored `test-results/`; build/package output belongs in `dist/` and `release/`.
 
-The prompt is self-contained and authorizes the lead to prepare focused pull requests in the private `ejjsharpe/moonbase` repository, using parallel workers and independent review. It preserves the original escode checkout and leaves GitHub PRs for human review. Keep the executing machine and session running.
-
-Source reference: `/Users/elliotsharpe/Projects/escode`. Do not modify or import that repository's Git history.
+Human acceptance remains pending. Controlled tests do not qualify real SSH/providers, packaged/native interaction, signing/notarization, VoiceOver, physical durability or Intel execution.

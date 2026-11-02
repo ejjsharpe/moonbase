@@ -1,0 +1,3 @@
+{
+  "extends": "@moonbase/config/typescript/base.json"
+}

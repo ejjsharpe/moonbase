@@ -1,0 +1,39 @@
+{
+  "analytics": false,
+  "targetDefaults": {
+    "typecheck": {
+      "cache": true,
+      "inputs": [
+        "default",
+        "{workspaceRoot}/tsconfig.base.json",
+        "{workspaceRoot}/packages/config/typescript/**/*.json"
+      ]
+    },
+    "lint": {
+      "cache": true,
+      "inputs": [
+        "default",
+        "{workspaceRoot}/oxlint.config.mts",
+        "{workspaceRoot}/packages/config/**/*",
+        {
+          "externalDependencies": ["oxlint"]
+        }
+      ]
+    },
+    "test": {
+      "cache": true
+    },
+    "build": {
+      "cache": true,
+      "outputs": ["{projectRoot}/dist"]
+    },
+    "package": {
+      "dependsOn": ["build"],
+      "cache": false
+    },
+    "smoke": {
+      "dependsOn": ["package"],
+      "cache": false
+    }
+  }
+}
