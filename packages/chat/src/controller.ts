@@ -56,7 +56,7 @@ type Owner = {
   completion?: Promise<void>;
 };
 type Observation = {
-  ready: Deferred.Deferred<ObservationClose>;
+  ready: Deferred.Deferred<Exit.Exit<ObservationClose>>;
   outcome?: Promise<Exit.Exit<void>>;
 };
 const maximumSavedBytes = 2 * 1024 * 1024;
@@ -206,7 +206,9 @@ class ChatModelState {
   private closeObservation(observation: Observation): Promise<Exit.Exit<void>> {
     return (observation.outcome ??= this.runEffect(
       Effect.exit(
-        Effect.flatMap(Deferred.await(observation.ready), (close) => Effect.promise(close)),
+        Effect.flatMap(Deferred.await(observation.ready), (acquired) =>
+          Effect.flatMap(acquired, (close) => Effect.promise(close)),
+        ),
       ).pipe(Effect.uninterruptible),
     ).then(
       (exit) => {
@@ -227,12 +229,9 @@ class ChatModelState {
       this.observations.add(observation);
       owner.observations.add(observation);
       const acquired = yield* Effect.exit(
-        Effect.try({ try: acquire, catch: normalizeApplicationError }),
+        Effect.try({ try: acquire, catch: normalizeApplicationError }).pipe(Effect.orDie),
       );
-      yield* Deferred.succeed(
-        observation.ready,
-        Exit.isSuccess(acquired) ? acquired.value : async () => {},
-      );
+      yield* Deferred.succeed(observation.ready, acquired);
       yield* Scope.addFinalizer(
         owner.scope,
         Effect.flatMap(

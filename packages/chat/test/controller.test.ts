@@ -997,8 +997,20 @@ test('detach leaves admitted mutation wait owned by model and preserves newer un
   assert(!f.calls.some((call) => call.operation === 'stopChat'));
 });
 
-test('failed watch acquisition remains observable, releases ownership and redacts unknown diagnostics', async (t) => {
-  const f = await fixture(t);
+test('failed watch acquisition remains observable through disposal and root cleanup without private diagnostics', async (t) => {
+  const cleanup: (() => Promise<void>)[] = [];
+  const f = await fixture({
+    after: (close) => {
+      cleanup.push(close);
+    },
+  });
+  const expected = (error: unknown) =>
+    ApplicationError.is(error) &&
+    error.code === 'Unavailable' &&
+    !error.message.includes('SYNTHETIC_PRIVATE_ACQUISITION_SENTINEL');
+  t.after(async () => {
+    for (const close of cleanup) await assert.rejects(close(), expected);
+  });
   await ready(f);
   await f.controller.closeView();
   f.chat.watch = () => {
@@ -1007,7 +1019,7 @@ test('failed watch acquisition remains observable, releases ownership and redact
   await f.controller.select(target);
   assert.match(f.controller.getSnapshot().error!, /Unavailable/);
   assert(!f.controller.getSnapshot().error!.includes('SYNTHETIC_PRIVATE_ACQUISITION_SENTINEL'));
-  await f.controller.dispose();
+  await assert.rejects(f.controller.dispose(), expected);
 });
 
 test('synchronous watch callback can dispose before the close handle is returned without abandoning it', async (t) => {
@@ -1358,3 +1370,42 @@ test('public context copies cannot retarget the model, its saved namespace or su
   assert.deepEqual(JSON.parse(f.storage.value!).session, context);
   assert.deepEqual(f.controller.context, context);
 });
+
+for (const typed of [true, false])
+  test(`reentrant disposal retains ${typed ? 'typed' : 'unknown'} watch acquisition failure after the panel is removed`, async (t) => {
+    const cleanup: (() => Promise<void>)[] = [];
+    const f = await fixture({
+      after: (close) => {
+        cleanup.push(close);
+      },
+    });
+    const failure = typed
+      ? new ApplicationError({ code: 'Persistence', message: 'Reentrant watch acquisition failed' })
+      : new Error('SYNTHETIC_PRIVATE_REENTRANT_ACQUISITION');
+    const expected = (error: unknown) =>
+      ApplicationError.is(error) &&
+      error.code === (typed ? 'Persistence' : 'Unavailable') &&
+      !error.message.includes('SYNTHETIC_PRIVATE_REENTRANT_ACQUISITION') &&
+      (!typed || error === failure);
+    t.after(async () => {
+      for (const close of cleanup) await assert.rejects(close(), expected);
+    });
+    let closing: Promise<void> | undefined;
+    f.controller.subscribe(() => {
+      if (f.controller.getSnapshot().connection && !closing) closing = f.controller.dispose();
+    });
+    f.connection.watch = (receive) => {
+      receive({ state: 'disconnected', connectionId: null, profile });
+      throw failure;
+    };
+    await f.controller.start();
+    assert(closing);
+    await assert.rejects(closing, expected);
+    assert.strictEqual(f.controller.dispose(), closing);
+    await assert.rejects(f.controller.dispose(), expected);
+    assert.equal(f.storage.writes, 0);
+    assert.equal(f.controller.getSnapshot().error, null);
+    assert(
+      !f.calls.some((call) => ['createChat', 'sendChat', 'stopChat'].includes(call.operation)),
+    );
+  });
