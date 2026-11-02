@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { Effect, Exit, Layer, ManagedRuntime, Scope } from 'effect';
 import { makeChatModel, makeChatController } from '@moonbase/chat';
-import { decodeChatInput } from '@moonbase/application/chat-schema';
-import { decodeEditorRecovery } from '@moonbase/application/workspace-schema';
+import { decodeChatInput } from '@moonbase/contracts/chat-schema';
+import { decodeEditorRecovery } from '@moonbase/contracts/workspace-schema';
 
 const fixture = (name) =>
   readFileSync(

@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { ManagedRuntime } from 'effect';
-import type { ObservationClose } from '@moonbase/application/client';
+import type { ObservationClose } from '@moonbase/contracts/workspace';
 import { makeConnectionClient } from '@moonbase/application/runtime-client';
 import { SshLive } from '@moonbase/ssh';
 import { decodeSshConfiguration, type DecodedSshConfiguration } from '@moonbase/ssh/configuration';

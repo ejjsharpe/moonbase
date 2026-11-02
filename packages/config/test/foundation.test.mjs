@@ -12,7 +12,7 @@ test('Foundation verifies browser-only command contracts and headless models wit
   const directory = mkdtempSync(path.join(tmpdir(), 'moonbase-foundation-'));
   try {
     mkdirSync(path.join(directory, 'node_modules/@moonbase'), { recursive: true });
-    for (const name of ['application', 'chat', 'editor']) {
+    for (const name of ['application', 'contracts', 'effect', 'chat', 'editor']) {
       const target = path.join(directory, 'packages', name);
       cpSync(path.join(root, 'packages', name, 'src'), path.join(target, 'src'), {
         recursive: true,

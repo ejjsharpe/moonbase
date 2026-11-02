@@ -1,6 +1,6 @@
 # Chat host health v1
 
-`@moonbase/application/host-client` exposes browser-safe host/store identity and protocol/application versions. Privileged `@moonbase/application/host-health` exports `checkHostHealth({origin, token, expected})` for the existing runtime and `createHostHealthReply` for the host HTTP handler. [Pi](../../pi-runtime/README.md) serves health; [SSH](../../ssh/README.md) checks it before exposing connectivity.
+`@moonbase/contracts/host` exposes browser-safe host/store identity and protocol/application versions. Privileged `@moonbase/ssh/host-health` exports `checkHostHealth({origin, token, expected})` for the existing runtime and `createHostHealthReply` for the host HTTP handler. [Pi](../../pi-runtime/README.md) serves health; [SSH](../../ssh/README.md) checks it before exposing connectivity.
 
 The operator-provisioned random application key (`token`) stays private on both peers. It never enters renderer commands, HTTP messages, URLs, SSH arguments or logs. The endpoint is a bare HTTP origin on `127.0.0.1`, normally an OpenSSH local forward.
 

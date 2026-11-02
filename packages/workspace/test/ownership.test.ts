@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { Effect, Layer, ManagedRuntime } from 'effect';
 import { TestClock } from 'effect/testing';
-import { ApplicationError, emptyRecovery } from '@moonbase/application/client';
+import { ApplicationError, emptyRecovery } from '@moonbase/contracts/workspace';
 import { makeEditorClient } from '@moonbase/application/runtime-client';
 import { runApplicationEffect } from '@moonbase/application/effect-client';
 import { WorkspaceLive, WorkspaceNative } from '@moonbase/workspace';

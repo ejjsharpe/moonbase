@@ -4,7 +4,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./configuration": "./src/configuration.ts"
+    "./configuration": "./src/configuration.ts",
+    "./host-health": "./src/host-health.ts"
   },
   "scripts": {
     "build": "tsc --noEmit -p tsconfig.json",
@@ -13,7 +14,11 @@
     "test": "node --experimental-strip-types --test test/*.test.ts"
   },
   "dependencies": {
-    "@moonbase/application": "workspace:*",
-    "effect": "4.1.0"
+    "effect": "4.1.0",
+    "@moonbase/contracts": "workspace:*",
+    "@moonbase/effect": "workspace:*"
+  },
+  "devDependencies": {
+    "@moonbase/application": "workspace:*"
   }
 }

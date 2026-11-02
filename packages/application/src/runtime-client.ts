@@ -1,8 +1,8 @@
 import type { ManagedRuntime } from 'effect';
 import { runApplicationEffect, observeApplicationStream } from './effect-client.ts';
-import type { ApplicationError, EditorClient } from './client.ts';
-import type { ConnectionClient } from './connection-client.ts';
-import type { ChatClient } from './chat-client.ts';
+import type { ApplicationError, EditorClient } from '@moonbase/contracts/workspace';
+import type { ConnectionClient } from '@moonbase/contracts/connection';
+import type { ChatClient } from '@moonbase/contracts/chat';
 import {
   chatCommand,
   chatWatch,
@@ -11,7 +11,11 @@ import {
   workspaceCommand,
   workspaceWatch,
 } from './handlers.ts';
-import type { ChatService, ConnectionService, WorkspaceService } from './services.ts';
+import type {
+  ChatService,
+  ConnectionService,
+  WorkspaceService,
+} from '@moonbase/contracts/services';
 
 /** Accept the process root's runtime; never acquire a second service graph here. */
 export function makeEditorClient(

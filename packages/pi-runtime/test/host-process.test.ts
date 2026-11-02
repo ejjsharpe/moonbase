@@ -1,4 +1,4 @@
-import type { ChatTarget } from '@moonbase/application/chat-client';
+import type { ChatTarget } from '@moonbase/contracts/chat';
 import type { AddressInfo } from 'node:net';
 import type * as Esbuild from 'esbuild';
 import assert from 'node:assert/strict';
@@ -11,9 +11,9 @@ import { tmpdir } from 'node:os';
 import { createServer } from 'node:net';
 import { randomBytes } from 'node:crypto';
 import { Effect, Layer, ManagedRuntime, Stream } from 'effect';
-import { checkHostHealth } from '@moonbase/application/host-health';
-import { ConnectionService } from '@moonbase/application/services';
-import { ApplicationError } from '@moonbase/application/client';
+import { checkHostHealth } from '@moonbase/ssh/host-health';
+import { ConnectionService } from '@moonbase/contracts/services';
+import { ApplicationError } from '@moonbase/contracts/workspace';
 import { makeChatClient } from '@moonbase/application/runtime-client';
 import { RemoteChatLive } from '../src/remote.ts';
 import { createRequire } from 'node:module';
@@ -283,7 +283,7 @@ test('compiled remote entry runs on Electron Node24 against the separate Node26 
   const entry = join(directory, 'remote.cjs');
   const source = `import {readFileSync} from 'node:fs';
     import {Effect,Layer,ManagedRuntime,Stream} from 'effect';
-    import {ConnectionService} from '@moonbase/application/services';
+    import { ConnectionService } from '@moonbase/contracts/services';
     import {makeChatClient} from '@moonbase/application/runtime-client';
     import {RemoteChatLive} from './src/remote.ts';
     async function main(){

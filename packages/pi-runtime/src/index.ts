@@ -34,8 +34,8 @@ import {
   Semaphore,
   Stream,
 } from 'effect';
-import { normalizeApplicationError } from '@moonbase/application/effect-client';
-import { ApplicationError } from '@moonbase/application/client';
+import { normalizeApplicationError } from '@moonbase/effect';
+import { ApplicationError } from '@moonbase/contracts/workspace';
 import type {
   ChatCommand,
   ChatInput,
@@ -47,12 +47,9 @@ import type {
   ChatHistoryPage,
   ChatSendReceipt,
   ChatRun,
-} from '@moonbase/application/chat-client';
-import {
-  ChatService,
-  releaseResource,
-  type ChatServiceShape,
-} from '@moonbase/application/services';
+} from '@moonbase/contracts/chat';
+import { releaseResource } from '@moonbase/effect';
+import { ChatService, type ChatServiceShape } from '@moonbase/contracts/services';
 import * as V from './validation.ts';
 import * as S from './private-schema.ts';
 

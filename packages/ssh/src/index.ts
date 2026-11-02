@@ -1,17 +1,14 @@
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Queue, Stream, type Scope } from 'effect';
 import { createServer, type Server, type AddressInfo } from 'node:net';
 import { randomUUID } from 'node:crypto';
-import { ApplicationError } from '@moonbase/application/client';
-import type { ConnectionSnapshot } from '@moonbase/application/connection-client';
-import { decodeConnectionInput } from '@moonbase/application/connection-schema';
-import { decodeChatHostTarget } from '@moonbase/application/host-schema';
-import type { ChatHostHealth } from '@moonbase/application/host-client';
-import { checkHostHealth } from '@moonbase/application/host-health';
-import {
-  ConnectionService,
-  releaseResource,
-  type ConnectionServiceShape,
-} from '@moonbase/application/services';
+import { ApplicationError } from '@moonbase/contracts/workspace';
+import type { ConnectionSnapshot } from '@moonbase/contracts/connection';
+import { decodeConnectionInput } from '@moonbase/contracts/connection-schema';
+import { decodeChatHostTarget } from '@moonbase/contracts/host-schema';
+import type { ChatHostHealth } from '@moonbase/contracts/host';
+import { checkHostHealth } from '@moonbase/ssh/host-health';
+import { releaseResource } from '@moonbase/effect';
+import { ConnectionService, type ConnectionServiceShape } from '@moonbase/contracts/services';
 import { SshProcess } from './process.ts';
 import {
   decodeSshConfiguration,

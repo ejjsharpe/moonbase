@@ -1,4 +1,4 @@
-import type { LookupMatch } from '@moonbase/application/client';
+import type { LookupMatch } from '@moonbase/contracts/workspace';
 
 /** Independent matcher. Positions are UTF-16 offsets, as consumed by React/Monaco. */
 export function matchPath(path: string, query: string): LookupMatch | null {

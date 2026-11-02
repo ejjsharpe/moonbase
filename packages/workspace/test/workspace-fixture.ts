@@ -9,7 +9,7 @@ import {
   emptyRecovery,
   type CheckoutTarget,
   type EditorRecovery,
-} from '@moonbase/application/client';
+} from '@moonbase/contracts/workspace';
 import { WorkspaceLive } from '../src/index.ts';
 
 export function fixture() {

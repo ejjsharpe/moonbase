@@ -1,15 +1,16 @@
 import type { AddressInfo } from 'node:net';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { Effect } from 'effect';
-import type { ChatClient } from '@moonbase/application/chat-client';
-import { createHostHealthReply, validateHostHealth } from '@moonbase/application/host-health';
+import type { ChatClient } from '@moonbase/contracts/chat';
+import { createHostHealthReply, validateHostHealth } from '@moonbase/ssh/host-health';
 import {
   chatHostVersion,
   chatProtocolVersion,
   type ChatHostTarget,
-} from '@moonbase/application/host-client';
-import { releaseResource } from '@moonbase/application/services';
-import { ApplicationError } from '@moonbase/application/client';
+} from '@moonbase/contracts/host';
+import { releaseResource } from '@moonbase/effect';
+
+import { ApplicationError } from '@moonbase/contracts/workspace';
 import * as P from './protocol.ts';
 import * as V from './validation.ts';
 import * as S from './private-schema.ts';

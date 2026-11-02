@@ -1,6 +1,6 @@
 import { Schema, Struct } from 'effect';
 import { isAbsolute } from 'node:path';
-import { ApplicationError } from '@moonbase/application/client';
+import { ApplicationError } from '@moonbase/contracts/workspace';
 import { hash, recovery } from './validation.ts';
 import {
   CheckoutTargetSchema,
@@ -12,7 +12,7 @@ import {
   WorkspaceOperationSchema,
   workspaceInputSchemas,
   decodeEditorRecovery,
-} from '@moonbase/application/workspace-schema';
+} from '@moonbase/contracts/workspace-schema';
 
 const struct = <const F extends Schema.Struct.Fields>(fields: F) =>
   Schema.Struct(fields).mapFields(Struct.map(Schema.mutableKey));

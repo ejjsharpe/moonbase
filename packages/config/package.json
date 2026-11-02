@@ -15,6 +15,10 @@
       "test": {
         "inputs": [
           "default",
+          "{workspaceRoot}/packages/contracts/src/**/*",
+          "{workspaceRoot}/packages/contracts/package.json",
+          "{workspaceRoot}/packages/effect/src/**/*",
+          "{workspaceRoot}/packages/effect/package.json",
           "{workspaceRoot}/oxlint.config.mts",
           "{workspaceRoot}/oxfmt.config.mts",
           "{workspaceRoot}/scripts/check-foundation.mjs",
