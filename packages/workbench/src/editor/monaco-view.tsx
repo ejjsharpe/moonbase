@@ -243,15 +243,14 @@ export function MonacoView({
     editor.updateOptions({ automaticLayout: visible });
     if (!visible) return;
     editor.layout();
-    const restore = (view: monaco.editor.ICodeEditor, position: typeof modified) => {
+    const restoreScroll = (view: monaco.editor.ICodeEditor, position: typeof modified) => {
       if (!position) return;
-      view.setPosition({ lineNumber: position.line, column: position.column });
       view.setScrollPosition({ scrollTop: position.top, scrollLeft: position.left });
     };
     if ('getModifiedEditor' in editor) {
-      restore(editor.getOriginalEditor(), original);
-      restore(editor.getModifiedEditor(), modified);
-    } else restore(editor, modified);
+      restoreScroll(editor.getOriginalEditor(), original);
+      restoreScroll(editor.getModifiedEditor(), modified);
+    } else restoreScroll(editor, modified);
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- Restore visibility on the same view identities as creation; typing must not relayout the editor.
   }, [
     visible,

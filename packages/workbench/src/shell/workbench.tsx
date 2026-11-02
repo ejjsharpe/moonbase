@@ -171,6 +171,12 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       }}
       inert={closing || ['prepared', 'disposing', 'disposed', 'failed'].includes(lifecycle.phase)}
       {...stylex.props(workbench.document, styles.shell)}
+      onKeyDownCapture={(event) => {
+        if (view !== 'chat') handle.current?.keyDown(event);
+      }}
+      onKeyUp={(event) => {
+        if (view !== 'chat') handle.current?.keyUp(event);
+      }}
       onDragOver={(event) => {
         if (event.dataTransfer.types.includes('Files')) event.preventDefault();
       }}

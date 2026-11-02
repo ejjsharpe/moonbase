@@ -85,6 +85,70 @@ test('browser shell keeps dirty comparisons, cursor, scroll, Monaco undo and sco
   expect(errors).toEqual([]);
 });
 
+for (const mode of ['file', 'staged'] as const) {
+  for (const selection of ['range', 'multiple cursors'] as const) {
+    test(`Chat round trip preserves ${selection} in ${mode} view`, async ({ page }) => {
+      await page.goto('/?chat');
+      await expect(input(page)).toBeVisible();
+      await page.evaluate(() =>
+        window.demo.first.edit(
+          { checkout: window.demo.checkout, path: 'welcome.ts' },
+          'first\nsecond',
+        ),
+      );
+      await shell(page).getByLabel('File view', { exact: true }).selectOption(mode);
+      if (mode === 'staged')
+        await expect.poll(() => page.evaluate(() => window.demo.diffReady())).toBe(true);
+      await input(page).focus();
+      await input(page).press('Meta+a');
+      if (selection === 'multiple cursors') {
+        await input(page).press('ArrowLeft');
+        await input(page).press('Meta+Alt+ArrowDown');
+      }
+      await tabs(page).getByRole('tab', { name: 'Chat', exact: true }).click();
+      await project(page).click();
+      await expect(input(page)).toBeFocused();
+      await input(page).press('Q');
+      expect(
+        await page.evaluate(
+          () =>
+            window.demo.first.buffer({ checkout: window.demo.checkout, path: 'welcome.ts' })!.text,
+        ),
+      ).toBe(selection === 'range' ? 'Q' : 'Qfirst\nQsecond');
+    });
+  }
+}
+
+test('project-tab shortcuts use the editor handler after keyboard navigation from Chat', async ({
+  page,
+}) => {
+  await page.goto('/?chat');
+  await expect(input(page)).toBeVisible();
+  await page.evaluate(() =>
+    window.demo.first.edit(
+      { checkout: window.demo.checkout, path: 'welcome.ts' },
+      'save from project tab',
+    ),
+  );
+  await tabs(page).getByRole('tab', { name: 'Chat', exact: true }).click();
+  await tabs(page).getByRole('tab', { name: 'Chat', exact: true }).focus();
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('Enter');
+  await expect(project(page)).toBeFocused();
+  await project(page).press('Meta+s');
+  await expect.poll(() => page.evaluate(() => window.demo.memory.stats.saves)).toBe(1);
+  await expect(project(page)).toBeFocused();
+  await project(page).press('Meta+p');
+  await expect(page.getByRole('dialog', { name: 'Find file', exact: true })).toBeVisible();
+  await page.getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true }).click();
+  await project(page).focus();
+  await project(page).press('Meta+w');
+  await expect(shell(page).getByRole('tab', { name: 'welcome.ts', exact: true })).toHaveCount(0);
+  await project(page).focus();
+  await project(page).press('Meta+Shift+t');
+  await expect(input(page)).toBeVisible();
+});
+
 for (const choice of ['Save', 'Discard'] as const) {
   test(`shell project close Cancel retains work, then ${choice} uses the authoritative close gate`, async ({
     page,

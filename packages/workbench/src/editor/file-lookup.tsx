@@ -103,7 +103,6 @@ export function FileLookup({
         <input
           {...stylex.props(controls.field)}
           value={query}
-          autoFocus
           role="combobox"
           aria-controls={id}
           aria-expanded={rows.length > 0}

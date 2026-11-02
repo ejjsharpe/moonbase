@@ -26,7 +26,7 @@ Inject only today's native selection capabilities: `selectCheckout`, `selectNati
 
 Project select/close delegates to `selectCheckout`/`closeCheckout`; Chat close/reopen delegates to `application.closeChat/openChat`. Cancel retains work, while pending/failing Chat cleanup remains visible and blocks namespace reuse. Unavailable, initialization-failed and opening Chat remain visible, with explicit retry where available.
 
-The single editor stays mounted across project and Chat navigation, retaining Monaco models, undo, comparisons and view positions. Mouse selection restores content focus; keyboard navigation retains tab focus. Hidden editor shortcuts do not handle Chat input. Chat observation detaches/resumes with visibility without Stop or mutation replay.
+The single editor stays mounted across project and Chat navigation, retaining Monaco models, undo, selections, comparisons and view positions. Mouse selection restores content focus; keyboard navigation retains tab focus. Editor shortcuts also work from focused project tabs. Hidden editor shortcuts do not handle Chat input. Chat observation detaches/resumes with visibility without Stop or mutation replay.
 
 `WorkbenchHandle.prepareQuit()` reveals the editor's exact prompts and uncertainty controls, delegates to `application.prepareQuit()` and reveals Chat preservation failures. Use it for the platform Quit presentation handoff. Application remains authoritative for preservation and admission fencing. The platform retains synchronous `canUnload()` vetoes, native action subscriptions, matching Quit/disposal acknowledgments, root unmount and awaited `application.dispose()`. `closing` makes presentation inert after platform consent; prepared/disposed application phases also fence the view.
 

@@ -101,6 +101,38 @@ test('close dialog Cancel then Discard; Reopen reads disk and disposal releases 
   await expect.poll(() => page.evaluate(() => window.demo.modelCount())).toBe(before - 1);
 });
 
+for (const origin of ['editor', 'project tab', 'Find file button'] as const)
+  test(`file search restores ${origin} focus and reopens after dismissal`, async ({ page }) => {
+    await page.goto('/');
+    let focused = first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true });
+    if (origin === 'project tab')
+      focused = first(page)
+        .getByRole('tablist', { name: 'Workbench views', exact: true })
+        .getByRole('tab', { name: 'moonbase · main', exact: true });
+    else if (origin === 'Find file button')
+      focused = first(page).getByRole('button', { name: 'Find file', exact: true });
+    await focused.focus();
+    const dialog = page.getByRole('dialog', { name: 'Find file', exact: true });
+    for (const dismiss of ['Escape', 'Cancel'] as const) {
+      if (origin === 'Find file button') await focused.click();
+      else await page.keyboard.press('Meta+p');
+      await expect(dialog.getByRole('combobox')).toBeFocused();
+      if (dismiss === 'Escape') await page.keyboard.press('Escape');
+      else await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+      await expect(dialog).toHaveCount(0);
+      await expect(focused).toBeFocused();
+    }
+    await page.keyboard.press('Meta+p');
+    await expect(dialog.getByRole('combobox')).toBeFocused();
+    await dialog.getByRole('combobox').fill('README');
+    await expect(dialog.getByRole('option', { name: 'README.md', exact: true })).toBeVisible();
+    await page.keyboard.press('Enter');
+    await expect(dialog).toHaveCount(0);
+    await expect(
+      first(page).getByRole('textbox', { name: 'README.md editor', exact: true }),
+    ).toBeFocused();
+  });
+
 test('lookup groups/highlights, previews, tree actions and constrained layout', async ({
   page,
 }) => {

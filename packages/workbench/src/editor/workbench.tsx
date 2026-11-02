@@ -11,6 +11,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type KeyboardEvent,
 } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { Button } from '@base-ui/react/button';
@@ -41,6 +42,8 @@ const focusOrigin = (element: HTMLElement): FocusOrigin => {
 
 export type EditorWorkbenchHandle = {
   importFiles(checkout: CheckoutTarget, references: string[]): void;
+  keyDown(event: KeyboardEvent): void;
+  keyUp(event: KeyboardEvent): void;
 };
 export type EditorWorkbenchProps = {
   controller: EditorController;
@@ -191,10 +194,85 @@ export const EditorWorkbench = forwardRef<EditorWorkbenchHandle, EditorWorkbench
       },
       [controller],
     );
-    useImperativeHandle(ref, () => ({ importFiles }), [importFiles]);
     const run = (work: Promise<unknown>) => {
       void work.catch(controller.report);
     };
+    useImperativeHandle(ref, () => ({
+      importFiles,
+      keyDown(event: KeyboardEvent) {
+        const element = event.target as HTMLElement;
+        if (
+          element.closest('[role="dialog"], [role="menu"]') ||
+          (element.closest('input,textarea,select,[contenteditable=true]') &&
+            !element.closest('.monaco-editor'))
+        )
+          return;
+        if (!checkout || !selected || state.preserving) return;
+        const key = event.key.toLowerCase(),
+          command = event.metaKey || event.ctrlKey;
+        if (command && key === 's') {
+          event.preventDefault();
+          event.stopPropagation();
+          if (target) run(controller.save(target));
+        } else if (command && key === 'p' && !event.shiftKey && !event.altKey) {
+          event.preventDefault();
+          event.stopPropagation();
+          setLookup(true);
+        } else if (event.metaKey && key === 'w' && !event.shiftKey) {
+          event.preventDefault();
+          event.stopPropagation();
+          if (target) run(withFocus(controller.close([target]), focusOrigin(element), true));
+        } else if (event.metaKey && event.shiftKey && key === 't') {
+          event.preventDefault();
+          event.stopPropagation();
+          run(withFocus(controller.reopen(checkout), focusOrigin(element), true));
+        } else if (
+          event.metaKey &&
+          event.altKey &&
+          ['ArrowLeft', 'ArrowRight'].includes(event.key)
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          run(
+            withFocus(
+              controller.navigate(checkout, event.key === 'ArrowRight' ? 1 : -1),
+              focusOrigin(element),
+            ),
+          );
+        } else if (event.ctrlKey && event.key === 'Tab') {
+          event.preventDefault();
+          event.stopPropagation();
+          const paths =
+            recent?.paths ??
+            [
+              ...new Set([
+                selected.active,
+                ...state.recovery.recentFiles
+                  .filter((file) => checkoutKey(file.checkout) === checkoutKey(checkout))
+                  .map((file) => file.path),
+                ...selected.openFiles,
+              ]),
+            ].filter((path) => selected.openFiles.includes(path));
+          if (paths.length)
+            setRecent({
+              paths,
+              index:
+                ((recent?.index ?? 0) + (event.shiftKey ? paths.length - 1 : 1)) % paths.length,
+              origin: recent?.origin ?? focusOrigin(element),
+            });
+        } else if (event.key === 'Escape' && recent) {
+          event.preventDefault();
+          setRecent(null);
+        }
+      },
+      keyUp(event: KeyboardEvent) {
+        if (event.key === 'Control' && recent && checkout) {
+          const path = recent.paths[recent.index];
+          setRecent(null);
+          run(withFocus(controller.open({ checkout, path }), recent.origin));
+        }
+      },
+    }));
     const selectedPaths = selected?.tree.selected ?? [];
     return (
       <div
@@ -203,79 +281,6 @@ export const EditorWorkbench = forwardRef<EditorWorkbenchHandle, EditorWorkbench
         aria-label="Moonbase editor"
         onBlur={(event) => {
           if (!event.currentTarget.contains(event.relatedTarget)) setRecent(null);
-        }}
-        onKeyDownCapture={(event) => {
-          const element = event.target as HTMLElement;
-          if (
-            element.closest('[role="dialog"], [role="menu"]') ||
-            (element.closest('input,textarea,select,[contenteditable=true]') &&
-              !element.closest('.monaco-editor'))
-          )
-            return;
-          if (!checkout || !selected || state.preserving) return;
-          const key = event.key.toLowerCase(),
-            command = event.metaKey || event.ctrlKey;
-          if (command && key === 's') {
-            event.preventDefault();
-            event.stopPropagation();
-            if (target) run(controller.save(target));
-          } else if (command && key === 'p' && !event.shiftKey && !event.altKey) {
-            event.preventDefault();
-            event.stopPropagation();
-            setLookup(true);
-          } else if (event.metaKey && key === 'w' && !event.shiftKey) {
-            event.preventDefault();
-            event.stopPropagation();
-            if (target) run(withFocus(controller.close([target]), focusOrigin(element), true));
-          } else if (event.metaKey && event.shiftKey && key === 't') {
-            event.preventDefault();
-            event.stopPropagation();
-            run(withFocus(controller.reopen(checkout), focusOrigin(element), true));
-          } else if (
-            event.metaKey &&
-            event.altKey &&
-            ['ArrowLeft', 'ArrowRight'].includes(event.key)
-          ) {
-            event.preventDefault();
-            event.stopPropagation();
-            run(
-              withFocus(
-                controller.navigate(checkout, event.key === 'ArrowRight' ? 1 : -1),
-                focusOrigin(element),
-              ),
-            );
-          } else if (event.ctrlKey && event.key === 'Tab') {
-            event.preventDefault();
-            event.stopPropagation();
-            const paths =
-              recent?.paths ??
-              [
-                ...new Set([
-                  selected.active,
-                  ...state.recovery.recentFiles
-                    .filter((file) => checkoutKey(file.checkout) === checkoutKey(checkout))
-                    .map((file) => file.path),
-                  ...selected.openFiles,
-                ]),
-              ].filter((path) => selected.openFiles.includes(path));
-            if (paths.length)
-              setRecent({
-                paths,
-                index:
-                  ((recent?.index ?? 0) + (event.shiftKey ? paths.length - 1 : 1)) % paths.length,
-                origin: recent?.origin ?? focusOrigin(element),
-              });
-          } else if (event.key === 'Escape' && recent) {
-            event.preventDefault();
-            setRecent(null);
-          }
-        }}
-        onKeyUp={(event) => {
-          if (event.key === 'Control' && recent && checkout) {
-            const path = recent.paths[recent.index];
-            setRecent(null);
-            run(withFocus(controller.open({ checkout, path }), recent.origin));
-          }
         }}>
         <div {...stylex.props(styles.panel)}>
           {!state.ready && (
