@@ -114,12 +114,16 @@ export class Store {
     );
     if (record) {
       const receipt = record.receipt;
+      const row = this.db.prepare('SELECT revision FROM recovery WHERE client=?').get(clientId);
+      const currentRevision = row ? Number(row.revision) : -1;
       if (
         receipt.clientId !== clientId ||
         receipt.requestId !== requestId ||
         !Number.isSafeInteger(receipt.previousRevision) ||
         !Number.isSafeInteger(receipt.revision) ||
-        receipt.revision !== receipt.previousRevision + 1
+        receipt.revision !== receipt.previousRevision + 1 ||
+        !Number.isSafeInteger(currentRevision) ||
+        receipt.revision > currentRevision
       )
         throw invalidStored();
     }

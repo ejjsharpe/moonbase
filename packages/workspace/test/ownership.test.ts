@@ -871,6 +871,10 @@ test('stored publication receipts bind the queried client/request and exact cons
       database
         .prepare("UPDATE records SET body=? WHERE bucket='recovery-publications' AND key=?")
         .run(body, row.key!);
+      await assert.rejects(
+        client.command('getRecoveryPublication', { clientId: 'alice', requestId: 'owned-receipt' }),
+        isError('Persistence'),
+      );
       await assert.rejects(client.command('persistRecovery', input), isError('Persistence'));
       assert.equal(
         database
@@ -879,6 +883,33 @@ test('stored publication receipts bind the queried client/request and exact cons
         body,
       );
       assert.deepEqual(database.prepare('SELECT client,revision,body FROM recovery').all(), states);
+      database
+        .prepare("UPDATE records SET body=? WHERE bucket='recovery-publications' AND key=?")
+        .run(row.body!, row.key!);
+      await client.command('persistRecovery', {
+        ...input,
+        requestId: 'legitimate-advance',
+        expectedRevision: 1,
+      });
+      const advanced = database.prepare('SELECT client,revision,body FROM recovery').all();
+      const withinBound = JSON.stringify({
+        ...record,
+        receipt: { ...record.receipt, previousRevision: 1, revision: 2 },
+      });
+      database
+        .prepare("UPDATE records SET body=? WHERE bucket='recovery-publications' AND key=?")
+        .run(withinBound, row.key!);
+      await assert.rejects(client.command('persistRecovery', input), isError('Persistence'));
+      assert.equal(
+        database
+          .prepare("SELECT body FROM records WHERE bucket='recovery-publications' AND key=?")
+          .get(row.key!)!.body,
+        withinBound,
+      );
+      assert.deepEqual(
+        database.prepare('SELECT client,revision,body FROM recovery').all(),
+        advanced,
+      );
     } finally {
       database.close();
     }
