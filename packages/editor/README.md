@@ -17,9 +17,8 @@ The composition root acquires `makeEditorModel` once in its aggregate scope, the
 
 | Export | Purpose |
 | --- | --- |
-| `.` | Workbench, props and UI handle; temporary headless compatibility reexports |
+| `.` | Workbench, props and UI handle |
 | `./workers` | Monaco workers for a browser root with Vite-compatible `?worker` support |
-| `./state`, `./memory` | Temporary forwarding aliases of application entries, removed after callers migrate |
 
 Shells may supply `selectCheckout` and `selectNativeImports`; native imports use approved opaque references, never raw OS source paths. Picker, clipboard and drop share `EditorWorkbenchHandle.importFiles(checkout, references)` and its destination/replacement dialog. `EditorWorkbenchHandle.prepareQuit()` delegates to the controller's authoritative close gate.
 
@@ -42,4 +41,4 @@ bun run --cwd packages/editor test:ui
 bun run --cwd packages/editor demo
 ```
 
-The five headless source suites now run with `bun run --cwd packages/application test`. Playwright requires its pinned Chromium (`bun x playwright install chromium`). The demo composes one memory-service runtime and two editor controllers. The [editor/workspace suite](../../tests/editor-workspace/README.md) tests real IO through public boundaries. Packaged/native interaction, VoiceOver and human acceptance require desktop qualification. Distribution must retain notices for actual bundled dependencies, including Monaco workers/fonts.
+Headless source suites run with `bun run --cwd packages/application test`. Playwright requires its pinned Chromium (`bun x playwright install chromium`). The demo composes one memory-service runtime and two editor controllers. The [editor/workspace suite](../../tests/editor-workspace/README.md) tests real IO through public boundaries. Packaged/native interaction, VoiceOver and human acceptance require desktop qualification. Distribution must retain notices for actual bundled dependencies, including Monaco workers/fonts.

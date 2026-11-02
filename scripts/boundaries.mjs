@@ -92,7 +92,7 @@ export const processRoots = new Set([
   'packages/ssh/examples/connect.ts',
 ]);
 const infrastructure = new Set(['workspace', 'pi-runtime', 'ssh']);
-const portable = new Set(['application', 'contracts', 'effect', 'chat']);
+const portable = new Set(['application', 'contracts', 'effect']);
 const forbiddenPortable =
   /^(?:node:|electron(?:\/|$)|react(?:-dom)?(?:\/|$)|monaco-editor(?:\/|$)|@effect\/platform|@earendil-works\/|(?:fs|path|crypto|http|net|child_process)$)/;
 const owner = (path) => path.match(/^packages\/([^/]+)\//)?.[1];
@@ -101,14 +101,12 @@ const production = (path) =>
   /^packages\/[^/]+\/src\//.test(path) || /^packages\/ui\/[^/]+\.ts$/.test(path);
 
 /** Check source ownership separately from emitted bundles, which erase type-only imports. */
-export function checkBoundaries({ files, packages }, legacy = new Set()) {
+export function checkBoundaries({ files, packages }) {
   const errors = [],
-    usedLegacy = new Set(),
     graph = new Map();
   function reject(path, edge, reason) {
     const key = `${path} -> ${edge.specifier}`;
-    if (legacy.has(key)) usedLegacy.add(key);
-    else errors.push(`${key}: ${reason}${edge.typeOnly ? ' (type-only)' : ''}`);
+    errors.push(`${key}: ${reason}${edge.typeOnly ? ' (type-only)' : ''}`);
   }
   function target(path, specifier) {
     if (specifier.startsWith('.')) {
@@ -120,7 +118,7 @@ export function checkBoundaries({ files, packages }, legacy = new Set()) {
     const match = specifier.match(/^(@moonbase\/[^/]+)(.*)$/);
     if (!match) return;
     const pkg = packages.get(match[1]);
-    if (!pkg) return;
+    if (!pkg) return null;
     const subpath = match[2] ? `.${match[2]}` : '.';
     let exported = pkg.exports[subpath];
     if (!exported) {
@@ -189,6 +187,12 @@ export function checkBoundaries({ files, packages }, legacy = new Set()) {
       }
       if (infrastructure.has(sourceOwner) && destination === 'application')
         reject(path, edge, 'reusable infrastructure depends on application');
+      if (
+        sourceOwner === 'editor' &&
+        destination &&
+        !['editor', 'application', 'contracts', 'ui'].includes(destination)
+      )
+        reject(path, edge, 'presentation depends on infrastructure or shared implementation');
       if (
         infrastructure.has(sourceOwner) &&
         destination &&
@@ -281,7 +285,5 @@ export function checkBoundaries({ files, packages }, legacy = new Set()) {
     (name) => packageGraph.get(name) ?? [],
     'package cycle including type-only edges',
   );
-  for (const edge of legacy)
-    if (!usedLegacy.has(edge)) errors.push(`Remove stale migration exception: ${edge}`);
   return [...new Set(errors)];
 }

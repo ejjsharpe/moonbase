@@ -6,7 +6,7 @@
 - Discovery: Git status/comparisons, file lookup and filesystem watching.
 - Recovery: SQLite storage for drafts, editor state and interrupted operation results.
 
-It implements the contracts in [`@moonbase/contracts`](../contracts/README.md). Clients such as the [editor](../editor/README.md) own buffers, rendering and Save/Discard/Cancel decisions; workspace owns local IO, validation and persistence.
+It implements the contracts in [`@moonbase/contracts`](../contracts/README.md). The [headless application editor](../application/docs/EDITOR.md) owns buffers and Save/Discard/Cancel decisions; its presentation owns rendering. Workspace owns local IO, validation and persistence.
 
 ## Integration
 

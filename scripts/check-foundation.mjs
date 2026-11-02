@@ -1,28 +1,17 @@
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { checkBoundaries, readRepository } from './boundaries.mjs';
 import './test-boundaries.mjs';
 import './check-compatibility.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-const migrationEdges = JSON.parse(
-  readFileSync(new URL('./migration-boundaries.json', import.meta.url), 'utf8'),
-);
-assert.deepEqual(checkBoundaries(readRepository(root), new Set(Object.keys(migrationEdges))), []);
-console.log(
-  `Verified source ownership, public exports and cycles (${Object.keys(migrationEdges).length} exact migration edges).`,
-);
+assert.deepEqual(checkBoundaries(readRepository(root)), []);
+console.log('Verified final source ownership, public exports and cycles; no migration exceptions.');
 
-for (const path of [
-  ...['client', 'host-client', 'connection-client', 'chat-client'].map(
-    (entry) => `@moonbase/application/${entry}`,
-  ),
-  ...['workspace', 'host', 'connection', 'chat', 'errors', 'common'].map(
-    (entry) => `@moonbase/contracts/${entry}`,
-  ),
-]) {
+for (const entry of ['workspace', 'host', 'connection', 'chat', 'errors', 'common']) {
+  const path = `@moonbase/contracts/${entry}`;
   const result = await build({
     entryPoints: [path],
     bundle: true,
@@ -31,9 +20,7 @@ for (const path of [
     metafile: true,
   });
   assert(
-    Object.keys(result.metafile.inputs).every((input) =>
-      /^packages\/(?:application|contracts)\//.test(input),
-    ),
+    Object.keys(result.metafile.inputs).every((input) => input.startsWith('packages/contracts/')),
     'DTO/client entries must emit no Effect/platform dependency',
   );
   assert(!/node:|electron|@moonbase\/(workspace|pi-runtime|ssh)/.test(result.outputFiles[0].text));
@@ -101,9 +88,7 @@ for (const [entry, owner] of [
       `Foreign package reached ${entry}: ${input}`,
     );
     assert(
-      !/packages\/application\/src\/(?:(?:services|handlers|runtime-client|host-health)|runtime\/(?:handlers|clients))\.ts$/.test(
-        input,
-      ),
+      !/packages\/application\/src\/runtime\/(?:handlers|clients)\.ts$/.test(input),
       `Privileged application implementation reached ${entry}: ${input}`,
     );
   }

@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Effect, Layer, ManagedRuntime, Stream } from 'effect';
-import { ApplicationError } from '../src/client.ts';
-import type { ChatSnapshot, ChatTarget } from '../src/chat-client.ts';
+import { ApplicationError } from '@moonbase/contracts/errors';
+import type { ChatSnapshot, ChatTarget } from '@moonbase/contracts/chat';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
-import { ChatService, releaseResource, type ChatServiceShape } from '../src/services.ts';
+import { ChatService, type ChatServiceShape } from '@moonbase/contracts/services';
+import { releaseResource } from '@moonbase/effect';
 
 const session = { host: { hostId: 'remote', storeId: 'store' }, actorId: 'personal' };
 const target: ChatTarget = { ...session, conversationId: '42' };

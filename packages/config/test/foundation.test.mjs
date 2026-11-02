@@ -12,7 +12,7 @@ test('Foundation verifies browser-only command contracts and headless models wit
   const directory = mkdtempSync(path.join(tmpdir(), 'moonbase-foundation-'));
   try {
     mkdirSync(path.join(directory, 'node_modules/@moonbase'), { recursive: true });
-    for (const name of ['application', 'contracts', 'effect', 'chat', 'editor']) {
+    for (const name of ['application', 'contracts', 'effect', 'editor']) {
       const target = path.join(directory, 'packages', name);
       cpSync(path.join(root, 'packages', name, 'src'), path.join(target, 'src'), {
         recursive: true,
@@ -33,7 +33,7 @@ test('Foundation verifies browser-only command contracts and headless models wit
     const independent = check();
     assert.equal(independent.status, 0, independent.stderr);
     writeFileSync(
-      path.join(directory, 'packages/application/src/client.ts'),
+      path.join(directory, 'packages/contracts/src/workspace.ts'),
       "export { readFile } from 'node:fs/promises';\n",
     );
     const corrupt = check();
