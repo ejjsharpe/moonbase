@@ -219,8 +219,9 @@ class Application {
     if (this.phase !== 'live' || !this.currentChat || this.closingChat || this.checkingUnload)
       return false;
     this.closingChat = true;
+    const instance = this.currentChat;
+    instance.model.setAdmissionsOpen(false);
     try {
-      const instance = this.currentChat;
       if (!instance.controller.preserve() || this.phase !== 'live' || this.currentChat !== instance)
         return false;
       this.currentChat = null;
@@ -236,6 +237,8 @@ class Application {
       this.publish();
       return true;
     } finally {
+      if (this.phase === 'live' && this.currentChat === instance)
+        instance.model.setAdmissionsOpen(true);
       this.closingChat = false;
     }
   }
@@ -300,19 +303,31 @@ class Application {
   private async prepare(): Promise<boolean> {
     if (this.opening) await this.opening;
     if (this.phase !== 'preparing') return false;
-    if (this.chatState === 'initialization-failed' || (this.chat && !this.chat.preserve())) {
+    const chat = this.currentChat;
+    chat?.model.setAdmissionsOpen(false);
+    const preserved = chat?.controller.preserve() ?? true;
+    if (this.phase === 'preparing') chat?.model.setAdmissionsOpen(true);
+    if (this.chatState === 'initialization-failed' || !preserved) {
       this.restore();
       return false;
     }
-    for (const { controller } of this.instances) {
+    for (const { controller, model } of this.instances) {
       if (this.phase !== 'preparing' || !(await controller.prepareQuit())) {
+        this.restore();
+        return false;
+      }
+      model.setAdmissionsOpen(false);
+      if (!controller.getSnapshot().recoveryReady) {
         this.restore();
         return false;
       }
     }
     if (this.phase !== 'preparing') return false;
     this.fence(false);
-    if (this.chat && !this.chat.preserve()) {
+    if (
+      (this.chat && !this.chat.preserve()) ||
+      this.instances.some(({ controller }) => !controller.getSnapshot().recoveryReady)
+    ) {
       this.restore();
       return false;
     }
