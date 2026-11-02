@@ -1,8 +1,22 @@
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { checkBoundaries, readRepository } from './boundaries.mjs';
+import './test-boundaries.mjs';
+import './check-compatibility.mjs';
+
+const root = fileURLToPath(new URL('../', import.meta.url));
+const migrationEdges = JSON.parse(
+  readFileSync(new URL('./migration-boundaries.json', import.meta.url), 'utf8'),
+);
+assert.deepEqual(checkBoundaries(readRepository(root), new Set(Object.keys(migrationEdges))), []);
+console.log(
+  `Verified source ownership, public exports and cycles (${Object.keys(migrationEdges).length} exact migration edges).`,
+);
 
 for (const entry of ['client', 'host-client', 'connection-client', 'chat-client']) {
-  const path = `packages/application/src/${entry}.ts`;
+  const path = `@moonbase/application/${entry}`;
   const result = await build({
     entryPoints: [path],
     bundle: true,
@@ -10,10 +24,39 @@ for (const entry of ['client', 'host-client', 'connection-client', 'chat-client'
     write: false,
     metafile: true,
   });
-  assert.deepEqual(Object.keys(result.metafile.inputs), [path]);
+  assert(
+    Object.keys(result.metafile.inputs).every((input) =>
+      /^packages\/(?:application|contracts)\//.test(input),
+    ),
+    'DTO/client entries must emit no Effect/platform dependency',
+  );
   assert(!/node:|electron|@moonbase\/(workspace|pi-runtime|ssh)/.test(result.outputFiles[0].text));
 }
 console.log('Verified browser-only command contracts.');
+
+const smoke = await build({
+  absWorkingDir: root,
+  entryPoints: ['scripts/fixtures/headless.ts'],
+  bundle: true,
+  platform: 'browser',
+  format: 'esm',
+  write: false,
+  metafile: true,
+});
+assert(
+  Object.keys(smoke.metafile.inputs).some((input) => input.includes('packages/application/src/')),
+);
+for (const input of Object.keys(smoke.metafile.inputs)) {
+  assert(
+    !/(?:^|\/)node_modules\/(?:react(?:-dom)?|monaco-editor|electron)\/|@earendil-works|node:|packages\/(?:workspace|pi-runtime|ssh)\//.test(
+      input,
+    ),
+    `Forbidden dependency in public headless consumer: ${input}`,
+  );
+}
+console.log(
+  `Verified public headless browser consumer (${Object.keys(smoke.metafile.inputs).length} actual bundle inputs).`,
+);
 
 for (const [entry, owner] of [
   ['@moonbase/chat', 'chat'],
@@ -35,7 +78,9 @@ for (const [entry, owner] of [
     );
     const module = input.match(/(?:^|\/)packages\/([^/]+)\//)?.[1];
     assert(
-      module === undefined || module === owner || module === 'application',
+      module === undefined ||
+        module === owner ||
+        ['application', 'contracts', 'effect'].includes(module),
       `Foreign package reached ${entry}: ${input}`,
     );
     assert(

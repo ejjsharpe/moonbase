@@ -1,0 +1,1 @@
+{"version":1,"clientId":"baseline-editor","checkouts":[],"openCheckoutIds":[],"selectedCheckoutId":null,"views":{},"drafts":[],"recentFiles":[],"sidebarWidth":270}

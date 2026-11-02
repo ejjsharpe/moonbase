@@ -1,0 +1,1 @@
+{"target":{"host":{"hostId":"host","storeId":"store"},"actorId":"owner","conversationId":"chat"},"requestId":"send","text":"  Keep original text  "}
