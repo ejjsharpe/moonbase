@@ -22,11 +22,14 @@
           "{workspaceRoot}/packages/application/package.json",
           "{workspaceRoot}/packages/chat/src/**/*",
           "{workspaceRoot}/packages/chat/package.json",
+          "{workspaceRoot}/packages/editor/src/**/*",
+          "{workspaceRoot}/packages/editor/package.json",
           {
             "externalDependencies": [
               "oxlint",
               "oxfmt",
-              "esbuild"
+              "esbuild",
+              "effect"
             ]
           }
         ]

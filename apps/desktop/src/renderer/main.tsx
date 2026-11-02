@@ -2,17 +2,35 @@ import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Tabs } from '@base-ui/react/tabs';
-import { ChatController } from '@moonbase/chat';
+import { makeChatController, makeChatModel, type ChatController } from '@moonbase/chat';
+import { Effect, Exit, Layer, ManagedRuntime, Scope } from 'effect';
+import {
+  normalizeApplicationError,
+  runApplicationEffect,
+} from '@moonbase/application/effect-client';
+import { RendererCleanup, releaseInstance } from './cleanup.ts';
 import { ChatView } from '../chat/view.tsx';
 import { browserClients, type ChatBridge } from '../chat/wire.ts';
 import { Button } from '@base-ui/react/button';
 import * as stylex from '@stylexjs/stylex';
-import { EditorWorkbench, createEditor, type EditorWorkbenchHandle } from '@moonbase/editor';
+import {
+  EditorWorkbench,
+  makeEditorModel,
+  makeEditorController,
+  type EditorWorkbenchHandle,
+} from '@moonbase/editor';
 import { configureMonacoWorkers } from '@moonbase/editor/workers';
 import { controls } from '@moonbase/ui/controls';
 import { workbench } from '@moonbase/ui/workbench';
 import { colors, space } from '@moonbase/ui/tokens.stylex';
-import { bridgeClient, unwrap, type DesktopBridge } from '../wire.ts';
+import {
+  bridgeClient,
+  unwrap,
+  errorDTO,
+  failure,
+  type ErrorDTO,
+  type DesktopBridge,
+} from '../wire.ts';
 import '@moonbase/ui/reset.css';
 
 declare global {
@@ -24,12 +42,24 @@ declare global {
 document.body.className = stylex.props(workbench.document).className ?? '';
 configureMonacoWorkers();
 const bridge = window.moonbase,
-  controller = createEditor({ client: bridgeClient(bridge), clientId: bridge.clientId });
+  runtime = ManagedRuntime.make(Layer.empty),
+  scope = Scope.makeUnsafe('parallel'),
+  cleanup = new RendererCleanup(runtime, scope),
+  editorScope = Scope.forkUnsafe(scope, 'parallel'),
+  editorModel = await runApplicationEffect(
+    runtime,
+    makeEditorModel({ client: bridgeClient(bridge), clientId: bridge.clientId }).pipe(
+      Effect.provideService(Scope.Scope, editorScope),
+    ),
+  ),
+  controller = makeEditorController(runtime, editorModel);
+cleanup.claim('editor');
 const root = createRoot(document.getElementById('root')!);
 const loaded = controller.load().catch(controller.report);
 let chatError = '',
   chatInitializationFailed = false;
-const chat = await (async () => {
+let chatScope: Scope.Closeable | null = null;
+async function acquireChat(): Promise<ChatController | null> {
   try {
     const configured = unwrap(await bridge.chatConfigured());
     if (!configured) {
@@ -40,11 +70,24 @@ const chat = await (async () => {
     const context = await window.moonbaseChat.context();
     const { chat, connection } = browserClients(window.moonbaseChat);
     const storageKey = 'moonbase.chat.v1';
-    return new ChatController(chat, connection, context, {
-      read: () => localStorage.getItem(storageKey),
-      write: (value) => localStorage.setItem(storageKey, value),
-    });
+    cleanup.claim('chat');
+    chatScope = Scope.forkUnsafe(scope, 'parallel');
+    const model = await runApplicationEffect(
+      runtime,
+      makeChatModel({
+        chat,
+        connection,
+        context,
+        storage: {
+          read: () => localStorage.getItem(storageKey),
+          write: (value) => localStorage.setItem(storageKey, value),
+        },
+      }).pipe(Effect.provideService(Scope.Scope, chatScope)),
+    );
+    return makeChatController(runtime, model);
   } catch (error) {
+    if (chatScope)
+      await runApplicationEffect(runtime, Scope.close(chatScope, Exit.void)).catch(() => {});
     chatInitializationFailed = true;
     chatError =
       error instanceof Error
@@ -52,21 +95,65 @@ const chat = await (async () => {
         : 'Chat could not initialize. Preserve this user-data directory.';
     return null;
   }
-})();
+}
+let chat = await acquireChat(),
+  chatActive = !!chat;
+const chatConfigured = !!chat;
+function disposeChat() {
+  const current = chat,
+    instanceScope = chatScope;
+  if (!current || !instanceScope) return Promise.resolve();
+  return releaseInstance(runtime, instanceScope, () => current.dispose()).then(() => {
+    if (chat === current) {
+      chat = null;
+      chatScope = null;
+    }
+  });
+}
+let disposal: Promise<ErrorDTO | undefined> | undefined;
+function disposeRenderer() {
+  disposal ??= (async () => {
+    cleanup.close('editor', () =>
+      releaseInstance(runtime, editorScope, () => controller.dispose()),
+    );
+    if (chat) cleanup.close('chat', disposeChat);
+    const failures: unknown[] = [];
+    for (const release of [
+      () => cleanup.drain(),
+      () => runApplicationEffect(runtime, Scope.close(scope, Exit.void)),
+      () => runApplicationEffect(runtime, runtime.disposeEffect),
+    ]) {
+      try {
+        await release();
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (!failures.length) return undefined;
+    const first = normalizeApplicationError(failures[0]);
+    return {
+      ...errorDTO(first),
+      message: failures
+        .map((error) => normalizeApplicationError(error).message)
+        .join('; ')
+        .slice(0, 512),
+    };
+  })();
+  return disposal;
+}
 window.addEventListener('beforeunload', (event) => {
   const state = controller.getSnapshot();
-  if (chatInitializationFailed || !state.recoveryReady || (chat && !chat.preserve())) {
+  if (
+    chatInitializationFailed ||
+    !state.recoveryReady ||
+    (chatActive && chat && !chat.preserve())
+  ) {
     event.preventDefault();
     event.returnValue = '';
   }
 });
 window.addEventListener('unload', () => {
-  chat?.dispose();
-  controller.dispose();
-});
-document.addEventListener('visibilitychange', () => {
-  if (document.hidden) chat?.detach();
-  else void chat?.start();
+  void disposeRenderer();
 });
 const styles = stylex.create({
   shell: {
@@ -95,7 +182,10 @@ const styles = stylex.create({
 });
 function Desktop() {
   const [closing, setClosing] = useState(false),
-    [view, setView] = useState('editor');
+    [view, setView] = useState('editor'),
+    [chatPanel, setChatPanel] = useState(!!chat),
+    [openingChat, setOpeningChat] = useState(false),
+    cleanupState = useSyncExternalStore(cleanup.subscribe, cleanup.getSnapshot);
   const panels = useRef<Record<string, HTMLElement | null>>({}),
     focus = useRef<Record<string, HTMLElement | null>>({});
   const currentView = useRef(view);
@@ -117,7 +207,7 @@ function Desktop() {
   useEffect(() => {
     async function prepareQuit(id: string) {
       try {
-        if (chatInitializationFailed || (chat && !chat.preserve())) {
+        if (chatInitializationFailed || (chatActive && chat && !chat.preserve())) {
           setView('chat');
           bridge.quitResult(id, false);
           return;
@@ -125,7 +215,8 @@ function Desktop() {
         // Check chat before destructive choices, then preserve newer drafts after them.
         setView('editor');
         const consent =
-          ((await handle.current?.prepareQuit()) ?? false) && (chat?.preserve() ?? true);
+          ((await handle.current?.prepareQuit()) ?? false) &&
+          (chatActive ? (chat?.preserve() ?? true) : true);
         if (!consent && chat?.getSnapshot().storageError) setView('chat');
         if (consent) flushSync(() => setClosing(true));
         bridge.quitResult(id, consent);
@@ -134,18 +225,30 @@ function Desktop() {
         bridge.quitResult(id, false);
       }
     }
-    const off = bridge.actions((action, id) => {
+    const off = bridge.actions((action, id, error) => {
+      if (action === 'cleanup-error') cleanup.report(failure(error));
       if (action === 'quit') void prepareQuit(id);
       if (action === 'dispose') {
-        chat?.dispose();
-        controller.dispose();
-        root.unmount();
-        bridge.quitResult(id, true);
+        flushSync(() => setClosing(true));
+        void disposeRenderer().then((error) => {
+          root.unmount();
+          bridge.quitResult(id, true, error);
+        });
       }
     });
     void loaded.then(() => bridge.ready());
     return off;
   }, []);
+  useEffect(() => {
+    const attach = () => {
+      if (!chat || !chatPanel) return;
+      const task = view === 'chat' && !document.hidden ? chat.start() : chat.detach();
+      void task.catch(controller.report);
+    };
+    attach();
+    document.addEventListener('visibilitychange', attach);
+    return () => document.removeEventListener('visibilitychange', attach);
+  }, [view, chatPanel]);
   const run = (task: Promise<unknown>) => {
     void task.catch(controller.report);
   };
@@ -197,12 +300,62 @@ function Desktop() {
             Editor
           </Tabs.Tab>
           <Tabs.Tab
+            hidden={!chatPanel && chatConfigured}
             value="chat"
             {...stylex.props(controls.button, view === 'chat' && workbench.fileSelected)}>
             Chat
           </Tabs.Tab>
         </Tabs.List>
         <span role="status">{status}</span>
+        {chatPanel && chat ? (
+          <Button
+            {...stylex.props(controls.button)}
+            onClick={() => {
+              if (!chat?.preserve()) {
+                setView('chat');
+                return;
+              }
+              cleanup.close('chat', disposeChat);
+              chatActive = false;
+              flushSync(() => {
+                setChatPanel(false);
+                setView('editor');
+              });
+              requestAnimationFrame(() => {
+                const target =
+                  focus.current.editor ??
+                  panels.current.editor?.querySelector<HTMLElement>(
+                    'button:not([disabled]), [tabindex="0"]',
+                  );
+                target?.focus();
+              });
+            }}>
+            Close Chat panel
+          </Button>
+        ) : null}
+        {!chatPanel && chatConfigured ? (
+          <Button
+            {...stylex.props(controls.button)}
+            disabled={openingChat || !cleanup.available('chat')}
+            onClick={() =>
+              run(
+                (async () => {
+                  setOpeningChat(true);
+                  try {
+                    chat = await acquireChat();
+                    chatActive = !!chat;
+                    setChatPanel(!!chat);
+                    setView('chat');
+                  } finally {
+                    setOpeningChat(false);
+                  }
+                })(),
+              )
+            }>
+            Open Chat panel
+          </Button>
+        ) : null}
+        {cleanupState.pending.length ? <span role="status">Finishing panel cleanup…</span> : null}
         <Button
           hidden={view !== 'editor'}
           {...stylex.props(controls.button)}
@@ -225,6 +378,15 @@ function Desktop() {
           Import clipboard files
         </Button>
       </header>
+      {cleanupState.errors.length ? (
+        <section role="alert" aria-label="Panel cleanup errors" {...stylex.props(styles.empty)}>
+          <strong>Panel cleanup failed</strong>
+          {cleanupState.errors.map((error, i) => (
+            <p key={i}>{error}</p>
+          ))}
+          <p>Quit Moonbase before reopening this panel. Preserved recovery remains available.</p>
+        </section>
+      ) : null}
       <Tabs.Panel
         value="editor"
         keepMounted
@@ -262,9 +424,8 @@ function Desktop() {
           focus.current.chat = event.target as HTMLElement;
         }}
         {...stylex.props(styles.panel)}>
-        {chat ? (
-          <ChatView controller={chat} />
-        ) : (
+        {chat && chatPanel ? <ChatView controller={chat} /> : null}
+        {!chatConfigured ? (
           <section {...stylex.props(styles.empty)} aria-label="Remote chat configuration">
             <h1>Remote chat is unavailable</h1>
             <p role="status">{chatError}</p>
@@ -273,7 +434,7 @@ function Desktop() {
               open or synchronize local files.
             </p>
           </section>
-        )}
+        ) : null}
       </Tabs.Panel>
     </Tabs.Root>
   );

@@ -1,6 +1,6 @@
 # Moonbase desktop
 
-The macOS Electron client composes the public editor, headless chat, workspace, SSH and remote Pi modules. Main owns one scoped application runtime, private configuration and native authority; the sandboxed renderer receives browser-safe clients. Feature rules stay in packages. Editor and Chat remain mounted across navigation.
+The macOS Electron client composes the public editor, headless chat, workspace, SSH and remote Pi modules. Main owns one scoped application runtime, private configuration and native authority; the sandboxed renderer receives browser-safe clients. Feature rules stay in packages. The renderer acquires editor and optional chat models under one document runtime and aggregate scope. Editor and Chat remain mounted across navigation.
 
 Without `MOONBASE_CHAT_CONFIG`, the root acquires only workspace capabilities. With configuration, it adds SSH and remote chat. Startup/navigation never Connect or Send.
 
@@ -29,9 +29,11 @@ The Apple Silicon app bundles Electron/Node, the native helper and standalone ri
 
 ## Authority and preservation
 
-Native picker approval grants an exact checkout identity. Picker, clipboard and File-backed drop produce scoped `WorkspaceNative` references and enter the public editor import dialog; renderer path strings grant no filesystem authority. IPC validates bounded input, caller ownership and the exact main frame/document. Workspace owns path/domain validation. Navigation, popups, webviews and browser permissions are denied; CSP restricts asset/frame loading.
+Native picker approval grants an exact checkout identity. Picker, clipboard and File-backed drop produce scoped `WorkspaceNative` references and enter the public editor import dialog; renderer path strings grant no filesystem authority. IPC uses shared request/reply schemas and validates bounded input, caller ownership and the exact main frame/document. Workspace owns path/domain validation. Navigation, popups, webviews and browser permissions are denied; CSP restricts asset/frame loading.
 
-Window close hides the mounted workbench; explicit Quit runs chat preservation, the editor Save/Discard/Cancel gate, then preservation of the latest chat state. A veto or uncertain publication keeps resolve controls available. Completed Saves/confirmed Discards remain facts. Only after consent does the renderer become inert and dispose controllers, IPC and the root runtime. Cleanup failures are reported natively after attempting all releases.
+Close Chat panel preserves drafts and removes that panel immediately; its cleanup remains owned by the application root. Reopen waits for successful cleanup, and failures stay visible outside the removed panel. View switching keeps the editor mounted and detaches/resumes chat observation. See [lifecycle ownership](docs/LIFECYCLE.md).
+
+Window close hides the mounted workbench; explicit Quit runs chat preservation, the editor Save/Discard/Cancel gate, then preservation of the latest chat state. A veto or uncertain publication keeps resolve controls available. Completed Saves/confirmed Discards remain facts. Only after consent does the renderer become inert, drain pending panel cleanup and dispose models, IPC and its root runtime. Cancellation acknowledgments await real local watch/wait cleanup; they do not acknowledge mutation rollback or remote termination. Cleanup failures are reported natively after attempting all releases.
 
 Reload requires the editor's synchronous recovery gate and chat preservation before releasing the old document. Renderer crash offers **Recover workbench** or **Quit Moonbase** using persisted recovery and the same runtime/approved roots. Changes since the last publication can be lost; force-kill is not a preservation gate.
 

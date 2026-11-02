@@ -17,9 +17,12 @@ const bridge: ChatBridge = {
       throw error;
     }
   },
-  cancel(id) {
-    active.delete(id);
-    ipcRenderer.send(channels.cancel, id);
+  async cancel(id) {
+    try {
+      return await ipcRenderer.invoke(channels.cancel, id);
+    } finally {
+      active.delete(id);
+    }
   },
   events(receive) {
     const listener = (_: unknown, id: string, result: Reply) => receive(id, result);
@@ -29,7 +32,7 @@ const bridge: ChatBridge = {
 };
 // A committed document unload releases waits/observations, never remote execution.
 window.addEventListener('unload', () => {
-  for (const id of active) ipcRenderer.send(channels.cancel, id);
+  for (const id of active) void bridge.cancel(id).catch(() => {});
   active.clear();
 });
 contextBridge.exposeInMainWorld('moonbaseChat', bridge);

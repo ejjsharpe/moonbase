@@ -5,6 +5,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readConfiguration } from '../src/chat/config.ts';
 test('private configuration is owner-only, bounded, explicit and projected; bad files never initialize transport', async (t) => {
+  await assert.rejects(readConfiguration(''), {
+    code: 'InvalidInput',
+    message: 'Set MOONBASE_CHAT_CONFIG to an absolute private configuration file.',
+  });
   const directory = await mkdtemp(join(tmpdir(), 'moonbase-chat-config-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'private.json'),
@@ -23,7 +27,7 @@ test('private configuration is owner-only, bounded, explicit and projected; bad 
   const result = await readConfiguration(path);
   assert.deepEqual(result.context, { host: value.profile.expected, actorId: 'owner' });
   assert(!JSON.stringify(result.context).includes(value.token));
-  assert.equal(result.ssh.sshExecutable, undefined);
+  assert.equal(result.ssh.sshExecutable, '/usr/bin/ssh');
   await writeFile(path, JSON.stringify({ ...value, sshExecutable: '/usr/bin/ssh' }));
   assert.equal((await readConfiguration(path)).ssh.sshExecutable, '/usr/bin/ssh');
   for (const invalid of [

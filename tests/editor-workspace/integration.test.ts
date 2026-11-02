@@ -16,7 +16,7 @@ import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { createRequire } from 'node:module';
-import { Effect, ManagedRuntime } from 'effect';
+import { Effect, ManagedRuntime, Scope } from 'effect';
 import {
   ApplicationError,
   type EditorClient,
@@ -24,9 +24,30 @@ import {
   type WorkspaceEvent,
 } from '@moonbase/application/client';
 import { makeEditorClient } from '@moonbase/application/runtime-client';
-import { createEditor, fileKey, type EditorController } from '@moonbase/editor/state';
+import {
+  makeEditorModel,
+  makeEditorController,
+  fileKey,
+  type EditorController,
+  type EditorBuffer,
+  type CloseChoice,
+} from '@moonbase/editor/state';
 import { WorkspaceLive, WorkspaceNative } from '@moonbase/workspace';
 
+function answering<A>(
+  controller: EditorController,
+  action: () => Promise<A>,
+  choose: (buffer: Readonly<EditorBuffer>) => Promise<CloseChoice>,
+) {
+  const answered = new Set<string>();
+  const off = controller.subscribe(() => {
+    const prompt = controller.getSnapshot().closePrompt;
+    if (!prompt || answered.has(prompt.id)) return;
+    answered.add(prompt.id);
+    void choose(prompt.buffer).then((choice) => controller.answerClose(prompt.id, choice));
+  });
+  return action().finally(off);
+}
 function deferred() {
   let resolve!: () => void;
   const promise = new Promise<void>((done) => {
@@ -81,7 +102,11 @@ function fixture() {
   };
   const current = launch();
   async function editor(clientId: string, client = current.client) {
-    const value = createEditor({ client, clientId });
+    const runtime = runtimes.at(-1)!.runtime;
+    const model = await runtime.runPromise(
+      makeEditorModel({ client, clientId }).pipe(Effect.provideService(Scope.Scope, runtime.scope)),
+    );
+    const value = makeEditorController(runtime, model);
     editors.push(value);
     await value.load();
     return value;
@@ -94,7 +119,7 @@ function fixture() {
     editor,
     launch,
     async close() {
-      for (const value of editors) value.dispose();
+      for (const value of editors) await value.dispose();
       for (const value of runtimes) await value.runtime.dispose();
       rmSync(base, { recursive: true, force: true });
     },
@@ -151,7 +176,7 @@ test('create and native import consumer payloads need no empty inspection and re
       nativeReferences: references,
       replacements,
     });
-    assert.equal(single.outcome, 'completed');
+    assert.equal(single.outcome, 'completed', JSON.stringify(single));
     assert.equal(readFileSync(join(f.roots[0], 'b.ts'), 'utf8'), 'NATIVE SOURCE\n');
     assert.equal(readFileSync(outside, 'utf8'), 'NATIVE SOURCE\n');
     await assert.rejects(
@@ -208,7 +233,7 @@ test(
       await editor.flush();
       assert.equal(readFileSync(join(f.roots[0], 'a.ts'), 'utf8'), 'DIRTY ALPHA\n');
       assert.equal(readFileSync(join(f.roots[1], 'a.ts'), 'utf8'), 'WORKING\n');
-      editor.dispose();
+      await editor.dispose();
       await f.runtime.dispose();
       const restarted = f.launch(),
         restored = await f.editor('comparison', restarted.client);
@@ -262,7 +287,7 @@ test(
       await editor.flush();
       assert.equal(editor.buffer(target)?.text, 'NEWER LIVE TEXT\n');
       assert.equal(editor.buffer(target)?.disk.text, 'CAPTURED SAVE\n');
-      editor.dispose();
+      await editor.dispose();
       await f.runtime.dispose();
       const restarted = f.launch(),
         restored = await f.editor('save-handoff', restarted.client);
@@ -302,8 +327,8 @@ test(
       const durable = await f.client.command('loadRecovery', { clientId: 'actor-b' });
       assert.deepEqual(durable.state.drafts[0].disk, baseline);
       assert.equal(durable.state.drafts[0].text, 'B RETAINED\n');
-      a.dispose();
-      b.dispose();
+      await a.dispose();
+      await b.dispose();
       await f.runtime.dispose();
       const restarted = f.launch(),
         restored = await f.editor('actor-b', restarted.client);
@@ -435,7 +460,14 @@ test(
       await editor.flush();
       lock = new DatabaseSync(join(f.dataDirectory, 'moonbase-workspace-v1.sqlite'));
       lock.exec('BEGIN IMMEDIATE');
-      assert.equal(await editor.close([target], async () => 'discard'), false);
+      assert.equal(
+        await answering(
+          editor,
+          () => editor.close([target]),
+          async () => 'discard',
+        ),
+        false,
+      );
       assert.equal(editor.buffer(target)?.text, 'PRESERVE UNDER CONTENTION\n');
       lock.exec('ROLLBACK');
       lock.close();
@@ -447,8 +479,22 @@ test(
           .text,
         'PRESERVE UNDER CONTENTION\n',
       );
-      assert.equal(await editor.close([target], async () => 'cancel'), false);
-      assert.equal(await editor.close([target], async () => 'discard'), true);
+      assert.equal(
+        await answering(
+          editor,
+          () => editor.close([target]),
+          async () => 'cancel',
+        ),
+        false,
+      );
+      assert.equal(
+        await answering(
+          editor,
+          () => editor.close([target]),
+          async () => 'discard',
+        ),
+        true,
+      );
       assert.equal(editor.buffer(target), undefined);
     } finally {
       if (lock) {
@@ -500,7 +546,14 @@ test(
       editor.edit(target, 'DISCARD ONLY ON EXACT RECEIPT\n');
       await editor.flush();
       unknown = true;
-      assert.equal(await editor.close([target], async () => 'discard'), false);
+      assert.equal(
+        await answering(
+          editor,
+          () => editor.close([target]),
+          async () => 'discard',
+        ),
+        false,
+      );
       assert.equal(finalCommits, 1);
       assert.equal(editor.buffer(target)?.text, 'DISCARD ONLY ON EXACT RECEIPT\n');
       assert.equal(editor.getSnapshot().publication?.kind, 'close');
@@ -517,7 +570,7 @@ test(
       assert.equal(editor.buffer(target), undefined);
       await assert.rejects(editor.flush(), code('Conflict'));
       assert.equal(finalCommits, 1);
-      editor.dispose();
+      await editor.dispose();
       await f.runtime.dispose();
       const restarted = f.launch(),
         restored = await f.editor('unknown-close', restarted.client);
@@ -545,9 +598,16 @@ test(
       editor.position(target, 'staged', { line: 1, column: 2, top: 3, left: 4 });
       editor.tree(checkout, { expanded: ['folder'], focus: 'folder/nested.ts' });
       await editor.flush();
-      assert.equal(await editor.closeCheckout(checkout, async () => 'discard'), true);
+      assert.equal(
+        await answering(
+          editor,
+          () => editor.closeCheckout(checkout),
+          async () => 'discard',
+        ),
+        true,
+      );
       closedId = checkout.checkoutId;
-      editor.dispose();
+      await editor.dispose();
       await f.runtime.dispose();
       renameSync(f.roots[0], f.roots[0] + '-unavailable');
       const restarted = f.launch();
@@ -602,8 +662,10 @@ test(
       const baseline = editor.buffer(c)!.disk;
       writeFileSync(join(f.roots[0], c.path), 'EXTERNAL WRITER\n');
       assert.equal(
-        await editor.close([a, b, c], async (buffer) =>
-          buffer.target.path === b.path ? 'discard' : 'save',
+        await answering(
+          editor,
+          () => editor.close([a, b, c]),
+          async (buffer) => (buffer.target.path === b.path ? 'discard' : 'save'),
         ),
         false,
       );
@@ -623,7 +685,14 @@ test(
         baseline,
       );
       assert.equal(durable.state.views[checkout.checkoutId].openFiles.length, 3);
-      assert.equal(await editor.prepareQuit(async () => 'cancel'), false);
+      assert.equal(
+        await answering(
+          editor,
+          () => editor.prepareQuit(),
+          async () => 'cancel',
+        ),
+        false,
+      );
     } finally {
       await f.close();
     }
@@ -705,8 +774,15 @@ for (const mode of ['lost', 'reordered'] as const)
         assert.equal(requestIds.get(b.path)?.size, 1);
         assert.equal(readFileSync(join(f.roots[0], a.path), 'utf8'), 'CAPTURED a.ts');
         assert.equal(readFileSync(join(f.roots[0], b.path), 'utf8'), 'CAPTURED b.ts');
-        assert.equal(await editor.prepareQuit(async () => 'cancel'), false);
-        editor.dispose();
+        assert.equal(
+          await answering(
+            editor,
+            () => editor.prepareQuit(),
+            async () => 'cancel',
+          ),
+          false,
+        );
+        await editor.dispose();
         await f.runtime.dispose();
         const restarted = f.launch(),
           restored = await f.editor('two-saves-' + mode, restarted.client);
@@ -714,7 +790,14 @@ for (const mode of ['lost', 'reordered'] as const)
         assert.equal(restored.buffer(a)?.disk.text, 'CAPTURED a.ts');
         assert.equal(restored.buffer(b)?.text, 'NEWER B AFTER CAPTURE');
         assert.equal(restored.buffer(b)?.disk.text, 'CAPTURED b.ts');
-        assert.equal(await restored.prepareQuit(async () => 'discard'), true);
+        assert.equal(
+          await answering(
+            restored,
+            () => restored.prepareQuit(),
+            async () => 'discard',
+          ),
+          true,
+        );
       } finally {
         lose = false;
         held = false;
@@ -853,8 +936,15 @@ for (const failure of [
           durable.state.drafts.find((draft) => draft.target.path === b.path)?.text,
           'NEWER B DURING PUBLICATION',
         );
-        assert.equal(await editor.prepareQuit(async () => 'cancel'), false);
-        editor.dispose();
+        assert.equal(
+          await answering(
+            editor,
+            () => editor.prepareQuit(),
+            async () => 'cancel',
+          ),
+          false,
+        );
+        await editor.dispose();
         await f.runtime.dispose();
         const restarted = f.launch(),
           restored = await f.editor(editor.clientId, restarted.client);
@@ -862,7 +952,14 @@ for (const failure of [
         assert.equal(restored.buffer(a)?.disk.text, 'CAPTURE a.ts');
         assert.equal(restored.buffer(b)?.text, 'NEWER B DURING PUBLICATION');
         assert.equal(restored.buffer(b)?.disk.text, 'CAPTURE b.ts');
-        assert.equal(await restored.prepareQuit(async () => 'discard'), true);
+        assert.equal(
+          await answering(
+            restored,
+            () => restored.prepareQuit(),
+            async () => 'discard',
+          ),
+          true,
+        );
       } finally {
         holdB = false;
         denyStatus = false;

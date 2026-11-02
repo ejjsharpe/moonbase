@@ -50,7 +50,7 @@ test('combined public root requires explicit verified Connect, then saves/lists/
     (value) =>
       value.some((snapshot) => snapshot.entries.some((entry) => entry.text === 'REMOTE COMPLETED')),
   );
-  unsubscribe();
+  await unsubscribe();
   assert.deepEqual(errors, []);
   assert.equal((await f.stats()).calls, 1);
   const children = (await readFile(f.log, 'utf8'))

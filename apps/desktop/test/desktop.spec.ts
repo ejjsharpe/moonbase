@@ -43,6 +43,10 @@ declare global {
     held: string | null;
     release(): void;
     cancels: number;
+    holdChatCancel: boolean;
+    chatCancelHeld: boolean;
+    failChatCancel: boolean;
+    releaseChatCancel(): void;
   };
 }
 test.beforeEach(async () => {

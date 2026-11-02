@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
-import type { ChatClient } from '@moonbase/application/chat-client';
+import { test, after } from 'node:test';
+import { Layer, ManagedRuntime } from 'effect';
+const runtime = ManagedRuntime.make(Layer.empty);
+after(() => runtime.dispose());
+import type { ChatClient, ChatSnapshot } from '@moonbase/application/chat-client';
 import type { ConnectionClient } from '@moonbase/application/connection-client';
 import { ApplicationError } from '@moonbase/application/client';
 import { ChatIpcSession } from '../src/chat/session.ts';
@@ -28,7 +31,7 @@ function fixture() {
     },
     watch: () => {
       observers++;
-      return () => {
+      return async () => {
         observers--;
       };
     },
@@ -38,9 +41,9 @@ function fixture() {
       stop++;
       return undefined as never;
     },
-    watch: () => () => {},
+    watch: () => async () => {},
   };
-  const owner = new ChatIpcSession(chat, connection, context, () => {});
+  const owner = new ChatIpcSession(runtime, chat, connection, context, () => {});
   return {
     owner,
     get calls() {
@@ -88,7 +91,7 @@ test('public bridge preserves Uncertain and exact pending payload; preaborted ca
     code: 'Cancelled',
   });
   assert.equal(f.calls, 1);
-  f.owner.dispose();
+  await f.owner.dispose();
 });
 test('shared IPC schemas reject malformed nested data before dispatch and retain authority errors', async () => {
   const f = fixture();
@@ -109,19 +112,119 @@ test('shared IPC schemas reject malformed nested data before dispatch and retain
   assert.equal(f.calls, 0);
   assert.equal(f.observers, 0);
   assert.equal(f.owner.count, 0);
-  f.owner.dispose();
+  await f.owner.dispose();
 });
 test('IPC cancellation/disposal releases only owned waiters/observations, never Stop or Disconnect', async () => {
   const f = fixture();
   await f.owner.call('watch-chat', '', { target }, 'watch');
   assert.equal(f.observers, 1);
   const pending = f.owner.call('chat', 'getChatHistory', { target, cursor: 'page' }, 'wait');
-  f.owner.cancel('wait');
+  await f.owner.cancel('wait');
   const reply = await pending;
   assert(!reply.ok);
   assert.equal(reply.error.code, 'Cancelled');
-  f.owner.dispose();
+  await f.owner.dispose();
   assert.equal(f.observers, 0);
   assert.equal(f.owner.count, 0);
   assert.equal(f.stop, 0);
 });
+
+test('chat cancellation waits for finalizers, fences callbacks and leaves commands responsive', async () => {
+  const held = Promise.withResolvers<void>();
+  let receive!: (value: ChatSnapshot) => void,
+    emitted = 0,
+    closes = 0;
+  const chat: ChatClient = {
+    command: async () => null as never,
+    watch: (_input, next) => {
+      receive = next;
+      return async () => {
+        closes++;
+        await held.promise;
+      };
+    },
+  };
+  const connection: ConnectionClient = {
+    command: async () => undefined as never,
+    watch: () => async () => {},
+  };
+  const owner = new ChatIpcSession(runtime, chat, connection, context, () => emitted++);
+  await owner.call('watch-chat', '', { target }, 'watch');
+  let done = false;
+  const cleanup = owner.cancel('watch');
+  assert.equal(owner.cancel('watch'), cleanup);
+  void cleanup.then(() => {
+    done = true;
+  });
+  receive({} as never);
+  await Promise.resolve();
+  assert.equal(done, false);
+  assert.equal(emitted, 0);
+  assert((await owner.call('connection', 'getConnection', {}, 'other')).ok);
+  held.reject(new ApplicationError({ code: 'Persistence', message: 'watch release failed' }));
+  const result = await cleanup;
+  assert(!result.ok);
+  assert.equal(result.error.code, 'Persistence');
+  assert.equal(await owner.cancel('watch'), result);
+  assert.equal(closes, 1);
+  await assert.rejects(owner.dispose(), { code: 'Persistence' });
+});
+
+for (const failure of ['none', 'release', 'acquisition'] as const) {
+  test(`reentrant chat watch cancellation joins the acquired close (${failure})`, async () => {
+    const releasing = Promise.withResolvers<void>(),
+      gate = Promise.withResolvers<void>();
+    let acknowledgment: ReturnType<ChatIpcSession['cancel']> | undefined,
+      releases = 0,
+      delivered = 0;
+    const expected = new ApplicationError({
+      code: 'Persistence',
+      message: 'Owned reentrant chat watch failure',
+    });
+    const chat: ChatClient = {
+      command: async () => null as never,
+      watch: (_input, receive) => {
+        receive({} as never);
+        if (failure === 'acquisition') throw expected;
+        receive({} as never);
+        return async () => {
+          releases++;
+          releasing.resolve();
+          await gate.promise;
+        };
+      },
+    };
+    const connection: ConnectionClient = {
+      command: async () => undefined as never,
+      watch: () => async () => {},
+    };
+    const owner = new ChatIpcSession(runtime, chat, connection, context, () => {
+      delivered++;
+      acknowledgment = owner.cancel('watch');
+    });
+    const watching = owner.call('watch-chat', '', { target }, 'watch');
+    assert(acknowledgment);
+    let settled = false;
+    void acknowledgment.then(() => {
+      settled = true;
+    });
+    if (failure !== 'acquisition') {
+      await releasing.promise;
+      assert.equal(settled, false);
+      assert.equal(releases, 1);
+      if (failure === 'release') gate.reject(expected);
+      else gate.resolve();
+    }
+    const reply = await acknowledgment;
+    const watchReply = await watching;
+    assert.equal(reply.ok, failure === 'none');
+    assert.equal(watchReply.ok, failure === 'none');
+    assert.equal(delivered, 1);
+    if (failure === 'none') await owner.dispose();
+    else {
+      assert(!reply.ok);
+      assert.equal(reply.error.code, 'Persistence');
+      await assert.rejects(owner.dispose(), { code: 'Persistence' });
+    }
+  });
+}

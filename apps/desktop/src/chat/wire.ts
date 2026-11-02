@@ -1,6 +1,18 @@
-import { ApplicationError, type ApplicationErrorCode } from '@moonbase/application/client';
+import { normalizeApplicationError } from '@moonbase/application/effect-client';
+import {
+  decodeApplicationErrorDTO,
+  type ApplicationErrorDTOSchema,
+} from '@moonbase/application/error-schema';
+import { decodeChatOutput, isChatCommand } from '@moonbase/application/chat-schema';
+import {
+  decodeConnectionOutput,
+  decodeConnectionSnapshot,
+  isConnectionCommand,
+} from '@moonbase/application/connection-schema';
+import { cancellation, unwrap as unwrapReply } from '../wire.ts';
+import { ApplicationError } from '@moonbase/application/client';
 import type { ChatClient, ChatSession } from '@moonbase/application/chat-client';
-import type { ConnectionClient, ConnectionCommand } from '@moonbase/application/connection-client';
+import type { ConnectionClient } from '@moonbase/application/connection-client';
 
 export const channels = {
   call: 'moonbase-chat:call',
@@ -9,7 +21,7 @@ export const channels = {
 } as const;
 export type Reply =
   | { ok: true; value: unknown }
-  | { ok: false; error: { code: ApplicationErrorCode; message: string } };
+  | { ok: false; error: typeof ApplicationErrorDTOSchema.Type };
 export interface ChatBridge {
   context(): Promise<ChatSession>;
   call(
@@ -18,7 +30,7 @@ export interface ChatBridge {
     input: unknown,
     id: string,
   ): Promise<Reply>;
-  cancel(id: string): void;
+  cancel(id: string): Promise<Reply>;
   events(receive: (id: string, result: Reply) => void): () => void;
 }
 export const invalid = (): never => {
@@ -39,28 +51,16 @@ export function requestId(value: unknown): asserts value is string {
   if (typeof value !== 'string' || !/^[A-Za-z0-9._:-]{1,256}$/.test(value)) invalid();
 }
 export function errorDTO(value: unknown): Reply {
-  const e = ApplicationError.fromUnknown(value);
+  const e = normalizeApplicationError(value);
   return { ok: false, error: { code: e.code, message: e.message.slice(0, 512) } };
 }
 export function unwrap(reply: Reply): unknown {
-  if (reply.ok) return reply.value;
-  const codes = [
-    'InvalidInput',
-    'Unavailable',
-    'Conflict',
-    'Persistence',
-    'Uncertain',
-    'Cancelled',
-    'Unauthorized',
-    'Incompatible',
-  ];
-  if (
-    !codes.includes(reply.error?.code) ||
-    typeof reply.error.message !== 'string' ||
-    reply.error.message.length > 512
-  )
-    throw new ApplicationError({ code: 'Incompatible', message: 'Malformed desktop error.' });
-  throw new ApplicationError(reply.error);
+  if (!reply.ok) {
+    const dto = decodeApplicationErrorDTO(reply.error);
+    if (dto.message.length > 512)
+      throw new ApplicationError({ code: 'Incompatible', message: 'Malformed desktop error.' });
+  }
+  return unwrapReply(reply);
 }
 export function browserClients(bridge: ChatBridge): {
   chat: ChatClient;
@@ -75,10 +75,21 @@ export function browserClients(bridge: ChatBridge): {
     if (options?.signal?.aborted)
       throw new ApplicationError({ code: 'Cancelled', message: 'Command cancelled' });
     const id = crypto.randomUUID(),
-      cancel = () => bridge.cancel(id);
+      cancel = () => {
+        void bridge
+          .cancel(id)
+          .then(cancellation)
+          .catch(() => {});
+      };
     options?.signal?.addEventListener('abort', cancel, { once: true });
     try {
-      return unwrap(await bridge.call(kind, operation, input, id));
+      const value = unwrap(await bridge.call(kind, operation, input, id));
+      if (kind === 'chat' && isChatCommand(operation)) return decodeChatOutput(operation, value);
+      if (kind === 'connection' && isConnectionCommand(operation))
+        return decodeConnectionOutput(operation, value);
+      return invalid();
+    } catch (error) {
+      throw normalizeApplicationError(error);
     } finally {
       options?.signal?.removeEventListener('abort', cancel);
     }
@@ -94,25 +105,41 @@ export function browserClients(bridge: ChatBridge): {
     const off = bridge.events((eventId, result) => {
       if (active && eventId === id)
         try {
-          receive(unwrap(result) as never);
+          receive(
+            (kind === 'watch-chat'
+              ? decodeChatOutput('getChat', unwrap(result))
+              : decodeConnectionSnapshot(unwrap(result))) as never,
+          );
         } catch (e) {
-          onError(ApplicationError.fromUnknown(e));
+          onError(normalizeApplicationError(e));
         }
     });
-    void bridge.call(kind, '', input, id).then(
+    const started = bridge.call(kind, '', input, id);
+    void started.then(
       (r) => {
-        if (active && !r.ok) onError(ApplicationError.fromUnknown(unwrapError(r)));
+        if (active && !r.ok) onError(normalizeApplicationError(unwrapError(r)));
       },
       (e) => {
-        if (active) onError(ApplicationError.fromUnknown(e));
+        if (active) onError(normalizeApplicationError(e));
       },
     );
+    let completion: Promise<void> | undefined;
     return () => {
-      if (active) {
-        active = false;
-        off();
-        bridge.cancel(id);
-      }
+      active = false;
+      completion ??= started.then(
+        async () => {
+          try {
+            cancellation(await bridge.cancel(id));
+          } finally {
+            off();
+          }
+        },
+        (error) => {
+          off();
+          throw normalizeApplicationError(error);
+        },
+      );
+      return completion;
     };
   };
   return {
@@ -134,8 +161,3 @@ function unwrapError(r: Reply) {
   }
   return Error('Invalid reply');
 }
-export const connectionFields: Record<ConnectionCommand, string[]> = {
-  getConnection: [],
-  connect: ['profileId'],
-  disconnect: ['connectionId'],
-};
