@@ -11,7 +11,6 @@
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "oxlint .",
-    "test": "node --experimental-strip-types --test test/*.test.ts",
     "build": "vp build --config vite.config.ts",
     "demo": "vp dev --config vite.config.ts --host 127.0.0.1",
     "test:ui": "playwright test --config playwright.config.ts",
@@ -19,6 +18,7 @@
   },
   "dependencies": {
     "@moonbase/application": "workspace:*",
+    "@moonbase/contracts": "workspace:*",
     "@moonbase/ui": "workspace:*",
     "@base-ui/react": "1.9.0",
     "@stylexjs/stylex": "0.19.1",

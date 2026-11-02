@@ -11,7 +11,8 @@ assert.deepEqual(
   [],
   'Privileged implementation reached the actual Vite renderer graph',
 );
-assert(inputs.some((p) => p.endsWith('application/src/client.ts')));
+assert(inputs.some((p) => p.endsWith('application/src/features/editor/editor.ts')));
+assert(inputs.some((p) => p.endsWith('contracts/src/errors.ts')));
 assert(inputs.some((p) => p.includes('monaco-editor')));
 assert(inputs.some((p) => p.endsWith('desktop/src/chat/view.tsx')));
 assert(inputs.some((p) => p.endsWith('application/src/features/chat/controller.ts')));

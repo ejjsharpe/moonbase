@@ -1,9 +1,9 @@
-import { acquireEditor, answering } from './model-fixture.ts';
+import { acquireEditor, answering } from './editor-model-fixture.ts';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ManagedRuntime } from 'effect';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
-import { memoryWorkspace } from '@moonbase/editor/memory';
+import { memoryWorkspace } from '@moonbase/application/testing/memory-workspace';
 
 const checkout = {
   hostId: 'local',

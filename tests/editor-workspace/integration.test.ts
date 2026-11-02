@@ -22,7 +22,7 @@ import {
   type EditorClient,
   type FileTarget,
   type WorkspaceEvent,
-} from '@moonbase/application/client';
+} from '@moonbase/contracts/workspace';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import {
   makeEditorModel,
@@ -31,7 +31,7 @@ import {
   type EditorController,
   type EditorBuffer,
   type CloseChoice,
-} from '@moonbase/editor/state';
+} from '@moonbase/application/editor';
 import { WorkspaceLive, WorkspaceNative } from '@moonbase/workspace';
 
 function answering<A>(

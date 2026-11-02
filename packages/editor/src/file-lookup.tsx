@@ -5,9 +5,14 @@ import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react'
 import { Button } from '@base-ui/react/button';
 import { Dialog } from '@base-ui/react/dialog';
 import { overlays } from '@moonbase/ui/overlays';
-import type { CheckoutTarget } from '@moonbase/application/client';
-import { checkoutKey, fileKey, type EditorController, type EditorSnapshot } from './editor.ts';
-import type { EditorLookup } from './workflows.ts';
+import type { CheckoutTarget } from '@moonbase/contracts/workspace';
+import {
+  checkoutKey,
+  fileKey,
+  type EditorController,
+  type EditorSnapshot,
+} from '@moonbase/application/editor';
+import type { EditorLookup } from '@moonbase/application/editor';
 import { Popup } from './popup.tsx';
 
 const empty = { rows: [], message: 'Type a filename or path.', busy: false };

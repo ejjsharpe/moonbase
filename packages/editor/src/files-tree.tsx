@@ -3,9 +3,14 @@ import { controls } from '@moonbase/ui/controls';
 import { styles } from './styles.ts';
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { filesUI } from '@moonbase/ui/files';
-import type { CheckoutTarget } from '@moonbase/application/client';
-import { checkoutKey, fileKey, type EditorController, type EditorSnapshot } from './editor.ts';
-import { readOwn } from './record.ts';
+import type { CheckoutTarget } from '@moonbase/contracts/workspace';
+import {
+  checkoutKey,
+  fileKey,
+  readOwn,
+  type EditorController,
+  type EditorSnapshot,
+} from '@moonbase/application/editor';
 
 export function FilesTree({
   controller,

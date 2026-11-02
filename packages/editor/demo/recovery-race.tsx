@@ -1,11 +1,12 @@
+import { makeEditorModel, makeEditorController } from '@moonbase/application/editor';
 import { createRoot } from 'react-dom/client';
 import { Effect, Exit, Scope, ManagedRuntime } from 'effect';
 const modelScope = Scope.makeUnsafe();
-import { ApplicationError, type CommandInput } from '@moonbase/application/client';
+import { ApplicationError, type CommandInput } from '@moonbase/contracts/workspace';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
-import { EditorWorkbench, makeEditorModel, makeEditorController } from '../src/index.ts';
+import { EditorWorkbench } from '../src/index.ts';
 import { configureMonacoWorkers } from '../src/workers.ts';
-import { memoryWorkspace } from '../src/memory.ts';
+import { memoryWorkspace } from '@moonbase/application/testing/memory-workspace';
 import '@moonbase/ui/reset.css';
 import 'virtual:stylex:runtime';
 
