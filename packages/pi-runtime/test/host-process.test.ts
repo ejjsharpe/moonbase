@@ -427,3 +427,46 @@ test('repeated actual process interruption parks Pi work visibly instead of repo
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test('CLI rejects strict private configuration before opening or rewriting its store', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'moonbase-chat-strict-')),
+    file = join(directory, 'private.json'),
+    secret = randomBytes(32).toString('hex');
+  const config = {
+    host: { hostId: 'strict-host', storeId: 'store' },
+    actorId: 'personal',
+    cwd: directory,
+    databasePath: join(directory, 'chat.sqlite'),
+    model: { provider: 'openai', modelId: 'gpt-6-sol' },
+    token: secret,
+    port: 8787,
+  };
+  try {
+    for (const change of [
+      { future: secret },
+      { host: { ...config.host, future: secret } },
+      { model: { ...config.model, future: secret } },
+      { model: { ...config.model, modelId: 'x'.repeat(257) } },
+      { cwd: 'relative-' + secret },
+      { port: 0 },
+      { port: 65536 },
+      { token: secret + ' ' },
+    ]) {
+      const bytes = JSON.stringify({ ...config, ...change });
+      await writeFile(file, bytes, { mode: 0o600 });
+      const child = start(file);
+      try {
+        assert.equal((await bounded(child.exited))[0], 1);
+        assert(child.errors.includes('InvalidInput'));
+        assert(!child.errors.includes(secret));
+        assert(!child.errors.includes(directory));
+        assert.equal(await readFile(file, 'utf8'), bytes);
+        await assert.rejects(readFile(config.databasePath), { code: 'ENOENT' });
+      } finally {
+        await cleanup(child.child, child.exited);
+      }
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

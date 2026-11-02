@@ -1,7 +1,9 @@
+import { normalizeApplicationError } from '@moonbase/application/effect-client';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { chmodSync, constants, closeSync, mkdirSync, openSync, realpathSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { canonical, ensure, fail, hash } from './validation.ts';
+import { invalidStored, parseRecord, parseRecovery, savedRevision } from './schema.ts';
 import {
   ApplicationError,
   type CommandInput,
@@ -55,16 +57,17 @@ export class Store {
     const row = this.db
       .prepare('SELECT body FROM records WHERE bucket=? AND key=?')
       .get(bucket, key);
-    return row ? (JSON.parse(row.body as string) as T) : null;
+    return row ? parseRecord<T>(bucket, row.body) : null;
   }
   all<T>(bucket: string, predicate = '1', parameters: SQLInputValue[] = []): T[] {
     return this.db
       .prepare(`SELECT body FROM records WHERE bucket=? AND (${predicate}) ORDER BY rowid`)
       .all(bucket, ...parameters)
-      .map((r) => JSON.parse(r.body as string) as T);
+      .map((r) => parseRecord<T>(bucket, r.body));
   }
   put(bucket: string, key: string, value: unknown) {
     try {
+      this.get(bucket, key);
       this.db
         .prepare(
           'INSERT INTO records VALUES(?,?,?) ON CONFLICT(bucket,key) DO UPDATE SET body=excluded.body',
@@ -75,7 +78,7 @@ export class Store {
         code: 'Persistence',
         message:
           'Workspace journal publication failed; retain drafts and retry. ' +
-          ApplicationError.fromUnknown(error).message,
+          normalizeApplicationError(error).message,
       });
     }
   }
@@ -90,22 +93,40 @@ export class Store {
         code: 'Persistence',
         message:
           'Workspace request reservation failed; no mutation admitted. ' +
-          ApplicationError.fromUnknown(error).message,
+          normalizeApplicationError(error).message,
       });
     }
   }
   readRecovery(client: string): { revision: number; state: unknown } | null {
     const row = this.db.prepare('SELECT revision, body FROM recovery WHERE client=?').get(client);
-    return row ? { revision: Number(row.revision), state: JSON.parse(row.body as string) } : null;
+    if (!row) return null;
+    const revision = savedRevision(row.revision);
+    return { revision, state: parseRecovery(row.body, client) };
   }
   publication(client: string): number {
     return this.get<number>('publications', client) ?? 0;
   }
   recoveryPublication(clientId: string, requestId: string) {
-    return this.get<PublicationRecord>(
+    const record = this.get<PublicationRecord>(
       'recovery-publications',
       hash(canonical([clientId, requestId])),
     );
+    if (record) {
+      const receipt = record.receipt;
+      const row = this.db.prepare('SELECT revision FROM recovery WHERE client=?').get(clientId);
+      const currentRevision = row ? savedRevision(row.revision) : -1;
+      if (
+        receipt.clientId !== clientId ||
+        receipt.requestId !== requestId ||
+        !Number.isSafeInteger(receipt.previousRevision) ||
+        !Number.isSafeInteger(receipt.revision) ||
+        receipt.revision !== receipt.previousRevision + 1 ||
+        !Number.isSafeInteger(currentRevision) ||
+        receipt.revision > currentRevision
+      )
+        throw invalidStored();
+    }
+    return record;
   }
   replayPublication(
     input: CommandInput<'persistRecovery'>,
@@ -117,10 +138,13 @@ export class Store {
         'InvalidInput',
         'Recovery request ID already belongs to a different immutable publication.',
       );
+    if (previous && previous.receipt.previousRevision !== input.expectedRevision)
+      throw invalidStored();
     return previous?.receipt ?? null;
   }
   /** Caller owns the transaction; module facts advance CAS without impersonating a client publication. */
   writeInternalRecovery(client: string, revision: number, state: unknown) {
+    this.readRecovery(client);
     this.db
       .prepare(
         'INSERT INTO recovery VALUES(?,?,?) ON CONFLICT(client) DO UPDATE SET revision=excluded.revision, body=excluded.body',
@@ -159,7 +183,10 @@ export class Store {
       throw error;
     }
   }
+  private closed = false;
   close() {
+    if (this.closed) return;
+    this.closed = true;
     this.db.close();
   }
 }

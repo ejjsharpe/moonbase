@@ -181,11 +181,11 @@ test('ending a view subscription disposes its listener without ending the servic
   try {
     await ready;
     await event;
-    stop();
+    await stop();
     await runtime.runPromise(Effect.yieldNow);
     assert.equal((await client.command('loadRecovery', { clientId: 'client' })).revision, 0);
   } finally {
-    stop();
+    await stop();
     await runtime.dispose();
   }
   assert.equal(counts.subscriptions, 1);
@@ -205,7 +205,7 @@ test('typed service failure crosses the same public command boundary', async () 
   }
 });
 
-test('unsubscribe reports a failing finalizer through the public error callback', async () => {
+test('unsubscribe rejects with a failing finalizer without duplicate active delivery', async () => {
   const { counts, runtime, client, ready } = fixture({
     watchCleanup: Error('Watch cleanup failed'),
   });
@@ -213,18 +213,21 @@ test('unsubscribe reports a failing finalizer through the public error callback'
   const stop = client.watch(
     { checkout, paths: [''] },
     () => {},
-    (error) => {
-      errors.push(error);
-    },
+    (error) => errors.push(error),
   );
   await ready;
-  stop();
+  const close = stop();
+  assert.strictEqual(stop(), close);
+  await assert.rejects(
+    close,
+    (error) =>
+      ApplicationError.is(error) &&
+      error.code === 'Unavailable' &&
+      /Application resource cleanup failed/.test(error.message),
+  );
   await runtime.dispose();
-  await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(counts.unsubscribed, 1);
-  assert.equal(errors.length, 1);
-  assert.equal(errors[0].code, 'Unavailable');
-  assert.match(errors[0].message, /Watch cleanup failed/);
+  assert.deepEqual(errors, []);
 });
 
 test('command cancellation preserves a failing cleanup instead of labelling it cancelled', async () => {
@@ -236,7 +239,7 @@ test('command cancellation preserves a failing cleanup instead of labelling it c
     (error) =>
       error instanceof ApplicationError &&
       error.code === 'Unavailable' &&
-      /Read cleanup failed/.test(error.message),
+      /Application resource cleanup failed/.test(error.message),
   );
   try {
     await started;
@@ -267,16 +270,14 @@ for (const concurrentDispose of [false, true])
       },
     );
     await acquiring;
-    stop();
+    const close = assert.rejects(stop(), /Application resource cleanup failed/);
     const disposal = concurrentDispose ? runtime.dispose() : undefined;
     release();
     await disposal;
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await close;
     await runtime.dispose();
     assert.equal(counts.unsubscribed, 1);
-    assert.equal(errors.length, 1);
-    assert.equal(errors[0].code, 'Unavailable');
-    assert.match(errors[0].message, /Pending watch cleanup failed/);
+    assert.deepEqual(errors, []);
   });
 
 test('unprintable defects reach command and watch application error boundaries', async () => {
@@ -375,7 +376,7 @@ for (const cleanup of ['ensuring', 'scoped'])
           assert(error instanceof ApplicationError);
           assert.equal(error.code, 'Uncertain');
           assert.deepEqual(error.target, target);
-          assert.match(error.message, /Cleanup also failed/);
+          assert.match(error.message, /Application resource cleanup failed/);
           return true;
         });
         const errors: ApplicationError[] = [];
@@ -390,7 +391,7 @@ for (const cleanup of ['ensuring', 'scoped'])
         assert.equal(errors.length, 1);
         assert.equal(errors[0].code, 'Uncertain');
         assert.deepEqual(errors[0].target, target);
-        assert.match(errors[0].message, /Cleanup also failed/);
+        assert.match(errors[0].message, /Application resource cleanup failed/);
       } finally {
         await runtime.dispose();
       }

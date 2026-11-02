@@ -1,9 +1,10 @@
 import { createRoot } from 'react-dom/client';
-import { ManagedRuntime } from 'effect';
+import { Effect, Exit, Scope, ManagedRuntime } from 'effect';
+const modelScope = Scope.makeUnsafe();
 import * as stylex from '@stylexjs/stylex';
 import { makeEditorClient } from '@moonbase/application/runtime-client';
 import type { CommandInput, EditorClient } from '@moonbase/application/client';
-import { EditorWorkbench, createEditor } from '../src/index.ts';
+import { EditorWorkbench, makeEditorModel, makeEditorController } from '../src/index.ts';
 import { configureMonacoWorkers } from '../src/workers.ts';
 import { memoryWorkspace } from '../src/memory.ts';
 import '@moonbase/ui/reset.css';
@@ -44,7 +45,14 @@ const client: EditorClient = {
     return raw.command(name, input, options);
   },
 };
-let editor = createEditor({ client, clientId: 'save-race' });
+let editor = makeEditorController(
+  runtime,
+  await runtime.runPromise(
+    makeEditorModel({ client, clientId: 'save-race' }).pipe(
+      Effect.provideService(Scope.Scope, modelScope),
+    ),
+  ),
+);
 await editor.load();
 await editor.openCheckout(checkout.root);
 for (const path of ['a.ts', 'b.ts']) {
@@ -80,8 +88,15 @@ window.saveRace = {
   },
   load: () => raw.command('loadRecovery', { clientId: editor.clientId }),
   async restart() {
-    editor.dispose();
-    editor = createEditor({ client: raw, clientId: 'save-race' });
+    await editor.dispose();
+    editor = makeEditorController(
+      runtime,
+      await runtime.runPromise(
+        makeEditorModel({ client: raw, clientId: 'save-race' }).pipe(
+          Effect.provideService(Scope.Scope, modelScope),
+        ),
+      ),
+    );
     await editor.load();
     render();
   },
@@ -104,8 +119,9 @@ window.addEventListener(
   'pagehide',
   () => {
     release();
-    editor.dispose();
-    void runtime.dispose();
+    void runtime
+      .runPromiseExit(Scope.close(modelScope, Exit.void))
+      .finally(() => runtime.dispose());
   },
   { once: true },
 );

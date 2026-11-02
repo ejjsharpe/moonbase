@@ -1,4 +1,5 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { type Cause, Deferred, Effect, Exit } from 'effect';
+import { spawn } from 'node:child_process';
 import { closeSync, constants, fstatSync, openSync, readdirSync, realpathSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import type { FileDocument } from '@moonbase/application/client';
@@ -9,59 +10,114 @@ export type Run = (
   args: string[],
   options: { fd: number; input?: string; extra?: number[]; signal?: AbortSignal },
 ) => Promise<Buffer>;
-export function makeRunner(helper: string, children: Set<ChildProcess>): Run {
+export function makeRunner(
+  helper: string,
+  runEffect: <A>(effect: Effect.Effect<A, unknown>) => Promise<A>,
+  reportCleanup: (cause: Cause.Cause<never>) => void,
+): Run {
   return (args, { fd, input, extra = [], signal }) =>
-    new Promise((resolve, reject) => {
-      if (signal?.aborted) {
-        reject(Error('Cancelled'));
-        return;
-      }
-      const child = spawn(helper, args, {
-        stdio: ['pipe', 'pipe', 'pipe', fd, ...extra],
-        env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_CONFIG_NOSYSTEM: '1' },
-      });
-      children.add(child);
-      let output = Buffer.alloc(0),
-        errors = '',
-        capped = false;
-      const stop = () => child.kill('SIGKILL');
-      const timer = setTimeout(() => {
-        capped = true;
-        stop();
-      }, 30000);
-      signal?.addEventListener('abort', stop, { once: true });
-      child.stdout!.on('data', (chunk: Buffer) => {
-        if (output.length + chunk.length > 16 * 1024 * 1024) {
-          capped = true;
-          stop();
-        } else output = Buffer.concat([output, chunk]);
-      });
-      child.stderr!.on('data', (chunk: Buffer) => {
-        errors = (errors + chunk.toString()).slice(0, 4096);
-      });
-      child.stdin!.on('error', () => {});
-      child.stdin!.end(input);
-      child.once('error', reject);
-      child.once('close', (code, killed) => {
-        clearTimeout(timer);
-        signal?.removeEventListener('abort', stop);
-        children.delete(child);
-        if (code === 0 && !capped && !signal?.aborted) resolve(output);
-        else {
-          let message = 'Filesystem helper unavailable.';
-          if (capped) message = 'Filesystem output/time limit reached; refine request.';
-          else if (signal?.aborted) message = 'Cancelled';
-          reject(
-            Object.assign(Error(errors || message), {
-              status: code,
-              stderr: errors,
-              uncertain: !!killed || capped || signal?.aborted,
-              output,
+    runEffect(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const state = yield* Effect.acquireRelease(
+            Effect.sync(() => {
+              if (signal?.aborted) throw Error('Cancelled');
+              const completion = Deferred.makeUnsafe<Buffer, unknown>();
+              const child = spawn(helper, args, {
+                stdio: ['pipe', 'pipe', 'pipe', fd, ...extra],
+                env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_CONFIG_NOSYSTEM: '1' },
+              });
+              const state = {
+                child,
+                completion,
+                settled: false,
+                capped: false,
+                stop: () => {
+                  child.kill('SIGKILL');
+                },
+              };
+              let output = Buffer.alloc(0),
+                errors = '',
+                spawnError: unknown;
+              child.stdout!.on('data', (chunk: Buffer) => {
+                if (output.length + chunk.length > 16 * 1024 * 1024) {
+                  state.capped = true;
+                  state.stop();
+                } else output = Buffer.concat([output, chunk]);
+              });
+              child.stderr!.on('data', (chunk: Buffer) => {
+                errors = (errors + chunk.toString()).slice(0, 4096);
+              });
+              child.stdin!.on('error', () => {});
+              child.once('error', (error) => {
+                spawnError = error;
+              });
+              child.once('close', (code, killed) => {
+                state.settled = true;
+                if (code === 0 && !state.capped && !signal?.aborted && !spawnError)
+                  Deferred.doneUnsafe(completion, Effect.succeed(output));
+                else {
+                  let message = 'Filesystem helper unavailable.';
+                  if (state.capped)
+                    message = 'Filesystem output/time limit reached; refine request.';
+                  else if (signal?.aborted) message = 'Cancelled';
+                  Deferred.doneUnsafe(
+                    completion,
+                    Effect.fail(
+                      spawnError ??
+                        Object.assign(Error(errors || message), {
+                          status: code,
+                          stderr: errors,
+                          uncertain: !!killed || state.capped || signal?.aborted,
+                          output,
+                        }),
+                    ),
+                  );
+                }
+              });
+              signal?.addEventListener('abort', state.stop, { once: true });
+              if (signal?.aborted) state.stop();
+              child.stdin!.end(input);
+              return state;
             }),
+            (state) =>
+              Effect.gen(function* () {
+                const stopped = yield* Effect.exit(
+                  Effect.sync(() => {
+                    if (!state.settled) state.stop();
+                  }),
+                );
+                // Child error/abort is not exit: descriptors remain owned until close.
+                yield* Effect.exit(Deferred.await(state.completion));
+                yield* Effect.sync(() => {
+                  signal?.removeEventListener('abort', state.stop);
+                  state.child.removeAllListeners();
+                  state.child.stdin?.removeAllListeners();
+                  state.child.stdout?.removeAllListeners();
+                  state.child.stderr?.removeAllListeners();
+                });
+                if (Exit.isFailure(stopped)) return yield* Effect.failCause(stopped.cause);
+              }).pipe(
+                Effect.onExit((exit) =>
+                  Effect.sync(() => {
+                    if (Exit.isFailure(exit)) reportCleanup(exit.cause);
+                  }),
+                ),
+              ),
           );
-        }
-      });
-    });
+          yield* Effect.sleep('30 seconds').pipe(
+            Effect.andThen(
+              Effect.sync(() => {
+                state.capped = true;
+                state.stop();
+              }),
+            ),
+            Effect.forkScoped,
+          );
+          return yield* Deferred.await(state.completion);
+        }),
+      ),
+    );
 }
 export class Directory {
   readonly fd: number;
@@ -93,7 +149,10 @@ export class Directory {
       throw error;
     }
   }
+  private closed = false;
   close() {
+    if (this.closed) return;
+    this.closed = true;
     closeSync(this.fd);
   }
   check() {

@@ -56,7 +56,10 @@ registry.install(
 );
 const runtime = ManagedRuntime.make(
     PiRuntimeLive({
-      ...config,
+      host: config.host,
+      actorId: config.actorId,
+      cwd: config.cwd,
+      databasePath: config.databasePath,
       models,
       registry,
       model: { provider: faux.provider.id, modelId: faux.getModel().id },
@@ -70,7 +73,7 @@ try {
   await runtime.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        yield* serveChat(config, client);
+        yield* serveChat({ host: config.host, token: config.token, port: config.port }, client);
         console.log(JSON.stringify({ event: 'ready' }));
         yield* Effect.promise(() => done);
       }),

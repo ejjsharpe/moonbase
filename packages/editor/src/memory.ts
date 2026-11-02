@@ -1,3 +1,4 @@
+import { decodeEditorRecovery } from '@moonbase/application/workspace-schema';
 import { readOwn } from './record.ts';
 import { Effect, Layer, Queue, Stream } from 'effect';
 import { WorkspaceService, type WorkspaceServiceShape } from '@moonbase/application/services';
@@ -139,6 +140,11 @@ export function memoryWorkspace(seeds: Seed[]) {
         watcher.notify({ checkout, paths });
   };
   function validateRecovery(state: EditorRecovery) {
+    try {
+      decodeEditorRecovery(state);
+    } catch {
+      fail('Invalid recovery state.');
+    }
     const known = new Map(state.checkouts.map((checkout) => [checkout.checkoutId, checkout]));
     if (known.size !== state.checkouts.length) fail('Duplicate known checkout ID.');
     for (const checkout of state.checkouts) exact(checkout);

@@ -1,7 +1,7 @@
 import * as Schema from 'effect/Schema';
-import * as SchemaGetter from 'effect/SchemaGetter';
-import * as Option from 'effect/Option';
-import * as Struct from 'effect/Struct';
+import { struct, optional } from './schema.ts';
+import { ChatIdentifierSchema, ChatHostTargetSchema } from './host-schema.ts';
+export { ChatIdentifierSchema, ChatHostTargetSchema } from './host-schema.ts';
 import { ApplicationError } from './client.ts';
 import {
   chatPageSize,
@@ -12,8 +12,6 @@ import {
   type ChatOutput,
 } from './chat-client.ts';
 
-const struct = <const F extends Schema.Struct.Fields>(fields: F) =>
-  Schema.Struct(fields).mapFields(Struct.map(Schema.mutableKey));
 // Unicode mode matches unpaired surrogates without rejecting valid pairs.
 const unicode = Schema.String.check(Schema.makeFilter((value) => !/[\ud800-\udfff]/u.test(value)));
 const text = (bytes: number) =>
@@ -23,24 +21,6 @@ const text = (bytes: number) =>
         !value.includes('\0') && !!value.trim() && new TextEncoder().encode(value).length <= bytes,
     ),
   );
-// Optional undefined values were omitted by the original DTO projection.
-const optional = <T>(schema: Schema.Codec<T>) =>
-  Schema.optional(schema).pipe(
-    Schema.decodeTo(Schema.optionalKey(schema), {
-      decode: SchemaGetter.transformOptional<T, T | undefined>((value) =>
-        Option.filter(value, (item): item is T => item !== undefined),
-      ),
-      encode: SchemaGetter.passthrough<T | undefined, T>({ strict: false }),
-    }),
-  );
-
-export const ChatIdentifierSchema = Schema.String.check(
-  Schema.isPattern(/^[A-Za-z0-9._:-]{1,256}$/),
-);
-export const ChatHostTargetSchema = struct({
-  hostId: ChatIdentifierSchema,
-  storeId: ChatIdentifierSchema,
-});
 export const ChatSessionSchema = struct({
   host: ChatHostTargetSchema,
   actorId: ChatIdentifierSchema,

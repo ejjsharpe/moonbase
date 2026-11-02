@@ -642,8 +642,13 @@ test('pending Save index upgrades existing stores and retains unresolved and res
   database.close();
   const store = new Store(base, 'index-host');
   try {
-    assert.deepEqual(store.all('saves', pendingSaves), records.slice(0, 6));
-    assert.deepEqual(store.all('saves'), records, 'upgrading must retain every immutable receipt');
+    const read = (predicate = '1') =>
+      store.db
+        .prepare(`SELECT body FROM records WHERE bucket='saves' AND (${predicate}) ORDER BY rowid`)
+        .all()
+        .map((row) => JSON.parse(row.body as string));
+    assert.deepEqual(read(pendingSaves), records.slice(0, 6));
+    assert.deepEqual(read(), records, 'upgrading must retain every immutable receipt');
     const plan = store.db
       .prepare(
         `EXPLAIN QUERY PLAN SELECT body FROM records WHERE bucket=? AND ${pendingSaves} ORDER BY rowid`,

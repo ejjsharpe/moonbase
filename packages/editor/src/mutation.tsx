@@ -1,23 +1,18 @@
 import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
 import { styles } from './styles.ts';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { Button } from '@base-ui/react/button';
 import { Dialog } from '@base-ui/react/dialog';
-import type {
-  CheckoutTarget,
-  EntryReference,
-  WorkspaceOperation,
-} from '@moonbase/application/client';
 import type { EditorController } from './editor.ts';
 import { Popup } from './popup.tsx';
 
-export type Action = {
-  checkout: CheckoutTarget;
-  kind: WorkspaceOperation['kind'];
-  paths: string[];
-  nativeReferences?: string[];
-};
+export type { MutationAction as Action } from './workflows.ts';
+import type { EditorMutation, MutationAction as Action } from './workflows.ts';
+const empty = { busy: false, error: '', replacements: null };
+const emptySnapshot = () => empty;
+const noSubscription = () => () => {};
+
 export function Mutation({
   controller,
   action,
@@ -30,21 +25,22 @@ export function Mutation({
   const checkout = action.checkout,
     batchImport = action.kind === 'import' && action.nativeReferences!.length > 1;
   const [destination, setDestination] = useState(
-      action.kind === 'move' ? (action.paths[0] ?? '') : '',
-    ),
-    [error, setError] = useState('');
+    action.kind === 'move' ? (action.paths[0] ?? '') : '',
+  );
   const [replacementPaths, setReplacementPaths] = useState('');
-  const [replacements, setReplacements] = useState<EntryReference[] | null>(null),
-    [sources, setSources] = useState<EntryReference[] | null>(null),
-    [busy, setBusy] = useState(false);
-  const [operationId] = useState(() => crypto.randomUUID());
-  const active = useRef(true);
+  const [workflow, setWorkflow] = useState<EditorMutation | null>(null);
+  const { replacements, busy, error } = useSyncExternalStore(
+    workflow?.subscribe ?? noSubscription,
+    workflow?.getSnapshot ?? emptySnapshot,
+  );
   useEffect(() => {
-    active.current = true;
+    const acquired = controller.createMutation(action);
+    // oxlint-disable-next-line react/set-state-in-effect -- The model owns a fresh dialog attachment, including StrictMode remounts.
+    setWorkflow(acquired);
     return () => {
-      active.current = false;
+      void acquired.dispose().catch(controller.report);
     };
-  }, []);
+  }, [controller, action]);
   const titles: Record<Action['kind'], string> = {
     trash: 'Move to Trash',
     move: 'Rename or move',
@@ -65,72 +61,10 @@ export function Mutation({
     descriptionSuffix = '. Text and positions are preserved; text undo history resets.';
   async function apply(consent = false) {
     if (busy || (action.kind !== 'trash' && !batchImport && !destination)) return;
-    setBusy(true);
-    setError('');
-    try {
-      if (
-        controller
-          .getSnapshot()
-          .operations.some(
-            (operation) =>
-              operation.clientId === controller.clientId && operation.id === operationId,
-          )
-      ) {
-        const result = await controller.resolveOperation(operationId);
-        if (result?.outcome === 'completed') close();
-        else
-          setError(
-            'Operation remains unresolved. Its original identity is retained; no effects were repeated.',
-          );
-        return;
-      }
-      const captured =
-        sources ?? (action.paths.length ? await controller.inspect(checkout, action.paths) : []);
-      setSources(captured);
-      let replace = replacements;
-      if (action.kind !== 'trash' && replace === null) {
-        if (batchImport) {
-          const paths = replacementPaths.split('\n').filter(Boolean);
-          replace = paths.length ? await controller.inspect(checkout, paths) : [];
-        } else {
-          const parent = destination.split('/').slice(0, -1).join('/'),
-            listing = await controller.list(checkout, parent);
-          const collision = listing.entries.find(
-            (entry) =>
-              entry.path.normalize('NFC').toLowerCase() ===
-              destination.normalize('NFC').toLowerCase(),
-          );
-          replace = collision ? await controller.inspect(checkout, [collision.path]) : [];
-        }
-        setReplacements(replace);
-      }
-      if (replace?.length && !consent) return;
-      const result = await controller.mutate({
-        id: operationId,
-        checkout,
-        kind: action.kind,
-        sources: captured,
-        ...(action.kind === 'trash' ? {} : { destination }),
-        ...(action.nativeReferences ? { nativeReferences: action.nativeReferences } : {}),
-        replacements: replace ?? [],
-      });
-      if (!active.current || controller.getSnapshot().disposed) return;
-      if (result.outcome !== 'completed') {
-        setError(
-          result.message ?? 'Operation incomplete. Review the recorded outcome before continuing.',
-        );
-        return;
-      }
+    if (await workflow?.apply(destination, replacementPaths, consent)) {
       if (action.kind === 'create-file')
-        await controller.open(
-          { checkout, path: destination },
-          { view: 'file', intent: 'keep', current: () => active.current },
-        );
+        await controller.open({ checkout, path: destination }, { view: 'file', intent: 'keep' });
       close();
-    } catch (error) {
-      setError(String(error));
-    } finally {
-      setBusy(false);
     }
   }
   return (
@@ -155,7 +89,7 @@ export function Mutation({
             value={destination}
             onChange={(event) => {
               setDestination(event.target.value);
-              setReplacements(null);
+              workflow?.invalidate();
             }}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.nativeEvent.isComposing) void apply();
@@ -172,7 +106,7 @@ export function Mutation({
             value={replacementPaths}
             onChange={(event) => {
               setReplacementPaths(event.target.value);
-              setReplacements(null);
+              workflow?.invalidate();
             }}
           />
           Only paths matching imported filenames can be replaced; each is captured and confirmed

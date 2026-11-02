@@ -1,12 +1,10 @@
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Queue, Stream, type Scope } from 'effect';
 import { createServer, type Server, type AddressInfo } from 'node:net';
-import { isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { ApplicationError } from '@moonbase/application/client';
-import type {
-  ConnectionProfile,
-  ConnectionSnapshot,
-} from '@moonbase/application/connection-client';
+import type { ConnectionSnapshot } from '@moonbase/application/connection-client';
+import { decodeConnectionInput } from '@moonbase/application/connection-schema';
+import { decodeChatHostTarget } from '@moonbase/application/host-schema';
 import type { ChatHostHealth } from '@moonbase/application/host-client';
 import { checkHostHealth } from '@moonbase/application/host-health';
 import {
@@ -15,19 +13,17 @@ import {
   type ConnectionServiceShape,
 } from '@moonbase/application/services';
 import { SshProcess } from './process.ts';
-
-export type SshConfiguration = {
-  profile: ConnectionProfile;
-  token: string;
-  sshExecutable?: string;
-};
+import {
+  decodeSshConfiguration,
+  type DecodedSshConfiguration,
+  type SshConfiguration,
+} from './configuration.ts';
+export type { SshConfiguration } from './configuration.ts';
 const error = (code: ApplicationError['code'], message: string) =>
   new ApplicationError({ code, message });
 const ensure: (condition: unknown, message: string) => asserts condition = (condition, message) => {
   if (!condition) throw error('InvalidInput', message);
 };
-const identifier = (value: unknown): value is string =>
-  typeof value === 'string' && /^[A-Za-z0-9._:-]{1,256}$/.test(value);
 function fields(input: unknown, names: string[]) {
   ensure(
     input !== null &&
@@ -36,61 +32,6 @@ function fields(input: unknown, names: string[]) {
       Object.keys(input).every((name) => names.includes(name)),
     'Invalid connection command fields.',
   );
-}
-function configuration(input: SshConfiguration): SshConfiguration {
-  ensure(input && typeof input === 'object', 'Configure one SSH connection profile.');
-  ensure(process.platform !== 'win32', 'SSH process-group ownership requires a POSIX platform.');
-  ensure(
-    typeof input.token === 'string' && /^[\x21-\x7e]{16,4096}$/.test(input.token),
-    'Configure a valid private chat host key.',
-  );
-  const p = input.profile;
-  ensure(
-    p &&
-      identifier(p.id) &&
-      typeof p.label === 'string' &&
-      // oxlint-disable-next-line no-control-regex -- Reject control characters in the operator-visible SSH label.
-      /^[^\x00-\x1f\x7f]{1,128}$/.test(p.label),
-    'Configure the SSH profile identity and label.',
-  );
-  ensure(
-    typeof p.destination === 'string' &&
-      p.destination.length <= 320 &&
-      /^(?:[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}@)?(?:[A-Za-z0-9_][A-Za-z0-9_.-]{0,252}|\[[0-9A-Fa-f:.%_-]+\])$/.test(
-        p.destination,
-      ),
-    'Use a configured SSH alias or user@host, without URLs, options or shell characters.',
-  );
-  ensure(
-    Number.isInteger(p.remotePort) && p.remotePort >= 1 && p.remotePort <= 65535,
-    'Configure a valid remote loopback chat port.',
-  );
-  ensure(
-    p.expected && identifier(p.expected.hostId) && identifier(p.expected.storeId),
-    'Configure exact expected host and store identities.',
-  );
-  const sshExecutable = input.sshExecutable ?? '/usr/bin/ssh';
-  ensure(
-    typeof sshExecutable === 'string' && isAbsolute(sshExecutable) && !sshExecutable.includes('\0'),
-    'System SSH executable must be an absolute path.',
-  );
-  ensure(
-    ![p.id, p.label, p.destination, p.expected.hostId, p.expected.storeId, sshExecutable].some(
-      (value) => value.includes(input.token),
-    ),
-    'Private host key must be separate from public SSH profile fields.',
-  );
-  return {
-    profile: {
-      id: p.id,
-      label: p.label,
-      destination: p.destination,
-      remotePort: p.remotePort,
-      expected: { hostId: p.expected.hostId, storeId: p.expected.storeId },
-    },
-    token: input.token,
-    sshExecutable,
-  };
 }
 const command = <A>(run: () => A): Effect.Effect<A, ApplicationError> =>
   Effect.try({
@@ -113,7 +54,14 @@ export function SshLive(input: SshConfiguration) {
   return Layer.effect(
     ConnectionService,
     Effect.gen(function* () {
-      const config = yield* command(() => configuration(input)),
+      const config = yield* command(() => {
+          const value = decodeSshConfiguration(input);
+          ensure(
+            process.platform !== 'win32',
+            'SSH process-group ownership requires a POSIX platform.',
+          );
+          return value;
+        }),
         scope = yield* Effect.scope;
       const owner = yield* Effect.acquireRelease(
         Effect.sync(() => new Connection(config, scope)),
@@ -124,7 +72,7 @@ export function SshLive(input: SshConfiguration) {
   );
 }
 class Connection {
-  readonly config: SshConfiguration;
+  readonly config: DecodedSshConfiguration;
   readonly scope: Scope.Scope;
   readonly service: ConnectionServiceShape;
   private state: ConnectionSnapshot;
@@ -132,22 +80,22 @@ class Connection {
   private readonly generations = new Set<Generation>();
   private readonly observers = new Set<Queue.Queue<ConnectionSnapshot, Cause.Done>>();
   private closed = false;
-  constructor(config: SshConfiguration, scope: Scope.Scope) {
+  constructor(config: DecodedSshConfiguration, scope: Scope.Scope) {
     this.config = config;
     this.scope = scope;
     this.state = { profile: config.profile, state: 'disconnected', connectionId: null };
     this.service = {
       getConnection: (input) =>
         command(() => {
-          fields(input, []);
+          decodeConnectionInput('getConnection', input);
           this.open();
           return this.snapshot();
         }),
       connect: (input) =>
         Effect.flatMap(
           command(() => {
-            fields(input, ['profileId']);
-            ensure(input.profileId === config.profile.id, 'Choose the configured SSH profile.');
+            const value = decodeConnectionInput('connect', input);
+            ensure(value.profileId === config.profile.id, 'Choose the configured SSH profile.');
             this.open();
           }),
           () => this.connect(),
@@ -155,24 +103,20 @@ class Connection {
       disconnect: (input) =>
         Effect.flatMap(
           command(() => {
-            fields(input, ['connectionId']);
-            ensure(identifier(input.connectionId), 'Choose an exact connection generation.');
+            const value = decodeConnectionInput('disconnect', input);
             this.open();
+            return value.connectionId;
           }),
-          () => this.disconnect(input.connectionId),
+          (id) => this.disconnect(id),
         ),
       endpoint: (input) =>
         command(() => {
           fields(input, ['host']);
-          fields(input.host, ['hostId', 'storeId']);
+          const host = decodeChatHostTarget(input.host);
           this.open();
-          ensure(
-            identifier(input.host.hostId) && identifier(input.host.storeId),
-            'Choose an exact host and store.',
-          );
           if (
-            input.host.hostId !== config.profile.expected.hostId ||
-            input.host.storeId !== config.profile.expected.storeId
+            host.hostId !== config.profile.expected.hostId ||
+            host.storeId !== config.profile.expected.storeId
           )
             throw error(
               'Conflict',
@@ -369,7 +313,7 @@ class Connection {
     return Effect.try({
       try: () => {
         const child = new SshProcess(
-          this.config.sshExecutable!,
+          this.config.sshExecutable,
           args,
           this.config.token,
           captureOutput,

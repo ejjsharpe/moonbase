@@ -8,8 +8,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
-import { Effect, ManagedRuntime } from 'effect';
-import { ApplicationError } from '@moonbase/application/client';
+import { Effect, ManagedRuntime, Queue } from 'effect';
+import { ApplicationError, type ObservationClose } from '@moonbase/application/client';
 import type { ConnectionSnapshot } from '@moonbase/application/connection-client';
 import { chatHostVersion, chatProtocolVersion } from '@moonbase/application/host-client';
 import { createHostHealthReply } from '@moonbase/application/host-health';
@@ -279,8 +279,7 @@ test('observation unsubscribe is not disconnect; generation exit fails visibly a
     assert.equal(events[0].state, 'disconnected');
     const first = await f.client.command('connect', { profileId: 'configured' });
     await until(() => events.some((e) => e.state === 'connected'));
-    stop();
-    await tick();
+    await stop();
     const observed = events.length;
     assert.equal((await f.client.command('getConnection', {})).state, 'connected');
     process.kill(f.forwards()[0].pid, 'SIGTERM');
@@ -301,7 +300,7 @@ test('observation unsubscribe is not disconnect; generation exit fails visibly a
     assert.equal((await f.client.command('getConnection', {})).state, 'connected');
     assert(f.requests.every((r) => r.url === '/v1/health'));
   } finally {
-    stop();
+    await stop();
     await f.close();
   }
 });
@@ -404,6 +403,29 @@ test('private config is projected explicitly and invalid commands/config cannot 
       f.client.command('connect', { profileId: 'other' }),
       failure('InvalidInput'),
     );
+    for (const [operation, input] of [
+      ['getConnection', null],
+      ['getConnection', []],
+      ['connect', {}],
+      ['connect', { profileId: 'configured', destination: f.profile.destination }],
+      ['connect', { profileId: f.key + ' invalid' }],
+      ['disconnect', {}],
+      ['disconnect', { connectionId: 'valid', token: f.key }],
+      ['disconnect', { connectionId: 'line\n' }],
+    ] as const)
+      await assert.rejects(
+        f.client.command(operation, input as never),
+        (error) => failure('InvalidInput')(error) && !JSON.stringify(error).includes(f.key),
+      );
+    for (const input of [
+      { host: { ...f.profile.expected, token: f.key } },
+      { host: f.profile.expected, origin: 'http://127.0.0.1:9999' },
+      { host: { ...f.profile.expected, hostId: 'line\n' } },
+    ])
+      await assert.rejects(
+        f.runtime.runPromise(Effect.flatMap(ConnectionService, (s) => s.endpoint(input))),
+        failure('InvalidInput'),
+      );
     await assert.rejects(
       f.runtime.runPromise(
         Effect.flatMap(ConnectionService, (s) =>
@@ -495,7 +517,7 @@ test('public disconnect reports an unknown throwing process release; later root 
 
 test('watch subscriptions are bounded and unsubscribe plus concurrent root disposal has no connection side effect', async () => {
   const f = await fixture(),
-    stops: (() => void)[] = [],
+    stops: ObservationClose[] = [],
     events: ConnectionSnapshot[] = [];
   let reported: ApplicationError | undefined;
   try {
@@ -509,21 +531,20 @@ test('watch subscriptions are bounded and unsubscribe plus concurrent root dispo
         ),
       );
     await until(() => events.length === 64);
-    stops.push(
-      f.client.watch(
-        () => {},
-        (e) => {
-          reported = e;
-        },
-      ),
+    const overflow = f.client.watch(
+      () => {},
+      (e) => {
+        reported = e;
+      },
     );
     await until(() => !!reported);
     assert.equal(reported?.code, 'Unavailable');
-    stops.forEach((stop) => stop());
+    await assert.rejects(overflow(), failure('Unavailable'));
+    await Promise.all(stops.map((stop) => stop()));
     await f.runtime.dispose();
     assert.equal(f.spawned().length, 0);
   } finally {
-    stops.forEach((stop) => stop());
+    await Promise.all(stops.map((stop) => stop()));
     await f.close();
   }
   const raced = await fixture();
@@ -531,9 +552,60 @@ test('watch subscriptions are bounded and unsubscribe plus concurrent root dispo
     () => {},
     () => {},
   );
-  stop();
-  await raced.runtime.dispose();
-  await raced.close();
+  try {
+    const [observation, root] = await Promise.allSettled([stop(), raced.runtime.dispose()]);
+    assert.equal(root.status, 'fulfilled');
+    if (observation.status === 'rejected')
+      assert(
+        failure('Unavailable')(observation.reason) || failure('Cancelled')(observation.reason),
+      );
+    assert.equal(raced.spawned().length, 0);
+  } finally {
+    await raced.close();
+  }
+});
+
+test('IO watch close awaits release and retains a redacted cleanup failure on repeated close', async () => {
+  const f = await fixture();
+  let observed = false,
+    failed = false;
+  const errors: ApplicationError[] = [];
+  const stop = f.client.watch(
+    () => {
+      observed = true;
+    },
+    (error) => errors.push(error),
+  );
+  try {
+    await until(() => observed);
+    const remove = Set.prototype.delete;
+    mock.method(Set.prototype, 'delete', function (this: Set<unknown>, value: unknown) {
+      const removed = remove.call(this, value);
+      if (removed && !failed && Queue.isQueue(value)) {
+        failed = true;
+        throw Error(f.key);
+      }
+      return removed;
+    });
+    const closed = stop();
+    assert.equal(stop(), closed);
+    await assert.rejects(
+      closed,
+      (error) =>
+        failure('Unavailable')(error) &&
+        /cleanup/.test((error as ApplicationError).message) &&
+        !JSON.stringify(error).includes(f.key),
+    );
+    assert(failed);
+    assert.equal(errors.length, 0);
+    await assert.rejects(stop(), failure('Unavailable'));
+    assert.equal((await f.client.command('getConnection', {})).state, 'disconnected');
+    assert.equal(f.spawned().length, 0);
+  } finally {
+    mock.restoreAll();
+    await stop().catch(() => {});
+    await f.close();
+  }
 });
 
 test('installed system OpenSSH accepts the safe owned-child options without making a network connection', () => {
@@ -673,6 +745,16 @@ test('runnable consumer composition root uses the public package and never print
     assert(!good.stdout.includes('http://127.0.0.1:'));
     assert.equal(f.forwards().length, 1);
     assert(f.spawned().every((child) => !alive(child.pid)));
+    writeFileSync(
+      configuration,
+      JSON.stringify({ ...f.config, sshExecutable: 'relative/' + f.key }),
+    );
+    const invalid = await execute();
+    assert(invalid.error);
+    assert.match(invalid.stderr, /Could not read the private connection configuration JSON/);
+    assert(!invalid.stderr.includes(f.key));
+    assert(!invalid.stderr.includes(f.base));
+    assert.equal(f.forwards().length, 1);
     writeFileSync(configuration, '{ malformed private JSON ' + f.key);
     const bad = await execute();
     assert(bad.error);
@@ -750,7 +832,7 @@ for (const action of ['disconnect', 'dispose'])
         else await assert.rejects(f.client.command('getConnection', {}));
         assert.equal(f.spawned().length, 0);
       } finally {
-        stop();
+        await stop();
         abort.abort();
         secondAbort.abort();
         await Promise.allSettled([pending, second, release]);
