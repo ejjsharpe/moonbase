@@ -1,0 +1,89 @@
+import { Schema, Struct } from 'effect';
+import { ApplicationError } from '@moonbase/application/client';
+import {
+  ChatSessionSchema,
+  ChatTargetSchema,
+  chatInputSchemas,
+} from '@moonbase/application/chat-schema';
+import type { ChatSession, ChatTarget } from '@moonbase/application/chat-client';
+
+const struct = <const F extends Schema.Struct.Fields>(fields: F) =>
+  Schema.Struct(fields).mapFields(Struct.map(Schema.mutableKey));
+const array = <S extends Schema.Constraint>(value: S) => Schema.mutable(Schema.Array(value));
+const text = (limit: number) =>
+  Schema.String.check(
+    Schema.makeFilter(
+      (value) =>
+        value.isWellFormed() &&
+        !value.includes('\0') &&
+        new TextEncoder().encode(value).length <= limit,
+    ),
+  );
+const pending = Schema.Union([
+  struct({
+    operation: Schema.Literal('createChat'),
+    input: chatInputSchemas.createChat,
+    message: text(1024),
+  }),
+  struct({
+    operation: Schema.Literal('sendChat'),
+    input: chatInputSchemas.sendChat,
+    message: text(1024),
+  }),
+  struct({
+    operation: Schema.Literal('stopChat'),
+    input: chatInputSchemas.stopChat,
+    message: text(1024),
+  }),
+]);
+const SavedSchema = struct({
+  version: Schema.Literal(1),
+  session: ChatSessionSchema,
+  selected: Schema.NullOr(ChatTargetSchema),
+  drafts: array(struct({ target: ChatTargetSchema, text: text(32768) })).check(
+    Schema.isMaxLength(32),
+  ),
+  pending: array(pending).check(Schema.isMaxLength(16)),
+});
+export type Saved = typeof SavedSchema.Type;
+export type Pending = typeof pending.Type;
+export const sameSession = (a: ChatSession, b: ChatSession) =>
+  a.host.hostId === b.host.hostId && a.host.storeId === b.host.storeId && a.actorId === b.actorId;
+export const sameTarget = (a: ChatTarget | null, b: ChatTarget | null) =>
+  a === b || (!!a && !!b && sameSession(a, b) && a.conversationId === b.conversationId);
+const decode = Schema.decodeUnknownSync(SavedSchema, {
+  onExcessProperty: 'error',
+  reportInput: false,
+});
+export function decodeSaved(value: unknown, context: ChatSession): Saved {
+  try {
+    const saved = decode(value);
+    if (
+      !sameSession(saved.session, context) ||
+      (saved.selected && !sameSession(saved.selected, context))
+    )
+      throw Error();
+    const drafts = new Set<string>(),
+      requests = new Set<string>();
+    for (const draft of saved.drafts) {
+      if (!sameSession(draft.target, context) || drafts.has(draft.target.conversationId))
+        throw Error();
+      drafts.add(draft.target.conversationId);
+    }
+    for (const item of saved.pending) {
+      let session: ChatSession;
+      if (item.operation === 'createChat') session = item.input.session;
+      else if (item.operation === 'sendChat') session = item.input.target;
+      else session = item.input.stop.target;
+      if (!sameSession(session, context) || requests.has(item.input.requestId)) throw Error();
+      requests.add(item.input.requestId);
+    }
+    return saved;
+  } catch {
+    throw new ApplicationError({
+      code: 'Persistence',
+      message:
+        'Saved drafts have an incompatible context or format. Preserve the existing chat data; use its original host/store/actor.',
+    });
+  }
+}

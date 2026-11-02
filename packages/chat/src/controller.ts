@@ -1,8 +1,16 @@
-import { ApplicationError } from '@moonbase/application/client';
+import { Cause, Deferred, Effect, Exit, Fiber, Scope, type ManagedRuntime } from 'effect';
+import { ApplicationError, type ObservationClose } from '@moonbase/application/client';
+import {
+  normalizeApplicationError,
+  runApplicationEffect,
+} from '@moonbase/application/effect-client';
+import { decodeChatInput } from '@moonbase/application/chat-schema';
 import type {
   ChatClient,
-  ChatHostConfiguration,
+  ChatCommand,
   ChatInput,
+  ChatOutput,
+  ChatHostConfiguration,
   ChatSession,
   ChatSnapshot,
   ChatSummary,
@@ -11,19 +19,9 @@ import type {
   ChatEntry,
 } from '@moonbase/application/chat-client';
 import type { ConnectionClient, ConnectionSnapshot } from '@moonbase/application/connection-client';
+import { decodeSaved, sameSession, sameTarget, type Saved, type Pending } from './saved.ts';
+export type { Pending } from './saved.ts';
 
-export type Pending = (
-  | { operation: 'createChat'; input: ChatInput<'createChat'> }
-  | { operation: 'sendChat'; input: ChatInput<'sendChat'> }
-  | { operation: 'stopChat'; input: ChatInput<'stopChat'> }
-) & { message: string };
-type Saved = {
-  version: 1;
-  session: ChatSession;
-  selected: ChatTarget | null;
-  drafts: { target: ChatTarget; text: string }[];
-  pending: Pending[];
-};
 export interface DraftStorage {
   read(): string | null;
   write(value: string): void;
@@ -44,161 +42,83 @@ export type ChatState = {
   storageError: string | null;
   notice: string;
 };
-const sameHost = (a: ChatSession['host'], b: ChatSession['host']) =>
-  a.hostId === b.hostId && a.storeId === b.storeId;
-const sameSession = (a: ChatSession, b: ChatSession) =>
-  sameHost(a.host, b.host) && a.actorId === b.actorId;
-const sameTarget = (a: ChatTarget | null, b: ChatTarget | null) =>
-  a === b || (!!a && !!b && sameSession(a, b) && a.conversationId === b.conversationId);
+export type ChatDependencies = {
+  chat: ChatClient;
+  connection: ConnectionClient;
+  context: ChatSession;
+  storage: DraftStorage;
+  newId?: () => string;
+};
+type Owner = {
+  scope: Scope.Closeable;
+  alive: boolean;
+  observations: Set<Observation>;
+  completion?: Promise<void>;
+};
+type Observation = {
+  ready: Deferred.Deferred<ObservationClose>;
+  outcome?: Promise<Exit.Exit<void>>;
+};
+const bytes = (value: string) => new TextEncoder().encode(value).length;
+const text = (value: string, limit: number) =>
+  value.isWellFormed() && !value.includes('\0') && bytes(value) <= limit;
 const sameStop = (a: ChatStopTarget, b: ChatStopTarget) =>
   sameTarget(a.target, b.target) && a.submissionId === b.submissionId && a.taskId === b.taskId;
-const bytes = (s: string) => new TextEncoder().encode(s).length;
-const text = (s: unknown, limit: number): s is string =>
-  typeof s === 'string' && s.isWellFormed() && !s.includes('\0') && bytes(s) <= limit;
-const id = (s: unknown): s is string => typeof s === 'string' && /^[A-Za-z0-9._:-]{1,256}$/.test(s);
-const object = (v: unknown): v is Record<string, unknown> =>
-  !!v && typeof v === 'object' && !Array.isArray(v);
-const exact = (v: Record<string, unknown>, fields: string[]) =>
-  Object.keys(v).length === fields.length && fields.every((k) => Object.hasOwn(v, k));
-function host(v: unknown): v is ChatSession['host'] {
-  return object(v) && exact(v, ['hostId', 'storeId']) && id(v.hostId) && id(v.storeId);
-}
-function session(v: unknown): v is ChatSession {
-  return object(v) && exact(v, ['host', 'actorId']) && host(v.host) && id(v.actorId);
-}
-function target(v: unknown, s: ChatSession): v is ChatTarget {
-  return (
-    object(v) &&
-    exact(v, ['host', 'actorId', 'conversationId']) &&
-    host(v.host) &&
-    sameHost(v.host, s.host) &&
-    v.actorId === s.actorId &&
-    id(v.conversationId)
-  );
-}
-function validate(v: unknown, s: ChatSession): asserts v is Saved {
-  if (
-    !object(v) ||
-    !exact(v, ['version', 'session', 'selected', 'drafts', 'pending']) ||
-    v.version !== 1 ||
-    !session(v.session) ||
-    !sameSession(v.session, s) ||
-    (v.selected !== null && !target(v.selected, s)) ||
-    !Array.isArray(v.drafts) ||
-    v.drafts.length > 32 ||
-    !Array.isArray(v.pending) ||
-    v.pending.length > 16
-  )
-    throw Error(
-      'Saved drafts have an incompatible context or format. Preserve the existing chat data; use its original host/store/actor.',
-    );
-  const drafts = new Set<string>(),
-    requests = new Set<string>();
-  for (const d of v.drafts) {
-    if (
-      !object(d) ||
-      !exact(d, ['target', 'text']) ||
-      !target(d.target, s) ||
-      !text(d.text, 32768) ||
-      drafts.has(JSON.stringify(d.target))
-    )
-      throw Error('Saved draft is invalid. Preserve the existing data for recovery.');
-    drafts.add(JSON.stringify(d.target));
-  }
-  for (const p of v.pending) {
-    if (
-      !object(p) ||
-      !exact(p, ['operation', 'input', 'message']) ||
-      !object(p.input) ||
-      !id(p.input.requestId) ||
-      !text(p.message, 1024) ||
-      requests.has(p.input.requestId)
-    )
-      throw Error('Saved pending identity is invalid. Preserve the existing data for recovery.');
-    requests.add(p.input.requestId);
-    const i = p.input;
-    if (
-      p.operation === 'createChat' &&
-      exact(i, ['session', 'requestId', 'title']) &&
-      session(i.session) &&
-      sameSession(i.session, s) &&
-      text(i.title, 200) &&
-      i.title.trim()
-    )
-      continue;
-    if (
-      p.operation === 'sendChat' &&
-      exact(i, ['target', 'requestId', 'text']) &&
-      target(i.target, s) &&
-      text(i.text, 32768) &&
-      i.text.trim()
-    )
-      continue;
-    if (
-      p.operation === 'stopChat' &&
-      exact(i, ['stop', 'requestId']) &&
-      object(i.stop) &&
-      exact(i.stop, ['target', 'submissionId', 'taskId']) &&
-      target(i.stop.target, s) &&
-      id(i.stop.submissionId) &&
-      (i.stop.taskId === null || id(i.stop.taskId))
-    )
-      continue;
-    throw Error('Saved pending command is invalid. Preserve the existing data for recovery.');
-  }
-}
-/** Ordinary browser state only: drafts/immutable command inputs, never execution or transcript authority. */
-export class ChatController {
+const invalid = (message: string) => new ApplicationError({ code: 'InvalidInput', message });
+
+class ChatModelState {
   private saved: Saved;
   private raw: string | null = null;
   private state: ChatState;
   private listeners = new Set<() => void>();
-  private stopConnection?: () => void;
-  private stopChat?: () => void;
+  private scope: Scope.Closeable;
+  private attachment?: Owner;
+  private detaching?: Promise<void>;
+  private generation?: Owner;
+  private selection?: Owner & { target: ChatTarget };
+  private refreshOwner?: Owner;
+  private observations = new Set<Observation>();
   private epoch = 0;
   private closed = false;
-  private attached = false;
-  private inFlight = new Set<string>();
-  readonly chat: ChatClient;
-  readonly connection: ConnectionClient;
-  readonly context: ChatSession;
+  private actions = new Map<string, number>();
+  private cleanup?: Promise<void>;
+  private releasing = false;
+  private released = Deferred.makeUnsafe<Exit.Exit<void>>();
+  private runEffect!: <A>(effect: Effect.Effect<A, ApplicationError>) => Promise<A>;
+  private bound = false;
+  private readonly chat: ChatClient;
+  private readonly connection: ConnectionClient;
+  private readonly context: ChatSession;
   private storage: DraftStorage;
   private newId: () => string;
-  constructor(
-    chat: ChatClient,
-    connection: ConnectionClient,
-    context: ChatSession,
-    storage: DraftStorage,
-    newId: () => string = () => crypto.randomUUID(),
-  ) {
-    this.chat = chat;
-    this.connection = connection;
-    this.context = structuredClone(context);
-    this.storage = storage;
-    this.newId = newId;
-    if (!session(context)) throw Error('Configure an exact host, store and actor.');
+
+  constructor(scope: Scope.Closeable, dependencies: ChatDependencies) {
+    this.scope = scope;
+    this.chat = dependencies.chat;
+    this.connection = dependencies.connection;
+    this.context = structuredClone(
+      decodeChatInput('listChats', { session: dependencies.context }).session,
+    );
+    this.storage = dependencies.storage;
+    this.newId = dependencies.newId ?? (() => crypto.randomUUID());
     this.saved = {
       version: 1,
-      session: structuredClone(context),
+      session: structuredClone(this.context),
       selected: null,
       drafts: [],
       pending: [],
     };
     let storageError: string | null = null;
     try {
-      this.raw = storage.read();
+      this.raw = this.storage.read();
       if (this.raw !== null) {
         if (bytes(this.raw) > 2 * 1024 * 1024)
-          throw Error('Saved chat data exceeds its bound. Preserve it for recovery.');
-        const v: unknown = JSON.parse(this.raw);
-        validate(v, context);
-        this.saved = v;
+          throw invalid('Saved chat data exceeds its bound. Preserve it for recovery.');
+        this.saved = decodeSaved(JSON.parse(this.raw), this.context);
       }
-    } catch (e) {
+    } catch {
       storageError =
-        e instanceof Error
-          ? e.message
-          : 'Draft storage is unavailable. No new command will be sent.';
+        'Saved chat data or storage is unavailable. Preserve the original data; no new mutation can start.';
     }
     this.state = {
       connection: null,
@@ -217,8 +137,15 @@ export class ChatController {
       notice: 'Disconnected. Connect explicitly; reconnect never resends a message.',
     };
   }
+  bind<R, E extends ApplicationError>(runtime: ManagedRuntime.ManagedRuntime<R, E>) {
+    if (this.bound) throw invalid('Chat model already bound.');
+    this.bound = true;
+    this.runEffect = (effect) => runApplicationEffect(runtime, effect);
+    return this;
+  }
   getSnapshot = () => this.state;
   subscribe = (listener: () => void) => {
+    if (this.closed) return () => {};
     this.listeners.add(listener);
     return () => {
       this.listeners.delete(listener);
@@ -227,20 +154,21 @@ export class ChatController {
   private update(change: Partial<ChatState>) {
     if (this.closed) return;
     this.state = { ...this.state, ...change };
-    for (const f of this.listeners) f();
+    for (const listener of this.listeners) listener();
   }
   private draft() {
-    return this.saved.drafts.find((d) => sameTarget(d.target, this.saved.selected))?.text ?? '';
+    return (
+      this.saved.drafts.find((draft) => sameTarget(draft.target, this.saved.selected))?.text ?? ''
+    );
   }
   private commit(next: Saved) {
-    if (this.state.storageError) throw Error(this.state.storageError);
-    validate(next, this.context);
+    if (this.closed) throw invalid('Chat model disposed.');
+    if (this.state.storageError)
+      throw new ApplicationError({ code: 'Persistence', message: this.state.storageError });
+    decodeSaved(next, this.context);
     const raw = JSON.stringify(next);
     try {
-      if (this.storage.read() !== this.raw)
-        throw Error(
-          'Draft storage changed in another client. Reload to preserve both versions before sending.',
-        );
+      if (this.storage.read() !== this.raw) throw Error();
       this.storage.write(raw);
       this.raw = raw;
       this.saved = next;
@@ -250,65 +178,191 @@ export class ChatController {
         storageError:
           'Draft preservation failed or another client changed it. Keep this window open; no new mutation can start.',
       });
-      throw Error('Draft preservation failed.');
+      throw new ApplicationError({ code: 'Persistence', message: 'Draft preservation failed.' });
     }
   }
-  private error(e: unknown) {
-    const f = ApplicationError.fromUnknown(e);
-    this.update({ error: `${f.code}: ${f.message}` });
+  private error = (error: unknown) => {
+    const failure = normalizeApplicationError(error);
+    this.update({ error: `${failure.code}: ${failure.message}` });
+  };
+  private owner(parent?: Owner): Owner {
+    let alive = true;
+    return {
+      scope: Scope.forkUnsafe(parent?.scope ?? this.scope),
+      get alive() {
+        return alive && (parent?.alive ?? true);
+      },
+      set alive(value) {
+        alive = value;
+      },
+      observations: new Set(),
+    };
   }
-  private async action(name: string, f: () => Promise<void>) {
-    if (this.inFlight.has(name) || this.closed) return;
-    this.inFlight.add(name);
-    this.update({ active: [...this.inFlight], error: null });
-    try {
-      await f();
-    } catch (e) {
-      this.error(e);
-    } finally {
-      this.inFlight.delete(name);
-      this.update({ active: [...this.inFlight] });
+  private closeObservation(observation: Observation): Promise<Exit.Exit<void>> {
+    return (observation.outcome ??= this.runEffect(
+      Effect.exit(
+        Effect.flatMap(Deferred.await(observation.ready), (close) => Effect.promise(close)),
+      ).pipe(Effect.uninterruptible),
+    ).then(
+      (exit) => {
+        if (Exit.isSuccess(exit)) this.observations.delete(observation);
+        return exit;
+      },
+      (error) => Exit.die(error),
+    ));
+  }
+  private observe(
+    owner: Owner,
+    acquire: () => ObservationClose,
+  ): Effect.Effect<void, ApplicationError> {
+    return Effect.gen({ self: this }, function* () {
+      if (!owner.alive || this.closed) return;
+      // A synchronous watch callback can reenter disposal before acquisition returns.
+      const observation: Observation = { ready: Deferred.makeUnsafe() };
+      this.observations.add(observation);
+      owner.observations.add(observation);
+      const acquired = yield* Effect.exit(
+        Effect.try({ try: acquire, catch: normalizeApplicationError }),
+      );
+      yield* Deferred.succeed(
+        observation.ready,
+        Exit.isSuccess(acquired) ? acquired.value : async () => {},
+      );
+      yield* Scope.addFinalizer(
+        owner.scope,
+        Effect.flatMap(
+          Effect.promise(() => this.closeObservation(observation)),
+          (exit) => exit,
+        ),
+      );
+      if (Exit.isFailure(acquired)) yield* acquired;
+    }).pipe(Effect.uninterruptible);
+  }
+  private closeOwner(owner?: Owner): Promise<void> {
+    if (!owner) return Promise.resolve();
+    if (!owner.completion) {
+      owner.alive = false;
+      for (const observation of owner.observations) this.closeObservation(observation);
+      owner.completion = this.runEffect(
+        Scope.close(owner.scope, Exit.void).pipe(Effect.uninterruptible),
+      );
+      void owner.completion.catch(this.error);
     }
+    return owner.completion;
   }
-  async start() {
-    if (this.stopConnection || this.closed) return;
-    this.attached = true;
-    this.stopConnection = this.connection.watch(
-      (s) => this.onConnection(s),
-      (e) => this.error(e),
-    );
-    await this.action('status', async () =>
-      this.onConnection(await this.connection.command('getConnection', {})),
-    );
-    if (this.state.connection?.state === 'connected' && !this.state.host) await this.refresh();
+  private call<K extends ChatCommand>(
+    operation: K,
+    input: ChatInput<K>,
+  ): Effect.Effect<ChatOutput<K>, ApplicationError> {
+    return Effect.tryPromise({
+      try: (signal) => this.chat.command(operation, input, { signal }),
+      catch: normalizeApplicationError,
+    });
   }
-  private onConnection(s: ConnectionSnapshot) {
-    if (!this.attached || this.closed) return;
+  private action(
+    name: string,
+    work: Effect.Effect<void, ApplicationError>,
+    owner?: Owner,
+    duplicate = true,
+    current: () => boolean = () => true,
+  ): Promise<void> {
+    if (this.closed || (owner && !owner.alive) || (duplicate && this.actions.has(name)))
+      return Promise.resolve();
+    this.actions.set(name, (this.actions.get(name) ?? 0) + 1);
+    this.update({ active: [...this.actions.keys()], error: null });
+    return this.runEffect(
+      Effect.flatMap(
+        Effect.forkIn(work, owner?.scope ?? this.scope, { startImmediately: true }),
+        Fiber.join,
+      ),
+    )
+      .catch((error) => {
+        if ((!owner || owner.alive) && current()) this.error(error);
+      })
+      .finally(() => {
+        const count = this.actions.get(name)! - 1;
+        if (count) this.actions.set(name, count);
+        else this.actions.delete(name);
+        this.update({ active: [...this.actions.keys()] });
+      });
+  }
+  start(): Promise<void> {
+    if (this.attachment?.alive || this.closed) return Promise.resolve();
+    const owner = (this.attachment = this.owner());
+    return this.action(
+      'status',
+      Effect.gen({ self: this }, function* () {
+        yield* this.observe(owner, () =>
+          this.connection.watch(
+            (state) => {
+              if (owner.alive) this.onConnection(state);
+            },
+            (error) => {
+              if (owner.alive) this.error(error);
+            },
+          ),
+        );
+        const state = yield* Effect.tryPromise({
+          try: (signal) => this.connection.command('getConnection', {}, { signal }),
+          catch: normalizeApplicationError,
+        });
+        if (owner.alive) this.onConnection(state);
+      }),
+      owner,
+      false,
+    ).then(async () => {
+      if (owner.alive && this.state.connection?.state === 'connected' && !this.state.host)
+        await this.refresh();
+    });
+  }
+  private onConnection(state: ConnectionSnapshot) {
+    if (!this.attachment?.alive || this.closed) return;
     const previous = this.state.connection;
-    const changed = previous?.connectionId !== s.connectionId || previous?.state !== s.state;
-    this.update({ connection: s });
-    if (changed) {
-      this.epoch++;
-      this.stopChat?.();
-      this.stopChat = undefined;
-      this.update({ snapshot: null, older: [], olderCursor: null, host: null });
-      if (s.state === 'connected') void this.refresh();
-    }
+    const changed =
+      previous?.connectionId !== state.connectionId ||
+      previous?.state !== state.state ||
+      (state.state === 'connected' && !this.generation?.alive);
+    this.update({ connection: state });
+    if (!changed) return;
+    this.epoch++;
+    void this.closeOwner(this.generation);
+    this.generation = state.state === 'connected' ? this.owner(this.attachment) : undefined;
+    this.selection = undefined;
+    this.refreshOwner = undefined;
+    this.update({ snapshot: null, older: [], olderCursor: null, host: null });
+    if (state.state === 'connected') void this.refresh();
   }
   connect = () =>
-    this.action('connect', async () => {
-      const s = this.state.connection;
-      if (!s) return;
-      this.onConnection(await this.connection.command('connect', { profileId: s.profile.id }));
-    });
+    this.action(
+      'connect',
+      Effect.gen({ self: this }, function* () {
+        const state = this.state.connection;
+        if (!state) return;
+        const connected = yield* Effect.tryPromise({
+          try: (signal) =>
+            this.connection.command('connect', { profileId: state.profile.id }, { signal }),
+          catch: normalizeApplicationError,
+        });
+        this.onConnection(connected);
+      }),
+    );
   disconnect = () =>
-    this.action('disconnect', async () => {
-      const id = this.state.connection?.connectionId;
-      if (id) {
-        await this.connection.command('disconnect', { connectionId: id });
-        this.onConnection(await this.connection.command('getConnection', {}));
-      }
-    });
+    this.action(
+      'disconnect',
+      Effect.gen({ self: this }, function* () {
+        const id = this.state.connection?.connectionId;
+        if (!id) return;
+        yield* Effect.tryPromise({
+          try: (signal) => this.connection.command('disconnect', { connectionId: id }, { signal }),
+          catch: normalizeApplicationError,
+        });
+        const state = yield* Effect.tryPromise({
+          try: (signal) => this.connection.command('getConnection', {}, { signal }),
+          catch: normalizeApplicationError,
+        });
+        this.onConnection(state);
+      }),
+    );
   private connected() {
     if (this.state.connection?.state !== 'connected')
       throw new ApplicationError({
@@ -317,290 +371,385 @@ export class ChatController {
       });
     return this.epoch;
   }
-  refresh = async (): Promise<void> => {
-    const generation = this.epoch;
-    await this.action('refresh', async () => {
-      const epoch = this.connected();
-      const host = await this.chat.command('getChatHost', { host: this.context.host });
-      if (!sameSession(host, this.context))
-        throw new ApplicationError({
-          code: 'Incompatible',
-          message: 'Host actor does not match the configured chat context.',
+  refresh = (): Promise<void> => {
+    if (!this.generation?.alive)
+      return this.action(
+        'refresh',
+        Effect.sync(() => {
+          this.connected();
+        }),
+      );
+    void this.closeOwner(this.refreshOwner);
+    const owner = (this.refreshOwner = this.owner(this.generation));
+    const epoch = this.epoch;
+    return this.action(
+      'refresh',
+      Effect.gen({ self: this }, function* () {
+        const host = yield* this.call('getChatHost', { host: this.context.host });
+        if (!sameSession(host, this.context))
+          throw new ApplicationError({
+            code: 'Incompatible',
+            message: 'Host actor does not match the configured chat context.',
+          });
+        const page = yield* this.call('listChats', { session: this.context });
+        if (!owner.alive || epoch !== this.epoch) return;
+        this.update({
+          host,
+          chats: page.conversations,
+          nextChats: page.nextCursor,
+          notice: 'Verified host. Reconnection reads saved state; it does not send.',
         });
-      const page = await this.chat.command('listChats', { session: this.context });
-      if (epoch !== this.epoch || this.closed) return;
-      this.update({
-        host,
-        chats: page.conversations,
-        nextChats: page.nextCursor,
-        notice: 'Verified host. Reconnection reads saved state; it does not send.',
-      });
-      if (this.saved.selected) await this.observe(this.saved.selected, epoch);
-      for (const p of this.saved.pending)
-        if (p.operation === 'sendChat') await this.query(p.input.requestId);
-    });
-    // An obsolete read must not consume the refresh needed by a resumed or selected view.
-    if (
-      generation !== this.epoch &&
-      this.attached &&
-      !this.closed &&
-      this.state.connection?.state === 'connected'
-    )
-      await this.refresh();
+        if (this.saved.selected && !this.selection?.alive)
+          yield* this.openSelected(this.saved.selected);
+        for (const pending of this.saved.pending)
+          if (pending.operation === 'sendChat') yield* this.queryPending(pending);
+      }),
+      owner,
+      false,
+    );
   };
-  moreChats = () =>
-    this.action('chats', async () => {
-      const epoch = this.connected(),
-        cursor = this.state.nextChats;
-      if (!cursor) return;
-      const p = await this.chat.command('listChats', { session: this.context, cursor });
-      if (epoch === this.epoch) this.update({ chats: p.conversations, nextChats: p.nextCursor });
-    });
+  moreChats = () => {
+    const owner = this.generation;
+    return this.action(
+      'chats',
+      Effect.gen({ self: this }, function* () {
+        const epoch = this.connected(),
+          cursor = this.state.nextChats;
+        if (!cursor) return;
+        const page = yield* this.call('listChats', { session: this.context, cursor });
+        if (owner?.alive && epoch === this.epoch)
+          this.update({ chats: page.conversations, nextChats: page.nextCursor });
+      }),
+      owner,
+    );
+  };
   firstChats = () => this.refresh();
   setDraft(value: string) {
+    if (this.closed) return;
     if (!text(value, 32768)) {
       this.update({ error: 'Message must contain valid Unicode and at most 32 KiB.' });
       return;
     }
     const target = this.saved.selected;
     if (!target) return;
-    // Retain a live edit if persistence fails; admission remains blocked until preserved.
     this.update({ draft: value });
     try {
       const next = structuredClone(this.saved);
-      if (!value) next.drafts = next.drafts.filter((d) => !sameTarget(d.target, target));
+      if (!value) next.drafts = next.drafts.filter((draft) => !sameTarget(draft.target, target));
       else {
-        const entry = next.drafts.find((d) => sameTarget(d.target, target));
+        const entry = next.drafts.find((draft) => sameTarget(draft.target, target));
         if (entry) entry.text = value;
         else next.drafts.push({ target, text: value });
       }
       this.commit(next);
-    } catch (e) {
+    } catch (error) {
       this.update({
         storageError:
           this.state.storageError ??
           'This live edit could not be preserved within the draft bound. Copy it before closing; mutations and Quit are blocked.',
       });
-      this.error(e);
+      this.error(error);
     }
   }
-  select = (target: ChatTarget) =>
-    this.action('open', async () => {
-      if (
-        !target ||
-        !sameHost(target.host, this.context.host) ||
-        target.actorId !== this.context.actorId
-      )
-        throw Error('Chat belongs to another context.');
+  select = (target: ChatTarget): Promise<void> => {
+    if (this.closed) return Promise.resolve();
+    try {
+      const captured = decodeChatInput('getChat', { target }).target;
+      if (!sameSession(captured, this.context)) throw invalid('Chat belongs to another context.');
       const next = structuredClone(this.saved);
-      next.selected = target;
+      next.selected = captured;
       this.commit(next);
       this.connected();
-      await this.observe(target, ++this.epoch);
-    });
-  closeView() {
-    this.epoch++;
-    this.stopChat?.();
-    this.stopChat = undefined;
+      this.epoch++;
+      void this.closeOwner(this.selection);
+      this.selection = undefined;
+      // A selection supersedes an old list read without suppressing the new view's refresh.
+      if (this.refreshOwner?.alive && this.actions.has('refresh')) void this.refresh();
+      const epoch = this.epoch;
+      return this.action(
+        'open',
+        this.openSelected(captured),
+        this.generation,
+        false,
+        () => epoch === this.epoch && sameTarget(this.saved.selected, captured),
+      );
+    } catch (error) {
+      this.error(error);
+      return Promise.resolve();
+    }
+  };
+  closeView(): Promise<void> {
+    if (this.closed) return Promise.resolve();
     try {
       this.commit({ ...structuredClone(this.saved), selected: null });
+      this.epoch++;
+      if (this.refreshOwner?.alive && this.actions.has('refresh')) void this.refresh();
+      const closing = this.closeOwner(this.selection);
+      this.selection = undefined;
       this.update({ snapshot: null, older: [], olderCursor: null });
-    } catch (e) {
-      this.error(e);
+      return closing;
+    } catch (error) {
+      this.error(error);
+      return Promise.resolve();
     }
   }
-  private async observe(target: ChatTarget, epoch: number) {
-    if (!this.attached || this.closed) return;
-    this.stopChat?.();
-    this.stopChat = undefined;
-    this.update({ snapshot: null, older: [], olderCursor: null });
-    let received = false;
-    const accept = (s: ChatSnapshot) => {
-      if (epoch === this.epoch && sameTarget(this.saved.selected, target) && !this.closed)
-        this.update({
-          snapshot: s,
-          ...(this.state.older.length ? {} : { olderCursor: s.olderCursor }),
-        });
-    };
-    // Register before the initial read; the service delivers replacement snapshots.
-    this.stopChat = this.chat.watch(
-      { target },
-      (s) => {
-        received = true;
-        accept(s);
-      },
-      (e) => {
-        if (epoch === this.epoch) this.error(e);
-      },
-    );
-    const s = await this.chat.command('getChat', { target });
-    if (!received) accept(s);
-  }
-  older = () =>
-    this.action('history', async () => {
-      const target = this.saved.selected,
-        cursor = this.state.olderCursor,
-        epoch = this.connected();
-      if (!target || !cursor) return;
-      const p = await this.chat.command('getChatHistory', { target, cursor });
-      if (epoch === this.epoch && sameTarget(target, this.saved.selected))
-        this.update({ older: p.entries, olderCursor: p.olderCursor });
+  private openSelected(target: ChatTarget): Effect.Effect<void, ApplicationError> {
+    return Effect.gen({ self: this }, function* () {
+      if (!this.attachment?.alive || !this.generation?.alive || this.closed) return;
+      if (this.selection?.alive && sameTarget(this.selection.target, target)) return;
+      void this.closeOwner(this.selection);
+      const owner = (this.selection = Object.assign(this.owner(this.generation), {
+        target: structuredClone(target),
+      }));
+      const epoch = this.epoch;
+      this.update({ snapshot: null, older: [], olderCursor: null });
+      let received = false;
+      const accept = (snapshot: ChatSnapshot) => {
+        if (
+          owner.alive &&
+          this.selection === owner &&
+          epoch === this.epoch &&
+          sameTarget(this.saved.selected, target)
+        )
+          this.update({
+            snapshot,
+            ...(this.state.older.length ? {} : { olderCursor: snapshot.olderCursor }),
+          });
+      };
+      const read = Effect.gen({ self: this }, function* () {
+        yield* this.observe(owner, () =>
+          this.chat.watch(
+            { target },
+            (snapshot) => {
+              received = true;
+              accept(snapshot);
+            },
+            (error) => {
+              if (owner.alive && this.selection === owner) this.error(error);
+            },
+          ),
+        );
+        const snapshot = yield* this.call('getChat', { target });
+        if (!received) accept(snapshot);
+      });
+      yield* Effect.flatMap(
+        Effect.forkIn(read, owner.scope, { startImmediately: true }),
+        Fiber.join,
+      );
     });
-  private reserve(p: Pending) {
+  }
+  older = () => {
+    const owner = this.selection;
+    return this.action(
+      'history',
+      Effect.gen({ self: this }, function* () {
+        const target = this.saved.selected,
+          cursor = this.state.olderCursor,
+          epoch = this.connected();
+        if (!target || !cursor) return;
+        const page = yield* this.call('getChatHistory', { target, cursor });
+        if (
+          owner?.alive &&
+          this.selection === owner &&
+          epoch === this.epoch &&
+          sameTarget(target, this.saved.selected)
+        )
+          this.update({ older: page.entries, olderCursor: page.olderCursor });
+      }),
+      owner,
+    );
+  };
+  private reserve(pending: Pending) {
     const next = structuredClone(this.saved);
     if (next.pending.length >= 16)
-      throw Error('Resolve an existing pending command before creating another.');
-    next.pending.push(p);
+      throw invalid('Resolve an existing pending command before creating another.');
+    next.pending.push(pending);
     this.commit(next);
   }
   create = (title: string) =>
-    this.action('create', async () => {
-      this.connected();
-      if (!text(title, 200) || !title.trim()) throw Error('Use a chat title of 1–200 UTF-8 bytes.');
-      const p: Pending = {
-        operation: 'createChat',
-        input: { session: structuredClone(this.context), requestId: this.newId(), title },
-        message: 'Outcome pending. Original creation identity retained.',
-      };
-      this.reserve(p);
-      await this.dispatch(p);
-    });
+    this.action(
+      'create',
+      Effect.gen({ self: this }, function* () {
+        this.connected();
+        if (!text(title, 200) || !title.trim())
+          throw invalid('Use a chat title of 1–200 UTF-8 bytes.');
+        const pending: Pending = {
+          operation: 'createChat',
+          input: { session: structuredClone(this.context), requestId: this.newId(), title },
+          message: 'Outcome pending. Original creation identity retained.',
+        };
+        this.reserve(pending);
+        yield* this.dispatch(pending);
+      }),
+    );
   send = () =>
-    this.action('send', async () => {
-      this.connected();
-      const target = this.saved.selected,
-        value = this.state.draft;
-      if (!target || !text(value, 32768) || !value.trim())
-        throw Error('Write a message before sending.');
-      if (
-        this.saved.pending.some(
-          (p) => p.operation === 'sendChat' && sameTarget(p.input.target, target),
+    this.action(
+      'send',
+      Effect.gen({ self: this }, function* () {
+        this.connected();
+        const target = this.saved.selected,
+          value = this.state.draft;
+        if (!target || !text(value, 32768) || !value.trim())
+          throw invalid('Write a message before sending.');
+        if (
+          this.saved.pending.some(
+            (pending) =>
+              pending.operation === 'sendChat' && sameTarget(pending.input.target, target),
+          )
         )
-      )
-        throw Error('Resolve the retained Send before starting another in this chat.');
-      const p: Pending = {
-        operation: 'sendChat',
-        input: { target: structuredClone(target), requestId: this.newId(), text: value },
-        message: 'Outcome pending. Original Send identity and text retained.',
-      };
-      this.reserve(p);
-      await this.dispatch(p);
-    });
+          throw invalid('Resolve the retained Send before starting another in this chat.');
+        const pending: Pending = {
+          operation: 'sendChat',
+          input: { target: structuredClone(target), requestId: this.newId(), text: value },
+          message: 'Outcome pending. Original Send identity and text retained.',
+        };
+        this.reserve(pending);
+        yield* this.dispatch(pending);
+      }),
+    );
   stop = () =>
-    this.action('stop', async () => {
-      this.connected();
-      const stop = this.state.snapshot?.run?.stop;
-      if (!stop) return;
-      if (
-        this.saved.pending.some((p) => p.operation === 'stopChat' && sameStop(p.input.stop, stop))
-      )
-        throw Error('Resolve the captured Stop before requesting it again.');
-      const p: Pending = {
-        operation: 'stopChat',
-        input: { stop: structuredClone(stop), requestId: this.newId() },
-        message: 'Outcome pending. Exact submission/task retained.',
-      };
-      this.reserve(p);
-      await this.dispatch(p);
-    });
+    this.action(
+      'stop',
+      Effect.gen({ self: this }, function* () {
+        this.connected();
+        const stop = this.state.snapshot?.run?.stop;
+        if (!stop) return;
+        if (
+          this.saved.pending.some(
+            (pending) => pending.operation === 'stopChat' && sameStop(pending.input.stop, stop),
+          )
+        )
+          throw invalid('Resolve the captured Stop before requesting it again.');
+        const pending: Pending = {
+          operation: 'stopChat',
+          input: { stop: structuredClone(stop), requestId: this.newId() },
+          message: 'Outcome pending. Exact submission/task retained.',
+        };
+        this.reserve(pending);
+        yield* this.dispatch(pending);
+      }),
+    );
   retry = (id: string) =>
-    this.action(id, async () => {
-      this.connected();
-      const p = this.saved.pending.find((p) => p.input.requestId === id);
-      if (!p) return;
-      await this.queryPending(p);
-      if (this.saved.pending.some((q) => q.input.requestId === id)) await this.dispatch(p);
-    });
+    this.action(
+      id,
+      Effect.gen({ self: this }, function* () {
+        this.connected();
+        const pending = this.saved.pending.find((item) => item.input.requestId === id);
+        if (!pending) return;
+        yield* this.queryPending(pending);
+        if (this.saved.pending.some((item) => item.input.requestId === id))
+          yield* this.dispatch(pending);
+      }),
+    );
   query = (id: string) =>
-    this.action('query:' + id, async () => {
-      this.connected();
-      const p = this.saved.pending.find((p) => p.input.requestId === id);
-      if (p) await this.queryPending(p);
-    });
-  private async queryPending(p: Pending) {
-    if (p.operation === 'sendChat') {
-      const r = await this.chat.command('getChatSend', {
-        target: p.input.target,
-        requestId: p.input.requestId,
-      });
-      if (r?.admission === 'admitted') {
-        this.resolve(p);
-        this.update({ notice: 'Original Send admission recovered without resending.' });
-      } else
+    this.action(
+      'query:' + id,
+      Effect.gen({ self: this }, function* () {
+        this.connected();
+        const pending = this.saved.pending.find((item) => item.input.requestId === id);
+        if (pending) yield* this.queryPending(pending);
+      }),
+      this.generation,
+    );
+  private queryPending(pending: Pending): Effect.Effect<void, ApplicationError> {
+    return Effect.gen({ self: this }, function* () {
+      if (pending.operation === 'sendChat') {
+        const receipt = yield* this.call('getChatSend', {
+          target: pending.input.target,
+          requestId: pending.input.requestId,
+        });
+        if (receipt?.admission === 'admitted') {
+          this.resolve(pending);
+          this.update({ notice: 'Original Send admission recovered without resending.' });
+        } else
+          this.update({
+            notice:
+              'No confirmed admission. Keep the original ID; only an explicit matching retry may send.',
+          });
+      } else if (pending.operation === 'createChat') {
+        yield* this.call('listChats', { session: pending.input.session });
         this.update({
           notice:
-            'No confirmed admission. Keep the original ID; only an explicit matching retry may send.',
+            'Saved chats read. Creation identity cannot be proven by title; explicitly retry the original creation ID.',
         });
-    } else if (p.operation === 'createChat') {
-      await this.chat.command('listChats', { session: p.input.session });
-      this.update({
-        notice:
-          'Saved chats read. Creation identity cannot be proven by title; explicitly retry the original creation ID.',
-      });
-    } else {
-      await this.chat.command('getChat', { target: p.input.stop.target });
-      this.update({
-        notice:
-          'Current state read. The retained Stop still targets its original task; retry never adopts its successor.',
-      });
-    }
+      } else {
+        yield* this.call('getChat', { target: pending.input.stop.target });
+        this.update({
+          notice:
+            'Current state read. The retained Stop still targets its original task; retry never adopts its successor.',
+        });
+      }
+    });
   }
-  private resolve(p: Pending, conversation?: ChatSummary) {
+  private resolve(pending: Pending, conversation?: ChatSummary) {
     const next = structuredClone(this.saved);
-    next.pending = next.pending.filter((q) => q.input.requestId !== p.input.requestId);
-    if (p.operation === 'sendChat')
+    next.pending = next.pending.filter((item) => item.input.requestId !== pending.input.requestId);
+    if (pending.operation === 'sendChat')
       next.drafts = next.drafts.filter(
-        (d) => !sameTarget(d.target, p.input.target) || d.text !== p.input.text,
+        (draft) =>
+          !sameTarget(draft.target, pending.input.target) || draft.text !== pending.input.text,
       );
     if (conversation) next.selected = conversation.target;
     this.commit(next);
   }
-  private async dispatch(p: Pending) {
-    // A read-only reconciliation may await while another client replaces local preservation.
-    this.commit(structuredClone(this.saved));
-    try {
-      if (p.operation === 'createChat') {
-        const r = await this.chat.command(p.operation, p.input);
-        this.resolve(p, r.conversation);
+  private dispatch(pending: Pending): Effect.Effect<void, ApplicationError> {
+    return Effect.gen({ self: this }, function* () {
+      this.commit(structuredClone(this.saved));
+      if (pending.operation === 'createChat') {
+        const receipt = yield* this.call(pending.operation, pending.input);
+        this.resolve(pending, receipt.conversation);
         this.update({
           chats: [
-            r.conversation,
-            ...this.state.chats.filter((c) => !sameTarget(c.target, r.conversation.target)),
+            receipt.conversation,
+            ...this.state.chats.filter(
+              (chat) => !sameTarget(chat.target, receipt.conversation.target),
+            ),
           ].slice(0, 32),
         });
-        if (this.state.connection?.state === 'connected')
-          await this.observe(r.conversation.target, this.epoch);
-      } else if (p.operation === 'sendChat') {
-        const r = await this.chat.command(p.operation, p.input);
-        if (r.admission === 'admitted') this.resolve(p);
+        if (this.generation?.alive) {
+          const target = receipt.conversation.target;
+          void this.action('open', this.openSelected(target), this.generation, false, () =>
+            sameTarget(this.saved.selected, target),
+          );
+        }
+      } else if (pending.operation === 'sendChat') {
+        const receipt = yield* this.call(pending.operation, pending.input);
+        if (receipt.admission === 'admitted') this.resolve(pending);
         else
           this.note(
-            p,
+            pending,
             'Reserved; admission is unconfirmed. Query before an explicit matching retry.',
           );
       } else {
-        const r = await this.chat.command(p.operation, p.input);
-        if (r.outcome === 'pending')
-          this.note(p, 'Stop remains pending; cooperative cancellation is not confirmed.');
+        const receipt = yield* this.call(pending.operation, pending.input);
+        if (receipt.outcome === 'pending')
+          this.note(pending, 'Stop remains pending; cooperative cancellation is not confirmed.');
         else {
-          this.resolve(p);
-          this.update({ notice: `Captured Stop: ${r.outcome}.` });
+          this.resolve(pending);
+          this.update({ notice: `Captured Stop: ${receipt.outcome}.` });
         }
       }
-    } catch (e) {
-      const f = ApplicationError.fromUnknown(e);
-      this.note(p, `${f.code}: ${f.message}`.slice(0, 1000));
-      throw e;
-    }
+    }).pipe(
+      Effect.tapError((error) =>
+        Effect.sync(() => {
+          const message = `${error.code}: ${error.message}`;
+          this.note(
+            pending,
+            text(message, 1024) ? message : `${error.code}: Original command outcome retained.`,
+          );
+        }),
+      ),
+    );
   }
-  private note(p: Pending, message: string) {
+  private note(pending: Pending, message: string) {
+    if (this.closed) return;
     const next = structuredClone(this.saved),
-      entry = next.pending.find((q) => q.input.requestId === p.input.requestId);
-    if (entry) entry.message = message;
+      item = next.pending.find((item) => item.input.requestId === pending.input.requestId);
+    if (item) item.message = message;
     this.commit(next);
   }
   preserve() {
-    if (this.state.storageError) return false;
+    if (this.closed || this.state.storageError) return false;
     try {
       this.commit(structuredClone(this.saved));
       return true;
@@ -608,18 +757,97 @@ export class ChatController {
       return false;
     }
   }
-  detach() {
-    this.attached = false;
+  detach(): Promise<void> {
     this.epoch++;
-    this.stopConnection?.();
-    this.stopConnection = undefined;
-    this.stopChat?.();
-    this.stopChat = undefined;
+    const owner = this.attachment;
+    if (!owner) return this.detaching ?? Promise.resolve();
+    this.attachment = undefined;
+    this.generation = undefined;
+    this.selection = undefined;
+    this.refreshOwner = undefined;
     this.update({ snapshot: null, older: [], olderCursor: null, host: null });
+    return (this.detaching = this.closeOwner(owner));
   }
-  dispose() {
-    this.detach();
+  private beginDisposal() {
+    if (this.closed) return;
+    void this.detach();
     this.closed = true;
     this.listeners.clear();
   }
+  release(): Effect.Effect<void> {
+    return Effect.suspend(() => {
+      this.beginDisposal();
+      if (this.releasing) return Effect.flatMap(Deferred.await(this.released), (exit) => exit);
+      this.releasing = true;
+      // Detached scopes can already be closing; join their actual observation outcomes too.
+      return Effect.gen({ self: this }, function* () {
+        const exits = yield* Effect.all(
+          [
+            Effect.exit(Scope.close(this.scope, Exit.void)),
+            ...[...this.observations].map((observation) =>
+              Effect.promise(() => this.closeObservation(observation)),
+            ),
+          ],
+          { concurrency: 'unbounded' },
+        );
+        const cause = exits.reduce(
+          (cause, exit) => (Exit.isFailure(exit) ? Cause.combine(cause, exit.cause) : cause),
+          Cause.empty,
+        );
+        if (cause.reasons.length) yield* Effect.failCause(cause);
+      }).pipe(
+        Effect.exit,
+        Effect.flatMap((exit) =>
+          Deferred.succeed(this.released, exit).pipe(Effect.flatMap(() => exit)),
+        ),
+        Effect.uninterruptible,
+      );
+    });
+  }
+  dispose(): Promise<void> {
+    this.beginDisposal();
+    return (this.cleanup ??= this.runEffect(this.release()));
+  }
+}
+export type ChatModel = ChatModelState;
+export type ChatController = Pick<
+  ChatModelState,
+  | 'getSnapshot'
+  | 'subscribe'
+  | 'start'
+  | 'connect'
+  | 'disconnect'
+  | 'refresh'
+  | 'moreChats'
+  | 'firstChats'
+  | 'setDraft'
+  | 'select'
+  | 'closeView'
+  | 'older'
+  | 'create'
+  | 'send'
+  | 'stop'
+  | 'retry'
+  | 'query'
+  | 'preserve'
+  | 'detach'
+  | 'dispose'
+>;
+export const makeChatModel = (
+  dependencies: ChatDependencies,
+): Effect.Effect<ChatModel, ApplicationError, Scope.Scope> =>
+  Effect.gen(function* () {
+    const scope = yield* Scope.make();
+    const model = yield* Effect.try({
+      try: () => new ChatModelState(scope, dependencies),
+      catch: normalizeApplicationError,
+    });
+    yield* Effect.addFinalizer(() => model.release());
+    return model;
+  });
+export function makeChatController<R, E extends ApplicationError>(
+  runtime: ManagedRuntime.ManagedRuntime<R, E>,
+  model: ChatModel,
+): ChatController {
+  return model.bind(runtime);
 }

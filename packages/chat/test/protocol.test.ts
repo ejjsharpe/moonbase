@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ChatController, type DraftStorage } from '@moonbase/chat';
+import { type DraftStorage } from '@moonbase/chat';
+import { modelRoot } from './model-fixture.ts';
 import { fixture, until } from '../../../tests/chat/tool-fixture.ts';
 class Storage implements DraftStorage {
   value: string | null = null;
@@ -13,13 +14,22 @@ class Storage implements DraftStorage {
 }
 async function setup(t: { after: (f: () => Promise<void>) => void }, hold = false) {
   const f = await fixture(hold);
+  const models = modelRoot();
   t.after(async () => {
-    await f.close();
+    try {
+      await models.close();
+    } finally {
+      await f.close();
+    }
   });
   const root = f.root(),
     storage = new Storage(),
-    controller = new ChatController(root.chat, root.connection, f.session, storage);
-  t.after(async () => controller.dispose());
+    controller = await models.make({
+      chat: root.chat,
+      connection: root.connection,
+      context: f.session,
+      storage,
+    });
   await controller.start();
   await controller.connect();
   await until(
@@ -27,7 +37,7 @@ async function setup(t: { after: (f: () => Promise<void>) => void }, hold = fals
     (s) => !!s.host,
   );
   await controller.create('Production protocol chat');
-  return { ...f, clientRoot: root, controller, storage };
+  return { ...f, clientRoot: root, controller, storage, models };
 }
 test('public chat controller creates, lists, opens, streams real tool output and captures exact Stop through SSH/HTTP/Pi', async (t) => {
   const f = await setup(t, true);
@@ -52,7 +62,7 @@ test('public chat controller creates, lists, opens, streams real tool output and
     (s) => !s.run,
   );
   assert.equal((await f.stats()).tools, 1);
-  f.controller.closeView();
+  await f.controller.closeView();
   assert.equal(f.controller.getSnapshot().selected, null);
   await f.controller.select(target);
   assert.deepEqual(f.controller.getSnapshot().selected, target);
@@ -69,12 +79,16 @@ test('lost actual HTTP Send response + newer draft + controller reload/client cl
   assert.equal(pending.operation, 'sendChat');
   assert(pending.message.startsWith('Uncertain'));
   f.controller.setDraft('Newer unsent edit');
-  f.controller.dispose();
+  await f.controller.dispose();
   await f.clientRoot.runtime.dispose();
   await until(f.stats, (s) => s.tools === 1);
   const second = f.root(),
-    next = new ChatController(second.chat, second.connection, f.session, f.storage);
-  t.after(async () => next.dispose());
+    next = await f.models.make({
+      chat: second.chat,
+      connection: second.connection,
+      context: f.session,
+      storage: f.storage,
+    });
   await next.start();
   assert.equal(next.getSnapshot().pending[0].input.requestId, pending.input.requestId);
   await next.connect();
@@ -89,13 +103,17 @@ test('lost actual HTTP Send response + newer draft + controller reload/client cl
     () => second.chat.command('getChat', { target }),
     (s) => !s.run && s.entries.some((e) => e.text.includes('Remote response finished')),
   );
-  next.dispose();
+  await next.dispose();
   await second.runtime.dispose();
   await f.stopHost();
   await f.startHost();
   const third = f.root(),
-    last = new ChatController(third.chat, third.connection, f.session, f.storage);
-  t.after(async () => last.dispose());
+    last = await f.models.make({
+      chat: third.chat,
+      connection: third.connection,
+      context: f.session,
+      storage: f.storage,
+    });
   await last.start();
   await last.connect();
   await until(
@@ -125,7 +143,7 @@ test('view detach and Disconnect leave remote tool running; reopen queries same 
   f.controller.setDraft('Keep remote work');
   await f.controller.send();
   await until(f.stats, (s) => s.tools === 1);
-  f.controller.closeView();
+  await f.controller.closeView();
   await f.controller.disconnect();
   assert.equal(f.controller.getSnapshot().connection!.state, 'disconnected');
   assert.equal((await f.stats()).commands.filter((s) => s === 'stopChat').length, 0);
