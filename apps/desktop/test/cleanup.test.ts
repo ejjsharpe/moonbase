@@ -103,3 +103,53 @@ for (const fail of [false, true]) {
     await runtime.dispose();
   });
 }
+
+test('synchronous disposer throws stay owned, release acquisition scopes and make Quit fail safely', async () => {
+  const runtime = ManagedRuntime.make(Layer.empty),
+    aggregate = Scope.makeUnsafe('parallel');
+  const instance = Scope.forkUnsafe(aggregate, 'parallel');
+  let finalized = 0,
+    fenced = false;
+  runtime.runSync(
+    Scope.addFinalizer(
+      instance,
+      Effect.sync(() => {
+        finalized++;
+      }),
+    ),
+  );
+  const expected = new ApplicationError({
+    code: 'Persistence',
+    message: 'Synchronous model cleanup failed',
+  });
+  const release = releaseInstance(runtime, instance, () => {
+    throw expected;
+  });
+  await assert.rejects(release, { code: 'Persistence' });
+  assert.equal(finalized, 1);
+  const cleanup = new RendererCleanup(runtime, aggregate);
+  const close = cleanup.close('editor', () => {
+    fenced = true;
+    throw expected;
+  });
+  assert.equal(fenced, true);
+  assert.equal(
+    cleanup.close('editor', () => {
+      throw Error('must not repeat');
+    }),
+    close,
+  );
+  await assert.rejects(close, (error) => error === expected);
+  const privateSentinel = 'private-disposer-token-must-not-leak';
+  await assert.rejects(
+    cleanup.close('chat', () => {
+      throw Error(privateSentinel);
+    }),
+    (error) => ApplicationError.is(error) && !error.message.includes(privateSentinel),
+  );
+  await assert.rejects(cleanup.drain(), { code: 'Persistence' });
+  assert.equal(cleanup.getSnapshot().errors.length, 2);
+  assert.equal(cleanup.available('editor'), false);
+  await runApplicationEffect(runtime, Scope.close(aggregate, Exit.void));
+  await runtime.dispose();
+});

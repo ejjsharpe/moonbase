@@ -5,6 +5,14 @@ import {
   runApplicationEffect,
 } from '@moonbase/application/effect-client';
 
+function disposalOutcome(dispose: () => Promise<void>): Promise<ApplicationError | undefined> {
+  try {
+    return dispose().then(() => undefined, normalizeApplicationError);
+  } catch (error) {
+    return Promise.resolve(normalizeApplicationError(error));
+  }
+}
+
 type Task = { state: 'closing' | 'closed' | 'failed'; completion: Promise<void> };
 /** Application-owned cleanup survives removal of an individual model's panel/scope. */
 export class RendererCleanup {
@@ -58,7 +66,7 @@ export class RendererCleanup {
     const previous = this.tasks.get(namespace);
     if (previous) return previous.completion;
     // dispose fences model admissions synchronously, before the panel is removed.
-    const disposal = dispose().then(() => undefined, normalizeApplicationError);
+    const disposal = disposalOutcome(dispose);
     const task: Task = { state: 'closing', completion: Promise.resolve() };
     this.tasks.set(namespace, task);
     task.completion = runApplicationEffect(
@@ -108,11 +116,14 @@ export function releaseInstance(
   scope: Scope.Closeable,
   dispose: () => Promise<void>,
 ): Promise<void> {
-  const disposal = dispose();
+  const disposal = disposalOutcome(dispose);
   return (async () => {
     const failures: ApplicationError[] = [];
     for (const release of [
-      () => disposal,
+      async () => {
+        const error = await disposal;
+        if (error) throw error;
+      },
       () => runApplicationEffect(runtime, Scope.close(scope, Exit.void)),
     ]) {
       try {

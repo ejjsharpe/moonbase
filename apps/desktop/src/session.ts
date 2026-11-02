@@ -53,6 +53,7 @@ type Request = {
   complete: () => void;
   close?: Promise<void>;
   scope: Scope.Closeable;
+  cleanupError?: ApplicationError;
 };
 /** Authority belongs to this main-frame session, never to an arbitrary renderer root or caller ID. */
 export class EditorSession {
@@ -193,6 +194,7 @@ export class EditorSession {
             request.cancelled = true;
             await request.cancel();
             if (!request.watch) await request.completion;
+            if (request.cleanupError) throw request.cleanupError;
           }),
         ),
       );
@@ -259,13 +261,20 @@ export class EditorSession {
         );
         const capture = { checkout, clientId: this.clientId, references };
         // Install cleanup ownership before any successful capture is published to the renderer.
-        await runApplicationEffect(
-          this.runtime,
-          Scope.addFinalizer(
-            document,
-            Effect.promise(() => this.native.release(capture)),
-          ),
-        );
+        try {
+          await runApplicationEffect(
+            this.runtime,
+            Scope.addFinalizer(
+              document,
+              Effect.promise(() => this.native.release(capture)),
+            ),
+          );
+          if (generation === this.generation && !live()) await this.native.release(capture);
+        } catch (error) {
+          // A closed document executes this finalizer here; its root still owns any release failure.
+          reserved.cleanupError = normalizeApplicationError(error);
+          throw reserved.cleanupError;
+        }
         requireLive();
         value = references;
       } else if (method === 'watch') {

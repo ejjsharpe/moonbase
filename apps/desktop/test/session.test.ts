@@ -415,3 +415,98 @@ test('desktop errors redact unknown private diagnostics and reply envelopes rema
     code: 'Incompatible',
   });
 });
+
+test('late native capture release failure remains in document and session cleanup after the old reply is lost', async () => {
+  const captured = Promise.withResolvers<string[]>();
+  const client: EditorClient = {
+    command: async () =>
+      ({
+        revision: 0,
+        state: { ...emptyRecovery('desktop-primary'), checkouts: [target] },
+        operations: [],
+        errors: [],
+      }) as never,
+    watch: () => async () => {},
+  };
+  const owner = new EditorSession(
+    runtime,
+    client,
+    {
+      chooseCheckout: async () => null,
+      imports: () => captured.promise,
+      release: async () => {
+        throw new ApplicationError({ code: 'Persistence', message: 'Late capture release failed' });
+      },
+    },
+    () => {},
+  );
+  await owner.call(
+    'command',
+    { operation: 'loadRecovery', input: { clientId: owner.clientId } },
+    'load',
+  );
+  const oldReply = owner.call('choose-imports', { checkout: target }, 'capture');
+  const documentCleanup = owner.releaseDocument();
+  const documentOutcome = documentCleanup.then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  captured.resolve(['abandoned-token']);
+  const reply = await oldReply;
+  assert(!reply.ok);
+  assert.equal(reply.error.code, 'Persistence');
+  const error = await documentOutcome;
+  assert(ApplicationError.is(error));
+  assert.equal(error.code, 'Persistence');
+  await assert.rejects(owner.dispose(), { code: 'Persistence' });
+});
+
+test('cancelling native capture in a live document releases unpublished references before acknowledgment', async () => {
+  const captured = Promise.withResolvers<string[]>(),
+    releasing = Promise.withResolvers<void>(),
+    releaseGate = Promise.withResolvers<void>();
+  let attempts = 0;
+  const client: EditorClient = {
+    command: async () =>
+      ({
+        revision: 0,
+        state: { ...emptyRecovery('desktop-primary'), checkouts: [target] },
+        operations: [],
+        errors: [],
+      }) as never,
+    watch: () => async () => {},
+  };
+  const owner = new EditorSession(
+    runtime,
+    client,
+    {
+      chooseCheckout: async () => null,
+      imports: () => captured.promise,
+      release: async () => {
+        attempts++;
+        releasing.resolve();
+        await releaseGate.promise;
+      },
+    },
+    () => {},
+  );
+  await owner.call(
+    'command',
+    { operation: 'loadRecovery', input: { clientId: owner.clientId } },
+    'load',
+  );
+  const oldReply = owner.call('choose-imports', { checkout: target }, 'capture');
+  let done = false;
+  const acknowledgment = owner.cancel('capture');
+  void acknowledgment.then(() => {
+    done = true;
+  });
+  captured.resolve(['unpublished-token']);
+  await releasing.promise;
+  assert.equal(attempts, 1);
+  assert.equal(done, false);
+  releaseGate.resolve();
+  assert.equal((await oldReply).ok, false);
+  assert((await acknowledgment).ok);
+  await owner.dispose();
+});
