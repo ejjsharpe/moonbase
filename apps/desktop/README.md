@@ -11,11 +11,10 @@ From the repository root on macOS with pinned Node/Bun and Xcode command-line to
 ```sh
 bun install --frozen-lockfile
 node scripts/prepare-ripgrep.mjs
-MOONBASE_USER_DATA="$(mktemp -d -t moonbase-editor)" \
-  NX_DAEMON=false bunx nx run @moonbase/desktop:dev
+NX_DAEMON=false bunx nx run @moonbase/desktop:dev
 ```
 
-Development requires a fresh absolute `MOONBASE_USER_DATA` directory. The packaged default is the separate `Application Support/Moonbase` namespace; never use an old application's data directory. There is no legacy import. `dev` builds the static custom-scheme UI with production CSP/bridge; rebuild/relaunch after changes.
+From `apps/desktop`, run `bun dev`. Development creates and prints a fresh temporary user-data directory for each launch. To reuse development state, set `MOONBASE_USER_DATA` to an absolute directory dedicated to Moonbase development. The launcher leaves temporary data in place on exit for recovery; the OS may later remove it. The packaged default is the separate `Application Support/Moonbase` namespace; never use an old application's data directory. There is no legacy import. `dev` builds the static custom-scheme UI with production CSP/bridge; rebuild/relaunch after changes.
 
 ```sh
 NX_DAEMON=false bunx nx run @moonbase/desktop:build
