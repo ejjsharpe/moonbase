@@ -7,11 +7,11 @@ import {
   type EditorClient,
   type RecoveryLoad,
   type WorkspaceEvent,
-} from '@moonbase/application/client';
+} from '@moonbase/contracts/workspace';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
-import { makeEditorController, makeEditorModel } from '@moonbase/editor/state';
-import { memoryWorkspace } from '@moonbase/editor/memory';
-import { acquireEditor } from './model-fixture.ts';
+import { makeEditorController, makeEditorModel } from '@moonbase/application/editor';
+import { memoryWorkspace } from '@moonbase/application/testing/memory-workspace';
+import { acquireEditor } from './editor-model-fixture.ts';
 import { checkout, target } from './editor-fixture.ts';
 
 const gate = () => {

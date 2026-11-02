@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
-import type { EditorController } from '../src/editor.ts';
+import type { EditorController } from '@moonbase/application/editor';
 
 declare global {
   interface Window {

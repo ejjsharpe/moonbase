@@ -1,4 +1,4 @@
-import type { CheckoutTarget, EditorRecovery, FileTarget } from '@moonbase/application/client';
+import type { CheckoutTarget, EditorRecovery, FileTarget } from '@moonbase/contracts/workspace';
 import { readOwn } from './record.ts';
 
 export const checkoutKey = (target: CheckoutTarget) =>

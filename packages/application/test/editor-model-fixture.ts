@@ -1,5 +1,5 @@
 import { Effect, Exit, Scope, type ManagedRuntime } from 'effect';
-import type { ApplicationError } from '@moonbase/application/client';
+import type { ApplicationError } from '@moonbase/contracts/workspace';
 import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
 import {
   makeEditorController,
@@ -8,7 +8,7 @@ import {
   type EditorController,
   type EditorBuffer,
   type CloseChoice,
-} from '@moonbase/editor/state';
+} from '@moonbase/application/editor';
 
 /** A test composition owns its acquisition scope and injected runtime. */
 export async function acquireEditor<R, E extends ApplicationError>(

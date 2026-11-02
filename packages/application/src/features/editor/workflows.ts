@@ -1,4 +1,4 @@
-import { normalizeApplicationError } from '@moonbase/application/runtime/effect-client';
+import { normalizeApplicationError } from '../../runtime/effect-client.ts';
 import { Effect, Exit, Fiber, Scope } from 'effect';
 import {
   type ApplicationError,
@@ -8,7 +8,7 @@ import {
   type CommandOutput,
   type WorkspaceOperation,
   type OperationResult,
-} from '@moonbase/application/client';
+} from '@moonbase/contracts/workspace';
 import { fileKey } from './references.ts';
 
 type Run = <A>(effect: Effect.Effect<A, ApplicationError>) => Promise<A>;

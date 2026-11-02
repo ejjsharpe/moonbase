@@ -1,8 +1,8 @@
-import { acquireEditor } from './model-fixture.ts';
+import { acquireEditor } from './editor-model-fixture.ts';
 import { ManagedRuntime } from 'effect';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
-import { type CheckoutTarget } from '@moonbase/application/client';
-import { memoryWorkspace } from '@moonbase/editor/memory';
+import { type CheckoutTarget } from '@moonbase/contracts/workspace';
+import { memoryWorkspace } from '@moonbase/application/testing/memory-workspace';
 
 export const checkout: CheckoutTarget = {
   hostId: 'local',

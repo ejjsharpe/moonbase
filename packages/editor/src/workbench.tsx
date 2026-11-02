@@ -2,7 +2,6 @@ import { FileLookup } from './file-lookup.tsx';
 import { FilesTree } from './files-tree.tsx';
 import { Mutation, type Action } from './mutation.tsx';
 import { Popup } from './popup.tsx';
-import { readOwn } from './record.ts';
 import {
   forwardRef,
   useEffect,
@@ -22,8 +21,14 @@ import { controls } from '@moonbase/ui/controls';
 import { filesUI } from '@moonbase/ui/files';
 import { workbench } from '@moonbase/ui/workbench';
 import { overlays } from '@moonbase/ui/overlays';
-import type { CheckoutTarget, FileView } from '@moonbase/application/client';
-import { checkoutKey, fileKey, type CloseChoice, type EditorController } from './editor.ts';
+import type { CheckoutTarget, FileView } from '@moonbase/contracts/workspace';
+import {
+  checkoutKey,
+  fileKey,
+  readOwn,
+  type CloseChoice,
+  type EditorController,
+} from '@moonbase/application/editor';
 import { MonacoView } from './monaco-view.tsx';
 import { styles } from './styles.ts';
 

@@ -6,10 +6,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { Effect, Exit, ManagedRuntime, Scope } from 'effect';
-import { ApplicationError, emptyRecovery, type EditorClient } from '@moonbase/application/client';
+import { ApplicationError, emptyRecovery, type EditorClient } from '@moonbase/contracts/workspace';
 import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
-import { makeEditorModel, makeEditorController } from '@moonbase/editor/state';
+import { makeEditorModel, makeEditorController } from '@moonbase/application/editor';
 import { WorkspaceLive } from '@moonbase/workspace';
 
 const persistence = (error: unknown) => ApplicationError.is(error) && error.code === 'Persistence';
