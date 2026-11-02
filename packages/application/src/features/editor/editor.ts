@@ -1606,10 +1606,16 @@ class EditorModelState {
       if (!sameCheckout(source.target.checkout, operation.checkout))
         throw editorError('A file operation must use one exact checkout.');
     }
-    const replacementPaths = [
-      ...(operation.replacements ?? []).map((item) => item.target.path),
-      ...(operation.destination ? [operation.destination] : []),
-    ];
+    const replacementPaths = (operation.replacements ?? []).map((item) => item.target.path);
+    if (operation.destination) {
+      if (operation.sources.length > 1)
+        replacementPaths.push(
+          ...operation.sources.map(
+            (source) => `${operation.destination}/${source.target.path.split('/').at(-1)}`,
+          ),
+        );
+      else replacementPaths.push(operation.destination);
+    }
     if (
       [...this.buffers.values()].some(
         (buffer) =>

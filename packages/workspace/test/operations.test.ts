@@ -1,7 +1,17 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { randomUUID } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { userInfo } from 'node:os';
 import { join } from 'node:path';
 import { Effect, Layer, ManagedRuntime } from 'effect';
 import { TestClock } from 'effect/testing';
@@ -9,6 +19,66 @@ import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { emptyRecovery } from '@moonbase/contracts/workspace';
 import { WorkspaceLive, WorkspaceNative } from '../src/index.ts';
 import { quote, fixture, isError, waitFor } from './recovery-fixture.ts';
+
+for (const kind of ['copy', 'import'] as const)
+  test(`${kind} publishes a folder readable only through its source ACL`, async () => {
+    const f = fixture(),
+      { runtime, client } = f.start(),
+      source = join(kind === 'copy' ? f.root : f.base, 'source'),
+      destination = join(f.root, 'copied');
+    mkdirSync(join(source, 'nested'), { recursive: true });
+    writeFileSync(join(source, 'nested/file.txt'), 'copied bytes');
+    try {
+      for (const folder of [source, join(source, 'nested')]) {
+        execFileSync('/bin/chmod', [
+          '+a',
+          `user:${userInfo().username} allow list,search,readattr,readextattr,readsecurity`,
+          folder,
+        ]);
+        chmodSync(folder, 0);
+      }
+      const checkout = await client.command('openCheckout', { root: f.root });
+      const selection =
+        kind === 'copy'
+          ? { sources: await client.command('inspectEntries', { checkout, paths: ['source'] }) }
+          : {
+              sources: [],
+              nativeReferences: await runtime.runPromise(
+                Effect.flatMap(WorkspaceNative, (native) =>
+                  native.capture({ checkout, clientId: 'alice', paths: [source] }),
+                ),
+              ),
+            };
+      const result = await client.command('mutate', {
+        id: 'copy-acl',
+        clientId: 'alice',
+        checkout,
+        kind,
+        ...selection,
+        destination: 'copied',
+      });
+      assert.equal(result.outcome, 'completed', JSON.stringify(result));
+      assert.equal(statSync(destination).mode & 0o7777, 0);
+      chmodSync(destination, 0o700);
+      assert.equal(statSync(join(destination, 'nested')).mode & 0o7777, 0);
+      chmodSync(join(destination, 'nested'), 0o700);
+      assert.equal(readFileSync(join(destination, 'nested/file.txt'), 'utf8'), 'copied bytes');
+      assert(!readdirSync(f.root).some((name) => name.startsWith('.moonbase-copy-')));
+    } finally {
+      for (const path of [
+        source,
+        destination,
+        ...readdirSync(f.root)
+          .filter((name) => name.startsWith('.moonbase-copy-'))
+          .map((name) => join(f.root, name)),
+      ]) {
+        if (existsSync(path)) chmodSync(path, 0o700);
+        if (existsSync(join(path, 'nested'))) chmodSync(join(path, 'nested'), 0o700);
+      }
+      await runtime.dispose();
+      f.cleanup();
+    }
+  });
 
 for (const kind of ['copy', 'import'] as const)
   test(`${kind} preserves top-level and nested folder permissions after copying children`, async () => {

@@ -143,6 +143,9 @@ for (const kind of ['move', 'copy'] as const)
         if (source !== 'b.ts') renameSync(join(f.roots[0], 'b.ts'), join(f.roots[0], source));
         mkdirSync(join(f.roots[0], 'dest'));
         writeFileSync(join(f.roots[0], 'dest/unrelated.ts'), 'RETAIN\n');
+        const unrelated = { checkout, path: 'dest/unrelated.ts' };
+        await editor.open(unrelated, { intent: 'keep' });
+        editor.edit(unrelated, 'UNSAVED\n');
         if (collision) writeFileSync(join(f.roots[0], 'dest', collision), 'REPLACE\n');
         const workflow = editor.createMutation({ checkout, kind, paths: [source, 'folder'] });
         try {
@@ -163,6 +166,7 @@ for (const kind of ['move', 'copy'] as const)
           assert.equal(readFileSync(join(f.roots[0], 'dest', source), 'utf8'), 'B\n');
           assert.equal(readFileSync(join(f.roots[0], 'dest/folder/nested.ts'), 'utf8'), 'NESTED\n');
           assert.equal(readFileSync(join(f.roots[0], 'dest/unrelated.ts'), 'utf8'), 'RETAIN\n');
+          assert.equal(editor.buffer(unrelated)?.text, 'UNSAVED\n');
           const sources = await editor.list(checkout, '');
           assert.equal(
             sources.entries.some((entry) => entry.path === source),
@@ -179,6 +183,32 @@ for (const kind of ['move', 'copy'] as const)
         await f.close();
       }
     });
+
+for (const kind of ['move', 'copy'] as const)
+  test(`batch ${kind} protects open buffers inside an actual replacement`, async () => {
+    const f = fixture();
+    try {
+      const editor = await f.editor('batch-open-replacement-' + kind),
+        checkout = await editor.openCheckout(f.roots[0]),
+        target = { checkout, path: 'dest/folder/nested.ts' };
+      mkdirSync(join(f.roots[0], 'dest/folder'), { recursive: true });
+      writeFileSync(join(f.roots[0], target.path), 'RETAIN\n');
+      await editor.open(target, { intent: 'keep' });
+      editor.edit(target, 'UNSAVED\n');
+      const workflow = editor.createMutation({ checkout, kind, paths: ['b.ts', 'folder'] });
+      try {
+        assert.equal(await workflow.apply('dest', '', false), false);
+        assert.equal(await workflow.apply('dest', '', true), false);
+        assert.match(workflow.getSnapshot().error, /Replacement has open buffers/);
+        assert.equal(editor.buffer(target)?.text, 'UNSAVED\n');
+        assert.equal(readFileSync(join(f.roots[0], target.path), 'utf8'), 'RETAIN\n');
+      } finally {
+        await workflow.dispose();
+      }
+    } finally {
+      await f.close();
+    }
+  });
 
 test('create and native import consumer payloads need no empty inspection and retain explicit destination/replacement authority', async () => {
   const f = fixture();
