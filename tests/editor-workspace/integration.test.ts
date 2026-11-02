@@ -128,6 +128,52 @@ function fixture() {
 const code = (expected: ApplicationError['code']) => (error: unknown) =>
   ApplicationError.is(error) && error.code === expected;
 
+for (const kind of ['move', 'copy'] as const)
+  for (const collision of [false, true])
+    test(`batch ${kind} captures only individual destinations (collisions: ${collision})`, async () => {
+      const f = fixture();
+      try {
+        const editor = await f.editor('batch-' + kind),
+          checkout = await editor.openCheckout(f.roots[0]);
+        mkdirSync(join(f.roots[0], 'dest'));
+        writeFileSync(join(f.roots[0], 'dest/unrelated.ts'), 'RETAIN\n');
+        if (collision) writeFileSync(join(f.roots[0], 'dest/b.ts'), 'REPLACE\n');
+        const workflow = editor.createMutation({ checkout, kind, paths: ['b.ts', 'folder'] });
+        try {
+          assert.equal(await workflow.apply('dest', '', false), !collision);
+          assert.equal(workflow.getSnapshot().error, '');
+          assert.deepEqual(
+            workflow.getSnapshot().replacements?.map((entry) => entry.target.path),
+            collision ? ['dest/b.ts'] : [],
+          );
+          if (collision) {
+            assert.equal(readFileSync(join(f.roots[0], 'dest/b.ts'), 'utf8'), 'REPLACE\n');
+            assert.equal(
+              await workflow.apply('dest', '', true),
+              true,
+              workflow.getSnapshot().error,
+            );
+          }
+          assert.equal(readFileSync(join(f.roots[0], 'dest/b.ts'), 'utf8'), 'B\n');
+          assert.equal(readFileSync(join(f.roots[0], 'dest/folder/nested.ts'), 'utf8'), 'NESTED\n');
+          assert.equal(readFileSync(join(f.roots[0], 'dest/unrelated.ts'), 'utf8'), 'RETAIN\n');
+          const sources = await editor.list(checkout, '');
+          assert.equal(
+            sources.entries.some((entry) => entry.path === 'b.ts'),
+            kind === 'copy',
+          );
+          assert.equal(
+            sources.entries.some((entry) => entry.path === 'folder'),
+            kind === 'copy',
+          );
+        } finally {
+          await workflow.dispose();
+        }
+      } finally {
+        await f.close();
+      }
+    });
+
 test('create and native import consumer payloads need no empty inspection and retain explicit destination/replacement authority', async () => {
   const f = fixture();
   try {

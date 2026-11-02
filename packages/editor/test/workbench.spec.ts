@@ -9,6 +9,48 @@ async function edit(page: Page, text: string) {
   await input.pressSequentially(text);
 }
 
+test('opening, editing and saving a UTF-8 BOM file preserves its marker', async ({ page }) => {
+  await page.goto('/');
+  await page.evaluate(async () => {
+    const { first, checkout } = window.demo;
+    await first.mutate({
+      checkout,
+      kind: 'create-file',
+      sources: [],
+      destination: 'bom.txt',
+      text: '\ufeffhello\n',
+    });
+    await first.open({ checkout, path: 'bom.txt' }, { intent: 'keep' });
+  });
+  const input = first(page).getByRole('textbox', { name: 'bom.txt editor', exact: true });
+  await expect(input).toBeVisible();
+  const buffer = () =>
+    page.evaluate(() => {
+      const value = window.demo.first.buffer({ checkout: window.demo.checkout, path: 'bom.txt' })!;
+      return { text: value.text, dirty: value.text !== value.disk.text };
+    });
+  expect(await buffer()).toEqual({ text: '\ufeffhello\n', dirty: false });
+  await input.focus();
+  await input.press('Control+Home');
+  await input.pressSequentially('edited ');
+  await expect.poll(buffer).toEqual({ text: '\ufeffedited hello\n', dirty: true });
+  await first(page).getByRole('button', { name: 'Save', exact: true }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        async () =>
+          (
+            await window.demo.client.command('readFile', {
+              checkout: window.demo.checkout,
+              path: 'bom.txt',
+            })
+          ).text,
+      ),
+    )
+    .toBe('\ufeffedited hello\n');
+  await expect.poll(buffer).toEqual({ text: '\ufeffedited hello\n', dirty: false });
+});
+
 test('real Monaco edits/save, shared diff model and isolated second instance', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));

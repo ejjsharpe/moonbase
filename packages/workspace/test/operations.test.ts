@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Effect, Layer, ManagedRuntime } from 'effect';
 import { TestClock } from 'effect/testing';
@@ -9,6 +9,57 @@ import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { emptyRecovery } from '@moonbase/contracts/workspace';
 import { WorkspaceLive, WorkspaceNative } from '../src/index.ts';
 import { quote, fixture, isError, waitFor } from './recovery-fixture.ts';
+
+for (const kind of ['copy', 'import'] as const)
+  test(`${kind} preserves top-level and nested folder permissions after copying children`, async () => {
+    const f = fixture(),
+      { runtime, client } = f.start(),
+      source = join(kind === 'copy' ? f.root : f.base, 'source'),
+      destination = join(f.root, 'copied');
+    mkdirSync(join(source, 'nested'), { recursive: true });
+    writeFileSync(join(source, 'nested/file.txt'), 'copied bytes');
+    chmodSync(join(source, 'nested/file.txt'), 0o444);
+    chmodSync(join(source, 'nested'), 0o550);
+    chmodSync(source, 0o755);
+    try {
+      const checkout = await client.command('openCheckout', { root: f.root });
+      const selection =
+        kind === 'copy'
+          ? { sources: await client.command('inspectEntries', { checkout, paths: ['source'] }) }
+          : {
+              sources: [],
+              nativeReferences: await runtime.runPromise(
+                Effect.flatMap(WorkspaceNative, (native) =>
+                  native.capture({ checkout, clientId: 'alice', paths: [source] }),
+                ),
+              ),
+            };
+      const result = await client.command('mutate', {
+        id: 'copy-modes',
+        clientId: 'alice',
+        checkout,
+        kind,
+        ...selection,
+        destination: 'copied',
+      });
+      assert.equal(result.outcome, 'completed');
+      assert.equal(readFileSync(join(destination, 'nested/file.txt'), 'utf8'), 'copied bytes');
+      for (const path of ['', 'nested', 'nested/file.txt'])
+        assert.equal(
+          statSync(join(destination, path)).mode & 0o777,
+          statSync(join(source, path)).mode & 0o777,
+          path,
+        );
+    } finally {
+      for (const path of [source, destination]) {
+        if (existsSync(path)) chmodSync(path, 0o700);
+        if (existsSync(join(path, 'nested'))) chmodSync(join(path, 'nested'), 0o700);
+      }
+      await runtime.dispose();
+      f.cleanup();
+    }
+  });
+
 test('aliases cannot authorize two same-baseline saves of one macOS object', async () => {
   const f = fixture(),
     { runtime, client } = f.start();

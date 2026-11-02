@@ -3,8 +3,12 @@ import { Effect } from 'effect';
 import { releaseResource } from '@moonbase/effect';
 
 import { ApplicationError } from '@moonbase/contracts/workspace';
+import { maximumChatInputBytes } from '@moonbase/contracts/chat';
 import type { ChatHostEndpoint } from '@moonbase/contracts/services';
 import { fail } from './validation.ts';
+
+// JSON can escape each input byte as \uXXXX; identifiers and envelope fields fit in 4 KiB.
+export const maximumChatRequestBytes = 6 * maximumChatInputBytes + 4096;
 
 export const nonce = () => randomBytes(32).toString('base64url');
 export const validNonce = (value: unknown): value is string =>
