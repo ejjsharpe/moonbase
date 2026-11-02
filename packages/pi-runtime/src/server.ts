@@ -170,7 +170,7 @@ export const serveChat = (config: ChatServerConfiguration, client: ChatClient) =
               V.fail('InvalidInput', 'Chat request must be JSON.');
             for await (const chunk of request) {
               length += chunk.length;
-              if (length > 64 * 1024)
+              if (length > P.maximumChatRequestBytes)
                 V.fail('InvalidInput', 'Chat input exceeds its transport limit.');
               chunks.push(chunk);
             }

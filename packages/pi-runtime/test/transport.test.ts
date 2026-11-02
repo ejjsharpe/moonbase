@@ -1,5 +1,6 @@
 import type { AddressInfo } from 'node:net';
 import type { ChatInput, ChatStopTarget } from '@moonbase/contracts/chat';
+import { maximumChatInputBytes } from '@moonbase/contracts/chat';
 import assert from 'node:assert/strict';
 import { test, mock } from 'node:test';
 import { createHmac, createHash, randomBytes } from 'node:crypto';
@@ -175,6 +176,53 @@ function post(
     },
   });
 }
+
+for (const escaped of ['\n', '\\', '\u0001'])
+  test(`transport admits maximum UTF-8 input with JSON escaping ${JSON.stringify(escaped)}`, async (t) => {
+    const f = await setup(t);
+    const {
+      conversation: { target },
+    } = await f.remote.command('createChat', {
+      session,
+      requestId: 'create-escaped',
+      title: 'Escaped input',
+    });
+    f.faux.setResponses([fauxAssistantMessage('Reply')]);
+    const input = {
+      target,
+      requestId: 'escaped-send',
+      text: 'x' + escaped.repeat(maximumChatInputBytes - 1),
+    };
+    assert.equal(Buffer.byteLength(input.text), maximumChatInputBytes);
+    assert(Buffer.byteLength(JSON.stringify({ operation: 'sendChat', input })) > 64 * 1024);
+    const receipt = await f.remote.command('sendChat', input);
+    assert.equal(receipt.admission, 'admitted');
+    assert.deepEqual(
+      await f.remote.command('getChatSend', { target, requestId: input.requestId }),
+      receipt,
+    );
+    const calls = f.calls.filter((operation) => operation === 'sendChat').length;
+    await assert.rejects(f.remote.command('sendChat', { ...input, text: input.text + 'x' }), {
+      code: 'InvalidInput',
+    });
+    const response = await post(f, await grant(f), 'sendChat', {
+      ...input,
+      text: input.text + 'x',
+    });
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error.code, 'InvalidInput');
+    assert.equal(f.calls.filter((operation) => operation === 'sendChat').length, calls);
+  });
+
+test('oversized authenticated envelopes remain bounded before dispatch', async (t) => {
+  const f = await setup(t);
+  const response = await post(f, await grant(f), 'sendChat', { text: 'x'.repeat(256 * 1024) });
+  assert.equal(response.status, 400);
+  assert.equal(response.headers.get('x-moonbase-proof'), null);
+  await response.arrayBuffer();
+  assert(!f.calls.includes('sendChat'));
+});
+
 test('production remote/server route shared commands and immutable retries without key disclosure', async (t) => {
   const f = await setup(t);
   assert.deepEqual(
@@ -1061,7 +1109,7 @@ test('R1 pre-authentication malformed requests never obtain RPC signatures befor
       }
       let body;
       if (mode === 'oversized') {
-        body = 'x'.repeat(64 * 1024 + 1);
+        body = 'x'.repeat(256 * 1024 + 1);
       } else {
         if (mode === 'malformed-json') {
           body = '{';

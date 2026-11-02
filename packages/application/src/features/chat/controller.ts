@@ -162,7 +162,13 @@ class ChatModelState {
   private update(change: Partial<ChatState>) {
     if (this.closed) return;
     this.state = { ...this.state, ...change };
-    for (const listener of this.listeners) listener();
+    for (const listener of this.listeners) {
+      try {
+        listener();
+      } catch {
+        /* A view cannot interrupt draft preservation or owned chat work. */
+      }
+    }
   }
   private draft() {
     return (

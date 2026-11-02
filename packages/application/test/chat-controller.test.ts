@@ -156,6 +156,27 @@ async function ready(f: Awaited<ReturnType<typeof fixture>>) {
   await f.controller.select(target);
 }
 
+test('throwing chat subscribers cannot poison saved drafts or block Send and preservation', async (t) => {
+  const f = await fixture(t);
+  await ready(f);
+  let delivered = 0;
+  f.controller.subscribe(() => {
+    throw Error('Controlled view failure');
+  });
+  f.controller.subscribe(() => {
+    delivered++;
+  });
+  assert.equal(f.controller.preserve(), true);
+  assert.doesNotThrow(() => f.controller.setDraft('Preserved despite view failure'));
+  assert.equal(f.controller.getSnapshot().storageError, null);
+  assert.equal(JSON.parse(f.storage.value!).drafts[0].text, 'Preserved despite view failure');
+  assert(delivered > 0);
+  await f.controller.send();
+  assert.equal(f.calls.filter((call) => call.operation === 'sendChat').length, 1);
+  assert.equal(f.controller.getSnapshot().storageError, null);
+  assert.equal(f.controller.preserve(), true);
+});
+
 test('existing version-1 drafts and pending identities reopen unchanged through the public entry', async (t) => {
   const storage = new Storage();
   const saved = {

@@ -2,6 +2,8 @@ import type { ApplicationError, CommandOptions, ObservationClose } from './works
 import type * as Contracts from './chat-schema.ts';
 
 export const maximumChatInputBytes = 32 * 1024;
+// JSON can escape each input byte as \uXXXX; identifiers and envelope fields fit in 4 KiB.
+export const maximumChatRequestBytes = 6 * maximumChatInputBytes + 4096;
 export const maximumChatReplyBytes = 256 * 1024;
 export const chatPageSize = 32;
 export const chatPreviewBytes = 4096;

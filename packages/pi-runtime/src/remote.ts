@@ -120,7 +120,7 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
               });
               yield* assertGeneration;
               const body = JSON.stringify({ operation, input });
-              if (Buffer.byteLength(body) > 64 * 1024)
+              if (Buffer.byteLength(body) > P.maximumChatRequestBytes)
                 return yield* Effect.fail(
                   new ApplicationError({
                     code: 'InvalidInput',

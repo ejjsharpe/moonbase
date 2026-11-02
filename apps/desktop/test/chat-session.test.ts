@@ -3,7 +3,11 @@ import { test, after } from 'node:test';
 import { Layer, ManagedRuntime } from 'effect';
 const runtime = ManagedRuntime.make(Layer.empty);
 after(() => runtime.dispose());
-import type { ChatClient, ChatSnapshot } from '@moonbase/contracts/chat';
+import {
+  maximumChatInputBytes,
+  type ChatClient,
+  type ChatSnapshot,
+} from '@moonbase/contracts/chat';
 import type { ConnectionClient } from '@moonbase/contracts/connection';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import { ChatIpcSession } from '../src/chat/session.ts';
@@ -11,12 +15,14 @@ import { browserClients, type ChatBridge } from '../src/chat/wire.ts';
 const context = { host: { hostId: 'host', storeId: 'store' }, actorId: 'owner' },
   target = { ...context, conversationId: 'saved' };
 function fixture() {
+  const inputs: unknown[] = [];
   let calls = 0,
     observers = 0,
     stop = 0;
   const chat: ChatClient = {
     command: async (_op, _input, options) => {
       calls++;
+      inputs.push(_input);
       if (_op === 'sendChat')
         throw new ApplicationError({ code: 'Uncertain', message: 'Admission response lost' });
       if (_op === 'getChatHistory')
@@ -46,6 +52,7 @@ function fixture() {
   const owner = new ChatIpcSession(runtime, chat, connection, context, () => {});
   return {
     owner,
+    inputs,
     get calls() {
       return calls;
     },
@@ -92,6 +99,42 @@ test('public bridge preserves Uncertain and exact pending payload; preaborted ca
   });
   assert.equal(f.calls, 1);
   await f.owner.dispose();
+});
+test('desktop bridge admits maximum escaped chat text and still rejects oversized input before dispatch', async () => {
+  const f = fixture();
+  const client = browserClients({
+    context: async () => context,
+    call: (kind, op, input, id) => f.owner.call(kind, op, input, id),
+    cancel: (id) => f.owner.cancel(id),
+    events: () => () => {},
+  }).chat;
+  try {
+    for (const escaped of ['\n', '\\', '\u0001']) {
+      const input = {
+        target,
+        requestId: 'escaped',
+        text: 'x' + escaped.repeat(maximumChatInputBytes - 1),
+      };
+      assert.equal(Buffer.byteLength(input.text), maximumChatInputBytes);
+      assert(JSON.stringify(input).length > 65536);
+      // The controlled service reports Uncertain only after dispatch.
+      await assert.rejects(client.command('sendChat', input), { code: 'Uncertain' });
+      assert.deepEqual(f.inputs.at(-1), input);
+      const calls = f.calls;
+      await assert.rejects(client.command('sendChat', { ...input, text: input.text + 'x' }), {
+        code: 'InvalidInput',
+      });
+      assert.equal(f.calls, calls);
+    }
+    assert.equal(f.calls, 3);
+    await assert.rejects(
+      client.command('sendChat', { target, requestId: 'oversized', text: 'x'.repeat(256 * 1024) }),
+      { code: 'InvalidInput' },
+    );
+    assert.equal(f.calls, 3);
+  } finally {
+    await f.owner.dispose();
+  }
 });
 test('shared IPC schemas reject malformed nested data before dispatch and retain authority errors', async () => {
   const f = fixture();
