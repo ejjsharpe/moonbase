@@ -90,7 +90,7 @@ class ChatModelState {
   private bound = false;
   private readonly chat: ChatClient;
   private readonly connection: ConnectionClient;
-  private readonly context: ChatSession;
+  private readonly session: ChatSession;
   private storage: DraftStorage;
   private newId: () => string;
 
@@ -98,14 +98,14 @@ class ChatModelState {
     this.scope = scope;
     this.chat = dependencies.chat;
     this.connection = dependencies.connection;
-    this.context = structuredClone(
+    this.session = structuredClone(
       decodeChatInput('listChats', { session: dependencies.context }).session,
     );
     this.storage = dependencies.storage;
     this.newId = dependencies.newId ?? (() => crypto.randomUUID());
     this.saved = {
       version: 1,
-      session: structuredClone(this.context),
+      session: structuredClone(this.session),
       selected: null,
       drafts: [],
       pending: [],
@@ -116,7 +116,7 @@ class ChatModelState {
       if (this.raw !== null) {
         if (bytes(this.raw) > maximumSavedBytes)
           throw invalid('Saved chat data exceeds its bound. Preserve it for recovery.');
-        this.saved = decodeSaved(JSON.parse(this.raw), this.context);
+        this.saved = decodeSaved(JSON.parse(this.raw), this.session);
       }
     } catch {
       storageError =
@@ -145,6 +145,9 @@ class ChatModelState {
     this.runEffect = (effect) => runApplicationEffect(runtime, effect);
     return this;
   }
+  get context(): ChatSession {
+    return structuredClone(this.session);
+  }
   getSnapshot = () => this.state;
   subscribe = (listener: () => void) => {
     if (this.closed) return () => {};
@@ -167,7 +170,7 @@ class ChatModelState {
     if (this.closed) throw invalid('Chat model disposed.');
     if (this.state.storageError)
       throw new ApplicationError({ code: 'Persistence', message: this.state.storageError });
-    decodeSaved(next, this.context);
+    decodeSaved(next, this.session);
     const raw = JSON.stringify(next);
     try {
       if (bytes(raw) > maximumSavedBytes || this.storage.read() !== this.raw) throw Error();
@@ -398,13 +401,13 @@ class ChatModelState {
     return this.action(
       'refresh',
       Effect.gen({ self: this }, function* () {
-        const host = yield* this.call('getChatHost', { host: this.context.host });
-        if (!sameSession(host, this.context))
+        const host = yield* this.call('getChatHost', { host: this.session.host });
+        if (!sameSession(host, this.session))
           throw new ApplicationError({
             code: 'Incompatible',
             message: 'Host actor does not match the configured chat context.',
           });
-        const page = yield* this.call('listChats', { session: this.context });
+        const page = yield* this.call('listChats', { session: this.session });
         if (!owner.alive || epoch !== this.epoch) return;
         this.update({
           host,
@@ -429,7 +432,7 @@ class ChatModelState {
         const epoch = this.connected(),
           cursor = this.state.nextChats;
         if (!cursor) return;
-        const page = yield* this.call('listChats', { session: this.context, cursor });
+        const page = yield* this.call('listChats', { session: this.session, cursor });
         if (owner?.alive && epoch === this.epoch)
           this.update({ chats: page.conversations, nextChats: page.nextCursor });
       }),
@@ -468,7 +471,7 @@ class ChatModelState {
     if (this.closed) return Promise.resolve();
     try {
       const captured = decodeChatInput('getChat', { target }).target;
-      if (!sameSession(captured, this.context)) throw invalid('Chat belongs to another context.');
+      if (!sameSession(captured, this.session)) throw invalid('Chat belongs to another context.');
       const next = structuredClone(this.saved);
       next.selected = captured;
       this.commit(next);
@@ -588,7 +591,7 @@ class ChatModelState {
           throw invalid('Use a chat title of 1–200 UTF-8 bytes.');
         const pending: Pending = {
           operation: 'createChat',
-          input: { session: structuredClone(this.context), requestId: this.newId(), title },
+          input: { session: structuredClone(this.session), requestId: this.newId(), title },
           message: 'Outcome pending. Original creation identity retained.',
         };
         this.reserve(pending);
@@ -835,6 +838,7 @@ class ChatModelState {
 export type ChatModel = ChatModelState;
 export type ChatController = Pick<
   ChatModelState,
+  | 'context'
   | 'getSnapshot'
   | 'subscribe'
   | 'start'
