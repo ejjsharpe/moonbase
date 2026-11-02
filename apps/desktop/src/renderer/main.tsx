@@ -184,6 +184,7 @@ function Desktop() {
   const [closing, setClosing] = useState(false),
     [view, setView] = useState('editor'),
     [chatPanel, setChatPanel] = useState(!!chat),
+    [openingChat, setOpeningChat] = useState(false),
     cleanupState = useSyncExternalStore(cleanup.subscribe, cleanup.getSnapshot);
   const panels = useRef<Record<string, HTMLElement | null>>({}),
     focus = useRef<Record<string, HTMLElement | null>>({});
@@ -320,6 +321,14 @@ function Desktop() {
                 setChatPanel(false);
                 setView('editor');
               });
+              requestAnimationFrame(() => {
+                const target =
+                  focus.current.editor ??
+                  panels.current.editor?.querySelector<HTMLElement>(
+                    'button:not([disabled]), [tabindex="0"]',
+                  );
+                target?.focus();
+              });
             }}>
             Close Chat panel
           </Button>
@@ -327,14 +336,19 @@ function Desktop() {
         {!chatPanel && chatConfigured ? (
           <Button
             {...stylex.props(controls.button)}
-            disabled={!cleanup.available('chat')}
+            disabled={openingChat || !cleanup.available('chat')}
             onClick={() =>
               run(
                 (async () => {
-                  chat = await acquireChat();
-                  chatActive = !!chat;
-                  setChatPanel(!!chat);
-                  setView('chat');
+                  setOpeningChat(true);
+                  try {
+                    chat = await acquireChat();
+                    chatActive = !!chat;
+                    setChatPanel(!!chat);
+                    setView('chat');
+                  } finally {
+                    setOpeningChat(false);
+                  }
                 })(),
               )
             }>

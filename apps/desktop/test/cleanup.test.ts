@@ -11,6 +11,7 @@ test('root cleanup retains failed/pending instance ownership while another names
   const cleanup = new RendererCleanup(runtime, scope),
     held = Promise.withResolvers<void>();
   cleanup.claim('chat');
+  assert.throws(() => cleanup.claim('chat'), { code: 'Unavailable' });
   cleanup.claim('editor');
   let stopped = false,
     releases = 0,

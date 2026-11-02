@@ -9,6 +9,7 @@ type Task = { state: 'closing' | 'closed' | 'failed'; completion: Promise<void> 
 /** Application-owned cleanup survives removal of an individual model's panel/scope. */
 export class RendererCleanup {
   private tasks = new Map<string, Task>();
+  private claims = new Set<string>();
   private listeners = new Set<() => void>();
   private snapshot = { pending: [] as string[], errors: [] as string[] };
   private runtime: ManagedRuntime.ManagedRuntime<never, ApplicationError>;
@@ -41,16 +42,17 @@ export class RendererCleanup {
   }
   claim(namespace: string) {
     const task = this.tasks.get(namespace);
-    if (task && task.state !== 'closed')
+    if (this.claims.has(namespace) || (task && task.state !== 'closed'))
       throw new ApplicationError({
         code: 'Unavailable',
         message: 'This panel still owns unfinished cleanup. Quit and recover before reopening it.',
       });
     this.tasks.delete(namespace);
+    this.claims.add(namespace);
   }
   available(namespace: string) {
     const task = this.tasks.get(namespace);
-    return !task || task.state === 'closed';
+    return !this.claims.has(namespace) && (!task || task.state === 'closed');
   }
   close(namespace: string, dispose: () => Promise<void>): Promise<void> {
     const previous = this.tasks.get(namespace);
@@ -69,6 +71,7 @@ export class RendererCleanup {
     ).then(
       () => {
         task.state = 'closed';
+        this.claims.delete(namespace);
         this.publish();
       },
       (error) => {
