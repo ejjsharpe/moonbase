@@ -11,9 +11,9 @@ Read the root README and the README of each module you change. Keep READMEs and 
 
 ## Runtime boundaries
 
-`packages/application` is the shared Effect command center: typed commands, queries, subscriptions, dispatch, cancellation, errors and dependency composition. UI, keyboard, native and transport entry points use the same handlers.
+`packages/contracts` owns independent DTOs, schemas, errors and Effect service ports. `packages/application` owns headless editor/chat controllers, shared dispatch, cancellation, composition and lifecycle; `packages/editor` renders supplied controllers. UI, keyboard, native and transport entry points use the same handlers. When changing dependency boundaries or public exports, read [the architecture](docs/HEADLESS-ARCHITECTURE.md); when changing feature acquisition, preservation or shutdown, read [application lifecycle](packages/application/docs/LIFECYCLE.md).
 
-Workspace, Pi and SSH expose focused Effect services/layers with injected dependencies and own their validation, resources and domain rules. Each process creates one scoped root runtime and acquires shared dependencies once; feature packages return Effects/scoped streams. React receives browser-safe clients. Buffers, rendering and pure editor calculations stay ordinary TypeScript. Pi Durable owns execution, transcripts and tasks. Use resource-appropriate concurrency so long work cannot block unrelated commands or Stop; keep the center small without another scheduler, event store or global command queue.
+Workspace, Pi and SSH expose focused Effect services/layers consuming contracts and own their validation, resources and domain rules. Shared normalization/release belongs to `packages/effect`; host authentication is the named `@moonbase/ssh/host-health` leaf. One `createMoonbaseApplication` owns each live client's runtime and feature scopes; privileged process roots own separate runtimes and acquire shared dependencies once. React receives browser-safe controllers. Buffers, rendering and pure editor calculations stay ordinary TypeScript. Pi Durable owns execution, transcripts and tasks. Use resource-appropriate concurrency so long work cannot block unrelated commands or Stop; keep the center small without another scheduler, event store or global command queue.
 
 ## Verification and safety
 

@@ -12,7 +12,7 @@
 | `schema` | Shared portable schema constructors |
 | `services` | Privileged Effect service ports/tags and endpoint types |
 
-Client entries use erased schema imports, so they emit no Effect runtime code. Explicit schema/service imports may load portable Effect. `workspace` also reexports common/error types to preserve the existing client surface; every import shares the same error brand and Context service tags. Temporary `@moonbase/application/*-client`, schema and service exports alias these definitions until migration cleanup.
+Client entries use erased schema imports, so they emit no Effect runtime code. Explicit schema/service imports may load portable Effect. `workspace` also reexports common/error types to preserve the client surface; every import shares the same error brand and Context service tags.
 
 DTO shape validation grants no authority. `services` is a privileged capability boundary: `ConnectionService.endpoint` carries origin/token configuration that must never enter renderer bridges, public settings or logs. The public `host` entry contains identity/health data, without endpoint credentials. Executable HMAC verification is the Node-only `@moonbase/ssh/host-health` leaf; safe failure/resource helpers belong to `@moonbase/effect`.
 

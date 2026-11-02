@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Cause, Effect, Layer, ManagedRuntime, Stream } from 'effect';
-import { ApplicationError } from '@moonbase/application/client';
+import { ApplicationError } from '@moonbase/contracts/errors';
 import {
   normalizeApplicationError,
   runApplicationEffect,
   observeApplicationStream,
 } from '@moonbase/application/runtime/effect-client';
-import { releaseResource } from '@moonbase/application/services';
+import { releaseResource } from '@moonbase/effect';
 import type { ObservationClose } from '@moonbase/contracts/common';
 
 function event() {

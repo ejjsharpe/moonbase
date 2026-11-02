@@ -6,8 +6,9 @@ import {
   emptyRecovery,
   type CheckoutTarget,
   type WorkspaceEvent,
-} from '../src/client.ts';
-import { WorkspaceService, releaseResource, type WorkspaceServiceShape } from '../src/services.ts';
+} from '@moonbase/contracts/workspace';
+import { WorkspaceService, type WorkspaceServiceShape } from '@moonbase/contracts/services';
+import { releaseResource } from '@moonbase/effect';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 
 const checkout: CheckoutTarget = {

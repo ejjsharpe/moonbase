@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { emptyRecovery, type EditorRecovery } from '@moonbase/contracts/workspace';
@@ -1127,7 +1127,7 @@ test('complete restoration retries wait for an active sibling admission without 
   }
 });
 
-// Unmodified first-party module source, retained only to generate authentic previous-format test stores.
+// Archived first-party behavior generates authentic previous-format stores; only imports are rewired.
 let previousModule: Promise<{ WorkspaceLive: typeof WorkspaceLive }> | undefined;
 function previousWorkspace() {
   if (!previousModule) {
@@ -1139,6 +1139,21 @@ function previousWorkspace() {
     const directory = fileURLToPath(new URL('../dist/previous-workspace', import.meta.url));
     mkdirSync(directory, { recursive: true });
     execFileSync('/usr/bin/tar', ['-xzf', archive, '-C', directory]);
+    for (const name of readdirSync(directory).filter((name) => name.endsWith('.ts'))) {
+      const path = join(directory, name);
+      const source = readFileSync(path, 'utf8')
+        .replaceAll("'@moonbase/application/client'", "'@moonbase/contracts/workspace'")
+        .replace(
+          'WorkspaceService, releaseResource, type WorkspaceServiceShape',
+          'WorkspaceService, type WorkspaceServiceShape',
+        )
+        .replace(
+          "'@moonbase/application/services';",
+          "'@moonbase/contracts/services';\nimport { releaseResource } from '@moonbase/effect';",
+        );
+      assert(!source.includes('@moonbase/application/'), 'Unresolved archived dependency');
+      writeFileSync(path, source);
+    }
     previousModule = import(pathToFileURL(join(directory, 'index.ts')).href);
   }
   return previousModule!;

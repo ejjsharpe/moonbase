@@ -1,15 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Effect, Layer, ManagedRuntime, Stream } from 'effect';
-import { ApplicationError } from '../src/client.ts';
-import type { ConnectionSnapshot } from '../src/connection-client.ts';
-import { chatHostVersion, chatProtocolVersion } from '../src/host-client.ts';
+import { ApplicationError } from '@moonbase/contracts/errors';
+import type { ConnectionSnapshot } from '@moonbase/contracts/connection';
+import { chatHostVersion, chatProtocolVersion } from '@moonbase/contracts/host';
 import { makeConnectionClient } from '@moonbase/application/runtime/clients';
-import {
-  ConnectionService,
-  releaseResource,
-  type ConnectionServiceShape,
-} from '../src/services.ts';
+import { ConnectionService, type ConnectionServiceShape } from '@moonbase/contracts/services';
+import { releaseResource } from '@moonbase/effect';
 
 const profile = {
   id: 'configured',

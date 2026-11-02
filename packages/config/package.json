@@ -15,25 +15,18 @@
       "test": {
         "inputs": [
           "default",
-          "{workspaceRoot}/packages/contracts/src/**/*",
-          "{workspaceRoot}/packages/contracts/package.json",
-          "{workspaceRoot}/packages/effect/src/**/*",
-          "{workspaceRoot}/packages/effect/package.json",
           "{workspaceRoot}/oxlint.config.mts",
           "{workspaceRoot}/oxfmt.config.mts",
-          "{workspaceRoot}/scripts/check-foundation.mjs",
-          "{workspaceRoot}/packages/application/src/**/*",
-          "{workspaceRoot}/packages/application/package.json",
-          "{workspaceRoot}/packages/chat/src/**/*",
-          "{workspaceRoot}/packages/chat/package.json",
-          "{workspaceRoot}/packages/editor/src/**/*",
-          "{workspaceRoot}/packages/editor/package.json",
+          "{workspaceRoot}/scripts/**/*",
+          "{workspaceRoot}/docs/fixtures/headless-baseline/**/*",
+          "{workspaceRoot}/{packages,apps,tests}/**/*",
           {
             "externalDependencies": [
               "oxlint",
               "oxfmt",
               "esbuild",
-              "effect"
+              "effect",
+              "@stylexjs/unplugin"
             ]
           }
         ]
