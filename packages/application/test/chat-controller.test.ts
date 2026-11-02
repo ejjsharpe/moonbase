@@ -1,16 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ApplicationError } from '@moonbase/application/client';
+import { ApplicationError } from '@moonbase/contracts/workspace';
 import { Effect } from 'effect';
-import type {
-  ChatClient,
-  ChatSnapshot,
-  ChatTarget,
-  ChatCommands,
-} from '@moonbase/application/chat-client';
-import type { ConnectionClient, ConnectionSnapshot } from '@moonbase/application/connection-client';
-import { type DraftStorage } from '@moonbase/chat';
-import { modelRoot } from './model-fixture.ts';
+import type { ChatClient, ChatSnapshot, ChatTarget, ChatCommands } from '@moonbase/contracts/chat';
+import type { ConnectionClient, ConnectionSnapshot } from '@moonbase/contracts/connection';
+import { type DraftStorage } from '@moonbase/application/chat';
+import { modelRoot } from './chat-model-fixture.ts';
 const context = { host: { hostId: 'host', storeId: 'store' }, actorId: 'owner' },
   target = { ...context, conversationId: 'chat' };
 const summary = {
