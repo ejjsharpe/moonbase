@@ -1768,3 +1768,25 @@ test('Harness release failure still releases the environment and reports both ty
   assert.equal(closes, 1);
   assert.equal(cleanups, 1);
 });
+
+test('maximum escaped Send text retains its original serialized binding across retry and restart', async (t) => {
+  const f = await fixture(t),
+    target = await f.create();
+  f.faux.setResponses([fauxAssistantMessage('Escaped input completed')]);
+  const input = { target, requestId: 'escaped-binding', text: '\u0001'.repeat(32768) };
+  assert(Buffer.byteLength(JSON.stringify({ operation: 'sendChat', ...input })) > 64 * 1024);
+  const receipt = await f.client.command('sendChat', input);
+  await until(
+    () => f.client.command('getChat', { target }),
+    (value) =>
+      !value.run && value.entries.some((entry) => entry.text === 'Escaped input completed'),
+  );
+  assert.deepEqual(await f.client.command('sendChat', input), receipt);
+  await f.restart();
+  assert.deepEqual(
+    await f.client.command('getChatSend', { target, requestId: input.requestId }),
+    receipt,
+  );
+  assert.deepEqual(await f.client.command('sendChat', input), receipt);
+  assert.equal(f.faux.state.callCount, 1);
+});
