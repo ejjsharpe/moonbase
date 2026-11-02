@@ -108,10 +108,22 @@ export class Store {
     return this.get<number>('publications', client) ?? 0;
   }
   recoveryPublication(clientId: string, requestId: string) {
-    return this.get<PublicationRecord>(
+    const record = this.get<PublicationRecord>(
       'recovery-publications',
       hash(canonical([clientId, requestId])),
     );
+    if (record) {
+      const receipt = record.receipt;
+      if (
+        receipt.clientId !== clientId ||
+        receipt.requestId !== requestId ||
+        !Number.isSafeInteger(receipt.previousRevision) ||
+        !Number.isSafeInteger(receipt.revision) ||
+        receipt.revision !== receipt.previousRevision + 1
+      )
+        throw invalidStored();
+    }
+    return record;
   }
   replayPublication(
     input: CommandInput<'persistRecovery'>,
@@ -123,6 +135,8 @@ export class Store {
         'InvalidInput',
         'Recovery request ID already belongs to a different immutable publication.',
       );
+    if (previous && previous.receipt.previousRevision !== input.expectedRevision)
+      throw invalidStored();
     return previous?.receipt ?? null;
   }
   /** Caller owns the transaction; module facts advance CAS without impersonating a client publication. */
