@@ -56,15 +56,16 @@ export class RendererCleanup {
     const previous = this.tasks.get(namespace);
     if (previous) return previous.completion;
     // dispose fences model admissions synchronously, before the panel is removed.
-    const disposal = dispose();
+    const disposal = dispose().then(() => undefined, normalizeApplicationError);
     const task: Task = { state: 'closing', completion: Promise.resolve() };
     this.tasks.set(namespace, task);
     task.completion = runApplicationEffect(
       this.runtime,
-      Effect.tryPromise({
-        try: () => disposal,
-        catch: normalizeApplicationError,
-      }).pipe(Effect.forkIn(this.scope), Effect.flatMap(Fiber.join)),
+      Effect.promise(() => disposal).pipe(
+        Effect.flatMap((error) => (error ? Effect.fail(error) : Effect.void)),
+        Effect.forkIn(this.scope),
+        Effect.flatMap(Fiber.join),
+      ),
     ).then(
       () => {
         task.state = 'closed';
