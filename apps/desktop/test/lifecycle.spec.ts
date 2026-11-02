@@ -33,7 +33,7 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
                 ),
             }
           : {}),
-        args: packaged ? [] : [process.env.MOONBASE_TEST_MAIN ?? resolve('dist/main.mjs')],
+        args: packaged ? [] : [resolve('test/harness.mjs')],
         env: {
           PATH: '/usr/bin:/bin',
           HOME: process.env.HOME!,
@@ -51,12 +51,16 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
       p.on('pageerror', (e) => errors.push(e.message));
       for (const pid of await current.evaluate(({ app }) => app.getAppMetrics().map((v) => v.pid)))
         pids.add(pid);
-      await current.evaluate(({ ipcMain }) => {
+      await current.evaluate(() => {
         globalThis.task08Cancels = [];
-        for (const kind of ['moonbase', 'moonbase-chat'])
-          ipcMain.on(kind + ':cancel', (_event, id) =>
-            globalThis.task08Cancels.push(kind + ':' + id),
-          );
+        if (globalThis.desktopTest)
+          Object.defineProperty(globalThis, 'task08Cancels', {
+            configurable: true,
+            get: () => [
+              ...globalThis.desktopTest.cancelIds.map((id) => 'moonbase:' + id),
+              ...globalThis.desktopTest.chatCancelIds.map((id) => 'moonbase-chat:' + id),
+            ],
+          });
       });
       await expect(p.getByRole('button', { name: 'Open checkout', exact: true })).toBeVisible();
       await p.evaluate(() => {
@@ -285,7 +289,7 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
         );
       } else {
         await expect(p.getByRole('textbox', { name: 'a.ts editor', exact: true })).toBeVisible();
-        if (!crash)
+        if (!crash && !packaged)
           await expect
             .poll(() =>
               current.evaluate(

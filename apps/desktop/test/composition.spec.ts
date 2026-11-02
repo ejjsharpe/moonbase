@@ -1106,3 +1106,105 @@ for (const failsWrite of [false, true])
       }
     }
   });
+
+test('closing Chat removes its panel, preserves drafts and permits explicit reopen after cleanup', async () => {
+  const f = await fixture(true);
+  let current: ElectronApplication | undefined;
+  try {
+    await setup(f);
+    const { app, page: p } = await launch(f, 'panel-close');
+    current = app;
+    await connect(p);
+    await create(p, 'Close and recover');
+    await p.getByLabel('Message', { exact: true }).fill('preserved before panel close');
+    await p.getByRole('button', { name: 'Close Chat panel', exact: true }).click();
+    await expect(tab(p, 'Chat')).toBeHidden();
+    await expect(p.getByLabel('Message', { exact: true })).toHaveCount(0);
+    await expect(p.getByRole('button', { name: 'Open checkout', exact: true })).toBeEnabled();
+    await expect(p.getByRole('button', { name: 'Open Chat panel', exact: true })).toBeEnabled();
+    await p.getByRole('button', { name: 'Open Chat panel', exact: true }).click();
+    await expect(p.getByLabel('Message', { exact: true })).toHaveValue(
+      'preserved before panel close',
+    );
+    expect((await f.stats()).commands.filter((command) => command === 'sendChat')).toHaveLength(0);
+    await screen(app, p, 'reopened-panel');
+  } finally {
+    if (current) await stop(current, true);
+    await f.close();
+  }
+});
+
+if (!packaged) {
+  test('removed Chat retains its cleanup lease and reports a failed cancellation acknowledgment outside the panel', async () => {
+    const f = await fixture(true);
+    let current: ElectronApplication | undefined;
+    const nativeReport = join(f.directory, 'cleanup-error.json');
+    try {
+      await setup(f);
+      const { app, page: p } = await launch(f, 'panel-error');
+      current = app;
+      await connect(p);
+      await create(p, 'Closing with pending cleanup');
+      await p.getByLabel('Message', { exact: true }).fill('preserved while cleanup fails');
+      const preserved = await p.evaluate(() => localStorage.getItem('moonbase.chat.v1'));
+      await app.evaluate(() => {
+        globalThis.desktopTest.holdChatCancel = true;
+        globalThis.desktopTest.failChatCancel = true;
+      });
+      await p.getByRole('button', { name: 'Close Chat panel', exact: true }).click();
+      await expect.poll(() => app.evaluate(() => globalThis.desktopTest.chatCancelHeld)).toBe(true);
+      await expect(tab(p, 'Chat')).toBeHidden();
+      await expect(p.getByLabel('Message', { exact: true })).toHaveCount(0);
+      await expect(p.getByRole('button', { name: 'Open Chat panel', exact: true })).toBeDisabled();
+      await local(p, app, f);
+      await editor(p).press('Meta+s');
+      await expect.poll(async () => (await recovery(p)).state.drafts.length).toBe(0);
+      await app.evaluate(() => globalThis.desktopTest.releaseChatCancel());
+      await expect(p.getByRole('alert', { name: 'Panel cleanup errors' })).toContainText(
+        'Controlled cancellation acknowledgment failure',
+      );
+      await expect(p.getByRole('button', { name: 'Open Chat panel', exact: true })).toBeDisabled();
+      expect(await p.evaluate(() => localStorage.getItem('moonbase.chat.v1'))).toBe(preserved);
+      await screen(app, p, 'panel-cleanup-error');
+      await app.evaluate(({ dialog }, report) => {
+        dialog.showMessageBox = (async (_window, options) => {
+          process.getBuiltinModule('fs').writeFileSync(report, JSON.stringify(options));
+          return { response: 0, checkboxChecked: false };
+        }) as typeof dialog.showMessageBox;
+      }, nativeReport);
+      const child = app.process();
+      await app.evaluate(({ app }) => app.quit());
+      await until(async () => child.exitCode !== null || child.signalCode !== null, Boolean);
+      expect(child.exitCode).toBe(1);
+      expect(await readFile(nativeReport, 'utf8')).toContain('Moonbase could not finish cleanup');
+    } finally {
+      if (current) await stop(current, true);
+      await f.close();
+    }
+  });
+
+  test('Quit waits for a removed panel cancellation acknowledgment before disposing the shared root', async () => {
+    const f = await fixture(true);
+    let current: ElectronApplication | undefined;
+    try {
+      const { app, page: p } = await launch(f, 'panel-quit');
+      current = app;
+      await connect(p);
+      await app.evaluate(() => {
+        globalThis.desktopTest.holdChatCancel = true;
+      });
+      await p.getByRole('button', { name: 'Close Chat panel', exact: true }).click();
+      await expect.poll(() => app.evaluate(() => globalThis.desktopTest.chatCancelHeld)).toBe(true);
+      const child = app.process();
+      await app.evaluate(({ app }) => app.quit());
+      await expect(p.getByRole('status').filter({ hasText: 'Closing workbench' })).toBeVisible();
+      expect(child.exitCode).toBeNull();
+      await app.evaluate(() => globalThis.desktopTest.releaseChatCancel());
+      await until(async () => child.exitCode !== null || child.signalCode !== null, Boolean);
+      expect(child.exitCode).toBe(0);
+    } finally {
+      if (current) await stop(current, true);
+      await f.close();
+    }
+  });
+}

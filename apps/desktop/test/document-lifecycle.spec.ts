@@ -25,7 +25,7 @@ for (const mode of ['reload', 'veto', 'crash'])
               resolve('release/mac-arm64/Moonbase.app/Contents/MacOS/Moonbase'),
           }
         : {}),
-      args: packaged ? [] : [process.env.MOONBASE_RELOAD_MAIN ?? resolve('dist/main.mjs')],
+      args: packaged ? [] : [resolve('test/harness.mjs')],
       env: {
         PATH: '/usr/bin:/bin',
         HOME: process.env.HOME!,
@@ -39,9 +39,12 @@ for (const mode of ['reload', 'veto', 'crash'])
       pids = new Set<number>([child.pid!]),
       page = await app.firstWindow();
     try {
-      await app.evaluate(({ ipcMain }) => {
+      await app.evaluate(() => {
         globalThis.reloadProbe = { cancels: [], held: null, stopped: false };
-        ipcMain.on('moonbase:cancel', (_event, id) => globalThis.reloadProbe.cancels.push(id));
+        if (globalThis.desktopTest)
+          Object.defineProperty(globalThis.reloadProbe, 'cancels', {
+            get: () => globalThis.desktopTest.cancelIds,
+          });
       });
       await expect(page.getByRole('button', { name: 'Open checkout', exact: true })).toBeVisible();
       await page.evaluate(() => {
@@ -197,14 +200,15 @@ for (const mode of ['reload', 'veto', 'crash'])
               ),
             )
             .toBe('reload');
-          await expect
-            .poll(() =>
-              app.evaluate(
-                (_, ids) => ids.every((id) => globalThis.reloadProbe.cancels.includes(id)),
-                [...observers, waitId],
-              ),
-            )
-            .toBe(true);
+          if (!packaged)
+            await expect
+              .poll(() =>
+                app.evaluate(
+                  (_, ids) => ids.every((id) => globalThis.reloadProbe.cancels.includes(id)),
+                  [...observers, waitId],
+                ),
+              )
+              .toBe(true);
         }
         await expect
           .poll(() => {

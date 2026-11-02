@@ -1,16 +1,17 @@
+import { Effect, Exit, Scope, type ManagedRuntime } from 'effect';
+import {
+  decodeConnectionInput,
+  isConnectionCommand,
+} from '@moonbase/application/connection-schema';
+import {
+  normalizeApplicationError,
+  runApplicationEffect,
+} from '@moonbase/application/effect-client';
 import { decodeChatInput, isChatCommand } from '@moonbase/application/chat-schema';
 import { ApplicationError } from '@moonbase/application/client';
 import type { ChatClient, ChatCommand, ChatSession } from '@moonbase/application/chat-client';
 import type { ConnectionClient, ConnectionCommand } from '@moonbase/application/connection-client';
-import {
-  connectionFields,
-  fields,
-  record,
-  requestId,
-  errorDTO,
-  invalid,
-  type Reply,
-} from './wire.ts';
+import { fields, record, requestId, errorDTO, invalid, type Reply } from './wire.ts';
 
 /** A window's bounded IPC waits and observations; commands still enter shared application handlers. */
 export class ChatIpcSession {
@@ -23,9 +24,12 @@ export class ChatIpcSession {
       watch: boolean;
       closing?: Promise<void>;
       cancelled: boolean;
+      scope: Scope.Closeable;
     }
   >();
   private generation = 0;
+  private runtime: ManagedRuntime.ManagedRuntime<never, ApplicationError>;
+  private document: Scope.Closeable;
   private closed = false;
   private cleanup: Promise<void> = Promise.resolve();
   private disposal?: Promise<void>;
@@ -35,11 +39,14 @@ export class ChatIpcSession {
   readonly context: ChatSession;
   private emit: (id: string, result: Reply) => void;
   constructor(
+    runtime: ManagedRuntime.ManagedRuntime<never, ApplicationError>,
     chat: ChatClient,
     connection: ConnectionClient,
     context: ChatSession,
     emit: (id: string, result: Reply) => void,
   ) {
+    this.runtime = runtime;
+    this.document = Scope.forkUnsafe(runtime.scope, 'parallel');
     this.chat = chat;
     this.connection = connection;
     this.context = context;
@@ -78,10 +85,8 @@ export class ChatIpcSession {
       v = decodeChatInput(operation, v);
       this.authority(v);
     } else if (kind === 'connection') {
-      if (!Object.hasOwn(connectionFields, operation)) invalid();
-      const spec = connectionFields[operation as ConnectionCommand];
-      if (!spec) invalid();
-      fields(v, spec);
+      if (!isConnectionCommand(operation)) invalid();
+      v = decodeConnectionInput(operation as ConnectionCommand, v);
     } else if (kind === 'watch-chat') {
       if (operation !== '') invalid();
       v = decodeChatInput('getChat', v);
@@ -100,7 +105,18 @@ export class ChatIpcSession {
         watch: kind === 'watch-chat' || kind === 'watch-connection',
         cancelled: false,
         closing: undefined as Promise<void> | undefined,
+        scope: Scope.forkUnsafe(this.document, 'parallel'),
       };
+    this.runtime.runSync(
+      Scope.addFinalizer(
+        request.scope,
+        Effect.promise(async () => {
+          request.cancelled = true;
+          await request.stop();
+          if (!request.watch) await request.completion;
+        }),
+      ),
+    );
     const live = () => !this.closed && generation === this.generation && !request.cancelled;
     this.work.set(id, request);
     try {
@@ -132,6 +148,7 @@ export class ChatIpcSession {
       if (!request.watch) {
         if (this.work.get(id) === request) this.work.delete(id);
         request.complete();
+        await this.closeRequest(id, request);
       }
     }
   }
@@ -144,18 +161,17 @@ export class ChatIpcSession {
       watch: boolean;
       cancelled: boolean;
       closing?: Promise<void>;
+      scope: Scope.Closeable;
     },
   ): Promise<void> {
     if (!request.closing) {
       request.cancelled = true;
-      request.closing = (async () => {
-        try {
-          await request.stop();
-          if (!request.watch) await request.completion;
-        } finally {
-          if (this.work.get(id) === request) this.work.delete(id);
-        }
-      })();
+      request.closing = runApplicationEffect(
+        this.runtime,
+        Scope.close(request.scope, Exit.void),
+      ).finally(() => {
+        if (this.work.get(id) === request) this.work.delete(id);
+      });
     }
     return request.closing;
   }
@@ -170,21 +186,35 @@ export class ChatIpcSession {
       errorDTO,
     );
     this.closing.set(id, completion);
+    void completion.then((reply) => {
+      if (reply.ok && this.closing.get(id) === completion) this.closing.delete(id);
+      if (this.closing.size >= 128) this.closed = true;
+    });
     return completion;
   }
   releaseDocument() {
     this.generation++;
-    const pending = [...this.work].map(([id, request]) => this.closeRequest(id, request));
+    for (const request of this.work.values()) request.cancelled = true;
     this.work.clear();
+    const acknowledgments = [...this.closing.values()];
     this.closing.clear();
+    const document = this.document;
+    this.document = Scope.forkUnsafe(this.runtime.scope, 'parallel');
     const previous = this.cleanup;
     this.cleanup = (async () => {
-      const results = await Promise.allSettled([previous, ...pending]);
+      const results = await Promise.allSettled([
+        previous,
+        runApplicationEffect(this.runtime, Scope.close(document, Exit.void)),
+        ...acknowledgments.map(async (acknowledgment) => {
+          const reply = await acknowledgment;
+          if (!reply.ok) throw new ApplicationError(reply.error);
+        }),
+      ]);
       const failures = results.flatMap((r) => (r.status === 'rejected' ? [r.reason] : []));
       if (failures.length)
         throw new ApplicationError({
-          code: 'Unavailable',
-          message: failures.map((error) => ApplicationError.fromUnknown(error).message).join('; '),
+          code: normalizeApplicationError(failures[0]).code,
+          message: failures.map((error) => normalizeApplicationError(error).message).join('; '),
         });
     })();
     return this.cleanup;

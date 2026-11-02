@@ -1,10 +1,16 @@
+import { normalizeApplicationError } from '@moonbase/application/effect-client';
+import {
+  decodeApplicationErrorDTO,
+  type ApplicationErrorDTOSchema,
+} from '@moonbase/application/error-schema';
+import {
+  decodeWorkspaceOutput,
+  decodeWorkspaceEvent,
+} from '@moonbase/application/workspace-schema';
 import {
   ApplicationError,
-  type ApplicationErrorCode,
   type CheckoutTarget,
   type EditorClient,
-  type FileTarget,
-  type WorkspaceCommand,
 } from '@moonbase/application/client';
 
 export const channels = {
@@ -16,9 +22,9 @@ export const channels = {
   ready: 'moonbase:ready',
   configured: 'moonbase:chat-configured',
 } as const;
-export type ErrorDTO = { code: ApplicationErrorCode; message: string; target?: FileTarget };
+export type ErrorDTO = typeof ApplicationErrorDTOSchema.Type;
 export type Reply<T = unknown> = { ok: true; value: T } | { ok: false; error: ErrorDTO };
-export type DesktopAction = 'quit' | 'dispose';
+export type DesktopAction = 'quit' | 'dispose' | 'cleanup-error';
 export interface DesktopBridge {
   readonly clientId: string;
   call(
@@ -28,22 +34,12 @@ export interface DesktopBridge {
   ): Promise<Reply>;
   cancel(id: string): Promise<Reply<null>>;
   events(receive: (id: string, result: Reply) => void): () => void;
-  actions(receive: (action: DesktopAction, id: string) => void): () => void;
+  actions(receive: (action: DesktopAction, id: string, error?: ErrorDTO) => void): () => void;
   quitResult(id: string, consent: boolean, cleanupError?: ErrorDTO): void;
   ready(): void;
   chatConfigured(): Promise<Reply<boolean>>;
   drop(checkout: CheckoutTarget, files: File[]): Promise<Reply<string[]>>;
 }
-const codes: ApplicationErrorCode[] = [
-  'InvalidInput',
-  'Unavailable',
-  'Conflict',
-  'Persistence',
-  'Uncertain',
-  'Cancelled',
-  'Unauthorized',
-  'Incompatible',
-];
 export const invalid = (message: string): never => {
   throw new ApplicationError({ code: 'InvalidInput', message });
 };
@@ -78,22 +74,14 @@ export function checkout(value: unknown): asserts value is CheckoutTarget {
   for (const field of Object.values(v)) string(field);
 }
 export function errorDTO(error: unknown): ErrorDTO {
-  const e = ApplicationError.fromUnknown(error);
+  const e = normalizeApplicationError(error);
   return { code: e.code, message: e.message, ...(e.target ? { target: e.target } : {}) };
 }
 export function failure(value: unknown): ApplicationError {
   try {
-    const v = record(value);
-    keys(v, ['code', 'message', 'target'], ['code', 'message']);
-    if (!codes.includes(v.code as ApplicationErrorCode)) invalid('Invalid error code.');
-    string(v.message, 2 ** 22);
-    if (v.target !== undefined) {
-      const t = record(v.target);
-      keys(t, ['checkout', 'path']);
-      checkout(t.checkout);
-      string(t.path);
-    }
-    return new ApplicationError(v as ErrorDTO);
+    const dto = decodeApplicationErrorDTO(value);
+    if (dto.message.length > 2 ** 22) invalid('Invalid error message.');
+    return new ApplicationError(dto);
   } catch {
     return new ApplicationError({
       code: 'Incompatible',
@@ -102,8 +90,20 @@ export function failure(value: unknown): ApplicationError {
   }
 }
 export function unwrap<T>(value: Reply<T>): T {
-  if (value.ok) return value.value;
-  throw failure(value.error);
+  let reply: Record<string, unknown>;
+  try {
+    reply = record(value);
+    if (reply.ok === true) keys(reply, ['ok', 'value']);
+    else if (reply.ok === false) keys(reply, ['ok', 'error']);
+    else invalid('Invalid reply envelope.');
+  } catch {
+    throw new ApplicationError({
+      code: 'Incompatible',
+      message: 'Malformed desktop reply envelope.',
+    });
+  }
+  if (reply.ok === true) return reply.value as T;
+  throw failure(reply.error);
 }
 export function cancellation(value: unknown): void {
   let error: ApplicationError;
@@ -139,7 +139,10 @@ export function bridgeClient(bridge: DesktopBridge): EditorClient {
         };
       options?.signal?.addEventListener('abort', cancel, { once: true });
       try {
-        return unwrap(await bridge.call('command', { operation, input }, id)) as never;
+        return decodeWorkspaceOutput(
+          operation,
+          unwrap(await bridge.call('command', { operation, input }, id)),
+        );
       } finally {
         options?.signal?.removeEventListener('abort', cancel);
       }
@@ -150,9 +153,9 @@ export function bridgeClient(bridge: DesktopBridge): EditorClient {
       const stop = bridge.events((eventId, result) => {
         if (active && eventId === id) {
           try {
-            receive(unwrap(result) as never);
+            receive(decodeWorkspaceEvent(unwrap(result)));
           } catch (e) {
-            onError(ApplicationError.fromUnknown(e));
+            onError(normalizeApplicationError(e));
           }
         }
       });
@@ -162,7 +165,7 @@ export function bridgeClient(bridge: DesktopBridge): EditorClient {
           if (active && !result.ok) onError(failure(result.error));
         },
         (e) => {
-          if (active) onError(ApplicationError.fromUnknown(e));
+          if (active) onError(normalizeApplicationError(e));
         },
       );
       let completion: Promise<void> | undefined;
@@ -178,7 +181,7 @@ export function bridgeClient(bridge: DesktopBridge): EditorClient {
           },
           (error) => {
             stop();
-            throw ApplicationError.fromUnknown(error);
+            throw normalizeApplicationError(error);
           },
         );
         return completion;
@@ -186,38 +189,3 @@ export function bridgeClient(bridge: DesktopBridge): EditorClient {
     },
   };
 }
-export const commandFields: Record<WorkspaceCommand, [string[], string[]?]> = {
-  openCheckout: [['root']],
-  readFile: [['checkout', 'path']],
-  saveFile: [['target', 'clientId', 'requestId', 'text', 'expectedVersion']],
-  listDirectory: [
-    ['checkout', 'path', 'hideIgnored'],
-    ['checkout', 'path'],
-  ],
-  gitStatus: [['checkout']],
-  readComparison: [['target', 'area']],
-  lookupFiles: [
-    ['checkout', 'query', 'limit', 'history'],
-    ['checkout', 'query'],
-  ],
-  inspectEntries: [['checkout', 'paths']],
-  mutate: [
-    [
-      'id',
-      'clientId',
-      'checkout',
-      'kind',
-      'sources',
-      'destination',
-      'text',
-      'replacements',
-      'nativeReferences',
-    ],
-    ['id', 'clientId', 'checkout', 'kind', 'sources'],
-  ],
-  operationStatus: [['clientId', 'id']],
-  acknowledgeOperation: [['clientId', 'operationClientId', 'id']],
-  loadRecovery: [['clientId']],
-  persistRecovery: [['clientId', 'requestId', 'expectedRevision', 'state']],
-  getRecoveryPublication: [['clientId', 'requestId']],
-};

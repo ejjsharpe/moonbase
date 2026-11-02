@@ -19,15 +19,40 @@ const control = {
     this.released = null;
   },
   cancels: 0,
+  holdChatCancel: false,
+  chatCancelHeld: false,
+  failChatCancel: false,
+  chatCancelGate: null,
+  chatCancelRelease: null,
+  releaseChatCancel() {
+    this.holdChatCancel = false;
+    this.chatCancelRelease?.();
+  },
 };
 globalThis.desktopTest = control;
-ipcMain.on('moonbase:cancel', (_event, id) => {
-  control.cancels++;
-  control.cancelIds.push(id);
-});
-ipcMain.on('moonbase-chat:cancel', (_event, id) => control.chatCancelIds.push(id));
 ipcMain.handle = (name, listener) =>
   register(name, async (event, input) => {
+    if (name === 'moonbase:cancel') {
+      control.cancels++;
+      control.cancelIds.push(input);
+    }
+    if (name === 'moonbase-chat:cancel') {
+      control.chatCancelIds.push(input);
+      if (control.holdChatCancel) {
+        control.chatCancelHeld = true;
+        control.chatCancelGate ??= new Promise((resolve) => {
+          control.chatCancelRelease = resolve;
+        });
+        await control.chatCancelGate;
+      }
+      const reply = await listener(event, input);
+      if (control.failChatCancel)
+        return {
+          ok: false,
+          error: { code: 'Persistence', message: 'Controlled cancellation acknowledgment failure' },
+        };
+      return reply;
+    }
     if (name === 'moonbase-chat:call') control.chatCalls.push(structuredClone(input));
     if (name !== 'moonbase:call') return listener(event, input);
     control.calls.push(structuredClone(input));

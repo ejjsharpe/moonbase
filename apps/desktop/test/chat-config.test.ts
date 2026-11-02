@@ -23,7 +23,7 @@ test('private configuration is owner-only, bounded, explicit and projected; bad 
   const result = await readConfiguration(path);
   assert.deepEqual(result.context, { host: value.profile.expected, actorId: 'owner' });
   assert(!JSON.stringify(result.context).includes(value.token));
-  assert.equal(result.ssh.sshExecutable, undefined);
+  assert.equal(result.ssh.sshExecutable, '/usr/bin/ssh');
   await writeFile(path, JSON.stringify({ ...value, sshExecutable: '/usr/bin/ssh' }));
   assert.equal((await readConfiguration(path)).ssh.sshExecutable, '/usr/bin/ssh');
   for (const invalid of [

@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { test, after } from 'node:test';
+import { Layer, ManagedRuntime } from 'effect';
+const runtime = ManagedRuntime.make(Layer.empty);
+after(() => runtime.dispose());
 import type { ChatClient, ChatSnapshot } from '@moonbase/application/chat-client';
 import type { ConnectionClient } from '@moonbase/application/connection-client';
 import { ApplicationError } from '@moonbase/application/client';
@@ -40,7 +43,7 @@ function fixture() {
     },
     watch: () => async () => {},
   };
-  const owner = new ChatIpcSession(chat, connection, context, () => {});
+  const owner = new ChatIpcSession(runtime, chat, connection, context, () => {});
   return {
     owner,
     get calls() {
@@ -145,7 +148,7 @@ test('chat cancellation waits for finalizers, fences callbacks and leaves comman
     command: async () => undefined as never,
     watch: () => async () => {},
   };
-  const owner = new ChatIpcSession(chat, connection, context, () => emitted++);
+  const owner = new ChatIpcSession(runtime, chat, connection, context, () => emitted++);
   await owner.call('watch-chat', '', { target }, 'watch');
   let done = false;
   const cleanup = owner.cancel('watch');
@@ -164,5 +167,5 @@ test('chat cancellation waits for finalizers, fences callbacks and leaves comman
   assert.equal(result.error.code, 'Persistence');
   assert.equal(await owner.cancel('watch'), result);
   assert.equal(closes, 1);
-  await owner.dispose();
+  await assert.rejects(owner.dispose(), { code: 'Persistence' });
 });

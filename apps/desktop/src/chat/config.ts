@@ -1,20 +1,18 @@
 import { open } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { isAbsolute } from 'node:path';
-import type { SshConfiguration } from '@moonbase/ssh';
+import {
+  decodeSshConfiguration,
+  SshConfigurationSchema,
+  type SshConfiguration,
+} from '@moonbase/ssh/configuration';
 import type { ChatSession } from '@moonbase/application/chat-client';
 import * as Schema from 'effect/Schema';
-import { ChatIdentifierSchema, ChatHostTargetSchema } from '@moonbase/application/chat-schema';
+import { ChatIdentifierSchema } from '@moonbase/application/chat-schema';
 import { invalid } from './wire.ts';
 
 const configurationSchema = Schema.Struct({
-  profile: Schema.Struct({
-    id: ChatIdentifierSchema,
-    label: Schema.String,
-    destination: Schema.String,
-    remotePort: Schema.Number,
-    expected: ChatHostTargetSchema,
-  }),
+  profile: SshConfigurationSchema.fields.profile,
   token: Schema.String.check(Schema.isBetweenLength(32, 4096)),
   actorId: ChatIdentifierSchema,
   sshExecutable: Schema.optional(Schema.String.check(Schema.makeFilter(isAbsolute))),
@@ -53,17 +51,11 @@ export async function readConfiguration(path: string | undefined): Promise<ChatC
       h = p.expected;
     // Project the private file explicitly; no private extras enter public snapshots or renderer context.
     return {
-      ssh: {
-        profile: {
-          id: p.id,
-          label: p.label,
-          destination: p.destination,
-          remotePort: p.remotePort,
-          expected: { hostId: h.hostId, storeId: h.storeId },
-        },
+      ssh: decodeSshConfiguration({
+        profile: p,
         token: v.token,
         ...(v.sshExecutable ? { sshExecutable: v.sshExecutable } : {}),
-      },
+      }),
       context: { host: { hostId: h.hostId, storeId: h.storeId }, actorId: v.actorId },
     };
   } finally {

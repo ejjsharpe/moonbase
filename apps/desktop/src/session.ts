@@ -1,3 +1,14 @@
+import { Effect, Exit, Scope, type ManagedRuntime } from 'effect';
+import {
+  decodeWorkspaceInput,
+  decodeWorkspaceOutput,
+  decodeWorkspaceWatchInput,
+  isWorkspaceCommand,
+} from '@moonbase/application/workspace-schema';
+import {
+  normalizeApplicationError,
+  runApplicationEffect,
+} from '@moonbase/application/effect-client';
 import {
   ApplicationError,
   type CheckoutTarget,
@@ -7,7 +18,6 @@ import {
 } from '@moonbase/application/client';
 import {
   checkout,
-  commandFields,
   errorDTO,
   invalid,
   keys,
@@ -42,7 +52,7 @@ type Request = {
   completion: Promise<void>;
   complete: () => void;
   close?: Promise<void>;
-  cleanupError?: unknown;
+  scope: Scope.Closeable;
 };
 /** Authority belongs to this main-frame session, never to an arbitrary renderer root or caller ID. */
 export class EditorSession {
@@ -52,22 +62,23 @@ export class EditorSession {
   private operations = new Set<string>();
   private active = new Map<string, Request>();
   private generation = 0;
-  private captures = new Map<
-    { checkout: CheckoutTarget; clientId: string; references: string[] },
-    number
-  >();
   private closing = new Map<string, Promise<Reply<null>>>();
   private cleanup: Promise<void> = Promise.resolve();
   private disposal?: Promise<void>;
+  private runtime: ManagedRuntime.ManagedRuntime<never, ApplicationError>;
+  private document: Scope.Closeable;
   private closed = false;
   private client: EditorClient;
   private native: NativeActions;
   private send: (id: string, result: Reply<WorkspaceEvent>) => void;
   constructor(
+    runtime: ManagedRuntime.ManagedRuntime<never, ApplicationError>,
     client: EditorClient,
     native: NativeActions,
     send: (id: string, result: Reply<WorkspaceEvent>) => void,
   ) {
+    this.runtime = runtime;
+    this.document = Scope.forkUnsafe(runtime.scope, 'parallel');
     this.client = client;
     this.native = native;
     this.send = send;
@@ -106,9 +117,7 @@ export class EditorSession {
     for (const item of Object.values(object)) this.inspect(item, depth + 1);
   }
   private validate(operation: WorkspaceCommand, input: unknown) {
-    const v = record(input),
-      [allowed, required] = commandFields[operation];
-    keys(v, allowed, required ?? allowed);
+    const v = record(decodeWorkspaceInput(operation, input));
     // Domain/path/state validation remains in WorkspaceService; this boundary additionally binds caller and approval.
     if (JSON.stringify(v).length > 32 * 1024 * 1024) invalid('Command input is too large.');
     this.inspect(v);
@@ -154,7 +163,8 @@ export class EditorSession {
   }
   async call(method: unknown, input: unknown, id: unknown): Promise<Reply> {
     let reserved: Request | undefined;
-    const generation = this.generation;
+    const generation = this.generation,
+      document = this.document;
     try {
       requestId(id);
       if (this.closed)
@@ -173,7 +183,19 @@ export class EditorSession {
         cancelled: false,
         completion: completion.promise,
         complete: () => completion.resolve(),
+        scope: Scope.forkUnsafe(this.document, 'parallel'),
       };
+      const request = reserved;
+      this.runtime.runSync(
+        Scope.addFinalizer(
+          request.scope,
+          Effect.promise(async () => {
+            request.cancelled = true;
+            await request.cancel();
+            if (!request.watch) await request.completion;
+          }),
+        ),
+      );
       this.active.set(id, reserved);
       const live = () => !this.closed && generation === this.generation && !reserved?.cancelled;
       const requireLive = () => {
@@ -184,14 +206,13 @@ export class EditorSession {
       if (method === 'command') {
         const envelope = record(input);
         keys(envelope, ['operation', 'input']);
-        if (
-          typeof envelope.operation !== 'string' ||
-          !Object.hasOwn(commandFields, envelope.operation)
-        )
-          invalid('Unknown application command.');
+        if (!isWorkspaceCommand(envelope.operation)) invalid('Unknown application command.');
         const operation = envelope.operation as WorkspaceCommand;
         const validated = this.validate(operation, envelope.input);
-        value = await this.client.command(operation, validated as never, { signal: abort.signal });
+        value = decodeWorkspaceOutput(
+          operation,
+          await this.client.command(operation, validated as never, { signal: abort.signal }),
+        );
         if (operation === 'openCheckout' && live()) {
           checkout(value);
           this.known.set(value.checkoutId, value);
@@ -238,21 +259,17 @@ export class EditorSession {
         );
         const capture = { checkout, clientId: this.clientId, references };
         // Install cleanup ownership before any successful capture is published to the renderer.
-        this.captures.set(capture, generation);
-        if (!live()) {
-          try {
-            await this.native.release(capture);
-          } catch (error) {
-            reserved.cleanupError = error;
-            throw error;
-          }
-          this.captures.delete(capture);
-          requireLive();
-        }
+        await runApplicationEffect(
+          this.runtime,
+          Scope.addFinalizer(
+            document,
+            Effect.promise(() => this.native.release(capture)),
+          ),
+        );
+        requireLive();
         value = references;
       } else if (method === 'watch') {
-        const v = record(input);
-        keys(v, ['checkout', 'paths']);
+        const v = decodeWorkspaceWatchInput(input);
         this.inspect(v);
         this.approved(v.checkout);
         if (
@@ -283,21 +300,21 @@ export class EditorSession {
     } finally {
       if (reserved && !reserved.watch && this.active.get(id as string) === reserved)
         this.active.delete(id as string);
-      if (reserved && !reserved.watch) reserved.complete();
+      if (reserved && !reserved.watch) {
+        reserved.complete();
+        await this.closeRequest(id as string, reserved);
+      }
     }
   }
   private closeRequest(id: string, active: Request): Promise<void> {
     if (!active.close) {
       active.cancelled = true;
-      active.close = (async () => {
-        try {
-          await active.cancel();
-          if (!active.watch) await active.completion;
-          if (active.cleanupError) throw active.cleanupError;
-        } finally {
-          if (this.active.get(id) === active) this.active.delete(id);
-        }
-      })();
+      active.close = runApplicationEffect(
+        this.runtime,
+        Scope.close(active.scope, Exit.void),
+      ).finally(() => {
+        if (this.active.get(id) === active) this.active.delete(id);
+      });
     }
     return active.close;
   }
@@ -312,29 +329,36 @@ export class EditorSession {
       (error) => ({ ok: false, error: errorDTO(error) }),
     );
     this.closing.set(id, completion);
+    void completion.then((reply) => {
+      if (reply.ok && this.closing.get(id) === completion) this.closing.delete(id);
+      if (this.closing.size >= 128) this.closed = true;
+    });
     return completion;
   }
   releaseDocument() {
-    const generation = this.generation++;
+    this.generation++;
     this.rootGrants.clear();
-    const pending = [...this.active].map(([id, active]) => this.closeRequest(id, active));
+    for (const request of this.active.values()) request.cancelled = true;
     this.active.clear();
+    const acknowledgments = [...this.closing.values()];
     this.closing.clear();
+    const document = this.document;
+    this.document = Scope.forkUnsafe(this.runtime.scope, 'parallel');
     const previous = this.cleanup;
     this.cleanup = (async () => {
-      const results = await Promise.allSettled([previous, ...pending]);
-      const captures = [...this.captures]
-        .filter(([, owner]) => owner <= generation)
-        .map(([capture]) => capture);
-      for (const capture of captures) this.captures.delete(capture);
-      results.push(
-        ...(await Promise.allSettled(captures.map((capture) => this.native.release(capture)))),
-      );
+      const results = await Promise.allSettled([
+        previous,
+        runApplicationEffect(this.runtime, Scope.close(document, Exit.void)),
+        ...acknowledgments.map(async (acknowledgment) => {
+          const reply = await acknowledgment;
+          if (!reply.ok) throw new ApplicationError(reply.error);
+        }),
+      ]);
       const failures = results.flatMap((r) => (r.status === 'rejected' ? [r.reason] : []));
       if (failures.length)
         throw new ApplicationError({
-          code: 'Unavailable',
-          message: failures.map((error) => ApplicationError.fromUnknown(error).message).join('; '),
+          code: normalizeApplicationError(failures[0]).code,
+          message: failures.map((error) => normalizeApplicationError(error).message).join('; '),
         });
     })();
     return this.cleanup;

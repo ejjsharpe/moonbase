@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Button } from '@base-ui/react/button';
 import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
@@ -23,9 +23,6 @@ export function ChatView({ controller }: { controller: ChatController }) {
   const entries = [...(snapshot?.entries ?? []), ...state.older]
     .filter((e, i, all) => all.findIndex((q) => q.id === e.id) === i)
     .reverse();
-  useEffect(() => {
-    void controller.start();
-  }, [controller]);
   return (
     <div {...stylex.props(workbench.page, styles.page)}>
       <header {...stylex.props(workbench.toolbar, styles.header)}>

@@ -74,6 +74,7 @@
       "name": "@moonbase/chat",
       "dependencies": {
         "@moonbase/application": "workspace:*",
+        "effect": "4.1.0",
       },
       "devDependencies": {
         "@moonbase/config": "workspace:*",

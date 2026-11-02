@@ -1,6 +1,12 @@
 import './chat-preload.ts';
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
-import { channels, type DesktopBridge, type DesktopAction, type Reply } from './wire.ts';
+import {
+  channels,
+  type DesktopBridge,
+  type DesktopAction,
+  type ErrorDTO,
+  type Reply,
+} from './wire.ts';
 const active = new Set<string>();
 const call = async <T = unknown>(method: string, input: unknown, id: string) => {
   active.add(id);
@@ -41,7 +47,8 @@ const bridge: DesktopBridge = {
     return () => ipcRenderer.removeListener(channels.event, listener);
   },
   actions(receive) {
-    const listener = (_: unknown, action: DesktopAction, id: string) => receive(action, id);
+    const listener = (_: unknown, action: DesktopAction, id: string, error?: ErrorDTO) =>
+      receive(action, id, error);
     ipcRenderer.on(channels.action, listener);
     return () => ipcRenderer.removeListener(channels.action, listener);
   },

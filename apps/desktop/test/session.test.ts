@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { test, after } from 'node:test';
+import { Layer, ManagedRuntime } from 'effect';
+const runtime = ManagedRuntime.make(Layer.empty);
+after(() => runtime.dispose());
 import {
   ApplicationError,
   emptyRecovery,
@@ -55,6 +58,7 @@ function fixture() {
     },
   };
   const session = new EditorSession(
+    runtime,
     client,
     {
       chooseCheckout: async () => '/approved',
@@ -211,7 +215,13 @@ test('document release retains approvals but cancels waits and isolates reused o
   assert((await f.call('loadRecovery', { clientId: 'desktop-primary' })).ok);
   await f.session.dispose();
   const client: EditorClient = {
-    command: async () => ({ state: { checkouts: [target] }, operations: [] }) as never,
+    command: async () =>
+      ({
+        revision: 0,
+        state: { ...emptyRecovery('desktop-primary'), checkouts: [target] },
+        operations: [],
+        errors: [],
+      }) as never,
     watch: (_input, receive) => {
       receives.push(receive);
       return async () => {
@@ -220,6 +230,7 @@ test('document release retains approvals but cancels waits and isolates reused o
     },
   };
   const owner = new EditorSession(
+    runtime,
     client,
     { chooseCheckout: async () => null, imports: async () => [], release: async () => {} },
     () => sends++,
@@ -263,6 +274,7 @@ test('cancel joins the actual watch finalizer, fences delivery and retains its f
     },
   };
   const owner = new EditorSession(
+    runtime,
     client,
     { chooseCheckout: async () => null, imports: async () => [], release: async () => {} },
     () => sends++,
@@ -298,7 +310,7 @@ test('cancel joins the actual watch finalizer, fences delivery and retains its f
   assert.equal(result.error.code, 'Persistence');
   assert.equal(releases, 1);
   assert.equal(await owner.cancel('watch'), result);
-  await owner.dispose();
+  await assert.rejects(owner.dispose(), { code: 'Persistence' });
 });
 
 test('document replacement joins late capture and releases it before completion without granting a new document', async () => {
@@ -316,6 +328,7 @@ test('document replacement joins late capture and releases it before completion 
     watch: () => async () => {},
   };
   const owner = new EditorSession(
+    runtime,
     client,
     {
       chooseCheckout: () => picker.promise,
