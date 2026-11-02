@@ -9,7 +9,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { Effect, Layer, ManagedRuntime } from 'effect';
 import { ApplicationError, emptyRecovery, type CommandInput } from '@moonbase/contracts/workspace';
 import { WorkspaceService } from '@moonbase/contracts/services';
-import { makeEditorClient } from '@moonbase/application/runtime-client';
+import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { Store, pendingSaves } from '../src/store.ts';
 import { WorkspaceLive } from '../src/index.ts';
 const binary = fileURLToPath(new URL('../dist/filesystem', import.meta.url));

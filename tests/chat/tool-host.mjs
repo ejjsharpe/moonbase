@@ -13,7 +13,7 @@ import { createRegistry, defineExtension, defineTool } from '@earendil-works/pi-
 import { Type } from 'typebox';
 import { PiRuntimeLive } from '@moonbase/pi-runtime';
 import { serveChat } from '@moonbase/pi-runtime/server';
-import { makeChatClient } from '@moonbase/application/runtime-client';
+import { makeChatClient } from '@moonbase/application/runtime/clients';
 const config = JSON.parse(readFileSync(process.argv[2], 'utf8'));
 const models = createModels(),
   faux = fauxProvider({ tokensPerSecond: 100, tokenSize: { min: 4, max: 4 } });

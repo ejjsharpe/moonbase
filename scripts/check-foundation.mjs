@@ -90,7 +90,7 @@ for (const [entry, owner] of [
       `Foreign package reached ${entry}: ${input}`,
     );
     assert(
-      !/packages\/application\/src\/(?:services|handlers|runtime-client|host-health)\.ts$/.test(
+      !/packages\/application\/src\/(?:(?:services|handlers|runtime-client|host-health)|runtime\/(?:handlers|clients))\.ts$/.test(
         input,
       ),
       `Privileged application implementation reached ${entry}: ${input}`,

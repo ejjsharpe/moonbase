@@ -4,7 +4,7 @@ import { Effect, Layer, ManagedRuntime, Stream } from 'effect';
 import { ApplicationError } from '../src/client.ts';
 import type { ConnectionSnapshot } from '../src/connection-client.ts';
 import { chatHostVersion, chatProtocolVersion } from '../src/host-client.ts';
-import { makeConnectionClient } from '../src/runtime-client.ts';
+import { makeConnectionClient } from '@moonbase/application/runtime/clients';
 import {
   ConnectionService,
   releaseResource,

@@ -8,7 +8,7 @@ import {
 import {
   normalizeApplicationError,
   runApplicationEffect,
-} from '@moonbase/application/effect-client';
+} from '@moonbase/application/runtime/effect-client';
 import {
   ApplicationError,
   type CheckoutTarget,

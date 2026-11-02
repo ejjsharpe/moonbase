@@ -2,7 +2,7 @@ import { createRoot } from 'react-dom/client';
 import { createRef, StrictMode, useState } from 'react';
 import { Effect, Exit, Scope, ManagedRuntime } from 'effect';
 const modelScope = Scope.makeUnsafe();
-import { makeEditorClient } from '@moonbase/application/runtime-client';
+import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import {
   EditorWorkbench,
   makeEditorModel,

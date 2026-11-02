@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { ManagedRuntime } from 'effect';
-import { makeEditorClient } from '@moonbase/application/runtime-client';
+import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { WorkspaceLive } from '../src/index.ts';
 const [root, dataDirectory, filesystemHelper, ripgrepExecutable] = process.argv.slice(2);
 const runtime = ManagedRuntime.make(

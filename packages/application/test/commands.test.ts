@@ -8,7 +8,7 @@ import {
   type WorkspaceEvent,
 } from '../src/client.ts';
 import { WorkspaceService, releaseResource, type WorkspaceServiceShape } from '../src/services.ts';
-import { makeEditorClient } from '../src/runtime-client.ts';
+import { makeEditorClient } from '@moonbase/application/runtime/clients';
 
 const checkout: CheckoutTarget = {
   hostId: 'host',

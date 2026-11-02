@@ -23,7 +23,7 @@ import {
   type FileTarget,
   type WorkspaceEvent,
 } from '@moonbase/application/client';
-import { makeEditorClient } from '@moonbase/application/runtime-client';
+import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import {
   makeEditorModel,
   makeEditorController,

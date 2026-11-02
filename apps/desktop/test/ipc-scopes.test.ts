@@ -4,8 +4,8 @@ import { Effect, Layer, ManagedRuntime, Stream } from 'effect';
 import { ApplicationError } from '@moonbase/application/client';
 import type { ChatClient } from '@moonbase/application/chat-client';
 import { ConnectionService, releaseResource } from '@moonbase/application/services';
-import { makeConnectionClient } from '@moonbase/application/runtime-client';
-import { runApplicationEffect } from '@moonbase/application/effect-client';
+import { makeConnectionClient } from '@moonbase/application/runtime/clients';
+import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
 import { cancellation } from '../src/wire.ts';
 import { ChatIpcSession } from '../src/chat/session.ts';
 

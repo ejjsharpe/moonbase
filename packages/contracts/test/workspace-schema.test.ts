@@ -301,7 +301,7 @@ for (const entry of ['workspace-schema', 'connection-schema', 'host-schema', 'er
     });
     assert.deepEqual(
       Object.keys(bundle.metafile.inputs).filter((path) =>
-        /application\/src\/(?:handlers|runtime-client|services|host-health)\.ts|packages\/(?:pi-runtime|ssh|workspace)\/|node_modules\/(?:\.bun\/[^/]+\/node_modules\/)?react(?:-dom)?\/|electron|@earendil-works|node:/.test(
+        /packages\/(?:application|pi-runtime|ssh|workspace)\/|node_modules\/(?:\.bun\/[^/]+\/node_modules\/)?react(?:-dom)?\/|electron|@earendil-works|node:/.test(
           path,
         ),
       ),

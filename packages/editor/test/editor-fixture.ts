@@ -1,6 +1,6 @@
 import { acquireEditor } from './model-fixture.ts';
 import { ManagedRuntime } from 'effect';
-import { makeEditorClient } from '@moonbase/application/runtime-client';
+import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { type CheckoutTarget } from '@moonbase/application/client';
 import { memoryWorkspace } from '@moonbase/editor/memory';
 

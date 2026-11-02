@@ -11,7 +11,7 @@ import { connect as connectSocket } from 'node:net';
 import { Effect, Exit, Layer, ManagedRuntime, Scope, Stream } from 'effect';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider, fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux';
-import { makeChatClient } from '@moonbase/application/runtime-client';
+import { makeChatClient } from '@moonbase/application/runtime/clients';
 import { ConnectionService, type VerifiedChatEndpoint } from '@moonbase/contracts/services';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import type { ChatClient } from '@moonbase/contracts/chat';

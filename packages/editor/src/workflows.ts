@@ -1,4 +1,4 @@
-import { normalizeApplicationError } from '@moonbase/application/effect-client';
+import { normalizeApplicationError } from '@moonbase/application/runtime/effect-client';
 import { Effect, Exit, Fiber, Scope } from 'effect';
 import {
   type ApplicationError,

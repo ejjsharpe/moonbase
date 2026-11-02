@@ -7,7 +7,7 @@ import { Effect, Exit, Layer, ManagedRuntime, Scope } from 'effect';
 import {
   normalizeApplicationError,
   runApplicationEffect,
-} from '@moonbase/application/effect-client';
+} from '@moonbase/application/runtime/effect-client';
 import { RendererCleanup, releaseInstance } from './cleanup.ts';
 import { ChatView } from '../chat/view.tsx';
 import { browserClients, type ChatBridge } from '../chat/wire.ts';

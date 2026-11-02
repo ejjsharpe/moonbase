@@ -16,7 +16,10 @@
     "./connection-schema": "./src/connection-schema.ts",
     "./host-schema": "./src/host-schema.ts",
     "./error-schema": "./src/error-schema.ts",
-    "./effect-client": "./src/effect-client.ts"
+    "./effect-client": "./src/effect-client.ts",
+    "./runtime/handlers": "./src/runtime/handlers.ts",
+    "./runtime/clients": "./src/runtime/clients.ts",
+    "./runtime/effect-client": "./src/runtime/effect-client.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",

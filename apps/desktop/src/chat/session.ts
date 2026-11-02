@@ -6,7 +6,7 @@ import {
 import {
   normalizeApplicationError,
   runApplicationEffect,
-} from '@moonbase/application/effect-client';
+} from '@moonbase/application/runtime/effect-client';
 import { decodeChatInput, isChatCommand } from '@moonbase/application/chat-schema';
 import { ApplicationError, type ObservationClose } from '@moonbase/application/client';
 import type { ChatClient, ChatCommand, ChatSession } from '@moonbase/application/chat-client';

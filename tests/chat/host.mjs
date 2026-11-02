@@ -6,7 +6,7 @@ import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider, fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux';
 import { PiRuntimeLive } from '@moonbase/pi-runtime';
 import { serveChat } from '@moonbase/pi-runtime/server';
-import { makeChatClient } from '@moonbase/application/runtime-client';
+import { makeChatClient } from '@moonbase/application/runtime/clients';
 
 const config = JSON.parse(readFileSync(process.argv[2], 'utf8'));
 const faux = fauxProvider({ tokensPerSecond: 100000 }),

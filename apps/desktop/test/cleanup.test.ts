@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Effect, Exit, Layer, ManagedRuntime, Scope } from 'effect';
 import { ApplicationError } from '@moonbase/application/client';
-import { runApplicationEffect } from '@moonbase/application/effect-client';
+import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
 import { RendererCleanup, releaseInstance } from '../src/renderer/cleanup.ts';
 
 test('root cleanup retains failed/pending instance ownership while another namespace works and Quit drains', async () => {
