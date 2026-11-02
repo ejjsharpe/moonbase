@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFile } from 'node:fs/promises';
-import type { ApplicationError } from '@moonbase/application/client';
-import type { ChatSnapshot } from '@moonbase/application/chat-client';
+import type { ApplicationError } from '@moonbase/contracts/errors';
+import type { ChatSnapshot } from '@moonbase/contracts/chat';
 import { controlledHostFixture, until } from './fixture.ts';
 
 async function fixture(t: { after(fn: () => Promise<void>): void }, hold = false) {

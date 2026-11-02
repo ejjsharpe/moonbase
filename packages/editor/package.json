@@ -4,8 +4,6 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./state": "./src/editor.ts",
-    "./memory": "./src/memory.ts",
     "./workers": "./src/workers.ts"
   },
   "scripts": {

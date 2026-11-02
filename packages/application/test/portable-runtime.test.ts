@@ -15,7 +15,7 @@ for (const entry of ['', '/runtime/handlers', '/runtime/clients', '/runtime/effe
     });
     assert.deepEqual(
       Object.keys(bundle.metafile.inputs).filter((path) =>
-        /application\/src\/(?:services|host-health)\.ts|packages\/(?:pi-runtime|ssh|workspace)\/|node_modules\/(?:\.bun\/[^/]+\/node_modules\/)?(?:react(?:-dom)?|monaco-editor)\/|electron|@earendil-works|node:/.test(
+        /packages\/(?:pi-runtime|ssh|workspace)\/|node_modules\/(?:\.bun\/[^/]+\/node_modules\/)?(?:react(?:-dom)?|monaco-editor)\/|electron|@earendil-works|node:/.test(
           path,
         ),
       ),

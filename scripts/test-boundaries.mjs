@@ -42,6 +42,17 @@ assert(
     (error) => error.includes('public package export'),
   ),
 );
+for (const specifier of ['@moonbase/chat', '@moonbase/application/client'])
+  assert(
+    check({ 'apps/desktop/src/main.ts': `import '${specifier}';` }).some((error) =>
+      error.includes('public package export'),
+    ),
+  );
+assert(
+  check({ 'packages/editor/src/index.ts': "import type {} from '@moonbase/pi-runtime';" }).some(
+    (error) => error.includes('presentation depends on infrastructure'),
+  ),
+);
 assert(
   check({
     'packages/application/src/index.ts': "import '../../contracts/src/index.ts';",

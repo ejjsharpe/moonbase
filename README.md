@@ -6,9 +6,8 @@ A macOS workbench for local editing and optional remote Pi Durable chat. Reusabl
 | --- | --- |
 | [Contracts](packages/contracts/README.md) | Independent DTOs, schemas, clients and Effect service ports |
 | [Effect helpers](packages/effect/README.md) | Safe shared failure normalization and resource release |
-| [Application](packages/application/README.md) | Shared dispatch and runtime-bound application clients |
-| [Editor](packages/editor/README.md) | React/Monaco workbench and independent editor state |
-| [Chat feature](packages/application/docs/CHAT.md) | Headless chat state and draft preservation in application |
+| [Application](packages/application/README.md) | Headless editor/chat features, composition, lifecycle and shared dispatch |
+| [Editor](packages/editor/README.md) | React/Monaco presentation receiving an application controller |
 | [Workspace](packages/workspace/README.md) | Local files, Git and recovery persistence |
 | [Pi runtime](packages/pi-runtime/README.md) | Pi chat execution, host transport and remote adapter |
 | [SSH](packages/ssh/README.md) | Scoped, authenticated SSH connectivity |
@@ -18,7 +17,9 @@ A macOS workbench for local editing and optional remote Pi Durable chat. Reusabl
 
 Packages consume public exports, accept injected dependencies and stay independent of client applications. Each process owns one scoped Effect runtime; standalone clients acquire only the capabilities they use. See [AGENTS.md](AGENTS.md) for contribution rules and [DESIGN.md](docs/DESIGN.md) for UI guidance.
 
-The [headless migration architecture and baseline](docs/HEADLESS-ARCHITECTURE.md) records the target ownership, temporary import edges, helper decisions and ticket handoffs for [epic #63](https://github.com/ejjsharpe/moonbase/issues/63).
+Use [`createMoonbaseApplication`](packages/application/docs/LIFECYCLE.md) with injected clients, stable identities and synchronous storage for editor-only, chat-only or combined applications. Each application owns one client runtime and independent feature scopes; Electron main keeps its privileged runtime. The [direct headless consumer](packages/application/docs/HEADLESS-CONSUMER.md) demonstrates ordinary TypeScript use and the separate responsibilities of a future process/language adapter.
+
+The [architecture and baseline](docs/HEADLESS-ARCHITECTURE.md) records enforced ownership, public exports, helper decisions and compatibility evidence. The [epic delivery ledger](https://github.com/ejjsharpe/moonbase/issues/63#issuecomment-6585556403) tracks final review, source, controlled, native and packaged acceptance separately.
 
 ## Development
 

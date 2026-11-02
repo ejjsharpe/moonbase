@@ -1,4 +1,0 @@
-{
-  "packages/application/src/host-health.ts -> @moonbase/ssh/host-health": 72,
-  "packages/chat/src/index.ts -> @moonbase/application/chat": 72
-}

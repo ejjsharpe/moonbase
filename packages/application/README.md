@@ -15,13 +15,8 @@ The [direct headless consumer](docs/HEADLESS-CONSUMER.md) runs all three composi
 | `runtime/handlers` | Shared command dispatch and subscriptions |
 | `runtime/clients` | Editor/chat/connection clients bound to an existing process runtime |
 | `runtime/effect-client` | Invocation and awaitable observation close bound to a supplied runtime |
-| `handlers`, `runtime-client`, `effect-client` | Temporary aliases of the canonical runtime entries |
-| `client`, `chat-client`, `connection-client`, `host-client` | Temporary aliases of canonical contracts client definitions |
-| `chat-schema`, `workspace-schema`, `connection-schema`, `host-schema`, `error-schema` | Temporary aliases of canonical contracts schemas |
-| `services` | Temporary canonical service-tag aliases and `releaseResource` compatibility export |
-| `host-health` | Temporary privileged alias of `@moonbase/ssh/host-health`; excluded from portable graphs |
 
-The compatibility exports retain the exact canonical error brand, decoder functions and service tags; they are removed after all migration callers move. `@moonbase/effect` owns shared safe normalization/release behavior; application preserves its existing public normalizer reexport. Application invocation creates no runtime, retries no operation and leaves injected resource ownership with its caller.
+`@moonbase/contracts` supplies the single error brand, decoder functions and service tags. `@moonbase/effect` owns shared safe normalization/release behavior; application invocation reexports its normalizer. Runtime helpers create no runtime, retry no operation and leave injected resource ownership with their caller. Only the application factory owns the client runtime it creates.
 
 Use the public runtime entries directly from TypeScript. `makeEditorClient`, `makeChatClient` and `makeConnectionClient` bind the process root's existing runtime to the same typed handlers; they acquire no second service graph. Headless features use a caller-supplied runtime and bind their already-acquired models. The [chat API](docs/CHAT.md) preserves synchronous snapshots/drafts/storage and reports awaitable observation cleanup; importing or acquiring it neither installs backend capabilities nor Connects, Sends or Stops. Command cancellation affects that invocation; observation close fences delivery immediately and awaits its actual finalizers. Synchronous snapshot subscriptions retain their separate synchronous unsubscribe API. See the [runtime API handoff](docs/SCHEMAS.md) for exact signatures and ownership.
 
