@@ -1,7 +1,7 @@
 import type { TaskId, ConversationId } from '@earendil-works/pi-durable';
 import assert from 'node:assert/strict';
 import { test, mock } from 'node:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ManagedRuntime } from 'effect';
@@ -80,6 +80,9 @@ async function fixture(
     },
     async dispose() {
       await runtime.dispose();
+    },
+    async disposeObserved() {
+      await runApplicationEffect(runtime, runtime.disposeEffect);
     },
     async create(requestId = 'create') {
       return (
@@ -1791,75 +1794,283 @@ test('maximum escaped Send text retains its original serialized binding across r
   assert.equal(f.faux.state.callCount, 1);
 });
 
-test('root disposal retains a terminal waiter cleanup failure raised during interruption', async (t) => {
+for (const count of [1, 2])
+  test(`root disposal retains ${count} terminal waiter cleanup failures raised during interruption`, async (t) => {
+    const original = Harness.open;
+    let entered!: () => void,
+      modelsEntered!: () => void,
+      modelEntries = 0,
+      waiters = 0,
+      cancelled = 0,
+      modelAborted = 0;
+    const waiting = new Promise<void>((resolve) => (entered = resolve)),
+      modelsStarted = new Promise<void>((resolve) => (modelsEntered = resolve)),
+      failures: string[] = [];
+    mock.method(Harness, 'open', async (...args: Parameters<typeof original>) => {
+      const harness = await original(...args),
+        wait = harness.waitForTask.bind(harness);
+      harness.abortTask = async () => 'marked';
+      harness.waitForTask = async <R>(id: TaskId<R>, context: Parameters<typeof wait>[1]) => {
+        if (++waiters === count) entered();
+        try {
+          return await wait(id, context);
+        } catch {
+          assert(context.abortSignal?.aborted);
+          cancelled++;
+          const message = 'Controlled shutdown waiter cleanup failure ' + id;
+          failures.push(message);
+          throw new ApplicationError({ code: 'Persistence', message });
+        } finally {
+          waiters--;
+        }
+      };
+      return harness;
+    });
+    t.after(() => mock.restoreAll());
+    const f = await fixture(t),
+      targets = await Promise.all(
+        Array.from({ length: count }, (_, index) => f.create('create-' + index)),
+      );
+    f.faux.setResponses(
+      Array.from({ length: count }, () => async (_messages, options) => {
+        if (++modelEntries === count) modelsEntered();
+        await new Promise<void>((resolve) => {
+          if (options?.signal?.aborted) {
+            modelAborted++;
+            return resolve();
+          }
+          options?.signal?.addEventListener(
+            'abort',
+            () => {
+              modelAborted++;
+              resolve();
+            },
+            { once: true },
+          );
+        });
+        return fauxAssistantMessage('Interrupted by root close');
+      }),
+    );
+    await Promise.all(
+      targets.map((target, index) =>
+        f.client.command('sendChat', { target, requestId: 'active-' + index, text: 'Held model' }),
+      ),
+    );
+    await modelsStarted;
+    const current = await Promise.all(
+      targets.map((target) =>
+        until(
+          () => f.client.command('getChat', { target }),
+          (value) => !!value.run,
+        ),
+      ),
+    );
+    const stops = current.map((value, index) =>
+      f.client
+        .command('stopChat', { stop: value.run!.stop, requestId: 'shutdown-waiter-' + index })
+        .catch((error: unknown) => error),
+    );
+    await waiting;
+    await assert.rejects(f.disposeObserved(), (error: unknown) => {
+      assert(ApplicationError.is(error));
+      assert.equal(failures.length, count);
+      for (const failure of failures) assert(String(error).includes(failure));
+      assert(!String(error).includes(f.config.cwd));
+      return true;
+    });
+    for (const result of await Promise.all(stops)) {
+      assert(ApplicationError.is(result));
+      assert.equal(result.code, 'Cancelled');
+    }
+    assert.equal(cancelled, count);
+    assert.equal(waiters, 0);
+    assert.equal(modelAborted, count);
+  });
+
+for (const state of ['admitted', 'pending', 'empty'] as const)
+  test(`Send refuses to rewrite a saved ${state} request without its captured conversation`, async (t) => {
+    const original = Harness.open;
+    let harness!: Harness;
+    mock.method(Harness, 'open', async (...args: Parameters<typeof original>) => {
+      harness = await original(...args);
+      if (state === 'pending') {
+        const get = harness.conversation.bind(harness);
+        harness.conversation = async (...args: Parameters<typeof get>) => {
+          const conversation = await get(...args);
+          if (conversation)
+            conversation.submit = async () => {
+              throw Error('Controlled reserved intent');
+            };
+          return conversation;
+        };
+      }
+      return harness;
+    });
+    t.after(() => mock.restoreAll());
+    const f = await fixture(t),
+      target = await f.create(),
+      input = { target, requestId: 'captured', text: 'Original' };
+    f.faux.setResponses([fauxAssistantMessage('Original completed')]);
+    if (state === 'pending')
+      await assert.rejects(f.client.command('sendChat', input), { code: 'Uncertain' });
+    else {
+      await f.client.command('sendChat', input);
+      await until(
+        () => f.client.command('getChat', { target }),
+        (value) => !value.run,
+      );
+    }
+    const request = defineDocFamily({
+        kind: 'moonbase.chat.request',
+        version: 1,
+        scope: 'session',
+        family: true,
+        initial: (binding: string) => ({
+          binding,
+          conversationId: null as string | null,
+          submissionId: null as string | null,
+          pending: false,
+        }),
+        checkpointWhen: () => true,
+      }),
+      requestKey = JSON.stringify([session.actorId, input.requestId]);
+    await harness.commit(async (tx) => {
+      const value = await tx.doc(request, requestKey, '');
+      value.conversationId = null;
+      if (state === 'empty') {
+        value.submissionId = null;
+        value.pending = false;
+      }
+    }, BACKGROUND_CONTEXT);
+    const before = JSON.stringify(await harness.snapshot(request, requestKey, BACKGROUND_CONTEXT)),
+      calls = f.faux.state.callCount;
+    let commits = 0;
+    const off = harness.subscribeCommits(() => {
+      commits++;
+    });
+    try {
+      await assert.rejects(f.client.command('sendChat', input), { code: 'Persistence' });
+      await assert.rejects(
+        f.client.command('getChatSend', { target, requestId: input.requestId }),
+        { code: 'Persistence' },
+      );
+      assert.equal(commits, 0);
+      assert.equal(
+        JSON.stringify(await harness.snapshot(request, requestKey, BACKGROUND_CONTEXT)),
+        before,
+      );
+      assert.equal(f.faux.state.callCount, calls);
+    } finally {
+      off();
+    }
+  });
+
+test('escaped identity components open and reopen without an extra serialized identity limit', async (t) => {
+  const directory = await mkdtemp('/tmp/moonbase-pi-identity-escaped-');
+  let cwd = directory;
+  while (Buffer.byteLength(cwd) < 979)
+    cwd = join(cwd, String.fromCharCode(1).repeat(Math.min(230, 980 - Buffer.byteLength(cwd) - 1)));
+  await mkdir(cwd, { recursive: true });
+  const models = createModels(),
+    faux = fauxProvider({ provider: 'p'.repeat(255), models: [{ id: '\u0002'.repeat(256) }] });
+  models.setProvider(faux.provider);
+  const session = {
+      host: { hostId: 'h'.repeat(256), storeId: 's'.repeat(256) },
+      actorId: 'a'.repeat(256),
+    },
+    model = { provider: faux.provider.id, modelId: faux.getModel().id },
+    config = { ...session, cwd, databasePath: join(directory, 'chat.sqlite'), model, models };
+  assert(Buffer.byteLength(JSON.stringify({ ...session, cwd, model })) > 8192);
+  let runtime = ManagedRuntime.make(PiRuntimeLive(config));
+  t.after(async () => {
+    try {
+      await runtime.dispose();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+  const host = await makeChatClient(runtime).command('getChatHost', { host: session.host });
+  const created = await makeChatClient(runtime).command('createChat', {
+    session,
+    requestId: 'create',
+    title: 'Escaped identity',
+  });
+  await runtime.dispose();
+  runtime = ManagedRuntime.make(PiRuntimeLive(config));
+  assert.deepEqual(
+    await makeChatClient(runtime).command('getChatHost', { host: session.host }),
+    host,
+  );
+  assert.deepEqual(
+    (await makeChatClient(runtime).command('listChats', { session })).conversations[0],
+    created.conversation,
+  );
+  assert.equal(faux.state.callCount, 0);
+});
+
+test('multiple late abort failures remain composed after their Stop responses return pending', async (t) => {
   const original = Harness.open;
   let entered!: () => void,
-    waiters = 0,
-    cancelled = 0,
-    modelAborted = false;
-  const waiting = new Promise<void>((resolve) => (entered = resolve));
+    release!: () => void,
+    aborted = 0;
+  const requested = new Promise<void>((resolve) => (entered = resolve)),
+    gate = new Promise<void>((resolve) => (release = resolve)),
+    failures: string[] = [];
   mock.method(Harness, 'open', async (...args: Parameters<typeof original>) => {
-    const harness = await original(...args),
-      wait = harness.waitForTask.bind(harness);
-    harness.abortTask = async () => 'marked';
-    harness.waitForTask = async <R>(id: TaskId<R>, context: Parameters<typeof wait>[1]) => {
-      waiters++;
-      entered();
-      try {
-        return await wait(id, context);
-      } catch {
-        assert(context.abortSignal?.aborted);
-        cancelled++;
-        throw new ApplicationError({
-          code: 'Persistence',
-          message: 'Controlled shutdown waiter cleanup failure',
-        });
-      } finally {
-        waiters--;
-      }
+    const harness = await original(...args);
+    harness.abortTask = async (id) => {
+      if (++aborted === 2) entered();
+      await gate;
+      const message = 'Controlled late abort failure ' + id;
+      failures.push(message);
+      throw new ApplicationError({ code: 'Persistence', message });
     };
     return harness;
   });
-  t.after(() => mock.restoreAll());
+  t.after(() => {
+    release();
+    mock.restoreAll();
+  });
   const f = await fixture(t),
-    target = await f.create();
-  f.faux.setResponses([
-    async (_messages, options) => {
+    targets = await Promise.all([f.create('first'), f.create('second')]);
+  f.faux.setResponses(
+    Array.from({ length: 2 }, () => async (_messages, options) => {
       await new Promise<void>((resolve) => {
-        if (options?.signal?.aborted) {
-          modelAborted = true;
-          return resolve();
-        }
-        options?.signal?.addEventListener(
-          'abort',
-          () => {
-            modelAborted = true;
-            resolve();
-          },
-          { once: true },
-        );
+        if (options?.signal?.aborted) return resolve();
+        options?.signal?.addEventListener('abort', () => resolve(), { once: true });
       });
       return fauxAssistantMessage('Interrupted by root close');
-    },
-  ]);
-  await f.client.command('sendChat', { target, requestId: 'active', text: 'Held model' });
-  const current = await until(
-    () => f.client.command('getChat', { target }),
-    (value) => !!value.run,
+    }),
   );
-  const stop = f.client
-    .command('stopChat', { stop: current.run!.stop, requestId: 'shutdown-waiter' })
-    .catch((error: unknown) => error);
-  await waiting;
-  await assert.rejects(f.dispose(), (error: unknown) => {
-    assert(String(error).includes('Controlled shutdown waiter cleanup failure'));
-    assert(!String(error).includes(f.config.cwd));
+  await Promise.all(
+    targets.map((target, index) =>
+      f.client.command('sendChat', { target, requestId: 'active-' + index, text: 'Held model' }),
+    ),
+  );
+  const current = await Promise.all(
+    targets.map((target) =>
+      until(
+        () => f.client.command('getChat', { target }),
+        (value) => !!value.run,
+      ),
+    ),
+  );
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const stops = current.map((value, index) =>
+    f.client.command('stopChat', { stop: value.run!.stop, requestId: 'late-abort-' + index }),
+  );
+  await requested;
+  t.mock.timers.tick(1001);
+  assert((await Promise.all(stops)).every((value) => value.outcome === 'pending'));
+  t.mock.timers.reset();
+  release();
+  await until(
+    () => Promise.resolve(failures.length),
+    (count) => count === 2,
+  );
+  await assert.rejects(f.disposeObserved(), (error: unknown) => {
+    assert(ApplicationError.is(error));
+    for (const failure of failures) assert(error.message.includes(failure), error.message);
     return true;
   });
-  const result = await stop;
-  assert(ApplicationError.is(result));
-  assert.equal(result.code, 'Cancelled');
-  assert.equal(cancelled, 1);
-  assert.equal(waiters, 0);
-  assert(modelAborted);
 });

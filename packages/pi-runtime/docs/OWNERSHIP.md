@@ -16,7 +16,7 @@ Watch acquisition registers commit and close subscriptions before the initial sn
 
 ## Resource release
 
-Each acquired database, storage, Harness and execution environment immediately receives a finalizer. Successful storage acquisition transfers database cleanup ownership; successful Harness acquisition transfers storage cleanup ownership. Failed acquisition retains the previous owner. Release attempts continue after failures, and the application error boundary preserves safe typed/composite evidence while redacting unknown diagnostics.
+Each acquired database, storage, Harness and execution environment immediately receives a finalizer. Successful storage acquisition transfers database cleanup ownership; successful Harness acquisition transfers storage cleanup ownership. Failed acquisition retains the previous owner. Release attempts continue after failures, and the application error boundary preserves safe typed/composite evidence while redacting unknown diagnostics. Retained adapters compose every failed exit as an Effect cause. After successful root acquisition, `runApplicationEffect(runtime, runtime.disposeEffect)` preserves that composite at the Promise boundary.
 
 Root finalizers run in this order:
 

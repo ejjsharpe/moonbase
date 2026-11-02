@@ -21,6 +21,7 @@ import { SqliteStorage } from '@earendil-works/pi-durable/storage/sqlite';
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node';
 import type { Models } from '@earendil-works/pi-ai/models';
 import {
+  Cause,
   Effect,
   Exit,
   Fiber,
@@ -28,6 +29,7 @@ import {
   Layer,
   Option,
   Queue,
+  Ref,
   Scope,
   Semaphore,
   Stream,
@@ -66,12 +68,15 @@ const Request = defineDocFamily({
   version: 1,
   scope: 'session',
   family: true,
-  initial: (binding: string) => ({
-    binding,
-    conversationId: null as string | null,
-    submissionId: null as string | null,
-    pending: false as boolean,
-  }),
+  initial: (binding: string) => {
+    const input = S.savedBinding(binding);
+    return {
+      binding,
+      conversationId: input.operation === 'sendChat' ? input.target.conversationId : null,
+      submissionId: null as string | null,
+      pending: false as boolean,
+    };
+  },
   checkpointWhen: () => true,
 });
 const Store = defineDocFamily({
@@ -164,16 +169,16 @@ class Host {
   readonly harness: Harness;
   readonly identity: string;
   readonly work: FiberSet.FiberSet<unknown, ApplicationError>;
-  readonly aborts: FiberSet.FiberSet<unknown, ApplicationError>;
-  readonly waiters: FiberSet.FiberSet<unknown, ApplicationError>;
+  readonly aborts: RetainedWork;
+  readonly waiters: RetainedWork;
   readonly observations: Scope.Closeable;
   constructor(
     config: PiRuntimeConfiguration,
     harness: Harness,
     identity: string,
     work: FiberSet.FiberSet<unknown, ApplicationError>,
-    aborts: FiberSet.FiberSet<unknown, ApplicationError>,
-    waiters: FiberSet.FiberSet<unknown, ApplicationError>,
+    aborts: RetainedWork,
+    waiters: RetainedWork,
     observations: Scope.Closeable,
   ) {
     this.config = config;
@@ -650,17 +655,14 @@ class Host {
         // The deadline owns only this join; the abort request stays with the host through settlement.
         const joined = yield* Effect.interruptible(
           Effect.gen({ self: this }, function* () {
-            const abort = yield* FiberSet.run(
-              this.aborts,
-              Effect.uninterruptible(
-                Effect.tryPromise({
-                  try: () => this.harness.abortTask(tid(d.stop.taskId!), context),
-                  catch: safeError,
-                }),
-              ),
+            const abort = yield* this.aborts.run(
+              Effect.tryPromise({
+                try: () => this.harness.abortTask(tid(d.stop.taskId!), context),
+                catch: safeError,
+              }),
             );
             yield* Fiber.join(abort);
-            const waiter = yield* FiberSet.run(this.waiters, this.terminal(tid(d.stop.taskId!)));
+            const waiter = yield* this.waiters.run(this.terminal(tid(d.stop.taskId!)));
             return yield* Fiber.join(waiter).pipe(Effect.ensuring(Fiber.interrupt(waiter)));
           }).pipe(Effect.timeoutOption('1 second')),
         );
@@ -761,18 +763,50 @@ function entryPreview(entry: EntryRecord): ChatHistoryPage['entries'][number] | 
       : {}),
   };
 }
+type RetainedWork = {
+  run<A>(
+    effect: Effect.Effect<A, ApplicationError>,
+  ): Effect.Effect<Fiber.Fiber<A, ApplicationError>>;
+};
 // Abort requests and terminal cleanup failures remain observable after a caller's deadline.
-function retainedWork() {
+function retainedWork(kind: 'abort' | 'waiter'): Effect.Effect<RetainedWork, never, Scope.Scope> {
   return Effect.gen(function* () {
     const scope = yield* Scope.make();
     const work = yield* Scope.provide(scope)(FiberSet.make<unknown, ApplicationError>());
+    const failures = yield* Ref.make<Cause.Cause<ApplicationError>>(Cause.empty);
     yield* Effect.addFinalizer(() =>
       FiberSet.clear(work).pipe(
         Effect.ensuring(Scope.close(scope, Exit.void)),
-        Effect.ensuring(FiberSet.join(work).pipe(Effect.orDie)),
+        Effect.ensuring(
+          Ref.get(failures).pipe(
+            Effect.flatMap((cause) =>
+              cause.reasons.length
+                ? Effect.failCause(
+                    Cause.fromReasons<never>(
+                      cause.reasons.map((reason) =>
+                        Cause.isFailReason(reason) ? Cause.makeDieReason(reason.error) : reason,
+                      ),
+                    ),
+                  )
+                : Effect.void,
+            ),
+          ),
+        ),
       ),
     );
-    return work;
+    return {
+      run: <A>(effect: Effect.Effect<A, ApplicationError>) => {
+        const observed = effect.pipe(
+          Effect.onExit((exit) =>
+            Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)
+              ? Ref.update(failures, (cause) => Cause.combine(cause, exit.cause))
+              : Effect.void,
+          ),
+        );
+        // Capture abort failure before restoring interruption after the noncancelable SDK call.
+        return FiberSet.run(work, kind === 'abort' ? Effect.uninterruptible(observed) : observed);
+      },
+    };
   });
 }
 
@@ -831,7 +865,7 @@ function open(config: PiRuntimeConfiguration) {
       (storage) => releaseResource(() => (storageOwned ? storage.close(context) : undefined)),
     );
     databaseOwned = false;
-    const aborts = yield* retainedWork();
+    const aborts = yield* retainedWork('abort');
     const harness = yield* Effect.acquireRelease(
       Effect.tryPromise({
         try: () =>
@@ -879,7 +913,7 @@ function open(config: PiRuntimeConfiguration) {
         Scope.close(scope, Exit.void),
       ),
       work = yield* Scope.provide(workScope)(FiberSet.make<unknown, ApplicationError>()),
-      waiters = yield* retainedWork(),
+      waiters = yield* retainedWork('waiter'),
       observations = yield* Effect.acquireRelease(Scope.make(), (scope) =>
         Scope.close(scope, Exit.void),
       ),
