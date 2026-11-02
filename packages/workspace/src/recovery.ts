@@ -1,5 +1,10 @@
 import { normalizeApplicationError } from '@moonbase/application/effect-client';
-import { type SaveRecordSchema, type OperationRecordSchema, parseRecovery } from './schema.ts';
+import {
+  type SaveRecordSchema,
+  type OperationRecordSchema,
+  parseRecovery,
+  savedRevision,
+} from './schema.ts';
 import type { LocalWorkspace } from './workspace.ts';
 import {
   emptyRecovery,
@@ -156,13 +161,13 @@ export function publishOperation(this: LocalWorkspace, id: string, record: Opera
     };
     for (const row of this.store.db.prepare('SELECT client, revision, body FROM recovery').all()) {
       const clientId = row.client as string,
-        state = parseRecovery(row.body as string, clientId);
+        state = parseRecovery(row.body, clientId);
       if (
         clientId !== record.input.clientId &&
         !state.checkouts.some((c) => same(c, record.input.checkout))
       )
         continue;
-      let revision = Number(row.revision);
+      let revision = savedRevision(row.revision);
       if (fresh.length)
         this.reconcile(state, [{ ...record, result: { ...record.result, items: fresh } }]);
       recovery(state, clientId);
