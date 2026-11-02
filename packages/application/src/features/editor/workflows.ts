@@ -30,7 +30,14 @@ export class EditorLookup {
     query: string,
     signal: AbortSignal,
   ) => Promise<CommandOutput<'lookupFiles'>>;
-  constructor(scope: Scope.Scope, execute: Run, search: EditorLookup['search']) {
+  private admits: () => boolean;
+  constructor(
+    admits: () => boolean,
+    scope: Scope.Scope,
+    execute: Run,
+    search: EditorLookup['search'],
+  ) {
+    this.admits = admits;
     this.scope = Scope.forkUnsafe(scope);
     this.execute = execute;
     this.search = search;
@@ -48,7 +55,7 @@ export class EditorLookup {
     for (const listener of this.listeners) listener();
   }
   query(query: string, checkouts: CheckoutTarget[]) {
-    if (this.closed) return;
+    if (!this.admits() || this.closed) return;
     const generation = ++this.generation;
     const previous = this.queryScope;
     const scope = (this.queryScope = Scope.forkUnsafe(this.scope));
@@ -105,7 +112,7 @@ export class EditorLookup {
     );
   }
   async open(open: (current: () => boolean) => Promise<boolean>): Promise<boolean> {
-    if (this.closed || this.snapshot.busy) return false;
+    if (!this.admits() || this.closed || this.snapshot.busy) return false;
     const generation = ++this.generation;
     this.update({ busy: true });
     try {
@@ -133,6 +140,7 @@ export class EditorLookup {
     }
   }
   message(message: string) {
+    if (!this.admits()) return;
     this.update({ message });
   }
   stop() {
@@ -185,12 +193,15 @@ export class EditorMutation {
   private completion?: Promise<void>;
   private snapshot: MutationSnapshot = { busy: false, error: '', replacements: null };
   private listeners = new Set<() => void>();
+  private admits: () => boolean;
   constructor(
+    admits: () => boolean,
     scope: Scope.Scope,
     execute: Run,
     dependencies: MutationDependencies,
     action: MutationAction,
   ) {
+    this.admits = admits;
     this.scope = Scope.forkUnsafe(scope);
     this.execute = execute;
     this.dependencies = dependencies;
@@ -209,12 +220,12 @@ export class EditorMutation {
     for (const listener of this.listeners) listener();
   }
   invalidate() {
-    if (this.snapshot.busy) return;
+    if (!this.admits() || this.snapshot.busy) return;
     this.generation++;
     this.update({ replacements: null });
   }
   async apply(destination: string, replacementPaths: string, consent: boolean): Promise<boolean> {
-    if (this.closed || this.snapshot.busy) return false;
+    if (!this.admits() || this.closed || this.snapshot.busy) return false;
     const action = this.action,
       generation = ++this.generation,
       dependencies = this.dependencies;
