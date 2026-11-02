@@ -340,7 +340,7 @@ async function main() {
     for (const cleanup of [
       () => chatSession?.dispose(),
       () => editorSession.dispose(),
-      () => runtime.dispose(),
+      () => runApplicationEffect(runtime, runtime.disposeEffect),
     ]) {
       try {
         await cleanup();

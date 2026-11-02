@@ -102,7 +102,7 @@ function disposeRenderer() {
     for (const release of [
       () => cleanup.drain(),
       () => runApplicationEffect(runtime, Scope.close(scope, Exit.void)),
-      () => runtime.dispose(),
+      () => runApplicationEffect(runtime, runtime.disposeEffect),
     ]) {
       try {
         await release();
