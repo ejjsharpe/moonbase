@@ -123,7 +123,7 @@ function fixture(options: { slow?: boolean; watchFailure?: boolean } = {}) {
 test('public connection clients share one scoped service and keep endpoint lookup outside public commands', async () => {
   const { counts, runtime, client, watched, unwatched } = fixture();
   const second = makeConnectionClient(runtime);
-  let stop = () => {};
+  let stop = async () => {};
   try {
     assert.equal((await client.command('getConnection', {})).state, 'disconnected');
     const connected = await second.command('connect', { profileId: profile.id });
@@ -136,7 +136,7 @@ test('public connection clients share one scoped service and keep endpoint looku
       },
     );
     await watched.promise;
-    stop();
+    await stop();
     await unwatched.promise;
     assert.equal((await second.command('getConnection', {})).state, 'connected');
     await client.command('disconnect', { connectionId: connected.connectionId });
@@ -146,7 +146,7 @@ test('public connection clients share one scoped service and keep endpoint looku
     assert.equal(counts.connect, 1);
     assert.equal(counts.disconnect, 1);
   } finally {
-    stop();
+    await stop();
     await runtime.dispose();
   }
   assert.equal(counts.released, 1);
@@ -196,22 +196,26 @@ test('pre-aborted connection commands dispatch nothing', async () => {
 test('connection observer cleanup errors remain observable without disposing the process service', async () => {
   const { counts, runtime, client, watched } = fixture({ watchFailure: true });
   const reported = event<ApplicationError>();
-  let stop = () => {};
+  let stop = async () => {};
   try {
     stop = client.watch(
       () => {},
       (error) => reported.resolve(error),
     );
     await watched.promise;
-    stop();
-    const error = await reported.promise;
+    let error!: ApplicationError;
+    await assert.rejects(stop(), (value) => {
+      assert(ApplicationError.is(value));
+      error = value;
+      return true;
+    });
     assert.equal(error.code, 'Unavailable');
-    assert.match(error.message, /cleanup failed/);
+    assert.match(error.message, /Application resource cleanup failed/);
     assert.equal(counts.unwatch, 1);
     assert.equal(counts.released, 0);
     await client.command('getConnection', {});
   } finally {
-    stop();
+    await stop().catch(() => {});
     await runtime.dispose();
   }
 });

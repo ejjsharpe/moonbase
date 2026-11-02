@@ -1,4 +1,4 @@
-import type { ApplicationError, CommandOptions } from './client.ts';
+import type { ApplicationError, CommandOptions, ObservationClose } from './client.ts';
 import type * as Contracts from './chat-schema.ts';
 
 export const maximumChatInputBytes = 32 * 1024;
@@ -37,5 +37,5 @@ export interface ChatClient {
     input: { target: ChatTarget },
     receive: (snapshot: ChatSnapshot) => void,
     onError: (error: ApplicationError) => void,
-  ): () => void;
+  ): ObservationClose;
 }

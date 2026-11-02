@@ -148,7 +148,7 @@ function fixture(options: { slowSend?: boolean; cleanupFailure?: boolean } = {})
 test('public chat entry points share one scope and preserve exact targets/request identities', async () => {
   const { counts, runtime, client, watched, unwatched } = fixture();
   const second = makeChatClient(runtime);
-  let unsubscribe = () => {};
+  let unsubscribe = async () => {};
   try {
     assert.equal(
       (await client.command('getChatHost', { host: session.host })).cwd,
@@ -192,7 +192,7 @@ test('public chat entry points share one scope and preserve exact targets/reques
     );
     await watched.promise;
     assert.deepEqual(await received.promise, snapshot);
-    unsubscribe();
+    await unsubscribe();
     await unwatched.promise;
     assert.equal((await client.command('getChat', { target })).state, 'idle');
     assert.equal(counts.send, 1);
@@ -206,7 +206,7 @@ test('public chat entry points share one scope and preserve exact targets/reques
     });
     assert.equal(counts.acquire, 1);
   } finally {
-    unsubscribe();
+    await unsubscribe();
     await runtime.dispose();
   }
   assert.equal(counts.release, 1);
@@ -266,7 +266,7 @@ test('pre-aborted chat commands acquire nothing', async () => {
 test('chat observer failures stay observable without closing the process service', async () => {
   const { counts, runtime, client, watched } = fixture({ cleanupFailure: true });
   const failure = event<ApplicationError>();
-  let unsubscribe = () => {};
+  let unsubscribe = async () => {};
   try {
     unsubscribe = client.watch(
       { target },
@@ -274,16 +274,20 @@ test('chat observer failures stay observable without closing the process service
       (error) => failure.resolve(error),
     );
     await watched.promise;
-    unsubscribe();
-    const error = await failure.promise;
+    let error!: ApplicationError;
+    await assert.rejects(unsubscribe(), (value) => {
+      assert(ApplicationError.is(value));
+      error = value;
+      return true;
+    });
     assert.equal(error.code, 'Unavailable');
-    assert.match(error.message, /Chat observer cleanup failed/);
+    assert.match(error.message, /Application resource cleanup failed/);
     assert.equal(counts.unwatch, 1);
     assert.equal(counts.release, 0);
     assert.equal(counts.stop, 0);
     await client.command('getChat', { target });
   } finally {
-    unsubscribe();
+    await unsubscribe().catch(() => {});
     await runtime.dispose();
   }
 });
