@@ -61,7 +61,7 @@ Start the [Pi host](../../packages/pi-runtime/README.md) separately on its machi
 
 Remote host/store/cwd identity never grants local checkout access, even for equal path strings. There is no file synchronization or remote-to-local open action. Hide, view switching, Disconnect, renderer loss and client Quit never Stop remote work. Stop uses the controller's exact captured submission/task.
 
-Desktop supplies LocalStorage under `moonbase.chat.v1` for the controller's lifetime; the [chat module](../../packages/chat/README.md) owns schema/preservation. No migration/import occurs.
+Desktop supplies LocalStorage under `moonbase.chat.v1` for the controller's lifetime; the [application chat feature](../../packages/application/docs/CHAT.md) owns schema/preservation. No migration/import occurs.
 
 ## Checks and limits
 

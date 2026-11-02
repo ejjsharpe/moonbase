@@ -1,11 +1,11 @@
 import { Schema, Struct } from 'effect';
-import { ApplicationError } from '@moonbase/application/client';
+import { ApplicationError } from '@moonbase/contracts/errors';
 import {
   ChatSessionSchema,
   ChatTargetSchema,
   chatInputSchemas,
-} from '@moonbase/application/chat-schema';
-import type { ChatSession, ChatTarget } from '@moonbase/application/chat-client';
+} from '@moonbase/contracts/chat-schema';
+import type { ChatSession, ChatTarget } from '@moonbase/contracts/chat';
 
 const struct = <const F extends Schema.Struct.Fields>(fields: F) =>
   Schema.Struct(fields).mapFields(Struct.map(Schema.mutableKey));

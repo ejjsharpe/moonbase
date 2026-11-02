@@ -65,7 +65,7 @@ console.log(
 );
 
 for (const [entry, owner] of [
-  ['@moonbase/chat', 'chat'],
+  ['@moonbase/application/chat', 'application'],
   ['@moonbase/editor/state', 'editor'],
 ]) {
   const result = await build({

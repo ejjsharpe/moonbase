@@ -7,8 +7,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "lint": "oxlint .",
-    "test": "node --experimental-strip-types --test --test-concurrency=1 test/*.test.ts"
+    "lint": "oxlint ."
   },
   "dependencies": {
     "@moonbase/application": "workspace:*",
@@ -16,23 +15,5 @@
   },
   "devDependencies": {
     "@moonbase/config": "workspace:*"
-  },
-  "nx": {
-    "targets": {
-      "test": {
-        "inputs": [
-          "default",
-          "^default",
-          "{workspaceRoot}/tests/chat/**/*",
-          {
-            "input": "default",
-            "projects": [
-              "@moonbase/pi-runtime",
-              "@moonbase/ssh"
-            ]
-          }
-        ]
-      }
-    }
   }
 }
