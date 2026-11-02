@@ -1283,6 +1283,7 @@ export class LocalWorkspace {
     );
     const replacements = input.replacements ?? [];
     ensure(replacements.length <= sources.length, 'Invalid replacement selection.');
+    const replacementDestinations = new Set<string>();
     for (const replacement of replacements) {
       ensure(
         replacement &&
@@ -1295,6 +1296,12 @@ export class LocalWorkspace {
           ),
         'Replacement must name the exact captured destination.',
       );
+      const destination = folded(replacement.target.path);
+      ensure(
+        !replacementDestinations.has(destination),
+        'A destination cannot have multiple replacements.',
+      );
+      replacementDestinations.add(destination);
       const actual = await directory.entry(replacement.target.path, signal);
       if (!same(actual, { identity: replacement.identity, directory: replacement.directory }))
         fail('Conflict', 'Replacement changed. Confirm a freshly captured destination.');

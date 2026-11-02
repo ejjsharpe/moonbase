@@ -20,6 +20,66 @@ import { emptyRecovery } from '@moonbase/contracts/workspace';
 import { WorkspaceLive, WorkspaceNative } from '../src/index.ts';
 import { quote, fixture, isError, waitFor } from './recovery-fixture.ts';
 
+for (const kind of ['move', 'copy'] as const)
+  for (const [name, alias] of [
+    ['file.txt', 'file.txt'],
+    ['file.txt', 'FILE.TXT'],
+    ['caf\u00e9.txt', 'cafe\u0301.txt'],
+  ])
+    test(`batch ${kind} rejects duplicate replacement destinations (${name}, ${alias}) before admission`, async () => {
+      const f = fixture(),
+        trash = join(f.base, 'trash');
+      const helper = f.wrapper(
+          `if [ "$1" = trash ]; then /usr/bin/touch ${quote(trash)}; exit 1; fi`,
+        ),
+        { runtime, client } = f.start(helper);
+      try {
+        writeFileSync(join(f.root, name), 'source');
+        writeFileSync(join(f.root, 'other.txt'), 'other source');
+        mkdirSync(join(f.root, 'dest'));
+        writeFileSync(join(f.root, 'dest', name), 'retained destination');
+        const checkout = await client.command('openCheckout', { root: f.root }),
+          sources = await client.command('inspectEntries', {
+            checkout,
+            paths: [name, 'other.txt'],
+          }),
+          [replacement] = await client.command('inspectEntries', {
+            checkout,
+            paths: ['dest/' + name],
+          });
+        await assert.rejects(
+          client.command('mutate', {
+            clientId: 'alice',
+            id: 'duplicate-replacement',
+            checkout,
+            kind,
+            sources,
+            destination: 'dest',
+            replacements: [
+              replacement,
+              { ...replacement, target: { checkout, path: 'dest/' + alias } },
+            ],
+          }),
+          { code: 'InvalidInput', message: 'A destination cannot have multiple replacements.' },
+        );
+        assert(!existsSync(trash), 'Duplicate replacements must reject before native Trash.');
+        assert.equal(
+          await client.command('operationStatus', {
+            clientId: 'alice',
+            id: 'duplicate-replacement',
+          }),
+          null,
+        );
+        assert.equal(readFileSync(join(f.root, name), 'utf8'), 'source');
+        assert.equal(readFileSync(join(f.root, 'other.txt'), 'utf8'), 'other source');
+        assert.equal(readFileSync(join(f.root, 'dest', name), 'utf8'), 'retained destination');
+        assert(!existsSync(join(f.root, 'dest/other.txt')));
+      } finally {
+        await runtime.dispose();
+        f.cleanup();
+      }
+    });
+
 for (const kind of ['copy', 'import'] as const)
   test(`${kind} publishes a folder readable only through its source ACL`, async () => {
     const f = fixture(),
