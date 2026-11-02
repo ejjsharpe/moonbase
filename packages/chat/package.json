@@ -1,0 +1,38 @@
+{
+  "name": "@moonbase/chat",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "oxlint .",
+    "test": "node --experimental-strip-types --test --test-concurrency=1 test/*.test.ts"
+  },
+  "dependencies": {
+    "@moonbase/application": "workspace:*",
+    "effect": "4.1.0"
+  },
+  "devDependencies": {
+    "@moonbase/config": "workspace:*"
+  },
+  "nx": {
+    "targets": {
+      "test": {
+        "inputs": [
+          "default",
+          "^default",
+          "{workspaceRoot}/tests/chat/**/*",
+          {
+            "input": "default",
+            "projects": [
+              "@moonbase/pi-runtime",
+              "@moonbase/ssh"
+            ]
+          }
+        ]
+      }
+    }
+  }
+}
