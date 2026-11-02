@@ -102,6 +102,7 @@
       "dependencies": {
         "@base-ui/react": "1.9.0",
         "@moonbase/application": "workspace:*",
+        "@moonbase/contracts": "workspace:*",
         "@moonbase/ui": "workspace:*",
         "@stylexjs/stylex": "0.19.1",
         "effect": "4.1.0",

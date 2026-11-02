@@ -1,11 +1,16 @@
-import { readOwn } from './record.ts';
 import { useLayoutEffect, useRef } from 'react';
 import * as monaco from 'monaco-editor';
 import * as stylex from '@stylexjs/stylex';
 import { workbench } from '@moonbase/ui/workbench';
 import { colors, type } from '@moonbase/ui/tokens.stylex';
-import { checkoutKey, fileKey, type EditorController, type EditorSnapshot } from './editor.ts';
-import type { FileTarget, FileView } from '@moonbase/application/client';
+import {
+  checkoutKey,
+  fileKey,
+  readOwn,
+  type EditorController,
+  type EditorSnapshot,
+} from '@moonbase/application/editor';
+import type { FileTarget, FileView } from '@moonbase/contracts/workspace';
 
 /** The composition root supplies Monaco's worker environment before mounting. */
 export function MonacoView({

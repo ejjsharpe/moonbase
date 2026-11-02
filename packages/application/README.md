@@ -5,6 +5,8 @@
 | Export | Purpose |
 | --- | --- |
 | `chat` | Scoped headless chat model, bound controller and synchronous draft preservation |
+| `editor` | Headless editor model/controller, close prompts, workflow sessions and state |
+| `testing/memory-workspace` | Concrete volatile workspace capability for tests and demos; excluded from `editor` imports |
 | `runtime/handlers` | Shared command dispatch and subscriptions |
 | `runtime/clients` | Editor/chat/connection clients bound to an existing process runtime |
 | `runtime/effect-client` | Invocation and awaitable observation close bound to a supplied runtime |
@@ -21,6 +23,8 @@ Use the public runtime entries directly from TypeScript. `makeEditorClient`, `ma
 Renderers receive browser-safe clients. Native/transport adapters validate and authorize unknown inputs before shared handlers; infrastructure retains domain validation and resource ownership. DTO types use erased schema imports. Shape validation grants no authority, and privileged endpoint credentials never belong in renderer bridges.
 
 See [Effect invocation and observation cleanup](docs/SCHEMAS.md), [contract schema policies](../contracts/docs/SCHEMAS.md), [chat admission/RPC](../contracts/docs/CHAT.md), [host authentication](../contracts/docs/HOST-PROTOCOL.md) and [recovery publications](../contracts/docs/RECOVERY-PUBLICATIONS.md).
+
+The [headless editor](docs/EDITOR.md) acquires once in a supplied scope and binds to the caller's runtime. `@moonbase/editor` only presents the supplied controller. Synchronous snapshots/recovery readiness, exact close prompts and awaitable disposal retain their existing contracts; unmounting presentation never owns model lifetime.
 
 ```sh
 bun run --cwd packages/application typecheck

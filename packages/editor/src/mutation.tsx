@@ -4,11 +4,14 @@ import { styles } from './styles.ts';
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { Button } from '@base-ui/react/button';
 import { Dialog } from '@base-ui/react/dialog';
-import type { EditorController } from './editor.ts';
 import { Popup } from './popup.tsx';
 
-export type { MutationAction as Action } from './workflows.ts';
-import type { EditorMutation, MutationAction as Action } from './workflows.ts';
+export type { MutationAction as Action } from '@moonbase/application/editor';
+import type {
+  EditorController,
+  EditorMutation,
+  MutationAction as Action,
+} from '@moonbase/application/editor';
 const empty = { busy: false, error: '', replacements: null };
 const emptySnapshot = () => empty;
 const noSubscription = () => () => {};

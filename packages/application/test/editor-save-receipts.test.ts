@@ -1,4 +1,4 @@
-import { acquireEditor, answering } from './model-fixture.ts';
+import { acquireEditor, answering } from './editor-model-fixture.ts';
 import * as controllerFixture from './editor-fixture.ts';
 import assert from 'node:assert/strict';
 import { test, describe } from 'node:test';
@@ -9,9 +9,9 @@ import {
   type CheckoutTarget,
   type CommandInput,
   type EditorClient,
-} from '@moonbase/application/client';
-import { type EditorController } from '@moonbase/editor/state';
-import { memoryWorkspace } from '@moonbase/editor/memory';
+} from '@moonbase/contracts/workspace';
+import { type EditorController } from '@moonbase/application/editor';
+import { memoryWorkspace } from '@moonbase/application/testing/memory-workspace';
 
 const checkout: CheckoutTarget = {
   hostId: 'receipts',

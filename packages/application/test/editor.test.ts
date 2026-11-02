@@ -1,4 +1,4 @@
-import { acquireEditor, answering } from './model-fixture.ts';
+import { acquireEditor, answering } from './editor-model-fixture.ts';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Effect } from 'effect';
@@ -7,8 +7,8 @@ import {
   type CheckoutTarget,
   type EditorClient,
   type CommandInput,
-} from '@moonbase/application/client';
-import { checkoutKey, fileKey, type CloseChoice } from '@moonbase/editor/state';
+} from '@moonbase/contracts/workspace';
+import { checkoutKey, fileKey, type CloseChoice } from '@moonbase/application/editor';
 import { checkout, second, target, fixture } from './editor-fixture.ts';
 
 test('memory inspection rejects empty and oversized selections like the production service', async () => {
