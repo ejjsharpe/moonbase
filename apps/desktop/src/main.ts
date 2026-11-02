@@ -247,7 +247,9 @@ async function main() {
   ipcMain.handle(channels.cancel, async (event, id: unknown) => {
     try {
       requireTrusted(event);
-      return await editorSession.cancel(id);
+      const reply = await editorSession.cancel(id);
+      if (!reply.ok) reportCleanup(Promise.reject(new ApplicationError(reply.error)));
+      return reply;
     } catch (e) {
       return { ok: false, error: errorDTO(e) };
     }
@@ -304,7 +306,9 @@ async function main() {
           code: 'Unavailable',
           message: 'Remote chat is not configured.',
         });
-      return await chatSession.cancel(id);
+      const reply = await chatSession.cancel(id);
+      if (!reply.ok) reportCleanup(Promise.reject(new ApplicationError(reply.error)));
+      return reply;
     } catch (error) {
       return chatError(error);
     }

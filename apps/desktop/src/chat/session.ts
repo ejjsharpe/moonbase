@@ -78,7 +78,12 @@ export class ChatIpcSession {
       [...this.work.values()].filter((request) => request.watch === watch).length >= 64
     )
       invalid();
-    if (typeof operation !== 'string' || JSON.stringify(input).length > 65536) return invalid();
+    if (typeof operation !== 'string') invalid();
+    try {
+      if ((JSON.stringify(input)?.length ?? Infinity) > 65536) invalid();
+    } catch {
+      invalid();
+    }
     let v = record(input);
     if (kind === 'chat') {
       if (!isChatCommand(operation)) return invalid();

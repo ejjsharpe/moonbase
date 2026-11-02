@@ -143,6 +143,8 @@ export function bridgeClient(bridge: DesktopBridge): EditorClient {
           operation,
           unwrap(await bridge.call('command', { operation, input }, id)),
         );
+      } catch (error) {
+        throw normalizeApplicationError(error);
       } finally {
         options?.signal?.removeEventListener('abort', cancel);
       }

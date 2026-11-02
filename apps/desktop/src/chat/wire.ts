@@ -88,6 +88,8 @@ export function browserClients(bridge: ChatBridge): {
       if (kind === 'connection' && isConnectionCommand(operation))
         return decodeConnectionOutput(operation, value);
       return invalid();
+    } catch (error) {
+      throw normalizeApplicationError(error);
     } finally {
       options?.signal?.removeEventListener('abort', cancel);
     }
