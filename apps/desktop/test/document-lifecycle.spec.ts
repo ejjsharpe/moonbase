@@ -1,5 +1,5 @@
 import { prepareCrashRecovery, recoverCrashedWorkbench } from './editor-regressions.ts';
-import type { RecoveryLoad } from '@moonbase/application/client';
+import type { RecoveryLoad } from '@moonbase/contracts/workspace';
 import { test, expect, _electron as electron } from '@playwright/test';
 import { mkdtempSync, realpathSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';

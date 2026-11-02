@@ -2,16 +2,13 @@ import { normalizeApplicationError } from '@moonbase/application/runtime/effect-
 import {
   decodeApplicationErrorDTO,
   type ApplicationErrorDTOSchema,
-} from '@moonbase/application/error-schema';
-import {
-  decodeWorkspaceOutput,
-  decodeWorkspaceEvent,
-} from '@moonbase/application/workspace-schema';
+} from '@moonbase/contracts/error-schema';
+import { decodeWorkspaceOutput, decodeWorkspaceEvent } from '@moonbase/contracts/workspace-schema';
 import {
   ApplicationError,
   type CheckoutTarget,
   type EditorClient,
-} from '@moonbase/application/client';
+} from '@moonbase/contracts/workspace';
 
 export const channels = {
   call: 'moonbase:call',

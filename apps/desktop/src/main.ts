@@ -1,4 +1,4 @@
-import { decodeApplicationErrorDTO } from '@moonbase/application/error-schema';
+import { decodeApplicationErrorDTO } from '@moonbase/contracts/error-schema';
 import {
   normalizeApplicationError,
   runApplicationEffect,
@@ -23,7 +23,7 @@ import {
   makeChatClient,
   makeConnectionClient,
 } from '@moonbase/application/runtime/clients';
-import { ApplicationError, type CheckoutTarget } from '@moonbase/application/client';
+import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
 import { randomUUID } from 'node:crypto';
 import { realpathSync, mkdirSync } from 'node:fs';
 import { isAbsolute, join, resolve, sep } from 'node:path';
@@ -410,7 +410,8 @@ async function main() {
       const v = record(value);
       keys(v, ['id', 'consent', 'cleanupError'], ['id', 'consent']);
       requestId(v.id);
-      if (!quit || v.id !== quit.id || typeof v.consent !== 'boolean')
+      if (!quit || v.id !== quit.id) return;
+      if (typeof v.consent !== 'boolean')
         throw new ApplicationError({ code: 'Unauthorized', message: 'No matching Quit request.' });
       if (v.cleanupError !== undefined) {
         if (quit.stage !== 'dispose')
@@ -471,6 +472,8 @@ async function main() {
   window.webContents.on('did-frame-navigate', (_event, _url, _code, _status, isMainFrame) => {
     if (!isMainFrame) return;
     rendererReady = false;
+    // A replacement document must prepare its own application before acknowledging Quit.
+    quit = undefined;
     reportCleanup(editorSession.releaseDocument());
     if (chatSession) reportCleanup(chatSession.releaseDocument());
   });

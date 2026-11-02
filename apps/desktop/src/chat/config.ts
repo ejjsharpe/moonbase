@@ -1,4 +1,4 @@
-import { ApplicationError } from '@moonbase/application/client';
+import { ApplicationError } from '@moonbase/contracts/workspace';
 import { open } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { isAbsolute } from 'node:path';
@@ -7,9 +7,9 @@ import {
   SshConfigurationSchema,
   type SshConfiguration,
 } from '@moonbase/ssh/configuration';
-import type { ChatSession } from '@moonbase/application/chat-client';
+import type { ChatSession } from '@moonbase/contracts/chat';
 import * as Schema from 'effect/Schema';
-import { ChatIdentifierSchema } from '@moonbase/application/chat-schema';
+import { ChatIdentifierSchema } from '@moonbase/contracts/chat-schema';
 import { invalid } from './wire.ts';
 
 const configurationSchema = Schema.Struct({

@@ -3,9 +3,9 @@ import { test, after } from 'node:test';
 import { Layer, ManagedRuntime } from 'effect';
 const runtime = ManagedRuntime.make(Layer.empty);
 after(() => runtime.dispose());
-import type { ChatClient, ChatSnapshot } from '@moonbase/application/chat-client';
-import type { ConnectionClient } from '@moonbase/application/connection-client';
-import { ApplicationError } from '@moonbase/application/client';
+import type { ChatClient, ChatSnapshot } from '@moonbase/contracts/chat';
+import type { ConnectionClient } from '@moonbase/contracts/connection';
+import { ApplicationError } from '@moonbase/contracts/workspace';
 import { ChatIpcSession } from '../src/chat/session.ts';
 import { browserClients, type ChatBridge } from '../src/chat/wire.ts';
 const context = { host: { hostId: 'host', storeId: 'store' }, actorId: 'owner' },
