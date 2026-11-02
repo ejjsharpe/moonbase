@@ -7,7 +7,8 @@ import { anthropicProvider } from '@earendil-works/pi-ai/providers/anthropic';
 import { createRegistry } from '@earendil-works/pi-durable';
 import { CodingTools } from '@earendil-works/pi-durable/tools';
 import { makeChatClient } from '@moonbase/application/runtime-client';
-import { releaseResource } from '@moonbase/application/services';
+import { releaseResource } from '@moonbase/effect';
+
 import { PiRuntimeLive } from './index.ts';
 import { serveChat } from './server.ts';
 import * as V from './validation.ts';

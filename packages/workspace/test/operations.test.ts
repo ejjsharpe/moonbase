@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { Effect, Layer, ManagedRuntime } from 'effect';
 import { TestClock } from 'effect/testing';
 import { makeEditorClient } from '@moonbase/application/runtime-client';
-import { emptyRecovery } from '@moonbase/application/client';
+import { emptyRecovery } from '@moonbase/contracts/workspace';
 import { WorkspaceLive, WorkspaceNative } from '../src/index.ts';
 import { quote, fixture, isError, waitFor } from './recovery-fixture.ts';
 test('aliases cannot authorize two same-baseline saves of one macOS object', async () => {

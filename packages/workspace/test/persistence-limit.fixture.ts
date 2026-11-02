@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { ManagedRuntime } from 'effect';
 import { makeEditorClient } from '@moonbase/application/runtime-client';
-import { ApplicationError, emptyRecovery } from '@moonbase/application/client';
+import { ApplicationError, emptyRecovery } from '@moonbase/contracts/workspace';
 import { WorkspaceLive } from '../src/index.ts';
 process.on('SIGXFSZ', () => {});
 const [root, dataDirectory] = process.argv.slice(2);

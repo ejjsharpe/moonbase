@@ -4,7 +4,9 @@ A macOS workbench for local editing and optional remote Pi Durable chat. Reusabl
 
 | Module | Owns |
 | --- | --- |
-| [Application](packages/application/README.md) | Shared commands, browser clients and Effect service contracts |
+| [Contracts](packages/contracts/README.md) | Independent DTOs, schemas, clients and Effect service ports |
+| [Effect helpers](packages/effect/README.md) | Safe shared failure normalization and resource release |
+| [Application](packages/application/README.md) | Shared dispatch and runtime-bound application clients |
 | [Editor](packages/editor/README.md) | React/Monaco workbench and independent editor state |
 | [Chat](packages/chat/README.md) | Headless chat state and draft preservation |
 | [Workspace](packages/workspace/README.md) | Local files, Git and recovery persistence |

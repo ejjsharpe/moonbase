@@ -18,7 +18,7 @@ import {
   emptyRecovery,
   type CheckoutTarget,
   type EditorRecovery,
-} from '@moonbase/application/client';
+} from '@moonbase/contracts/workspace';
 import { makeEditorClient } from '@moonbase/application/runtime-client';
 import { WorkspaceLive } from '../src/index.ts';
 export const binary = fileURLToPath(new URL('../dist/filesystem', import.meta.url));

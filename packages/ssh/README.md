@@ -1,6 +1,6 @@
 # SSH connection capability
 
-`@moonbase/ssh` exports `SshLive(config)`, a scoped `ConnectionService` layer. It depends on application contracts and Effect, with no editor, Electron, Pi or workspace implementation. Compose it once in a privileged process root; `makeConnectionClient(runtime)` uses the shared handlers.
+`@moonbase/ssh` exports `SshLive(config)`, a scoped `ConnectionService` layer. It depends on independent contracts and focused Effect helpers, with no editor, Electron, Pi or workspace implementation. Compose it once in a privileged process root; `makeConnectionClient(runtime)` uses the shared handlers.
 
 ## Configuration and use
 
@@ -26,7 +26,9 @@ Separately start the [chat host](../pi-runtime/README.md) on the authorized mach
 
 Each generation owns a foreground, nonmultiplexed OpenSSH child and its POSIX process group. The only forward is `127.0.0.1:ephemeral → remote 127.0.0.1:remotePort`. Noninteractive authentication uses existing SSH config/agent/keys. Local commands, agent forwarding and X11 forwarding are disabled. Root disposal releases owned children/helpers, with bounded TERM/KILL cleanup and confirmed group absence; Windows is unsupported. The port reservation is released before SSH binds, so a collision fails the forward rather than providing an atomic handoff.
 
-Connected status requires [authenticated health](../application/docs/HOST-PROTOCOL.md) for the exact host/store/version. Startup is bounded to 20 seconds. Only privileged services may resolve `ConnectionService.endpoint({host})`; lookup never connects or rebinds. Its origin/key must stay out of renderer bridges, arguments and logs. Public errors use bounded diagnostic categories rather than raw SSH output. Health authenticates application identity; OpenSSH supplies machine authentication and encryption. Health proofs do not authorize [chat RPC](../application/docs/CHAT.md#stateful-loopback-protocol), which requires separate authentication with no bearer fallback.
+Connected status requires [authenticated health](../contracts/docs/HOST-PROTOCOL.md) for the exact host/store/version. Startup is bounded to 20 seconds. Only privileged services may resolve `ConnectionService.endpoint({host})`; lookup never connects or rebinds. Its origin/key must stay out of renderer bridges, arguments and logs. Public errors use bounded diagnostic categories rather than raw SSH output. Health authenticates application identity; OpenSSH supplies machine authentication and encryption. Health proofs do not authorize [chat RPC](../contracts/docs/CHAT.md#stateful-loopback-protocol), which requires separate authentication with no bearer fallback.
+
+`@moonbase/ssh/host-health` owns the shared authenticated health helper used by SSH and Pi. This Node crypto leaf imports contracts and focused Effect helpers, without acquiring SSH processes or application runtime behavior.
 
 ## Checks
 

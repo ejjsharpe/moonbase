@@ -6,7 +6,7 @@
 - Discovery: Git status/comparisons, file lookup and filesystem watching.
 - Recovery: SQLite storage for drafts, editor state and interrupted operation results.
 
-It implements the contracts in [`@moonbase/application`](../application/README.md). Clients such as the [editor](../editor/README.md) own buffers, rendering and Save/Discard/Cancel decisions; workspace owns local IO, validation and persistence.
+It implements the contracts in [`@moonbase/contracts`](../contracts/README.md). Clients such as the [editor](../editor/README.md) own buffers, rendering and Save/Discard/Cancel decisions; workspace owns local IO, validation and persistence.
 
 ## Integration
 
@@ -16,11 +16,11 @@ Configure a stable `hostId` and a fresh `dataDirectory` outside approved checkou
 
 Native adapters use `WorkspaceNative.capture({checkout, clientId, paths})` for approved OS selections and install a release owner before publishing the returned references. `WorkspaceNative.release({checkout, clientId, references})` promptly closes unclaimed references for that exact owner; missing or already claimed references are harmless. A batch containing another owner's known reference rejects before releasing any reference. Capture interruption joins its helper and releases unobserved results. References expire after five minutes; claim transfers their descriptors to the admitted mutation, so expiry or document cleanup cannot close a descriptor that mutation still uses.
 
-See the [standalone example](examples/local.ts) for runtime/client wiring and [public types](../application/src/client.ts) for commands and results.
+See the [standalone example](examples/local.ts) for runtime/client wiring and [public types](../contracts/src/workspace.ts) for commands and results.
 
 ## Safety
 
-Only native/user-approved exact checkout identities grant filesystem access. Saves check content versions; replacements require explicit consent and use Trash. Consumers must preserve affected dirty drafts before mutations, retain immutable request identities across retries, and block destructive actions while outcomes are uncertain. Recovery uses compare-and-swap revisions and [exact publication receipts](../application/docs/RECOVERY-PUBLICATIONS.md).
+Only native/user-approved exact checkout identities grant filesystem access. Saves check content versions; replacements require explicit consent and use Trash. Consumers must preserve affected dirty drafts before mutations, retain immutable request identities across retries, and block destructive actions while outcomes are uncertain. Recovery uses compare-and-swap revisions and [exact publication receipts](../contracts/docs/RECOVERY-PUBLICATIONS.md).
 
 The root scope owns command settlement, helper processes, observations and native references. Overlap leases serialize same-checkout ancestor/descendant/root and NFC/case conflicts while unrelated paths remain concurrent. Cancelling a queued operation releases its waiting lease without admission. Cancelling a caller after admission stops its wait and signals supported IO; the workspace retains the lease and descriptors until actual helper exit and recovery settlement. Save's immutable reservation remains protected through staging/replacement. No cancellation establishes rollback.
 

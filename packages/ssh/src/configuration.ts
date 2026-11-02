@@ -1,7 +1,7 @@
 import { Effect, Schema, SchemaGetter } from 'effect';
 import { isAbsolute } from 'node:path';
-import { ApplicationError } from '@moonbase/application/client';
-import { ConnectionProfileSchema } from '@moonbase/application/connection-schema';
+import { ApplicationError } from '@moonbase/contracts/workspace';
+import { ConnectionProfileSchema } from '@moonbase/contracts/connection-schema';
 
 const executable = Schema.NullOr(Schema.String).pipe(
   Schema.decodeTo(

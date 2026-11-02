@@ -15,7 +15,7 @@ import {
 import { join } from 'node:path';
 import { ManagedRuntime, Effect } from 'effect';
 import { makeEditorClient } from '@moonbase/application/runtime-client';
-import { emptyRecovery } from '@moonbase/application/client';
+import { emptyRecovery } from '@moonbase/contracts/workspace';
 import { WorkspaceLive, WorkspaceNative } from '../src/index.ts';
 
 import { fixture, rejects, draft } from './workspace-fixture.ts';

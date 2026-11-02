@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ManagedRuntime } from 'effect';
-import { ApplicationError } from '@moonbase/application/client';
+import { ApplicationError } from '@moonbase/contracts/workspace';
 import { createModels } from '@earendil-works/pi-ai/models';
 import {
   fauxAssistantMessage,
@@ -31,7 +31,7 @@ import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node';
 import { SqliteStorage } from '@earendil-works/pi-durable/storage/sqlite';
 import { Effect, Layer } from 'effect';
 import { runApplicationEffect } from '@moonbase/application/effect-client';
-import type { ChatSnapshot } from '@moonbase/application/chat-client';
+import type { ChatSnapshot } from '@moonbase/contracts/chat';
 
 const session = { host: { hostId: 'test-host', storeId: 'test-store' }, actorId: 'personal' };
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));

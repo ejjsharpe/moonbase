@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { Schema } from 'effect';
-import { ApplicationError } from '@moonbase/application/client';
+import { ApplicationError } from '@moonbase/contracts/workspace';
 import type { SshConfiguration } from '@moonbase/ssh';
 import { decodeSshConfiguration, SshConfigurationSchema } from '@moonbase/ssh/configuration';
 

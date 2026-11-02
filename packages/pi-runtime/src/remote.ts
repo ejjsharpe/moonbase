@@ -1,17 +1,12 @@
 import { Effect, Layer, Stream, Schedule, Exit, Cause } from 'effect';
-import { ApplicationError } from '@moonbase/application/client';
-import type {
-  ChatCommand,
-  ChatInput,
-  ChatOutput,
-  ChatTarget,
-} from '@moonbase/application/chat-client';
+import { ApplicationError } from '@moonbase/contracts/workspace';
+import type { ChatCommand, ChatInput, ChatOutput, ChatTarget } from '@moonbase/contracts/chat';
 import {
   ChatService,
   ConnectionService,
   type ChatServiceShape,
-} from '@moonbase/application/services';
-import { validateHostHealth } from '@moonbase/application/host-health';
+} from '@moonbase/contracts/services';
+import { validateHostHealth } from '@moonbase/ssh/host-health';
 import * as P from './protocol.ts';
 import * as V from './validation.ts';
 

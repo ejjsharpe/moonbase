@@ -2,12 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
-import {
-  decodeChatInput,
-  decodeChatOutput,
-  isChatCommand,
-} from '@moonbase/application/chat-schema';
-import type { ChatCommand, ChatInput, ChatOutput } from '@moonbase/application/chat-client';
+import { decodeChatInput, decodeChatOutput, isChatCommand } from '@moonbase/contracts/chat-schema';
+import type { ChatCommand, ChatInput, ChatOutput } from '@moonbase/contracts/chat';
 
 const host = { hostId: 'host', storeId: 'store' };
 const session = { host, actorId: 'owner' };
@@ -219,7 +215,7 @@ test('schema failures use safe application errors without rejected values', () =
 test('schema entry stays independent of application dispatch and privileged implementations', async () => {
   const result = await build({
     absWorkingDir: fileURLToPath(new URL('../../../', import.meta.url)),
-    entryPoints: ['@moonbase/application/chat-schema'],
+    entryPoints: ['@moonbase/contracts/chat-schema'],
     bundle: true,
     platform: 'browser',
     write: false,

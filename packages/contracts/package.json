@@ -1,0 +1,31 @@
+{
+  "name": "@moonbase/contracts",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./workspace": "./src/workspace.ts",
+    "./chat": "./src/chat.ts",
+    "./connection": "./src/connection.ts",
+    "./host": "./src/host.ts",
+    "./chat-schema": "./src/chat-schema.ts",
+    "./workspace-schema": "./src/workspace-schema.ts",
+    "./connection-schema": "./src/connection-schema.ts",
+    "./host-schema": "./src/host-schema.ts",
+    "./error-schema": "./src/error-schema.ts",
+    "./schema": "./src/schema.ts",
+    "./errors": "./src/errors.ts",
+    "./common": "./src/common.ts",
+    "./services": "./src/services.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "oxlint .",
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  },
+  "dependencies": {
+    "effect": "4.1.0"
+  },
+  "devDependencies": {
+    "@moonbase/config": "workspace:*"
+  }
+}

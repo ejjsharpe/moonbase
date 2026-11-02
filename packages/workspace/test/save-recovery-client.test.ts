@@ -5,7 +5,7 @@ import { writeFileSync, readFileSync, chmodSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { ManagedRuntime } from 'effect';
 import { makeEditorClient } from '@moonbase/application/runtime-client';
-import { emptyRecovery } from '@moonbase/application/client';
+import { emptyRecovery } from '@moonbase/contracts/workspace';
 import { WorkspaceLive } from '../src/index.ts';
 
 import { fixture, rejects, draft } from './workspace-fixture.ts';
