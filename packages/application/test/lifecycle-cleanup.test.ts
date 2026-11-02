@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Effect, Exit, Layer, ManagedRuntime, Scope } from 'effect';
-import { ApplicationError } from '@moonbase/application/client';
+import { ApplicationError } from '@moonbase/contracts/workspace';
 import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
-import { RendererCleanup, releaseInstance } from '../src/renderer/cleanup.ts';
+import { ApplicationCleanup, releaseInstance } from '../src/runtime/lifecycle.ts';
 
 test('root cleanup retains failed/pending instance ownership while another namespace works and Quit drains', async () => {
   const runtime = ManagedRuntime.make(Layer.empty),
     scope = Scope.makeUnsafe('parallel');
-  const cleanup = new RendererCleanup(runtime, scope),
+  const cleanup = new ApplicationCleanup(runtime, scope),
     held = Promise.withResolvers<void>();
   cleanup.claim('chat');
   assert.throws(() => cleanup.claim('chat'), { code: 'Unavailable' });
@@ -56,7 +56,7 @@ test('root cleanup retains failed/pending instance ownership while another names
 test('a namespace can be explicitly reacquired only after successful cleanup', async () => {
   const runtime = ManagedRuntime.make(Layer.empty),
     scope = Scope.makeUnsafe();
-  const cleanup = new RendererCleanup(runtime, scope),
+  const cleanup = new ApplicationCleanup(runtime, scope),
     held = Promise.withResolvers<void>();
   const close = cleanup.close('chat', () => held.promise);
   assert.throws(() => cleanup.claim('chat'));
@@ -83,7 +83,7 @@ for (const fail of [false, true]) {
         }),
       ),
     );
-    const cleanup = new RendererCleanup(runtime, aggregate);
+    const cleanup = new ApplicationCleanup(runtime, aggregate);
     const result = cleanup.close('chat', () =>
       releaseInstance(runtime, instance, async () => {
         if (fail)
@@ -127,7 +127,7 @@ test('synchronous disposer throws stay owned, release acquisition scopes and mak
   });
   await assert.rejects(release, { code: 'Persistence' });
   assert.equal(finalized, 1);
-  const cleanup = new RendererCleanup(runtime, aggregate);
+  const cleanup = new ApplicationCleanup(runtime, aggregate);
   const close = cleanup.close('editor', () => {
     fenced = true;
     throw expected;

@@ -1,5 +1,5 @@
 import { captureNative } from './editor-regressions.ts';
-import type { CheckoutTarget } from '@moonbase/application/client';
+import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import {
   test,
   expect,
@@ -16,7 +16,11 @@ type Fixture = Awaited<ReturnType<typeof fixture>>;
 const packaged = !!process.env.MOONBASE_PACKAGED_TEST;
 const children = new WeakMap<ElectronApplication, ReturnType<ElectronApplication['process']>>();
 const output = resolve(process.env.MOONBASE_NATIVE_OUTPUT ?? 'test-results', 'composition');
-async function launch(f: Fixture, data = 'desktop-data') {
+async function launch(
+  f: Fixture,
+  data = 'desktop-data',
+  startupFailure?: 'editor' | 'chat-context',
+) {
   const app = await electron.launch({
     ...(packaged
       ? {
@@ -34,6 +38,7 @@ async function launch(f: Fixture, data = 'desktop-data') {
       TMPDIR: process.env.TMPDIR!,
       MOONBASE_USER_DATA: join(f.directory, data),
       MOONBASE_CHAT_CONFIG: f.clientConfig,
+      ...(startupFailure ? { MOONBASE_TEST_STARTUP_FAILURE: startupFailure } : {}),
       ...(process.env.MOONBASE_TEST_MAIN
         ? { MOONBASE_TEST_MAIN: process.env.MOONBASE_TEST_MAIN }
         : {}),
@@ -51,7 +56,11 @@ async function launch(f: Fixture, data = 'desktop-data') {
     if (m.type() === 'error') errors.push(m.text());
   });
   try {
-    await expect(page.getByRole('button', { name: 'Open checkout', exact: true })).toBeVisible();
+    await expect(
+      startupFailure === 'editor'
+        ? page.getByRole('alert', { name: 'Workbench startup failed' })
+        : page.getByRole('button', { name: 'Open checkout', exact: true }),
+    ).toBeVisible();
   } catch (error) {
     await stop(app, true);
     throw error;
@@ -1207,4 +1216,189 @@ if (!packaged) {
       await f.close();
     }
   });
+}
+
+if (!packaged) {
+  for (const failure of ['editor', 'chat-context'] as const)
+    test(`application ${failure} startup failure stays visible and native Quit remains responsive`, async () => {
+      const f = await fixture(true);
+      let current: ElectronApplication | undefined;
+      try {
+        await setup(f);
+        const { app, page: p, errors } = await launch(f, 'startup-' + failure, failure);
+        current = app;
+        await screen(app, p, 'startup-' + failure);
+        if (failure === 'chat-context') {
+          await expect(
+            p.getByRole('alert', { name: 'Remote chat initialization failed' }),
+          ).toBeVisible();
+          await local(p, app, f);
+          await editor(p).press('Meta+s');
+          await expect.poll(() => readFile(join(f.cwd, 'a.ts'), 'utf8')).toBe('local dirty draft');
+          await tab(p, 'Chat').click();
+          await expect(p.getByLabel('Remote chat configuration')).toContainText(
+            'Application effect failed',
+          );
+          expect(await reloadOutcome(app)).toBe('veto');
+          await app.evaluate(({ app }) => app.quit());
+          await expect(p.getByLabel('Remote chat configuration')).toBeVisible();
+          expect(app.process().exitCode).toBeNull();
+          await app.evaluate(() => {
+            globalThis.desktopTest.startupFailure = null;
+          });
+          await p.getByRole('button', { name: 'Open Chat panel', exact: true }).click();
+          await expect(p.getByRole('button', { name: 'Connect', exact: true })).toBeEnabled();
+          expect((await f.stats()).calls).toBe(0);
+          expect(errors).toEqual([]);
+          await stop(app);
+        } else {
+          const alert = p.getByRole('alert', { name: 'Workbench startup failed' });
+          await expect(alert).toContainText('Controlled editor recovery initialization failure');
+          await expect(p.getByRole('button', { name: 'Open checkout', exact: true })).toHaveCount(
+            0,
+          );
+          const report = join(f.directory, 'startup-error.json');
+          await app.evaluate(({ dialog }, report) => {
+            dialog.showMessageBox = (async (_window, options) => {
+              process.getBuiltinModule('fs').writeFileSync(report, JSON.stringify(options));
+              return { response: 0, checkboxChecked: false };
+            }) as typeof dialog.showMessageBox;
+          }, report);
+          const child = app.process();
+          await app.evaluate(({ app }) => app.quit());
+          await until(async () => child.exitCode !== null || child.signalCode !== null, Boolean);
+          expect(child.exitCode).toBe(1);
+          expect(await readFile(report, 'utf8')).toContain(
+            'Controlled editor recovery initialization failure',
+          );
+          expect((await f.stats()).calls).toBe(0);
+          expect(errors).toEqual([]);
+        }
+      } finally {
+        if (current) await stop(current, true);
+        await close(f);
+      }
+    });
+
+  for (const handoff of ['dispose', 'reload'] as const)
+    test(`prepared application fences native and synthetic actions until ${handoff} handoff completes`, async () => {
+      const f = await fixture(true);
+      let current: ElectronApplication | undefined;
+      try {
+        await setup(f);
+        const { app, page: p, errors } = await launch(f, 'handoff-' + handoff);
+        current = app;
+        await local(p, app, f);
+        await editor(p).press('Meta+s');
+        await expect.poll(() => readFile(join(f.cwd, 'a.ts'), 'utf8')).toBe('local dirty draft');
+        await connect(p);
+        await create(p, 'Consent handoff');
+        await p.getByLabel('Message', { exact: true }).fill('preserved consent draft');
+        const before = await p.evaluate(() => localStorage.getItem('moonbase.chat.v1'));
+        const report = join(f.directory, 'handoff.json');
+        await app.evaluate(({ app, BrowserWindow, dialog }, report) => {
+          const contents = BrowserWindow.getAllWindows()[0].webContents;
+          const send = contents.send.bind(contents);
+          globalThis.applicationHandoff = {
+            actions: [],
+            pickers: 0,
+            release: null,
+            held: false,
+            quitId: null,
+            obsoleteAcknowledgments: 0,
+          };
+          dialog.showOpenDialog = (async () => {
+            globalThis.applicationHandoff.pickers++;
+            return { canceled: true, filePaths: [] };
+          }) as typeof dialog.showOpenDialog;
+          contents.send = ((channel, ...args) => {
+            if (channel === 'moonbase:action') {
+              globalThis.applicationHandoff.actions.push(args[0]);
+              if (args[0] === 'quit') {
+                const previousId = globalThis.applicationHandoff.quitId;
+                globalThis.applicationHandoff.quitId = args[1];
+                if (previousId) {
+                  void contents
+                    .executeJavaScript(
+                      `window.moonbase.quitResult(${JSON.stringify(previousId)}, false)`,
+                    )
+                    .then(() => {
+                      globalThis.applicationHandoff.obsoleteAcknowledgments++;
+                      send(channel, ...args);
+                    });
+                  return;
+                }
+              }
+              if (args[0] === 'dispose' && !globalThis.applicationHandoff.held) {
+                globalThis.applicationHandoff.held = true;
+                globalThis.applicationHandoff.release = () => send(channel, ...args);
+                return;
+              }
+            }
+            send(channel, ...args);
+          }) as typeof contents.send;
+          app.once('will-quit', () => {
+            process
+              .getBuiltinModule('fs')
+              .writeFileSync(report, JSON.stringify(globalThis.applicationHandoff));
+          });
+        }, report);
+        const child = app.process();
+        await app.evaluate(({ app }) => app.quit());
+        await expect.poll(() => app.evaluate(() => globalThis.applicationHandoff.held)).toBe(true);
+        await expect(p.getByRole('status').filter({ hasText: 'Closing workbench' })).toBeVisible();
+        await app.evaluate(({ app }) => app.quit());
+        await p.evaluate(() => {
+          document.querySelector('[aria-label="Moonbase workbench"]')?.removeAttribute('inert');
+          const message = document.querySelector<HTMLTextAreaElement>('#message')!;
+          Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(
+            message,
+            'rejected after consent',
+          );
+          message.dispatchEvent(new Event('input', { bubbles: true }));
+          message
+            .closest('form')!
+            .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+          for (const name of ['Open checkout', 'Import clipboard files', 'Close Chat panel'])
+            [...document.querySelectorAll<HTMLButtonElement>('button')]
+              .find((button) => button.textContent?.trim() === name)
+              ?.click();
+        });
+        expect(await p.evaluate(() => localStorage.getItem('moonbase.chat.v1'))).toBe(before);
+        expect(await app.evaluate(() => globalThis.applicationHandoff.pickers)).toBe(0);
+        expect(
+          (await f.stats()).commands.filter((name) => ['sendChat', 'stopChat'].includes(name)),
+        ).toEqual([]);
+        if (handoff === 'reload') expect(await reloadOutcome(app)).toBe('reload');
+        else await app.evaluate(() => globalThis.applicationHandoff.release?.());
+        await until(async () => child.exitCode !== null || child.signalCode !== null, Boolean);
+        expect(child.exitCode).toBe(0);
+        const result = JSON.parse(await readFile(report, 'utf8')) as {
+          actions: string[];
+          obsoleteAcknowledgments: number;
+        };
+        expect(result.actions.filter((action) => action === 'quit')).toHaveLength(
+          handoff === 'reload' ? 2 : 1,
+        );
+        expect(result.actions.filter((action) => action === 'dispose')).toHaveLength(
+          handoff === 'reload' ? 2 : 1,
+        );
+        expect(result.obsoleteAcknowledgments).toBe(handoff === 'reload' ? 1 : 0);
+        expect(errors).toEqual([]);
+      } finally {
+        if (current) await stop(current, true);
+        await close(f);
+      }
+    });
+}
+
+declare global {
+  var applicationHandoff: {
+    actions: string[];
+    pickers: number;
+    release: (() => void) | null;
+    held: boolean;
+    quitId: string | null;
+    obsoleteAcknowledgments: number;
+  };
 }

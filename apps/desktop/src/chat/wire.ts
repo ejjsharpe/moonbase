@@ -2,17 +2,17 @@ import { normalizeApplicationError } from '@moonbase/application/runtime/effect-
 import {
   decodeApplicationErrorDTO,
   type ApplicationErrorDTOSchema,
-} from '@moonbase/application/error-schema';
-import { decodeChatOutput, isChatCommand } from '@moonbase/application/chat-schema';
+} from '@moonbase/contracts/error-schema';
+import { decodeChatOutput, isChatCommand } from '@moonbase/contracts/chat-schema';
 import {
   decodeConnectionOutput,
   decodeConnectionSnapshot,
   isConnectionCommand,
-} from '@moonbase/application/connection-schema';
+} from '@moonbase/contracts/connection-schema';
 import { cancellation, unwrap as unwrapReply } from '../wire.ts';
-import { ApplicationError } from '@moonbase/application/client';
-import type { ChatClient, ChatSession } from '@moonbase/application/chat-client';
-import type { ConnectionClient } from '@moonbase/application/connection-client';
+import { ApplicationError } from '@moonbase/contracts/workspace';
+import type { ChatClient, ChatSession } from '@moonbase/contracts/chat';
+import type { ConnectionClient } from '@moonbase/contracts/connection';
 
 export const channels = {
   call: 'moonbase-chat:call',

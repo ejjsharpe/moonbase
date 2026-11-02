@@ -9,7 +9,7 @@ import {
   type EditorClient,
   type CheckoutTarget,
   type WorkspaceEvent,
-} from '@moonbase/application/client';
+} from '@moonbase/contracts/workspace';
 import { EditorSession } from '../src/session.ts';
 import { bridgeClient, errorDTO, failure, type Reply } from '../src/wire.ts';
 const target: CheckoutTarget = {

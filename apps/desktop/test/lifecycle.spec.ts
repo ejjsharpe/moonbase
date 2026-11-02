@@ -1,5 +1,5 @@
 import { prepareCrashRecovery, recoverCrashedWorkbench } from './editor-regressions.ts';
-import type { RecoveryLoad } from '@moonbase/application/client';
+import type { RecoveryLoad } from '@moonbase/contracts/workspace';
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
 import { fixture, until } from '../../../tests/chat/tool-fixture.ts';
 import { join, resolve } from 'node:path';

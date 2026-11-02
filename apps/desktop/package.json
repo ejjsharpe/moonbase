@@ -30,13 +30,14 @@
     "@stylexjs/stylex": "0.19.1",
     "@base-ui/react": "1.9.0",
     "monaco-editor": "0.57.0",
-    "@moonbase/chat": "workspace:*",
     "@moonbase/pi-runtime": "workspace:*",
-    "@moonbase/ssh": "workspace:*"
+    "@moonbase/ssh": "workspace:*",
+    "@moonbase/contracts": "workspace:*"
   },
   "devDependencies": {
     "electron": "45.1.0",
-    "electron-builder": "26.18.0"
+    "electron-builder": "26.18.0",
+    "@moonbase/effect": "workspace:*"
   },
   "nx": {
     "targets": {
