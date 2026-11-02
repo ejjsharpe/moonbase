@@ -8,7 +8,7 @@ import {
   normalizeApplicationError,
   runApplicationEffect,
 } from '@moonbase/application/effect-client';
-import { RendererCleanup } from './cleanup.ts';
+import { RendererCleanup, releaseInstance } from './cleanup.ts';
 import { ChatView } from '../chat/view.tsx';
 import { browserClients, type ChatBridge } from '../chat/wire.ts';
 import { Button } from '@base-ui/react/button';
@@ -45,10 +45,11 @@ const bridge = window.moonbase,
   runtime = ManagedRuntime.make(Layer.empty),
   scope = Scope.makeUnsafe('parallel'),
   cleanup = new RendererCleanup(runtime, scope),
+  editorScope = Scope.forkUnsafe(scope, 'parallel'),
   editorModel = await runApplicationEffect(
     runtime,
     makeEditorModel({ client: bridgeClient(bridge), clientId: bridge.clientId }).pipe(
-      Effect.provideService(Scope.Scope, scope),
+      Effect.provideService(Scope.Scope, editorScope),
     ),
   ),
   controller = makeEditorController(runtime, editorModel);
@@ -57,6 +58,7 @@ const root = createRoot(document.getElementById('root')!);
 const loaded = controller.load().catch(controller.report);
 let chatError = '',
   chatInitializationFailed = false;
+let chatScope: Scope.Closeable | null = null;
 async function acquireChat(): Promise<ChatController | null> {
   try {
     const configured = unwrap(await bridge.chatConfigured());
@@ -69,6 +71,7 @@ async function acquireChat(): Promise<ChatController | null> {
     const { chat, connection } = browserClients(window.moonbaseChat);
     const storageKey = 'moonbase.chat.v1';
     cleanup.claim('chat');
+    chatScope = Scope.forkUnsafe(scope, 'parallel');
     const model = await runApplicationEffect(
       runtime,
       makeChatModel({
@@ -79,10 +82,12 @@ async function acquireChat(): Promise<ChatController | null> {
           read: () => localStorage.getItem(storageKey),
           write: (value) => localStorage.setItem(storageKey, value),
         },
-      }).pipe(Effect.provideService(Scope.Scope, scope)),
+      }).pipe(Effect.provideService(Scope.Scope, chatScope)),
     );
     return makeChatController(runtime, model);
   } catch (error) {
+    if (chatScope)
+      await runApplicationEffect(runtime, Scope.close(chatScope, Exit.void)).catch(() => {});
     chatInitializationFailed = true;
     chatError =
       error instanceof Error
@@ -93,11 +98,25 @@ async function acquireChat(): Promise<ChatController | null> {
 }
 let chat = await acquireChat(),
   chatActive = !!chat;
+const chatConfigured = !!chat;
+function disposeChat() {
+  const current = chat,
+    instanceScope = chatScope;
+  if (!current || !instanceScope) return Promise.resolve();
+  return releaseInstance(runtime, instanceScope, () => current.dispose()).then(() => {
+    if (chat === current) {
+      chat = null;
+      chatScope = null;
+    }
+  });
+}
 let disposal: Promise<ErrorDTO | undefined> | undefined;
 function disposeRenderer() {
   disposal ??= (async () => {
-    cleanup.close('editor', () => controller.dispose());
-    if (chat) cleanup.close('chat', () => chat!.dispose());
+    cleanup.close('editor', () =>
+      releaseInstance(runtime, editorScope, () => controller.dispose()),
+    );
+    if (chat) cleanup.close('chat', disposeChat);
     const failures: unknown[] = [];
     for (const release of [
       () => cleanup.drain(),
@@ -280,7 +299,7 @@ function Desktop() {
             Editor
           </Tabs.Tab>
           <Tabs.Tab
-            hidden={!chatPanel && !!chat}
+            hidden={!chatPanel && chatConfigured}
             value="chat"
             {...stylex.props(controls.button, view === 'chat' && workbench.fileSelected)}>
             Chat
@@ -295,7 +314,7 @@ function Desktop() {
                 setView('chat');
                 return;
               }
-              cleanup.close('chat', () => chat!.dispose());
+              cleanup.close('chat', disposeChat);
               chatActive = false;
               flushSync(() => {
                 setChatPanel(false);
@@ -305,7 +324,7 @@ function Desktop() {
             Close Chat panel
           </Button>
         ) : null}
-        {!chatPanel && chat ? (
+        {!chatPanel && chatConfigured ? (
           <Button
             {...stylex.props(controls.button)}
             disabled={!cleanup.available('chat')}
@@ -392,7 +411,7 @@ function Desktop() {
         }}
         {...stylex.props(styles.panel)}>
         {chat && chatPanel ? <ChatView controller={chat} /> : null}
-        {!chat ? (
+        {!chatConfigured ? (
           <section {...stylex.props(styles.empty)} aria-label="Remote chat configuration">
             <h1>Remote chat is unavailable</h1>
             <p role="status">{chatError}</p>

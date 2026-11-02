@@ -8,11 +8,11 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 
-test('Foundation verifies browser-only command contracts and headless chat without a source archive', () => {
+test('Foundation verifies browser-only command contracts and headless models without a source archive', () => {
   const directory = mkdtempSync(path.join(tmpdir(), 'moonbase-foundation-'));
   try {
     mkdirSync(path.join(directory, 'node_modules/@moonbase'), { recursive: true });
-    for (const name of ['application', 'chat']) {
+    for (const name of ['application', 'chat', 'editor']) {
       const target = path.join(directory, 'packages', name);
       cpSync(path.join(root, 'packages', name, 'src'), path.join(target, 'src'), {
         recursive: true,
@@ -20,6 +20,10 @@ test('Foundation verifies browser-only command contracts and headless chat witho
       cpSync(path.join(root, 'packages', name, 'package.json'), path.join(target, 'package.json'));
       symlinkSync(target, path.join(directory, 'node_modules/@moonbase', name));
     }
+    symlinkSync(
+      path.join(root, 'node_modules/effect'),
+      path.join(directory, 'node_modules/effect'),
+    );
     const check = () =>
       spawnSync(process.execPath, [path.join(root, 'scripts/check-foundation.mjs')], {
         cwd: directory,

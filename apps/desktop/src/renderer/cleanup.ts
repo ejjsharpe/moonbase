@@ -1,4 +1,4 @@
-import { Effect, Fiber, type Scope, type ManagedRuntime } from 'effect';
+import { Effect, Exit, Fiber, Scope, type ManagedRuntime } from 'effect';
 import { ApplicationError } from '@moonbase/application/client';
 import {
   normalizeApplicationError,
@@ -96,4 +96,31 @@ export class RendererCleanup {
           .slice(0, 512),
       });
   }
+}
+
+/** Close the removable acquisition scope even when the model's own release fails. */
+export function releaseInstance(
+  runtime: ManagedRuntime.ManagedRuntime<never, ApplicationError>,
+  scope: Scope.Closeable,
+  dispose: () => Promise<void>,
+): Promise<void> {
+  const disposal = dispose();
+  return (async () => {
+    const failures: ApplicationError[] = [];
+    for (const release of [
+      () => disposal,
+      () => runApplicationEffect(runtime, Scope.close(scope, Exit.void)),
+    ]) {
+      try {
+        await release();
+      } catch (error) {
+        failures.push(normalizeApplicationError(error));
+      }
+    }
+    if (failures.length)
+      throw new ApplicationError({
+        code: failures[0].code,
+        message: failures.map((error) => error.message).join('; '),
+      });
+  })();
 }

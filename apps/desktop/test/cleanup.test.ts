@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Exit, Layer, ManagedRuntime, Scope } from 'effect';
+import { Effect, Exit, Layer, ManagedRuntime, Scope } from 'effect';
 import { ApplicationError } from '@moonbase/application/client';
 import { runApplicationEffect } from '@moonbase/application/effect-client';
-import { RendererCleanup } from '../src/renderer/cleanup.ts';
+import { RendererCleanup, releaseInstance } from '../src/renderer/cleanup.ts';
 
 test('root cleanup retains failed/pending instance ownership while another namespace works and Quit drains', async () => {
   const runtime = ManagedRuntime.make(Layer.empty),
@@ -67,3 +67,38 @@ test('a namespace can be explicitly reacquired only after successful cleanup', a
   await runtime.runPromise(Scope.close(scope, Exit.void));
   await runtime.dispose();
 });
+
+for (const fail of [false, true]) {
+  test(`instance acquisition finalizers release before aggregate shutdown (model failure: ${fail})`, async () => {
+    const runtime = ManagedRuntime.make(Layer.empty),
+      aggregate = Scope.makeUnsafe('parallel');
+    let finalized = 0;
+    const instance = Scope.forkUnsafe(aggregate, 'parallel');
+    runtime.runSync(
+      Scope.addFinalizer(
+        instance,
+        Effect.sync(() => {
+          finalized++;
+        }),
+      ),
+    );
+    const cleanup = new RendererCleanup(runtime, aggregate);
+    const result = cleanup.close('chat', () =>
+      releaseInstance(runtime, instance, async () => {
+        if (fail)
+          throw new ApplicationError({ code: 'Persistence', message: 'Model cleanup failed' });
+      }),
+    );
+    if (fail) await assert.rejects(result, { code: 'Persistence' });
+    else await result;
+    assert.equal(finalized, 1);
+    assert.equal(
+      await runtime.runPromise(Effect.succeed('another model works')),
+      'another model works',
+    );
+    assert.equal(cleanup.available('chat'), !fail);
+    await runtime.runPromise(Scope.close(aggregate, Exit.void));
+    assert.equal(finalized, 1);
+    await runtime.dispose();
+  });
+}
