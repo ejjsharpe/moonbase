@@ -3,8 +3,12 @@ import { once } from 'node:events';
 import { createServer, type RequestListener } from 'node:http';
 import { test, type TestContext } from 'node:test';
 import { Cause, Effect, Exit } from 'effect';
-import { ApplicationError, type ApplicationErrorCode } from '../src/client.ts';
-import { chatHostVersion, chatProtocolVersion, type ChatHostHealth } from '../src/host-client.ts';
+import { ApplicationError, type ApplicationErrorCode } from '@moonbase/contracts/errors';
+import {
+  chatHostVersion,
+  chatProtocolVersion,
+  type ChatHostHealth,
+} from '@moonbase/contracts/host';
 import {
   checkHostHealth,
   createHostHealthReply,

@@ -54,6 +54,8 @@
     "@moonbase/config": "workspace:*",
     "@moonbase/chat": "workspace:*",
     "@earendil-works/pi-durable": "1.4.0",
-    "typebox": "1.3.27"
+    "typebox": "1.3.27",
+    "@moonbase/contracts": "workspace:*",
+    "@moonbase/effect": "workspace:*"
   }
 }

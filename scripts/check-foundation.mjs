@@ -15,8 +15,14 @@ console.log(
   `Verified source ownership, public exports and cycles (${Object.keys(migrationEdges).length} exact migration edges).`,
 );
 
-for (const entry of ['client', 'host-client', 'connection-client', 'chat-client']) {
-  const path = `@moonbase/application/${entry}`;
+for (const path of [
+  ...['client', 'host-client', 'connection-client', 'chat-client'].map(
+    (entry) => `@moonbase/application/${entry}`,
+  ),
+  ...['workspace', 'host', 'connection', 'chat', 'errors', 'common'].map(
+    (entry) => `@moonbase/contracts/${entry}`,
+  ),
+]) {
   const result = await build({
     entryPoints: [path],
     bundle: true,

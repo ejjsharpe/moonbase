@@ -14,6 +14,11 @@ const packages = new Map([
     '@moonbase/pi-runtime',
     { directory: 'packages/pi-runtime', exports: { '.': './src/index.ts' } },
   ],
+  [
+    '@moonbase/ssh',
+    { directory: 'packages/ssh', exports: { './host-health': './src/host-health.ts' } },
+  ],
+  ['@moonbase/effect', { directory: 'packages/effect', exports: { '.': './src/index.ts' } }],
 ]);
 function check(sources) {
   return checkBoundaries({
@@ -72,6 +77,28 @@ assert(
     'packages/pi-runtime/src/service.ts': "import type {} from '@moonbase/application';",
     'packages/application/src/index.ts': '',
   }).some((error) => error.includes('reusable infrastructure')),
+);
+assert.deepEqual(
+  check({
+    'packages/pi-runtime/src/index.ts': "import '@moonbase/ssh/host-health';",
+    'packages/ssh/src/host-health.ts':
+      "import '@moonbase/contracts'; import '@moonbase/effect'; import 'node:crypto';",
+    'packages/contracts/src/index.ts': '',
+    'packages/effect/src/index.ts': "import '@moonbase/contracts';",
+  }),
+  [],
+);
+assert(
+  check({
+    'packages/ssh/src/host-health.ts': "import type {} from './process.ts';",
+    'packages/ssh/src/process.ts': '',
+  }).some((error) => error.includes('named authentication helper reaches implementation')),
+);
+assert(
+  check({
+    'packages/contracts/src/index.ts': "import '@moonbase/effect';",
+    'packages/effect/src/index.ts': '',
+  }).some((error) => error.includes('contracts depends on executable')),
 );
 console.log(
   'Boundary negative fixtures passed: platform/type/dynamic/deep imports, cycles and hidden process-root back edges.',

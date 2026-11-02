@@ -1,7 +1,7 @@
 import { ManagedRuntime, Layer } from 'effect';
-import type { ConnectionService } from '@moonbase/application/services';
-import type { ApplicationError } from '@moonbase/application/client';
-import type { ChatSession } from '@moonbase/application/chat-client';
+import type { ConnectionService } from '@moonbase/contracts/services';
+import type { ApplicationError } from '@moonbase/contracts/workspace';
+import type { ChatSession } from '@moonbase/contracts/chat';
 import { makeChatClient } from '@moonbase/application/runtime-client';
 import { RemoteChatLive } from '@moonbase/pi-runtime/remote';
 

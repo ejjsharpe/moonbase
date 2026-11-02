@@ -1,4 +1,4 @@
-import { normalizeApplicationError } from '@moonbase/application/effect-client';
+import { normalizeApplicationError } from '@moonbase/effect';
 import {
   type SaveRecordSchema,
   type OperationRecordSchema,
@@ -13,7 +13,7 @@ import {
   type WorkspaceOperation,
   type EditorRecovery,
   type CheckoutTarget,
-} from '@moonbase/application/client';
+} from '@moonbase/contracts/workspace';
 import {
   identifier,
   canonical,

@@ -1,4 +1,4 @@
-import { normalizeApplicationError } from '@moonbase/application/effect-client';
+import { normalizeApplicationError } from '@moonbase/effect';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { chmodSync, constants, closeSync, mkdirSync, openSync, realpathSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
@@ -8,7 +8,7 @@ import {
   ApplicationError,
   type CommandInput,
   type RecoveryPublication,
-} from '@moonbase/application/client';
+} from '@moonbase/contracts/workspace';
 
 // shortcut: immutable receipts still grow on disk; compact only with proven replay and recovery compatibility.
 export const pendingSaves =

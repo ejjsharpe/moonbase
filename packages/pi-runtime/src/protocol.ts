@@ -1,8 +1,9 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { Effect } from 'effect';
-import { releaseResource } from '@moonbase/application/services';
-import { ApplicationError } from '@moonbase/application/client';
-import type { ChatHostEndpoint } from '@moonbase/application/host-health';
+import { releaseResource } from '@moonbase/effect';
+
+import { ApplicationError } from '@moonbase/contracts/workspace';
+import type { ChatHostEndpoint } from '@moonbase/contracts/services';
 import { fail } from './validation.ts';
 
 export const nonce = () => randomBytes(32).toString('base64url');

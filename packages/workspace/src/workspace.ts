@@ -1,4 +1,4 @@
-import { normalizeApplicationError } from '@moonbase/application/effect-client';
+import { normalizeApplicationError } from '@moonbase/effect';
 import { type ApprovalSchema, parseRecovery, savedRevision } from './schema.ts';
 import { Cause, Deferred, Effect, Exit, Fiber, FiberSet, Queue, Scope, Stream } from 'effect';
 import {
@@ -6,8 +6,9 @@ import {
   decodeWorkspaceOutput,
   decodeWorkspaceEvent,
   decodeWorkspaceWatchInput,
-} from '@moonbase/application/workspace-schema';
-import { releaseResource, type WorkspaceServiceShape } from '@moonbase/application/services';
+} from '@moonbase/contracts/workspace-schema';
+import { releaseResource } from '@moonbase/effect';
+import { type WorkspaceServiceShape } from '@moonbase/contracts/services';
 import {
   ApplicationError,
   type CheckoutTarget,
@@ -18,7 +19,7 @@ import {
   type SaveResult,
   type WorkspaceCommand,
   type WorkspaceOperation,
-} from '@moonbase/application/client';
+} from '@moonbase/contracts/workspace';
 import {
   accessSync,
   closeSync,

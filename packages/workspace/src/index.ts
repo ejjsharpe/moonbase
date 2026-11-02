@@ -1,7 +1,7 @@
-import { normalizeApplicationError } from '@moonbase/application/effect-client';
+import { normalizeApplicationError } from '@moonbase/effect';
 import { Context, Effect, FiberSet, Layer, Scope } from 'effect';
-import { WorkspaceService } from '@moonbase/application/services';
-import { ApplicationError, type CheckoutTarget } from '@moonbase/application/client';
+import { WorkspaceService } from '@moonbase/contracts/services';
+import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
 import { LocalWorkspace } from './workspace.ts';
 import {
   decodeConfiguration,

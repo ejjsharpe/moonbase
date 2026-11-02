@@ -1,6 +1,6 @@
 # Pi chat runtime
 
-`@moonbase/pi-runtime` implements `ChatService` through the shared application handlers. Pi Durable owns execution, transcripts, tasks and request metadata; clients do not add an execution store or scheduler.
+`@moonbase/pi-runtime` implements independent contracts `ChatService`; process roots bind it through the shared application handlers. Pi Durable owns execution, transcripts, tasks and request metadata; clients do not add an execution store or scheduler.
 
 | Export | Role |
 | --- | --- |
@@ -8,7 +8,7 @@
 | `./server` | `serveChat(config, rootBoundChatClient)`: scoped authenticated loopback listener |
 | `./remote` | `RemoteChatLive`: service using an injected `ConnectionService`, without Pi/SQLite/provider code |
 
-Layers create no runtime. `src/host.ts` is a standalone process root with one runtime, Harness/store and listener. Remote clients compose the remote and connection layers in their own root; see the [consumer example](examples/remote.ts).
+Reusable service exports consume `@moonbase/contracts` and focused Effect helpers; shared authentication comes only from the named `@moonbase/ssh/host-health` leaf. Layers create no runtime. `src/host.ts` is a standalone process root with one runtime, Harness/store and listener. Remote clients compose the remote and connection layers in their own root; see the [consumer example](examples/remote.ts).
 
 ## Host setup
 
@@ -40,9 +40,9 @@ The host acquires exclusive SQLite ownership before serving. Existing stores wit
 
 ## Command semantics
 
-Use `makeChatClient(runtime)` and the [chat contract](../application/docs/CHAT.md). Mutations bind actor/request IDs to full immutable inputs. Preserve originals across uncertain outcomes; reconnect, reads and subscriptions never resend. Send reserves metadata before Pi submission; a reserved request without admission requires explicit matching retry. Stop targets only its captured submission/task. Cancellation or disconnect does not establish remote termination.
+Use `makeChatClient(runtime)` and the [chat contract](../contracts/docs/CHAT.md). Mutations bind actor/request IDs to full immutable inputs. Preserve originals across uncertain outcomes; reconnect, reads and subscriptions never resend. Send reserves metadata before Pi submission; a reserved request without admission requires explicit matching retry. Stop targets only its captured submission/task. Cancellation or disconnect does not establish remote termination.
 
-The server implements the [health](../application/docs/HOST-PROTOCOL.md) and [challenge/RPC](../application/docs/CHAT.md#stateful-loopback-protocol) protocols. The remote adapter validates replies and exact connection generations. A lost, unproved or malformed mutation response may mean admission and remains `Uncertain`. Keys/endpoints stay privileged. HMAC authenticates messages; SSH supplies transport encryption.
+The server implements the [health](../contracts/docs/HOST-PROTOCOL.md) and [challenge/RPC](../contracts/docs/CHAT.md#stateful-loopback-protocol) protocols. The remote adapter validates replies and exact connection generations. A lost, unproved or malformed mutation response may mean admission and remains `Uncertain`. Keys/endpoints stay privileged. HMAC authenticates messages; SSH supplies transport encryption.
 
 Local SDK work and exact abort requests remain root-owned through settlement; caller cancellation releases only its wait. Shutdown closes observations, drains local admission work, closes Harness, then joins aborts and cleans remaining resources. Private configuration and app-owned saved payloads use strict schemas; malformed/foreign data blocks rewriting or resubmission. See [ownership and private formats](docs/OWNERSHIP.md).
 

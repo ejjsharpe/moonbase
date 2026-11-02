@@ -1,5 +1,5 @@
 import { Effect, Stream } from 'effect';
-import type { CommandInput, WorkspaceCommand } from './client.ts';
+import type { CommandInput, WorkspaceCommand } from '@moonbase/contracts/workspace';
 import {
   ChatService,
   ConnectionService,
@@ -7,9 +7,9 @@ import {
   type ChatHandlers,
   type ConnectionHandlers,
   type WorkspaceHandlers,
-} from './services.ts';
-import type { ConnectionCommand, ConnectionInput } from './connection-client.ts';
-import type { ChatCommand, ChatInput } from './chat-client.ts';
+} from '@moonbase/contracts/services';
+import type { ConnectionCommand, ConnectionInput } from '@moonbase/contracts/connection';
+import type { ChatCommand, ChatInput } from '@moonbase/contracts/chat';
 
 /** UI, native actions and transport adapters all enter these handlers. */
 export const workspaceCommand = <K extends WorkspaceCommand>(

@@ -102,3 +102,30 @@ The archived workspace fixture retains prior-producer SQLite records and the exi
 ## Delivery order
 
 #64 → #65 → #66 → (#67 and #68 in separate worktrees with agreed exports) → #69 → #71 → #70 → #72. Each ticket owns its affected callers/tests/docs. The orchestrator owns integrated commits, root metadata and final evidence. Keep PRs reviewable and unmerged. A fresh review agent audits final behavior/standards after implementation. Final acceptance records source, controlled, built/archive, packaged/native and real/manual evidence separately.
+
+## Ticket 02 extraction handoff
+
+Independent `@moonbase/contracts` now owns the canonical workspace/chat/connection/host client definitions, errors/common types, unchanged schemas and service tags. Focused `@moonbase/effect` owns exactly the three agreed normalization/release helpers. Shared HMAC/health verification is the named `@moonbase/ssh/host-health` leaf. Workspace/Pi/SSH reusable source exports consume these public APIs without an application import; only the named Pi host/process examples bind application runtime clients. Infrastructure manifests keep application as a development/composition dependency, while their reusable runtime dependencies are contracts/helpers (and Pi's explicit SSH health leaf).
+
+The 54 ticket-02 boundary exceptions were retired, leaving eight chat ownership edges for #67 and the documented privileged application host-health compatibility reexport for #72. Old application clients/schemas/services remain aliases of the same definitions, decoder functions, error brand and Context tags. They do not duplicate implementations. Schema and health tests moved to their owning packages; the existing application invocation browser check remains application-owned. DTO/client/type-only bundles emit no Effect runtime code; schemas/services contain only contracts and portable Effect. The public headless fixture now records 271 actual browser bundle inputs. Baseline fixture bytes and archive hashes remain unchanged.
+
+Runtime ticket #66 owns moving the unchanged application invocation/handlers/client files and their canonical public subpaths. Chat/editor tickets consume `@moonbase/contracts/{workspace,chat,connection,host,errors,common,services}` and schemas; application feature behavior has not moved in ticket 02. Domain protocol/schema documentation now lives in `packages/contracts/docs/`; application invocation documentation stays in application.
+
+Ticket 02 validation used Node `v26.13.0` and explicit pinned Bun `1.4.4` on macOS arm64. Commands ran on this extraction tree; the delivery commit identifies the exact revision. Logs are `/private/tmp/moonbase-65-{source-test,watch-recheck,source-recheck,workspace-serial,editor-integration,chat-integration,typecheck,portable-tests,build,renderer}.log`.
+
+| Command/evidence | Result |
+| --- | --- |
+| `bun install --frozen-lockfile` | Pass; no changes after workspace metadata update, no unrelated version changes |
+| `bun run check:foundation` | Pass; 9 exact remaining migration edges, 271 public bundle inputs, fixed baseline bytes unchanged |
+| `NX_DAEMON=false bun run typecheck` | Pass, all 9 tasks |
+| `bun run lint`, `bun run format:check`, `git diff --check` | Pass, formatting covered 216 source/config files |
+| `NX_DAEMON=false bun run test` | 9/10 tasks passed; default parallel workspace suite failed its external-watch timeout (113/114); this is not a fully green root test run |
+| Isolated external-watch test | Pass, 1/1 |
+| Workspace `node --experimental-strip-types --test --test-concurrency=1 test/*.test.ts` | Pass, 114/114; default parallel workspace rerun still timed out, so timing sensitivity remains explicit |
+| Contracts/helper plus canonical-identity/portable-runtime public tests | Pass, 64/64 |
+| `bun run test:editor-integration` | Pass, 16/16 |
+| `bun run test:chat-integration` | Pass, 7/7, controlled providers/loopback only |
+| `NX_DAEMON=false bun run build` | Pass, 5 tasks; desktop executed, 4 successful tasks cached |
+| `bun run --cwd apps/desktop check:renderer` | Pass, 1860 actual inputs; workers/font retained, no privileged graph |
+
+The build initially lacked ripgrep notice files after copying only its verified executable. Copying the complete baseline `prepare-ripgrep.mjs` output, including COPYING/LICENSE-MIT/UNLICENSE, fixed generated setup and the actual desktop build passed. No source workaround or notice omission was introduced. Native foreground/package execution and real/manual checks remain for final integration; the final default root source run must also report or resolve the timing-sensitive watch failure.

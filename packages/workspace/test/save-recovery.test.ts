@@ -5,7 +5,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { emptyRecovery, type EditorRecovery } from '@moonbase/application/client';
+import { emptyRecovery, type EditorRecovery } from '@moonbase/contracts/workspace';
 import { WorkspaceLive } from '../src/index.ts';
 import { binary, quote, fixture, isError, state, waitFor } from './recovery-fixture.ts';
 test('concurrent lost-move reconciliation retains the original revision receipt and acknowledgement bounds', async () => {

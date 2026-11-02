@@ -24,9 +24,12 @@
     "test": "node --experimental-strip-types --test test/*.test.ts"
   },
   "dependencies": {
-    "effect": "4.1.0"
+    "effect": "4.1.0",
+    "@moonbase/contracts": "workspace:*",
+    "@moonbase/effect": "workspace:*"
   },
   "devDependencies": {
-    "@moonbase/config": "workspace:*"
+    "@moonbase/config": "workspace:*",
+    "@moonbase/ssh": "workspace:*"
   }
 }

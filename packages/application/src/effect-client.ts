@@ -1,9 +1,11 @@
 import { Cause, Effect, Exit, Stream, type ManagedRuntime } from 'effect';
-import { ApplicationError, type CommandOptions, type ObservationClose } from './client.ts';
-import { safeApplicationFailure } from './failure.ts';
-
-export const normalizeApplicationError = (value: unknown): ApplicationError =>
-  safeApplicationFailure(value, 'Application effect failed');
+import {
+  ApplicationError,
+  type CommandOptions,
+  type ObservationClose,
+} from '@moonbase/contracts/workspace';
+import { normalizeApplicationError } from '@moonbase/effect';
+export { normalizeApplicationError } from '@moonbase/effect';
 
 function applicationFailure(cause: Cause.Cause<ApplicationError>): ApplicationError {
   if (Cause.hasInterruptsOnly(cause))

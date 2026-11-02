@@ -9,11 +9,11 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { Effect, ManagedRuntime, Queue } from 'effect';
-import { ApplicationError, type ObservationClose } from '@moonbase/application/client';
-import type { ConnectionSnapshot } from '@moonbase/application/connection-client';
-import { chatHostVersion, chatProtocolVersion } from '@moonbase/application/host-client';
-import { createHostHealthReply } from '@moonbase/application/host-health';
-import { ConnectionService } from '@moonbase/application/services';
+import { ApplicationError, type ObservationClose } from '@moonbase/contracts/workspace';
+import type { ConnectionSnapshot } from '@moonbase/contracts/connection';
+import { chatHostVersion, chatProtocolVersion } from '@moonbase/contracts/host';
+import { createHostHealthReply } from '@moonbase/ssh/host-health';
+import { ConnectionService } from '@moonbase/contracts/services';
 import { makeConnectionClient } from '@moonbase/application/runtime-client';
 import { SshLive, type SshConfiguration } from '@moonbase/ssh';
 const failure = (code: ApplicationError['code']) => (e: unknown) =>

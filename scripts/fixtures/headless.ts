@@ -6,3 +6,6 @@ export {
   runApplicationEffect,
   observeApplicationStream,
 } from '@moonbase/application/effect-client';
+export { ApplicationError } from '@moonbase/contracts/errors';
+export { WorkspaceService, ConnectionService, ChatService } from '@moonbase/contracts/services';
+export { decodeChatInput } from '@moonbase/contracts/chat-schema';

@@ -9,7 +9,7 @@ import {
   ChatTargetSchema,
   ChatStopTargetSchema,
   chatInputSchemas,
-} from '@moonbase/application/chat-schema';
+} from '@moonbase/contracts/chat-schema';
 import { fail } from './validation.ts';
 
 const text = (bytes: number) =>

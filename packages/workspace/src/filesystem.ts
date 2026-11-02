@@ -2,7 +2,7 @@ import { type Cause, Deferred, Effect, Exit } from 'effect';
 import { spawn } from 'node:child_process';
 import { closeSync, constants, fstatSync, openSync, readdirSync, realpathSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
-import type { FileDocument } from '@moonbase/application/client';
+import type { FileDocument } from '@moonbase/contracts/workspace';
 import { document, ensure, fail, path } from './validation.ts';
 const flags = constants.O_RDONLY | constants.O_DIRECTORY | 0x20000000;
 export const identity = (stat: { dev: number; ino: number }) => `${stat.dev}:${stat.ino}`;

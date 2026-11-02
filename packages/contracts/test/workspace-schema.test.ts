@@ -8,7 +8,7 @@ import {
   type WorkspaceCommand,
   type CommandInput,
   type CommandOutput,
-} from '@moonbase/application/client';
+} from '@moonbase/contracts/workspace';
 import {
   decodeWorkspaceInput,
   decodeWorkspaceOutput,
@@ -16,16 +16,16 @@ import {
   decodeWorkspaceEvent,
   decodeWorkspaceWatchInput,
   isWorkspaceCommand,
-} from '@moonbase/application/workspace-schema';
+} from '@moonbase/contracts/workspace-schema';
 import {
   decodeConnectionInput,
   decodeConnectionOutput,
   decodeConnectionProfile,
   decodeConnectionSnapshot,
   isConnectionCommand,
-} from '@moonbase/application/connection-schema';
-import { decodeApplicationErrorDTO } from '@moonbase/application/error-schema';
-import { decodeChatHostHealth } from '@moonbase/application/host-schema';
+} from '@moonbase/contracts/connection-schema';
+import { decodeApplicationErrorDTO } from '@moonbase/contracts/error-schema';
+import { decodeChatHostHealth } from '@moonbase/contracts/host-schema';
 
 const checkout = {
   hostId: 'host',
@@ -289,17 +289,11 @@ test('error DTOs decode strictly without authenticating a plain value as Applica
       (e) => ApplicationError.is(e) && e.code === 'Incompatible' && !e.message.includes('secret'),
     );
 });
-for (const entry of [
-  'workspace-schema',
-  'connection-schema',
-  'host-schema',
-  'error-schema',
-  'effect-client',
-])
+for (const entry of ['workspace-schema', 'connection-schema', 'host-schema', 'error-schema'])
   test(`${entry} bundles without privileged implementations or application services`, async () => {
     const bundle = await build({
       absWorkingDir: fileURLToPath(new URL('../../../', import.meta.url)),
-      entryPoints: [`@moonbase/application/${entry}`],
+      entryPoints: [`@moonbase/contracts/${entry}`],
       bundle: true,
       platform: 'browser',
       write: false,

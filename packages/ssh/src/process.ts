@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { ApplicationError } from '@moonbase/application/client';
+import { ApplicationError } from '@moonbase/contracts/workspace';
 
 const unavailable = (message: string) => new ApplicationError({ code: 'Unavailable', message });
 export type ProcessExit = {

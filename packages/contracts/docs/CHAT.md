@@ -2,7 +2,7 @@
 
 Shared semantics for browser clients, application handlers and the [Pi local/remote services](../../pi-runtime/README.md). The standalone editor requires none of these capabilities. Changes must preserve the same contract across clients and transports.
 
-`@moonbase/application/chat-client` is browser-safe. `ChatService` provides eight commands and scoped bounded `watch({target})`; `chatCommand`/`chatWatch` are the common handlers. `makeChatClient` uses the existing process runtime. Hosts install Pi; remote clients install the remote service with an injected connection. Browser clients receive no endpoints, keys, provider credentials or database paths.
+`@moonbase/contracts/chat` is browser-safe. `ChatService` provides eight commands and scoped bounded `watch({target})`; `chatCommand`/`chatWatch` are the common handlers. `makeChatClient` uses the existing process runtime. Hosts install Pi; remote clients install the remote service with an injected connection. Browser clients receive no endpoints, keys, provider credentials or database paths.
 
 ## Identity and commands
 

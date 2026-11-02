@@ -1,4 +1,4 @@
-import { ApplicationError } from '@moonbase/application/client';
+import { ApplicationError } from '@moonbase/contracts/workspace';
 import * as Schema from 'effect/Schema';
 import {
   ChatIdentifierSchema,
@@ -8,7 +8,7 @@ import {
   decodeChatInput,
   decodeChatOutput,
   isChatCommand,
-} from '@moonbase/application/chat-schema';
+} from '@moonbase/contracts/chat-schema';
 import {
   maximumChatReplyBytes,
   type ChatCommand,
@@ -18,8 +18,8 @@ import {
   type ChatTarget,
   type ChatSummary,
   type ChatSnapshot,
-} from '@moonbase/application/chat-client';
-import type { ChatHostTarget } from '@moonbase/application/host-client';
+} from '@moonbase/contracts/chat';
+import type { ChatHostTarget } from '@moonbase/contracts/host';
 
 export const fail = (code: ApplicationError['code'], message: string): never => {
   throw new ApplicationError({ code, message });

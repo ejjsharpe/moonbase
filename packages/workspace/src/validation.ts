@@ -1,4 +1,4 @@
-import { decodeEditorRecovery } from '@moonbase/application/workspace-schema';
+import { decodeEditorRecovery } from '@moonbase/contracts/workspace-schema';
 import { isAbsolute } from 'node:path';
 import { createHash } from 'node:crypto';
 import {
@@ -7,7 +7,7 @@ import {
   type CheckoutTarget,
   type EditorRecovery,
   type FileDocument,
-} from '@moonbase/application/client';
+} from '@moonbase/contracts/workspace';
 export const fail = (code: ApplicationError['code'], message: string): never => {
   throw new ApplicationError({ code, message });
 };
