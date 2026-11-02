@@ -742,3 +742,104 @@ test('untyped injected read, lookup and inspection errors cannot publish private
     await runtime.dispose();
   }
 });
+
+for (const outcome of ['success', 'held-failure', 'throw'] as const)
+  test(`reentrant watch disposal owns the returned handle and acquisition outcome (${outcome})`, async () => {
+    const memory = memoryWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
+    const runtime = ManagedRuntime.make(memory.layer),
+      raw = makeEditorClient(runtime);
+    const entered = gate(),
+      release = gate();
+    const trigger = new ApplicationError({
+      code: 'Unavailable',
+      message: 'Reentrant observation disposal',
+    });
+    const failure = new ApplicationError({
+      code: 'Persistence',
+      message: 'Reentrant observation release failed',
+    });
+    let releases = 0,
+      disposing: Promise<void> | undefined,
+      settled = false;
+    let late!: (event: WorkspaceEvent) => void;
+    const state = {
+      ...emptyRecovery('reentrant-watch'),
+      checkouts: [checkout],
+      openCheckoutIds: [checkout.checkoutId],
+      selectedCheckoutId: checkout.checkoutId,
+    };
+    const client: EditorClient = {
+      ...raw,
+      async command(name, input, options) {
+        if (name === 'loadRecovery') return { revision: 0, state, errors: [], operations: [] };
+        return raw.command(name, input, options);
+      },
+      watch(input, receive, onError) {
+        late = receive;
+        if (outcome === 'throw') {
+          onError(trigger);
+          throw failure;
+        }
+        const close = raw.watch(input, receive, onError);
+        onError(trigger);
+        let completion: Promise<void> | undefined;
+        return () =>
+          (completion ??= (async () => {
+            releases++;
+            await close();
+            entered.release();
+            if (outcome === 'held-failure') {
+              await release.promise;
+              throw failure;
+            }
+          })());
+      },
+    };
+    const editor = await acquireEditor(runtime, { client, clientId: state.clientId });
+    const off = editor.subscribe(() => {
+      if (!disposing && editor.getSnapshot().errors.includes(trigger.message)) {
+        disposing = editor.dispose();
+        void disposing.then(
+          () => {
+            settled = true;
+          },
+          () => {
+            settled = true;
+          },
+        );
+      }
+    });
+    const loading = editor.load().catch(() => {});
+    try {
+      if (outcome !== 'throw') await entered.promise;
+      else await loading;
+      assert(disposing);
+      assert.strictEqual(editor.dispose(), disposing);
+      if (outcome === 'held-failure') {
+        const snapshot = editor.getSnapshot();
+        assert.equal(snapshot.disposed, false);
+        assert.equal(settled, false);
+        late({ checkout, paths: ['a.ts'], error: 'Late observation callback' });
+        assert.strictEqual(editor.getSnapshot(), snapshot);
+        release.release();
+      }
+      if (outcome === 'success') {
+        await disposing;
+        assert.equal(editor.getSnapshot().disposed, true);
+      } else {
+        await assert.rejects(disposing, (error) => error === failure);
+        assert.equal(editor.getSnapshot().disposed, false);
+        await assert.rejects(editor.dispose(), (error) => error === failure);
+      }
+      await loading;
+      assert.equal(releases, outcome === 'throw' ? 0 : 1);
+      assert.equal(memory.stats.active, 0);
+      assert.equal(memory.stats.publications, 0);
+    } finally {
+      off();
+      release.release();
+      await loading;
+      await editor.dispose().catch(() => {});
+      await runtime.dispose();
+    }
+  });

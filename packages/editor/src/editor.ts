@@ -402,48 +402,60 @@ class EditorModelState {
     await this.releaseObservation(key);
     if (this.closing) return;
     const scope = Scope.forkUnsafe(this.scope);
-    let close: ObservationClose | undefined;
+    const ready = Deferred.makeUnsafe<Exit.Exit<ObservationClose, ApplicationError>>();
+    let completion: Promise<void> | undefined;
+    const close: ObservationClose = () =>
+      (completion ??= this.runEffect(
+        Effect.flatMap(Deferred.await(ready), (acquired) =>
+          Effect.flatMap(acquired, (release) => Effect.promise(release)),
+        ).pipe(Effect.uninterruptible),
+      ));
+    // A synchronous watch callback can dispose the model before its close handle returns.
+    this.observationClosures.add(close);
+    this.stops.set(key, { scope, close });
     await this.runEffect(
       Effect.gen({ self: this }, function* () {
+        const acquired = yield* Effect.exit(
+          Effect.try({
+            try: () =>
+              this.client.watch(
+                { checkout, paths: [''] },
+                (event) => {
+                  if (
+                    this.closing ||
+                    !this.recovery.openCheckoutIds.includes(checkout.checkoutId) ||
+                    !sameCheckout(event.checkout, checkout) ||
+                    this.stops.get(key)?.scope !== scope
+                  )
+                    return;
+                  if (event.error) this.report(event.error);
+                  if (event.ready) return;
+                  this.discoveryRevision++;
+                  void this.reconcileRecovery().catch(this.report);
+                  void this.refresh(checkout).catch((error) => {
+                    if (this.stops.get(key)?.scope === scope) this.report(error);
+                  });
+                },
+                this.report,
+              ),
+            catch: normalizeApplicationError,
+          }),
+        );
+        yield* Deferred.succeed(ready, acquired);
         yield* Scope.addFinalizer(
           scope,
-          Effect.suspend(() =>
-            close
-              ? Effect.promise(close).pipe(
-                  Effect.exit,
-                  Effect.tap((exit) =>
-                    Effect.sync(() => {
-                      if (Exit.isSuccess(exit) && close) this.observationClosures.delete(close);
-                    }),
-                  ),
-                  Effect.asVoid,
-                )
-              : Effect.void,
+          Effect.promise(close).pipe(
+            Effect.exit,
+            Effect.tap((exit) =>
+              Effect.sync(() => {
+                if (Exit.isSuccess(exit)) this.observationClosures.delete(close);
+              }),
+            ),
+            Effect.asVoid,
           ),
         );
-        close = this.client.watch(
-          { checkout, paths: [''] },
-          (event) => {
-            if (
-              this.closing ||
-              !this.recovery.openCheckoutIds.includes(checkout.checkoutId) ||
-              !sameCheckout(event.checkout, checkout) ||
-              this.stops.get(key)?.scope !== scope
-            )
-              return;
-            if (event.error) this.report(event.error);
-            if (event.ready) return;
-            this.discoveryRevision++;
-            void this.reconcileRecovery().catch(this.report);
-            void this.refresh(checkout).catch((error) => {
-              if (this.stops.get(key)?.scope === scope) this.report(error);
-            });
-          },
-          this.report,
-        );
-        this.observationClosures.add(close);
-        this.stops.set(key, { scope, close });
-      }),
+        if (Exit.isFailure(acquired)) yield* acquired;
+      }).pipe(Effect.uninterruptible),
     );
   }
   async openCheckout(root: string) {
