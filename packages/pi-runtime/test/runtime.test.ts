@@ -1790,3 +1790,76 @@ test('maximum escaped Send text retains its original serialized binding across r
   assert.deepEqual(await f.client.command('sendChat', input), receipt);
   assert.equal(f.faux.state.callCount, 1);
 });
+
+test('root disposal retains a terminal waiter cleanup failure raised during interruption', async (t) => {
+  const original = Harness.open;
+  let entered!: () => void,
+    waiters = 0,
+    cancelled = 0,
+    modelAborted = false;
+  const waiting = new Promise<void>((resolve) => (entered = resolve));
+  mock.method(Harness, 'open', async (...args: Parameters<typeof original>) => {
+    const harness = await original(...args),
+      wait = harness.waitForTask.bind(harness);
+    harness.abortTask = async () => 'marked';
+    harness.waitForTask = async <R>(id: TaskId<R>, context: Parameters<typeof wait>[1]) => {
+      waiters++;
+      entered();
+      try {
+        return await wait(id, context);
+      } catch {
+        assert(context.abortSignal?.aborted);
+        cancelled++;
+        throw new ApplicationError({
+          code: 'Persistence',
+          message: 'Controlled shutdown waiter cleanup failure',
+        });
+      } finally {
+        waiters--;
+      }
+    };
+    return harness;
+  });
+  t.after(() => mock.restoreAll());
+  const f = await fixture(t),
+    target = await f.create();
+  f.faux.setResponses([
+    async (_messages, options) => {
+      await new Promise<void>((resolve) => {
+        if (options?.signal?.aborted) {
+          modelAborted = true;
+          return resolve();
+        }
+        options?.signal?.addEventListener(
+          'abort',
+          () => {
+            modelAborted = true;
+            resolve();
+          },
+          { once: true },
+        );
+      });
+      return fauxAssistantMessage('Interrupted by root close');
+    },
+  ]);
+  await f.client.command('sendChat', { target, requestId: 'active', text: 'Held model' });
+  const current = await until(
+    () => f.client.command('getChat', { target }),
+    (value) => !!value.run,
+  );
+  const stop = f.client
+    .command('stopChat', { stop: current.run!.stop, requestId: 'shutdown-waiter' })
+    .catch((error: unknown) => error);
+  await waiting;
+  await assert.rejects(f.dispose(), (error: unknown) => {
+    assert(String(error).includes('Controlled shutdown waiter cleanup failure'));
+    assert(!String(error).includes(f.config.cwd));
+    return true;
+  });
+  const result = await stop;
+  assert(ApplicationError.is(result));
+  assert.equal(result.code, 'Cancelled');
+  assert.equal(cancelled, 1);
+  assert.equal(waiters, 0);
+  assert(modelAborted);
+});
