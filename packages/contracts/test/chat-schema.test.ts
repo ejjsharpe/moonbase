@@ -223,7 +223,7 @@ test('schema entry stays independent of application dispatch and privileged impl
   });
   assert.deepEqual(
     Object.keys(result.metafile.inputs).filter((path) =>
-      /application\/src\/(?:handlers|runtime-client|services|host-health)\.ts|packages\/(?:pi-runtime|ssh|workspace)\/|electron|@earendil-works|node:/.test(
+      /packages\/(?:application|pi-runtime|ssh|workspace)\/|electron|@earendil-works|node:/.test(
         path,
       ),
     ),

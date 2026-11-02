@@ -8,7 +8,7 @@ import {
   type RecoveryLoad,
   type WorkspaceEvent,
 } from '@moonbase/application/client';
-import { makeEditorClient } from '@moonbase/application/runtime-client';
+import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { makeEditorController, makeEditorModel } from '@moonbase/editor/state';
 import { memoryWorkspace } from '@moonbase/editor/memory';
 import { acquireEditor } from './model-fixture.ts';

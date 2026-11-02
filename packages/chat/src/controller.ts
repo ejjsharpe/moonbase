@@ -3,7 +3,7 @@ import { ApplicationError, type ObservationClose } from '@moonbase/application/c
 import {
   normalizeApplicationError,
   runApplicationEffect,
-} from '@moonbase/application/effect-client';
+} from '@moonbase/application/runtime/effect-client';
 import { decodeChatInput } from '@moonbase/application/chat-schema';
 import type {
   ChatClient,

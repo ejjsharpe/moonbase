@@ -12,7 +12,7 @@ import {
 import {
   normalizeApplicationError,
   runApplicationEffect,
-} from '@moonbase/application/effect-client';
+} from '@moonbase/application/runtime/effect-client';
 import { decodeEditorRecovery } from '@moonbase/application/workspace-schema';
 import {
   ApplicationError,

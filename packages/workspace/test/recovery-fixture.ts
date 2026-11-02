@@ -19,7 +19,7 @@ import {
   type CheckoutTarget,
   type EditorRecovery,
 } from '@moonbase/contracts/workspace';
-import { makeEditorClient } from '@moonbase/application/runtime-client';
+import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { WorkspaceLive } from '../src/index.ts';
 export const binary = fileURLToPath(new URL('../dist/filesystem', import.meta.url));
 export const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";

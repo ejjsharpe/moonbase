@@ -3,7 +3,7 @@
   "packages/chat/src/controller.ts -> @moonbase/application/chat-schema": 67,
   "packages/chat/src/controller.ts -> @moonbase/application/client": 67,
   "packages/chat/src/controller.ts -> @moonbase/application/connection-client": 67,
-  "packages/chat/src/controller.ts -> @moonbase/application/effect-client": 67,
+  "packages/chat/src/controller.ts -> @moonbase/application/runtime/effect-client": 67,
   "packages/chat/src/saved.ts -> @moonbase/application/chat-client": 67,
   "packages/chat/src/saved.ts -> @moonbase/application/chat-schema": 67,
   "packages/chat/src/saved.ts -> @moonbase/application/client": 67,

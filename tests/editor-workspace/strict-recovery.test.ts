@@ -7,8 +7,8 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { Effect, Exit, ManagedRuntime, Scope } from 'effect';
 import { ApplicationError, emptyRecovery, type EditorClient } from '@moonbase/application/client';
-import { runApplicationEffect } from '@moonbase/application/effect-client';
-import { makeEditorClient } from '@moonbase/application/runtime-client';
+import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
+import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { makeEditorModel, makeEditorController } from '@moonbase/editor/state';
 import { WorkspaceLive } from '@moonbase/workspace';
 

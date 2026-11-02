@@ -12,7 +12,7 @@ import {
   fauxProvider,
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux';
-import { makeChatClient } from '@moonbase/application/runtime-client';
+import { makeChatClient } from '@moonbase/application/runtime/clients';
 import {
   Harness,
   createRegistry,
@@ -30,7 +30,7 @@ import { PiRuntimeLive } from '../src/index.ts';
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node';
 import { SqliteStorage } from '@earendil-works/pi-durable/storage/sqlite';
 import { Effect, Layer } from 'effect';
-import { runApplicationEffect } from '@moonbase/application/effect-client';
+import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
 import type { ChatSnapshot } from '@moonbase/contracts/chat';
 
 const session = { host: { hostId: 'test-host', storeId: 'test-store' }, actorId: 'personal' };

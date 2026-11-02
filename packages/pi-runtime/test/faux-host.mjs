@@ -8,7 +8,7 @@ import {
 } from '@earendil-works/pi-ai/providers/faux';
 import { createRegistry, defineExtension, defineTool } from '@earendil-works/pi-durable';
 import { Type } from 'typebox';
-import { makeChatClient } from '@moonbase/application/runtime-client';
+import { makeChatClient } from '@moonbase/application/runtime/clients';
 import { PiRuntimeLive } from '../src/index.ts';
 import { serveChat } from '../src/server.ts';
 const config = JSON.parse(await readFile(process.argv[2], 'utf8'));

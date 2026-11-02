@@ -3,7 +3,7 @@ import { ApplicationError } from '@moonbase/application/client';
 import {
   normalizeApplicationError,
   runApplicationEffect,
-} from '@moonbase/application/effect-client';
+} from '@moonbase/application/runtime/effect-client';
 
 function disposalOutcome(dispose: () => Promise<void>): Promise<ApplicationError | undefined> {
   try {

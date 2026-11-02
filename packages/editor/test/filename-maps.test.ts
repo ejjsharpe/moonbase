@@ -2,7 +2,7 @@ import { acquireEditor, answering } from './model-fixture.ts';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ManagedRuntime } from 'effect';
-import { makeEditorClient } from '@moonbase/application/runtime-client';
+import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { memoryWorkspace } from '@moonbase/editor/memory';
 
 const checkout = {

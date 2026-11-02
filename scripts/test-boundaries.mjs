@@ -6,7 +6,7 @@ const packages = new Map([
     '@moonbase/application',
     {
       directory: 'packages/application',
-      exports: { '.': './src/index.ts', './runtime-client': './src/index.ts' },
+      exports: { '.': './src/index.ts', './runtime/clients': './src/index.ts' },
     },
   ],
   ['@moonbase/contracts', { directory: 'packages/contracts', exports: { '.': './src/index.ts' } }],
@@ -61,7 +61,7 @@ assert(
   }).some((error) => error.includes('package cycle')),
 );
 assert.deepEqual(
-  check({ 'packages/pi-runtime/src/host.ts': "import '@moonbase/application/runtime-client';" }),
+  check({ 'packages/pi-runtime/src/host.ts': "import '@moonbase/application/runtime/clients';" }),
   [],
 );
 assert(

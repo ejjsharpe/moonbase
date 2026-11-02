@@ -2,7 +2,7 @@ import { createRoot } from 'react-dom/client';
 import { Effect, Exit, Scope, ManagedRuntime } from 'effect';
 const modelScope = Scope.makeUnsafe();
 import * as stylex from '@stylexjs/stylex';
-import { makeEditorClient } from '@moonbase/application/runtime-client';
+import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import type { CommandInput, EditorClient } from '@moonbase/application/client';
 import { EditorWorkbench, makeEditorModel, makeEditorController } from '../src/index.ts';
 import { configureMonacoWorkers } from '../src/workers.ts';

@@ -4,7 +4,7 @@ const output = new URL('../dist/', import.meta.url);
 const inputs = JSON.parse(await readFile(new URL('renderer/module-inputs.json', output), 'utf8'));
 assert.deepEqual(
   inputs.filter((p) =>
-    /(?:^|\/)node_modules\/(?:electron|@moonbase\/(?:workspace|pi-runtime|ssh|connection))\/|packages\/(?:workspace|pi-runtime|ssh|connection)\/|packages\/application\/src\/(?:services|handlers|runtime-client|host-health)\.ts|apps\/desktop\/src\/(?:main|session|preload|chat-preload|chat\/(?:config|session))\.ts|@earendil-works|pi-ai|pi-durable|node:sqlite|source-snapshot|node:/.test(
+    /(?:^|\/)node_modules\/(?:electron|@moonbase\/(?:workspace|pi-runtime|ssh|connection))\/|packages\/(?:workspace|pi-runtime|ssh|connection)\/|packages\/application\/src\/(?:(?:services|handlers|runtime-client|host-health)|runtime\/(?:handlers|clients))\.ts|apps\/desktop\/src\/(?:main|session|preload|chat-preload|chat\/(?:config|session))\.ts|@earendil-works|pi-ai|pi-durable|node:sqlite|source-snapshot|node:/.test(
       p,
     ),
   ),

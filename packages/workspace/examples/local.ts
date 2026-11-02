@@ -1,5 +1,5 @@
 import { ManagedRuntime } from 'effect';
-import { makeEditorClient } from '@moonbase/application/runtime-client';
+import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { WorkspaceLive } from '../src/index.ts';
 const [root, dataDirectory, file] = process.argv.slice(2);
 if (!root || !dataDirectory || !file)
