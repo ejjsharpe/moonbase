@@ -767,7 +767,10 @@ function retainedWork() {
     const scope = yield* Scope.make();
     const work = yield* Scope.provide(scope)(FiberSet.make<unknown, ApplicationError>());
     yield* Effect.addFinalizer(() =>
-      Scope.close(scope, Exit.void).pipe(Effect.ensuring(FiberSet.join(work).pipe(Effect.orDie))),
+      FiberSet.clear(work).pipe(
+        Effect.ensuring(Scope.close(scope, Exit.void)),
+        Effect.ensuring(FiberSet.join(work).pipe(Effect.orDie)),
+      ),
     );
     return work;
   });
