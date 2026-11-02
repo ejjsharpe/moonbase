@@ -126,6 +126,7 @@ class EditorModelState {
   private ready = false;
   private loading = false;
   private closing = false;
+  private admissionsOpen = true;
   private disposed = false;
   private workflows = new Set<{ stop(): void }>();
   private closePrompt: ClosePrompt | null = null;
@@ -193,6 +194,14 @@ class EditorModelState {
       throw editorError('An editor requires its own nonempty recovery client ID.');
     this.recovery = emptyRecovery(this.clientId);
     this.emit();
+  }
+  /** Composition fences admissions without interrupting already-admitted work. */
+  setAdmissionsOpen(open: boolean) {
+    if (!this.closing) this.admissionsOpen = open;
+  }
+  private assertAdmission() {
+    if (!this.admissionsOpen)
+      throw new ApplicationError({ code: 'Unavailable', message: 'Application is closing.' });
   }
   bind<R, E extends ApplicationError>(runtime: ManagedRuntime.ManagedRuntime<R, E>) {
     if (this.bound)
@@ -343,6 +352,7 @@ class EditorModelState {
     }
   }
   async load() {
+    this.assertAdmission();
     if (this.ready) return;
     this.loading = true;
     const loaded = await this.command('loadRecovery', { clientId: this.clientId });
@@ -384,11 +394,11 @@ class EditorModelState {
       await this.observe(checkout);
       const selected = readOwn(this.recovery.views, checkout.checkoutId);
       if (selected?.active)
-        await this.open(
+        await this.openFile(
           { checkout, path: selected.active },
           { view: readOwn(selected.fileViews, selected.active) ?? 'file' },
         );
-      await this.refresh(checkout);
+      await this.refreshCheckout(checkout);
     }
     this.recovery.selectedCheckoutId = selectedCheckoutId;
     this.loading = false;
@@ -428,8 +438,8 @@ class EditorModelState {
                   if (event.error) this.report(event.error);
                   if (event.ready) return;
                   this.discoveryRevision++;
-                  void this.reconcileRecovery().catch(this.report);
-                  void this.refresh(checkout).catch((error) => {
+                  void this.publishFacts([]).catch(this.report);
+                  void this.refreshCheckout(checkout).catch((error) => {
                     if (this.stops.get(key)?.scope === scope) this.report(error);
                   });
                 },
@@ -456,6 +466,7 @@ class EditorModelState {
     );
   }
   async openCheckout(root: string) {
+    this.assertAdmission();
     this.assertReady();
     const target = await this.command('openCheckout', { root });
     if (this.closing) return target;
@@ -473,11 +484,15 @@ class EditorModelState {
       this.recovery.openCheckoutIds.push(target.checkoutId);
       await this.observe(target);
     }
-    await this.selectCheckout(target);
-    await this.refresh(target);
+    await this.selectOpenCheckout(target);
+    await this.refreshCheckout(target);
     return target;
   }
   selectCheckout(target: CheckoutTarget) {
+    this.assertAdmission();
+    return this.selectOpenCheckout(target);
+  }
+  private selectOpenCheckout(target: CheckoutTarget) {
     this.checkout(target);
     this.selectReadScope(target, true);
     this.activation++;
@@ -511,7 +526,7 @@ class EditorModelState {
       working.version !== attempt?.failedWorkingVersion;
     if (mode === 'file' ? this.buffers.has(key) : attempt?.mode === mode && !needsWorking)
       return true;
-    return this.open(
+    return this.openFile(
       { checkout, path },
       {
         current: () =>
@@ -560,7 +575,7 @@ class EditorModelState {
             if (generation !== this.scheduleGeneration || this.closing) return Effect.void;
             this.scheduled = undefined;
             return Effect.tryPromise({
-              try: () => this.flush(),
+              try: () => this.flushRecovery(),
               catch: ApplicationError.fromUnknown,
             });
           }),
@@ -722,6 +737,7 @@ class EditorModelState {
     return next;
   }
   async resolveRecoveryPublication(): Promise<boolean> {
+    this.assertAdmission();
     if (this.closing) return false;
     let rejected = false;
     const next = this.run(
@@ -787,6 +803,10 @@ class EditorModelState {
     return resolved;
   }
   async flush() {
+    this.assertAdmission();
+    return this.flushRecovery();
+  }
+  private async flushRecovery() {
     this.assertReady();
     if (this.preserving)
       throw editorError('Finish the captured preservation action before flushing.');
@@ -797,6 +817,7 @@ class EditorModelState {
     return this.snapshot.buffers.find((buffer) => fileKey(buffer.target) === fileKey(target));
   }
   edit(target: FileTarget, text: string) {
+    this.assertAdmission();
     this.checkout(target.checkout);
     validPath(target.path);
     if (this.preserving) throw editorError('Finish the captured preservation action first.');
@@ -809,6 +830,7 @@ class EditorModelState {
     this.changed();
   }
   keepOpen(target: FileTarget) {
+    this.assertAdmission();
     const selected = this.checkout(target.checkout);
     if (selected.preview === target.path) {
       selected.preview = null;
@@ -816,6 +838,13 @@ class EditorModelState {
     }
   }
   async open(
+    target: FileTarget,
+    options: { view?: FileView; intent?: 'preview' | 'keep'; current?: () => boolean } = {},
+  ) {
+    this.assertAdmission();
+    return this.openFile(target, options);
+  }
+  private async openFile(
     target: FileTarget,
     options: { view?: FileView; intent?: 'preview' | 'keep'; current?: () => boolean } = {},
   ) {
@@ -910,6 +939,7 @@ class EditorModelState {
     }
   }
   async save(target: FileTarget, overwrite = false): Promise<boolean> {
+    this.assertAdmission();
     return this.saveFile(target, overwrite);
   }
   private async saveFile(
@@ -972,6 +1002,7 @@ class EditorModelState {
     }
   }
   async reload(target: FileTarget) {
+    this.assertAdmission();
     const captured = structuredClone(target),
       key = fileKey(captured);
     this.checkout(captured.checkout);
@@ -1028,6 +1059,7 @@ class EditorModelState {
     }
   }
   cancelConflict(target: FileTarget) {
+    if (!this.admissionsOpen) return;
     const buffer = this.buffers.get(fileKey(target));
     if (buffer) buffer.conflict = undefined;
     const selected = this.checkout(target.checkout);
@@ -1036,6 +1068,7 @@ class EditorModelState {
     this.changed();
   }
   position(target: FileTarget, mode: FileView | `${FileView}:original`, position: EditorPosition) {
+    if (!this.admissionsOpen) return;
     if (this.closing || this.preserving) return;
     if (
       !this.recovery.openCheckoutIds.includes(target.checkout.checkoutId) ||
@@ -1051,6 +1084,7 @@ class EditorModelState {
     this.changed();
   }
   reorder(checkout: CheckoutTarget, from: string, to: number) {
+    this.assertAdmission();
     const selected = this.checkout(checkout);
     if (this.preserving || !selected.openFiles.includes(from)) return;
     selected.openFiles.splice(selected.openFiles.indexOf(from), 1);
@@ -1059,13 +1093,15 @@ class EditorModelState {
     this.changed();
   }
   navigate(checkout: CheckoutTarget, direction: 1 | -1) {
+    this.assertAdmission();
     const selected = this.checkout(checkout),
       paths = selected.openFiles;
     if (!paths.length) return Promise.resolve(false);
     const next = (paths.indexOf(selected.active) + direction + paths.length) % paths.length;
-    return this.open({ checkout, path: paths[next] });
+    return this.openFile({ checkout, path: paths[next] });
   }
   answerClose(promptId: string, choice: CloseChoice) {
+    if (!this.admissionsOpen) return;
     if (
       !this.closeAnswer ||
       this.closePrompt?.id !== promptId ||
@@ -1075,9 +1111,11 @@ class EditorModelState {
     Deferred.doneUnsafe(this.closeAnswer, Effect.succeed(choice));
   }
   async close(targets: FileTarget[]) {
+    this.assertAdmission();
     return this.preserve(targets, 'files');
   }
   async closeCheckout(checkout: CheckoutTarget) {
+    this.assertAdmission();
     const selected = this.checkout(checkout);
     return this.preserve(
       selected.openFiles.map((path) => ({ checkout, path })),
@@ -1086,6 +1124,7 @@ class EditorModelState {
     );
   }
   async prepareQuit() {
+    this.assertAdmission();
     return this.preserve(
       [...this.buffers.values()].map((buffer) => buffer.target),
       'quit',
@@ -1245,6 +1284,7 @@ class EditorModelState {
     }
   }
   async reopen(checkout: CheckoutTarget) {
+    this.assertAdmission();
     const selected = this.checkout(checkout);
     if (this.preserving) return false;
     const index = this.history.findLastIndex((action) => sameCheckout(action.checkout, checkout));
@@ -1260,23 +1300,32 @@ class EditorModelState {
     selected.active = action.active;
     selected.preview = null;
     this.invalidateRecovery();
-    const success = await this.open({ checkout, path: action.active });
-    await this.flush();
+    const success = await this.openFile({ checkout, path: action.active });
+    await this.flushRecovery();
     this.history.splice(index, 1);
     this.emit();
     return success;
   }
   tree(checkout: CheckoutTarget, patch: Partial<CheckoutView['tree']>) {
+    this.assertAdmission();
+    return this.updateTree(checkout, patch);
+  }
+  private updateTree(checkout: CheckoutTarget, patch: Partial<CheckoutView['tree']>) {
     const selected = this.checkout(checkout);
     selected.tree = { ...selected.tree, ...patch };
     this.changed();
   }
   resizeSidebar(width: number) {
+    if (!this.admissionsOpen) return;
     if (this.closing) return;
     this.recovery.sidebarWidth = Math.max(190, Math.min(380, Math.round(width)));
     this.changed();
   }
   list(checkout: CheckoutTarget, path = '') {
+    this.assertAdmission();
+    return this.listCheckout(checkout, path);
+  }
+  private listCheckout(checkout: CheckoutTarget, path: string) {
     return this.listIn(checkout, path, this.stops.get(checkoutKey(checkout))?.scope ?? this.scope);
   }
   private async listIn(checkout: CheckoutTarget, path: string, scope: Scope.Scope) {
@@ -1298,6 +1347,7 @@ class EditorModelState {
     return listing;
   }
   async reveal(target: FileTarget, showIgnored = false) {
+    this.assertAdmission();
     const selected = this.checkout(target.checkout);
     validPath(target.path);
     const scope = this.stops.get(checkoutKey(target.checkout))?.scope ?? this.scope;
@@ -1322,15 +1372,16 @@ class EditorModelState {
         );
       if (i < parts.length - 1) expanded.push(path);
     }
-    this.tree(target.checkout, {
+    this.updateTree(target.checkout, {
       expanded: [...new Set([...selected.tree.expanded, ...expanded])],
       focus: target.path,
       selected: [target.path],
       ...(showIgnored ? { hideIgnored: false } : {}),
     });
-    await Promise.all(['', ...expanded].map((path) => this.list(target.checkout, path)));
+    await Promise.all(['', ...expanded].map((path) => this.listCheckout(target.checkout, path)));
   }
   async lookup(checkout: CheckoutTarget, query: string) {
+    this.assertAdmission();
     this.checkout(checkout);
     return this.command('lookupFiles', {
       checkout,
@@ -1342,6 +1393,10 @@ class EditorModelState {
     });
   }
   refresh(checkout: CheckoutTarget): Promise<void> {
+    this.assertAdmission();
+    return this.refreshCheckout(checkout);
+  }
+  private refreshCheckout(checkout: CheckoutTarget): Promise<void> {
     this.checkout(checkout);
     const key = checkoutKey(checkout);
     const scope = this.stops.get(key)?.scope ?? this.scope;
@@ -1375,7 +1430,7 @@ class EditorModelState {
   }
   private async refreshOnce(checkout: CheckoutTarget) {
     const paths = ['', ...this.checkout(checkout).tree.expanded];
-    await Promise.allSettled(paths.map((path) => this.list(checkout, path)));
+    await Promise.allSettled(paths.map((path) => this.listCheckout(checkout, path)));
     if (this.closing || !this.recovery.openCheckoutIds.includes(checkout.checkoutId)) return;
     try {
       const status = await this.command(
@@ -1436,8 +1491,10 @@ class EditorModelState {
     if (!this.closing) this.emit();
   }
   createLookup() {
+    this.assertAdmission();
     this.assertReady();
     const lookup = new EditorLookup(
+      () => this.admissionsOpen && !this.closing,
       this.scope,
       (effect) => this.runEffect(effect),
       (checkout, query, signal) => {
@@ -1465,8 +1522,10 @@ class EditorModelState {
     return lookup;
   }
   createMutation(action: MutationAction) {
+    this.assertAdmission();
     this.checkout(action.checkout);
     const mutation = new EditorMutation(
+      () => this.admissionsOpen && !this.closing,
       this.scope,
       (effect) => this.runEffect(effect),
       {
@@ -1487,6 +1546,7 @@ class EditorModelState {
     return mutation;
   }
   inspect(checkout: CheckoutTarget, paths: string[]) {
+    this.assertAdmission();
     return this.inspectIn(checkout, paths, this.scope);
   }
   private async inspectIn(checkout: CheckoutTarget, paths: string[], scope: Scope.Scope) {
@@ -1495,6 +1555,7 @@ class EditorModelState {
     return this.command('inspectEntries', { checkout, paths }, scope);
   }
   async mutate(input: Omit<WorkspaceOperation, 'clientId' | 'id'> & { id?: string }) {
+    this.assertAdmission();
     this.checkout(input.checkout);
     if (this.preserving || this.publicationBlocked())
       throw editorError('Finish the captured preservation/publication action first.');
@@ -1550,7 +1611,7 @@ class EditorModelState {
     )
       throw editorError('Resolve the source Save before moving or copying it.');
     // Publish dirty source drafts before any external mutation, including Trash.
-    await this.flush();
+    await this.flushRecovery();
     const uncertain: OperationResult = {
       id: operation.id,
       clientId: this.clientId,
@@ -1587,7 +1648,7 @@ class EditorModelState {
         );
       await this.publishFacts([], result);
       if (this.recovery.openCheckoutIds.includes(operation.checkout.checkoutId))
-        await this.refresh(operation.checkout);
+        await this.refreshCheckout(operation.checkout);
       return result;
     } catch (error) {
       if (this.operations.has(operationKey(this.clientId, operation.id)))
@@ -1596,6 +1657,7 @@ class EditorModelState {
     }
   }
   async resolveOperation(id: string, operationClientId = this.clientId) {
+    this.assertAdmission();
     const known = this.operations.get(operationKey(operationClientId, id));
     if (!known) throw editorError('Unknown operation.');
     const result = await this.command('operationStatus', { clientId: operationClientId, id });
@@ -1607,10 +1669,11 @@ class EditorModelState {
       throw editorError('Operation status identity mismatch.');
     await this.publishFacts([], result);
     if (this.recovery.openCheckoutIds.includes(result.checkout.checkoutId))
-      await this.refresh(result.checkout);
+      await this.refreshCheckout(result.checkout);
     return result;
   }
   async reconcileRecovery() {
+    this.assertAdmission();
     this.assertReady();
     await this.publishFacts([]);
   }
@@ -1956,7 +2019,7 @@ class EditorModelState {
 
 export type EditorDependencies = { client: EditorClient; clientId?: string };
 export type EditorModel = EditorModelState;
-export type EditorController = Omit<EditorModelState, 'bind' | 'release'>;
+export type EditorController = Omit<EditorModelState, 'bind' | 'release' | 'setAdmissionsOpen'>;
 
 /** Acquire once under the composition root's scope; no runtime or backend is installed. */
 export const makeEditorModel = (

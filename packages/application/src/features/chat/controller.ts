@@ -80,6 +80,7 @@ class ChatModelState {
   private epoch = 0;
   private connectionRevision = 0;
   private closed = false;
+  private admissionsOpen = true;
   private actions = new Map<string, number>();
   private cleanup?: Promise<void>;
   private releasing = false;
@@ -136,6 +137,10 @@ class ChatModelState {
       storageError,
       notice: 'Disconnected. Connect explicitly; reconnect never resends a message.',
     };
+  }
+  /** Composition fences admissions; retained command results may still reconcile. */
+  setAdmissionsOpen(open: boolean) {
+    if (!this.closed) this.admissionsOpen = open;
   }
   bind<R, E extends ApplicationError>(runtime: ManagedRuntime.ManagedRuntime<R, E>) {
     if (this.bound) throw invalid('Chat model already bound.');
@@ -268,7 +273,12 @@ class ChatModelState {
     duplicate = true,
     current: () => boolean = () => true,
   ): Promise<void> {
-    if (this.closed || (owner && !owner.alive) || (duplicate && this.actions.has(name)))
+    if (
+      !this.admissionsOpen ||
+      this.closed ||
+      (owner && !owner.alive) ||
+      (duplicate && this.actions.has(name))
+    )
       return Promise.resolve();
     this.actions.set(name, (this.actions.get(name) ?? 0) + 1);
     this.update({ active: [...this.actions.keys()], error: null });
@@ -289,7 +299,7 @@ class ChatModelState {
       });
   }
   start(): Promise<void> {
-    if (this.attachment?.alive || this.closed) return Promise.resolve();
+    if (!this.admissionsOpen || this.attachment?.alive || this.closed) return Promise.resolve();
     const owner = (this.attachment = this.owner());
     let received = false;
     return this.action(
@@ -385,6 +395,7 @@ class ChatModelState {
     return this.epoch;
   }
   refresh = (): Promise<void> => {
+    if (!this.admissionsOpen || this.closed) return Promise.resolve();
     if (!this.generation?.alive)
       return this.action(
         'refresh',
@@ -438,7 +449,7 @@ class ChatModelState {
   };
   firstChats = () => this.refresh();
   setDraft(value: string) {
-    if (this.closed) return;
+    if (!this.admissionsOpen || this.closed) return;
     if (!text(value, 32768)) {
       this.update({ error: 'Message must contain valid Unicode and at most 32 KiB.' });
       return;
@@ -465,7 +476,7 @@ class ChatModelState {
     }
   }
   select = (target: ChatTarget): Promise<void> => {
-    if (this.closed) return Promise.resolve();
+    if (!this.admissionsOpen || this.closed) return Promise.resolve();
     try {
       const captured = decodeChatInput('getChat', { target }).target;
       if (!sameSession(captured, this.session)) throw invalid('Chat belongs to another context.');
@@ -492,7 +503,7 @@ class ChatModelState {
     }
   };
   closeView(): Promise<void> {
-    if (this.closed) return Promise.resolve();
+    if (!this.admissionsOpen || this.closed) return Promise.resolve();
     try {
       this.commit({ ...structuredClone(this.saved), selected: null });
       this.epoch++;

@@ -2,8 +2,11 @@
 
 `@moonbase/application` owns shared typed dispatch, runtime-bound Promise clients and reusable headless feature behavior. Independent definitions, schemas and Effect service ports live in [`@moonbase/contracts`](../contracts/README.md); reusable infrastructure implements those ports without depending on application behavior. Process roots compose only their needed capabilities in one scoped runtime.
 
+The root `createMoonbaseApplication` factory composes supplied editor/chat capabilities into one headless application with direct controllers, synchronous unload preservation and coordinated Quit/disposal. It supports independent and combined features, with visible optional-chat degradation. See [application lifecycle and usage](docs/LIFECYCLE.md) for the API, admission fence, prompt handoff and root-owned panel cleanup.
+
 | Export | Purpose |
 | --- | --- |
+| `.` | Headless application factory, lifecycle snapshots and types |
 | `chat` | Scoped headless chat model, bound controller and synchronous draft preservation |
 | `editor` | Headless editor model/controller, close prompts, workflow sessions and state |
 | `testing/memory-workspace` | Concrete volatile workspace capability for tests and demos; excluded from `editor` imports |
