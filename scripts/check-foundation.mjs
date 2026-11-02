@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { checkBoundaries, readRepository } from './boundaries.mjs';
 import './test-boundaries.mjs';
@@ -62,6 +62,17 @@ for (const input of Object.keys(smoke.metafile.inputs)) {
 }
 console.log(
   `Verified public headless browser consumer (${Object.keys(smoke.metafile.inputs).length} actual bundle inputs).`,
+);
+const consumer = new URL('../test-results/headless/consumer.mjs', import.meta.url);
+mkdirSync(new URL('./', consumer), { recursive: true });
+writeFileSync(consumer, smoke.outputFiles[0].text);
+assert.deepEqual(await (await import(consumer.href)).checkHeadlessApplication(), [
+  'editor',
+  'chat',
+  'combined',
+]);
+console.log(
+  `Executed emitted headless JavaScript: editor-only, chat-only and combined; ${smoke.outputFiles[0].contents.length} emitted bytes.`,
 );
 
 for (const [entry, owner] of [
