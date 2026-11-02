@@ -297,6 +297,8 @@ test('keyboard close cancellation and failed publication preserve typing focus a
     first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true }),
   ).toBeFocused();
   await page.keyboard.type('after cancel ');
+  // Let Close consume the fault instead of the draft's debounced publication.
+  await page.evaluate(() => window.demo.first.flush());
   await page.getByRole('button', { name: 'Fail next recovery', exact: true }).click();
   await first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true }).focus();
   await page.keyboard.press('Meta+w');
