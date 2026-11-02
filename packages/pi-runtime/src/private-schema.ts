@@ -72,7 +72,7 @@ const bindings = Schema.Union([
   }),
 ]);
 const request = Schema.Struct({
-  binding: text(64 * 1024),
+  binding: Schema.String,
   conversationId: Schema.NullOr(recordId),
   submissionId: Schema.NullOr(recordId),
   pending: Schema.Boolean,
