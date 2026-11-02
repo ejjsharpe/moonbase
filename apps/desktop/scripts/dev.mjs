@@ -1,8 +1,12 @@
 import { spawn } from 'node:child_process';
+import { mkdtempSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 if (!process.env.MOONBASE_USER_DATA)
-  throw Error('Set MOONBASE_USER_DATA to a fresh explicit absolute directory.');
+  process.env.MOONBASE_USER_DATA = mkdtempSync(join(tmpdir(), 'moonbase-dev-'));
+console.log(`Moonbase user data: ${process.env.MOONBASE_USER_DATA}`);
 const require = createRequire(import.meta.url);
 await import('./build.mjs');
 const child = spawn(
