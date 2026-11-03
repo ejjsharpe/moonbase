@@ -121,6 +121,40 @@ test('provider browser replies project private fields and reject malformed statu
   value = { providers: [], flow: { id: 'incomplete' } };
   await assert.rejects(client.command('getProviders', {}), { code: 'Incompatible' });
 });
+test('local provider waits use the shared document lifetime without a remote connection', async (t) => {
+  const started = Promise.withResolvers<AbortSignal>();
+  const owner = new ChatIpcSession(
+    runtime,
+    { command: async () => null as never, watch: () => async () => {} },
+    null,
+    context,
+    () => {},
+    {
+      providers: {
+        command: async (_operation, _input, options) => {
+          assert(options?.signal);
+          const signal = options.signal;
+          started.resolve(signal);
+          return new Promise<never>((_resolve, reject) =>
+            signal.addEventListener(
+              'abort',
+              () => reject(new ApplicationError({ code: 'Cancelled', message: 'Wait cancelled' })),
+              { once: true },
+            ),
+          );
+        },
+      },
+    },
+  );
+  t.after(() => owner.dispose());
+  const pending = owner.call('providers', 'getProviders', {}, 'setup');
+  const signal = await started.promise;
+  await owner.releaseDocument();
+  const reply = await pending;
+  assert(signal.aborted);
+  assert(!reply.ok && reply.error.code === 'Cancelled');
+  assert.equal(owner.count, 0);
+});
 test('desktop bridge admits maximum escaped chat text and still rejects oversized input before dispatch', async () => {
   const f = fixture();
   const client = browserClients({
