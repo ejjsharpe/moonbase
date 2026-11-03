@@ -1,10 +1,9 @@
-import { makeEditorModel, makeEditorController } from '@moonbase/application/editor';
+import { createMoonbaseApplication } from '@moonbase/application';
 import { createRoot } from 'react-dom/client';
 import { createRef, StrictMode, useState } from 'react';
-import { Effect, Exit, Scope, ManagedRuntime } from 'effect';
-const modelScope = Scope.makeUnsafe();
+import { ManagedRuntime } from 'effect';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
-import { EditorWorkbench, type EditorWorkbenchHandle } from '../src/index.ts';
+import { Workbench, type WorkbenchHandle } from '../src/index.ts';
 import { configureMonacoWorkers } from '../src/workers.ts';
 import { memoryWorkspace } from '@moonbase/application/testing/memory-workspace';
 import * as monaco from 'monaco-editor';
@@ -46,26 +45,17 @@ const memory = memoryWorkspace([
 // One demo composition root. Feature packages do not construct runtimes.
 const runtime = ManagedRuntime.make(memory.layer),
   client = makeEditorClient(runtime);
-const first = makeEditorController(
-    runtime,
-    await runtime.runPromise(
-      makeEditorModel({ client, clientId: 'demo-first' }).pipe(
-        Effect.provideService(Scope.Scope, modelScope),
-      ),
-    ),
-  ),
-  second = makeEditorController(
-    runtime,
-    await runtime.runPromise(
-      makeEditorModel({ client, clientId: 'demo-second' }).pipe(
-        Effect.provideService(Scope.Scope, modelScope),
-      ),
-    ),
-  );
-const firstHandle = createRef<EditorWorkbenchHandle>();
+const firstApplication = await createMoonbaseApplication({
+    editors: [{ client, clientId: 'demo-first' }],
+  }),
+  secondApplication = await createMoonbaseApplication({
+    editors: [{ client, clientId: 'demo-second' }],
+  }),
+  first = firstApplication.editors[0]!,
+  second = secondApplication.editors[0]!;
+const firstHandle = createRef<WorkbenchHandle>();
 await Promise.all(
   [first, second].map(async (editor) => {
-    await editor.load();
     await editor.openCheckout(checkout.root);
     await editor.open({ checkout, path: 'welcome.ts' }, { intent: 'keep' });
   }),
@@ -141,7 +131,7 @@ function Demo() {
           {...stylex.props(controls.button)}
           onClick={() => {
             setDisposed(true);
-            void second.dispose().catch((error) => setCleanupError(String(error)));
+            void secondApplication.dispose().catch((error) => setCleanupError(String(error)));
           }}>
           Dispose second editor
         </Button>
@@ -149,15 +139,22 @@ function Demo() {
       {cleanupError && <p role="alert">{cleanupError}</p>}
       <div {...stylex.props(styles.editors)}>
         <section aria-label="First editor" hidden={!visible} {...stylex.props(styles.editor)}>
-          <EditorWorkbench
+          <Workbench
             ref={firstHandle}
             controller={first}
+            checkout={checkout}
+            visible={visible}
+            renderLayout={
+              new URLSearchParams(location.search).has('editor-only')
+                ? ({ editor }) => editor
+                : undefined
+            }
             selectNativeImports={() => window.demo.selectNativeImports()}
           />
         </section>
         {!disposed && (
           <section aria-label="Second editor" {...stylex.props(styles.editor, styles.second)}>
-            <EditorWorkbench controller={second} />
+            <Workbench controller={second} checkout={checkout} />
           </section>
         )}
       </div>
@@ -180,9 +177,11 @@ declare global {
       second: typeof second;
       checkout: typeof checkout;
       memory: typeof memory;
-      workbench(): EditorWorkbenchHandle;
+      workbench(): WorkbenchHandle;
+      application: typeof firstApplication;
       selectNativeImports(): Promise<string[]>;
       modelCount(): number;
+      diffReady(): boolean;
       client: typeof client;
       runtime: typeof runtime;
     };
@@ -191,20 +190,23 @@ declare global {
 window.demo = {
   first,
   second,
+  application: firstApplication,
   checkout,
   memory,
   workbench: () => firstHandle.current!,
   selectNativeImports: async () => [],
   modelCount: () => monaco.editor.getModels().length,
+  diffReady: () =>
+    monaco.editor.getDiffEditors().every((editor) => editor.getLineChanges() !== null),
   client,
   runtime,
 };
 window.addEventListener(
   'pagehide',
   () => {
-    void runtime
-      .runPromiseExit(Scope.close(modelScope, Exit.void))
-      .finally(() => runtime.dispose());
+    void Promise.allSettled([firstApplication.dispose(), secondApplication.dispose()]).finally(() =>
+      runtime.dispose(),
+    );
   },
   { once: true },
 );

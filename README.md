@@ -7,13 +7,13 @@ A macOS workbench for local editing and optional remote Pi Durable chat. Reusabl
 | [Contracts](packages/contracts/README.md) | Independent DTOs, schemas, clients and Effect service ports |
 | [Effect helpers](packages/effect/README.md) | Safe shared failure normalization and resource release |
 | [Application](packages/application/README.md) | Headless editor/chat features, composition, lifecycle and shared dispatch |
-| [Editor](packages/editor/README.md) | React/Monaco presentation receiving an application controller |
+| [Workbench](packages/workbench/README.md) | Project-scoped file sidebar, buffers and React/Monaco editor presentation |
 | [Workspace](packages/workspace/README.md) | Local files, Git and recovery persistence |
 | [Pi runtime](packages/pi-runtime/README.md) | Pi chat execution, host transport and remote adapter |
 | [SSH](packages/ssh/README.md) | Scoped, authenticated SSH connectivity |
 | [UI](packages/ui/README.md) | Shared StyleX tokens and recipes |
 | [Config](packages/config/README.md) | Lint, formatting and TypeScript defaults |
-| [Desktop](apps/desktop/README.md) | Electron composition, native authority and packaging |
+| [Desktop](apps/desktop/README.md) | Main navigation, project/Chat composition, native authority and packaging |
 
 Packages consume public exports, accept injected dependencies and stay independent of client applications. Each process owns one scoped Effect runtime; standalone clients acquire only the capabilities they use. See [AGENTS.md](AGENTS.md) for contribution rules and [DESIGN.md](docs/DESIGN.md) for UI guidance.
 

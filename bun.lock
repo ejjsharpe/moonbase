@@ -12,7 +12,7 @@
         "@moonbase/application": "workspace:*",
         "@moonbase/config": "workspace:*",
         "@moonbase/contracts": "workspace:*",
-        "@moonbase/editor": "workspace:*",
+        "@moonbase/workbench": "workspace:*",
         "@moonbase/effect": "workspace:*",
         "@moonbase/pi-runtime": "workspace:*",
         "@moonbase/ssh": "workspace:*",
@@ -46,7 +46,7 @@
         "@base-ui/react": "1.9.0",
         "@moonbase/application": "workspace:*",
         "@moonbase/contracts": "workspace:*",
-        "@moonbase/editor": "workspace:*",
+        "@moonbase/workbench": "workspace:*",
         "@moonbase/pi-runtime": "workspace:*",
         "@moonbase/ssh": "workspace:*",
         "@moonbase/ui": "workspace:*",
@@ -87,8 +87,8 @@
         "@moonbase/config": "workspace:*",
       },
     },
-    "packages/editor": {
-      "name": "@moonbase/editor",
+    "packages/workbench": {
+      "name": "@moonbase/workbench",
       "dependencies": {
         "@base-ui/react": "1.9.0",
         "@moonbase/application": "workspace:*",
@@ -381,7 +381,7 @@
 
     "@moonbase/desktop": ["@moonbase/desktop@workspace:apps/desktop"],
 
-    "@moonbase/editor": ["@moonbase/editor@workspace:packages/editor"],
+    "@moonbase/workbench": ["@moonbase/workbench@workspace:packages/workbench"],
 
     "@moonbase/effect": ["@moonbase/effect@workspace:packages/effect"],
 

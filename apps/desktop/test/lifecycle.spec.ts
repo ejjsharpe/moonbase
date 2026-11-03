@@ -217,7 +217,7 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
       }
       if (veto) {
         if (mode === 'fresh-veto') {
-          await views.getByRole('tab', { name: 'Editor', exact: true }).click();
+          await views.getByRole('tab', { name: / · main$/ }).click();
           await p.getByRole('textbox', { name: 'a.ts editor', exact: true }).focus();
           await p.keyboard.press('End');
         }
@@ -311,7 +311,7 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
           window.moonbaseChat.call('connection', 'getConnection', {}, crypto.randomUUID()),
         );
         expect(after).toEqual(connection);
-        await views.getByRole('tab', { name: 'Editor', exact: true }).click();
+        await views.getByRole('tab', { name: / · main$/ }).click();
         await expect(
           p.locator('.view-line').filter({ hasText: 'retained local draft at reload' }).first(),
         ).toBeVisible();

@@ -1,6 +1,6 @@
 # Moonbase desktop
 
-The macOS Electron client composes the public editor, headless chat, workspace, SSH and remote Pi modules. Main owns one scoped application runtime, private configuration and native authority; the sandboxed renderer receives browser-safe clients. Feature rules stay in packages. The renderer consumes one `createMoonbaseApplication` from `@moonbase/application`, injecting validated bridge clients, `desktop-primary` recovery identity and synchronous `moonbase.chat.v1` storage. Application owns its document runtime, feature scopes, preservation, admission fences and cleanup; React receives the supplied controllers. Editor and Chat remain mounted across navigation.
+The macOS Electron client composes the public browser workbench, headless application, workspace, SSH and remote Pi modules. Main owns one scoped application runtime, private configuration and native authority; the sandboxed renderer receives browser-safe clients. Feature rules stay in packages. The renderer consumes one `createMoonbaseApplication` from `@moonbase/application`, injecting validated bridge clients, `desktop-primary` recovery identity and synchronous `moonbase.chat.v1` storage. Application owns its document runtime, feature scopes, preservation, admission fences and cleanup; React receives the supplied controllers. Desktop owns main navigation, project/Chat tabs, the separate Chat view and startup/lifecycle presentation. It passes an editor controller and exact checkout to `@moonbase/workbench`, which owns the file sidebar, buffers and editor. The workbench remains mounted across navigation. Desktop also supplies validated native callbacks and private storage.
 
 Without `MOONBASE_CHAT_CONFIG`, the root acquires only workspace capabilities. With configuration, it adds SSH and remote chat. Startup/navigation never Connect or Send.
 
@@ -30,7 +30,7 @@ The Apple Silicon app bundles Electron/Node, the native helper and standalone ri
 
 Native picker approval grants an exact checkout identity. Picker, clipboard and File-backed drop produce scoped `WorkspaceNative` references and enter the public editor import dialog; renderer path strings grant no filesystem authority. IPC uses shared request/reply schemas and validates bounded input, caller ownership and the exact main frame/document. Workspace owns path/domain validation. Navigation, popups, webviews and browser permissions are denied; CSP restricts asset/frame loading.
 
-Close Chat panel preserves drafts and removes that panel immediately; its cleanup remains owned by the application root. Reopen waits for successful cleanup, and failures stay visible outside the removed panel. View switching keeps the editor mounted and detaches/resumes chat observation. See [lifecycle ownership](docs/LIFECYCLE.md).
+Close Chat panel preserves drafts and removes that panel immediately; its cleanup remains owned by the application root. Reopen waits for successful cleanup, and failures stay visible outside the removed panel. The desktop shell derives project tabs from exact controller checkout identities; file tabs remain internal to the project workbench. View switching keeps the editor mounted and detaches/resumes chat observation. See [lifecycle ownership](docs/LIFECYCLE.md).
 
 Optional chat initialization failure leaves local editing usable with a visible status and explicit **Open Chat panel** retry. Unavailable, initialization-failed and cleanup-blocked states come from application snapshots. Required application initialization failure shows a safe recovery view, preserves saved evidence and remains responsive to native Quit.
 
@@ -76,6 +76,8 @@ bun run --cwd apps/desktop test:native
 bun run --cwd apps/desktop check:package
 bun run --cwd apps/desktop test:package
 ```
+
+`test:browser` runs the desktop shell with memory/faux capabilities in Chromium, covering navigation, focus/undo retention, Quit prompts and Chat cleanup without Electron. Its fixture lives in `demo/`, runs with `demo:browser` and stays outside shipped renderer inputs.
 
 `test:native` covers editor, configuration, reload, composition and recovery with one worker. `test:package` covers resources, reload and composition. Focused projects: `test:desktop`, `test:composition`, `test:reload`. For focused packaged runs set `MOONBASE_PACKAGED_TEST=1`; reload also accepts absolute `MOONBASE_RELOAD_EXECUTABLE`. `MOONBASE_NATIVE_OUTPUT` selects the output directory.
 

@@ -168,8 +168,9 @@ for (const holdDiscovery of [false, true])
             dialogs: document.querySelectorAll('[role="dialog"]').length,
             focus:
               active?.getAttribute('aria-label') ?? active?.getAttribute('role') ?? active?.tagName,
-            selected: document.querySelector('[aria-label="Checkouts"] [aria-selected="true"]')
-              ?.textContent,
+            selected: document.querySelector(
+              '[aria-label="Workbench views"] [aria-selected="true"]',
+            )?.textContent,
           });
         if (state !== previous) {
           previous = state;
@@ -248,10 +249,6 @@ test('actual sandboxed custom-scheme editor reads, edits and saves through SQLit
       window.moonbaseChat.call('connection', 'getConnection', {}, crypto.randomUUID()),
     ),
   ).toMatchObject({ ok: false, error: { code: 'Unavailable' } });
-  await page
-    .getByRole('tablist', { name: 'Workbench views', exact: true })
-    .getByRole('tab', { name: 'Editor', exact: true })
-    .click();
   await open();
   await edit('export const saved = 42;');
   await page.getByRole('button', { name: 'Save', exact: true }).click();

@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { dirname, join, normalize } from 'node:path';
-import { createRequire } from 'node:module';
+import { builtinModules, createRequire } from 'node:module';
 
 // Reuse the parser already required by the pinned StyleX build toolchain.
 const stylexRequire = createRequire(import.meta.resolve('@stylexjs/unplugin'));
@@ -188,11 +188,31 @@ export function checkBoundaries({ files, packages }) {
       if (infrastructure.has(sourceOwner) && destination === 'application')
         reject(path, edge, 'reusable infrastructure depends on application');
       if (
-        sourceOwner === 'editor' &&
+        sourceOwner === 'workbench' &&
         destination &&
-        !['editor', 'application', 'contracts', 'ui'].includes(destination)
+        !['workbench', 'application', 'contracts', 'ui'].includes(destination)
       )
         reject(path, edge, 'presentation depends on infrastructure or shared implementation');
+      if (
+        sourceOwner === 'workbench' &&
+        (edge.specifier.startsWith('node:') ||
+          builtinModules.includes(edge.specifier) ||
+          /^(?:electron(?:\/|$)|@effect\/platform|@earendil-works\/)/.test(edge.specifier) ||
+          edge.specifier === '@moonbase/contracts/services' ||
+          /^@moonbase\/application\/(?:runtime|testing)\//.test(edge.specifier))
+      )
+        reject(path, edge, 'platform or privileged capability in browser workbench');
+      if (
+        sourceOwner === 'workbench' &&
+        (/^@moonbase\/application(?:$|\/(?!editor$))/.test(edge.specifier) ||
+          /^@moonbase\/contracts\/(?:chat|connection|host)(?:-schema)?$/.test(edge.specifier))
+      )
+        reject(path, edge, 'project workbench consumes only editor capabilities');
+      if (
+        sourceOwner === 'workbench' &&
+        /^packages\/workbench\/(?:demo|test)\//.test(resolved ?? '')
+      )
+        reject(path, edge, 'browser presentation reaches a demo/test capability');
       if (
         infrastructure.has(sourceOwner) &&
         destination &&
