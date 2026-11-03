@@ -180,6 +180,18 @@ type MutationDependencies = {
   pending(id: string): boolean;
 };
 
+export function getMutationDestinations(sources: readonly EntryReference[], destination: string) {
+  const batch = sources.length > 1;
+  return {
+    parent: batch ? destination : destination.split('/').slice(0, -1).join('/'),
+    destinations: batch
+      ? sources.map((source) =>
+          [destination, source.target.path.split('/').at(-1)].filter(Boolean).join('/'),
+        )
+      : [destination],
+  };
+}
+
 /** Consent/inspection belong to a dialog; admitted work belongs to its editor model. */
 export class EditorMutation {
   private scope: Scope.Closeable;
@@ -254,20 +266,14 @@ export class EditorMutation {
             ? await dependencies.inspect(action.checkout, paths, this.scope)
             : [];
         } else {
-          const batch = this.sources.length > 1;
-          const parent = batch ? destination : destination.split('/').slice(0, -1).join('/');
+          const { parent, destinations } = getMutationDestinations(this.sources, destination);
           const listing = await dependencies.list(action.checkout, parent, this.scope);
           if (!current()) return false;
-          const destinations = new Set(
-            (batch
-              ? this.sources.map((source) =>
-                  [destination, source.target.path.split('/').at(-1)].filter(Boolean).join('/'),
-                )
-              : [destination]
-            ).map((path) => path.normalize('NFC').toLowerCase()),
+          const matchingDestinations = new Set(
+            destinations.map((path) => path.normalize('NFC').toLowerCase()),
           );
           const collisions = listing.entries.filter((entry) =>
-            destinations.has(entry.path.normalize('NFC').toLowerCase()),
+            matchingDestinations.has(entry.path.normalize('NFC').toLowerCase()),
           );
           replace = collisions.length
             ? await dependencies.inspect(
