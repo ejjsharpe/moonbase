@@ -3,6 +3,7 @@ import { Effect } from 'effect';
 import { releaseResource } from '@moonbase/effect';
 
 import { ApplicationError } from '@moonbase/contracts/workspace';
+export { maximumChatRequestBytes } from '@moonbase/contracts/chat';
 import type { ChatHostEndpoint } from '@moonbase/contracts/services';
 import { fail } from './validation.ts';
 

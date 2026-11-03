@@ -254,16 +254,27 @@ export class EditorMutation {
             ? await dependencies.inspect(action.checkout, paths, this.scope)
             : [];
         } else {
-          const parent = destination.split('/').slice(0, -1).join('/');
+          const batch = this.sources.length > 1;
+          const parent = batch ? destination : destination.split('/').slice(0, -1).join('/');
           const listing = await dependencies.list(action.checkout, parent, this.scope);
           if (!current()) return false;
-          const collision = listing.entries.find(
-            (entry) =>
-              entry.path.normalize('NFC').toLowerCase() ===
-              destination.normalize('NFC').toLowerCase(),
+          const destinations = new Set(
+            (batch
+              ? this.sources.map((source) =>
+                  [destination, source.target.path.split('/').at(-1)].filter(Boolean).join('/'),
+                )
+              : [destination]
+            ).map((path) => path.normalize('NFC').toLowerCase()),
           );
-          replace = collision
-            ? await dependencies.inspect(action.checkout, [collision.path], this.scope)
+          const collisions = listing.entries.filter((entry) =>
+            destinations.has(entry.path.normalize('NFC').toLowerCase()),
+          );
+          replace = collisions.length
+            ? await dependencies.inspect(
+                action.checkout,
+                collisions.map((entry) => entry.path),
+                this.scope,
+              )
             : [];
         }
         if (!current()) return false;

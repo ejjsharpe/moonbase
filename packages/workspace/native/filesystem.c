@@ -269,6 +269,7 @@ static void copy_tree(int from, int to) {
     if (S_ISDIR(actual.st_mode) && mkdirat(to, entry->d_name, 0700)) fail("Create copy folder");
     int target = scoped_open(to, entry->d_name, S_ISDIR(actual.st_mode) ? O_RDONLY | O_DIRECTORY : O_WRONLY | O_CREAT | O_EXCL);
     copy_tree(child, target);
+    if (S_ISDIR(actual.st_mode) && fchmod(target, actual.st_mode & 07777)) fail("Copy folder permissions");
     close(child); close(target);
     errno = 0;
   }
@@ -464,6 +465,8 @@ int main(int argc, char **argv) {
     revalidate_source(argv[5], &staging_info);
     if (renameatx_np(3, argv[5], 3, argv[3], RENAME_EXCL | RENAME_NOFOLLOW_ANY | RENAME_RESOLVE_BENEATH))
       fail("Publish copy (destination must be free)");
+    // Keep staging accessible until identity validation and publication have finished.
+    if (S_ISDIR(info.st_mode) && fchmod(target, info.st_mode & 07777)) fail("Copy folder permissions");
     close(target);
     return 0;
   }

@@ -61,6 +61,29 @@ test('public factory composes independent editors and optional chat without remo
   }
 });
 
+test('throwing chat view subscribers cannot veto unload or Quit after a successful draft write', async () => {
+  const chat = chatCapabilities();
+  const app = await createMoonbaseApplication({ chat: async () => chat.dependencies });
+  try {
+    const controller = app.chat!;
+    await controller.start();
+    await controller.connect();
+    await tick();
+    await controller.select(chat.target);
+    let notifications = 0;
+    controller.subscribe(() => {
+      if (++notifications > 1) throw Error('Controlled view failure after draft update');
+    });
+    controller.setDraft('Retained draft');
+    assert.equal(JSON.parse(chat.storage.value!).drafts[0].text, 'Retained draft');
+    assert.equal(controller.getSnapshot().storageError, null);
+    assert.equal(app.canUnload(), true);
+    assert.equal(await app.prepareQuit(), true);
+  } finally {
+    await app.dispose();
+  }
+});
+
 test('sole chat is required, combined optional startup failure stays visible and keeps editor usable', async () => {
   const editor = editorCapabilities();
   const fail = async () => {

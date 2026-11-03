@@ -90,7 +90,7 @@ export function MonacoView({
         );
         const listener = model.onDidChangeContent(() => {
           const current = controller.buffer(buffer.target),
-            text = model.getValue();
+            text = model.getValue(undefined, true);
           if (current && current.text !== text) {
             try {
               controller.edit(buffer.target, text);
@@ -103,7 +103,7 @@ export function MonacoView({
         entry = { model, listener };
         models.current.set(key, entry);
       }
-      if (entry.model.getValue() !== buffer.text) entry.model.setValue(buffer.text);
+      if (entry.model.getValue(undefined, true) !== buffer.text) entry.model.setValue(buffer.text);
     }
     for (const [key, item] of models.current)
       if (state.disposed || !state.buffers.some((buffer) => fileKey(buffer.target) === key)) {
