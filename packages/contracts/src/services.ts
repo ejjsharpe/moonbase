@@ -1,3 +1,4 @@
+import type { ProviderCommand, ProviderInput, ProviderOutput } from './providers.ts';
 import { Context, type Effect, type Stream } from 'effect';
 import {
   type ApplicationError,
@@ -59,3 +60,17 @@ export type ChatServiceShape = ChatHandlers & {
 export class ChatService extends Context.Service<ChatService, ChatServiceShape>()(
   'moonbase/Chat',
 ) {}
+
+export type ProviderSetupHandlers = {
+  [K in ProviderCommand]: (
+    input: ProviderInput<K>,
+  ) => Effect.Effect<ProviderOutput<K>, ApplicationError>;
+};
+/** Each privileged owner is a live document; renderer inputs never choose it. */
+export class ProviderSetupService extends Context.Service<
+  ProviderSetupService,
+  {
+    forOwner(ownerId: string): ProviderSetupHandlers;
+    releaseOwner(ownerId: string): Effect.Effect<void, ApplicationError>;
+  }
+>()('moonbase/ProviderSetup') {}

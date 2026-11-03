@@ -48,3 +48,7 @@ The public Pi document API enforces family kind, scope, semantics and version; n
 ## Qualification
 
 Package tests use temporary SQLite, counted faux models/tools, controlled SDK-boundary failures, Node child hosts and loopback HTTP. The compiled remote-entry check runs Electron 45.1.0 in Node mode without foreground UI. Cross-module chat tests use controlled forwarding. These checks do not qualify integrated desktop/native/package behavior, real providers/SSH, physical durability, Intel execution or distribution.
+
+## Local ownership extension
+
+Local stores use a strict `{host, actorId, mode: "local"}` identity and require conversation metadata `settings: {cwd, model}`; fixed-settings remote identities and metadata remain unchanged. Local settings belong to immutable Create request bindings. The same resource/admission/Stop ownership above applies. See [local setup and qualification](LOCAL.md).

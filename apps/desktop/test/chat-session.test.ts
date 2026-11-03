@@ -100,6 +100,61 @@ test('public bridge preserves Uncertain and exact pending payload; preaborted ca
   assert.equal(f.calls, 1);
   await f.owner.dispose();
 });
+test('provider browser replies project private fields and reject malformed status', async () => {
+  let value: unknown = { providers: [], flow: null, privateToken: 'private-token' };
+  const client = browserClients(
+    {
+      context: async () => context,
+      call: async (kind, operation, input, _id, backendId) => {
+        assert.equal(kind, 'providers');
+        assert.equal(operation, 'getProviders');
+        assert.equal(backendId, 'local');
+        assert.deepEqual(input, {});
+        return { ok: true, value };
+      },
+      cancel: async () => ({ ok: true, value: null }),
+      events: () => () => {},
+    },
+    'local',
+  ).providers;
+  assert.deepEqual(await client.command('getProviders', {}), { providers: [], flow: null });
+  value = { providers: [], flow: { id: 'incomplete' } };
+  await assert.rejects(client.command('getProviders', {}), { code: 'Incompatible' });
+});
+test('local provider waits use the shared document lifetime without a remote connection', async (t) => {
+  const started = Promise.withResolvers<AbortSignal>();
+  const owner = new ChatIpcSession(
+    runtime,
+    { command: async () => null as never, watch: () => async () => {} },
+    null,
+    context,
+    () => {},
+    {
+      providers: {
+        command: async (_operation, _input, options) => {
+          assert(options?.signal);
+          const signal = options.signal;
+          started.resolve(signal);
+          return new Promise<never>((_resolve, reject) =>
+            signal.addEventListener(
+              'abort',
+              () => reject(new ApplicationError({ code: 'Cancelled', message: 'Wait cancelled' })),
+              { once: true },
+            ),
+          );
+        },
+      },
+    },
+  );
+  t.after(() => owner.dispose());
+  const pending = owner.call('providers', 'getProviders', {}, 'setup');
+  const signal = await started.promise;
+  await owner.releaseDocument();
+  const reply = await pending;
+  assert(signal.aborted);
+  assert(!reply.ok && reply.error.code === 'Cancelled');
+  assert.equal(owner.count, 0);
+});
 test('desktop bridge admits maximum escaped chat text and still rejects oversized input before dispatch', async () => {
   const f = fixture();
   const client = browserClients({
@@ -271,3 +326,39 @@ for (const failure of ['none', 'release', 'acquisition'] as const) {
     }
   });
 }
+
+test('local IPC captures its command and cannot route a late reply to a replacement document', async () => {
+  const gate = Promise.withResolvers<void>();
+  const chat: ChatClient = {
+    command: async () => {
+      await gate.promise;
+      return null as never;
+    },
+    watch: () => async () => {},
+  };
+  const owner = new ChatIpcSession(runtime, chat, null, context, () => {});
+  const missing = await owner.call(
+    'chat',
+    'createChat',
+    { session: context, requestId: 'missing', title: 'Missing settings' },
+    'missing',
+  );
+  assert(!missing.ok && missing.error.code === 'InvalidInput');
+  const pending = owner.call(
+    'chat',
+    'createChat',
+    {
+      session: context,
+      requestId: 'captured',
+      title: 'Local',
+      settings: { cwd: '/approved', model: { provider: 'openai', modelId: 'test' } },
+    },
+    'captured',
+  );
+  const release = owner.releaseDocument();
+  gate.resolve();
+  await pending;
+  await release;
+  assert.equal(owner.count, 0);
+  await owner.dispose();
+});

@@ -6,11 +6,52 @@ import { workbench } from '@moonbase/ui/workbench';
 import { colors, layout, radius, space, type } from '@moonbase/ui/tokens.stylex';
 import type { ChatEntry } from '@moonbase/contracts/chat';
 import type { ChatController } from '@moonbase/application/chat';
+import { ProviderSetup } from './setup.tsx';
+import { Choice } from './choice.tsx';
 /** The consumer owns the clients/runtime and controller lifetime; this view installs no capabilities. */
-export function ChatView({ controller }: { controller: ChatController }) {
+export function ChatView({
+  controller,
+  chooseFolder,
+}: {
+  controller: ChatController;
+  chooseFolder?: () => Promise<string | null>;
+}) {
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot),
-    [title, setTitle] = useState('');
-  const connected = state.connection?.state === 'connected',
+    [title, setTitle] = useState(''),
+    [cwd, setCwd] = useState(''),
+    [model, setModel] = useState(''),
+    [folderError, setFolderError] = useState<string | null>(null);
+  const providerState = useSyncExternalStore(
+    controller.providers?.subscribe ?? noSubscription,
+    controller.providers?.getSnapshot ?? noProviders,
+  );
+  const local = state.mode === 'local';
+  const models =
+    providerState?.status?.providers
+      .filter((provider) => provider.configured)
+      .flatMap((provider) =>
+        provider.models.map((model) => ({
+          value: JSON.stringify({ provider: provider.id, modelId: model.modelId }),
+          label: `${provider.name} · ${model.name}`,
+        })),
+      ) ?? [];
+  const selectedModel = models.some((entry) => entry.value === model) ? model : '';
+  let connectionLabel = state.connection?.state ?? 'Loading configuration';
+  if (local) connectionLabel = state.ready ? 'Local ready' : 'Loading local chats';
+  let contextLabel = local
+    ? 'Each conversation retains its working folder and model.'
+    : 'Fixed working folder and model are read from the verified remote host.';
+  if (state.host && 'cwd' in state.host) contextLabel = `${state.host.cwd} · ${state.host.model}`;
+  if (state.snapshot)
+    contextLabel = `${state.snapshot.conversation.cwd} · ${state.snapshot.conversation.model}`;
+  let conversationTitle = local ? 'Local chat' : 'Remote chat';
+  if (state.selected) conversationTitle = 'Saved chat selected';
+  if (state.snapshot) conversationTitle = state.snapshot.conversation.title;
+  let emptyMessage = local
+    ? 'Local chat is loading. Provider setup is available in the sidebar.'
+    : 'Connect to your configured host to begin.';
+  if (state.ready) emptyMessage = 'Create a chat or open one from the sidebar.';
+  const connected = state.ready,
     busy = (id: string) => state.active.includes(id);
   const snapshot = state.snapshot,
     run = snapshot?.run;
@@ -31,49 +72,71 @@ export function ChatView({ controller }: { controller: ChatController }) {
         </strong>
         <div {...stylex.props(controls.row)}>
           <span role="status" {...stylex.props(styles.connection)}>
-            {state.connection?.state ?? 'Loading configuration'}
+            {connectionLabel}
           </span>
-          {connected || state.connection?.state === 'connecting' ? (
-            <Button
-              {...stylex.props(controls.button)}
-              disabled={busy('disconnect')}
-              onClick={() => void controller.disconnect()}>
-              Disconnect
-            </Button>
-          ) : (
-            <Button
-              {...stylex.props(controls.button, styles.primary)}
-              disabled={
-                !state.connection || busy('connect') || state.connection.state === 'disconnecting'
-              }
-              onClick={() => void controller.connect()}>
-              {busy('connect') ? 'Connecting…' : 'Connect'}
-            </Button>
-          )}
+          {!local &&
+            (connected || state.connection?.state === 'connecting' ? (
+              <Button
+                {...stylex.props(controls.button)}
+                disabled={busy('disconnect')}
+                onClick={() => void controller.disconnect()}>
+                Disconnect
+              </Button>
+            ) : (
+              <Button
+                {...stylex.props(controls.button, styles.primary)}
+                disabled={
+                  !state.connection || busy('connect') || state.connection.state === 'disconnecting'
+                }
+                onClick={() => void controller.connect()}>
+                {busy('connect') ? 'Connecting…' : 'Connect'}
+              </Button>
+            ))}
         </div>
       </header>
       <div {...stylex.props(styles.workspace)}>
         <aside aria-label="Saved chats" {...stylex.props(styles.sidebar)}>
           <section {...stylex.props(styles.profile)}>
             <h1 {...stylex.props(styles.heading)}>
-              {state.connection?.profile.label ?? 'Configured host'}
+              {local ? 'On this computer' : (state.connection?.profile.label ?? 'Configured host')}
             </h1>
             <p {...stylex.props(styles.small)}>
-              {state.connection?.profile.destination ?? 'Loading…'}
+              {local
+                ? 'Read, write, edit and shell tools run with your OS permissions. The working folder is not a sandbox.'
+                : (state.connection?.profile.destination ?? 'Loading…')}
             </p>
-            <p {...stylex.props(styles.small)}>
-              Host {controller.context.host.hostId}
-              <br />
-              Store {controller.context.host.storeId}
-              <br />
-              Actor {controller.context.actorId}
-            </p>
+            {local ? (
+              <details>
+                <summary {...stylex.props(controls.summary)}>Local storage identity</summary>{' '}
+                <p {...stylex.props(styles.small)}>
+                  Host {controller.context.host.hostId}
+                  <br />
+                  Store {controller.context.host.storeId}
+                  <br />
+                  Actor {controller.context.actorId}
+                </p>
+              </details>
+            ) : (
+              <p {...stylex.props(styles.small)}>
+                Host {controller.context.host.hostId}
+                <br />
+                Store {controller.context.host.storeId}
+                <br />
+                Actor {controller.context.actorId}
+              </p>
+            )}
           </section>
+          {controller.providers && <ProviderSetup controller={controller.providers} />}
           <form
             {...stylex.props(styles.create)}
             onSubmit={(e) => {
               e.preventDefault();
-              void controller.create(title);
+              void controller.create(
+                title,
+                local && cwd && selectedModel
+                  ? { cwd, model: JSON.parse(selectedModel) }
+                  : undefined,
+              );
             }}>
             <label htmlFor="chat-title" {...stylex.props(styles.label)}>
               New saved chat
@@ -86,10 +149,51 @@ export function ChatView({ controller }: { controller: ChatController }) {
               onChange={(e) => setTitle(e.target.value)}
               maxLength={200}
             />
+            {local && (
+              <>
+                <Button
+                  {...stylex.props(controls.button)}
+                  disabled={!chooseFolder}
+                  onClick={() => {
+                    setFolderError(null);
+                    void chooseFolder?.()
+                      .then((folder) => {
+                        if (folder) setCwd(folder);
+                      })
+                      .catch(() =>
+                        setFolderError(
+                          'The folder could not be approved. Choose an existing working folder again.',
+                        ),
+                      );
+                  }}>
+                  Choose working folder
+                </Button>
+                <p {...stylex.props(styles.small)}>
+                  {cwd || 'Choose a folder for this new conversation.'}
+                </p>
+                {folderError && <p role="alert">{folderError}</p>}
+                <Choice
+                  label="Conversation model"
+                  value={selectedModel}
+                  options={models}
+                  onChange={setModel}
+                  disabled={!models.length}
+                />
+                {!models.length && (
+                  <p {...stylex.props(styles.small)}>Set up a provider to choose a model.</p>
+                )}
+              </>
+            )}
             <Button
               type="submit"
               {...stylex.props(controls.button)}
-              disabled={!connected || busy('create') || !!state.storageError || !title.trim()}>
+              disabled={
+                !connected ||
+                busy('create') ||
+                !!state.storageError ||
+                !title.trim() ||
+                (local && (!cwd || !selectedModel))
+              }>
               Create chat
             </Button>
           </form>
@@ -137,23 +241,16 @@ export function ChatView({ controller }: { controller: ChatController }) {
             </Button>
           )}
           <p {...stylex.props(styles.small, styles.sidebarFoot)}>
-            Disconnect ends connectivity.
-            <br />
-            Remote work continues until you Stop it.
+            {local
+              ? 'Hiding Moonbase or switching views keeps local agents running.'
+              : 'Disconnect ends connectivity. Remote work continues until you Stop it.'}
           </p>
         </aside>
         <main {...stylex.props(styles.content)}>
           <div {...stylex.props(styles.context)}>
             <div>
-              <h2 {...stylex.props(styles.title)}>
-                {snapshot?.conversation.title ??
-                  (state.selected ? 'Saved chat selected' : 'Remote chat')}
-              </h2>
-              <p {...stylex.props(styles.small)}>
-                {state.host
-                  ? `${state.host.cwd} · ${state.host.model}`
-                  : 'Fixed working folder and model are read from the verified remote host.'}
-              </p>
+              <h2 {...stylex.props(styles.title)}>{conversationTitle}</h2>
+              <p {...stylex.props(styles.small)}>{contextLabel}</p>
             </div>
             {run && (
               <Button
@@ -205,6 +302,14 @@ export function ChatView({ controller }: { controller: ChatController }) {
                       {p.input.requestId}
                       {identity}
                     </p>
+                    {p.operation === 'createChat' && (
+                      <p {...stylex.props(styles.small)}>
+                        {p.input.title}
+                        {p.input.settings
+                          ? ` · ${p.input.settings.cwd} · ${p.input.settings.model.provider}/${p.input.settings.model.modelId}`
+                          : ''}
+                      </p>
+                    )}
                     {p.operation === 'sendChat' && (
                       <pre {...stylex.props(controls.pre, styles.pendingText)}>{p.input.text}</pre>
                     )}
@@ -248,15 +353,16 @@ export function ChatView({ controller }: { controller: ChatController }) {
             {...stylex.props(styles.transcript)}>
             {!state.selected && (
               <div {...stylex.props(styles.empty)}>
-                <h2 {...stylex.props(styles.emptyTitle)}>A saved conversation, on your host.</h2>
-                <p>
-                  {connected
-                    ? 'Create a chat or open one from the sidebar.'
-                    : 'Connect to your configured host to begin.'}
-                </p>
+                <h2 {...stylex.props(styles.emptyTitle)}>
+                  {local
+                    ? 'Start a conversation on this computer.'
+                    : 'A saved conversation, on your host.'}
+                </h2>
+                <p>{emptyMessage}</p>
                 <p {...stylex.props(styles.small)}>
-                  Messages and tools run remotely. Reconnecting reads the current chat and never
-                  resends your input.
+                  {local
+                    ? 'Set up a provider, choose a folder and model, then create a chat. Tools can access files outside the working folder.'
+                    : 'Messages and tools run remotely. Reconnecting reads the current chat and never resends your input.'}
                 </p>
               </div>
             )}
@@ -335,7 +441,7 @@ export function ChatView({ controller }: { controller: ChatController }) {
             <textarea
               id="message"
               {...stylex.props(controls.field, styles.textarea)}
-              placeholder="Write to the remote chat…"
+              placeholder={local ? 'Write to the local chat…' : 'Write to the remote chat…'}
               value={state.draft}
               disabled={!state.selected}
               onChange={(e) => controller.setDraft(e.target.value)}
@@ -381,11 +487,15 @@ export function ChatView({ controller }: { controller: ChatController }) {
         </main>
       </div>
       <footer {...stylex.props(controls.status)}>
-        Chat · human acceptance pending · Closing a view or quitting does not Stop remote work.
+        {local
+          ? 'Local tools · Closing a view keeps agents running. Quit releases local Pi.'
+          : 'Remote tools · Closing a view or quitting does not Stop remote work.'}
       </footer>
     </div>
   );
 }
+const noSubscription = () => () => {};
+const noProviders = () => null;
 function Entry({ entry: e }: { entry: ChatEntry }) {
   let label = e.toolName ?? e.role;
   if (e.role === 'user') label = 'You';
@@ -406,7 +516,7 @@ function Entry({ entry: e }: { entry: ChatEntry }) {
   );
 }
 const styles = stylex.create({
-  page: { fontFamily: type.sans },
+  page: { fontFamily: type.sans, flex: 1, height: 'auto', minHeight: 0, overflowY: 'auto' },
   header: { minHeight: 56 },
   muted: { color: colors.secondary, fontWeight: 400 },
   connection: { textTransform: 'capitalize', color: colors.secondary },
@@ -421,7 +531,7 @@ const styles = stylex.create({
       '@media (max-width: 760px)': '190px minmax(0, 1fr)',
     },
     flex: 1,
-    minHeight: 0,
+    minHeight: 160,
   },
   sidebar: {
     backgroundColor: colors.surface,

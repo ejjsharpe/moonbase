@@ -7,3 +7,5 @@ export type {
   Pending,
   DraftStorage,
 } from './controller.ts';
+
+export { type ProviderSetupController, type ProviderSetupSnapshot } from './providers.ts';

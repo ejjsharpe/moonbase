@@ -1,8 +1,8 @@
 # Moonbase desktop
 
-The macOS Electron client composes the public browser workbench, headless application, workspace, SSH and remote Pi modules. Main owns one scoped application runtime, private configuration and native authority; the sandboxed renderer receives browser-safe clients. Feature rules stay in packages. The renderer consumes one `createMoonbaseApplication` from `@moonbase/application`, injecting validated bridge clients, `desktop-primary` recovery identity and synchronous `moonbase.chat.v1` storage. Application owns its document runtime, feature scopes, preservation, admission fences and cleanup; React receives the supplied controllers. Desktop owns main navigation, project/Chat tabs, the separate Chat view and startup/lifecycle presentation. It passes an editor controller and exact checkout to `@moonbase/workbench`, which owns the file sidebar, buffers and editor. The workbench remains mounted across navigation. Desktop also supplies validated native callbacks and private storage.
+The macOS Electron client composes the public browser workbench, headless application, workspace, local Pi, optional SSH and remote Pi modules. Main owns one scoped application runtime, private configuration and native authority; the sandboxed renderer receives browser-safe clients. Feature rules stay in packages. The renderer consumes one `createMoonbaseApplication` from `@moonbase/application`, injecting validated bridge clients, `desktop-primary` recovery identity and separate synchronous `moonbase.chat.local.v1` and existing remote `moonbase.chat.v1` storage. Application owns its document runtime, feature scopes, preservation, admission fences and cleanup; React receives the supplied controllers. Desktop owns main navigation, project/Chat tabs, the separate Chat view and startup/lifecycle presentation. It passes an editor controller and exact checkout to `@moonbase/workbench`, which owns the file sidebar, buffers and editor. The workbench remains mounted across navigation. Desktop also supplies validated native callbacks and private storage.
 
-Without `MOONBASE_CHAT_CONFIG`, the root acquires only workspace capabilities. With configuration, it adds SSH and remote chat. Startup/navigation never Connect or Send.
+Local chat is the desktop default without SSH configuration. Main acquires workspace and local Pi once in separate scopes of its runtime; `MOONBASE_CHAT_CONFIG` additionally offers the configured SSH host. Startup/navigation never Connect or Send. Local initialization failure leaves the editor usable and explicit Open Chat panel retries acquisition after the underlying failure is resolved.
 
 ## Run and package
 
@@ -38,6 +38,20 @@ Window close hides the mounted workbench; explicit Quit runs chat preservation, 
 
 Reload requires the editor's synchronous recovery gate and chat preservation before releasing the old document. Renderer crash offers **Recover workbench** or **Quit Moonbase** using persisted recovery and the same runtime/approved roots. Changes since the last publication can be lost; force-kill is not a preservation gate.
 
+## Local agents
+
+Open Chat, leave the target at **Local**, and expand **Provider setup**. Choose **ChatGPT subscription** for the current SDK browser sign-in flow, or OpenAI API key, Anthropic, Google Gemini or OpenRouter. ChatGPT and OpenAI API-key credentials are independent. The newer ChatGPT flow was selected during implementation in place of the ticket’s original legacy Codex/device-code route. It opens only the active provider’s validated sign-in URL and supports a full redirect-URL fallback; it does not offer device codes.
+
+For every new chat, choose an existing working folder through the native picker and a model from a configured provider. The saved chat retains those settings; create another chat to change them. Local read/write/edit/shell tools use your OS permissions: **the working folder is context, not a sandbox**. Local host/store/actor IDs persist in private `local-pi-v1/identity.json`; Pi owns conversations/tasks in that namespace’s SQLite store. No legacy state or external credential files are imported.
+
+Main supplies asynchronous Electron safeStorage encryption to Pi runtime’s atomic private credential store. No plaintext fallback exists. Credentials/answers never enter LocalStorage or controller snapshots; rejected storage/authentication diagnostics stay private. Unlock the Keychain and retry after encrypted storage failure. Unsigned builds may repeat Keychain prompts.
+
+Target switching preserves separate drafts and original retained commands and waits for controller cleanup. Backend work continues across target/view changes, panel close, window Hide and renderer reload. An uncommitted retained Create after process restart requires native approval of its original folder. An exactly matching committed Create recovers its receipt before renewed approval, even when the folder has disappeared; the original settings cannot change.
+
+After normal editor/chat preservation gates and admissions fencing, Quit inspects all local Pi work, including hidden conversations and unfinished admissions. **Keep running** cancels Quit and restores admissions. **Quit** releases local Pi normally; reopening follows Pi saved-task recovery. Neither action synthesizes Stop or rolls back external tool effects. Remote work remains on its host.
+
+See [runtime, credentials and qualification](../../packages/pi-runtime/docs/LOCAL.md) and [desktop lifecycle](docs/LIFECYCLE.md).
+
 ## Optional remote chat
 
 Set `MOONBASE_CHAT_CONFIG` to an absolute private JSON file outside source control: mode `0600`, owned by the current user, without symlinks.
@@ -58,11 +72,13 @@ Set `MOONBASE_CHAT_CONFIG` to an absolute private JSON file outside source contr
 
 An optional absolute `sshExecutable` overrides `/usr/bin/ssh`. Keep the key separate from public settings and out of renderers, URLs, arguments, logs and the repository. Main validates configuration and exact host/store/actor authority; the renderer receives no endpoint, credentials or database configuration.
 
-Start the [Pi host](../../packages/pi-runtime/README.md) separately on its machine and satisfy the [SSH policy](../../packages/ssh/README.md) with existing config/agent/keys and verified known hosts. The host uses Node 26.13.0; the desktop remote adapter uses Electron 45.1.0 / Node 24.22.1 without local Pi/provider initialization. Connect explicitly.
+Start the [Pi host](../../packages/pi-runtime/README.md) separately on its machine and satisfy the [SSH policy](../../packages/ssh/README.md) with existing config/agent/keys and verified known hosts. The host uses Node 26.13.0; the desktop uses its bundled Electron 45.1.0 / Node 24.22.1 for local Pi and its remote adapter. Connect explicitly.
 
 Remote host/store/cwd identity never grants local checkout access, even for equal path strings. There is no file synchronization or remote-to-local open action. Hide, view switching, Disconnect, renderer loss and client Quit never Stop remote work. Stop uses the controller's exact captured submission/task.
 
-Desktop supplies LocalStorage under `moonbase.chat.v1` for the controller's lifetime; the [application chat feature](../../packages/application/docs/CHAT.md) owns schema/preservation. No migration/import occurs.
+Desktop supplies separate local storage under `moonbase.chat.local.v1` and keeps remote LocalStorage under `moonbase.chat.v1` for the controller's lifetime; the [application chat feature](../../packages/application/docs/CHAT.md) owns schema/preservation. No migration/import occurs.
+
+See [local acceptance evidence](docs/LOCAL-ACCEPTANCE.md) for source, controlled, embedded, native and packaged results and remaining manual checks.
 
 ## Checks and limits
 
@@ -79,10 +95,10 @@ bun run --cwd apps/desktop test:package
 
 `test:browser` runs the desktop shell with memory/faux capabilities in Chromium, covering navigation, focus/undo retention, Quit prompts and Chat cleanup without Electron. Its fixture lives in `demo/`, runs with `demo:browser` and stays outside shipped renderer inputs.
 
-`test:native` covers editor, configuration, reload, composition and recovery with one worker. `test:package` covers resources, reload and composition. Focused projects: `test:desktop`, `test:composition`, `test:reload`. For focused packaged runs set `MOONBASE_PACKAGED_TEST=1`; reload also accepts absolute `MOONBASE_RELOAD_EXECUTABLE`. `MOONBASE_NATIVE_OUTPUT` selects the output directory.
+`test:local` exercises the local UI with network-disabled faux streams and a test cipher. `test:native` covers it alongside editor, configuration, reload, composition and recovery with one worker. `test:package` covers resources, reload and composition. Focused projects: `test:desktop`, `test:composition`, `test:reload`. For focused packaged runs set `MOONBASE_PACKAGED_TEST=1`; reload also accepts absolute `MOONBASE_RELOAD_EXECUTABLE`. `MOONBASE_NATIVE_OUTPUT` selects the output directory.
 
 Tests use temporary repositories/user-data, fixture clipboard APIs and owned processes. Native Trash checks only temporary files. Reply-loss instrumentation is excluded from shipped output. Controlled drop/restart checks do not establish OS gesture or power-loss behavior.
 
-Build-generated resources/notices live in ignored `dist`/`release`. Notices come from actual bundled assets/dependencies, including Monaco workers/fonts, ripgrep and Electron/Chromium. StyleX's missing npm license is fetched from its exact upstream release commit and SHA256-checked.
+Build-generated resources/notices live in ignored `dist`/`release`. Notices come from actual bundled assets/dependencies, including Monaco workers/fonts, ripgrep and Electron/Chromium. Missing npm license files for StyleX, Pi and Standard Webhooks are fetched from exact upstream release commits and SHA256-checked; data-uri-to-buffer supplies its notice in its bundled README.
 
 Human acceptance remains **pending**. Real picker/clipboard/drag gestures, Finder Put Back, VoiceOver/full accessibility, performance, physical durability, Intel execution and signing/notarization/distribution require separate qualification. The previously observed rapid Open→Find dismissal remains unexplained; controlled tests do not establish its resolution.

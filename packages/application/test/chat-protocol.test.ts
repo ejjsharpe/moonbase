@@ -42,7 +42,9 @@ async function setup(t: { after: (f: () => Promise<void>) => void }, hold = fals
 test('public chat controller creates, lists, opens, streams real tool output and captures exact Stop through SSH/HTTP/Pi', async (t) => {
   const f = await setup(t, true);
   const target = f.controller.getSnapshot().selected!;
-  assert.equal(f.controller.getSnapshot().host!.cwd, f.cwd);
+  const host = f.controller.getSnapshot().host!;
+  assert('cwd' in host);
+  assert.equal(host.cwd, f.cwd);
   f.controller.setDraft('Inspect controlled context');
   await f.controller.send();
   const active = await until(

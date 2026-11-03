@@ -2,14 +2,30 @@ import { contextBridge, ipcRenderer } from 'electron';
 import { channels, unwrap, type ChatBridge, type Reply } from './chat/wire.ts';
 
 // The reviewed bridge uses separate channels; the main process still authenticates every request.
-const active = new Set<string>();
+const active = new Map<string, string>();
 const bridge: ChatBridge = {
-  context: async () =>
-    unwrap(await ipcRenderer.invoke(channels.call, { kind: 'context' })) as never,
-  async call(kind, operation, input, id) {
-    active.add(id);
+  targets: async () =>
+    unwrap(await ipcRenderer.invoke(channels.call, { kind: 'targets' })) as never,
+  chooseFolder: async () =>
+    unwrap(
+      await ipcRenderer.invoke(channels.call, { kind: 'choose-folder', backendId: 'local' }),
+    ) as never,
+  confirmQuit: async () =>
+    unwrap(
+      await ipcRenderer.invoke(channels.call, { kind: 'confirm-quit', backendId: 'local' }),
+    ) as never,
+  context: async (backendId = 'remote') =>
+    unwrap(await ipcRenderer.invoke(channels.call, { kind: 'context', backendId })) as never,
+  async call(kind, operation, input, id, backendId = 'remote') {
+    active.set(id, backendId);
     try {
-      const reply: Reply = await ipcRenderer.invoke(channels.call, { kind, operation, input, id });
+      const reply: Reply = await ipcRenderer.invoke(channels.call, {
+        kind,
+        operation,
+        input,
+        id,
+        backendId,
+      });
       if ((kind !== 'watch-chat' && kind !== 'watch-connection') || !reply.ok) active.delete(id);
       return reply;
     } catch (error) {
@@ -17,22 +33,23 @@ const bridge: ChatBridge = {
       throw error;
     }
   },
-  async cancel(id) {
+  async cancel(id, backendId = 'remote') {
     try {
-      return await ipcRenderer.invoke(channels.cancel, id);
+      return await ipcRenderer.invoke(channels.cancel, { id, backendId });
     } finally {
       active.delete(id);
     }
   },
   events(receive) {
-    const listener = (_: unknown, id: string, result: Reply) => receive(id, result);
+    const listener = (_: unknown, id: string, result: Reply, backendId: string) =>
+      receive(id, result, backendId);
     ipcRenderer.on(channels.event, listener);
     return () => ipcRenderer.off(channels.event, listener);
   },
 };
 // A committed document unload releases waits/observations, never remote execution.
 window.addEventListener('unload', () => {
-  for (const id of active) void bridge.cancel(id).catch(() => {});
+  for (const [id, backendId] of active) void bridge.cancel(id, backendId).catch(() => {});
   active.clear();
 });
 contextBridge.exposeInMainWorld('moonbaseChat', bridge);

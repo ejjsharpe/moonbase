@@ -4,6 +4,7 @@ import type { ObservationClose } from '@moonbase/contracts/common';
 import { normalizeApplicationError, runApplicationEffect } from '../../runtime/effect-client.ts';
 import { decodeChatInput } from '@moonbase/contracts/chat-schema';
 import type {
+  ChatCreationSettings,
   ChatClient,
   ChatCommand,
   ChatInput,
@@ -17,6 +18,8 @@ import type {
   ChatEntry,
 } from '@moonbase/contracts/chat';
 import type { ConnectionClient, ConnectionSnapshot } from '@moonbase/contracts/connection';
+import { makeProviderSetupController, type ProviderSetupController } from './providers.ts';
+import type { ProviderSetupClient } from '@moonbase/contracts/providers';
 import { decodeSaved, sameSession, sameTarget, type Saved, type Pending } from './saved.ts';
 export type { Pending } from './saved.ts';
 
@@ -25,6 +28,8 @@ export interface DraftStorage {
   write(value: string): void;
 }
 export type ChatState = {
+  mode: 'local' | 'remote';
+  ready: boolean;
   connection: ConnectionSnapshot | null;
   host: ChatHostConfiguration | null;
   chats: ChatSummary[];
@@ -42,7 +47,9 @@ export type ChatState = {
 };
 export type ChatDependencies = {
   chat: ChatClient;
-  connection: ConnectionClient;
+  mode?: 'local' | 'remote';
+  connection?: ConnectionClient;
+  providers?: ProviderSetupClient;
   context: ChatSession;
   storage: DraftStorage;
   newId?: () => string;
@@ -88,7 +95,9 @@ class ChatModelState {
   private runEffect!: <A>(effect: Effect.Effect<A, ApplicationError>) => Promise<A>;
   private bound = false;
   private readonly chat: ChatClient;
-  private readonly connection: ConnectionClient;
+  private readonly connection?: ConnectionClient;
+  readonly providers: ProviderSetupController | null;
+  private readonly mode: 'local' | 'remote';
   private readonly session: ChatSession;
   private storage: DraftStorage;
   private newId: () => string;
@@ -97,6 +106,12 @@ class ChatModelState {
     this.scope = scope;
     this.chat = dependencies.chat;
     this.connection = dependencies.connection;
+    this.mode = dependencies.mode ?? 'remote';
+    if (this.mode === 'remote' && !this.connection)
+      throw invalid('Remote chat requires a connection capability.');
+    this.providers = dependencies.providers
+      ? makeProviderSetupController(dependencies.providers)
+      : null;
     this.session = structuredClone(
       decodeChatInput('listChats', { session: dependencies.context }).session,
     );
@@ -115,13 +130,15 @@ class ChatModelState {
       if (this.raw !== null) {
         if (bytes(this.raw) > maximumSavedBytes)
           throw invalid('Saved chat data exceeds its bound. Preserve it for recovery.');
-        this.saved = decodeSaved(JSON.parse(this.raw), this.session);
+        this.saved = decodeSaved(JSON.parse(this.raw), this.session, this.mode);
       }
     } catch {
       storageError =
         'Saved chat data or storage is unavailable. Preserve the original data; no new mutation can start.';
     }
     this.state = {
+      mode: this.mode,
+      ready: false,
       connection: null,
       host: null,
       chats: [],
@@ -135,12 +152,18 @@ class ChatModelState {
       active: [],
       error: null,
       storageError,
-      notice: 'Disconnected. Connect explicitly; reconnect never resends a message.',
+      notice:
+        this.mode === 'local'
+          ? 'Local chat. Tools run on this computer; a working folder is not a filesystem sandbox.'
+          : 'Disconnected. Connect explicitly; reconnect never resends a message.',
     };
   }
   /** Composition fences admissions; retained command results may still reconcile. */
   setAdmissionsOpen(open: boolean) {
-    if (!this.closed) this.admissionsOpen = open;
+    if (!this.closed) {
+      this.admissionsOpen = open;
+      this.providers?.setAdmissionsOpen(open);
+    }
   }
   bind<R, E extends ApplicationError>(runtime: ManagedRuntime.ManagedRuntime<R, E>) {
     if (this.bound) throw invalid('Chat model already bound.');
@@ -179,7 +202,7 @@ class ChatModelState {
     if (this.closed) throw invalid('Chat model disposed.');
     if (this.state.storageError)
       throw new ApplicationError({ code: 'Persistence', message: this.state.storageError });
-    decodeSaved(next, this.session);
+    decodeSaved(next, this.session, this.mode);
     const raw = JSON.stringify(next);
     try {
       if (bytes(raw) > maximumSavedBytes || this.storage.read() !== this.raw) throw Error();
@@ -307,12 +330,16 @@ class ChatModelState {
   start(): Promise<void> {
     if (!this.admissionsOpen || this.attachment?.alive || this.closed) return Promise.resolve();
     const owner = (this.attachment = this.owner());
+    if (this.mode === 'local') {
+      this.generation = this.owner(owner);
+      return Promise.all([this.refresh(), this.providers?.refresh()]).then(() => {});
+    }
     let received = false;
     return this.action(
       'status',
       Effect.gen({ self: this }, function* () {
         yield* this.observe(owner, () =>
-          this.connection.watch(
+          this.connection!.watch(
             (state) => {
               if (owner.alive && this.attachment === owner) {
                 received = true;
@@ -326,7 +353,7 @@ class ChatModelState {
           ),
         );
         const state = yield* Effect.tryPromise({
-          try: (signal) => this.connection.command('getConnection', {}, { signal }),
+          try: (signal) => this.connection!.command('getConnection', {}, { signal }),
           catch: normalizeApplicationError,
         });
         if (owner.alive && !received) this.onConnection(state);
@@ -345,27 +372,28 @@ class ChatModelState {
       previous?.connectionId !== state.connectionId ||
       previous?.state !== state.state ||
       (state.state === 'connected' && !this.generation?.alive);
-    this.update({ connection: state });
+    this.update({ connection: state, ready: state.state === 'connected' });
     if (!changed) return;
     this.epoch++;
     void this.closeOwner(this.generation);
     this.generation = state.state === 'connected' ? this.owner(this.attachment) : undefined;
     this.selection = undefined;
     this.refreshOwner = undefined;
-    this.update({ snapshot: null, older: [], olderCursor: null, host: null });
+    this.update({ snapshot: null, older: [], olderCursor: null, host: null, ready: false });
     if (state.state === 'connected') void this.refresh();
   }
   connect = () =>
     this.action(
       'connect',
       Effect.gen({ self: this }, function* () {
+        if (this.mode === 'local') return;
         const state = this.state.connection;
         if (!state) return;
         const attachment = this.attachment,
           revision = this.connectionRevision;
         const connected = yield* Effect.tryPromise({
           try: (signal) =>
-            this.connection.command('connect', { profileId: state.profile.id }, { signal }),
+            this.connection!.command('connect', { profileId: state.profile.id }, { signal }),
           catch: normalizeApplicationError,
         });
         if (attachment === this.attachment && revision === this.connectionRevision)
@@ -376,16 +404,17 @@ class ChatModelState {
     this.action(
       'disconnect',
       Effect.gen({ self: this }, function* () {
+        if (this.mode === 'local') return;
         const id = this.state.connection?.connectionId;
         if (!id) return;
         yield* Effect.tryPromise({
-          try: (signal) => this.connection.command('disconnect', { connectionId: id }, { signal }),
+          try: (signal) => this.connection!.command('disconnect', { connectionId: id }, { signal }),
           catch: normalizeApplicationError,
         });
         const attachment = this.attachment,
           revision = this.connectionRevision;
         const state = yield* Effect.tryPromise({
-          try: (signal) => this.connection.command('getConnection', {}, { signal }),
+          try: (signal) => this.connection!.command('getConnection', {}, { signal }),
           catch: normalizeApplicationError,
         });
         if (attachment === this.attachment && revision === this.connectionRevision)
@@ -393,7 +422,9 @@ class ChatModelState {
       }),
     );
   private connected() {
-    if (this.state.connection?.state !== 'connected')
+    if (
+      this.mode === 'local' ? !this.generation?.alive : this.state.connection?.state !== 'connected'
+    )
       throw new ApplicationError({
         code: 'Unavailable',
         message: 'Connect to the configured host first.',
@@ -416,6 +447,11 @@ class ChatModelState {
       'refresh',
       Effect.gen({ self: this }, function* () {
         const host = yield* this.call('getChatHost', { host: this.session.host });
+        if ((this.mode === 'local') !== 'mode' in host)
+          throw new ApplicationError({
+            code: 'Incompatible',
+            message: 'Chat backend mode does not match this controller.',
+          });
         if (!sameSession(host, this.session))
           throw new ApplicationError({
             code: 'Incompatible',
@@ -425,9 +461,13 @@ class ChatModelState {
         if (!owner.alive || epoch !== this.epoch) return;
         this.update({
           host,
+          ready: true,
           chats: page.conversations,
           nextChats: page.nextCursor,
-          notice: 'Verified host. Reconnection reads saved state; it does not send.',
+          notice:
+            this.mode === 'local'
+              ? 'Local tools use this computer’s permissions. The selected folder is context, not a sandbox.'
+              : 'Verified host. Reconnection reads saved state; it does not send.',
         });
         if (this.saved.selected && !this.selection?.alive)
           yield* this.openSelected(this.saved.selected);
@@ -596,16 +636,24 @@ class ChatModelState {
     next.pending.push(pending);
     this.commit(next);
   }
-  create = (title: string) =>
+  create = (title: string, settings?: ChatCreationSettings) =>
     this.action(
       'create',
       Effect.gen({ self: this }, function* () {
         this.connected();
         if (!text(title, 200) || !title.trim())
           throw invalid('Use a chat title of 1–200 UTF-8 bytes.');
+        if ((this.mode === 'local') !== (settings !== undefined))
+          throw invalid('Choose folder/model settings for local chats only.');
+        const captured = decodeChatInput('createChat', {
+          session: this.session,
+          requestId: this.newId(),
+          title,
+          ...(settings ? { settings } : {}),
+        });
         const pending: Pending = {
           operation: 'createChat',
-          input: { session: structuredClone(this.session), requestId: this.newId(), title },
+          input: structuredClone(captured),
           message: 'Outcome pending. Original creation identity retained.',
         };
         this.reserve(pending);
@@ -797,7 +845,7 @@ class ChatModelState {
     this.generation = undefined;
     this.selection = undefined;
     this.refreshOwner = undefined;
-    this.update({ snapshot: null, older: [], olderCursor: null, host: null });
+    this.update({ snapshot: null, older: [], olderCursor: null, host: null, ready: false });
     return (this.detaching = this.closeOwner(owner));
   }
   private beginDisposal() {
@@ -824,6 +872,7 @@ class ChatModelState {
         const exits = yield* Effect.all(
           [
             Effect.exit(Scope.close(this.scope, Exit.void)),
+            Effect.exit(Effect.promise(() => this.providers?.dispose() ?? Promise.resolve())),
             ...[...this.observations].map((observation) =>
               Effect.promise(() => this.closeObservation(observation)),
             ),
@@ -853,6 +902,7 @@ export type ChatModel = ChatModelState;
 export type ChatController = Pick<
   ChatModelState,
   | 'context'
+  | 'providers'
   | 'getSnapshot'
   | 'subscribe'
   | 'start'

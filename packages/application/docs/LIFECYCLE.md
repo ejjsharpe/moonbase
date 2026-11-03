@@ -57,3 +57,9 @@ Hide differs from disposal. Keep editor presentation mounted for Monaco undo/vie
 ## Evidence
 
 `test/application.test.ts` exercises public factory composition, startup degradation/unwind, corrupt saved bytes, prompt veto, final-write reentrancy, every controller admission, workflow handles, opening/Quit races, head loss, namespace fencing and held/failing finalizers. Existing feature suites retain mutation uncertainty and exact publication/receipt coverage. `test/portable-runtime.test.ts` audits the actual browser graph of the public root. These are source/controlled checks; native/package, real-provider/SSH, accessibility and physical durability qualification remain separate.
+
+## Named chat targets and final confirmation
+
+As an alternative to `chat`, supply `chatTargets: [{id, label, acquire}]` and optional `defaultChatTargetId`. IDs must be distinct and the default must exist. Snapshots include `chatTargets` and `chatTargetId`; the existing `chat` controller/open/close API remains intact. `selectChatTarget(id)` preserves the old namespace, awaits its real controller/scope cleanup, then acquires the chosen target. A failed preservation/cleanup vetoes switching. It never Connects, Sends, retries mutations or Stops work. Each target supplies its own exact context and draft storage. Backend execution resources stay with the privileged root across switching/reload.
+
+Optional `confirmQuit(): Promise<boolean>` runs after editor preservation and final chat preservation, with all client admissions fenced. A false result restores admissions and the live phase. The head owns native confirmation and privileged inspection of all local work, including hidden tasks and unfinished admissions; it must restore its backend admission fence when cancelling or losing that document. Returning true leaves client admissions fenced through normal disposal. No Stop is added to shutdown.

@@ -1,5 +1,6 @@
 import { isAbsolute } from 'node:path';
 import * as Schema from 'effect/Schema';
+import type { ChatCreationSettings } from '@moonbase/contracts/chat';
 import type { Models } from '@earendil-works/pi-ai/models';
 import type { Registry } from '@earendil-works/pi-durable';
 import {
@@ -77,11 +78,25 @@ const request = Schema.Struct({
   submissionId: Schema.NullOr(recordId),
   pending: Schema.Boolean,
 });
+const localIdentity = Schema.Struct({ ...ChatSessionSchema.fields, mode: Schema.Literal('local') });
+const localProgrammatic = Schema.Struct({
+  ...localIdentity.fields,
+  databasePath: path,
+  models: programmatic.fields.models,
+  registry: programmatic.fields.registry,
+  approveCreation: Schema.optional(
+    Schema.declare<(settings: ChatCreationSettings) => Promise<void>>(
+      (value): value is (settings: ChatCreationSettings) => Promise<void> =>
+        typeof value === 'function',
+    ),
+  ),
+});
 const store = Schema.Struct({ identity: Schema.String });
 const metadata = Schema.Struct({
   identity: Schema.String,
   title: text(200),
   createdAt: text(64).check(Schema.makeFilter((value) => Number.isFinite(Date.parse(value)))),
+  settings: Schema.optional(Schema.Struct({ cwd: path, model })),
   pending: integer.check(Schema.makeFilter((value) => value >= 0)),
 });
 // Pi owns scan positions. Only Moonbase's envelope and start sentinel are interpreted here.
@@ -110,6 +125,7 @@ function decode<S extends Schema.ConstraintDecoder<unknown, never>>(
 }
 export const cliConfiguration = (value: unknown) => decode(cli, value);
 export const runtimeConfiguration = (value: unknown) => decode(programmatic, value);
+export const localConfiguration = (value: unknown) => decode(localProgrammatic, value);
 export const serverConfiguration = (value: unknown) => decode(server, value);
 export function cursorEnvelope(value: unknown) {
   const result = decode(cursor, value);
@@ -153,7 +169,7 @@ export function savedMetadata(value: unknown) {
 }
 function savedIdentity(value: string) {
   try {
-    decode(identity, JSON.parse(value), true);
+    decode(Schema.Union([identity, localIdentity]), JSON.parse(value), true);
   } catch {
     fail('Persistence', 'Stored Moonbase chat authority is invalid.');
   }

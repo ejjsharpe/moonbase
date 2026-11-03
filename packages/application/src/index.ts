@@ -1,5 +1,6 @@
 export {
   createMoonbaseApplication,
+  type NamedChatTarget,
   type MoonbaseApplication,
   type MoonbaseApplicationOptions,
   type MoonbaseApplicationSnapshot,
