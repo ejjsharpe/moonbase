@@ -65,14 +65,14 @@ export function WorkspaceLive(configuration: WorkspaceConfiguration) {
             Effect.try({ try: () => decodeNativeCapture(input), catch: applicationError }),
             (captured) =>
               workspace.effect(
-                (signal) => workspace.capture(captured, signal),
+                (signal) => workspace.references.capture(captured, signal),
                 false,
                 undefined,
-                (references) => workspace.release({ ...captured, references }),
+                (references) => workspace.references.release({ ...captured, references }),
               ),
           ),
         release: (input: { checkout: CheckoutTarget; clientId: string; references: string[] }) =>
-          Effect.try({ try: () => workspace.release(input), catch: applicationError }),
+          Effect.try({ try: () => workspace.references.release(input), catch: applicationError }),
       })),
     ),
   ).pipe(Layer.provide(resources));
