@@ -17,6 +17,8 @@ A macOS workbench for local editing and local/optional remote Pi Durable chat. R
 
 Packages consume public exports, accept injected dependencies and stay independent of client applications. Each process owns one scoped Effect runtime; standalone clients acquire only the capabilities they use. See [AGENTS.md](AGENTS.md) for contribution rules and [DESIGN.md](docs/DESIGN.md) for UI guidance.
 
+Pi remains one infrastructure owner. Its [private ownership map](packages/pi-runtime/docs/OWNERSHIP.md) separates command coordination, bounded history/live projection and scoped resource acquisition behind the existing layers and transport exports.
+
 Use [`createMoonbaseApplication`](packages/application/docs/LIFECYCLE.md) with injected clients, stable identities and synchronous storage for editor-only, chat-only or combined applications. Each application owns one client runtime and independent feature scopes; Electron main keeps its privileged runtime. The [direct headless consumer](packages/application/docs/HEADLESS-CONSUMER.md) demonstrates ordinary TypeScript use and the separate responsibilities of a future process/language adapter.
 
 The [architecture and baseline](docs/HEADLESS-ARCHITECTURE.md) records enforced ownership, public exports, helper decisions and compatibility evidence. The [epic delivery ledger](https://github.com/ejjsharpe/moonbase/issues/63#issuecomment-6585556403) tracks final review, source, controlled, native and packaged acceptance separately.

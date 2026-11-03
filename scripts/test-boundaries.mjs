@@ -122,15 +122,18 @@ assert.deepEqual(
 );
 assert(
   check({
-    'packages/pi-runtime/src/index.ts': "export * from './host.ts';",
+    'packages/pi-runtime/src/index.ts': "import './resources.ts';",
+    'packages/pi-runtime/src/resources.ts': "import './commands.ts';",
+    'packages/pi-runtime/src/commands.ts': "import './host.ts';",
     'packages/pi-runtime/src/host.ts': "import '@moonbase/application';",
     'packages/application/src/index.ts': '',
   }).some((error) => error.includes('reusable export reaches process root')),
 );
 assert(
   check({
-    'packages/pi-runtime/src/index.ts': "export * from './service.ts';",
-    'packages/pi-runtime/src/service.ts': "import type {} from '@moonbase/application';",
+    'packages/pi-runtime/src/index.ts': "import './resources.ts';",
+    'packages/pi-runtime/src/resources.ts': "import './commands.ts';",
+    'packages/pi-runtime/src/commands.ts': "import type {} from '@moonbase/application';",
     'packages/application/src/index.ts': '',
   }).some((error) => error.includes('reusable infrastructure')),
 );

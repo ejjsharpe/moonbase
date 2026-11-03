@@ -13,6 +13,14 @@ Reusable service exports consume `@moonbase/contracts` and focused Effect helper
 
 See [local runtime, setup, credentials and qualification](docs/LOCAL.md) for embedded desktop use. Local and remote scopes share their caller’s root runtime; layers create none.
 
+The runtime implementation stays private behind those exports:
+
+- `src/index.ts` keeps configuration types, layers and explicit service wiring.
+- `src/commands.ts` owns request authority, admission, reconciliation, exact Stop, watches and local activity inspection.
+- `src/history.ts` projects bounded lists, history and live task/tool snapshots from the acquired Harness and immutable authority values.
+- `src/resources.ts` validates configuration and acquires SQLite, storage, Harness, tool environments and root work/observation scopes in release order.
+- `src/documents.ts` owns the unchanged document families, exact IDs and shared metadata/settings checks; `src/runtime-types.ts` holds erased shared types. Existing private schemas and validation remain their own leaves.
+
 ## Host setup
 
 Use Node 26.13.0 and pinned workspace dependencies. Start the host separately on its machine:
@@ -59,3 +67,5 @@ bun run test:chat-integration
 ```
 
 Tests use controlled providers and temporary SQLite. The host baseline is separate from the compiled remote adapter's Electron 45.1.0 / Node 24.22.1 runtime check. These do not qualify real provider/SSH access, shipped host notices, packaged UI or human acceptance.
+
+`test/commands.test.ts` covers immutable requests, saved-data rejection, authority and restart; `test/history.test.ts` covers bounded history/live projection and failure/tool states; `test/lifecycle.test.ts` covers admission, cancellation, Stop, watches and acquisition/shutdown. Each case acquires its own fixture from `test/runtime-fixture.ts`; Node's test-file isolation keeps SDK mocks separate. `test/transport.test.ts` and `test/host-process.test.ts` retain transport and actual host-process coverage, including an audit of the compiled remote bundle's actual inputs. Local/provider/credential suites remain separate.

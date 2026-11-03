@@ -35,6 +35,8 @@ The first build failed because fresh worktrees lack `dist/tools/ripgrep/rg`. The
 
 Contracts never imports application, platform or presentation implementation. Application never imports Node, Electron, React/Monaco or an infrastructure implementation. A reusable service never imports application, even through a type-only import or a helper barrel. Cross-package imports use package public exports, including type-only and dynamic imports. Internal DTO/schema type cycles are allowed because clients use erased schema references; runtime file cycles and cross-package cycles including type-only edges are forbidden.
 
+Pi's `src/index.ts` retains public layer/configuration wiring; private `commands.ts`, `history.ts` and `resources.ts` separate command coordination, bounded projection and root acquisition. `documents.ts` owns the shared document families/authority checks and `runtime-types.ts` holds erased shared types. These stay in the same reusable infrastructure graph with no new exports or process-root exceptions. Fixed-settings and local layers share those owners; `host.ts`, `server.ts`, `remote.ts` and local provider/credential entries retain their existing roles. See [Pi ownership and finalizer order](../packages/pi-runtime/docs/OWNERSHIP.md).
+
 ## Public exports and helper decisions
 
 | Baseline export/implementation | Canonical owner/export | Ticket |
