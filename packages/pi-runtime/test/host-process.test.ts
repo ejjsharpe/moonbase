@@ -6,7 +6,8 @@ import { test } from 'node:test';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:net';
 import { randomBytes } from 'node:crypto';
@@ -306,13 +307,17 @@ test('compiled remote entry runs on Electron Node24 against the separate Node26 
     outfile: entry,
     metafile: true,
   });
-  const inputs = Object.keys(result.metafile!.inputs);
+  const inputs = Object.keys(result.metafile!.inputs).map((path) => resolve(path));
   assert(
     !inputs.some((path) =>
-      /pi-durable|pi-ai|chord|packages\/(workspace|editor)|pi-runtime\/src\/(index|host|server)\.ts/.test(
-        path,
-      ),
+      /pi-durable|pi-ai|chord|packages\/(workspace|workbench|editor)\//.test(path),
     ),
+  );
+  const sourceDirectory = fileURLToPath(new URL('../src/', import.meta.url));
+  assert.deepEqual(
+    inputs.filter((path) => path.startsWith(sourceDirectory)).sort(),
+    ['remote.ts', 'protocol.ts', 'validation.ts'].map((name) => join(sourceDirectory, name)).sort(),
+    'The remote bundle must contain only its transport, protocol and validation leaves.',
   );
   assert(
     !Object.values(result.metafile!.outputs).some((output) =>
