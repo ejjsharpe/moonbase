@@ -69,3 +69,5 @@ bun run test:chat-integration
 Tests use controlled providers and temporary SQLite. The host baseline is separate from the compiled remote adapter's Electron 45.1.0 / Node 24.22.1 runtime check. These do not qualify real provider/SSH access, shipped host notices, packaged UI or human acceptance.
 
 `test/commands.test.ts` covers immutable requests, saved-data rejection, authority and restart; `test/history.test.ts` covers bounded history/live projection and failure/tool states; `test/lifecycle.test.ts` covers admission, cancellation, Stop, watches and acquisition/shutdown. Each case acquires its own fixture from `test/runtime-fixture.ts`; Node's test-file isolation keeps SDK mocks separate. `test/transport.test.ts` and `test/host-process.test.ts` retain transport and actual host-process coverage, including an audit of the compiled remote bundle's actual inputs. Local/provider/credential suites remain separate.
+
+The [ownership extraction qualification](docs/VALIDATION.md) records exact revisions, fresh review, command results and unperformed checks.
