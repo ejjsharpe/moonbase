@@ -97,7 +97,6 @@ test('unclaimed references expire in their owning scope and cannot be imported a
         paths: [join(f.base, 'external')],
       });
     await runtime.runPromise(TestClock.adjust('5 minutes'));
-    await api.release({ checkout, clientId: 'alice', references });
     await assert.rejects(
       client.command('mutate', {
         checkout,
@@ -111,6 +110,53 @@ test('unclaimed references expire in their owning scope and cannot be imported a
       isError('Unauthorized'),
     );
     assert(!existsSync(join(f.root, 'never')));
+    await api.release({ checkout, clientId: 'alice', references });
+  } finally {
+    await runtime.dispose();
+    f.cleanup();
+  }
+});
+
+test('failed durable import reservation leaves native references unclaimed for the original retry', async () => {
+  const f = fixture(),
+    count = join(f.base, 'imports');
+  const helper = f.wrapper(`if [ "$1" = import ]; then printf 'import\\n' >> ${quote(count)}; fi`);
+  const { runtime, client } = f.start(helper);
+  try {
+    const checkout = await client.command('openCheckout', { root: f.root });
+    const source = join(f.base, 'external');
+    writeFileSync(source, 'native bytes');
+    const references = await native(runtime).capture({
+      checkout,
+      clientId: 'alice',
+      paths: [source],
+    });
+    const input = {
+      checkout,
+      clientId: 'alice',
+      id: 'reserved-import',
+      kind: 'import' as const,
+      sources: [],
+      nativeReferences: references,
+      destination: 'imported',
+    };
+    const lock = new DatabaseSync(join(f.base, 'state', 'moonbase-workspace-v1.sqlite'));
+    try {
+      lock.exec('BEGIN IMMEDIATE');
+      await assert.rejects(client.command('mutate', input), isError('Persistence'));
+      assert.equal(
+        await client.command('operationStatus', { clientId: 'alice', id: input.id }),
+        null,
+      );
+      assert(!existsSync(join(f.root, 'imported')));
+      assert(!existsSync(count), 'reservation failure must not run the import helper');
+    } finally {
+      lock.exec('ROLLBACK');
+      lock.close();
+    }
+    assert.equal((await client.command('mutate', input)).outcome, 'completed');
+    assert.equal(readFileSync(join(f.root, 'imported'), 'utf8'), 'native bytes');
+    assert.equal(readFileSync(count, 'utf8'), 'import\n');
   } finally {
     await runtime.dispose();
     f.cleanup();
