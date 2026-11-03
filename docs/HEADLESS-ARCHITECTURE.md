@@ -35,6 +35,8 @@ The first build failed because fresh worktrees lack `dist/tools/ripgrep/rg`. The
 
 Contracts never imports application, platform or presentation implementation. Application never imports Node, Electron, React/Monaco or an infrastructure implementation. A reusable service never imports application, even through a type-only import or a helper barrel. Cross-package imports use package public exports, including type-only and dynamic imports. Internal DTO/schema type cycles are allowed because clients use erased schema references; runtime file cycles and cross-package cycles including type-only edges are forbidden.
 
+Workspace keeps its public service/configuration identities and filesystem asset export. Internally, `workspace.ts` composes exact authority, admission/overlap leases, filesystem mutations and ordered root disposal. `recovery.ts` owns volatile/journal evidence, immutable replay, publication transactions and acknowledgment rules through the acquired Store and focused authority/predicates. `native-references.ts` owns unclaimed capture/expiry and admitted descriptor claim/release; `discovery.ts` owns read-only listing/Git/lookup; `observations.ts` owns scoped watcher/debounce resources and failed-release retries. These owners neither receive the workspace parent nor close its shared Store/directories/helpers. See the [private source/test map](../packages/workspace/README.md#private-ownership-and-tests). Storage, contracts, application and desktop lifecycle remain unchanged.
+
 ## Public exports and helper decisions
 
 | Baseline export/implementation | Canonical owner/export | Ticket |

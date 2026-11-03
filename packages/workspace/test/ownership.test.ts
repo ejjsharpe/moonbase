@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test, mock } from 'node:test';
 import fs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
-import { existsSync, readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { Effect, Layer, ManagedRuntime } from 'effect';
@@ -477,6 +477,90 @@ test('admitted cancellation retains its overlap lease and root resources until t
   }
 });
 
+test('root disposal retains claimed native descriptors and journal ownership until actual helper exit', async () => {
+  const f = fixture(),
+    ready = join(f.base, 'import-admitted'),
+    release = join(f.base, 'release-import');
+  const helper = f.wrapper(
+    `if [ "$1" = import ]; then\n (while [ ! -e ${quote(release)} ]; do /bin/sleep 0.01; done) &\n /usr/bin/touch ${quote(ready)}\n while :; do /bin/sleep 0.01; done\nfi`,
+  );
+  const { runtime, client } = f.start(helper);
+  let mutation: Promise<unknown> | undefined, closing: Promise<void> | undefined;
+  try {
+    const checkout = await client.command('openCheckout', { root: f.root });
+    const source = join(f.base, 'external');
+    writeFileSync(source, 'native bytes');
+    const references = await native(runtime).capture({
+      checkout,
+      clientId: 'alice',
+      paths: [source],
+    });
+    mutation = client.command('mutate', {
+      checkout,
+      clientId: 'alice',
+      id: 'held-import',
+      kind: 'import',
+      sources: [],
+      nativeReferences: references,
+      destination: 'imported',
+    });
+    void mutation.catch(() => {});
+    await waitFor(ready);
+    const sourceId = statSync(source).ino;
+    const descriptors = readdirSync('/dev/fd')
+      .map(Number)
+      .filter((fd) => {
+        try {
+          return fs.fstatSync(fd).ino === sourceId;
+        } catch {
+          return false;
+        }
+      });
+    assert.equal(descriptors.length, 1);
+    await native(runtime).release({ checkout, clientId: 'alice', references });
+    assert.equal(
+      fs.fstatSync(descriptors[0]).ino,
+      sourceId,
+      'document release cannot close a claimed descriptor',
+    );
+    assert.equal(
+      (await client.command('readFile', { checkout, path: 'file.txt' })).text,
+      'original',
+    );
+    let disposed = false;
+    closing = runtime.dispose().then(() => {
+      disposed = true;
+    });
+    await new Promise<void>((done) => setImmediate(done));
+    assert.equal(disposed, false);
+    assert.equal(
+      fs.fstatSync(descriptors[0]).ino,
+      sourceId,
+      'root must join helper exit before descriptor release',
+    );
+    writeFileSync(release, 'continue');
+    await closing;
+    await mutation.catch(() => {});
+    assert.throws(() => fs.fstatSync(descriptors[0]), { code: 'EBADF' });
+    const reopened = f.start();
+    try {
+      assert.equal(
+        (await reopened.client.command('operationStatus', { clientId: 'alice', id: 'held-import' }))
+          ?.outcome,
+        'uncertain',
+      );
+    } finally {
+      await reopened.runtime.dispose();
+    }
+  } finally {
+    writeFileSync(release, 'continue');
+    await mutation?.catch(() => {});
+    await closing?.catch(() => {});
+    await runtime.dispose();
+    f.cleanup();
+  }
+});
+
 test('saved baseline hashes and embedded publication item objects reject corruption without rewriting', async () => {
   const f = fixture(),
     { runtime, client } = f.start();
@@ -744,6 +828,49 @@ test('mutation cancellation during preflight reserves no ID and consumes no nati
       );
     }
   } finally {
+    await runtime.dispose();
+    f.cleanup();
+  }
+});
+
+test('watch acquisition leaves unrelated commands responsive and root disposal closes every acquired watcher', async () => {
+  const f = fixture(),
+    { runtime, client } = f.start();
+  const actualWatch = fs.watch;
+  let acquired!: () => void, failed!: (error: unknown) => void;
+  const acquiring = new Promise<void>((resolve, reject) => {
+    acquired = resolve;
+    failed = reject;
+  });
+  let opened = 0,
+    closed = 0,
+    delivered = 0;
+  let stop = async () => {};
+  try {
+    const checkout = await client.command('openCheckout', { root: f.root });
+    const paths = Array.from({ length: 32 }, (_, i) => 'directory-' + i);
+    for (const path of paths) mkdirSync(join(f.root, path));
+    mock.method(fs, 'watch', (...args: Parameters<typeof fs.watch>) => {
+      const watcher: fs.FSWatcher = Reflect.apply(actualWatch, fs, args);
+      opened++;
+      watcher.once('close', () => closed++);
+      acquired();
+      return watcher;
+    });
+    syncBuiltinESMExports();
+    stop = client.watch({ checkout, paths }, () => delivered++, failed);
+    await acquiring;
+    const entries = await client.command('inspectEntries', { checkout, paths: ['file.txt'] });
+    assert.equal(entries[0].directory, false);
+    assert(opened < paths.length, 'unrelated command completes during acquisition');
+    assert.equal(delivered, 0, 'subscription is still acquiring');
+    await Promise.all([stop(), runtime.dispose()]);
+    assert.equal(closed, opened);
+    assert.equal(delivered, 0);
+  } finally {
+    mock.restoreAll();
+    syncBuiltinESMExports();
+    await stop();
     await runtime.dispose();
     f.cleanup();
   }
