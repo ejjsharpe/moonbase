@@ -100,6 +100,27 @@ test('public bridge preserves Uncertain and exact pending payload; preaborted ca
   assert.equal(f.calls, 1);
   await f.owner.dispose();
 });
+test('provider browser replies project private fields and reject malformed status', async () => {
+  let value: unknown = { providers: [], flow: null, privateToken: 'private-token' };
+  const client = browserClients(
+    {
+      context: async () => context,
+      call: async (kind, operation, input, _id, backendId) => {
+        assert.equal(kind, 'providers');
+        assert.equal(operation, 'getProviders');
+        assert.equal(backendId, 'local');
+        assert.deepEqual(input, {});
+        return { ok: true, value };
+      },
+      cancel: async () => ({ ok: true, value: null }),
+      events: () => () => {},
+    },
+    'local',
+  ).providers;
+  assert.deepEqual(await client.command('getProviders', {}), { providers: [], flow: null });
+  value = { providers: [], flow: { id: 'incomplete' } };
+  await assert.rejects(client.command('getProviders', {}), { code: 'Incompatible' });
+});
 test('desktop bridge admits maximum escaped chat text and still rejects oversized input before dispatch', async () => {
   const f = fixture();
   const client = browserClients({

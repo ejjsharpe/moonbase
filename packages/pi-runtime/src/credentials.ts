@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { mkdir, lstat, open, rename, unlink } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
+import * as Schema from 'effect/Schema';
 import type { CreateModelsOptions } from '@earendil-works/pi-ai/models';
 import { ApplicationError } from '@moonbase/contracts/errors';
 
@@ -18,28 +19,35 @@ const failure = () =>
     message:
       'Encrypted provider credentials could not be read or saved. Existing files were retained. Unlock your keychain and retry.',
   });
+const credentialSchema = Schema.NullOr(
+  Schema.Union([
+    Schema.Struct({
+      type: Schema.Literal('api_key'),
+      key: Schema.String.check(Schema.makeFilter((value) => !!value.trim())),
+    }),
+    // OAuth providers own extension metadata such as clientId and scopes.
+    Schema.StructWithRest(
+      Schema.Struct({
+        type: Schema.Literal('oauth'),
+        access: Schema.NonEmptyString,
+        refresh: Schema.NonEmptyString,
+        expires: Schema.Finite,
+      }),
+      [Schema.Record(Schema.String, Schema.Unknown)],
+    ),
+  ]),
+);
 function decodeCredential(value: unknown): Credential | undefined {
-  if (value === null) return undefined;
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw failure();
-  const v = value as Record<string, unknown>;
-  if (v.type === 'api_key') {
-    if (
-      Object.keys(v).some((key) => !['type', 'key'].includes(key)) ||
-      typeof v.key !== 'string' ||
-      !v.key.trim()
-    )
-      throw failure();
-  } else if (
-    v.type !== 'oauth' ||
-    typeof v.access !== 'string' ||
-    !v.access ||
-    typeof v.refresh !== 'string' ||
-    !v.refresh ||
-    typeof v.expires !== 'number' ||
-    !Number.isFinite(v.expires)
-  )
+  try {
+    return (
+      Schema.decodeUnknownSync(credentialSchema, {
+        onExcessProperty: 'error',
+        reportInput: false,
+      })(value) ?? undefined
+    );
+  } catch {
     throw failure();
-  return value as Credential;
+  }
 }
 async function protectStorage<A>(operation: () => Promise<A>): Promise<A> {
   try {

@@ -36,7 +36,7 @@ bun run test
 bun run format:check
 ```
 
-The root source test command runs package suites serially because concurrent native/process fixtures can delay filesystem watcher delivery beyond its existing deadline. Each package retains its own test concurrency and timeouts.
+The root source test command checks repository scripts, then runs package suites serially because concurrent native/process fixtures can delay filesystem watcher delivery beyond its existing deadline. Each package retains its own test concurrency and timeouts.
 
 Package READMEs cover setup and focused checks. The [editor/workspace](tests/editor-workspace/README.md) and [chat](tests/chat/README.md) suites test cross-module integration. Generated test output belongs in ignored `test-results/`; build/package output belongs in `dist/` and `release/`.
 

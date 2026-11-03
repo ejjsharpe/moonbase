@@ -100,8 +100,7 @@ export function browserClients(
     options?.signal?.addEventListener('abort', cancel, { once: true });
     try {
       const value = unwrap(await bridge.call(kind, operation, input, id, backendId));
-      if (kind === 'providers' && isProviderCommand(operation))
-        return decodeProviderOutput(operation, value);
+      if (kind === 'providers' && isProviderCommand(operation)) return value;
       if (kind === 'chat' && isChatCommand(operation)) return decodeChatOutput(operation, value);
       if (kind === 'connection' && isConnectionCommand(operation))
         return decodeConnectionOutput(operation, value);

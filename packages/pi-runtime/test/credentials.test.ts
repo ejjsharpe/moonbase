@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { ApplicationError } from '@moonbase/contracts/errors';
 import { createCredentialStore } from '../src/credentials.ts';
 
 test('credential persistence encrypts privately, serializes refresh and retains originals on encryption/storage failure', async (t) => {
@@ -35,6 +36,27 @@ test('credential persistence encrypts privately, serializes refresh and retains 
   assert.equal((await stat(path)).mode & 0o777, 0o600);
   assert.deepEqual(await store.list(), [{ providerId: 'openai-api-key', type: 'api_key' }]);
   assert.deepEqual(await store.read('openai-api-key'), original);
+  for (const value of [
+    [],
+    {},
+    { type: 'api_key', key: '   ' },
+    { type: 'api_key', key: 'private-schema-secret', extra: true },
+    { type: 'oauth', access: '', refresh: 'refresh', expires: 0 },
+    { type: 'oauth', access: 'access', refresh: '', expires: 0 },
+    { type: 'oauth', access: 'private-schema-secret', refresh: 'refresh' },
+    { type: 'oauth', access: 'access', refresh: 'refresh', expires: Infinity },
+  ]) {
+    await assert.rejects(
+      store.modify('openai-api-key', async () => value as never),
+      (error: unknown) => {
+        assert(ApplicationError.is(error));
+        assert.equal(error.code, 'Persistence');
+        assert(!String(error).includes('private-schema-secret'));
+        return true;
+      },
+    );
+    assert.deepEqual(await readFile(path), bytes);
+  }
   broken = true;
   await assert.rejects(
     store.modify('openai-api-key', async () => ({ type: 'api_key', key: 'replacement' })),
@@ -78,6 +100,8 @@ test('credential persistence encrypts privately, serializes refresh and retains 
     }),
   );
   assert.deepEqual(await readFile(join(directory, 'openai.encrypted')), before);
+  await store.delete('openai');
+  assert.equal(await store.read('openai'), undefined);
   await writeFile(path, Buffer.from('malformed ciphertext'));
   await assert.rejects(store.modify('openai-api-key', async () => original));
   assert.equal((await readFile(path)).toString(), 'malformed ciphertext');
