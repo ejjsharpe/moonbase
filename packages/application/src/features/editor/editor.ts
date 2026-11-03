@@ -309,7 +309,13 @@ class EditorModelState {
         .filter((value) => !value.acknowledged)
         .map((value) => structuredClone(value.result)),
     };
-    for (const listener of this.listeners) listener();
+    for (const listener of this.listeners) {
+      try {
+        listener();
+      } catch {
+        /* A view cannot interrupt recovery preservation or owned editor work. */
+      }
+    }
   }
   report = (error: unknown) => {
     if (this.closing || (ApplicationError.is(error) && this.obsoleteReadErrors.has(error))) return;

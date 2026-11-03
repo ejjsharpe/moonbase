@@ -61,6 +61,55 @@ test('public factory composes independent editors and optional chat without remo
   }
 });
 
+for (const failure of ['once', 'always'] as const)
+  test(`throwing editor subscribers cannot block notifications or automatic recovery (${failure})`, async () => {
+    const editor = editorCapabilities();
+    const app = await createMoonbaseApplication({
+      editors: [{ client: editor.client, clientId: 'one' }],
+    });
+    let stopThrowing = () => {},
+      stopCounting = () => {};
+    try {
+      const [model] = app.editors;
+      await model.openCheckout(checkout.root);
+      await model.open(target);
+      await model.flush();
+      const publications = editor.memory.stats.publications;
+      let attempts = 0,
+        notifications = 0;
+      stopThrowing = model.subscribe(() => {
+        if (++attempts === 1 || failure === 'always') throw Error('Controlled view failure');
+      });
+      stopCounting = model.subscribe(() => {
+        notifications++;
+      });
+
+      assert.doesNotThrow(() => model.edit(target, 'Automatically preserved despite view failure'));
+      assert.equal(notifications, 1, 'later subscribers run synchronously');
+      assert.equal(model.getSnapshot().recoveryReady, false);
+      assert.equal(app.canUnload(), false);
+      for (let attempt = 0; attempt < 100 && !model.getSnapshot().recoveryReady; attempt++)
+        await new Promise<void>((resolve) => setTimeout(resolve, 10));
+
+      assert.equal(model.getSnapshot().recoveryReady, true);
+      assert.equal(app.canUnload(), true);
+      assert(attempts > 1, 'subscriber remains installed during publication');
+      assert.equal(notifications, attempts);
+      assert.equal(editor.memory.stats.publications, publications + 1);
+      const saved = await editor.client.command('loadRecovery', { clientId: model.clientId });
+      assert.equal(saved.state.drafts.length, 1);
+      assert.deepEqual(saved.state.drafts[0].target, target);
+      assert.equal(saved.state.drafts[0].text, 'Automatically preserved despite view failure');
+      assert.equal(model.buffer(target)?.text, saved.state.drafts[0].text);
+      assert.deepEqual(model.getSnapshot().errors, []);
+    } finally {
+      stopThrowing();
+      stopCounting();
+      await app.dispose();
+      await editor.runtime.dispose();
+    }
+  });
+
 test('throwing chat view subscribers cannot veto unload or Quit after a successful draft write', async () => {
   const chat = chatCapabilities();
   const app = await createMoonbaseApplication({ chat: async () => chat.dependencies });
