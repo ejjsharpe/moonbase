@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { isPrivilegedDesktopInput } from '../../../scripts/boundaries.mjs';
 import { build } from 'esbuild';
 import { createRequire } from 'node:module';
 import { cp, mkdir, rm, writeFile, readFile, stat } from 'node:fs/promises';
@@ -69,6 +70,13 @@ for (const inputs of [mainInputs, preloadInputs, rendererInputs]) {
 }
 for (const inputs of [preloadInputs, rendererInputs]) {
   assert.deepEqual(
+    inputs.filter((path) =>
+      isPrivilegedDesktopInput(path.startsWith('src/') ? `apps/desktop/${path}` : path),
+    ),
+    [],
+    'Privileged desktop owner reached a browser boundary',
+  );
+  assert.deepEqual(
     inputs.filter((p) =>
       /@earendil-works|pi-runtime\/src\/(?:index|providers|credentials|local-models)\.ts|node:sqlite/.test(
         p,
@@ -88,6 +96,8 @@ for (const entry of [
     mainInputs.some((path) => path.endsWith(entry)),
     `Missing privileged local runtime input: ${entry}`,
   );
+for (const entry of ['native-actions', 'ipc', 'window-lifecycle', 'chat-backends'])
+  assert(mainInputs.includes(`src/main/${entry}.ts`), `Missing main owner: ${entry}`);
 const packages = await notices(
   [...Object.keys(main.metafile.inputs), ...Object.keys(preload.metafile.inputs)]
     .map((p) => resolve(root, p))
