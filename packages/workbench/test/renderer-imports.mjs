@@ -31,8 +31,16 @@ assert.deepEqual(
   [],
 );
 assert(inputs.some((path) => path.includes('monaco-editor')));
-for (const entry of ['src/shell/workbench.tsx', 'src/editor/workbench.tsx', 'src/chat/view.tsx'])
-  assert(inputs.includes(entry), `Missing shared presentation: ${entry}`);
+assert(inputs.includes('src/editor/workbench.tsx'), 'Missing project editor presentation');
+assert.deepEqual(
+  inputs.filter((path) =>
+    /application\/src\/(?:features\/chat\/|runtime\/composition\.ts)|contracts\/src\/(?:chat|connection|host)(?:-schema)?\.ts|src\/(?:chat|shell)\//.test(
+      path,
+    ),
+  ),
+  [],
+  'Application navigation or Chat reached the project workbench',
+);
 console.log(
   `Renderer browser bundle checked: ${inputs.length} inputs, browser-safe Effect permitted, no privileged implementations; ${result.outputFiles.reduce((size, file) => size + file.contents.length, 0)} emitted bytes.`,
 );

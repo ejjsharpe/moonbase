@@ -24,7 +24,7 @@ Renderers receive browser-safe clients. Native/transport adapters validate and a
 
 See [Effect invocation and observation cleanup](docs/SCHEMAS.md), [contract schema policies](../contracts/docs/SCHEMAS.md), [chat admission/RPC](../contracts/docs/CHAT.md), [host authentication](../contracts/docs/HOST-PROTOCOL.md) and [recovery publications](../contracts/docs/RECOVERY-PUBLICATIONS.md).
 
-The [headless editor](docs/EDITOR.md) acquires once in a supplied scope and binds to the caller's runtime. `@moonbase/workbench` presents the supplied application, owns the shared project/Chat shell and keeps editor presentation internal. Synchronous snapshots/recovery readiness, exact close prompts and awaitable disposal retain their existing contracts; unmounting presentation never owns model lifetime.
+The [headless editor](docs/EDITOR.md) acquires once in a supplied scope and binds to the caller's runtime. `@moonbase/workbench` presents a supplied editor controller and exact project/checkout. Consuming apps own main navigation, layout and separate Chat presentation. Synchronous snapshots/recovery readiness, exact close prompts and awaitable disposal retain their existing contracts; unmounting presentation never owns model lifetime.
 
 ```sh
 bun run --cwd packages/application typecheck

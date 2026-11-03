@@ -1,4 +1,27 @@
-# Shared workbench delivery evidence
+# Workbench delivery evidence
+
+The shared-shell extraction below is historical evidence. The project-only follow-up moves navigation, Chat, startup presentation and the shell browser fixture into desktop. Current workbench exports receive an editor controller and exact checkout; the package source and emitted graph reject Chat/application composition dependencies. Follow-up verification is recorded separately from the original results.
+
+## Project-only follow-up (2026-11-03)
+
+Workbench now takes an editor controller and exact checkout. Desktop owns navigation, Chat presentation/visibility, startup failures and Quit routing. `renderLayout({ explorer, editor })` supports app-owned placement or editor-only presentation; the default explorer/editor layout remains resizable. Find File is scoped to the supplied checkout. Headless features, runtime acquisition, native authority and saved/wire formats are unchanged.
+
+| Check | Follow-up result |
+| --- | --- |
+| `bun run check:foundation` | Pass; source ownership, negative fixtures, public graphs and fixed compatibility bytes |
+| `NX_DAEMON=false bun run typecheck` | Pass, 8 tasks (5 cached) |
+| Root lint, formatting and `git diff --check` | Pass |
+| Workbench `check:renderer`, `build`, `test:ui` | Pass; 1,829 library inputs; 44 browser tests including project isolation and editor-only layout |
+| Desktop `test:browser` | Pass, 13/13; moved shell/Chat regressions, including navigation, focus/undo, Quit and held/failing cleanup |
+| Desktop `test` | Pass, 28/28 source tests |
+| Desktop `build`, `check:renderer` | Pass; 1,862 actual renderer inputs, five workers/font and upstream notices retained |
+| Desktop `test:composition --grep 'dirty editor/live chat|captured Quit keeps|closing Chat removes'` | Pass, 3/3 focused Electron cases with temporary repositories and faux chat services |
+
+The two new layout/project browser cases were rechecked after strengthening completed-search and keyboard empty-editor/reopen assertions. Default layout screenshots were inspected. Logs are `/private/tmp/moonbase-{workbench,desktop}-*.log` and `/private/tmp/moonbase-typecheck.log`. The sandbox blocked local fixture sockets and the build's pinned license fetch; reruns with the required access passed. An initial overlapping shell run timed out during a repeated Cancel/Discard close; the isolated close cases and final serial 13-case shell suite passed.
+
+The full repository source suite, complete native suite and packaged application were not rerun for this follow-up. Historical packaged/native results below do not qualify this tree. Configurable docking, panel drag-and-drop, real providers/SSH, OS gestures and accessibility acceptance remain outside these checks; this change supplies only the composition boundary.
+
+## Historical shared-shell extraction
 
 Issue [#85](https://github.com/ejjsharpe/moonbase/issues/85) was implemented on the working tree based on integrated `main` revision `715fef33f9aaa02b1b290d1732b082faffa0b4af`. GitHub's default branch matched that checkout at the start; the tree was clean. The delivered #46/#63 work was already integrated, including the application-owned lifecycle and thin headless client seams. This refactor preserves those domain/runtime responsibilities.
 

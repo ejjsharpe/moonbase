@@ -1,6 +1,6 @@
-# Browser workbench
+# Project workbench
 
-`@moonbase/workbench` owns the shared React shell, project/Chat navigation and internal editor/chat presentation. It renders supplied headless application controllers using Base UI, StyleX and Monaco. It installs no model, runtime, desktop bridge or backend capability. Application owns buffers, recovery, exact Save/Discard/Cancel prompts, feature acquisition and cleanup.
+`@moonbase/workbench` presents one supplied project/checkout using a headless editor controller. It owns the file sidebar, buffers/file tabs, comparisons, Monaco, file lookup and editor dialogs. It installs no model, runtime, desktop bridge or backend capability. Application owns buffers, recovery, exact Save/Discard/Cancel decisions and cleanup.
 
 ## Use
 
@@ -8,29 +8,39 @@
 import { Workbench, type WorkbenchHandle } from '@moonbase/workbench';
 import { configureMonacoWorkers } from '@moonbase/workbench/workers';
 
-// The browser root acquires one application and configures workers once.
+// The browser root acquires the controller and configures workers once.
 configureMonacoWorkers();
-<Workbench application={application} ref={handle} selectCheckout={chooseApprovedRoot} />;
+<Workbench controller={editor} checkout={checkout} ref={handle} />;
 ```
 
-The workbench presents the application's first editor and optional Chat, or a chat-only application. Use separate applications for independent workbench clients, each with a distinct stable editor recovery identity. The shell derives project tabs from the controller's exact open-checkout identities and keeps only the visible destination locally; it persists no competing project list. File tabs, tree, comparisons and Monaco remain internal editor features.
+Pass the exact open `CheckoutTarget`, including project, host and checkout identity, or `undefined` for the empty view. The workbench renders that checkout independently of the controller's selected checkout. File lookup stays within it. `renderLayout({ explorer, editor })` optionally arranges or omits the supplied views; the default renders a resizable explorer beside the editor. This layout seam shares the same controller and dialogs without exposing internal component state. The consumer owns project selection and supplies a new checkout when navigating; it should keep the workbench mounted to retain Monaco models, undo, selections, comparisons and view positions. Independent editor clients need distinct stable recovery identities.
 
 | Export | Purpose |
 | --- | --- |
-| `.` | `Workbench`, props/handle and `WorkbenchStartupFailure` presentation |
+| `.` | `Workbench`, `WorkbenchProps` and `WorkbenchHandle` |
 | `./workers` | Five Monaco workers for browser roots with Vite-compatible `?worker` support |
 
-Inject only today's native selection capabilities: `selectCheckout`, `selectNativeImports`, `selectClipboardImports` and `selectDroppedImports`. Native imports return approved opaque references, never raw OS source paths. Picker, clipboard, drop and `WorkbenchHandle.importFiles(checkout, references)` share the editor's destination/replacement dialog and capture the exact checkout before asynchronous selection. The consumer retains approval, validation, private configuration and synchronous chat storage.
+`selectNativeImports(checkout)` returns approved opaque native references, never raw OS source paths. Native picker selection and `WorkbenchHandle.importFiles(checkout, references)` share the editor's destination/replacement dialog and capture the exact checkout before asynchronous selection. Consumers route clipboard/drop selections through that handle. Approval and trust-boundary validation remain with the platform and workspace.
 
-## View and application lifetime
+`WorkbenchHandle.keyDown/keyUp` lets a consumer forward shortcuts from its own project navigation. The workbench handles keys within its own view. Consumers can forward unhandled bubbling events from their navigation, checking `event.defaultPrevented`; handled editor shortcuts stop propagation. `visible={false}` suppresses hidden Monaco position writes; the consumer hides the containing panel. Unmount cancels an outstanding close prompt and releases presentation resources, without disposing the controller.
 
-Project select/close delegates to `selectCheckout`/`closeCheckout`; Chat close/reopen delegates to `application.closeChat/openChat`. Cancel retains work, while pending/failing Chat cleanup remains visible and blocks namespace reuse. Unavailable, initialization-failed and opening Chat remain visible, with explicit retry where available.
+## Composition and lifecycle
 
-The single editor stays mounted across project and Chat navigation, retaining Monaco models, undo, selections, comparisons and view positions. Mouse selection restores content focus; keyboard navigation retains tab focus. Editor shortcuts also work from focused project tabs. Hidden editor shortcuts do not handle Chat input. Chat observation detaches/resumes with visibility without Stop or mutation replay.
+```tsx
+<Workbench
+  controller={editor}
+  checkout={checkout}
+  renderLayout={({ explorer, editor }) => (
+    <ProjectLayout tools={explorer} content={editor} />
+  )}
+/>
+```
 
-`WorkbenchHandle.prepareQuit()` reveals the editor's exact prompts and uncertainty controls, delegates to `application.prepareQuit()` and reveals Chat preservation failures. Use it for the platform Quit presentation handoff. Application remains authoritative for preservation and admission fencing. The platform retains synchronous `canUnload()` vetoes, native action subscriptions, matching Quit/disposal acknowledgments, root unmount and awaited `application.dispose()`. `closing` makes presentation inert after platform consent; prepared/disposed application phases also fence the view.
+`ProjectLayout` is supplied by the consuming app. It can place the explorer in either sidebar, or render only the editor; the workbench retains shared editor dialogs and shortcuts.
 
-Unmount cancels an outstanding close prompt and releases presentation resources; it never owns application disposal. See [application lifecycle](../application/docs/LIFECYCLE.md) and [desktop handoff](../../apps/desktop/docs/LIFECYCLE.md).
+The consuming app owns main navigation, custom project layout, adjacent panels and cross-panel interactions. Use `renderLayout` to position the explorer and editor in app-owned containers; omitting the explorer leaves keyboard file lookup and editing available. For example, desktop composes this workbench and its separate Chat view, routes project/Chat navigation and controls observation visibility. A chat sidebar can be placed alongside the workbench without coupling their feature code. Workbench has no Chat or application lifecycle dependency.
+
+The consumer reveals the editor before calling `application.prepareQuit()` so exact close prompts and uncertainty controls remain available, and routes preservation failures to the relevant feature. It retains `canUnload()` vetoes, inert presentation after consent, native acknowledgments, unmount and awaited `application.dispose()`. See [application lifecycle](../application/docs/LIFECYCLE.md) and [desktop handoff](../../apps/desktop/docs/LIFECYCLE.md).
 
 ## Checks
 
@@ -45,6 +55,6 @@ bun run --cwd packages/workbench test:ui
 bun run --cwd packages/workbench demo
 ```
 
-The browser demo renders the real shared shell with memory workspace and optional faux Chat (`/?chat`), without Electron globals. The two clients retain independent buffers/recovery. Save/recovery race demos and existing editor regressions remain under `demo/` and `test/`; the shell suite adds mixed tabs, keyboard/focus, view/undo retention, close decisions, optional Chat retry, held/failing cleanup and Quit from Chat. This proves browser presentation portability, not a production web client or durable browser filesystem.
+The browser demo renders two project workbenches with independent buffers/recovery and no Electron globals. Save/recovery race fixtures compose their own project selection outside the workbench. Editor/import regressions cover exact identities, focus, disposal and uncertain publications. Desktop owns the browser shell/Chat fixture and regressions (`bun run --cwd apps/desktop test:browser`).
 
-Headless source suites remain in application. The [editor/workspace](../../tests/editor-workspace/README.md) and [chat](../../tests/chat/README.md) suites exercise real controlled IO through public boundaries. Desktop separately qualifies native and packaged execution. Distribution must retain notices for actual dependencies, including Monaco workers/fonts. See [delivery evidence](docs/VALIDATION.md) for this refactor's commands and limitations.
+Headless source suites remain in application. The [editor/workspace](../../tests/editor-workspace/README.md) and [chat](../../tests/chat/README.md) suites exercise controlled IO through public boundaries. Desktop separately qualifies native and packaged execution. Browser fixtures do not establish production web storage or transport, real SSH/providers, OS gestures or VoiceOver. Distribution must retain notices for actual dependencies, including Monaco workers/fonts. See [delivery evidence](docs/VALIDATION.md).

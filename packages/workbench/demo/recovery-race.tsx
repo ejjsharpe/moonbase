@@ -1,6 +1,11 @@
 import { createMoonbaseApplication } from '@moonbase/application';
 import { makeEditorModel, makeEditorController } from '@moonbase/application/editor';
 import { createRoot } from 'react-dom/client';
+import { useSyncExternalStore } from 'react';
+import { Tabs } from '@base-ui/react/tabs';
+import * as stylex from '@stylexjs/stylex';
+import { controls } from '@moonbase/ui/controls';
+import { workbench } from '@moonbase/ui/workbench';
 import { Effect, Exit, Scope, ManagedRuntime } from 'effect';
 const modelScope = Scope.makeUnsafe();
 import { ApplicationError, type CommandInput } from '@moonbase/contracts/workspace';
@@ -136,11 +141,37 @@ const application = await createMoonbaseApplication({
     ],
   }),
   editor = application.editors[0]!;
-createRoot(document.getElementById('root')!).render(
-  <div style={{ height: '100vh' }}>
-    <Workbench application={application} />
-  </div>,
-);
+function RecoveryRace() {
+  const { recovery } = useSyncExternalStore(editor.subscribe, editor.getSnapshot);
+  const checkout = recovery.checkouts.find(
+    (item) => item.checkoutId === recovery.selectedCheckoutId,
+  );
+  return (
+    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
+      <Tabs.Root
+        value={checkout?.checkoutId}
+        onValueChange={(id) => {
+          const target = recovery.checkouts.find((item) => item.checkoutId === id);
+          if (target) void editor.selectCheckout(target).catch(editor.report);
+        }}>
+        <Tabs.List aria-label="Demo projects" {...stylex.props(workbench.projectTabs)}>
+          {recovery.checkouts
+            .filter((item) => recovery.openCheckoutIds.includes(item.checkoutId))
+            .map((item) => (
+              <Tabs.Tab
+                key={item.checkoutId}
+                value={item.checkoutId}
+                {...stylex.props(controls.button)}>
+                {item.checkoutId} · {item.branch}
+              </Tabs.Tab>
+            ))}
+        </Tabs.List>
+      </Tabs.Root>
+      <Workbench controller={editor} checkout={checkout} />
+    </div>
+  );
+}
+createRoot(document.getElementById('root')!).render(<RecoveryRace />);
 declare global {
   interface Window {
     recoveryRace: {

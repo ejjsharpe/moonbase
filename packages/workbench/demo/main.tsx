@@ -1,5 +1,4 @@
 import { createMoonbaseApplication } from '@moonbase/application';
-import { chatCapabilities } from './chat.ts';
 import { createRoot } from 'react-dom/client';
 import { createRef, StrictMode, useState } from 'react';
 import { ManagedRuntime } from 'effect';
@@ -46,14 +45,8 @@ const memory = memoryWorkspace([
 // One demo composition root. Feature packages do not construct runtimes.
 const runtime = ManagedRuntime.make(memory.layer),
   client = makeEditorClient(runtime);
-const chat = chatCapabilities();
-let failChat = new URLSearchParams(location.search).has('fail-chat');
 const firstApplication = await createMoonbaseApplication({
     editors: [{ client, clientId: 'demo-first' }],
-    chat: async () => {
-      if (failChat) throw Error('Controlled Chat initialization failure');
-      return new URLSearchParams(location.search).has('chat') ? chat.dependencies : null;
-    },
   }),
   secondApplication = await createMoonbaseApplication({
     editors: [{ client, clientId: 'demo-second' }],
@@ -148,18 +141,20 @@ function Demo() {
         <section aria-label="First editor" hidden={!visible} {...stylex.props(styles.editor)}>
           <Workbench
             ref={firstHandle}
-            application={firstApplication}
-            selectCheckout={() => window.demo.selectCheckout()}
-            selectClipboardImports={(checkout) => window.demo.selectClipboardImports(checkout)}
-            selectDroppedImports={(checkout, files) =>
-              window.demo.selectDroppedImports(checkout, files)
+            controller={first}
+            checkout={checkout}
+            visible={visible}
+            renderLayout={
+              new URLSearchParams(location.search).has('editor-only')
+                ? ({ editor }) => editor
+                : undefined
             }
             selectNativeImports={() => window.demo.selectNativeImports()}
           />
         </section>
         {!disposed && (
           <section aria-label="Second editor" {...stylex.props(styles.editor, styles.second)}>
-            <Workbench application={secondApplication} />
+            <Workbench controller={second} checkout={checkout} />
           </section>
         )}
       </div>
@@ -184,11 +179,6 @@ declare global {
       memory: typeof memory;
       workbench(): WorkbenchHandle;
       application: typeof firstApplication;
-      chat: typeof chat;
-      retryChat(): void;
-      selectCheckout(): Promise<string | null>;
-      selectClipboardImports(target: typeof checkout): Promise<string[]>;
-      selectDroppedImports(target: typeof checkout, files: File[]): Promise<string[]>;
       selectNativeImports(): Promise<string[]>;
       modelCount(): number;
       diffReady(): boolean;
@@ -201,13 +191,6 @@ window.demo = {
   first,
   second,
   application: firstApplication,
-  chat,
-  retryChat: () => {
-    failChat = false;
-  },
-  selectCheckout: async () => null,
-  selectClipboardImports: async () => [],
-  selectDroppedImports: async () => [],
   checkout,
   memory,
   workbench: () => firstHandle.current!,

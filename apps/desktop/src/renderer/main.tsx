@@ -2,7 +2,8 @@ import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
 import { useEffect, useRef, useState } from 'react';
 import { createMoonbaseApplication, type MoonbaseApplication } from '@moonbase/application';
-import { Workbench, WorkbenchStartupFailure, type WorkbenchHandle } from '@moonbase/workbench';
+import { DesktopShell, type DesktopShellHandle } from './shell/workbench.tsx';
+import { WorkbenchStartupFailure } from './shell/startup-failure.tsx';
 import { configureMonacoWorkers } from '@moonbase/workbench/workers';
 import { browserClients, type ChatBridge } from '../chat/wire.ts';
 import {
@@ -27,7 +28,7 @@ document.body.className = stylex.props(workbench.document).className ?? '';
 const bridge = window.moonbase,
   root = createRoot(document.getElementById('root')!);
 function Desktop({ application }: { application: MoonbaseApplication }) {
-  const handle = useRef<WorkbenchHandle>(null),
+  const handle = useRef<DesktopShellHandle>(null),
     [closing, setClosing] = useState(false),
     [releasing, setReleasing] = useState(false);
   useEffect(() => {
@@ -69,7 +70,7 @@ function Desktop({ application }: { application: MoonbaseApplication }) {
       </main>
     );
   return (
-    <Workbench
+    <DesktopShell
       ref={handle}
       application={application}
       closing={closing}

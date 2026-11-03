@@ -26,13 +26,13 @@ await runtime.runPromise(Scope.close(scope, Exit.void));
 await runtime.dispose();
 ```
 
-Browser clients mount `Workbench` from `@moonbase/workbench` with their acquired `application`. The shared shell derives project tabs from this editor controller and keeps file/tree/Monaco presentation internal. Native callbacks return approved opaque references, never raw OS source paths; picker, clipboard and drop share `WorkbenchHandle.importFiles(checkout, references)` and the internal editor destination/replacement dialog. Direct headless consumers continue using the factories above without UI.
+Browser clients mount `Workbench` from `@moonbase/workbench` with an acquired editor `controller` and explicit `checkout`. The consuming app owns project navigation and passes the displayed checkout; the workbench owns project-scoped file/tree/Monaco presentation. Native callbacks return approved opaque references, never raw OS source paths; picker, clipboard and drop share `WorkbenchHandle.importFiles(checkout, references)` and the internal editor destination/replacement dialog. Direct headless consumers continue using the factories above without UI.
 
 | Export | Purpose |
 | --- | --- |
 | `@moonbase/application/editor` | Model/controller factories, types, target keys and concrete presentation helpers |
 | `@moonbase/application/testing/memory-workspace` | Injected volatile workspace service for tests and demos; excluded from the editor entry graph |
-| `@moonbase/workbench` | Shared browser shell receiving a supplied application; editor presentation is internal |
+| `@moonbase/workbench` | Project editor receiving a supplied controller and exact checkout |
 | `@moonbase/workbench/workers` | Browser-root Monaco worker configuration |
 
 Applications supply clients, acquire models in their aggregate scope and own runtime disposal. Multiple models share that runtime; each has a separate model scope, recovery identity and Monaco instance identity. Binding never acquires a second model or backend. Factory acquisition installs a finalizer even if the model is never bound. A privileged composition root can use `makeEditorClient(runtime)` from `@moonbase/application/runtime/clients`; isolated renderers receive a validated bridge client. Each live editor needs a distinct recovery `clientId`; reuse it only to restore that editor after shutdown. Omission generates a random ID.

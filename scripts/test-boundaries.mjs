@@ -6,7 +6,12 @@ const packages = new Map([
     '@moonbase/application',
     {
       directory: 'packages/application',
-      exports: { '.': './src/index.ts', './runtime/clients': './src/index.ts' },
+      exports: {
+        '.': './src/index.ts',
+        './runtime/clients': './src/index.ts',
+        './editor': './src/editor.ts',
+        './chat': './src/chat.ts',
+      },
     },
   ],
   [
@@ -74,6 +79,24 @@ assert(
     'packages/workbench/src/index.ts': "import type {} from '../demo/chat.ts';",
     'packages/workbench/demo/chat.ts': '',
   }).some((error) => error.includes('demo/test capability')),
+);
+for (const specifier of [
+  '@moonbase/application',
+  '@moonbase/application/chat',
+  '@moonbase/contracts/chat',
+  '@moonbase/contracts/connection',
+  '@moonbase/contracts/host-schema',
+])
+  assert(
+    check({ 'packages/workbench/src/index.ts': `import type {} from '${specifier}';` }).some(
+      (error) => error.includes('only editor capabilities'),
+    ),
+  );
+assert.deepEqual(
+  check({
+    'packages/workbench/src/index.ts': "import type {} from '@moonbase/application/editor';",
+  }),
+  [],
 );
 assert(
   check({

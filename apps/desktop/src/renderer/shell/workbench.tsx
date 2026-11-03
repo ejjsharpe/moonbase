@@ -15,15 +15,15 @@ import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { controls } from '@moonbase/ui/controls';
 import { workbench } from '@moonbase/ui/workbench';
 import { ChatView } from '../chat/view.tsx';
-import { EditorWorkbench, type EditorWorkbenchHandle } from '../editor/workbench.tsx';
+import { Workbench, type WorkbenchHandle } from '@moonbase/workbench';
 import { styles } from './styles.ts';
 import { MainTabs, tabValue } from './main-tabs.tsx';
 
-export type WorkbenchHandle = {
+export type DesktopShellHandle = {
   prepareQuit(): Promise<boolean>;
   importFiles(checkout: CheckoutTarget, references: string[]): void;
 };
-export type WorkbenchProps = {
+export type DesktopShellProps = {
   application: MoonbaseApplication;
   closing?: boolean;
   /** These callbacks return user-approved roots or opaque native references, never source paths. */
@@ -35,7 +35,7 @@ export type WorkbenchProps = {
 const noSubscription = () => () => {};
 const noEditor = () => undefined;
 
-export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Workbench(
+export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(function DesktopShell(
   {
     application,
     closing = false,
@@ -56,7 +56,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   const [destination, setDestination] = useState<'project' | 'chat'>(
     controller ? 'project' : 'chat',
   );
-  const handle = useRef<EditorWorkbenchHandle>(null),
+  const handle = useRef<WorkbenchHandle>(null),
     panels = useRef<Record<string, HTMLElement | null>>({}),
     focus = useRef<Record<string, HTMLElement | null>>({});
   const openCheckouts =
@@ -171,11 +171,11 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       }}
       inert={closing || ['prepared', 'disposing', 'disposed', 'failed'].includes(lifecycle.phase)}
       {...stylex.props(workbench.document, styles.shell)}
-      onKeyDownCapture={(event) => {
-        if (view !== 'chat') handle.current?.keyDown(event);
+      onKeyDown={(event) => {
+        if (view !== 'chat' && !event.defaultPrevented) handle.current?.keyDown(event);
       }}
       onKeyUp={(event) => {
-        if (view !== 'chat') handle.current?.keyUp(event);
+        if (view !== 'chat' && !event.defaultPrevented) handle.current?.keyUp(event);
       }}
       onDragOver={(event) => {
         if (event.dataTransfer.types.includes('Files')) event.preventDefault();
@@ -278,9 +278,10 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
           }}
           {...stylex.props(styles.panel)}>
           <section {...stylex.props(styles.panel)} aria-label="Editor workbench">
-            <EditorWorkbench
+            <Workbench
               ref={handle}
               controller={controller}
+              checkout={selected}
               visible={view !== 'chat'}
               selectNativeImports={selectNativeImports}
             />

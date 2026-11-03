@@ -59,7 +59,7 @@ const styles = stylex.create({ root: { height: '100dvh' } }),
 const render = () =>
   root.render(
     <div {...stylex.props(styles.root)}>
-      <Workbench key={editor.instanceId} application={application} />
+      <Workbench key={editor.instanceId} controller={editor} checkout={checkout} />
     </div>,
   );
 render();

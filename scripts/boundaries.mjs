@@ -204,6 +204,12 @@ export function checkBoundaries({ files, packages }) {
         reject(path, edge, 'platform or privileged capability in browser workbench');
       if (
         sourceOwner === 'workbench' &&
+        (/^@moonbase\/application(?:$|\/(?!editor$))/.test(edge.specifier) ||
+          /^@moonbase\/contracts\/(?:chat|connection|host)(?:-schema)?$/.test(edge.specifier))
+      )
+        reject(path, edge, 'project workbench consumes only editor capabilities');
+      if (
+        sourceOwner === 'workbench' &&
         /^packages\/workbench\/(?:demo|test)\//.test(resolved ?? '')
       )
         reject(path, edge, 'browser presentation reaches a demo/test capability');

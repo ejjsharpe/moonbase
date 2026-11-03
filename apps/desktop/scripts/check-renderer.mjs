@@ -16,8 +16,12 @@ assert(inputs.some((p) => p.endsWith('application/src/features/editor/editor.ts'
 assert(!inputs.some((p) => p.endsWith('desktop/src/renderer/cleanup.ts')));
 assert(inputs.some((p) => p.endsWith('contracts/src/errors.ts')));
 assert(inputs.some((p) => p.includes('monaco-editor')));
-for (const entry of ['shell/workbench.tsx', 'editor/workbench.tsx', 'chat/view.tsx'])
-  assert(inputs.some((p) => p.endsWith(`workbench/src/${entry}`)));
+for (const entry of [
+  'packages/workbench/src/editor/workbench.tsx',
+  'apps/desktop/src/renderer/shell/workbench.tsx',
+  'apps/desktop/src/renderer/chat/view.tsx',
+])
+  assert(inputs.some((p) => p.endsWith(entry)));
 assert(!inputs.some((p) => /packages\/editor\//.test(p)));
 assert(inputs.some((p) => p.endsWith('application/src/features/chat/controller.ts')));
 const assets = await readdir(new URL('renderer/assets/', output));
