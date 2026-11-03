@@ -151,10 +151,9 @@ test('public chat entry points share one scope and preserve exact targets/reques
   const second = makeChatClient(runtime);
   let unsubscribe = async () => {};
   try {
-    assert.equal(
-      (await client.command('getChatHost', { host: session.host })).cwd,
-      conversation.cwd,
-    );
+    const host = await client.command('getChatHost', { host: session.host });
+    assert('cwd' in host);
+    assert.equal(host.cwd, conversation.cwd);
     assert.deepEqual((await second.command('listChats', { session })).conversations, [
       conversation,
     ]);

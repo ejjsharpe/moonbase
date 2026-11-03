@@ -15,7 +15,9 @@
     "./schema": "./src/schema.ts",
     "./errors": "./src/errors.ts",
     "./common": "./src/common.ts",
-    "./services": "./src/services.ts"
+    "./services": "./src/services.ts",
+    "./providers": "./src/providers.ts",
+    "./providers-schema": "./src/providers-schema.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",

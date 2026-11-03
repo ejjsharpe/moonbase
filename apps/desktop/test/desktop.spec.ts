@@ -243,12 +243,12 @@ test('actual sandboxed custom-scheme editor reads, edits and saves through SQLit
     .getByRole('tablist', { name: 'Workbench views', exact: true })
     .getByRole('tab', { name: 'Chat', exact: true })
     .click();
-  await expect(page.getByLabel('Remote chat configuration')).toContainText('not configured');
+  await expect(page.getByText('On this computer', { exact: true })).toBeVisible();
   expect(
     await page.evaluate(() =>
       window.moonbaseChat.call('connection', 'getConnection', {}, crypto.randomUUID()),
     ),
-  ).toMatchObject({ ok: false, error: { code: 'Unavailable' } });
+  ).toMatchObject({ ok: false, error: { code: 'Unauthorized' } });
   await open();
   await edit('export const saved = 42;');
   await page.getByRole('button', { name: 'Save', exact: true }).click();

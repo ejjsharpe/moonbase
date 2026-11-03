@@ -38,7 +38,7 @@ ipcMain.handle = (name, listener) =>
       control.cancelIds.push(input);
     }
     if (name === 'moonbase-chat:cancel') {
-      control.chatCancelIds.push(input);
+      control.chatCancelIds.push(input.id);
       if (control.holdChatCancel) {
         control.chatCancelHeld = true;
         control.chatCancelGate ??= new Promise((resolve) => {

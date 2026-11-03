@@ -17,6 +17,9 @@ const main = await build({
   platform: 'node',
   format: 'esm',
   external: ['electron'],
+  banner: {
+    js: "import { createRequire as moonbaseCreateRequire } from 'node:module'; const require = moonbaseCreateRequire(import.meta.url);",
+  },
   metafile: true,
   legalComments: 'external',
   logLevel: 'warning',
@@ -51,21 +54,40 @@ for (const entry of [
     `Shared frontend missing: ${entry}`,
   );
 assert(!rendererInputs.some((p) => /packages\/editor\/|desktop\/src\/chat\/view\.tsx$/.test(p)));
-for (const inputs of [
-  Object.keys(main.metafile.inputs),
-  Object.keys(preload.metafile.inputs),
-  rendererInputs,
-]) {
+const mainInputs = Object.keys(main.metafile.inputs),
+  preloadInputs = Object.keys(preload.metafile.inputs);
+for (const inputs of [mainInputs, preloadInputs, rendererInputs]) {
   assert.deepEqual(
     inputs.filter((p) =>
-      /(?:^|\/)(?:test|tests)\/|(?:packages\/workbench|apps\/desktop)\/demo\/|test-fixture|host\.mjs|@earendil-works|pi-runtime\/src\/(?:runtime|server|index)\.ts/.test(
+      /(?:^|\/)(?:test|tests)\/|(?:packages\/workbench|apps\/desktop)\/demo\/|test-fixture|host\.mjs/.test(
         p,
       ),
     ),
     [],
-    'Host, SDK or test fixture reached shipped application inputs',
+    'Test fixture reached shipped application inputs',
   );
 }
+for (const inputs of [preloadInputs, rendererInputs]) {
+  assert.deepEqual(
+    inputs.filter((p) =>
+      /@earendil-works|pi-runtime\/src\/(?:index|providers|credentials|local-models)\.ts|node:sqlite/.test(
+        p,
+      ),
+    ),
+    [],
+    'Local runtime reached a browser boundary',
+  );
+}
+for (const entry of [
+  'pi-runtime/src/index.ts',
+  'pi-runtime/src/local-models.ts',
+  'pi-runtime/src/credentials.ts',
+  'pi-ai/dist/bun-oauth.js',
+])
+  assert(
+    mainInputs.some((path) => path.endsWith(entry)),
+    `Missing privileged local runtime input: ${entry}`,
+  );
 const packages = await notices(
   [...Object.keys(main.metafile.inputs), ...Object.keys(preload.metafile.inputs)]
     .map((p) => resolve(root, p))
@@ -88,7 +110,7 @@ await writeFile(
     version: '0.1.0',
     private: true,
     main: 'main.mjs',
-    description: 'Moonbase editor and remote chat workbench',
+    description: 'Moonbase editor and local/remote agent workbench',
     author: 'Elliot Sharpe',
   }),
 );

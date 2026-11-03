@@ -24,6 +24,13 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
           try: () => V.input(operation, unknown),
           catch: ApplicationError.fromUnknown,
         });
+        if (operation === 'createChat' && (input as ChatInput<'createChat'>).settings !== undefined)
+          return yield* Effect.fail(
+            new ApplicationError({
+              code: 'InvalidInput',
+              message: 'Remote chats retain the host’s fixed working folder and model.',
+            }),
+          );
         const mutation =
           operation === 'createChat' || operation === 'sendChat' || operation === 'stopChat';
         let dispatched = false;
@@ -207,7 +214,13 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
                   if (envelope.ok !== true || response.status !== 200)
                     return invalid('Incompatible', 'Chat reply has an unexpected status or shape.');
                   try {
-                    return V.output(operation, envelope.value, input);
+                    const output = V.output(operation, envelope.value, input);
+                    if (operation === 'getChatHost' && output && 'mode' in output)
+                      V.fail(
+                        'Incompatible',
+                        'An SSH host must supply its fixed working folder and model.',
+                      );
+                    return output;
                   } catch {
                     return invalid('Incompatible', 'Chat returned invalid response data.');
                   }

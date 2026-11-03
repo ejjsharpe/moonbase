@@ -271,3 +271,39 @@ for (const failure of ['none', 'release', 'acquisition'] as const) {
     }
   });
 }
+
+test('local IPC captures its command and cannot route a late reply to a replacement document', async () => {
+  const gate = Promise.withResolvers<void>();
+  const chat: ChatClient = {
+    command: async () => {
+      await gate.promise;
+      return null as never;
+    },
+    watch: () => async () => {},
+  };
+  const owner = new ChatIpcSession(runtime, chat, null, context, () => {});
+  const missing = await owner.call(
+    'chat',
+    'createChat',
+    { session: context, requestId: 'missing', title: 'Missing settings' },
+    'missing',
+  );
+  assert(!missing.ok && missing.error.code === 'InvalidInput');
+  const pending = owner.call(
+    'chat',
+    'createChat',
+    {
+      session: context,
+      requestId: 'captured',
+      title: 'Local',
+      settings: { cwd: '/approved', model: { provider: 'openai', modelId: 'test' } },
+    },
+    'captured',
+  );
+  const release = owner.releaseDocument();
+  gate.resolve();
+  await pending;
+  await release;
+  assert.equal(owner.count, 0);
+  await owner.dispose();
+});

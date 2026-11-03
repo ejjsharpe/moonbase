@@ -982,6 +982,7 @@ test('pipelined HTTP requests have a bounded active window without queuing anoth
 test('private host key cannot reuse public configuration data', async (t) => {
   const f = await setup(t),
     configuration = await f.client.command('getChatHost', { host });
+  assert('cwd' in configuration);
   await assert.rejects(
     Effect.runPromise(
       Effect.scoped(serveChat({ host, token: configuration.cwd, port: 0 }, f.client)),

@@ -1,3 +1,4 @@
+import { selectRemoteChat } from './chat-target.ts';
 import { captureNative } from './editor-regressions.ts';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import {
@@ -109,6 +110,7 @@ async function local(p: Page, app: ElectronApplication, f: Fixture) {
 }
 async function connect(p: Page) {
   await tab(p, 'Chat').click();
+  await selectRemoteChat(p);
   await p.getByRole('button', { name: 'Connect', exact: true }).click();
   await expect(p.getByLabel('New saved chat')).toBeEnabled();
 }
@@ -341,6 +343,7 @@ test('dirty editor/live chat, two drafts, no-resend reconnect, view close and cl
     await screen(app, p, 'restored-dirty-editor');
     await editor(p).focus(); // Establish focus in the NEW document before testing navigation restoration.
     await tab(p, 'Chat').click();
+    await selectRemoteChat(p);
     await expect(p.getByLabel('Message', { exact: true })).toHaveValue(
       'first independent newer draft',
     );
@@ -489,7 +492,39 @@ test('native 200% normal/constrained live chat keeps wheel/Tab Stop and Send rea
       await p.getByLabel('Message', { exact: true }).focus();
       await p.keyboard.press('Tab');
       await expect(p.getByRole('button', { name: 'Stop', exact: true })).toBeFocused();
-      await expect(p.getByRole('button', { name: 'Stop', exact: true })).toBeInViewport();
+      try {
+        await expect(p.getByRole('button', { name: 'Stop', exact: true })).toBeInViewport();
+      } catch (error) {
+        await writeFile(
+          join(output, `zoom-failure-${width}.json`),
+          JSON.stringify(
+            await p.getByRole('button', { name: 'Stop', exact: true }).evaluate((button) => {
+              const parents = [];
+              let element: Element | null = button;
+              while (element) {
+                const style = getComputedStyle(element);
+                parents.push({
+                  tag: element.tagName,
+                  role: element.getAttribute('role'),
+                  rect: element.getBoundingClientRect().toJSON(),
+                  height: element.clientHeight,
+                  scroll: element.scrollTop,
+                  scrollHeight: element.scrollHeight,
+                  overflow: style.overflowY,
+                  minHeight: style.minHeight,
+                  flex: style.flex,
+                });
+                element = element.parentElement;
+              }
+              return { width: innerWidth, height: innerHeight, parents };
+            }),
+            null,
+            2,
+          ),
+        );
+        await screen(app, p, `zoom-failed-${width}`);
+        throw error;
+      }
       await p.keyboard.press('Tab');
       await expect(p.getByRole('button', { name: 'Send message', exact: true })).toBeFocused();
       await expect(p.getByRole('button', { name: 'Send message', exact: true })).toBeInViewport();
@@ -836,6 +871,7 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
           await window.moonbaseChat.call('connection', 'getConnection', {}, crypto.randomUUID()),
       );
       await page.getByRole('button', { name: 'Disconnect', exact: true }).click();
+      await selectRemoteChat(page);
       await expect(page.getByRole('button', { name: 'Connect', exact: true })).toBeEnabled();
       await expect(page.getByRole('region', { name: 'Retained commands' })).toContainText(
         'Uncertain',
@@ -941,6 +977,7 @@ test(`${packaged ? 'packaged' : 'source'} Create readiness: repeated reload/fill
           })
           .toBe('reload');
         await tab(page, 'Chat').click();
+        await selectRemoteChat(page);
         await expect(page.getByText('Verified host.', { exact: false })).toBeVisible();
       }
       await page.evaluate(() => {
@@ -1233,24 +1270,23 @@ if (!packaged) {
         current = app;
         await screen(app, p, 'startup-' + failure);
         if (failure === 'chat-context') {
-          await expect(
-            p.getByRole('alert', { name: 'Remote chat initialization failed' }),
-          ).toBeVisible();
+          await expect(p.getByRole('alert', { name: 'Chat initialization failed' })).toBeVisible();
           await local(p, app, f);
           await editor(p).press('Meta+s');
           await expect.poll(() => readFile(join(f.cwd, 'a.ts'), 'utf8')).toBe('local dirty draft');
           await tab(p, 'Chat').click();
-          await expect(p.getByLabel('Remote chat configuration')).toContainText(
+          await expect(p.getByLabel('Chat configuration')).toContainText(
             'Application effect failed',
           );
           expect(await reloadOutcome(app)).toBe('veto');
           await app.evaluate(({ app }) => app.quit());
-          await expect(p.getByLabel('Remote chat configuration')).toBeVisible();
+          await expect(p.getByLabel('Chat configuration')).toBeVisible();
           expect(app.process().exitCode).toBeNull();
           await app.evaluate(() => {
             globalThis.desktopTest.startupFailure = null;
           });
           await p.getByRole('button', { name: 'Open Chat panel', exact: true }).click();
+          await selectRemoteChat(p);
           await expect(p.getByRole('button', { name: 'Connect', exact: true })).toBeEnabled();
           expect((await f.stats()).calls).toBe(0);
           expect(errors).toEqual([]);

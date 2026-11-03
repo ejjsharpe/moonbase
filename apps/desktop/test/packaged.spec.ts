@@ -123,6 +123,23 @@ test('unsigned macOS package runs with only system PATH, SQLite, native/rg resou
     expect(resource.notices).toContain('monaco-editor@0.57.0');
     expect(resource.notices).toContain('MIT License');
     await expect(page.getByRole('button', { name: 'Open checkout', exact: true })).toBeVisible();
+    await page.getByRole('tab', { name: 'Chat', exact: true }).click();
+    await expect(page.getByText('On this computer', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Sign in with ChatGPT', exact: true }).click();
+    await expect(
+      page.getByRole('button', { name: 'Open sign-in page', exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByLabel('Complete login in your browser, or paste the final redirect URL here:', {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await screen('local-oauth-loaded');
+    await page.getByRole('button', { name: 'Cancel setup', exact: true }).click();
+    await expect(page.getByText('Setup cancelled.', { exact: true })).toBeVisible();
+    expect(resource.notices).toContain('@earendil-works/pi-durable@1.4.0');
+    expect(resource.notices).toContain('@earendil-works/pi-ai@1.4.0');
+
     await app.evaluate(({ dialog }, root) => {
       dialog.showOpenDialog = (async () => ({
         canceled: false,

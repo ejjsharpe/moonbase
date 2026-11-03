@@ -12,6 +12,8 @@ import {
 import { cancellation, unwrap as unwrapReply } from '../wire.ts';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import type { ChatClient, ChatSession } from '@moonbase/contracts/chat';
+import type { ProviderSetupClient } from '@moonbase/contracts/providers';
+import { decodeProviderOutput, isProviderCommand } from '@moonbase/contracts/providers-schema';
 import type { ConnectionClient } from '@moonbase/contracts/connection';
 
 export const channels = {
@@ -22,16 +24,26 @@ export const channels = {
 export type Reply =
   | { ok: true; value: unknown }
   | { ok: false; error: typeof ApplicationErrorDTOSchema.Type };
+export type DesktopChatTarget = {
+  id: string;
+  label: string;
+  mode: 'local' | 'remote';
+  context: ChatSession;
+};
 export interface ChatBridge {
-  context(): Promise<ChatSession>;
+  targets?(): Promise<DesktopChatTarget[]>;
+  chooseFolder?(): Promise<string | null>;
+  confirmQuit?(): Promise<boolean>;
+  context(backendId?: string): Promise<ChatSession>;
   call(
-    kind: 'chat' | 'connection' | 'watch-chat' | 'watch-connection',
+    kind: 'chat' | 'connection' | 'watch-chat' | 'watch-connection' | 'providers',
     operation: string,
     input: unknown,
     id: string,
+    backendId?: string,
   ): Promise<Reply>;
-  cancel(id: string): Promise<Reply>;
-  events(receive: (id: string, result: Reply) => void): () => void;
+  cancel(id: string, backendId?: string): Promise<Reply>;
+  events(receive: (id: string, result: Reply, backendId?: string) => void): () => void;
 }
 export const invalid = (): never => {
   throw new ApplicationError({ code: 'InvalidInput', message: 'Invalid chat request.' });
@@ -62,12 +74,16 @@ export function unwrap(reply: Reply): unknown {
   }
   return unwrapReply(reply);
 }
-export function browserClients(bridge: ChatBridge): {
+export function browserClients(
+  bridge: ChatBridge,
+  backendId = 'remote',
+): {
   chat: ChatClient;
   connection: ConnectionClient;
+  providers: ProviderSetupClient;
 } {
   const command = async (
-    kind: 'chat' | 'connection',
+    kind: 'chat' | 'connection' | 'providers',
     operation: string,
     input: unknown,
     options?: { signal?: AbortSignal },
@@ -77,13 +93,15 @@ export function browserClients(bridge: ChatBridge): {
     const id = crypto.randomUUID(),
       cancel = () => {
         void bridge
-          .cancel(id)
+          .cancel(id, backendId)
           .then(cancellation)
           .catch(() => {});
       };
     options?.signal?.addEventListener('abort', cancel, { once: true });
     try {
-      const value = unwrap(await bridge.call(kind, operation, input, id));
+      const value = unwrap(await bridge.call(kind, operation, input, id, backendId));
+      if (kind === 'providers' && isProviderCommand(operation))
+        return decodeProviderOutput(operation, value);
       if (kind === 'chat' && isChatCommand(operation)) return decodeChatOutput(operation, value);
       if (kind === 'connection' && isConnectionCommand(operation))
         return decodeConnectionOutput(operation, value);
@@ -102,8 +120,8 @@ export function browserClients(bridge: ChatBridge): {
   ) => {
     const id = crypto.randomUUID();
     let active = true;
-    const off = bridge.events((eventId, result) => {
-      if (active && eventId === id)
+    const off = bridge.events((eventId, result, eventBackend = 'remote') => {
+      if (active && eventId === id && eventBackend === backendId)
         try {
           receive(
             (kind === 'watch-chat'
@@ -114,7 +132,7 @@ export function browserClients(bridge: ChatBridge): {
           onError(normalizeApplicationError(e));
         }
     });
-    const started = bridge.call(kind, '', input, id);
+    const started = bridge.call(kind, '', input, id, backendId);
     void started.then(
       (r) => {
         if (active && !r.ok) onError(normalizeApplicationError(unwrapError(r)));
@@ -129,7 +147,7 @@ export function browserClients(bridge: ChatBridge): {
       completion ??= started.then(
         async () => {
           try {
-            cancellation(await bridge.cancel(id));
+            cancellation(await bridge.cancel(id, backendId));
           } finally {
             off();
           }
@@ -143,6 +161,10 @@ export function browserClients(bridge: ChatBridge): {
     };
   };
   return {
+    providers: {
+      command: async (op, input, options) =>
+        decodeProviderOutput(op, await command('providers', op, input, options)),
+    },
     chat: {
       command: (op, input, options) => command('chat', op, input, options) as never,
       watch: (input, receive, error) => watch('watch-chat', input, receive, error),

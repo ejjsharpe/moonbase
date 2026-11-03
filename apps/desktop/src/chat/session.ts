@@ -4,6 +4,8 @@ import {
   normalizeApplicationError,
   runApplicationEffect,
 } from '@moonbase/application/runtime/effect-client';
+import type { ProviderSetupClient } from '@moonbase/contracts/providers';
+import { decodeProviderInput, isProviderCommand } from '@moonbase/contracts/providers-schema';
 import { decodeChatInput, isChatCommand } from '@moonbase/contracts/chat-schema';
 import { ApplicationError, type ObservationClose } from '@moonbase/contracts/workspace';
 import {
@@ -37,15 +39,21 @@ export class ChatIpcSession {
   private disposal?: Promise<void>;
   private closing = new Map<string, Promise<Reply>>();
   private chat: ChatClient;
-  private connection: ConnectionClient;
+  private connection: ConnectionClient | null;
+  private capabilities: {
+    providers?: ProviderSetupClient;
+  };
   readonly context: ChatSession;
   private emit: (id: string, result: Reply) => void;
   constructor(
     runtime: ManagedRuntime.ManagedRuntime<never, ApplicationError>,
     chat: ChatClient,
-    connection: ConnectionClient,
+    connection: ConnectionClient | null,
     context: ChatSession,
     emit: (id: string, result: Reply) => void,
+    capabilities: {
+      providers?: ProviderSetupClient;
+    } = {},
   ) {
     this.runtime = runtime;
     this.document = Scope.forkUnsafe(runtime.scope, 'parallel');
@@ -53,6 +61,7 @@ export class ChatIpcSession {
     this.connection = connection;
     this.context = context;
     this.emit = emit;
+    this.capabilities = capabilities;
   }
   private authority(value: unknown) {
     const v = record(value);
@@ -91,7 +100,11 @@ export class ChatIpcSession {
       if (!isChatCommand(operation)) return invalid();
       v = decodeChatInput(operation, v);
       this.authority(v);
+    } else if (kind === 'providers') {
+      if (!this.capabilities.providers || !isProviderCommand(operation)) return invalid();
+      v = decodeProviderInput(operation, v);
     } else if (kind === 'connection') {
+      if (!this.connection) return invalid();
       if (!isConnectionCommand(operation)) invalid();
       v = decodeConnectionInput(operation as ConnectionCommand, v);
     } else if (kind === 'watch-chat') {
@@ -99,6 +112,7 @@ export class ChatIpcSession {
       v = decodeChatInput('getChat', v);
       this.authority(v);
     } else if (kind === 'watch-connection') {
+      if (!this.connection) return invalid();
       if (operation !== '') invalid();
       fields(v, []);
     } else invalid();
@@ -146,7 +160,7 @@ export class ChatIpcSession {
           const stop =
             kind === 'watch-chat'
               ? this.chat.watch(v as never, receive, error)
-              : this.connection.watch(receive, error);
+              : this.connection!.watch(receive, error);
           ready.resolve({ close: stop });
         } catch (error) {
           ready.resolve({ error: normalizeApplicationError(error) });
@@ -155,12 +169,23 @@ export class ChatIpcSession {
         if (!live()) await this.closeRequest(id, request);
         return { ok: true, value: null };
       }
-      const value =
-        kind === 'chat'
-          ? await this.chat.command(operation as ChatCommand, v as never, { signal: abort.signal })
-          : await this.connection.command(operation as ConnectionCommand, v as never, {
-              signal: abort.signal,
-            });
+      if (kind === 'chat' && operation === 'createChat') {
+        const settings = (v as { settings?: unknown }).settings;
+        if ((this.connection === null) !== (settings !== undefined)) return invalid();
+      }
+      let value: unknown;
+      if (kind === 'providers')
+        value = await this.capabilities.providers!.command(operation as never, v as never, {
+          signal: abort.signal,
+        });
+      else if (kind === 'chat')
+        value = await this.chat.command(operation as ChatCommand, v as never, {
+          signal: abort.signal,
+        });
+      else
+        value = await this.connection!.command(operation as ConnectionCommand, v as never, {
+          signal: abort.signal,
+        });
       return { ok: true, value };
     } catch (e) {
       if (!request.closing) request.watch = false;

@@ -934,3 +934,82 @@ test('uncertain final Quit metadata keeps its original publication and vetoes un
     await editor.runtime.dispose();
   }
 });
+
+test('named local/remote targets preserve separate drafts and wait for controller cleanup without Stop or replay', async () => {
+  const local = chatCapabilities(),
+    remote = chatCapabilities();
+  const localDependencies = {
+    ...local.dependencies,
+    mode: 'local' as const,
+    connection: undefined,
+  };
+  const remoteDependencies = remote.dependencies;
+  const localChat = localDependencies.chat;
+  localDependencies.chat = {
+    ...localChat,
+    command: async (op, input, options) =>
+      op === 'getChatHost'
+        ? ({ ...localDependencies.context, mode: 'local' } as never)
+        : localChat.command(op, input, options),
+  };
+  const application = await createMoonbaseApplication({
+    chatTargets: [
+      { id: 'local', label: 'Local', acquire: async () => localDependencies },
+      { id: 'remote', label: 'Remote', acquire: async () => remoteDependencies },
+    ],
+  });
+  try {
+    await application.chat!.start();
+    assert.equal(application.chat!.getSnapshot().mode, 'local');
+    await application.chat!.create('Local', {
+      cwd: '/local',
+      model: { provider: 'fake', modelId: 'first' },
+    });
+    application.chat!.setDraft('local draft');
+    const held = Promise.withResolvers<void>();
+    local.controls.release = () => held.promise;
+    const switching = application.selectChatTarget('remote');
+    assert.equal(application.canUnload(), false);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(application.chat, null);
+    held.resolve();
+    await switching;
+    await application.chat!.start();
+    await application.chat!.connect();
+    await application.chat!.create('Remote');
+    application.chat!.setDraft('remote draft');
+    await application.selectChatTarget('local');
+    assert.equal(application.chat!.getSnapshot().draft, 'local draft');
+    assert.equal(JSON.parse(remote.storage.value!).drafts[0].text, 'remote draft');
+    assert.equal(local.calls.filter((call) => call === 'createChat').length, 1);
+    assert(
+      ![...local.calls, ...remote.calls].some((call) => ['sendChat', 'stopChat'].includes(call)),
+    );
+  } finally {
+    await application.dispose();
+  }
+});
+
+test('final Quit confirmation runs with admissions fenced and Keep running restores them', async () => {
+  const chat = chatCapabilities();
+  let confirms = 0;
+  const application = await createMoonbaseApplication({
+    chat: async () => chat.dependencies,
+    confirmQuit: async () => {
+      confirms++;
+      await application.chat!.create('Fenced');
+      assert(!chat.calls.includes('createChat'));
+      return confirms > 1;
+    },
+  });
+  try {
+    await application.chat!.start();
+    await application.chat!.connect();
+    assert.equal(await application.prepareQuit(), false);
+    assert.equal(application.getSnapshot().phase, 'live');
+    assert.equal(await application.prepareQuit(), true);
+    assert.equal(confirms, 2);
+  } finally {
+    await application.dispose();
+  }
+});

@@ -74,6 +74,7 @@ function Desktop({ application }: { application: MoonbaseApplication }) {
       ref={handle}
       application={application}
       closing={closing}
+      chooseChatFolder={() => window.moonbaseChat.chooseFolder!()}
       selectCheckout={async () =>
         application.getSnapshot().phase === 'live'
           ? (unwrap(await bridge.call('choose-checkout', null, crypto.randomUUID())) as
@@ -118,19 +119,37 @@ function StartupFailure({ error }: { error: ErrorDTO }) {
 
 try {
   configureMonacoWorkers();
+  const targets = await window.moonbaseChat.targets!();
   const application = await createMoonbaseApplication({
     editors: [{ client: bridgeClient(bridge), clientId: bridge.clientId }],
-    chat: async () => {
-      if (!unwrap(await bridge.chatConfigured())) return null;
-      return {
-        ...browserClients(window.moonbaseChat),
-        context: await window.moonbaseChat.context(),
-        storage: {
-          read: () => localStorage.getItem('moonbase.chat.v1'),
-          write: (value) => localStorage.setItem('moonbase.chat.v1', value),
-        },
-      };
-    },
+    defaultChatTargetId: 'local',
+    chatTargets: targets.map((target) => ({
+      id: target.id,
+      label: target.label,
+      acquire: async () => {
+        const clients = browserClients(window.moonbaseChat, target.id);
+        return {
+          chat: clients.chat,
+          ...(target.mode === 'local'
+            ? { providers: clients.providers }
+            : { connection: clients.connection }),
+          mode: target.mode,
+          context: await window.moonbaseChat.context(target.id),
+          storage: {
+            read: () =>
+              localStorage.getItem(
+                target.mode === 'local' ? 'moonbase.chat.local.v1' : 'moonbase.chat.v1',
+              ),
+            write: (value: string) =>
+              localStorage.setItem(
+                target.mode === 'local' ? 'moonbase.chat.local.v1' : 'moonbase.chat.v1',
+                value,
+              ),
+          },
+        };
+      },
+    })),
+    confirmQuit: () => window.moonbaseChat.confirmQuit!(),
   });
   window.addEventListener('beforeunload', (event) => {
     if (!application.canUnload()) {

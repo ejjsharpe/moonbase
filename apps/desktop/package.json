@@ -14,12 +14,13 @@
     "test:desktop": "playwright test --project editor",
     "check:renderer": "node scripts/check-renderer.mjs",
     "test:package": "MOONBASE_PACKAGED_TEST=1 playwright test --project packaged --project reload --project composition",
-    "test:native": "playwright test --project editor --project configuration --project reload --project composition --project recovery",
+    "test:native": "playwright test --project editor --project configuration --project reload --project composition --project recovery --project local",
     "test:composition": "playwright test --project composition",
     "test:reload": "playwright test --project reload",
     "check:package": "node scripts/check-package.mjs",
     "demo:browser": "vp dev --config vite.browser.config.ts --host 127.0.0.1",
-    "test:browser": "playwright test --config playwright.browser.config.ts"
+    "test:browser": "playwright test --config playwright.browser.config.ts",
+    "test:local": "playwright test --project local"
   },
   "dependencies": {
     "@moonbase/application": "workspace:*",

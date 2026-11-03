@@ -4,11 +4,14 @@
 
 | Export | Role |
 | --- | --- |
-| `.` | `PiRuntimeLive(config)`: Pi-backed service |
+| `.` | Remote fixed-settings `PiRuntimeLive(config)`, per-conversation `LocalPiRuntimeLive(config)` and privileged `LocalPiControl` |
+| `./local-models`, `./providers`, `./credentials` | Pinned local provider catalog, document-owned setup and injected encrypted persistence |
 | `./server` | `serveChat(config, rootBoundChatClient)`: scoped authenticated loopback listener |
 | `./remote` | `RemoteChatLive`: service using an injected `ConnectionService`, without Pi/SQLite/provider code |
 
 Reusable service exports consume `@moonbase/contracts` and focused Effect helpers; shared authentication comes only from the named `@moonbase/ssh/host-health` leaf. Layers create no runtime. `src/host.ts` is a standalone process root with one runtime, Harness/store and listener. Remote clients compose the remote and connection layers in their own root; see the [consumer example](examples/remote.ts).
+
+See [local runtime, setup, credentials and qualification](docs/LOCAL.md) for embedded desktop use. Local and remote scopes share their caller’s root runtime; layers create none.
 
 ## Host setup
 

@@ -7,6 +7,7 @@ export const maximumChatRequestBytes = 6 * maximumChatInputBytes + 4096;
 export const maximumChatReplyBytes = 256 * 1024;
 export const chatPageSize = 32;
 export const chatPreviewBytes = 4096;
+export type ChatCreationSettings = typeof Contracts.ChatCreationSettingsSchema.Type;
 export type ChatSession = typeof Contracts.ChatSessionSchema.Type;
 export type ChatTarget = typeof Contracts.ChatTargetSchema.Type;
 export type ChatHostConfiguration = typeof Contracts.ChatHostConfigurationSchema.Type;
