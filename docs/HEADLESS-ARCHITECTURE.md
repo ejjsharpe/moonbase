@@ -37,6 +37,8 @@ Contracts never imports application, platform or presentation implementation. Ap
 
 Pi's `src/index.ts` retains public layer/configuration wiring; private `commands.ts`, `history.ts` and `resources.ts` separate command coordination, bounded projection and root acquisition. `documents.ts` owns the shared document families/authority checks and `runtime-types.ts` holds erased shared types. These stay in the same reusable infrastructure graph with no new exports or process-root exceptions. Fixed-settings and local layers share those owners; `host.ts`, `server.ts`, `remote.ts` and local provider/credential entries retain their existing roles. See [Pi ownership and finalizer order](../packages/pi-runtime/docs/OWNERSHIP.md).
 
+Desktop keeps its one privileged composition root in `apps/desktop/src/main.ts`, with private native consent, command IPC, chat backend wiring and document/window lifecycle owners under `src/main/`. Existing session/wire/preload authority remains desktop-private; no package/public export is added. The actual build/archive graph requires those owners, and browser/preload audits reject the privileged subtree. See [desktop ownership](../apps/desktop/docs/LIFECYCLE.md).
+
 ## Public exports and helper decisions
 
 | Baseline export/implementation | Canonical owner/export | Ticket |
