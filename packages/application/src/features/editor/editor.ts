@@ -107,6 +107,26 @@ export type EditorSnapshot = {
   errors: readonly string[];
   operations: readonly OperationResult[];
 };
+type SnapshotData =
+  | string
+  | number
+  | boolean
+  | null
+  | undefined
+  | readonly SnapshotData[]
+  | { readonly [key: string]: SnapshotData };
+
+// Snapshot DTOs need fresh containers, but immutable strings can retain their backing storage.
+function copySnapshotData<A extends SnapshotData>(value: A): A;
+function copySnapshotData(value: SnapshotData): SnapshotData {
+  if (Array.isArray(value)) return value.map((item) => copySnapshotData(item));
+  if (value !== null && typeof value === 'object')
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, copySnapshotData(item)]),
+    );
+  return value;
+}
+
 type ClosedAction = {
   checkout: CheckoutTarget;
   files: {
@@ -279,7 +299,7 @@ class EditorModelState {
   getSnapshot = () => this.snapshot;
   private emit(force = false) {
     if (this.closing && !force) return;
-    this.snapshot = {
+    this.snapshot = copySnapshotData({
       ready: this.ready,
       recoveryReady:
         this.ready &&
@@ -292,23 +312,23 @@ class EditorModelState {
         ![...this.buffers.values()].some((buffer) => buffer.saving || buffer.pendingSave) &&
         ![...this.operations.values()].some((value) => !value.acknowledged),
       disposed: this.disposed,
-      closePrompt: this.closePrompt && structuredClone(this.closePrompt),
+      closePrompt: this.closePrompt,
       preserving: this.preserving,
       discoveryRevision: this.discoveryRevision,
-      recovery: structuredClone(this.recovery),
-      buffers: structuredClone([...this.buffers.values()]),
-      comparisons: { ...this.comparisons },
-      listings: { ...this.listings },
-      git: { ...this.git },
+      recovery: this.recovery,
+      buffers: [...this.buffers.values()],
+      comparisons: this.comparisons,
+      listings: this.listings,
+      git: this.git,
       publication: this.pendingPublication && {
         requestId: this.pendingPublication.request.requestId,
         kind: this.pendingPublication.kind,
       },
-      errors: [...this.errors],
+      errors: this.errors,
       operations: [...this.operations.values()]
         .filter((value) => !value.acknowledged)
-        .map((value) => structuredClone(value.result)),
-    };
+        .map((value) => value.result),
+    });
     for (const listener of this.listeners) {
       try {
         listener();
