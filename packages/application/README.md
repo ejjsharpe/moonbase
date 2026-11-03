@@ -26,6 +26,17 @@ See [Effect invocation and observation cleanup](docs/SCHEMAS.md), [contract sche
 
 The [headless editor](docs/EDITOR.md) acquires once in a supplied scope and binds to the caller's runtime. `@moonbase/workbench` presents a supplied editor controller and exact project/checkout. Consuming apps own main navigation, layout and separate Chat presentation. Synchronous snapshots/recovery readiness, exact close prompts and awaitable disposal retain their existing contracts; unmounting presentation never owns model lifetime.
 
+Editor internals stay private under `src/features/editor/`; consumers continue importing `/editor`.
+
+| Owner | Behavior suites in `test/` |
+| --- | --- |
+| `editor.ts`: buffers, views, commands, mutation/reference facts and synchronous snapshots | `editor.test.ts`, `editor-save-receipts.test.ts`, `editor-filename-maps.test.ts`, `editor-snapshots.test.ts` |
+| `recovery-publications.ts`: exact CAS receipts, retained attempts and scoped debounce | `editor-recovery-readiness.test.ts` |
+| `preservation.ts`: captured Close/Reload/Quit, exact prompts and close history | `editor-preservation-races.test.ts` |
+| `discovery.ts`: checkout watches, selection scopes, cancellation and refresh coalescing | `editor-discovery-activation.test.ts`, `editor-model-lifecycle.test.ts` |
+
+The existing public model fixture freezes controller signatures at compile time. `application.test.ts` covers aggregate admission/lifecycle; `portable-runtime.test.ts` audits the actual public browser graph, including all three private owners. Tests use public controllers and injected clients rather than private owners.
+
 ```sh
 bun run --cwd packages/application typecheck
 bun run --cwd packages/application lint

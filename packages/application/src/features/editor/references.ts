@@ -1,4 +1,10 @@
-import type { CheckoutTarget, EditorRecovery, FileTarget } from '@moonbase/contracts/workspace';
+import type {
+  CheckoutTarget,
+  CheckoutView,
+  EditorRecovery,
+  FileTarget,
+  FileView,
+} from '@moonbase/contracts/workspace';
 import { readOwn } from './record.ts';
 
 export const checkoutKey = (target: CheckoutTarget) =>
@@ -41,4 +47,65 @@ export function moveRecoveryReferences(
       : item,
   );
   state.recentFiles = [...new Map(recentFiles.map((item) => [fileKey(item), item])).values()];
+}
+
+export type ClosedAction = {
+  checkout: CheckoutTarget;
+  files: {
+    path: string;
+    index: number;
+    view: FileView;
+    positions?: CheckoutView['positions'][string];
+  }[];
+  active: string;
+};
+
+/** Apply exact captured close references; buffers and draft decisions stay with the caller. */
+export function closeRecoveryReferences(
+  state: EditorRecovery,
+  targets: readonly FileTarget[],
+  kind: 'files' | 'checkout' | 'quit',
+  checkout?: CheckoutTarget,
+  remember = false,
+): ClosedAction[] {
+  const keys = new Set(targets.map(fileKey));
+  const history: ClosedAction[] = [];
+  if (kind === 'files')
+    for (const target of state.checkouts) {
+      const selected = readOwn(state.views, target.checkoutId);
+      if (!selected) continue;
+      const closing = selected.openFiles.filter((path) =>
+        keys.has(fileKey({ checkout: target, path })),
+      );
+      if (!closing.length) continue;
+      if (remember)
+        history.push({
+          checkout: target,
+          active: closing.includes(selected.active) ? selected.active : closing.at(-1)!,
+          files: closing.map((path) => ({
+            path,
+            index: selected.openFiles.indexOf(path),
+            view: readOwn(selected.fileViews, path) ?? 'file',
+            positions: structuredClone(readOwn(selected.positions, path)),
+          })),
+        });
+      selected.openFiles = selected.openFiles.filter((path) => !closing.includes(path));
+      if (closing.includes(selected.active))
+        selected.active =
+          state.recentFiles.find(
+            (item) =>
+              checkoutKey(item.checkout) === checkoutKey(target) &&
+              selected.openFiles.includes(item.path),
+          )?.path ??
+          selected.openFiles[0] ??
+          '';
+      if (selected.preview && closing.includes(selected.preview)) selected.preview = null;
+    }
+  if (kind === 'checkout' && checkout) {
+    state.openCheckoutIds = state.openCheckoutIds.filter((id) => id !== checkout.checkoutId);
+    if (state.selectedCheckoutId === checkout.checkoutId)
+      state.selectedCheckoutId = state.openCheckoutIds[0] ?? null;
+  }
+
+  return history;
 }

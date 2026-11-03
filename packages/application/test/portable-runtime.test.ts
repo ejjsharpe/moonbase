@@ -3,7 +3,13 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 
-for (const entry of ['', '/runtime/handlers', '/runtime/clients', '/runtime/effect-client'])
+for (const entry of [
+  '',
+  '/editor',
+  '/runtime/handlers',
+  '/runtime/clients',
+  '/runtime/effect-client',
+])
   test(`application${entry} bundles without privileged or UI implementations`, async () => {
     const bundle = await build({
       absWorkingDir: fileURLToPath(new URL('../../../', import.meta.url)),
@@ -21,4 +27,10 @@ for (const entry of ['', '/runtime/handlers', '/runtime/clients', '/runtime/effe
       ),
       [],
     );
+    if (entry === '' || entry === '/editor')
+      for (const owner of ['recovery-publications', 'preservation', 'discovery'])
+        assert(
+          `packages/application/src/features/editor/${owner}.ts` in bundle.metafile.inputs,
+          `The actual browser graph must include the private ${owner} owner`,
+        );
   });

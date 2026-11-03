@@ -35,6 +35,8 @@ The first build failed because fresh worktrees lack `dist/tools/ripgrep/rg`. The
 
 Contracts never imports application, platform or presentation implementation. Application never imports Node, Electron, React/Monaco or an infrastructure implementation. A reusable service never imports application, even through a type-only import or a helper barrel. Cross-package imports use package public exports, including type-only and dynamic imports. Internal DTO/schema type cycles are allowed because clients use erased schema references; runtime file cycles and cross-package cycles including type-only edges are forbidden.
 
+The headless editor's private owners live together in `packages/application/src/features/editor/`. `editor.ts` owns authoritative buffers/views, public commands, synchronous snapshots and mutation/reference fact ordering; `recovery-publications.ts` owns exact CAS attempts/receipts and debounce; `preservation.ts` owns captured Close/Reload/Quit prompts/barriers and history; `discovery.ts` owns checkout observations, selection-read cancellation and coalesced discovery. They consume named injected capabilities and per-attempt captures/current predicates, with confirmed results applied by the editor. The existing runtime/model scope and public `/editor` export remain the boundaries. `EditorController` explicitly declares the existing surface, while composition retains model-only admission and lifecycle methods. See the [editor seams and test map](../packages/application/docs/EDITOR.md).
+
 ## Public exports and helper decisions
 
 | Baseline export/implementation | Canonical owner/export | Ticket |
