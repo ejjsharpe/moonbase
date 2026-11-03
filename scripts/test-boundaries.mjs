@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { checkBoundaries, imports } from './boundaries.mjs';
+import { checkBoundaries, imports, isPrivilegedDesktopInput } from './boundaries.mjs';
 
 const packages = new Map([
   [
@@ -159,3 +159,17 @@ assert(
 console.log(
   'Boundary negative fixtures passed: platform/type/dynamic/deep imports, cycles and hidden process-root back edges.',
 );
+
+for (const entry of [
+  'main.ts',
+  'main/native-actions.ts',
+  'main/ipc.ts',
+  'main/window-lifecycle.ts',
+  'main/chat-backends.ts',
+  'main/future-owner.ts',
+  'ipc-lifetime.ts',
+  'chat/local.ts',
+])
+  assert(isPrivilegedDesktopInput(`/checkout/apps/desktop/src/${entry}`), entry);
+assert(!isPrivilegedDesktopInput('/checkout/apps/desktop/src/renderer/main.tsx'));
+assert(!isPrivilegedDesktopInput('/checkout/apps/desktop/src/chat/wire.ts'));

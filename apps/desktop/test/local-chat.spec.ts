@@ -1,3 +1,4 @@
+import assert from 'node:assert/strict';
 import { test, expect, _electron as electron } from '@playwright/test';
 import { build } from 'esbuild';
 import { readFile, mkdir, mkdtemp, realpath, rm, symlink } from 'node:fs/promises';
@@ -26,13 +27,20 @@ test.beforeAll(async () => {
       {
         name: 'controlled-local-model',
         setup(builder) {
-          builder.onLoad({ filter: /desktop\/src\/main\.ts$/ }, async ({ path }) => ({
-            loader: 'ts',
-            contents: (await readFile(path, 'utf8')).replace(
-              '  let local = localResult.backend;',
-              "  let local = localResult.backend; if (local && process.env.MOONBASE_TEST_LOCAL_ACTIVE) local.control.hasActiveWork = () => Effect.succeed(true); if (local && process.env.MOONBASE_TEST_LOCAL_SCAN_ERROR) local.control.hasActiveWork = () => Effect.fail(new ApplicationError({ code: 'Persistence', message: 'Controlled activity scan failure' }));",
-            ),
-          }));
+          builder.onLoad({ filter: /desktop\/src\/main\/chat-backends\.ts$/ }, async ({ path }) => {
+            const source = await readFile(path, 'utf8');
+            const marker = '  let local = localResult.backend;';
+            assert(source.includes(marker), 'Local activity fixture injection point is missing');
+            return {
+              loader: 'ts',
+              contents:
+                "import { Effect } from 'effect';\n" +
+                source.replace(
+                  marker,
+                  "  let local = localResult.backend; if (local && process.env.MOONBASE_TEST_LOCAL_ACTIVE) local.control.hasActiveWork = () => Effect.succeed(true); if (local && process.env.MOONBASE_TEST_LOCAL_SCAN_ERROR) local.control.hasActiveWork = () => Effect.fail(new ApplicationError({ code: 'Persistence', message: 'Controlled activity scan failure' }));",
+                ),
+            };
+          });
           builder.onLoad({ filter: /pi-runtime\/src\/local-models\.ts$/ }, async ({ path }) => {
             const source = await readFile(path, 'utf8');
             return {
