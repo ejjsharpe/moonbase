@@ -8,7 +8,7 @@ A macOS workbench for local editing and local/optional remote Pi Durable chat. R
 | [Effect helpers](packages/effect/README.md) | Safe shared failure normalization and resource release |
 | [Application](packages/application/README.md) | Headless editor/chat features, composition, lifecycle and shared dispatch |
 | [Workbench](packages/workbench/README.md) | Project-scoped file sidebar, buffers and React/Monaco editor presentation |
-| [Workspace](packages/workspace/README.md) | Local files, Git and recovery persistence |
+| [Workspace](packages/workspace/README.md) | Local files/Git, recovery and scoped native/watch resources |
 | [Pi runtime](packages/pi-runtime/README.md) | Pi chat execution, local provider setup, host transport and remote adapter |
 | [SSH](packages/ssh/README.md) | Scoped, authenticated SSH connectivity |
 | [UI](packages/ui/README.md) | Shared StyleX tokens and recipes |
