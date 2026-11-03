@@ -80,6 +80,20 @@ Desktop supplies separate local storage under `moonbase.chat.local.v1` and keeps
 
 See [local acceptance evidence](docs/LOCAL-ACCEPTANCE.md) for source, controlled, embedded, native and packaged results and remaining manual checks.
 
+## Private source and test map
+
+`src/main.ts` is the sole privileged composition root: user-data/single-instance setup, assets/CSP, runtime acquisition, window/security policy, menu and installation order. Its private owners create no runtime and expose no package API:
+
+| Source | Owns | Focused source checks |
+| --- | --- | --- |
+| `src/main/native-actions.ts` | Native consent, bounded Finder plist conversion and supplied capture/release | `test/native-actions.test.ts`; session late-capture regressions |
+| `src/main/ipc.ts` | Exact live window/main-frame/document guard and command/config/cancel registration with idempotent teardown | `test/main-ipc.test.ts` |
+| `src/main/window-lifecycle.ts` | Ready, document replacement/crash, Hide/Show, Quit identities/stages, cleanup evidence and final release order | `test/window-lifecycle.test.ts` |
+| `src/main/chat-backends.ts` | Existing local/remote sessions, explicit local retry, folder/provider document ownership and local activity inspection | `test/chat-backends.test.ts` |
+| `src/{session,ipc-lifetime}.ts`, `src/chat/session.ts` | Approval, payload policy, request/watch lifetimes and captured finalizers | `test/{session,session-lifetime,ipc-scopes,chat-session}.test.ts` |
+
+`test/main-window.ts` supplies a narrow controlled window adapter for the IPC/lifecycle tests. Source discovery remains `test/*.test.ts`. The test-only native harness still wraps actual IPC registration and imports shipped `dist/main.mjs`; production imports no test hooks. Existing native projects cover real Electron navigation/IPC, reload, crash recovery, local chat and composition; package projects exercise the final archive. Build/archive checks require all private main owners, and the renderer/preload graph checks reject the privileged subtree. See [privileged extraction evidence](docs/PRIVILEGED-VALIDATION.md).
+
 ## Checks and limits
 
 Build before source/native tests; package before package tests:

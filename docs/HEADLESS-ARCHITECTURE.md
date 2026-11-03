@@ -37,6 +37,8 @@ Contracts never imports application, platform or presentation implementation. Ap
 
 Workspace keeps its public service/configuration identities and filesystem asset export. Internally, `workspace.ts` composes exact authority, admission/overlap leases, filesystem mutations and ordered root disposal. `recovery.ts` owns volatile/journal evidence, immutable replay, publication transactions and acknowledgment rules through the acquired Store and focused authority/predicates. `native-references.ts` owns unclaimed capture/expiry and admitted descriptor claim/release; `discovery.ts` owns read-only listing/Git/lookup; `observations.ts` owns scoped watcher/debounce resources and failed-release retries. These owners neither receive the workspace parent nor close its shared Store/directories/helpers. See the [private source/test map](../packages/workspace/README.md#private-ownership-and-tests). Storage, contracts, application and desktop lifecycle remain unchanged.
 
+Desktop keeps its one privileged composition root in `apps/desktop/src/main.ts`, with private native consent, command IPC, chat backend wiring and document/window lifecycle owners under `src/main/`. Existing session/wire/preload authority remains desktop-private; no package/public export is added. The actual build/archive graph requires those owners, and browser/preload audits reject the privileged subtree. See [desktop ownership](../apps/desktop/docs/LIFECYCLE.md).
+
 ## Public exports and helper decisions
 
 | Baseline export/implementation | Canonical owner/export | Ticket |
