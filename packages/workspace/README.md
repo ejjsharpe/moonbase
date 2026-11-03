@@ -47,7 +47,7 @@ Recovery receives the acquired Store, authorized directory lookup, an active-che
 
 Mutation inspects references, reserves immutable evidence, then transfers the selected descriptors synchronously without yielding. Expiry and document release see only unclaimed tokens. The admitted operation retains its descriptors until helper exit and durable/volatile settlement. Root close fences admission and signals work, closes observations and retries their failed releases, closes unclaimed-reference scope, joins operations/helpers, then closes directories and Store.
 
-`recovery-fixture.ts` and `workspace-fixture.ts` compose public services/clients with temporary stores and repositories. Existing helper gates and the Effect test clock control races. `ownership.test.ts` additionally covers disposal of a claimed import while its helper still owns stdio and unrelated command progress during watch acquisition. Cross-module checks remain in [`tests/editor-workspace`](../../tests/editor-workspace/README.md); fixed previous-producer archives and expected bytes are unchanged.
+`recovery-fixture.ts` and `workspace-fixture.ts` compose public services/clients with temporary stores and repositories. Existing helper gates and the Effect test clock control races. `ownership.test.ts` additionally covers failed import reservation retaining the original references, automatic expiry before explicit release, disposal of a claimed import while its helper still owns stdio, and unrelated command progress during watch acquisition. Cross-module checks remain in [`tests/editor-workspace`](../../tests/editor-workspace/README.md); fixed previous-producer archives and expected bytes are unchanged.
 
 ## Build and check
 
@@ -60,4 +60,4 @@ bun run --cwd packages/workspace lint
 bun run --cwd packages/workspace test
 ```
 
-The [editor/workspace integration suite](../../tests/editor-workspace/README.md) checks the public module boundary.
+The [editor/workspace integration suite](../../tests/editor-workspace/README.md) checks the public module boundary. [Ownership refactor validation](docs/VALIDATION.md) records exact revisions, commands and separate qualification limits.
