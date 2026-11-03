@@ -143,6 +143,38 @@ test('close dialog Cancel then Discard; Reopen reads disk and disposal releases 
   await expect.poll(() => page.evaluate(() => window.demo.modelCount())).toBe(before - 1);
 });
 
+for (const origin of ['editor', 'file tab', 'Find file button'] as const)
+  test(`file search restores ${origin} focus and reopens after dismissal`, async ({ page }) => {
+    await page.goto('/');
+    let focused = first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true });
+    if (origin === 'file tab')
+      focused = first(page)
+        .getByRole('tablist', { name: 'Open files', exact: true })
+        .getByRole('tab', { name: 'welcome.ts', exact: true });
+    else if (origin === 'Find file button')
+      focused = first(page).getByRole('button', { name: 'Find file', exact: true });
+    await focused.focus();
+    const dialog = page.getByRole('dialog', { name: 'Find file', exact: true });
+    for (const dismiss of ['Escape', 'Cancel'] as const) {
+      if (origin === 'Find file button') await focused.click();
+      else await page.keyboard.press('Meta+p');
+      await expect(dialog.getByRole('combobox')).toBeFocused();
+      if (dismiss === 'Escape') await page.keyboard.press('Escape');
+      else await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+      await expect(dialog).toHaveCount(0);
+      await expect(focused).toBeFocused();
+    }
+    await page.keyboard.press('Meta+p');
+    await expect(dialog.getByRole('combobox')).toBeFocused();
+    await dialog.getByRole('combobox').fill('README');
+    await expect(dialog.getByRole('option', { name: 'README.md', exact: true })).toBeVisible();
+    await page.keyboard.press('Enter');
+    await expect(dialog).toHaveCount(0);
+    await expect(
+      first(page).getByRole('textbox', { name: 'README.md editor', exact: true }),
+    ).toBeFocused();
+  });
+
 test('lookup groups/highlights, previews, tree actions and constrained layout', async ({
   page,
 }) => {
@@ -184,9 +216,7 @@ test('real close-checkout removes its Monaco models without a teardown exception
     first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true }),
   ).toBeVisible();
   const before = await page.evaluate(() => window.demo.modelCount());
-  await first(page)
-    .getByRole('button', { name: 'Close checkout /demo/moonbase', exact: true })
-    .click();
+  await page.evaluate(() => window.demo.first.closeCheckout(window.demo.checkout));
   await expect(
     first(page).getByText(
       'Open a checkout to browse files and edit. Unsaved changes belong to this editor instance.',
@@ -235,6 +265,47 @@ test('close-all/reopen/close-active loads the surviving file instead of an unava
     first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true }),
   ).toBeVisible();
 });
+
+for (const via of ['button', 'keyboard', 'menu'] as const)
+  test(`closing via ${via} loads the supplied checkout's survivor when another checkout is selected`, async ({
+    page,
+  }) => {
+    await page.goto('/');
+    await first(page).getByRole('treeitem', { name: 'README.md', exact: true }).dblclick();
+    await first(page).getByRole('button', { name: 'Tab actions', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Close All', exact: true }).click();
+    await expect(first(page).getByRole('tab')).toHaveCount(0);
+    await first(page).getByRole('button', { name: 'Tab actions', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Reopen Closed Files', exact: true }).click();
+    await expect(
+      first(page).getByRole('textbox', { name: 'README.md editor', exact: true }),
+    ).toBeVisible();
+    await page.evaluate(() => window.demo.first.openCheckout('/demo/other'));
+    expect(
+      await page.evaluate(() => window.demo.first.getSnapshot().recovery.selectedCheckoutId),
+    ).toBe('other');
+    expect(
+      await page.evaluate(() =>
+        window.demo.first.buffer({ checkout: window.demo.checkout, path: 'welcome.ts' }),
+      ),
+    ).toBeUndefined();
+    if (via === 'button')
+      await first(page).getByRole('button', { name: 'Close README.md', exact: true }).click();
+    else if (via === 'keyboard') {
+      await first(page).getByRole('textbox', { name: 'README.md editor', exact: true }).focus();
+      await page.keyboard.press('Meta+w');
+    } else {
+      await first(page).getByRole('button', { name: 'Tab actions', exact: true }).click();
+      await page.getByRole('menuitem', { name: 'Close', exact: true }).click();
+    }
+    const survivor = first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true });
+    await expect(survivor).toBeVisible();
+    if (via === 'keyboard') await expect(survivor).toBeFocused();
+    await expect(first(page).getByRole('button', { name: 'Retry file', exact: true })).toHaveCount(
+      0,
+    );
+    await page.screenshot({ path: `test-results/editor-project-close-${via}.png`, fullPage: true });
+  });
 
 for (const navigation of ['visual', 'recent'] as const)
   test(`${navigation} keyboard navigation restores typing focus and keeps tab-strip focus`, async ({
@@ -1042,7 +1113,7 @@ test('Shift tree ranges extend and shrink from a stable anchor before Trash', as
   });
   await tree.focus();
   await tree.press('Shift+ArrowUp');
-  expect(await selected()).toEqual(paths.slice(2));
+  expect(await selected()).toEqual(paths.slice(2, 3));
   await tree.press('ArrowUp');
   await tree.press('Shift+ArrowDown');
   expect(await selected()).toEqual(paths.slice(1, 3));
@@ -1080,4 +1151,61 @@ test('Reveal starts a new Shift tree range and captures only that Trash batch', 
   expect(await selected()).toEqual(['welcome.ts']);
   await tree.press('Shift+ArrowUp');
   expect(await selected()).toEqual(['README.md', 'welcome.ts']);
+});
+
+test('workbench renders its supplied checkout independently of application navigation', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await expect(
+    first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true }),
+  ).toBeVisible();
+  await page.evaluate(async () => {
+    await window.demo.first.openCheckout('/demo/other');
+  });
+  expect(
+    await page.evaluate(() => window.demo.first.getSnapshot().recovery.selectedCheckoutId),
+  ).toBe('other');
+  await expect(
+    first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true }),
+  ).toBeVisible();
+  await expect(
+    first(page).getByRole('treeitem', { name: 'elsewhere.ts', exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    first(page).getByRole('tablist', { name: 'Workbench views', exact: true }),
+  ).toHaveCount(0);
+  await expect(first(page).getByRole('tab', { name: 'Chat', exact: true })).toHaveCount(0);
+  await first(page).getByRole('button', { name: 'Find file', exact: true }).click();
+  await page.getByRole('combobox').fill('elsewhere');
+  await expect(page.getByRole('dialog').getByRole('status')).toContainText('0 results');
+  await expect(page.getByRole('option')).toHaveCount(0);
+  await expect(page.getByLabel('All open checkouts', { exact: true })).toHaveCount(0);
+});
+
+test('editor remains usable when the app omits the explorer from its layout', async ({ page }) => {
+  await page.goto('/?editor-only');
+  const input = first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true });
+  await expect(input).toBeVisible();
+  await expect(first(page).getByRole('tree', { name: 'Files', exact: true })).toHaveCount(0);
+  await expect(
+    first(page).getByRole('complementary', { name: 'Editor sidebar', exact: true }),
+  ).toHaveCount(0);
+  await input.focus();
+  await input.press('Meta+a');
+  await input.pressSequentially('editor without explorer');
+  await input.press('Meta+s');
+  await expect.poll(() => page.evaluate(() => window.demo.memory.stats.saves)).toBe(1);
+  await input.press('Meta+p');
+  await page.getByRole('combobox').fill('README');
+  await page.getByRole('option', { name: 'README.md', exact: true }).click();
+  await expect(
+    first(page).getByRole('textbox', { name: 'README.md editor', exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press('Meta+w');
+  await expect(input).toBeFocused();
+  await page.keyboard.press('Meta+w');
+  await expect(first(page).locator('[aria-label="Moonbase editor"]')).toBeFocused();
+  await page.keyboard.press('Meta+Shift+t');
+  await expect(input).toBeFocused();
 });

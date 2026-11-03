@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { Dialog } from '@base-ui/react/dialog';
 import { overlays } from '@moonbase/ui/overlays';
+import { workbench } from '@moonbase/ui/workbench';
 import { styles } from './styles.ts';
 
 export function Popup({
@@ -23,7 +24,9 @@ export function Popup({
       }}>
       <Dialog.Portal>
         <Dialog.Backdrop {...stylex.props(styles.backdrop)} />
-        <Dialog.Popup finalFocus={finalFocus} {...stylex.props(overlays.dialog, styles.popup)}>
+        <Dialog.Popup
+          finalFocus={finalFocus}
+          {...stylex.props(workbench.document, overlays.dialog, styles.popup)}>
           <Dialog.Title {...stylex.props(overlays.dialogTitle)}>{title}</Dialog.Title>
           {children}
         </Dialog.Popup>

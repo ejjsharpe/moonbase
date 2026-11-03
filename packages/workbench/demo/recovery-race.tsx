@@ -1,10 +1,16 @@
+import { createMoonbaseApplication } from '@moonbase/application';
 import { makeEditorModel, makeEditorController } from '@moonbase/application/editor';
 import { createRoot } from 'react-dom/client';
+import { useSyncExternalStore } from 'react';
+import { Tabs } from '@base-ui/react/tabs';
+import * as stylex from '@stylexjs/stylex';
+import { controls } from '@moonbase/ui/controls';
+import { workbench } from '@moonbase/ui/workbench';
 import { Effect, Exit, Scope, ManagedRuntime } from 'effect';
 const modelScope = Scope.makeUnsafe();
 import { ApplicationError, type CommandInput } from '@moonbase/contracts/workspace';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
-import { EditorWorkbench } from '../src/index.ts';
+import { Workbench } from '../src/index.ts';
 import { configureMonacoWorkers } from '../src/workers.ts';
 import { memoryWorkspace } from '@moonbase/application/testing/memory-workspace';
 import '@moonbase/ui/reset.css';
@@ -77,68 +83,95 @@ let releaseCopyPreflight = () => {},
 let copyPreflight = Promise.resolve(),
   copyRead = Promise.resolve(),
   copying = Promise.resolve();
-const editor = makeEditorController(
-  runtime,
-  await runtime.runPromise(
-    makeEditorModel({
-      clientId: 'recovery-race',
-      client: {
-        ...client,
-        async command(name, input, options) {
-          if (name === 'persistRecovery' && holdCopyPreflight) {
-            holdCopyPreflight = false;
-            const receipt = await client.command(name, input, options);
-            copyPhase = 'preflight';
-            await copyPreflight;
-            return receipt;
-          }
-          if (
-            name === 'readFile' &&
-            (input as CommandInput<'readFile'>).path === 'copy.ts' &&
-            holdCopyRead
-          ) {
-            holdCopyRead = false;
-            const disk = await client.command(name, input, options);
-            copyPhase = 'read';
-            await copyRead;
-            return disk;
-          }
-          if (hold && name === 'persistRecovery') {
-            waiting = true;
-            await wait;
-          }
-          if (
-            loseFinal &&
-            name === 'persistRecovery' &&
-            !(input as CommandInput<'persistRecovery'>).state.views.alpha.openFiles.includes('b.ts')
-          ) {
-            loseFinal = false;
-            failStatus = true;
-            await client.command(name, input, options);
-            throw new ApplicationError({
-              code: 'Unavailable',
-              message: 'Controlled lost final close response',
-            });
-          }
-          if (failStatus && name === 'getRecoveryPublication') {
-            failStatus = false;
-            throw new ApplicationError({
-              code: 'Unavailable',
-              message: 'Controlled status outage',
-            });
-          }
-          return client.command(name, input, options);
+const application = await createMoonbaseApplication({
+    editors: [
+      {
+        clientId: 'recovery-race',
+        client: {
+          ...client,
+          async command(name, input, options) {
+            if (name === 'persistRecovery' && holdCopyPreflight) {
+              holdCopyPreflight = false;
+              const receipt = await client.command(name, input, options);
+              copyPhase = 'preflight';
+              await copyPreflight;
+              return receipt;
+            }
+            if (
+              name === 'readFile' &&
+              (input as CommandInput<'readFile'>).path === 'copy.ts' &&
+              holdCopyRead
+            ) {
+              holdCopyRead = false;
+              const disk = await client.command(name, input, options);
+              copyPhase = 'read';
+              await copyRead;
+              return disk;
+            }
+            if (hold && name === 'persistRecovery') {
+              waiting = true;
+              await wait;
+            }
+            if (
+              loseFinal &&
+              name === 'persistRecovery' &&
+              !(input as CommandInput<'persistRecovery'>).state.views.alpha.openFiles.includes(
+                'b.ts',
+              )
+            ) {
+              loseFinal = false;
+              failStatus = true;
+              await client.command(name, input, options);
+              throw new ApplicationError({
+                code: 'Unavailable',
+                message: 'Controlled lost final close response',
+              });
+            }
+            if (failStatus && name === 'getRecoveryPublication') {
+              failStatus = false;
+              throw new ApplicationError({
+                code: 'Unavailable',
+                message: 'Controlled status outage',
+              });
+            }
+            return client.command(name, input, options);
+          },
         },
       },
-    }).pipe(Effect.provideService(Scope.Scope, modelScope)),
-  ),
-);
-await editor.load();
-createRoot(document.getElementById('root')!).render(
-  <div style={{ height: '100vh' }}>
-    <EditorWorkbench controller={editor} />
-  </div>,
-);
+    ],
+  }),
+  editor = application.editors[0]!;
+function RecoveryRace() {
+  const { recovery } = useSyncExternalStore(editor.subscribe, editor.getSnapshot);
+  const checkout = recovery.checkouts.find(
+    (item) => item.checkoutId === recovery.selectedCheckoutId,
+  );
+  return (
+    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
+      <Tabs.Root
+        value={checkout?.checkoutId}
+        onValueChange={(id) => {
+          const target = recovery.checkouts.find((item) => item.checkoutId === id);
+          if (target) void editor.selectCheckout(target).catch(editor.report);
+        }}>
+        <Tabs.List aria-label="Demo projects" {...stylex.props(workbench.projectTabs)}>
+          {recovery.checkouts
+            .filter((item) => recovery.openCheckoutIds.includes(item.checkoutId))
+            .map((item) => (
+              <Tabs.Tab
+                key={item.checkoutId}
+                value={item.checkoutId}
+                {...stylex.props(controls.button)}>
+                {item.checkoutId} · {item.branch}
+              </Tabs.Tab>
+            ))}
+        </Tabs.List>
+      </Tabs.Root>
+      <Workbench controller={editor} checkout={checkout} />
+    </div>
+  );
+}
+createRoot(document.getElementById('root')!).render(<RecoveryRace />);
 declare global {
   interface Window {
     recoveryRace: {
@@ -228,8 +261,9 @@ window.recoveryRace = {
 window.addEventListener(
   'pagehide',
   () => {
-    void runtime
-      .runPromiseExit(Scope.close(modelScope, Exit.void))
+    void application
+      .dispose()
+      .finally(() => runtime.runPromiseExit(Scope.close(modelScope, Exit.void)))
       .finally(() => runtime.dispose());
   },
   { once: true },

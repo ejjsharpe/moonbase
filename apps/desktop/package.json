@@ -17,11 +17,13 @@
     "test:native": "playwright test --project editor --project configuration --project reload --project composition --project recovery",
     "test:composition": "playwright test --project composition",
     "test:reload": "playwright test --project reload",
-    "check:package": "node scripts/check-package.mjs"
+    "check:package": "node scripts/check-package.mjs",
+    "demo:browser": "vp dev --config vite.browser.config.ts --host 127.0.0.1",
+    "test:browser": "playwright test --config playwright.browser.config.ts"
   },
   "dependencies": {
     "@moonbase/application": "workspace:*",
-    "@moonbase/editor": "workspace:*",
+    "@moonbase/workbench": "workspace:*",
     "@moonbase/workspace": "workspace:*",
     "@moonbase/ui": "workspace:*",
     "effect": "4.1.0",

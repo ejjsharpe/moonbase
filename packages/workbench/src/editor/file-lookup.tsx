@@ -33,7 +33,6 @@ export function FileLookup({
   editorFocus: () => HTMLElement | null;
 }) {
   const [query, setQuery] = useState(''),
-    [all, setAll] = useState(false),
     [refresh, setRefresh] = useState(0);
   const [lookup, setLookup] = useState<EditorLookup | null>(null);
   const { rows, message, busy } = useSyncExternalStore(
@@ -43,12 +42,7 @@ export function FileLookup({
   const [index, setIndex] = useState(0);
   const activated = useRef(false),
     id = useId();
-  const scope = all
-      ? state.recovery.checkouts.filter((target) =>
-          state.recovery.openCheckoutIds.includes(target.checkoutId),
-        )
-      : [checkout],
-    scopeKey = JSON.stringify(scope);
+  const scopeKey = JSON.stringify([checkout]);
   useEffect(() => {
     const acquired = controller.createLookup();
     // oxlint-disable-next-line react/set-state-in-effect -- React owns this popup attachment; the model owns its async work.
@@ -63,10 +57,6 @@ export function FileLookup({
     setIndex(0);
   }, [query, scopeKey, refresh, lookup, state.discoveryRevision]);
   async function open(row = rows[index]) {
-    if (!row && all) {
-      lookup?.message('Choose one exact checkout result, or search in the active checkout.');
-      return;
-    }
     const target = row ? { checkout: row.checkout, path: row.path } : { checkout, path: query };
     if (
       await lookup?.open((current) =>
@@ -95,15 +85,12 @@ export function FileLookup({
       title="Find file"
       onClose={close}
       finalFocus={() => (activated.current ? (editorFocus() ?? false) : true)}>
-      <Dialog.Description {...stylex.props(styles.path)}>
-        {all ? 'Search exactly the open checkouts.' : checkout.root}
-      </Dialog.Description>
+      <Dialog.Description {...stylex.props(styles.path)}>{checkout.root}</Dialog.Description>
       <label {...stylex.props(styles.label)}>
         Filename or exact relative path
         <input
           {...stylex.props(controls.field)}
           value={query}
-          autoFocus
           role="combobox"
           aria-controls={id}
           aria-expanded={rows.length > 0}
@@ -129,10 +116,6 @@ export function FileLookup({
             }
           }}
         />
-      </label>
-      <label>
-        <input type="checkbox" checked={all} onChange={(event) => setAll(event.target.checked)} />{' '}
-        All open checkouts
       </label>
       <div id={id} role="listbox" aria-label="Matching files" {...stylex.props(styles.lookupList)}>
         {[true, false].map((recent) => (
@@ -169,11 +152,6 @@ export function FileLookup({
                       ) : (
                         character
                       ),
-                    )}
-                    {all && (
-                      <small {...stylex.props(overlays.lookupRoot)}>
-                        {row.checkout.branch} · {row.checkout.root}
-                      </small>
                     )}
                   </div>
                 );

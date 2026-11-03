@@ -90,6 +90,10 @@ const tab = (p: Page, view: string) =>
   p
     .getByRole('tablist', { name: 'Workbench views', exact: true })
     .getByRole('tab', { name: view, exact: true });
+const projectTab = (p: Page) =>
+  p
+    .getByRole('tablist', { name: 'Workbench views', exact: true })
+    .getByRole('tab', { name: / · main$/ });
 async function local(p: Page, app: ElectronApplication, f: Fixture) {
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = (async () => ({
@@ -232,7 +236,7 @@ test('dirty editor/live chat, two drafts, no-resend reconnect, view close and cl
     await p.getByLabel('Message', { exact: true }).fill('first independent newer draft');
     await tab(p, 'Chat').focus();
     await p.keyboard.press('ArrowLeft');
-    await expect(tab(p, 'Editor')).toBeFocused();
+    await expect(projectTab(p)).toBeFocused();
     await p.keyboard.press('Enter');
     await p.evaluate(
       () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
@@ -253,8 +257,8 @@ test('dirty editor/live chat, two drafts, no-resend reconnect, view close and cl
         2,
       ),
     );
-    await expect(tab(p, 'Editor')).toBeFocused();
-    await expect(tab(p, 'Editor')).toHaveAttribute('aria-selected', 'true');
+    await expect(projectTab(p)).toBeFocused();
+    await expect(projectTab(p)).toHaveAttribute('aria-selected', 'true');
     const editorHasFocus = () =>
       p.evaluate(() => !!document.activeElement?.closest('[aria-label="Moonbase editor"]'));
     for (let step = 0; step < 24 && !(await editorHasFocus()); step++)
@@ -358,7 +362,7 @@ test('dirty editor/live chat, two drafts, no-resend reconnect, view close and cl
     await p.getByRole('button', { name: 'Close view', exact: true }).click();
     expect((await f.stats()).commands.filter((v) => v === 'stopChat')).toHaveLength(0);
     await p.getByRole('button', { name: 'First remote chat', exact: false }).click();
-    await tab(p, 'Editor').click();
+    await projectTab(p).click();
     await expect(editor(p)).toBeFocused();
     await p.getByRole('button', { name: 'Close a.ts', exact: true }).click();
     await p.getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true }).click();
@@ -431,7 +435,7 @@ for (const change of ['external', 'write-failure'])
       await expect(p.getByRole('alert').first()).toContainText('preserv');
       await expect(p.getByRole('dialog')).toHaveCount(0);
       expect(children.get(app)!.exitCode).toBeNull();
-      await tab(p, 'Editor').click();
+      await projectTab(p).click();
       await expect(editor(p)).toBeVisible();
       await expect(
         p.locator('.view-line').filter({ hasText: 'local dirty draft' }).first(),
@@ -523,7 +527,7 @@ test('native 200% normal/constrained live chat keeps wheel/Tab Stop and Send rea
     await app.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(1),
     );
-    await tab(p, 'Editor').click();
+    await projectTab(p).click();
     await expect(editor(p)).toBeFocused();
     await editor(p).press('End');
     await editor(p).pressSequentially(' after zoom');
@@ -551,7 +555,7 @@ test('captured Quit keeps chat/newer drafts and editor conflicts usable; Cancel 
     await connect(p);
     await create(p, 'Quit with independent chat');
     await p.getByLabel('Message', { exact: true }).fill('before Quit');
-    await tab(p, 'Editor').click();
+    await projectTab(p).click();
     await writeFile(join(f.cwd, 'a.ts'), 'external conflicting change');
     await app.evaluate(({ app }) => app.quit());
     await p.getByRole('dialog').getByRole('button', { name: 'Save', exact: true }).click();
@@ -563,7 +567,7 @@ test('captured Quit keeps chat/newer drafts and editor conflicts usable; Cancel 
     await expect(editor(p)).toBeVisible();
     await tab(p, 'Chat').click();
     await p.getByLabel('Message', { exact: true }).fill('newer draft after cancelled Quit');
-    await tab(p, 'Editor').click();
+    await projectTab(p).click();
     await app.evaluate(({ app }) => app.quit());
     await p.getByRole('dialog').getByRole('button', { name: 'Discard', exact: true }).click();
     await until(async () => children.get(app)!.exitCode !== null, Boolean);
@@ -597,7 +601,7 @@ if (!packaged)
       await local(p, app, f);
       await connect(p);
       await create(p, 'Independent long waits');
-      await tab(p, 'Editor').click();
+      await projectTab(p).click();
       await app.evaluate(() => {
         globalThis.desktopTest.held = 'saveFile';
       });
@@ -616,7 +620,7 @@ if (!packaged)
       );
       expect(status.ok).toBe(true);
       await app.evaluate(() => globalThis.desktopTest.release());
-      await tab(p, 'Editor').click();
+      await projectTab(p).click();
       await expect(p.getByRole('button', { name: 'Save', exact: true })).toBeEnabled();
       await editor(p).focus();
       await editor(p).press('End');
@@ -639,7 +643,7 @@ if (!packaged)
       await p
         .getByLabel('Message', { exact: true })
         .fill('latest chat while editor publication unknown');
-      await tab(p, 'Editor').click();
+      await projectTab(p).click();
       await app.evaluate(() => {
         globalThis.desktopTest.noStatus = false;
       });
@@ -684,7 +688,7 @@ test('held admitted Send leaves local Save/read/status and exact Stop independen
       (v: { operation: string }) => v.operation === 'sendChat',
     );
     await p.getByLabel('Message', { exact: true }).fill('newer draft while original waits');
-    await tab(p, 'Editor').click();
+    await projectTab(p).click();
     await p.getByRole('button', { name: 'Save', exact: true }).click();
     await expect.poll(() => readFile(join(f.cwd, 'a.ts'), 'utf8')).toBe('local dirty draft');
     expect((await recovery(p)).state.checkouts).toHaveLength(1);

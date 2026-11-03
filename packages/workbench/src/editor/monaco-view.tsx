@@ -18,13 +18,19 @@ export function MonacoView({
   state,
   target,
   mode,
+  visible,
 }: {
   controller: EditorController;
   state: EditorSnapshot;
   target?: FileTarget;
   mode: FileView;
+  visible: boolean;
 }) {
-  const container = useRef<HTMLDivElement>(null);
+  const container = useRef<HTMLDivElement>(null),
+    visibility = useRef(visible);
+  useLayoutEffect(() => {
+    visibility.current = visible;
+  }, [visible]);
   const models = useRef(
     new Map<string, { model: monaco.editor.ITextModel; listener: monaco.IDisposable }>(),
   );
@@ -136,6 +142,8 @@ export function MonacoView({
         editor.setScrollPosition({ scrollTop: position.top, scrollLeft: position.left });
       }
       const record = () => {
+        // Hidden layout changes are presentation artifacts, not user view positions.
+        if (!visibility.current) return;
         try {
           const cursor = editor.getPosition();
           if (cursor)
@@ -225,6 +233,37 @@ export function MonacoView({
   }, [controller, key, mode, hasBuffer, comparison?.original, comparison?.title, state.disposed]);
   useLayoutEffect(() => {
     const editor = mounted.current;
+    if (!editor || !target) return;
+    const positions = readOwn(
+      readOwn(controller.getSnapshot().recovery.views, target.checkout.checkoutId)?.positions,
+      target.path,
+    );
+    const modified = readOwn(positions, mode),
+      original = readOwn(positions, `${mode}:original`);
+    editor.updateOptions({ automaticLayout: visible });
+    if (!visible) return;
+    editor.layout();
+    const restoreScroll = (view: monaco.editor.ICodeEditor, position: typeof modified) => {
+      if (!position) return;
+      view.setScrollPosition({ scrollTop: position.top, scrollLeft: position.left });
+    };
+    if ('getModifiedEditor' in editor) {
+      restoreScroll(editor.getOriginalEditor(), original);
+      restoreScroll(editor.getModifiedEditor(), modified);
+    } else restoreScroll(editor, modified);
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- Restore visibility on the same view identities as creation; typing must not relayout the editor.
+  }, [
+    visible,
+    controller,
+    key,
+    mode,
+    hasBuffer,
+    comparison?.original,
+    comparison?.title,
+    state.disposed,
+  ]);
+  useLayoutEffect(() => {
+    const editor = mounted.current;
     if (editor) {
       const readOnly = state.preserving || !hasBuffer;
       if ('getModifiedEditor' in editor) {
@@ -236,7 +275,7 @@ export function MonacoView({
         editor.updateOptions(diffOptions);
       } else editor.updateOptions({ readOnly });
     }
-  }, [state.preserving, hasBuffer, comparison?.title, target?.path]);
+  }, [visible, state.preserving, hasBuffer, comparison?.title, target?.path]);
   return (
     <div
       ref={container}

@@ -18,7 +18,7 @@ export default defineConfig({
     },
     {
       ...web,
-      files: ['**/*.tsx', 'apps/desktop/src/renderer/**', 'packages/{editor,ui}/**'],
+      files: ['**/*.tsx', 'apps/desktop/src/renderer/**', 'packages/{workbench,ui}/**'],
     },
   ],
 });
