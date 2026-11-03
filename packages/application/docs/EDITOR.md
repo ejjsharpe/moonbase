@@ -39,6 +39,31 @@ Applications supply clients, acquire models in their aggregate scope and own run
 
 `getSnapshot()` retains its identity until the next publication. Each publication copies its DTO arrays and objects, including nested buffers, recovery and discovery data, while sharing immutable string values. Consumer mutations cannot change model state or later publications; retained snapshots remain stable as the editor changes. This avoids serializing large unrelated buffer and restored-draft strings on every edit or position update. See the [controlled snapshot measurements](EDITOR-SNAPSHOT-PERFORMANCE.md) for the repeatable harness and its limits.
 
+## Controller surface
+
+`EditorController` explicitly declares the existing surface in `src/features/editor/editor.ts`; adding an implementation method cannot expand it. `clientId` and `instanceId` are readonly. `subscribe`, `getSnapshot` and `report` are bound callbacks; subscription returns a synchronous unsubscribe. `dispose` remains replaceable by a composition fixture and returns the same cleanup promise on repeated calls.
+
+| Area | Members |
+| --- | --- |
+| Snapshots and errors | `subscribe(listener)`, `getSnapshot()`, `report(error)`, `clearErrors()` |
+| Recovery and checkout | `load()`, `openCheckout(root)`, `selectCheckout(target)`, `resolveRecoveryPublication()`, `flush()`, `reconcileRecovery()` |
+| Buffers | `buffer(target)`, `edit(target, text)`, `keepOpen(target)`, `open(target, options?)`, `save(target, overwrite = false)`, `reload(target)`, `cancelConflict(target)` |
+| View memory | `position(target, mode, position)`, `reorder(checkout, from, to)`, `navigate(checkout, direction)`, `tree(checkout, patch)`, `resizeSidebar(width)` |
+| Preservation | `answerClose(promptId, choice)`, `close(targets)`, `closeCheckout(checkout)`, `prepareQuit()`, `reopen(checkout)`, `dispose()` |
+| Discovery and operations | `list(checkout, path = '')`, `reveal(target, showIgnored = false)`, `lookup(checkout, query)`, `refresh(checkout)`, `createLookup()`, `createMutation(action)`, `inspect(checkout, paths)`, `mutate(input)`, `resolveOperation(id, operationClientId = clientId)` |
+
+`open` retains optional `view`, `intent` and `current` controls. The acquired `EditorModel` separately retains `bind`, `release`, `setAdmissionsOpen` and `finishQuitPreparation` for composition. They are excluded from the controller. Factories, binding once, public export paths, storage and wire contracts remain unchanged; the public fixture checks the full original controller type.
+
+## Internal lifetimes
+
+`editor.ts` remains the sole writer of live buffers, disk/conflict state, checkout/view memory and synchronous snapshots. Mutation/reference reconciliation and its facts semaphore/defer coordinator stay there. `references.ts` shares exact reference calculations between cloned close proposals and confirmed live application; `record.ts` keeps filename maps safe.
+
+`recovery-publications.ts` owns the publication semaphore, persisted revision, capture/confirmation generations, in-flight count, immutable pending request and debounce fiber/generation under the supplied model scope. It accepts cloned recovery and captured Save IDs, validates only an attempt's exact CAS receipt and invokes that attempt's retained continuation. Validated fact transitions enter through its revision operation; Save evidence is retired only after the containing publication confirms. The facts coordinator acquires its own semaphore before waiting for publication ownership, preserving the original lock order.
+
+`preservation.ts` owns one captured Close/Reload/Quit action, its generation/barrier, exact prompt Deferred and close history. Per-attempt capabilities capture buffers/recovery, save/read, check current references/revision and apply the confirmed result. It never receives mutable model state. The final exact publication receipt authorizes the live result; a pending confirmation retains the barrier. Release resumes deferred facts through the editor's existing coordinator before activation/debounce work. Document loss cancels an unanswered prompt immediately.
+
+`discovery.ts` owns checkout watch scopes/handles, retained observation-close outcomes, selected-read scopes/activation generations, obsolete interrupt-only classification and refresh coalescing. Named listing/Git/comparison capabilities and operation-local current predicates publish into model-owned state. Watch events request existing facts reconciliation; discovery never publishes recovery. Checkout removal releases its observation, and model disposal joins detached, held or failed closures. Active, compound and cleanup failures remain observable.
+
 ## Preservation and lifecycle
 
 Snapshot subscribers run synchronously. A throwing subscriber cannot block later notifications or editor-owned preservation.
@@ -52,6 +77,8 @@ Recovery uses [exact publication receipts](../../contracts/docs/RECOVERY-PUBLICA
 Saved recovery is decoded strictly before rebuilding buffers or publishing a capture. Unfamiliar nested fields, malformed data and foreign client identity keep readiness false and prevent overwrite; original bytes remain untouched. Known optional fields and dynamic filename keys remain supported. There is no migration or silent reset. Memory/demo recovery uses the same structural decoder; an invalid live draft remains visible and must be corrected before preservation can publish it.
 
 Publication and immutable-fact ordering use independent per-model Effect semaphores. Debounce timers, checkout observers, selection reads and lookup/inspection sessions have scoped lifetimes; cancelling a popup cannot cancel an already captured mutation. Late results remain fenced by exact identities and generation checks. No operation is automatically replayed.
+
+The [README test map](../README.md) separates ordinary buffer behavior, immutable Save receipts, readiness/publications, preservation races, discovery/activation, filename safety and scoped cleanup. The preservation suite retains facts crossing Close/Reload barriers and Copy destination-close invalidation. The lifecycle suite retains reentrant watch acquisition, held/detached/failing watch close and obsolete versus compound cancellation. A queued A/B publication regression covers exact retained-attempt ownership. All use public factories/controllers; browser graph checks include each private owner without a fixed input count.
 
 ## Checks
 

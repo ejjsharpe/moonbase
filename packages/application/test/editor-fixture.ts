@@ -1,7 +1,7 @@
 import { acquireEditor } from './editor-model-fixture.ts';
 import { ManagedRuntime } from 'effect';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
-import { type CheckoutTarget } from '@moonbase/contracts/workspace';
+import { type CheckoutTarget, type EditorClient } from '@moonbase/contracts/workspace';
 import { memoryWorkspace } from '@moonbase/application/testing/memory-workspace';
 
 export const checkout: CheckoutTarget = {
@@ -50,6 +50,50 @@ export async function fixture(clientId = 'editor-one', observe = true) {
     async dispose() {
       await editor.dispose();
       await runtime.dispose();
+    },
+  };
+}
+
+export const held = () => {
+  let release!: () => void;
+  const promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { promise, release };
+};
+
+export async function observedFixture(clientId: string) {
+  const f = await fixture(clientId, false);
+  await f.editor.open(target('a.ts'), { view: 'staged' });
+  await f.editor.open(target('b.ts'));
+  await f.editor.openCheckout(second.root);
+  await f.editor.open(target('a.ts', second));
+  await f.editor.open(target('b.ts', second));
+  await f.editor.selectCheckout(checkout);
+  await f.editor.flush();
+  await f.editor.dispose();
+  const transport: { command?: EditorClient['command'] } = {};
+  const client: EditorClient = {
+    ...f.client,
+    watch: () => async () => {},
+    command(name, input, options) {
+      return transport.command
+        ? transport.command(name, input, options)
+        : f.client.command(name, input, options);
+    },
+  };
+  const editor = await acquireEditor(f.runtime, { client, clientId });
+  await editor.load();
+  return {
+    ...f,
+    raw: f.client,
+    clientCommand: f.client.command,
+    editor,
+    client,
+    transport,
+    async dispose() {
+      await editor.dispose();
+      await f.dispose();
     },
   };
 }
