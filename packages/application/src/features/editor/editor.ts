@@ -1,4 +1,9 @@
-import { EditorLookup, EditorMutation, type MutationAction } from './workflows.ts';
+import {
+  EditorLookup,
+  EditorMutation,
+  getMutationDestinations,
+  type MutationAction,
+} from './workflows.ts';
 import {
   Cause,
   Deferred,
@@ -1607,15 +1612,10 @@ class EditorModelState {
         throw editorError('A file operation must use one exact checkout.');
     }
     const replacementPaths = (operation.replacements ?? []).map((item) => item.target.path);
-    if (operation.destination) {
-      if (operation.sources.length > 1)
-        replacementPaths.push(
-          ...operation.sources.map(
-            (source) => `${operation.destination}/${source.target.path.split('/').at(-1)}`,
-          ),
-        );
-      else replacementPaths.push(operation.destination);
-    }
+    if (operation.destination)
+      replacementPaths.push(
+        ...getMutationDestinations(operation.sources, operation.destination).destinations,
+      );
     if (
       [...this.buffers.values()].some(
         (buffer) =>
