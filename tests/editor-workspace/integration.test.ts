@@ -275,6 +275,19 @@ test('create and native import consumer payloads need no empty inspection and re
     writeFileSync(second, 'SECOND SOURCE\n');
     writeFileSync(join(f.roots[0], 'outside.txt'), 'OLD DESTINATION\n');
     const batch = await capture([outside, second]);
+    const retained = { checkout, path: 'folder/nested.ts' };
+    await editor.open(retained, { intent: 'keep' });
+    editor.edit(retained, 'UNSAVED\n');
+    await assert.rejects(
+      editor.mutate({
+        kind: 'import',
+        checkout,
+        sources: [],
+        destination: 'folder',
+        nativeReferences: batch,
+      }),
+      /Replacement has open buffers/,
+    );
     const result = await editor.mutate({
       kind: 'import',
       checkout,
@@ -286,6 +299,8 @@ test('create and native import consumer payloads need no empty inspection and re
     assert.equal(result.outcome, 'completed');
     assert.equal(readFileSync(join(f.roots[0], 'outside.txt'), 'utf8'), 'NATIVE SOURCE\n');
     assert.equal(readFileSync(join(f.roots[0], 'second.txt'), 'utf8'), 'SECOND SOURCE\n');
+    assert.equal(readFileSync(join(f.roots[0], retained.path), 'utf8'), 'NESTED\n');
+    assert.equal(editor.buffer(retained)?.text, 'UNSAVED\n');
   } finally {
     await f.close();
   }

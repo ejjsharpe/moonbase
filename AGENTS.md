@@ -8,6 +8,7 @@ Read the root README and the README of each module you change. Keep READMEs and 
 - Give each module a focused public interface that hides its implementation. Consume other modules through public exports. Keep domain rules in their owning module rather than duplicating them in UI, IPC or transport adapters.
 - Inject capabilities and dependencies. A module must be usable without importing a particular app, Electron shell or unrelated feature. Standalone editor and chat compositions install only their own capabilities.
 - Keep changes within scope. Reuse existing modules before adding abstractions; add flexibility only for a concrete consumer. Update affected public callers, tests and documentation together.
+- Name functions with verb phrases describing their action, such as `getMutationDestinations`, `findFile` or `saveDraft`. Use noun phrases for variables and types.
 
 ## Runtime boundaries
 
