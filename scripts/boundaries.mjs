@@ -307,3 +307,8 @@ export function checkBoundaries({ files, packages }) {
   );
   return [...new Set(errors)];
 }
+
+export const isPrivilegedDesktopInput = (path) =>
+  /(?:^|\/)apps\/desktop\/src\/(?:main(?:\/|\.ts$)|(?:session|ipc-lifetime)\.ts$|chat\/(?:config|local|session)\.ts$)/.test(
+    path,
+  );

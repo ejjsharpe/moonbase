@@ -35,6 +35,8 @@ The first build failed because fresh worktrees lack `dist/tools/ripgrep/rg`. The
 
 Contracts never imports application, platform or presentation implementation. Application never imports Node, Electron, React/Monaco or an infrastructure implementation. A reusable service never imports application, even through a type-only import or a helper barrel. Cross-package imports use package public exports, including type-only and dynamic imports. Internal DTO/schema type cycles are allowed because clients use erased schema references; runtime file cycles and cross-package cycles including type-only edges are forbidden.
 
+Desktop keeps its one privileged composition root in `apps/desktop/src/main.ts`, with private native consent, command IPC, chat backend wiring and document/window lifecycle owners under `src/main/`. Existing session/wire/preload authority remains desktop-private; no package/public export is added. The actual build/archive graph requires those owners, and browser/preload audits reject the privileged subtree. See [desktop ownership](../apps/desktop/docs/LIFECYCLE.md).
+
 ## Public exports and helper decisions
 
 | Baseline export/implementation | Canonical owner/export | Ticket |

@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict';
+import { isPrivilegedDesktopInput } from '../../../scripts/boundaries.mjs';
 import { readFile, readdir } from 'node:fs/promises';
 const output = new URL('../dist/', import.meta.url);
 const inputs = JSON.parse(await readFile(new URL('renderer/module-inputs.json', output), 'utf8'));
 assert.deepEqual(
-  inputs.filter((p) =>
-    /(?:^|\/)node_modules\/(?:electron|@moonbase\/(?:workspace|pi-runtime|ssh|connection))\/|packages\/(?:workspace|pi-runtime|ssh|connection)\/|packages\/workbench\/(?:demo|test)\/|packages\/contracts\/src\/services\.ts|packages\/application\/src\/testing\/|packages\/application\/src\/runtime\/(?:handlers|clients)\.ts|apps\/desktop\/src\/(?:main|session|preload|chat-preload|chat\/(?:config|session))\.ts|@earendil-works|pi-ai|pi-durable|node:sqlite|source-snapshot|node:/.test(
-      p,
-    ),
+  inputs.filter(
+    (p) =>
+      isPrivilegedDesktopInput(p) ||
+      /(?:^|\/)node_modules\/(?:electron|@moonbase\/(?:workspace|pi-runtime|ssh|connection))\/|packages\/(?:workspace|pi-runtime|ssh|connection)\/|packages\/workbench\/(?:demo|test)\/|packages\/contracts\/src\/services\.ts|packages\/application\/src\/testing\/|packages\/application\/src\/runtime\/(?:handlers|clients)\.ts|apps\/desktop\/src\/(?:main|session|preload|chat-preload|chat\/(?:config|session))\.ts|@earendil-works|pi-ai|pi-durable|node:sqlite|source-snapshot|node:/.test(
+        p,
+      ),
   ),
   [],
   'Privileged implementation reached the actual Vite renderer graph',

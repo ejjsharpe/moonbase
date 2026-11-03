@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { isPrivilegedDesktopInput } from '../../../scripts/boundaries.mjs';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
@@ -39,6 +40,14 @@ for (const name of [
 }
 const main = Object.keys(JSON.parse(await readFile(join(root, 'dist/main-inputs.json'), 'utf8'))),
   renderer = JSON.parse(await readFile(join(root, 'dist/renderer/module-inputs.json'), 'utf8'));
+
+assert.deepEqual(
+  renderer.filter(isPrivilegedDesktopInput),
+  [],
+  'Privileged desktop owner reached packaged renderer',
+);
+for (const entry of ['native-actions', 'ipc', 'window-lifecycle', 'chat-backends'])
+  assert(main.includes(`src/main/${entry}.ts`), `Missing packaged main owner: ${entry}`);
 
 for (const entry of [
   'packages/workbench/src/editor/workbench.tsx',
