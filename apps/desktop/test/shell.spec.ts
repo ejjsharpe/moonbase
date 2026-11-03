@@ -304,7 +304,7 @@ test('optional Chat initialization failure remains visible and explicit retry op
   await page.goto('/?chat&fail-chat');
   await expect(input(page)).toBeVisible();
   await expect(
-    shell(page).getByRole('alert', { name: 'Remote chat initialization failed', exact: true }),
+    shell(page).getByRole('alert', { name: 'Chat initialization failed', exact: true }),
   ).toBeVisible();
   expect(await page.evaluate(() => window.demo.application.canUnload())).toBe(false);
   await page.evaluate(() => window.demo.retryChat());

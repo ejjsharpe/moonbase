@@ -1,3 +1,4 @@
+import { selectRemoteChat } from './chat-target.ts';
 import { test, expect, _electron as electron } from '@playwright/test';
 import { fixture } from '../../../tests/chat/tool-fixture.ts';
 import { mkdtempSync, realpathSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
@@ -106,13 +107,15 @@ for (const configured of [false, true])
       await expect(page.getByRole('button', { name: 'Open checkout', exact: true })).toBeVisible();
       expect(await page.evaluate(() => window.moonbase.chatConfigured())).toEqual({
         ok: true,
-        value: configured,
+        value: true,
       });
       await page
         .getByRole('tablist', { name: 'Workbench views', exact: true })
         .getByRole('tab', { name: 'Chat', exact: true })
         .click();
+      await expect(page.getByText('On this computer', { exact: true })).toBeVisible();
       if (configured) {
+        await selectRemoteChat(page);
         await expect(page.getByRole('button', { name: 'Connect', exact: true })).toBeEnabled();
         const stats = await f!.stats();
         expect(stats.calls).toBe(0);
@@ -128,8 +131,14 @@ for (const configured of [false, true])
           test.info().outputPath('configured-no-connect.json'),
           JSON.stringify({ before, stats, status }, null, 2),
         );
-      } else
-        await expect(page.getByLabel('Remote chat configuration')).toContainText('not configured');
+      } else {
+        await expect(
+          page.getByRole('button', { name: 'Sign in with ChatGPT', exact: true }),
+        ).toBeVisible();
+        await expect(
+          page.getByRole('button', { name: 'Choose working folder', exact: true }),
+        ).toBeVisible();
+      }
     } finally {
       for (const pid of await app.evaluate(({ app }) =>
         app.getAppMetrics().map((value) => value.pid),

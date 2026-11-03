@@ -169,3 +169,11 @@ Validation used Node `v26.13.0` and pinned Bun `1.4.4` on macOS arm64 against th
 | Foundation, root lint, formatting and `git diff --check` | Pass |
 
 The controlled integration suites ran serially. Full default source tests and desktop build/package/native foreground suites were not repeated for this mechanical relocation; #72 must run final integrated checks, with the #65 workspace parallel-watch timing failure still explicit. No real SSH/provider, manual interaction, accessibility, signing or deployment qualification is claimed.
+
+## Local chat extension (#91)
+
+Desktop additionally acquires local Pi and optional remote/SSH layers in separate scopes of its existing main runtime, binding the exact acquired services through shared application handlers. Every IPC invocation/observation captures its backend ID and exact host/store/actor. Renderer selection does not choose where a late reply goes. A live document owns provider authentication flow/prompt authority; only native folder approval grants new local Create authority.
+
+Contracts owns portable creation settings/local host variants and provider setup DTOs/ports. Pi runtime owns pinned provider/SDK authentication, injected encrypted persistence, per-conversation tool environments and privileged local activity inspection. Application owns explicit local readiness, setup presentation state, named-target controller lifecycle and the final fenced Quit hook. Workbench remains project editor/sidebar presentation without Chat. Desktop owns the existing Chat view and target/folder/model/setup controls. See [local runtime](../packages/pi-runtime/docs/LOCAL.md) and [application lifecycle](../packages/application/docs/LIFECYCLE.md).
+
+The previous remote-only desktop bundle restriction is superseded for main only. Build/archive guards require the intended local runtime/OAuth graph and notices while excluding SDK, credentials, SQLite and native services from renderer/preload. Standalone host Node qualification and remote formats remain unchanged.

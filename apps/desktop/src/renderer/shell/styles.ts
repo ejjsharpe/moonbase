@@ -2,6 +2,15 @@ import * as stylex from '@stylexjs/stylex';
 import { colors, space } from '@moonbase/ui/tokens.stylex';
 
 export const styles = stylex.create({
+  chatTargetBar: {
+    flexShrink: 0,
+    display: 'flex',
+    alignItems: 'center',
+    gap: space.sm,
+    padding: space.sm,
+    backgroundColor: colors.chrome,
+  },
+  chatTargetChoice: { width: 280, maxWidth: '100%' },
   shell: {
     height: '100%',
     minWidth: 0,

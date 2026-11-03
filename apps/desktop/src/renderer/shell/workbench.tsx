@@ -14,6 +14,7 @@ import type { MoonbaseApplication } from '@moonbase/application';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { controls } from '@moonbase/ui/controls';
 import { workbench } from '@moonbase/ui/workbench';
+import { Choice } from '../chat/choice.tsx';
 import { ChatView } from '../chat/view.tsx';
 import { Workbench, type WorkbenchHandle } from '@moonbase/workbench';
 import { styles } from './styles.ts';
@@ -27,6 +28,7 @@ export type DesktopShellProps = {
   application: MoonbaseApplication;
   closing?: boolean;
   /** These callbacks return user-approved roots or opaque native references, never source paths. */
+  chooseChatFolder?: () => Promise<string | null>;
   selectCheckout?: () => Promise<string | null>;
   selectNativeImports?: (checkout: CheckoutTarget) => Promise<string[]>;
   selectClipboardImports?: (checkout: CheckoutTarget) => Promise<string[]>;
@@ -39,6 +41,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
   {
     application,
     closing = false,
+    chooseChatFolder,
     selectCheckout,
     selectNativeImports,
     selectClipboardImports,
@@ -141,16 +144,13 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
       handle.current?.importFiles(checkout, references);
     }
   }
-  let status =
-    view === 'chat' ? 'Remote host · Explicit Connect and Send' : 'Explicit Save · Local workspace';
+  let status = view === 'chat' ? 'Agents · Explicit Send' : 'Explicit Save · Local workspace';
   if (closing || lifecycle.phase === 'prepared') status = 'Closing workbench…';
   else if (state?.preserving) status = 'Preserving edits…';
   else if (state?.publication) status = 'Recovery confirmation pending';
-  let chatHeading = 'Remote chat is unavailable';
-  if (lifecycle.chat.state === 'initialization-failed')
-    chatHeading = 'Remote chat could not initialize';
-  else if (lifecycle.chat.state === 'cleanup-blocked')
-    chatHeading = 'Remote chat cleanup is blocked';
+  let chatHeading = 'Chat is unavailable';
+  if (lifecycle.chat.state === 'initialization-failed') chatHeading = 'Chat could not initialize';
+  else if (lifecycle.chat.state === 'cleanup-blocked') chatHeading = 'Chat cleanup is blocked';
   return (
     <Tabs.Root
       aria-label="Moonbase workbench"
@@ -250,9 +250,9 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
       {lifecycle.chat.state === 'initialization-failed' && view !== 'chat' ? (
         <section
           role="alert"
-          aria-label="Remote chat initialization failed"
+          aria-label="Chat initialization failed"
           {...stylex.props(styles.empty)}>
-          <strong>Remote chat could not initialize</strong>
+          <strong>Chat could not initialize</strong>
           <p>{lifecycle.chat.error}</p>
           <p>Local editing is available. Open Chat panel to retry before closing this workbench.</p>
         </section>
@@ -298,17 +298,38 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
           focus.current.chat = event.target as HTMLElement;
         }}
         {...stylex.props(styles.panel)}>
+        {lifecycle.chatTargets.length > 0 && (
+          <div {...stylex.props(styles.chatTargetBar)}>
+            <span>Chat target</span>
+            <div {...stylex.props(styles.chatTargetChoice)}>
+              <Choice
+                label="Chat target"
+                value={lifecycle.chatTargetId ?? ''}
+                options={lifecycle.chatTargets.map((target) => ({
+                  value: target.id,
+                  label: target.label,
+                }))}
+                disabled={lifecycle.phase !== 'live' || lifecycle.chat.state === 'opening'}
+                onChange={(id) => run(application.selectChatTarget(id))}
+              />
+            </div>
+          </div>
+        )}
         {chat ? (
-          <ChatView controller={chat} />
+          <ChatView
+            key={lifecycle.chatTargetId}
+            controller={chat}
+            chooseFolder={chooseChatFolder}
+          />
         ) : (
-          <section {...stylex.props(styles.empty)} aria-label="Remote chat configuration">
+          <section {...stylex.props(styles.empty)} aria-label="Chat configuration">
             <h1>{chatHeading}</h1>
             <p role="status">
-              {lifecycle.chat.error ?? 'Remote chat is not configured. Local editing is available.'}
+              {lifecycle.chat.error ?? 'Chat is unavailable. Local editing is available.'}
             </p>
             <p>
-              Local checkouts remain on this computer. Remote paths are descriptive; they do not
-              open or synchronize local files.
+              Local editing remains available. Open Chat panel to retry initialization, or choose
+              another chat target.
             </p>
           </section>
         )}

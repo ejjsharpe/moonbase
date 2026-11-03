@@ -34,11 +34,19 @@ export const ChatStopTargetSchema = struct({
   submissionId: ChatIdentifierSchema,
   taskId: Schema.NullOr(ChatIdentifierSchema),
 });
-export const ChatHostConfigurationSchema = struct({
+export const ChatCreationSettingsSchema = struct({
+  cwd: text(4096),
+  model: struct({ provider: ChatIdentifierSchema, modelId: text(256) }),
+});
+const remoteHostConfiguration = struct({
   ...ChatSessionSchema.fields,
   cwd: text(4096),
   model: text(512),
 });
+export const ChatHostConfigurationSchema = Schema.Union([
+  remoteHostConfiguration,
+  struct({ ...ChatSessionSchema.fields, mode: Schema.Literal('local') }),
+]);
 export const ChatSummarySchema = struct({
   target: ChatTargetSchema,
   title: text(200),
@@ -96,6 +104,7 @@ export const chatInputSchemas = {
     session: ChatSessionSchema,
     requestId: ChatIdentifierSchema,
     title: text(200),
+    settings: optional(ChatCreationSettingsSchema),
   }),
   getChat: struct({ target: ChatTargetSchema }),
   getChatHistory: struct({ target: ChatTargetSchema, cursor }),

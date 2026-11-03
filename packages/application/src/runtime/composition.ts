@@ -18,9 +18,18 @@ import {
 import { runApplicationEffect } from './effect-client.ts';
 import { ApplicationCleanup, releaseInstance } from './lifecycle.ts';
 
+export type NamedChatTarget = {
+  id: string;
+  label: string;
+  acquire(): Promise<ChatDependencies | null>;
+};
 export type MoonbaseApplicationOptions = {
   editors?: readonly EditorDependencies[];
   chat?: () => Promise<ChatDependencies | null>;
+  chatTargets?: readonly NamedChatTarget[];
+  defaultChatTargetId?: string;
+  /** Final head confirmation runs only after all client admissions are fenced. */
+  confirmQuit?: () => Promise<boolean>;
 };
 export type ApplicationPhase =
   | 'live'
@@ -39,6 +48,8 @@ export type ApplicationChatStatus =
 export type MoonbaseApplicationSnapshot = {
   phase: ApplicationPhase;
   chat: { state: ApplicationChatStatus; error: string | null };
+  chatTargets: readonly { id: string; label: string }[];
+  chatTargetId: string | null;
   cleanup: { pending: readonly string[]; errors: readonly string[] };
 };
 type EditorInstance = { model: EditorModel; controller: EditorController; scope: Scope.Closeable };
@@ -72,6 +83,9 @@ class Application {
   private chatFailure: ApplicationError | null = null;
   private listeners = new Set<() => void>();
   private snapshot!: MoonbaseApplicationSnapshot;
+  private targetId: string | null;
+  private switching?: Promise<ChatController | null>;
+  private chatCleanup?: Promise<void>;
   private opening?: Promise<ChatController | null>;
   private preparation?: Promise<boolean>;
   private disposal?: Promise<void>;
@@ -82,7 +96,10 @@ class Application {
     this.options = {
       editors: options.editors?.map((editor) => ({ ...editor })),
       chat: options.chat,
+      chatTargets: options.chatTargets?.map((target) => ({ ...target })),
+      confirmQuit: options.confirmQuit,
     };
+    this.targetId = options.defaultChatTargetId ?? options.chatTargets?.[0]?.id ?? null;
     this.cleanup.subscribe(() => this.publish());
     this.publish();
   }
@@ -101,6 +118,8 @@ class Application {
     this.snapshot = {
       phase: this.phase,
       chat: { state: this.chatState, error: this.chatFailure?.message ?? null },
+      chatTargets: this.options.chatTargets?.map(({ id, label }) => ({ id, label })) ?? [],
+      chatTargetId: this.targetId,
       cleanup: this.cleanup.getSnapshot(),
     };
     for (const listener of this.listeners) {
@@ -131,7 +150,7 @@ class Application {
       this.controllers.push(controller);
       await controller.load();
     }
-    if (this.options.chat) {
+    if (this.options.chat || this.options.chatTargets?.length) {
       await this.openChat();
       if (!this.instances.length && !this.currentChat)
         throw (
@@ -141,10 +160,53 @@ class Application {
     }
   }
   openChat(): Promise<ChatController | null> {
+    return this.switching ?? this.openSelectedChat();
+  }
+  selectChatTarget(id: string): Promise<ChatController | null> {
+    if (
+      this.phase !== 'live' ||
+      this.checkingUnload ||
+      this.switching ||
+      !this.options.chatTargets?.some((target) => target.id === id)
+    )
+      return Promise.reject(
+        new ApplicationError({
+          code: 'Unavailable',
+          message: 'Chat target is unavailable or another selection is pending.',
+        }),
+      );
+    if (id === this.targetId) return this.openChat();
+    const result = Promise.withResolvers<ChatController | null>();
+    this.switching = result.promise;
+    void (async () => {
+      if (this.opening) await this.opening;
+      if (this.currentChat && !this.closeChat())
+        throw new ApplicationError({
+          code: 'Persistence',
+          message: 'Preserve the current chat before switching targets.',
+        });
+      await this.chatCleanup;
+      if (this.phase !== 'live') return null;
+      this.targetId = id;
+      this.publish();
+      return this.openSelectedChat();
+    })().then(
+      (controller) => {
+        this.switching = undefined;
+        result.resolve(controller);
+      },
+      (error) => {
+        this.switching = undefined;
+        result.reject(error);
+      },
+    );
+    return result.promise;
+  }
+  private openSelectedChat(): Promise<ChatController | null> {
     if (this.phase !== 'live' || this.checkingUnload) return Promise.reject(closing());
     if (this.opening) return this.opening;
     if (this.currentChat) return Promise.resolve(this.currentChat.controller);
-    if (!this.options.chat) return Promise.resolve(null);
+    if (!this.options.chat && !this.options.chatTargets?.length) return Promise.resolve(null);
     if (!this.cleanup.available('chat'))
       return Promise.reject(
         new ApplicationError({
@@ -177,7 +239,10 @@ class Application {
     const scope = Scope.forkUnsafe(this.scope, 'parallel');
     let model: ChatModel | undefined;
     try {
-      const dependencies = await this.options.chat!();
+      const acquire =
+        this.options.chatTargets?.find((target) => target.id === this.targetId)?.acquire ??
+        this.options.chat;
+      const dependencies = await acquire!();
       if (dependencies && !this.releasing()) {
         model = await runApplicationEffect(
           this.runtime,
@@ -226,9 +291,9 @@ class Application {
         return false;
       this.currentChat = null;
       this.chatState = 'closed';
-      const close = this.cleanup.close('chat', () =>
+      const close = (this.chatCleanup = this.cleanup.close('chat', () =>
         releaseInstance(this.runtime, instance.scope, () => instance.controller.dispose()),
-      );
+      ));
       void close.catch((error) => {
         this.chatState = 'cleanup-blocked';
         this.chatFailure = normalizeApplicationError(error);
@@ -249,6 +314,7 @@ class Application {
       this.closingChat ||
       this.phase !== 'live' ||
       this.opening ||
+      this.switching ||
       this.chatState === 'initialization-failed' ||
       this.chatState === 'cleanup-blocked'
     )
@@ -301,6 +367,7 @@ class Application {
     this.publish();
   }
   private async prepare(): Promise<boolean> {
+    if (this.switching) await this.switching;
     if (this.opening) await this.opening;
     if (this.phase !== 'preparing') return false;
     const chat = this.currentChat;
@@ -328,6 +395,11 @@ class Application {
       (this.chat && !this.chat.preserve()) ||
       this.instances.some(({ controller }) => !controller.getSnapshot().recoveryReady)
     ) {
+      this.restore();
+      return false;
+    }
+    if (this.phase !== 'preparing') return false;
+    if (this.options.confirmQuit && !(await this.options.confirmQuit())) {
       this.restore();
       return false;
     }
@@ -374,6 +446,7 @@ class Application {
     const errors: unknown[] = [];
     for (const release of [
       async () => {
+        await this.switching;
         await this.opening;
       },
       () => this.cleanup.drain(),
@@ -397,6 +470,7 @@ export type MoonbaseApplication = Pick<
   | 'getSnapshot'
   | 'subscribe'
   | 'reportCleanup'
+  | 'selectChatTarget'
   | 'openChat'
   | 'closeChat'
   | 'canUnload'
@@ -408,10 +482,23 @@ export type MoonbaseApplication = Pick<
 export async function createMoonbaseApplication(
   options: MoonbaseApplicationOptions,
 ): Promise<MoonbaseApplication> {
-  if (!options.editors?.length && !options.chat)
+  if (!options.editors?.length && !options.chat && !options.chatTargets?.length)
     throw new ApplicationError({
       code: 'InvalidInput',
       message: 'Supply an editor or chat capability.',
+    });
+  const targets = options.chatTargets ?? [];
+  if (
+    (options.chat && targets.length) ||
+    new Set(targets.map((target) => target.id)).size !== targets.length ||
+    targets.some((target) => !/^[A-Za-z0-9._:-]{1,256}$/.test(target.id) || !target.label.trim()) ||
+    (options.defaultChatTargetId &&
+      !targets.some((target) => target.id === options.defaultChatTargetId))
+  )
+    throw new ApplicationError({
+      code: 'InvalidInput',
+      message:
+        'Supply distinct named chat targets and a matching default, or the single chat capability.',
     });
   const ids = (options.editors ?? []).flatMap((editor) =>
     editor.clientId === undefined ? [] : [editor.clientId],

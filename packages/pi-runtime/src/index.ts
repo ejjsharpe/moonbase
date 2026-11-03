@@ -18,9 +18,11 @@ import {
   type EntryRecord,
 } from '@earendil-works/pi-durable';
 import { SqliteStorage } from '@earendil-works/pi-durable/storage/sqlite';
+import { CodingTools } from '@earendil-works/pi-durable/tools';
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node';
 import type { Models } from '@earendil-works/pi-ai/models';
 import {
+  Context,
   Cause,
   Effect,
   Exit,
@@ -37,6 +39,7 @@ import {
 import { normalizeApplicationError } from '@moonbase/effect';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import type {
+  ChatCreationSettings,
   ChatCommand,
   ChatInput,
   ChatOutput,
@@ -60,6 +63,23 @@ export type PiRuntimeConfiguration = ChatSession & {
   models: Models;
   registry?: Registry;
 };
+export type LocalPiRuntimeConfiguration = ChatSession & {
+  databasePath: string;
+  models: Models;
+  registry?: Registry;
+  approveCreation?: (settings: ChatCreationSettings) => Promise<void>;
+};
+type RuntimeConfiguration =
+  | PiRuntimeConfiguration
+  | (LocalPiRuntimeConfiguration & { mode: 'local' });
+/** Privileged shutdown control; it grants no renderer capability. */
+export class LocalPiControl extends Context.Service<
+  LocalPiControl,
+  {
+    setAdmissionsOpen(open: boolean): void;
+    hasActiveWork(): Effect.Effect<boolean, ApplicationError>;
+  }
+>()('moonbase/LocalPiControl') {}
 const Request = defineDocFamily({
   kind: 'moonbase.chat.request',
   version: 1,
@@ -91,7 +111,12 @@ const Metadata = defineDocFamily({
   history: 'latest',
   fork: 'current',
   family: true,
-  initial: (value: { title: string; createdAt: string; identity: string }) => ({
+  initial: (value: {
+    title: string;
+    createdAt: string;
+    identity: string;
+    settings?: ChatCreationSettings;
+  }) => ({
     ...value,
     pending: 0,
   }),
@@ -162,7 +187,9 @@ class Host {
   get cursorIdentity() {
     return createHash('sha256').update(this.identity).digest('hex');
   }
-  readonly config: PiRuntimeConfiguration;
+  admissionsOpen = true;
+  mutations = 0;
+  readonly config: RuntimeConfiguration;
   readonly harness: Harness;
   readonly identity: string;
   readonly work: FiberSet.FiberSet<unknown, ApplicationError>;
@@ -170,7 +197,7 @@ class Host {
   readonly waiters: RetainedWork;
   readonly observations: Scope.Closeable;
   constructor(
-    config: PiRuntimeConfiguration,
+    config: RuntimeConfiguration,
     harness: Harness,
     identity: string,
     work: FiberSet.FiberSet<unknown, ApplicationError>,
@@ -202,15 +229,43 @@ class Host {
     );
     if (!meta || meta.identity !== this.identity)
       return V.fail('Unauthorized', 'Conversation does not belong to this configured actor/store.');
-    return S.savedMetadata(meta);
+    const saved = S.savedMetadata(meta);
+    if ('mode' in this.config && !saved.settings)
+      return V.fail(
+        'Persistence',
+        'Stored local conversation settings are missing; preserve this store.',
+      );
+    if (!('mode' in this.config) && saved.settings)
+      return V.fail(
+        'Persistence',
+        'Remote conversation has incompatible settings; preserve this store.',
+      );
+    return saved;
   }
-  summary(conversationId: string, meta: { title: string; createdAt: string }): ChatSummary {
+  getSettings(meta: { settings?: ChatCreationSettings }): ChatCreationSettings {
+    if ('mode' in this.config) {
+      if (!meta.settings)
+        return V.fail('Persistence', 'Stored local conversation settings are missing.');
+      return meta.settings;
+    }
+    if (meta.settings)
+      return V.fail(
+        'Persistence',
+        'Remote conversation has incompatible settings; preserve this store.',
+      );
+    return { cwd: this.config.cwd, model: this.config.model };
+  }
+  summary(
+    conversationId: string,
+    meta: { title: string; createdAt: string; settings?: ChatCreationSettings },
+  ): ChatSummary {
+    const settings = this.getSettings(meta);
     return {
       target: { host: { ...this.config.host }, actorId: this.config.actorId, conversationId },
       title: meta.title,
       createdAt: meta.createdAt,
-      cwd: this.config.cwd,
-      model: `${this.config.model.provider}/${this.config.model.modelId}`,
+      cwd: settings.cwd,
+      model: `${settings.model.provider}/${settings.model.modelId}`,
     };
   }
   own<A>(effect: Effect.Effect<A, ApplicationError>) {
@@ -261,17 +316,22 @@ class Host {
         catch: normalizeApplicationError,
       });
       if (this.closed) return yield* Effect.fail(safeError(null));
-      if (operation === 'sendChat') {
-        const { target } = data as ChatInput<'sendChat'>;
-        yield* this.own(
-          Effect.uninterruptible(
-            Effect.tryPromise({
-              try: () => this.metadata(target),
-              catch: safeError,
-            }),
-          ),
+      if (mutation && !this.admissionsOpen)
+        return yield* Effect.fail(
+          new ApplicationError({
+            code: 'Unavailable',
+            message: 'Local chat is preparing to quit.',
+          }),
         );
-      }
+      const preflight =
+        operation === 'sendChat'
+          ? Effect.uninterruptible(
+              Effect.tryPromise({
+                try: () => this.metadata((data as ChatInput<'sendChat'>).target),
+                catch: safeError,
+              }),
+            )
+          : Effect.void;
       const invoke = Effect.suspend(() => {
         const result = handle(data);
         return Effect.isEffect(result)
@@ -285,10 +345,20 @@ class Host {
           }),
         ),
       );
-      return yield* this.own(
+      if (mutation) this.mutations++;
+      const admission =
         operation === 'sendChat'
           ? this.admission((data as ChatInput<'sendChat'>).target.conversationId, invoke)
-          : Effect.uninterruptible(invoke),
+          : Effect.uninterruptible(invoke);
+      return yield* this.own(
+        preflight.pipe(
+          Effect.andThen(admission),
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (mutation) this.mutations--;
+            }),
+          ),
+        ),
       );
     });
   }
@@ -296,6 +366,8 @@ class Host {
     if (!V.sameHost(d.host, this.config.host))
       V.fail('Incompatible', 'Chat host/store does not match this host.');
     S.savedStore(await this.harness.snapshot(Store, 'identity', context));
+    if ('mode' in this.config)
+      return { host: { ...this.config.host }, actorId: this.config.actorId, mode: 'local' };
     return {
       host: { ...this.config.host },
       actorId: this.config.actorId,
@@ -334,7 +406,38 @@ class Host {
   }
   async create(d: ChatInput<'createChat'>): Promise<ChatOutput<'createChat'>> {
     this.session(d.session);
+    if ('mode' in this.config !== (d.settings !== undefined))
+      V.fail('InvalidInput', 'Choose folder/model settings for local chats only.');
     const binding = JSON.stringify({ operation: 'createChat', ...d });
+    const existing =
+      'mode' in this.config
+        ? await this.harness.snapshot(Request, key(d.session.actorId, d.requestId), context)
+        : undefined;
+    if (existing) {
+      S.savedRequest(existing, d.session.actorId, d.requestId);
+      if (existing.binding !== binding)
+        V.fail('InvalidInput', 'Request ID is already bound to different chat input.');
+      if (existing.conversationId)
+        return {
+          requestId: d.requestId,
+          conversation: this.summary(
+            existing.conversationId,
+            await this.metadata({ ...d.session, conversationId: existing.conversationId }),
+          ),
+        };
+    }
+    let settings: ChatCreationSettings;
+    if ('mode' in this.config) {
+      const cwd = await realpath(d.settings!.cwd).catch(() =>
+        V.fail('InvalidInput', 'Choose an existing local working folder.'),
+      );
+      if (cwd !== d.settings!.cwd || !(await stat(cwd)).isDirectory())
+        V.fail('InvalidInput', 'Choose a canonical local working folder.');
+      if (!this.config.models.getModel(d.settings!.model.provider, d.settings!.model.modelId))
+        V.fail('InvalidInput', 'Choose an installed model from the local catalog.');
+      settings = d.settings!;
+      await this.config.approveCreation?.(settings);
+    } else settings = { cwd: this.config.cwd, model: this.config.model };
     let conversationId: string, definiteRejection: ApplicationError | undefined;
     try {
       conversationId = await this.harness.commit(async (tx) => {
@@ -354,11 +457,12 @@ class Host {
         }
         if (request.conversationId) return request.conversationId;
         const conversation = await tx.createConversation({ ownership: { kind: 'ownerless' } });
-        await configure(tx, conversation.id, { model: this.config.model, cwd: this.config.cwd });
+        await configure(tx, conversation.id, settings);
         await tx.doc(Metadata, conversation.id, 'metadata', {
           identity: this.identity,
           title: d.title,
           createdAt: new Date().toISOString(),
+          ...('mode' in this.config ? { settings } : {}),
         });
         request.conversationId = String(conversation.id);
         return String(conversation.id);
@@ -595,6 +699,19 @@ class Host {
     else if (meta.pending)
       message = 'Pending Send intent is retained; query or retry its original request explicitly.';
     else if (state === 'failed') message = 'Pi could not complete the last submission.';
+    if ('mode' in this.config) {
+      const cwd = this.getSettings(meta).cwd;
+      const available = await realpath(cwd)
+        .then(async (canonical) => canonical === cwd && (await stat(cwd)).isDirectory())
+        .catch(() => false);
+      if (!available)
+        message = [
+          message,
+          'The saved local working folder is unavailable. Restore its original path, or create another conversation with a new folder.',
+        ]
+          .filter(Boolean)
+          .join(' ');
+    }
     const base = {
       conversation: this.summary(target.conversationId, meta),
       run,
@@ -602,6 +719,28 @@ class Host {
       ...(message === undefined ? {} : { message }),
     };
     return { ...base, ...(await this.history(target, undefined, base)) };
+  }
+  async hasActiveWork(): Promise<boolean> {
+    if (this.mutations || this.admissions.size) return true;
+    let scan: Cursor | undefined;
+    do {
+      const page = await this.harness.commit((tx) => tx.scanTasks({}, 32, scan), context);
+      if (page.items.some((task) => task.state.status !== 'terminal')) return true;
+      scan = page.next;
+    } while (scan);
+    scan = undefined;
+    do {
+      const page = await this.harness.commit((tx) => tx.scanConversations({}, 32, scan), context);
+      for (const conversation of page.items) {
+        const meta = await this.metadata({
+          ...this.config,
+          conversationId: String(conversation.id),
+        });
+        if (meta.pending) return true;
+      }
+      scan = page.next;
+    } while (scan);
+    return this.mutations > 0;
   }
   stop(d: ChatInput<'stopChat'>): Effect.Effect<ChatOutput<'stopChat'>, ApplicationError> {
     return Effect.gen({ self: this }, function* () {
@@ -807,16 +946,24 @@ function retainedWork(kind: 'abort' | 'waiter'): Effect.Effect<RetainedWork, nev
   });
 }
 
-function open(config: PiRuntimeConfiguration) {
+function open(config: RuntimeConfiguration) {
   return Effect.gen(function* () {
     const validated = yield* Effect.tryPromise({
       try: async () => {
         const [major, minor] = process.versions.node.split('.').map(Number);
-        if (major < 26 || (major === 26 && minor < 13))
+        const local = 'mode' in config;
+        const qualifiedElectron =
+          process.versions.electron === '45.1.0' && process.versions.node === '24.22.1';
+        if (
+          local
+            ? !qualifiedElectron && (major < 26 || (major === 26 && minor < 13))
+            : major < 26 || (major === 26 && minor < 13)
+        )
           V.fail(
             'Incompatible',
             'The Pi host requires qualified Node 26.13 or newer. The remote client has its own runtime boundary.',
           );
+        if (local) return S.localConfiguration(config);
         const data = S.runtimeConfiguration(config),
           cwd = await realpath(data.cwd);
         if (!(await stat(cwd)).isDirectory())
@@ -831,11 +978,51 @@ function open(config: PiRuntimeConfiguration) {
       catch: safeError,
     });
     const session = { host: validated.host, actorId: validated.actorId },
-      identity = JSON.stringify({ ...session, cwd: validated.cwd, model: validated.model });
-    const env = yield* Effect.acquireRelease(
-      Effect.sync(() => new NodeExecutionEnv({ cwd: validated.cwd })),
-      (env) => releaseResource(() => env.cleanup(context)),
+      identity = JSON.stringify(
+        'mode' in validated
+          ? { ...session, mode: 'local' }
+          : { ...session, cwd: validated.cwd, model: validated.model },
+      );
+    const environments = new Map<string, NodeExecutionEnv>();
+    yield* Effect.addFinalizer(() =>
+      Effect.all(
+        [...environments.values()].map((env) =>
+          Effect.exit(releaseResource(() => env.cleanup(context))),
+        ),
+        { concurrency: 'unbounded' },
+      ).pipe(
+        Effect.flatMap((exits) => {
+          const cause = exits.reduce(
+            (cause, exit) => (Exit.isFailure(exit) ? Cause.combine(cause, exit.cause) : cause),
+            Cause.empty,
+          );
+          return cause.reasons.length ? Effect.failCause(cause) : Effect.void;
+        }),
+      ),
     );
+    if (!('mode' in validated))
+      environments.set(validated.cwd, new NodeExecutionEnv({ cwd: validated.cwd }));
+    const getToolEnvironment = async (target: { conversationId: ConversationId; cwd?: string }) => {
+      let cwd: string;
+      if ('mode' in validated) {
+        const meta = await host.metadata({
+          ...session,
+          conversationId: String(target.conversationId),
+        });
+        cwd = host.getSettings(meta).cwd;
+        if (target.cwd !== cwd || (await realpath(cwd)) !== cwd || !(await stat(cwd)).isDirectory())
+          V.fail(
+            'Unavailable',
+            'The saved local working folder is unavailable. Restore it before retrying.',
+          );
+      } else cwd = validated.cwd;
+      let env = environments.get(cwd);
+      if (!env) {
+        env = new NodeExecutionEnv({ cwd });
+        environments.set(cwd, env);
+      }
+      return env;
+    };
     let databaseOwned = true,
       storageOwned = true;
     const database = yield* Effect.acquireRelease(
@@ -871,7 +1058,7 @@ function open(config: PiRuntimeConfiguration) {
             {
               models: validated.models,
               registry: validated.registry ?? createRegistry(),
-              env: () => env,
+              env: getToolEnvironment,
               settings: {
                 retry: { enabled: false },
                 compaction: { enabled: false },
@@ -925,6 +1112,19 @@ function open(config: PiRuntimeConfiguration) {
   });
 }
 
+function makeChatService(host: Host): ChatServiceShape {
+  return {
+    getChatHost: (d) => host.run('getChatHost', d, (input) => host.getHost(input)),
+    listChats: (d) => host.run('listChats', d, (input) => host.list(input)),
+    createChat: (d) => host.run('createChat', d, (input) => host.create(input)),
+    getChat: (d) => host.run('getChat', d, (input) => host.snapshot(input.target)),
+    getChatHistory: (d) => host.run('getChatHistory', d, (input) => host.getHistory(input)),
+    sendChat: (d) => host.run('sendChat', d, (input) => host.send(input)),
+    getChatSend: (d) => host.run('getChatSend', d, (input) => host.getSend(input)),
+    stopChat: (d) => host.run('stopChat', d, (input) => host.stop(input)),
+    watch: ({ target }) => host.watch(target),
+  };
+}
 export const PiRuntimeLive = (
   config: PiRuntimeConfiguration,
 ): Layer.Layer<ChatService, ApplicationError> =>
@@ -932,16 +1132,26 @@ export const PiRuntimeLive = (
     ChatService,
     Effect.gen(function* () {
       const host = yield* open(config);
-      return {
-        getChatHost: (d) => host.run('getChatHost', d, (input) => host.getHost(input)),
-        listChats: (d) => host.run('listChats', d, (input) => host.list(input)),
-        createChat: (d) => host.run('createChat', d, (input) => host.create(input)),
-        getChat: (d) => host.run('getChat', d, (input) => host.snapshot(input.target)),
-        getChatHistory: (d) => host.run('getChatHistory', d, (input) => host.getHistory(input)),
-        sendChat: (d) => host.run('sendChat', d, (input) => host.send(input)),
-        getChatSend: (d) => host.run('getChatSend', d, (input) => host.getSend(input)),
-        stopChat: (d) => host.run('stopChat', d, (input) => host.stop(input)),
-        watch: ({ target }) => host.watch(target),
-      } satisfies ChatServiceShape;
+      return makeChatService(host);
+    }),
+  );
+
+export const LocalPiRuntimeLive = (
+  config: LocalPiRuntimeConfiguration,
+): Layer.Layer<ChatService | LocalPiControl, ApplicationError> =>
+  Layer.effectContext(
+    Effect.gen(function* () {
+      const registry = config.registry ?? createRegistry();
+      if (!config.registry) registry.install(CodingTools);
+      const host = yield* open({ ...config, registry, mode: 'local' });
+      return Context.make(ChatService, makeChatService(host)).pipe(
+        Context.add(LocalPiControl, {
+          setAdmissionsOpen: (open) => {
+            host.admissionsOpen = open;
+          },
+          hasActiveWork: () =>
+            Effect.tryPromise({ try: () => host.hasActiveWork(), catch: safeError }),
+        }),
+      );
     }),
   );

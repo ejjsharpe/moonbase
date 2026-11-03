@@ -983,7 +983,9 @@ test('generation replacement cancels held host reads and does not accept stale h
   assert(old.aborted);
   held.resolve({ ...context, cwd: '/obsolete', model: 'obsolete' });
   await refreshing;
-  assert.equal(f.controller.getSnapshot().host!.cwd, summary.cwd);
+  const host = f.controller.getSnapshot().host!;
+  assert('cwd' in host);
+  assert.equal(host.cwd, summary.cwd);
   assert.equal(f.controller.getSnapshot().error, null);
   assert.equal(f.subscriptions, 1);
   assert(!f.calls.some((call) => ['sendChat', 'stopChat'].includes(call.operation)));

@@ -5,10 +5,10 @@
 | Public subpath | Responsibility |
 | --- | --- |
 | `workspace` | Workspace/editor DTOs, command types, `EditorClient`, limits and the existing empty recovery value |
-| `chat`, `connection`, `host` | Browser-safe DTOs, command/client interfaces and protocol constants |
+| `chat`, `connection`, `host`, `providers` | Browser-safe DTOs, command/client interfaces and protocol constants |
 | `errors` | Canonical branded `ApplicationError` and error-code type |
 | `common` | `CommandOptions` and awaitable `ObservationClose` types |
-| `chat-schema`, `workspace-schema`, `connection-schema`, `host-schema`, `error-schema` | Existing strict request/saved-data decoders and projecting wire-reply decoders |
+| `providers-schema`, `chat-schema`, `workspace-schema`, `connection-schema`, `host-schema`, `error-schema` | Existing strict request/saved-data decoders and projecting wire-reply decoders |
 | `schema` | Shared portable schema constructors |
 | `services` | Privileged Effect service ports/tags and endpoint types |
 
@@ -28,3 +28,5 @@ bun run check:foundation
 ```
 
 Tests retain the pre-extraction schema assertions, verify public browser/type-only bundle graphs, and reuse unchanged baseline-produced data through the foundation check.
+
+Local Create includes immutable folder/model settings; local host replies contain `mode: "local"` without global settings. Remote requests/replies retain their existing formats. Provider setup ports expose only catalogs/status and live prompt identities; credentials remain privileged. See the [chat boundary](docs/CHAT.md).

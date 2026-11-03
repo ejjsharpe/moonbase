@@ -1,6 +1,6 @@
 # Moonbase
 
-A macOS workbench for local editing and optional remote Pi Durable chat. Reusable packages own feature behavior; clients compose them through public interfaces and supply platform capabilities.
+A macOS workbench for local editing and local/optional remote Pi Durable chat. Reusable packages own feature behavior; clients compose them through public interfaces and supply platform capabilities.
 
 | Module | Owns |
 | --- | --- |
@@ -9,7 +9,7 @@ A macOS workbench for local editing and optional remote Pi Durable chat. Reusabl
 | [Application](packages/application/README.md) | Headless editor/chat features, composition, lifecycle and shared dispatch |
 | [Workbench](packages/workbench/README.md) | Project-scoped file sidebar, buffers and React/Monaco editor presentation |
 | [Workspace](packages/workspace/README.md) | Local files, Git and recovery persistence |
-| [Pi runtime](packages/pi-runtime/README.md) | Pi chat execution, host transport and remote adapter |
+| [Pi runtime](packages/pi-runtime/README.md) | Pi chat execution, local provider setup, host transport and remote adapter |
 | [SSH](packages/ssh/README.md) | Scoped, authenticated SSH connectivity |
 | [UI](packages/ui/README.md) | Shared StyleX tokens and recipes |
 | [Config](packages/config/README.md) | Lint, formatting and TypeScript defaults |
@@ -36,7 +36,7 @@ bun run test
 bun run format:check
 ```
 
-The root source test command runs package suites serially because concurrent native/process fixtures can delay filesystem watcher delivery beyond its existing deadline. Each package retains its own test concurrency and timeouts.
+The root source test command checks repository scripts, then runs package suites serially because concurrent native/process fixtures can delay filesystem watcher delivery beyond its existing deadline. Each package retains its own test concurrency and timeouts.
 
 Package READMEs cover setup and focused checks. The [editor/workspace](tests/editor-workspace/README.md) and [chat](tests/chat/README.md) suites test cross-module integration. Generated test output belongs in ignored `test-results/`; build/package output belongs in `dist/` and `release/`.
 

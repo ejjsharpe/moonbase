@@ -1,3 +1,4 @@
+import { selectRemoteChat } from './chat-target.ts';
 import { prepareCrashRecovery, recoverCrashedWorkbench } from './editor-regressions.ts';
 import type { RecoveryLoad } from '@moonbase/contracts/workspace';
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
@@ -86,6 +87,7 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
       await p.keyboard.insertText('retained local draft at reload');
       const views = p.getByRole('tablist', { name: 'Workbench views', exact: true });
       await views.getByRole('tab', { name: 'Chat', exact: true }).click();
+      await selectRemoteChat(p);
       await p.getByRole('button', { name: 'Connect', exact: true }).click();
       await p.getByLabel('New saved chat').fill('Live lifecycle task');
       await p.getByRole('button', { name: 'Create chat', exact: true }).click();
@@ -303,6 +305,7 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
             .toBe(true);
         await f.releaseReply();
         await views.getByRole('tab', { name: 'Chat', exact: true }).click();
+        await selectRemoteChat(p);
         await expect(p.getByLabel('Message', { exact: true })).toHaveValue(
           'newer chat draft across reload',
         );

@@ -13,17 +13,22 @@ import {
   net,
   protocol,
   session,
+  shell,
   type IpcMainEvent,
   type IpcMainInvokeEvent,
 } from 'electron';
-import { ManagedRuntime, Effect, Layer } from 'effect';
+import { Context, ManagedRuntime, Effect, Layer, Scope } from 'effect';
 import { WorkspaceLive, WorkspaceNative } from '@moonbase/workspace';
 import {
   makeEditorClient,
-  makeChatClient,
-  makeConnectionClient,
+  bindChatClient,
+  bindConnectionClient,
+  bindProviderSetupClient,
 } from '@moonbase/application/runtime/clients';
 import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
+import { ChatService, ConnectionService } from '@moonbase/contracts/services';
+import { acquireLocalChat } from './chat/local.ts';
+import type { Reply, DesktopChatTarget } from './chat/wire.ts';
 import { randomUUID } from 'node:crypto';
 import { realpathSync, mkdirSync } from 'node:fs';
 import { isAbsolute, join, resolve, sep } from 'node:path';
@@ -83,27 +88,39 @@ async function main() {
     ripgrepExecutable: join(assets, 'ripgrep/rg'),
     gitExecutable: '/usr/bin/git',
   });
-  // Exactly one of these capability sets is acquired, once for this process.
-  const root = chatConfiguration
-    ? (() => {
-        const runtime = ManagedRuntime.make(
-          Layer.merge(
-            workspace,
-            RemoteChatLive.pipe(Layer.provideMerge(SshLive(chatConfiguration.ssh))),
-          ),
-        );
-        return {
-          runtime,
-          chat: makeChatClient(runtime),
-          connection: makeConnectionClient(runtime),
-        };
-      })()
-    : { runtime: ManagedRuntime.make(workspace), chat: null, connection: null };
-  const { runtime, chat, connection } = root;
+  const runtime = ManagedRuntime.make(workspace);
   const client = makeEditorClient(runtime);
-  // Acquire once now so SQLite/runtime incompatibility is visible before showing the editor.
   await runtime.runPromise(Effect.asVoid(WorkspaceNative));
-  if (connection) await connection.command('getConnection', {}); // Acquire without connecting.
+  // Local and remote backends are acquired once in separate scopes of this root.
+  let localResult = await acquireLocalChat(runtime, userData, (url) =>
+    shell.openExternal(url),
+  ).then(
+    (backend) => ({ backend, error: null }),
+    () => ({
+      backend: null,
+      error: new ApplicationError({
+        code: 'Unavailable',
+        message:
+          'Local Pi could not initialize. Preserve local chat files, check the working folders and restart Moonbase. Editing remains available.',
+      }),
+    }),
+  );
+  let local = localResult.backend;
+  let localRetry: Promise<void> | undefined;
+  const remote = chatConfiguration
+    ? await runApplicationEffect(
+        runtime,
+        Layer.buildWithScope(
+          RemoteChatLive.pipe(Layer.provideMerge(SshLive(chatConfiguration.ssh))),
+          Scope.forkUnsafe(runtime.scope, 'parallel'),
+        ),
+      )
+    : null;
+  const remoteChat = remote ? bindChatClient(runtime, Context.get(remote, ChatService)) : null;
+  const connection = remote
+    ? bindConnectionClient(runtime, Context.get(remote, ConnectionService))
+    : null;
+  if (connection) await connection.command('getConnection', {});
   const rendererRoot = join(directory, 'renderer');
   protocol.handle('moonbase', async (request) => {
     const url = new URL(request.url);
@@ -254,12 +271,74 @@ async function main() {
       return { ok: false, error: errorDTO(e) };
     }
   });
-  const chatSession =
-    chatConfiguration && chat && connection
-      ? new ChatIpcSession(runtime, chat, connection, chatConfiguration.context, (id, result) => {
-          if (!window.isDestroyed()) window.webContents.send(chatChannels.event, id, result);
-        })
-      : null;
+  const sessions = new Map<string, ChatIpcSession>();
+  let documentId = randomUUID();
+  const emitChat = (backendId: string) => (id: string, result: Reply) => {
+    if (!window.isDestroyed()) window.webContents.send(chatChannels.event, id, result, backendId);
+  };
+  const installChatSessions = () => {
+    if (local && !sessions.has('local'))
+      sessions.set(
+        'local',
+        new ChatIpcSession(
+          runtime,
+          bindChatClient(runtime, local.chat),
+          null,
+          local.session,
+          emitChat('local'),
+          {
+            providers: bindProviderSetupClient(runtime, local.providers, documentId),
+          },
+        ),
+      );
+    if (chatConfiguration && remoteChat && connection && !sessions.has('remote'))
+      sessions.set(
+        'remote',
+        new ChatIpcSession(
+          runtime,
+          remoteChat,
+          connection,
+          chatConfiguration.context,
+          emitChat('remote'),
+        ),
+      );
+  };
+  installChatSessions();
+  const targets: DesktopChatTarget[] = [
+    {
+      id: 'local',
+      label: 'Local',
+      mode: 'local',
+      context: local?.session ?? {
+        host: { hostId: 'unavailable-local', storeId: 'unavailable-local' },
+        actorId: 'unavailable-local',
+      },
+    },
+    ...(chatConfiguration
+      ? [
+          {
+            id: 'remote',
+            label: chatConfiguration.ssh.profile.label,
+            mode: 'remote' as const,
+            context: chatConfiguration.context,
+          },
+        ]
+      : []),
+  ];
+  const releaseChatDocument = async () => {
+    const owner = documentId;
+    const closing = [...sessions.values()].map((session) => session.dispose());
+    sessions.clear();
+    documentId = randomUUID();
+    local?.control.setAdmissionsOpen(true);
+    installChatSessions();
+    const results = await Promise.allSettled([
+      ...closing,
+      ...(local ? [runApplicationEffect(runtime, local.providers.releaseOwner(owner))] : []),
+    ]);
+    const failure = results.find((result) => result.status === 'rejected');
+    if (failure?.status === 'rejected') throw failure.reason;
+  };
   ipcMain.handle(channels.configured, (event, ...args: unknown[]) => {
     try {
       requireTrusted(event);
@@ -268,7 +347,7 @@ async function main() {
           code: 'InvalidInput',
           message: 'Unexpected configuration query input.',
         });
-      return { ok: true, value: chatSession !== null };
+      return { ok: true, value: true };
     } catch (error) {
       return { ok: false, error: errorDTO(error) };
     }
@@ -277,36 +356,94 @@ async function main() {
     try {
       requireTrusted(event);
       const v = chatRecord(value);
-      if (v.kind === 'context') {
+      if (v.kind === 'targets') {
         fields(v, ['kind']);
-        if (!chatSession)
+        return { ok: true, value: targets };
+      }
+      if (typeof v.backendId !== 'string' || !targets.some((target) => target.id === v.backendId))
+        throw new ApplicationError({
+          code: 'Unauthorized',
+          message: 'Choose an installed chat target.',
+        });
+      const backendId = v.backendId;
+      if (backendId === 'local' && !local && v.kind === 'context') {
+        localRetry ??= (async () => {
+          localResult = await acquireLocalChat(runtime, userData, (url) =>
+            shell.openExternal(url),
+          ).then(
+            (backend) => ({ backend, error: null }),
+            () => ({
+              backend: null,
+              error:
+                localResult.error ??
+                new ApplicationError({
+                  code: 'Unavailable',
+                  message:
+                    'Local Pi could not initialize. Preserve its files and restart Moonbase.',
+                }),
+            }),
+          );
+          local = localResult.backend;
+          if (local) {
+            targets[0] = { ...targets[0], context: local.session };
+            installChatSessions();
+          }
+        })().finally(() => {
+          localRetry = undefined;
+        });
+        await localRetry;
+      }
+      if (backendId === 'local' && !local && v.kind !== 'confirm-quit') throw localResult.error;
+      if (v.kind === 'context') {
+        fields(v, ['kind', 'backendId']);
+        return { ok: true, value: targets.find((target) => target.id === backendId)!.context };
+      }
+      if (v.kind === 'choose-folder') {
+        fields(v, ['kind', 'backendId']);
+        if (backendId !== 'local' || !local || quit || terminating)
           throw new ApplicationError({
             code: 'Unavailable',
-            message:
-              'Remote chat is not configured. Launch with an explicit MOONBASE_CHAT_CONFIG to use a host. Local editing is available.',
+            message: 'Folder selection is unavailable.',
           });
-        return { ok: true, value: chatSession.context };
+        const owner = documentId;
+        const selection = await dialog.showOpenDialog(window, {
+          title: 'Choose a local chat working folder',
+          properties: ['openDirectory'],
+        });
+        if (owner !== documentId || selection.canceled || !selection.filePaths[0])
+          return { ok: true, value: null };
+        return { ok: true, value: await local.approveFolder(selection.filePaths[0]) };
       }
-      fields(v, ['kind', 'operation', 'input', 'id']);
-      if (!chatSession)
+      if (v.kind === 'confirm-quit') {
+        fields(v, ['kind', 'backendId']);
+        if (backendId !== 'local' || quit?.stage !== 'preserve')
+          throw new ApplicationError({
+            code: 'Unavailable',
+            message: 'No active Quit preparation.',
+          });
+        return { ok: true, value: await confirmLocalQuit() };
+      }
+      fields(v, ['kind', 'operation', 'input', 'id', 'backendId']);
+      const owner = sessions.get(backendId);
+      if (!owner)
         throw new ApplicationError({
           code: 'Unavailable',
-          message: 'Remote chat is not configured.',
+          message: 'This chat target is unavailable.',
         });
-      return await chatSession.call(v.kind, v.operation, v.input, v.id);
+      return await owner.call(v.kind, v.operation, v.input, v.id);
     } catch (error) {
       return chatError(error);
     }
   });
-  ipcMain.handle(chatChannels.cancel, async (event, id: unknown) => {
+  ipcMain.handle(chatChannels.cancel, async (event, value: unknown) => {
     try {
       requireTrusted(event);
-      if (!chatSession)
-        throw new ApplicationError({
-          code: 'Unavailable',
-          message: 'Remote chat is not configured.',
-        });
-      const reply = await chatSession.cancel(id);
+      const v = chatRecord(value);
+      fields(v, ['id', 'backendId']);
+      const owner = typeof v.backendId === 'string' ? sessions.get(v.backendId) : undefined;
+      if (!owner)
+        throw new ApplicationError({ code: 'Unauthorized', message: 'Unknown chat backend.' });
+      const reply = await owner.cancel(v.id);
       if (!reply.ok) reportCleanup(Promise.reject(new ApplicationError(reply.error)));
       return reply;
     } catch (error) {
@@ -325,7 +462,7 @@ async function main() {
       console.error('Document cleanup failed:', normalizeApplicationError(error).message);
     });
   };
-  let quit: { id: string; stage: 'preserve' | 'dispose' } | undefined,
+  let quit: { id: string; stage: 'preserve' | 'dispose'; localConfirmed?: boolean } | undefined,
     exiting = false,
     rendererReady = false,
     quitRequested = false,
@@ -336,13 +473,44 @@ async function main() {
       window.focus();
     }
   }
+  async function confirmLocalQuit(): Promise<boolean> {
+    if (!local || quit?.localConfirmed) return true;
+    const owner = documentId,
+      intent = quit;
+    const current = () => owner === documentId && intent === quit;
+    local.control.setAdmissionsOpen(false);
+    try {
+      const active = await runApplicationEffect(runtime, local.control.hasActiveWork());
+      if (!current()) return false;
+      const decision = active
+        ? await dialog.showMessageBox(window, {
+            type: 'question',
+            message: 'Local agents are still working.',
+            detail:
+              'Keep Moonbase open to continue, or quit and release local Pi. Reopening follows saved-task recovery; external tool effects cannot be rolled back. Remote work continues.',
+            buttons: ['Keep running', 'Quit'],
+            defaultId: 0,
+            cancelId: 0,
+            noLink: true,
+          })
+        : { response: 1 };
+      if (!current()) return false;
+      const consent = decision.response === 1;
+      if (!consent) local.control.setAdmissionsOpen(true);
+      else if (intent) intent.localConfirmed = true;
+      return consent;
+    } catch (error) {
+      if (current()) local.control.setAdmissionsOpen(true);
+      throw error;
+    }
+  }
   async function finishQuit() {
     if (terminating) return;
     terminating = true;
     rendererReady = false;
     const failures: unknown[] = backgroundFailures.splice(0);
     for (const cleanup of [
-      () => chatSession?.dispose(),
+      ...[...sessions.values()].map((session) => () => session.dispose()),
       () => editorSession.dispose(),
       () => runApplicationEffect(runtime, runtime.disposeEffect),
     ]) {
@@ -405,6 +573,8 @@ async function main() {
     }
   });
   ipcMain.on(channels.quit, async (event, value: unknown) => {
+    const owner = documentId,
+      intent = quit;
     try {
       requireTrusted(event);
       const v = record(value);
@@ -434,22 +604,33 @@ async function main() {
           message: 'Disposal cannot return to the live workbench.',
         });
       if (!v.consent) {
+        local?.control.setAdmissionsOpen(true);
         quit = undefined;
         quitRequested = false;
         show();
         return;
       }
       if (quit.stage === 'preserve') {
+        const consent = await confirmLocalQuit();
+        if (owner !== documentId || intent !== quit) return;
+        if (!consent) {
+          quit = undefined;
+          quitRequested = false;
+          show();
+          return;
+        }
         quit = { id: randomUUID(), stage: 'dispose' };
         window.webContents.send(channels.action, 'dispose', quit.id);
         return;
       }
       await finishQuit();
     } catch (error) {
+      if (owner !== documentId || intent !== quit) return;
       if (quit?.stage === 'dispose') {
         console.error('Invalid disposal acknowledgment:', normalizeApplicationError(error).message);
         return;
       }
+      local?.control.setAdmissionsOpen(true);
       quit = undefined;
       show();
       console.error('Quit failed:', normalizeApplicationError(error).message);
@@ -475,16 +656,17 @@ async function main() {
     // A replacement document must prepare its own application before acknowledging Quit.
     quit = undefined;
     reportCleanup(editorSession.releaseDocument());
-    if (chatSession) reportCleanup(chatSession.releaseDocument());
+    reportCleanup(releaseChatDocument());
   });
   window.webContents.on('render-process-gone', async (_event, details) => {
     if (terminating || exiting) return;
     reportCleanup(editorSession.releaseDocument());
-    if (chatSession) reportCleanup(chatSession.releaseDocument());
+    reportCleanup(releaseChatDocument());
     rendererReady = false;
     quit = undefined;
     quitRequested = false;
     console.error('Workbench renderer exited:', details.reason);
+    const owner = documentId;
     const recovery = await dialog.showMessageBox(window, {
       type: 'error',
       message: 'The workbench stopped unexpectedly.',
@@ -495,7 +677,18 @@ async function main() {
       cancelId: 1,
       noLink: true,
     });
-    if (recovery.response === 0) {
+    if (owner !== documentId || terminating || exiting) return;
+    let consent = false;
+    if (recovery.response !== 0) {
+      try {
+        consent = await confirmLocalQuit();
+      } catch (error) {
+        reportCleanup(Promise.reject(error));
+      }
+    }
+    if (owner !== documentId || terminating || exiting) return;
+    if (recovery.response === 0 || !consent) {
+      quitRequested = false;
       show();
       window.webContents.reload();
     } else await finishQuit();

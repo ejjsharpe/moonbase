@@ -6,7 +6,7 @@ Shared semantics for browser clients, application handlers and the [Pi local/rem
 
 ## Identity and commands
 
-Configuration fixes one host/store, personal actor, absolute remote cwd and model. `ChatSession` binds host/store/actor; `ChatTarget` adds the conversation. Services validate exact configured identities and Pi ownership metadata before access. Authentication and shape validation alone grant no target authority. Remote cwd never grants local editor access; incompatible saved settings reject rather than rebind.
+Remote configuration fixes one host/store, personal actor, absolute cwd and model. Local configuration fixes host/store/actor with `mode: "local"`; each Create requires `settings: {cwd, model: {provider, modelId}}`. A local host reply has no global cwd/model. Remote Create rejects settings; its existing request and ownership formats remain unchanged. `ChatSession` binds host/store/actor; `ChatTarget` adds the conversation. Services validate exact configured identities and Pi ownership metadata before access. Authentication and shape validation alone grant no target authority. Remote cwd never grants local editor access; incompatible saved settings reject rather than rebind.
 
 Mutations bind `(actorId, requestId)` within the configured host/store to the full operation, target and payload in Pi documents. Matching retries resolve original intent; changed reuse, including across operations/conversations, is `InvalidInput`. Keep original inputs through uncertainty; new deliberate actions use new IDs.
 
@@ -73,3 +73,7 @@ Use one bounded per-request deadline (20 seconds) across challenge and RPC body 
 ## Verification
 
 Real temporary SQLite, counted faux models/tools, exclusive second-process ownership, changed/duplicate/lost Send, two-phase crash gaps, restart without resubmit, storage errors, bounded Unicode/JSON output, subscriber disposal and exact Stop races. Exercise the production local HTTP server/remote adapter with wrong listener/key/identity, tampered/replayed/reflected responses, duplicate/concurrent/expired/old-server challenge use, bounded grant capacity, unknown operations, cancellation/deadlines and disconnected generations. Use controlled providers and temporary stores. See [integration checks](../../../tests/chat/README.md); real provider/SSH access, runtime/assets qualification, packaged execution and human acceptance require separate evidence.
+
+## Provider setup
+
+`providers`/`providers-schema` define portable catalog/status, start-login, prompt-answer, cancel, open-active-URL and sign-out commands. `ProviderSetupService` binds handlers to a privileged owning document ID supplied by the head. Answers carry exact flow/prompt identities; no renderer-selected owner or URL grants authority. Replies contain no credential values or authorization URLs. SDK authentication, model validation and credential persistence belong to Pi runtime.

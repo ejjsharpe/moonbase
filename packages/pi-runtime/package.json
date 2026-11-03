@@ -5,7 +5,10 @@
   "exports": {
     ".": "./src/index.ts",
     "./remote": "./src/remote.ts",
-    "./server": "./src/server.ts"
+    "./server": "./src/server.ts",
+    "./providers": "./src/providers.ts",
+    "./credentials": "./src/credentials.ts",
+    "./local-models": "./src/local-models.ts"
   },
   "scripts": {
     "build": "tsc --noEmit -p tsconfig.json",

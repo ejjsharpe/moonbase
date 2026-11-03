@@ -52,11 +52,30 @@ for (const entry of [
 assert(!renderer.some((p) => /packages\/editor\/|desktop\/src\/chat\/view\.tsx$/.test(p)));
 assert.deepEqual(
   [...main, ...renderer].filter((p) =>
-    /(?:^|\/)(?:test|tests)\/|(?:packages\/workbench|apps\/desktop)\/demo\/|test-fixture|host\.mjs|@earendil-works|pi-runtime\/src\/(?:runtime|server|index)\.ts/.test(
+    /(?:^|\/)(?:test|tests)\/|(?:packages\/workbench|apps\/desktop)\/demo\/|test-fixture|host\.mjs/.test(
       p,
     ),
   ),
   [],
+);
+assert.deepEqual(
+  renderer.filter((p) => /@earendil-works|pi-runtime\/src\/|node:sqlite/.test(p)),
+  [],
+);
+for (const entry of [
+  'pi-runtime/src/index.ts',
+  'pi-runtime/src/local-models.ts',
+  'pi-runtime/src/credentials.ts',
+  'pi-ai/dist/bun-oauth.js',
+])
+  assert(
+    main.some((path) => path.endsWith(entry)),
+    `Missing packaged local runtime input: ${entry}`,
+  );
+assert(
+  !/@earendil-works|node:sqlite|safeStorage/.test(
+    asar.extractFile(archive, 'preload.cjs').toString(),
+  ),
 );
 assert.equal(
   files.filter((name) => /^renderer\/assets\/(editor|json|css|html|ts)\.worker.*\.js$/.test(name))

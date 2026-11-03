@@ -24,7 +24,9 @@ test('combined public root requires explicit verified Connect, then saves/lists/
   assert.equal(connected.state, 'connected');
   assert(!JSON.stringify(connected).includes(f.token));
   assert(!JSON.stringify(connected).includes('http://'));
-  assert.equal((await client.chat.command('getChatHost', { host: f.session.host })).cwd, f.cwd);
+  const host = await client.chat.command('getChatHost', { host: f.session.host });
+  assert('cwd' in host);
+  assert.equal(host.cwd, f.cwd);
   const input = { session: f.session, requestId: 'create-one', title: 'Saved remote chat' };
   const created = await client.chat.command('createChat', input);
   assert.deepEqual(await client.chat.command('createChat', input), created);
