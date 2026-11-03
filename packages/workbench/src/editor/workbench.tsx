@@ -78,10 +78,12 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     [panel, setPanel] = useState('files'),
     [action, updateAction] = useState<Action | null>(null);
   const actionRef = useRef<Action | null>(null),
-    lookupRef = useRef(lookup);
+    lookupRef = useRef(lookup),
+    projectRef = useRef(project);
   useLayoutEffect(() => {
     lookupRef.current = lookup;
-  }, [lookup]);
+    projectRef.current = project;
+  }, [lookup, project]);
   function setAction(value: Action | null) {
     actionRef.current = value;
     updateAction(value);
@@ -200,6 +202,19 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   const run = (work: Promise<unknown>) => {
     void work.catch(controller.report);
   };
+  const closeFiles = async (paths: string[]) => {
+    if (!checkout) return false;
+    const closed = await controller.close(paths.map((path) => ({ checkout, path })));
+    const next = controller.getSnapshot().recovery;
+    const path = readOwn(next.views, checkout.checkoutId)?.active;
+    const current = () =>
+      !!root.current &&
+      !!projectRef.current &&
+      checkoutKey(projectRef.current) === checkoutKey(checkout);
+    if (closed && path && next.openCheckoutIds.includes(checkout.checkoutId) && current())
+      await controller.open({ checkout, path }, { current });
+    return closed;
+  };
   const actions: WorkbenchHandle = {
     importFiles,
     keyDown(event: KeyboardEvent) {
@@ -224,7 +239,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       } else if (event.metaKey && key === 'w' && !event.shiftKey) {
         event.preventDefault();
         event.stopPropagation();
-        if (target) run(withFocus(controller.close([target]), focusOrigin(element), true));
+        if (target) run(withFocus(closeFiles([target.path]), focusOrigin(element), true));
       } else if (event.metaKey && event.shiftKey && key === 't') {
         event.preventDefault();
         event.stopPropagation();
@@ -496,7 +511,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                     {...stylex.props(controls.button)}
                     aria-label={`Close ${path}`}
                     disabled={state.preserving}
-                    onClick={() => run(controller.close([file]))}>
+                    onClick={() => run(closeFiles([path]))}>
                     <svg
                       width="12"
                       height="12"
@@ -591,7 +606,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                               } else {
                                 paths = menuCapture.current;
                               }
-                              run(controller.close(paths.map((path) => ({ checkout, path }))));
+                              run(closeFiles(paths));
                             }}>
                             {label}
                           </Menu.Item>

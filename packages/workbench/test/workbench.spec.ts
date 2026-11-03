@@ -224,6 +224,47 @@ test('close-all/reopen/close-active loads the surviving file instead of an unava
   ).toBeVisible();
 });
 
+for (const via of ['button', 'keyboard', 'menu'] as const)
+  test(`closing via ${via} loads the supplied checkout's survivor when another checkout is selected`, async ({
+    page,
+  }) => {
+    await page.goto('/');
+    await first(page).getByRole('treeitem', { name: 'README.md', exact: true }).dblclick();
+    await first(page).getByRole('button', { name: 'Tab actions', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Close All', exact: true }).click();
+    await expect(first(page).getByRole('tab')).toHaveCount(0);
+    await first(page).getByRole('button', { name: 'Tab actions', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Reopen Closed Files', exact: true }).click();
+    await expect(
+      first(page).getByRole('textbox', { name: 'README.md editor', exact: true }),
+    ).toBeVisible();
+    await page.evaluate(() => window.demo.first.openCheckout('/demo/other'));
+    expect(
+      await page.evaluate(() => window.demo.first.getSnapshot().recovery.selectedCheckoutId),
+    ).toBe('other');
+    expect(
+      await page.evaluate(() =>
+        window.demo.first.buffer({ checkout: window.demo.checkout, path: 'welcome.ts' }),
+      ),
+    ).toBeUndefined();
+    if (via === 'button')
+      await first(page).getByRole('button', { name: 'Close README.md', exact: true }).click();
+    else if (via === 'keyboard') {
+      await first(page).getByRole('textbox', { name: 'README.md editor', exact: true }).focus();
+      await page.keyboard.press('Meta+w');
+    } else {
+      await first(page).getByRole('button', { name: 'Tab actions', exact: true }).click();
+      await page.getByRole('menuitem', { name: 'Close', exact: true }).click();
+    }
+    const survivor = first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true });
+    await expect(survivor).toBeVisible();
+    if (via === 'keyboard') await expect(survivor).toBeFocused();
+    await expect(first(page).getByRole('button', { name: 'Retry file', exact: true })).toHaveCount(
+      0,
+    );
+    await page.screenshot({ path: `test-results/editor-project-close-${via}.png`, fullPage: true });
+  });
+
 for (const navigation of ['visual', 'recent'] as const)
   test(`${navigation} keyboard navigation restores typing focus and keeps tab-strip focus`, async ({
     page,
