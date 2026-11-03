@@ -30,6 +30,25 @@ Saved recovery and private journal/approval/receipt records use strict schemas. 
 
 Files must be strict UTF-8 text up to 2 MiB. The journal retains saved text without compaction. Filesystem changes and SQLite commits are not one atomic transaction. Power-loss survival, packaged Electron behavior and human accessibility acceptance require separate qualification.
 
+## Private ownership and tests
+
+`src/index.ts` acquires the single Store/helper resources and child scopes. The following owners remain private; consumers keep using `WorkspaceLive`, `WorkspaceNative` and the existing configuration/contracts.
+
+| Source | Owns | Public regression coverage (`test/`) |
+| --- | --- | --- |
+| `workspace.ts` | Validated dispatch, exact checkout/directory authority, overlap leases, Save/mutation execution and root close order | `ownership.test.ts`, `operations*.test.ts` |
+| `recovery.ts` | Volatile evidence, active Save markers, indexed journal reads, immutable replay, pure reconciliation, publication transactions and acknowledgment bounds | `recovery-publications.test.ts`, `save-recovery*.test.ts`, `operations-client.test.ts` |
+| `native-references.ts`, `native-import.ts` | Capture/capacity, unclaimed expiry, owner validation, preflight inspection, admitted claim and final descriptor release | `ownership.test.ts`, `native-races.test.ts`, `operations.test.ts` |
+| `discovery.ts`, `lookup.ts` | Listing, Git status/comparison, ripgrep enumeration and ranking through authorized IO/ignore validation | `workspace.test.ts` |
+| `observations.ts` | Subscription scopes/capacity, watcher identity checks, readiness/debounce and retained failed releases | `workspace.test.ts`, `ownership.test.ts` |
+| `store.ts`, `schema.ts`, `validation.ts`, `filesystem.ts` | SQLite authority, strict saved data/input rules, no-follow directory IO and helper lifetime | Recovery, ownership and native suites above |
+
+Recovery receives the acquired Store, authorized directory lookup, an active-checkout predicate and exact-checkout approval. Workspace supplies computed overlap/destination predicates; recovery never reaches native references or dispatch. Discovery receives authorized IO, ignore validation and executable paths. Native references and observations receive only their required authority, supplied scope/expiry runner, admission check and cleanup reporter. No child owner closes shared directory/helper/Store resources or creates a runtime.
+
+Mutation inspects references, reserves immutable evidence, then transfers the selected descriptors synchronously without yielding. Expiry and document release see only unclaimed tokens. The admitted operation retains its descriptors until helper exit and durable/volatile settlement. Root close fences admission and signals work, closes observations and retries their failed releases, closes unclaimed-reference scope, joins operations/helpers, then closes directories and Store.
+
+`recovery-fixture.ts` and `workspace-fixture.ts` compose public services/clients with temporary stores and repositories. Existing helper gates and the Effect test clock control races. `ownership.test.ts` additionally covers failed import reservation retaining the original references, automatic expiry before explicit release, disposal of a claimed import while its helper still owns stdio, and unrelated command progress during watch acquisition. Cross-module checks remain in [`tests/editor-workspace`](../../tests/editor-workspace/README.md); fixed previous-producer archives and expected bytes are unchanged.
+
 ## Build and check
 
 Requires macOS with Xcode command-line tools. From the repository root:
@@ -41,4 +60,4 @@ bun run --cwd packages/workspace lint
 bun run --cwd packages/workspace test
 ```
 
-The [editor/workspace integration suite](../../tests/editor-workspace/README.md) checks the public module boundary.
+The [editor/workspace integration suite](../../tests/editor-workspace/README.md) checks the public module boundary. [Ownership refactor validation](docs/VALIDATION.md) records exact revisions, commands and separate qualification limits.
