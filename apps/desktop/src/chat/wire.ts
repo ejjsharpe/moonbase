@@ -50,7 +50,7 @@ export function fields(value: Record<string, unknown>, allowed: string[], requir
 export function requestId(value: unknown): asserts value is string {
   if (typeof value !== 'string' || !/^[A-Za-z0-9._:-]{1,256}$/.test(value)) invalid();
 }
-export function errorDTO(value: unknown): Reply {
+export function errorDTO(value: unknown): Extract<Reply, { ok: false }> {
   const e = normalizeApplicationError(value);
   return { ok: false, error: { code: e.code, message: e.message.slice(0, 512) } };
 }

@@ -1,11 +1,7 @@
-import { Effect, Exit, Scope, type ManagedRuntime } from 'effect';
+import type { ManagedRuntime } from 'effect';
 import { decodeConnectionInput, isConnectionCommand } from '@moonbase/contracts/connection-schema';
-import {
-  normalizeApplicationError,
-  runApplicationEffect,
-} from '@moonbase/application/runtime/effect-client';
 import { decodeChatInput, isChatCommand } from '@moonbase/contracts/chat-schema';
-import { ApplicationError, type ObservationClose } from '@moonbase/contracts/workspace';
+import { ApplicationError } from '@moonbase/contracts/workspace';
 import {
   maximumChatRequestBytes,
   type ChatClient,
@@ -14,28 +10,11 @@ import {
 } from '@moonbase/contracts/chat';
 import type { ConnectionClient, ConnectionCommand } from '@moonbase/contracts/connection';
 import { fields, record, requestId, errorDTO, invalid, type Reply } from './wire.ts';
+import { IpcLifetime } from '../ipc-lifetime.ts';
 
 /** A window's bounded IPC waits and observations; commands still enter shared application handlers. */
 export class ChatIpcSession {
-  private work = new Map<
-    string,
-    {
-      stop: () => void | Promise<void>;
-      complete: () => void;
-      completion: Promise<void>;
-      watch: boolean;
-      closing?: Promise<void>;
-      cancelled: boolean;
-      scope: Scope.Closeable;
-    }
-  >();
-  private generation = 0;
-  private runtime: ManagedRuntime.ManagedRuntime<never, ApplicationError>;
-  private document: Scope.Closeable;
-  private closed = false;
-  private cleanup: Promise<void> = Promise.resolve();
-  private disposal?: Promise<void>;
-  private closing = new Map<string, Promise<Reply>>();
+  private lifetime: IpcLifetime;
   private chat: ChatClient;
   private connection: ConnectionClient;
   readonly context: ChatSession;
@@ -47,8 +26,7 @@ export class ChatIpcSession {
     context: ChatSession,
     emit: (id: string, result: Reply) => void,
   ) {
-    this.runtime = runtime;
-    this.document = Scope.forkUnsafe(runtime.scope, 'parallel');
+    this.lifetime = new IpcLifetime(runtime, 64, errorDTO);
     this.chat = chat;
     this.connection = connection;
     this.context = context;
@@ -73,13 +51,7 @@ export class ChatIpcSession {
   async call(kind: unknown, operation: unknown, input: unknown, id: unknown): Promise<Reply> {
     requestId(id);
     const watch = kind === 'watch-chat' || kind === 'watch-connection';
-    if (
-      this.closed ||
-      this.work.has(id) ||
-      this.closing.has(id) ||
-      [...this.work.values()].filter((request) => request.watch === watch).length >= 64
-    )
-      invalid();
+    if (this.lifetime.getAdmissionError(id, watch)) invalid();
     if (typeof operation !== 'string') invalid();
     try {
       if (Buffer.byteLength(JSON.stringify(input)) > maximumChatRequestBytes) invalid();
@@ -102,30 +74,8 @@ export class ChatIpcSession {
       if (operation !== '') invalid();
       fields(v, []);
     } else invalid();
-    const abort = new AbortController();
-    const generation = this.generation,
-      done = Promise.withResolvers<void>(),
-      request = {
-        stop: (): void | Promise<void> => abort.abort(),
-        complete: () => done.resolve(),
-        completion: done.promise,
-        watch: kind === 'watch-chat' || kind === 'watch-connection',
-        cancelled: false,
-        closing: undefined as Promise<void> | undefined,
-        scope: Scope.forkUnsafe(this.document, 'parallel'),
-      };
-    this.runtime.runSync(
-      Scope.addFinalizer(
-        request.scope,
-        Effect.promise(async () => {
-          request.cancelled = true;
-          await request.stop();
-          if (!request.watch) await request.completion;
-        }),
-      ),
-    );
-    const live = () => !this.closed && generation === this.generation && !request.cancelled;
-    this.work.set(id, request);
+    const request = this.lifetime.reserveRequest(id, watch);
+    const live = request.isLive;
     try {
       if (kind === 'watch-chat' || kind === 'watch-connection') {
         const receive = (value: unknown) => {
@@ -134,120 +84,40 @@ export class ChatIpcSession {
           error = (e: ApplicationError) => {
             if (live()) this.emit(id, errorDTO(e));
           };
-        const ready = Promise.withResolvers<
-          { close: ObservationClose } | { error: ApplicationError }
-        >();
-        request.stop = async () => {
-          const acquired = await ready.promise;
-          if ('error' in acquired) throw acquired.error;
-          await acquired.close();
-        };
-        try {
-          const stop =
-            kind === 'watch-chat'
-              ? this.chat.watch(v as never, receive, error)
-              : this.connection.watch(receive, error);
-          ready.resolve({ close: stop });
-        } catch (error) {
-          ready.resolve({ error: normalizeApplicationError(error) });
-          throw error;
-        }
-        if (!live()) await this.closeRequest(id, request);
+        await request.acquireWatch(() =>
+          kind === 'watch-chat'
+            ? this.chat.watch(v as never, receive, error)
+            : this.connection.watch(receive, error),
+        );
         return { ok: true, value: null };
       }
       const value =
         kind === 'chat'
-          ? await this.chat.command(operation as ChatCommand, v as never, { signal: abort.signal })
+          ? await this.chat.command(operation as ChatCommand, v as never, {
+              signal: request.signal,
+            })
           : await this.connection.command(operation as ConnectionCommand, v as never, {
-              signal: abort.signal,
+              signal: request.signal,
             });
       return { ok: true, value };
     } catch (e) {
-      if (!request.closing) request.watch = false;
+      request.fail();
       return errorDTO(e);
     } finally {
-      if (!request.watch) {
-        if (this.work.get(id) === request) this.work.delete(id);
-        request.complete();
-        await this.closeRequest(id, request);
-      }
+      await request.finish();
     }
-  }
-  private closeRequest(
-    id: string,
-    request: {
-      stop: () => void | Promise<void>;
-      complete: () => void;
-      completion: Promise<void>;
-      watch: boolean;
-      cancelled: boolean;
-      closing?: Promise<void>;
-      scope: Scope.Closeable;
-    },
-  ): Promise<void> {
-    if (!request.closing) {
-      request.cancelled = true;
-      request.closing = runApplicationEffect(
-        this.runtime,
-        Scope.close(request.scope, Exit.void),
-      ).finally(() => {
-        if (this.work.get(id) === request) this.work.delete(id);
-      });
-    }
-    return request.closing;
   }
   cancel(id: unknown): Promise<Reply> {
     requestId(id);
-    const previous = this.closing.get(id);
-    if (previous) return previous;
-    const request = this.work.get(id);
-    if (!request) return Promise.resolve({ ok: true, value: null });
-    const completion = this.closeRequest(id, request).then<Reply, Reply>(
-      () => ({ ok: true, value: null }),
-      errorDTO,
-    );
-    this.closing.set(id, completion);
-    void completion.then((reply) => {
-      if (reply.ok && this.closing.get(id) === completion) this.closing.delete(id);
-      if (this.closing.size >= 128) this.closed = true;
-    });
-    return completion;
+    return this.lifetime.cancel(id);
   }
   releaseDocument() {
-    this.generation++;
-    for (const request of this.work.values()) request.cancelled = true;
-    this.work.clear();
-    const acknowledgments = [...this.closing.values()];
-    this.closing.clear();
-    const document = this.document;
-    this.document = Scope.forkUnsafe(this.runtime.scope, 'parallel');
-    const previous = this.cleanup;
-    this.cleanup = (async () => {
-      const results = await Promise.allSettled([
-        previous,
-        runApplicationEffect(this.runtime, Scope.close(document, Exit.void)),
-        ...acknowledgments.map(async (acknowledgment) => {
-          const reply = await acknowledgment;
-          if (!reply.ok) throw new ApplicationError(reply.error);
-        }),
-      ]);
-      const failures = results.flatMap((r) => (r.status === 'rejected' ? [r.reason] : []));
-      if (failures.length)
-        throw new ApplicationError({
-          code: normalizeApplicationError(failures[0]).code,
-          message: failures.map((error) => normalizeApplicationError(error).message).join('; '),
-        });
-    })();
-    return this.cleanup;
+    return this.lifetime.releaseDocument();
   }
   dispose() {
-    if (!this.disposal) {
-      this.closed = true;
-      this.disposal = this.releaseDocument();
-    }
-    return this.disposal;
+    return this.lifetime.dispose();
   }
   get count() {
-    return this.work.size;
+    return this.lifetime.count;
   }
 }
