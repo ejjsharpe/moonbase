@@ -2,6 +2,16 @@
 
 `PiRuntimeLive` acquires resources in its caller's root scope. It creates no runtime. The standalone `host.ts` owns the process runtime; `RemoteChatLive` receives an existing connection capability and contains no host, provider, SQLite or private-configuration implementation.
 
+## Private implementation
+
+`index.ts` exposes the existing configuration/layer API and maps each `ChatServiceShape` operation explicitly. Both fixed-settings `PiRuntimeLive` and per-conversation `LocalPiRuntimeLive` use the same private owners. No private module has a package export.
+
+`commands.ts` owns `Host` and its mutable command state: captured inputs, actor/request/operation/target bindings, pending intents, keyed admission, reconciliation, exact Stop, terminal waits, watches and local activity inspection. It authorizes session and conversation reads before calling projection. Receipt lookup may reconcile existing admission evidence but never submits.
+
+`history.ts` receives only the acquired Harness and the immutable session, store identity, target, settings and snapshot values needed for projection. It receives no Host, command callbacks or lifecycle state. It retains descending scans, the 32-row budget, serialized 240 KiB list/250 KiB history candidate limits, escaped byte accounting, identity-bound cursors and the start/continuation sentinel. Live projection retains durable entry IDs, eight tool previews and safe failed/parked/pending messages.
+
+`resources.ts` owns runtime/configuration and canonical cwd/model validation, exclusive SQLite acquisition with its 30 ms busy timeout, database → storage → Harness cleanup transfer, strict store-owner validation before `resume()` and explicit root scope construction. Its tool environment callback reads owned conversation settings through `documents.ts`, without reaching into Host. `documents.ts` declares Request/Store/Metadata once and shares exact record IDs and metadata/settings validation; `runtime-types.ts` contains only erased configuration and retained-work types. `private-schema.ts` and `validation.ts` keep their existing strict decoding and command/output boundaries.
+
 ## Admission and cancellation
 
 The root owns local SDK calls as Effect child work through actual Promise settlement. Cancelling a caller interrupts its join. Before admission, a cancelled per-conversation semaphore waiter cannot submit. After the admission section starts, cancellation cannot release its lease or close backing resources while the SDK call continues. The keyed semaphore entry disappears after its last holder/waiter leaves.
@@ -26,6 +36,8 @@ Root finalizers run in this order:
 4. Close Harness, allowing it to interrupt its owned model/tool invocations under Pi restart semantics.
 5. Join outstanding abort adapters and surface their retained failures.
 6. Release any still-owned storage/database and the execution environment.
+
+This order follows the explicit registrations in `resources.ts`: environment cleanup, database, storage, retained aborts, Harness, local SDK work scope, retained terminal waiters, observation scope and finally the command fence. The retained adapters collect safe composite failures even after their original callers leave. No resource manager or additional runtime changes that ordering.
 
 The host does not wait for every model task to become terminal before closing Harness. A noncooperative SDK admission may delay clean shutdown; its database cannot safely be closed early. Failed cleanup is not a clean shutdown claim.
 
