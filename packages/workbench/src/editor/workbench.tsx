@@ -30,6 +30,7 @@ import {
   readOwn,
   type CloseChoice,
   type EditorController,
+  type EditorSnapshot,
 } from '@moonbase/application/editor';
 import { MonacoView } from './monaco-view.tsx';
 import { styles } from './styles.ts';
@@ -89,13 +90,53 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   const actionRef = useRef<Action | null>(null),
     lookupRef = useRef(lookup),
     projectRef = useRef(project);
+  const [mutationFinalFocus, setMutationFinalFocus] = useState<
+    (() => boolean | HTMLElement | null) | undefined
+  >(undefined);
   useLayoutEffect(() => {
     lookupRef.current = lookup;
     projectRef.current = project;
   }, [lookup, project]);
-  function setAction(value: Action | null) {
+  function setAction(value: Action | null, finalFocus?: () => boolean | HTMLElement | null) {
+    if (value) setMutationFinalFocus(() => finalFocus);
     actionRef.current = value;
     updateAction(value);
+  }
+  function canRequestMutation(
+    value: Action,
+    snapshot: EditorSnapshot = state,
+    blocked = !!(action || lookup),
+  ) {
+    return (
+      snapshot.ready &&
+      !snapshot.disposed &&
+      !snapshot.preserving &&
+      !snapshot.closePrompt &&
+      !blocked &&
+      snapshot.recovery.openCheckoutIds.includes(value.checkout.checkoutId) &&
+      snapshot.recovery.checkouts.some(
+        (target) => checkoutKey(target) === checkoutKey(value.checkout),
+      ) &&
+      (!(value.kind === 'move' || value.kind === 'copy') || value.paths.length === 1) &&
+      (value.kind !== 'trash' || value.paths.length > 0)
+    );
+  }
+  function requestMutation(value: Action, finalFocus?: () => boolean | HTMLElement | null) {
+    if (
+      !canRequestMutation(
+        value,
+        controller.getSnapshot(),
+        !!(actionRef.current || lookupRef.current),
+      )
+    ) {
+      controller.report(
+        new Error(
+          'File action unavailable. Check the selection and finish the current editor dialog or preservation.',
+        ),
+      );
+      return;
+    }
+    setAction({ ...value, checkout: { ...value.checkout }, paths: [...value.paths] }, finalFocus);
   }
   const choice = state.closePrompt;
   const [recent, setRecent] = useState<{
@@ -301,6 +342,8 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     if (
       !checkout ||
       !selectClipboardImports ||
+      !event.currentTarget.contains(event.target as Node) ||
+      (event.target as HTMLElement).closest('[role="menu"], [role="dialog"]') ||
       (event.target as HTMLElement).closest('input,textarea,select,[contenteditable=true]')
     )
       return;
@@ -309,7 +352,6 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     const captured = { ...checkout };
     run(selectClipboardImports(captured).then((references) => importFiles(captured, references)));
   }
-  const selectedPaths = selected?.tree.selected ?? [];
   const explorer =
     checkout && selected ? (
       <div
@@ -368,12 +410,29 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                   {...stylex.props(controls.button, filesUI.iconButton)}
                   aria-label={kind === 'create-file' ? 'New File' : 'New Folder'}
                   title={kind === 'create-file' ? 'New file' : 'New folder'}
-                  disabled={state.preserving}
-                  onClick={() => setAction({ checkout: { ...checkout }, kind, paths: [] })}>
+                  disabled={!canRequestMutation({ checkout, kind, paths: [] })}
+                  onClick={() => requestMutation({ checkout, kind, paths: [] })}>
                   <Icon name={kind === 'create-file' ? 'newFile' : 'newFolder'} />
                 </Button>
               ))}
 
+              {selectNativeImports && (
+                <Button
+                  {...stylex.props(controls.button, filesUI.iconButton)}
+                  aria-label="Import files"
+                  title="Import files"
+                  disabled={state.preserving}
+                  onClick={() =>
+                    run(
+                      (async () => {
+                        const target = { ...checkout };
+                        importFiles(target, await selectNativeImports(target));
+                      })(),
+                    )
+                  }>
+                  <Icon name="import" />
+                </Button>
+              )}
               <Button
                 {...stylex.props(controls.button, filesUI.iconButton)}
                 aria-label="Reveal Active File"
@@ -404,50 +463,11 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
               checkout={checkout}
               active={selected.active}
               anchorReset={anchorReset}
+              visible={visible}
+              dialogOpen={!!(action || choice || lookup)}
+              canRequestMutation={canRequestMutation}
+              requestMutation={requestMutation}
             />
-            <div {...stylex.props(filesUI.tools)}>
-              {(['move', 'copy', 'trash'] as const).map((kind) => (
-                <Button
-                  key={kind}
-                  {...stylex.props(controls.button, filesUI.iconButton)}
-                  aria-label={{ move: 'Rename / Move', trash: 'Trash', copy: 'Copy' }[kind]}
-                  title={{ move: 'Rename / Move', trash: 'Trash', copy: 'Copy' }[kind]}
-                  disabled={
-                    state.preserving ||
-                    !selectedPaths.length ||
-                    (kind !== 'trash' && selectedPaths.length !== 1)
-                  }
-                  onClick={() =>
-                    setAction({
-                      checkout: { ...checkout },
-                      kind,
-                      paths: [...selectedPaths],
-                    })
-                  }>
-                  <Icon name={kind} />
-                </Button>
-              ))}
-              {selectNativeImports && (
-                <Button
-                  {...stylex.props(controls.button, filesUI.iconButton)}
-                  aria-label="Import files"
-                  title="Import files"
-                  disabled={state.preserving}
-                  onClick={() =>
-                    run(
-                      (async () => {
-                        const target = { ...checkout };
-                        importFiles(target, await selectNativeImports(target));
-                      })(),
-                    )
-                  }>
-                  <Icon name="import" />
-                </Button>
-              )}
-            </div>
-            {selectClipboardImports && (
-              <p {...stylex.props(styles.pasteHint)}>Paste or drop files here to import</p>
-            )}
           </>
         ) : (
           <>
@@ -863,7 +883,14 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
           }
         />
       )}
-      {action && <Mutation controller={controller} action={action} close={() => setAction(null)} />}
+      {action && (
+        <Mutation
+          controller={controller}
+          action={action}
+          close={() => setAction(null)}
+          finalFocus={mutationFinalFocus}
+        />
+      )}
       {choice && (
         <Popup title="Save changes before closing?" onClose={() => answer('cancel')}>
           <Dialog.Description>{choice.buffer.target.path} has unsaved changes.</Dialog.Description>

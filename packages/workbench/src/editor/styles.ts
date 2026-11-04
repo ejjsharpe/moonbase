@@ -20,7 +20,6 @@ export const styles = stylex.create({
     whiteSpace: 'nowrap',
     textOverflow: 'ellipsis',
   },
-  pasteHint: { color: colors.muted, fontSize: type.caption, margin: '0 4px 4px' },
   empty: { margin: space.xl, maxWidth: 540, color: colors.secondary, fontSize: type.body },
   backdrop: { position: 'fixed', inset: 0, backgroundColor: colors.backdrop, zIndex: 50 },
   popup: {
