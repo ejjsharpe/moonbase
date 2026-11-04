@@ -1,4 +1,39 @@
-/* Document reset only. App appearance belongs to StyleX recipes and tokens. */
+/* Shared font resources and document reset. App appearance belongs to StyleX. */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 200 800;
+  font-display: swap;
+  src: url('./fonts/manrope-variable.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'SpaceMono Nerd Font Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./fonts/space-mono-nerd-font-mono-regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'SpaceMono Nerd Font Mono';
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./fonts/space-mono-nerd-font-mono-italic.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'SpaceMono Nerd Font Mono';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('./fonts/space-mono-nerd-font-mono-bold.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'SpaceMono Nerd Font Mono';
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+  src: url('./fonts/space-mono-nerd-font-mono-bolditalic.woff2') format('woff2');
+}
 @layer reset {
   :root {
     color-scheme: dark;

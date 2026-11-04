@@ -25,36 +25,36 @@ colors:
   backdrop: "#0008"
 typography:
   caption:
-    fontFamily: "-apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif"
+    fontFamily: "\"Manrope\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif"
     fontSize: "11px"
     lineHeight: 1.5
   label:
-    fontFamily: "-apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif"
+    fontFamily: "\"Manrope\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif"
     fontSize: "12px"
     lineHeight: "18px"
   body:
-    fontFamily: "-apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif"
+    fontFamily: "\"Manrope\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif"
     fontSize: "13px"
     lineHeight: 1.5
   title:
-    fontFamily: "-apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif"
+    fontFamily: "\"Manrope\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif"
     fontSize: "13px"
     fontWeight: 500
     lineHeight: 1.5
   message:
-    fontFamily: "-apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif"
+    fontFamily: "\"Manrope\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif"
     fontSize: "15px"
     lineHeight: 1.7
   composer:
-    fontFamily: "-apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif"
+    fontFamily: "\"Manrope\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif"
     fontSize: "15px"
     lineHeight: 1.6
   heading:
-    fontFamily: "-apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif"
+    fontFamily: "\"Manrope\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif"
     fontSize: "16px"
     lineHeight: 1.5
   code:
-    fontFamily: "SFMono-Regular, Menlo, Consolas, monospace"
+    fontFamily: "\"SpaceMono Nerd Font Mono\", SFMono-Regular, Menlo, Consolas, monospace"
     fontSize: "13px"
     lineHeight: 1.6
 rounded:
@@ -169,14 +169,14 @@ components:
 
 **Creative North Star: "The Quiet Workbench"**
 
-The Quiet Workbench follows the user-pinned Cursor reference: cool charcoal surfaces, platform typography, compact outline controls and a spacious conversation measure. This is an Operate surface. Familiar navigation, readable content and visible state define its character. The latest pinned canvas and sidebar colors supersede earlier palette explorations.
+The Quiet Workbench follows the user-pinned Cursor reference: cool charcoal surfaces, Manrope interface typography, compact outline controls and a spacious conversation measure. This is an Operate surface. Familiar navigation, readable content and visible state define its character. The latest pinned canvas and sidebar colors supersede earlier palette explorations.
 
 The shell stays visually flat. Tonal steps separate navigation, content, controls and selection; light neutral focus and Send treatments identify action. Desktop conversation and editor views share this language while retaining their own layout and interaction owners. The reference supplies the visual quality bar; no catalog world was adopted. The build is code-led and ships no raster design assets.
 
 **Key Characteristics:**
 
 - Exact charcoal canvas and sidebar levels with coordinated cool-neutral controls.
-- Platform sans for interface text and a separate monospace stack for code.
+- Bundled Manrope for interface text and SpaceMono Nerd Font Mono for code.
 - Compact controls, generous conversation space and restrained tonal hierarchy.
 - Shared StyleX appearance with Base UI interactions and native macOS window controls.
 
@@ -220,7 +220,7 @@ Readable enabled text must maintain at least 4.5:1 against its actual surface. S
 
 ## Typography
 
-**Interface font:** the platform sans stack (`type.sans`). **Code font:** the SFMono-Regular / Menlo / Consolas stack (`type.mono`). The system has no decorative display face. Platform sans is the approved native interface choice.
+**Interface font:** Manrope (`type.sans`), with platform sans fallbacks. **Code font:** SpaceMono Nerd Font Mono (`type.mono`), with SFMono-Regular / Menlo / Consolas fallbacks. The user selected this pairing for the editor’s character. Both fonts are bundled locally through the shared reset, with their upstream notices retained; no system installation or remote font service is needed. See [font provenance](../packages/ui/docs/FONTS.md). Existing type sizes, line heights and weights remain authoritative.
 
 ### Hierarchy
 
@@ -328,7 +328,7 @@ Desktop supplies clipboard/drop capabilities and does not supply `selectNativeIm
 
 Consume packages through public exports. The icon export is a React presentation leaf; tokens and style recipes remain independent of it. UI owns no application interactions or state. Compose the base StyleX recipe first, then the specific recipe and conditional state. Feature-local `stylex.create` rules own feature layout; shared controls and palette stay in UI. Use parameterized styles for measured positions and sizes, and keep shared constants in `.stylex.ts`. Name overrides for layout or meaning rather than a page, and avoid descendant overrides. Spell borders as width, style and color properties because the StyleX compiler does not emit the border shorthand. Apply styles to the actual DOM node, including portal-rendered content.
 
-The only authored CSS file is the existing `packages/ui/reset.css`, limited to document sizing, box sizing, dark native color scheme and `[hidden]`. Add no new CSS files. Lifecycle and protocol details remain in their owning documentation; this record changes no runtime or module boundary.
+The only authored CSS file is the existing `packages/ui/reset.css`, limited to bundled `@font-face` resources, document sizing, box sizing, dark native color scheme and `[hidden]`. Add no new CSS files. Lifecycle and protocol details remain in their owning documentation; this record changes no runtime or module boundary.
 
 ## Do's and Don'ts
 

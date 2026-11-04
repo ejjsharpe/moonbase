@@ -18,6 +18,61 @@ async function chat(page: Page) {
   await expect(shell(page).getByLabel('Message', { exact: true })).toBeEnabled();
 }
 
+test('bundled fonts load and Monaco realigns the cursor after a delayed editor font', async ({
+  page,
+}) => {
+  let releaseFont!: () => void;
+  const fontGate = new Promise<void>((resolve) => {
+    releaseFont = resolve;
+  });
+  await page.route('**/space-mono-nerd-font-mono-regular.woff2', async (route) => {
+    await fontGate;
+    await route.continue();
+  });
+  try {
+    await page.goto('/?chat', { waitUntil: 'domcontentloaded' });
+    await project(page).click();
+    await expect(input(page)).toBeVisible();
+    await page.evaluate(() => {
+      window.demo.first.edit(
+        { checkout: window.demo.checkout, path: 'welcome.ts' },
+        'i'.repeat(40),
+      );
+    });
+    await input(page).focus();
+    await input(page).press('Meta+ArrowRight');
+    expect(
+      await page.evaluate(() => document.fonts.check('400 13px "SpaceMono Nerd Font Mono"')),
+    ).toBe(false);
+    releaseFont();
+    const fonts = await page.evaluate(async () => {
+      await document.fonts.ready;
+      return Promise.all(
+        ['400 13px "SpaceMono Nerd Font Mono"', '600 13px "Manrope"'].map(async (font) =>
+          (await document.fonts.load(font)).map((face) => face.status),
+        ),
+      );
+    });
+    expect(fonts).toEqual([['loaded'], ['loaded']]);
+    const editor = input(page).locator('xpath=ancestor::div[contains(@class,"monaco-editor")]');
+    await expect
+      .poll(() =>
+        editor.evaluate((element) => {
+          const line = element.querySelector('.view-line')!,
+            cursor = element.querySelector('.cursor')!,
+            range = document.createRange();
+          range.selectNodeContents(line);
+          const caret = cursor.getBoundingClientRect(),
+            textEnd = range.getBoundingClientRect().right;
+          return Math.max(caret.left - textEnd, textEnd - caret.right, 0);
+        }),
+      )
+      .toBeLessThan(1);
+  } finally {
+    releaseFont();
+  }
+});
+
 test('browser shell keeps dirty comparisons, cursor, scroll, Monaco undo and scoped keyboard/focus across project and Chat tabs', async ({
   page,
 }) => {

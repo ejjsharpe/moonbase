@@ -5,6 +5,7 @@
   "exports": {
     "./*": "./*.ts",
     "./reset.css": "./reset.css",
+    "./font-notices": "./fonts/NOTICES.txt",
     "./tokens.stylex": "./tokens.stylex.ts"
   },
   "dependencies": {

@@ -31,7 +31,7 @@ for (const name of [
   'preload.cjs',
   'renderer/index.html',
   'dependency-notices.txt',
-  ...files.filter((name) => /^renderer\/assets\/.+\.(?:js|css|ttf)$/.test(name)),
+  ...files.filter((name) => /^renderer\/assets\/.+\.(?:js|css|ttf|woff2)$/.test(name)),
 ]) {
   const bytes = asar.extractFile(archive, name),
     source = await readFile(join(root, 'dist', name));

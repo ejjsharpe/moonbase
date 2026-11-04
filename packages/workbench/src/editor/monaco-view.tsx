@@ -220,6 +220,10 @@ export function MonacoView({
     } else return;
     element.dataset.modelUri = working?.uri.toString() ?? '';
     let released = false;
+    // Monaco caches fallback widths while bundled fonts are loading.
+    void document.fonts.ready.then(() => {
+      if (!released) monaco.editor.remeasureFonts();
+    });
     const cleanup = () => {
       if (!released) {
         released = true;

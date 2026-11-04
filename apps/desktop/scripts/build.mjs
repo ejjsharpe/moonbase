@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { isPrivilegedDesktopInput } from '../../../scripts/boundaries.mjs';
 import { build } from 'esbuild';
 import { createRequire } from 'node:module';
-import { cp, mkdir, rm, writeFile, readFile, stat } from 'node:fs/promises';
+import { appendFile, cp, mkdir, rm, writeFile, readFile, stat } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { join, resolve } from 'node:path';
@@ -103,6 +103,11 @@ const packages = await notices(
     .map((p) => resolve(root, p))
     .concat(rendererInputs, require.resolve('electron/package.json')),
   join(root, 'dist/dependency-notices.txt'),
+);
+await appendFile(
+  join(root, 'dist/dependency-notices.txt'),
+  '\n\n========================================\n\n' +
+    (await readFile(require.resolve('@moonbase/ui/font-notices'), 'utf8')),
 );
 await writeFile(join(root, 'dist/main-inputs.json'), JSON.stringify(main.metafile.inputs));
 const resources = join(root, 'dist/workspace');

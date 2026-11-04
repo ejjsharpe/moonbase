@@ -35,8 +35,8 @@ export const space = stylex.defineConsts({
 });
 
 export const type = stylex.defineConsts({
-  sans: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-  mono: 'SFMono-Regular, Menlo, Consolas, monospace',
+  sans: '"Manrope", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+  mono: '"SpaceMono Nerd Font Mono", SFMono-Regular, Menlo, Consolas, monospace',
   caption: 11,
   small: 12,
   body: 13,
