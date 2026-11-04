@@ -17,6 +17,7 @@ import { Metadata, cid, eid, getSettings } from './documents.ts';
 import * as V from './validation.ts';
 import * as S from './private-schema.ts';
 import {
+  NestedSourceRetired,
   captureTranscript,
   getLiveSource,
   projectEntryTranscript,
@@ -177,6 +178,17 @@ export async function readHistory(
   };
 }
 export async function projectSnapshot(
+  ...input: Parameters<typeof projectSnapshotOnce>
+): Promise<ChatSnapshot> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await projectSnapshotOnce(...input);
+    } catch (error) {
+      if (!(error instanceof NestedSourceRetired) || attempt === 2) throw error;
+    }
+  }
+}
+async function projectSnapshotOnce(
   harness: Harness,
   identity: string,
   target: ChatTarget,

@@ -104,3 +104,30 @@ Final combined correction checks (Node `v26.13.0`, Bun `1.4.4`):
 | `git diff --check` | Pass |
 
 Logs are in the implementation checkout's ignored `test-results/transcript-109/review-fixes/`. The parent separately reported desktop build and renderer checks passing on rebased head `d6e297a`; those checks were not rerun for these corrections. No app was launched, PR opened, review delegated, real provider/SSH used, legacy data accessed or deployment performed. Full root/Pi suites, native/package/manual and physical performance checks were not repeated for the corrections. SDK-owned nested documents still retire with their parent; reads cannot recover data Pi no longer retains.
+
+## Round 2 correction: nested retirement during snapshot projection
+
+Reviewed base: `1280dbba3b8c7d7a2058da8091683f4e2b398013`. The fresh review correctly reproduced a normal parent completion retiring `NestedCallDoc` after the live capture but before its separate read, allowing `Conflict` to terminate `Host.watch` without a publication.
+
+The projection now distinguishes confirmed owner retirement with a private `NestedSourceRetired` application error. A missing document alone is insufficient: a fresh SDK read must confirm the matching parent is completing/terminal. Only snapshot reads handle that signal, with at most three full capture/projection attempts. Each attempt obtains a new committed history boundary and live/control state. Ordinary `Conflict`, a missing active document, malformed/cross-authority data, storage errors and unknown failures are not retried. Exhaustion remains a visible `Conflict`. Explicit manifest/content selections are never silently retargeted or recaptured.
+
+The new held-read regression failed before the fix with zero snapshots and an observation `Conflict`. It now verifies that a real temporary Pi SQLite parent finishes while both observation projection and an explicit content read are held: observation publishes the fresh final idle history and remains active for a subsequent Send, while the explicit content selection fails source-changed. Additional public probes verify one attempt for six non-retirement failures, three attempts for persistent confirmed retirement, no read-triggered Send, and no late delivery or early Harness closure when observation close/root disposal occurs during an unsettled SDK read.
+
+The existing `Host.run` ownership, SDK Promise settlement, admission and observation cleanup paths were inspected and left unchanged. No commands/resources changes, scheduler, protocol/DTO changes or new lifecycle capability were added. No #122 progress-starvation fix is included here.
+
+For #122 integration: the existing private `projectSnapshot` call shape remains unchanged. Its new `projectSnapshotOnce` includes the entire capture and projection; capture/inspection hooks added by #122 must therefore run per attempt, using the successful attempt's source/control/history evidence. If an outer unsafe-control fence predates an internal recapture, a coalesced refresh can discard/re-read that frame; ordinary progress supersession must not be promoted to unsafe invalidation or a blanket retry condition. Do not reuse one frozen capture for every retry. This checkout does not qualify the combined #122 revision.
+
+Round 2 correction checks:
+
+| Exact command | Result |
+| --- | --- |
+| `bun run --cwd packages/pi-runtime typecheck` | Pass |
+| `NX_DAEMON=false bun run typecheck` | Pass, 8 tasks |
+| `bun run check:foundation` | Pass, source/browser boundaries and unchanged saved bytes |
+| `node --experimental-strip-types --test packages/contracts/test/chat-schema.test.ts packages/pi-runtime/test/history.test.ts packages/pi-runtime/test/transcript.test.ts apps/desktop/test/chat-session.test.ts` | Pass, 58 tests including three new retirement/error/cleanup regressions |
+| `node --experimental-strip-types --test packages/pi-runtime/test/lifecycle.test.ts` | Pass, 18 tests |
+| `bun run lint` | Pass |
+| `bun run format:check` | Pass |
+| `git diff --check` | Pass |
+
+Logs are in the implementation checkout's ignored `test-results/transcript-109/retirement-fix/`. These are source and controlled temporary-SDK checks. Transport/cross-process suites, full root/Pi suites, desktop build/renderer/native/package, manual/real provider/SSH and combined #122 checks were not repeated for this narrowly scoped correction; prior results above remain historical evidence. No app, PR, deployment, merge, real provider/SSH, legacy data access or delegated review was used.

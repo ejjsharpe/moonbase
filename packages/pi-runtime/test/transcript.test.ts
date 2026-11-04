@@ -18,7 +18,9 @@ import {
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux';
 import { Type } from 'typebox';
+import { ApplicationError } from '@moonbase/contracts/errors';
 import type {
+  ChatSnapshot,
   ChatClient,
   ChatTranscriptSource,
   ChatTranscriptPart,
@@ -1063,3 +1065,265 @@ for (const mode of ['modified', 'blocked'] as const)
     releaseParent();
     await getHarness().waitForTask(Number(requested.parentTaskId) as TaskId, context);
   });
+
+async function makeRetirementFixture(t: TestContext) {
+  let releaseParent!: () => void,
+    ready = false,
+    parentTaskId!: TaskId,
+    childTaskId = '';
+  const parentGate = new Promise<void>((resolve) => {
+    releaseParent = resolve;
+  });
+  t.after(() => releaseParent());
+  const registry = createRegistry();
+  registry.install(
+    defineExtension({
+      name: 'nested-retirement',
+      tools: [
+        defineTool({
+          name: 'parent',
+          description: 'Retire nested state at a controlled boundary',
+          parameters: Type.Object({}),
+          execute: async (_, api, ctx) => {
+            parentTaskId = api.taskId;
+            childTaskId = String(
+              (await api.executeTool('child', {}, ctx, { key: 'child' })).taskId,
+            );
+            ready = true;
+            await parentGate;
+            return { output: [{ type: 'text', text: 'Parent finished' }] };
+          },
+        }),
+        defineTool({
+          name: 'child',
+          description: 'Retain a child result until the parent finishes',
+          parameters: Type.Object({}),
+          execute: async () => ({
+            output: [{ type: 'text', text: 'Retained child' }],
+            details: { patch: 'Recorded child patch' },
+          }),
+        }),
+      ],
+    }),
+  );
+  const getHarness = captureHarness(t),
+    f = await fixture(t, registry),
+    target = await f.create();
+  f.faux.setResponses([
+    fauxAssistantMessage([fauxToolCall('parent', {})], { stopReason: 'toolUse' }),
+    fauxAssistantMessage('Final after retirement'),
+  ]);
+  await f.client.command('sendChat', {
+    target,
+    requestId: 'retirement',
+    text: 'Run a nested tool',
+  });
+  await until(async () => ready, Boolean);
+  const source = (await f.client.command('getChat', { target })).run!.transcript!.source;
+  const part = (await manifest(f.client, source)).find(
+    (part) => part.taskId === childTaskId && part.kind === 'result',
+  )!;
+  return { ...f, target, source, part, getHarness, parentTaskId, releaseParent };
+}
+
+test('watch recaptures a held nested retirement while explicit content selections remain source-changed', async (t) => {
+  let releaseReads = () => {};
+  t.after(() => releaseReads());
+  const f = await makeRetirementFixture(t),
+    harness = f.getHarness();
+  const readGate = new Promise<void>((resolve) => {
+    releaseReads = resolve;
+  });
+  let held = 0;
+  const original = harness.snapshot.bind(harness);
+  t.mock.method(harness, 'snapshot', async (...args: Parameters<typeof original>) => {
+    if (args[0] === NestedCallDoc && held < 2) {
+      held++;
+      await readGate;
+    }
+    return original(...args);
+  });
+  const snapshots: ChatSnapshot[] = [],
+    errors: unknown[] = [];
+  const close = f.client.watch(
+    { target: f.target },
+    (view) => snapshots.push(view),
+    (error) => errors.push(error),
+  );
+  t.after(async () => {
+    releaseReads();
+    await close();
+  });
+  await until(
+    async () => held,
+    (count) => count === 1,
+  );
+  const changed = assert.rejects(content(f.client, f.source, f.part), { code: 'Conflict' });
+  await until(
+    async () => held,
+    (count) => count === 2,
+  );
+  f.releaseParent();
+  await harness.waitForTask(f.parentTaskId, context);
+  await until(
+    () => f.client.command('getChat', { target: f.target }),
+    (view) => !view.run && view.state === 'idle',
+  );
+  releaseReads();
+  await changed;
+  await until(
+    async () => snapshots.length + errors.length,
+    (count) => count > 0,
+  );
+  assert.deepEqual(errors, []);
+  await until(
+    async () => snapshots,
+    (views) =>
+      views.some(
+        (view) =>
+          !view.run && view.entries.some((entry) => entry.text === 'Final after retirement'),
+      ),
+  );
+  f.faux.setResponses([fauxAssistantMessage('Still observing')]);
+  await f.client.command('sendChat', {
+    target: f.target,
+    requestId: 'follow-up',
+    text: 'Keep observing',
+  });
+  await until(
+    async () => snapshots,
+    (views) =>
+      views.some(
+        (view) => !view.run && view.entries.some((entry) => entry.text === 'Still observing'),
+      ),
+  );
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test('snapshot retirement recovery preserves ordinary errors and stops after three confirmed retirement attempts', async (t) => {
+  const f = await makeRetirementFixture(t),
+    harness = f.getHarness();
+  const snapshot = harness.snapshot.bind(harness),
+    getTask = harness.getTask.bind(harness);
+  for (const failure of [
+    'missing-active',
+    'Conflict',
+    'Persistence',
+    'Unauthorized',
+    'unknown',
+    'wrong-index',
+  ] as const) {
+    let reads = 0;
+    const mocked = t.mock.method(
+      harness,
+      'snapshot',
+      async (...args: Parameters<typeof snapshot>) => {
+        if (args[0] !== NestedCallDoc) return snapshot(...args);
+        reads++;
+        if (failure === 'missing-active') return undefined;
+        if (failure === 'unknown') throw Error('private-retirement-read-canary');
+        if (failure === 'wrong-index')
+          return { ...(await snapshot(...args)), taskId: f.parentTaskId };
+        throw new ApplicationError({ code: failure, message: 'Controlled nested read failure' });
+      },
+    );
+    try {
+      await assert.rejects(f.client.command('getChat', { target: f.target }), (error) => {
+        assert(ApplicationError.is(error));
+        const code = failure === 'missing-active' ? 'Conflict' : failure;
+        assert.equal(
+          error.code,
+          code === 'wrong-index' || code === 'unknown' ? 'Persistence' : code,
+        );
+        assert(!error.message.includes('private-retirement-read-canary'));
+        return true;
+      });
+      assert.equal(reads, 1);
+    } finally {
+      mocked.mock.restore();
+    }
+  }
+  let reads = 0;
+  const missing = t.mock.method(
+    harness,
+    'snapshot',
+    async (...args: Parameters<typeof snapshot>) => {
+      if (args[0] !== NestedCallDoc) return snapshot(...args);
+      reads++;
+      return undefined;
+    },
+  );
+  const ended = t.mock.method(harness, 'getTask', async (...args: Parameters<typeof getTask>) => {
+    const task = await getTask(...args);
+    if (task?.id !== f.parentTaskId) return task;
+    // Simulate a source that retires again before each projection can consume its document.
+    return {
+      ...task,
+      memos: undefined,
+      state: { status: 'terminal' as const, outcome: { status: 'completed' as const, result: {} } },
+    };
+  });
+  try {
+    await assert.rejects(f.client.command('getChat', { target: f.target }), { code: 'Conflict' });
+    assert.equal(reads, 3);
+  } finally {
+    missing.mock.restore();
+    ended.mock.restore();
+  }
+  assert((await f.client.command('getChat', { target: f.target })).run);
+  assert.equal(f.faux.state.callCount, 1);
+});
+
+test('closing observation and disposing the root retain a held nested SDK read through settlement', async (t) => {
+  let releaseRead = () => {};
+  t.after(() => releaseRead());
+  const f = await makeRetirementFixture(t),
+    harness = f.getHarness();
+  const gate = new Promise<void>((resolve) => {
+    releaseRead = resolve;
+  });
+  let held = false,
+    settled = false,
+    closed = false,
+    disposed = false;
+  const snapshot = harness.snapshot.bind(harness),
+    closeHarness = harness.close.bind(harness);
+  t.mock.method(harness, 'snapshot', async (...args: Parameters<typeof snapshot>) => {
+    if (args[0] === NestedCallDoc && !held) {
+      held = true;
+      await gate;
+      const result = await snapshot(...args);
+      settled = true;
+      return result;
+    }
+    return snapshot(...args);
+  });
+  t.mock.method(harness, 'close', async (...args: Parameters<typeof closeHarness>) => {
+    closed = true;
+    return closeHarness(...args);
+  });
+  const snapshots: ChatSnapshot[] = [],
+    errors: unknown[] = [];
+  const close = f.client.watch(
+    { target: f.target },
+    (view) => snapshots.push(view),
+    (error) => errors.push(error),
+  );
+  await until(async () => held, Boolean);
+  const closing = close();
+  const disposal = f.dispose().then(() => {
+    disposed = true;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(settled, false);
+  assert.equal(closed, false);
+  assert.equal(disposed, false);
+  releaseRead();
+  f.releaseParent();
+  await Promise.all([closing, disposal]);
+  assert(settled && closed && disposed);
+  assert.deepEqual(snapshots, []);
+  assert.deepEqual(errors, []);
+  await close();
+});

@@ -79,3 +79,5 @@ Structured transcripts use the private `transcript.ts` owner for ordered parts, 
 Completed nested-tool activity reads the exact retained public `NestedCallDoc` result, validated against its child/parent/call identities. Cleared live-slot previews are not completion evidence; missing retained content remains explicitly unavailable. See the [review correction evidence](docs/TRANSCRIPT-VALIDATION.md).
 
 Nested requested arguments come from immutable task input. Executed arguments require an execute checkpoint or a settled result with SDK execution-time evidence; pending and blocked requests are never labeled executed.
+
+Snapshot projection recaptures the full live/history view up to three times when a nested document disappears and the SDK confirms its parent is ending. Other failures propagate immediately. Explicit content selections keep their captured source and still fail with `Conflict` on retirement.

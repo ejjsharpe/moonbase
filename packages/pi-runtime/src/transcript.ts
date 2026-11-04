@@ -24,6 +24,7 @@ import {
   type ChatInput,
   type ChatOutput,
 } from '@moonbase/contracts/chat';
+import { ApplicationError } from '@moonbase/contracts/errors';
 import { cid, eid } from './documents.ts';
 import * as V from './validation.ts';
 import * as S from './private-schema.ts';
@@ -41,6 +42,11 @@ const hash = (value: string | Buffer) => createHash('sha256').update(value).dige
 const bind = (value: unknown) => hash(JSON.stringify(value));
 const getLabel = (value: string, fallback = 'Tool') =>
   V.preview(value, 128).text.replaceAll('\0', '').trim() || fallback;
+export class NestedSourceRetired extends ApplicationError {
+  constructor() {
+    super({ code: 'Conflict', message: 'Nested tool source ended; reload the consistent view.' });
+  }
+}
 export function sealCursor(harness: Harness, value: S.TranscriptCursor) {
   const body = Buffer.from(JSON.stringify(value)).toString('base64url');
   const mac = createHmac('sha256', getKey(harness)).update(body).digest('base64url');
@@ -393,7 +399,19 @@ async function readNestedCall(
     return V.fail('Persistence', 'Nested tool parent authority is invalid.');
   const record = await harness.snapshot(NestedCallDoc, input.parent, input.key, context);
   checkRead(signal);
-  if (!record) return V.fail('Conflict', 'Nested tool source ended; reload the consistent view.');
+  if (!record) {
+    const currentParent = await harness.getTask(input.parent, context);
+    checkRead(signal);
+    if (
+      !currentParent ||
+      currentParent.kind !== 'pi.tool' ||
+      currentParent.conversationId !== task.conversationId
+    )
+      return V.fail('Persistence', 'Nested tool parent authority is invalid.');
+    if (currentParent.state.status === 'terminal' || currentParent.state.status === 'completing')
+      throw new NestedSourceRetired();
+    return V.fail('Conflict', 'Nested tool source is unavailable; reload the consistent view.');
+  }
   if (record.taskId !== task.id || (record.result && record.result.taskId !== task.id))
     return V.fail('Persistence', 'Retained nested result identity is invalid.');
   if (tool.status === 'done' && tool.summary && !record.result)
