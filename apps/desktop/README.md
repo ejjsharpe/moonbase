@@ -30,7 +30,7 @@ node scripts/prepare-ripgrep.mjs
 NX_DAEMON=false bunx nx run @moonbase/desktop:dev
 ```
 
-From `apps/desktop`, run `bun dev`. Development creates and prints a fresh temporary user-data directory for each launch. To reuse development state, set `MOONBASE_USER_DATA` to an absolute directory dedicated to Moonbase development. The launcher leaves temporary data in place on exit for recovery; the OS may later remove it. The packaged default is the separate `Application Support/Moonbase` namespace; never use an old application's data directory. There is no legacy import. `dev` builds the static custom-scheme UI with production CSP/bridge; rebuild/relaunch after changes.
+From `apps/desktop`, run `bun dev`. The launcher runs the Nx desktop build, including dependency builds such as the workspace native helper, before starting Electron. The ripgrep preparation above is still required. Development creates and prints a fresh temporary user-data directory for each launch. To reuse development state, set `MOONBASE_USER_DATA` to an absolute directory dedicated to Moonbase development. The launcher leaves temporary data in place on exit for recovery; the OS may later remove it. The packaged default is the separate `Application Support/Moonbase` namespace; never use an old application's data directory. There is no legacy import. `dev` builds the static custom-scheme UI with production CSP/bridge; rebuild/relaunch after changes.
 
 ```sh
 NX_DAEMON=false bunx nx run @moonbase/desktop:build
