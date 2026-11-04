@@ -231,7 +231,7 @@ test('rejected unchanged Rename leaves explicit Save and Close usable', async ({
   await page.goto('/');
   await first(page).getByRole('treeitem', { name: 'welcome.ts', exact: true }).click();
   await first(page).getByRole('tree', { name: 'Files', exact: true }).press('ContextMenu');
-  await page.getByRole('menuitem', { name: 'Rename…', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Rename', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: 'Rename', exact: true }).click();
   await page.getByRole('button', { name: 'Replace captured destination', exact: true }).click();
   await expect(page.getByRole('dialog').getByRole('alert').last()).toContainText(
@@ -1093,7 +1093,7 @@ test('Shift tree ranges extend and shrink from a stable anchor before Trash', as
   await tree.press('Shift+ArrowDown');
   expect(await selected()).toEqual(paths.slice(0, 2));
   await tree.press('ContextMenu');
-  await page.getByRole('menuitem', { name: 'Move to Trash…', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Move to Trash', exact: true }).click();
   await expect(page.getByRole('dialog', { name: 'Move to Trash', exact: true })).toContainText(
     paths.slice(0, 2).join(', '),
   );
@@ -1140,7 +1140,7 @@ test('Reveal starts a new Shift tree range and captures only that Trash batch', 
   await tree.press('Shift+ArrowUp');
   expect(await selected()).toEqual(['README.md', 'welcome.ts']);
   await tree.press('ContextMenu');
-  await page.getByRole('menuitem', { name: 'Move to Trash…', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Move to Trash', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Move to Trash', exact: true });
   await expect(dialog).toContainText('README.md, welcome.ts');
   await expect(dialog).not.toContainText('ignored.txt');

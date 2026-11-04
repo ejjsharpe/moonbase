@@ -57,16 +57,16 @@ for (const shortcut of ['ContextMenu', 'Shift+F10'])
     await tree(page).focus();
     await tree(page).press('Home');
     await tree(page).press(shortcut);
-    await expect(item(page, 'Rename…')).toBeFocused();
+    await expect(item(page, 'Rename')).toBeFocused();
     const captured = await selected(page);
     await page.keyboard.press('End');
-    await expect(item(page, 'Move to Trash…')).toBeFocused();
+    await expect(item(page, 'Move to Trash')).toBeFocused();
     await page.keyboard.press('Home');
-    await expect(item(page, 'Rename…')).toBeFocused();
+    await expect(item(page, 'Rename')).toBeFocused();
     await page.keyboard.press('ArrowDown');
-    await expect(item(page, 'Copy…')).toBeFocused();
+    await expect(item(page, 'Copy')).toBeFocused();
     await page.keyboard.press('m');
-    await expect(item(page, 'Move to Trash…')).toBeFocused();
+    await expect(item(page, 'Move to Trash')).toBeFocused();
     expect(await selected(page)).toEqual(captured);
     await page.keyboard.press('Escape');
     await expect(tree(page)).toBeFocused();
@@ -84,9 +84,9 @@ test('selected rows retain the range anchor; unselected rows replace it', async 
   const paths = await selected(page);
   await row(page, paths[1]).click({ button: 'right' });
   expect(await selected(page)).toEqual(paths);
-  await expect(item(page, 'Rename…')).toHaveAttribute('aria-disabled', 'true');
-  await expect(item(page, 'Copy…')).toHaveAttribute('aria-disabled', 'true');
-  await expect(item(page, 'Move to Trash…')).not.toHaveAttribute('aria-disabled', 'true');
+  await expect(item(page, 'Rename')).toHaveAttribute('aria-disabled', 'true');
+  await expect(item(page, 'Copy')).toHaveAttribute('aria-disabled', 'true');
+  await expect(item(page, 'Move to Trash')).not.toHaveAttribute('aria-disabled', 'true');
   await page.keyboard.press('Escape');
   await tree(page).press('Shift+ArrowUp');
   expect(await selected(page)).toEqual(paths.slice(0, 1));
@@ -98,9 +98,9 @@ test('selected rows retain the range anchor; unselected rows replace it', async 
 });
 
 for (const [name, title] of [
-  ['Rename…', 'Rename'],
-  ['Copy…', 'Copy'],
-  ['Move to Trash…', 'Move to Trash'],
+  ['Rename', 'Rename'],
+  ['Copy', 'Copy'],
+  ['Move to Trash', 'Move to Trash'],
 ])
   test(`${name} hands focus to its existing dialog and Cancel returns to this tree`, async ({
     page,
@@ -128,7 +128,7 @@ for (const key of ['Tab', 'Shift+Tab'])
     await tree(page).focus();
     await tree(page).press('Home');
     await tree(page).press('ContextMenu');
-    await expect(item(page, 'Rename…')).toBeFocused();
+    await expect(item(page, 'Rename')).toBeFocused();
     await page.keyboard.press(key);
     await expect(menu(page)).toHaveCount(0);
     await expect(
@@ -182,7 +182,7 @@ test('large-tree menus capture all offscreen paths and keep row virtualization',
   await tree(page).press('ContextMenu');
   expect(await tree(page).getByRole('treeitem').count()).toBeLessThan(80);
   expect(await selected(page)).toHaveLength(10000);
-  await item(page, 'Move to Trash…').click();
+  await item(page, 'Move to Trash').click();
   const dialog = page.getByRole('dialog', { name: 'Move to Trash', exact: true });
   await expect(dialog).toContainText('file-00000');
   await expect(dialog).toContainText('file-09999');
@@ -243,7 +243,7 @@ test('a captured dialog survives navigation and refuses a closed checkout withou
   await page.goto('/recovery-race.html');
   const currentTree = page.getByRole('tree', { name: 'Files', exact: true });
   await currentTree.getByRole('treeitem', { name: 'a.ts', exact: true }).click({ button: 'right' });
-  await item(page, 'Copy…').click();
+  await item(page, 'Copy').click();
   const dialog = page.getByRole('dialog', { name: 'Copy', exact: true });
   await page.evaluate(async () => {
     const editor = window.recoveryRace.editor;
@@ -271,12 +271,12 @@ test('two workbenches keep menu selection, dialogs and return focus independent'
   const second = page.getByRole('region', { name: 'Second editor', exact: true });
   const otherTree = second.getByRole('tree', { name: 'Files', exact: true });
   await row(page, 'README.md').click({ button: 'right' });
-  await item(page, 'Copy…').click();
+  await item(page, 'Copy').click();
   await expect(page.getByRole('dialog', { name: 'Copy', exact: true })).toContainText('README.md');
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(tree(page)).toBeFocused();
   await otherTree.getByRole('treeitem', { name: 'src', exact: true }).click({ button: 'right' });
-  await item(page, 'Move to Trash…').click();
+  await item(page, 'Move to Trash').click();
   await expect(page.getByRole('dialog')).toContainText('src');
   expect(await selected(page)).toEqual(['README.md']);
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
@@ -293,7 +293,7 @@ test('controlled remote host and local checkout with matching IDs and paths stay
   await otherTree
     .getByRole('treeitem', { name: 'README.md', exact: true })
     .click({ button: 'right' });
-  await item(page, 'Copy…').click();
+  await item(page, 'Copy').click();
   const dialog = page.getByRole('dialog', { name: 'Copy', exact: true });
   await expect(dialog).toContainText('remote-memory · /demo/remote');
   await dialog.getByLabel('Destination relative path', { exact: true }).fill('remote-copy.md');
@@ -321,7 +321,7 @@ test('portal typing and paste do not import files or navigate the explorer', asy
     element.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true })),
   );
   await page.keyboard.press('c');
-  await expect(item(page, 'Copy…')).toBeFocused();
+  await expect(item(page, 'Copy')).toBeFocused();
   expect(await selected(page)).toEqual(['README.md']);
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(region(page).getByRole('alert', { includeHidden: true })).toHaveCount(0);
@@ -341,8 +341,8 @@ test('eligibility updates during preservation and disabled actions cannot execut
     window.recoveryRace.hold();
     void editor.close([{ checkout, path: 'b.ts' }]);
   });
-  await expect(item(page, 'Copy…')).toHaveAttribute('aria-disabled', 'true');
-  await item(page, 'Copy…').dispatchEvent('click');
+  await expect(item(page, 'Copy')).toHaveAttribute('aria-disabled', 'true');
+  await item(page, 'Copy').dispatchEvent('click');
   await expect(page.getByRole('dialog', { name: 'Copy', exact: true })).toHaveCount(0);
   await page.keyboard.press('Escape');
   await page.evaluate(() => window.recoveryRace.release());
@@ -350,7 +350,7 @@ test('eligibility updates during preservation and disabled actions cannot execut
     .poll(() => page.evaluate(() => window.recoveryRace.editor.getSnapshot().preserving))
     .toBe(false);
   await page.getByRole('tree', { name: 'Files', exact: true }).press('ContextMenu');
-  await expect(item(page, 'Copy…')).toBeEnabled();
+  await expect(item(page, 'Copy')).toBeEnabled();
 });
 
 test('another file saving does not disable an unrelated row mutation', async ({ page }) => {
@@ -372,8 +372,8 @@ test('another file saving does not disable an unrelated row mutation', async ({ 
     )
     .toBe(true);
   await row(page, 'README.md').click({ button: 'right' });
-  await expect(item(page, 'Copy…')).not.toHaveAttribute('aria-disabled', 'true');
-  await item(page, 'Copy…').click();
+  await expect(item(page, 'Copy')).not.toHaveAttribute('aria-disabled', 'true');
+  await item(page, 'Copy').click();
   await expect(page.getByRole('dialog', { name: 'Copy', exact: true })).toBeVisible();
 });
 
@@ -526,7 +526,7 @@ test('nested folder invocation preserves expansion and full relative paths', asy
   await row(page, 'src/nested').click({ button: 'right' });
   await expect(row(page, 'src/nested')).toHaveAttribute('aria-expanded', 'false');
   await expect(row(page, 'src/nested')).toHaveAttribute('aria-level', '2');
-  await item(page, 'Rename…').click();
+  await item(page, 'Rename').click();
   await expect(page.getByLabel('Destination relative path', { exact: true })).toHaveValue(
     'src/nested',
   );
@@ -551,8 +551,8 @@ for (const width of [1440, 768, 390])
         ),
       width,
     );
-    await expect(item(page, 'Rename…')).toBeFocused();
-    await expect(item(page, 'Rename…')).toHaveCSS('background-color', 'rgb(43, 43, 46)');
+    await expect(item(page, 'Rename')).toBeFocused();
+    await expect(item(page, 'Rename')).toHaveCSS('background-color', 'rgb(43, 43, 46)');
     await expect
       .poll(() =>
         menu(page).evaluate((element) => {

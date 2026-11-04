@@ -824,7 +824,7 @@ test('real create, dirty move and copy use native operations; lost move reply re
   await edit('dirty created buffer', 'created.ts');
   await page.getByRole('treeitem', { name: 'created.ts, unsaved', exact: true }).click();
   await page.getByRole('tree', { name: 'Files', exact: true }).press('ContextMenu');
-  await page.getByRole('menuitem', { name: 'Rename…', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Rename', exact: true }).click();
   await page.getByLabel('Destination relative path').fill('renamed.ts');
   // Keep live observation from resolving the fact before the explicit status gesture.
   await app.evaluate(() => {
@@ -842,7 +842,7 @@ test('real create, dirty move and copy use native operations; lost move reply re
   ).toBeVisible();
   await page.getByRole('treeitem', { name: 'renamed.ts, unsaved', exact: true }).click();
   await page.getByRole('tree', { name: 'Files', exact: true }).press('ContextMenu');
-  await page.getByRole('menuitem', { name: 'Copy…', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Copy', exact: true }).click();
   await page.getByLabel('Destination relative path').fill('copied.ts');
   await page.getByRole('dialog').getByRole('button', { name: 'Copy', exact: true }).click();
   await open('copied.ts');
@@ -953,7 +953,7 @@ test('native Trash moves only a captured temporary fixture and leaves its dirty 
   await edit('retained after native Trash', name);
   await page.getByRole('treeitem', { name: name + ', unsaved', exact: true }).click();
   await page.getByRole('tree', { name: 'Files', exact: true }).press('ContextMenu');
-  await page.getByRole('menuitem', { name: 'Move to Trash…', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Move to Trash', exact: true }).click();
   await page
     .getByRole('dialog')
     .getByRole('button', { name: 'Move to Trash', exact: true })
@@ -1182,7 +1182,7 @@ test('unacknowledged real move evidence restores dirty text on process restart w
   const inode = statSync(join(checkout, 'a.ts')).ino;
   await page.getByRole('treeitem', { name: 'a.ts, unsaved', exact: true }).click();
   await page.getByRole('tree', { name: 'Files', exact: true }).press('ContextMenu');
-  await page.getByRole('menuitem', { name: 'Rename…', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Rename', exact: true }).click();
   await page.getByLabel('Destination relative path').fill('moved.ts');
   await app.evaluate(() => {
     globalThis.desktopTest.fault = 'mutate';
@@ -1217,7 +1217,7 @@ test('replacement consent cannot overwrite another open dirty draft or admit a n
   await expect.poll(async () => (await recovery()).state.drafts.length).toBe(2);
   await page.getByRole('treeitem', { name: 'a.ts, unsaved', exact: true }).click();
   await page.getByRole('tree', { name: 'Files', exact: true }).press('ContextMenu');
-  await page.getByRole('menuitem', { name: 'Rename…', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Rename', exact: true }).click();
   await page.getByLabel('Destination relative path').fill('b.ts');
   await page.getByRole('dialog').getByRole('button', { name: 'Rename', exact: true }).click();
   await page.getByRole('button', { name: 'Replace captured destination', exact: true }).click();
