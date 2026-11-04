@@ -4,6 +4,20 @@ The macOS Electron client composes the public browser workbench, headless applic
 
 Local chat is the desktop default without SSH configuration. Main acquires workspace and local Pi once in separate scopes of its runtime; `MOONBASE_CHAT_CONFIG` additionally offers the configured SSH host. Startup/navigation never Connect or Send. Local initialization failure leaves the editor usable and explicit Open Chat panel retries acquisition after the underlying failure is resolved.
 
+## Navigation and composition
+
+Agents opens first, with or without an open project. Its distinct tab stays to the left of independently scrolling project tabs. All adjacent tabs use the same 6px gap. Main tabs use rounded inset selection, vertically centered content, left-aligned labels and equal outer padding around Tabler outlined icons. Inactive labels are dimmed; hover brightens their text and background. Short dividers separate inactive neighbors. Close controls appear on selection, hover or keyboard focus without shifting the tab. The plus beside project tabs opens an approved checkout and reveals its editor; switching back retains editor buffers, selection and undo.
+
+Motion (`motion/react`) animates tab entry, exit and neighboring positions, including the project plus, after the existing Open/Close handlers complete. Exiting tabs become inert and disabled immediately; only their visual exit remains. Initial tabs appear without a load animation. Reduced motion uses short fades and immediate layout changes. Preservation/cleanup notices stay below the tab strip so they cannot move the native controls or disturb tab reflow.
+
+Type directly into the new-chat composer. For local chat, choose a working folder and configured model beside the composer, then Send; the first message creates the conversation and supplies its title. New-chat drafts are preserved before a conversation exists. A lost Create or Send retains its original identities and text for explicit recovery rather than creating another conversation. **New chat** returns to the unsent draft without closing an existing agent's work. The sidebar folds into a keyboard-accessible Conversations drawer in compact windows and at high zoom.
+
+The first local chat shows the configured provider's maintained Moonbase model/effort default. Changing either control saves that exact preference across new chats, panel reopening and app restarts. Existing conversations keep their captured settings. An unavailable saved model or effort stays preserved and requires an explicit replacement before Send; it never silently falls back. Retained first-message recovery shows the original text, Send identity and selected effort.
+
+File actions use compact labelled icons. Paste Finder files while the file sidebar has focus, or drop them into the project, to enter the existing destination/replacement flow. Text paste in Monaco and fields remains ordinary editing. Native clipboard approval still applies. Close Chat panel remains available beside the pinned Agents tab, with the existing preservation/cleanup gate.
+
+The [interactive design reference](docs/redesign-mockup.html) uses illustrative content. Run `demo:browser` and open `/?local&design` for the actual shell with volatile local chat/provider capabilities, or `/?chat&design` for the remote fixture. These fixtures call no real provider or host.
+
 ## Run and package
 
 From the repository root on macOS with pinned Node/Bun and Xcode command-line tools:
@@ -42,7 +56,7 @@ Reload requires the editor's synchronous recovery gate and chat preservation bef
 
 Open Chat, leave the target at **Local**, and expand **Provider setup**. Choose **ChatGPT subscription** for the current SDK browser sign-in flow, or OpenAI API key, Anthropic, Google Gemini or OpenRouter. ChatGPT and OpenAI API-key credentials are independent. The newer ChatGPT flow was selected during implementation in place of the ticket’s original legacy Codex/device-code route. It opens only the active provider’s validated sign-in URL and supports a full redirect-URL fallback; it does not offer device codes.
 
-For every new chat, choose an existing working folder through the native picker and a model from a configured provider. The saved chat retains those settings; create another chat to change them. Local read/write/edit/shell tools use your OS permissions: **the working folder is context, not a sandbox**. Local host/store/actor IDs persist in private `local-pi-v1/identity.json`; Pi owns conversations/tasks in that namespace’s SQLite store. No legacy state or external credential files are imported.
+Before the first Send in a new local chat, choose an existing working folder through the native picker and a model from a configured provider. Send creates the saved conversation automatically. The saved chat retains those settings; create another chat to change them. Local read/write/edit/shell tools use your OS permissions: **the working folder is context, not a sandbox**. Local host/store/actor IDs persist in private `local-pi-v1/identity.json`; Pi owns conversations/tasks in that namespace’s SQLite store. No legacy state or external credential files are imported.
 
 Main supplies asynchronous Electron safeStorage encryption to Pi runtime’s atomic private credential store. No plaintext fallback exists. Credentials/answers never enter LocalStorage or controller snapshots; rejected storage/authentication diagnostics stay private. Unlock the Keychain and retry after encrypted storage failure. Unsigned builds may repeat Keychain prompts.
 

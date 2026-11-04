@@ -1,0 +1,534 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-04T08:59:54Z",
+  "title": "Design System: Moonbase",
+  "extensions": {
+    "colorMeta": {
+      "canvas": {
+        "role": "neutral",
+        "displayName": "Canvas charcoal",
+        "canonical": "#141415",
+        "tonalRamp": [
+          "#141415",
+          "#222224",
+          "#2b2b2e",
+          "#343438",
+          "#3a3a42",
+          "#97979f",
+          "#b2b2b8",
+          "#ededf0"
+        ]
+      },
+      "chrome": {
+        "role": "neutral",
+        "displayName": "Chrome charcoal",
+        "canonical": "#161618",
+        "tonalRamp": [
+          "#141415",
+          "#222224",
+          "#2b2b2e",
+          "#343438",
+          "#3a3a42",
+          "#97979f",
+          "#b2b2b8",
+          "#ededf0"
+        ]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Sidebar charcoal",
+        "canonical": "#161618",
+        "tonalRamp": [
+          "#141415",
+          "#222224",
+          "#2b2b2e",
+          "#343438",
+          "#3a3a42",
+          "#97979f",
+          "#b2b2b8",
+          "#ededf0"
+        ]
+      },
+      "elevated": {
+        "role": "neutral",
+        "displayName": "Raised charcoal",
+        "canonical": "#222224",
+        "tonalRamp": [
+          "#141415",
+          "#222224",
+          "#2b2b2e",
+          "#343438",
+          "#3a3a42",
+          "#97979f",
+          "#b2b2b8",
+          "#ededf0"
+        ]
+      },
+      "hover": {
+        "role": "neutral",
+        "displayName": "Hover charcoal",
+        "canonical": "#2b2b2e",
+        "tonalRamp": [
+          "#141415",
+          "#222224",
+          "#2b2b2e",
+          "#343438",
+          "#3a3a42",
+          "#97979f",
+          "#b2b2b8",
+          "#ededf0"
+        ]
+      },
+      "selected": {
+        "role": "neutral",
+        "displayName": "Selected charcoal",
+        "canonical": "#28282b",
+        "tonalRamp": [
+          "#141415",
+          "#222224",
+          "#2b2b2e",
+          "#343438",
+          "#3a3a42",
+          "#97979f",
+          "#b2b2b8",
+          "#ededf0"
+        ]
+      },
+      "selectedHover": {
+        "role": "neutral",
+        "displayName": "Selected hover charcoal",
+        "canonical": "#303034",
+        "tonalRamp": [
+          "#141415",
+          "#222224",
+          "#2b2b2e",
+          "#343438",
+          "#3a3a42",
+          "#97979f",
+          "#b2b2b8",
+          "#ededf0"
+        ]
+      },
+      "text": {
+        "role": "neutral",
+        "displayName": "Content light",
+        "canonical": "#e5e5e7",
+        "tonalRamp": [
+          "#141415",
+          "#222224",
+          "#2b2b2e",
+          "#343438",
+          "#3a3a42",
+          "#97979f",
+          "#b2b2b8",
+          "#ededf0"
+        ]
+      },
+      "secondary": {
+        "role": "neutral",
+        "displayName": "Supporting gray",
+        "canonical": "#b2b2b8",
+        "tonalRamp": [
+          "#141415",
+          "#222224",
+          "#2b2b2e",
+          "#343438",
+          "#3a3a42",
+          "#97979f",
+          "#b2b2b8",
+          "#ededf0"
+        ]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Metadata gray",
+        "canonical": "#97979f",
+        "tonalRamp": [
+          "#141415",
+          "#222224",
+          "#2b2b2e",
+          "#343438",
+          "#3a3a42",
+          "#97979f",
+          "#b2b2b8",
+          "#ededf0"
+        ]
+      },
+      "border": {
+        "role": "neutral",
+        "displayName": "Structural charcoal",
+        "canonical": "#29292d",
+        "tonalRamp": [
+          "#141415",
+          "#222224",
+          "#2b2b2e",
+          "#343438",
+          "#3a3a42",
+          "#97979f",
+          "#b2b2b8",
+          "#ededf0"
+        ]
+      },
+      "controlBorder": {
+        "role": "neutral",
+        "displayName": "Control charcoal",
+        "canonical": "#343438",
+        "tonalRamp": [
+          "#141415",
+          "#222224",
+          "#2b2b2e",
+          "#343438",
+          "#3a3a42",
+          "#97979f",
+          "#b2b2b8",
+          "#ededf0"
+        ]
+      },
+      "accent": {
+        "role": "primary",
+        "displayName": "Light neutral action",
+        "canonical": "#ededf0",
+        "tonalRamp": [
+          "#141415",
+          "#222224",
+          "#2b2b2e",
+          "#343438",
+          "#3a3a42",
+          "#97979f",
+          "#b2b2b8",
+          "#ededf0"
+        ]
+      },
+      "onAccent": {
+        "role": "primary",
+        "displayName": "Dark action text",
+        "canonical": "#19191b",
+        "tonalRamp": [
+          "#141415",
+          "#222224",
+          "#2b2b2e",
+          "#343438",
+          "#3a3a42",
+          "#97979f",
+          "#b2b2b8",
+          "#ededf0"
+        ]
+      },
+      "link": {
+        "role": "primary",
+        "displayName": "White link and hover",
+        "canonical": "#ffffff",
+        "tonalRamp": [
+          "#141415",
+          "#222224",
+          "#2b2b2e",
+          "#343438",
+          "#3a3a42",
+          "#97979f",
+          "#b2b2b8",
+          "#ededf0"
+        ]
+      },
+      "selection": {
+        "role": "neutral",
+        "displayName": "Text selection charcoal",
+        "canonical": "#3a3a42",
+        "tonalRamp": [
+          "#141415",
+          "#222224",
+          "#2b2b2e",
+          "#343438",
+          "#3a3a42",
+          "#97979f",
+          "#b2b2b8",
+          "#ededf0"
+        ]
+      },
+      "warningSurface": {
+        "role": "neutral",
+        "displayName": "Attention ground",
+        "canonical": "#393222",
+        "tonalRamp": [
+          "oklch(15.00% 0.00993 87.04)",
+          "oklch(26.43% 0.01844 87.04)",
+          "oklch(37.86% 0.02412 87.04)",
+          "oklch(49.29% 0.02838 87.04)",
+          "oklch(60.71% 0.02838 87.04)",
+          "oklch(72.14% 0.02412 87.04)",
+          "oklch(83.57% 0.01703 87.04)",
+          "oklch(95.00% 0.00568 87.04)"
+        ]
+      },
+      "warningBorder": {
+        "role": "neutral",
+        "displayName": "Attention boundary",
+        "canonical": "#77613b",
+        "tonalRamp": [
+          "oklch(15.00% 0.02140 80.35)",
+          "oklch(26.43% 0.03974 80.35)",
+          "oklch(37.86% 0.05197 80.35)",
+          "oklch(49.29% 0.06114 80.35)",
+          "oklch(60.71% 0.06114 80.35)",
+          "oklch(72.14% 0.05197 80.35)",
+          "oklch(83.57% 0.03668 80.35)",
+          "oklch(95.00% 0.01223 80.35)"
+        ]
+      },
+      "warningText": {
+        "role": "neutral",
+        "displayName": "Attention text",
+        "canonical": "#ffd49b",
+        "tonalRamp": [
+          "oklch(15.00% 0.03057 74.14)",
+          "oklch(26.43% 0.05678 74.14)",
+          "oklch(37.86% 0.07425 74.14)",
+          "oklch(49.29% 0.08736 74.14)",
+          "oklch(60.71% 0.08736 74.14)",
+          "oklch(72.14% 0.07425 74.14)",
+          "oklch(83.57% 0.05241 74.14)",
+          "oklch(95.00% 0.01747 74.14)"
+        ]
+      },
+      "danger": {
+        "role": "neutral",
+        "displayName": "Invalid input",
+        "canonical": "#ffb4ab",
+        "tonalRamp": [
+          "oklch(15.00% 0.03118 26.76)",
+          "oklch(26.43% 0.05791 26.76)",
+          "oklch(37.86% 0.07572 26.76)",
+          "oklch(49.29% 0.08908 26.76)",
+          "oklch(60.71% 0.08908 26.76)",
+          "oklch(72.14% 0.07572 26.76)",
+          "oklch(83.57% 0.05345 26.76)",
+          "oklch(95.00% 0.01782 26.76)"
+        ]
+      },
+      "backdrop": {
+        "role": "neutral",
+        "displayName": "Modal backdrop",
+        "canonical": "#0008",
+        "tonalRamp": [
+          "#141415",
+          "#222224",
+          "#2b2b2e",
+          "#343438",
+          "#3a3a42",
+          "#97979f",
+          "#b2b2b8",
+          "#ededf0"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "caption": {
+        "displayName": "Caption",
+        "purpose": "Dates, small status, identity metadata and composer help."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Ordinary compact controls; chat supporting text uses its source-specific line height."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Shared document text, file rows and menus."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Saved-conversation heading."
+      },
+      "message": {
+        "displayName": "Message",
+        "purpose": "Transcript message content."
+      },
+      "composer": {
+        "displayName": "Composer",
+        "purpose": "Message textarea."
+      },
+      "heading": {
+        "displayName": "Heading",
+        "purpose": "Dialog and empty-state headings."
+      },
+      "code": {
+        "displayName": "Code",
+        "purpose": "Preformatted output; Monaco configures its own editor typography."
+      }
+    },
+    "shadows": [
+      {
+        "name": "active-view-underline",
+        "value": "inset 0 -1px #ededf0",
+        "purpose": "Functional Files/Diff selection marker; not a decorative elevation shadow."
+      }
+    ],
+    "motion": [
+      {
+        "name": "desktop-tab-entry-reflow",
+        "value": "200ms",
+        "purpose": "Desktop main-tab opacity/x entry and position-only tab/plus reflow, coordinated by LayoutGroup. Existing tabs skip entry; the project scroller stays plain and stationary."
+      },
+      {
+        "name": "desktop-tab-exit",
+        "value": "140ms",
+        "purpose": "Explicit AnimatedTab opacity/x exit. Wrappers become inert/aria-hidden and tab/close controls disable immediately; only visual presence remains after the existing close gate."
+      },
+      {
+        "name": "desktop-tab-ease",
+        "value": "cubic-bezier(0.2, 0.8, 0.2, 1)",
+        "purpose": "Outer transition easing for desktop main-tab entry/reflow without bounce; exit declares its own duration."
+      },
+      {
+        "name": "desktop-tab-reduced-fade",
+        "value": "80ms",
+        "purpose": "Reduced-motion tab opacity fades with x=0 and spatial layout projection disabled."
+      },
+      {
+        "name": "desktop-tab-reduced-reflow",
+        "value": "0ms",
+        "purpose": "Immediate tab/plus layout under reduced motion. Preservation/cleanup notices stay below MainTabs so the strip and native controls remain stationary."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "agents-narrow",
+        "value": "760px"
+      },
+      {
+        "name": "conversations-drawer",
+        "value": "640px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Button",
+      "kind": "button",
+      "refersTo": "button",
+      "description": "Ordinary shared action, including its enabled hover, keyboard focus and disabled state.",
+      "html": "<button class=\"ds-button\">Save</button>",
+      "css": ".ds-button {font-family:-apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;font-size:12px;line-height:18px;color:#e5e5e7;background:#222224;border:1px solid #343438;border-radius:6px;padding:5px 10px;cursor:pointer;} .ds-button:hover:not(:disabled) {background:#2b2b2e;} .ds-button:focus-visible {outline:2px solid #ededf0;outline-offset:2px;} .ds-button:focus:not(:focus-visible) {outline:none;} .ds-button:disabled {opacity:0.55;cursor:not-allowed;}"
+    },
+    {
+      "name": "Quiet button",
+      "kind": "button",
+      "refersTo": "button-quiet",
+      "description": "Supporting action with a transparent resting surface.",
+      "html": "<button class=\"ds-quiet\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-11a2 2 0 0 1 2 -2\"/></svg><span>Choose working folder</span></button>",
+      "css": ".ds-quiet {font-family:-apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;font-size:12px;line-height:18px;color:#e5e5e7;background:#222224;border:1px solid #343438;border-radius:6px;padding:5px 10px;cursor:pointer;display:inline-flex;align-items:center;gap:8px;color:#b2b2b8;border-color:transparent;background:transparent;} .ds-quiet:hover:not(:disabled) {background:#2b2b2e;} .ds-quiet:focus-visible {outline:2px solid #ededf0;outline-offset:2px;} .ds-quiet:focus:not(:focus-visible) {outline:none;} .ds-quiet:disabled {opacity:0.55;cursor:not-allowed;}"
+    },
+    {
+      "name": "Icon button",
+      "kind": "button",
+      "refersTo": "button-icon",
+      "description": "Compact named file or shell action.",
+      "html": "<button class=\"ds-icon-button\" aria-label=\"New file\" title=\"New file\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M14 3v4a1 1 0 0 0 1 1h4\"/><path d=\"M17 21h-10a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2h7l5 5v11a2 2 0 0 1 -2 2\"/><path d=\"M12 11l0 6\"/><path d=\"M9 14l6 0\"/></svg></button>",
+      "css": ".ds-icon-button {font-family:-apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;font-size:12px;line-height:18px;color:#e5e5e7;background:#222224;border:1px solid #343438;border-radius:6px;padding:5px 10px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:6px;color:#b2b2b8;border-color:transparent;background:transparent;flex-shrink:0;} .ds-icon-button:hover:not(:disabled) {background:#2b2b2e;} .ds-icon-button:focus-visible {outline:2px solid #ededf0;outline-offset:2px;} .ds-icon-button:focus:not(:focus-visible) {outline:none;} .ds-icon-button:disabled {opacity:0.55;cursor:not-allowed;}"
+    },
+    {
+      "name": "Send",
+      "kind": "button",
+      "refersTo": "button-send",
+      "description": "The circular inverted conversation action.",
+      "html": "<button class=\"ds-send\" aria-label=\"Send message\" title=\"Send message · ⌘ Enter\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M12 5l0 14\"/><path d=\"M18 11l-6 -6\"/><path d=\"M6 11l6 -6\"/></svg></button>",
+      "css": ".ds-send {font-family:-apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;font-size:12px;line-height:18px;color:#e5e5e7;background:#222224;border:1px solid #343438;border-radius:6px;padding:5px 10px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:32px;height:32px;padding:7px;border-width:0;border-radius:50%;background:#ededf0;color:#19191b;} .ds-send:hover:not(:disabled) {background:#ffffff;} .ds-send:focus-visible {outline:2px solid #ededf0;outline-offset:2px;} .ds-send:focus:not(:focus-visible) {outline:none;} .ds-send:disabled {opacity:0.55;cursor:not-allowed;}"
+    },
+    {
+      "name": "Text field",
+      "kind": "input",
+      "refersTo": "field",
+      "description": "Shared field treatment; typography is inherited from its host.",
+      "html": "<div class=\"ds-field-host\"><input class=\"ds-field\" aria-label=\"Search files\" placeholder=\"Search files\" /></div>",
+      "css": ".ds-field-host {font-family:-apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;font-size:13px;line-height:1.5;} .ds-field {font:inherit;color:#e5e5e7;background:#161618;border:1px solid #343438;border-radius:6px;padding:6px 8px;caret-color:#ededf0;accent-color:#ededf0;min-width:0;max-width:100%;} .ds-field:focus-visible {outline:2px solid #ededf0;outline-offset:2px;} .ds-field::placeholder {color:#97979f;opacity:1;}"
+    },
+    {
+      "name": "Pinned Agents tab",
+      "kind": "nav",
+      "refersTo": "agents-tab",
+      "description": "Pinned natural-width Agents beside independently scrolling projects, all 6px apart. Inactive Agents/project neighbors show the shared divider; selected workspace stays bright. Each group reveals only its own close on hover or focus. Labels are left-aligned with equal 12px icon/close insets. Preview shows settled HTML/CSS appearance; desktop uses motion@14.9.0 from motion/react as recorded in extensions.motion, without a React runtime in this preview.",
+      "html": "<div class=\"ds-agents-strip\" role=\"tablist\" aria-label=\"Workbench views\"><div class=\"ds-agents-group ds-agents-agents-group\" data-selected=\"false\" data-divider=\"true\"><button class=\"ds-agents-tab\" role=\"tab\" aria-selected=\"false\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M3 20l1.3 -3.9c-2.324 -3.437 -1.426 -7.872 2.1 -10.374c3.526 -2.501 8.59 -2.296 11.845 .48c3.255 2.777 3.695 7.266 1.029 10.501c-2.666 3.235 -7.615 4.215 -11.574 2.293l-4.7 1\"/></svg><span class=\"ds-agents-title\">Agents</span></button><button class=\"ds-agents-close\" aria-label=\"Close Chat panel\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M18 6l-12 12\"/><path d=\"M6 6l12 12\"/></svg></button></div><div class=\"ds-agents-projects\" role=\"group\" aria-label=\"Project tabs\"><div class=\"ds-agents-group ds-agents-project-group\" data-selected=\"false\" data-divider=\"false\"><button class=\"ds-agents-tab\" role=\"tab\" aria-selected=\"false\" title=\"local · main · /example/moonbase\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-11a2 2 0 0 1 2 -2\"/></svg><span class=\"ds-agents-title\">moonbase · main</span></button><button class=\"ds-agents-close\" aria-label=\"Close checkout /example/moonbase\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M18 6l-12 12\"/><path d=\"M6 6l12 12\"/></svg></button></div><div class=\"ds-agents-group ds-agents-project-group\" data-selected=\"true\" data-divider=\"false\"><button class=\"ds-agents-tab\" role=\"tab\" aria-selected=\"true\" title=\"local · main · /example/workspace\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-11a2 2 0 0 1 2 -2\"/></svg><span class=\"ds-agents-title\">workspace · main</span></button><button class=\"ds-agents-close\" aria-label=\"Close checkout /example/workspace\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M18 6l-12 12\"/><path d=\"M6 6l12 12\"/></svg></button></div><button class=\"ds-agents-open\" aria-label=\"Open checkout\" title=\"Open project\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M12 5l0 14\"/><path d=\"M5 12l14 0\"/></svg></button></div></div>",
+      "css": ".ds-agents-strip {position:relative;display:flex;align-items:center;gap:6px;height:40px;min-height:40px;padding:4px 14px 4px 86px;box-sizing:border-box;background:#161618;overflow-x:hidden;-webkit-app-region:drag;} .ds-agents-projects {display:flex;align-items:center;gap:6px;min-width:0;overflow-x:auto;} .ds-agents-group {position:relative;display:flex;align-items:center;min-width:0;height:32px;gap:0;padding:0 8px;box-sizing:border-box;border-radius:8px;background:transparent;color:#97979f;-webkit-app-region:no-drag;} .ds-agents-agents-group {z-index:1;flex-shrink:0;align-self:center;} .ds-agents-project-group {flex:0 0 216px;} .ds-agents-group:hover {background:#222224;} .ds-agents-group:hover,.ds-agents-group:focus-within {color:#e5e5e7;} .ds-agents-group[data-selected=\"true\"] {background:#28282b;color:#e5e5e7;} .ds-agents-group[data-selected=\"true\"]:hover {background:#303034;} .ds-agents-group[data-divider=\"true\"]::after {content:\"\";position:absolute;right:-4px;top:8px;width:1px;height:16px;background:#343438;pointer-events:none;} .ds-agents-tab,.ds-agents-close,.ds-agents-open {font-family:-apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;font-size:12px;line-height:18px;display:flex;align-items:center;border:0;border-radius:6px;background:transparent;white-space:nowrap;box-shadow:none;cursor:pointer;-webkit-app-region:no-drag;} .ds-agents-tab {min-width:0;height:32px;gap:8px;padding:0 4px;text-align:left;color:inherit;} .ds-agents-project-group .ds-agents-tab {flex:1;height:100%;} .ds-agents-agents-group .ds-agents-tab {font-weight:600;} .ds-agents-project-group .ds-agents-title {flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;} .ds-agents-close {flex:0 0 24px;justify-content:center;width:24px;height:24px;padding:4px;box-sizing:border-box;color:inherit;opacity:0;pointer-events:none;} .ds-agents-group[data-selected=\"true\"] .ds-agents-close,.ds-agents-group:hover .ds-agents-close,.ds-agents-group:focus-within .ds-agents-close {opacity:1;pointer-events:auto;} .ds-agents-open {align-self:center;justify-content:center;flex-shrink:0;width:30px;height:30px;padding:7px;box-sizing:border-box;color:#b2b2b8;} .ds-agents-close:hover:not(:disabled),.ds-agents-open:hover:not(:disabled) {background:#2b2b2e;} .ds-agents-tab:focus-visible,.ds-agents-close:focus-visible,.ds-agents-open:focus-visible {outline:2px solid #ededf0;outline-offset:2px;} .ds-agents-tab:focus:not(:focus-visible),.ds-agents-close:focus:not(:focus-visible),.ds-agents-open:focus:not(:focus-visible) {outline:none;} .ds-agents-tab:disabled,.ds-agents-open:disabled {opacity:0.55;cursor:not-allowed;} .ds-agents-close:disabled {cursor:not-allowed;}"
+    },
+    {
+      "name": "Project tab",
+      "kind": "nav",
+      "refersTo": "project-tab",
+      "description": "216px project groups with left-aligned truncated labels, equal 12px icon/close insets and retained close space. Selected Agents has no adjacent divider; inactive project neighbors do. All gaps are 6px; hover/focus brightens only that group and reveals its close. Content is illustrative. Preview shows settled HTML/CSS appearance; desktop Motion behavior is recorded in extensions.motion, without a React runtime in this preview.",
+      "html": "<div class=\"ds-project-strip\" role=\"tablist\" aria-label=\"Workbench views\"><div class=\"ds-project-group ds-project-agents-group\" data-selected=\"true\" data-divider=\"false\"><button class=\"ds-project-tab\" role=\"tab\" aria-selected=\"true\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M3 20l1.3 -3.9c-2.324 -3.437 -1.426 -7.872 2.1 -10.374c3.526 -2.501 8.59 -2.296 11.845 .48c3.255 2.777 3.695 7.266 1.029 10.501c-2.666 3.235 -7.615 4.215 -11.574 2.293l-4.7 1\"/></svg><span class=\"ds-project-title\">Agents</span></button><button class=\"ds-project-close\" aria-label=\"Close Chat panel\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M18 6l-12 12\"/><path d=\"M6 6l12 12\"/></svg></button></div><div class=\"ds-project-projects\" role=\"group\" aria-label=\"Project tabs\"><div class=\"ds-project-group ds-project-project-group\" data-selected=\"false\" data-divider=\"true\"><button class=\"ds-project-tab\" role=\"tab\" aria-selected=\"false\" title=\"local · main · /example/moonbase\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-11a2 2 0 0 1 2 -2\"/></svg><span class=\"ds-project-title\">moonbase · main</span></button><button class=\"ds-project-close\" aria-label=\"Close checkout /example/moonbase\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M18 6l-12 12\"/><path d=\"M6 6l12 12\"/></svg></button></div><div class=\"ds-project-group ds-project-project-group\" data-selected=\"false\" data-divider=\"false\"><button class=\"ds-project-tab\" role=\"tab\" aria-selected=\"false\" title=\"local · main · /example/workspace\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-11a2 2 0 0 1 2 -2\"/></svg><span class=\"ds-project-title\">workspace · main</span></button><button class=\"ds-project-close\" aria-label=\"Close checkout /example/workspace\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M18 6l-12 12\"/><path d=\"M6 6l12 12\"/></svg></button></div><button class=\"ds-project-open\" aria-label=\"Open checkout\" title=\"Open project\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M12 5l0 14\"/><path d=\"M5 12l14 0\"/></svg></button></div></div>",
+      "css": ".ds-project-strip {position:relative;display:flex;align-items:center;gap:6px;height:40px;min-height:40px;padding:4px 14px 4px 86px;box-sizing:border-box;background:#161618;overflow-x:hidden;-webkit-app-region:drag;} .ds-project-projects {display:flex;align-items:center;gap:6px;min-width:0;overflow-x:auto;} .ds-project-group {position:relative;display:flex;align-items:center;min-width:0;height:32px;gap:0;padding:0 8px;box-sizing:border-box;border-radius:8px;background:transparent;color:#97979f;-webkit-app-region:no-drag;} .ds-project-agents-group {z-index:1;flex-shrink:0;align-self:center;} .ds-project-project-group {flex:0 0 216px;} .ds-project-group:hover {background:#222224;} .ds-project-group:hover,.ds-project-group:focus-within {color:#e5e5e7;} .ds-project-group[data-selected=\"true\"] {background:#28282b;color:#e5e5e7;} .ds-project-group[data-selected=\"true\"]:hover {background:#303034;} .ds-project-group[data-divider=\"true\"]::after {content:\"\";position:absolute;right:-4px;top:8px;width:1px;height:16px;background:#343438;pointer-events:none;} .ds-project-tab,.ds-project-close,.ds-project-open {font-family:-apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;font-size:12px;line-height:18px;display:flex;align-items:center;border:0;border-radius:6px;background:transparent;white-space:nowrap;box-shadow:none;cursor:pointer;-webkit-app-region:no-drag;} .ds-project-tab {min-width:0;height:32px;gap:8px;padding:0 4px;text-align:left;color:inherit;} .ds-project-project-group .ds-project-tab {flex:1;height:100%;} .ds-project-agents-group .ds-project-tab {font-weight:600;} .ds-project-project-group .ds-project-title {flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;} .ds-project-close {flex:0 0 24px;justify-content:center;width:24px;height:24px;padding:4px;box-sizing:border-box;color:inherit;opacity:0;pointer-events:none;} .ds-project-group[data-selected=\"true\"] .ds-project-close,.ds-project-group:hover .ds-project-close,.ds-project-group:focus-within .ds-project-close {opacity:1;pointer-events:auto;} .ds-project-open {align-self:center;justify-content:center;flex-shrink:0;width:30px;height:30px;padding:7px;box-sizing:border-box;color:#b2b2b8;} .ds-project-close:hover:not(:disabled),.ds-project-open:hover:not(:disabled) {background:#2b2b2e;} .ds-project-tab:focus-visible,.ds-project-close:focus-visible,.ds-project-open:focus-visible {outline:2px solid #ededf0;outline-offset:2px;} .ds-project-tab:focus:not(:focus-visible),.ds-project-close:focus:not(:focus-visible),.ds-project-open:focus:not(:focus-visible) {outline:none;} .ds-project-tab:disabled,.ds-project-open:disabled {opacity:0.55;cursor:not-allowed;} .ds-project-close:disabled {cursor:not-allowed;}"
+    },
+    {
+      "name": "Conversation row",
+      "kind": "nav",
+      "refersTo": "conversation-row",
+      "description": "Two-line saved conversation with folder basename and date. Content is illustrative.",
+      "html": "<button class=\"ds-conversation\" aria-pressed=\"true\"><span class=\"ds-chat-dot\" aria-hidden=\"true\"></span><span class=\"ds-chat-summary\"><span class=\"ds-chat-title\">Review the desktop shell and editor</span><span class=\"ds-chat-folder\">moonbase</span></span><time class=\"ds-chat-date\" datetime=\"2026-01-01\">Jan 1</time></button>",
+      "css": ".ds-conversation {font-family:-apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;font-size:12px;line-height:18px;color:#e5e5e7;background:#222224;border:1px solid #343438;border-radius:6px;padding:5px 10px;cursor:pointer;display:flex;align-items:start;gap:10px;width:100%;text-align:left;min-width:0;padding:9px 12px;border-width:0;border-radius:7px;background:transparent;color:#b2b2b8;} .ds-conversation:hover:not(:disabled) {background:#2b2b2e;} .ds-conversation:focus-visible {outline:2px solid #ededf0;outline-offset:2px;} .ds-conversation:focus:not(:focus-visible) {outline:none;} .ds-conversation:disabled {opacity:0.55;cursor:not-allowed;} .ds-conversation[aria-pressed=\"true\"] {background:#28282b;color:#e5e5e7;} .ds-conversation[aria-pressed=\"true\"]:hover:not(:disabled) {background:#303034;} .ds-chat-dot {margin-top:7px;width:5px;height:5px;border-radius:50%;background:#97979f;flex-shrink:0;} .ds-chat-summary {display:flex;flex-direction:column;gap:2px;min-width:0;} .ds-chat-title,.ds-chat-folder {overflow:hidden;text-overflow:ellipsis;white-space:nowrap;} .ds-chat-folder {font-size:12px;font-weight:400;color:#97979f;} .ds-chat-date {font-size:11px;color:#97979f;margin-left:auto;white-space:nowrap;flex-shrink:0;}"
+    },
+    {
+      "name": "Conversation composer",
+      "kind": "custom",
+      "refersTo": "composer",
+      "description": "Source-sized textarea, compact model and reasoning selectors, circular Send and required tool notice. Selector content is illustrative.",
+      "html": "<div class=\"ds-compose-area\"><form class=\"ds-composer\"><textarea class=\"ds-message\" aria-label=\"Message\" placeholder=\"Ask anything, or describe what you want to build…\"></textarea><div class=\"ds-compose-actions\"><button type=\"button\" class=\"ds-model\">Demo model <svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M6 9l6 6l6 -6\"/></svg></button><button type=\"button\" class=\"ds-model ds-effort\">Extra high <svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M6 9l6 6l6 -6\"/></svg></button><button type=\"button\" class=\"ds-compose-send\" aria-label=\"Send message\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M12 5l0 14\"/><path d=\"M18 11l-6 -6\"/><path d=\"M6 11l6 -6\"/></svg></button></div></form><div class=\"ds-compose-help\"><span>Local tools can access files outside the working folder.</span><span>⌘ / Ctrl Enter</span></div></div>",
+      "css": ".ds-compose-area {font-family:-apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;color:#e5e5e7;width:calc(100% - 48px);max-width:640px;margin:12px auto 8px;} .ds-composer {display:flex;flex-direction:column;gap:8px;padding:12px;background:#222224;border:1px solid #343438;border-radius:18px;} .ds-composer:focus-within {border-color:#97979f;} .ds-message {font-family:inherit;color:#e5e5e7;caret-color:#ededf0;width:100%;min-width:0;max-width:100%;resize:none;min-height:48px;max-height:25vh;font-size:15px;line-height:1.6;background:transparent;border:0;border-radius:0;padding:0;} .ds-message::placeholder {color:#97979f;opacity:1;} .ds-message:focus-visible {outline:none;} .ds-compose-actions {display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap;min-height:32px;} .ds-model {font-family:-apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;font-size:12px;line-height:18px;color:#e5e5e7;background:#222224;border:1px solid #343438;border-radius:6px;padding:5px 10px;cursor:pointer;display:inline-flex;align-items:center;gap:8px;background:transparent;color:#b2b2b8;border-color:transparent;} .ds-model:hover:not(:disabled) {background:#2b2b2e;} .ds-model:focus-visible {outline:2px solid #ededf0;outline-offset:2px;} .ds-model:focus:not(:focus-visible) {outline:none;} .ds-model:disabled {opacity:0.55;cursor:not-allowed;}.ds-compose-send {font-family:-apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;font-size:12px;line-height:18px;color:#e5e5e7;background:#222224;border:1px solid #343438;border-radius:6px;padding:5px 10px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:32px;height:32px;padding:7px;border:0;border-radius:50%;background:#ededf0;color:#19191b;} .ds-compose-send:hover:not(:disabled) {background:#ffffff;} .ds-compose-send:focus-visible {outline:2px solid #ededf0;outline-offset:2px;} .ds-compose-send:focus:not(:focus-visible) {outline:none;} .ds-compose-send:disabled {opacity:0.55;cursor:not-allowed;} .ds-compose-help {display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;padding:10px 8px;font-size:11px;line-height:1.5;color:#97979f;} .ds-effort {flex-shrink:0;width:116px;justify-content:space-between;}"
+    },
+    {
+      "name": "Model popup",
+      "kind": "custom",
+      "refersTo": "popup",
+      "description": "Shared elevated portal surface and focusable options. Labels are illustrative.",
+      "html": "<div class=\"ds-popup\"><div class=\"ds-options\"><button class=\"ds-option\">Configured model</button><button class=\"ds-option\">Another configured model</button></div></div>",
+      "css": ".ds-popup {font-family:-apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;font-size:13px;line-height:1.5;width:min(360px, calc(100vw - 32px));border:1px solid #343438;border-radius:12px;background:#222224;color:#e5e5e7;overflow:hidden;scrollbar-color:#343438 #222224;scrollbar-width:thin;} .ds-options {max-height:min(340px, 45vh);overflow-y:auto;padding:6px;border-top:1px solid #29292d;} .ds-option {font-family:inherit;font-size:inherit;line-height:inherit;display:flex;align-items:center;justify-content:space-between;width:100%;text-align:left;padding:12px;border:0;border-radius:7px;background:transparent;color:#e5e5e7;outline-offset:-2px;} .ds-option:hover:not(:disabled),.ds-option:focus-visible {background:#2b2b2e;}"
+    },
+    {
+      "name": "File tree row",
+      "kind": "nav",
+      "refersTo": "file-row",
+      "description": "Official Tabler IconFile, IconFolder and IconFolderOpen at 16px/stroke 1.5, with a reserved 16px disclosure column and aligned names at each depth. Existing 28px row geometry, selection, active-label and focus states remain distinct; expansion is illustrative.",
+      "html": "<div class=\"ds-tree\" role=\"tree\" tabindex=\"0\" aria-label=\"Files\" aria-multiselectable=\"true\" aria-activedescendant=\"ds-file-welcome\"><div class=\"ds-file-row ds-file-level-1\" role=\"treeitem\" aria-level=\"1\" aria-selected=\"false\" aria-expanded=\"true\"><span class=\"ds-disclosure ds-disclosure-open\" aria-hidden=\"true\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M9 6l6 6l-6 6\"/></svg></span><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M5 19l2.757 -7.351a1 1 0 0 1 .936 -.649h12.307a1 1 0 0 1 .986 1.164l-.996 5.211a2 2 0 0 1 -1.964 1.625h-14.026a2 2 0 0 1 -2 -2v-11a2 2 0 0 1 2 -2h4l3 3h7a2 2 0 0 1 2 2v2\"/></svg><span class=\"ds-file-label\">src</span></div><div class=\"ds-file-row ds-file-level-2\" role=\"treeitem\" id=\"ds-file-welcome\" aria-level=\"2\" aria-selected=\"true\" aria-current=\"true\" data-focused=\"true\"><span class=\"ds-disclosure\" aria-hidden=\"true\"></span><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M14 3v4a1 1 0 0 0 1 1h4\"/><path d=\"M17 21h-10a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2h7l5 5v11a2 2 0 0 1 -2 2\"/></svg><span class=\"ds-file-label ds-file-active\">welcome.ts</span></div><div class=\"ds-file-row ds-file-level-1\" role=\"treeitem\" aria-level=\"1\" aria-selected=\"false\" aria-expanded=\"false\"><span class=\"ds-disclosure\" aria-hidden=\"true\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M9 6l6 6l-6 6\"/></svg></span><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-11a2 2 0 0 1 2 -2\"/></svg><span class=\"ds-file-label\">tests</span></div><div class=\"ds-file-row ds-file-level-1\" role=\"treeitem\" aria-level=\"1\" aria-selected=\"false\"><span class=\"ds-disclosure\" aria-hidden=\"true\"></span><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M14 3v4a1 1 0 0 0 1 1h4\"/><path d=\"M17 21h-10a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2h7l5 5v11a2 2 0 0 1 -2 2\"/></svg><span class=\"ds-file-label\">README.md</span></div></div>",
+      "css": ".ds-tree {font-family:-apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;font-size:13px;line-height:1.5;background:#161618;overflow:auto;min-height:80px;outline-offset:-2px;} .ds-tree:focus-visible {outline:2px solid #ededf0;} .ds-file-row {display:flex;align-items:center;gap:5px;min-height:28px;height:28px;padding:3px 6px;box-sizing:border-box;cursor:default;font-size:13px;color:#b2b2b8;background:transparent;} .ds-file-level-2 {padding-left:22px;} .ds-file-row:hover {background:#222224;} .ds-file-row[aria-selected=\"true\"] {background:#28282b;} .ds-file-row[aria-selected=\"true\"]:hover {background:#303034;} .ds-disclosure {display:inline-flex;width:16px;height:16px;flex-shrink:0;} .ds-disclosure-open {transform:rotate(90deg);} .ds-file-label {overflow:hidden;text-overflow:ellipsis;white-space:nowrap;} .ds-file-active {color:#e5e5e7;} .ds-tree:focus .ds-file-row[data-focused=\"true\"] {outline:1px solid #ededf0;outline-offset:-1px;}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Quiet Workbench",
+    "overview": "The Quiet Workbench follows the user-pinned Cursor reference: cool charcoal surfaces, platform typography, compact outline controls and a spacious conversation measure. This is an Operate surface. Familiar navigation, readable content and visible state define its character. The latest pinned canvas and sidebar colors supersede earlier palette explorations.\n\nThe shell stays visually flat. Tonal steps separate navigation, content, controls and selection; light neutral focus and Send treatments identify action. Desktop conversation and editor views share this language while retaining their own layout and interaction owners. The reference supplies the visual quality bar; no catalog world was adopted. The build is code-led and ships no raster design assets.",
+    "keyCharacteristics": [
+      "Exact charcoal canvas and sidebar levels with coordinated cool-neutral controls.",
+      "Platform sans for interface text and a separate monospace stack for code.",
+      "Compact controls, generous conversation space and restrained tonal hierarchy.",
+      "Shared StyleX appearance with Base UI interactions and native macOS window controls."
+    ],
+    "rules": [
+      {
+        "name": "The Pinned Surface Rule",
+        "body": "Preserve the canvas and sidebar tokens exactly; build companion surfaces from the shared cool-neutral palette.",
+        "section": "colors"
+      },
+      {
+        "name": "The One Measure Rule",
+        "body": "Align transcript content and composition to the same conversation maximum width.",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat Workbench Rule",
+        "body": "Use surface tone, borders and state outlines for depth; reserve inset lines for navigation state.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do consume shared tokens, recipes and the named Tabler outlined icon selection through the public @moonbase/ui exports.",
+      "Do keep the pinned Agents destination distinct from the independently scrolling project group.",
+      "Do keep preservation and cleanup notices below MainTabs, the project scroller stationary and exiting tab controls inert.",
+      "Do preserve accessible labels, keyboard focus, required local-tool notices and visible preservation or uncertainty controls.",
+      "Do route desktop file paste and drop through the existing import destination and replacement flow.",
+      "Do apply StyleX to the actual rendered element, including Base UI portals and rendered content."
+    ],
+    "donts": [
+      "Don't replace the pinned neutral palette with a warmer palette or a catalog visual world.",
+      "Don't add a separate macOS app-name titlebar, redundant Agents-sidebar branding or a visible desktop empty-chat heading.",
+      "Don't add a desktop sidebar import-picker control; standalone Workbench may retain its optional injected picker.",
+      "Don't conflate the Agents sidebar width with the editor controller's resizable sidebar width.",
+      "Don't introduce new appearance CSS files, decorative shadows, glyph icons, view-specific palettes or motion beyond the approved desktop main-tab behavior."
+    ]
+  }
+}

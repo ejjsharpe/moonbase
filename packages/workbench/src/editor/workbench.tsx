@@ -33,6 +33,7 @@ import {
 } from '@moonbase/application/editor';
 import { MonacoView } from './monaco-view.tsx';
 import { styles } from './styles.ts';
+import { Icon } from './icon.tsx';
 
 type FocusOrigin = 'editor' | 'strip' | 'tree';
 const focusOrigin = (element: HTMLElement): FocusOrigin => {
@@ -53,9 +54,17 @@ export type WorkbenchProps = {
   renderLayout?: (views: { explorer: ReactNode; editor: ReactNode }) => ReactNode;
   /** Native/user-authorized selection belongs to the shell. A renderer path alone grants no access. */
   selectNativeImports?: (checkout: CheckoutTarget) => Promise<string[]>;
+  selectClipboardImports?: (checkout: CheckoutTarget) => Promise<string[]>;
 };
 export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Workbench(
-  { controller, checkout: project, visible = true, renderLayout, selectNativeImports },
+  {
+    controller,
+    checkout: project,
+    visible = true,
+    renderLayout,
+    selectNativeImports,
+    selectClipboardImports,
+  },
   ref,
 ) {
   const state = useSyncExternalStore(
@@ -288,68 +297,106 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     },
   };
   useImperativeHandle(ref, () => actions);
+  function pasteFiles(event: React.ClipboardEvent | React.KeyboardEvent) {
+    if (
+      !checkout ||
+      !selectClipboardImports ||
+      (event.target as HTMLElement).closest('input,textarea,select,[contenteditable=true]')
+    )
+      return;
+    event.preventDefault();
+    event.stopPropagation();
+    const captured = { ...checkout };
+    run(selectClipboardImports(captured).then((references) => importFiles(captured, references)));
+  }
   const selectedPaths = selected?.tree.selected ?? [];
   const explorer =
     checkout && selected ? (
-      <>
-        <div {...stylex.props(filesUI.tools)}>
+      <div
+        {...stylex.props(styles.panel)}
+        onPaste={pasteFiles}
+        onKeyDown={(event) => {
+          if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'v')
+            pasteFiles(event);
+        }}>
+        <div {...stylex.props(workbench.viewNav)}>
           <Button
-            {...stylex.props(controls.button)}
+            {...stylex.props(
+              controls.button,
+              workbench.viewButton,
+              panel === 'files' && workbench.activeView,
+            )}
             aria-pressed={panel === 'files'}
             onClick={() => setPanel('files')}>
             Files
           </Button>
           <Button
-            {...stylex.props(controls.button)}
+            {...stylex.props(
+              controls.button,
+              workbench.viewButton,
+              panel === 'git' && workbench.activeView,
+            )}
             aria-pressed={panel === 'git'}
             onClick={() => setPanel('git')}>
             Diff
           </Button>
-          <Button ref={findFile} {...stylex.props(controls.button)} onClick={() => setLookup(true)}>
-            Find file
+          <Button
+            ref={findFile}
+            aria-label="Find file"
+            title="Find file · ⌘P"
+            {...stylex.props(controls.button, filesUI.iconButton)}
+            onClick={() => setLookup(true)}>
+            <Icon name="search" />
+          </Button>
+          <Button
+            aria-label="Refresh"
+            title="Refresh"
+            {...stylex.props(controls.button, filesUI.iconButton)}
+            onClick={() => run(controller.refresh(checkout))}>
+            <Icon name="refresh" />
           </Button>
         </div>
-        <p {...stylex.props(workbench.directory)}>
+        <p title={checkout.root} {...stylex.props(workbench.directory, styles.directory)}>
           {checkout.branch} · {checkout.root}
         </p>
-        <Button
-          {...stylex.props(controls.button)}
-          onClick={() => run(controller.refresh(checkout))}>
-          Refresh
-        </Button>
         {panel === 'files' ? (
           <>
             <div {...stylex.props(filesUI.tools)}>
               {(['create-file', 'create-directory'] as const).map((kind) => (
                 <Button
                   key={kind}
-                  {...stylex.props(controls.button)}
+                  {...stylex.props(controls.button, filesUI.iconButton)}
+                  aria-label={kind === 'create-file' ? 'New File' : 'New Folder'}
+                  title={kind === 'create-file' ? 'New file' : 'New folder'}
                   disabled={state.preserving}
                   onClick={() => setAction({ checkout: { ...checkout }, kind, paths: [] })}>
-                  {kind === 'create-file' ? 'New File' : 'New Folder'}
+                  <Icon name={kind === 'create-file' ? 'newFile' : 'newFolder'} />
                 </Button>
               ))}
-            </div>
-            <Button
-              {...stylex.props(controls.button)}
-              disabled={!target}
-              onClick={() => {
-                if (target)
-                  run(
-                    controller.reveal(target).then(() => {
-                      const current = controller.getSnapshot().recovery;
-                      if (
-                        current.openCheckoutIds.includes(checkout.checkoutId) &&
-                        current.checkouts.some(
-                          (item) => checkoutKey(item) === checkoutKey(checkout),
+
+              <Button
+                {...stylex.props(controls.button, filesUI.iconButton)}
+                aria-label="Reveal Active File"
+                title="Reveal active file"
+                disabled={!target}
+                onClick={() => {
+                  if (target)
+                    run(
+                      controller.reveal(target).then(() => {
+                        const current = controller.getSnapshot().recovery;
+                        if (
+                          current.openCheckoutIds.includes(checkout.checkoutId) &&
+                          current.checkouts.some(
+                            (item) => checkoutKey(item) === checkoutKey(checkout),
+                          )
                         )
-                      )
-                        setAnchorReset((value) => value + 1);
-                    }),
-                  );
-              }}>
-              Reveal Active File
-            </Button>
+                          setAnchorReset((value) => value + 1);
+                      }),
+                    );
+                }}>
+                <Icon name="reveal" />
+              </Button>
+            </div>
             <FilesTree
               key={checkoutKey(checkout)}
               controller={controller}
@@ -362,7 +409,9 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
               {(['move', 'copy', 'trash'] as const).map((kind) => (
                 <Button
                   key={kind}
-                  {...stylex.props(controls.button)}
+                  {...stylex.props(controls.button, filesUI.iconButton)}
+                  aria-label={{ move: 'Rename / Move', trash: 'Trash', copy: 'Copy' }[kind]}
+                  title={{ move: 'Rename / Move', trash: 'Trash', copy: 'Copy' }[kind]}
                   disabled={
                     state.preserving ||
                     !selectedPaths.length ||
@@ -375,24 +424,29 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                       paths: [...selectedPaths],
                     })
                   }>
-                  {{ move: 'Rename / Move', trash: 'Trash', copy: 'Copy' }[kind]}
+                  <Icon name={kind} />
                 </Button>
               ))}
+              {selectNativeImports && (
+                <Button
+                  {...stylex.props(controls.button, filesUI.iconButton)}
+                  aria-label="Import files"
+                  title="Import files"
+                  disabled={state.preserving}
+                  onClick={() =>
+                    run(
+                      (async () => {
+                        const target = { ...checkout };
+                        importFiles(target, await selectNativeImports(target));
+                      })(),
+                    )
+                  }>
+                  <Icon name="import" />
+                </Button>
+              )}
             </div>
-            {selectNativeImports && (
-              <Button
-                {...stylex.props(controls.button)}
-                disabled={state.preserving}
-                onClick={() =>
-                  run(
-                    (async () => {
-                      const target = { ...checkout };
-                      importFiles(target, await selectNativeImports(target));
-                    })(),
-                  )
-                }>
-                Import files
-              </Button>
+            {selectClipboardImports && (
+              <p {...stylex.props(styles.pasteHint)}>Paste or drop files here to import</p>
             )}
           </>
         ) : (
@@ -429,7 +483,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
             ))}
           </>
         )}
-      </>
+      </div>
     ) : null;
   const editor =
     checkout && selected ? (
@@ -491,6 +545,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                     onDoubleClick={() => controller.keepOpen(file)}
                     {...stylex.props(
                       controls.button,
+                      workbench.tabButton,
                       workbench.fileTabButton,
                       selected.active === path && workbench.fileSelected,
                       selected.preview === path && workbench.preview,
@@ -499,19 +554,11 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                     {label}
                   </Tabs.Tab>
                   <Button
-                    {...stylex.props(controls.button)}
+                    {...stylex.props(controls.button, controls.iconButton)}
                     aria-label={`Close ${path}`}
                     disabled={state.preserving}
                     onClick={() => run(closeFiles([path]))}>
-                    <svg
-                      width="12"
-                      height="12"
-                      viewBox="0 0 16 16"
-                      stroke="currentColor"
-                      strokeWidth="1.5"
-                      aria-hidden="true">
-                      <path d="m4 4 8 8 M12 4l-8 8" />
-                    </svg>
+                    <Icon name="close" />
                   </Button>
                 </span>
               );

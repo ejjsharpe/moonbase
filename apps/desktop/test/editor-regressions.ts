@@ -254,3 +254,22 @@ export async function recoverCrashedWorkbench(app: ElectronApplication) {
     .toEqual(['Recover workbench', 'Quit Moonbase']);
   await app.evaluate(() => globalThis.recoveryChoice!({ response: 0, checkboxChecked: false }));
 }
+
+export async function pasteNativeFile(app: ElectronApplication, page: Page, path: string) {
+  await app.evaluate(({ clipboard, dialog, ClipboardItem }, path) => {
+    dialog.showMessageBox = (async () => ({
+      response: 1,
+      checkboxChecked: false,
+    })) as typeof dialog.showMessageBox;
+    const escaped = path.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+    const xml = `<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><array><string>${escaped}</string></array></plist>`;
+    clipboard.read = async () => [
+      new ClipboardItem({
+        'electron application/osclipboard;format="NSFilenamesPboardType"': new Blob([xml]),
+      }),
+    ];
+  }, path);
+  await page.getByRole('tree', { name: 'Files', exact: true }).focus();
+  await page.keyboard.press('Meta+v');
+  await expect(page.getByRole('dialog', { name: 'Import files', exact: true })).toBeVisible();
+}

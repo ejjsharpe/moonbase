@@ -10,6 +10,7 @@ import {
 } from '@earendil-works/pi-durable';
 import { Effect, Exit, Fiber, FiberSet, Option, Queue, Scope, Semaphore, Stream } from 'effect';
 import { normalizeApplicationError, releaseResource } from '@moonbase/effect';
+import { getSupportedThinkingLevels } from '@earendil-works/pi-ai/models';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import type {
   ChatCreationSettings,
@@ -262,8 +263,14 @@ export class Host {
       );
       if (cwd !== d.settings!.cwd || !(await stat(cwd)).isDirectory())
         V.fail('InvalidInput', 'Choose a canonical local working folder.');
-      if (!this.config.models.getModel(d.settings!.model.provider, d.settings!.model.modelId))
+      const model =
+        this.config.models.getModel(d.settings!.model.provider, d.settings!.model.modelId) ??
         V.fail('InvalidInput', 'Choose an installed model from the local catalog.');
+      if (
+        d.settings!.reasoningEffort &&
+        !getSupportedThinkingLevels(model).includes(d.settings!.reasoningEffort)
+      )
+        V.fail('InvalidInput', 'Choose a reasoning effort supported by this model.');
       settings = d.settings!;
       await this.config.approveCreation?.(settings);
     } else settings = { cwd: this.config.cwd, model: this.config.model };
@@ -286,7 +293,11 @@ export class Host {
         }
         if (request.conversationId) return request.conversationId;
         const conversation = await tx.createConversation({ ownership: { kind: 'ownerless' } });
-        await configure(tx, conversation.id, settings);
+        await configure(tx, conversation.id, {
+          cwd: settings.cwd,
+          model: settings.model,
+          ...(settings.reasoningEffort ? { thinkingLevel: settings.reasoningEffort } : {}),
+        });
         await tx.doc(Metadata, conversation.id, 'metadata', {
           identity: this.identity,
           title: d.title,

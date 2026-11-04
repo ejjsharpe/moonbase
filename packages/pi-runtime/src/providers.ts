@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Effect, Layer } from 'effect';
-import type { Models } from '@earendil-works/pi-ai/models';
+import { getSupportedThinkingLevels, type Models } from '@earendil-works/pi-ai/models';
 type Interaction = Parameters<Models['login']>[2];
 type AuthPrompt = Parameters<Interaction['prompt']>[0];
 type AuthEvent = Parameters<Interaction['notify']>[0];
@@ -8,6 +8,16 @@ import { ProviderSetupService, type ProviderSetupHandlers } from '@moonbase/cont
 import type { ProviderCommand, ProviderInput, ProviderState } from '@moonbase/contracts/providers';
 import { decodeProviderInput, decodeProviderOutput } from '@moonbase/contracts/providers-schema';
 import { ApplicationError } from '@moonbase/contracts/errors';
+import type { ChatReasoningEffort } from '@moonbase/contracts/chat';
+
+// Moonbase defaults for the pinned catalog; explicit user preferences take precedence.
+const defaultModels: Record<string, { modelId: string; reasoningEffort: ChatReasoningEffort }> = {
+  openai: { modelId: 'gpt-6.1-sol', reasoningEffort: 'medium' },
+  'openai-api-key': { modelId: 'gpt-6.1-sol', reasoningEffort: 'medium' },
+  anthropic: { modelId: 'claude-opus-5-5', reasoningEffort: 'high' },
+  google: { modelId: 'gemini-3.8-flash', reasoningEffort: 'medium' },
+  openrouter: { modelId: 'openai/gpt-6.1-sol', reasoningEffort: 'medium' },
+};
 
 export const localProviderIds = [
   'openai',
@@ -92,14 +102,37 @@ export const ProviderSetupLive = (
             let name = provider.name;
             if (id === 'openai') name = 'ChatGPT subscription';
             if (id === 'google') name = 'Google Gemini';
+            const models = provider.getModels().map((model) => {
+              const reasoningEfforts = getSupportedThinkingLevels(model);
+              const preferredEffort = defaultModels[id]!.reasoningEffort;
+              let defaultReasoningEffort = reasoningEfforts[0]!;
+              if (reasoningEfforts.includes('medium')) defaultReasoningEffort = 'medium';
+              if (reasoningEfforts.includes(preferredEffort))
+                defaultReasoningEffort = preferredEffort;
+              return {
+                modelId: model.id,
+                name: model.name,
+                reasoningEfforts,
+                defaultReasoningEffort,
+              };
+            });
+            const defaultModel = models.find(
+              (model) => model.modelId === defaultModels[id]!.modelId,
+            );
             return {
               id,
               name,
               auth: id === 'openai' ? ('oauth' as const) : ('api_key' as const),
               configured: !!(await config.models.checkAuth(id)),
-              models: provider
-                .getModels()
-                .map((model) => ({ modelId: model.id, name: model.name })),
+              models,
+              ...(defaultModel
+                ? {
+                    defaultModel: {
+                      model: { provider: id, modelId: defaultModel.modelId },
+                      reasoningEffort: defaultModel.defaultReasoningEffort,
+                    },
+                  }
+                : {}),
             };
           }),
         ),

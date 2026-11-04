@@ -57,7 +57,10 @@ test.beforeAll(async () => {
             fauxAssistantMessage(fauxToolCall('write',{path:'local-result.txt',content:'second conversation'}),{stopReason:'toolUse'}),fauxAssistantMessage('Second local response'),
             fauxAssistantMessage('Active hidden local output '.repeat(1000)),
           ]);
-          models.setProvider({...original,stream:faux.provider.stream,streamSimple:faux.provider.streamSimple});
+          models.setProvider({...original,stream:faux.provider.stream,streamSimple:(model,context,options)=>{
+            if(model.id !== 'gpt-6.1-sol' || options?.reasoning !== 'xhigh') throw Error('Expected the chosen Sol model and xhigh reasoning');
+            return faux.provider.streamSimple(model,context,options);
+          }});
           return models;
         `,
                 ),
@@ -96,11 +99,30 @@ test('native local setup, approved folders/models, streaming/tools, hidden work 
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   const openChat = async () => {
-    await page.getByRole('tab', { name: 'Chat', exact: true }).click();
+    await page.getByRole('tab', { name: 'Agents', exact: true }).click();
   };
   try {
     await openChat();
-    await expect(page.getByText('On this computer', { exact: true })).toBeVisible();
+    await expect(page.getByRole('tab', { name: 'Agents', exact: true })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    const chrome = await app.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows()[0];
+      return {
+        frame: window.getBounds(),
+        content: window.getContentBounds(),
+        background: window.getBackgroundColor(),
+      };
+    });
+    expect(chrome.frame.height - chrome.content.height).toBeLessThanOrEqual(2);
+    expect(chrome.content.y - chrome.frame.y).toBeLessThanOrEqual(2);
+    expect(chrome.background).toBe('#141415');
+    await captureNative(app, page, resolve('../../test-results/redesign-review/native.png'));
+    await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
+    await expect(
+      page.getByText('Set up a provider to send. Local tools are not sandboxed.', { exact: true }),
+    ).toBeVisible();
     const context = await page.evaluate(() => window.moonbaseChat.context('local'));
     const unauthorized = await page.evaluate(
       async (context) =>
@@ -132,6 +154,14 @@ test('native local setup, approved folders/models, streaming/tools, hidden work 
     await expect(
       page.getByRole('combobox', { name: 'Conversation model', exact: true }),
     ).toBeEnabled();
+    await expect(
+      page.getByRole('combobox', { name: 'Conversation model', exact: true }),
+    ).toContainText('GPT-6.1 Sol');
+    await expect(
+      page.getByRole('combobox', { name: 'Reasoning effort', exact: true }),
+    ).toContainText('Medium');
+    await page.getByRole('combobox', { name: 'Reasoning effort', exact: true }).click();
+    await page.getByRole('option', { name: 'Extra high', exact: true }).click();
     for (const [index, folder] of [first, second].entries()) {
       await app.evaluate(({ dialog }, path) => {
         dialog.showOpenDialog = (async () => ({
@@ -140,15 +170,16 @@ test('native local setup, approved folders/models, streaming/tools, hidden work 
         })) as typeof dialog.showOpenDialog;
       }, folder);
       await page.getByRole('button', { name: 'Choose working folder', exact: true }).click();
-      await expect(page.getByText(folder, { exact: true })).toBeVisible();
-      await page.getByRole('combobox', { name: 'Conversation model', exact: true }).click();
-      await page.getByRole('option').nth(index).click();
-      await page.getByLabel('New saved chat').fill('Local conversation ' + index);
-      await page.getByRole('button', { name: 'Create chat', exact: true }).click();
       await expect(
-        page.getByRole('heading', { name: 'Local conversation ' + index, exact: true }),
-      ).toBeVisible();
-      await page.getByLabel('Message', { exact: true }).fill('Write in this local working folder');
+        page.getByRole('button', { name: 'Choose working folder', exact: true }),
+      ).toHaveAttribute('title', folder);
+      await expect(
+        page.getByRole('combobox', { name: 'Conversation model', exact: true }),
+      ).toContainText('GPT-6.1 Sol');
+      await expect(
+        page.getByRole('combobox', { name: 'Reasoning effort', exact: true }),
+      ).toContainText('Extra high');
+      await page.getByLabel('Message', { exact: true }).fill('Local conversation ' + index);
       await page.getByRole('button', { name: 'Send message', exact: true }).click();
       await expect(
         page.getByText(index ? 'Second local response' : 'First local response', { exact: true }),
@@ -156,6 +187,7 @@ test('native local setup, approved folders/models, streaming/tools, hidden work 
       expect(await readFile(join(folder, 'local-result.txt'), 'utf8')).toBe(
         index ? 'second conversation' : 'first conversation',
       );
+      if (!index) await page.getByRole('button', { name: 'New chat', exact: true }).click();
     }
     await captureNative(app, page, test.info().outputPath('local-chat.png'));
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(660, 600));
@@ -177,7 +209,7 @@ test('native local setup, approved folders/models, streaming/tools, hidden work 
     await page.getByLabel('Message', { exact: true }).fill('Keep working');
     await page.getByRole('button', { name: 'Send message', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
-    await page.getByRole('tab', { name: 'Chat', exact: true }).focus();
+    await page.getByRole('tab', { name: 'Agents', exact: true }).focus();
     await page.getByRole('button', { name: 'Close Chat panel', exact: true }).click();
     await app.evaluate(({ dialog, app }) => {
       dialog.showMessageBox = (async () => ({
@@ -208,6 +240,13 @@ test('native local setup, approved folders/models, streaming/tools, hidden work 
     expect(after).toEqual(context);
     const saved = await page.evaluate(() => localStorage.getItem('moonbase.chat.local.v1'));
     expect(saved).not.toContain('controlled-private-key');
+    await page.getByRole('button', { name: 'New chat', exact: true }).click();
+    await expect(
+      page.getByRole('combobox', { name: 'Conversation model', exact: true }),
+    ).toContainText('GPT-6.1 Sol');
+    await expect(
+      page.getByRole('combobox', { name: 'Reasoning effort', exact: true }),
+    ).toContainText('Extra high');
     expect(errors).toEqual([]);
   } finally {
     if (child.exitCode === null) await app.evaluate(({ app }) => app.exit(0));
@@ -382,7 +421,7 @@ test('a failed local activity scan during crash-Quit reports safely and recovers
     expect(child.exitCode).toBeNull();
     const editing = await app.evaluate(async ({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(
-        '[...document.querySelectorAll("button")].some(button => button.textContent === "Open checkout" && !button.disabled)',
+        '[...document.querySelectorAll("button")].some(button => button.getAttribute("aria-label") === "Open checkout" && !button.disabled)',
       ),
     );
     expect(editing).toBe(true);

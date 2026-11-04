@@ -19,7 +19,7 @@ const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const files = asar.listPackage(archive).map((name) => name.replace(/^\//, ''));
 assert(
   !files.some((name) =>
-    /(?:^|\/)(?:test|tests|evidence|node_modules)\/|main-inputs|module-inputs|test-fixture|host\.mjs/.test(
+    /(?:^|\/)(?:test|tests|evidence|node_modules)\/|main-inputs|module-inputs|test-fixture|(?:^|\/)host\.mjs$/.test(
       name,
     ),
   ),
@@ -61,7 +61,7 @@ for (const entry of [
 assert(!renderer.some((p) => /packages\/editor\/|desktop\/src\/chat\/view\.tsx$/.test(p)));
 assert.deepEqual(
   [...main, ...renderer].filter((p) =>
-    /(?:^|\/)(?:test|tests)\/|(?:packages\/workbench|apps\/desktop)\/demo\/|test-fixture|host\.mjs/.test(
+    /(?:^|\/)(?:test|tests)\/|(?:packages\/workbench|apps\/desktop)\/demo\/|test-fixture|(?:^|\/)host\.mjs$/.test(
       p,
     ),
   ),

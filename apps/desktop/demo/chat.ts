@@ -1,12 +1,17 @@
 import type { ChatDependencies } from '@moonbase/application/chat';
-import type { ChatClient, ChatSnapshot } from '@moonbase/contracts/chat';
+import type {
+  ChatClient,
+  ChatSnapshot,
+  ChatSummary,
+  ChatCreationSettings,
+} from '@moonbase/contracts/chat';
 import type { ConnectionClient, ConnectionSnapshot } from '@moonbase/contracts/connection';
 
 /** Volatile browser demo capabilities; no host, transport or provider is installed. */
-export function chatCapabilities() {
+export function chatCapabilities(local = false) {
   const context = { host: { hostId: 'host', storeId: 'store' }, actorId: 'actor' };
   const target = { ...context, conversationId: 'conversation' };
-  const conversation = {
+  const conversation: ChatSummary = {
     target,
     title: 'Conversation',
     cwd: '/remote',
@@ -49,14 +54,41 @@ export function chatCapabilities() {
       calls.push(operation);
       switch (operation) {
         case 'getChatHost':
-          return { ...context, cwd: conversation.cwd, model: conversation.model } as never;
+          return (
+            local
+              ? { ...context, mode: 'local' }
+              : { ...context, cwd: conversation.cwd, model: conversation.model }
+          ) as never;
         case 'listChats':
           return { conversations: [conversation], nextCursor: null } as never;
         case 'getChat':
           return structuredClone(snapshot) as never;
         case 'createChat':
+          if (local) {
+            const creation = input as {
+              title: string;
+              settings: ChatCreationSettings;
+            };
+            conversation.title = creation.title;
+            conversation.cwd = creation.settings.cwd;
+            conversation.model = creation.settings.model.modelId;
+            conversation.reasoningEffort = creation.settings.reasoningEffort;
+          }
           return { requestId: (input as { requestId: string }).requestId, conversation } as never;
         case 'sendChat':
+          if (local) {
+            const message = input as { requestId: string; text: string };
+            snapshot.entries.unshift(
+              {
+                id: message.requestId + '-reply',
+                role: 'assistant',
+                text: 'I’ll inspect the desktop shell and file sidebar, then check that the editor keeps its buffers and undo history when switching views.',
+                truncated: false,
+              },
+              { id: message.requestId, role: 'user', text: message.text, truncated: false },
+            );
+            controls.receiveChat(structuredClone(snapshot));
+          }
           return {
             target,
             requestId: (input as { requestId: string }).requestId,
@@ -100,7 +132,45 @@ export function chatCapabilities() {
   };
   const dependencies: ChatDependencies = {
     chat,
-    connection,
+    ...(local
+      ? {
+          mode: 'local' as const,
+          providers: {
+            command: async (operation: string) => {
+              if (operation !== 'getProviders') throw Error('Demo provider setup is read-only.');
+              return {
+                providers: [
+                  {
+                    id: 'openai',
+                    name: 'Demo provider',
+                    auth: 'api_key' as const,
+                    configured: true,
+                    defaultModel: {
+                      model: { provider: 'openai', modelId: 'demo-model' },
+                      reasoningEffort: 'medium' as const,
+                    },
+                    models: [
+                      {
+                        modelId: 'demo-model',
+                        name: 'Demo model',
+                        reasoningEfforts: ['low', 'medium', 'high'] as const,
+                        defaultReasoningEffort: 'medium' as const,
+                      },
+                      {
+                        modelId: 'demo-coding',
+                        name: 'Demo coding model',
+                        reasoningEfforts: ['low', 'medium', 'high', 'xhigh'] as const,
+                        defaultReasoningEffort: 'medium' as const,
+                      },
+                    ].map((model) => ({ ...model, reasoningEfforts: [...model.reasoningEfforts] })),
+                  },
+                ],
+                flow: null,
+              };
+            },
+          },
+        }
+      : { connection }),
     context,
     storage: {
       read: () => storage.value,

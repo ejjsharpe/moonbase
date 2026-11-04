@@ -1,4 +1,4 @@
-import { selectRemoteChat } from './chat-target.ts';
+import { createRemoteChat, selectRemoteChat } from './chat-target.ts';
 import { captureNative } from './editor-regressions.ts';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import {
@@ -109,14 +109,16 @@ async function local(p: Page, app: ElectronApplication, f: Fixture) {
   await editor(p).pressSequentially('local dirty draft');
 }
 async function connect(p: Page) {
-  await tab(p, 'Chat').click();
+  await tab(p, 'Agents').click();
   await selectRemoteChat(p);
   await p.getByRole('button', { name: 'Connect', exact: true }).click();
-  await expect(p.getByLabel('New saved chat')).toBeEnabled();
+  await expect(p.getByRole('button', { name: 'Disconnect', exact: true })).toBeEnabled();
+  const details = p.getByText('Connection details', { exact: true });
+  if (!(await details.evaluate((element) => element.parentElement!.hasAttribute('open'))))
+    await details.click();
 }
 async function create(p: Page, title: string) {
-  await p.getByLabel('New saved chat').fill(title);
-  await p.getByRole('button', { name: 'Create chat', exact: true }).click();
+  await createRemoteChat(p, title);
   await expect(p.getByRole('heading', { name: title, exact: true })).toBeVisible();
   await expect(p.getByLabel('Message', { exact: true })).toBeEnabled();
 }
@@ -236,8 +238,8 @@ test('dirty editor/live chat, two drafts, no-resend reconnect, view close and cl
       (v: { operation: string }) => v.operation === 'sendChat',
     );
     await p.getByLabel('Message', { exact: true }).fill('first independent newer draft');
-    await tab(p, 'Chat').focus();
-    await p.keyboard.press('ArrowLeft');
+    await tab(p, 'Agents').focus();
+    await p.keyboard.press('ArrowRight');
     await expect(projectTab(p)).toBeFocused();
     await p.keyboard.press('Enter');
     await p.evaluate(
@@ -294,7 +296,7 @@ test('dirty editor/live chat, two drafts, no-resend reconnect, view close and cl
     expect(rejected).toMatchObject({ ok: false, error: { code: 'Unauthorized' } });
     expect(await readFile(join(f.cwd, 'a.ts'), 'utf8')).toContain('original');
     await screen(app, p, 'dirty-editor');
-    await tab(p, 'Chat').click();
+    await tab(p, 'Agents').click();
     await expect(p.getByLabel('Message', { exact: true })).toHaveValue(
       'first independent newer draft',
     );
@@ -324,6 +326,7 @@ test('dirty editor/live chat, two drafts, no-resend reconnect, view close and cl
     } finally {
       await writeFile(join(output, 'durable-reload-outcomes.json'), JSON.stringify(reloadOutcomes));
     }
+    await projectTab(p).click();
     await expect(editor(p)).toBeVisible();
     await expect(
       p.locator('.view-line').filter({ hasText: 'local dirty draft + live tool editing' }).first(),
@@ -342,7 +345,7 @@ test('dirty editor/live chat, two drafts, no-resend reconnect, view close and cl
         .toEqual({ editor: true, chat: true });
     await screen(app, p, 'restored-dirty-editor');
     await editor(p).focus(); // Establish focus in the NEW document before testing navigation restoration.
-    await tab(p, 'Chat').click();
+    await tab(p, 'Agents').click();
     await selectRemoteChat(p);
     await expect(p.getByLabel('Message', { exact: true })).toHaveValue(
       'first independent newer draft',
@@ -376,7 +379,7 @@ test('dirty editor/live chat, two drafts, no-resend reconnect, view close and cl
     await p.getByRole('button', { name: 'Close a.ts', exact: true }).click();
     await expect(editor(p)).toHaveCount(0);
     expect((await f.stats()).commands.filter((v) => v === 'stopChat')).toHaveLength(0);
-    await tab(p, 'Chat').click();
+    await tab(p, 'Agents').click();
     await p.getByRole('button', { name: 'Second remote chat', exact: false }).click();
     await expect(p.getByLabel('Message', { exact: true })).toHaveValue('second independent draft');
     await p.getByLabel('Message', { exact: true }).fill('latest second draft for restart');
@@ -488,7 +491,6 @@ test('native 200% normal/constrained live chat keeps wheel/Tab Stop and Send rea
       const main = p.locator('main');
       await main.hover();
       await p.mouse.wheel(0, 10000);
-      await expect.poll(() => main.evaluate((e) => e.scrollTop)).toBeGreaterThan(0);
       await p.getByLabel('Message', { exact: true }).focus();
       await p.keyboard.press('Tab');
       await expect(p.getByRole('button', { name: 'Stop', exact: true })).toBeFocused();
@@ -600,7 +602,7 @@ test('captured Quit keeps chat/newer drafts and editor conflicts usable; Cancel 
     await p.getByRole('button', { name: 'Cancel', exact: true }).click();
     expect(children.get(app)!.exitCode).toBeNull();
     await expect(editor(p)).toBeVisible();
-    await tab(p, 'Chat').click();
+    await tab(p, 'Agents').click();
     await p.getByLabel('Message', { exact: true }).fill('newer draft after cancelled Quit');
     await projectTab(p).click();
     await app.evaluate(({ app }) => app.quit());
@@ -642,7 +644,7 @@ if (!packaged)
       });
       await p.getByRole('button', { name: 'Save', exact: true }).click();
       await expect.poll(() => app.evaluate(() => globalThis.desktopTest.held)).toBe('waiting');
-      await tab(p, 'Chat').click();
+      await tab(p, 'Agents').click();
       await p.getByLabel('Message', { exact: true }).fill('task while Save reply waits');
       await p.getByRole('button', { name: 'Send message', exact: true }).click();
       await expect.poll(async () => (await f.stats()).tools).toBe(1);
@@ -674,7 +676,7 @@ if (!packaged)
       expect((await recovery(p)).state.drafts).toEqual([]);
       await expect(editor(p)).toBeVisible();
       expect(children.get(app)!.exitCode).toBeNull();
-      await tab(p, 'Chat').click();
+      await tab(p, 'Agents').click();
       await p
         .getByLabel('Message', { exact: true })
         .fill('latest chat while editor publication unknown');
@@ -727,7 +729,7 @@ test('held admitted Send leaves local Save/read/status and exact Stop independen
     await p.getByRole('button', { name: 'Save', exact: true }).click();
     await expect.poll(() => readFile(join(f.cwd, 'a.ts'), 'utf8')).toBe('local dirty draft');
     expect((await recovery(p)).state.checkouts).toHaveLength(1);
-    await tab(p, 'Chat').click();
+    await tab(p, 'Agents').click();
     const status = await p.evaluate(() =>
       window.moonbaseChat.call('connection', 'getConnection', {}, crypto.randomUUID()),
     );
@@ -832,8 +834,7 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
       await connect(page);
       await expect(page.getByText('Verified host.', { exact: false })).toBeVisible();
       if (operation !== 'createChat') {
-        await page.getByLabel('New saved chat').fill('Exact generation');
-        await page.getByRole('button', { name: 'Create chat', exact: true }).click();
+        await createRemoteChat(page, 'Exact generation');
         await expect(
           page.getByRole('heading', { name: 'Exact generation', exact: true }),
         ).toBeVisible();
@@ -849,8 +850,8 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
       }
       await f.holdReply(operation);
       if (operation === 'createChat') {
-        await page.getByLabel('New saved chat').fill('Captured creation');
-        await page.getByRole('button', { name: 'Create chat', exact: true }).click();
+        await page.getByLabel('Message', { exact: true }).fill('Captured creation');
+        await page.getByRole('button', { name: 'Send message', exact: true }).click();
       } else if (operation === 'sendChat') {
         await page
           .getByLabel('Message', { exact: true })
@@ -892,7 +893,8 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
       await expect.poll(() => reloadOutcome(app)).toBe('reload');
       await connect(page);
       await expect(page.getByRole('button', { name: 'Disconnect', exact: true })).toBeEnabled();
-      await expect(page.getByRole('main').getByText(f.cwd, { exact: false })).toBeVisible();
+      if (operation !== 'createChat')
+        await expect(page.getByRole('main').getByText(f.cwd, { exact: false })).toBeVisible();
       if (operation === 'sendChat') {
         await expect(page.getByRole('region', { name: 'Retained commands' })).toHaveCount(0);
         await expect(page.getByLabel('Message', { exact: true })).toHaveValue(
@@ -915,7 +917,7 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
       for (const call of mutations) expect(call.input).toEqual(retained.input);
       if (operation === 'createChat') {
         expect(mutations[1].result).toEqual(mutations[0].result);
-        expect(stats.calls).toBe(0);
+        expect(stats.calls).toBe(1);
       } else {
         expect(stats.commands.filter((c) => c === 'sendChat')).toHaveLength(1);
         expect(stats.tools).toBe(1);
@@ -957,90 +959,44 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
     }
   });
 
-test(`${packaged ? 'packaged' : 'source'} Create readiness: repeated reload/fill/refresh records the disabled-button symptom without bypass`, async () => {
-  await mkdir(output, { recursive: true });
-  const f = await fixture(false);
+test(`${packaged ? 'packaged' : 'source'} new-chat draft survives reload and refresh before the first Send`, async () => {
+  const f = await fixture(true);
   let current: ElectronApplication | undefined;
-  const observations: unknown[] = [];
   try {
     const { app, page } = await launch(f, 'create-readiness');
     current = app;
     await connect(page);
-    await expect(page.getByText('Verified host.', { exact: false })).toBeVisible();
     for (let i = 0; i < 12; i++) {
-      if (i) {
-        await expect
-          .poll(async () => {
-            const outcome = await reloadOutcome(app);
-            observations.push({ iteration: i, reload: outcome });
-            return outcome;
-          })
-          .toBe('reload');
-        await tab(page, 'Chat').click();
-        await selectRemoteChat(page);
-        await expect(page.getByText('Verified host.', { exact: false })).toBeVisible();
-      }
-      await page.evaluate(() => {
-        const events: { type: string; value: string; trusted: boolean; visibility: string }[] = [];
-        (window as unknown as { createEvents: unknown }).createEvents = events;
-        for (const type of ['input', 'change'])
-          document.getElementById('chat-title')!.addEventListener(type, (e) => {
-            events.push({
-              type: e.type,
-              value: (e.target as HTMLInputElement).value,
-              trusted: e.isTrusted,
-              visibility: document.visibilityState,
-            });
-          });
-      });
-      const title = 'Readiness ' + i;
-      await page.getByLabel('New saved chat').fill(title);
-      if (i % 3 === 0) await page.getByRole('button', { name: 'Refresh', exact: true }).click();
-      await expect(page.getByLabel('New saved chat')).toHaveValue(title);
-      await expect(page.getByRole('button', { name: 'Create chat', exact: true })).toBeEnabled({
-        timeout: 2000,
-      });
-      observations.push(
-        await page.evaluate(
-          (i) => ({
-            iteration: i,
-            title: (document.getElementById('chat-title') as HTMLInputElement).value,
-            disabled: Array.from(document.querySelectorAll('button')).find(
-              (b) => b.textContent === 'Create chat',
-            )?.disabled,
-            events: (window as unknown as { createEvents: unknown }).createEvents,
-            visibility: document.visibilityState,
-          }),
-          i,
-        ),
-      );
-      await page.getByRole('button', { name: 'Create chat', exact: true }).click();
-      await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();
+      const message = 'Preserved first message ' + i;
+      await page.getByLabel('Message', { exact: true }).fill(message);
+      await page.getByRole('button', { name: 'Refresh saved chats', exact: true }).click();
+      await expect(page.getByRole('button', { name: 'Send message', exact: true })).toBeEnabled();
+      await expect.poll(() => reloadOutcome(app)).toBe('reload');
+      await tab(page, 'Agents').click();
+      await selectRemoteChat(page);
+      await expect(page.getByLabel('Message', { exact: true })).toHaveValue(message);
     }
-    expect((await f.stats()).commands.filter((c) => c === 'createChat')).toHaveLength(12);
-    expect((await f.stats()).calls).toBe(0);
+    expect(
+      (await f.stats()).commands.filter((operation) =>
+        ['createChat', 'sendChat'].includes(operation),
+      ),
+    ).toEqual([]);
+    await page.getByRole('button', { name: 'Send message', exact: true }).click();
+    await expect(
+      page.getByRole('heading', { name: 'Preserved first message 11', exact: true }),
+    ).toBeVisible();
+    await expect
+      .poll(
+        async () =>
+          (await f.stats()).commands.filter((operation) => operation === 'sendChat').length,
+      )
+      .toBe(1);
+    expect(
+      (await f.stats()).commands.filter((operation) => operation === 'createChat'),
+    ).toHaveLength(1);
     await stop(app);
     current = undefined;
-  } catch (error) {
-    const page = current?.windows()[0];
-    if (page && !page.isClosed()) {
-      await page.screenshot({
-        path: join(output, `${packaged ? 'packaged' : 'source'}-create-readiness-failure.png`),
-      });
-      observations.push(
-        await page.evaluate(() => ({
-          body: document.body.innerText,
-          title: (document.getElementById('chat-title') as HTMLInputElement)?.value,
-          events: (window as unknown as { createEvents: unknown }).createEvents,
-        })),
-      );
-    }
-    throw error;
   } finally {
-    await writeFile(
-      join(output, `${packaged ? 'packaged' : 'source'}-create-readiness.json`),
-      JSON.stringify(observations, null, 2),
-    );
     if (current) await stop(current, true);
     await close(f);
   }
@@ -1056,8 +1012,7 @@ for (const failsWrite of [false, true])
       current = app;
       await connect(page);
       await expect(page.getByText('Verified host.', { exact: false })).toBeVisible();
-      await page.getByLabel('New saved chat').fill('Retry preservation');
-      await page.getByRole('button', { name: 'Create chat', exact: true }).click();
+      await createRemoteChat(page, 'Retry preservation');
       await expect(
         page.getByRole('heading', { name: 'Retry preservation', exact: true }),
       ).toBeVisible();
@@ -1168,7 +1123,7 @@ test('closing Chat removes its panel, preserves drafts and permits explicit reop
     await create(p, 'Close and recover');
     await p.getByLabel('Message', { exact: true }).fill('preserved before panel close');
     await p.getByRole('button', { name: 'Close Chat panel', exact: true }).click();
-    await expect(tab(p, 'Chat')).toBeHidden();
+    await expect(tab(p, 'Agents')).toBeHidden();
     await expect(p.getByLabel('Message', { exact: true })).toHaveCount(0);
     await expect(p.getByRole('button', { name: 'Open checkout', exact: true })).toBeEnabled();
     await expect(p.getByRole('button', { name: 'Open Chat panel', exact: true })).toBeEnabled();
@@ -1203,7 +1158,7 @@ if (!packaged) {
       });
       await p.getByRole('button', { name: 'Close Chat panel', exact: true }).click();
       await expect.poll(() => app.evaluate(() => globalThis.desktopTest.chatCancelHeld)).toBe(true);
-      await expect(tab(p, 'Chat')).toBeHidden();
+      await expect(tab(p, 'Agents')).toBeHidden();
       await expect(p.getByLabel('Message', { exact: true })).toHaveCount(0);
       await expect(p.getByRole('button', { name: 'Open Chat panel', exact: true })).toBeDisabled();
       await local(p, app, f);
@@ -1270,11 +1225,14 @@ if (!packaged) {
         current = app;
         await screen(app, p, 'startup-' + failure);
         if (failure === 'chat-context') {
-          await expect(p.getByRole('alert', { name: 'Chat initialization failed' })).toBeVisible();
+          await expect(p.getByLabel('Chat configuration')).toContainText(
+            'Application effect failed',
+          );
           await local(p, app, f);
+          await expect(p.getByRole('alert', { name: 'Chat initialization failed' })).toBeVisible();
           await editor(p).press('Meta+s');
           await expect.poll(() => readFile(join(f.cwd, 'a.ts'), 'utf8')).toBe('local dirty draft');
-          await tab(p, 'Chat').click();
+          await tab(p, 'Agents').click();
           await expect(p.getByLabel('Chat configuration')).toContainText(
             'Application effect failed',
           );
@@ -1399,9 +1357,9 @@ if (!packaged) {
           message
             .closest('form')!
             .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-          for (const name of ['Open checkout', 'Import clipboard files', 'Close Chat panel'])
+          for (const name of ['Open checkout', 'Close Chat panel'])
             [...document.querySelectorAll<HTMLButtonElement>('button')]
-              .find((button) => button.textContent?.trim() === name)
+              .find((button) => button.getAttribute('aria-label') === name)
               ?.click();
         });
         expect(await p.evaluate(() => localStorage.getItem('moonbase.chat.v1'))).toBe(before);

@@ -1,6 +1,7 @@
 import { Select } from '@base-ui/react/select';
 import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
+import { Icon } from '../icon.tsx';
 import { overlays } from '@moonbase/ui/overlays';
 
 export function Choice({
@@ -9,12 +10,14 @@ export function Choice({
   options,
   onChange,
   disabled = false,
+  compact = false,
 }: {
   label: string;
   value: string;
   options: { value: string; label: string }[];
   onChange(value: string): void;
   disabled?: boolean;
+  compact?: boolean;
 }) {
   return (
     <Select.Root
@@ -24,8 +27,13 @@ export function Choice({
       }}
       disabled={disabled}
       items={options}>
-      <Select.Trigger aria-label={label} {...stylex.props(controls.button, controls.fullWidth)}>
-        <Select.Value placeholder={label} />
+      <Select.Trigger
+        aria-label={label}
+        {...stylex.props(controls.button, controls.fullWidth, compact && controls.quietButton)}>
+        <span {...stylex.props(controls.truncate, controls.grow)}>
+          <Select.Value placeholder={label} />
+        </span>
+        <Icon name="chevron" />
       </Select.Trigger>
       <Select.Portal>
         <Select.Positioner sideOffset={4} {...stylex.props(overlays.positioner)}>

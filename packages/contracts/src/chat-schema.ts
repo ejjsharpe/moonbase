@@ -34,9 +34,22 @@ export const ChatStopTargetSchema = struct({
   submissionId: ChatIdentifierSchema,
   taskId: Schema.NullOr(ChatIdentifierSchema),
 });
+export const ChatReasoningEffortSchema = Schema.Literals([
+  'off',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+]);
+export const ChatModelPreferenceSchema = struct({
+  model: struct({ provider: ChatIdentifierSchema, modelId: text(256) }),
+  reasoningEffort: optional(ChatReasoningEffortSchema),
+});
 export const ChatCreationSettingsSchema = struct({
   cwd: text(4096),
-  model: struct({ provider: ChatIdentifierSchema, modelId: text(256) }),
+  ...ChatModelPreferenceSchema.fields,
 });
 const remoteHostConfiguration = struct({
   ...ChatSessionSchema.fields,
@@ -53,6 +66,7 @@ export const ChatSummarySchema = struct({
   createdAt: text(64).check(Schema.makeFilter((value) => Number.isFinite(Date.parse(value)))),
   cwd: text(4096),
   model: text(512),
+  reasoningEffort: optional(ChatReasoningEffortSchema),
 });
 const preview = unicode.check(
   Schema.makeFilter((value) => new TextEncoder().encode(value).length <= chatPreviewBytes),

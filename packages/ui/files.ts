@@ -47,6 +47,7 @@ export const filesUI = stylex.create({
   },
   activeLabel: { color: colors.text },
   ignored: { color: colors.muted },
+  disclosure: { display: 'inline-flex', width: 16, height: 16, flexShrink: 0 },
   rotated: { transform: 'rotate(90deg)' },
   message: { color: colors.muted, fontSize: type.small },
   edit: { flex: 1, minWidth: 0, padding: '2px 0' },

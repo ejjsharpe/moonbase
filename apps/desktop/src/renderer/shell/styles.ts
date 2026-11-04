@@ -1,5 +1,5 @@
 import * as stylex from '@stylexjs/stylex';
-import { colors, space } from '@moonbase/ui/tokens.stylex';
+import { colors, space, type } from '@moonbase/ui/tokens.stylex';
 
 export const styles = stylex.create({
   chatTargetBar: {
@@ -7,10 +7,11 @@ export const styles = stylex.create({
     display: 'flex',
     alignItems: 'center',
     gap: space.sm,
-    padding: space.sm,
-    backgroundColor: colors.chrome,
+    padding: '4px 24px',
+    backgroundColor: colors.canvas,
+    justifyContent: 'flex-end',
   },
-  chatTargetChoice: { width: 280, maxWidth: '100%' },
+  chatTargetChoice: { width: 200, maxWidth: '100%' },
   shell: {
     height: '100%',
     minWidth: 0,
@@ -20,25 +21,45 @@ export const styles = stylex.create({
     backgroundColor: colors.canvas,
     color: colors.text,
   },
-  toolbar: {
+  status: { padding: '6px 16px', color: colors.secondary, fontSize: type.small },
+  tabs: { position: 'relative', overflowX: 'hidden' },
+  projects: {
+    position: 'relative',
+    display: 'flex',
+    gap: 6,
+    minWidth: 0,
+    overflowX: 'auto',
+    alignItems: 'center',
+  },
+  agentsGroup: {
+    WebkitAppRegion: 'no-drag',
+    position: 'relative',
+    zIndex: 1,
     display: 'flex',
     alignItems: 'center',
-    gap: space.sm,
-    padding: space.sm,
-    flexWrap: 'wrap',
-    borderBottomWidth: 1,
-    borderBottomStyle: 'solid',
-    borderBottomColor: colors.border,
-    backgroundColor: colors.chrome,
-  },
-  title: { flex: 1, minWidth: 80 },
-  tabs: {
-    padding: '6px 12px',
-    height: 'auto',
-    minHeight: 40,
     flexShrink: 0,
-    WebkitAppRegion: 'no-drag',
+    alignSelf: 'center',
+    height: 32,
+    gap: 0,
+    padding: '0 8px',
+    borderRadius: 8,
+    color: { default: colors.muted, ':hover': colors.text, ':focus-within': colors.text },
+    backgroundColor: { default: 'transparent', ':hover': colors.elevated },
   },
+  agentsTab: {
+    height: 32,
+    padding: '0 4px',
+    gap: 8,
+    fontWeight: 600,
+    color: 'inherit',
+    textAlign: 'left',
+    backgroundColor: { default: 'transparent', ':hover:not(:disabled)': 'transparent' },
+  },
+  agentsSelected: {
+    color: colors.text,
+    backgroundColor: { default: colors.selected, ':hover': colors.selectedHover },
+  },
+  chatClose: { width: 24, height: 24, padding: 4, borderWidth: 0, color: 'inherit' },
   panel: { flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' },
   empty: { padding: space.lg, maxWidth: 740 },
 });

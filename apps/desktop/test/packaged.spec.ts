@@ -1,4 +1,4 @@
-import { captureNative } from './editor-regressions.ts';
+import { captureNative, pasteNativeFile } from './editor-regressions.ts';
 import {
   filenameCases,
   checkFilenameMaps,
@@ -123,8 +123,8 @@ test('unsigned macOS package runs with only system PATH, SQLite, native/rg resou
     expect(resource.notices).toContain('monaco-editor@0.57.0');
     expect(resource.notices).toContain('MIT License');
     await expect(page.getByRole('button', { name: 'Open checkout', exact: true })).toBeVisible();
-    await page.getByRole('tab', { name: 'Chat', exact: true }).click();
-    await expect(page.getByText('On this computer', { exact: true })).toBeVisible();
+    await page.getByRole('tab', { name: 'Agents', exact: true }).click();
+    await expect(page.getByText('Local ready', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Sign in with ChatGPT', exact: true }).click();
     await expect(
       page.getByRole('button', { name: 'Open sign-in page', exact: true }),
@@ -170,13 +170,7 @@ test('unsigned macOS package runs with only system PATH, SQLite, native/rg resou
     ).toBeVisible();
     const native = join(base, 'package-native.txt');
     writeFileSync(native, 'PACKAGED NATIVE IMPORT');
-    await app.evaluate(({ dialog }, path) => {
-      dialog.showOpenDialog = (async () => ({
-        canceled: false,
-        filePaths: [path],
-      })) as typeof dialog.showOpenDialog;
-    }, native);
-    await page.getByRole('button', { name: 'Import files', exact: true }).click();
+    await pasteNativeFile(app, page, native);
     await page.getByLabel('Destination relative path').fill('packaged-import.txt');
     await page
       .getByRole('dialog')

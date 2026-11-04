@@ -12,6 +12,14 @@ test('local settings/host variants stay portable while setup inputs reject extra
     settings: { cwd: '/approved', model: { provider: 'openai', modelId: 'model' } },
   };
   assert.deepEqual(decodeChatInput('createChat', create), create);
+  const withEffort = { ...create, settings: { ...create.settings, reasoningEffort: 'xhigh' } };
+  assert.deepEqual(decodeChatInput('createChat', withEffort), withEffort);
+  assert.throws(() =>
+    decodeChatInput('createChat', {
+      ...create,
+      settings: { ...create.settings, reasoningEffort: 'invented' },
+    }),
+  );
   assert.deepEqual(decodeChatOutput('getChatHost', { ...session, mode: 'local' }), {
     ...session,
     mode: 'local',

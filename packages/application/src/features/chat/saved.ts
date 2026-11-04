@@ -3,6 +3,8 @@ import { ApplicationError } from '@moonbase/contracts/errors';
 import {
   ChatSessionSchema,
   ChatTargetSchema,
+  ChatIdentifierSchema,
+  ChatModelPreferenceSchema,
   chatInputSchemas,
 } from '@moonbase/contracts/chat-schema';
 import type { ChatSession, ChatTarget } from '@moonbase/contracts/chat';
@@ -23,6 +25,9 @@ const pending = Schema.Union([
   struct({
     operation: Schema.Literal('createChat'),
     input: chatInputSchemas.createChat,
+    firstMessage: Schema.optionalKey(
+      struct({ requestId: ChatIdentifierSchema, text: text(32768) }),
+    ),
     message: text(1024),
   }),
   struct({
@@ -40,6 +45,8 @@ const SavedSchema = struct({
   version: Schema.Literal(1),
   session: ChatSessionSchema,
   selected: Schema.NullOr(ChatTargetSchema),
+  newDraft: Schema.optionalKey(text(32768)),
+  modelPreference: Schema.optionalKey(ChatModelPreferenceSchema),
   drafts: array(struct({ target: ChatTargetSchema, text: text(32768) })).check(
     Schema.isMaxLength(32),
   ),
@@ -83,6 +90,11 @@ export function decodeSaved(
       else session = item.input.stop.target;
       if (!sameSession(session, context) || requests.has(item.input.requestId)) throw Error();
       requests.add(item.input.requestId);
+      if (item.operation === 'createChat' && item.firstMessage) {
+        if (requests.has(item.firstMessage.requestId) || !item.firstMessage.text.trim())
+          throw Error();
+        requests.add(item.firstMessage.requestId);
+      }
     }
     return saved;
   } catch {

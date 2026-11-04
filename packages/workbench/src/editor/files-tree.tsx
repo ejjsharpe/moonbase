@@ -1,6 +1,7 @@
 import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
 import { styles } from './styles.ts';
+import { Icon } from './icon.tsx';
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { filesUI } from '@moonbase/ui/files';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
@@ -183,6 +184,7 @@ export function FilesTree({
               const row = rows[index];
               if (!row) return null;
               const dirty = dirtyPaths.has(row.path);
+              const folderIcon = expanded.has(row.path) ? 'folderOpen' : 'folder';
               return (
                 <div
                   key={row.path}
@@ -231,19 +233,15 @@ export function FilesTree({
                         { view: 'file', intent: 'keep' },
                       );
                   }}>
-                  {row.directory && (
-                    <svg
-                      width="12"
-                      height="12"
-                      viewBox="0 0 12 12"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.5"
-                      aria-hidden="true"
-                      {...stylex.props(controls.icon, expanded.has(row.path) && filesUI.rotated)}>
-                      <path d="m4 2 4 4-4 4" />
-                    </svg>
-                  )}
+                  <span
+                    aria-hidden="true"
+                    {...stylex.props(
+                      filesUI.disclosure,
+                      row.directory && expanded.has(row.path) && filesUI.rotated,
+                    )}>
+                    {row.directory && <Icon name="chevronRight" />}
+                  </span>
+                  <Icon name={row.directory ? folderIcon : 'file'} />
                   <span
                     {...stylex.props(
                       styles.treeLabel,

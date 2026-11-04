@@ -60,7 +60,7 @@ const mainInputs = Object.keys(main.metafile.inputs),
 for (const inputs of [mainInputs, preloadInputs, rendererInputs]) {
   assert.deepEqual(
     inputs.filter((p) =>
-      /(?:^|\/)(?:test|tests)\/|(?:packages\/workbench|apps\/desktop)\/demo\/|test-fixture|host\.mjs/.test(
+      /(?:^|\/)(?:test|tests)\/|(?:packages\/workbench|apps\/desktop)\/demo\/|test-fixture|(?:^|\/)host\.mjs$/.test(
         p,
       ),
     ),

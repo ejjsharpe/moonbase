@@ -45,14 +45,23 @@ test('first folder open displays every file before Git finishes and then fades i
     await expect(ignored).not.toHaveAttribute('aria-description');
     await page.evaluate(() => window.ignoreProbe.release?.());
     await expect(ignored).toHaveAttribute('aria-description', 'Git-ignored');
-    await expect(ignored.locator('span').first()).toHaveCSS('color', 'rgb(170, 169, 182)');
-    await expect(normal.locator('span').first()).toHaveCSS('color', 'rgb(185, 184, 197)');
+    await expect(ignored.getByText('ignored.ts', { exact: true })).toHaveCSS(
+      'color',
+      'rgb(151, 151, 159)',
+    );
+    await expect(normal.getByText('example.ts', { exact: true })).toHaveCSS(
+      'color',
+      'rgb(178, 178, 184)',
+    );
     await ignored.click();
     await expect(
       region.getByRole('textbox', { name: 'src/ignored.ts editor', exact: true }),
     ).toBeVisible();
     await expect(ignored).toHaveAttribute('aria-selected', 'true');
-    await expect(ignored.locator('span').first()).toHaveCSS('color', 'rgb(170, 169, 182)');
+    await expect(ignored.getByText('ignored.ts', { exact: true })).toHaveCSS(
+      'color',
+      'rgb(151, 151, 159)',
+    );
     await page.screenshot({ path: 'test-results/explorer-ignored-files.png', fullPage: true });
   } finally {
     await page.evaluate(() => window.ignoreProbe.release?.());

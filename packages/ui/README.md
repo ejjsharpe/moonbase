@@ -4,6 +4,7 @@
 
 - `@moonbase/ui/tokens.stylex` for design tokens.
 - `@moonbase/ui/controls`, `@moonbase/ui/files`, `@moonbase/ui/overlays` and `@moonbase/ui/workbench` for recipes.
+- `@moonbase/ui/icons` for the shared, named Tabler outlined React icon components. Consumers choose their size and stroke; only selected icons enter the bundle.
 - `@moonbase/ui/reset.css` for the shared reset.
 
-Use Base UI in consuming React components for interactions and accessibility. This package contains styling; application state and interactions belong to consumers. Read [DESIGN.md](../../docs/DESIGN.md) when changing or consuming shared styles. Root lint and formatting checks cover these files.
+Use Base UI in consuming React components for interactions and accessibility. The icon export is a React presentation leaf; tokens and recipes remain independent of it. Application state and interactions belong to consumers. Read [DESIGN.md](../../docs/DESIGN.md) when changing or consuming shared styles. The neutral charcoal palette, quiet/icon control variants and inverted Send treatment are shared across editor and Agents. Root lint and formatting checks cover these files.
