@@ -38,7 +38,9 @@ const wait = async (predicate: () => boolean) => {
 async function fixture(t: TestContext, holdInitial = false) {
   const token = P.nonce(),
     listeners = new Set<(value: ChatSnapshot) => void>(),
-    calls: string[] = [];
+    calls: string[] = [],
+    sourceErrors = new Set<(error: ApplicationError) => void>();
+  let sourceError: ApplicationError | undefined;
   let acquisitions = 0,
     releases = 0,
     current = snapshot,
@@ -51,13 +53,16 @@ async function fixture(t: TestContext, holdInitial = false) {
       if (operation === 'getChat') return snapshot as never;
       throw Error('Unexpected command');
     },
-    watch: (_, receive) => {
+    watch: (_, receive, onError) => {
       acquisitions++;
+      sourceErrors.add(onError);
       listeners.add(receive);
-      if (!holdInitial) queueMicrotask(() => receive(current));
+      if (sourceError) queueMicrotask(() => onError(sourceError!));
+      else if (!holdInitial) queueMicrotask(() => receive(current));
       return async () => {
         releases++;
         listeners.delete(receive);
+        sourceErrors.delete(onError);
       };
     },
   };
@@ -125,6 +130,10 @@ async function fixture(t: TestContext, holdInitial = false) {
   return {
     origin: server.origin,
     token,
+    failSource: (error: ApplicationError, persistent = false) => {
+      if (persistent) sourceError = error;
+      sourceErrors.forEach((onError) => onError(error));
+    },
     client,
     runtime,
     get replacementChecks() {
@@ -994,4 +1003,85 @@ test('a reader cancellation repeating its transport error is not a second cleanu
   assert.equal(w.errors[0].message, 'Chat stream was interrupted.');
   assert.equal(w.views.at(-1)!.observationStatus, 'reconnecting');
   await wait(() => f.listeners.size === 0);
+});
+
+for (const failure of ['initial', 'once', 'persistent'] as const)
+  test(`production server delivers authenticated terminal source errors without reconnect (${failure})`, async (t) => {
+    const f = await fixture(t, failure === 'initial'),
+      w = f.observe();
+    await wait(() => (failure === 'initial' ? f.acquisitions === 1 : w.views.length === 1));
+    f.failSource(
+      new ApplicationError({ code: 'Unauthorized', message: 'private source diagnostic' }),
+      failure === 'persistent',
+    );
+    await wait(() => w.errors.length === 1 || (failure === 'once' && f.acquisitions > 1));
+    assert.equal(w.errors[0]?.code, 'Unauthorized');
+    assert.equal(w.errors[0].message, 'Chat request is not authorized.');
+    assert.equal(f.acquisitions, 1);
+    await wait(() => f.listeners.size === 0);
+    assert.equal(f.releases, 1);
+    if (failure === 'initial') assert.equal(w.views.length, 0);
+    else assert.equal(w.views.at(-1)!.observationStatus, 'reconnecting');
+    await assert.rejects(w.close(), { code: 'Unauthorized' });
+  });
+
+test('a stalled terminal finish is bounded and releases its observation without blocking RPC', async (t) => {
+  const f = await fixture(t),
+    nonce = P.nonce();
+  const grant = await fetch(f.origin + '/v1/chat/challenge', {
+    headers: {
+      'X-Moonbase-Nonce': nonce,
+      Authorization: `Moonbase-RPC-HMAC-SHA256 ${P.mac(f.token, 'challenge-request', nonce, 'GET', '/v1/chat/challenge')}`,
+    },
+  });
+  const { challenge } = (await grant.json()) as { challenge: string },
+    body = JSON.stringify({ target, connectionId: 'raw' });
+  const response = await fetch(f.origin + P.streamPath, {
+    method: 'POST',
+    body,
+    headers: {
+      'content-type': 'application/json',
+      'X-Moonbase-Nonce': nonce,
+      'X-Moonbase-Challenge': challenge,
+      Authorization: `Moonbase-RPC-HMAC-SHA256 ${P.streamMac(f.token, 'request', nonce, challenge, 'POST', P.streamPath, P.hash(body))}`,
+    },
+  });
+  const reader = response.body!.getReader();
+  await reader.read();
+  const entered = Promise.withResolvers<void>(),
+    end = ServerResponse.prototype.end;
+  t.mock.method(
+    ServerResponse.prototype,
+    'end',
+    function (this: ServerResponse, ...args: Parameters<typeof end>) {
+      if (this.getHeader('content-type') === 'application/vnd.moonbase.chat-stream-v1') {
+        entered.resolve();
+        return this;
+      }
+      return end.apply(this, args);
+    },
+  );
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    f.failSource(
+      new ApplicationError({ code: 'Unauthorized', message: 'controlled source error' }),
+    );
+    await entered.promise;
+    assert.equal(f.releases, 0);
+    assert((await f.client.command('getChatHost', { host })).features?.includes('chat-stream-v1'));
+    t.mock.timers.tick(P.streamLimits.drainMs - 1);
+    assert.equal(f.releases, 0);
+    t.mock.timers.tick(1);
+    t.mock.timers.reset();
+    await wait(() => f.releases === 1);
+    assert.equal(f.listeners.size, 0);
+  } finally {
+    t.mock.timers.reset();
+    try {
+      await reader.cancel();
+    } catch {
+      /* The bounded finish deliberately destroys the unfinished response. */
+    }
+    reader.releaseLock();
+  }
 });

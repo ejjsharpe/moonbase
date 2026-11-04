@@ -418,6 +418,21 @@ async function streamChat(
           kind: 'error',
           code: terminal.code === 'Uncertain' ? 'Unavailable' : terminal.code,
         });
+        clearTimeout(deadline);
+        if (active)
+          await new Promise<void>((resolve) => {
+            const done = () => {
+              clearTimeout(timer);
+              response.off('finish', done);
+              controller.signal.removeEventListener('abort', done);
+              resolve();
+            };
+            const timer = setTimeout(stop, P.streamLimits.drainMs);
+            response.once('finish', done);
+            controller.signal.addEventListener('abort', done, { once: true });
+            response.end();
+            if (response.writableFinished || !active) done();
+          });
         break;
       }
       if (pending) {
@@ -446,7 +461,8 @@ async function streamChat(
     clearInterval(heartbeat);
     response.off('close', stop);
     response.off('error', stop);
-    response.destroy();
+    // A completed terminal response must keep its flushed bytes on the socket.
+    if (!response.writableFinished) response.destroy();
     await close?.();
   }
 }
