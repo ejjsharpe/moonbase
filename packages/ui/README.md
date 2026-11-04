@@ -10,3 +10,5 @@
 Use Base UI in consuming React components for interactions and accessibility. The icon export is a React presentation leaf; tokens and recipes remain independent of it. Application state and interactions belong to consumers. Read [DESIGN.md](../../docs/DESIGN.md) when changing or consuming shared styles. The neutral charcoal palette, quiet/icon control variants and inverted Send treatment are shared across editor and Agents. Root lint and formatting checks cover these files.
 
 File-tree rows use the shared row radius for hover and selection. Their focus outline appears only while the tree has keyboard-visible focus, keeping mouse selection quiet without hiding keyboard navigation.
+
+Base UI context menus use `overlays.positioner`, `popup`, `menuPopup`, `option` and `menuItem` for viewport-constrained positioning, rounded rows, highlighted fill and disabled text/cursors. `menuBackdrop` consumes outside dismissal clicks without activating the underlying work area. Interaction and captured mutation targets remain in Workbench.
