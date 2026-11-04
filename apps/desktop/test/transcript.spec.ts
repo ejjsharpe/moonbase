@@ -26,6 +26,11 @@ test('safe GFM, literal user content, progressive source, exact native callbacks
     '```typescript',
   );
   await expect(row.locator('table')).toHaveCount(1);
+  await expect(row.locator('th').last()).toHaveCSS('text-align', 'right');
+  await expect(row.locator('tbody tr').first().locator('td').last()).toHaveCSS(
+    'text-align',
+    'right',
+  );
   await expect(row.locator('blockquote')).toHaveCount(1);
   await expect(row.locator('ul')).toHaveCount(2);
   await expect(row.locator('script, svg, img, style, iframe, button[onclick]')).toHaveCount(0);

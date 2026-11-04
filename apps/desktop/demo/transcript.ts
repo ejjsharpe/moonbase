@@ -38,7 +38,7 @@ export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabili
     };
   }
   const markdown =
-    '# Reading a retained answer\n\nA **complete** answer with _emphasis_, ~~old words~~ and `inline code`.\n\n- First item\n- Second item\n  - Nested item\n\n> A quoted explanation.\n\n| File | Result |\n| --- | --- |\n| `src/main.ts` | Kept |\n| A very long filename that stays inside the table | Readable |\n\n```typescript\r\n  const moon = "🌔";\t\r\nconsole.log(moon);\r\n```\r\n\n[Read documentation](https://example.com/read)\n\n![External image](https://example.com/never-fetch.png)\n\n<script>window.transcriptExecuted = true</script>\n<button onclick="alert(1)">inert model control</button>\n<svg onload="alert(1)"><circle /></svg>\n\n[Unsafe](javascript:alert(1)) [File](file:///tmp/example.ts)\n';
+    '# Reading a retained answer\n\nA **complete** answer with _emphasis_, ~~old words~~ and `inline code`.\n\n- First item\n- Second item\n  - Nested item\n\n> A quoted explanation.\n\n| File | Result |\n| --- | ---: |\n| `src/main.ts` | Kept |\n| A very long filename that stays inside the table | Readable |\n\n```typescript\r\n  const moon = "🌔";\t\r\nconsole.log(moon);\r\n```\r\n\n[Read documentation](https://example.com/read)\n\n![External image](https://example.com/never-fetch.png)\n\n<script>window.transcriptExecuted = true</script>\n<button onclick="alert(1)">inert model control</button>\n<svg onload="alert(1)"><circle /></svg>\n\n[Unsafe](javascript:alert(1)) [File](file:///tmp/example.ts)\n';
   const entries: ChatEntry[] = [];
   for (let index = 0; index < 180; index++) {
     const id = `reading-${index}`,

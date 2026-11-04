@@ -170,7 +170,13 @@ function renderToken(token: Token, actions: Actions): ReactNode {
             <thead>
               <tr>
                 {table.header.map((cell, index) => (
-                  <th key={index} {...stylex.props(styles.cell)}>
+                  <th
+                    key={index}
+                    {...stylex.props(
+                      styles.cell,
+                      table.align[index] === 'right' && styles.cellRight,
+                      table.align[index] === 'center' && styles.cellCenter,
+                    )}>
                     {inline(cell.tokens, actions)}
                   </th>
                 ))}
@@ -180,7 +186,13 @@ function renderToken(token: Token, actions: Actions): ReactNode {
               {table.rows.map((row, index) => (
                 <tr key={index}>
                   {row.map((cell, index) => (
-                    <td key={index} {...stylex.props(styles.cell)}>
+                    <td
+                      key={index}
+                      {...stylex.props(
+                        styles.cell,
+                        table.align[index] === 'right' && styles.cellRight,
+                        table.align[index] === 'center' && styles.cellCenter,
+                      )}>
                       {inline(cell.tokens, actions)}
                     </td>
                   ))}
@@ -361,6 +373,8 @@ const styles = stylex.create({
     width: 'max-content',
     minWidth: '100%',
   },
+  cellRight: { textAlign: 'right' },
+  cellCenter: { textAlign: 'center' },
   cell: {
     borderBottomWidth: 1,
     borderBottomStyle: 'solid',
