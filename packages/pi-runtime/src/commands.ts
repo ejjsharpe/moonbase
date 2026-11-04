@@ -47,7 +47,7 @@ import {
   type SnapshotCache,
 } from './history.ts';
 import type { RuntimeConfiguration, RetainedWork } from './runtime-types.ts';
-import { readTranscriptContent, checkRead } from './transcript.ts';
+import { NestedSourceRetired, readTranscriptContent, checkRead } from './transcript.ts';
 import * as V from './validation.ts';
 import * as S from './private-schema.ts';
 
@@ -761,6 +761,11 @@ export class Host {
                       : Option.none(),
                   catch: safeError,
                 }),
+              ),
+              Effect.catch((error) =>
+                error instanceof NestedSourceRetired && version !== revision
+                  ? Effect.succeed(Option.none())
+                  : Effect.fail(error),
               ),
             );
           }),

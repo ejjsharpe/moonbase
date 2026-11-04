@@ -1275,6 +1275,114 @@ test('snapshot retirement recovery preserves ordinary errors and stops after thr
   assert.equal(f.faux.state.callCount, 1);
 });
 
+test('a superseded bounded retirement recapture requeues observation using the winning history boundary', async (t) => {
+  const f = await makeRetirementFixture(t),
+    harness = f.getHarness();
+  const previous = await f.client.command('getChat', { target: f.target });
+  const snapshot = harness.snapshot.bind(harness),
+    getTask = harness.getTask.bind(harness),
+    commit = harness.commit.bind(harness);
+  const boundaries: (string | null)[] = [];
+  let retirements = 0,
+    ended = false,
+    boundary = '';
+  t.mock.method(harness, 'commit', async (...args: Parameters<typeof commit>) => {
+    const result = await commit(...args);
+    if (result && typeof result === 'object' && 'live' in result && 'boundary' in result)
+      boundaries.push(result.boundary ? String(result.boundary) : null);
+    return result;
+  });
+  t.mock.method(harness, 'snapshot', async (...args: Parameters<typeof snapshot>) => {
+    if (args[0] !== NestedCallDoc || retirements === 3) return snapshot(...args);
+    if (retirements++ === 0)
+      boundary = String(
+        (
+          await commit(
+            (tx) =>
+              tx.appendEntry(Number(f.target.conversationId) as ConversationId, {
+                kind: 'app.retirement-boundary',
+                data: {},
+              }),
+            context,
+          )
+        ).id,
+      );
+    ended = true;
+    return undefined;
+  });
+  t.mock.method(harness, 'getTask', async (...args: Parameters<typeof getTask>) => {
+    const task = await getTask(...args);
+    if (!ended || task?.id !== f.parentTaskId) return task;
+    ended = false;
+    return {
+      ...task,
+      memos: undefined,
+      state: { status: 'terminal' as const, outcome: { status: 'completed' as const, result: {} } },
+    };
+  });
+  const views: ChatSnapshot[] = [],
+    errors: unknown[] = [];
+  const close = f.client.watch(
+    { target: f.target },
+    (view) => views.push(view),
+    (error) => errors.push(error),
+  );
+  t.after(async () => {
+    await close().catch(() => {});
+  });
+  await until(
+    async () => views.length + errors.length,
+    (count) => count > 0,
+  );
+  assert.deepEqual(errors, []);
+  assert.equal(retirements, 3);
+  assert.deepEqual(boundaries, [previous.transcriptBoundary, boundary, boundary, boundary]);
+  assert.equal(views.length, 1);
+  assert.equal(views[0].transcriptBoundary, boundary);
+  assert(views[0].entries.some((entry) => entry.id === boundary));
+  assert.notDeepEqual(views[0].run!.transcript!.source, previous.run!.transcript!.source);
+  await close();
+});
+
+test('an unsafe queued refresh does not suppress an ordinary nested read Conflict', async (t) => {
+  const f = await makeRetirementFixture(t),
+    harness = f.getHarness();
+  const snapshot = harness.snapshot.bind(harness);
+  let reads = 0;
+  t.mock.method(harness, 'snapshot', async (...args: Parameters<typeof snapshot>) => {
+    if (args[0] !== NestedCallDoc) return snapshot(...args);
+    reads++;
+    await harness.commit(
+      (tx) =>
+        tx.appendEntry(Number(f.target.conversationId) as ConversationId, {
+          kind: 'app.error-boundary',
+          data: {},
+        }),
+      context,
+    );
+    throw new ApplicationError({ code: 'Conflict', message: 'Controlled ordinary conflict' });
+  });
+  const views: ChatSnapshot[] = [],
+    errors: ApplicationError[] = [];
+  const close = f.client.watch(
+    { target: f.target },
+    (view) => views.push(view),
+    (error) => errors.push(error),
+  );
+  t.after(async () => {
+    await close().catch(() => {});
+  });
+  await until(
+    async () => errors.length,
+    (count) => count > 0,
+  );
+  assert.equal(reads, 1);
+  assert.equal(errors[0].code, 'Conflict');
+  assert.equal(errors[0].message, 'Controlled ordinary conflict');
+  assert.deepEqual(views, []);
+  await assert.rejects(close(), { code: 'Conflict' });
+});
+
 test('closing observation and disposing the root retain a held nested SDK read through settlement', async (t) => {
   let releaseRead = () => {};
   t.after(() => releaseRead());
