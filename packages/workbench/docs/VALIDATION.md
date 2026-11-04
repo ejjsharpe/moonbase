@@ -76,6 +76,8 @@ Context-menu coverage includes secondary/Control-click, ContextMenu/Shift+F10, n
 
 Native dev smoke: the final desktop build retained notices for 61 packages, launched with fresh temporary user data, opened this exact worktree through the native picker, and displayed all three README row-menu entries after an OS-synthesized secondary click. No mutation was executed. Manual macOS secondary/Control-click, physical function-key behavior, VoiceOver, viewport zoom and Finder Trash recovery remain unqualified. Automated gestures and temporary native filesystem integration are recorded separately from those human checks; packaged execution and real hosts/providers were not run for this change.
 
+The subsequent UI refinement labels the action **Rename** and removes the bottom action row, retaining the optional standalone import picker above the tree. Its 35 focused browser checks pass (27 context-menu, five import and three rename/range regressions), as do Workbench/desktop typechecks, lint, formatting and the desktop build. Updated native test callers use the context menu; the native suite was not rerun. The rebuilt dev app was restarted through normal Quit with its existing temporary profile, and the absent footer icons were checked visually.
+
 ## Remaining qualification
 
 This browser harness proves portable presentation with supplied memory/faux capabilities. It does not implement a production web bootstrap, authentication, filesystem/Git backend or browser transport. No plugin registry, scheduler, storage migration or placeholder destination was added.

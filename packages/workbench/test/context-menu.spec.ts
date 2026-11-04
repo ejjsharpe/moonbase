@@ -57,12 +57,12 @@ for (const shortcut of ['ContextMenu', 'Shift+F10'])
     await tree(page).focus();
     await tree(page).press('Home');
     await tree(page).press(shortcut);
-    await expect(item(page, 'Rename / Move…')).toBeFocused();
+    await expect(item(page, 'Rename…')).toBeFocused();
     const captured = await selected(page);
     await page.keyboard.press('End');
     await expect(item(page, 'Move to Trash…')).toBeFocused();
     await page.keyboard.press('Home');
-    await expect(item(page, 'Rename / Move…')).toBeFocused();
+    await expect(item(page, 'Rename…')).toBeFocused();
     await page.keyboard.press('ArrowDown');
     await expect(item(page, 'Copy…')).toBeFocused();
     await page.keyboard.press('m');
@@ -84,7 +84,7 @@ test('selected rows retain the range anchor; unselected rows replace it', async 
   const paths = await selected(page);
   await row(page, paths[1]).click({ button: 'right' });
   expect(await selected(page)).toEqual(paths);
-  await expect(item(page, 'Rename / Move…')).toHaveAttribute('aria-disabled', 'true');
+  await expect(item(page, 'Rename…')).toHaveAttribute('aria-disabled', 'true');
   await expect(item(page, 'Copy…')).toHaveAttribute('aria-disabled', 'true');
   await expect(item(page, 'Move to Trash…')).not.toHaveAttribute('aria-disabled', 'true');
   await page.keyboard.press('Escape');
@@ -98,7 +98,7 @@ test('selected rows retain the range anchor; unselected rows replace it', async 
 });
 
 for (const [name, title] of [
-  ['Rename / Move…', 'Rename or move'],
+  ['Rename…', 'Rename'],
   ['Copy…', 'Copy'],
   ['Move to Trash…', 'Move to Trash'],
 ])
@@ -128,14 +128,13 @@ for (const key of ['Tab', 'Shift+Tab'])
     await tree(page).focus();
     await tree(page).press('Home');
     await tree(page).press('ContextMenu');
-    await expect(item(page, 'Rename / Move…')).toBeFocused();
+    await expect(item(page, 'Rename…')).toBeFocused();
     await page.keyboard.press(key);
     await expect(menu(page)).toHaveCount(0);
     await expect(
-      region(page).getByRole('button', {
-        name: key === 'Tab' ? 'Rename / Move' : 'Reveal Active File',
-        exact: true,
-      }),
+      key === 'Tab'
+        ? region(page).getByRole('tab', { name: 'welcome.ts', exact: true })
+        : region(page).getByRole('button', { name: 'Reveal Active File', exact: true }),
     ).toBeFocused();
     await expect(page.getByRole('dialog')).toHaveCount(0);
   });
@@ -347,7 +346,11 @@ test('eligibility updates during preservation and disabled actions cannot execut
   await expect(page.getByRole('dialog', { name: 'Copy', exact: true })).toHaveCount(0);
   await page.keyboard.press('Escape');
   await page.evaluate(() => window.recoveryRace.release());
-  await expect(page.getByRole('button', { name: 'Copy', exact: true })).toBeEnabled();
+  await expect
+    .poll(() => page.evaluate(() => window.recoveryRace.editor.getSnapshot().preserving))
+    .toBe(false);
+  await page.getByRole('tree', { name: 'Files', exact: true }).press('ContextMenu');
+  await expect(item(page, 'Copy…')).toBeEnabled();
 });
 
 test('another file saving does not disable an unrelated row mutation', async ({ page }) => {
@@ -523,7 +526,7 @@ test('nested folder invocation preserves expansion and full relative paths', asy
   await row(page, 'src/nested').click({ button: 'right' });
   await expect(row(page, 'src/nested')).toHaveAttribute('aria-expanded', 'false');
   await expect(row(page, 'src/nested')).toHaveAttribute('aria-level', '2');
-  await item(page, 'Rename / Move…').click();
+  await item(page, 'Rename…').click();
   await expect(page.getByLabel('Destination relative path', { exact: true })).toHaveValue(
     'src/nested',
   );
@@ -548,8 +551,8 @@ for (const width of [1440, 768, 390])
         ),
       width,
     );
-    await expect(item(page, 'Rename / Move…')).toBeFocused();
-    await expect(item(page, 'Rename / Move…')).toHaveCSS('background-color', 'rgb(43, 43, 46)');
+    await expect(item(page, 'Rename…')).toBeFocused();
+    await expect(item(page, 'Rename…')).toHaveCSS('background-color', 'rgb(43, 43, 46)');
     await expect
       .poll(() =>
         menu(page).evaluate((element) => {

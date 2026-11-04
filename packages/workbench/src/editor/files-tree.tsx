@@ -406,7 +406,7 @@ export function FilesTree({
                     );
                     setMenu(null);
                   }}>
-                  {{ move: 'Rename / Move…', copy: 'Copy…', trash: 'Move to Trash…' }[kind]}
+                  {{ move: 'Rename…', copy: 'Copy…', trash: 'Move to Trash…' }[kind]}
                 </ContextMenu.Item>
               ))}
             </ContextMenu.Popup>

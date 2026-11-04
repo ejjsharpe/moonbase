@@ -54,7 +54,7 @@ export function Mutation({
   }, [controller, action]);
   const titles: Record<Action['kind'], string> = {
     trash: 'Move to Trash',
-    move: 'Rename or move',
+    move: 'Rename',
     copy: 'Copy',
     import: 'Import files',
     'create-file': 'New File',

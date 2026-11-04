@@ -352,7 +352,6 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     const captured = { ...checkout };
     run(selectClipboardImports(captured).then((references) => importFiles(captured, references)));
   }
-  const selectedPaths = selected?.tree.selected ?? [];
   const explorer =
     checkout && selected ? (
       <div
@@ -417,6 +416,23 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                 </Button>
               ))}
 
+              {selectNativeImports && (
+                <Button
+                  {...stylex.props(controls.button, filesUI.iconButton)}
+                  aria-label="Import files"
+                  title="Import files"
+                  disabled={state.preserving}
+                  onClick={() =>
+                    run(
+                      (async () => {
+                        const target = { ...checkout };
+                        importFiles(target, await selectNativeImports(target));
+                      })(),
+                    )
+                  }>
+                  <Icon name="import" />
+                </Button>
+              )}
               <Button
                 {...stylex.props(controls.button, filesUI.iconButton)}
                 aria-label="Reveal Active File"
@@ -452,45 +468,6 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
               canRequestMutation={canRequestMutation}
               requestMutation={requestMutation}
             />
-            <div {...stylex.props(filesUI.tools)}>
-              {(['move', 'copy', 'trash'] as const).map((kind) => (
-                <Button
-                  key={kind}
-                  {...stylex.props(controls.button, filesUI.iconButton)}
-                  aria-label={{ move: 'Rename / Move', trash: 'Trash', copy: 'Copy' }[kind]}
-                  title={{ move: 'Rename / Move', trash: 'Trash', copy: 'Copy' }[kind]}
-                  disabled={!canRequestMutation({ checkout, kind, paths: selectedPaths })}
-                  onClick={() =>
-                    requestMutation({
-                      checkout,
-                      kind,
-                      paths: [...selectedPaths],
-                    })
-                  }>
-                  <Icon name={kind} />
-                </Button>
-              ))}
-              {selectNativeImports && (
-                <Button
-                  {...stylex.props(controls.button, filesUI.iconButton)}
-                  aria-label="Import files"
-                  title="Import files"
-                  disabled={state.preserving}
-                  onClick={() =>
-                    run(
-                      (async () => {
-                        const target = { ...checkout };
-                        importFiles(target, await selectNativeImports(target));
-                      })(),
-                    )
-                  }>
-                  <Icon name="import" />
-                </Button>
-              )}
-            </div>
-            {selectClipboardImports && (
-              <p {...stylex.props(styles.pasteHint)}>Paste or drop files here to import</p>
-            )}
           </>
         ) : (
           <>
