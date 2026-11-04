@@ -14,7 +14,7 @@ The parent owns the separately reviewed #109 nested-call retention/requested-arg
 
 ## Checks
 
-Commands ran from the repository root. Package/resource-heavy suites ran serially, using each package's existing internal concurrency. Logs in this environment use `/tmp/observation122-*.log`.
+The following table records the initial `a146b4abc820439e7f043585d62802662d3cbabc` implementation; the subsequent review correction is recorded below. Commands ran from the repository root. Package/resource-heavy suites ran serially, using each package's existing internal concurrency. Logs in this environment use `/tmp/observation122-*.log`.
 
 | Command | Result |
 | --- | --- |
@@ -54,3 +54,11 @@ The full root and chat-integration runs retain legacy remote polling, authentica
 The [selected API, byte/subscription budgets and #123 handoff](OBSERVATION.md) distinguish independently replaceable snapshots from event delivery, watch-close finalizers from root SDK settlement, and transport bounds from SDK document/inspection allocations. #123 must consume supplied `client.watch` without per-update reads and enforce its actual authenticated framed-byte budget; it owns network advertisement, proof/framing, reconnect and status.
 
 No foreground/dev application, standalone desktop build, packaged/native UI acceptance, real provider quota, real SSH host, legacy-state import/deletion, deployment or PR operation was used. The root suite's controlled Electron Node-mode checks do not qualify native interaction. Manual accessibility, physical performance/durability and Intel behavior remain untested. The separately owned #109 corrections still require propagation and affected-check reruns.
+
+## Independent review correction: steady progress
+
+Independent #122 review requested changes to `a146b4a`: fencing every relevant commit could discard every in-flight projection when progress commits outpaced projection. The new public embedded-provider regression reproduced **zero** intermediate text publications on that head with 175 ms latency after capture settlement, 25 updates at 110 ms intervals, and immediate completion after the last update. It emits independently of observation acknowledgments. `/tmp/observation122-steady-red.log` records the failure; `/tmp/observation122-steady-green.log` records the corrected test passing.
+
+The correction retains the one-slot queue and fences only unsafe invalidations. A whitelist of public LiveDoc progress paths permits publication of an older coherent progress capture while a replacement stays queued; source/control/authority/history changes, unknown operations and document lifecycle changes retain the fence. Six additional held-capture regressions cover exact attempt changes, tool membership, retained history, metadata retirement, valid foreign Store authority and same-commit LiveDoc replacement. They verify that no stale capture publishes across those invalidations. Existing completion, scheduler status, Stop, subscription and held SDK-settlement cases remain in the suite.
+
+`node --experimental-strip-types --test --test-timeout=20000 packages/pi-runtime/test/observation.test.ts` passes all **22** tests after the correction, and Pi typechecking passes. Combined final-tree qualification is pending the separately owned #109 retirement fix and rebase; this local correction does not duplicate its bounded recapture retry or claim its regressions passed yet.

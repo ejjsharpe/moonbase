@@ -212,6 +212,70 @@ test('committed text/thinking stream before completion; B produces no A reads or
   assert.equal(measured.counts.subscriptions, 0);
 });
 
+test('steady provider progress publishes while projection is slower than the commit interval', async (t) => {
+  const measured = instrument(t),
+    f = await fixture(t, undefined, {}, true),
+    target = await f.create();
+  const stream = createAssistantMessageEventStream();
+  t.mock.method(
+    f.faux.provider,
+    'streamSimple',
+    (...args: Parameters<typeof f.faux.provider.streamSimple>) => {
+      args[2]?.signal?.addEventListener(
+        'abort',
+        () => stream.end(fauxAssistantMessage('', { stopReason: 'aborted' })),
+        { once: true },
+      );
+      return stream;
+    },
+  );
+  const watch = observe(t, f.client, target);
+  await watch.wait((view) => view.state === 'idle');
+  await f.client.command('sendChat', { target, requestId: 'steady', text: 'Stream steadily' });
+  function emit(text: string) {
+    stream.push({
+      type: 'text_delta',
+      contentIndex: 0,
+      delta: text,
+      partial: fauxAssistantMessage(text),
+    });
+  }
+  emit('opening');
+  const initial = await watch.wait((view) => view.run?.text === 'opening');
+  const commit = measured.harness().commit.bind(measured.harness());
+  t.mock.method(measured.harness(), 'commit', async (...args: Parameters<typeof commit>) => {
+    const result = await commit(...args);
+    if (result && typeof result === 'object' && 'live' in result && 'boundary' in result)
+      await delay(175);
+    return result;
+  });
+  const before = { ...measured.counts };
+  for (let i = 0; i < 25; i++) {
+    emit('steady ' + i);
+    await delay(110);
+  }
+  const progress = watch.views.filter((view) => view.run?.text.startsWith('steady '));
+  const during = { ...measured.counts };
+  const final = fauxAssistantMessage('completed steady stream');
+  stream.push({ type: 'done', reason: 'stop', message: final });
+  stream.end(final);
+  await watch.wait(
+    (view) => !view.run && view.entries.some((entry) => entry.text === 'completed steady stream'),
+  );
+  assert(
+    progress.length >= 2,
+    `Expected text during continuous progress, received ${progress.length} live updates.`,
+  );
+  for (const view of progress) {
+    assert.deepEqual(view.run!.transcript!.source, initial.run!.transcript!.source);
+    assert.equal(view.transcriptBoundary, initial.transcriptBoundary);
+  }
+  assert.equal(during.scans, before.scans);
+  assert.equal(during.entries, before.entries);
+  assert.equal(during.inspections, before.inspections);
+  assert.deepEqual(watch.errors, []);
+});
+
 test('live tool output is observed while execution is held; progress does not inspect the task graph or reload history', async (t) => {
   const measured = instrument(t),
     hold = gate(),
@@ -307,6 +371,112 @@ test('registration precedes initial capture; a held stale snapshot is replaced a
   assert.equal(view.transcriptBoundary, view.entries[0].id);
   assert.deepEqual(watch.errors, []);
 });
+
+for (const change of ['attempt', 'tools', 'history', 'metadata', 'store', 'replacement'] as const)
+  test(`a held progress snapshot cannot publish across ${change} invalidation`, async (t) => {
+    const hold = gate(),
+      read = gate();
+    t.after(hold.release);
+    t.after(read.release);
+    const measured = instrument(t),
+      f = await fixture(t),
+      target = await f.create();
+    f.faux.setResponses([
+      async () => {
+        await hold.promise;
+        return fauxAssistantMessage('final');
+      },
+    ]);
+    await f.client.command('sendChat', { target, requestId: 'held', text: 'Hold' });
+    await until(
+      () => measured.harness().snapshot(LiveDoc, conversationId(target), context),
+      (live) => !!live?.generation,
+    );
+    await measured.harness().commit(async (tx) => {
+      const live = await tx.doc(LiveDoc, conversationId(target));
+      live.generation!.message = JSON.parse(
+        JSON.stringify(fauxAssistantMessage('captured progress')),
+      );
+    }, context);
+    const initial = await f.client.command('getChat', { target });
+    const metadata = defineDocFamily<{ identity: string }, null>({
+      kind: 'moonbase.chat.metadata',
+      version: 1,
+      scope: 'conversation',
+      family: true,
+      history: 'latest',
+      fork: 'current',
+      initial: () => ({ identity: '' }),
+      checkpointWhen: () => true,
+    });
+    const store = defineDocFamily<{ identity: string }, null>({
+      kind: 'moonbase.chat.store',
+      version: 1,
+      scope: 'session',
+      family: true,
+      initial: () => ({ identity: '' }),
+      checkpointWhen: () => true,
+    });
+    const commit = measured.harness().commit.bind(measured.harness());
+    let held = false;
+    t.mock.method(measured.harness(), 'commit', async (...args: Parameters<typeof commit>) => {
+      const result = await commit(...args);
+      if (
+        !held &&
+        result &&
+        typeof result === 'object' &&
+        'live' in result &&
+        'boundary' in result
+      ) {
+        held = true;
+        await read.promise;
+      }
+      return result;
+    });
+    const watch = observe(t, f.client, target);
+    await until(async () => held, Boolean);
+    await commit(async (tx) => {
+      if (change === 'metadata') return tx.retireDoc(metadata, conversationId(target), 'metadata');
+      if (change === 'store') {
+        const owner = await tx.doc(store, 'identity', null);
+        const identity = JSON.parse(owner.identity);
+        identity.actorId = 'revoked';
+        owner.identity = JSON.stringify(identity);
+        return;
+      }
+      if (change === 'history') {
+        await tx.appendEntry(conversationId(target), { kind: 'app.boundary', data: {} });
+        return;
+      }
+      if (change === 'replacement') await tx.retireDoc(LiveDoc, conversationId(target));
+      const live = await tx.doc(LiveDoc, conversationId(target));
+      if (change === 'attempt') live.generation!.attempt++;
+      if (change === 'tools')
+        live.tools = [{ callId: 'control', name: 'control', status: 'pending' }];
+    }, context);
+    read.release();
+    if (change === 'metadata' || change === 'store') {
+      await until(async () => watch.errors.length, Boolean);
+      assert.equal(watch.errors[0].code, 'Unauthorized');
+      assert.deepEqual(watch.views, []);
+      await assert.rejects(watch.off(), { code: 'Unauthorized' });
+    } else {
+      const next = await watch.wait(() => true);
+      assert.equal(watch.views.length, 1);
+      if (change === 'replacement') assert.equal(next.run, null);
+      else assert.notDeepEqual(next.run!.transcript!.source, initial.run!.transcript!.source);
+      if (change === 'history')
+        assert.notEqual(next.transcriptBoundary, initial.transcriptBoundary);
+      if (change === 'attempt') {
+        assert.equal(next.run!.transcript!.source.kind, 'live');
+        const previous = initial.run!.transcript!.source;
+        assert.equal(previous.kind, 'live');
+        if (next.run!.transcript!.source.kind === 'live' && previous.kind === 'live')
+          assert.equal(next.run!.transcript!.source.attempt, previous.attempt + 1);
+      }
+      assert.deepEqual(watch.errors, []);
+    }
+  });
 
 test('slow consumers coalesce a burst to one bounded replacement; Stop and another conversation remain responsive', async (t) => {
   const measured = instrument(t),

@@ -616,8 +616,8 @@ export class Host {
                   this.observers--;
                 }),
             );
-            const refresh = () => {
-              revision++;
+            const refresh = (invalidatesCapture = true) => {
+              if (invalidatesCapture) revision++;
               Queue.offerUnsafe(queue, undefined);
             };
             const invalidateStatus = () => {
@@ -625,7 +625,8 @@ export class Host {
               cache.status = undefined;
             };
             const invalidate = (publication: CommitPublication) => {
-              let relevant = false;
+              let relevant = false,
+                invalidatesCapture = false;
               let liveRetired = false,
                 livePresent = false;
               for (const change of publication.changes) {
@@ -639,6 +640,29 @@ export class Host {
                     )
                       continue;
                     relevant = true;
+                    // Progress can outpace projection without invalidating its captured source/control.
+                    const progressOnly =
+                      kind === LiveDoc.definition.kind &&
+                      change.type === 'document' &&
+                      change.value !== null &&
+                      change.ops.length !== 0 &&
+                      change.ops.every((op) => {
+                        if (op[0] === 'r') return false;
+                        const path = op[1];
+                        return (
+                          (path[0] === 'generation' && path[1] === 'message') ||
+                          ((path[0] === 'tools' || path[0] === 'nestedTools') &&
+                            typeof path[1] === 'number' &&
+                            [
+                              'output',
+                              'details',
+                              'diagnostics',
+                              'droppedBytes',
+                              'droppedLines',
+                            ].includes(String(path[2])))
+                        );
+                      });
+                    invalidatesCapture ||= !progressOnly;
                     if (kind === LiveDoc.definition.kind) {
                       if (change.type === 'document' && change.value === null) liveRetired = true;
                       else livePresent = true;
@@ -656,6 +680,7 @@ export class Host {
                     change.record.scope.kind === 'session'
                   ) {
                     relevant = true;
+                    invalidatesCapture = true;
                     cache.boundary = undefined;
                     cache.history = undefined;
                     invalidateStatus();
@@ -665,6 +690,7 @@ export class Host {
                     change.type === 'conversation' ? change.value.id : change.value.conversationId;
                   if (conversationId !== cid(target.conversationId)) continue;
                   relevant = true;
+                  invalidatesCapture = true;
                   if (change.type === 'entry' || change.type === 'conversation') {
                     cache.boundary = undefined;
                     cache.history = undefined;
@@ -673,7 +699,7 @@ export class Host {
                 }
               }
               if (liveRetired || livePresent) cache.retired = liveRetired && !livePresent;
-              if (relevant) refresh();
+              if (relevant) refresh(invalidatesCapture);
             };
             yield* Effect.acquireRelease(
               Effect.try({
