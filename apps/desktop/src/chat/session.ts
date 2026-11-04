@@ -141,6 +141,11 @@ export class ChatIpcSession {
               message: 'Could not open the link in your browser. Try again.',
             });
           }
+          if (!live())
+            throw new ApplicationError({
+              code: 'Cancelled',
+              message: 'Link opening was cancelled after it began.',
+            });
         }
         return { ok: true, value: null };
       }

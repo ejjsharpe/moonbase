@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test, expect, _electron as electron } from '@playwright/test';
 import { build } from 'esbuild';
-import { readFile, mkdir, mkdtemp, realpath, rm, symlink } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, mkdtemp, realpath, rm, symlink } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
@@ -545,6 +545,23 @@ test('transcript local rendering precedes held completion; native Copy/link fail
       window.webContents.setZoomFactor(2);
     });
     await expect(page.getByLabel('Message', { exact: true })).toBeInViewport();
+    const layout = await page.evaluate(() => {
+      const main = document.querySelector<HTMLElement>('[aria-label="Agent workspace"]')!,
+        grid = main.parentElement!;
+      return {
+        innerWidth,
+        compact: matchMedia('(max-width: 640px)').matches,
+        rootWidth: document.getElementById('root')!.getBoundingClientRect().width,
+        mainWidth: main.getBoundingClientRect().width,
+        gridWidth: grid.getBoundingClientRect().width,
+        columns: getComputedStyle(grid).gridTemplateColumns,
+      };
+    });
+    await writeFile(
+      resolve('../../test-results/transcript-111/native-zoom-layout.json'),
+      JSON.stringify(layout, null, 2),
+    );
+    expect(layout.mainWidth).toBeGreaterThan(layout.innerWidth - 2);
     await captureNative(
       app,
       page,

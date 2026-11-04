@@ -62,6 +62,12 @@ test('safe GFM, literal user content, progressive source, exact native callbacks
   await page.setViewportSize({ width: 1440, height: 900 });
   await row.getByRole('heading').scrollIntoViewIfNeeded();
   await page.screenshot({ path: resolve(output, 'normal.png') });
+  await page.setViewportSize({ width: 640, height: 700 });
+  expect(
+    await page
+      .getByRole('main', { name: 'Agent workspace', exact: true })
+      .evaluate((element) => element.getBoundingClientRect().width),
+  ).toBe(640);
   await page.setViewportSize({ width: 540, height: 844 });
   await row.getByRole('heading').scrollIntoViewIfNeeded();
   await page.screenshot({ path: resolve(output, 'compact.png') });

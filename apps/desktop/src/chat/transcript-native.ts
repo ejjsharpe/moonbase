@@ -1,5 +1,6 @@
 import { decodeChatInput, decodeChatOutput } from '@moonbase/contracts/chat-schema';
 import { ApplicationError } from '@moonbase/contracts/errors';
+import { maximumChatReplyBytes } from '@moonbase/contracts/chat';
 import type { ChatClient, ChatSnapshot, ChatTranscriptSelection } from '@moonbase/contracts/chat';
 import { iterateTranscriptSource, type TranscriptRead } from '@moonbase/application/chat';
 import { locateFences } from './transcript-source.ts';
@@ -8,7 +9,6 @@ import type { IpcRequest } from '../ipc-lifetime.ts';
 
 const areTranscriptValuesEqual = (a: unknown, b: unknown) =>
   JSON.stringify(a) === JSON.stringify(b);
-const getTranscriptKey = (value: unknown) => JSON.stringify(value);
 
 export type NativeTranscriptActions = {
   writeText(text: string): Promise<void>;
@@ -46,7 +46,12 @@ export function decodeTranscriptLink(input: unknown) {
     )
   )
     invalid();
-  const url = new URL(value.url as string);
+  let url: URL;
+  try {
+    url = new URL(value.url as string);
+  } catch {
+    return invalid();
+  }
   if (!['http:', 'https:'].includes(url.protocol) || !url.hostname || url.username || url.password)
     invalid();
   return url.href;
@@ -116,7 +121,7 @@ export async function copyTranscript(
     const selections: ChatTranscriptSelection[] = [];
     // The iterator validates every manifest/content echo, chunk and continuation independently of UI retention.
     const chunks: string[] = [];
-    let previous = '';
+    const seenParts = new Set<string>();
     for await (const chunk of iterateTranscriptSource({
       source,
       selection,
@@ -127,8 +132,16 @@ export async function copyTranscript(
       },
       read: async (input, options) => {
         const raw = await read(input, options);
-        if (Buffer.byteLength(JSON.stringify(raw)) > 256 * 1024) invalid();
+        if (Buffer.byteLength(JSON.stringify(raw)) > maximumChatReplyBytes) invalid();
         const reply = decodeChatOutput('getChatTranscriptContent', raw);
+        if (
+          reply.kind === 'manifest' &&
+          new Set(reply.parts.map((part) => part.partId)).size !== reply.parts.length
+        )
+          throw new ApplicationError({
+            code: 'Incompatible',
+            message: 'Transcript manifest repeats a part.',
+          });
         return !selection && reply.kind === 'manifest'
           ? {
               ...reply,
@@ -145,12 +158,17 @@ export async function copyTranscript(
           code: 'InvalidInput',
           message: 'This part is binary and cannot be copied as text.',
         });
-      const key = getTranscriptKey(chunk.selection);
-      if (key !== previous) {
+      if (chunk.offset === 0) {
+        if (seenParts.has(chunk.selection.partId))
+          throw new ApplicationError({
+            code: 'Incompatible',
+            message: 'Transcript manifest repeats a selected part.',
+          });
+        seenParts.add(chunk.selection.partId);
         selections.push(chunk.selection);
-        previous = key;
       }
       chunks.push(chunk.data);
+      await new Promise<void>((resolve) => setImmediate(resolve));
     }
     if (!selections.length)
       throw new ApplicationError({

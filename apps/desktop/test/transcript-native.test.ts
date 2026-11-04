@@ -76,6 +76,7 @@ function fixture(live = false, text = '  **raw**\r\n\t🌔 é\r\n' + 'α'.repea
   const controls = {
     beforeRead: async (_read: number) => {},
     write: async (_text: string) => {},
+    open: async (_url: string) => {},
     snapshot,
     setText(value: string) {
       text = value;
@@ -147,6 +148,7 @@ function fixture(live = false, text = '  **raw**\r\n\t🌔 é\r\n' + 'α'.repea
         writes.push(value);
       },
       openExternal: async (url) => {
+        await controls.open(url);
         links.push(url);
       },
     },
@@ -405,5 +407,84 @@ test('reentrant cancellation before the first native observation cannot strand C
   await cancelled;
   assert.equal(closed, true);
   assert.deepEqual(f.writes, []);
+  await f.owner.dispose();
+});
+
+test('native Copy validates unfiltered and cross-page manifest identities before writing', async () => {
+  for (const acrossPages of [false, true]) {
+    const f = fixture(),
+      command = f.chat.command;
+    f.chat.command = async (operation, input, options) => {
+      const value = await command(operation, input, options);
+      if (
+        operation === 'getChatTranscriptContent' &&
+        !(input as { selection?: unknown }).selection
+      ) {
+        const reply = value as {
+          parts: ChatTranscriptPart[];
+          cursor: string | null;
+          nextCursor: string | null;
+        };
+        if (!acrossPages) reply.parts[1]!.partId = reply.parts[0]!.partId;
+        else {
+          reply.parts = [reply.parts[0]!];
+          reply.cursor = (input as { cursor?: string }).cursor ?? null;
+          reply.nextCursor = reply.cursor ? null : 'again';
+        }
+      }
+      return value as never;
+    };
+    await assert.rejects(f.actions.copy({ source: f.source }), { code: 'Incompatible' });
+    assert.deepEqual(f.writes, []);
+    await f.owner.dispose();
+  }
+});
+
+test('native chunk iteration yields to unrelated IPC without another command queue', async () => {
+  const f = fixture();
+  let readDuringCopy = false;
+  const copy = f.actions.copy({ source: f.source });
+  const parallel = new Promise<void>((resolve, reject) =>
+    setImmediate(() => {
+      readDuringCopy = f.writes.length === 0;
+      void f.owner.call('chat', 'getChat', { target }, 'parallel').then((reply) => {
+        assert.equal(reply.ok, true);
+        resolve();
+      }, reject);
+    }),
+  );
+  await copy;
+  await parallel;
+  assert.equal(readDuringCopy, true);
+  await f.owner.dispose();
+});
+
+test('native link cancellation waits for its actual opener settlement', async () => {
+  const f = fixture(),
+    entered = Promise.withResolvers<void>(),
+    held = Promise.withResolvers<void>();
+  f.controls.open = async () => {
+    entered.resolve();
+    await held.promise;
+  };
+  const opening = f.owner.call(
+    'transcript',
+    'open-link',
+    { url: 'https://example.com/read' },
+    'held-link',
+  );
+  await entered.promise;
+  let settled = false;
+  const cancellation = f.owner.cancel('held-link').then(() => {
+    settled = true;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(settled, false);
+  held.resolve();
+  const reply = await opening;
+  assert.equal(reply.ok, false);
+  if (!reply.ok) assert.equal(reply.error.code, 'Cancelled');
+  await cancellation;
+  assert.equal(f.links.length, 1);
   await f.owner.dispose();
 });

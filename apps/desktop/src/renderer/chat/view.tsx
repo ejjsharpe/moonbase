@@ -218,7 +218,7 @@ export function ChatView({
   );
   return (
     <div {...stylex.props(workbench.page, styles.page)}>
-      <div {...stylex.props(styles.workspace)}>
+      <div {...stylex.props(styles.workspace, !compact && styles.expandedWorkspace)}>
         {!compact && sidebar}
         <main aria-label="Agent workspace" {...stylex.props(styles.content)}>
           <header
@@ -566,13 +566,15 @@ const styles = stylex.create({
   },
   workspace: {
     display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr)',
+    flex: 1,
+    minHeight: 0,
+  },
+  expandedWorkspace: {
     gridTemplateColumns: {
       default: '288px minmax(0, 1fr)',
       '@media (max-width: 760px)': '210px minmax(0, 1fr)',
-      '@media (max-width: 640px)': 'minmax(0, 1fr)',
     },
-    flex: 1,
-    minHeight: 0,
   },
   sidebar: {
     flex: 1,
