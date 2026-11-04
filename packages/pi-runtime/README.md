@@ -77,3 +77,5 @@ The [ownership extraction qualification](docs/VALIDATION.md) records exact revis
 Structured transcripts use the private `transcript.ts` owner for ordered parts, exact sources, authenticated cursors and bounded retained-content reads. `history.ts` captures coherent live/history boundaries and around-entry windows. See [read contracts](../contracts/docs/TRANSCRIPTS.md) and [qualification](docs/TRANSCRIPT-VALIDATION.md).
 
 Completed nested-tool activity reads the exact retained public `NestedCallDoc` result, validated against its child/parent/call identities. Cleared live-slot previews are not completion evidence; missing retained content remains explicitly unavailable. See the [review correction evidence](docs/TRANSCRIPT-VALIDATION.md).
+
+Nested requested arguments come from immutable task input. Executed arguments require an execute checkpoint or a settled result with SDK execution-time evidence; pending and blocked requests are never labeled executed.

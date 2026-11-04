@@ -712,12 +712,13 @@ test('completed nested results read their exact retained output, patch and diagn
     completed = false,
     nestedTaskId = '',
     mediaTaskId = '',
-    arrayTaskId = '';
+    arrayTaskId = '',
+    jsonTaskId = '';
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
   t.after(() => release());
-  const output = 'retained child output 😀 '.repeat(1200),
+  const output = 'retained child output 😀 '.repeat(1400),
     patch = '--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+retained child change\n';
   const registry = createRegistry();
   registry.install(
@@ -740,6 +741,9 @@ test('completed nested results read their exact retained output, patch and diagn
             );
             arrayTaskId = String(
               (await api.executeTool('array_child', {}, ctx, { key: 'array' })).taskId,
+            );
+            jsonTaskId = String(
+              (await api.executeTool('json_child', {}, ctx, { key: 'json' })).taskId,
             );
             completed = true;
             await gate;
@@ -781,6 +785,19 @@ test('completed nested results read their exact retained output, patch and diagn
           structuredOutputSchema: Type.Array(Type.Number()),
           execute: async () => ({ structuredOutput: [] }),
         }),
+        defineTool({
+          name: 'json_child',
+          description: 'Retain program JSON without discarding extra fields',
+          parameters: Type.Object({}),
+          structuredOutputSchema: Type.Object({
+            type: Type.Literal('text'),
+            text: Type.String(),
+            extra: Type.Boolean(),
+          }),
+          execute: async () => ({
+            structuredOutput: { type: 'text', text: 'program data', extra: true },
+          }),
+        }),
       ],
     }),
   );
@@ -810,6 +827,12 @@ test('completed nested results read their exact retained output, patch and diagn
   assert.equal((await content(f.client, source, media[2])).toString(), 'after image');
   const array = allParts.find((part) => part.taskId === arrayTaskId && part.kind === 'result')!;
   assert.deepEqual(JSON.parse((await content(f.client, source, array)).toString()), []);
+  const json = allParts.find((part) => part.taskId === jsonTaskId && part.kind === 'result')!;
+  assert.deepEqual(JSON.parse((await content(f.client, source, json)).toString()), {
+    type: 'text',
+    text: 'program data',
+    extra: true,
+  });
   const parts = allParts.filter((part) => part.taskId === nestedTaskId);
   const result = parts.find((part) => part.kind === 'result')!;
   assert.equal(result.state, 'completed');
@@ -864,3 +887,179 @@ test('completed nested results read their exact retained output, patch and diagn
   await getHarness().waitForTask(Number(result.parentTaskId) as TaskId, context);
   await assert.rejects(content(f.client, source, result), { code: 'Conflict' });
 });
+
+for (const mode of ['modified', 'blocked'] as const)
+  test(`nested ${mode} calls preserve requested arguments and label executed arguments only with SDK proof`, async (t) => {
+    let releaseBefore!: () => void, releaseChild!: () => void, releaseParent!: () => void;
+    const beforeGate = new Promise<void>((resolve) => {
+      releaseBefore = resolve;
+    });
+    const childGate = new Promise<void>((resolve) => {
+      releaseChild = resolve;
+    });
+    const parentGate = new Promise<void>((resolve) => {
+      releaseParent = resolve;
+    });
+    t.after(() => {
+      releaseBefore();
+      releaseChild();
+      releaseParent();
+    });
+    let beforeEntered = false,
+      completed = false,
+      executions = 0,
+      nestedTaskId = '';
+    const registry = createRegistry();
+    registry.install(
+      defineExtension({
+        name: 'nested-arguments',
+        hooks: [
+          hook(ToolTask, {
+            beforeTool: async (call, api) => {
+              if (!call.parent) return;
+              nestedTaskId = String(api.taskId);
+              beforeEntered = true;
+              await beforeGate;
+              if (mode === 'blocked') return { block: 'Controlled nested block' };
+              return { arguments: { value: 'actually executed' } };
+            },
+          }),
+        ],
+        tools: [
+          defineTool({
+            name: 'parent',
+            description: 'Keep nested evidence live',
+            parameters: Type.Object({}),
+            execute: async (_, api, ctx) => {
+              const result = await api.executeTool('child', { value: 'requested' }, ctx, {
+                key: 'child',
+              });
+              assert.equal(typeof result.durationMs, mode === 'modified' ? 'number' : 'undefined');
+              completed = true;
+              await parentGate;
+              return { output: [{ type: 'text', text: 'Parent complete' }] };
+            },
+          }),
+          defineTool({
+            name: 'child',
+            description: 'Exercise nested argument repair',
+            parameters: Type.Object({ value: Type.String() }),
+            execute: async (args) => {
+              executions++;
+              assert.equal(args.value, 'actually executed');
+              await childGate;
+              return { output: [{ type: 'text', text: 'Child complete' }] };
+            },
+          }),
+        ],
+      }),
+    );
+    const getHarness = captureHarness(t),
+      f = await fixture(t, registry),
+      target = await f.create();
+    f.faux.setResponses([
+      fauxAssistantMessage([fauxToolCall('parent', {})], { stopReason: 'toolUse' }),
+      fauxAssistantMessage('Done'),
+    ]);
+    await f.client.command('sendChat', {
+      target,
+      requestId: 'nested',
+      text: 'Check nested arguments',
+    });
+    await until(async () => beforeEntered, Boolean);
+    const pendingSource = (await f.client.command('getChat', { target })).run!.transcript!.source;
+    const pending = (await manifest(f.client, pendingSource)).filter(
+      (part) => part.taskId === nestedTaskId,
+    );
+    assert(!pending.some((part) => part.kind === 'executed-arguments'));
+    const requested = pending.find((part) => part.kind === 'arguments')!;
+    assert.deepEqual(JSON.parse((await content(f.client, pendingSource, requested)).toString()), {
+      value: 'requested',
+    });
+    releaseBefore();
+    if (mode === 'modified') {
+      await until(
+        async () => executions,
+        (count) => count === 1,
+      );
+      const runningSource = (await f.client.command('getChat', { target })).run!.transcript!.source;
+      const running = (await manifest(f.client, runningSource)).filter(
+        (part) => part.taskId === nestedTaskId,
+      );
+      assert.deepEqual(
+        JSON.parse(
+          (
+            await content(
+              f.client,
+              runningSource,
+              running.find((part) => part.kind === 'arguments')!,
+            )
+          ).toString(),
+        ),
+        { value: 'requested' },
+      );
+      assert.deepEqual(
+        JSON.parse(
+          (
+            await content(
+              f.client,
+              runningSource,
+              running.find((part) => part.kind === 'executed-arguments')!,
+            )
+          ).toString(),
+        ),
+        { value: 'actually executed' },
+      );
+    }
+    releaseChild();
+    await until(async () => completed, Boolean);
+    const completeSource = (await f.client.command('getChat', { target })).run!.transcript!.source;
+    const complete = (await manifest(f.client, completeSource)).filter(
+      (part) => part.taskId === nestedTaskId,
+    );
+    assert.deepEqual(
+      JSON.parse(
+        (
+          await content(
+            f.client,
+            completeSource,
+            complete.find((part) => part.kind === 'arguments')!,
+          )
+        ).toString(),
+      ),
+      { value: 'requested' },
+    );
+    assert.equal(executions, mode === 'modified' ? 1 : 0);
+    if (mode === 'modified') {
+      assert.deepEqual(
+        JSON.parse(
+          (
+            await content(
+              f.client,
+              completeSource,
+              complete.find((part) => part.kind === 'executed-arguments')!,
+            )
+          ).toString(),
+        ),
+        { value: 'actually executed' },
+      );
+    } else {
+      assert(!complete.some((part) => part.kind === 'executed-arguments'));
+      assert(
+        complete.some(
+          (part) =>
+            part.kind === 'result' &&
+            part.state === 'failed' &&
+            part.availability === 'unavailable',
+        ),
+      );
+      assert(
+        complete.some(
+          (part) => part.kind === 'details' && part.text.includes('Controlled nested block'),
+        ),
+      );
+    }
+    await assert.rejects(manifest(f.client, pendingSource), { code: 'Conflict' });
+    releaseParent();
+    await getHarness().waitForTask(Number(requested.parentTaskId) as TaskId, context);
+  });

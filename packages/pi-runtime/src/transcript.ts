@@ -10,6 +10,7 @@ import {
   type EntryRecord,
   type LiveState,
   type ToolTaskInput,
+  type ToolTaskCheckpoint,
 } from '@earendil-works/pi-durable';
 import type { Message, ToolResultMessage } from '@earendil-works/pi-ai';
 import {
@@ -407,13 +408,19 @@ function getNestedOutput(
   const blocks: unknown[] = Array.isArray(value) ? value : [value];
   const isContent = (block: unknown): block is ToolResultMessage['content'][number] => {
     if (!block || typeof block !== 'object' || !('type' in block)) return false;
-    if (block.type === 'text') return 'text' in block && typeof block.text === 'string';
+    if (block.type === 'text')
+      return (
+        'text' in block &&
+        typeof block.text === 'string' &&
+        Object.keys(block).every((key) => ['type', 'text', 'textSignature'].includes(key))
+      );
     return (
       block.type === 'image' &&
       'data' in block &&
       typeof block.data === 'string' &&
       'mimeType' in block &&
-      typeof block.mimeType === 'string'
+      typeof block.mimeType === 'string' &&
+      Object.keys(block).every((key) => ['type', 'data', 'mimeType'].includes(key))
     );
   };
   return blocks.length > 0 && blocks.every(isContent)
@@ -526,7 +533,7 @@ async function getLiveParts(
   for (const tool of capture.live.nestedTools ?? []) {
     checkRead(signal);
     const prefix = `nested.${tool.taskId}.`;
-    const { result } = await readNestedCall(harness, source.target, tool, signal);
+    const { task, input, result } = await readNestedCall(harness, source.target, tool, signal);
     let state: ChatTranscriptPart['state'] = 'running';
     if (tool.status === 'done') {
       state = 'missing-result';
@@ -542,14 +549,27 @@ async function getLiveParts(
       droppedLines: tool.droppedLines ?? 0,
     };
     parts.push(
-      makePart(
-        prefix + 'arguments',
-        'executed-arguments',
-        'tool',
-        JSON.stringify(tool.arguments),
-        common,
-      ),
+      makePart(prefix + 'arguments', 'arguments', 'tool', JSON.stringify(input.call.arguments), {
+        ...common,
+        state: 'requested',
+      }),
     );
+    const checkpoint = task.state.checkpoint as ToolTaskCheckpoint | undefined;
+    let executed: NestedToolSlot['arguments'] | undefined;
+    if (tool.status === 'running' && checkpoint?.phase === 'execute')
+      executed = checkpoint.arguments;
+    // Terminal tasks drop checkpoints; duration proves this slot's final arguments reached execution.
+    else if (tool.status === 'done' && result?.durationMs !== undefined) executed = tool.arguments;
+    if (executed !== undefined)
+      parts.push(
+        makePart(
+          prefix + 'executed',
+          'executed-arguments',
+          'tool',
+          JSON.stringify(executed),
+          common,
+        ),
+      );
     if (tool.status === 'done') {
       if (!result) {
         parts.push(
@@ -582,8 +602,12 @@ async function getLiveParts(
           },
         ],
         prefix,
-      ))
+      )) {
+        checkRead(signal);
         parts.push({ ...part, descriptor: { ...part.descriptor, ...retained } });
+        if (signal && parts.length % 32 === 0)
+          await new Promise<void>((resolve) => setImmediate(resolve));
+      }
       if (result.structuredOutput === undefined)
         parts.push(
           makePart(prefix + 'output', 'result', 'tool', '', {

@@ -80,3 +80,27 @@ Checks for this correction:
 - `git diff --check` — pass.
 
 This is source/controlled SDK evidence. Native/build/package/manual and real provider/SSH checks were not run for the correction.
+
+## Independent review correction: nested argument evidence (P2)
+
+Follow-up to the P1 correction `2e588d7e9cd894881b336a6dc7affb97027bbcf5`, still based on reviewed head `d6e297affa9fe035592ea91e2c2e6402c648496d`. Both pending-hook regressions first failed because requested slot arguments were labeled executed.
+
+Nested requests now expose immutable `ToolTaskInput.call.arguments` as `arguments`. An additional `executed-arguments` part requires a running public execute checkpoint. Once the terminal task has discarded its checkpoint, the public retained result's `durationMs` supplies execution evidence and the slot supplies the final executed arguments. Pi documents `durationMs` as absent when execution never occurred; pending/blocked calls therefore make no executed-input claim. Modified inputs retain both requested and executed values. Interrupted or unavailable evidence is not guessed.
+
+The public controlled regressions hold the child's `beforeTool` hook, then either block execution or change its actual arguments. They verify pending, running, settled and blocked states, including the unchanged requested value, the actual value observed inside `execute`, no executed label on a blocked request, retained block diagnostics and invalidation of the preceding source. The combined correction also keeps non-content program JSON fields inert instead of dropping them through text/image shape recognition, and normalizes large nested results in cancellable slices. No DTO, service, transport, mutation or saved-format changes were needed.
+
+Final combined correction checks (Node `v26.13.0`, Bun `1.4.4`):
+
+| Exact command | Result |
+| --- | --- |
+| `bun run --cwd packages/pi-runtime typecheck` | Pass |
+| `NX_DAEMON=false bun run typecheck` | Pass, 8 tasks |
+| `bun run check:foundation` | Pass, browser/module boundaries and unchanged saved bytes |
+| `node --experimental-strip-types --test packages/contracts/test/chat-schema.test.ts packages/pi-runtime/test/history.test.ts packages/pi-runtime/test/transcript.test.ts apps/desktop/test/chat-session.test.ts` | Pass, 55 tests including all three new nested regressions |
+| `node --experimental-strip-types --test packages/pi-runtime/test/transport.test.ts` | Pass, 40 tests |
+| `bun run test:chat-integration` | Pass, 8 controlled cross-process tests |
+| `bun run lint` | Pass |
+| `bun run format:check` | Pass |
+| `git diff --check` | Pass |
+
+Logs are in the implementation checkout's ignored `test-results/transcript-109/review-fixes/`. The parent separately reported desktop build and renderer checks passing on rebased head `d6e297a`; those checks were not rerun for these corrections. No app was launched, PR opened, review delegated, real provider/SSH used, legacy data accessed or deployment performed. Full root/Pi suites, native/package/manual and physical performance checks were not repeated for the corrections. SDK-owned nested documents still retire with their parent; reads cannot recover data Pi no longer retains.
