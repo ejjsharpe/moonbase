@@ -1,7 +1,14 @@
 import type { AddressInfo } from 'node:net';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { Effect } from 'effect';
-import type { ChatClient } from '@moonbase/contracts/chat';
+import {
+  chatStreamFeature,
+  chatContentChunkBytes,
+  type ChatClient,
+  type ChatStreamRequest,
+  type ChatStreamFrame,
+} from '@moonbase/contracts/chat';
+import { decodeChatStreamRequest } from '@moonbase/contracts/chat-schema';
 import { createHostHealthReply, validateHostHealth } from '@moonbase/ssh/host-health';
 import {
   chatHostVersion,
@@ -43,6 +50,8 @@ export const serveChat = (config: ChatServerConfiguration, client: ChatClient) =
             'InvalidInput',
             'Keep the private host key separate from public chat identities and settings.',
           );
+        const streamClosures = new Set<Promise<void>>();
+        let streamFailure: unknown;
         const grants = new Map<string, { nonce: string; expires: number }>();
         let closed = false,
           active = 0;
@@ -149,7 +158,8 @@ export const serveChat = (config: ChatServerConfiguration, client: ChatClient) =
             }
             return;
           }
-          if (request.method !== 'POST' || request.url !== '/v1/chat') {
+          const streaming = request.url === P.streamPath;
+          if (request.method !== 'POST' || (!streaming && request.url !== '/v1/chat')) {
             response.writeHead(404);
             response.end();
             return;
@@ -171,7 +181,7 @@ export const serveChat = (config: ChatServerConfiguration, client: ChatClient) =
               V.fail('InvalidInput', 'Chat request must be JSON.');
             for await (const chunk of request) {
               length += chunk.length;
-              if (length > P.maximumChatRequestBytes)
+              if (length > (streaming ? P.streamLimits.requestBytes : P.maximumChatRequestBytes))
                 V.fail('InvalidInput', 'Chat input exceeds its transport limit.');
               chunks.push(chunk);
             }
@@ -183,7 +193,25 @@ export const serveChat = (config: ChatServerConfiguration, client: ChatClient) =
               grant.expires <= performance.now() ||
               !P.proof(
                 auth,
-                P.mac(token, 'request', clientNonce, challenge, 'POST', '/v1/chat', P.hash(bytes)),
+                streaming
+                  ? P.streamMac(
+                      token,
+                      'request',
+                      clientNonce,
+                      challenge,
+                      'POST',
+                      P.streamPath,
+                      P.hash(bytes),
+                    )
+                  : P.mac(
+                      token,
+                      'request',
+                      clientNonce,
+                      challenge,
+                      'POST',
+                      '/v1/chat',
+                      P.hash(bytes),
+                    ),
               )
             ) {
               response.writeHead(401);
@@ -193,6 +221,25 @@ export const serveChat = (config: ChatServerConfiguration, client: ChatClient) =
             // No await may separate checking a grant from consuming it.
             grants.delete(challenge);
             authenticated = true;
+            if (streaming) {
+              const input = decodeChatStreamRequest(P.json(bytes));
+              if (!V.sameHost(input.target.host, expected))
+                V.fail('Unauthorized', 'Chat stream target differs from this host.');
+              if (streamClosures.size >= P.streamLimits.subscriptions)
+                V.fail('Unavailable', 'Chat stream capacity is full.');
+              clearTimeout(timer);
+              const work = streamChat(response, client, input, token, clientNonce, challenge);
+              streamClosures.add(work);
+              try {
+                await work;
+              } catch (error) {
+                streamFailure ??= error;
+                throw error;
+              } finally {
+                streamClosures.delete(work);
+              }
+              return;
+            }
             const envelope = V.object(P.json(bytes), ['operation', 'input']),
               operation = V.command(envelope.operation),
               input = V.input(operation, envelope.input);
@@ -214,12 +261,31 @@ export const serveChat = (config: ChatServerConfiguration, client: ChatClient) =
                 ),
                 input,
               );
-              send(200, { ok: true, value }, challenge);
+              send(
+                200,
+                {
+                  ok: true,
+                  value:
+                    operation === 'getChatHost'
+                      ? {
+                          ...value,
+                          features: [
+                            ...new Set([
+                              ...((value as typeof configuration).features ?? []),
+                              chatStreamFeature,
+                            ]),
+                          ],
+                        }
+                      : value,
+                },
+                challenge,
+              );
             } finally {
               response.off('close', cancelRead);
             }
           } catch (error) {
-            if (authenticated)
+            if (response.headersSent) response.destroy();
+            else if (authenticated)
               send(400, { ok: false, error: P.publicError(error, dispatchedOperation) }, challenge);
             else if (!response.destroyed) {
               response.writeHead(400);
@@ -248,6 +314,8 @@ export const serveChat = (config: ChatServerConfiguration, client: ChatClient) =
               server.close((error) => (error ? reject(error) : resolve()));
               server.closeAllConnections();
             });
+            await Promise.allSettled(streamClosures);
+            if (streamFailure) throw streamFailure;
           },
         };
       },
@@ -261,3 +329,124 @@ export const serveChat = (config: ChatServerConfiguration, client: ChatClient) =
     }),
     (server) => releaseResource(() => server.close()),
   );
+
+/** One pending replacement and one being written; watches never trigger an RPC read. */
+async function streamChat(
+  response: ServerResponse,
+  client: ChatClient,
+  input: ChatStreamRequest,
+  token: string,
+  nonce: string,
+  challenge: string,
+) {
+  const controller = new AbortController();
+  let pending: Buffer | undefined, terminal: ReturnType<typeof P.publicError> | undefined;
+  let wake: (() => void) | undefined,
+    active = true,
+    sequence = 0,
+    initial = true;
+  const streamId = P.nonce();
+  const notify = () => {
+    wake?.();
+    wake = undefined;
+  };
+  const stop = () => {
+    active = false;
+    controller.abort();
+    notify();
+  };
+  response.once('close', stop);
+  response.once('error', stop);
+  const deadline = setTimeout(stop, P.streamLimits.establishmentMs);
+  const heartbeat = setInterval(notify, P.streamLimits.heartbeatMs);
+  let close: ReturnType<ChatClient['watch']> | undefined;
+  const write = async <Frame extends ChatStreamFrame>(
+    frame: Frame extends ChatStreamFrame
+      ? Omit<Frame, keyof ChatStreamRequest | 'streamId' | 'sequence'>
+      : never,
+  ) => {
+    if (!active) return;
+    if (!Number.isSafeInteger(sequence)) V.fail('Incompatible', 'Chat stream sequence exhausted.');
+    const bytes = P.encodeFrame(token, nonce, challenge, {
+      ...input,
+      streamId,
+      sequence: sequence++,
+      ...frame,
+    });
+    if (!response.headersSent)
+      response.writeHead(200, { 'content-type': 'application/vnd.moonbase.chat-stream-v1' });
+    if (response.write(bytes)) return;
+    await new Promise<void>((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        response.off('drain', done);
+        controller.signal.removeEventListener('abort', done);
+        resolve();
+      };
+      const timer = setTimeout(stop, P.streamLimits.drainMs);
+      response.once('drain', done);
+      controller.signal.addEventListener('abort', done, { once: true });
+      if (!active) done();
+    });
+  };
+  try {
+    close = client.watch(
+      { target: input.target },
+      (snapshot) => {
+        if (!active || terminal) return;
+        try {
+          pending = Buffer.from(
+            JSON.stringify(V.output('getChat', snapshot, { target: input.target })),
+          );
+        } catch (error) {
+          terminal = P.publicError(error);
+          pending = undefined;
+        }
+        notify();
+      },
+      (error) => {
+        if (active) {
+          terminal = P.publicError(error);
+          pending = undefined;
+          notify();
+        }
+      },
+    );
+    while (active) {
+      if (terminal) {
+        await write({
+          kind: 'error',
+          code: terminal.code === 'Uncertain' ? 'Unavailable' : terminal.code,
+        });
+        break;
+      }
+      if (pending) {
+        const bytes = pending;
+        pending = undefined;
+        for (let offset = 0; offset < bytes.length && active; offset += chatContentChunkBytes)
+          await write({
+            kind: 'snapshot',
+            offset,
+            total: bytes.length,
+            data: bytes.subarray(offset, offset + chatContentChunkBytes).toString('base64'),
+          });
+        initial = false;
+        clearTimeout(deadline);
+      } else {
+        if (!initial) await write({ kind: 'heartbeat' });
+        if (active && !pending && !terminal)
+          await new Promise<void>((resolve) => {
+            wake = resolve;
+          });
+      }
+    }
+  } finally {
+    stop();
+    clearTimeout(deadline);
+    clearInterval(heartbeat);
+    response.off('close', stop);
+    response.off('error', stop);
+    response.destroy();
+    await close?.();
+  }
+}

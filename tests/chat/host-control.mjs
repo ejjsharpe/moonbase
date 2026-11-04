@@ -6,6 +6,9 @@ export function hostControl(client, stats, release) {
   let replyOperation,
     replyGate = Promise.resolve(),
     releaseReply = () => {};
+  let watches = 0,
+    publications = 0,
+    activeWatches = 0;
   const bound = {
     command: async (...args) => {
       commands.push(args[0]);
@@ -22,7 +25,22 @@ export function hostControl(client, stats, release) {
       }
       return result;
     },
-    watch: client.watch,
+    watch: (input, receive, onError) => {
+      watches++;
+      activeWatches++;
+      const close = client.watch(
+        input,
+        (value) => {
+          publications++;
+          receive(value);
+        },
+        onError,
+      );
+      return async () => {
+        await close();
+        activeWatches--;
+      };
+    },
   };
   let end;
   const ended = new Promise((r) => (end = r));
@@ -31,6 +49,9 @@ export function hostControl(client, stats, release) {
       process.send?.({
         id: message.id,
         ...stats(),
+        watches,
+        publications,
+        activeWatches,
         commands: [...commands],
         mutations: [...mutations],
         heldReplies: [...heldReplies],

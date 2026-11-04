@@ -293,6 +293,9 @@ test('compiled remote entry runs on Electron Node24 against the separate Node26 
       const connection=Layer.succeed(ConnectionService,{getConnection:unavailable,connect:unavailable,disconnect:unavailable,watch:()=>Stream.empty,endpoint:()=>Effect.succeed({origin:'http://127.0.0.1:'+config.port,token:config.token,expected:config.host,connectionId:'controlled',health:{...config.host,protocol:1,version:'0.1.0',capabilities:['chat-v0']}})});
       const runtime=ManagedRuntime.make(RemoteChatLive.pipe(Layer.provide(connection))),client=makeChatClient(runtime);
       try{const publicHost=await client.command('getChatHost',{host:config.host});const target=(await client.command('createChat',{session:{host:config.host,actorId:'personal'},requestId:'electron-create',title:'Electron remote'})).conversation.target;
+        if(!publicHost.features?.includes('chat-stream-v1'))throw Error('stream feature missing');
+        let off; await boundedWatch();
+        async function boundedWatch(){await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('stream deadline')),4000);off=client.watch({target},value=>{if(value.observationStatus==='connected'){clearTimeout(timer);resolve();}},reject);});await off();}
         const receipt=await client.command('sendChat',{target,requestId:'electron-send',text:'One controlled input'});
         const recovered=await client.command('getChatSend',{target,requestId:'electron-send'});
         if(JSON.stringify(receipt)!==JSON.stringify(recovered))throw Error('receipt mismatch');
