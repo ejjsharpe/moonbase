@@ -11,6 +11,7 @@ import {
   type LiveState,
   type ToolTaskInput,
   type ToolTaskCheckpoint,
+  type EntryId,
 } from '@earendil-works/pi-durable';
 import type { Message, ToolResultMessage } from '@earendil-works/pi-ai';
 import {
@@ -84,15 +85,28 @@ export async function readEntry(harness: Harness, target: ChatTarget, id: string
     return V.fail('InvalidInput', 'Entry does not belong to this conversation.');
   return entry;
 }
-export async function captureTranscript(harness: Harness, target: ChatTarget) {
+export async function captureTranscript(
+  harness: Harness,
+  target: ChatTarget,
+  cache?: { boundary?: EntryId | null; retired?: boolean },
+) {
   return harness.commit(async (tx) => {
+    if (cache?.retired)
+      V.fail('Persistence', 'Pi live state was replaced. Reopen this conversation.');
     // LiveDoc already exists for every Harness-created conversation; this read changes no fields.
     const live = JSON.parse(
       JSON.stringify(await tx.doc(LiveDoc, cid(target.conversationId))),
     ) as LiveState;
-    const boundary = (
-      await tx.scanEntries({ conversationId: cid(target.conversationId), order: 'descending' }, 1)
-    ).items[0]?.id;
+    const boundary =
+      cache?.boundary !== undefined
+        ? (cache.boundary ?? undefined)
+        : (
+            await tx.scanEntries(
+              { conversationId: cid(target.conversationId), order: 'descending' },
+              1,
+            )
+          ).items[0]?.id;
+    if (cache) cache.boundary = boundary ?? null;
     const task = live.run ? await tx.task(live.run.taskId) : undefined;
     const latest = (
       await tx.scanTasks(

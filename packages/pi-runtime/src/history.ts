@@ -1,7 +1,13 @@
 import { createHash } from 'node:crypto';
 import { realpath, stat } from 'node:fs/promises';
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
-import { type Harness, type Cursor, type EntryRecord } from '@earendil-works/pi-durable';
+import {
+  type Harness,
+  type Cursor,
+  type EntryRecord,
+  type EntryId,
+  type TaskInspection,
+} from '@earendil-works/pi-durable';
 import type {
   ChatCreationSettings,
   ChatInput,
@@ -30,6 +36,18 @@ import {
 } from './transcript.ts';
 
 const getCursorIdentity = (identity: string) => createHash('sha256').update(identity).digest('hex');
+type BlockedReason = Extract<TaskInspection['state'], { kind: 'blocked' }>['reason'];
+export type SnapshotCache = {
+  statusVersion: number;
+  retired?: boolean;
+  boundary?: EntryId | null;
+  history?: {
+    boundary: string | null;
+    page: ChatHistoryPage;
+    continuations: (string | null)[];
+  };
+  status?: { taskId: string; blocked?: BlockedReason };
+};
 const readCursor = (
   value: string | undefined,
   kind: string,
@@ -117,6 +135,8 @@ export async function readHistory(
   encoded?: string,
   base: unknown = {},
   upperEntryId?: string | null,
+  continuations?: (string | null)[],
+  signal?: AbortSignal,
 ): Promise<ChatHistoryPage> {
   if (upperEntryId === null) return { entries: [], olderCursor: null };
   let scan = readCursor(
@@ -127,6 +147,7 @@ export async function readHistory(
   const entries: ChatHistoryPage['entries'] = [];
   let scanned = 0;
   do {
+    checkRead(signal);
     const page = await harness.commit(
       (tx) =>
         tx.scanEntries(
@@ -145,7 +166,7 @@ export async function readHistory(
       scan = undefined;
       break;
     }
-    const entry = await projectEntry(harness, target, row);
+    const entry = await projectEntry(harness, target, row, signal);
     const candidate = {
       ...(base as object),
       entries: [...entries, entry],
@@ -166,6 +187,7 @@ export async function readHistory(
       };
     }
     entries.push(entry);
+    continuations?.push(candidate.olderCursor);
     scan = page.next;
   } while (scan && ++scanned < 32);
   return {
@@ -195,14 +217,43 @@ async function projectSnapshotOnce(
   conversation: ChatSummary,
   pending: number,
   local: boolean,
+  cache?: SnapshotCache,
+  signal?: AbortSignal,
 ): Promise<ChatSnapshot> {
-  const captured = await captureTranscript(harness, target);
+  checkRead(signal);
+  const captured = await captureTranscript(harness, target, cache);
+  checkRead(signal);
   const { live, task, latest } = captured;
   let run: ChatRun | null = null,
-    parked = false;
+    blocked: BlockedReason | undefined;
   if (live?.run) {
     const submissionId = live.run.inputs[0];
-    parked = (task?.restarts ?? 0) >= 5;
+    let status = cache?.status;
+    if (!status || status.taskId !== String(live.run.taskId)) {
+      const version = cache?.statusVersion;
+      const inspection = await harness.inspect(context);
+      checkRead(signal);
+      const active = inspection.tasks.find((item) => item.record.id === live.run!.taskId);
+      // An inspection from another control revision cannot describe this captured run.
+      if (active && JSON.stringify(active.record) === JSON.stringify(task)) {
+        const waiting = new Set<string>([String(active.record.id)]);
+        for (let size = -1; size !== waiting.size;) {
+          size = waiting.size;
+          for (const item of inspection.tasks)
+            if (waiting.has(String(item.record.id)) && item.state.kind === 'waiting')
+              for (const id of item.state.on) waiting.add(String(id));
+        }
+        const stopped = inspection.tasks.find(
+          (item) => waiting.has(String(item.record.id)) && item.state.kind === 'blocked',
+        );
+        status = {
+          taskId: String(active.record.id),
+          ...(stopped?.state.kind === 'blocked' ? { blocked: stopped.state.reason } : {}),
+        };
+        if (cache && cache.statusVersion === version) cache.status = status;
+      }
+    }
+    blocked = status?.blocked;
     const tools = (live.tools ?? []).slice(0, 8).map((tool, index) => {
       const entry = captured.tools[index];
       const result = entry?.model?.find((message) => message.role === 'toolResult');
@@ -240,7 +291,7 @@ async function projectSnapshotOnce(
       };
   }
   let state: ChatSnapshot['state'];
-  if (parked) state = 'failed';
+  if (blocked) state = 'failed';
   else if (run) state = 'running';
   else if (pending) state = 'uncertain';
   else if (latest?.state.status === 'terminal' && latest.state.outcome.status === 'aborted')
@@ -249,9 +300,12 @@ async function projectSnapshotOnce(
     state = 'failed';
   else state = 'idle';
   let message: string | undefined;
-  if (parked)
+  if (blocked === 'restart_limit')
     message =
       'Pi parked this task after repeated interruption. Preserve its receipt and resolve the host failure.';
+  else if (blocked)
+    message =
+      'Pi cannot run this task with the installed host definitions. Preserve its receipt and resolve the host configuration.';
   else if (pending)
     message = 'Pending Send intent is retained; query or retry its original request explicitly.';
   else if (state === 'failed') message = 'Pi could not complete the last submission.';
@@ -277,17 +331,40 @@ async function projectSnapshotOnce(
     state,
     ...(message === undefined ? {} : { message }),
   };
-  return {
-    ...base,
-    ...(await readHistory(
+  checkRead(signal);
+  let history = cache?.history;
+  if (!history || history.boundary !== base.transcriptBoundary) {
+    const continuations: (string | null)[] = [];
+    const page = await readHistory(
       harness,
       identity,
       target,
       undefined,
-      base,
-      captured.boundary ? String(captured.boundary) : null,
-    )),
-  };
+      {},
+      base.transcriptBoundary,
+      continuations,
+      signal,
+    );
+    history = { boundary: base.transcriptBoundary, page, continuations };
+    if (cache) cache.history = history;
+  }
+  checkRead(signal);
+  const page = { ...history.page, entries: [...history.page.entries] };
+  // A growing escaped live preview can shrink the page without rereading retained entries.
+  while (
+    page.entries.length &&
+    Buffer.byteLength(JSON.stringify({ ...base, ...page })) > 250 * 1024
+  ) {
+    page.entries.pop();
+    page.olderCursor = page.entries.length
+      ? history.continuations[page.entries.length - 1]
+      : writeCursor(
+          { start: true },
+          'history',
+          getCursorIdentity(identity) + ':' + target.conversationId,
+        );
+  }
+  return { ...base, ...page };
 }
 export async function projectEntry(
   harness: Harness,
