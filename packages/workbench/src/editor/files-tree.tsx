@@ -124,6 +124,7 @@ export function FilesTree({
           rows[focusIndex] ? `${id}-${encodeURIComponent(rows[focusIndex].path)}` : undefined
         }
         {...stylex.props(filesUI.tree, stylex.defaultMarker())}
+        onFocus={(event) => event.currentTarget.focus()}
         onScroll={(event) => {
           const top = event.currentTarget.scrollTop;
           setGeometry((old) => ({ ...old, top }));
@@ -190,6 +191,7 @@ export function FilesTree({
                   key={row.path}
                   id={`${id}-${encodeURIComponent(row.path)}`}
                   role="treeitem"
+                  tabIndex={-1}
                   aria-level={row.level}
                   aria-posinset={row.position}
                   aria-setsize={row.size}
