@@ -157,6 +157,7 @@ components:
     backgroundColor: "transparent"
     textColor: "{colors.secondary}"
     typography: "{typography.body}"
+    rounded: "{rounded.row}"
     padding: "3px 6px"
     height: "28px"
   file-row-selected:
@@ -307,7 +308,7 @@ Conversation rows have two text lines: title, then working-folder basename, with
 
 ### File actions and imports
 
-Compact SVG actions cover new file, new folder, refresh and reveal; selected-file operations stay in the footer. File-tree rows use the official file/closed-folder/open-folder icons, with the existing expansion state selecting the folder shape. The reserved disclosure column aligns names while preserving tree labels, interaction and 28px row geometry. Ignored entries remain visible with muted text and a Git-ignored accessibility description; there is no hide-ignored toggle. Selection fill, keyboard focus, active-file label and drop outline are distinct states. Sidebar-focused file paste and file drop enter the existing import destination/replacement dialog; text paste in editable fields and Monaco remains ordinary editing.
+Compact SVG actions cover new file, new folder, refresh and reveal; selected-file operations stay in the footer. File-tree rows use the official file/closed-folder/open-folder icons, with the existing expansion state selecting the folder shape. The reserved disclosure column aligns names while preserving tree labels, interaction and 28px row geometry. Hover and selection use the shared row radius. Row focus outlines follow the tree's `:focus-visible` state, so mouse clicks show selection fill while keyboard navigation retains its focus indicator. Ignored entries remain visible with muted text and a Git-ignored accessibility description; there is no hide-ignored toggle. Selection fill, keyboard focus, active-file label and drop outline are distinct states. Sidebar-focused file paste and file drop enter the existing import destination/replacement dialog; text paste in editable fields and Monaco remains ordinary editing.
 
 Desktop supplies clipboard/drop capabilities and does not supply `selectNativeImports`, so its sidebar has no import-picker control. Standalone Workbench keeps the optional injected picker and its shared import flow. This is a composition boundary, not a deletion of the reusable Workbench capability.
 
