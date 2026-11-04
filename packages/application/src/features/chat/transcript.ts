@@ -1,4 +1,5 @@
 import { maximumChatReplyBytes } from '@moonbase/contracts/chat';
+import type { ApplicationError } from '@moonbase/contracts/errors';
 import type {
   ChatClient,
   ChatCommand,
@@ -599,49 +600,62 @@ export class TranscriptOwner {
     const isCurrent = () =>
       this.current(anchor.source) &&
       equal(this.getLiveAnchorIdentity(anchor), this.getLiveAnchorIdentity(this.state.view.anchor));
-    return this.run('view', async (signal) => {
-      try {
-        let evidence: unknown;
-        const iterator = this.iterate(anchor.source, {
-          selection: { partId: anchor.partId, bytes: anchor.bytes, revision: anchor.revision },
-          signal,
-          onProgress: () => {
-            evidence = this.getLiveEvidence(anchor);
-          },
-        });
+    // Publish proof completion only after cleanup, in the owning job's final synchronous fence.
+    let evidence: unknown;
+    let failure: ApplicationError | undefined;
+    return this.run(
+      'view',
+      async (signal) => {
         try {
-          const first = await iterator.next();
-          checkTranscriptRead(signal, isCurrent);
-          if (first.done)
-            throw makeTranscriptFailure('The anchored live part is unavailable.', 'Unavailable');
-          if (!equal(evidence, this.getLiveEvidence(anchor)))
-            throw makeTranscriptFailure(
-              'Live evidence changed after the anchor proof. Reload the selected part.',
-              'Conflict',
-            );
-          this.viewEvidence = evidence;
-          this.state = { ...this.state, viewStatus: 'ready', viewError: null };
-        } finally {
-          await iterator.return(undefined);
+          const iterator = this.iterate(anchor.source, {
+            selection: { partId: anchor.partId, bytes: anchor.bytes, revision: anchor.revision },
+            signal,
+            onProgress: () => {
+              evidence = this.getLiveEvidence(anchor);
+            },
+          });
+          try {
+            const first = await iterator.next();
+            checkTranscriptRead(signal, isCurrent);
+            if (first.done)
+              throw makeTranscriptFailure('The anchored live part is unavailable.', 'Unavailable');
+          } finally {
+            await iterator.return(undefined);
+          }
+        } catch (error) {
+          failure = normalizeApplicationError(error);
         }
-      } catch (error) {
-        if (!signal.aborted && isCurrent()) {
-          const failure = normalizeApplicationError(error);
+      },
+      (signal) => {
+        if (signal.aborted || !isCurrent()) return;
+        if (!failure && !equal(evidence, this.getLiveEvidence(anchor)))
+          failure = makeTranscriptFailure(
+            'Live evidence changed after the anchor proof. Reload the selected part.',
+            'Conflict',
+          );
+        if (failure)
           this.state = {
             ...this.state,
             viewStatus: failure.code === 'Conflict' ? 'source-changed' : 'unavailable',
             viewError: failure.message,
           };
+        else {
+          this.viewEvidence = evidence;
+          this.state = { ...this.state, viewStatus: 'ready', viewError: null };
         }
-      }
-    });
+      },
+    );
   }
   restore() {
     const anchor = this.state.view.anchor;
     if (anchor?.source) return this.restoreLiveView();
     return anchor ? this.around(anchor.entryId, false) : Promise.resolve();
   }
-  private run(name: string, work: (signal: AbortSignal) => Promise<void>) {
+  private run(
+    name: string,
+    work: (signal: AbortSignal) => Promise<void>,
+    finish?: (signal: AbortSignal) => void,
+  ) {
     if (!this.current()) return Promise.resolve();
     const old = this.jobs.get(name);
     if (old) return old.promise;
@@ -662,6 +676,7 @@ export class TranscriptOwner {
         if (this.jobs.get(name) !== job) return;
         this.jobs.delete(name);
         if (this.alive) {
+          finish?.(job.abort.signal);
           this.state = { ...this.state, loading: this.jobs.has('history') };
           this.publish();
         }

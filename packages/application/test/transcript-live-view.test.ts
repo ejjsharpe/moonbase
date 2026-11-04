@@ -156,6 +156,14 @@ async function waitView(controller: ChatController) {
     });
   });
 }
+function runAfterMicrotasks(delay: number, work: () => void) {
+  let turn = 0;
+  const advance = () => {
+    if (turn++ < delay) queueMicrotask(advance);
+    else work();
+  };
+  queueMicrotask(advance);
+}
 
 test('live restoration waits for a fresh coherent observation and proves a retained prefix after append', async (t) => {
   const f = await transcriptController(t, 64),
@@ -194,6 +202,171 @@ test('live restoration waits for a fresh coherent observation and proves a retai
   assert.equal(f.controller.getSnapshot().transcript.viewStatus, 'ready');
   assert.equal(f.calls.length, requests, 'viewport/expansion changes reuse the same prefix proof');
   assert(!f.calls.some((call) => call.operation === 'getChatHistoryAround'));
+});
+
+test('finite appends across proof cleanup and publication never strand live restoration', async () => {
+  const outcomes = { ready: 0, 'source-changed': 0 };
+  for (let delay = 0; delay < 100; delay++) {
+    let close!: () => Promise<void>;
+    const f = await transcriptController({ after: (cleanup) => (close = cleanup) }, 64);
+    try {
+      const live = publishLive(f.fixture, 'captured');
+      const view = captureView(f.controller, live);
+      f.controller.setTranscriptView(view);
+      await f.controller.detach();
+      publishLive(f.fixture, 'captured first append');
+      let scheduled = false;
+      f.handlers.set('getChatTranscriptContent', async (_raw, _signal, fallback) => {
+        const reply = fallback();
+        if (!scheduled) {
+          scheduled = true;
+          runAfterMicrotasks(delay, () =>
+            publishLive(f.fixture, 'captured first append second append'),
+          );
+        }
+        return reply;
+      });
+      await f.controller.start();
+      for (let turn = 0; turn < 10; turn++) await tick();
+      const state = f.controller.getSnapshot().transcript;
+      assert.notEqual(state.viewStatus, 'pending', `stranded after microtask ${delay}`);
+      assert(state.viewStatus === 'ready' || state.viewStatus === 'source-changed');
+      outcomes[state.viewStatus]++;
+      assert.equal(state.loading, false);
+      assert.equal(state.error, null);
+      assert.deepEqual(state.view, view);
+      const reads = f.calls.filter((call) => call.operation === 'getChatTranscriptContent');
+      assert(reads.length <= 4, 'one data read and at most three superseded prefix proofs');
+      for (const read of reads) {
+        const input = read.input as ChatInput<'getChatTranscriptContent'>;
+        assert.deepEqual(input.source, view.anchor.source);
+        assert.deepEqual(input.selection, {
+          partId: view.anchor.partId,
+          bytes: view.anchor.bytes,
+          revision: view.anchor.revision,
+        });
+        assert.equal(input.cursor, undefined);
+      }
+      if (state.viewStatus === 'source-changed') {
+        assert.match(state.viewError!, /proof|evidence/);
+        const snapshot = f.controller.getSnapshot();
+        f.fixture.publish(structuredClone(f.fixture.snapshot));
+        await tick();
+        assert.equal(f.controller.getSnapshot(), snapshot, 'no unbounded automatic proof retry');
+        assert.equal(
+          f.calls.filter((call) => call.operation === 'getChatTranscriptContent').length,
+          reads.length,
+        );
+        f.controller.setTranscriptView(view);
+        await waitView(f.controller);
+        assert.equal(f.controller.getSnapshot().transcript.viewStatus, 'ready');
+      } else assert.equal(state.viewError, null);
+    } finally {
+      await close();
+    }
+  }
+  assert(outcomes.ready > 0);
+  assert(outcomes['source-changed'] > 0, 'the sweep reaches the final evidence fence');
+});
+
+for (const change of ['terminal', 'selection'] as const)
+  test(`proof cleanup cannot overwrite ${change} supersession at final publication`, async () => {
+    for (let delay = 10; delay < 25; delay++) {
+      let close!: () => Promise<void>;
+      const f = await transcriptController({ after: (cleanup) => (close = cleanup) }, 64);
+      try {
+        const view = captureView(f.controller, publishLive(f.fixture, 'captured'));
+        f.controller.setTranscriptView(view);
+        await f.controller.detach();
+        const appended = publishLive(f.fixture, 'captured first append');
+        const replacement = captureView(f.controller, appended, -29);
+        replacement.expanded = ['replacement expansion'];
+        let scheduled = false;
+        f.handlers.set('getChatTranscriptContent', async (_raw, _signal, fallback) => {
+          const reply = fallback();
+          if (!scheduled) {
+            scheduled = true;
+            runAfterMicrotasks(delay, () => {
+              if (change === 'terminal')
+                f.fixture.fail(
+                  new ApplicationError({
+                    code: 'Unauthorized',
+                    message: 'authority lost in cleanup',
+                  }),
+                );
+              else f.controller.setTranscriptView(replacement);
+            });
+          }
+          return reply;
+        });
+        await f.controller.start();
+        for (let turn = 0; turn < 10; turn++) await tick();
+        const current = f.controller.getSnapshot();
+        assert.equal(current.transcript.loading, false);
+        if (change === 'terminal') {
+          assert.equal(current.transcript.observation, 'failed');
+          assert.equal(current.transcript.viewStatus, 'source-changed');
+          assert.match(current.transcript.viewError!, /authority lost in cleanup/);
+          assert.match(current.error!, /^Unauthorized:/);
+          assert.deepEqual(current.transcript.view, view);
+        } else {
+          assert.equal(current.transcript.viewStatus, 'ready');
+          assert.equal(current.transcript.viewError, null);
+          assert.deepEqual(current.transcript.view, replacement);
+        }
+        await tick();
+        assert.equal(f.controller.getSnapshot(), current);
+      } finally {
+        await close();
+      }
+    }
+  });
+
+test('cancelled anchor proof retains actual IO and independent watch cleanup failure', async () => {
+  const f = transcriptFixture(64);
+  const watch = f.chat.watch;
+  f.chat.watch = (...args) => {
+    const close = watch(...args);
+    return async () => {
+      await close();
+      throw new ApplicationError({ code: 'Unavailable', message: 'anchor watch cleanup failed' });
+    };
+  };
+  const app = await createMoonbaseApplication({ chat: async () => f.dependencies });
+  const entered = Promise.withResolvers<void>(),
+    held = Promise.withResolvers<void>();
+  try {
+    const chat = app.chat!;
+    await chat.start();
+    await chat.select(f.target);
+    chat.setTranscriptView(captureView(chat, publishLive(f, 'captured')));
+    f.handlers.set('getChatTranscriptContent', async (_raw, _signal, fallback) => {
+      const reply = fallback();
+      entered.resolve();
+      await held.promise;
+      return reply;
+    });
+    publishLive(f, 'captured append');
+    await entered.promise;
+    const disposal = app.dispose();
+    const rejected = assert.rejects(disposal, /anchor watch cleanup failed/);
+    await tick();
+    assert.equal(app.getSnapshot().phase, 'disposing');
+    assert(f.calls.find((call) => call.operation === 'getChatTranscriptContent')!.signal!.aborted);
+    const current = chat.getSnapshot();
+    held.resolve();
+    await rejected;
+    assert.equal(chat.getSnapshot(), current, 'cancelled proof cannot publish a late failure');
+    assert.equal(app.getSnapshot().phase, 'failed');
+    assert(
+      app
+        .getSnapshot()
+        .cleanup.errors.some((error) => error.includes('anchor watch cleanup failed')),
+    );
+  } finally {
+    held.resolve();
+    await app.dispose().catch(() => {});
+  }
 });
 
 for (const changed of [
