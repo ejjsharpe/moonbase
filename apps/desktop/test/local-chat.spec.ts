@@ -564,7 +564,34 @@ test('transcript local rendering precedes held completion; native Copy/link fail
     expect(layout.mainWidth).toBeGreaterThan(layout.innerWidth - 2);
     const reading = live.getByText('First local chunk 🌔 and second chunk', { exact: true });
     await reading.scrollIntoViewIfNeeded();
-    await expect(reading).toBeInViewport();
+    await page.getByRole('region', { name: 'Chat transcript', exact: true }).hover();
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const gap = await reading.evaluate(
+        (element) =>
+          element.getBoundingClientRect().top -
+          document.querySelector('[data-transcript-chrome]')!.getBoundingClientRect().bottom -
+          4,
+      );
+      if (Math.abs(gap) < 2) break;
+      await page.mouse.wheel(0, gap);
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+          ),
+      );
+    }
+    expect(
+      await reading.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return (
+          rect.top >=
+            document.querySelector('[data-transcript-chrome]')!.getBoundingClientRect().bottom &&
+          rect.bottom <=
+            element.closest('[aria-label="Chat transcript"]')!.getBoundingClientRect().bottom
+        );
+      }),
+    ).toBe(true);
     await captureNative(
       app,
       page,
