@@ -225,10 +225,10 @@ test('oversized authenticated envelopes remain bounded before dispatch', async (
 
 test('production remote/server route shared commands and immutable retries without key disclosure', async (t) => {
   const f = await setup(t);
-  assert.deepEqual(
-    await f.remote.command('getChatHost', { host }),
-    await f.client.command('getChatHost', { host }),
-  );
+  assert.deepEqual(await f.remote.command('getChatHost', { host }), {
+    ...(await f.client.command('getChatHost', { host })),
+    features: ['transcript-v1', 'chat-stream-v1'],
+  });
   const created = await f.remote.command('createChat', {
       session,
       requestId: 'create',

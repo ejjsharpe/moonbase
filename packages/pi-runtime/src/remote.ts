@@ -1,10 +1,20 @@
-import { Effect, Layer, Stream, Schedule, Exit, Cause } from 'effect';
+import { Effect, Layer, Stream, Schedule, Exit, Cause, Queue } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/workspace';
-import type { ChatCommand, ChatInput, ChatOutput, ChatTarget } from '@moonbase/contracts/chat';
+import {
+  chatStreamFeature,
+  type ChatCommand,
+  type ChatInput,
+  type ChatOutput,
+  type ChatTarget,
+  type ChatSnapshot,
+} from '@moonbase/contracts/chat';
+import { decodeChatStreamFrame } from '@moonbase/contracts/chat-schema';
+import { releaseResource } from '@moonbase/effect';
 import {
   ChatService,
   ConnectionService,
   type ChatServiceShape,
+  type VerifiedChatEndpoint,
 } from '@moonbase/contracts/services';
 import { validateHostHealth } from '@moonbase/ssh/host-health';
 import * as P from './protocol.ts';
@@ -261,6 +271,118 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
         if (Exit.isFailure(attempt)) return yield* Effect.failCause(attempt.cause);
         return attempt.value;
       });
+    let observers = 0;
+    const watch = (target: ChatTarget) =>
+      Stream.unwrap(
+        Effect.gen(function* () {
+          yield* Effect.try({ try: () => V.target(target), catch: ApplicationError.fromUnknown });
+          const endpoint = yield* connections.endpoint({ host: target.host });
+          const assertGeneration = Effect.flatMap(
+            connections.endpoint({ host: target.host }),
+            (current) =>
+              current.connectionId === endpoint.connectionId &&
+              current.origin === endpoint.origin &&
+              current.token === endpoint.token &&
+              V.sameHost(current.expected, endpoint.expected)
+                ? Effect.void
+                : Effect.fail(
+                    new ApplicationError({
+                      code: 'Unavailable',
+                      message: 'Chat stream connection generation changed.',
+                    }),
+                  ),
+          );
+          const configuration = yield* call('getChatHost', { host: target.host });
+          yield* assertGeneration;
+          if (!configuration.features?.includes(chatStreamFeature))
+            return Stream.fromEffectSchedule(
+              call('getChat', { target }),
+              Schedule.spaced('250 millis'),
+            );
+          return Stream.callback<ChatSnapshot, ApplicationError>(
+            (queue) =>
+              Effect.gen(function* () {
+                yield* Effect.acquireRelease(
+                  Effect.try({
+                    try: () => {
+                      if (observers >= P.streamLimits.subscriptions)
+                        V.fail('Unavailable', 'Chat stream capacity is full.');
+                      observers++;
+                    },
+                    catch: ApplicationError.fromUnknown,
+                  }),
+                  () =>
+                    Effect.sync(() => {
+                      observers--;
+                    }),
+                );
+                let last: ChatSnapshot | undefined;
+                const publish = (snapshot: ChatSnapshot) => {
+                  last = snapshot;
+                  Queue.offerUnsafe(queue, snapshot);
+                };
+                let defects: Cause.Cause<never> = Cause.empty;
+                // Registered before child scopes so their actual cleanup settles before this check.
+                yield* Effect.addFinalizer(() =>
+                  defects.reasons.length ? Effect.failCause(defects) : Effect.void,
+                );
+                const forkObservation = (effect: Effect.Effect<unknown, ApplicationError>) =>
+                  effect.pipe(
+                    Effect.onExit((exit) =>
+                      Effect.sync(() => {
+                        if (Exit.isFailure(exit))
+                          defects = Cause.combine(
+                            defects,
+                            Cause.fromReasons<never>(exit.cause.reasons.filter(Cause.isDieReason)),
+                          );
+                      }),
+                    ),
+                    Effect.catchCause((cause) => {
+                      const failure = Cause.fromReasons(cause.reasons.filter(Cause.isFailReason));
+                      return failure.reasons.length
+                        ? Queue.failCause(queue, failure)
+                        : Queue.end(queue);
+                    }),
+                    Effect.forkScoped,
+                  );
+                // Connection publications abort a held read without introducing a polling timer.
+                yield* forkObservation(
+                  connections.watch().pipe(Stream.runForEach(() => assertGeneration)),
+                );
+                yield* forkObservation(
+                  Effect.gen(function* () {
+                    for (let attempt = 0; ; attempt++) {
+                      yield* assertGeneration;
+                      const result = yield* Effect.exit(
+                        readStream(endpoint, target, assertGeneration, publish),
+                      );
+                      if (Exit.isSuccess(result)) return;
+                      if (Cause.hasInterruptsOnly(result.cause))
+                        return yield* Effect.failCause(result.cause);
+                      yield* assertGeneration.pipe(
+                        Effect.catchCause((cause) =>
+                          Effect.failCause(Cause.combine(result.cause, cause)),
+                        ),
+                      );
+                      if (last) publish({ ...last, observationStatus: 'reconnecting' });
+                      const transient = result.cause.reasons.every(
+                        (reason) =>
+                          Cause.isFailReason(reason) && reason.error.code === 'Unavailable',
+                      );
+                      if (!transient || attempt >= P.streamLimits.reconnectMs.length)
+                        return yield* Effect.failCause(result.cause);
+                      yield* Effect.sleep(P.streamLimits.reconnectMs[attempt]);
+                    }
+                  }),
+                );
+              }),
+            { bufferSize: 1, strategy: 'sliding' },
+          ).pipe(
+            // A failed queue drains buffered replacements before surfacing its error.
+            Stream.mapEffect((snapshot) => Effect.as(assertGeneration, snapshot)),
+          );
+        }),
+      );
     return {
       getChatHost: (d) => call('getChatHost', d),
       listChats: (d) => call('listChats', d),
@@ -272,8 +394,267 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
       sendChat: (d) => call('sendChat', d),
       getChatSend: (d) => call('getChatSend', d),
       stopChat: (d) => call('stopChat', d),
-      watch: ({ target }) =>
-        Stream.fromEffectSchedule(call('getChat', { target }), Schedule.spaced('250 millis')),
+      watch: ({ target }) => watch(target),
     } satisfies ChatServiceShape;
   }),
 );
+
+function readStream(
+  endpoint: VerifiedChatEndpoint,
+  target: ChatTarget,
+  assertGeneration: Effect.Effect<void, ApplicationError>,
+  publish: (snapshot: ChatSnapshot) => void,
+) {
+  return Effect.acquireUseRelease(
+    Effect.sync(() => {
+      const controller = new AbortController();
+      const state = {
+        controller,
+        timer: setTimeout(() => controller.abort(), P.streamLimits.establishmentMs),
+      };
+      return state;
+    }),
+    (state) =>
+      Effect.gen(function* () {
+        const nonce = P.nonce(),
+          origin = P.origin(endpoint);
+        const request = (path: string, init: RequestInit) =>
+          Effect.tryPromise({
+            try: (signal) =>
+              fetch(origin + path, {
+                ...init,
+                redirect: 'error',
+                credentials: 'omit',
+                cache: 'no-store',
+                signal: AbortSignal.any([signal, state.controller.signal]),
+              }),
+            catch: () =>
+              new ApplicationError({
+                code: 'Unavailable',
+                message: 'Chat stream transport was lost.',
+              }),
+          });
+        const response = yield* request('/v1/chat/challenge', {
+          headers: {
+            'X-Moonbase-Nonce': nonce,
+            Authorization: `Moonbase-RPC-HMAC-SHA256 ${P.mac(endpoint.token, 'challenge-request', nonce, 'GET', '/v1/chat/challenge')}`,
+          },
+        });
+        const challengeBytes = yield* P.responseBytes(response, 8192);
+        const challenge = yield* Effect.try({
+          try: () => {
+            if (
+              response.headers.get('x-moonbase-nonce') !== nonce ||
+              !P.proof(
+                response.headers.get('x-moonbase-proof'),
+                P.mac(
+                  endpoint.token,
+                  'challenge-response',
+                  nonce,
+                  response.status,
+                  P.hash(challengeBytes),
+                ),
+              )
+            )
+              V.fail('Unauthorized', 'Chat stream challenge could not be authenticated.');
+            if (response.status !== 200)
+              V.fail('Unavailable', 'Chat stream challenge is unavailable.');
+            const data = V.object(P.json(challengeBytes));
+            validateHostHealth(data.health, target.host);
+            if (!P.validNonce(data.challenge))
+              V.fail('Incompatible', 'Chat stream challenge is invalid.');
+            return data.challenge as string;
+          },
+          catch: ApplicationError.fromUnknown,
+        });
+        yield* assertGeneration;
+        const body = JSON.stringify({ target, connectionId: endpoint.connectionId });
+        const stream = yield* request(P.streamPath, {
+          method: 'POST',
+          body,
+          headers: {
+            'content-type': 'application/json',
+            'X-Moonbase-Nonce': nonce,
+            'X-Moonbase-Challenge': challenge,
+            Authorization: `Moonbase-RPC-HMAC-SHA256 ${P.streamMac(endpoint.token, 'request', nonce, challenge, 'POST', P.streamPath, P.hash(body))}`,
+          },
+        });
+        if (stream.status !== 200) {
+          const bytes = yield* P.responseBytes(stream, 8192);
+          yield* Effect.try({
+            try: () => {
+              if (
+                stream.headers.get('x-moonbase-nonce') !== nonce ||
+                stream.headers.get('x-moonbase-challenge') !== challenge ||
+                !P.proof(
+                  stream.headers.get('x-moonbase-proof'),
+                  P.mac(endpoint.token, 'response', nonce, challenge, stream.status, P.hash(bytes)),
+                )
+              )
+                V.fail('Unauthorized', 'Chat stream failure could not be authenticated.');
+              const data = V.object(P.json(bytes)),
+                error = V.object(data.error);
+              if (!P.codes.includes(error.code as (typeof P.codes)[number]))
+                V.fail('Incompatible', 'Chat stream error is invalid.');
+              throw new ApplicationError({
+                code: error.code as (typeof P.codes)[number],
+                message: P.publicError(
+                  new ApplicationError({
+                    code: error.code as (typeof P.codes)[number],
+                    message: '',
+                  }),
+                ).message,
+              });
+            },
+            catch: ApplicationError.fromUnknown,
+          });
+        }
+        let readFailure: { error: unknown } | undefined;
+        yield* Effect.acquireUseRelease(
+          Effect.try({
+            try: () => {
+              if (
+                stream.headers.get('content-type') !== 'application/vnd.moonbase.chat-stream-v1' ||
+                !stream.body
+              )
+                V.fail('Incompatible', 'Chat stream response is incompatible.');
+              return stream.body!.getReader();
+            },
+            catch: ApplicationError.fromUnknown,
+          }),
+          (reader) =>
+            Effect.gen(function* () {
+              const decoder = new P.FrameDecoder();
+              let sequence = 0,
+                streamId: string | undefined,
+                snapshot: Buffer | undefined,
+                used = 0,
+                initial = true;
+              while (true) {
+                const part = yield* Effect.tryPromise({
+                  try: () => reader.read(),
+                  catch: (error) => {
+                    readFailure = { error };
+                    return new ApplicationError({
+                      code: 'Unavailable',
+                      message: 'Chat stream was interrupted.',
+                    });
+                  },
+                });
+                if (part.done)
+                  return yield* Effect.fail(
+                    new ApplicationError({
+                      code: 'Unavailable',
+                      message: decoder.partial
+                        ? 'Chat stream ended in a partial frame.'
+                        : 'Chat stream ended; resynchronizing.',
+                    }),
+                  );
+                for (const frame of decoder.push(part.value)) {
+                  yield* assertGeneration;
+                  const update = yield* Effect.try({
+                    try: () => {
+                      if (
+                        !P.proof(
+                          frame.proof,
+                          P.streamMac(
+                            endpoint.token,
+                            'frame',
+                            nonce,
+                            challenge,
+                            P.hash(frame.body),
+                          ),
+                        )
+                      )
+                        V.fail('Unauthorized', 'Chat stream frame could not be authenticated.');
+                      let value;
+                      try {
+                        value = decodeChatStreamFrame(P.json(frame.body));
+                      } catch {
+                        return V.fail('Incompatible', 'Chat stream frame is invalid.');
+                      }
+                      if (
+                        !V.sameTarget(value.target, target) ||
+                        value.connectionId !== endpoint.connectionId ||
+                        value.sequence !== sequence++ ||
+                        (streamId !== undefined && value.streamId !== streamId)
+                      )
+                        V.fail('Incompatible', 'Chat stream authority or sequence changed.');
+                      streamId = value.streamId;
+                      if (value.kind === 'error')
+                        throw new ApplicationError({
+                          code: value.code,
+                          message: P.publicError(
+                            new ApplicationError({ code: value.code, message: '' }),
+                          ).message,
+                        });
+                      if (value.kind === 'heartbeat') {
+                        if (initial || snapshot)
+                          V.fail('Incompatible', 'Chat stream heartbeat interrupted a snapshot.');
+                        return;
+                      }
+                      if (!snapshot) {
+                        if (value.offset !== 0)
+                          V.fail(
+                            'Incompatible',
+                            'Chat stream snapshot starts with a missing fragment.',
+                          );
+                        snapshot = Buffer.allocUnsafe(value.total);
+                        used = 0;
+                      }
+                      const bytes = Buffer.from(value.data, 'base64');
+                      if (
+                        value.total !== snapshot.length ||
+                        value.offset !== used ||
+                        used + bytes.length > snapshot.length
+                      )
+                        V.fail('Incompatible', 'Chat stream snapshot fragments are discontinuous.');
+                      snapshot.set(bytes, used);
+                      used += bytes.length;
+                      if (used === snapshot.length) {
+                        const result = V.output('getChat', P.json(snapshot), { target });
+                        snapshot = undefined;
+                        initial = false;
+                        return { ...result, observationStatus: 'connected' as const };
+                      }
+                    },
+                    catch: (error) =>
+                      ApplicationError.is(error)
+                        ? error
+                        : new ApplicationError({
+                            code: 'Incompatible',
+                            message: 'Chat stream frame is invalid.',
+                          }),
+                  });
+                  if (!initial) {
+                    clearTimeout(state.timer);
+                    state.timer = setTimeout(() => state.controller.abort(), P.streamLimits.idleMs);
+                  }
+                  if (update) {
+                    yield* assertGeneration;
+                    yield* Effect.sync(() => publish(update));
+                  }
+                }
+              }
+            }),
+          (reader) =>
+            releaseResource(async () => {
+              const cancellation = reader.cancel();
+              state.controller.abort();
+              try {
+                await cancellation;
+              } catch (error) {
+                if (!readFailure || error !== readFailure.error) throw error;
+              } finally {
+                reader.releaseLock();
+              }
+            }),
+        );
+      }),
+    (state) =>
+      Effect.sync(() => {
+        clearTimeout(state.timer);
+        state.controller.abort();
+      }),
+  );
+}

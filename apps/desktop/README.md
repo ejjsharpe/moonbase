@@ -134,3 +134,5 @@ Build-generated resources/notices live in ignored `dist`/`release`. Notices come
 Human acceptance remains **pending**. Real picker/clipboard/drag gestures, Finder Put Back, VoiceOver/full accessibility, performance, physical durability, Intel execution and signing/notarization/distribution require separate qualification. The previously observed rapid Open→Find dismissal remains unexplained; controlled tests do not establish its resolution.
 
 Chat IPC authorizes nested transcript `source.target` identities as well as ordinary targets before dispatching the optional [content and around-entry reads](../../packages/contracts/docs/TRANSCRIPTS.md). The browser demo remains an explicit legacy capability until its transcript presentation is supplied.
+
+Remote snapshot validation passes optional `observationStatus` through the existing browser watch bridge. Document release still fences late snapshots and awaits the captured watch close; #110 owns reconnecting presentation. This transport change adds no endpoint or credential authority to renderer clients.
