@@ -136,3 +136,5 @@ Human acceptance remains **pending**. Real picker/clipboard/drag gestures, Finde
 Chat IPC authorizes nested transcript `source.target` identities as well as ordinary targets before dispatching the optional [content and around-entry reads](../../packages/contracts/docs/TRANSCRIPTS.md). The browser demo remains an explicit legacy capability until its transcript presentation is supplied.
 
 Remote snapshot validation passes optional `observationStatus` through the existing browser watch bridge. Document release still fences late snapshots and awaits the captured watch close; #110 owns reconnecting presentation. This transport change adds no endpoint or credential authority to renderer clients.
+
+Chat consumes the application controller’s oldest-first canonical transcript window and earlier/later navigation, with explicit upgrade, reconnect-stale and read-error notices. Markdown, native Copy and DOM anchor/scroll behavior remain the subsequent presentation work; desktop no longer merges two arrays or replaces a single older page.

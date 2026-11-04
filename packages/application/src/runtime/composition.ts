@@ -9,6 +9,7 @@ import {
   type EditorModel,
 } from '../features/editor/index.ts';
 import {
+  TranscriptViewMemory,
   makeChatController,
   makeChatModel,
   type ChatController,
@@ -73,6 +74,7 @@ class Application {
     return this.controllers;
   }
   private instances: EditorInstance[] = [];
+  private transcriptMemory = new TranscriptViewMemory();
   private currentChat: ChatInstance | null = null;
   private runtime = ManagedRuntime.make(Layer.empty);
   private scope = Scope.makeUnsafe('parallel');
@@ -246,7 +248,11 @@ class Application {
       if (dependencies && !this.releasing()) {
         model = await runApplicationEffect(
           this.runtime,
-          makeChatModel(dependencies).pipe(Effect.provideService(Scope.Scope, scope)),
+          makeChatModel({
+            ...dependencies,
+            backendId: this.targetId ?? dependencies.backendId ?? 'chat',
+            transcriptMemory: this.transcriptMemory,
+          }).pipe(Effect.provideService(Scope.Scope, scope)),
         );
         const controller = makeChatController(this.runtime, model);
         if (!this.releasing()) {
@@ -414,6 +420,7 @@ class Application {
     const result = Promise.withResolvers<void>();
     this.disposal = result.promise;
     this.phase = 'disposing';
+    this.transcriptMemory.clear();
     this.fence(false);
     for (const { model, controller, scope } of this.instances)
       void this.cleanup.close(`editor:${model.clientId}`, () =>

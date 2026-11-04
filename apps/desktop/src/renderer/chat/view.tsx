@@ -99,9 +99,7 @@ export function ChatView({
     if (follow.current && transcript.current)
       transcript.current.scrollTop = transcript.current.scrollHeight;
   }, [snapshot, state.pending.length]);
-  const entries = [...(snapshot?.entries ?? []), ...state.older]
-    .filter((e, i, all) => all.findIndex((q) => q.id === e.id) === i)
-    .reverse();
+  const entries = state.transcript.entries;
   const sidebar = (
     <aside
       aria-label="Saved chats"
@@ -260,10 +258,11 @@ export function ChatView({
               )}
             </div>
             <div {...stylex.props(controls.row)}>
-              {run && (
+              {(run || !state.transcript.atLatest) && (
                 <Button
                   {...stylex.props(controls.button, controls.quietButton)}
                   onClick={() => {
+                    void controller.jumpToLatest();
                     follow.current = true;
                     if (transcript.current)
                       transcript.current.scrollTop = transcript.current.scrollHeight;
@@ -392,10 +391,10 @@ export function ChatView({
               )}
               {state.selected && snapshot && (
                 <div {...stylex.props(styles.measure)}>
-                  {state.olderCursor && (
+                  {state.transcript.earlier && (
                     <Button
                       {...stylex.props(controls.button)}
-                      disabled={!connected || busy('history')}
+                      disabled={!connected || state.transcript.loading}
                       onClick={() => {
                         follow.current = false;
                         void controller.older();
@@ -403,10 +402,27 @@ export function ChatView({
                       Read older page
                     </Button>
                   )}
-                  {state.older.length > 0 && (
+                  {state.transcript.later && (
+                    <Button
+                      {...stylex.props(controls.button)}
+                      disabled={!connected || state.transcript.loading}
+                      onClick={() => void controller.later()}>
+                      Read later page
+                    </Button>
+                  )}
+                  {state.transcript.error && (
+                    <p role="alert" {...stylex.props(styles.warning)}>
+                      {state.transcript.error}
+                    </p>
+                  )}
+                  {state.transcript.observation === 'reconnecting' && (
+                    <p role="status" {...stylex.props(styles.small)}>
+                      Reconnecting. Transcript content is stale.
+                    </p>
+                  )}
+                  {state.transcript.capabilities.transcript === 'legacy' && (
                     <p {...stylex.props(styles.small)}>
-                      One older page shown. Reading another replaces it; stored history remains on
-                      the host.
+                      Upgrade this host for complete transcript reads.
                     </p>
                   )}
                   {entries.map((e) => (

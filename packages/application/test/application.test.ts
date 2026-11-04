@@ -615,6 +615,18 @@ test('prepared controllers block all IO and state admissions while teardown sett
     await current.select(chat.target);
     await current.closeView();
     await current.older();
+    await current.later();
+    await current.jumpToEntry('late');
+    await current.jumpToLatest();
+    current.setTranscriptView({ anchor: { entryId: 'late', offset: 0 }, expanded: ['late'] });
+    const source = { kind: 'entry' as const, target: chat.target, entryId: 'late' };
+    await current.loadTranscriptManifest(source);
+    await current.loadTranscriptPart(source, {
+      partId: 'late',
+      bytes: 0,
+      revision: '0'.repeat(64),
+    });
+    assert.throws(() => current.iterateTranscript(source), { code: 'Cancelled' });
     await current.create('late');
     await current.send();
     await current.stop();
@@ -1060,5 +1072,158 @@ test('final Quit confirmation runs with admissions fenced and Keep running resto
     assert.equal(confirms, 2);
   } finally {
     await application.dispose();
+  }
+});
+
+test('transcript anchors/expansions belong to application lifetime and exact backend identity, never saved drafts', async () => {
+  const { transcriptFixture } = await import('./transcript-fixture.ts');
+  const a = transcriptFixture(),
+    b = transcriptFixture();
+  const options = {
+    chatTargets: [
+      { id: 'backend-A', label: 'A', acquire: async () => a.dependencies },
+      { id: 'backend-B', label: 'B', acquire: async () => b.dependencies },
+    ],
+  };
+  const app = await createMoonbaseApplication(options);
+  try {
+    let chat = app.chat!;
+    await chat.start();
+    await chat.select(a.target);
+    await chat.jumpToEntry('e320');
+    chat.setTranscriptView({
+      anchor: { entryId: 'e320', partId: 'm0.b0', offset: -37.5 },
+      expanded: ['tool-1', 'thought-2'],
+    });
+    const saved = a.storage.value!;
+    assert(
+      !saved.includes('anchor') && !saved.includes('expanded') && !saved.includes('transcript'),
+    );
+    await chat.detach();
+    await chat.start();
+    assert.deepEqual(chat.getSnapshot().transcript.view.anchor, {
+      entryId: 'e320',
+      partId: 'm0.b0',
+      offset: -37.5,
+    });
+    assert(chat.getSnapshot().transcript.entries.some((entry) => entry.id === 'e320'));
+    chat = (await app.selectChatTarget('backend-B'))!;
+    await chat.start();
+    await chat.select(b.target);
+    assert.equal(
+      chat.getSnapshot().transcript.atLatest,
+      true,
+      'same public IDs on another backend do not share anchors',
+    );
+    await chat.jumpToEntry('e200');
+    chat = (await app.selectChatTarget('backend-A'))!;
+    await chat.start();
+    assert.deepEqual(chat.getSnapshot().transcript.view, {
+      anchor: { entryId: 'e320', partId: 'm0.b0', offset: -37.5 },
+      expanded: ['tool-1', 'thought-2'],
+    });
+    assert(app.closeChat());
+    await cleanupSettled(app);
+    chat = (await app.openChat())!;
+    await chat.start();
+    assert.equal(chat.getSnapshot().transcript.view.anchor!.entryId, 'e320');
+    assert.equal(a.storage.value, saved);
+  } finally {
+    await app.dispose();
+  }
+  const restarted = await createMoonbaseApplication(options);
+  try {
+    await restarted.chat!.start();
+    assert.equal(restarted.chat!.getSnapshot().selected!.conversationId, a.target.conversationId);
+    assert.equal(restarted.chat!.getSnapshot().transcript.atLatest, true);
+    assert.equal(restarted.chat!.getSnapshot().transcript.view.anchor, null);
+    assert.equal(restarted.chat!.getSnapshot().transcript.entries.at(-1)!.id, 'e639');
+  } finally {
+    await restarted.dispose();
+  }
+});
+
+test('independent failing watch cleanup remains observable while cancelled transcript IO settles', async () => {
+  const { transcriptFixture, part } = await import('./transcript-fixture.ts');
+  const f = transcriptFixture(1),
+    gate = Promise.withResolvers<void>(),
+    entered = Promise.withResolvers<void>();
+  f.handlers.set('getChatTranscriptContent', async (_input, _signal, fallback) => {
+    entered.resolve();
+    await gate.promise;
+    return fallback();
+  });
+  f.chat.watch = () => async () => {
+    throw new ApplicationError({ code: 'Unavailable', message: 'independent close failed' });
+  };
+  const app = await createMoonbaseApplication({ chat: async () => f.dependencies });
+  try {
+    const chat = app.chat!;
+    await chat.start();
+    await chat.select(f.target);
+    const descriptor = part('m0.b0', 'same text');
+    const read = chat.loadTranscriptPart(f.entries[0].transcript!.source, {
+      partId: descriptor.partId,
+      bytes: descriptor.bytes,
+      revision: descriptor.revision,
+    });
+    await entered.promise;
+    const disposal = app.dispose();
+    const rejected = assert.rejects(disposal, /independent close failed/);
+    await read;
+    assert.equal(
+      app.getSnapshot().phase,
+      'disposing',
+      'cancelled waits release promptly but actual IO stays root owned',
+    );
+    gate.resolve();
+    await rejected;
+    assert.equal(app.getSnapshot().phase, 'failed');
+    assert(
+      app.getSnapshot().cleanup.errors.some((error) => error.includes('independent close failed')),
+    );
+  } finally {
+    gate.resolve();
+    await app.dispose().catch(() => {});
+  }
+});
+
+test('named-target replacement fences a cancelled late read failure and retains cleanup before reacquisition', async () => {
+  const { transcriptFixture } = await import('./transcript-fixture.ts');
+  const a = transcriptFixture(1),
+    b = transcriptFixture(1);
+  const entered = Promise.withResolvers<void>(),
+    held = Promise.withResolvers<void>();
+  a.handlers.set('getChatTranscriptContent', async () => {
+    entered.resolve();
+    await held.promise;
+    throw new ApplicationError({ code: 'Unavailable', message: 'late A read failed' });
+  });
+  const app = await createMoonbaseApplication({
+    chatTargets: [
+      { id: 'A', label: 'A', acquire: async () => a.dependencies },
+      { id: 'B', label: 'B', acquire: async () => b.dependencies },
+    ],
+  });
+  try {
+    const first = app.chat!;
+    await first.start();
+    await first.select(a.target);
+    const read = first.loadTranscriptManifest(a.entries[0].transcript!.source);
+    await entered.promise;
+    const switching = app.selectChatTarget('B');
+    await read;
+    assert.equal(app.chat, null, 'old panel is removed while its IO is still settling');
+    assert(app.getSnapshot().cleanup.pending.includes('chat'));
+    held.resolve();
+    const next = (await switching)!;
+    await next.start();
+    await next.select(b.target);
+    assert.equal(next.getSnapshot().transcript.error, null);
+    assert.equal(next.getSnapshot().error, null);
+    assert.equal(app.getSnapshot().cleanup.errors.length, 0);
+  } finally {
+    held.resolve();
+    await app.dispose();
   }
 });
