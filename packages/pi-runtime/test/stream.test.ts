@@ -875,3 +875,123 @@ test('a held public service consumer never dequeues a buffered snapshot after co
     await completion;
   }
 });
+
+for (const reason of ['close', 'generation'] as const)
+  test(`public watch ${reason} retains and awaits independent reader cleanup failure`, async (t) => {
+    const f = await fixture(t),
+      original = fetch,
+      release = Promise.withResolvers<void>();
+    let entered = false,
+      cancellations = 0;
+    t.mock.method(
+      globalThis,
+      'fetch',
+      async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+        const response = await original(url, init);
+        if (!String(url).endsWith(P.streamPath)) return response;
+        const reader = response.body!.getReader(),
+          cancel = reader.cancel.bind(reader);
+        t.mock.method(reader, 'cancel', async () => {
+          cancellations++;
+          await cancel();
+          entered = true;
+          await release.promise;
+          throw new ApplicationError({
+            code: 'Persistence',
+            message: 'Independent reader release failed',
+          });
+        });
+        t.mock.method(response.body!, 'getReader', () => reader);
+        return response;
+      },
+    );
+    const w = f.observe();
+    await wait(() => w.views.length === 1);
+    let settled = false;
+    const closing =
+      reason === 'close'
+        ? w.close().then(
+            () => {
+              settled = true;
+              return undefined;
+            },
+            (error) => {
+              settled = true;
+              return error;
+            },
+          )
+        : undefined;
+    if (reason === 'generation') f.replace();
+    try {
+      await wait(() => entered);
+      assert.equal(settled, false);
+      assert.equal(w.errors.length, 0);
+      assert(
+        (await f.client.command('getChatHost', { host })).features?.includes('chat-stream-v1'),
+      );
+      release.resolve();
+      if (reason === 'close') {
+        const error = await closing;
+        assert(ApplicationError.is(error));
+        assert.equal(error.code, 'Persistence');
+        assert.equal(error.message, 'Independent reader release failed');
+      } else {
+        await wait(() => w.errors.length === 1);
+        assert.equal(w.errors[0].code, 'Unavailable');
+        assert.match(w.errors[0].message, /generation changed/);
+        assert.match(w.errors[0].message, /Independent reader release failed/);
+        assert.equal(w.errors[0].message.match(/Independent reader release failed/g)?.length, 1);
+        await assert.rejects(w.close(), /Independent reader release failed/);
+      }
+      assert.equal(cancellations, 1);
+      await wait(() => f.listeners.size === 0);
+      f.publish({ ...snapshot, message: 'late after failed release' });
+      assert.equal(w.views.length, 1);
+    } finally {
+      release.resolve();
+      await closing;
+    }
+  });
+
+test('a reader cancellation repeating its transport error is not a second cleanup failure', async (t) => {
+  const f = await fixture(t),
+    original = fetch;
+  let attempts = 0,
+    cancellations = 0;
+  t.mock.method(
+    globalThis,
+    'fetch',
+    async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      const response = await original(url, init);
+      if (!String(url).endsWith(P.streamPath)) return response;
+      attempts++;
+      const reader = response.body!.getReader(),
+        read = reader.read.bind(reader),
+        cancel = reader.cancel.bind(reader),
+        failure = Error('private transport diagnostic');
+      let initial = true;
+      t.mock.method(reader, 'read', () => {
+        if (initial) {
+          initial = false;
+          return read();
+        }
+        return Promise.reject(failure);
+      });
+      t.mock.method(reader, 'cancel', async () => {
+        cancellations++;
+        await cancel();
+        throw failure;
+      });
+      t.mock.method(response.body!, 'getReader', () => reader);
+      return response;
+    },
+  );
+  const w = f.observe();
+  await wait(() => w.errors.length === 1);
+  assert.equal(attempts, 4);
+  assert.equal(cancellations, 4);
+  assert.equal(w.errors[0].code, 'Unavailable');
+  assert.equal(w.errors[0].message, 'Chat stream was interrupted.');
+  assert.equal(w.views.at(-1)!.observationStatus, 'reconnecting');
+  await wait(() => f.listeners.size === 0);
+});

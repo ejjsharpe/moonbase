@@ -321,37 +321,59 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
                   last = snapshot;
                   Queue.offerUnsafe(queue, snapshot);
                 };
-                // Connection publications abort a held read without introducing a polling timer.
-                yield* connections.watch().pipe(
-                  Stream.runForEach(() => assertGeneration),
-                  Effect.catchCause((cause) => Queue.failCause(queue, cause)),
-                  Effect.forkScoped,
+                let defects: Cause.Cause<never> = Cause.empty;
+                // Registered before child scopes so their actual cleanup settles before this check.
+                yield* Effect.addFinalizer(() =>
+                  defects.reasons.length ? Effect.failCause(defects) : Effect.void,
                 );
-                yield* Effect.gen(function* () {
-                  for (let attempt = 0; ; attempt++) {
-                    yield* assertGeneration;
-                    const result = yield* Effect.exit(
-                      readStream(endpoint, target, assertGeneration, publish),
-                    );
-                    if (Exit.isSuccess(result)) return;
-                    if (Cause.hasInterruptsOnly(result.cause))
-                      return yield* Effect.failCause(result.cause);
-                    yield* assertGeneration.pipe(
-                      Effect.catchCause((cause) =>
-                        Effect.failCause(Cause.combine(result.cause, cause)),
-                      ),
-                    );
-                    if (last) publish({ ...last, observationStatus: 'reconnecting' });
-                    const transient = result.cause.reasons.every(
-                      (reason) => Cause.isFailReason(reason) && reason.error.code === 'Unavailable',
-                    );
-                    if (!transient || attempt >= P.streamLimits.reconnectMs.length)
-                      return yield* Effect.failCause(result.cause);
-                    yield* Effect.sleep(P.streamLimits.reconnectMs[attempt]);
-                  }
-                }).pipe(
-                  Effect.catchCause((cause) => Queue.failCause(queue, cause)),
-                  Effect.forkScoped,
+                const forkObservation = (effect: Effect.Effect<unknown, ApplicationError>) =>
+                  effect.pipe(
+                    Effect.onExit((exit) =>
+                      Effect.sync(() => {
+                        if (Exit.isFailure(exit))
+                          defects = Cause.combine(
+                            defects,
+                            Cause.fromReasons<never>(exit.cause.reasons.filter(Cause.isDieReason)),
+                          );
+                      }),
+                    ),
+                    Effect.catchCause((cause) => {
+                      const failure = Cause.fromReasons(cause.reasons.filter(Cause.isFailReason));
+                      return failure.reasons.length
+                        ? Queue.failCause(queue, failure)
+                        : Queue.end(queue);
+                    }),
+                    Effect.forkScoped,
+                  );
+                // Connection publications abort a held read without introducing a polling timer.
+                yield* forkObservation(
+                  connections.watch().pipe(Stream.runForEach(() => assertGeneration)),
+                );
+                yield* forkObservation(
+                  Effect.gen(function* () {
+                    for (let attempt = 0; ; attempt++) {
+                      yield* assertGeneration;
+                      const result = yield* Effect.exit(
+                        readStream(endpoint, target, assertGeneration, publish),
+                      );
+                      if (Exit.isSuccess(result)) return;
+                      if (Cause.hasInterruptsOnly(result.cause))
+                        return yield* Effect.failCause(result.cause);
+                      yield* assertGeneration.pipe(
+                        Effect.catchCause((cause) =>
+                          Effect.failCause(Cause.combine(result.cause, cause)),
+                        ),
+                      );
+                      if (last) publish({ ...last, observationStatus: 'reconnecting' });
+                      const transient = result.cause.reasons.every(
+                        (reason) =>
+                          Cause.isFailReason(reason) && reason.error.code === 'Unavailable',
+                      );
+                      if (!transient || attempt >= P.streamLimits.reconnectMs.length)
+                        return yield* Effect.failCause(result.cause);
+                      yield* Effect.sleep(P.streamLimits.reconnectMs[attempt]);
+                    }
+                  }),
                 );
               }),
             { bufferSize: 1, strategy: 'sliding' },
