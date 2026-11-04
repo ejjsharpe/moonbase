@@ -1,5 +1,5 @@
+import { expectSaveEnabled, saveFile, captureNative } from './editor-regressions.ts';
 import { createRemoteChat, selectRemoteChat } from './chat-target.ts';
-import { captureNative } from './editor-regressions.ts';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import {
   test,
@@ -372,7 +372,7 @@ test('dirty editor/live chat, two drafts, no-resend reconnect, view close and cl
     await expect(editor(p)).toBeFocused();
     await p.getByRole('button', { name: 'Close a.ts', exact: true }).click();
     await p.getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true }).click();
-    await p.getByRole('button', { name: 'Save', exact: true }).click();
+    await saveFile(p);
     await expect
       .poll(() => readFile(join(f.cwd, 'a.ts'), 'utf8'))
       .toBe('local dirty draft + live tool editing');
@@ -568,7 +568,7 @@ test('native 200% normal/constrained live chat keeps wheel/Tab Stop and Send rea
     await expect(editor(p)).toBeFocused();
     await editor(p).press('End');
     await editor(p).pressSequentially(' after zoom');
-    await p.getByRole('button', { name: 'Save', exact: true }).click();
+    await saveFile(p);
     await expect
       .poll(() => readFile(join(f.cwd, 'a.ts'), 'utf8'))
       .toBe('local dirty draft after zoom');
@@ -642,7 +642,7 @@ if (!packaged)
       await app.evaluate(() => {
         globalThis.desktopTest.held = 'saveFile';
       });
-      await p.getByRole('button', { name: 'Save', exact: true }).click();
+      await saveFile(p);
       await expect.poll(() => app.evaluate(() => globalThis.desktopTest.held)).toBe('waiting');
       await tab(p, 'Agents').click();
       await p.getByLabel('Message', { exact: true }).fill('task while Save reply waits');
@@ -658,7 +658,7 @@ if (!packaged)
       expect(status.ok).toBe(true);
       await app.evaluate(() => globalThis.desktopTest.release());
       await projectTab(p).click();
-      await expect(p.getByRole('button', { name: 'Save', exact: true })).toBeEnabled();
+      await expectSaveEnabled(p, true);
       await editor(p).focus();
       await editor(p).press('End');
       await editor(p).pressSequentially(' newer pending recovery');
@@ -726,7 +726,7 @@ test('held admitted Send leaves local Save/read/status and exact Stop independen
     );
     await p.getByLabel('Message', { exact: true }).fill('newer draft while original waits');
     await projectTab(p).click();
-    await p.getByRole('button', { name: 'Save', exact: true }).click();
+    await saveFile(p);
     await expect.poll(() => readFile(join(f.cwd, 'a.ts'), 'utf8')).toBe('local dirty draft');
     expect((await recovery(p)).state.checkouts).toHaveLength(1);
     await tab(p, 'Agents').click();

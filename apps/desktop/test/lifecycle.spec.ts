@@ -1,5 +1,10 @@
+import {
+  expectSaveEnabled,
+  saveFile,
+  prepareCrashRecovery,
+  recoverCrashedWorkbench,
+} from './editor-regressions.ts';
 import { createRemoteChat, selectRemoteChat } from './chat-target.ts';
-import { prepareCrashRecovery, recoverCrashedWorkbench } from './editor-regressions.ts';
 import type { RecoveryLoad } from '@moonbase/contracts/workspace';
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
 import { fixture, until } from '../../../tests/chat/tool-fixture.ts';
@@ -325,8 +330,8 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
         await expect(
           p.locator('.view-line').filter({ hasText: 'retained local draft at reload' }).first(),
         ).toBeVisible();
-        await p.getByRole('button', { name: 'Save', exact: true }).click();
-        await expect(p.getByRole('button', { name: 'Save', exact: true })).toBeEnabled();
+        await saveFile(p);
+        await expectSaveEnabled(p, true);
       }
       const stats = await f.stats();
       expect(stats.commands.filter((v) => v === 'sendChat')).toHaveLength(1);

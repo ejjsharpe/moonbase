@@ -18,7 +18,7 @@ import * as stylex from '@stylexjs/stylex';
 import { Button } from '@base-ui/react/button';
 import { Dialog } from '@base-ui/react/dialog';
 import { Tabs } from '@base-ui/react/tabs';
-import { Menu } from '@base-ui/react/menu';
+import { ContextMenu as Menu } from '@base-ui/react/context-menu';
 import { controls } from '@moonbase/ui/controls';
 import { filesUI } from '@moonbase/ui/files';
 import { workbench } from '@moonbase/ui/workbench';
@@ -82,6 +82,13 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   const buffer =
     target && state.buffers.find((buffer) => fileKey(buffer.target) === fileKey(target));
   const mode = (target && readOwn(selected?.fileViews, target.path)) || 'file';
+  const breadcrumbs =
+    checkout && selected?.active
+      ? [
+          checkout.root.split('/').filter(Boolean).at(-1) || checkout.root,
+          ...selected.active.split('/'),
+        ]
+      : [];
   const [anchorReset, setAnchorReset] = useState(0);
   const [lookup, setLookup] = useState(false),
     [panel, setPanel] = useState('files'),
@@ -110,6 +117,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     origin: FocusOrigin;
   } | null>(null);
   const menuCapture = useRef<string[]>([]),
+    menuKeyboard = useRef(false),
     root = useRef<HTMLDivElement>(null),
     findFile = useRef<HTMLButtonElement>(null);
   const targetIdentity = target && fileKey(target);
@@ -497,6 +505,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
               const file = { checkout, path },
                 current = state.buffers.find((buffer) => fileKey(buffer.target) === fileKey(file)),
                 dirty = current && current.text !== current.disk.text;
+              const fileView = readOwn(selected.fileViews, path) || 'file';
               const parts = path.split('/');
               let label = parts.at(-1)!;
               for (let count = 1; count <= parts.length; count++) {
@@ -509,120 +518,108 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                   break;
               }
               return (
-                <span
-                  key={path}
-                  {...stylex.props(workbench.fileTab)}
-                  onDragOver={(event) => {
-                    if (dragged.current) event.preventDefault();
-                  }}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    if (dragged.current)
-                      controller.reorder(
-                        checkout,
-                        dragged.current,
-                        selected.openFiles.indexOf(path),
-                      );
-                    dragged.current = null;
+                <Menu.Root
+                  key={fileKey(file)}
+                  disabled={state.preserving}
+                  onOpenChange={(open) => {
+                    if (open) menuCapture.current = [...selected.openFiles];
+                    else menuKeyboard.current = false;
                   }}>
-                  <Tabs.Tab
-                    value={path}
-                    aria-label={path}
-                    title={`${checkout.hostId} · ${checkout.root}/${path}`}
-                    aria-description={
-                      [selected.preview === path && 'Preview', dirty && 'Unsaved']
-                        .filter(Boolean)
-                        .join(', ') || undefined
-                    }
-                    draggable={!state.preserving}
-                    onDragStart={(event) => {
-                      dragged.current = path;
-                      event.dataTransfer.setData('text/plain', path);
+                  <Menu.Trigger
+                    render={<span />}
+                    onKeyDown={(event) => {
+                      if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+                        event.preventDefault();
+                        menuKeyboard.current = true;
+                        const bounds = event.currentTarget.getBoundingClientRect();
+                        event.currentTarget.dispatchEvent(
+                          new MouseEvent('contextmenu', {
+                            bubbles: true,
+                            cancelable: true,
+                            clientX: bounds.left,
+                            clientY: bounds.bottom,
+                          }),
+                        );
+                      }
                     }}
-                    onDragEnd={() => {
-                      dragged.current = null;
-                    }}
-                    onDoubleClick={() => controller.keepOpen(file)}
                     {...stylex.props(
-                      controls.button,
-                      workbench.tabButton,
-                      workbench.fileTabButton,
-                      selected.active === path && workbench.fileSelected,
-                      selected.preview === path && workbench.preview,
-                      dirty && workbench.unsaved,
-                    )}>
-                    {label}
-                  </Tabs.Tab>
-                  <Button
-                    {...stylex.props(controls.button, controls.iconButton)}
-                    aria-label={`Close ${path}`}
-                    disabled={state.preserving}
-                    onClick={() => run(closeFiles([path]))}>
-                    <Icon name="close" />
-                  </Button>
-                </span>
-              );
-            })}
-          </Tabs.List>
-          <div {...stylex.props(workbench.toolbar)}>
-            <span {...stylex.props(workbench.toolbarLabel)}>
-              {selected.active || 'No file selected'}
-              {buffer && buffer.text !== buffer.disk.text ? ' · Unsaved' : ''}
-            </span>
-            {target && (
-              <>
-                <label>
-                  File view{' '}
-                  <select
-                    aria-label="File view"
-                    {...stylex.props(controls.field)}
-                    value={mode}
-                    onChange={(event) =>
-                      run(
-                        controller.open(target, {
-                          view: event.target.value as FileView,
-                        }),
-                      )
-                    }>
-                    <option value="file">File</option>
-                    {(['staged', 'unstaged', 'untracked'] as const).map((mode) => (
-                      <option key={mode} value={mode}>
-                        {mode}
-                      </option>
-                    ))}
-                    {(buffer?.conflict || mode === 'conflict') && (
-                      <option value="conflict">Save conflict</option>
+                      stylex.defaultMarker(),
+                      workbench.fileTab,
+                      selected.active === path && workbench.activeFileTab,
                     )}
-                  </select>
-                </label>
-                <Button
-                  {...stylex.props(controls.button)}
-                  disabled={!buffer || buffer.saving || state.preserving}
-                  onClick={() => run(controller.save(target))}>
-                  {buffer?.pendingSave ? 'Retry Save' : 'Save'}
-                </Button>
-                {selected.preview === target.path && (
-                  <Button
-                    {...stylex.props(controls.button)}
-                    onClick={() => controller.keepOpen(target)}>
-                    Keep Open
-                  </Button>
-                )}
-              </>
-            )}
-            <Menu.Root
-              onOpenChange={(open) => {
-                if (open) menuCapture.current = [...selected.openFiles];
-              }}>
-              <Menu.Trigger {...stylex.props(controls.button)}>Tab actions</Menu.Trigger>
-              <Menu.Portal>
-                <Menu.Positioner>
-                  <Menu.Popup {...stylex.props(overlays.popup, overlays.options)}>
-                    {target && (
-                      <>
+                    onDragOver={(event) => {
+                      if (dragged.current) event.preventDefault();
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      if (dragged.current)
+                        controller.reorder(
+                          checkout,
+                          dragged.current,
+                          selected.openFiles.indexOf(path),
+                        );
+                      dragged.current = null;
+                    }}>
+                    <Tabs.Tab
+                      value={path}
+                      aria-label={path}
+                      title={`${checkout.hostId} · ${checkout.root}/${path}`}
+                      aria-description={
+                        [selected.preview === path && 'Preview', dirty && 'Unsaved']
+                          .filter(Boolean)
+                          .join(', ') || undefined
+                      }
+                      draggable={!state.preserving}
+                      onDragStart={(event) => {
+                        dragged.current = path;
+                        event.dataTransfer.setData('text/plain', path);
+                      }}
+                      onDragEnd={() => {
+                        dragged.current = null;
+                      }}
+                      onDoubleClick={() => controller.keepOpen(file)}
+                      {...stylex.props(
+                        controls.button,
+                        workbench.tabButton,
+                        workbench.fileTabButton,
+                        selected.preview === path && workbench.preview,
+                        dirty && workbench.unsaved,
+                      )}>
+                      <span {...stylex.props(controls.icon)}>
+                        <Icon name="file" />
+                      </span>
+                      <span {...stylex.props(controls.truncate)}>{label}</span>
+                    </Tabs.Tab>
+                    <Button
+                      {...stylex.props(
+                        controls.button,
+                        controls.iconButton,
+                        workbench.tabClose,
+                        workbench.fileTabClose,
+                        workbench.revealTabClose,
+                        selected.active === path && workbench.visibleTabClose,
+                      )}
+                      aria-label={`Close ${path}`}
+                      disabled={state.preserving}
+                      onClick={() => run(closeFiles([path]))}>
+                      <Icon name="close" />
+                    </Button>
+                  </Menu.Trigger>
+                  <Menu.Portal>
+                    <Menu.Positioner {...stylex.props(overlays.positioner)}>
+                      <Menu.Popup
+                        onFocus={(event) => {
+                          if (menuKeyboard.current) {
+                            menuKeyboard.current = false;
+                            event.currentTarget
+                              .querySelector<HTMLElement>('[role="menuitem"]')
+                              ?.focus();
+                          }
+                        }}
+                        {...stylex.props(overlays.popup, overlays.options)}>
                         <Menu.Item
                           {...stylex.props(overlays.option)}
-                          onClick={() => controller.keepOpen(target)}>
+                          onClick={() => controller.keepOpen(file)}>
                           Keep Open
                         </Menu.Item>
                         {(
@@ -634,17 +631,17 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                             onClick={() => {
                               let paths;
                               if (label === 'Close') {
-                                paths = [target.path];
+                                paths = [file.path];
                               } else if (label === 'Close Others') {
-                                paths = menuCapture.current.filter((path) => path !== target.path);
+                                paths = menuCapture.current.filter((path) => path !== file.path);
                               } else if (label === 'Close to the Right') {
                                 paths = menuCapture.current.slice(
-                                  menuCapture.current.indexOf(target.path) + 1,
+                                  menuCapture.current.indexOf(file.path) + 1,
                                 );
                               } else {
                                 paths = menuCapture.current;
                               }
-                              run(closeFiles(paths));
+                              run(withFocus(closeFiles(paths), 'strip', true));
                             }}>
                             {label}
                           </Menu.Item>
@@ -654,8 +651,8 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                           onClick={() =>
                             controller.reorder(
                               checkout,
-                              target.path,
-                              selected.openFiles.indexOf(target.path) - 1,
+                              file.path,
+                              selected.openFiles.indexOf(file.path) - 1,
                             )
                           }>
                           Move tab left
@@ -665,24 +662,116 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                           onClick={() =>
                             controller.reorder(
                               checkout,
-                              target.path,
-                              selected.openFiles.indexOf(target.path) + 1,
+                              file.path,
+                              selected.openFiles.indexOf(file.path) + 1,
                             )
                           }>
                           Move tab right
                         </Menu.Item>
-                      </>
+                        <Menu.Item
+                          {...stylex.props(overlays.option)}
+                          disabled={!current || current.saving || state.preserving}
+                          onClick={() => run(controller.save(file))}>
+                          {current?.pendingSave ? 'Retry Save' : 'Save'}
+                        </Menu.Item>
+                        <Menu.SubmenuRoot>
+                          <Menu.SubmenuTrigger {...stylex.props(overlays.option)}>
+                            File view <Icon name="chevronRight" />
+                          </Menu.SubmenuTrigger>
+                          <Menu.Portal>
+                            <Menu.Positioner {...stylex.props(overlays.positioner)}>
+                              <Menu.Popup {...stylex.props(overlays.popup, overlays.options)}>
+                                <Menu.RadioGroup
+                                  aria-label="File view"
+                                  value={fileView}
+                                  onValueChange={(view: FileView) =>
+                                    run(controller.open(file, { view }))
+                                  }>
+                                  {(['file', 'staged', 'unstaged', 'untracked'] as const).map(
+                                    (view) => (
+                                      <Menu.RadioItem
+                                        key={view}
+                                        value={view}
+                                        closeOnClick
+                                        {...stylex.props(
+                                          overlays.option,
+                                          fileView === view && workbench.fileSelected,
+                                        )}>
+                                        {view === 'file' ? 'File' : view}
+                                      </Menu.RadioItem>
+                                    ),
+                                  )}
+                                  {(current?.conflict || fileView === 'conflict') && (
+                                    <Menu.RadioItem
+                                      value="conflict"
+                                      closeOnClick
+                                      {...stylex.props(
+                                        overlays.option,
+                                        fileView === 'conflict' && workbench.fileSelected,
+                                      )}>
+                                      Save conflict
+                                    </Menu.RadioItem>
+                                  )}
+                                </Menu.RadioGroup>
+                              </Menu.Popup>
+                            </Menu.Positioner>
+                          </Menu.Portal>
+                        </Menu.SubmenuRoot>
+                        <Menu.Item
+                          {...stylex.props(overlays.option)}
+                          onClick={() => run(controller.reopen(checkout))}>
+                          Reopen Closed Files
+                        </Menu.Item>
+                      </Menu.Popup>
+                    </Menu.Positioner>
+                  </Menu.Portal>
+                </Menu.Root>
+              );
+            })}
+          </Tabs.List>
+          {!!breadcrumbs.length && (
+            <nav
+              aria-label="File breadcrumbs"
+              title={`${checkout.root}/${selected.active}`}
+              {...stylex.props(workbench.breadcrumbs)}>
+              <ol {...stylex.props(workbench.breadcrumbList)}>
+                {breadcrumbs.map((part, index) => (
+                  <li
+                    key={index}
+                    aria-current={index === breadcrumbs.length - 1 ? 'page' : undefined}
+                    {...stylex.props(
+                      workbench.breadcrumb,
+                      index === breadcrumbs.length - 1 && workbench.currentBreadcrumb,
+                    )}>
+                    {index > 0 && (
+                      <span aria-hidden="true" {...stylex.props(workbench.breadcrumbSeparator)}>
+                        /
+                      </span>
                     )}
-                    <Menu.Item
-                      {...stylex.props(overlays.option)}
-                      onClick={() => run(controller.reopen(checkout))}>
-                      Reopen Closed Files
-                    </Menu.Item>
-                  </Menu.Popup>
-                </Menu.Positioner>
-              </Menu.Portal>
-            </Menu.Root>
-          </div>
+                    <span {...stylex.props(controls.truncate)} title={part}>
+                      {part}
+                      {index === breadcrumbs.length - 1 &&
+                      buffer &&
+                      buffer.text !== buffer.disk.text
+                        ? ' · Unsaved'
+                        : ''}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            </nav>
+          )}
+          {buffer?.pendingSave && !buffer.saving && target && (
+            <p role="status" {...stylex.props(controls.status)}>
+              Save result unconfirmed. Your edits are retained.{' '}
+              <Button
+                {...stylex.props(controls.button)}
+                disabled={state.preserving}
+                onClick={() => run(controller.save(target))}>
+                Retry Save
+              </Button>
+            </p>
+          )}
           {buffer?.conflict && target && (
             <div role="alert" {...stylex.props(controls.alert, workbench.conflict)}>
               <p>{target.path} changed on disk. Your edits are retained.</p>

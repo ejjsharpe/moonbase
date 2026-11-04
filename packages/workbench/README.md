@@ -26,6 +26,8 @@ The file tree renders only viewport rows and the focused row. It keeps one Tab s
 
 `selectNativeImports(checkout)` returns approved opaque native references, never raw OS source paths. Native picker selection and `WorkbenchHandle.importFiles(checkout, references)` share the editor's destination/replacement dialog and capture the exact checkout before asynchronous selection. Consumers route clipboard/drop selections through that handle. Approval and trust-boundary validation remain with the platform and workspace.
 
+Buffer tabs are square and flush, with shared file icons, truncated filenames and full-height dividers. The active tab joins the editor breadcrumb row below; close controls appear on selection, hover or keyboard focus without shifting the strip. Preview italics, unsaved markers and full-path accessible labels/titles remain available. A compact 28px breadcrumb row shows the checkout basename and relative file path, with a brighter current filename and no toolbar buttons. Right-click a file tab (or press Shift+F10 while it has keyboard focus) for the existing file-view and tab commands. Save remains available through Command/Ctrl+S; retained uncertain saves keep an explicit Retry Save notice.
+
 `WorkbenchHandle.keyDown/keyUp` lets a consumer forward shortcuts from its own project navigation. The workbench handles keys within its own view. Consumers can forward unhandled bubbling events from their navigation, checking `event.defaultPrevented`; handled editor shortcuts stop propagation. `visible={false}` suppresses hidden Monaco position writes; the consumer hides the containing panel. Unmount cancels an outstanding close prompt and releases presentation resources, without disposing the controller.
 
 ## Composition and lifecycle

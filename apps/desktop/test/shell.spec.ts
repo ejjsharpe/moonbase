@@ -1,3 +1,4 @@
+import { selectFileView } from './editor-regressions.ts';
 import { test, expect, type Page } from '@playwright/test';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -43,7 +44,7 @@ test('browser shell keeps dirty comparisons, cursor, scroll, Monaco undo and sco
       Array.from({ length: 200 }, (_, i) => `// line ${i}`).join('\n'),
     );
   });
-  await shell(page).getByLabel('File view', { exact: true }).selectOption('staged');
+  await selectFileView(shell(page), 'staged');
   await expect.poll(() => page.evaluate(() => window.demo.diffReady())).toBe(true);
   await input(page).focus();
   await input(page).press('Meta+ArrowDown');
@@ -74,7 +75,7 @@ test('browser shell keeps dirty comparisons, cursor, scroll, Monaco undo and sco
       () => window.demo.first.getSnapshot().recovery.views.sample.positions['welcome.ts'].staged!,
     ),
   ).toEqual(before.position);
-  await expect(shell(page).getByLabel('File view', { exact: true })).toHaveValue('staged');
+  await expect(shell(page).getByRole('textbox', { name: /^staged · .* original$/ })).toBeVisible();
   await input(page).focus();
   await tabs(page).getByRole('tab', { name: 'Agents', exact: true }).click();
   await project(page).click();
@@ -106,7 +107,7 @@ for (const mode of ['file', 'staged'] as const) {
           'first\nsecond',
         ),
       );
-      await shell(page).getByLabel('File view', { exact: true }).selectOption(mode);
+      await selectFileView(shell(page), mode);
       if (mode === 'staged')
         await expect.poll(() => page.evaluate(() => window.demo.diffReady())).toBe(true);
       await input(page).focus();
@@ -158,6 +159,44 @@ test('project-tab shortcuts use the editor handler after keyboard navigation fro
   await project(page).focus();
   await project(page).press('Meta+Shift+t');
   await expect(input(page)).toBeVisible();
+});
+
+test('switching checkouts dismisses a file menu even when the relative paths match', async ({
+  page,
+}) => {
+  await page.goto('/?chat&design');
+  await page.evaluate(async () => {
+    const { first, checkout } = window.demo;
+    await first.openCheckout('/demo/other');
+    const other = first
+      .getSnapshot()
+      .recovery.checkouts.find((target) => target.checkoutId === 'other')!;
+    await first.mutate({
+      checkout: other,
+      kind: 'create-file',
+      sources: [],
+      destination: 'welcome.ts',
+      text: 'Other checkout',
+    });
+    await first.open({ checkout: other, path: 'welcome.ts' }, { intent: 'keep' });
+    await first.selectCheckout(checkout);
+  });
+  await page.getByRole('tab', { name: 'moonbase · main', exact: true }).click();
+  await page.getByRole('tab', { name: 'welcome.ts', exact: true }).click({ button: 'right' });
+  await expect(page.getByRole('menu')).toBeVisible();
+  await page.evaluate(() => {
+    const { first } = window.demo;
+    return first.selectCheckout(
+      first.getSnapshot().recovery.checkouts.find((target) => target.checkoutId === 'other')!,
+    );
+  });
+  await expect(page.getByRole('menu')).toHaveCount(0);
+  expect(
+    await page.evaluate(() => {
+      const { views } = window.demo.first.getSnapshot().recovery;
+      return { sample: views.sample.openFiles, other: views.other.openFiles };
+    }),
+  ).toEqual({ sample: ['welcome.ts'], other: ['welcome.ts'] });
 });
 
 test('reopened projects append to the tab strip and open projects keep their slot', async ({
@@ -460,7 +499,7 @@ test('opening an exact project from Chat selects it and retains the other projec
   await page.goto('/?chat');
   await project(page).click();
   await expect(input(page)).toBeVisible();
-  await shell(page).getByLabel('File view', { exact: true }).selectOption('staged');
+  await selectFileView(shell(page), 'staged');
   await tabs(page).getByRole('tab', { name: 'Agents', exact: true }).click();
   await page.evaluate(() => {
     window.demo.selectCheckout = async () => '/demo/other';
@@ -480,7 +519,7 @@ test('opening an exact project from Chat selects it and retains the other projec
   await shell(page).getByRole('treeitem', { name: 'elsewhere.ts', exact: true }).dblclick();
   await project(page).click();
   await expect(input(page)).toBeVisible();
-  await expect(shell(page).getByLabel('File view', { exact: true })).toHaveValue('staged');
+  await expect(shell(page).getByRole('textbox', { name: /^staged · .* original$/ })).toBeVisible();
   expect(
     await page.evaluate(() => window.demo.first.getSnapshot().recovery.openCheckoutIds),
   ).toEqual(['sample', 'other']);
@@ -781,6 +820,10 @@ test('main tabs dim inactive labels, reveal close on hover or focus and separate
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/?local&design');
   await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
+  await expect(page.getByRole('tablist', { name: 'Workbench views', exact: true })).toHaveCSS(
+    'box-shadow',
+    'rgb(41, 41, 45) 0px -1px 0px 0px inset',
+  );
   await page.evaluate(() => window.demo.first.openCheckout('/demo/other'));
   const agents = page.getByRole('tab', { name: 'Agents', exact: true });
   const project = page.getByRole('tab', { name: 'moonbase · main', exact: true });

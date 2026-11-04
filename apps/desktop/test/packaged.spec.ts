@@ -1,4 +1,4 @@
-import { captureNative, pasteNativeFile } from './editor-regressions.ts';
+import { saveFile, selectFileView, captureNative, pasteNativeFile } from './editor-regressions.ts';
 import {
   filenameCases,
   checkFilenameMaps,
@@ -156,11 +156,11 @@ test('unsigned macOS package runs with only system PATH, SQLite, native/rg resou
     await input.focus();
     await input.press('Meta+a');
     await input.pressSequentially('export const packaged = 42;');
-    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await saveFile(page);
     await expect
       .poll(() => readFileSync(join(checkout, 'package.ts'), 'utf8'))
       .toBe('export const packaged = 42;');
-    await page.getByLabel('File view', { exact: true }).selectOption('staged');
+    await selectFileView(page, 'staged');
     await expect(page.getByRole('textbox', { name: / original$/ })).toHaveCount(1);
     await page.getByRole('button', { name: 'New File', exact: true }).click();
     await page.getByLabel('Destination relative path').fill('packaged-created.txt');

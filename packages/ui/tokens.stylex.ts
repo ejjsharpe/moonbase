@@ -14,6 +14,7 @@ export const colors = stylex.defineConsts({
   muted: '#97979f',
   border: '#29292d',
   controlBorder: '#343438',
+  scrollShadow: '#00000026',
   accent: '#ededf0',
   onAccent: '#19191b',
   link: '#ffffff',
