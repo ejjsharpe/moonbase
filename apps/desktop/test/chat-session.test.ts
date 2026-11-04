@@ -74,6 +74,23 @@ test('IPC rejects unknown fields/operations/foreign authority before dispatch', 
     ['chat', 'getChat', { target, privateKey: 'x' }],
     ['chat', 'getChat', { target: { ...target, actorId: 'other' } }],
     ['chat', 'getChat', { target: { ...target, host: { ...context.host, storeId: 'other' } } }],
+    [
+      'chat',
+      'getChatTranscriptContent',
+      { source: { kind: 'entry', target: { ...target, actorId: 'other' }, entryId: 'entry' } },
+    ],
+    [
+      'chat',
+      'getChatTranscriptContent',
+      {
+        source: {
+          kind: 'entry',
+          target: { ...target, host: { ...context.host, storeId: 'other' } },
+          entryId: 'entry',
+        },
+      },
+    ],
+    ['chat', 'getChatHistoryAround', { target: { ...target, actorId: 'other' }, entryId: 'entry' }],
     ['connection', 'connect', { profileId: 'id', destination: 'injected' }],
     ['unknown', 'getChat', { target }],
   ])

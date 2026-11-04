@@ -29,6 +29,8 @@ const inputs = {
   createChat: { session, requestId: 'create', title: '  Saved chat  ' },
   getChat: { target },
   getChatHistory: { target, cursor: 'opaque cursor' },
+  getChatTranscriptContent: { source: { kind: 'entry', target, entryId: 'entry' } },
+  getChatHistoryAround: { target, entryId: 'entry' },
   sendChat: { target, requestId: 'send', text: '  Keep original text  ' },
   getChatSend: { target, requestId: 'send' },
   stopChat: { stop, requestId: 'stop' },
@@ -39,6 +41,23 @@ const outputs = {
   createChat: { requestId: 'create', conversation },
   getChat: snapshot,
   getChatHistory: { entries: snapshot.entries, olderCursor: null },
+  getChatTranscriptContent: {
+    kind: 'manifest',
+    cursor: null,
+    source: { kind: 'entry', target, entryId: 'entry' },
+    parts: [],
+    nextCursor: null,
+    thinking: 'none',
+  },
+  getChatHistoryAround: {
+    entries: [],
+    olderCursor: null,
+    target,
+    entryId: 'entry',
+    cursor: null,
+    newerCursor: null,
+    upperEntryId: 'entry',
+  },
   sendChat: {
     target,
     requestId: 'send',
@@ -229,4 +248,49 @@ test('schema entry stays independent of application dispatch and privileged impl
     ),
     [],
   );
+});
+
+test('transcript schemas bound decoded chunks, canonical base64, identities and continuation evidence', () => {
+  const source = { kind: 'entry', target, entryId: 'entry' } as const;
+  const selection = { partId: 'm0.b0', bytes: 32768, revision: 'a'.repeat(64) };
+  const chunk = {
+    kind: 'content',
+    cursor: null,
+    source,
+    selection,
+    offset: 0,
+    nextCursor: null,
+    encoding: 'utf8',
+    data: '😀'.repeat(8192),
+  };
+  assert.deepEqual(decodeChatOutput('getChatTranscriptContent', chunk), chunk);
+  for (const changed of [
+    { data: '😀'.repeat(8193) },
+    { offset: 1 },
+    { nextCursor: 'continues' },
+    { encoding: 'base64', data: Buffer.alloc(32769).toString('base64') },
+    { encoding: 'base64', data: 'not base64!' },
+    { data: '\ud800' },
+  ])
+    assert.throws(() => decodeChatOutput('getChatTranscriptContent', { ...chunk, ...changed }));
+  assert.throws(() =>
+    decodeChatInput('getChatTranscriptContent', { source: { ...source, path: '/arbitrary' } }),
+  );
+  assert.throws(() =>
+    decodeChatInput('getChatTranscriptContent', { source, selection: { ...selection, bytes: -1 } }),
+  );
+  assert.equal(decodeChatOutput('getChatHost', outputs.getChatHost).features, undefined);
+  assert.deepEqual(
+    decodeChatOutput('getChatHost', { ...outputs.getChatHost, features: ['transcript-v1'] })
+      .features,
+    ['transcript-v1'],
+  );
+  assert.deepEqual(
+    decodeChatOutput('getChatHost', {
+      ...outputs.getChatHost,
+      features: ['transcript-v1', 'future-feature'],
+    }).features,
+    ['transcript-v1', 'future-feature'],
+  );
+  assert.equal(isChatCommand('findChatTranscript'), false);
 });

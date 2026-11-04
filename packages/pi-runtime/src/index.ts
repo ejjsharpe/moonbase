@@ -24,6 +24,10 @@ function makeChatService(host: Host): ChatServiceShape {
     createChat: (d) => host.run('createChat', d, (input) => host.create(input)),
     getChat: (d) => host.run('getChat', d, (input) => host.snapshot(input.target)),
     getChatHistory: (d) => host.run('getChatHistory', d, (input) => host.getHistory(input)),
+    getChatTranscriptContent: (d) =>
+      host.run('getChatTranscriptContent', d, (input) => host.getTranscriptContent(input)),
+    getChatHistoryAround: (d) =>
+      host.run('getChatHistoryAround', d, (input) => host.getHistoryAround(input)),
     sendChat: (d) => host.run('sendChat', d, (input) => host.send(input)),
     getChatSend: (d) => host.run('getChatSend', d, (input) => host.getSend(input)),
     stopChat: (d) => host.run('stopChat', d, (input) => host.stop(input)),

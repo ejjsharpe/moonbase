@@ -11,6 +11,8 @@ import {
 } from '@moonbase/contracts/chat-schema';
 import {
   maximumChatReplyBytes,
+  type ChatTranscript,
+  type ChatTranscriptSource,
   type ChatCommand,
   type ChatInput,
   type ChatOutput,
@@ -121,6 +123,56 @@ export function output<K extends ChatCommand>(
   }
   if (operation === 'getChatHost' && !sameHost(r!.host as ChatHostTarget, q.host as ChatHostTarget))
     fail('Incompatible', 'Chat host changed.');
+  const validateTranscript = (transcript: ChatTranscript, target: ChatTarget, id?: string) => {
+    if (
+      !sameTarget(transcript.source.target, target) ||
+      (id !== undefined && (transcript.source.kind !== 'entry' || transcript.source.entryId !== id))
+    )
+      fail('Incompatible', 'Transcript source changed.');
+    if (new Set(transcript.parts.map((part) => part.partId)).size !== transcript.parts.length)
+      fail('Incompatible', 'Transcript contains duplicate part identities.');
+  };
+  if (
+    operation === 'getChat' ||
+    operation === 'getChatHistoryAround' ||
+    operation === 'getChatHistory'
+  ) {
+    const target = q.target as ChatTarget;
+    for (const entry of r!.entries as ChatSnapshot['entries'])
+      if (entry.transcript) validateTranscript(entry.transcript, target, entry.id);
+    if (operation === 'getChat') {
+      const run = (result as ChatSnapshot).run;
+      if (run?.transcript) {
+        validateTranscript(run.transcript, target);
+        const source = run.transcript.source;
+        if (
+          source.kind !== 'live' ||
+          source.submissionId !== run.stop.submissionId ||
+          source.taskId !== run.stop.taskId
+        )
+          fail('Incompatible', 'Live transcript authority changed.');
+      }
+    }
+  }
+  if (operation === 'getChatHistoryAround') {
+    if (r!.entryId !== q.entryId || r!.cursor !== (q.cursor ?? null))
+      fail('Incompatible', 'History read identity changed.');
+  }
+  if (operation === 'getChatTranscriptContent') {
+    const data = result as ChatOutput<'getChatTranscriptContent'>;
+    const input = request as ChatInput<'getChatTranscriptContent'>;
+    const sameSource = (a: ChatTranscriptSource, b: ChatTranscriptSource) =>
+      JSON.stringify(a) === JSON.stringify(b);
+    if (!sameSource(data.source, input.source) || data.cursor !== (input.cursor ?? null))
+      fail('Incompatible', 'Content read identity changed.');
+    if (data.kind === 'manifest') {
+      if (input.selection) fail('Incompatible', 'Content selection was ignored.');
+      validateTranscript(data, input.source.target);
+    } else {
+      if (!input.selection || JSON.stringify(data.selection) !== JSON.stringify(input.selection))
+        fail('Incompatible', 'Content selection changed.');
+    }
+  }
   if (q.target && r) {
     const actual =
       operation === 'getChat'

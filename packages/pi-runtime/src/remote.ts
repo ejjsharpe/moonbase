@@ -38,10 +38,15 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
           host?: { hostId: string; storeId: string };
           session?: { host: { hostId: string; storeId: string } };
           target?: ChatTarget;
+          source?: { target: ChatTarget };
           stop?: { target: ChatTarget };
         };
         const host =
-          shape.host ?? shape.session?.host ?? shape.target?.host ?? shape.stop!.target.host;
+          shape.host ??
+          shape.session?.host ??
+          shape.target?.host ??
+          shape.source?.target.host ??
+          shape.stop!.target.host;
         const endpoint = yield* connections.endpoint({ host });
         const changed = () =>
           new ApplicationError({
@@ -208,7 +213,8 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
                     if (!code) return invalid('Incompatible', 'Chat returned an invalid error.');
                     throw new ApplicationError({
                       code,
-                      message: P.publicError(new ApplicationError({ code, message: '' })).message,
+                      message: P.publicError(new ApplicationError({ code, message: '' }), operation)
+                        .message,
                     });
                   }
                   if (envelope.ok !== true || response.status !== 200)
@@ -261,6 +267,8 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
       createChat: (d) => call('createChat', d),
       getChat: (d) => call('getChat', d),
       getChatHistory: (d) => call('getChatHistory', d),
+      getChatTranscriptContent: (d) => call('getChatTranscriptContent', d),
+      getChatHistoryAround: (d) => call('getChatHistoryAround', d),
       sendChat: (d) => call('sendChat', d),
       getChatSend: (d) => call('getChatSend', d),
       stopChat: (d) => call('stopChat', d),

@@ -64,7 +64,7 @@ export const codes = [
   'Unavailable',
   'Cancelled',
 ] as const;
-export function publicError(error: unknown) {
+export function publicError(error: unknown, operation?: string) {
   const code =
     ApplicationError.is(error) && codes.includes(error.code as (typeof codes)[number])
       ? error.code
@@ -79,7 +79,13 @@ export function publicError(error: unknown) {
     Unavailable: 'Chat host is unavailable.',
     Cancelled: 'Chat wait was cancelled.',
   };
-  return { code, message: messages[code] };
+  return {
+    code,
+    message:
+      code === 'Conflict' && operation === 'getChatTranscriptContent'
+        ? 'Transcript source changed; reload the selected content.'
+        : messages[code],
+  };
 }
 export function responseBytes(
   response: Response,

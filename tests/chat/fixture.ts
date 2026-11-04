@@ -263,6 +263,8 @@ export async function controlledHostFixture(hostScript: URL, hold = false) {
     close,
     release: () => host!.send({ type: 'release' }),
     loseNextSend: () => writeFile(drop, ''),
+    loseNextReply: (operation: string) => writeFile(drop, operation),
+    tamperNextReply: (operation: string) => writeFile(drop, 'tamper:' + operation),
     holdReply: async (operation: string) => {
       host!.send({ type: 'hold-reply', operation });
       await until(stats, (s) => s.replyOperation === operation);

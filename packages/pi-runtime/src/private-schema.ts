@@ -181,3 +181,16 @@ function savedIdentity(value: string) {
     fail('Persistence', 'Stored Moonbase chat authority is invalid.');
   }
 }
+
+const transcriptCursorSchema = Schema.Struct({
+  kind: Schema.Literals(['manifest', 'content', 'around']),
+  binding: Schema.String.check(Schema.makeFilter((value) => /^[a-f0-9]{64}$/.test(value))),
+  position: integer.check(Schema.makeFilter((value) => value >= 0)),
+  revision: Schema.optional(
+    Schema.String.check(Schema.makeFilter((value) => /^[a-f0-9]{64}$/.test(value))),
+  ),
+  upper: Schema.optional(recordId),
+  direction: Schema.optional(Schema.Literals(['older', 'newer'])),
+});
+export type TranscriptCursor = typeof transcriptCursorSchema.Type;
+export const transcriptCursor = (value: unknown) => decode(transcriptCursorSchema, value);

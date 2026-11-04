@@ -1,3 +1,4 @@
+import { ApplicationError } from '@moonbase/contracts/errors';
 import type { ChatDependencies } from '@moonbase/application/chat';
 import type {
   ChatClient,
@@ -95,6 +96,12 @@ export function chatCapabilities(local = false) {
             admission: 'admitted',
             submissionId: 'submission',
           } as never;
+        case 'getChatTranscriptContent':
+        case 'getChatHistoryAround':
+          throw new ApplicationError({
+            code: 'Incompatible',
+            message: 'This legacy demo does not advertise transcript reads.',
+          });
         case 'getChatSend':
           return null as never;
         case 'stopChat':

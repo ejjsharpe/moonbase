@@ -3,6 +3,7 @@ import {
   defineDocFamily,
   type Harness,
   type ConversationId,
+  type EntryId,
   type SubmissionId,
   type TaskId,
 } from '@earendil-works/pi-durable';
@@ -59,6 +60,7 @@ function numeric(value: string): number {
   return Number(value);
 }
 export const cid = (value: string) => numeric(value) as ConversationId;
+export const eid = (value: string) => numeric(value) as EntryId;
 export const sid = (value: string) => numeric(value) as SubmissionId;
 export const tid = (value: string) => numeric(value) as TaskId;
 export async function readOwnedMetadata(

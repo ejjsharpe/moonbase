@@ -263,3 +263,102 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
       assert.equal((await f.stats()).calls, 1);
     }
   });
+
+test('transcript reads cross the real child/forwarding boundary with identity, lost/tampered/held replies, cancellation and independent Stop', async (t) => {
+  const f = await fixture(t, true),
+    client = f.root();
+  const connected = await client.connection.command('connect', { profileId: client.profile.id });
+  assert(
+    (await client.chat.command('getChatHost', { host: f.session.host })).features?.includes(
+      'transcript-v1',
+    ),
+  );
+  const target = (
+    await client.chat.command('createChat', {
+      session: f.session,
+      requestId: 'transcript',
+      title: 'Transcript',
+    })
+  ).conversation.target;
+  await client.chat.command('sendChat', {
+    target,
+    requestId: 'run',
+    text: 'Retained user content 😀',
+  });
+  const live = await until(
+    () => client.chat.command('getChat', { target }),
+    (view) => !!view.run && view.entries.some((entry) => entry.role === 'user'),
+  );
+  const source = live.entries.find((entry) => entry.role === 'user')!.transcript!.source;
+  const parts = await client.chat.command('getChatTranscriptContent', { source });
+  assert(parts.kind === 'manifest');
+  const descriptor = parts.parts[0],
+    selection = {
+      partId: descriptor.partId,
+      bytes: descriptor.bytes,
+      revision: descriptor.revision,
+    };
+  const request = { source, selection };
+  await f.loseNextReply('getChatTranscriptContent');
+  await assert.rejects(client.chat.command('getChatTranscriptContent', request), {
+    code: 'Unavailable',
+  });
+  const content = await client.chat.command('getChatTranscriptContent', request);
+  assert(content.kind === 'content');
+  assert.equal(content.data, 'Retained user content 😀');
+  assert.deepEqual(content.source, source);
+  await f.tamperNextReply('getChatTranscriptContent');
+  await assert.rejects(client.chat.command('getChatTranscriptContent', request));
+  const other = (
+    await client.chat.command('createChat', {
+      session: f.session,
+      requestId: 'other',
+      title: 'Other',
+    })
+  ).conversation.target;
+  for (const wrong of [
+    other,
+    { ...target, actorId: 'other' },
+    { ...target, host: { ...target.host, storeId: 'other' } },
+  ])
+    await assert.rejects(
+      client.chat.command('getChatTranscriptContent', {
+        ...request,
+        source: { ...source, target: wrong },
+      }),
+    );
+  assert(source.kind === 'entry');
+  const around = await client.chat.command('getChatHistoryAround', {
+    target,
+    entryId: source.entryId,
+  });
+  assert.deepEqual(around.target, target);
+  assert.equal(around.entryId, source.entryId);
+  await f.holdReply('getChatTranscriptContent');
+  const abort = new AbortController();
+  const pending = client.chat.command('getChatTranscriptContent', request, {
+    signal: abort.signal,
+  });
+  const cancelled = assert.rejects(pending, { code: 'Cancelled' });
+  await until(f.stats, (stats) => stats.heldReplies.includes('getChatTranscriptContent'));
+  assert.equal((await client.chat.command('getChat', { target: other })).state, 'idle');
+  const stop = await client.chat.command('stopChat', { stop: live.run!.stop, requestId: 'stop' });
+  assert.deepEqual(stop.stop, live.run!.stop);
+  abort.abort();
+  await cancelled;
+  await f.releaseReply();
+  await f.holdReply('getChatHistoryAround');
+  const stale = client.chat.command('getChatHistoryAround', { target, entryId: source.entryId });
+  const disconnected = assert.rejects(stale, { code: 'Unavailable' });
+  await until(f.stats, (stats) => stats.heldReplies.includes('getChatHistoryAround'));
+  await client.connection.command('disconnect', { connectionId: connected.connectionId! });
+  await disconnected;
+  await f.releaseReply();
+  const reconnected = await client.connection.command('connect', { profileId: client.profile.id });
+  assert.notEqual(reconnected.connectionId, connected.connectionId);
+  assert.equal((await client.chat.command('getChatTranscriptContent', request)).kind, 'content');
+  assert.equal(
+    (await f.stats()).commands.filter((operation) => operation === 'sendChat').length,
+    1,
+  );
+});
