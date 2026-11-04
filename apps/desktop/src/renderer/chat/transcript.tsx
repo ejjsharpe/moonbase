@@ -711,7 +711,8 @@ function Part({
   entryId: string;
 }) {
   const identity = JSON.stringify([transcript.source, part.partId]);
-  const source = useMemo(() => transcript.source, [identity]);
+  const [source, setSource] = useState(transcript.source);
+  if (JSON.stringify(source) !== JSON.stringify(transcript.source)) setSource(transcript.source);
   const disclosure = useMemo(
     () => getTranscriptDisclosureId(entryId, part.partId),
     [entryId, part.partId],

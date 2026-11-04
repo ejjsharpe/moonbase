@@ -48,6 +48,12 @@ test('changed messages re-lex, references/fence closure invalidate interpretatio
   assert.notEqual(next[0]!.signature, first[0]!.signature);
   assert.equal(locateFences('```js\nconst n=1')[0]!.closed, false);
   assert.equal(locateFences('```js\nconst n=1\n```')[0]!.closed, true);
+  const nested = cache.parse(
+    'nested',
+    '1',
+    '- ```ts\r\n  body 🌔\t\r\noutside the list\r\n```\r\n',
+  );
+  assert.match(nested[0]!.signature, /"closed":false/);
   for (let i = 0; i < 256; i++) cache.parse(String(i), '1', 'message '.repeat(100));
   assert.ok(cache.stats.messages <= 128);
   assert.ok(cache.stats.retainedBytes <= 2 * 1024 * 1024);

@@ -33,8 +33,10 @@ export class MarkdownCache {
       normalizedOffset = 0;
     const locations = fences.map((fence) => {
       normalizedOffset += source.slice(originalOffset, fence.start).replace(/\r\n?/g, '\n').length;
-      originalOffset = fence.start;
-      return { fence, offset: normalizedOffset };
+      const offset = normalizedOffset;
+      normalizedOffset += source.slice(fence.start, fence.end).replace(/\r\n?/g, '\n').length;
+      originalOffset = fence.end;
+      return { fence, offset, end: normalizedOffset };
     });
     let position = 0,
       location = 0;
@@ -44,18 +46,22 @@ export class MarkdownCache {
       const end = start + outer.raw.length;
       position = end;
       while (locations[location] && locations[location]!.offset < start) location++;
-      const candidates: CodeSource[] = [];
+      const candidates: (typeof locations)[number][] = [];
       while (locations[location] && locations[location]!.offset < end)
-        candidates.push(locations[location++]!.fence);
+        candidates.push(locations[location++]!);
       let candidateIndex = 0;
       marked.walkTokens([outer], (token) => {
         if (token.type !== 'code' || (token as Tokens.Code).codeBlockStyle === 'indented') return;
         const candidate = candidates[candidateIndex++];
         if (
           candidate &&
-          candidate.text.replace(/\r\n?/g, '\n').replace(/\n$/, '') === (token as Tokens.Code).text
+          candidate.fence.text.replace(/\r\n?/g, '\n').replace(/\n$/, '') ===
+            (token as Tokens.Code).text
         )
-          (token as LocatedToken).sourceCode = candidate;
+          (token as LocatedToken).sourceCode = {
+            ...candidate.fence,
+            closed: candidate.fence.closed && candidate.end <= end,
+          };
       });
     }
     const blocks = tokens.map((token) => ({ token, signature: JSON.stringify(token) }));
