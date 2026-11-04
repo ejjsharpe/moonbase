@@ -1,5 +1,5 @@
 import * as stylex from '@stylexjs/stylex';
-import { colors, layout, space, type } from './tokens.stylex';
+import { colors, layout, radius, space, type } from './tokens.stylex';
 
 export const filesUI = stylex.create({
   tools: { display: 'flex', gap: space.xs, flexWrap: 'wrap', margin: '0 0 12px' },
@@ -34,6 +34,7 @@ export const filesUI = stylex.create({
     height: layout.treeRow,
     padding: '3px 6px',
     paddingLeft: 6 + (level - 1) * 16,
+    borderRadius: radius.row,
     cursor: 'default',
     fontSize: type.body,
     color: colors.secondary,
@@ -42,7 +43,10 @@ export const filesUI = stylex.create({
   editing: { height: 'auto' },
   selected: { backgroundColor: { default: colors.selected, ':hover': colors.selectedHover } },
   focused: {
-    outline: { default: null, [stylex.when.ancestor(':focus')]: `1px solid ${colors.accent}` },
+    outline: {
+      default: null,
+      [stylex.when.ancestor(':focus-visible')]: `1px solid ${colors.accent}`,
+    },
     outlineOffset: -1,
   },
   activeLabel: { color: colors.text },
