@@ -46,6 +46,7 @@ assert.deepEqual(
   [],
   'Privileged desktop owner reached packaged renderer',
 );
+assert(main.includes('src/chat/transcript-native.ts'), 'Missing native transcript authority owner');
 for (const entry of ['native-actions', 'ipc', 'window-lifecycle', 'chat-backends'])
   assert(main.includes(`src/main/${entry}.ts`), `Missing packaged main owner: ${entry}`);
 

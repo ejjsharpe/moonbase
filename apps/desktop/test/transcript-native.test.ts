@@ -159,6 +159,7 @@ function fixture(live = false, text = '  **raw**\r\n\t🌔 é\r\n' + 'α'.repea
   };
   return {
     owner,
+    chat,
     actions: browserTranscriptActions(bridge, 'local'),
     clients: browserClients(bridge, 'local'),
     source,
@@ -318,5 +319,91 @@ test('Copy code is independent of highlight/DOM/range-count limits, including a 
   );
   await f.actions.copy({ source: f.source, selection: select(f.part), code: { start: 0 } });
   assert.deepEqual(f.writes, [body]);
+  await f.owner.dispose();
+});
+
+test('native schema/content echoes and binary content cannot authorize a clipboard write', async () => {
+  for (const corruption of ['source', 'selection', 'offset', 'binary']) {
+    const f = fixture();
+    const command = f.chat.command;
+    f.chat.command = async (operation, input, options) => {
+      const value = await command(operation, input, options);
+      if (operation !== 'getChatTranscriptContent') return value as never;
+      const reply = value as {
+        kind: string;
+        source: { target: { actorId: string } };
+        selection?: { revision: string };
+        offset?: number;
+        encoding?: string;
+        data?: string;
+      };
+      if (reply.kind === 'content') {
+        if (corruption === 'source') reply.source.target.actorId = 'foreign';
+        if (corruption === 'selection') reply.selection!.revision = 'b'.repeat(64);
+        if (corruption === 'offset') reply.offset = 1;
+        if (corruption === 'binary') {
+          reply.encoding = 'base64';
+          reply.data = Buffer.from(reply.data!).toString('base64');
+        }
+      }
+      return value as never;
+    };
+    await assert.rejects(f.actions.copy({ source: f.source, selection: select(f.part) }));
+    assert.deepEqual(f.writes, []);
+    await f.owner.dispose();
+  }
+  const f = fixture();
+  await assert.rejects(
+    f.owner.call('transcript', 'copy', { source: f.source, selection: null }, 'malformed'),
+  );
+  await f.owner.dispose();
+});
+
+test('late cancellation joins an already-started async clipboard write and never reports success', async () => {
+  const f = fixture();
+  const held = Promise.withResolvers<void>(),
+    entered = Promise.withResolvers<void>();
+  f.controls.write = async () => {
+    entered.resolve();
+    await held.promise;
+  };
+  const copying = f.owner.call('transcript', 'copy', { source: f.source }, 'late-write');
+  await entered.promise;
+  let settled = false;
+  const cancel = f.owner.cancel('late-write').then(() => {
+    settled = true;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(settled, false);
+  held.resolve();
+  const reply = await copying;
+  assert.equal(reply.ok, false);
+  if (!reply.ok) assert.equal(reply.error.code, 'Cancelled');
+  await cancel;
+  assert.equal(f.writes.length, 1);
+  await f.owner.dispose();
+});
+
+test('reentrant cancellation before the first native observation cannot strand Copy', async () => {
+  const f = fixture(true);
+  let closed = false;
+  let cancelled: Promise<Reply> | undefined;
+  f.chat.watch = () => {
+    cancelled = f.owner.cancel('reentrant');
+    return async () => {
+      closed = true;
+    };
+  };
+  const reply = await f.owner.call(
+    'transcript',
+    'copy',
+    { source: f.source, selection: select(f.part) },
+    'reentrant',
+  );
+  assert.equal(reply.ok, false);
+  if (!reply.ok) assert.equal(reply.error.code, 'Cancelled');
+  await cancelled;
+  assert.equal(closed, true);
+  assert.deepEqual(f.writes, []);
   await f.owner.dispose();
 });

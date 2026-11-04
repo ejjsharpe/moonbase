@@ -54,13 +54,7 @@ test('safe GFM, literal user content, progressive source, exact native callbacks
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );
-  const cdp = await page.context().newCDPSession(page);
-  await cdp.send('Emulation.setDeviceMetricsOverride', {
-    width: 720,
-    height: 450,
-    deviceScaleFactor: 2,
-    mobile: false,
-  });
+  await page.setViewportSize({ width: 720, height: 450 });
   await page.screenshot({ path: resolve(output, 'zoom-200.png') });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,

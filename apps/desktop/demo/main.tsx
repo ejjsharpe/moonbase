@@ -192,6 +192,14 @@ function Demo() {
     </main>
   );
 }
+if (transcriptDemo && new URLSearchParams(location.search).has('reading')) {
+  await firstApplication.chat!.start();
+  await firstApplication.chat!.select(chat.target);
+  firstApplication.chat!.setTranscriptView({
+    anchor: { entryId: 'reading-179', partId: 'm0.b0', offset: 0 },
+    expanded: [],
+  });
+}
 createRoot(document.getElementById('root')!).render(
   new URLSearchParams(location.search).has('strict') ? (
     <StrictMode>

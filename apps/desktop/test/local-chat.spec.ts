@@ -545,9 +545,11 @@ test('transcript local rendering precedes held completion; native Copy/link fail
       window.webContents.setZoomFactor(2);
     });
     await expect(page.getByLabel('Message', { exact: true })).toBeInViewport();
-    await page.screenshot({
-      path: resolve('../../test-results/transcript-111/native-zoom-200.png'),
-    });
+    await captureNative(
+      app,
+      page,
+      resolve('../../test-results/transcript-111/native-zoom-200.png'),
+    );
     await app.evaluate(() =>
       (globalThis as unknown as { transcriptTest: Control }).transcriptTest.finish(),
     );

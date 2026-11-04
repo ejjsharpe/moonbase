@@ -450,7 +450,7 @@ const Entry = memo(function Entry({
       {transcript?.thinking === 'redacted' && !parts?.some((part) => part.kind === 'thinking') && (
         <p {...stylex.props(styles.small)}>Thinking is redacted by the provider.</p>
       )}
-      {source && (manifest?.nextCursor ?? transcript?.nextCursor) && (
+      {source && (manifest ? manifest.nextCursor : transcript?.nextCursor) && (
         <Button
           {...stylex.props(controls.button)}
           disabled={manifest?.status === 'loading'}
@@ -556,6 +556,13 @@ function Part({
         : `${part.availability} content`}
     </p>
   );
+  if (!readable && part.availability !== 'redacted' && part.text)
+    presentation = (
+      <>
+        {presentation}
+        <pre {...stylex.props(styles.output)}>{part.text}</pre>
+      </>
+    );
   if (readable) {
     presentation = (
       <pre
@@ -582,10 +589,10 @@ function Part({
       {part.pairing && part.pairing !== 'matched' && (
         <p {...stylex.props(styles.small)}>Tool result pairing: {part.pairing}.</p>
       )}
-      {!!part.droppedBytes && (
+      {(!!part.droppedBytes || !!part.droppedLines) && (
         <p {...stylex.props(styles.small)}>
-          {part.droppedBytes.toLocaleString()} earlier bytes / {part.droppedLines ?? 0} lines were
-          not retained by the tool.
+          {(part.droppedBytes ?? 0).toLocaleString()} earlier bytes / {part.droppedLines ?? 0} lines
+          were not retained by the tool.
         </p>
       )}
       {!!content?.retainedFrom && (

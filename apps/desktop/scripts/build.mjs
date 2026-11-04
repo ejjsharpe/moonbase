@@ -96,6 +96,10 @@ for (const entry of [
     mainInputs.some((path) => path.endsWith(entry)),
     `Missing privileged local runtime input: ${entry}`,
   );
+assert(
+  mainInputs.includes('src/chat/transcript-native.ts'),
+  'Missing native transcript authority owner',
+);
 for (const entry of ['native-actions', 'ipc', 'window-lifecycle', 'chat-backends'])
   assert(mainInputs.includes(`src/main/${entry}.ts`), `Missing main owner: ${entry}`);
 const packages = await notices(

@@ -75,7 +75,7 @@ export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabili
         source,
         parts: parts.slice(0, 4),
         nextCursor: parts.length > 4 ? '4' : null,
-        thinking: 'redacted',
+        thinking: index === 179 ? 'redacted' : 'none',
       },
     });
   }

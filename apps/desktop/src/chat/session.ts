@@ -133,7 +133,14 @@ export class ChatIpcSession {
         } else {
           if (!live())
             throw new ApplicationError({ code: 'Cancelled', message: 'Link opening cancelled.' });
-          await this.capabilities.transcript!.openExternal(v.url as string);
+          try {
+            await this.capabilities.transcript!.openExternal(v.url as string);
+          } catch {
+            throw new ApplicationError({
+              code: 'Unavailable',
+              message: 'Could not open the link in your browser. Try again.',
+            });
+          }
         }
         return { ok: true, value: null };
       }

@@ -109,6 +109,7 @@ export async function copyTranscript(
       : undefined;
   const aborted = () => ready.resolve();
   request.signal.addEventListener('abort', aborted, { once: true });
+  if (request.signal.aborted) ready.resolve();
   try {
     if (close) await ready.promise;
     check();
@@ -188,7 +189,14 @@ export async function copyTranscript(
       if (!proved) throw changed();
     }
     check();
-    await native.writeText(text);
+    try {
+      await native.writeText(text);
+    } catch {
+      throw new ApplicationError({
+        code: 'Unavailable',
+        message: 'Could not write to the clipboard. Try Copy again.',
+      });
+    }
     if (!request.isLive() || request.signal.aborted)
       throw new ApplicationError({
         code: 'Cancelled',
