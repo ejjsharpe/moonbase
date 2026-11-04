@@ -12,3 +12,5 @@ Use Base UI in consuming React components for interactions and accessibility. Th
 File-tree rows use the shared row radius for hover and selection. Their focus outline appears only while the tree has keyboard-visible focus, keeping mouse selection quiet without hiding keyboard navigation.
 
 Buffer tabs use a flush, square strip with full-height dividers and an active surface joined to the breadcrumb row. Close controls reserve their space and appear on selection, hover or keyboard focus. A compact breadcrumb recipe pairs muted ancestors and slash separators with the current filename; the row stays on one line and truncates within narrow editor panes. The project-tab strip has an inset bottom separator that preserves its 40px geometry.
+
+Base UI context menus use `overlays.positioner`, `popup`, `menuPopup`, `option` and `menuItem` for viewport-constrained positioning, rounded rows, highlighted fill and disabled text/cursors. `menuBackdrop` consumes outside dismissal clicks without activating the underlying work area. Interaction and captured mutation targets remain in Workbench.

@@ -12,6 +12,7 @@ import type {
   EditorMutation,
   MutationAction as Action,
 } from '@moonbase/application/editor';
+import { checkoutKey } from '@moonbase/application/editor';
 const empty = { busy: false, error: '', replacements: null };
 const emptySnapshot = () => empty;
 const noSubscription = () => () => {};
@@ -20,13 +21,20 @@ export function Mutation({
   controller,
   action,
   close,
+  finalFocus,
 }: {
   controller: EditorController;
   action: Action;
   close: () => void;
+  finalFocus?: () => boolean | HTMLElement | null;
 }) {
   const checkout = action.checkout,
     batchImport = action.kind === 'import' && action.nativeReferences!.length > 1;
+  const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
+  const unavailable =
+    state.disposed ||
+    !state.recovery.openCheckoutIds.includes(checkout.checkoutId) ||
+    !state.recovery.checkouts.some((target) => checkoutKey(target) === checkoutKey(checkout));
   const [destination, setDestination] = useState(
     action.kind === 'move' ? (action.paths[0] ?? '') : '',
   );
@@ -46,24 +54,23 @@ export function Mutation({
   }, [controller, action]);
   const titles: Record<Action['kind'], string> = {
     trash: 'Move to Trash',
-    move: 'Rename or move',
+    move: 'Rename',
     copy: 'Copy',
     import: 'Import files',
     'create-file': 'New File',
     'create-directory': 'New Folder',
   };
   const title = titles[action.kind];
-  let selectionDescription = checkout.root;
+  let selectionDescription = action.paths.join(', ');
   if (action.nativeReferences)
-    selectionDescription = `${action.nativeReferences.length} selected item(s) → ${checkout.root}`;
-  else if (action.paths.length) selectionDescription = action.paths.join(', ');
+    selectionDescription = `${action.nativeReferences.length} selected item(s)`;
   let descriptionSuffix = '';
   if (action.kind === 'trash')
     descriptionSuffix = '. Unsaved text remains in recovery at its original path.';
   else if (action.kind === 'move')
     descriptionSuffix = '. Text and positions are preserved; text undo history resets.';
   async function apply(consent = false) {
-    if (busy || (action.kind !== 'trash' && !batchImport && !destination)) return;
+    if (unavailable || busy || (action.kind !== 'trash' && !batchImport && !destination)) return;
     if (await workflow?.apply(destination, replacementPaths, consent)) {
       if (action.kind === 'create-file')
         await controller.open({ checkout, path: destination }, { view: 'file', intent: 'keep' });
@@ -73,10 +80,13 @@ export function Mutation({
   return (
     <Popup
       title={title}
+      finalFocus={finalFocus}
       onClose={() => {
         if (!busy) close();
       }}>
       <Dialog.Description {...stylex.props(styles.path)}>
+        {checkout.hostId} · {checkout.root}
+        {selectionDescription && ' — '}
         {selectionDescription}
         {descriptionSuffix}
       </Dialog.Description>
@@ -127,10 +137,17 @@ export function Mutation({
           {error}
         </p>
       )}
+      {unavailable && (
+        <p role="alert" {...stylex.props(controls.alert)}>
+          The captured checkout is unavailable. Reopen that exact checkout before continuing.
+        </p>
+      )}
       <div {...stylex.props(styles.dialogActions)}>
         <Button
           {...stylex.props(controls.button)}
-          disabled={busy || (action.kind !== 'trash' && !batchImport && !destination)}
+          disabled={
+            unavailable || busy || (action.kind !== 'trash' && !batchImport && !destination)
+          }
           onClick={() => void apply(!!replacements?.length)}>
           {replacements?.length ? 'Replace captured destination' : title}
         </Button>
