@@ -80,6 +80,7 @@ const inputs = {
     expectedVersion: disk.version,
   },
   listDirectory: { checkout, path: '', hideIgnored: false },
+  getIgnoredPaths: { checkout, path: '', paths: [target.path] },
   gitStatus: { checkout },
   readComparison: { target, area: 'staged' },
   lookupFiles: { checkout, query: '', limit: 100, history: [target.path] },
@@ -105,6 +106,7 @@ const outputs = {
     entries: [{ path: target.path, directory: false, ignored: false }],
     partial: false,
   },
+  getIgnoredPaths: { paths: [target.path] },
   gitStatus: { branch: '', changes: [{ path: target.path, area: 'staged' }] },
   readComparison: { original: '', title: '', working: null },
   lookupFiles: {

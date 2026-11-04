@@ -10,7 +10,9 @@ Contracts schemas define structural/value bounds, not authority. Workspace owns 
 | `error-schema` | `ApplicationErrorCodeSchema`, `ApplicationErrorDTOSchema` | `decodeApplicationErrorDTO` |
 | `chat-schema` | Existing chat schemas; identifier/host-target exports alias `host-schema` | Existing `decodeChatInput`, `decodeChatOutput`, `isChatCommand` |
 
-The workspace registries cover openCheckout, readFile, saveFile, listDirectory, gitStatus, readComparison, lookupFiles, inspectEntries, mutate, operationStatus, acknowledgeOperation, loadRecovery, persistRecovery and getRecoveryPublication. The connection registries cover getConnection, connect and disconnect, including exact undefined output for void commands.
+The workspace registries cover openCheckout, readFile, saveFile, listDirectory, getIgnoredPaths, gitStatus, readComparison, lookupFiles, inspectEntries, mutate, operationStatus, acknowledgeOperation, loadRecovery, persistRecovery and getRecoveryPublication. The connection registries cover getConnection, connect and disconnect, including exact undefined output for void commands.
+
+`listDirectory.includeIgnoredStatus: false` requests entries without waiting for Git; omitted `DirectoryEntry.ignored` means unknown. `getIgnoredPaths` returns ignored paths and an optional policy error for at most 20,000 supplied immediate children of one directory. Workspace validates exact directory/path authority; desktop retains its exact native checkout grant and the existing byte bound while admitting this command's full listing-sized path array. Neither command changes saved recovery schemas.
 
 Request decoders reject unfamiliar fields recursively and use safe `InvalidInput` errors. Ordinary successful reply/event decoders project recognized fields and use `Incompatible` on malformed data. Optional undefined fields are omitted; mutable DTO fields/arrays, null distinctions and dynamic record keys remain supported. Workspace request/client identities retain their own 160-character grammar; chat/connection/host identities retain their separate 256-character grammar. Text byte limits and filename UTF-16 limits remain distinct.
 

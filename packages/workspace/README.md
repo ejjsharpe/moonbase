@@ -8,6 +8,8 @@
 
 It implements the contracts in [`@moonbase/contracts`](../contracts/README.md). The [headless application editor](../application/docs/EDITOR.md) owns buffers and Save/Discard/Cancel decisions; its presentation owns rendering. Workspace owns local IO, validation and persistence.
 
+Folder listings enumerate only the requested directory. `listDirectory({includeIgnoredStatus: false})` skips Git entirely and leaves `ignored` flags unknown; it cannot be combined with `hideIgnored`. The default retains complete ignore-aware listings for direct consumers. `getIgnoredPaths({checkout, path, paths})` classifies up to 20,000 exact immediate children without enumerating them again, validating checkout authority, paths and applicable ignore policies. An unavailable or unsafe policy returns an explicit error so clients can retain visible files without claiming a known ignore state. Git ignore checks validate `.gitignore` files along the directory's ancestor chain and the repository exclude policy, without traversing unrelated project files. File lookup retains its broader ripgrep policy validation.
+
 ## Integration
 
 `WorkspaceLive(config)` provides the scoped `WorkspaceService` and privileged `WorkspaceNative` service for approved native imports. Compose it once in the process root’s Effect runtime and use the shared application handlers/client for all entry points. Dispose the runtime after the editor’s preservation gate succeeds.

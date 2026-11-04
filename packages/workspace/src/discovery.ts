@@ -1,6 +1,6 @@
 import { normalizeApplicationError } from '@moonbase/effect';
 import { accessSync, constants } from 'node:fs';
-import { basename, isAbsolute, join } from 'node:path';
+import { basename, dirname, isAbsolute, join } from 'node:path';
 import type { CheckoutTarget, CommandInput, CommandOutput } from '@moonbase/contracts/workspace';
 import type { Directory } from './filesystem.ts';
 import { matchPath, compareMatches } from './lookup.ts';
@@ -53,6 +53,10 @@ export class WorkspaceDiscovery {
   }
   async listDirectory(input: CommandInput<'listDirectory'>, signal: AbortSignal) {
     path(input.path, true);
+    ensure(
+      input.includeIgnoredStatus !== false || !input.hideIgnored,
+      'Ignore filtering requires ignore classification.',
+    );
     const directory = await this.directory(input.checkout);
     await directory.entry(input.path, signal);
     const entries = (await directory.io(['list', input.path || '.'], undefined, signal))
@@ -63,15 +67,50 @@ export class WorkspaceDiscovery {
       .map((row) => ({
         path: input.path ? input.path + '/' + row.slice(1) : row.slice(1),
         directory: row[0] === 'd',
-        ignored: false,
       }));
+    if (input.includeIgnoredStatus === false)
+      return {
+        entries: entries.sort(
+          (a, b) => Number(b.directory) - Number(a.directory) || a.path.localeCompare(b.path),
+        ),
+        partial: entries.length === 20000,
+      };
+    const ignored = await this.getIgnoredPaths(
+      { checkout: input.checkout, path: input.path, paths: entries.map((entry) => entry.path) },
+      signal,
+    );
+    const ignoredPaths = new Set(ignored.paths);
+    return {
+      entries: entries
+        .map((entry) => ({ ...entry, ignored: ignoredPaths.has(entry.path) }))
+        .filter((entry) => !input.hideIgnored || !entry.ignored)
+        .sort((a, b) => Number(b.directory) - Number(a.directory) || a.path.localeCompare(b.path)),
+      partial: entries.length === 20000 || !!ignored.error,
+      error: ignored.error,
+    };
+  }
+  async getIgnoredPaths(
+    input: CommandInput<'getIgnoredPaths'>,
+    signal: AbortSignal,
+  ): Promise<CommandOutput<'getIgnoredPaths'>> {
+    path(input.path, true);
+    input.paths.forEach((item) => {
+      path(item);
+      ensure(
+        dirname(item) === (input.path || '.'),
+        'Ignore paths must be immediate directory children.',
+      );
+    });
+    const directory = await this.directory(input.checkout);
+    await directory.entry(input.path, signal);
     let error: string | undefined;
     try {
       this.policy(input.checkout);
       const output = await directory
         .io(
           [
-            'lookup',
+            'check-ignore',
+            input.path || '.',
             this.gitExecutable,
             '-c',
             'core.excludesFile=/dev/null',
@@ -79,29 +118,20 @@ export class WorkspaceDiscovery {
             '-z',
             '--stdin',
           ],
-          entries.map((e) => e.path).join('\0') + (entries.length ? '\0' : ''),
+          input.paths.join('\0') + (input.paths.length ? '\0' : ''),
           signal,
         )
         .catch((error) => {
-          if (error.status === 1) return Buffer.alloc(0);
+          if (error.status === 1 && !error.stderr) return Buffer.alloc(0);
           throw error;
         });
-      const ignored = new Set(output.toString().split('\0'));
-      entries.forEach((e) => {
-        e.ignored = ignored.has(e.path);
-      });
+      return { paths: output.toString().split('\0').filter(Boolean) };
     } catch (failure) {
       error =
         'Git ignore policy unavailable; all entries shown. ' +
         normalizeApplicationError(failure).message;
     }
-    return {
-      entries: entries
-        .filter((e) => !input.hideIgnored || !e.ignored)
-        .sort((a, b) => Number(b.directory) - Number(a.directory) || a.path.localeCompare(b.path)),
-      partial: entries.length === 20000 || !!error,
-      error,
-    };
+    return { paths: [], error };
   }
   async getStatus(target: CheckoutTarget, signal: AbortSignal) {
     const directory = await this.directory(target);

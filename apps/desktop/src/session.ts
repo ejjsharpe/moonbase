@@ -79,7 +79,7 @@ export class EditorSession {
         message: 'Choose this exact checkout with the native picker.',
       });
   }
-  private inspect(value: unknown, depth = 0): void {
+  private inspect(value: unknown, depth = 0, arrayLimit = 8192): void {
     if (depth > 24) invalid('Input nesting limit exceeded.');
     if (typeof value === 'string') {
       if (value.length > 2 ** 24) invalid('Input too large.');
@@ -92,18 +92,18 @@ export class EditorSession {
     )
       return;
     if (Array.isArray(value)) {
-      if (value.length > 8192) invalid('Input array too large.');
-      for (const item of value) this.inspect(item, depth + 1);
+      if (value.length > arrayLimit) invalid('Input array too large.');
+      for (const item of value) this.inspect(item, depth + 1, arrayLimit);
       return;
     }
     const object = record(value);
-    for (const item of Object.values(object)) this.inspect(item, depth + 1);
+    for (const item of Object.values(object)) this.inspect(item, depth + 1, arrayLimit);
   }
   private validate(operation: WorkspaceCommand, input: unknown) {
     const v = record(decodeWorkspaceInput(operation, input));
     // Domain/path/state validation remains in WorkspaceService; this boundary additionally binds caller and approval.
     if (JSON.stringify(v).length > 32 * 1024 * 1024) invalid('Command input is too large.');
-    this.inspect(v);
+    this.inspect(v, 0, operation === 'getIgnoredPaths' ? 20000 : 8192);
     if ('checkout' in v) this.approved(v.checkout);
     if ('target' in v) {
       const target = record(v.target);

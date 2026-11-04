@@ -203,6 +203,12 @@ export const workspaceInputSchemas = {
     checkout: CheckoutTargetSchema,
     path,
     hideIgnored: optional(Schema.Boolean),
+    includeIgnoredStatus: optional(Schema.Boolean),
+  }),
+  getIgnoredPaths: struct({
+    checkout: CheckoutTargetSchema,
+    path,
+    paths: array(path).check(Schema.isMaxLength(20000)),
   }),
   gitStatus: struct({ checkout: CheckoutTargetSchema }),
   readComparison: struct({
@@ -251,6 +257,7 @@ export const workspaceOutputSchemas = {
   readFile: FileDocumentSchema,
   saveFile: SaveResultSchema,
   listDirectory: DirectoryListingSchema,
+  getIgnoredPaths: struct({ paths: array(path), error: optional(Schema.String) }),
   gitStatus: GitStatusSchema,
   readComparison: ComparisonSchema,
   lookupFiles: struct({

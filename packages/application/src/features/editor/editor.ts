@@ -148,6 +148,16 @@ class EditorModelState {
   private comparisons: Record<string, Comparison> = {};
   private comparisonAttempts = new Map<string, { mode: FileView; failedWorkingVersion?: string }>();
   private listings: Record<string, DirectoryListing> = {};
+  private listingReads = new Map<
+    string,
+    {
+      scope: Scope.Scope;
+      classificationScope: Scope.Closeable;
+      revision: number;
+      listed: boolean;
+      promise: Promise<DirectoryListing>;
+    }
+  >();
   private git: Record<string, GitStatus> = {};
   private errors: string[] = [];
   private operations = new Map<
@@ -969,21 +979,73 @@ class EditorModelState {
     return this.listIn(checkout, path, this.discovery.getCheckoutScope(checkout));
   }
   private async listIn(checkout: CheckoutTarget, path: string, scope: Scope.Scope) {
-    const selected = this.checkout(checkout);
+    this.checkout(checkout);
     validPath(path, true);
-    const listing = await this.discovery.listDirectory(
-      {
-        checkout,
-        path,
-        hideIgnored: selected.tree.hideIgnored,
-      },
-      scope,
-    );
-    if (this.closing || !this.recovery.openCheckoutIds.includes(checkout.checkoutId))
-      return listing;
-    this.listings[JSON.stringify([checkoutKey(checkout), path])] = listing;
-    this.emit();
-    return listing;
+    const key = JSON.stringify([checkoutKey(checkout), path]),
+      revision = this.discovery.discoveryRevision,
+      pending = this.listingReads.get(key);
+    if (pending?.scope === scope && !pending.listed && pending.revision === revision)
+      return pending.promise;
+    if (pending)
+      void this.run(Scope.close(pending.classificationScope, Exit.void), pending.scope).catch(
+        this.report,
+      );
+    const classificationScope = Scope.forkUnsafe(scope);
+    const promise = this.discovery
+      .listDirectory(
+        {
+          checkout,
+          path,
+          includeIgnoredStatus: false,
+        },
+        scope,
+      )
+      .then((listing) => {
+        if (!isCurrent()) return listing;
+        this.listingReads.get(key)!.listed = true;
+        this.listings[key] = listing;
+        this.emit();
+        return listing;
+      });
+    const isCurrent = () =>
+      !this.closing &&
+      scope.state._tag !== 'Closed' &&
+      this.recovery.openCheckoutIds.includes(checkout.checkoutId) &&
+      this.listingReads.get(key)?.promise === promise;
+    this.listingReads.set(key, { scope, classificationScope, revision, listed: false, promise });
+    void promise
+      .then(async (listing) => {
+        if (!isCurrent() || !listing.entries.some((entry) => entry.ignored === undefined)) return;
+        const ignored = await this.command(
+          'getIgnoredPaths',
+          {
+            checkout,
+            path,
+            paths: listing.entries.map((entry) => entry.path),
+          },
+          classificationScope,
+        );
+        if (!isCurrent()) return;
+        const paths = new Set(ignored.paths);
+        this.listings[key] = {
+          ...listing,
+          entries: listing.entries.map((entry) => ({
+            ...entry,
+            ignored: ignored.error ? undefined : paths.has(entry.path),
+          })),
+          partial: listing.partial || !!ignored.error,
+          error: ignored.error ?? listing.error,
+        };
+        this.emit();
+      })
+      .catch(() => {
+        /* The scoped command already reported its failure; keep the visible files. */
+      })
+      .finally(() => {
+        if (this.listingReads.get(key)?.promise === promise) this.listingReads.delete(key);
+        return this.run(Scope.close(classificationScope, Exit.void), scope).catch(this.report);
+      });
+    return promise;
   }
   async reveal(target: FileTarget, showIgnored = false) {
     this.assertAdmission();
@@ -998,16 +1060,12 @@ class EditorModelState {
         {
           checkout: target.checkout,
           path: parts.slice(0, i).join('/'),
-          hideIgnored: false,
+          includeIgnoredStatus: false,
         },
         scope,
       );
       const entry = listing.entries.find((item) => item.path === path);
       if (!entry) throw editorError(listing.error ?? 'Active file unavailable. Refresh and retry.');
-      if (entry.ignored && selected.tree.hideIgnored && !showIgnored)
-        throw editorError(
-          'Active file is hidden. Turn off Hide Git-ignored files and reveal again.',
-        );
       if (i < parts.length - 1) expanded.push(path);
     }
     this.updateTree(target.checkout, {
