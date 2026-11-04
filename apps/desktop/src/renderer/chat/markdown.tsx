@@ -62,7 +62,7 @@ const Block = memo(
     a.openLink === b.openLink &&
     a.copyCode === b.copyCode,
 );
-function isReadingNodePinned(node: HTMLElement | null) {
+export function isReadingNodePinned(node: HTMLElement | null) {
   const selection = window.getSelection();
   return (
     !!node &&

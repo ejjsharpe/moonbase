@@ -550,6 +550,7 @@ test('transcript local rendering precedes held completion; native Copy/link fail
       page,
       resolve('../../test-results/transcript-111/native-zoom-200.png'),
     );
+    await page.getByLabel('Message', { exact: true }).focus();
     await app.evaluate(() =>
       (globalThis as unknown as { transcriptTest: Control }).transcriptTest.finish(),
     );

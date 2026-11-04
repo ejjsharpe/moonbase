@@ -7,13 +7,15 @@ import type { ChatController, ChatState, TranscriptContentState } from '@moonbas
 import type { ChatEntry, ChatTranscript, ChatTranscriptPart } from '@moonbase/contracts/chat';
 import type { TranscriptNative } from '../../chat/wire.ts';
 import { getTranscriptDisclosureId } from '../../chat/transcript-source.ts';
-import { Markdown } from './markdown.tsx';
+import { Markdown, isReadingNodePinned } from './markdown.tsx';
 import { MarkdownCache } from './markdown-model.ts';
 
-type Anchor = ChatState['transcript']['view']['anchor'];
+type Anchor =
+  | ChatState['transcript']['view']['anchor']
+  | { liveSource: string; partId?: string; offset: number };
 export function Transcript({
   controller,
-  state,
+  state: latestState,
   native,
 }: {
   controller: ChatController;
@@ -22,6 +24,27 @@ export function Transcript({
 }) {
   const root = useRef<HTMLElement>(null),
     content = useRef<HTMLDivElement>(null);
+  const [pinned, setPinned] = useState(false),
+    [presented, setPresented] = useState(latestState);
+  const preserve = pinned && getLiveIdentity(presented) !== getLiveIdentity(latestState);
+  if (!preserve && presented !== latestState) setPresented(latestState);
+  const state = preserve ? presented : latestState;
+  useEffect(() => {
+    const update = () =>
+      setPinned(
+        isReadingNodePinned(
+          root.current?.querySelector<HTMLElement>('[data-transcript-live]') ?? null,
+        ),
+      );
+    document.addEventListener('selectionchange', update);
+    document.addEventListener('focusin', update);
+    document.addEventListener('focusout', update);
+    return () => {
+      document.removeEventListener('selectionchange', update);
+      document.removeEventListener('focusin', update);
+      document.removeEventListener('focusout', update);
+    };
+  }, []);
   const follow = useRef(!state.transcript.view.anchor),
     anchor = useRef<Anchor>(state.transcript.view.anchor);
   const current = useRef(state);
@@ -44,9 +67,9 @@ export function Transcript({
     [controller, cache],
   );
   useEffect(() => {
-    if (state.transcript.observation === 'inactive' || !state.ready)
+    if (latestState.transcript.observation === 'inactive' || !latestState.ready)
       for (const job of jobs.current) job.abort();
-  }, [state.transcript.observation, state.ready]);
+  }, [latestState.transcript.observation, latestState.ready]);
   const run = useCallback((action: (signal: AbortSignal) => Promise<void>, success: string) => {
     if (jobs.current.size >= 2) {
       setNotice({
@@ -88,23 +111,29 @@ export function Transcript({
     if (!element) return;
     const top = getReadingTop(element);
     const nodes = [
-      ...element.querySelectorAll<HTMLElement>('[data-transcript-part], [data-transcript-entry]'),
+      ...element.querySelectorAll<HTMLElement>(
+        '[data-transcript-part], [data-transcript-entry], [data-transcript-live]',
+      ),
     ];
     const node =
       nodes.find(
         (node) =>
           node.getBoundingClientRect().bottom > top && node.getBoundingClientRect().top >= top,
       ) ?? nodes.find((node) => node.getBoundingClientRect().bottom > top);
-    if (node)
+    if (node) {
+      const row = node.closest<HTMLElement>('[data-transcript-entry], [data-transcript-live]')!;
+      const location = row.dataset.transcriptLive
+        ? { liveSource: row.dataset.transcriptLive }
+        : { entryId: row.dataset.transcriptEntry! };
       anchor.current = {
-        entryId:
-          node.dataset.transcriptEntry ??
-          node.closest<HTMLElement>('[data-transcript-entry]')!.dataset.transcriptEntry!,
+        ...location,
         ...(node.dataset.transcriptPart ? { partId: node.dataset.transcriptPart } : {}),
         offset: node.getBoundingClientRect().top - top,
       };
+    }
     controller.setTranscriptView({
-      anchor: follow.current ? null : anchor.current,
+      anchor:
+        follow.current || !anchor.current || !('entryId' in anchor.current) ? null : anchor.current,
       expanded: current.current.transcript.view.expanded,
     });
   }, [controller]);
@@ -121,8 +150,14 @@ export function Transcript({
     }
     const target = anchor.current ?? current.current.transcript.view.anchor;
     if (!target) return;
-    const nodes = [...element.querySelectorAll<HTMLElement>('[data-transcript-entry]')];
-    const entry = nodes.find((node) => node.dataset.transcriptEntry === target.entryId);
+    const nodes = [
+      ...element.querySelectorAll<HTMLElement>('[data-transcript-entry], [data-transcript-live]'),
+    ];
+    const entry = nodes.find((node) =>
+      'entryId' in target
+        ? node.dataset.transcriptEntry === target.entryId
+        : node.dataset.transcriptLive === target.liveSource,
+    );
     const part =
       target.partId &&
       [...(entry?.querySelectorAll<HTMLElement>('[data-transcript-part]') ?? [])].find(
@@ -138,7 +173,9 @@ export function Transcript({
     if (
       !navigation.current &&
       view &&
-      (view.entryId !== anchor.current?.entryId || view.partId !== anchor.current?.partId)
+      (view.entryId !==
+        (anchor.current && 'entryId' in anchor.current ? anchor.current.entryId : undefined) ||
+        view.partId !== anchor.current?.partId)
     )
       anchor.current = view;
   }, [state.transcript.view.anchor]);
@@ -212,6 +249,7 @@ export function Transcript({
     )
       earlier();
   };
+  const status = latestState.transcript;
   const transcript = state.transcript,
     snapshot = state.snapshot,
     live = transcript.atLatest && !earlierRow ? snapshot?.run : null;
@@ -278,7 +316,7 @@ export function Transcript({
                 Read later
               </Button>
             )}
-            {(!following || !transcript.atLatest) && (
+            {(preserve || !following || !transcript.atLatest) && (
               <Button {...stylex.props(controls.button, controls.quietButton)} onClick={latest}>
                 Jump to latest
               </Button>
@@ -292,9 +330,9 @@ export function Transcript({
             </p>
           )}
         </div>
-        {transcript.error && (
+        {status.error && (
           <p role="alert" {...stylex.props(styles.warning)}>
-            {transcript.error}{' '}
+            {status.error}{' '}
             <Button
               {...stylex.props(controls.button)}
               onClick={() => {
@@ -308,31 +346,37 @@ export function Transcript({
             </Button>
           </p>
         )}
-        {transcript.observation === 'reconnecting' && (
+        {status.observation === 'reconnecting' && (
           <p role="status" {...stylex.props(styles.small)}>
             Reconnecting. Showing the last received content; live reads and Copy wait for a fresh
             connection.
           </p>
         )}
-        {transcript.observation === 'failed' && (
+        {status.observation === 'failed' && (
           <p role="alert" {...stylex.props(styles.warning)}>
             Live updates stopped. Reopen the conversation to refresh.
           </p>
         )}
-        {transcript.observation === 'legacy' && (
+        {status.observation === 'legacy' && (
           <p {...stylex.props(styles.small)}>
             This host updates periodically. Upgrade the host for streaming responses.
           </p>
         )}
-        {transcript.capabilities.transcript === 'legacy' && (
+        {status.capabilities.transcript === 'legacy' && (
           <p {...stylex.props(styles.small)}>
             Upgrade this host for complete transcript reads and Copy. Previews remain readable.
           </p>
         )}
 
+        {preserve && (
+          <p role="status" {...stylex.props(styles.small)}>
+            The response changed. Your selection is retained; Jump to latest to read the current
+            output.
+          </p>
+        )}
         {entries.map((entry) => (
           <Entry
-            key={entry.id}
+            key={'entry:' + entry.id}
             entry={entry}
             controller={controller}
             state={transcript}
@@ -358,7 +402,7 @@ export function Transcript({
             native={native}
             run={run}
             openLink={openLink}
-            liveState={live.state}
+            liveState={preserve ? 'Selected response' : live.state}
           />
         )}
         {live &&
@@ -447,14 +491,15 @@ const Entry = memo(function Entry({
             native={native}
             run={run}
             openLink={openLink}
-            entryId={entry.id}
+            entryId={source?.kind === 'live' ? JSON.stringify(source) : entry.id}
           />
         ))}
       </>
     );
   return (
     <article
-      data-transcript-entry={entry.id}
+      data-transcript-entry={liveState ? undefined : entry.id}
+      data-transcript-live={liveState ? JSON.stringify(source ?? 'legacy') : undefined}
       aria-label={liveState ? 'Live response' : undefined}
       {...stylex.props(styles.message)}>
       <div {...stylex.props(styles.header)}>
@@ -726,6 +771,11 @@ function Part({
         </Button>
       )}
     </section>
+  );
+}
+function getLiveIdentity(state: ChatState) {
+  return JSON.stringify(
+    state.snapshot?.run?.transcript?.source ?? state.snapshot?.run?.stop ?? null,
   );
 }
 function getReadingTop(element: HTMLElement) {

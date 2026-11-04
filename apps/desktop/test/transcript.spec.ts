@@ -88,7 +88,7 @@ test('128-row reuse, unchanged sibling DOM, selection/focus and anchors during l
     for (let i = 0; i < 8 && !window.demo.application.chat!.getSnapshot().transcript.atLatest; i++)
       await window.demo.application.chat!.later();
   });
-  await expect(page.locator('[data-transcript-entry]')).toHaveCount(128);
+  await expect(page.locator('[data-transcript-entry], [data-transcript-live]')).toHaveCount(128);
   const before = await page.evaluate(() => {
     const row = document.querySelector('[data-transcript-entry="reading-179"]')!;
     row.setAttribute('data-sibling-retained', 'true');
@@ -118,7 +118,7 @@ test('128-row reuse, unchanged sibling DOM, selection/focus and anchors during l
   });
   expect(await page.locator('[data-sibling-retained]').count()).toBe(1);
   expect(await page.evaluate(() => window.getSelection()!.toString())).toBe(before.text);
-  await expect(page.locator('[data-transcript-entry]')).toHaveCount(128);
+  await expect(page.locator('[data-transcript-entry], [data-transcript-live]')).toHaveCount(128);
   const metrics = await page.evaluate(() => ({ ...window.demo.transcript!.metrics }));
   // Only the changed live message is re-lexed/re-tokenized; unchanged 128-row history is reused.
   expect(metrics.lex - before.metrics.lex).toBeLessThanOrEqual(22);
@@ -312,4 +312,42 @@ test('history retry repeats the captured navigation direction after a public rea
   );
   expect(reads).toHaveLength(2);
   expect(reads[1]).toBe(reads[0]);
+});
+
+test('retired live DOM stays pinned for focus/selection and never enters durable view memory', async ({
+  page,
+}) => {
+  await open(page);
+  await page.evaluate(() =>
+    window.demo.transcript!.live('```typescript\nconst selected = "held source";\n```\n'),
+  );
+  const live = page.locator('[data-transcript-live]'),
+    code = live.locator('pre');
+  await code.focus();
+  const selected = await code.evaluate((element) => {
+    element.setAttribute('data-retained-selection', 'true');
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return selection.toString();
+  });
+  await page.waitForTimeout(25);
+  await page.evaluate(() => {
+    window.demo.chat.snapshot.run = null;
+    window.demo.chat.snapshot.state = 'idle';
+    window.demo.chat.controls.receiveChat(structuredClone(window.demo.chat.snapshot));
+  });
+  await expect(page.getByText(/The response changed. Your selection is retained/)).toBeVisible();
+  await expect(page.locator('[data-retained-selection]')).toBeFocused();
+  expect(await page.evaluate(() => window.getSelection()!.toString())).toBe(selected);
+  expect(
+    await page.evaluate(
+      () => window.demo.application.chat!.getSnapshot().transcript.view.anchor?.entryId,
+    ),
+  ).not.toBe('live');
+  await page.evaluate(() => window.getSelection()!.removeAllRanges());
+  await page.getByRole('textbox', { name: 'Message', exact: true }).focus();
+  await expect(page.locator('[data-retained-selection]')).toHaveCount(0);
 });
