@@ -57,6 +57,7 @@ export function MonacoView({
         'editorCursor.foreground': colors.accent,
         'editorWidget.background': colors.elevated,
         'editorWidget.border': colors.controlBorder,
+        'scrollbar.shadow': colors.scrollShadow,
       },
     });
     const ownedModels = models.current;

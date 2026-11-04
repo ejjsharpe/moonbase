@@ -1,6 +1,14 @@
-import { captureNative, pasteNativeFile } from './editor-regressions.ts';
+import {
+  openTabMenu,
+  saveFile,
+  selectFileView,
+  captureNative,
+  pasteNativeFile,
+  filenameCases,
+  checkFilenameMaps,
+  checkTabMenu,
+} from './editor-regressions.ts';
 import type { RecoveryLoad } from '@moonbase/contracts/workspace';
-import { filenameCases, checkFilenameMaps, checkTabMenu } from './editor-regressions.ts';
 import { test, expect, _electron as electron } from '@playwright/test';
 import type { ElectronApplication, Page } from '@playwright/test';
 import {
@@ -324,7 +332,7 @@ test('actual sandboxed custom-scheme editor reads, edits and saves through SQLit
   ).toMatchObject({ ok: false, error: { code: 'Unauthorized' } });
   await open();
   await edit('export const saved = 42;');
-  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await saveFile(page);
   await expect
     .poll(() => readFileSync(join(checkout, 'a.ts'), 'utf8'))
     .toBe('export const saved = 42;');
@@ -372,7 +380,7 @@ test('actual conflict Compare, Cancel, Overwrite and Reload retain one dirty wor
   await open();
   await edit('my unsaved text');
   writeFileSync(join(checkout, 'a.ts'), 'external text');
-  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await saveFile(page);
   await page.getByRole('button', { name: 'Compare', exact: true }).click();
   await expect(page.getByRole('textbox', { name: 'a.ts editor', exact: true })).toBeVisible();
   await expect(
@@ -380,16 +388,16 @@ test('actual conflict Compare, Cancel, Overwrite and Reload retain one dirty wor
   ).toBeVisible();
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   expect(readFileSync(join(checkout, 'a.ts'), 'utf8')).toBe('external text');
-  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await saveFile(page);
   await page.getByRole('button', { name: 'Overwrite observed version', exact: true }).click();
   await expect.poll(() => readFileSync(join(checkout, 'a.ts'), 'utf8')).toBe('my unsaved text');
   for (const area of ['staged', 'unstaged']) {
-    await page.getByLabel('File view', { exact: true }).selectOption(area);
+    await selectFileView(page, area);
     await expect(page.getByRole('textbox', { name: 'a.ts editor', exact: true })).toBeVisible();
     // Monaco's accessible label is exercised together with its readonly editor option by the module suite.
     await expect(page.getByRole('textbox', { name: / original$/, exact: false })).toHaveCount(1);
     await edit('shared ' + area);
-    await page.getByLabel('File view', { exact: true }).selectOption('file');
+    await selectFileView(page, 'file');
     await expect(
       page
         .locator('.view-line')
@@ -406,7 +414,7 @@ test('actual conflict Compare, Cancel, Overwrite and Reload retain one dirty wor
     page.locator('.view-line').filter({ hasText: 'shared unstaged' }).first(),
   ).toBeVisible();
   writeFileSync(join(checkout, 'a.ts'), 'latest external');
-  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await saveFile(page);
   await page.getByRole('button', { name: 'Reload', exact: true }).click();
   await expect(
     page.locator('.view-line').filter({ hasText: 'latest external' }).first(),
@@ -522,7 +530,7 @@ test('SQLite contention vetoes Quit Discard; exact resolution and fresh choice k
 
 test('dirty recovery and comparison metadata restore across actual process restart', async () => {
   await open();
-  await page.getByLabel('File view', { exact: true }).selectOption('staged');
+  await selectFileView(page, 'staged');
   await expect(page.getByRole('textbox', { name: / original$/ })).toHaveCount(1);
   await edit('dirty restored staged');
   await expect
@@ -531,7 +539,7 @@ test('dirty recovery and comparison metadata restore across actual process resta
   await forceStop();
   await launch();
   await expect(page.getByRole('textbox', { name: 'a.ts editor', exact: true })).toBeVisible();
-  await expect(page.getByLabel('File view', { exact: true })).toHaveValue('staged');
+  await expect(page.getByRole('textbox', { name: /^staged · .* original$/ })).toBeVisible();
   await expect(
     page.locator('.view-line').filter({ hasText: 'dirty restored staged' }).first(),
   ).toBeVisible();
@@ -547,14 +555,14 @@ test('lost real Save reply retries original identity without replacing the nativ
   await app.evaluate(() => {
     globalThis.desktopTest.fault = 'saveFile';
   });
-  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await saveFile(page);
   await expect(page.getByRole('button', { name: 'Retry Save', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Retry Save', exact: true })).toBeEnabled();
   await expect.poll(() => readFileSync(join(checkout, 'a.ts'), 'utf8')).toBe('captured Save');
   const savedInode = statSync(join(checkout, 'a.ts')).ino;
   await edit('newer after lost reply');
   await page.getByRole('button', { name: 'Retry Save', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Retry Save', exact: true })).toHaveCount(0);
   await expect
     .poll(async () => (await recovery()).state.drafts[0]?.text)
     .toBe('newer after lost reply');
@@ -851,7 +859,7 @@ test('real create, dirty move and copy use native operations; lost move reply re
     page.locator('.view-line').filter({ hasText: 'dirty created buffer' }).first(),
   ).toBeVisible();
   await edit('saved only copied buffer', 'copied.ts');
-  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await saveFile(page);
   await expect
     .poll(() => readFileSync(join(checkout, 'copied.ts'), 'utf8'))
     .toBe('saved only copied buffer');
@@ -872,8 +880,10 @@ test('previews, Keep Open, order, keyboard Close/Reopen and overflow remain usef
     );
   await open();
   await page.getByRole('treeitem', { name: 'b.ts', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Keep Open', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Keep Open', exact: true }).click();
+  const preview = page.getByRole('tab', { name: 'b.ts', exact: true });
+  await expect(preview).toHaveAttribute('aria-description', 'Preview');
+  await preview.dblclick();
+  await expect(preview).not.toHaveAttribute('aria-description', 'Preview');
   for (let i = 0; i < 7; i++) await open(`long-component-name-for-overflow-${i}.ts`);
   await app.evaluate(({ BrowserWindow }) => {
     BrowserWindow.getAllWindows()[0].setSize(760, 650);
@@ -908,7 +918,7 @@ test('previews, Keep Open, order, keyboard Close/Reopen and overflow remain usef
   const before = await tabs.evaluateAll((elements) =>
     elements.map((element) => element.getAttribute('aria-label')),
   );
-  await page.getByRole('button', { name: 'Tab actions', exact: true }).click();
+  await openTabMenu(page);
   await page.getByRole('menuitem', { name: 'Move tab left', exact: true }).click();
   const after = await tabs.evaluateAll((elements) =>
     elements.map((element) => element.getAttribute('aria-label')),
@@ -919,8 +929,11 @@ test('previews, Keep Open, order, keyboard Close/Reopen and overflow remain usef
   });
   await capture('desktop-zoom');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await page.getByRole('button', { name: 'Tab actions', exact: true }).focus();
-  await page.keyboard.press('Enter');
+  await page
+    .getByRole('tablist', { name: 'Open files', exact: true })
+    .getByRole('tab', { selected: true })
+    .focus();
+  await page.keyboard.press('Shift+F10');
   await expect(page.getByRole('menu')).toBeVisible();
   await capture('desktop-keyboard-menu');
   await page.keyboard.press('Escape');
@@ -1250,7 +1263,7 @@ test('a file named checkout remains data when its view and draft cross the autho
       async () => (await recovery()).state.drafts.find((d) => d.target.path === 'checkout')?.text,
     )
     .toBe('retained reserved-looking filename');
-  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await saveFile(page);
   await expect
     .poll(() => readFileSync(join(checkout, 'checkout'), 'utf8'))
     .toBe('retained reserved-looking filename');
@@ -1372,6 +1385,7 @@ test('app R1 context-isolated command transport preserves own JSON keys', async 
 test('app R1 Tab actions first/last selection and Close click work at native size and zoom', async () => {
   await open('b.ts');
   await open();
+  await page.getByRole('tab', { name: 'b.ts', exact: true }).hover();
   await page.getByRole('button', { name: 'Close b.ts', exact: true }).click();
   await expect(page.getByRole('tab', { name: 'b.ts', exact: true })).toHaveCount(0);
   await checkTabMenu(app, page, (name) => capture('desktop-' + name));

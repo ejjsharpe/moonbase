@@ -1,4 +1,4 @@
-import { captureNative } from './editor-regressions.ts';
+import { saveFile, captureNative } from './editor-regressions.ts';
 import type { RecoveryLoad } from '@moonbase/contracts/workspace';
 import { test, expect, _electron as electron } from '@playwright/test';
 import { mkdtempSync, realpathSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
@@ -155,7 +155,7 @@ test('native Reload retains text painted before ordinary recovery debounce', asy
         ),
       )
       .toContain('fresh visible tail');
-    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await saveFile(page);
     await expect
       .poll(() => readFileSync(join(checkout, 'a.ts'), 'utf8'))
       .toContain('fresh visible tail');

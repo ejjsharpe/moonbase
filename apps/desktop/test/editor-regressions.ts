@@ -1,8 +1,38 @@
+import type { Locator } from '@playwright/test';
 import { dirname } from 'node:path';
 import { createHash } from 'node:crypto';
 import { test, expect, type Page, type ElectronApplication } from '@playwright/test';
 import type { RecoveryLoad } from '@moonbase/contracts/workspace';
 import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+
+export async function openTabMenu(editor: Page | Locator) {
+  await editor
+    .getByRole('tablist', { name: 'Open files', exact: true })
+    .getByRole('tab', { selected: true })
+    .click({ button: 'right' });
+}
+
+export async function saveFile(editor: Page | Locator) {
+  await editor.getByRole('textbox', { name: / editor$/ }).press('Meta+s');
+}
+
+export async function selectFileView(editor: Page | Locator, view: string) {
+  const page = 'page' in editor ? editor.page() : editor;
+  await openTabMenu(editor);
+  await page.getByRole('menuitem', { name: 'File view', exact: true }).click();
+  await page
+    .getByRole('menuitemradio', { name: view === 'file' ? 'File' : view, exact: true })
+    .click();
+}
+
+export async function expectSaveEnabled(editor: Page | Locator, enabled: boolean) {
+  const page = 'page' in editor ? editor.page() : editor;
+  await openTabMenu(editor);
+  const action = page.getByRole('menuitem', { name: 'Save', exact: true });
+  if (enabled) await expect(action).toBeEnabled();
+  else await expect(action).toBeDisabled();
+  await page.keyboard.press('Escape');
+}
 
 export const filenameCases = ['__proto__', 'constructor', 'toString', 'hasOwnProperty'];
 export const recoveryState = async (page: Page): Promise<RecoveryLoad> =>
@@ -54,9 +84,9 @@ export async function checkFilenameMaps(
     await input.press('ArrowRight');
     expect(await prototypes(page)).toBe(before);
     await edit(path, 'saved ' + path);
-    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await saveFile(page);
     await expect.poll(() => readFileSync(checkout + '/' + path, 'utf8')).toBe('saved ' + path);
-    await page.getByLabel('File view', { exact: true }).selectOption('staged');
+    await selectFileView(page, 'staged');
     await expect(page.getByRole('textbox', { name: / original$/ })).toHaveJSProperty(
       'readOnly',
       true,
@@ -90,7 +120,7 @@ export async function checkFilenameMaps(
     restored = restarted.views[restarted.selectedCheckoutId!];
   for (const path of filenameCases) {
     await page.getByRole('tab', { name: path, exact: true }).click();
-    await expect(page.getByLabel('File view', { exact: true })).toHaveValue('staged');
+    await expect(page.getByRole('textbox', { name: /^staged · .* original$/ })).toBeVisible();
     await expect(page.getByRole('textbox', { name: / original$/ })).toHaveJSProperty(
       'readOnly',
       true,
@@ -115,7 +145,7 @@ export async function checkFilenameMaps(
   await protoTab.click();
   await expect(protoTab).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByRole('textbox', { name: '__proto__ editor', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await saveFile(page);
   await expect.poll(() => readFileSync(checkout + '/__proto__', 'utf8')).toBe('dirty __proto__');
   await expect.poll(async () => (await recoveryState(page)).state.drafts.length).toBe(4);
   return {
@@ -147,9 +177,11 @@ export async function checkTabMenu(
       { width, height, zoom },
     );
     await expect.poll(() => page.evaluate(() => innerWidth)).toBe(Math.round(width / zoom));
-    const trigger = page.getByRole('button', { name: 'Tab actions', exact: true });
+    const trigger = page
+      .getByRole('tablist', { name: 'Open files', exact: true })
+      .getByRole('tab', { selected: true });
     await trigger.focus();
-    await trigger.press('Enter');
+    await trigger.press('Shift+F10');
     await page.keyboard.press('Home');
     const first = page.getByRole('menuitem', { name: 'Keep Open', exact: true });
     await expect(first).toBeFocused();
@@ -163,7 +195,7 @@ export async function checkTabMenu(
     await page.keyboard.press('Enter');
     await expect(page.getByRole('menu')).toHaveCount(0);
     await expect(trigger).toBeFocused();
-    await trigger.press('Enter');
+    await trigger.press('Shift+F10');
     await expect(first).toBeFocused();
     await page.keyboard.press('End');
     const last = page.getByRole('menuitem', { name: 'Reopen Closed Files', exact: true });
@@ -189,7 +221,7 @@ export async function checkTabMenu(
     await expect(
       page.getByRole('textbox', { name: reopened + ' editor', exact: true }),
     ).toBeVisible();
-    await trigger.click();
+    await trigger.click({ button: 'right' });
     await page.getByRole('menuitem', { name: 'Close', exact: true }).click();
     await expect(page.getByRole('menu')).toHaveCount(0);
     await expect(page.getByRole('tab', { name: reopened, exact: true })).toHaveCount(0);

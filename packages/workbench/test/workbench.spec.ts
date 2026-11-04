@@ -1,13 +1,206 @@
 import { test, expect } from '@playwright/test';
-import type { Page } from '@playwright/test';
+import type { Page, Locator } from '@playwright/test';
+
+async function openTabMenu(editor: Page | Locator) {
+  await editor
+    .getByRole('tablist', { name: 'Open files', exact: true })
+    .getByRole('tab', { selected: true })
+    .click({ button: 'right' });
+}
+
+async function saveFile(editor: Page | Locator) {
+  await editor.getByRole('textbox', { name: / editor$/ }).press('Meta+s');
+}
+
+async function selectFileView(editor: Page | Locator, view: string) {
+  const page = 'page' in editor ? editor.page() : editor;
+  await openTabMenu(editor);
+  await page.getByRole('menuitem', { name: 'File view', exact: true }).click();
+  await page
+    .getByRole('menuitemradio', { name: view === 'file' ? 'File' : view, exact: true })
+    .click();
+}
 
 const first = (page: Page) => page.getByRole('region', { name: 'First editor', exact: true });
+async function expectSaveEnabled(editor: Page | Locator, enabled: boolean) {
+  const page = 'page' in editor ? editor.page() : editor;
+  await openTabMenu(editor);
+  const action = page.getByRole('menuitem', { name: 'Save', exact: true });
+  if (enabled) await expect(action).toBeEnabled();
+  else await expect(action).toBeDisabled();
+  await page.keyboard.press('Escape');
+}
+
 async function edit(page: Page, text: string) {
   const input = first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true });
   await input.focus();
   await input.press('Meta+a');
   await input.pressSequentially(text);
 }
+
+test('compact breadcrumbs show the checkout and path without toolbar actions', async ({ page }) => {
+  await page.goto('/');
+  await page.evaluate(() => {
+    const { first, checkout } = window.demo;
+    return first.open({ checkout, path: 'src/example.ts' }, { intent: 'keep' });
+  });
+  const breadcrumbs = first(page).getByRole('navigation', { name: 'File breadcrumbs' });
+  await expect(breadcrumbs.getByRole('listitem')).toHaveText(['moonbase', '/src', '/example.ts']);
+  await expect(breadcrumbs.locator('[aria-current="page"]')).toHaveText('/example.ts');
+  await expect(breadcrumbs).toHaveAttribute('title', '/demo/moonbase/src/example.ts');
+  await expect(breadcrumbs).toHaveCSS('height', '28px');
+  await expect(breadcrumbs.getByRole('button')).toHaveCount(0);
+  await expect(first(page).getByRole('button', { name: 'Save', exact: true })).toHaveCount(0);
+  await expect(first(page).getByRole('button', { name: 'Tab actions', exact: true })).toHaveCount(
+    0,
+  );
+  await page.setViewportSize({ width: 543, height: 441 });
+  await expect(breadcrumbs).toHaveCSS('height', '28px');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await first(page).getByRole('button', { name: 'Close src/example.ts', exact: true }).click();
+  await expect(breadcrumbs.locator('[aria-current="page"]')).toHaveText('/welcome.ts');
+  await first(page).getByRole('button', { name: 'Close welcome.ts', exact: true }).click();
+  await expect(breadcrumbs).toHaveCount(0);
+});
+
+test('the editor uses a subtle scroll shadow below the breadcrumbs', async ({ page }) => {
+  await page.goto('/');
+  await page.evaluate(() => {
+    const { first, checkout } = window.demo;
+    first.edit(
+      { checkout, path: 'welcome.ts' },
+      Array.from({ length: 200 }, (_, line) => `// line ${line}`).join('\n'),
+    );
+  });
+  await first(page)
+    .getByRole('textbox', { name: 'welcome.ts editor', exact: true })
+    .press('Meta+ArrowDown');
+  const shadow = first(page).locator('.monaco-editor .scroll-decoration');
+  await expect(shadow).toBeVisible();
+  await expect(shadow).toHaveCSS('box-shadow', 'rgba(0, 0, 0, 0.15) 0px 6px 6px -6px inset');
+});
+
+test('a background tab context menu closes its captured file and keeps the current breadcrumbs', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await page.evaluate(async () => {
+    const { first, checkout } = window.demo;
+    await first.open({ checkout, path: 'README.md' }, { intent: 'keep' });
+    await first.open({ checkout, path: 'src/example.ts' }, { intent: 'keep' });
+  });
+  const background = first(page).getByRole('tab', { name: 'README.md', exact: true });
+  await background.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Close', exact: true }).click();
+  await expect(background).toHaveCount(0);
+  await expect(
+    first(page).getByRole('tab', { name: 'src/example.ts', exact: true }),
+  ).toHaveAttribute('aria-selected', 'true');
+  await expect(
+    first(page)
+      .getByRole('navigation', { name: 'File breadcrumbs' })
+      .locator('[aria-current="page"]'),
+  ).toHaveText('/example.ts');
+});
+
+for (const survivor of [true, false])
+  test(`keyboard context-menu Close restores ${survivor ? 'the surviving tab' : 'empty-editor'} focus and allows Reopen`, async ({
+    page,
+  }) => {
+    await page.goto('/');
+    const path = survivor ? 'README.md' : 'welcome.ts';
+    if (survivor)
+      await page.evaluate(() => {
+        const { first, checkout } = window.demo;
+        return first.open({ checkout, path: 'README.md' }, { intent: 'keep' });
+      });
+    const tab = first(page).getByRole('tab', { name: path, exact: true });
+    await tab.focus();
+    await tab.press('Shift+F10');
+    await expect(page.getByRole('menuitem', { name: 'Keep Open', exact: true })).toBeFocused();
+    await page.keyboard.press('ArrowDown');
+    await expect(page.getByRole('menuitem', { name: 'Close', exact: true })).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(tab).toHaveCount(0);
+    const fallback = survivor
+      ? first(page).getByRole('tab', { name: 'welcome.ts', exact: true })
+      : first(page).getByRole('button', { name: 'Find file', exact: true });
+    await expect(fallback).toBeFocused();
+    await page.keyboard.press('Meta+Shift+t');
+    await expect(tab).toBeVisible();
+    await expect(
+      survivor ? tab : first(page).getByRole('textbox', { name: `${path} editor`, exact: true }),
+    ).toBeFocused();
+  });
+
+test('buffer tabs join edge to edge and reveal only their own close control without moving', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await page.evaluate(async () => {
+    const { first, checkout } = window.demo;
+    await first.open({ checkout, path: 'README.md' }, { intent: 'keep' });
+    await first.open({ checkout, path: 'src/example.ts' }, { intent: 'preview' });
+  });
+  const strip = first(page).getByRole('tablist', { name: 'Open files', exact: true });
+  const welcome = strip.getByRole('tab', { name: 'welcome.ts', exact: true });
+  const readme = strip.getByRole('tab', { name: 'README.md', exact: true });
+  const example = strip.getByRole('tab', { name: 'src/example.ts', exact: true });
+  const closeWelcome = strip.getByRole('button', { name: 'Close welcome.ts', exact: true });
+  const closeReadme = strip.getByRole('button', { name: 'Close README.md', exact: true });
+  const closeExample = strip.getByRole('button', { name: 'Close src/example.ts', exact: true });
+  await expect(example).toHaveAttribute('aria-selected', 'true');
+  await page.mouse.move(0, 0);
+  await expect(closeExample).toHaveCSS('opacity', '1');
+  await expect(closeWelcome).toHaveCSS('opacity', '0');
+  await expect(closeReadme).toHaveCSS('opacity', '0');
+  const geometry = await strip.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    const groups = [...element.children].map((group) => group.getBoundingClientRect());
+    return {
+      height: bounds.height,
+      inset: groups[0]!.left - bounds.left,
+      gaps: groups.slice(1).map((group, index) => group.left - groups[index]!.right),
+    };
+  });
+  expect(geometry).toEqual({ height: 36, inset: 0, gaps: [0, 0] });
+  await expect(welcome).toHaveCSS('border-radius', '0px');
+  await expect(example).toHaveCSS('font-style', 'italic');
+  const originalBounds = await example.boundingBox();
+  await welcome.hover();
+  await expect(closeWelcome).toHaveCSS('opacity', '1');
+  await expect(closeReadme).toHaveCSS('opacity', '0');
+  expect(await example.boundingBox()).toEqual(originalBounds);
+  await page.mouse.move(0, 0);
+  await closeReadme.focus();
+  await expect(closeReadme).toBeFocused();
+  await expect(closeReadme).toHaveCSS('opacity', '1');
+  await expect(closeWelcome).toHaveCSS('opacity', '0');
+  await closeReadme.press('Enter');
+  await expect(readme).toHaveCount(0);
+  await expect(example).toHaveAttribute('aria-selected', 'true');
+  const path = 'a-long-buffer-filename-that-must-leave-room-for-the-unsaved-dot-and-close.ts';
+  await page.evaluate(async (path) => {
+    const { first, checkout } = window.demo;
+    await first.mutate({
+      checkout,
+      kind: 'create-file',
+      sources: [],
+      destination: path,
+      text: '',
+    });
+    await first.open({ checkout, path }, { intent: 'keep' });
+  }, path);
+  await first(page)
+    .getByRole('textbox', { name: `${path} editor`, exact: true })
+    .press('a');
+  const longTab = strip.getByRole('tab', { name: path, exact: true });
+  await expect(longTab).toHaveAttribute('aria-description', 'Unsaved');
+  expect(await longTab.evaluate((element) => getComputedStyle(element, '::after').width)).toBe(
+    '6px',
+  );
+  await expect(strip.getByRole('button', { name: `Close ${path}`, exact: true })).toBeVisible();
+});
 
 test('opening, editing and saving a UTF-8 BOM file preserves its marker', async ({ page }) => {
   await page.goto('/');
@@ -34,7 +227,7 @@ test('opening, editing and saving a UTF-8 BOM file preserves its marker', async 
   await input.press('Control+Home');
   await input.pressSequentially('edited ');
   await expect.poll(buffer).toEqual({ text: '\ufeffedited hello\n', dirty: true });
-  await first(page).getByRole('button', { name: 'Save', exact: true }).click();
+  await saveFile(first(page));
   await expect
     .poll(() =>
       page.evaluate(
@@ -58,7 +251,7 @@ test('real Monaco edits/save, shared diff model and isolated second instance', a
   await expect(first(page).getByRole('tab', { name: 'welcome.ts', exact: true })).toBeVisible();
   await edit(page, 'export const value = 42;');
   await expect(first(page).getByText('welcome.ts · Unsaved', { exact: true })).toBeVisible();
-  await first(page).getByLabel('File view', { exact: true }).selectOption('staged');
+  await selectFileView(first(page), 'staged');
   await expect(
     first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true }),
   ).toBeVisible();
@@ -72,7 +265,7 @@ test('real Monaco edits/save, shared diff model and isolated second instance', a
       () => window.demo.second.buffer({ checkout: window.demo.checkout, path: 'welcome.ts' })!.text,
     ),
   ).toContain('Hello Moonbase');
-  await first(page).getByRole('button', { name: 'Save', exact: true }).click();
+  await saveFile(first(page));
   await expect(first(page).getByText('welcome.ts · Unsaved', { exact: true })).toHaveCount(0);
   const modelCount = await page.evaluate(() => window.demo.modelCount());
   await page.getByRole('button', { name: 'Hide first editor', exact: true }).click();
@@ -93,7 +286,7 @@ test('external conflict Compare/Cancel and failed Save preserve edits in the vis
   await page.goto('/');
   await edit(page, 'my retained edits');
   await page.getByRole('button', { name: 'External change', exact: true }).click();
-  await first(page).getByRole('button', { name: 'Save', exact: true }).click();
+  await saveFile(first(page));
   await expect(
     first(page).getByText('welcome.ts changed on disk. Your edits are retained.'),
   ).toBeVisible();
@@ -108,7 +301,7 @@ test('external conflict Compare/Cancel and failed Save preserve edits in the vis
     ),
   ).toBe('my retained edits');
   await page.getByRole('button', { name: 'Fail next Save', exact: true }).click();
-  await first(page).getByRole('button', { name: 'Save', exact: true }).click();
+  await saveFile(first(page));
   await expect(first(page).getByRole('alert').last()).toContainText('Demo Save failed');
   expect(
     await page.evaluate(
@@ -129,8 +322,7 @@ test('close dialog Cancel then Discard; Reopen reads disk and disposal releases 
   await first(page).getByRole('button', { name: 'Close welcome.ts', exact: true }).click();
   await page.getByRole('button', { name: 'Discard', exact: true }).click();
   await expect(first(page).getByRole('tab', { name: 'welcome.ts', exact: true })).toHaveCount(0);
-  await first(page).getByRole('button', { name: 'Tab actions', exact: true }).click();
-  await page.getByRole('menuitem', { name: 'Reopen Closed Files', exact: true }).click();
+  await first(page).getByLabel('Moonbase editor', { exact: true }).press('Meta+Shift+t');
   await expect(first(page).getByRole('tab', { name: 'welcome.ts', exact: true })).toBeVisible();
   expect(
     await page.evaluate(
@@ -241,7 +433,7 @@ test('rejected unchanged Rename/Move leaves explicit Save and Close usable', asy
   );
   await page.getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true }).click();
   await edit(page, 'export const afterRejection = true;');
-  await first(page).getByRole('button', { name: 'Save', exact: true }).click();
+  await saveFile(first(page));
   await expect(first(page).getByText('welcome.ts · Unsaved', { exact: true })).toHaveCount(0);
   await first(page).getByRole('button', { name: 'Close welcome.ts', exact: true }).click();
   await expect(first(page).getByRole('tab', { name: 'welcome.ts', exact: true })).toHaveCount(0);
@@ -252,11 +444,10 @@ test('close-all/reopen/close-active loads the surviving file instead of an unava
 }) => {
   await page.goto('/');
   await first(page).getByRole('treeitem', { name: 'README.md', exact: true }).dblclick();
-  await first(page).getByRole('button', { name: 'Tab actions', exact: true }).click();
+  await openTabMenu(first(page));
   await page.getByRole('menuitem', { name: 'Close All', exact: true }).click();
   await expect(first(page).getByRole('tab', { name: 'README.md', exact: true })).toHaveCount(0);
-  await first(page).getByRole('button', { name: 'Tab actions', exact: true }).click();
-  await page.getByRole('menuitem', { name: 'Reopen Closed Files', exact: true }).click();
+  await first(page).getByLabel('Moonbase editor', { exact: true }).press('Meta+Shift+t');
   await expect(
     first(page).getByRole('textbox', { name: 'README.md editor', exact: true }),
   ).toBeVisible();
@@ -272,11 +463,10 @@ for (const via of ['button', 'keyboard', 'menu'] as const)
   }) => {
     await page.goto('/');
     await first(page).getByRole('treeitem', { name: 'README.md', exact: true }).dblclick();
-    await first(page).getByRole('button', { name: 'Tab actions', exact: true }).click();
+    await openTabMenu(first(page));
     await page.getByRole('menuitem', { name: 'Close All', exact: true }).click();
     await expect(first(page).getByRole('tab')).toHaveCount(0);
-    await first(page).getByRole('button', { name: 'Tab actions', exact: true }).click();
-    await page.getByRole('menuitem', { name: 'Reopen Closed Files', exact: true }).click();
+    await first(page).getByLabel('Moonbase editor', { exact: true }).press('Meta+Shift+t');
     await expect(
       first(page).getByRole('textbox', { name: 'README.md editor', exact: true }),
     ).toBeVisible();
@@ -295,7 +485,7 @@ for (const via of ['button', 'keyboard', 'menu'] as const)
       await first(page).getByRole('textbox', { name: 'README.md editor', exact: true }).focus();
       await page.keyboard.press('Meta+w');
     } else {
-      await first(page).getByRole('button', { name: 'Tab actions', exact: true }).click();
+      await openTabMenu(first(page));
       await page.getByRole('menuitem', { name: 'Close', exact: true }).click();
     }
     const survivor = first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true });
@@ -481,7 +671,7 @@ test('returning to a background-closed checkout loads the survivor', async ({ pa
 for (const area of ['staged', 'unstaged'] as const)
   test(`actual typing after close into remembered ${area} comparison`, async ({ page }) => {
     await page.goto('/');
-    await first(page).getByLabel('File view', { exact: true }).selectOption(area);
+    await selectFileView(first(page), area);
     await first(page).getByRole('treeitem', { name: 'README.md', exact: true }).dblclick();
     await first(page).getByRole('textbox', { name: 'README.md editor', exact: true }).focus();
     await page.keyboard.press('Meta+w');
@@ -687,12 +877,12 @@ for (const area of ['staged', 'unstaged'] as const)
       modified = page.getByRole('textbox', { name: 'a.ts editor', exact: true });
     await expect(original).toHaveJSProperty('readOnly', true);
     await expect(modified).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
+    await expectSaveEnabled(page, false);
     await page.getByRole('tab', { name: 'beta · main', exact: true }).click();
     await page.evaluate(() => window.recoveryRace.recreateWorking());
     await page.getByRole('tab', { name: 'alpha · main', exact: true }).click();
     await page.getByRole('button', { name: 'Refresh', exact: true }).click();
-    await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeEnabled();
+    await expectSaveEnabled(page, true);
     await expect(original).toHaveJSProperty('readOnly', true);
     await expect(modified).toHaveJSProperty('readOnly', false);
     await modified.focus();
@@ -710,7 +900,7 @@ for (const area of ['staged', 'unstaged'] as const)
         ),
       )
       .toContain('typed after recreation ' + area);
-    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await saveFile(page);
     await expect
       .poll(() =>
         page.evaluate(
@@ -748,7 +938,7 @@ test('lost and reordered Save receipts keep Retry Save visible until exact recov
   await page.evaluate(() =>
     window.demo.memory.failNext('saveFile', 'Lost committed Save reply', true),
   );
-  await first(page).getByRole('button', { name: 'Save', exact: true }).click();
+  await saveFile(first(page));
   await expect(first(page).getByRole('button', { name: 'Retry Save', exact: true })).toBeVisible();
   const pendingA = await page.evaluate(
     () =>
@@ -761,7 +951,7 @@ test('lost and reordered Save receipts keep Retry Save visible until exact recov
     await first.open({ checkout, path: 'README.md' }, { intent: 'keep' });
     first.edit({ checkout, path: 'README.md' }, 'captured README');
   });
-  await first(page).getByRole('button', { name: 'Save', exact: true }).click();
+  await saveFile(first(page));
   await expect
     .poll(() =>
       page.evaluate(() => {
@@ -800,7 +990,7 @@ test('lost and reordered Save receipts keep Retry Save visible until exact recov
   await readme.pressSequentially('newer README');
   await first(page).getByRole('tab', { name: 'welcome.ts', exact: true }).click();
   await first(page).getByRole('button', { name: 'Retry Save', exact: true }).click();
-  await expect(first(page).getByRole('button', { name: 'Save', exact: true })).toBeVisible();
+  await expect(first(page).getByRole('button', { name: 'Retry Save', exact: true })).toHaveCount(0);
   expect(
     await page.evaluate(
       () =>
@@ -821,7 +1011,7 @@ test('lost and reordered Save receipts keep Retry Save visible until exact recov
     ),
   ).toBe('newer README');
   await first(page).getByRole('tab', { name: 'README.md', exact: true }).click();
-  await expect(first(page).getByRole('button', { name: 'Save', exact: true })).toBeVisible();
+  await expect(first(page).getByRole('button', { name: 'Retry Save', exact: true })).toHaveCount(0);
   await readme.focus();
   await readme.press('End');
   await readme.pressSequentially(' typed after reconciliation');
@@ -846,7 +1036,7 @@ test('Resolve recovers a rejected metadata publication after an already-started 
       'Controlled before-commit publication failure',
     ),
   );
-  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await saveFile(page);
   await expect(
     page.getByRole('button', { name: 'Resolve recovery publication', exact: true }),
   ).toBeVisible();
@@ -876,7 +1066,7 @@ test('Resolve recovers a rejected metadata publication after an already-started 
   ).toEqual(ids.sort());
   await page.evaluate(() => window.saveRace.restart());
   await expect(b).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeEnabled();
+  await expectSaveEnabled(page, true);
   expect(
     await page.evaluate(() =>
       window.saveRace.editor
@@ -891,7 +1081,7 @@ test('Resolve recovers a rejected metadata publication after an already-started 
   await b.focus();
   await b.press('End');
   await b.pressSequentially(' typed after resolution');
-  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await saveFile(page);
   await expect
     .poll(() =>
       page.evaluate(
@@ -934,7 +1124,7 @@ test('valid prototype-shaped filenames edit and save without changing browser pr
       expect(await page.evaluate(() => Object.hasOwn(Object.prototype, 'file'))).toBe(false);
       await input.press('Meta+a');
       await input.pressSequentially('saved ' + path);
-      await first(page).getByRole('button', { name: 'Save', exact: true }).click();
+      await saveFile(first(page));
       await expect
         .poll(() =>
           page.evaluate(
@@ -976,9 +1166,11 @@ for (const viewport of [
       await first.close([{ checkout, path: 'README.md' }]);
       await first.open({ checkout, path: 'src/example.ts' }, { intent: 'preview' });
     });
-    const trigger = first(page).getByRole('button', { name: 'Tab actions', exact: true });
+    const trigger = first(page)
+      .getByRole('tablist', { name: 'Open files', exact: true })
+      .getByRole('tab', { selected: true });
     await trigger.focus();
-    await trigger.press('Enter');
+    await trigger.press('Shift+F10');
     const menu = page.getByRole('menu'),
       firstItem = page.getByRole('menuitem', { name: 'Keep Open', exact: true }),
       lastItem = page.getByRole('menuitem', { name: 'Reopen Closed Files', exact: true });
@@ -987,6 +1179,7 @@ for (const viewport of [
         const rect = element.getBoundingClientRect();
         return rect.top >= 0 && rect.bottom <= innerHeight;
       });
+    await expect(firstItem).toBeFocused();
     await page.keyboard.press('Home');
     await expect(firstItem).toBeFocused();
     expect(await within(firstItem)).toBe(true);
@@ -1000,7 +1193,7 @@ for (const viewport of [
     await page.screenshot({ path: `test-results/tab-menu-${viewport.width}.png`, fullPage: true });
     await page.keyboard.press('Enter');
     await expect(first(page).getByRole('tab', { name: 'README.md', exact: true })).toBeVisible();
-    await trigger.click();
+    await trigger.click({ button: 'right' });
     await page.getByRole('menuitem', { name: 'Close', exact: true }).click();
     await expect(first(page).getByRole('tab', { name: 'README.md', exact: true })).toHaveCount(0);
     await expect(menu).toHaveCount(0);
