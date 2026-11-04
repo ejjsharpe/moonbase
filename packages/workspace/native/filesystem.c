@@ -63,6 +63,33 @@ static void lookup_policy(int fd, unsigned depth, unsigned *entries) {
   closedir(dir);
 }
 
+static void check_ignore_policy(const char *path) {
+  char parents[PATH_MAX];
+  if (snprintf(parents, sizeof(parents), "%s", path) >= (int)sizeof(parents)) {
+    errno = ENAMETOOLONG; fail("Ignore policy path too long");
+  }
+  int fd = scoped_open(3, ".", O_RDONLY | O_DIRECTORY);
+  char *next = parents;
+  for (;;) {
+    int policy = openat(fd, ".gitignore", O_RDONLY | SCOPED);
+    if (policy < 0) {
+      if (errno != ENOENT) fail("Open Git ignore policy");
+    } else {
+      struct stat info;
+      if (fstat(policy, &info)) fail("Inspect Git ignore policy");
+      if (!S_ISREG(info.st_mode)) { errno = EINVAL; fail("Git ignore policy must be a regular file without links"); }
+      close(policy);
+    }
+    if (!*next || !strcmp(next, ".")) break;
+    char *component = strsep(&next, "/");
+    int child = scoped_open(fd, component, O_RDONLY | O_DIRECTORY);
+    close(fd);
+    fd = child;
+    if (!next) next = "";
+  }
+  close(fd);
+}
+
 static void revalidate_source(const char *path, const struct stat *expected) {
   int current = scoped_open(3, path, O_RDONLY);
   struct stat actual;
@@ -288,6 +315,13 @@ int main(int argc, char **argv) {
   if (!strcmp(operation, "lookup")) {
     unsigned entries = 0;
     lookup_policy(scoped_open(3, ".", O_RDONLY | O_DIRECTORY), 0, &entries);
+  }
+  if (!strcmp(operation, "check-ignore")) {
+    if (argc < 4) { errno = EINVAL; fail("Invalid ignore request"); }
+    check_ignore_policy(argv[2]);
+    if (fchdir(3) || fcntl(3, F_SETFD, FD_CLOEXEC)) fail("Enter checkout");
+    execv(argv[3], argv + 3);
+    fail("Start Git");
   }
   if (!strcmp(operation, "git") || !strcmp(operation, "lookup")) {
     if (fchdir(3) || fcntl(3, F_SETFD, FD_CLOEXEC)) fail("Enter checkout");

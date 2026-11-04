@@ -332,15 +332,6 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
             </div>
             <Button
               {...stylex.props(controls.button)}
-              aria-pressed={selected.tree.hideIgnored}
-              onClick={() => {
-                controller.tree(checkout, { hideIgnored: !selected.tree.hideIgnored });
-                run(controller.refresh(checkout));
-              }}>
-              Hide Git-ignored files
-            </Button>
-            <Button
-              {...stylex.props(controls.button)}
               disabled={!target}
               onClick={() => {
                 if (target)

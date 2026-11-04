@@ -6,7 +6,6 @@ import { filesUI } from '@moonbase/ui/files';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import {
   checkoutKey,
-  fileKey,
   readOwn,
   type EditorController,
   type EditorSnapshot,
@@ -29,6 +28,18 @@ export function FilesTree({
     treeElement = useRef<HTMLDivElement>(null),
     anchor = useRef<string | null>(null),
     id = useId();
+  const checkoutIdentity = checkoutKey(checkout),
+    expanded = new Set(tree.expanded),
+    selected = new Set(tree.selected),
+    dirtyPaths = new Set(
+      state.buffers
+        .filter(
+          (buffer) =>
+            checkoutKey(buffer.target.checkout) === checkoutIdentity &&
+            buffer.text !== buffer.disk.text,
+        )
+        .map((buffer) => buffer.target.path),
+    );
   useLayoutEffect(() => {
     anchor.current = null;
   }, [anchorReset]);
@@ -42,14 +53,13 @@ export function FilesTree({
     size: number;
   }[] = [];
   function visit(parent: string, level: number) {
-    const entries = state.listings[JSON.stringify([checkoutKey(checkout), parent])]?.entries ?? [];
+    const entries = state.listings[JSON.stringify([checkoutIdentity, parent])]?.entries ?? [];
     entries.forEach((entry, index) => {
       rows.push({ ...entry, level, position: index + 1, size: entries.length });
-      if (entry.directory && tree.expanded.includes(entry.path)) visit(entry.path, level + 1);
+      if (entry.directory && expanded.has(entry.path)) visit(entry.path, level + 1);
     });
   }
   visit('', 1);
-  const checkoutIdentity = checkoutKey(checkout);
   useEffect(() => {
     const element = treeElement.current;
     if (!element) return;
@@ -73,15 +83,17 @@ export function FilesTree({
     else if (top + 28 > element.scrollTop + element.clientHeight)
       element.scrollTop = top + 28 - element.clientHeight;
   }, [tree.focus, focusIndex, rows.length]);
-  function toggle(path: string) {
+  function toggle(path: string, select = false) {
+    const wasExpanded = expanded.has(path);
     controller.tree(checkout, {
-      expanded: tree.expanded.includes(path)
+      ...(select ? { focus: path, selected: [path] } : {}),
+      expanded: wasExpanded
         ? tree.expanded.filter((value) => value !== path)
         : [...tree.expanded, path],
     });
-    void controller.list(checkout, path).catch(controller.report);
+    if (!wasExpanded) void controller.list(checkout, path).catch(controller.report);
   }
-  const root = state.listings[JSON.stringify([checkoutKey(checkout), ''])];
+  const root = state.listings[JSON.stringify([checkoutIdentity, ''])];
   const indexes = new Set<number>([focusIndex]);
   for (
     let index = Math.max(0, Math.floor(geometry.top / 28) - 10);
@@ -92,7 +104,7 @@ export function FilesTree({
   return (
     <>
       {Object.entries(state.listings)
-        .filter(([key]) => key.includes(checkoutKey(checkout).replaceAll('"', '\\"')))
+        .filter(([key]) => key.startsWith(JSON.stringify([checkoutIdentity]).slice(0, -1) + ','))
         .map(([key, listing]) =>
           listing.error || listing.partial ? (
             <p key={key} role="status" {...stylex.props(controls.status)}>
@@ -145,11 +157,11 @@ export function FilesTree({
           } else if (event.key === 'ArrowRight' && row.directory) {
             anchor.current = null;
             event.preventDefault();
-            if (!tree.expanded.includes(row.path)) toggle(row.path);
+            if (!expanded.has(row.path)) toggle(row.path);
           } else if (event.key === 'ArrowLeft') {
             anchor.current = null;
             event.preventDefault();
-            if (row.directory && tree.expanded.includes(row.path)) toggle(row.path);
+            if (row.directory && expanded.has(row.path)) toggle(row.path);
             else controller.tree(checkout, { focus: row.path.split('/').slice(0, -1).join('/') });
           } else if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault();
@@ -170,11 +182,7 @@ export function FilesTree({
             .map((index) => {
               const row = rows[index];
               if (!row) return null;
-              const dirty = state.buffers.some(
-                (buffer) =>
-                  fileKey(buffer.target) === fileKey({ checkout, path: row.path }) &&
-                  buffer.text !== buffer.disk.text,
-              );
+              const dirty = dirtyPaths.has(row.path);
               return (
                 <div
                   key={row.path}
@@ -183,14 +191,16 @@ export function FilesTree({
                   aria-level={row.level}
                   aria-posinset={row.position}
                   aria-setsize={row.size}
-                  aria-expanded={row.directory ? tree.expanded.includes(row.path) : undefined}
-                  aria-selected={tree.selected.includes(row.path)}
+                  aria-expanded={row.directory ? expanded.has(row.path) : undefined}
+                  aria-selected={selected.has(row.path)}
                   aria-current={row.path === active ? 'true' : undefined}
                   aria-label={row.path + (dirty ? ', unsaved' : '')}
+                  aria-description={row.ignored ? 'Git-ignored' : undefined}
                   {...stylex.props(
                     styles.treeRow(index * 28),
                     filesUI.row(row.level),
-                    tree.selected.includes(row.path) && filesUI.selected,
+                    row.ignored && filesUI.ignored,
+                    selected.has(row.path) && filesUI.selected,
                     tree.focus === row.path && filesUI.focused,
                   )}
                   onClick={(event) => {
@@ -202,14 +212,16 @@ export function FilesTree({
                       selected = tree.selected.includes(row.path)
                         ? tree.selected.filter((path) => path !== row.path)
                         : [...tree.selected, row.path];
+                    if (!additive && row.directory) {
+                      toggle(row.path, true);
+                      return;
+                    }
                     controller.tree(checkout, { focus: row.path, selected });
                     if (!additive) {
-                      if (row.directory) toggle(row.path);
-                      else
-                        void controller.open(
-                          { checkout, path: row.path },
-                          { view: 'file', intent: 'preview' },
-                        );
+                      void controller.open(
+                        { checkout, path: row.path },
+                        { view: 'file', intent: 'preview' },
+                      );
                     }
                   }}
                   onDoubleClick={() => {
@@ -228,15 +240,16 @@ export function FilesTree({
                       stroke="currentColor"
                       strokeWidth="1.5"
                       aria-hidden="true"
-                      {...stylex.props(
-                        controls.icon,
-                        tree.expanded.includes(row.path) && filesUI.rotated,
-                      )}>
+                      {...stylex.props(controls.icon, expanded.has(row.path) && filesUI.rotated)}>
                       <path d="m4 2 4 4-4 4" />
                     </svg>
                   )}
                   <span
-                    {...stylex.props(styles.treeLabel, row.path === active && filesUI.activeLabel)}>
+                    {...stylex.props(
+                      styles.treeLabel,
+                      row.path === active && filesUI.activeLabel,
+                      row.ignored && filesUI.ignored,
+                    )}>
                     {row.path.split('/').at(-1)}
                   </span>
                   {dirty && <span aria-hidden="true"> •</span>}

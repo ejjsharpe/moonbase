@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { test, after } from 'node:test';
 import { Layer, ManagedRuntime } from 'effect';
+import { createMoonbaseApplication } from '@moonbase/application';
+import { makeEditorClient } from '@moonbase/application/runtime/clients';
+import { memoryWorkspace } from '@moonbase/application/testing/memory-workspace';
 const runtime = ManagedRuntime.make(Layer.empty);
 after(() => runtime.dispose());
 import {
@@ -142,6 +145,84 @@ test('restored exact approvals, owned cancellation, failed-watch cleanup and dis
   await f.session.dispose();
   assert.equal(f.stops, 1);
   assert.equal((await f.call('loadRecovery', { clientId: 'desktop-primary' })).ok, false);
+});
+
+test('ignore classification accepts a full folder listing only for an approved exact checkout', async () => {
+  const f = fixture();
+  try {
+    await f.call('loadRecovery', { clientId: 'desktop-primary' });
+    const before = f.dispatches;
+    const input = { checkout: target, path: '', paths: Array(20000).fill('a.ts') };
+    await f.call('getIgnoredPaths', input);
+    assert.equal(f.dispatches, before + 1);
+    assert.equal(
+      (await f.call('getIgnoredPaths', { ...input, paths: Array(20001).fill('a.ts') })).ok,
+      false,
+    );
+    assert.equal(
+      (await f.call('getIgnoredPaths', { ...input, checkout: { ...target, hostId: 'foreign' } }))
+        .ok,
+      false,
+    );
+    assert.equal(f.dispatches, before + 1);
+  } finally {
+    await f.session.dispose();
+  }
+});
+
+test('superseded classifications release desktop capacity for unrelated file commands', async () => {
+  const memory = memoryWorkspace([
+    { checkout: target, files: { 'a.ts': 'A', 'folder/nested.ts': 'nested' } },
+  ]);
+  const backend = ManagedRuntime.make(memory.layer),
+    raw = makeEditorClient(backend),
+    signals: AbortSignal[] = [];
+  const session = new EditorSession(
+    runtime,
+    {
+      ...raw,
+      async command(name, input, options) {
+        if (name === 'getIgnoredPaths' && (input as { path: string }).path === 'folder') {
+          const signal = options?.signal;
+          assert(signal);
+          signals.push(signal);
+          await new Promise<never>((_resolve, reject) => {
+            const cancel = () =>
+              reject(new ApplicationError({ code: 'Cancelled', message: 'Classifier cancelled' }));
+            signal.addEventListener('abort', cancel, { once: true });
+            if (signal.aborted) cancel();
+          });
+        }
+        return raw.command(name, input, options);
+      },
+    },
+    { chooseCheckout: async () => target.root, imports: async () => [], release: async () => {} },
+    () => {},
+  );
+  const client = bridgeClient({
+    call: session.call.bind(session),
+    cancel: session.cancel.bind(session),
+    events: () => () => {},
+  } as never);
+  const application = await createMoonbaseApplication({
+    editors: [{ client, clientId: session.clientId }],
+  });
+  const editor = application.editors[0]!;
+  try {
+    assert((await session.call('choose-checkout', null, crypto.randomUUID())).ok);
+    await editor.openCheckout(target.root);
+    for (let index = 0; index < 160; index++) await editor.list(target, 'folder');
+    assert.equal(signals.length, 160);
+    assert(signals.slice(0, -1).every((signal) => signal.aborted));
+    assert.equal(signals.at(-1)?.aborted, false);
+    assert.equal(await editor.open({ checkout: target, path: 'a.ts' }), true);
+    assert.deepEqual(editor.getSnapshot().errors, []);
+  } finally {
+    await application.dispose();
+    await session.dispose();
+    await backend.dispose();
+  }
+  assert(signals.every((signal) => signal.aborted));
 });
 test('error DTO reconstructs the application brand/code/target and rejects malformed DTOs', () => {
   for (const code of [

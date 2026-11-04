@@ -23,6 +23,9 @@ let app: ElectronApplication, child: ChildProcess, page: Page, base: string, che
 const errors: string[] = [],
   consoleErrors: string[] = [];
 declare global {
+  interface Window {
+    firstOpenTiming: { started: number; visible: number };
+  }
   var desktopTest: {
     startupFailure: string | null;
     chatCalls: { kind: string; id: string }[];
@@ -238,6 +241,73 @@ for (const holdDiscovery of [false, true])
       await app.context().tracing.stop({ path: test.info().outputPath('rapid-lookup-trace.zip') });
     }
   });
+test('first native folder open displays ignored files before Git classification finishes', async () => {
+  mkdirSync(join(checkout, 'src'));
+  writeFileSync(join(checkout, 'src/normal.ts'), 'normal');
+  writeFileSync(join(checkout, 'src/ignored.ts'), 'ignored');
+  writeFileSync(join(checkout, 'root-hidden.txt'), 'ignored root marker');
+  writeFileSync(join(checkout, '.gitignore'), 'root-hidden.txt\nsrc/ignored.ts\n');
+  await page.getByRole('button', { name: 'Open checkout', exact: true }).click();
+  await expect(
+    page.getByRole('treeitem', { name: 'root-hidden.txt', exact: true }),
+  ).toHaveAttribute('aria-description', 'Git-ignored');
+  const ignored = page.getByRole('treeitem', { name: 'src/ignored.ts', exact: true });
+  await expect(ignored).toHaveCount(0);
+  await app.evaluate(() => {
+    globalThis.desktopTest.held = 'getIgnoredPaths';
+  });
+  await page.evaluate(() => {
+    window.firstOpenTiming = { started: 0, visible: 0 };
+    document.addEventListener(
+      'click',
+      function begin(event) {
+        if (
+          (event.target as Element).closest('[role="treeitem"]')?.getAttribute('aria-label') !==
+          'src'
+        )
+          return;
+        window.firstOpenTiming.started = performance.now();
+        const observer = new MutationObserver(() => {
+          if (document.querySelector('[role="treeitem"][aria-label="src/ignored.ts"]')) {
+            window.firstOpenTiming.visible = performance.now();
+            observer.disconnect();
+          }
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+        document.removeEventListener('click', begin, true);
+      },
+      true,
+    );
+  });
+  try {
+    await page.getByRole('treeitem', { name: 'src', exact: true }).click();
+    await expect(ignored).toBeVisible();
+    await expect(page.getByRole('treeitem', { name: 'src/normal.ts', exact: true })).toBeVisible();
+    await expect.poll(() => app.evaluate(() => globalThis.desktopTest.held)).toBe('waiting');
+    await expect(ignored).not.toHaveAttribute('aria-description');
+    const milliseconds = await page.evaluate(
+      () => window.firstOpenTiming.visible - window.firstOpenTiming.started,
+    );
+    console.log(
+      `First native folder open, click to rows with Git held: ${milliseconds.toFixed(1)} ms`,
+    );
+    await test.info().attach('first-folder-open', {
+      body: JSON.stringify({ clickToRowsMs: milliseconds, gitClassificationHeld: true }),
+      contentType: 'application/json',
+    });
+    await app.evaluate(() => {
+      globalThis.desktopTest.release();
+    });
+    await expect(ignored).toHaveAttribute('aria-description', 'Git-ignored');
+    await expect(ignored.locator('span').first()).toHaveCSS('color', 'rgb(170, 169, 182)');
+    await capture('ignored-files-first-open');
+  } finally {
+    await app.evaluate(() => {
+      globalThis.desktopTest.release();
+    });
+  }
+});
+
 test('actual sandboxed custom-scheme editor reads, edits and saves through SQLite workspace', async () => {
   await page
     .getByRole('tablist', { name: 'Workbench views', exact: true })

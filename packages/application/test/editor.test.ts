@@ -287,15 +287,15 @@ test('recovery CAS conflict is visible and vetoes close', async () => {
   }
 });
 
-test('tree ignore filtering/reveal and bounded lookup expose their real results', async () => {
+test('tree keeps ignored files visible and revealable while lookup retains its filtering', async () => {
   const f = await fixture();
   try {
     f.editor.tree(checkout, { hideIgnored: true });
     assert.equal(
       (await f.editor.list(checkout)).entries.some((entry) => entry.path === 'c.ts'),
-      false,
+      true,
     );
-    await assert.rejects(f.editor.reveal(target('c.ts')), /hidden/);
+    await f.editor.reveal(target('c.ts'));
     await f.editor.reveal(target('folder/nested.ts'));
     assert.deepEqual(f.editor.getSnapshot().recovery.views[checkout.checkoutId].tree.selected, [
       'folder/nested.ts',
