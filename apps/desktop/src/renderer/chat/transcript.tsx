@@ -3,16 +3,18 @@ import { Button } from '@base-ui/react/button';
 import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
 import { colors, layout, radius, space, type } from '@moonbase/ui/tokens.stylex';
-import type { ChatController, ChatState, TranscriptContentState } from '@moonbase/application/chat';
+import type {
+  ChatController,
+  ChatState,
+  TranscriptContentState,
+  TranscriptViewAnchor,
+} from '@moonbase/application/chat';
 import type { ChatEntry, ChatTranscript, ChatTranscriptPart } from '@moonbase/contracts/chat';
 import type { TranscriptNative } from '../../chat/wire.ts';
 import { getTranscriptDisclosureId } from '../../chat/transcript-source.ts';
 import { Markdown, isReadingNodePinned } from './markdown.tsx';
 import { MarkdownCache } from './markdown-model.ts';
 
-type Anchor =
-  | ChatState['transcript']['view']['anchor']
-  | { liveSource: string; partId?: string; offset: number };
 export function Transcript({
   controller,
   state: latestState,
@@ -46,7 +48,9 @@ export function Transcript({
     };
   }, []);
   const follow = useRef(!state.transcript.view.anchor),
-    anchor = useRef<Anchor>(state.transcript.view.anchor);
+    anchor = useRef<TranscriptViewAnchor | null>(state.transcript.view.anchor),
+    restoringLive = useRef(!!state.transcript.view.anchor?.source),
+    domAnchor = useRef<{ node: HTMLElement; offset: number } | null>(null);
   const current = useRef(state);
   useLayoutEffect(() => {
     current.current = state;
@@ -55,6 +59,7 @@ export function Transcript({
   const [following, setFollowing] = useState(!state.transcript.view.anchor);
   const [notice, setNotice] = useState<{ error: boolean; text: string } | null>(null);
   const navigation = useRef(false);
+  const scrollFrame = useRef<number | null>(null);
   const topIntent = useRef(false);
   const lastMove = useRef<'earlier' | 'later' | 'latest'>('earlier');
   const jobs = useRef(new Set<AbortController>());
@@ -62,6 +67,7 @@ export function Transcript({
   useEffect(
     () => () => {
       for (const job of jobs.current) job.abort();
+      if (scrollFrame.current !== null) cancelAnimationFrame(scrollFrame.current);
       cache.clear();
     },
     [controller, cache],
@@ -117,6 +123,14 @@ export function Transcript({
   const capture = useCallback(() => {
     const element = root.current;
     if (!element) return;
+    const observed = controller.getSnapshot();
+    if (
+      observed.transcript.view.anchor?.source &&
+      (observed.transcript.viewStatus !== 'ready' ||
+        restoringLive.current ||
+        JSON.stringify(observed.transcript.view.anchor) !== JSON.stringify(anchor.current))
+    )
+      return;
     const top = getReadingTop(element);
     const nodes = [
       ...element.querySelectorAll<HTMLElement>(
@@ -130,62 +144,121 @@ export function Transcript({
       ) ?? nodes.find((node) => node.getBoundingClientRect().bottom > top);
     if (node) {
       const row = node.closest<HTMLElement>('[data-transcript-entry], [data-transcript-live]')!;
-      const location = row.dataset.transcriptLive
-        ? { liveSource: row.dataset.transcriptLive }
-        : { entryId: row.dataset.transcriptEntry! };
-      anchor.current = {
-        ...location,
-        ...(node.dataset.transcriptPart ? { partId: node.dataset.transcriptPart } : {}),
-        offset: node.getBoundingClientRect().top - top,
-      };
+      domAnchor.current = { node, offset: node.getBoundingClientRect().top - top };
+      if (row.dataset.transcriptLive) {
+        const summary = observed.snapshot?.run?.transcript;
+        if (
+          !observed.ready ||
+          !summary ||
+          row.dataset.transcriptLive !== JSON.stringify(summary.source) ||
+          summary.source.kind !== 'live' ||
+          ['inactive', 'reconnecting', 'failed'].includes(observed.transcript.observation)
+        )
+          return;
+        const partNode = node.dataset.transcriptPart
+          ? node
+          : row.querySelector<HTMLElement>('[data-transcript-part]');
+        const manifest = observed.transcript.manifest;
+        const parts = manifest && sameSource(summary, manifest) ? manifest.parts : summary.parts;
+        const part = parts.find((part) => part.partId === partNode?.dataset.transcriptPart);
+        if (!part || part.availability !== 'available') return;
+        const saved = observed.transcript.view.anchor;
+        const selection =
+          saved?.source && saved.partId === part.partId && sameSource(summary, saved)
+            ? saved
+            : part;
+        anchor.current = {
+          backendId: controller.backendId,
+          source: summary.source,
+          partId: part.partId,
+          bytes: selection.bytes,
+          revision: selection.revision,
+          offset: partNode!.getBoundingClientRect().top - top,
+        };
+      } else
+        anchor.current = {
+          entryId: row.dataset.transcriptEntry!,
+          ...(node.dataset.transcriptPart ? { partId: node.dataset.transcriptPart } : {}),
+          offset: domAnchor.current.offset,
+        };
     }
     controller.setTranscriptView({
-      anchor:
-        follow.current || !anchor.current || !('entryId' in anchor.current) ? null : anchor.current,
+      anchor: follow.current ? null : anchor.current,
       expanded: current.current.transcript.view.expanded,
     });
   }, [controller]);
   const restore = useCallback(() => {
     const element = root.current;
     if (!element) return;
+    const setTop = (top: number) => {
+      if (element.scrollTop === top) return;
+      if (scrollFrame.current !== null) cancelAnimationFrame(scrollFrame.current);
+      element.scrollTop = top;
+      scrollFrame.current = requestAnimationFrame(() => {
+        scrollFrame.current = null;
+      });
+    };
     if (
       follow.current &&
       current.current.transcript.atLatest &&
       window.getSelection()?.isCollapsed !== false
     ) {
-      element.scrollTop = element.scrollHeight;
+      setTop(element.scrollHeight);
       return;
     }
     const target = anchor.current ?? current.current.transcript.view.anchor;
-    if (!target) return;
+    if (!target) {
+      const saved = domAnchor.current;
+      if (saved?.node.isConnected)
+        setTop(
+          element.scrollTop +
+            saved.node.getBoundingClientRect().top -
+            getReadingTop(element) -
+            saved.offset,
+        );
+      return;
+    }
+    const observed = controller.getSnapshot();
+    if (
+      target.source &&
+      (observed.transcript.viewStatus !== 'ready' ||
+        target.backendId !== controller.backendId ||
+        JSON.stringify(target.source) !==
+          JSON.stringify(observed.snapshot?.run?.transcript?.source))
+    )
+      return;
     const nodes = [
       ...element.querySelectorAll<HTMLElement>('[data-transcript-entry], [data-transcript-live]'),
     ];
     const entry = nodes.find((node) =>
-      'entryId' in target
-        ? node.dataset.transcriptEntry === target.entryId
-        : node.dataset.transcriptLive === target.liveSource,
+      target.source
+        ? node.dataset.transcriptLive === JSON.stringify(target.source)
+        : node.dataset.transcriptEntry === target.entryId,
     );
     const part =
       target.partId &&
       [...(entry?.querySelectorAll<HTMLElement>('[data-transcript-part]') ?? [])].find(
         (node) => node.dataset.transcriptPart === target.partId,
       );
-    const node = part || entry;
-    if (node)
-      element.scrollTop +=
-        node.getBoundingClientRect().top - getReadingTop(element) - target.offset;
-  }, []);
+    const node = part || (target.source && target.partId ? undefined : entry);
+    if (node) {
+      setTop(
+        element.scrollTop +
+          node.getBoundingClientRect().top -
+          getReadingTop(element) -
+          target.offset,
+      );
+      restoringLive.current = false;
+    }
+  }, [controller]);
   useLayoutEffect(() => {
     const view = state.transcript.view.anchor;
-    if (
-      !navigation.current &&
-      view &&
-      (view.entryId !==
-        (anchor.current && 'entryId' in anchor.current ? anchor.current.entryId : undefined) ||
-        view.partId !== anchor.current?.partId)
-    )
+    if (!navigation.current && view && JSON.stringify(view) !== JSON.stringify(anchor.current)) {
       anchor.current = view;
+      restoringLive.current = !!view.source;
+      follow.current = false;
+      setFollowing(false);
+    }
   }, [state.transcript.view.anchor]);
   useLayoutEffect(restore, [state.transcript, state.snapshot?.run, restore]);
   useEffect(() => {
@@ -233,11 +306,14 @@ export function Transcript({
     setEarlierRow(false);
     follow.current = true;
     anchor.current = null;
+    restoringLive.current = false;
+    domAnchor.current = null;
     setFollowing(true);
     controller.setTranscriptView({ anchor: null, expanded: state.transcript.view.expanded });
     void controller.jumpToLatest();
   };
   const scroll = () => {
+    if (scrollFrame.current !== null) return;
     const element = root.current!;
     follow.current =
       state.transcript.atLatest &&
@@ -253,14 +329,17 @@ export function Transcript({
       state.transcript.earlier &&
       !state.transcript.loading &&
       window.getSelection()?.isCollapsed !== false &&
-      !document.activeElement?.closest('[data-transcript-entry]')
+      !document.activeElement?.closest('[data-transcript-entry], [data-transcript-live]')
     )
       earlier();
   };
   const status = latestState.transcript;
   const transcript = state.transcript,
     snapshot = state.snapshot,
-    live = transcript.atLatest && !earlierRow ? snapshot?.run : null;
+    live =
+      !earlierRow && (transcript.atLatest || (transcript.view.anchor?.source && !transcript.later))
+        ? snapshot?.run
+        : null;
   const hiddenRow = !!live && transcript.entries.length === 128;
   const entries = hiddenRow ? transcript.entries.slice(1) : transcript.entries;
   return (
@@ -279,7 +358,8 @@ export function Transcript({
             state.transcript.earlier &&
             !state.transcript.loading &&
             !navigation.current &&
-            window.getSelection()?.isCollapsed !== false
+            window.getSelection()?.isCollapsed !== false &&
+            !document.activeElement?.closest('[data-transcript-entry], [data-transcript-live]')
           )
             earlier();
         }
@@ -324,7 +404,7 @@ export function Transcript({
                 Read later
               </Button>
             )}
-            {(preserve || !following || !transcript.atLatest) && (
+            {(status.view.anchor?.source || preserve || !following || !transcript.atLatest) && (
               <Button {...stylex.props(controls.button, controls.quietButton)} onClick={latest}>
                 Jump to latest
               </Button>
@@ -337,6 +417,33 @@ export function Transcript({
               {notice.text}
             </p>
           )}
+          {status.view.anchor?.source && status.viewStatus === 'pending' && (
+            <p role="status" {...stylex.props(styles.small)}>
+              Restoring the saved live position…
+            </p>
+          )}
+          {status.viewError && (
+            <p role="alert" {...stylex.props(styles.warning)}>
+              {status.viewError}{' '}
+              <Button
+                {...stylex.props(controls.button)}
+                onClick={() => {
+                  try {
+                    controller.setTranscriptView(status.view);
+                  } catch (error) {
+                    setNotice({
+                      error: true,
+                      text:
+                        error instanceof Error
+                          ? error.message
+                          : 'The saved live position is unavailable. Jump to latest.',
+                    });
+                  }
+                }}>
+                Reload live position
+              </Button>
+            </p>
+          )}
         </div>
         {status.error && (
           <p role="alert" {...stylex.props(styles.warning)}>
@@ -345,7 +452,11 @@ export function Transcript({
               {...stylex.props(controls.button)}
               onClick={() => {
                 const missing = transcript.view.anchor;
-                if (missing && !transcript.entries.some((entry) => entry.id === missing.entryId))
+                if (
+                  missing &&
+                  !missing.source &&
+                  !transcript.entries.some((entry) => entry.id === missing.entryId)
+                )
                   void controller.jumpToEntry(missing.entryId);
                 else if (lastMove.current === 'latest') latest();
                 else move(lastMove.current);
@@ -459,6 +570,22 @@ const Entry = memo(function Entry({
     transcript && state.manifest && sameSource(transcript, state.manifest) ? state.manifest : null;
   const parts = manifest?.parts.length ? manifest.parts : transcript?.parts;
   const source = transcript?.source;
+  const saved = state.view.anchor;
+  const revealPart =
+    saved?.source && state.viewStatus === 'ready' && transcript && sameSource(transcript, saved)
+      ? saved.partId
+      : undefined;
+  useEffect(() => {
+    if (
+      revealPart &&
+      source &&
+      !parts?.some((part) => part.partId === revealPart) &&
+      !manifest?.error &&
+      manifest?.status !== 'loading' &&
+      (!manifest || manifest.nextCursor)
+    )
+      void controller.loadTranscriptManifest(source);
+  }, [revealPart, source, parts, manifest, controller]);
   const copy = useCallback(() => {
     if (native && source) run((signal) => native.copy({ source }, signal), 'Copied.');
   }, [native, source, run]);
@@ -583,8 +710,8 @@ function Part({
   part: ChatTranscriptPart;
   entryId: string;
 }) {
-  const source = transcript.source;
-  const identity = JSON.stringify([source, part.partId]);
+  const identity = JSON.stringify([transcript.source, part.partId]);
+  const source = useMemo(() => transcript.source, [identity]);
   const disclosure = useMemo(
     () => getTranscriptDisclosureId(entryId, part.partId),
     [entryId, part.partId],
@@ -609,10 +736,14 @@ function Part({
     };
   }, [disclosure]);
   const expansion = typeof disclosure === 'string' ? disclosure : resolved;
+  const saved = state.view.anchor;
+  const applyView = !saved?.source || state.viewStatus === 'ready';
+  const anchored =
+    saved?.partId === part.partId &&
+    (saved.source ? sameSource(transcript, saved) : saved.entryId === entryId);
   const expanded =
     disclosureError ||
-    (expansion !== null && state.view.expanded.includes(expansion)) ||
-    (state.view.anchor?.entryId === entryId && state.view.anchor.partId === part.partId);
+    (applyView && ((expansion !== null && state.view.expanded.includes(expansion)) || anchored));
   const content = state.content.find(
     (item) =>
       sameSource(transcript, item) &&

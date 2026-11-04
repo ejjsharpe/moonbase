@@ -180,7 +180,7 @@ export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabili
       links.push(url);
     },
   };
-  async function live(text: string) {
+  async function live(text: string, outputs: string[] = []) {
     const source: ChatTranscriptSource = {
       kind: 'live',
       target: chat.target,
@@ -189,15 +189,23 @@ export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabili
       attempt: 0,
       incarnation: 'a'.repeat(64),
     };
-    const parts = [await part(text)];
-    sources.set(JSON.stringify(source), { source, parts, texts: [text] });
+    const texts = [text, ...outputs];
+    const parts = await Promise.all(
+      texts.map((value, index) => part(value, `m0.b${index}`, index ? 'result' : 'text')),
+    );
+    sources.set(JSON.stringify(source), { source, parts, texts });
     chat.snapshot.run = {
       stop: { target: chat.target, submissionId: 'demo-submission', taskId: 'demo-task' },
       state: 'running',
       text: [...text].slice(0, 1000).join(''),
       truncated: text.length > 1000,
       tools: [],
-      transcript: { source, parts, nextCursor: null, thinking: 'none' },
+      transcript: {
+        source,
+        parts: parts.slice(0, 4),
+        nextCursor: parts.length > 4 ? '4' : null,
+        thinking: 'none',
+      },
     };
     chat.snapshot.state = 'running';
     chat.controls.receiveChat(structuredClone(chat.snapshot));

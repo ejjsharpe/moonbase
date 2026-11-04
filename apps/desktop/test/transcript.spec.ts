@@ -389,3 +389,159 @@ test('retired live DOM stays pinned for focus/selection and never enters durable
   await page.getByRole('textbox', { name: 'Message', exact: true }).focus();
   await expect(page.locator('[data-retained-selection]')).toHaveCount(0);
 });
+
+test('application live-part memory restores only the exact source across panel replacement, then reports retirement', async ({
+  page,
+}) => {
+  await open(page);
+  await page.evaluate(async () => {
+    await window.demo.transcript!.live(
+      'Live reading\n'.repeat(80),
+      Array.from({ length: 5 }, (_, index) => `Output ${index}\n` + 'retained output\n'.repeat(80)),
+    );
+    const controller = window.demo.application.chat!;
+    await controller.jumpToLatest();
+    const source = controller.getSnapshot().snapshot!.run!.transcript!.source;
+    if (source.kind !== 'live') throw Error('Expected live fixture');
+    await controller.loadTranscriptManifest(source);
+    await controller.loadTranscriptManifest(source);
+    const part = controller
+      .getSnapshot()
+      .transcript.manifest!.parts.find((part) => part.partId === 'm0.b5')!;
+    controller.setTranscriptView({
+      anchor: {
+        backendId: controller.backendId,
+        source,
+        partId: part.partId,
+        bytes: part.bytes,
+        revision: part.revision,
+        offset: 16,
+      },
+      expanded: [],
+    });
+  });
+  const selected = page.locator('[data-transcript-live] [data-transcript-part="m0.b5"]');
+  await expect(selected.getByText('Output 4', { exact: false })).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        window.demo.application
+          .chat!.getSnapshot()
+          .transcript.content.some(
+            (item) => item.selection.partId === 'm0.b5' && item.status === 'complete',
+          ),
+      ),
+    )
+    .toBe(true);
+  const before = await page.evaluate(() => {
+    const controller = window.demo.application.chat!;
+    const part = document.querySelector<HTMLElement>(
+      '[data-transcript-live] [data-transcript-part="m0.b5"]',
+    )!;
+    const chrome = document.querySelector<HTMLElement>('[data-transcript-chrome]')!;
+    controller.setTranscriptView({
+      ...controller.getSnapshot().transcript.view,
+      anchor: {
+        ...controller.getSnapshot().transcript.view.anchor!,
+        offset: part.getBoundingClientRect().top - chrome.getBoundingClientRect().bottom,
+      },
+    });
+    Object.assign(window, { replacedChat: controller });
+    return controller.getSnapshot().transcript.view.anchor;
+  });
+  expect(before?.source?.kind).toBe('live');
+  await page.getByRole('button', { name: 'Close Chat panel', exact: true }).click();
+  await page.evaluate(() =>
+    window.demo.transcript!.live(
+      'Live reading\n'.repeat(80),
+      Array.from(
+        { length: 5 },
+        (_, index) =>
+          `Output ${index}\n` +
+          'retained output\n'.repeat(80) +
+          (index === 4 ? 'later append\n' : ''),
+      ),
+    ),
+  );
+  await page.evaluate(() => {
+    const original = window.demo.chat.dependencies.chat.command;
+    const gate = Promise.withResolvers<void>();
+    let released = false;
+    Object.assign(window, {
+      releaseLiveProof: () => {
+        released = true;
+        gate.resolve();
+      },
+    });
+    window.demo.chat.dependencies.chat.command = async (operation, input, options) => {
+      if (
+        operation === 'getChatTranscriptContent' &&
+        'selection' in input &&
+        input.selection?.partId === 'm0.b5' &&
+        !released
+      )
+        await gate.promise;
+      return original(operation, input, options) as never;
+    };
+  });
+  await page.getByRole('button', { name: 'Open Chat panel', exact: true }).click();
+  await expect(page.getByText('Restoring the saved live position…', { exact: true })).toBeVisible();
+  await expect(selected.getByText('Output 4', { exact: false })).toHaveCount(0);
+  await page.evaluate(() =>
+    (window as typeof window & { releaseLiveProof(): void }).releaseLiveProof(),
+  );
+  await expect(selected.getByText('Output 4', { exact: false })).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        window.demo.application
+          .chat!.getSnapshot()
+          .transcript.content.some(
+            (item) => item.selection.partId === 'm0.b5' && item.status === 'complete',
+          ),
+      ),
+    )
+    .toBe(true);
+  const restored = await page.evaluate(() => {
+    const controller = window.demo.application.chat!;
+    const part = document.querySelector<HTMLElement>(
+      '[data-transcript-live] [data-transcript-part="m0.b5"]',
+    )!;
+    const chrome = document.querySelector<HTMLElement>('[data-transcript-chrome]')!;
+    return {
+      replacement:
+        controller !== (window as typeof window & { replacedChat: unknown }).replacedChat,
+      anchor: controller.getSnapshot().transcript.view.anchor,
+      status: controller.getSnapshot().transcript.viewStatus,
+      offset: part.getBoundingClientRect().top - chrome.getBoundingClientRect().bottom,
+    };
+  });
+  expect(restored.replacement).toBe(true);
+  expect(restored.anchor).toEqual(before);
+  expect(restored.status).toBe('ready');
+  expect(Math.abs(restored.offset - before!.offset)).toBeLessThan(3);
+  await page.evaluate(() => {
+    const run = window.demo.chat.snapshot.run!;
+    if (run.transcript!.source.kind !== 'live') throw Error('Expected live fixture');
+    run.transcript!.source = { ...run.transcript!.source, attempt: 1, incarnation: 'b'.repeat(64) };
+    window.demo.chat.controls.receiveChat(structuredClone(window.demo.chat.snapshot));
+  });
+  await expect(
+    page.getByRole('alert').filter({ hasText: 'anchored live source retired or changed' }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(() => window.demo.application.chat!.getSnapshot().transcript.view.anchor),
+  ).toEqual(before);
+  await page.getByRole('button', { name: 'Close Chat panel', exact: true }).click();
+  await page.getByRole('button', { name: 'Open Chat panel', exact: true }).click();
+  await expect(
+    page.getByRole('alert').filter({ hasText: 'anchored live source retired or changed' }),
+  ).toBeVisible();
+  await expect(selected.getByText('Output 4', { exact: false })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Jump to latest', exact: true }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.demo.application.chat!.getSnapshot().transcript.view.anchor),
+    )
+    .toBeNull();
+});
