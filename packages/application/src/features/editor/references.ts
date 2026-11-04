@@ -104,7 +104,7 @@ export function closeRecoveryReferences(
   if (kind === 'checkout' && checkout) {
     state.openCheckoutIds = state.openCheckoutIds.filter((id) => id !== checkout.checkoutId);
     if (state.selectedCheckoutId === checkout.checkoutId)
-      state.selectedCheckoutId = state.openCheckoutIds[0] ?? null;
+      state.selectedCheckoutId = state.openCheckoutIds.at(-1) ?? null;
   }
 
   return history;

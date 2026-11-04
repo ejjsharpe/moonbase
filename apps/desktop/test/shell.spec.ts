@@ -160,45 +160,299 @@ test('project-tab shortcuts use the editor handler after keyboard navigation fro
   await expect(input(page)).toBeVisible();
 });
 
-for (const choice of ['Save', 'Discard'] as const) {
-  test(`shell project close Cancel retains work, then ${choice} uses the authoritative close gate`, async ({
+test('reopened projects append to the tab strip and open projects keep their slot', async ({
+  page,
+}) => {
+  await page.goto('/?chat&design');
+  await page.evaluate(async () => {
+    await window.demo.first.openCheckout('/demo/other');
+    await window.demo.first.openCheckout('/demo/third');
+  });
+  const projects = page.getByRole('group', { name: 'Project tabs', exact: true });
+  const projectTabs = projects.getByRole('tab');
+  await expect(projectTabs).toHaveText(['moonbase · main', 'other · main', 'third · main']);
+  await projects.getByRole('tab', { name: 'other · main', exact: true }).hover();
+  await projects.getByRole('button', { name: 'Close checkout /demo/other', exact: true }).click();
+  await expect(projectTabs).toHaveText(['moonbase · main', 'third · main']);
+  await page.evaluate(() => {
+    window.demo.selectCheckout = async () => '/demo/other';
+  });
+  await projects.getByRole('button', { name: 'Open checkout', exact: true }).click();
+  await expect(projectTabs).toHaveText(['moonbase · main', 'third · main', 'other · main']);
+  expect(
+    await page.evaluate(() => window.demo.first.getSnapshot().recovery.openCheckoutIds),
+  ).toEqual(['sample', 'third', 'other']);
+  await page.evaluate(() => {
+    window.demo.selectCheckout = async () => '/demo/third';
+  });
+  await projects.getByRole('button', { name: 'Open checkout', exact: true }).click();
+  await expect(projects.getByRole('tab', { name: 'third · main', exact: true })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  await expect(projectTabs).toHaveText(['moonbase · main', 'third · main', 'other · main']);
+  await expect(
+    projects.getByRole('tab', { name: 'other · main', exact: true }).locator('..'),
+  ).toHaveCSS('transform', 'none');
+  await page.screenshot({ path: test.info().outputPath('reopened-project-tabs.png') });
+});
+
+for (const closed of ['moonbase', 'other', 'third']) {
+  test(`closing the active ${closed} project selects the rightmost remaining tab`, async ({
     page,
   }) => {
-    await page.goto('/?chat');
-    await project(page).click();
-    await expect(input(page)).toBeVisible();
-    await input(page).focus();
-    await input(page).press('Meta+a');
-    await input(page).pressSequentially('dirty project close');
-    await tabs(page)
-      .getByRole('button', { name: 'Close checkout /demo/moonbase', exact: true })
+    await page.goto('/?chat&design');
+    await page.evaluate(async () => {
+      await window.demo.first.openCheckout('/demo/other');
+      await window.demo.first.openCheckout('/demo/third');
+    });
+    const projects = page.getByRole('group', { name: 'Project tabs', exact: true });
+    await projects.getByRole('tab', { name: `${closed} · main`, exact: true }).click();
+    await projects
+      .getByRole('button', { name: `Close checkout /demo/${closed}`, exact: true })
       .click();
-    await page.getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true }).click();
-    await expect(project(page)).toHaveAttribute('aria-selected', 'true');
-    expect(
-      await page.evaluate(
-        () =>
-          window.demo.first.buffer({ checkout: window.demo.checkout, path: 'welcome.ts' })!.text,
-      ),
-    ).toBe('dirty project close');
-    await tabs(page)
-      .getByRole('button', { name: 'Close checkout /demo/moonbase', exact: true })
-      .click();
-    await page.getByRole('dialog').getByRole('button', { name: choice, exact: true }).click();
-    await expect(project(page)).toHaveCount(0);
+    const next = closed === 'third' ? 'other' : 'third';
     await expect(
-      shell(page).getByText(
-        'Open a checkout to browse files and edit. Unsaved changes belong to this editor instance.',
-      ),
-    ).toBeVisible();
-    expect(await page.evaluate(() => window.demo.memory.stats.saves)).toBe(
-      choice === 'Save' ? 1 : 0,
+      projects.getByRole('tab', { name: `${next} · main`, exact: true }),
+    ).toHaveAttribute('aria-selected', 'true');
+    const recovery = await page.evaluate(() =>
+      window.demo.client.command('loadRecovery', { clientId: window.demo.first.clientId }),
     );
-    expect(
-      await page.evaluate(() => window.demo.first.getSnapshot().recovery.checkouts),
-    ).toHaveLength(1);
+    expect(recovery.state.selectedCheckoutId).toBe(next);
+    expect(recovery.state.openCheckoutIds.at(-1)).toBe(next);
   });
 }
+
+for (const selected of ['other · main', 'moonbase · main', 'Agents']) {
+  test(`closing a project from ${selected} keeps the next view steady`, async ({ page }) => {
+    await page.goto('/?chat&design');
+    await page.evaluate(async () => {
+      const checkout = await window.demo.first.openCheckout('/demo/other');
+      await window.demo.first.open({ checkout, path: 'elsewhere.ts' }, { intent: 'keep' });
+    });
+    const other = page.getByRole('tab', { name: 'other · main', exact: true });
+    await page.getByRole('tab', { name: selected, exact: true }).click();
+    await expect(page.getByRole('tab', { name: selected, exact: true })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    await expect(other.locator('..')).toHaveCSS('transform', 'none');
+    const frames = await page.evaluate(async () => {
+      const command = window.demo.client.command;
+      window.demo.client.command = async (...args) => {
+        if (args[0] === 'persistRecovery') await new Promise((resolve) => setTimeout(resolve, 50));
+        return command(...args);
+      };
+      const frames: { selected: string | null; editors: string[]; top: number }[] = [];
+      document
+        .querySelector<HTMLButtonElement>('button[aria-label="Close checkout /demo/other"]')!
+        .click();
+      for (let i = 0; i < 32; i++) {
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        frames.push({
+          selected:
+            document.querySelector(
+              '[role="tablist"][aria-label="Workbench views"] [aria-selected="true"]',
+            )?.textContent ?? null,
+          editors: [
+            ...document.querySelectorAll<HTMLElement>('.monaco-editor textarea[role="textbox"]'),
+          ]
+            .filter((element) => element.checkVisibility())
+            .map((element) => element.getAttribute('aria-label')!),
+          top: document
+            .querySelector('[aria-label="Moonbase workbench"] > [role="tabpanel"]:not([hidden])')!
+            .getBoundingClientRect().top,
+        });
+      }
+      window.demo.client.command = command;
+      return frames;
+    });
+    const next = selected === 'other · main' ? 'moonbase · main' : selected;
+    for (const frame of frames) {
+      expect(frame.selected).not.toBeNull();
+      expect([selected, next]).toContain(frame.selected);
+      expect(frame.editors).toEqual(
+        frame.selected === 'Agents'
+          ? []
+          : [frame.selected === 'other · main' ? 'elsewhere.ts editor' : 'welcome.ts editor'],
+      );
+    }
+    expect([...new Set(frames.map((frame) => frame.top))]).toEqual([40]);
+    await expect(page.getByRole('tab', { name: next, exact: true })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+  });
+}
+
+test('closing the final project shows Agents directly without an empty editor frame', async ({
+  page,
+}) => {
+  await page.goto('/?chat&design');
+  await page.getByRole('tab', { name: 'moonbase · main', exact: true }).click();
+  const frames = await page.evaluate(async () => {
+    const frames: string[] = [];
+    document
+      .querySelector<HTMLButtonElement>('button[aria-label="Close checkout /demo/moonbase"]')!
+      .click();
+    for (let i = 0; i < 32; i++) {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      frames.push(
+        document.querySelector(
+          '[aria-label="Moonbase workbench"] > [role="tabpanel"]:not([hidden])',
+        )?.textContent ?? '',
+      );
+    }
+    return frames;
+  });
+  expect(
+    frames.filter((frame) => !frame || frame.includes('Open a checkout to browse files')),
+  ).toEqual([]);
+  await expect(page.getByRole('tab', { name: 'Agents', exact: true })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+});
+
+for (const fromChat of [false, true]) {
+  for (const choice of ['Save', 'Discard'] as const) {
+    test(`shell project close ${fromChat ? 'from Chat ' : ''}Cancel retains work, then ${choice} uses the authoritative close gate`, async ({
+      page,
+    }) => {
+      await page.goto('/?chat');
+      await project(page).click();
+      await expect(input(page)).toBeVisible();
+      await input(page).focus();
+      await input(page).press('Meta+a');
+      await input(page).pressSequentially('dirty project close');
+      if (fromChat) await tabs(page).getByRole('tab', { name: 'Agents', exact: true }).click();
+      await project(page).hover();
+      await tabs(page)
+        .getByRole('button', { name: 'Close checkout /demo/moonbase', exact: true })
+        .click();
+      await page.getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true }).click();
+      await expect(project(page)).toHaveAttribute('aria-selected', 'true');
+      expect(
+        await page.evaluate(
+          () =>
+            window.demo.first.buffer({ checkout: window.demo.checkout, path: 'welcome.ts' })!.text,
+        ),
+      ).toBe('dirty project close');
+      if (fromChat) await tabs(page).getByRole('tab', { name: 'Agents', exact: true }).click();
+      await project(page).hover();
+      await tabs(page)
+        .getByRole('button', { name: 'Close checkout /demo/moonbase', exact: true })
+        .click();
+      await page.getByRole('dialog').getByRole('button', { name: choice, exact: true }).click();
+      await expect(project(page)).toHaveCount(0);
+      await expect(tabs(page).getByRole('tab', { name: 'Agents', exact: true })).toHaveAttribute(
+        'aria-selected',
+        'true',
+      );
+      expect(await page.evaluate(() => window.demo.memory.stats.saves)).toBe(
+        choice === 'Save' ? 1 : 0,
+      );
+      expect(
+        await page.evaluate(() => window.demo.first.getSnapshot().recovery.checkouts),
+      ).toHaveLength(1);
+    });
+  }
+}
+
+test('failed Open without a project stays visible in Agents and can be dismissed and retried', async ({
+  page,
+}) => {
+  await page.goto('/?chat&design');
+  await page.getByRole('tab', { name: 'moonbase · main', exact: true }).click();
+  await page.getByRole('button', { name: 'Close checkout /demo/moonbase', exact: true }).click();
+  await expect(page.getByRole('tab', { name: 'Agents', exact: true })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  await page.evaluate(() => {
+    window.demo.selectCheckout = async () => '/demo/other';
+    window.demo.memory.failNext('openCheckout', 'Controlled empty Open failure');
+  });
+  await page.getByRole('button', { name: 'Open checkout', exact: true }).click();
+  const error = page.getByRole('alert').filter({ hasText: 'Controlled empty Open failure' });
+  await expect(error).toBeVisible();
+  await error.getByRole('button', { name: 'Dismiss error', exact: true }).click();
+  await expect(error).toHaveCount(0);
+  await page.getByRole('button', { name: 'Open checkout', exact: true }).click();
+  await expect(page.getByRole('tab', { name: 'other · main', exact: true })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+});
+
+for (const fromChat of [false, true]) {
+  test(`a background close Save conflict from ${fromChat ? 'Agents' : 'another project'} reveals the captured project and recovery controls`, async ({
+    page,
+  }) => {
+    await page.goto('/?chat&design');
+    await page.evaluate(async () => {
+      const checkout = await window.demo.first.openCheckout('/demo/other');
+      const target = { checkout, path: 'elsewhere.ts' };
+      await window.demo.first.open(target, { intent: 'keep' });
+      window.demo.first.edit(target, 'retained background edit');
+      window.demo.memory.externalWrite(target, 'external background edit');
+    });
+    await page.getByRole('tab', { name: 'moonbase · main', exact: true }).click();
+    if (fromChat) await page.getByRole('tab', { name: 'Agents', exact: true }).click();
+    const other = page.getByRole('tab', { name: 'other · main', exact: true });
+    await other.hover();
+    await page.getByRole('button', { name: 'Close checkout /demo/other', exact: true }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(other).toHaveAttribute('aria-selected', 'true');
+    await expect(
+      page.getByRole('textbox', { name: 'elsewhere.ts editor', exact: true }),
+    ).toBeVisible();
+    for (const name of ['Compare', 'Overwrite observed version', 'Reload'])
+      await expect(page.getByRole('button', { name, exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Overwrite observed version', exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.demo.memory.stats.saves)).toBe(1);
+    expect(
+      await page.evaluate(() => {
+        const checkout = window.demo.first
+          .getSnapshot()
+          .recovery.checkouts.find((checkout) => checkout.checkoutId === 'other')!;
+        return window.demo.client.command('readFile', { checkout, path: 'elsewhere.ts' });
+      }),
+    ).toMatchObject({ text: 'retained background edit' });
+    await expect(other).toHaveAttribute('aria-selected', 'true');
+  });
+}
+
+test('failed project close from Chat reveals recovery errors and retains the project', async ({
+  page,
+}) => {
+  await page.goto('/?chat');
+  await page.evaluate(() =>
+    window.demo.memory.failNext('persistRecovery', 'Controlled close failure'),
+  );
+  await project(page).hover();
+  await tabs(page)
+    .getByRole('button', { name: 'Close checkout /demo/moonbase', exact: true })
+    .click();
+  await expect(project(page)).toHaveAttribute('aria-selected', 'true');
+  await expect(shell(page).getByRole('alert').last()).toContainText('Controlled close failure');
+  expect(
+    await page.evaluate(() => window.demo.first.getSnapshot().recovery.openCheckoutIds),
+  ).toEqual(['sample']);
+});
+
+test('closing every view leaves the editor empty state available', async ({ page }) => {
+  await page.goto('/?chat');
+  await tabs(page).getByRole('button', { name: 'Close Chat panel', exact: true }).click();
+  await tabs(page)
+    .getByRole('button', { name: 'Close checkout /demo/moonbase', exact: true })
+    .click();
+  await expect(
+    shell(page).getByText(
+      'Open a checkout to browse files and edit. Unsaved changes belong to this editor instance.',
+    ),
+  ).toBeVisible();
+});
 
 test('opening an exact project from Chat selects it and retains the other project and its comparisons', async ({
   page,

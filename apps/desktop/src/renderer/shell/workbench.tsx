@@ -8,9 +8,11 @@ import {
   useSyncExternalStore,
 } from 'react';
 import { Tabs } from '@base-ui/react/tabs';
+import { Button } from '@base-ui/react/button';
 import * as stylex from '@stylexjs/stylex';
 import type { MoonbaseApplication } from '@moonbase/application';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
+import { controls } from '@moonbase/ui/controls';
 import { workbench } from '@moonbase/ui/workbench';
 import { Choice } from '../chat/choice.tsx';
 import { ChatView } from '../chat/view.tsx';
@@ -58,15 +60,15 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
     panels = useRef<Record<string, HTMLElement | null>>({}),
     focus = useRef<Record<string, HTMLElement | null>>({});
   const openCheckouts =
-    state?.recovery.checkouts.filter((checkout) =>
-      state.recovery.openCheckoutIds.includes(checkout.checkoutId),
-    ) ?? [];
+    state?.recovery.openCheckoutIds
+      .map((id) => state.recovery.checkouts.find((checkout) => checkout.checkoutId === id))
+      .filter((checkout) => checkout !== undefined) ?? [];
   const selected = openCheckouts.find(
     (checkout) => checkout.checkoutId === state?.recovery.selectedCheckoutId,
   );
   const chatTab = !!chat || !['closed', 'cleanup-blocked'].includes(lifecycle.chat.state);
   const projectValue = selected ? tabValue({ kind: 'project', checkout: selected }) : 'empty';
-  const view = destination === 'chat' && chatTab ? 'chat' : projectValue;
+  const view = (destination === 'chat' || !selected) && chatTab ? 'chat' : projectValue;
   const report = controller?.report ?? application.reportCleanup;
   const run = (task: Promise<unknown>) => {
     void task.catch(report);
@@ -125,9 +127,11 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
   }
   async function closeCheckout(checkout: CheckoutTarget) {
     if (!controller) return;
-    setDestination('project');
-    await controller.selectCheckout(checkout);
-    await controller.closeCheckout(checkout);
+    if (!(await controller.closeCheckout(checkout))) {
+      const selection = controller.selectCheckout(checkout);
+      setDestination('project');
+      await selection;
+    }
   }
   async function importFiles(checkout: CheckoutTarget, selection: Promise<string[]>) {
     const references = await selection;
@@ -138,7 +142,6 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
   }
   let status = view === 'chat' ? 'Agents · Explicit Send' : 'Explicit Save · Local workspace';
   if (closing || lifecycle.phase === 'prepared') status = 'Closing workbench…';
-  else if (state?.preserving) status = 'Preserving edits…';
   else if (state?.publication) status = 'Recovery confirmation pending';
   let chatHeading = 'Chat is unavailable';
   if (lifecycle.chat.state === 'initialization-failed') chatHeading = 'Chat could not initialize';
@@ -214,11 +217,23 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
       />
       {(closing ||
         lifecycle.phase === 'prepared' ||
-        state?.preserving ||
         state?.publication ||
         lifecycle.cleanup.pending.length > 0) && (
         <div role="status" {...stylex.props(styles.status)}>
           {lifecycle.cleanup.pending.length ? 'Finishing panel cleanup…' : status}
+        </div>
+      )}
+      {state?.preserving && (
+        <div role="status" {...stylex.props(controls.hidden)}>
+          Preserving edits…
+        </div>
+      )}
+      {view === 'chat' && !selected && !!state?.errors.length && (
+        <div role="alert" {...stylex.props(controls.status, controls.alert)}>
+          {state.errors.at(-1)}{' '}
+          <Button {...stylex.props(controls.button)} onClick={() => controller?.clearErrors()}>
+            Dismiss error
+          </Button>
         </div>
       )}
       {lifecycle.chat.state === 'initialization-failed' && view !== 'chat' ? (
@@ -244,6 +259,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
         <Tabs.Panel
           value={projectValue}
           keepMounted
+          hidden={view === 'chat'}
           ref={(element) => {
             panels.current.project = element;
           }}
@@ -271,6 +287,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
       <Tabs.Panel
         value="chat"
         keepMounted
+        hidden={view !== 'chat'}
         ref={(element) => {
           panels.current.chat = element;
         }}
