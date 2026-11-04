@@ -17,6 +17,7 @@ import { sameTarget } from './saved.ts';
 import type { TranscriptViewMemory, TranscriptView } from './view-memory.ts';
 import {
   awaitTranscriptRead,
+  checkTranscriptRead,
   countDecodedTranscriptBytes,
   areTranscriptValuesEqual as equal,
   iterateTranscriptSource,
@@ -835,7 +836,7 @@ export class TranscriptOwner {
       signal?: AbortSignal;
       onProgress?: (progress: TranscriptReadProgress) => void;
     } = {},
-  ) {
+  ): AsyncGenerator<TranscriptChunk> {
     if (!this.dependencies.capable)
       throw makeTranscriptFailure(
         'This host requires an upgrade for complete transcript reads.',
@@ -843,9 +844,9 @@ export class TranscriptOwner {
       );
     const captured = structuredClone(source);
     const selection = options.selection ? { ...options.selection } : undefined;
-    const getEvidence = () => {
+    const getEvidence = (selected?: ChatTranscriptSelection) => {
       const transcript = this.snapshot?.run?.transcript;
-      const part = selection && transcript?.parts.find((part) => part.partId === selection.partId);
+      const part = selected && transcript?.parts.find((part) => part.partId === selected.partId);
       return part
         ? {
             partId: part.partId,
@@ -855,19 +856,93 @@ export class TranscriptOwner {
           }
         : transcript;
     };
-    const evidence = captured.kind === 'live' ? structuredClone(getEvidence()) : undefined;
-    return iterateTranscriptSource({
-      ...options,
-      selection,
+    const manifestEvidence =
+      captured.kind === 'live' && !selection ? structuredClone(getEvidence()) : undefined;
+    const isCurrent = () =>
+      this.current(captured) &&
+      (captured.kind !== 'live' || !!selection || equal(manifestEvidence, getEvidence()));
+    const signal = options.signal
+      ? AbortSignal.any([options.signal, this.lifetime.signal])
+      : this.lifetime.signal;
+    let proofState:
+      | {
+          selection: ChatTranscriptSelection;
+          encoding: TranscriptChunk['encoding'];
+          evidence: unknown;
+        }
+      | undefined;
+    let progress: TranscriptReadProgress | undefined;
+    const needsProof = () =>
+      captured.kind === 'live' &&
+      proofState &&
+      !equal(proofState.evidence, getEvidence(proofState.selection));
+    const verifyCurrent = async (budget: { remaining: number }) => {
+      checkTranscriptRead(signal, isCurrent);
+      if (captured.kind !== 'live' || !proofState) return;
+      const selected = proofState;
+      while (!equal(selected.evidence, getEvidence(selected.selection))) {
+        if (budget.remaining === 0)
+          throw makeTranscriptFailure(
+            'Transcript prefix proof was repeatedly superseded.',
+            'Conflict',
+          );
+        budget.remaining--;
+        const evidence = structuredClone(getEvidence(selected.selection));
+        const proof = await readTranscript(
+          this.read,
+          { source: captured, selection: selected.selection },
+          signal,
+          isCurrent,
+        );
+        if (proof.kind !== 'content' || proof.offset !== 0 || proof.encoding !== selected.encoding)
+          throw makeTranscriptFailure('Transcript prefix proof does not match the captured part.');
+        // A held proof covers only the evidence observed before its request.
+        selected.evidence = evidence;
+      }
+      checkTranscriptRead(signal, isCurrent);
+    };
+    const iterator = iterateTranscriptSource({
       source: captured,
-      read: this.read,
-      signal: options.signal
-        ? AbortSignal.any([options.signal, this.lifetime.signal])
-        : this.lifetime.signal,
-      // An observed revision change requires fresh prefix proof, including for held replies.
-      isCurrent: () =>
-        this.current(captured) && (captured.kind !== 'live' || equal(evidence, getEvidence())),
+      selection,
+      signal,
+      isCurrent,
+      read: async (input, options) => {
+        const evidence = structuredClone(getEvidence(input.selection));
+        const reply = await this.read(input, options);
+        if (reply.kind === 'content' && input.selection)
+          proofState = { selection: { ...input.selection }, encoding: reply.encoding, evidence };
+        return reply;
+      },
+      onProgress: (value) => {
+        progress = value;
+      },
     });
+    const onProgress = options.onProgress;
+    return (async function* () {
+      try {
+        for (;;) {
+          const next = await iterator.next();
+          const budget = { remaining: 3 };
+          for (;;) {
+            await verifyCurrent(budget);
+            checkTranscriptRead(signal, isCurrent);
+            if (needsProof()) continue;
+            if (progress) {
+              const current = progress;
+              progress = undefined;
+              onProgress?.(current);
+              checkTranscriptRead(signal, isCurrent);
+              if (needsProof()) continue;
+            }
+            if (next.done) return;
+            yield next.value;
+            break;
+          }
+        }
+      } finally {
+        await iterator.return(undefined);
+      }
+    })();
   }
   close() {
     this.alive = false;

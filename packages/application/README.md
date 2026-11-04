@@ -50,6 +50,6 @@ bun run --cwd packages/application lint
 bun run --cwd packages/application test
 ```
 
-Runtime-bound chat clients and shared dispatch also carry the optional [structured transcript reads](../contracts/docs/TRANSCRIPTS.md). The legacy controller and controlled demo capabilities do not advertise structured transcript support; navigation/hydration presentation is composed separately.
+Runtime-bound chat clients and shared dispatch also carry the optional [structured transcript reads](../contracts/docs/TRANSCRIPTS.md). The controller negotiates structured transcript support; controlled legacy demo capabilities do not advertise it. Fixed-selection iteration retains its source/length/revision through appends and uses bounded fresh prefix proofs when observed evidence changes.
 
 The [transcript owner](docs/TRANSCRIPTS.md) supplies canonical bounded history, progressive selected content reads, complete-source iteration and transient application-lifetime anchors. Consumers use `ChatState.transcript.entries`; they do not merge the latest snapshot with a separate older page. Saved drafts retain their existing format.

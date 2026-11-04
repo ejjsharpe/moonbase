@@ -607,7 +607,7 @@ test('held live content cannot complete after an observed same-incarnation prefi
     }),
   );
   await entered.promise;
-  f.publish(live(initial, 'REPLACED'));
+  publishLiveCopy(f, 'REPLACED');
   held.resolve();
   await assert.rejects(reading, (error) => ApplicationError.is(error) && error.code === 'Conflict');
 });
@@ -775,4 +775,269 @@ test('disjoint latest updates preserve an around-entry anchor and bridge to late
   }
   assert.equal(seen.size, 640);
   assert.equal(f.controller.getSnapshot().transcript.atLatest, true);
+});
+
+function publishLiveCopy(f: Awaited<ReturnType<typeof transcriptController>>, data: string) {
+  const value = live(f.fixture.snapshot, data);
+  value.run!.text = data.slice(0, 64);
+  value.run!.truncated = data.length > 64;
+  const source = value.run!.transcript!.source;
+  f.fixture.sources.set(JSON.stringify(source), { source, data: [data] });
+  f.publish(value);
+  return value.run!.transcript!;
+}
+
+test('fixed live Copy survives a pure append while its second response is held', async (t) => {
+  const f = await transcriptController(t, 1),
+    data = 'x'.repeat(70000);
+  const transcript = publishLiveCopy(f, data),
+    chosen = selection(transcript.parts[0]);
+  const progress: number[] = [];
+  const iterator = f.controller.iterateTranscript(transcript.source, {
+    selection: chosen,
+    onProgress: (state) => progress.push(state.bytes),
+  });
+  const first = await iterator.next();
+  const entered = Promise.withResolvers<void>(),
+    held = Promise.withResolvers<void>();
+  f.handlers.set('getChatTranscriptContent', async (raw, _signal, fallback) => {
+    const reply = fallback();
+    if ((raw as { cursor?: string }).cursor === '32768') {
+      entered.resolve();
+      await held.promise;
+    }
+    return reply;
+  });
+  try {
+    const reading = iterator.next();
+    await entered.promise;
+    publishLiveCopy(f, data + ' appended');
+    held.resolve();
+    const second = await reading;
+    assert.equal(first.value!.data + second.value!.data + (await collect(iterator)), data);
+    assert.equal(progress.at(-1), 70000);
+    const inputs = f.calls
+      .filter((call) => call.operation === 'getChatTranscriptContent')
+      .map((call) => call.input as { selection: unknown; cursor?: string });
+    assert(inputs.every((input) => JSON.stringify(input.selection) === JSON.stringify(chosen)));
+    assert.equal(
+      inputs.filter((input) => !input.cursor).length,
+      2,
+      'one fresh prefix proof, no whole-Copy restart',
+    );
+    assert.equal(inputs.filter((input) => input.cursor === '32768').length, 1);
+  } finally {
+    held.resolve();
+    await iterator.return(undefined);
+  }
+});
+
+test('fixed live Copy completes through successive appends and final-progress reentrancy without restarting data', async (t) => {
+  const f = await transcriptController(t, 1),
+    data = 'x'.repeat(70000);
+  const transcript = publishLiveCopy(f, data),
+    chosen = selection(transcript.parts[0]);
+  let offset = 0,
+    appends = 0,
+    finalProgress = 0;
+  f.handlers.set('getChatTranscriptContent', async (raw, _signal, fallback) => {
+    const input = raw as { cursor?: string };
+    const reply = fallback() as ContentReply;
+    if (Number(input.cursor ?? 0) === offset) {
+      offset += Buffer.byteLength(reply.data);
+      publishLiveCopy(f, data + 'append'.repeat(++appends));
+    }
+    return reply;
+  });
+  const progress: number[] = [];
+  const result = await collect(
+    f.controller.iterateTranscript(transcript.source, {
+      selection: chosen,
+      onProgress(value) {
+        progress.push(value.bytes);
+        if (value.parts === 1) {
+          finalProgress++;
+          publishLiveCopy(f, data + 'append'.repeat(++appends));
+        }
+      },
+    }),
+  );
+  assert.equal(result, data);
+  assert.equal(offset, 70000);
+  assert.equal(appends, 4);
+  assert.equal(finalProgress, 1);
+  assert.deepEqual(progress, [32768, 65536, 70000, 70000]);
+  const inputs = f.calls
+    .filter((call) => call.operation === 'getChatTranscriptContent')
+    .map((call) => call.input as { cursor?: string });
+  assert.equal(
+    inputs.filter((input) => input.cursor).length,
+    2,
+    'each continuation is consumed once',
+  );
+  assert.equal(
+    inputs.filter((input) => !input.cursor).length,
+    5,
+    'three chunk proofs and one final-progress proof',
+  );
+});
+
+for (const change of ['replacement', 'rollover', 'reconnecting', 'finalized'] as const)
+  test(`a held fresh live prefix proof rejects ${change} without publishing its old chunk`, async (t) => {
+    const f = await transcriptController(t, 1),
+      data = 'x'.repeat(70000);
+    const transcript = publishLiveCopy(f, data),
+      chosen = selection(transcript.parts[0]);
+    const iterator = f.controller.iterateTranscript(transcript.source, { selection: chosen });
+    await iterator.next();
+    const entered = Promise.withResolvers<void>(),
+      held = Promise.withResolvers<void>();
+    let second = false,
+      proofs = 0;
+    f.handlers.set('getChatTranscriptContent', async (raw, _signal, fallback) => {
+      const input = raw as { cursor?: string },
+        reply = fallback();
+      if (input.cursor === '32768') {
+        second = true;
+        publishLiveCopy(f, data + ' appended');
+      } else if (second && !input.cursor) {
+        proofs++;
+        entered.resolve();
+        await held.promise;
+      }
+      return reply;
+    });
+    const reading = iterator.next();
+    const rejected = assert.rejects(
+      reading,
+      (error) =>
+        ApplicationError.is(error) &&
+        error.code ===
+          (change === 'replacement' || change === 'rollover' ? 'Conflict' : 'Cancelled'),
+    );
+    try {
+      await entered.promise;
+      if (change === 'replacement')
+        publishLiveCopy(f, data.slice(0, 40000) + 'REPLACED' + data.slice(40008));
+      if (change === 'rollover') publishLiveCopy(f, 'tail after rollover');
+      if (change === 'reconnecting')
+        f.publish({ ...f.fixture.snapshot, observationStatus: 'reconnecting' });
+      if (change === 'finalized') f.publish({ ...f.fixture.snapshot, run: null, state: 'idle' });
+      held.resolve();
+      await rejected;
+      assert.equal(
+        proofs,
+        1,
+        'replacement/rollover fail the next fresh read; stale control fails before another read',
+      );
+    } finally {
+      held.resolve();
+      await iterator.return(undefined);
+    }
+  });
+
+test('fresh live prefix proof attempts are bounded when every response is superseded', async (t) => {
+  const f = await transcriptController(t, 1),
+    data = 'x'.repeat(70000);
+  const transcript = publishLiveCopy(f, data),
+    chosen = selection(transcript.parts[0]);
+  let requests = 0,
+    progress = 0;
+  f.handlers.set('getChatTranscriptContent', async (_raw, _signal, fallback) => {
+    const reply = fallback();
+    publishLiveCopy(f, data + 'append'.repeat(++requests));
+    return reply;
+  });
+  await assert.rejects(
+    collect(
+      f.controller.iterateTranscript(transcript.source, {
+        selection: chosen,
+        onProgress: () => progress++,
+      }),
+    ),
+    (error) =>
+      ApplicationError.is(error) && error.code === 'Conflict' && /superseded/.test(error.message),
+  );
+  assert.equal(requests, 4, 'one data read and at most three fresh proofs');
+  assert.equal(progress, 0);
+  assert(
+    f.calls
+      .filter((call) => call.operation === 'getChatTranscriptContent')
+      .every((call) => !(call.input as { cursor?: string }).cursor),
+  );
+});
+
+for (const corrupt of ['offset', 'source', 'selection', 'cursor', 'encoding'] as const)
+  test(`fresh live prefix proofs validate ${corrupt}`, async (t) => {
+    const f = await transcriptController(t, 1),
+      data = 'x'.repeat(70000);
+    const transcript = publishLiveCopy(f, data),
+      chosen = selection(transcript.parts[0]);
+    let requests = 0;
+    f.handlers.set('getChatTranscriptContent', async (_raw, _signal, fallback) => {
+      const reply = fallback() as ContentReply;
+      if (++requests === 1) publishLiveCopy(f, data + ' appended');
+      else {
+        if (corrupt === 'offset') reply.offset++;
+        if (corrupt === 'source') reply.source.target.actorId = 'another-actor';
+        if (corrupt === 'cursor') reply.cursor = 'another-cursor';
+        if (corrupt === 'selection') reply.selection.partId = 'another-part';
+        if (corrupt === 'encoding') {
+          reply.encoding = 'base64';
+          reply.data = Buffer.from(reply.data).toString('base64');
+        }
+      }
+      return reply;
+    });
+    await assert.rejects(
+      collect(f.controller.iterateTranscript(transcript.source, { selection: chosen })),
+      (error) => ApplicationError.is(error) && error.code === 'Incompatible',
+    );
+    assert.equal(requests, 2);
+  });
+
+test('cancelling a held prefix proof fences progress and retains actual cleanup settlement', async (t) => {
+  const f = await transcriptController(t, 1),
+    data = 'x'.repeat(70000);
+  const transcript = publishLiveCopy(f, data),
+    chosen = selection(transcript.parts[0]);
+  const entered = Promise.withResolvers<void>(),
+    held = Promise.withResolvers<void>();
+  let requests = 0,
+    progress = 0;
+  f.handlers.set('getChatTranscriptContent', async (_raw, _signal, fallback) => {
+    const reply = fallback();
+    if (++requests === 1) publishLiveCopy(f, data + ' appended');
+    else {
+      entered.resolve();
+      await held.promise;
+    }
+    return reply;
+  });
+  const iterator = f.controller.iterateTranscript(transcript.source, {
+    selection: chosen,
+    onProgress: () => progress++,
+  });
+  const rejected = assert.rejects(
+    iterator.next(),
+    (error) => ApplicationError.is(error) && error.code === 'Cancelled',
+  );
+  try {
+    await entered.promise;
+    let settled = false;
+    const closing = f.controller.detach().then(() => {
+      settled = true;
+    });
+    await rejected;
+    assert.equal(progress, 0);
+    assert.equal(settled, false);
+    await f.controller.start();
+    const replacement = f.controller.getSnapshot();
+    held.resolve();
+    await closing;
+    assert.equal(f.controller.getSnapshot(), replacement);
+  } finally {
+    held.resolve();
+    await iterator.return(undefined);
+  }
 });
