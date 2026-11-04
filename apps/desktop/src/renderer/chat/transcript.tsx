@@ -59,6 +59,7 @@ export function Transcript({
   const [following, setFollowing] = useState(!state.transcript.view.anchor);
   const [notice, setNotice] = useState<{ error: boolean; text: string } | null>(null);
   const navigation = useRef(false);
+  const navigationRevision = useRef(0);
   const scrollFrame = useRef<number | null>(null);
   const topIntent = useRef(false);
   const lastMove = useRef<'earlier' | 'later' | 'latest'>('earlier');
@@ -66,6 +67,7 @@ export function Transcript({
   const [cache] = useState(() => new MarkdownCache());
   useEffect(
     () => () => {
+      navigationRevision.current++;
       for (const job of jobs.current) job.abort();
       if (scrollFrame.current !== null) cancelAnimationFrame(scrollFrame.current);
       cache.clear();
@@ -274,12 +276,16 @@ export function Transcript({
       follow.current = false;
       setFollowing(false);
       capture();
+      const revision = ++navigationRevision.current;
       navigation.current = true;
       const pending = direction === 'earlier' ? controller.older() : controller.later();
       void pending.finally(() =>
         requestAnimationFrame(() => {
+          if (revision !== navigationRevision.current) return;
           navigation.current = false;
           topIntent.current = false;
+          const saved = controller.getSnapshot().transcript.view.anchor;
+          if (saved?.partId) anchor.current = saved;
           restore();
           capture();
         }),
@@ -301,6 +307,14 @@ export function Transcript({
     } else move('earlier');
   }, [capture, move, earlierRow]);
   const latest = () => {
+    const selection = window.getSelection();
+    if (
+      root.current &&
+      selection?.rangeCount &&
+      selection.getRangeAt(0).intersectsNode(root.current)
+    )
+      selection.removeAllRanges();
+    setPinned(false);
     topIntent.current = false;
     lastMove.current = 'latest';
     setEarlierRow(false);
@@ -309,8 +323,16 @@ export function Transcript({
     restoringLive.current = false;
     domAnchor.current = null;
     setFollowing(true);
-    controller.setTranscriptView({ anchor: null, expanded: state.transcript.view.expanded });
-    void controller.jumpToLatest();
+    const revision = ++navigationRevision.current;
+    navigation.current = true;
+    void controller.jumpToLatest().finally(() =>
+      requestAnimationFrame(() => {
+        if (revision !== navigationRevision.current) return;
+        navigation.current = false;
+        topIntent.current = false;
+        restore();
+      }),
+    );
   };
   const scroll = () => {
     if (scrollFrame.current !== null) return;

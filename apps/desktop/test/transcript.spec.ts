@@ -273,6 +273,12 @@ test('incomplete/unknown/oversized code remains readable and copyable; fence/ref
     .toBe('const value = 1;\n'.repeat(18000));
   await live.getByRole('button', { name: /Show all 18001 lines/ }).click();
   await expect(live.getByRole('button', { name: 'Fold code', exact: true })).toBeVisible();
+  await live.locator('pre code').evaluate((element) => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+  });
   expect(
     await live.locator('pre').evaluate((element) => element.scrollHeight > element.clientHeight),
   ).toBe(true);
@@ -283,8 +289,9 @@ test('incomplete/unknown/oversized code remains readable and copyable; fence/ref
     ),
   );
   await expect(live.getByRole('button', { name: 'Fold code', exact: true })).toBeFocused();
-  await page.getByRole('textbox', { name: 'Message', exact: true }).focus();
+  await page.getByRole('button', { name: 'Jump to latest', exact: true }).click();
   await expect(live.getByText(/Replacement with & and 🌔/)).toBeVisible();
+  expect(await page.evaluate(() => window.getSelection()!.isCollapsed)).toBe(true);
   await expect(live.locator('img')).toHaveCount(0);
 });
 
@@ -403,8 +410,7 @@ test('retired live DOM stays pinned for focus/selection and never enters durable
       () => window.demo.application.chat!.getSnapshot().transcript.view.anchor?.entryId,
     ),
   ).not.toBe('live');
-  await page.evaluate(() => window.getSelection()!.removeAllRanges());
-  await page.getByRole('textbox', { name: 'Message', exact: true }).focus();
+  await page.getByRole('button', { name: 'Jump to latest', exact: true }).click();
   await expect(page.locator('[data-retained-selection]')).toHaveCount(0);
 });
 
@@ -435,7 +441,7 @@ test('application live-part memory restores only the exact source across panel r
         revision: part.revision,
         offset: 16,
       },
-      expanded: [],
+      expanded: ['remembered-live-disclosure'],
     });
   });
   const selected = page.locator('[data-transcript-live] [data-transcript-part="m0.b5"]');
@@ -562,4 +568,7 @@ test('application live-part memory restores only the exact source across panel r
       page.evaluate(() => window.demo.application.chat!.getSnapshot().transcript.view.anchor),
     )
     .toBeNull();
+  expect(
+    await page.evaluate(() => window.demo.application.chat!.getSnapshot().transcript.view.expanded),
+  ).toEqual([]);
 });
