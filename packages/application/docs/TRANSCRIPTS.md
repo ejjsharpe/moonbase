@@ -28,6 +28,8 @@ The readonly `controller.backendId` is the composition's backend identity; captu
 
 For live anchors, `transcript.viewStatus` is `pending`, `ready`, `source-changed` or `unavailable`, with `viewError: string | null`. Apply the saved live offset/expansions only at `ready`; this authorizes view restoration, not a native clipboard write. Pending restoration waits for a coherent matching observation; reconnecting evidence cannot authorize it. An exact available descriptor proves the saved part immediately. Appended revisions or parts beyond the first-four preview use one bounded content chunk of the original fixed selection, with the existing bounded fresh-prefix proof checks if observations supersede that read. This does not hydrate the content cache or iterate the whole part. Unchanged DTOs and offset/expansion changes reuse the proof. Proof completion stays private through iterator cleanup; the owning job rechecks current source/anchor/evidence synchronously with its final publication. If an observation supersedes that completion, it reports `source-changed` with `viewError`, requiring explicit recapture/reload. It cannot finish at `pending` without owned work or a pending coherent observation, and it does not reset proof budgets by automatically requeuing.
 
+History temporarily defers a pending live proof. Winning history and hydration job completions recheck the current live anchor after their final publication and resume its bounded proof once the history dependency is gone. A subscriber can replace the anchor or admit newer navigation during publication; the old completion cannot bypass that current dependency. A cancelled/superseded job cannot resume work, clear a newer error or delete the newer job. Proof completion never retries itself, and unrelated hydration does not retry explicit proof failure. Thus `pending` means an owned proof, an owned history dependency or a pending coherent observation.
+
 Retired/replaced/finalized sources retain the captured anchor and explicit error, without applying expansions to a replacement. No text/task-based or automatic live-to-committed mapping is performed, including for tool parts with an explicit committed reference. `jumpToLatest()` explicitly clears a live anchor and its expansions; explicit recapture/reload retries a failed proof. Repeated progress does not silently retry failure. Historical navigation replaces live view memory with its durable anchor. Durable restoration continues to use navigation `loading`/`error` and around-entry reads; it does not use live `viewStatus` as authority. Missing anchors and failed reads remain visible; no mutation/retry/Stop is synthesized.
 
 ## Progressive content
@@ -174,3 +176,22 @@ Four new public tests cover 100 finite-append microtask schedules (including exp
 | `bun run test:chat-integration` | 12/12; `/tmp/moonbase-110-r4-chat-integration.log` |
 
 Evidence is source/controlled only, using Node `v26.13.0` / Bun `1.4.4` in the same isolated checkout. Heavy source/process and controlled integration suites ran serially. No foreground/native/package/manual UI, final clipboard write, real provider/SSH, legacy operation, PR update/push, dependency or delegation was used. #111 keeps its existing `ready` gate and native final-write authority; no public signature change is required.
+
+### R5 deferred live restoration completion correction
+
+Based on `496e36961b1fd371000855ab301c65c380a73f71`, retaining runtime prerequisite `23303e0432a60f7e5863d235086ed7ef5e657b65`. Both public 640-entry reproductions failed before the fix: failed earlier navigation after cancelling a held live proof, followed by successful durable hydration; and a live anchor captured by a synchronous subscriber during successful history publication. They quiesced at `pending` after 20 event-loop turns. The first case covers both late success and late failure of the cancelled proof. Red evidence: `/tmp/moonbase-110-r5-red.log`.
+
+The existing winning-job finalizer now hands off deferred restoration after publishing completion. It reuses the existing current-anchor/source/history admission checks and bounded proof owner. This applies once at the shared read completion point, including hydration; proof jobs are excluded from self-requeue. The R4 proof-through-cleanup/final-publication fence and explicit supersession uncertainty remain unchanged. No public signature, runtime, contracts, UI, saved data, cache budget or dependency changes are included.
+
+Nine new public tests cover both reproductions; old history success/error while newer history and a fresh proof are held; preservation of the winning navigation error; reconnecting observation dependency, terminal `Unauthorized` and Hide; and hydration completion after explicit proof failure without automatic retry. All 36 live-view tests pass. Green evidence: `/tmp/moonbase-110-r5-green.log`. Resource-heavy source/process and controlled integration checks remain serial; #111 retains its current `ready` gate and native clipboard authority.
+
+| Command | Result / evidence |
+| --- | --- |
+| `node --experimental-strip-types --test --test-concurrency=1 packages/application/test/transcript.test.ts packages/application/test/transcript-live-view.test.ts packages/application/test/application.test.ts packages/application/test/chat-controller.test.ts` | 196/196; `/tmp/moonbase-110-r5-focused.log` |
+| `NX_DAEMON=false bun run typecheck` | 8 tasks passed; `/tmp/moonbase-110-r5-typecheck.log` |
+| `bun run lint`; `bun run format:check`; `git diff --check` | Pass; `/tmp/moonbase-110-r5-{lint,format}.log` |
+| `bun run check:foundation` | Pass, 281 browser inputs and unchanged saved-byte fixtures; `/tmp/moonbase-110-r5-foundation.log` |
+| `NX_DAEMON=false bun run test` | 8 tasks passed, 2 cached; `/tmp/moonbase-110-r5-source.log` |
+| `bun run test:chat-integration` | 12/12; `/tmp/moonbase-110-r5-chat-integration.log` |
+
+Evidence is source/controlled only, using Node `v26.13.0` / Bun `1.4.4` in the same isolated checkout. No foreground/native/package/manual UI, final clipboard write, real provider/SSH, legacy operation, PR update/push, dependency or delegation was used. Pending reconnecting evidence still waits for a coherent observation; explicit failed/superseded proof still requires explicit recapture/reload. No public signature change is required.

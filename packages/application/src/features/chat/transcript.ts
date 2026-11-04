@@ -679,6 +679,8 @@ export class TranscriptOwner {
           finish?.(job.abort.signal);
           this.state = { ...this.state, loading: this.jobs.has('history') };
           this.publish();
+          // Resume restoration deferred by a dependency; proofs never requeue themselves.
+          if (name !== 'view' && !job.abort.signal.aborted) void this.restoreLiveView();
         }
       });
     this.state = {

@@ -369,6 +369,255 @@ test('cancelled anchor proof retains actual IO and independent watch cleanup fai
   }
 });
 
+for (const outcome of ['success', 'failure'] as const)
+  test(`failed history settles its deferred live anchor despite cancelled proof ${outcome} and durable hydration`, async (t) => {
+    const f = await transcriptController(t, 640);
+    const view = captureView(f.controller, publishLive(f.fixture, 'captured'));
+    f.controller.setTranscriptView(view);
+    const entered = Promise.withResolvers<void>(),
+      held = Promise.withResolvers<void>();
+    let liveReads = 0;
+    f.handlers.set('getChatTranscriptContent', async (raw, _signal, fallback) => {
+      const input = raw as ChatInput<'getChatTranscriptContent'>;
+      const reply = fallback();
+      if (input.source.kind === 'live' && ++liveReads === 1) {
+        entered.resolve();
+        await held.promise;
+        if (outcome === 'failure')
+          throw new ApplicationError({ code: 'Unavailable', message: 'obsolete proof failed' });
+      }
+      return reply;
+    });
+    f.handlers.set('getChatHistoryAround', async () => {
+      throw new ApplicationError({ code: 'Unavailable', message: 'older page failed' });
+    });
+    try {
+      publishLive(f.fixture, 'captured appended');
+      await entered.promise;
+      await f.controller.older();
+      assert.match(f.controller.getSnapshot().transcript.error!, /older page failed/);
+      assert(
+        f.calls.find((call) => call.operation === 'getChatTranscriptContent')!.signal!.aborted,
+      );
+      held.resolve();
+      const entry = f.controller.getSnapshot().transcript.entries[0];
+      const selected = entry.transcript!.parts[0];
+      await f.controller.loadTranscriptPart(entry.transcript!.source, {
+        partId: selected.partId,
+        bytes: selected.bytes,
+        revision: selected.revision,
+      });
+      for (let turn = 0; turn < 20; turn++) await tick();
+      const current = f.controller.getSnapshot();
+      assert.equal(current.transcript.viewStatus, 'ready');
+      assert.equal(current.transcript.viewError, null);
+      assert.equal(current.transcript.error, null);
+      assert.equal(current.error, null);
+      assert.equal(current.transcript.loading, false);
+      assert.deepEqual(current.transcript.view, view);
+      assert.equal(liveReads, 2, 'one cancelled proof and one bounded deferred proof');
+      assert.equal(current.transcript.content[0].status, 'complete');
+      await tick();
+      assert.equal(f.controller.getSnapshot(), current);
+    } finally {
+      held.resolve();
+    }
+  });
+
+test('successful history settles a live anchor captured synchronously during its window publication', async (t) => {
+  const f = await transcriptController(t, 640);
+  const view = captureView(f.controller, publishLive(f.fixture, 'captured'));
+  publishLive(f.fixture, 'captured appended');
+  const initial = f.controller.getSnapshot().transcript.entries[0].id;
+  let captured = false;
+  const off = f.controller.subscribe(() => {
+    const state = f.controller.getSnapshot().transcript;
+    if (!captured && state.loading && state.entries[0].id !== initial) {
+      captured = true;
+      f.controller.setTranscriptView(view);
+    }
+  });
+  t.after(off);
+  await f.controller.older();
+  for (let turn = 0; turn < 20; turn++) await tick();
+  const current = f.controller.getSnapshot().transcript;
+  assert(captured, 'the live view was captured before the history job completed');
+  assert.equal(current.viewStatus, 'ready');
+  assert.equal(current.viewError, null);
+  assert.equal(current.error, null);
+  assert.equal(current.loading, false);
+  assert.deepEqual(current.view, view);
+  const reads = f.calls.filter((call) => call.operation === 'getChatTranscriptContent');
+  assert.equal(reads.length, 1);
+  assert.deepEqual((reads[0].input as ChatInput<'getChatTranscriptContent'>).selection, {
+    partId: view.anchor.partId,
+    bytes: view.anchor.bytes,
+    revision: view.anchor.revision,
+  });
+  assert(current.entries.length <= 128);
+  assert(current.retained.summaries <= 256);
+  assert(current.retained.summaryBytes <= 2 * 1024 * 1024);
+  assert(!f.calls.some((call) => (call.input as { entryId?: string }).entryId === 'live'));
+});
+
+for (const outcome of ['success', 'failure'] as const)
+  test(`superseded history ${outcome} cannot resume a live proof before the winning dependency finishes`, async (t) => {
+    const f = await transcriptController(t, 640);
+    const view = captureView(f.controller, publishLive(f.fixture, 'captured'));
+    publishLive(f.fixture, 'captured appended');
+    const oldEntered = Promise.withResolvers<void>(),
+      newEntered = Promise.withResolvers<void>(),
+      proofEntered = Promise.withResolvers<void>(),
+      oldHeld = Promise.withResolvers<void>(),
+      newHeld = Promise.withResolvers<void>(),
+      proofHeld = Promise.withResolvers<void>();
+    let historyReads = 0,
+      liveReads = 0;
+    f.handlers.set('getChatHistoryAround', async (_raw, _signal, fallback) => {
+      const page = fallback();
+      if (++historyReads === 1) {
+        oldEntered.resolve();
+        await oldHeld.promise;
+        if (outcome === 'failure')
+          throw new ApplicationError({ code: 'Unavailable', message: 'obsolete history failed' });
+        return page;
+      }
+      newEntered.resolve();
+      await newHeld.promise;
+      throw new ApplicationError({ code: 'Unavailable', message: 'winning history failed' });
+    });
+    f.handlers.set('getChatTranscriptContent', async (_raw, _signal, fallback) => {
+      const reply = fallback();
+      liveReads++;
+      proofEntered.resolve();
+      await proofHeld.promise;
+      return reply;
+    });
+    try {
+      const old = f.controller.older();
+      await oldEntered.promise;
+      f.controller.setTranscriptView(view);
+      const winning = f.controller.jumpToEntry('e200');
+      await newEntered.promise;
+      f.controller.setTranscriptView(view);
+      const waiting = f.controller.getSnapshot();
+      oldHeld.resolve();
+      await old;
+      await tick();
+      assert.equal(f.controller.getSnapshot(), waiting);
+      assert.equal(waiting.transcript.loading, true);
+      assert.equal(waiting.transcript.viewStatus, 'pending');
+      assert.equal(liveReads, 0, 'an obsolete completion cannot bypass the winning history job');
+      newHeld.resolve();
+      await winning;
+      await proofEntered.promise;
+      assert.match(f.controller.getSnapshot().transcript.error!, /winning history failed/);
+      assert.equal(f.controller.getSnapshot().transcript.viewStatus, 'pending');
+      assert.equal(liveReads, 1);
+      proofHeld.resolve();
+      await waitView(f.controller);
+      const current = f.controller.getSnapshot();
+      assert.equal(current.transcript.viewStatus, 'ready');
+      assert.equal(current.transcript.loading, false);
+      assert.match(current.transcript.error!, /winning history failed/);
+      assert.deepEqual(current.transcript.view, view);
+      await tick();
+      assert.equal(f.controller.getSnapshot(), current);
+    } finally {
+      oldHeld.resolve();
+      newHeld.resolve();
+      proofHeld.resolve();
+    }
+  });
+
+for (const boundary of ['reconnecting', 'terminal', 'hide'] as const)
+  test(`deferred restoration respects ${boundary} while its history dependency fails or cancels`, async (t) => {
+    const f = await transcriptController(t, 640);
+    const view = captureView(f.controller, publishLive(f.fixture, 'captured'));
+    const connected = publishLive(f.fixture, 'captured appended').snapshot;
+    const entered = Promise.withResolvers<void>(),
+      held = Promise.withResolvers<void>();
+    let liveReads = 0;
+    f.handlers.set('getChatHistoryAround', async () => {
+      entered.resolve();
+      await held.promise;
+      throw new ApplicationError({ code: 'Unavailable', message: 'history dependency failed' });
+    });
+    f.handlers.set('getChatTranscriptContent', async (_raw, _signal, fallback) => {
+      liveReads++;
+      return fallback();
+    });
+    try {
+      const history = f.controller.older();
+      await entered.promise;
+      f.controller.setTranscriptView(view);
+      let detaching: Promise<void> | undefined;
+      if (boundary === 'reconnecting')
+        f.fixture.publish({ ...connected, observationStatus: 'reconnecting' });
+      else if (boundary === 'terminal')
+        f.fixture.fail(new ApplicationError({ code: 'Unauthorized', message: 'authority lost' }));
+      else detaching = f.controller.detach();
+      held.resolve();
+      await history;
+      await detaching;
+      for (let turn = 0; turn < 20; turn++) await tick();
+      const current = f.controller.getSnapshot();
+      assert.equal(liveReads, 0);
+      assert.equal(current.transcript.loading, false);
+      if (boundary === 'reconnecting') {
+        assert.equal(current.transcript.viewStatus, 'pending');
+        assert.equal(current.transcript.observation, 'reconnecting');
+        assert.match(current.transcript.error!, /history dependency failed/);
+        f.fixture.publish(connected);
+        await waitView(f.controller);
+        assert.equal(f.controller.getSnapshot().transcript.viewStatus, 'ready');
+        assert.equal(liveReads, 1);
+      } else if (boundary === 'terminal') {
+        assert.equal(current.transcript.viewStatus, 'source-changed');
+        assert.match(current.transcript.viewError!, /authority lost/);
+        assert.match(current.error!, /^Unauthorized:/);
+      } else {
+        assert.equal(current.transcript.view.anchor, null);
+        assert.equal(current.transcript.viewStatus, 'ready');
+      }
+    } finally {
+      held.resolve();
+    }
+  });
+
+test('hydration completion does not requeue an explicitly failed live proof', async (t) => {
+  const f = await transcriptController(t, 640);
+  const view = captureView(f.controller, publishLive(f.fixture, 'captured'));
+  f.controller.setTranscriptView(view);
+  let liveReads = 0;
+  f.handlers.set('getChatTranscriptContent', async (raw, _signal, fallback) => {
+    if ((raw as ChatInput<'getChatTranscriptContent'>).source.kind === 'live' && ++liveReads === 1)
+      throw new ApplicationError({ code: 'Conflict', message: 'live proof was superseded' });
+    return fallback();
+  });
+  publishLive(f.fixture, 'captured appended');
+  await waitView(f.controller);
+  const failure = f.controller.getSnapshot().transcript.viewError;
+  assert.equal(f.controller.getSnapshot().transcript.viewStatus, 'source-changed');
+  assert.match(failure!, /superseded/);
+  const entry = f.controller.getSnapshot().transcript.entries[0];
+  const selected = entry.transcript!.parts[0];
+  await f.controller.loadTranscriptManifest(entry.transcript!.source);
+  await f.controller.loadTranscriptPart(entry.transcript!.source, {
+    partId: selected.partId,
+    bytes: selected.bytes,
+    revision: selected.revision,
+  });
+  for (let turn = 0; turn < 20; turn++) await tick();
+  assert.equal(liveReads, 1);
+  assert.equal(f.controller.getSnapshot().transcript.viewStatus, 'source-changed');
+  assert.equal(f.controller.getSnapshot().transcript.viewError, failure);
+  f.controller.setTranscriptView(view);
+  await waitView(f.controller);
+  assert.equal(f.controller.getSnapshot().transcript.viewStatus, 'ready');
+  assert.equal(liveReads, 2);
+});
+
 for (const changed of [
   'incarnation',
   'submission',
