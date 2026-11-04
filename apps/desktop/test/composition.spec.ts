@@ -844,6 +844,10 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
           .getByLabel('Message', { exact: true })
           .fill('One admitted task before exact Stop');
         await page.getByRole('button', { name: 'Send message', exact: true }).click();
+        await page
+          .getByRole('article', { name: 'Live response' })
+          .getByRole('button', { name: /inspect_remote_context · Output/ })
+          .click();
         await expect(page.getByRole('article', { name: 'Live response' })).toContainText(
           'Controlled remote tool activity',
         );
@@ -1020,6 +1024,10 @@ for (const failsWrite of [false, true])
         .getByLabel('Message', { exact: true })
         .fill('First admitted input keeps chat busy');
       await page.getByRole('button', { name: 'Send message', exact: true }).click();
+      await page
+        .getByRole('article', { name: 'Live response' })
+        .getByRole('button', { name: /inspect_remote_context · Output/ })
+        .click();
       await expect(page.getByRole('article', { name: 'Live response' })).toContainText(
         'Controlled remote tool activity',
       );

@@ -23,9 +23,13 @@ export const Markdown = memo(function Markdown({
   cache,
   ...actions
 }: Actions & { source: string; identity: string; revision: string; cache: MarkdownCache }) {
+  const blocks = useMemo(
+    () => cache.parse(identity, revision, source),
+    [cache, identity, revision, source],
+  );
   return (
     <div {...stylex.props(styles.prose)}>
-      {cache.parse(identity, revision, source).map((block, index) => (
+      {blocks.map((block, index) => (
         <Block key={index} block={block} {...actions} />
       ))}
     </div>
@@ -128,6 +132,10 @@ function renderToken(token: Token, actions: Actions): ReactNode {
           onClick={(event) => {
             event.preventDefault();
             actions.openLink(url);
+          }}
+          onAuxClick={(event) => {
+            event.preventDefault();
+            if (event.button === 1) actions.openLink(url);
           }}>
           {label}
         </a>

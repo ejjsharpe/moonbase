@@ -76,3 +76,19 @@ test('disclosure IDs preserve exact identities within application memory bounds'
     await getTranscriptDisclosureId('entry', 'part:tail'),
   );
 });
+
+test('many original CRLF fences keep their own source locations and cache keys count toward retention', () => {
+  const cache = new MarkdownCache();
+  const fence = '```ts\r\nconst moon = "🌔";\r\n```\r\n\r\n';
+  const blocks = cache.parse('many', '1', fence.repeat(1000));
+  const code = blocks.filter((block) => block.token.type === 'code');
+  assert.equal(code.length, 1000);
+  for (let i = 0; i < code.length; i++) {
+    assert.equal(code[i]!.token.sourceCode!.start, i * fence.length);
+    assert.equal(code[i]!.token.sourceCode!.text, 'const moon = "🌔";\r\n');
+  }
+  cache.clear();
+  cache.parse('x'.repeat(2 * 1024 * 1024), '1', 'small text');
+  assert.equal(cache.stats.messages, 0);
+  assert.equal(cache.stats.retainedBytes, 0);
+});

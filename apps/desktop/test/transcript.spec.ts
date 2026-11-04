@@ -38,7 +38,9 @@ test('safe GFM, literal user content, progressive source, exact native callbacks
     row.getByText('<button onclick="alert(1)">inert model control</button>', { exact: false }),
   ).toBeAttached();
   await row.getByRole('link', { name: 'Read documentation' }).click();
+  await row.getByRole('link', { name: 'Read documentation' }).click({ button: 'middle' });
   expect(await page.evaluate(() => window.demo.transcript!.links)).toEqual([
+    'https://example.com/read',
     'https://example.com/read',
   ]);
   await row.getByRole('button', { name: 'Copy code', exact: true }).click();
@@ -249,6 +251,15 @@ test('incomplete/unknown/oversized code remains readable and copyable; fence/ref
     }
   });
   await expect(live.getByRole('button', { name: /Show all 18001 lines/ })).toBeVisible();
+  const unchanged = await page.evaluate(async () => {
+    const before = window.demo.transcript!.metrics.lex;
+    window.demo.chat.controls.receiveChat(structuredClone(window.demo.chat.snapshot));
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+    );
+    return { before, after: window.demo.transcript!.metrics.lex };
+  });
+  expect(unchanged.after).toBe(unchanged.before);
   await live.getByRole('button', { name: 'Copy code', exact: true }).click();
   await expect
     .poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1)))
