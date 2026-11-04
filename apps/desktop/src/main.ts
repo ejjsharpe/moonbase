@@ -133,6 +133,9 @@ async function main() {
   });
   const window = new BrowserWindow({
     title: 'Moonbase',
+    titleBarStyle: 'hiddenInset',
+    trafficLightPosition: { x: 14, y: 14 },
+    backgroundColor: '#141415',
     width: 1280,
     height: 850,
     minWidth: 600,

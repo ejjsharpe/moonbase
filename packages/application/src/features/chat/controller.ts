@@ -1,10 +1,11 @@
-import { Cause, Deferred, Effect, Exit, Fiber, Scope, type ManagedRuntime } from 'effect';
+import { Cause, Deferred, Effect, Exit, Fiber, Schema, Scope, type ManagedRuntime } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type { ObservationClose } from '@moonbase/contracts/common';
 import { normalizeApplicationError, runApplicationEffect } from '../../runtime/effect-client.ts';
-import { decodeChatInput } from '@moonbase/contracts/chat-schema';
+import { decodeChatInput, ChatModelPreferenceSchema } from '@moonbase/contracts/chat-schema';
 import type {
   ChatCreationSettings,
+  ChatModelPreference,
   ChatClient,
   ChatCommand,
   ChatInput,
@@ -39,6 +40,7 @@ export type ChatState = {
   olderCursor: string | null;
   selected: ChatTarget | null;
   draft: string;
+  modelPreference: ChatModelPreference | null;
   pending: Pending[];
   active: string[];
   error: string | null;
@@ -148,6 +150,7 @@ class ChatModelState {
       olderCursor: null,
       selected: this.saved.selected,
       draft: this.draft(),
+      modelPreference: this.saved.modelPreference ?? null,
       pending: this.saved.pending,
       active: [],
       error: null,
@@ -194,6 +197,7 @@ class ChatModelState {
     }
   }
   private draft() {
+    if (!this.saved.selected) return this.saved.newDraft ?? '';
     return (
       this.saved.drafts.find((draft) => sameTarget(draft.target, this.saved.selected))?.text ?? ''
     );
@@ -209,7 +213,12 @@ class ChatModelState {
       this.storage.write(raw);
       this.raw = raw;
       this.saved = next;
-      this.update({ selected: next.selected, draft: this.draft(), pending: next.pending });
+      this.update({
+        selected: next.selected,
+        draft: this.draft(),
+        pending: next.pending,
+        modelPreference: next.modelPreference ?? null,
+      });
     } catch {
       this.update({
         storageError:
@@ -494,6 +503,20 @@ class ChatModelState {
     );
   };
   firstChats = () => this.refresh();
+  setModelPreference(value: ChatModelPreference) {
+    if (!this.admissionsOpen || this.closed) return;
+    try {
+      const preference = Schema.decodeUnknownSync(ChatModelPreferenceSchema, {
+        onExcessProperty: 'error',
+        reportInput: false,
+      })(value);
+      this.commit({ ...structuredClone(this.saved), modelPreference: structuredClone(preference) });
+    } catch (error) {
+      this.error(
+        ApplicationError.is(error) ? error : invalid('Choose a valid model and reasoning effort.'),
+      );
+    }
+  }
   setDraft(value: string) {
     if (!this.admissionsOpen || this.closed) return;
     if (!text(value, 32768)) {
@@ -501,11 +524,14 @@ class ChatModelState {
       return;
     }
     const target = this.saved.selected;
-    if (!target) return;
     this.update({ draft: value });
     try {
       const next = structuredClone(this.saved);
-      if (!value) next.drafts = next.drafts.filter((draft) => !sameTarget(draft.target, target));
+      if (!target) {
+        if (value) next.newDraft = value;
+        else delete next.newDraft;
+      } else if (!value)
+        next.drafts = next.drafts.filter((draft) => !sameTarget(draft.target, target));
       else {
         const entry = next.drafts.find((draft) => sameTarget(draft.target, target));
         if (entry) entry.text = value;
@@ -660,15 +686,47 @@ class ChatModelState {
         yield* this.dispatch(pending);
       }),
     );
-  send = () =>
+  send = (settings?: ChatCreationSettings) =>
     this.action(
       'send',
       Effect.gen({ self: this }, function* () {
         this.connected();
         const target = this.saved.selected,
           value = this.state.draft;
-        if (!target || !text(value, 32768) || !value.trim())
-          throw invalid('Write a message before sending.');
+        if (!text(value, 32768) || !value.trim()) throw invalid('Write a message before sending.');
+        if (!target) {
+          if (this.saved.drafts.length >= 32)
+            throw invalid(
+              '32 conversation drafts are retained. Send or clear an existing draft before starting another conversation.',
+            );
+          if (
+            this.saved.pending.some(
+              (pending) => pending.operation === 'createChat' && pending.firstMessage,
+            )
+          )
+            throw invalid('Resolve the retained new conversation before sending another.');
+          if ((this.mode === 'local') !== (settings !== undefined))
+            throw invalid('Choose folder/model settings for local chats only.');
+          let title = '';
+          for (const character of value.trim().split('\n')[0]!) {
+            if (bytes(title + character) > 80) break;
+            title += character;
+          }
+          const pending: Pending = {
+            operation: 'createChat',
+            input: decodeChatInput('createChat', {
+              session: this.session,
+              requestId: this.newId(),
+              title: title || 'New conversation',
+              ...(settings ? { settings } : {}),
+            }),
+            firstMessage: { requestId: this.newId(), text: value },
+            message: 'Outcome pending. Original creation and first message retained.',
+          };
+          this.reserve(pending);
+          yield* this.dispatch(pending);
+          return;
+        }
         if (
           this.saved.pending.some(
             (pending) =>
@@ -759,7 +817,7 @@ class ChatModelState {
       }
     });
   }
-  private resolve(pending: Pending, conversation?: ChatSummary) {
+  private resolve(pending: Pending, conversation?: ChatSummary, firstSend?: Pending) {
     const next = structuredClone(this.saved);
     next.pending = next.pending.filter((item) => item.input.requestId !== pending.input.requestId);
     if (pending.operation === 'sendChat')
@@ -767,7 +825,22 @@ class ChatModelState {
         (draft) =>
           !sameTarget(draft.target, pending.input.target) || draft.text !== pending.input.text,
       );
-    if (conversation) next.selected = conversation.target;
+    if (conversation) {
+      if (pending.operation === 'createChat' && pending.firstMessage) {
+        const existing = next.drafts.find((draft) => sameTarget(draft.target, conversation.target));
+        if (!existing) {
+          const draft = next.newDraft ?? pending.firstMessage.text;
+          if (draft && next.drafts.length >= 32)
+            throw invalid(
+              'The conversation was created, but the draft limit was reached. Send or clear an existing draft, then retry the original Create.',
+            );
+          if (draft) next.drafts.push({ target: conversation.target, text: draft });
+          delete next.newDraft;
+        } else if (next.newDraft === pending.firstMessage.text) delete next.newDraft;
+        if (!next.selected) next.selected = conversation.target;
+      } else next.selected = conversation.target;
+    }
+    if (firstSend) next.pending.push(firstSend);
     this.commit(next);
   }
   private dispatch(pending: Pending): Effect.Effect<void, ApplicationError> {
@@ -775,7 +848,23 @@ class ChatModelState {
       this.commit(structuredClone(this.saved));
       if (pending.operation === 'createChat') {
         const receipt = yield* this.call(pending.operation, pending.input);
-        this.resolve(pending, receipt.conversation);
+        // Another original/retry reply may already have resolved this Create.
+        if (
+          !this.saved.pending.some(
+            (item) =>
+              item.operation === 'createChat' && item.input.requestId === pending.input.requestId,
+          )
+        )
+          return;
+        const firstSend: Pending | undefined = pending.firstMessage
+          ? {
+              operation: 'sendChat',
+              input: { ...pending.firstMessage, target: receipt.conversation.target },
+              message: 'Outcome pending. Original first message retained.',
+            }
+          : undefined;
+        // Publish the exact Send with the Create receipt before disclosing the message.
+        this.resolve(pending, receipt.conversation, firstSend);
         this.update({
           chats: [
             receipt.conversation,
@@ -784,12 +873,16 @@ class ChatModelState {
             ),
           ].slice(0, 32),
         });
-        if (this.generation?.alive) {
+        if (
+          this.generation?.alive &&
+          sameTarget(this.saved.selected, receipt.conversation.target)
+        ) {
           const target = receipt.conversation.target;
           void this.action('open', this.openSelected(target), this.generation, false, () =>
             sameTarget(this.saved.selected, target),
           );
         }
+        if (firstSend) yield* this.dispatch(firstSend);
       } else if (pending.operation === 'sendChat') {
         const receipt = yield* this.call(pending.operation, pending.input);
         if (receipt.admission === 'admitted') this.resolve(pending);
@@ -912,6 +1005,7 @@ export type ChatController = Pick<
   | 'moreChats'
   | 'firstChats'
   | 'setDraft'
+  | 'setModelPreference'
   | 'select'
   | 'closeView'
   | 'older'

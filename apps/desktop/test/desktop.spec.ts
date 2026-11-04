@@ -1,4 +1,4 @@
-import { captureNative } from './editor-regressions.ts';
+import { captureNative, pasteNativeFile } from './editor-regressions.ts';
 import type { RecoveryLoad } from '@moonbase/contracts/workspace';
 import { filenameCases, checkFilenameMaps, checkTabMenu } from './editor-regressions.ts';
 import { test, expect, _electron as electron } from '@playwright/test';
@@ -299,7 +299,10 @@ test('first native folder open displays ignored files before Git classification 
       globalThis.desktopTest.release();
     });
     await expect(ignored).toHaveAttribute('aria-description', 'Git-ignored');
-    await expect(ignored.locator('span').first()).toHaveCSS('color', 'rgb(170, 169, 182)');
+    await expect(ignored.getByText('ignored.ts', { exact: true })).toHaveCSS(
+      'color',
+      'rgb(151, 151, 159)',
+    );
     await capture('ignored-files-first-open');
   } finally {
     await app.evaluate(() => {
@@ -311,9 +314,9 @@ test('first native folder open displays ignored files before Git classification 
 test('actual sandboxed custom-scheme editor reads, edits and saves through SQLite workspace', async () => {
   await page
     .getByRole('tablist', { name: 'Workbench views', exact: true })
-    .getByRole('tab', { name: 'Chat', exact: true })
+    .getByRole('tab', { name: 'Agents', exact: true })
     .click();
-  await expect(page.getByText('On this computer', { exact: true })).toBeVisible();
+  await expect(page.getByText('Local ready', { exact: true })).toBeVisible();
   expect(
     await page.evaluate(() =>
       window.moonbaseChat.call('connection', 'getConnection', {}, crypto.randomUUID()),
@@ -800,7 +803,8 @@ test("controlled clipboard fixtures require native consent and capture real file
       }),
     ];
   }, source);
-  await page.getByRole('button', { name: 'Import clipboard files', exact: true }).click();
+  await page.getByRole('tree', { name: 'Files', exact: true }).focus();
+  await page.keyboard.press('Meta+v');
   await expect(page.getByRole('dialog', { name: 'Import files', exact: true })).toBeVisible();
   await expect(
     page.getByRole('dialog').getByRole('button', { name: 'Import files', exact: true }),
@@ -1133,17 +1137,11 @@ test('exact checkout tabs preserve independent dirty paths, views and closed met
     .toBe('beta dirty a');
 });
 
-test("single-file picker and File-backed drop share the editor's destination dialog", async () => {
+test("single-file paste and File-backed drop share the editor's destination dialog", async () => {
   await open();
   const source = join(base, 'picked.txt');
   writeFileSync(source, 'ONE PICKED NATIVE FILE');
-  await app.evaluate(({ dialog }, path) => {
-    dialog.showOpenDialog = (async () => ({
-      canceled: false,
-      filePaths: [path],
-    })) as typeof dialog.showOpenDialog;
-  }, source);
-  await page.getByRole('button', { name: 'Import files', exact: true }).click();
+  await pasteNativeFile(app, page, source);
   await expect(
     page.getByRole('dialog').getByRole('button', { name: 'Import files', exact: true }),
   ).toBeDisabled();

@@ -42,17 +42,24 @@ const memory = memoryWorkspace([
     checkout: { ...checkout, checkoutId: 'other', root: '/demo/other' },
     files: { 'elsewhere.ts': 'export const other = true;\n' },
   },
+  {
+    checkout: { ...checkout, checkoutId: 'third', root: '/demo/third' },
+    files: { 'third.ts': 'export const third = true;\n' },
+  },
 ]);
 // One demo composition root. Feature packages do not construct runtimes.
 const runtime = ManagedRuntime.make(memory.layer),
   client = makeEditorClient(runtime);
-const chat = chatCapabilities();
+const chat = chatCapabilities(new URLSearchParams(location.search).has('local'));
 let failChat = new URLSearchParams(location.search).has('fail-chat');
 const firstApplication = await createMoonbaseApplication({
     editors: [{ client, clientId: 'demo-first' }],
     chat: async () => {
       if (failChat) throw Error('Controlled Chat initialization failure');
-      return new URLSearchParams(location.search).has('chat') ? chat.dependencies : null;
+      return new URLSearchParams(location.search).has('chat') ||
+        new URLSearchParams(location.search).has('local')
+        ? chat.dependencies
+        : null;
     },
   }),
   secondApplication = await createMoonbaseApplication({
@@ -102,6 +109,20 @@ function Demo() {
   const [visible, setVisible] = useState(true),
     [disposed, setDisposed] = useState(false),
     [cleanupError, setCleanupError] = useState('');
+  if (new URLSearchParams(location.search).has('design'))
+    return (
+      <main {...stylex.props(workbench.document, styles.app)}>
+        <DesktopShell
+          application={firstApplication}
+          chooseChatFolder={async () => '/demo/moonbase'}
+          selectCheckout={() => window.demo.selectCheckout()}
+          selectClipboardImports={(checkout) => window.demo.selectClipboardImports(checkout)}
+          selectDroppedImports={(checkout, files) =>
+            window.demo.selectDroppedImports(checkout, files)
+          }
+        />
+      </main>
+    );
   return (
     <main {...stylex.props(workbench.document, styles.app)}>
       <div {...stylex.props(styles.tools)}>
@@ -154,7 +175,6 @@ function Demo() {
             selectDroppedImports={(checkout, files) =>
               window.demo.selectDroppedImports(checkout, files)
             }
-            selectNativeImports={() => window.demo.selectNativeImports()}
           />
         </section>
         {!disposed && (
@@ -189,7 +209,6 @@ declare global {
       selectCheckout(): Promise<string | null>;
       selectClipboardImports(target: typeof checkout): Promise<string[]>;
       selectDroppedImports(target: typeof checkout, files: File[]): Promise<string[]>;
-      selectNativeImports(): Promise<string[]>;
       modelCount(): number;
       diffReady(): boolean;
       client: typeof client;
@@ -211,7 +230,6 @@ window.demo = {
   checkout,
   memory,
   workbench: () => firstHandle.current!,
-  selectNativeImports: async () => [],
   modelCount: () => monaco.editor.getModels().length,
   diffReady: () =>
     monaco.editor.getDiffEditors().every((editor) => editor.getLineChanges() !== null),

@@ -6,6 +6,52 @@ import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
 import { makeProviderSetupClient } from '@moonbase/application/runtime/clients';
 import { ProviderSetupLive, localProviderIds } from '../src/providers.ts';
 import { ProviderSetupService } from '@moonbase/contracts/services';
+import { openaiProvider } from '@earendil-works/pi-ai/providers/openai';
+import { anthropicProvider } from '@earendil-works/pi-ai/providers/anthropic';
+import { googleProvider } from '@earendil-works/pi-ai/providers/google';
+import { openrouterProvider } from '@earendil-works/pi-ai/providers/openrouter';
+
+test('maintained defaults and reasoning options match the pinned provider catalogs', async (t) => {
+  const models = createModels({
+    authContext: { env: async () => undefined, fileExists: async () => false },
+  });
+  for (const make of [openaiProvider, anthropicProvider, googleProvider, openrouterProvider])
+    models.setProvider(make());
+  const openai = openaiProvider();
+  models.setProvider({
+    ...openai,
+    id: 'openai-api-key',
+    getModels: () => openai.getModels().map((model) => ({ ...model, provider: 'openai-api-key' })),
+  });
+  const runtime = ManagedRuntime.make(
+    ProviderSetupLive({
+      models,
+      deviceId: 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa',
+      openUrl: async () => {
+        throw Error('No network or login expected');
+      },
+    }),
+  );
+  t.after(() => runtime.dispose());
+  const client = makeProviderSetupClient(runtime, 'defaults');
+  const status = await client.command('getProviders', {});
+  for (const provider of status.providers) {
+    assert(provider.defaultModel, `Missing default for ${provider.id}`);
+    assert.equal(provider.defaultModel.model.provider, provider.id);
+    const selected = provider.models.find(
+      (model) => model.modelId === provider.defaultModel!.model.modelId,
+    );
+    assert(selected?.reasoningEfforts?.includes(provider.defaultModel.reasoningEffort!));
+  }
+  assert.deepEqual(status.providers.find((provider) => provider.id === 'openai')!.defaultModel, {
+    model: { provider: 'openai', modelId: 'gpt-6.1-sol' },
+    reasoningEffort: 'medium',
+  });
+  assert.deepEqual(status.providers.find((provider) => provider.id === 'anthropic')!.defaultModel, {
+    model: { provider: 'anthropic', modelId: 'claude-opus-5-5' },
+    reasoningEffort: 'high',
+  });
+});
 
 test('provider-owned setup binds prompts and URLs to the live document, supports cancellation and never publishes answers', async (t) => {
   const models = createModels({
@@ -76,6 +122,7 @@ test('provider-owned setup binds prompts and URLs to the live document, supports
   const client = makeProviderSetupClient(runtime, 'document-a'),
     foreign = makeProviderSetupClient(runtime, 'document-b');
   let state = await client.command('startProviderLogin', { providerId: 'openai' });
+  assert.equal(state.providers[0]!.defaultModel, undefined);
   const initial = state.flow!;
   assert(initial.prompt);
   await assert.rejects(

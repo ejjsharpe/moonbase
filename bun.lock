@@ -12,10 +12,10 @@
         "@moonbase/application": "workspace:*",
         "@moonbase/config": "workspace:*",
         "@moonbase/contracts": "workspace:*",
-        "@moonbase/workbench": "workspace:*",
         "@moonbase/effect": "workspace:*",
         "@moonbase/pi-runtime": "workspace:*",
         "@moonbase/ssh": "workspace:*",
+        "@moonbase/workbench": "workspace:*",
         "@moonbase/workspace": "workspace:*",
         "@playwright/test": "1.64.1",
         "@stylexjs/stylex": "0.19.1",
@@ -46,14 +46,15 @@
         "@base-ui/react": "1.9.0",
         "@moonbase/application": "workspace:*",
         "@moonbase/contracts": "workspace:*",
-        "@moonbase/workbench": "workspace:*",
         "@moonbase/pi-runtime": "workspace:*",
         "@moonbase/ssh": "workspace:*",
         "@moonbase/ui": "workspace:*",
+        "@moonbase/workbench": "workspace:*",
         "@moonbase/workspace": "workspace:*",
         "@stylexjs/stylex": "0.19.1",
         "effect": "4.1.0",
         "monaco-editor": "0.57.0",
+        "motion": "14.9.0",
         "react": "19.3.1",
         "react-dom": "19.3.1",
       },
@@ -85,19 +86,6 @@
       },
       "devDependencies": {
         "@moonbase/config": "workspace:*",
-      },
-    },
-    "packages/workbench": {
-      "name": "@moonbase/workbench",
-      "dependencies": {
-        "@base-ui/react": "1.9.0",
-        "@moonbase/application": "workspace:*",
-        "@moonbase/contracts": "workspace:*",
-        "@moonbase/ui": "workspace:*",
-        "@stylexjs/stylex": "0.19.1",
-        "effect": "4.1.0",
-        "monaco-editor": "0.57.0",
-        "react": "19.3.1",
       },
     },
     "packages/effect": {
@@ -141,6 +129,20 @@
       "name": "@moonbase/ui",
       "dependencies": {
         "@stylexjs/stylex": "0.19.1",
+        "@tabler/icons-react": "3.50.0",
+      },
+    },
+    "packages/workbench": {
+      "name": "@moonbase/workbench",
+      "dependencies": {
+        "@base-ui/react": "1.9.0",
+        "@moonbase/application": "workspace:*",
+        "@moonbase/contracts": "workspace:*",
+        "@moonbase/ui": "workspace:*",
+        "@stylexjs/stylex": "0.19.1",
+        "effect": "4.1.0",
+        "monaco-editor": "0.57.0",
+        "react": "19.3.1",
       },
     },
     "packages/workspace": {
@@ -381,8 +383,6 @@
 
     "@moonbase/desktop": ["@moonbase/desktop@workspace:apps/desktop"],
 
-    "@moonbase/workbench": ["@moonbase/workbench@workspace:packages/workbench"],
-
     "@moonbase/effect": ["@moonbase/effect@workspace:packages/effect"],
 
     "@moonbase/pi-runtime": ["@moonbase/pi-runtime@workspace:packages/pi-runtime"],
@@ -390,6 +390,8 @@
     "@moonbase/ssh": ["@moonbase/ssh@workspace:packages/ssh"],
 
     "@moonbase/ui": ["@moonbase/ui@workspace:packages/ui"],
+
+    "@moonbase/workbench": ["@moonbase/workbench@workspace:packages/workbench"],
 
     "@moonbase/workspace": ["@moonbase/workspace@workspace:packages/workspace"],
 
@@ -610,6 +612,10 @@
     "@stylexjs/unplugin": ["@stylexjs/unplugin@0.19.1", "", { "dependencies": { "@babel/core": "^7.26.8", "@babel/plugin-syntax-flow": "^7.26.0", "@babel/plugin-syntax-jsx": "^7.25.9", "@babel/plugin-syntax-typescript": "^7.25.9", "@stylexjs/babel-plugin": "0.19.1", "browserslist": "^4.24.0", "lightningcss": "^1.29.1" }, "peerDependencies": { "unplugin": "^2.3.11" } }, "sha512-MJz/IPrFe3hSHbZtjbxaYd3kLgS718/NFBEY/Mf+njteJKLdY7bHHfVka3051LCYy9fKfyZapGCmUpibraHqmQ=="],
 
     "@szmarczak/http-timer": ["@szmarczak/http-timer@4.0.6", "", { "dependencies": { "defer-to-connect": "^2.0.0" } }, "sha512-4BAffykYOgO+5nzBWYwE3W90sBgLJoUPRWWcL8wlyiM8IB8ipJz3UMJ9KXQd1RKQXpKp8Tutn80HZtWsu2u76w=="],
+
+    "@tabler/icons": ["@tabler/icons@3.50.0", "", {}, "sha512-HflLxyrH1cqC7s7jzQGSjpsTAVIoaf7+/yHjbdM59rJQBMjliibp+LYhDPFxOMcwa1M8DNpOk6ENzQiWn9a1Dg=="],
+
+    "@tabler/icons-react": ["@tabler/icons-react@3.50.0", "", { "dependencies": { "@tabler/icons": "3.50.0" }, "peerDependencies": { "react": ">= 16" } }, "sha512-X9XhFbxAmSNimQ71VAd7opfd4z84x1pLrEbBT33VCIEsFs8zWVqdhh5r/Jyi/3iJjQ861kE5Wm9ixiJfS2nwBA=="],
 
     "@testing-library/dom": ["@testing-library/dom@10.4.2", "", { "dependencies": { "@babel/code-frame": "^7.10.4", "@babel/runtime": "^7.12.5", "@types/aria-query": "^5.0.1", "aria-query": "5.3.0", "dom-accessibility-api": "^0.5.9", "lz-string": "^1.5.0", "picocolors": "1.1.1", "pretty-format": "^27.0.2" } }, "sha512-yzr2S9HyAIdhz2/6qHgbs665Q7PKVcDF05vsOlHPxG1mo36gKVesdYVeDLnXgfjJ03CrKRk08knc6+E/9m8v2Q=="],
 
@@ -993,6 +999,8 @@
 
     "formdata-polyfill": ["formdata-polyfill@4.0.10", "", { "dependencies": { "fetch-blob": "^3.1.2" } }, "sha512-buewHzMvYL29jdeQTVILecSaZKnt/RJWjoZCF5OW60Z67/GmSLBkOFM7qh1PI3zFNtJbaZL5eQu1vLfazOwj4g=="],
 
+    "framer-motion": ["framer-motion@14.9.0", "", { "dependencies": { "motion-dom": "14.9.0", "motion-utils": "14.7.0", "tslib": "^2.4.0" }, "peerDependencies": { "react": "^18.0.0 || ^19.0.0", "react-dom": "^18.0.0 || ^19.0.0", "remix": "^3.1.0" }, "optionalPeers": ["react", "react-dom", "remix"] }, "sha512-g1hZu8WoTwgsoVAaqEEcefhvR03cKGtkmrKaRrWpXhnM3LGR8jl1u2qyJ1PMVlO7LKQHE8TTRQYUlMmnrY4L+g=="],
+
     "fs-constants": ["fs-constants@1.0.0", "", {}, "sha512-y6OAwoSIf7FyjMIv94u+b5rdheZEjzR63GTyZJm5qh4Bi+2YgwLCcI/fPFZkL5PSixOt6ZNKm+w+Hfp/Bciwow=="],
 
     "fs-extra": ["fs-extra@10.1.0", "", { "dependencies": { "graceful-fs": "^4.2.0", "jsonfile": "^6.0.1", "universalify": "^2.0.0" } }, "sha512-oRXApq54ETRj4eMiFzGnHWGy+zo5raudjuxN0b8H7s/RU2oW0Wvsx9O0ACRN/kRq9E8Vu/ReskGB5o3ji+FzHQ=="],
@@ -1178,6 +1186,12 @@
     "mkdirp": ["mkdirp@0.5.6", "", { "dependencies": { "minimist": "^1.2.6" }, "bin": { "mkdirp": "bin/cmd.js" } }, "sha512-FP+p8RB8OWpF3YZBCrP5gtADmtXApB5AMLn+vdyA+PyxCjrCs00mjyUozssO33cwDeT3wNGdLxJ5M//YqtHAJw=="],
 
     "monaco-editor": ["monaco-editor@0.57.0", "", { "dependencies": { "dompurify": "3.4.15", "marked": "14.0.0" } }, "sha512-5BkI9KGoqrNvBGUe15/QlZq3OooZ8WLg1AxTpaqHRCP3HNpzPPZKE2EDz8M7c+VRmCeUw1Brp4cx/PWm3kI/5A=="],
+
+    "motion": ["motion@14.9.0", "", { "dependencies": { "framer-motion": "14.9.0", "tslib": "^2.4.0" }, "peerDependencies": { "react": "^18.0.0 || ^19.0.0", "react-dom": "^18.0.0 || ^19.0.0", "remix": "^3.1.0" }, "optionalPeers": ["react", "react-dom", "remix"] }, "sha512-Oc+jjq/AyhwsnEUaAq2xEu/SsfKTphgsXqoxddTSLzgTdXZc6FwHcp9RLGSECccTykN1/p3gWUN4kMJAamm+1g=="],
+
+    "motion-dom": ["motion-dom@14.9.0", "", { "dependencies": { "motion-utils": "14.7.0" } }, "sha512-wGjKbNDMHd75aLStkxLCKZ+T8/wusZHklmNLK1Ak68UrdBt2X8I4yweYR/0WonxGnBsw6oloDTIV8pN+UTvzzA=="],
+
+    "motion-utils": ["motion-utils@14.7.0", "", {}, "sha512-woO0/Nb7ys75f94fjvQi/6leiHGvZUYkeHUPEZ3vxsV+9OpEVhkxp01x8MlRwX0zt31EqgXsKDAoBoJLC148Tw=="],
 
     "mrmime": ["mrmime@2.0.1", "", {}, "sha512-Y3wQdFg2Va6etvQ5I82yUhGdsKrcYox6p7FfL1LbK2J4V01F9TGlepTIhnK24t7koZibmg82KGglhA1XK5IsLQ=="],
 

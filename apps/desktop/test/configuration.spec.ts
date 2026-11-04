@@ -111,9 +111,9 @@ for (const configured of [false, true])
       });
       await page
         .getByRole('tablist', { name: 'Workbench views', exact: true })
-        .getByRole('tab', { name: 'Chat', exact: true })
+        .getByRole('tab', { name: 'Agents', exact: true })
         .click();
-      await expect(page.getByText('On this computer', { exact: true })).toBeVisible();
+      await expect(page.getByText('Local ready', { exact: true })).toBeVisible();
       if (configured) {
         await selectRemoteChat(page);
         await expect(page.getByRole('button', { name: 'Connect', exact: true })).toBeEnabled();

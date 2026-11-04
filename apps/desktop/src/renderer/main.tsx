@@ -82,13 +82,6 @@ function Desktop({ application }: { application: MoonbaseApplication }) {
               | null)
           : null
       }
-      selectNativeImports={async (checkout) =>
-        application.getSnapshot().phase === 'live'
-          ? (unwrap(
-              await bridge.call('choose-imports', { checkout }, crypto.randomUUID()),
-            ) as string[])
-          : []
-      }
       selectClipboardImports={async (checkout) =>
         application.getSnapshot().phase === 'live'
           ? (unwrap(

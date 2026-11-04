@@ -1,4 +1,4 @@
-import { selectRemoteChat } from './chat-target.ts';
+import { createRemoteChat, selectRemoteChat } from './chat-target.ts';
 import { prepareCrashRecovery, recoverCrashedWorkbench } from './editor-regressions.ts';
 import type { RecoveryLoad } from '@moonbase/contracts/workspace';
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
@@ -86,11 +86,10 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
       await p.keyboard.press('Meta+a');
       await p.keyboard.insertText('retained local draft at reload');
       const views = p.getByRole('tablist', { name: 'Workbench views', exact: true });
-      await views.getByRole('tab', { name: 'Chat', exact: true }).click();
+      await views.getByRole('tab', { name: 'Agents', exact: true }).click();
       await selectRemoteChat(p);
       await p.getByRole('button', { name: 'Connect', exact: true }).click();
-      await p.getByLabel('New saved chat').fill('Live lifecycle task');
-      await p.getByRole('button', { name: 'Create chat', exact: true }).click();
+      await createRemoteChat(p, 'Live lifecycle task');
       await expect(p.getByLabel('Message', { exact: true })).toBeEnabled();
       await f.loseNextSend();
       await p.getByLabel('Message', { exact: true }).fill('one immutable Send');
@@ -168,7 +167,10 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
         const read = () =>
           current.evaluate(async ({ BrowserWindow }) =>
             BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(`(async () => {
-          if (!document.querySelector('[aria-label="a.ts editor"]')) return null;
+          const project = [...document.querySelectorAll('[role="tab"]')].find(tab => tab.textContent.endsWith(' · main'));
+          if (!project) return null;
+          project.click();
+          if (!document.querySelector('[aria-label="a.ts editor"]')?.getClientRects().length) return null;
           const r = await window.moonbase.call("command", { operation: "loadRecovery", input: { clientId: window.moonbase.clientId } }, crypto.randomUUID());
           return { recovery: r, saved: JSON.parse(localStorage.getItem("moonbase.chat.v1")), connection: await window.moonbaseChat.call("connection", "getConnection", {}, crypto.randomUUID()) };
         })()`),
@@ -287,12 +289,17 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
           await expect(
             p.locator('.view-line').filter({ hasText: 'fresh visible tail' }).first(),
           ).toBeVisible();
-          await views.getByRole('tab', { name: 'Chat', exact: true }).click();
+          await views.getByRole('tab', { name: 'Agents', exact: true }).click();
         }
         await expect(p.getByLabel('Message', { exact: true })).toHaveValue(
           'newer unpreserved live draft',
         );
       } else {
+        await expect(views.getByRole('tab', { name: 'Agents', exact: true })).toHaveAttribute(
+          'aria-selected',
+          'true',
+        );
+        await views.getByRole('tab', { name: / · main$/ }).click();
         await expect(p.getByRole('textbox', { name: 'a.ts editor', exact: true })).toBeVisible();
         if (!crash && !packaged)
           await expect
@@ -304,7 +311,7 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
             )
             .toBe(true);
         await f.releaseReply();
-        await views.getByRole('tab', { name: 'Chat', exact: true }).click();
+        await views.getByRole('tab', { name: 'Agents', exact: true }).click();
         await selectRemoteChat(p);
         await expect(p.getByLabel('Message', { exact: true })).toHaveValue(
           'newer chat draft across reload',

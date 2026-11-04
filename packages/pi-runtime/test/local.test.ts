@@ -31,10 +31,17 @@ test('local conversations retain distinct folders/models, coding tools, immutabl
   await mkdir(second);
   const models = createModels(),
     faux = fauxProvider({
-      models: [{ id: 'first-model' }, { id: 'second-model' }],
+      models: [
+        { id: 'first-model', reasoning: true },
+        { id: 'second-model', reasoning: true },
+      ],
       tokensPerSecond: 100000,
     });
-  models.setProvider(faux.provider);
+  models.setProvider({
+    ...faux.provider,
+    getModels: () =>
+      faux.models.map((model) => ({ ...model, thinkingLevelMap: { xhigh: 'xhigh' } })),
+  });
   const config = { ...session, databasePath: join(root, 'local.sqlite'), models };
   let runtime = ManagedRuntime.make(LocalPiRuntimeLive(config));
   t.after(async () => {
@@ -57,9 +64,22 @@ test('local conversations retain distinct folders/models, coding tools, immutabl
     settings: {
       cwd,
       model: { provider: faux.provider.id, modelId: index ? 'second-model' : 'first-model' },
+      reasoningEffort: index ? ('xhigh' as const) : ('high' as const),
     },
   }));
   const chats = await Promise.all(inputs.map((input) => client.command('createChat', input)));
+  assert.deepEqual(
+    chats.map((chat) => chat.conversation.reasoningEffort),
+    ['high', 'xhigh'],
+  );
+  await assert.rejects(
+    client.command('createChat', {
+      ...inputs[0],
+      requestId: 'unsupported-effort',
+      settings: { ...inputs[0].settings, reasoningEffort: 'max' },
+    }),
+    { code: 'InvalidInput' },
+  );
   assert.deepEqual(
     chats.map((chat) => chat.conversation.cwd),
     [first, second],
@@ -74,8 +94,9 @@ test('local conversations retain distinct folders/models, coding tools, immutabl
   );
   for (let i = 0; i < 2; i++) {
     faux.setResponses([
-      (_context, _options, _state, model) => {
+      (_context, options, _state, model) => {
         assert.equal(model.id, inputs[i].settings.model.modelId);
+        assert.equal(options?.reasoning, inputs[i].settings.reasoningEffort);
         return fauxAssistantMessage(
           fauxToolCall('write', { path: 'result.txt', content: 'folder-' + i }),
           { stopReason: 'toolUse' },
@@ -100,6 +121,28 @@ test('local conversations retain distinct folders/models, coding tools, immutabl
   runtime = ManagedRuntime.make(LocalPiRuntimeLive(config));
   client = makeChatClient(runtime);
   assert.deepEqual(await client.command('createChat', inputs[0]), chats[0]);
+  assert.equal(
+    (await client.command('getChat', { target: chats[1].conversation.target })).conversation
+      .reasoningEffort,
+    'xhigh',
+  );
+  faux.setResponses([
+    (_context, options) => {
+      assert.equal(options?.reasoning, 'xhigh');
+      return fauxAssistantMessage('Resumed with the captured effort');
+    },
+  ]);
+  await client.command('sendChat', {
+    target: chats[1].conversation.target,
+    requestId: 'after-restart',
+    text: 'Continue',
+  });
+  await until(
+    () => client.command('getChat', { target: chats[1].conversation.target }),
+    (snapshot) =>
+      !snapshot.run &&
+      snapshot.entries.some((entry) => entry.text === 'Resumed with the captured effort'),
+  );
   assert.equal((await client.command('listChats', { session })).conversations.length, 2);
   await assert.rejects(
     client.command('listChats', {

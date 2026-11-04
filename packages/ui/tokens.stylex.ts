@@ -2,22 +2,22 @@ import * as stylex from '@stylexjs/stylex';
 
 // Static values also feed Monaco's theme API, which requires literal colors.
 export const colors = stylex.defineConsts({
-  canvas: '#131416',
-  chrome: '#18191c',
-  surface: '#1b1c20',
-  elevated: '#24252b',
-  hover: '#303139',
-  selected: '#343044',
-  selectedHover: '#40394f',
-  text: '#ededed',
-  secondary: '#b9b8c5',
-  muted: '#aaa9b6',
-  border: '#303138',
-  controlBorder: '#484351',
-  accent: '#b7aaf5',
-  onAccent: '#191622',
-  link: '#c7bdff',
-  selection: '#48405f',
+  canvas: '#141415',
+  chrome: '#161618',
+  surface: '#161618',
+  elevated: '#222224',
+  hover: '#2b2b2e',
+  selected: '#28282b',
+  selectedHover: '#303034',
+  text: '#e5e5e7',
+  secondary: '#b2b2b8',
+  muted: '#97979f',
+  border: '#29292d',
+  controlBorder: '#343438',
+  accent: '#ededf0',
+  onAccent: '#19191b',
+  link: '#ffffff',
+  selection: '#3a3a42',
   warningSurface: '#393222',
   warningBorder: '#77613b',
   warningText: '#ffd49b',
@@ -44,6 +44,6 @@ export const type = stylex.defineConsts({
   heading: 16,
 });
 
-export const radius = stylex.defineConsts({ control: 5, row: 8, panel: 12, composer: 22 });
-export const layout = stylex.defineConsts({ conversation: 740, treeRow: 28 });
+export const radius = stylex.defineConsts({ control: 6, row: 7, panel: 12, composer: 18 });
+export const layout = stylex.defineConsts({ conversation: 640, treeRow: 28 });
 export const sidebar = stylex.defineVars({ width: '270px' });

@@ -1,0 +1,991 @@
+<!doctype html>
+<html lang="en">
+  <!-- Tabler outlined icons, @tabler/icons-react 3.50.0
+MIT License
+
+Copyright (c) 2020-2026 Paweł Kuna
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+-->
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Moonbase desktop redesign</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      font:
+        14px -apple-system,
+        BlinkMacSystemFont,
+        'Segoe UI',
+        sans-serif;
+      color: #ededed;
+    }
+    button,
+    textarea,
+    select {
+      font: inherit;
+    }
+    button {
+      cursor: pointer;
+    }
+    button:focus-visible,
+    textarea:focus-visible {
+      outline: 2px solid #bdbdbd;
+      outline-offset: 3px;
+    }
+    .switcher {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+    .switcher button {
+      padding: 7px 12px;
+      color: var(--foreground, #eee);
+      background: transparent;
+      border: 1px solid var(--border, #343438);
+      border-radius: 7px;
+    }
+    .switcher button[aria-pressed='true'] {
+      background: var(--secondary, #292929);
+    }
+    .frame {
+      padding: 16px;
+      background: #101010;
+      border-radius: 12px;
+    }
+    .viewport {
+      width: 100%;
+      aspect-ratio: 1440/860;
+      overflow: hidden;
+      position: relative;
+    }
+    .app {
+      width: 1440px;
+      height: 860px;
+      transform-origin: top left;
+      background: #141415;
+      display: flex;
+      flex-direction: column;
+      border-radius: 10px;
+      overflow: hidden;
+      color: #ededed;
+    }
+    .tabs {
+      height: 40px;
+      background: #161618;
+      display: flex;
+      align-items: center;
+      padding: 4px 16px 4px 86px;
+      gap: 6px;
+      flex: none;
+      position: relative;
+    }
+    .lights {
+      position: absolute;
+      left: 17px;
+      display: flex;
+      gap: 8px;
+    }
+    .lights i {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #ff5f57;
+    }
+    .lights i:nth-child(2) {
+      background: #febc2e;
+    }
+    .lights i:nth-child(3) {
+      background: #28c840;
+    }
+    .tab {
+      background: transparent;
+      color: #97979f;
+      border: 0;
+      display: flex;
+      gap: 9px;
+      align-items: center;
+      height: 32px;
+      padding: 0 12px;
+      border-radius: 8px;
+      white-space: nowrap;
+      font-size: 12px;
+      line-height: 18px;
+      text-align: left;
+    }
+    .tab:hover,
+    .tab:focus-within {
+      background: #222224;
+      color: #e5e5e7;
+    }
+    .tab .tab-label {
+      flex: 1;
+    }
+    .tab .tab-close {
+      opacity: 0;
+    }
+    .tab.active .tab-close,
+    .tab:hover .tab-close,
+    .tab:focus-within .tab-close {
+      opacity: 1;
+    }
+    .tab.active {
+      background: #28282b;
+      color: #eee;
+    }
+    .agents {
+      font-weight: 600;
+    }
+    .project {
+      width: 216px;
+      justify-content: space-between;
+    }
+    .plus {
+      width: 30px;
+      padding: 7px;
+    }
+    .tabs .spacer {
+      flex: 1;
+    }
+    .shell {
+      display: grid;
+      grid-template-columns: 288px minmax(0, 1fr);
+      flex: 1;
+      min-height: 0;
+    }
+    .sidebar {
+      background: #161618;
+      border-right: 1px solid #2a2a2a;
+      padding: 24px 12px 16px;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .brand {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      padding: 0 12px;
+      margin-bottom: 26px;
+      font-weight: 600;
+      letter-spacing: -0.3px;
+    }
+    .brand svg {
+      width: 22px;
+      height: 22px;
+    }
+    .new {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: #282828;
+      border: 0;
+      color: #eee;
+      border-radius: 7px;
+      padding: 11px 12px;
+      width: 100%;
+      text-align: left;
+    }
+    .new kbd {
+      margin-left: auto;
+      font: 11px inherit;
+      color: #a5a5a5;
+    }
+    .group {
+      margin-top: 32px;
+      padding: 0 12px 12px;
+      color: #aaa;
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .chats {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+    .chat {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      color: #b4b4b4;
+      background: transparent;
+      border: 0;
+      text-align: left;
+      padding: 11px 12px;
+      border-radius: 6px;
+    }
+    .chat.selected {
+      color: #eee;
+      background: #272727;
+    }
+    .chat span {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: #777;
+    }
+    .chat {
+      white-space: nowrap;
+      font-size: 13px;
+    }
+    .chat time {
+      margin-left: auto;
+      font-size: 11px;
+      color: #999;
+    }
+    .bottom {
+      margin-top: auto;
+      padding: 16px 12px 0;
+      border-top: 1px solid #29292d;
+      color: #aaa;
+    }
+    .bottom button {
+      border: 0;
+      background: transparent;
+      color: #bbb;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0;
+    }
+    .local {
+      font-size: 11px;
+      color: #999;
+      padding-top: 14px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .local i {
+      width: 5px;
+      height: 5px;
+      background: #b4b4b4;
+      border-radius: 50%;
+    }
+    .content {
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      min-width: 0;
+    }
+    .head {
+      height: 56px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 28px;
+      color: #aaa;
+      font-size: 12px;
+      flex: none;
+    }
+    .head h1 {
+      font-size: 13px;
+      font-weight: 500;
+      color: #ddd;
+      margin: 0;
+    }
+    .main {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      padding: 24px 32px;
+    }
+    .start {
+      margin: auto;
+      width: 100%;
+      max-width: 640px;
+      padding-bottom: 38px;
+    }
+    .context {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin: 0 12px 12px;
+      color: #b4b4b4;
+      font-size: 13px;
+    }
+    .context button {
+      color: inherit;
+      border: 0;
+      background: transparent;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 3px 0;
+    }
+    .composer {
+      background: #222224;
+      border: 1px solid #343438;
+      border-radius: 18px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .composer textarea {
+      width: 100%;
+      background: transparent;
+      border: 0;
+      outline: none;
+      resize: none;
+      color: #eee;
+      min-height: 48px;
+      font-size: 16px;
+      line-height: 1.6;
+      padding: 0;
+    }
+    .composer textarea::placeholder {
+      color: #aaa;
+    }
+    .compose-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      color: #aaa;
+      font-size: 12px;
+    }
+    .model {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    .send {
+      width: 30px;
+      height: 30px;
+      border: 0;
+      background: #ededed;
+      color: #161616;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+    }
+    .hint {
+      font-size: 11px;
+      color: #999;
+      display: flex;
+      justify-content: space-between;
+      padding: 12px 10px;
+    }
+    .thread {
+      display: none;
+      width: 100%;
+      max-width: 640px;
+      margin: 18px auto 28px;
+      line-height: 1.7;
+    }
+    .thread article {
+      padding: 12px 0 28px;
+    }
+    .thread strong {
+      font-size: 12px;
+    }
+    .thread p {
+      font-size: 15px;
+      color: #d5d5d5;
+    }
+    .thread code {
+      background: #232323;
+      border-radius: 4px;
+      padding: 3px 5px;
+      font:
+        13px Menlo,
+        monospace;
+    }
+    .conversation .thread {
+      display: block;
+    }
+    .conversation .start {
+      margin: auto auto 0;
+      padding-bottom: 4px;
+    }
+    .conversation .context {
+      display: none;
+    }
+    .editor-shell {
+      display: none;
+      flex: 1;
+      min-height: 0;
+      grid-template-columns: 288px minmax(0, 1fr);
+    }
+    .editor-mode .shell {
+      display: none;
+    }
+    .editor-mode .editor-shell {
+      display: grid;
+    }
+    .file-head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 8px 14px;
+      color: #ddd;
+    }
+    .file-head span {
+      margin-right: auto;
+    }
+    .icon {
+      width: 26px;
+      height: 26px;
+      display: grid;
+      place-items: center;
+      color: #aaa;
+      background: transparent;
+      border: 0;
+      padding: 5px;
+      border-radius: 5px;
+    }
+    .icon:hover {
+      background: #303030;
+    }
+    .branch {
+      color: #999;
+      font-size: 11px;
+      padding: 2px 8px 16px;
+    }
+    .files {
+      display: flex;
+      flex-direction: column;
+      color: #bbb;
+      font-size: 13px;
+    }
+    .files div {
+      display: flex;
+      gap: 9px;
+      align-items: center;
+      padding: 7px 9px;
+    }
+    .files .indent {
+      padding-left: 30px;
+    }
+    .files .sel {
+      background: #29292d;
+      border-radius: 5px;
+      color: #eee;
+    }
+    .editor-content {
+      background: #141415;
+    }
+    .file-tabs {
+      height: 40px;
+      border-bottom: 1px solid #2a2a2a;
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      gap: 10px;
+      font-size: 12px;
+      color: #ccc;
+    }
+    .file-tabs .file-active {
+      background: #252525;
+      padding: 10px 14px;
+      display: flex;
+      gap: 22px;
+    }
+    .code {
+      display: flex;
+      padding-top: 24px;
+      font:
+        13px/24px Menlo,
+        Consolas,
+        monospace;
+      white-space: pre;
+    }
+    .numbers {
+      padding: 0 24px;
+      color: #777;
+      text-align: right;
+    }
+    .source {
+      color: #d0d0d0;
+    }
+    .comment {
+      color: #999;
+    }
+    .keyword {
+      color: #c6c6c6;
+    }
+    .string {
+      color: #b5c9b5;
+    }
+    .caption {
+      margin-top: 10px;
+      font-size: 12px;
+      color: var(--muted-foreground, #999);
+      line-height: 1.5;
+    }
+    svg {
+      width: 16px;
+      height: 16px;
+      stroke: currentColor;
+      stroke-width: 1.5;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      flex: none;
+    }
+    .brand,
+    #compose-label {
+      display: none;
+    }
+    .app:not(.conversation) .head {
+      display: none;
+    }
+  </style>
+  <div class="switcher" aria-label="Mockup screens">
+    <button data-screen="new" aria-pressed="true">New chat</button
+    ><button data-screen="conversation" aria-pressed="false">Conversation</button
+    ><button data-screen="editor" aria-pressed="false">Project editor</button>
+  </div>
+  <div class="frame">
+    <div class="viewport">
+      <div class="app" id="app">
+        <div class="tabs">
+          <span class="lights" aria-hidden="true"><i></i><i></i><i></i></span
+          ><button class="tab agents active" id="agents">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              class="tabler-icon tabler-icon-message-circle"
+              aria-hidden="true">
+              <path
+                d="M3 20l1.3 -3.9c-2.324 -3.437 -1.426 -7.872 2.1 -10.374c3.526 -2.501 8.59 -2.296 11.845 .48c3.255 2.777 3.695 7.266 1.029 10.501c-2.666 3.235 -7.615 4.215 -11.574 2.293l-4.7 1"></path></svg
+            ><span class="tab-label">Agents</span
+            ><svg class="tab-close" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M18 6l-12 12" />
+              <path d="M6 6l12 12" />
+            </svg></button
+          ><button class="tab project" id="project">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              class="tabler-icon tabler-icon-folder"
+              aria-hidden="true">
+              <path
+                d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-11a2 2 0 0 1 2 -2"></path></svg
+            ><span class="tab-label">moonbase · main</span
+            ><svg class="tab-close" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M18 6l-12 12" />
+              <path d="M6 6l12 12" />
+            </svg></button
+          ><button class="tab plus" title="Open project">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              class="tabler-icon tabler-icon-plus"
+              aria-hidden="true">
+              <path d="M12 5l0 14"></path>
+              <path d="M5 12l14 0"></path>
+            </svg></button
+          ><span class="spacer"></span><span style="font-size: 11px; color: #999">Moonbase</span>
+        </div>
+        <div class="shell">
+          <aside class="sidebar">
+            <div class="brand">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                class="tabler-icon tabler-icon-moon"
+                aria-hidden="true">
+                <path
+                  d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454l0 .008"></path></svg
+              >Moonbase
+            </div>
+            <button class="new" id="new">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                class="tabler-icon tabler-icon-edit"
+                aria-hidden="true">
+                <path d="M7 7h-1a2 2 0 0 0 -2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2 -2v-1"></path>
+                <path
+                  d="M20.385 6.585a2.1 2.1 0 0 0 -2.97 -2.97l-8.415 8.385v3h3l8.385 -8.415"></path>
+                <path d="M16 5l3 3"></path></svg
+              >New chat<kbd>⌘ N</kbd>
+            </button>
+            <div class="group">
+              Conversations<svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                class="tabler-icon tabler-icon-refresh"
+                aria-hidden="true">
+                <path d="M20 11a8.1 8.1 0 0 0 -15.5 -2m-.5 -4v4h4"></path>
+                <path d="M4 13a8.1 8.1 0 0 0 15.5 2m.5 4v-4h-4"></path>
+              </svg>
+            </div>
+            <nav class="chats">
+              <button class="chat" id="saved">
+                <span></span>Redesign the desktop app<time>Now</time></button
+              ><button class="chat"><span></span>Explore the workspace<time>2h</time></button
+              ><button class="chat">
+                <span></span>Review editor changes<time>Yesterday</time>
+              </button>
+            </nav>
+            <div class="bottom">
+              <button id="settings">
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  class="tabler-icon tabler-icon-settings"
+                  aria-hidden="true">
+                  <path
+                    d="M10.325 4.317c.426 -1.756 2.924 -1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543 -.94 3.31 .826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c1.756 .426 1.756 2.924 0 3.35a1.724 1.724 0 0 0 -1.066 2.573c.94 1.543 -.826 3.31 -2.37 2.37a1.724 1.724 0 0 0 -2.572 1.065c-.426 1.756 -2.924 1.756 -3.35 0a1.724 1.724 0 0 0 -2.573 -1.066c-1.543 .94 -3.31 -.826 -2.37 -2.37a1.724 1.724 0 0 0 -1.065 -2.572c-1.756 -.426 -1.756 -2.924 0 -3.35a1.724 1.724 0 0 0 1.066 -2.573c-.94 -1.543 .826 -3.31 2.37 -2.37c1 .608 2.296 .07 2.572 -1.065"></path>
+                  <path d="M9 12a3 3 0 1 0 6 0a3 3 0 0 0 -6 0"></path></svg
+                >Provider setup
+              </button>
+              <div class="local"><i></i>Local · This Mac</div>
+            </div>
+          </aside>
+          <section class="content">
+            <header class="head">
+              <h1 id="heading">New chat</h1>
+              <span>This Mac</span>
+            </header>
+            <main class="main">
+              <div class="thread">
+                <article>
+                  <strong>You</strong>
+                  <p>Help me make the desktop app feel simpler and more intuitive.</p>
+                </article>
+                <article>
+                  <strong>Assistant</strong>
+                  <p>
+                    I’ll start with the navigation and chat composer, then simplify the file
+                    sidebar. The editor will stay one click away in its project tab.
+                  </p>
+                  <p>First I’ll inspect <code>apps/desktop</code> and the shared UI components.</p>
+                </article>
+              </div>
+              <div class="start">
+                <div class="context">
+                  <button title="Choose working folder">
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.5"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      class="tabler-icon tabler-icon-folder"
+                      aria-hidden="true">
+                      <path
+                        d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-11a2 2 0 0 1 2 -2"></path></svg
+                    >moonbase<svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.5"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      class="tabler-icon tabler-icon-chevron-down"
+                      aria-hidden="true">
+                      <path d="M6 9l6 6l6 -6"></path>
+                    </svg></button
+                  ><span style="color: #666">/</span
+                  ><button>
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.5"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      class="tabler-icon tabler-icon-device-laptop"
+                      aria-hidden="true">
+                      <path d="M3 19l18 0"></path>
+                      <path
+                        d="M5 7a1 1 0 0 1 1 -1h12a1 1 0 0 1 1 1v8a1 1 0 0 1 -1 1h-12a1 1 0 0 1 -1 -1l0 -8"></path></svg
+                    >This Mac
+                  </button>
+                </div>
+                <form class="composer" id="composer">
+                  <textarea
+                    aria-label="Message"
+                    placeholder="Ask anything, or describe what you want to build…"></textarea>
+                  <div class="compose-actions">
+                    <span id="compose-label">New conversation</span>
+                    <div class="model">
+                      <span>OpenAI · GPT-5.4 <span style="margin-left: 4px">⌄</span></span
+                      ><button class="send" aria-label="Send message">
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          width="16"
+                          height="16"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="1.5"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          class="tabler-icon tabler-icon-arrow-up"
+                          aria-hidden="true">
+                          <path d="M12 5l0 14"></path>
+                          <path d="M18 11l-6 -6"></path>
+                          <path d="M6 11l6 -6"></path>
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                </form>
+                <div class="hint">
+                  <span>Local tools can access files outside this folder.</span
+                  ><span>⌘ Enter to send</span>
+                </div>
+              </div>
+            </main>
+          </section>
+        </div>
+        <div class="editor-shell">
+          <aside class="sidebar">
+            <div class="file-head">
+              <span>Files</span
+              ><button class="icon" title="New File">
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  class="tabler-icon tabler-icon-file-plus"
+                  aria-hidden="true">
+                  <path d="M14 3v4a1 1 0 0 0 1 1h4"></path>
+                  <path
+                    d="M17 21h-10a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2h7l5 5v11a2 2 0 0 1 -2 2"></path>
+                  <path d="M12 11l0 6"></path>
+                  <path d="M9 14l6 0"></path>
+                </svg></button
+              ><button class="icon" title="New Folder">
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  class="tabler-icon tabler-icon-folder-plus"
+                  aria-hidden="true">
+                  <path
+                    d="M12 19h-7a2 2 0 0 1 -2 -2v-11a2 2 0 0 1 2 -2h4l3 3h7a2 2 0 0 1 2 2v3.5"></path>
+                  <path d="M16 19h6"></path>
+                  <path d="M19 16v6"></path>
+                </svg></button
+              ><button class="icon" title="Refresh">
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  class="tabler-icon tabler-icon-refresh"
+                  aria-hidden="true">
+                  <path d="M20 11a8.1 8.1 0 0 0 -15.5 -2m-.5 -4v4h4"></path>
+                  <path d="M4 13a8.1 8.1 0 0 0 15.5 2m.5 4v-4h-4"></path>
+                </svg>
+              </button>
+            </div>
+            <div class="branch">main · moonbase</div>
+            <div class="files">
+              <div>
+                ⌄
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  class="tabler-icon tabler-icon-folder"
+                  aria-hidden="true">
+                  <path
+                    d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-11a2 2 0 0 1 2 -2"></path></svg
+                >apps
+              </div>
+              <div class="indent">⌄ desktop</div>
+              <div class="indent">⌄ src</div>
+              <div class="indent sel">workbench.tsx</div>
+              <div class="indent">main.tsx</div>
+              <div>› packages</div>
+              <div>README.md</div>
+              <div>package.json</div>
+            </div>
+            <div class="bottom" style="font-size: 11px">Paste or drop files here to import</div>
+          </aside>
+          <section class="editor-content">
+            <div class="file-tabs">
+              <span class="file-active"
+                >workbench.tsx
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M18 6l-12 12" />
+                  <path d="M6 6l12 12" /></svg
+              ></span>
+              ><span>main.tsx</span>
+            </div>
+            <div class="code">
+              <span class="numbers"
+                >1<br />2<br />3<br />4<br />5<br />6<br />7<br />8<br />9<br />10<br />11<br />12</span
+              >
+              <div class="source">
+                <span class="comment"
+                  >// The shell composes independent editor and chat views.</span
+                >
+                <span class="keyword">export function</span> DesktopShell({ application }) {
+                <span class="keyword">const</span> [destination, setDestination] = useState(<span
+                  class="string"
+                  >'chat'</span
+                >);
+
+                <span class="keyword">return</span> ( &lt;WorkbenchNavigation
+                destination={destination} onNavigate={setDestination} application={application}
+                /&gt; ); }
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+  </div>
+  <p class="caption">
+    Interactive design mockup · Illustrative conversations, code and model name. Sending here
+    changes only this mockup.
+  </p>
+  <script>
+    const app = document.getElementById('app'),
+      viewport = document.querySelector('.viewport');
+    new ResizeObserver(() => {
+      app.style.transform = `scale(${viewport.clientWidth / 1440})`;
+    }).observe(viewport);
+    function show(screen) {
+      app.classList.toggle('editor-mode', screen === 'editor');
+      app.classList.toggle('conversation', screen === 'conversation');
+      document.getElementById('heading').textContent =
+        screen === 'conversation' ? 'Redesign the desktop app' : 'New chat';
+      document.getElementById('agents').classList.toggle('active', screen !== 'editor');
+      document.getElementById('project').classList.toggle('active', screen === 'editor');
+      document.getElementById('saved').classList.toggle('selected', screen === 'conversation');
+      document.getElementById('compose-label').textContent =
+        screen === 'conversation' ? 'Reply' : 'New conversation';
+      document
+        .querySelectorAll('[data-screen]')
+        .forEach((b) => b.setAttribute('aria-pressed', b.dataset.screen === screen));
+    }
+    document
+      .querySelectorAll('[data-screen]')
+      .forEach((b) => (b.onclick = () => show(b.dataset.screen)));
+    document.getElementById('agents').onclick = () => show('new');
+    document.getElementById('project').onclick = () => show('editor');
+    document.getElementById('new').onclick = () => {
+      show('new');
+      document.querySelector('textarea').value = '';
+      document.querySelector('textarea').focus();
+    };
+    document.getElementById('saved').onclick = () => show('conversation');
+    document.getElementById('composer').onsubmit = (e) => {
+      e.preventDefault();
+      if (document.querySelector('textarea').value.trim()) {
+        document.querySelector('.thread article:first-child p').textContent =
+          document.querySelector('textarea').value;
+        show('conversation');
+        document.querySelector('textarea').value = '';
+      }
+    };
+    console.assert(
+      document.querySelectorAll('.tabs .agents').length === 1,
+      'One pinned Agents tab',
+    );
+  </script>
+</html>

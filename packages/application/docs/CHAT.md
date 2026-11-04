@@ -33,6 +33,22 @@ Supply browser-safe `ChatClient` and `ChatSession` from `@moonbase/contracts/cha
 
 A failed watch acquisition remains observable through disposal and aggregate root cleanup, including synchronous callback/dispose/throw races. Disposal stops new actions and late state/storage writes immediately, joins actual IO-watch finalizers (including already-closing detached observations), and preserves its result for repeated calls. The application root owns and observes that Promise outside the removed panel's scope, reports failure in its visible cleanup area, prevents overlapping reuse of its storage namespace, and drains cleanup before disposing the shared runtime. A disposed model never writes a late receipt: the original preserved pending input remains recovery evidence. Hide differs from disposal and may still reconcile an admitted command.
 
+## First-message composition
+
+`setDraft(text)` works without a selected conversation and preserves that new-chat draft synchronously. `closeView()` returns to it while retaining each saved conversation's separate draft. `send(settings?)` captures the current text, creates a conversation when no target is selected, and sends to that exact returned target. The title uses the first line, bounded to 80 UTF-8 bytes. Local first sends require the same immutable folder/model settings as `create`; remote first sends reject those settings. Existing `create(title, settings?)` remains available for explicit empty conversations.
+
+The version-one saved envelope accepts optional `newDraft` text and an optional `firstMessage` on a retained Create. Existing version-one data remains readable without rewriting its shape. Both request identities and the first message are preserved before Create. The confirmed Create receipt is published together with the exact retained Send before message disclosure. Creation failure retains both identities; Send failure retains Send independently. Reconnection and reload never start either mutation. An explicit original Create retry completes the captured first Send; an original Send retry does not create again. Newer edits survive admission, and publication failure prevents Send. Older clients that do not recognize these optional fields cannot open such new data.
+
+First Send checks the 32-conversation draft limit before Create. If another edit fills the last slot during creation, the original Create/message stay retained with an explicit capacity error; clearing a draft permits an exact retry without another conversation or lost text.
+
+Concurrent original and retry Create calls may return the same receipt. Only the first receipt for a still-retained Create updates selection/drafts and starts its captured Send. Later replies are ignored after resolution, preserving a newer new-chat draft and avoiding duplicate pending Send identities.
+
+## Model preferences
+
+`setModelPreference({ model: { provider, modelId }, reasoningEffort? })` preserves an explicit model/effort choice synchronously and exposes it as `ChatState.modelPreference`. It is independent of the selected conversation and survives New chat, panel removal and controller replacement using the same namespace. Missing preferences remain `null`; the consumer presents the configured provider's supplied default without persisting an implicit user choice. Selecting an older conversation never overwrites the preference. Local Create/first Send captures the chosen `reasoningEffort` with its immutable folder/model settings; later preference changes cannot retarget a retained command or existing conversation.
+
+The strict version-one envelope accepts optional `modelPreference`; old envelopes remain readable without adding fields. Invalid preferences cannot replace valid saved settings. Failed writes use the existing preservation fence. Availability is catalog state rather than saved-data validity: an unavailable saved model or effort remains preserved and the desktop asks the user to choose a replacement. It does not silently change the preference.
+
 ## Preservation
 
 Chat owns the strict version-one saved schema, draft/pending-command preservation, exact context and duplicate checks. Public input schemas supply retained Create/Send/Stop shapes; unfamiliar nested fields, unsupported versions and foreign context reject before the first write. Original stored bytes stay untouched and the namespace blocks mutation/destructive close. No projection, migration, legacy import or deletion occurs.

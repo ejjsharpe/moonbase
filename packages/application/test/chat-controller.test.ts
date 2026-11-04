@@ -156,6 +156,387 @@ async function ready(f: Awaited<ReturnType<typeof fixture>>) {
   await f.controller.select(target);
 }
 
+test('new-conversation drafts preserve before a chat exists and reopen without mutations', async (t) => {
+  const f = await fixture(t);
+  f.controller.setDraft('A draft before opening a project or chat');
+  assert.equal(f.controller.getSnapshot().selected, null);
+  assert.equal(f.controller.preserve(), true);
+  await f.controller.dispose();
+  const second = await f.root.make({
+    chat: f.chat,
+    connection: f.connection,
+    context,
+    storage: f.storage,
+  });
+  assert.equal(second.getSnapshot().draft, 'A draft before opening a project or chat');
+  assert.deepEqual(f.calls, []);
+});
+
+test('explicit model and effort preferences survive chat selection, new chats and controller restart', async (t) => {
+  const f = await fixture(t);
+  assert.equal(f.controller.getSnapshot().modelPreference, null);
+  const preference = {
+    model: { provider: 'openai', modelId: 'gpt-6.1-sol' },
+    reasoningEffort: 'xhigh' as const,
+  };
+  f.controller.setModelPreference(preference);
+  preference.model.modelId = 'changed by caller';
+  const expected = {
+    model: { provider: 'openai', modelId: 'gpt-6.1-sol' },
+    reasoningEffort: 'xhigh',
+  };
+  assert.deepEqual(f.controller.getSnapshot().modelPreference, expected);
+  await ready(f);
+  assert.deepEqual(f.controller.getSnapshot().modelPreference, expected);
+  await f.controller.closeView();
+  f.controller.setDraft('First new chat');
+  await f.controller.send();
+  await f.controller.closeView();
+  assert.deepEqual(f.controller.getSnapshot().modelPreference, expected);
+  assert.equal(f.controller.preserve(), true);
+  await f.controller.dispose();
+  const second = await f.root.make({
+    chat: f.chat,
+    connection: f.connection,
+    context,
+    storage: f.storage,
+  });
+  assert.deepEqual(second.getSnapshot().modelPreference, expected);
+  await second.start();
+  assert.deepEqual(second.getSnapshot().modelPreference, expected);
+  assert.equal(f.calls.filter((call) => call.operation === 'createChat').length, 1);
+});
+
+test('invalid or fenced model preferences cannot replace preserved settings', async (t) => {
+  const f = await fixture(t);
+  const preference = {
+    model: { provider: 'openai', modelId: 'gpt-6.1-sol' },
+    reasoningEffort: 'high' as const,
+  };
+  f.controller.setModelPreference(preference);
+  const raw = f.storage.value;
+  f.controller.setModelPreference({ ...preference, reasoningEffort: 'invented' as 'high' });
+  assert.equal(f.storage.value, raw);
+  assert.deepEqual(f.controller.getSnapshot().modelPreference, preference);
+  await f.controller.dispose();
+  f.controller.setModelPreference({ ...preference, reasoningEffort: 'medium' });
+  assert.equal(f.storage.value, raw);
+});
+
+test('first Send creates once and sends the captured message to its exact conversation', async (t) => {
+  const f = await fixture(t);
+  await ready(f);
+  await f.controller.closeView();
+  f.controller.setDraft('Explain the editor');
+  assert(!f.calls.some((call) => call.operation === 'createChat'));
+  await Promise.all([f.controller.send(), f.controller.send()]);
+  const creates = f.calls.filter((call) => call.operation === 'createChat');
+  const sends = f.calls.filter((call) => call.operation === 'sendChat');
+  assert.equal(creates.length, 1);
+  assert.equal((creates[0]!.input as { title: string }).title, 'Explain the editor');
+  assert.equal(sends.length, 1);
+  assert.deepEqual((sends[0]!.input as { target: ChatTarget }).target, target);
+  assert.equal((sends[0]!.input as { text: string }).text, 'Explain the editor');
+  assert.equal(f.controller.getSnapshot().draft, '');
+  assert.equal(f.controller.getSnapshot().pending.length, 0);
+});
+
+test('first Send checks draft capacity before creating and succeeds after an existing draft is cleared', async (t) => {
+  const f = await fixture(t);
+  await ready(f);
+  for (let i = 0; i < 32; i++) {
+    await f.controller.select({ ...target, conversationId: 'draft-' + i });
+    f.controller.setDraft('retained-' + i);
+  }
+  await f.controller.closeView();
+  f.controller.setDraft('Keep my first message');
+  await f.controller.send();
+  assert(!f.calls.some((call) => ['createChat', 'sendChat'].includes(call.operation)));
+  assert.match(f.controller.getSnapshot().error!, /32 conversation drafts/);
+  assert.equal(f.controller.getSnapshot().draft, 'Keep my first message');
+  assert.equal(f.controller.preserve(), true);
+  await f.controller.select({ ...target, conversationId: 'draft-0' });
+  f.controller.setDraft('');
+  await f.controller.closeView();
+  await f.controller.send();
+  assert.equal(f.calls.filter((call) => call.operation === 'createChat').length, 1);
+  assert.equal(f.calls.filter((call) => call.operation === 'sendChat').length, 1);
+  assert.equal(f.controller.getSnapshot().draft, '');
+});
+
+test('typing during first-chat creation survives the captured first Send', async (t) => {
+  const f = await fixture(t);
+  await ready(f);
+  await f.controller.closeView();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  f.answers.set('createChat', async (input: ChatCommands['createChat']['input']) => {
+    await gate;
+    return { requestId: input.requestId, conversation: summary };
+  });
+  f.controller.setDraft('Captured first message');
+  const sending = f.controller.send();
+  await turn();
+  f.controller.setDraft('Newer unsent edit');
+  release();
+  await sending;
+  assert.equal(f.controller.getSnapshot().draft, 'Newer unsent edit');
+  assert.equal(
+    (f.calls.find((call) => call.operation === 'sendChat')!.input as { text: string }).text,
+    'Captured first message',
+  );
+});
+
+for (const firstReply of [0, 1] as const)
+  for (const sendSettled of [false, true])
+    test(`late duplicate Create receipt preserves a newer new-chat draft (${firstReply ? 'retry' : 'initial'} first, Send ${sendSettled ? 'settled' : 'pending'})`, async (t) => {
+      const f = await fixture(t);
+      await ready(f);
+      await f.controller.closeView();
+      const replies = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+      const started = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+      const sendStarted = Promise.withResolvers<void>();
+      const sendReply = Promise.withResolvers<void>();
+      let creations = 0;
+      f.answers.set('createChat', async (input: ChatCommands['createChat']['input']) => {
+        const index = creations++;
+        started[index]!.resolve();
+        await replies[index]!.promise;
+        return { requestId: input.requestId, conversation: summary };
+      });
+      f.answers.set('sendChat', async (input: ChatCommands['sendChat']['input']) => {
+        sendStarted.resolve();
+        await sendReply.promise;
+        return {
+          target,
+          requestId: input.requestId,
+          admission: 'admitted',
+          submissionId: 'submission',
+        };
+      });
+      f.controller.setDraft('Captured first message');
+      const initial = f.controller.send();
+      await started[0]!.promise;
+      const pending = f.controller.getSnapshot().pending[0]!;
+      assert(pending.operation === 'createChat' && pending.firstMessage);
+      const retry = f.controller.retry(pending.input.requestId);
+      const workflows = [initial, retry];
+      try {
+        await started[1]!.promise;
+        replies[firstReply]!.resolve();
+        await sendStarted.promise;
+        if (sendSettled) {
+          sendReply.resolve();
+          await workflows[firstReply];
+        }
+        await f.controller.closeView();
+        f.controller.setDraft('A different new conversation');
+        replies[1 - firstReply]!.resolve();
+        await workflows[1 - firstReply];
+        const state = f.controller.getSnapshot();
+        assert.equal(state.selected, null);
+        assert.equal(state.draft, 'A different new conversation');
+        assert.equal(state.error, null);
+        assert.equal(state.storageError, null);
+        assert.equal(JSON.parse(f.storage.value!).newDraft, 'A different new conversation');
+        assert.equal(f.calls.filter((call) => call.operation === 'sendChat').length, 1);
+        assert.equal(state.pending.length, sendSettled ? 0 : 1);
+        sendReply.resolve();
+        await workflows[firstReply];
+        assert.equal(f.controller.getSnapshot().pending.length, 0);
+        assert.equal(f.controller.getSnapshot().draft, 'A different new conversation');
+        assert.equal(f.controller.preserve(), true);
+      } finally {
+        for (const reply of replies) reply.resolve();
+        sendReply.resolve();
+        await Promise.all(workflows);
+      }
+    });
+
+test('draft capacity reached during Create retains exact recovery and resumes after capacity is freed', async (t) => {
+  const f = await fixture(t);
+  await ready(f);
+  for (let i = 0; i < 31; i++) {
+    await f.controller.select({ ...target, conversationId: 'draft-' + i });
+    f.controller.setDraft('retained-' + i);
+  }
+  await f.controller.closeView();
+  f.controller.setDraft('Captured first message');
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  f.answers.set('createChat', async (input: ChatCommands['createChat']['input']) => {
+    await gate;
+    return { requestId: input.requestId, conversation: summary };
+  });
+  const sending = f.controller.send();
+  await turn();
+  await f.controller.select({ ...target, conversationId: 'last-slot' });
+  f.controller.setDraft('Another conversation draft');
+  release();
+  await sending;
+  assert.match(f.controller.getSnapshot().error!, /conversation was created, but the draft limit/);
+  const retained = f.controller.getSnapshot().pending[0]!;
+  assert(retained.operation === 'createChat' && retained.firstMessage);
+  assert.equal(retained.firstMessage.text, 'Captured first message');
+  assert(!f.calls.some((call) => call.operation === 'sendChat'));
+  assert.equal(f.controller.preserve(), true);
+  f.controller.setDraft('');
+  await f.controller.retry(retained.input.requestId);
+  assert.equal(f.calls.filter((call) => call.operation === 'sendChat').length, 1);
+  assert.deepEqual(
+    f.calls.filter((call) => call.operation === 'createChat').map((call) => call.input),
+    [retained.input, retained.input],
+  );
+});
+
+test('lost first-chat Create retains both identities across reload and sends only on original retry', async (t) => {
+  const f = await fixture(t);
+  await ready(f);
+  await f.controller.closeView();
+  f.answers.set('createChat', async () => {
+    throw failure();
+  });
+  f.controller.setDraft('Original first message');
+  await f.controller.send();
+  const pending = f.controller.getSnapshot().pending[0]!;
+  assert(pending.operation === 'createChat' && pending.firstMessage);
+  f.controller.setDraft('Newer edit');
+  await f.controller.dispose();
+  const second = await f.root.make({
+    chat: f.chat,
+    connection: f.connection,
+    context,
+    storage: f.storage,
+    newId: () => {
+      throw Error('Must retain original IDs');
+    },
+  });
+  await second.start();
+  await turn();
+  assert(!f.calls.some((call) => call.operation === 'sendChat'));
+  f.answers.delete('createChat');
+  await second.retry(pending.input.requestId);
+  const creates = f.calls.filter((call) => call.operation === 'createChat');
+  assert.deepEqual(creates[0]!.input, creates[1]!.input);
+  const send = f.calls.find((call) => call.operation === 'sendChat')!.input;
+  assert.deepEqual(send, { ...pending.firstMessage, target });
+  assert.equal(second.getSnapshot().draft, 'Newer edit');
+});
+
+test('uncertain first Send retains the Send without creating another conversation', async (t) => {
+  const f = await fixture(t);
+  await ready(f);
+  await f.controller.closeView();
+  f.answers.set('sendChat', async () => {
+    throw failure();
+  });
+  f.controller.setDraft('First message');
+  await f.controller.send();
+  const pending = f.controller.getSnapshot().pending[0]!;
+  assert.equal(pending.operation, 'sendChat');
+  const original = structuredClone(pending.input);
+  await f.controller.dispose();
+  const second = await f.root.make({
+    chat: f.chat,
+    connection: f.connection,
+    context,
+    storage: f.storage,
+  });
+  await second.start();
+  await turn();
+  assert.equal(f.calls.filter((call) => call.operation === 'sendChat').length, 1);
+  f.answers.delete('sendChat');
+  await second.retry(pending.input.requestId);
+  assert.equal(f.calls.filter((call) => call.operation === 'createChat').length, 1);
+  assert.deepEqual(f.calls.filter((call) => call.operation === 'sendChat')[1]!.input, original);
+});
+
+test('failed first-message publication prevents Send after a successful Create', async (t) => {
+  const f = await fixture(t);
+  await ready(f);
+  await f.controller.closeView();
+  f.controller.setDraft('Keep this message');
+  f.answers.set('createChat', async (input: ChatCommands['createChat']['input']) => {
+    f.storage.fail = true;
+    return { requestId: input.requestId, conversation: summary };
+  });
+  await f.controller.send();
+  assert(!f.calls.some((call) => call.operation === 'sendChat'));
+  assert.equal(f.controller.getSnapshot().draft, 'Keep this message');
+  assert.equal(f.controller.preserve(), false);
+});
+
+test('automatic conversation titles bound Unicode by UTF-8 bytes', async (t) => {
+  const f = await fixture(t);
+  await ready(f);
+  await f.controller.closeView();
+  f.controller.setDraft('🌙'.repeat(100));
+  await f.controller.send();
+  const title = (
+    f.calls.find((call) => call.operation === 'createChat')!.input as { title: string }
+  ).title;
+  assert.equal(new TextEncoder().encode(title).length, 80);
+  assert.equal(title.isWellFormed(), true);
+});
+
+test('first-message Create retry preserves a discovered conversation draft and a newer new-chat draft', async (t) => {
+  const f = await fixture(t);
+  await ready(f);
+  await f.controller.closeView();
+  f.answers.set('createChat', async () => {
+    throw failure();
+  });
+  f.controller.setDraft('Captured first message');
+  await f.controller.send();
+  const pending = f.controller.getSnapshot().pending[0]!;
+  f.controller.setDraft('New unsent conversation');
+  await f.controller.select(target);
+  f.controller.setDraft('Edited discovered conversation');
+  f.answers.delete('createChat');
+  await f.controller.retry(pending.input.requestId);
+  assert.equal(f.controller.getSnapshot().draft, 'Edited discovered conversation');
+  assert.equal(f.controller.getSnapshot().storageError, null);
+  await f.controller.closeView();
+  assert.equal(f.controller.getSnapshot().draft, 'New unsent conversation');
+});
+
+test('local first Send requires folder/model settings and retains the exact approved settings', async (t) => {
+  const f = await fixture(t);
+  const controller = await f.root.make({
+    chat: {
+      ...f.chat,
+      command: (operation, input, options) =>
+        operation === 'getChatHost'
+          ? Promise.resolve({ ...context, mode: 'local' } as never)
+          : f.chat.command(operation, input, options),
+    },
+    mode: 'local',
+    context,
+    storage: new Storage(),
+  });
+  await controller.start();
+  controller.setDraft('Local first message');
+  await controller.send();
+  assert(!f.calls.some((call) => call.operation === 'createChat'));
+  assert.equal(controller.getSnapshot().draft, 'Local first message');
+  const settings = {
+    cwd: '/approved/project',
+    model: { provider: 'configured', modelId: 'model' },
+    reasoningEffort: 'xhigh' as const,
+  };
+  await controller.send(settings);
+  assert.deepEqual(
+    (f.calls.find((call) => call.operation === 'createChat')!.input as { settings: unknown })
+      .settings,
+    settings,
+  );
+  assert.equal(f.calls.filter((call) => call.operation === 'sendChat').length, 1);
+});
+
 test('throwing chat subscribers cannot poison saved drafts or block Send and preservation', async (t) => {
   const f = await fixture(t);
   await ready(f);

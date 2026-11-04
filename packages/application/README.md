@@ -24,6 +24,10 @@ Renderers receive browser-safe clients. Native/transport adapters validate and a
 
 See [Effect invocation and observation cleanup](docs/SCHEMAS.md), [contract schema policies](../contracts/docs/SCHEMAS.md), [chat admission/RPC](../contracts/docs/CHAT.md), [host authentication](../contracts/docs/HOST-PROTOCOL.md) and [recovery publications](../contracts/docs/RECOVERY-PUBLICATIONS.md).
 
+Chat accepts `setDraft()` before selection. `send(settings?)` creates a conversation from that preserved draft when none is selected, retaining the Create and first Send identities through uncertainty; local callers supply approved folder/model settings. Existing `create(title, settings?)` remains available to headless consumers. See [chat composition and preservation](docs/CHAT.md).
+
+`setModelPreference({ model, reasoningEffort? })` synchronously preserves an explicit choice in the chat namespace. New views and replacement controllers retain it; opening an existing conversation does not replace it with that conversation's settings. Provider defaults remain supplied catalog metadata until the user chooses a preference.
+
 The [headless editor](docs/EDITOR.md) acquires once in a supplied scope and binds to the caller's runtime. `@moonbase/workbench` presents a supplied editor controller and exact project/checkout. Consuming apps own main navigation, layout and separate Chat presentation. Synchronous snapshots/recovery readiness, exact close prompts and awaitable disposal retain their existing contracts; unmounting presentation never owns model lifetime.
 
 Editor internals stay private under `src/features/editor/`; consumers continue importing `/editor`.

@@ -10,6 +10,7 @@ import {
   ChatTargetSchema,
   ChatStopTargetSchema,
   chatInputSchemas,
+  ChatReasoningEffortSchema,
 } from '@moonbase/contracts/chat-schema';
 import { fail } from './validation.ts';
 
@@ -96,7 +97,13 @@ const metadata = Schema.Struct({
   identity: Schema.String,
   title: text(200),
   createdAt: text(64).check(Schema.makeFilter((value) => Number.isFinite(Date.parse(value)))),
-  settings: Schema.optional(Schema.Struct({ cwd: path, model })),
+  settings: Schema.optional(
+    Schema.Struct({
+      cwd: path,
+      model,
+      reasoningEffort: Schema.optional(ChatReasoningEffortSchema),
+    }),
+  ),
   pending: integer.check(Schema.makeFilter((value) => value >= 0)),
 });
 // Pi owns scan positions. Only Moonbase's envelope and start sentinel are interpreted here.

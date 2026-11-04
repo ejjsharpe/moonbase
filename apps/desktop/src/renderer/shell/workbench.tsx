@@ -8,11 +8,9 @@ import {
   useSyncExternalStore,
 } from 'react';
 import { Tabs } from '@base-ui/react/tabs';
-import { Button } from '@base-ui/react/button';
 import * as stylex from '@stylexjs/stylex';
 import type { MoonbaseApplication } from '@moonbase/application';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
-import { controls } from '@moonbase/ui/controls';
 import { workbench } from '@moonbase/ui/workbench';
 import { Choice } from '../chat/choice.tsx';
 import { ChatView } from '../chat/view.tsx';
@@ -30,7 +28,6 @@ export type DesktopShellProps = {
   /** These callbacks return user-approved roots or opaque native references, never source paths. */
   chooseChatFolder?: () => Promise<string | null>;
   selectCheckout?: () => Promise<string | null>;
-  selectNativeImports?: (checkout: CheckoutTarget) => Promise<string[]>;
   selectClipboardImports?: (checkout: CheckoutTarget) => Promise<string[]>;
   selectDroppedImports?: (checkout: CheckoutTarget, files: File[]) => Promise<string[]>;
 };
@@ -43,7 +40,6 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
     closing = false,
     chooseChatFolder,
     selectCheckout,
-    selectNativeImports,
     selectClipboardImports,
     selectDroppedImports,
   },
@@ -56,10 +52,9 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
       controller?.getSnapshot ?? noEditor,
     ),
     chat = application.chat;
-  const [destination, setDestination] = useState<'project' | 'chat'>(
-    controller ? 'project' : 'chat',
-  );
+  const [destination, setDestination] = useState<'project' | 'chat'>('chat');
   const handle = useRef<WorkbenchHandle>(null),
+    requestedFocus = useRef<string | null>(null),
     panels = useRef<Record<string, HTMLElement | null>>({}),
     focus = useRef<Record<string, HTMLElement | null>>({});
   const openCheckouts =
@@ -72,33 +67,30 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
   const chatTab = !!chat || !['closed', 'cleanup-blocked'].includes(lifecycle.chat.state);
   const projectValue = selected ? tabValue({ kind: 'project', checkout: selected }) : 'empty';
   const view = destination === 'chat' && chatTab ? 'chat' : projectValue;
-  const currentView = useRef(view);
-  useLayoutEffect(() => {
-    currentView.current = view;
-  }, [view]);
   const report = controller?.report ?? application.reportCleanup;
   const run = (task: Promise<unknown>) => {
     void task.catch(report);
   };
   const restoreFocus = (value: string) => {
-    requestAnimationFrame(() =>
-      requestAnimationFrame(() => {
-        if (currentView.current !== value) return;
-        const panel = panels.current[value === 'chat' ? 'chat' : 'project'];
-        const previous = focus.current[value];
-        const target =
-          previous?.isConnected && panel?.contains(previous)
-            ? previous
-            : (panel?.querySelector<HTMLElement>('.monaco-editor textarea[role="textbox"]') ??
-              panel?.querySelector<HTMLElement>('button:not([disabled]), [tabindex="0"]'));
-        target?.focus();
-      }),
-    );
+    requestedFocus.current = value;
   };
+  useLayoutEffect(() => {
+    const value = requestedFocus.current;
+    requestedFocus.current = null;
+    if (value !== view) return;
+    const panel = panels.current[value === 'chat' ? 'chat' : 'project'];
+    const previous = focus.current[value];
+    const target =
+      previous?.isConnected && panel?.contains(previous)
+        ? previous
+        : (panel?.querySelector<HTMLElement>('.monaco-editor textarea[role="textbox"]') ??
+          panel?.querySelector<HTMLElement>('button:not([disabled]), [tabindex="0"]'));
+    target?.focus();
+  });
   useImperativeHandle(ref, () => ({
     async prepareQuit() {
       // Reveal the editor's exact prompts and uncertainty controls, including Quit from Chat.
-      if (controller) setDestination('project');
+      if (controller && openCheckouts.length) setDestination('project');
       const consent = await application.prepareQuit();
       if (
         !consent &&
@@ -167,7 +159,8 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
             setDestination('project');
           }
         }
-        if (details.event instanceof MouseEvent && details.event.detail > 0) restoreFocus(next);
+        if (next !== view && details.event instanceof MouseEvent && details.event.detail > 0)
+          restoreFocus(next);
       }}
       inert={closing || ['prepared', 'disposing', 'disposed', 'failed'].includes(lifecycle.phase)}
       {...stylex.props(workbench.document, styles.shell)}
@@ -191,45 +184,6 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
         }
         run(importFiles(selected, selectDroppedImports(selected, [...event.dataTransfer.files])));
       }}>
-      <header {...stylex.props(styles.toolbar)}>
-        <strong {...stylex.props(styles.title)}>Moonbase</strong>
-        <span role="status">{status}</span>
-        {selectCheckout && controller ? (
-          <Button
-            {...stylex.props(controls.button)}
-            disabled={lifecycle.phase !== 'live' || state?.preserving}
-            onClick={() => run(openCheckout())}>
-            Open checkout
-          </Button>
-        ) : null}
-        {!chat && lifecycle.chat.state !== 'unavailable' ? (
-          <Button
-            {...stylex.props(controls.button)}
-            disabled={
-              lifecycle.phase !== 'live' ||
-              lifecycle.chat.state === 'opening' ||
-              lifecycle.chat.state === 'cleanup-blocked' ||
-              lifecycle.cleanup.pending.includes('chat')
-            }
-            onClick={() => run(application.openChat().then(() => setDestination('chat')))}>
-            Open Chat panel
-          </Button>
-        ) : null}
-        {lifecycle.cleanup.pending.length ? (
-          <span role="status">Finishing panel cleanup…</span>
-        ) : null}
-        {selectClipboardImports && controller ? (
-          <Button
-            hidden={view === 'chat'}
-            {...stylex.props(controls.button)}
-            disabled={!selected || state?.preserving || lifecycle.phase !== 'live'}
-            onClick={() => {
-              if (selected) run(importFiles(selected, selectClipboardImports(selected)));
-            }}>
-            Import clipboard files
-          </Button>
-        ) : null}
-      </header>
       <MainTabs
         checkouts={openCheckouts}
         value={view}
@@ -237,6 +191,17 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
         chatOpen={!!chat}
         disabled={lifecycle.phase !== 'live'}
         preserving={!!state?.preserving}
+        openCheckout={selectCheckout && controller ? () => run(openCheckout()) : undefined}
+        openChat={
+          !chat && lifecycle.chat.state !== 'unavailable'
+            ? () => run(application.openChat().then(() => setDestination('chat')))
+            : undefined
+        }
+        chatDisabled={
+          lifecycle.chat.state === 'opening' ||
+          lifecycle.chat.state === 'cleanup-blocked' ||
+          lifecycle.cleanup.pending.includes('chat')
+        }
         closeCheckout={(checkout) => run(closeCheckout(checkout))}
         closeChat={() => {
           if (!application.closeChat()) {
@@ -244,9 +209,18 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
             return;
           }
           setDestination('project');
-          restoreFocus(projectValue);
+          if (view === 'chat') restoreFocus(projectValue);
         }}
       />
+      {(closing ||
+        lifecycle.phase === 'prepared' ||
+        state?.preserving ||
+        state?.publication ||
+        lifecycle.cleanup.pending.length > 0) && (
+        <div role="status" {...stylex.props(styles.status)}>
+          {lifecycle.cleanup.pending.length ? 'Finishing panel cleanup…' : status}
+        </div>
+      )}
       {lifecycle.chat.state === 'initialization-failed' && view !== 'chat' ? (
         <section
           role="alert"
@@ -283,7 +257,13 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
               controller={controller}
               checkout={selected}
               visible={view !== 'chat'}
-              selectNativeImports={selectNativeImports}
+              selectClipboardImports={
+                selectClipboardImports &&
+                ((checkout) =>
+                  application.getSnapshot().phase === 'live'
+                    ? selectClipboardImports(checkout)
+                    : Promise.resolve([]))
+              }
             />
           </section>
         </Tabs.Panel>
@@ -298,12 +278,12 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
           focus.current.chat = event.target as HTMLElement;
         }}
         {...stylex.props(styles.panel)}>
-        {lifecycle.chatTargets.length > 0 && (
+        {lifecycle.chatTargets.length > 1 && (
           <div {...stylex.props(styles.chatTargetBar)}>
-            <span>Chat target</span>
             <div {...stylex.props(styles.chatTargetChoice)}>
               <Choice
                 label="Chat target"
+                compact
                 value={lifecycle.chatTargetId ?? ''}
                 options={lifecycle.chatTargets.map((target) => ({
                   value: target.id,

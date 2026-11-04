@@ -13,6 +13,8 @@ Reusable service exports consume `@moonbase/contracts` and focused Effect helper
 
 See [local runtime, setup, credentials and qualification](docs/LOCAL.md) for embedded desktop use. Local and remote scopes share their caller’s root runtime; layers create none.
 
+Provider setup publishes maintained Moonbase defaults and SDK-supported reasoning efforts. Local Create validates the chosen effort, stores it with the immutable conversation settings and configures Pi's thinking level before the first Send. Defaults do not override a client's explicit saved preference.
+
 The runtime implementation stays private behind those exports:
 
 - `src/index.ts` keeps configuration types, layers and explicit service wiring.

@@ -30,3 +30,5 @@ bun run check:foundation
 Tests retain the pre-extraction schema assertions, verify public browser/type-only bundle graphs, and reuse unchanged baseline-produced data through the foundation check.
 
 Local Create includes immutable folder/model settings; local host replies contain `mode: "local"` without global settings. Remote requests/replies retain their existing formats. Provider setup ports expose only catalogs/status and live prompt identities; credentials remain privileged. See the [chat boundary](docs/CHAT.md).
+
+Local settings and conversation summaries accept optional `reasoningEffort`. Provider catalogs expose supported efforts, a model's initial effort and a maintained per-provider default. `ChatModelPreference` describes the portable model/effort choice without folder authority; all additions preserve existing field-absent payloads.

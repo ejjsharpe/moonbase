@@ -1,6 +1,11 @@
 import * as Schema from 'effect/Schema';
 import { struct } from './schema.ts';
-import { ChatIdentifierSchema } from './chat-schema.ts';
+import {
+  ChatIdentifierSchema,
+  ChatModelPreferenceSchema,
+  ChatReasoningEffortSchema,
+} from './chat-schema.ts';
+import { optional } from './schema.ts';
 import { ApplicationError } from './errors.ts';
 import type { ProviderCommand, ProviderInput, ProviderOutput } from './providers.ts';
 
@@ -22,9 +27,21 @@ export const ProviderStateSchema = struct({
         name: text(128),
         auth: Schema.Literals(['oauth', 'api_key']),
         configured: Schema.Boolean,
-        models: Schema.mutable(Schema.Array(struct({ modelId: text(256), name: text(256) }))).check(
-          Schema.isMaxLength(4096),
-        ),
+        defaultModel: optional(ChatModelPreferenceSchema),
+        models: Schema.mutable(
+          Schema.Array(
+            struct({
+              modelId: text(256),
+              name: text(256),
+              reasoningEfforts: optional(
+                Schema.mutable(Schema.Array(ChatReasoningEffortSchema)).check(
+                  Schema.isMaxLength(7),
+                ),
+              ),
+              defaultReasoningEffort: optional(ChatReasoningEffortSchema),
+            }),
+          ),
+        ).check(Schema.isMaxLength(4096)),
       }),
     ),
   ).check(Schema.isMaxLength(5)),

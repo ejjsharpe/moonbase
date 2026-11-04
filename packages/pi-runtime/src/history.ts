@@ -54,6 +54,7 @@ export function summarizeConversation(
     createdAt: meta.createdAt,
     cwd: settings.cwd,
     model: `${settings.model.provider}/${settings.model.modelId}`,
+    ...(settings.reasoningEffort ? { reasoningEffort: settings.reasoningEffort } : {}),
   };
 }
 export async function listConversations(
