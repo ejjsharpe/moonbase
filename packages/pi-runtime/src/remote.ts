@@ -351,6 +351,9 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
                 );
               }),
             { bufferSize: 1, strategy: 'sliding' },
+          ).pipe(
+            // A failed queue drains buffered replacements before surfacing its error.
+            Stream.mapEffect((snapshot) => Effect.as(assertGeneration, snapshot)),
           );
         }),
       );

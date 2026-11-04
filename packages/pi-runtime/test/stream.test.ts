@@ -5,7 +5,7 @@ import { Harness } from '@earendil-works/pi-durable';
 import { fixture as piFixture } from './runtime-fixture.ts';
 import { Effect, Exit, Layer, ManagedRuntime, Scope, Stream, Queue } from 'effect';
 import type { ChatClient, ChatSnapshot, ChatStreamFrame } from '@moonbase/contracts/chat';
-import { ConnectionService } from '@moonbase/contracts/services';
+import { ChatService, ConnectionService } from '@moonbase/contracts/services';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import { serveChat } from '../src/server.ts';
@@ -41,7 +41,8 @@ async function fixture(t: TestContext, holdInitial = false) {
     calls: string[] = [];
   let acquisitions = 0,
     releases = 0,
-    current = snapshot;
+    current = snapshot,
+    replacementChecks = 0;
   const bound: ChatClient = {
     command: async (operation) => {
       calls.push(operation);
@@ -80,7 +81,11 @@ async function fixture(t: TestContext, holdInitial = false) {
     getConnection: unavailable,
     connect: unavailable,
     disconnect: unavailable,
-    endpoint: () => Effect.sync(() => endpoint),
+    endpoint: () =>
+      Effect.sync(() => {
+        if (endpoint.connectionId === 'two') replacementChecks++;
+        return endpoint;
+      }),
     watch: () =>
       Stream.fromQueue(changes).pipe(
         Stream.map(
@@ -121,6 +126,10 @@ async function fixture(t: TestContext, holdInitial = false) {
     origin: server.origin,
     token,
     client,
+    runtime,
+    get replacementChecks() {
+      return replacementChecks;
+    },
     calls,
     observe,
     listeners,
@@ -769,4 +778,88 @@ test('a lost challenge body retries without treating its existing read error as 
   assert.equal(f.acquisitions, 1);
   assert(!f.calls.includes('getChat'));
   await w.close();
+});
+
+test('a held public service consumer never dequeues a buffered snapshot after connection generation replacement', async (t) => {
+  const f = await fixture(t),
+    original = fetch,
+    release = Promise.withResolvers<void>();
+  let bufferedRead = false,
+    bufferedQueued = false;
+  t.mock.method(
+    globalThis,
+    'fetch',
+    async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      const response = await original(url, init);
+      if (!String(url).endsWith(P.streamPath)) return response;
+      const reader = response.body!.getReader(),
+        read = reader.read.bind(reader),
+        decoder = new P.FrameDecoder();
+      t.mock.method(reader, 'read', async () => {
+        if (bufferedRead) bufferedQueued = true;
+        const part = await read();
+        if (!part.done)
+          for (const frame of decoder.push(part.value)) {
+            const value = P.json(frame.body) as ChatStreamFrame;
+            if (
+              value.kind === 'snapshot' &&
+              value.offset === 0 &&
+              Buffer.from(value.data, 'base64').length === value.total
+            ) {
+              const snapshot = P.json(Buffer.from(value.data, 'base64')) as ChatSnapshot;
+              if (snapshot.message === 'buffered in generation one') bufferedRead = true;
+            }
+          }
+        return part;
+      });
+      t.mock.method(response.body!, 'getReader', () => reader);
+      return response;
+    },
+  );
+  const seen: ChatSnapshot[] = [];
+  const completion = f.runtime.runPromiseExit(
+    Effect.gen(function* () {
+      const service = yield* ChatService;
+      yield* service.watch({ target }).pipe(
+        Stream.runForEach((value) => {
+          seen.push(value);
+          return seen.length === 1 ? Effect.promise(() => release.promise) : Effect.void;
+        }),
+      );
+    }),
+  );
+  try {
+    await wait(() => seen.length === 1);
+    f.publish({
+      ...snapshot,
+      message: 'buffered in generation one',
+      transcriptBoundary: 'old-boundary',
+    });
+    await wait(() => bufferedQueued);
+    f.replace();
+    await wait(() => f.replacementChecks > 0);
+    release.resolve();
+    const result = await completion;
+    assert(Exit.isFailure(result));
+    if (Exit.isFailure(result))
+      assert(
+        result.cause.reasons.some(
+          (reason) =>
+            'error' in reason &&
+            ApplicationError.is(reason.error) &&
+            reason.error.code === 'Unavailable',
+        ),
+      );
+    assert.equal(
+      seen.length,
+      1,
+      'generation-one queued content must not reach a generation-two consumer',
+    );
+    assert.deepEqual(seen[0].conversation.target, target);
+    await wait(() => f.listeners.size === 0);
+    assert.equal(f.acquisitions, f.releases);
+  } finally {
+    release.resolve();
+    await completion;
+  }
 });
