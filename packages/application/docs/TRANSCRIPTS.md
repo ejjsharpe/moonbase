@@ -95,3 +95,24 @@ The three corrections are separate commits above reviewed implementation `37a6da
 | `bun run test:editor-integration` | 26/26; `/tmp/moonbase-110-review-r1-editor-integration.log` |
 
 Resource-heavy source/process and integration suites ran serially. Native foreground, packaged/manual presentation and final clipboard writes were not exercised; the public #111 handoff remains unchanged. #111 can retain its captured fixed selection while controller iteration verifies later appends; success still means completed validated iteration followed by native final-write authorization, never a progress callback or hydrated preview.
+
+### Round 2 navigation ownership correction
+
+The new held-history race reproduced on `bec0275c666fefd934fa4cec784a4636be3dff3b`: after a disjoint latest snapshot, a read captured under upper entry `e63` merged into the replacement latest window and produced canonical positions `0..48, 96..127, 49..63`. A second public probe showed that publishing a new snapshot from a loading subscriber could redirect the older read before dispatch. Red evidence: `/tmp/moonbase-110-round2-red.log`.
+
+Earlier/later movement now joins any admitted navigation first, skips unavailable boundaries, and freezes historical mode before publishing loading. Around-entry navigation likewise leaves latest mode on admission. Coalesced watch updates therefore retain the captured history window while updating live/status evidence independently. Every awaited navigation boundary rechecks the existing signal/current owner before merging or publishing; superseded jobs retain their existing cleanup, error and finally fences. Failed observations cannot admit read actions that clear their error. No new queue, generation framework, public signature or runtime/Copy change is introduced.
+
+Eight public regressions cover the held bounded page followed by disjoint latest data and complete ordered traversal; synchronous loading-subscriber reentrancy; around/latest supersession with late success and late error while newer loading/error remains visible; held restoration preserving entry/part/relative offset and immutable upper bound; and no-op/failed-observation boundaries. The primary race does not call a presentation view setter. Green evidence: `/tmp/moonbase-110-round2-green.log`.
+
+Qualification for this correction used Node `v26.13.0` and Bun `1.4.4` in the same isolated checkout, above `bec0275` and approved runtime base `23303e0`. The existing Copy proof limit and its public interface are unchanged. Resource-heavy source/process and controlled integration suites ran serially; no app/PR/delegation, real quota/SSH, runtime/contract/UI/saved-state/dependency change, or #111 checkout change was used.
+
+| Command | Result / evidence |
+| --- | --- |
+| `node --experimental-strip-types --test --test-concurrency=1 packages/application/test/transcript.test.ts packages/application/test/application.test.ts packages/application/test/chat-controller.test.ts` | 160/160; `/tmp/moonbase-110-round2-focused.log` |
+| `NX_DAEMON=false bun run typecheck` | 8 tasks passed, 7 cached; `/tmp/moonbase-110-round2-typecheck.log` |
+| `bun run lint`; `bun run format:check`; `git diff --check` | Pass; `/tmp/moonbase-110-round2-{lint,format}.log` |
+| `bun run check:foundation` | Pass, 281 browser inputs and unchanged saved-byte fixtures; `/tmp/moonbase-110-round2-foundation.log` |
+| `NX_DAEMON=false bun run test` | 8 tasks passed, 2 cached; `/tmp/moonbase-110-round2-source.log` |
+| `bun run test:chat-integration` | 12/12; `/tmp/moonbase-110-round2-chat-integration.log` |
+
+Evidence remains source/controlled only. Native foreground, packaged/manual presentation and final clipboard writes were not exercised for this correction.

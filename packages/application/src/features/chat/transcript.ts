@@ -506,7 +506,7 @@ export class TranscriptOwner {
     return anchor ? this.around(anchor.entryId, false) : Promise.resolve();
   }
   private run(name: string, work: (signal: AbortSignal) => Promise<void>) {
-    if (!this.alive) return Promise.resolve();
+    if (!this.current()) return Promise.resolve();
     const old = this.jobs.get(name);
     if (old) return old.promise;
     const job = { abort: new AbortController(), promise: Promise.resolve() };
@@ -537,6 +537,11 @@ export class TranscriptOwner {
   earlier = () => this.move('earlier');
   later = () => this.move('later');
   private move(direction: 'earlier' | 'later') {
+    const pending = this.jobs.get('history');
+    if (pending) return pending.promise;
+    if (!this.current() || !this.state[direction]) return Promise.resolve();
+    // Freeze the reading window before loading can notify a subscriber.
+    this.following = false;
     return this.run('history', async (signal) => {
       const previous = this.start;
       if (
@@ -561,6 +566,7 @@ export class TranscriptOwner {
           { target: this.dependencies.target, cursor },
           signal,
         );
+        checkTranscriptRead(signal, () => this.current());
         if (page.olderCursor === cursor)
           throw makeTranscriptFailure('History cursor did not advance.');
         this.validateEntries(page.entries);
@@ -569,7 +575,7 @@ export class TranscriptOwner {
         this.olderEnd = page.olderCursor === null;
         this.start = Math.max(0, this.records.length - transcriptLimits.displayedRows);
       }
-      this.following = false;
+      checkTranscriptRead(signal, () => this.current());
       if (direction === 'later' && this.start === 0 && this.newerEnd) this.following = true;
       if (this.start !== previous || this.state.entries.length) this.rememberWindow(direction);
       this.publish(true, direction);
@@ -587,6 +593,7 @@ export class TranscriptOwner {
       { target: this.dependencies.target, entryId, ...(cursor ? { cursor } : {}) },
       signal,
     );
+    checkTranscriptRead(signal, () => this.current());
     if (
       !sameTarget(page.target, this.dependencies.target) ||
       page.entryId !== entryId ||
@@ -613,6 +620,7 @@ export class TranscriptOwner {
         : 0;
   }
   around(entryId: string, resetView = true) {
+    this.following = false;
     this.jobs.get('history')?.abort.abort();
     this.jobs.delete('history');
     return this.run('history', async (signal) => {
@@ -622,7 +630,7 @@ export class TranscriptOwner {
           'Unavailable',
         );
       await this.readAround(entryId, undefined, 'earlier', signal, true);
-      this.following = false;
+      checkTranscriptRead(signal, () => this.current());
       if (resetView) this.setView({ ...this.state.view, anchor: { entryId, offset: 0 } });
     });
   }
@@ -632,6 +640,7 @@ export class TranscriptOwner {
     return this.run('history', async (signal) => {
       const previous = this.snapshot;
       const snapshot = await this.command('getChat', { target: this.dependencies.target }, signal);
+      checkTranscriptRead(signal, () => this.current());
       this.records = [];
       this.start = 0;
       this.navigation = undefined;

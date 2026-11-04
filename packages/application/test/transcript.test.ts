@@ -1041,3 +1041,244 @@ test('cancelling a held prefix proof fences progress and retains actual cleanup 
     await iterator.return(undefined);
   }
 });
+
+test('held older navigation keeps its captured window through a disjoint latest snapshot', async (t) => {
+  const f = await transcriptController(t, 64);
+  const entered = Promise.withResolvers<void>(),
+    held = Promise.withResolvers<void>();
+  let upper: string | undefined;
+  f.handlers.set('getChatHistoryAround', async (_input, _signal, fallback) => {
+    const page = fallback() as { upperEntryId: string };
+    if (!upper) {
+      upper = page.upperEntryId;
+      entered.resolve();
+      await held.promise;
+    }
+    return page;
+  });
+  try {
+    const reading = f.controller.older();
+    await entered.promise;
+    assert.equal(upper, 'e63');
+    appendTranscriptEntries(f, 128);
+    f.publish({
+      ...f.fixture.snapshot,
+      entries: f.entries.slice(-32).reverse(),
+      transcriptBoundary: f.entries.at(-1)!.id,
+      olderCursor: '96',
+    });
+    held.resolve();
+    await reading;
+    const seen = { earlier: new Set<string>(), later: new Set<string>() };
+    for (const direction of ['earlier', 'later'] as const) {
+      for (let step = 0; step < 80; step++) {
+        const state = f.controller.getSnapshot().transcript;
+        state.entries.forEach((entry) => seen[direction].add(entry.id));
+        const positions = state.entries.map((entry) =>
+          f.entries.findIndex((value) => value.id === entry.id),
+        );
+        assert.deepEqual(
+          positions,
+          [...positions].sort((a, b) => a - b),
+          'canonical window order',
+        );
+        assert.equal(state.error, null);
+        assert(state.entries.length <= transcriptLimits.displayedRows);
+        assert(state.retained.summaries <= transcriptLimits.summaryRecords);
+        if (!state[direction]) break;
+        await (direction === 'earlier' ? f.controller.older() : f.controller.later());
+      }
+      assert.equal(f.controller.getSnapshot().transcript[direction], false);
+    }
+    assert.deepEqual(
+      seen.earlier,
+      new Set(f.entries.slice(0, 64).map((entry) => entry.id)),
+      'old upper bound stays fixed',
+    );
+    assert.equal(seen.later.size, 128);
+    assert.equal(f.controller.getSnapshot().transcript.atLatest, true);
+    assert.equal(f.controller.getSnapshot().snapshot!.transcriptBoundary, f.entries.at(-1)!.id);
+  } finally {
+    held.resolve();
+  }
+});
+
+test('older navigation captures historical mode before a loading subscriber publishes a new boundary', async (t) => {
+  const f = await transcriptController(t, 64);
+  let published = false;
+  const off = f.controller.subscribe(() => {
+    if (published || !f.controller.getSnapshot().transcript.loading) return;
+    published = true;
+    appendTranscriptEntries(f, 128);
+    f.publish({
+      ...f.fixture.snapshot,
+      entries: f.entries.slice(-32).reverse(),
+      transcriptBoundary: f.entries.at(-1)!.id,
+      olderCursor: '96',
+    });
+  });
+  try {
+    await f.controller.older();
+    assert(published);
+    const request = f.calls.find((call) => call.operation === 'getChatHistoryAround')!.input as {
+      entryId: string;
+    };
+    assert.equal(request.entryId, 'e32');
+    assert.equal(f.controller.getSnapshot().transcript.atLatest, false);
+    assert(
+      f.controller
+        .getSnapshot()
+        .transcript.entries.every(
+          (entry) => f.entries.indexOf(f.entries.find((value) => value.id === entry.id)!) < 64,
+        ),
+    );
+    assert.equal(f.controller.getSnapshot().transcript.error, null);
+  } finally {
+    off();
+  }
+});
+
+for (const replacement of ['around', 'latest'] as const)
+  for (const oldOutcome of ['success', 'error'] as const)
+    test(`${replacement} supersedes held older navigation without late ${oldOutcome} changing its loading or failure`, async (t) => {
+      const f = await transcriptController(t, 64);
+      const oldEntered = Promise.withResolvers<void>(),
+        oldHeld = Promise.withResolvers<void>();
+      const newEntered = Promise.withResolvers<void>(),
+        newHeld = Promise.withResolvers<void>();
+      f.handlers.set('getChatHistoryAround', async (raw, _signal, fallback) => {
+        const page = fallback();
+        if ((raw as { entryId: string }).entryId === 'e32') {
+          oldEntered.resolve();
+          await oldHeld.promise;
+          if (oldOutcome === 'error')
+            throw new ApplicationError({ code: 'Unavailable', message: 'obsolete history failed' });
+        } else {
+          newEntered.resolve();
+          await newHeld.promise;
+        }
+        return page;
+      });
+      f.handlers.set('getChat', async (_raw, _signal, fallback) => {
+        const snapshot = fallback();
+        newEntered.resolve();
+        await newHeld.promise;
+        return snapshot;
+      });
+      try {
+        const old = f.controller.older();
+        await oldEntered.promise;
+        appendTranscriptEntries(f, 128);
+        f.publish({
+          ...f.fixture.snapshot,
+          entries: f.entries.slice(-32).reverse(),
+          transcriptBoundary: f.entries.at(-1)!.id,
+          olderCursor: '96',
+        });
+        const current =
+          replacement === 'around' ? f.controller.jumpToEntry('e10') : f.controller.jumpToLatest();
+        await newEntered.promise;
+        const loading = f.controller.getSnapshot();
+        await old;
+        assert.equal(
+          f.controller.getSnapshot(),
+          loading,
+          'old cancellation/finally cannot clear newer loading',
+        );
+        assert.equal(loading.transcript.loading, true);
+        newHeld.reject(
+          new ApplicationError({ code: 'Unavailable', message: 'newer navigation failed' }),
+        );
+        await current;
+        const failed = f.controller.getSnapshot();
+        assert.equal(failed.transcript.loading, false);
+        assert.match(failed.transcript.error!, /newer navigation failed/);
+        oldHeld.resolve();
+        await tick();
+        assert.equal(
+          f.controller.getSnapshot(),
+          failed,
+          'old settlement cannot clear newer error or merge its page',
+        );
+      } finally {
+        oldHeld.resolve();
+        newHeld.resolve();
+      }
+    });
+
+test('held anchor restoration preserves its upper bound and relative offset through a disjoint snapshot', async (t) => {
+  const f = await transcriptController(t, 64);
+  f.controller.setTranscriptView({
+    anchor: { entryId: 'e16', partId: 'm0.b0', offset: -9 },
+    expanded: ['thought'],
+  });
+  await f.controller.detach();
+  const entered = Promise.withResolvers<void>(),
+    held = Promise.withResolvers<void>();
+  let upper: string | undefined;
+  f.handlers.set('getChatHistoryAround', async (_raw, _signal, fallback) => {
+    const page = fallback() as { upperEntryId: string };
+    if (!upper) {
+      upper = page.upperEntryId;
+      entered.resolve();
+      await held.promise;
+    }
+    return page;
+  });
+  try {
+    const restoring = f.controller.start();
+    await entered.promise;
+    appendTranscriptEntries(f, 128);
+    f.publish({
+      ...f.fixture.snapshot,
+      entries: f.entries.slice(-32).reverse(),
+      transcriptBoundary: f.entries.at(-1)!.id,
+      olderCursor: '96',
+    });
+    held.resolve();
+    await restoring;
+    const state = f.controller.getSnapshot().transcript;
+    assert.equal(upper, 'e63');
+    assert.deepEqual(state.view, {
+      anchor: { entryId: 'e16', partId: 'm0.b0', offset: -9 },
+      expanded: ['thought'],
+    });
+    assert(
+      state.entries.every((entry) => f.entries.findIndex((value) => value.id === entry.id) < 64),
+    );
+    assert.equal(state.atLatest, false);
+    assert.equal(state.error, null);
+    assert(state.later);
+    for (let step = 0; step < 30 && f.controller.getSnapshot().transcript.later; step++)
+      await f.controller.later();
+    assert.equal(f.controller.getSnapshot().transcript.atLatest, true);
+    assert.equal(f.controller.getSnapshot().transcript.entries.at(-1)!.id, f.entries.at(-1)!.id);
+    assert.equal(f.controller.getSnapshot().transcript.error, null);
+  } finally {
+    held.resolve();
+  }
+});
+
+test('navigation at an unavailable boundary or failed observation does not move the window or clear errors', async (t) => {
+  const f = await transcriptController(t, 64);
+  const latest = f.controller.getSnapshot(),
+    calls = f.calls.length;
+  await f.controller.later();
+  assert.equal(f.controller.getSnapshot(), latest);
+  assert.equal(f.calls.length, calls);
+  await f.controller.jumpToEntry('e0');
+  const beginning = f.controller.getSnapshot(),
+    reads = f.calls.length;
+  await f.controller.older();
+  assert.equal(f.controller.getSnapshot(), beginning);
+  assert.equal(f.calls.length, reads);
+  f.fail(new ApplicationError({ code: 'Unauthorized', message: 'observation authority revoked' }));
+  const failed = f.controller.getSnapshot();
+  await f.controller.older();
+  await f.controller.later();
+  await f.controller.jumpToEntry('e10');
+  await f.controller.jumpToLatest();
+  assert.equal(f.controller.getSnapshot(), failed);
+  assert.equal(f.calls.length, reads);
+  assert.match(failed.transcript.error!, /observation authority revoked/);
+});
