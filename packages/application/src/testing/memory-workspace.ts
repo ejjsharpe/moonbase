@@ -360,9 +360,11 @@ export function memoryWorkspace(seeds: Seed[]) {
         }
         return result;
       }),
-    listDirectory: ({ checkout, path, hideIgnored }) =>
+    listDirectory: ({ checkout, path, hideIgnored, includeIgnoredStatus }) =>
       call('listDirectory', () => {
         pathCheck(path, true);
+        if (includeIgnoredStatus === false && hideIgnored)
+          fail('Ignore filtering requires ignore classification.');
         const seed = exact(checkout),
           prefix = path ? path + '/' : '';
         if (path && !entries(checkout).get(path)?.directory)
@@ -372,7 +374,9 @@ export function memoryWorkspace(seeds: Seed[]) {
           .map(([name, entry]) => ({
             path: name,
             directory: entry.directory,
-            ignored: seed.ignored?.some((item) => affected(name, item)) ?? false,
+            ...(includeIgnoredStatus === false
+              ? {}
+              : { ignored: seed.ignored?.some((item) => affected(name, item)) ?? false }),
           }));
         return {
           entries: values
@@ -381,6 +385,20 @@ export function memoryWorkspace(seeds: Seed[]) {
               (a, b) => Number(b.directory) - Number(a.directory) || a.path.localeCompare(b.path),
             ),
           partial: false,
+        };
+      }),
+    getIgnoredPaths: ({ checkout, path, paths }) =>
+      call('getIgnoredPaths', () => {
+        pathCheck(path, true);
+        const seed = exact(checkout);
+        if (paths.length > 20000) fail('Ignore paths exceed their limit.');
+        for (const item of paths) {
+          pathCheck(item);
+          if (item.split('/').slice(0, -1).join('/') !== path)
+            fail('Ignore paths must be immediate directory children.');
+        }
+        return {
+          paths: paths.filter((name) => seed.ignored?.some((item) => affected(name, item))),
         };
       }),
     gitStatus: ({ checkout }) =>

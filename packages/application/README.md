@@ -34,6 +34,9 @@ Editor internals stay private under `src/features/editor/`; consumers continue i
 | `recovery-publications.ts`: exact CAS receipts, retained attempts and scoped debounce | `editor-recovery-readiness.test.ts` |
 | `preservation.ts`: captured Close/Reload/Quit, exact prompts and close history | `editor-preservation-races.test.ts` |
 | `discovery.ts`: checkout watches, selection scopes, cancellation and refresh coalescing | `editor-discovery-activation.test.ts`, `editor-model-lifecycle.test.ts` |
+| `editor.ts`: shared in-flight directory reads, progressive ignore classification and stale-reply fencing | `editor-listing.test.ts` |
+
+Directory navigation publishes all file entries before Git ignore classification completes. Ignored entries remain available for selection, editing and Reveal; later snapshots carry their `ignored` flags for presentation. The saved `tree.hideIgnored` field is retained for recovery compatibility and no longer filters the explorer. Classification uses a child of the caller's read scope, cancels superseded work without delaying entries, reports failures without removing files and fences stale results and disposal.
 
 The existing public model fixture freezes controller signatures at compile time. `application.test.ts` covers aggregate admission/lifecycle; `portable-runtime.test.ts` audits the actual public browser graph, including all three private owners. Tests use public controllers and injected clients rather than private owners.
 

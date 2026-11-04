@@ -31,11 +31,12 @@ const memory = memoryWorkspace([
       'README.md':
         '# Volatile demo\n\nTwo editors share a workspace, with independent buffers and recovery identities.\n',
       'src/example.ts': 'export function double(value: number) {\n  return value * 2;\n}\n',
+      'src/ignored.ts': '// Git-ignored entries remain visible.\n',
       'ignored.txt': 'Hidden when Git-ignored files are filtered.\n',
     },
     head: { 'welcome.ts': "export const greeting = 'Hello';\n" },
     index: { 'welcome.ts': "export const greeting = 'Hello staged';\n" },
-    ignored: ['ignored.txt'],
+    ignored: ['ignored.txt', 'src/ignored.ts'],
   },
   {
     checkout: { ...checkout, checkoutId: 'other', root: '/demo/other' },

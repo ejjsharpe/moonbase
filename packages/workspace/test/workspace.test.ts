@@ -15,6 +15,176 @@ import { join } from 'node:path';
 import { Effect } from 'effect';
 
 import { fixture, rejects } from './workspace-fixture.ts';
+
+test('entries-only listings bypass Git ignore policy and leave classification unknown', async () => {
+  const f = fixture();
+  try {
+    writeFileSync(join(f.root, 'visible.ts'), 'visible');
+    writeFileSync(join(f.base, 'outside-ignore'), '*\n');
+    symlinkSync(join(f.base, 'outside-ignore'), join(f.root, '.gitignore'));
+    const checkout = await f.client.command('openCheckout', { root: f.root });
+    const listing = await f.client.command('listDirectory', {
+      checkout,
+      path: '',
+      includeIgnoredStatus: false,
+    });
+    assert.equal(listing.partial, false);
+    assert.equal(listing.error, undefined);
+    assert.deepEqual(listing.entries, [{ path: 'visible.ts', directory: false }]);
+    const ignored = await f.client.command('getIgnoredPaths', {
+      checkout,
+      path: '',
+      paths: ['visible.ts'],
+    });
+    assert.match(ignored.error!, /Git ignore policy unavailable/);
+    assert.deepEqual(ignored.paths, []);
+    await assert.rejects(
+      f.client.command('listDirectory', {
+        checkout,
+        path: '',
+        includeIgnoredStatus: false,
+        hideIgnored: true,
+      }),
+      rejects('InvalidInput'),
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test('ignore classification validates exact checkout and immediate child paths', async () => {
+  const f = fixture();
+  try {
+    mkdirSync(join(f.root, 'src'));
+    writeFileSync(join(f.root, '.gitignore'), 'hidden.ts\n');
+    writeFileSync(join(f.root, 'src/hidden.ts'), 'hidden');
+    writeFileSync(join(f.root, 'src/visible.ts'), 'visible');
+    const checkout = await f.client.command('openCheckout', { root: f.root });
+    assert.deepEqual(
+      await f.client.command('getIgnoredPaths', {
+        checkout,
+        path: 'src',
+        paths: ['src/hidden.ts', 'src/visible.ts'],
+      }),
+      { paths: ['src/hidden.ts'] },
+    );
+    for (const paths of [
+      ['../outside'],
+      ['.git/config'],
+      ['src/nested/file.ts'],
+      ['other/file.ts'],
+      Array(20001).fill('src/hidden.ts'),
+    ])
+      await assert.rejects(
+        f.client.command('getIgnoredPaths', { checkout, path: 'src', paths }),
+        rejects('InvalidInput'),
+      );
+    await assert.rejects(
+      f.client.command('getIgnoredPaths', {
+        checkout: { ...checkout, hostId: 'remote' },
+        path: 'src',
+        paths: ['src/hidden.ts'],
+      }),
+      rejects('Unauthorized'),
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test('browsing a small folder does not scan unrelated project files', async (t) => {
+  const f = fixture();
+  try {
+    mkdirSync(join(f.root, 'src'));
+    writeFileSync(join(f.root, 'src/visible.ts'), 'visible');
+    writeFileSync(join(f.root, 'src/hidden.ts'), 'hidden');
+    mkdirSync(join(f.root, 'src-fast'));
+    writeFileSync(join(f.root, 'src-fast/visible.ts'), 'visible');
+    writeFileSync(join(f.root, 'src-fast/hidden.ts'), 'hidden');
+    writeFileSync(join(f.root, '.gitignore'), 'hidden.ts\n');
+    mkdirSync(join(f.root, 'unrelated'));
+    for (let index = 0; index < 20100; index++)
+      linkSync(join(f.root, 'src/visible.ts'), join(f.root, 'unrelated', `${index}.ts`));
+    const checkout = await f.client.command('openCheckout', { root: f.root });
+    const fastStart = performance.now();
+    const fast = await f.client.command('listDirectory', {
+      checkout,
+      path: 'src-fast',
+      includeIgnoredStatus: false,
+    });
+    t.diagnostic(
+      `First entries-only listing with 20,100 unrelated files: ${(performance.now() - fastStart).toFixed(1)} ms`,
+    );
+    assert.equal(fast.entries.length, 2);
+    assert(fast.entries.every((entry) => entry.ignored === undefined));
+    const start = performance.now();
+    const listing = await f.client.command('listDirectory', {
+      checkout,
+      path: 'src',
+      hideIgnored: true,
+    });
+    t.diagnostic(
+      `Small-folder listing with 20,100 unrelated files: ${(performance.now() - start).toFixed(1)} ms`,
+    );
+    assert.equal(listing.partial, false, listing.error ?? 'Unexpected partial listing');
+    assert.deepEqual(
+      listing.entries.map((entry) => entry.path),
+      ['src/visible.ts'],
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test('folder listings validate only applicable Git ignore policies and retain policy errors', async () => {
+  const f = fixture();
+  try {
+    mkdirSync(join(f.root, 'src/deep'), { recursive: true });
+    mkdirSync(join(f.root, 'unrelated'));
+    writeFileSync(join(f.root, '.gitignore'), '*.log\nhidden.ts\n');
+    writeFileSync(join(f.root, 'src/.gitignore'), '!hidden.ts\n');
+    for (const name of ['visible.ts', 'hidden.ts', 'hidden.log'])
+      writeFileSync(join(f.root, 'src/deep', name), name);
+    writeFileSync(join(f.base, 'outside-ignore'), '*\n');
+    symlinkSync(join(f.base, 'outside-ignore'), join(f.root, 'unrelated/.gitignore'));
+    symlinkSync(join(f.base, 'outside-ignore'), join(f.root, '.ignore'));
+    const checkout = await f.client.command('openCheckout', { root: f.root });
+    const list = () =>
+      f.client.command('listDirectory', { checkout, path: 'src/deep', hideIgnored: true });
+    const listing = await list();
+    assert.equal(listing.partial, false, listing.error ?? 'Unexpected partial listing');
+    assert.deepEqual(
+      listing.entries.map((entry) => entry.path),
+      ['src/deep/hidden.ts', 'src/deep/visible.ts'],
+    );
+    writeFileSync(join(f.root, 'src/deep/.gitignore'), 'hidden.ts\n');
+    assert(!(await list()).entries.some((entry) => entry.path === 'src/deep/hidden.ts'));
+    for (const policy of [
+      'src/deep/.gitignore',
+      'src/.gitignore',
+      '.gitignore',
+      '.git/info/exclude',
+    ]) {
+      const location = join(f.root, policy);
+      const original = readFileSync(location);
+      rmSync(location);
+      symlinkSync(join(f.base, 'outside-ignore'), location);
+      const unavailable = await list();
+      assert.equal(unavailable.partial, true, policy);
+      assert.match(unavailable.error!, /Git ignore policy unavailable/);
+      assert.equal(
+        unavailable.entries.filter((entry) => /\.(ts|log)$/.test(entry.path)).length,
+        3,
+        'Policy failure must show entries with an observable error',
+      );
+      rmSync(location);
+      writeFileSync(location, original);
+    }
+  } finally {
+    await f.close();
+  }
+});
+
 test('local/remote and root replacement identities, traversal, symlinks, binary, size and hard-link save boundaries reject', async () => {
   const f = fixture();
   try {

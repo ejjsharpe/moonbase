@@ -190,6 +190,9 @@ export class LocalWorkspace {
       listDirectory: call<'listDirectory'>('listDirectory', (input, signal) =>
         this.discovery.listDirectory(input, signal),
       ),
+      getIgnoredPaths: call<'getIgnoredPaths'>('getIgnoredPaths', (input, signal) =>
+        this.discovery.getIgnoredPaths(input, signal),
+      ),
       gitStatus: call<'gitStatus'>('gitStatus', (input, signal) =>
         this.discovery.getStatus(input.checkout, signal),
       ),

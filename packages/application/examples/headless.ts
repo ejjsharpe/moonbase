@@ -61,6 +61,8 @@ function editorCapabilities() {
           return { kind: 'saved', disk, recoveryChanges: [] } as never;
         case 'listDirectory':
           return { entries: [{ path: target.path, directory: false }], partial: false } as never;
+        case 'getIgnoredPaths':
+          return { paths: [] } as never;
         case 'gitStatus':
           return { branch: checkout.branch, changes: [] } as never;
         default:

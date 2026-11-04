@@ -71,6 +71,7 @@ function fixture(
       Effect.succeed({ revision: 0, state: emptyRecovery(clientId), errors: [], operations: [] }),
     saveFile: unavailable,
     listDirectory: unavailable,
+    getIgnoredPaths: unavailable,
     gitStatus: unavailable,
     readComparison: unavailable,
     lookupFiles: unavailable,
