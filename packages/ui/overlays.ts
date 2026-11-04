@@ -20,6 +20,7 @@ export const overlays = stylex.create({
   },
   modelTrigger: { padding: space.xs, fontSize: type.small },
   positioner: { zIndex: 100 },
+  menuBackdrop: { position: 'fixed', inset: 0, zIndex: 99 },
   popup: {
     fontFamily: type.sans,
     fontSize: type.body,
@@ -68,6 +69,23 @@ export const overlays = stylex.create({
     },
     color: colors.text,
     outlineOffset: -2,
+  },
+  menuPopup: {
+    width: 'min(240px, calc(100vw - 16px))',
+    maxHeight: 'var(--available-height)',
+    overflowY: 'auto',
+    padding: space.xs,
+  },
+  menuItem: {
+    outlineWidth: 2,
+    outlineStyle: { default: 'none', ':focus-visible': 'solid' },
+    outlineColor: colors.accent,
+    backgroundColor: {
+      default: 'transparent',
+      '[data-highlighted]:not([data-disabled])': colors.hover,
+    },
+    color: { default: colors.text, '[data-disabled]': colors.muted },
+    cursor: { default: 'default', '[data-disabled]': 'not-allowed' },
   },
   detail: {
     display: 'block',

@@ -23,6 +23,10 @@ const checkout = {
   root: '/demo/moonbase',
   branch: 'main',
 };
+const remoteCheckout = { ...checkout, hostId: 'remote-memory', root: '/demo/remote' };
+const secondCheckout = new URLSearchParams(location.search).has('remote')
+  ? remoteCheckout
+  : checkout;
 const memory = memoryWorkspace([
   {
     checkout,
@@ -42,6 +46,10 @@ const memory = memoryWorkspace([
     checkout: { ...checkout, checkoutId: 'other', root: '/demo/other' },
     files: { 'elsewhere.ts': 'export const other = true;\n' },
   },
+  {
+    checkout: remoteCheckout,
+    files: { 'welcome.ts': '// Controlled remote fixture\n', 'README.md': '# Remote fixture\n' },
+  },
 ]);
 // One demo composition root. Feature packages do not construct runtimes.
 const runtime = ManagedRuntime.make(memory.layer),
@@ -57,8 +65,9 @@ const firstApplication = await createMoonbaseApplication({
 const firstHandle = createRef<WorkbenchHandle>();
 await Promise.all(
   [first, second].map(async (editor) => {
-    await editor.openCheckout(checkout.root);
-    await editor.open({ checkout, path: 'welcome.ts' }, { intent: 'keep' });
+    const target = editor === second ? secondCheckout : checkout;
+    await editor.openCheckout(target.root);
+    await editor.open({ checkout: target, path: 'welcome.ts' }, { intent: 'keep' });
   }),
 );
 const styles = stylex.create({
@@ -151,11 +160,16 @@ function Demo() {
                 : undefined
             }
             selectNativeImports={() => window.demo.selectNativeImports()}
+            selectClipboardImports={
+              new URLSearchParams(location.search).has('clipboard')
+                ? () => window.demo.selectClipboardImports()
+                : undefined
+            }
           />
         </section>
         {!disposed && (
           <section aria-label="Second editor" {...stylex.props(styles.editor, styles.second)}>
-            <Workbench controller={second} checkout={checkout} />
+            <Workbench controller={second} checkout={secondCheckout} />
           </section>
         )}
       </div>
@@ -181,6 +195,7 @@ declare global {
       workbench(): WorkbenchHandle;
       application: typeof firstApplication;
       selectNativeImports(): Promise<string[]>;
+      selectClipboardImports(): Promise<string[]>;
       modelCount(): number;
       diffReady(): boolean;
       client: typeof client;
@@ -196,6 +211,7 @@ window.demo = {
   memory,
   workbench: () => firstHandle.current!,
   selectNativeImports: async () => [],
+  selectClipboardImports: async () => [],
   modelCount: () => monaco.editor.getModels().length,
   diffReady: () =>
     monaco.editor.getDiffEditors().every((editor) => editor.getLineChanges() !== null),

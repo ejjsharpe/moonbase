@@ -4,13 +4,19 @@ import { styles } from './styles.ts';
 import { Icon } from './icon.tsx';
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { filesUI } from '@moonbase/ui/files';
+import { overlays } from '@moonbase/ui/overlays';
+import { ContextMenu } from '@base-ui/react/context-menu';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import {
   checkoutKey,
   readOwn,
   type EditorController,
   type EditorSnapshot,
+  type MutationAction,
 } from '@moonbase/application/editor';
+
+const isContextClick = (event: { button: number; ctrlKey: boolean }) =>
+  event.button === 2 || (event.button === 0 && event.ctrlKey && navigator.platform.includes('Mac'));
 
 export function FilesTree({
   controller,
@@ -18,17 +24,38 @@ export function FilesTree({
   checkout,
   active,
   anchorReset,
+  visible,
+  dialogOpen,
+  canRequestMutation,
+  requestMutation,
 }: {
   controller: EditorController;
   state: EditorSnapshot;
   checkout: CheckoutTarget;
   active: string;
   anchorReset: number;
+  visible: boolean;
+  dialogOpen: boolean;
+  canRequestMutation: (action: MutationAction) => boolean;
+  requestMutation: (action: MutationAction, finalFocus: () => HTMLElement | false) => void;
 }) {
   const tree = readOwn(state.recovery.views, checkout.checkoutId)!.tree,
     treeElement = useRef<HTMLDivElement>(null),
     anchor = useRef<string | null>(null),
     id = useId();
+  const [menu, setMenu] = useState<{
+    checkout: CheckoutTarget;
+    paths: string[];
+    path: string;
+    point: DOMRect;
+  } | null>(null);
+  const popup = useRef<HTMLDivElement>(null),
+    restoreMenuFocus = useRef(true),
+    visibility = useRef(visible);
+  useLayoutEffect(() => {
+    visibility.current = visible;
+    if (dialogOpen) restoreMenuFocus.current = false;
+  }, [visible, dialogOpen]);
   const checkoutIdentity = checkoutKey(checkout),
     expanded = new Set(tree.expanded),
     selected = new Set(tree.selected),
@@ -61,6 +88,38 @@ export function FilesTree({
     });
   }
   visit('', 1);
+  const menuAvailable =
+    !!menu &&
+    visible &&
+    !dialogOpen &&
+    !state.disposed &&
+    checkoutKey(menu.checkout) === checkoutIdentity &&
+    rows.some((row) => row.path === menu.path);
+  useEffect(() => {
+    if (menu && !menuAvailable) {
+      setMenu(null);
+    }
+  }, [menu, menuAvailable]);
+  function returnTreeFocus() {
+    const element = treeElement.current,
+      snapshot = controller.getSnapshot(),
+      recovery = snapshot.recovery;
+    return visibility.current &&
+      !snapshot.disposed &&
+      element?.isConnected &&
+      element.getClientRects().length &&
+      recovery.openCheckoutIds.includes(checkout.checkoutId) &&
+      recovery.checkouts.some((target) => checkoutKey(target) === checkoutIdentity)
+      ? element
+      : false;
+  }
+  function openMenu(path: string, x: number, y: number) {
+    const paths = selected.has(path) ? [...tree.selected] : [path];
+    if (!selected.has(path)) anchor.current = path;
+    restoreMenuFocus.current = true;
+    setMenu({ checkout: { ...checkout }, paths, path, point: DOMRect.fromRect({ x, y }) });
+    controller.tree(checkout, { focus: path, selected: paths });
+  }
   useEffect(() => {
     const element = treeElement.current;
     if (!element) return;
@@ -124,17 +183,28 @@ export function FilesTree({
           rows[focusIndex] ? `${id}-${encodeURIComponent(rows[focusIndex].path)}` : undefined
         }
         {...stylex.props(filesUI.tree, stylex.defaultMarker())}
-        onFocus={(event) => event.currentTarget.focus()}
+        onFocus={(event) => {
+          if (event.currentTarget.contains(event.target)) event.currentTarget.focus();
+        }}
         onScroll={(event) => {
+          if (event.target !== event.currentTarget) return;
+          setMenu(null);
           const top = event.currentTarget.scrollTop;
           setGeometry((old) => ({ ...old, top }));
           controller.tree(checkout, { scroll: top });
         }}
         onKeyDown={(event) => {
+          if (!event.currentTarget.contains(event.target as Node)) return;
           const row = rows[focusIndex];
           if (!row) return;
           let next = focusIndex;
-          if (['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) {
+          if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+            event.preventDefault();
+            event.stopPropagation();
+            const element = document.getElementById(`${id}-${encodeURIComponent(row.path)}`)!;
+            const rect = element.getBoundingClientRect();
+            openMenu(row.path, rect.left, rect.bottom);
+          } else if (['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) {
             event.preventDefault();
             if (event.key === 'Home') {
               next = 0;
@@ -207,7 +277,22 @@ export function FilesTree({
                     selected.has(row.path) && filesUI.selected,
                     tree.focus === row.path && filesUI.focused,
                   )}
+                  onContextMenu={(event) => {
+                    if (!event.currentTarget.contains(event.target as Node)) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openMenu(row.path, event.clientX, event.clientY);
+                  }}
+                  onPointerDown={(event) => {
+                    if (isContextClick(event)) event.preventDefault();
+                  }}
                   onClick={(event) => {
+                    if (
+                      !event.currentTarget.contains(event.target as Node) ||
+                      event.button !== 0 ||
+                      isContextClick(event)
+                    )
+                      return;
                     treeElement.current?.focus();
                     anchor.current = row.path;
                     const additive = event.metaKey || event.ctrlKey;
@@ -228,7 +313,8 @@ export function FilesTree({
                       );
                     }
                   }}
-                  onDoubleClick={() => {
+                  onDoubleClick={(event) => {
+                    if (event.button !== 0 || isContextClick(event)) return;
                     if (!row.directory)
                       void controller.open(
                         { checkout, path: row.path },
@@ -263,6 +349,70 @@ export function FilesTree({
           </p>
         )}
       </div>
+      <ContextMenu.Root
+        open={menuAvailable}
+        onOpenChange={(open) => {
+          if (!open) setMenu(null);
+        }}
+        onOpenChangeComplete={(open) => {
+          if (open) popup.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+        }}>
+        <ContextMenu.Portal>
+          <ContextMenu.Backdrop
+            {...stylex.props(overlays.menuBackdrop)}
+            onClick={() => setMenu(null)}
+          />
+          <ContextMenu.Positioner
+            anchor={menu ? { getBoundingClientRect: () => menu.point } : null}
+            collisionPadding={8}
+            {...stylex.props(overlays.positioner)}>
+            <ContextMenu.Popup
+              ref={popup}
+              aria-label="File actions"
+              finalFocus={() => (restoreMenuFocus.current ? returnTreeFocus() : false)}
+              onBlur={(event) => {
+                if (
+                  event.relatedTarget instanceof Element &&
+                  event.relatedTarget.closest('[role="dialog"]')
+                ) {
+                  restoreMenuFocus.current = false;
+                  setMenu(null);
+                }
+              }}
+              onKeyDownCapture={(event) => {
+                if (event.key === 'Tab') {
+                  restoreMenuFocus.current = false;
+                  setMenu(null);
+                  const element = returnTreeFocus();
+                  if (element) element.focus();
+                  event.stopPropagation();
+                }
+              }}
+              {...stylex.props(overlays.popup, overlays.menuPopup)}>
+              {(['move', 'copy', 'trash'] as const).map((kind) => (
+                <ContextMenu.Item
+                  key={kind}
+                  disabled={
+                    !menu ||
+                    !canRequestMutation({ checkout: menu.checkout, paths: menu.paths, kind })
+                  }
+                  {...stylex.props(overlays.option, overlays.menuItem)}
+                  onClick={() => {
+                    if (!menu) return;
+                    restoreMenuFocus.current = false;
+                    requestMutation(
+                      { checkout: menu.checkout, paths: menu.paths, kind },
+                      returnTreeFocus,
+                    );
+                    setMenu(null);
+                  }}>
+                  {{ move: 'Rename', copy: 'Copy', trash: 'Move to Trash' }[kind]}
+                </ContextMenu.Item>
+              ))}
+            </ContextMenu.Popup>
+          </ContextMenu.Positioner>
+        </ContextMenu.Portal>
+      </ContextMenu.Root>
     </>
   );
 }
