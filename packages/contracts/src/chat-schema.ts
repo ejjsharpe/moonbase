@@ -6,6 +6,8 @@ import { ApplicationError } from './errors.ts';
 import {
   chatPageSize,
   chatPreviewBytes,
+  chatContentChunkBytes,
+  chatManifestPageSize,
   maximumChatInputBytes,
   type ChatCommand,
   type ChatInput,
@@ -51,14 +53,16 @@ export const ChatCreationSettingsSchema = struct({
   cwd: text(4096),
   ...ChatModelPreferenceSchema.fields,
 });
+const features = optional(Schema.mutable(Schema.Array(text(64))).check(Schema.isMaxLength(16)));
 const remoteHostConfiguration = struct({
+  features,
   ...ChatSessionSchema.fields,
   cwd: text(4096),
   model: text(512),
 });
 export const ChatHostConfigurationSchema = Schema.Union([
   remoteHostConfiguration,
-  struct({ ...ChatSessionSchema.fields, mode: Schema.Literal('local') }),
+  struct({ ...ChatSessionSchema.fields, mode: Schema.Literal('local'), features }),
 ]);
 export const ChatSummarySchema = struct({
   target: ChatTargetSchema,
@@ -71,6 +75,79 @@ export const ChatSummarySchema = struct({
 const preview = unicode.check(
   Schema.makeFilter((value) => new TextEncoder().encode(value).length <= chatPreviewBytes),
 );
+const cursor = text(1024);
+const integer = Schema.Number.check(
+  Schema.makeFilter((value) => Number.isSafeInteger(value) && value >= 0),
+);
+const digest = Schema.String.check(Schema.makeFilter((value) => /^[a-f0-9]{64}$/.test(value)));
+export const ChatTranscriptSourceSchema = Schema.Union([
+  struct({
+    kind: Schema.Literal('entry'),
+    target: ChatTargetSchema,
+    entryId: ChatIdentifierSchema,
+  }),
+  struct({
+    kind: Schema.Literal('live'),
+    target: ChatTargetSchema,
+    submissionId: ChatIdentifierSchema,
+    taskId: ChatIdentifierSchema,
+    attempt: integer,
+    incarnation: digest,
+  }),
+]);
+export const ChatTranscriptSelectionSchema = struct({
+  partId: ChatIdentifierSchema,
+  bytes: integer,
+  revision: digest,
+});
+export const ChatTranscriptPartSchema = struct({
+  ...ChatTranscriptSelectionSchema.fields,
+  kind: Schema.Literals([
+    'text',
+    'thinking',
+    'arguments',
+    'executed-arguments',
+    'result',
+    'details',
+    'patch',
+    'diff',
+    'image',
+    'notice',
+  ]),
+  role: Schema.Literals(['user', 'assistant', 'tool', 'system']),
+  availability: Schema.Literals(['available', 'redacted', 'unsupported', 'unavailable']),
+  encoding: Schema.Literals(['utf8', 'base64']),
+  text: preview,
+  truncated: Schema.Boolean,
+  toolName: optional(text(128)),
+  callId: optional(preview),
+  taskId: optional(ChatIdentifierSchema),
+  parentTaskId: optional(ChatIdentifierSchema),
+  call: optional(struct({ entryId: ChatIdentifierSchema, partId: ChatIdentifierSchema })),
+  committed: optional(struct({ entryId: ChatIdentifierSchema, partId: ChatIdentifierSchema })),
+  pairing: optional(Schema.Literals(['matched', 'unmatched', 'ambiguous'])),
+  state: optional(
+    Schema.Literals([
+      'requested',
+      'running',
+      'completed',
+      'failed',
+      'interrupted',
+      'missing-result',
+    ]),
+  ),
+  mimeType: optional(text(128)),
+  droppedBytes: optional(integer),
+  droppedLines: optional(integer),
+});
+export const ChatTranscriptSchema = struct({
+  source: ChatTranscriptSourceSchema,
+  parts: Schema.mutable(Schema.Array(ChatTranscriptPartSchema)).check(
+    Schema.isMaxLength(chatManifestPageSize),
+  ),
+  nextCursor: Schema.NullOr(cursor),
+  thinking: Schema.Literals(['available', 'redacted', 'none', 'pending']),
+});
 export const ChatEntrySchema = struct({
   id: ChatIdentifierSchema,
   role: Schema.Literals(['user', 'assistant', 'tool', 'system']),
@@ -78,8 +155,8 @@ export const ChatEntrySchema = struct({
   truncated: Schema.Boolean,
   toolName: optional(text(128)),
   isError: optional(Schema.Boolean),
+  transcript: optional(ChatTranscriptSchema),
 });
-const cursor = text(1024);
 export const ChatHistoryPageSchema = struct({
   entries: Schema.mutable(Schema.Array(ChatEntrySchema)).check(Schema.isMaxLength(chatPageSize)),
   olderCursor: Schema.NullOr(cursor),
@@ -97,6 +174,7 @@ export const ChatRunSchema = struct({
   text: preview,
   truncated: Schema.Boolean,
   tools: Schema.mutable(Schema.Array(ChatToolActivitySchema)).check(Schema.isMaxLength(8)),
+  transcript: optional(ChatTranscriptSchema),
 });
 export const ChatSnapshotSchema = struct({
   ...ChatHistoryPageSchema.fields,
@@ -104,6 +182,7 @@ export const ChatSnapshotSchema = struct({
   run: Schema.NullOr(ChatRunSchema),
   state: Schema.Literals(['idle', 'running', 'stopped', 'failed', 'uncertain']),
   message: optional(text(512)),
+  transcriptBoundary: optional(Schema.NullOr(ChatIdentifierSchema)),
 });
 const receipt = { target: ChatTargetSchema, requestId: ChatIdentifierSchema };
 export const ChatSendReceiptSchema = Schema.Union([
@@ -122,6 +201,16 @@ export const chatInputSchemas = {
   }),
   getChat: struct({ target: ChatTargetSchema }),
   getChatHistory: struct({ target: ChatTargetSchema, cursor }),
+  getChatTranscriptContent: struct({
+    source: ChatTranscriptSourceSchema,
+    selection: optional(ChatTranscriptSelectionSchema),
+    cursor: optional(cursor),
+  }),
+  getChatHistoryAround: struct({
+    target: ChatTargetSchema,
+    entryId: ChatIdentifierSchema,
+    cursor: optional(cursor),
+  }),
   sendChat: struct({
     target: ChatTargetSchema,
     requestId: ChatIdentifierSchema,
@@ -141,6 +230,55 @@ export const chatOutputSchemas = {
   createChat: struct({ requestId: ChatIdentifierSchema, conversation: ChatSummarySchema }),
   getChat: ChatSnapshotSchema,
   getChatHistory: ChatHistoryPageSchema,
+  getChatTranscriptContent: Schema.Union([
+    struct({
+      kind: Schema.Literal('manifest'),
+      cursor: Schema.NullOr(cursor),
+      ...ChatTranscriptSchema.fields,
+    }),
+    struct({
+      kind: Schema.Literal('content'),
+      cursor: Schema.NullOr(cursor),
+      source: ChatTranscriptSourceSchema,
+      selection: ChatTranscriptSelectionSchema,
+      offset: integer,
+      nextCursor: Schema.NullOr(cursor),
+      encoding: Schema.Literals(['utf8', 'base64']),
+      data: unicode.check(
+        Schema.makeFilter(
+          (value) => new TextEncoder().encode(value).length <= 6 * chatContentChunkBytes,
+        ),
+      ),
+    }).check(
+      Schema.makeFilter((value) => {
+        try {
+          const bytes =
+            value.encoding === 'utf8'
+              ? new TextEncoder().encode(value.data).length
+              : atob(value.data).length;
+          if (value.encoding === 'base64' && btoa(atob(value.data)) !== value.data) return false;
+          const end = value.offset + bytes;
+          return (
+            bytes <= chatContentChunkBytes &&
+            end <= value.selection.bytes &&
+            (value.nextCursor === null
+              ? end === value.selection.bytes
+              : bytes > 0 && end < value.selection.bytes && value.nextCursor !== value.cursor)
+          );
+        } catch {
+          return false;
+        }
+      }),
+    ),
+  ]),
+  getChatHistoryAround: struct({
+    ...ChatHistoryPageSchema.fields,
+    target: ChatTargetSchema,
+    entryId: ChatIdentifierSchema,
+    cursor: Schema.NullOr(cursor),
+    newerCursor: Schema.NullOr(cursor),
+    upperEntryId: ChatIdentifierSchema,
+  }),
   sendChat: ChatSendReceiptSchema,
   getChatSend: Schema.NullOr(ChatSendReceiptSchema),
   stopChat: struct({

@@ -164,6 +164,7 @@ export const serveChat = (config: ChatServerConfiguration, client: ChatClient) =
           let length = 0,
             authenticated = false;
           let timer: ReturnType<typeof setTimeout> | undefined;
+          let dispatchedOperation: string | undefined;
           try {
             timer = setTimeout(() => request.destroy(), 20000);
             if (!/^application\/json(?:\s*;|$)/i.test(request.headers['content-type'] ?? ''))
@@ -195,10 +196,31 @@ export const serveChat = (config: ChatServerConfiguration, client: ChatClient) =
             const envelope = V.object(P.json(bytes), ['operation', 'input']),
               operation = V.command(envelope.operation),
               input = V.input(operation, envelope.input);
-            const value = V.output(operation, await client.command(operation, input), input);
-            send(200, { ok: true, value }, challenge);
+            dispatchedOperation = operation;
+            const controller = new AbortController();
+            const cancelRead = () => {
+              if (!response.writableEnded) controller.abort();
+            };
+            response.once('close', cancelRead);
+            try {
+              const value = V.output(
+                operation,
+                await client.command(
+                  operation,
+                  input,
+                  operation === 'getChatTranscriptContent' || operation === 'getChatHistoryAround'
+                    ? { signal: controller.signal }
+                    : undefined,
+                ),
+                input,
+              );
+              send(200, { ok: true, value }, challenge);
+            } finally {
+              response.off('close', cancelRead);
+            }
           } catch (error) {
-            if (authenticated) send(400, { ok: false, error: P.publicError(error) }, challenge);
+            if (authenticated)
+              send(400, { ok: false, error: P.publicError(error, dispatchedOperation) }, challenge);
             else if (!response.destroyed) {
               response.writeHead(400);
               response.end();

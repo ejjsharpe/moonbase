@@ -54,7 +54,7 @@ export class ChatIpcSession {
     }
     if (v.actorId !== undefined && v.actorId !== this.context.actorId)
       throw new ApplicationError({ code: 'Unauthorized', message: 'Use the configured actor.' });
-    for (const name of ['target', 'session', 'stop'])
+    for (const name of ['target', 'session', 'stop', 'source'])
       if (v[name] !== undefined) this.authority(v[name]);
   }
   async call(kind: unknown, operation: unknown, input: unknown, id: unknown): Promise<Reply> {

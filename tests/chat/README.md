@@ -13,3 +13,5 @@ The suite covers explicit connection and authenticated identity, Create/Send/Sto
 `host.mjs`, `tool-host.mjs`, wrappers and `forward.mjs` are test fixtures, not product transports. The tool host also supplies controlled streamed output to headless chat and desktop tests. Fault injection drops or holds actual production HTTP replies after dispatch.
 
 This is controlled cross-process transport evidence. It does not qualify real SSH authentication/agents/proxies, provider access, packaged/native UI, shipped host notices, physical durability or human acceptance.
+
+Transcript integration additionally covers both read operations, exact identity echoes, wrong conversation/actor/store, lost and tampered response bytes, held replies, cancellation, reconnect generations and independent Stop/unrelated conversations. Forwarding fault controls apply to named operations; existing Send-loss fixtures retain their original default.

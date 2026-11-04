@@ -2,7 +2,7 @@
 
 Shared semantics for browser clients, application handlers and the [Pi local/remote services](../../pi-runtime/README.md). The standalone editor requires none of these capabilities. Changes must preserve the same contract across clients and transports.
 
-`@moonbase/contracts/chat` is browser-safe. `ChatService` provides eight commands and scoped bounded `watch({target})`; `chatCommand`/`chatWatch` are the common handlers. `makeChatClient` uses the existing process runtime. Hosts install Pi; remote clients install the remote service with an injected connection. Browser clients receive no endpoints, keys, provider credentials or database paths.
+`@moonbase/contracts/chat` is browser-safe. `ChatService` provides ten commands and scoped bounded `watch({target})`; `chatCommand`/`chatWatch` are the common handlers. `makeChatClient` uses the existing process runtime. Hosts install Pi; remote clients install the remote service with an injected connection. Browser clients receive no endpoints, keys, provider credentials or database paths.
 
 ## Identity and commands
 
@@ -17,6 +17,8 @@ Mutations bind `(actorId, requestId)` within the configured host/store to the fu
 | `createChat` | Atomically create conversation, metadata and request binding; matching retry returns that conversation |
 | `getChat` | Bounded replacement snapshot with newest history/current run |
 | `getChatHistory` | Older history, newest first, identified by durable entry IDs |
+| `getChatTranscriptContent` | Optional bounded manifest/part reads over exact committed/live sources |
+| `getChatHistoryAround` | Optional bounded history with both continuations around a durable entry |
 | `sendChat` | Submit immutable text/target intent; matching explicit retry reconciles it |
 | `getChatSend` | Query exact intent without submitting; null/reserved does not prove non-admission |
 | `stopChat` | Cancel only the captured conversation/submission/task; null task withdraws only that queued submission |
@@ -56,7 +58,7 @@ The server validates that proof, then creates an independent random 32-byte cano
 
 SHA-256 hashes the exact raw UTF-8 body bytes. The client verifies this proof and expected health before sending any chat input. Cap challenge replies at 8 KiB. The server keeps at most 128 outstanding challenges in its existing HTTP server scope, each bound to its client nonce and a monotonic 20-second expiry. Expire old grants before accepting new ones; reject capacity exhaustion without evicting a grant into an accepted state. Closing/restarting the server drops outstanding grants, making old challenges invalid. This bounded authentication cache is not a durable command/execution store.
 
-`POST /v1/chat` carries UTF-8 JSON `{operation,input}` for exactly the eight commands above, capped at 196 KiB raw request bytes on both client and server: six times the 32 KiB text bound for worst-case JSON escaping, plus 4 KiB for identifiers and envelope fields. The public `maximumChatRequestBytes` constant also bounds serialized desktop IPC input. Decoded text retains its 32 KiB UTF-8 limit. Headers carry `X-Moonbase-Nonce`, `X-Moonbase-Challenge` and the RPC Authorization scheme above. Its proof covers:
+`POST /v1/chat` carries UTF-8 JSON `{operation,input}` for the commands above, capped at 196 KiB raw request bytes on both client and server: six times the 32 KiB text bound for worst-case JSON escaping, plus 4 KiB for identifiers and envelope fields. The public `maximumChatRequestBytes` constant also bounds serialized desktop IPC input. Decoded text retains its 32 KiB UTF-8 limit. Headers carry `X-Moonbase-Nonce`, `X-Moonbase-Challenge` and the RPC Authorization scheme above. Its proof covers:
 
 `["moonbase-chat-v1", "request", clientNonce, challenge, "POST", "/v1/chat", bodySha256]`
 
@@ -77,3 +79,5 @@ Real temporary SQLite, counted faux models/tools, exclusive second-process owner
 ## Provider setup
 
 `providers`/`providers-schema` define portable catalog/status, start-login, prompt-answer, cancel, open-active-URL and sign-out commands. `ProviderSetupService` binds handlers to a privileged owning document ID supplied by the head. Answers carry exact flow/prompt identities; no renderer-selected owner or URL grants authority. Replies contain no credential values or authorization URLs. SDK authentication, model validation and credential persistence belong to Pi runtime.
+
+The additive `transcript-v1` feature, ordered descriptors, source/prefix evidence, byte units, cursors and consistency rules are specified in [structured transcript reads](TRANSCRIPTS.md). No global protocol/version or saved-mutation format changes.

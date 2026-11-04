@@ -70,6 +70,10 @@ function fixture(options: { slowSend?: boolean; cleanupFailure?: boolean } = {})
         assert.equal(input.cursor, 'older');
         return { entries: [], olderCursor: null };
       }),
+    getChatTranscriptContent: () =>
+      Effect.fail(new ApplicationError({ code: 'Incompatible', message: 'Legacy fixture.' })),
+    getChatHistoryAround: () =>
+      Effect.fail(new ApplicationError({ code: 'Incompatible', message: 'Legacy fixture.' })),
     sendChat: (input) =>
       Effect.gen(function* () {
         assert.deepEqual(input.target, target);

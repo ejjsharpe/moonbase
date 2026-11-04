@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
 import { realpath, stat } from 'node:fs/promises';
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
-import { LiveDoc, type Harness, type Cursor, type EntryRecord } from '@earendil-works/pi-durable';
+import { type Harness, type Cursor, type EntryRecord } from '@earendil-works/pi-durable';
 import type {
   ChatCreationSettings,
+  ChatInput,
   ChatOutput,
   ChatSession,
   ChatTarget,
@@ -12,9 +13,21 @@ import type {
   ChatSnapshot,
   ChatRun,
 } from '@moonbase/contracts/chat';
-import { Metadata, cid, getSettings } from './documents.ts';
+import { Metadata, cid, eid, getSettings } from './documents.ts';
 import * as V from './validation.ts';
 import * as S from './private-schema.ts';
+import {
+  NestedSourceRetired,
+  captureTranscript,
+  getLiveSource,
+  projectEntryTranscript,
+  projectLiveTranscript,
+  sealCursor,
+  openCursor,
+  bindTranscriptRead,
+  checkRead,
+  readEntry,
+} from './transcript.ts';
 
 const getCursorIdentity = (identity: string) => createHash('sha256').update(identity).digest('hex');
 const readCursor = (
@@ -103,7 +116,9 @@ export async function readHistory(
   target: ChatTarget,
   encoded?: string,
   base: unknown = {},
+  upperEntryId?: string | null,
 ): Promise<ChatHistoryPage> {
+  if (upperEntryId === null) return { entries: [], olderCursor: null };
   let scan = readCursor(
     encoded,
     'history',
@@ -115,7 +130,11 @@ export async function readHistory(
     const page = await harness.commit(
       (tx) =>
         tx.scanEntries(
-          { conversationId: cid(target.conversationId), order: 'descending' },
+          {
+            conversationId: cid(target.conversationId),
+            order: 'descending',
+            ...(upperEntryId ? { maxEntryId: eid(upperEntryId) } : {}),
+          },
           1,
           scan,
         ),
@@ -126,17 +145,17 @@ export async function readHistory(
       scan = undefined;
       break;
     }
-    const entry = entryPreview(row);
+    const entry = await projectEntry(harness, target, row);
     const candidate = {
       ...(base as object),
-      entries: entry ? [...entries, entry] : entries,
+      entries: [...entries, entry],
       olderCursor: writeCursor(
         page.next,
         'history',
         getCursorIdentity(identity) + ':' + target.conversationId,
       ),
     };
-    if (Buffer.byteLength(JSON.stringify(candidate)) > 250 * 1024)
+    if (Buffer.byteLength(JSON.stringify(candidate)) > 250 * 1024) {
       return {
         entries,
         olderCursor: writeCursor(
@@ -145,7 +164,8 @@ export async function readHistory(
           getCursorIdentity(identity) + ':' + target.conversationId,
         ),
       };
-    if (entry) entries.push(entry);
+    }
+    entries.push(entry);
     scan = page.next;
   } while (scan && ++scanned < 32);
   return {
@@ -158,6 +178,17 @@ export async function readHistory(
   };
 }
 export async function projectSnapshot(
+  ...input: Parameters<typeof projectSnapshotOnce>
+): Promise<ChatSnapshot> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await projectSnapshotOnce(...input);
+    } catch (error) {
+      if (!(error instanceof NestedSourceRetired) || attempt === 2) throw error;
+    }
+  }
+}
+async function projectSnapshotOnce(
   harness: Harness,
   identity: string,
   target: ChatTarget,
@@ -165,37 +196,33 @@ export async function projectSnapshot(
   pending: number,
   local: boolean,
 ): Promise<ChatSnapshot> {
-  const live = await harness.snapshot(LiveDoc, cid(target.conversationId), context);
+  const captured = await captureTranscript(harness, target);
+  const { live, task, latest } = captured;
   let run: ChatRun | null = null,
     parked = false;
   if (live?.run) {
-    const task = await harness.getTask(live.run.taskId, context),
-      submissionId = live.run.inputs[0];
+    const submissionId = live.run.inputs[0];
     parked = (task?.restarts ?? 0) >= 5;
-    const tools = await Promise.all(
-      (live.tools ?? []).slice(0, 8).map(async (tool) => {
-        const entry = tool.entry
-          ? await harness.commit((tx) => tx.entry(tool.entry!), context)
-          : undefined;
-        const result = entry?.model?.find((message) => message.role === 'toolResult');
-        const text =
-          result?.role === 'toolResult'
-            ? result.content
-                .filter((part) => part.type === 'text')
-                .map((part) => part.text)
-                .join('')
-            : (tool.output ?? '');
-        let toolState: 'running' | 'completed' | 'failed' = 'running';
-        if (tool.status === 'done')
-          toolState = result?.role === 'toolResult' && !result.isError ? 'completed' : 'failed';
-        return {
-          taskId: String(tool.taskId ?? live.run!.taskId),
-          name: V.preview(tool.name, 128).text,
-          state: toolState,
-          ...V.preview(text),
-        };
-      }),
-    );
+    const tools = (live.tools ?? []).slice(0, 8).map((tool, index) => {
+      const entry = captured.tools[index];
+      const result = entry?.model?.find((message) => message.role === 'toolResult');
+      const text =
+        result?.role === 'toolResult'
+          ? result.content
+              .filter((part) => part.type === 'text')
+              .map((part) => part.text)
+              .join('')
+          : (tool.output ?? '');
+      let toolState: 'running' | 'completed' | 'failed' = 'running';
+      if (tool.status === 'done')
+        toolState = result?.role === 'toolResult' && !result.isError ? 'completed' : 'failed';
+      return {
+        taskId: String(tool.taskId ?? live.run!.taskId),
+        name: V.preview(tool.name, 128).text,
+        state: toolState,
+        ...V.preview(text),
+      };
+    });
     let runState: ChatRun['state'] = 'running';
     if (task?.abortRequested) runState = 'stopping';
     else if (live.generation?.deferred) runState = 'deferred';
@@ -212,20 +239,6 @@ export async function projectSnapshot(
         tools,
       };
   }
-  const latest = (
-    await harness.commit(
-      (tx) =>
-        tx.scanTasks(
-          {
-            conversationId: cid(target.conversationId),
-            kind: 'pi.generation',
-            order: 'descending',
-          },
-          1,
-        ),
-      context,
-    )
-  ).items[0];
   let state: ChatSnapshot['state'];
   if (parked) state = 'failed';
   else if (run) state = 'running';
@@ -255,19 +268,51 @@ export async function projectSnapshot(
         .filter(Boolean)
         .join(' ');
   }
+  const source = getLiveSource(harness, target, captured);
+  if (run && source) run.transcript = await projectLiveTranscript(harness, source, captured);
   const base = {
+    transcriptBoundary: captured.boundary ? String(captured.boundary) : null,
     conversation,
     run,
     state,
     ...(message === undefined ? {} : { message }),
   };
-  return { ...base, ...(await readHistory(harness, identity, target, undefined, base)) };
+  return {
+    ...base,
+    ...(await readHistory(
+      harness,
+      identity,
+      target,
+      undefined,
+      base,
+      captured.boundary ? String(captured.boundary) : null,
+    )),
+  };
 }
-function entryPreview(entry: EntryRecord): ChatHistoryPage['entries'][number] | null {
+export async function projectEntry(
+  harness: Harness,
+  target: ChatTarget,
+  entry: EntryRecord,
+  signal?: AbortSignal,
+): Promise<ChatHistoryPage['entries'][number]> {
   const message = entry.model?.[0];
-  if (!message) return null;
+  const transcript = await projectEntryTranscript(harness, target, entry, signal);
+  if (!message)
+    return {
+      id: String(entry.id),
+      role: 'system',
+      ...V.preview(transcript.parts[0]?.text ?? 'Transcript record.'),
+      transcript,
+    };
   const role = message.role === 'toolResult' ? 'tool' : message.role;
-  if (role !== 'user' && role !== 'assistant' && role !== 'tool' && role !== 'system') return null;
+  if (role !== 'user' && role !== 'assistant' && role !== 'tool' && role !== 'system')
+    return {
+      id: String(entry.id),
+      role: 'system',
+      text: 'Unsupported transcript record.',
+      truncated: false,
+      transcript,
+    };
   const text =
     typeof message.content === 'string'
       ? message.content
@@ -278,10 +323,107 @@ function entryPreview(entry: EntryRecord): ChatHistoryPage['entries'][number] | 
   const failed = message.role === 'assistant' && message.stopReason === 'error';
   return {
     id: String(entry.id),
+    transcript,
     role,
     ...V.preview(failed ? 'Model response failed.' : text),
     ...(message.role === 'toolResult'
       ? { toolName: V.preview(message.toolName, 128).text, isError: message.isError }
       : {}),
+  };
+}
+
+export async function readHistoryAround(
+  harness: Harness,
+  input: ChatInput<'getChatHistoryAround'>,
+  signal?: AbortSignal,
+): Promise<ChatOutput<'getChatHistoryAround'>> {
+  const { target } = input;
+  await readEntry(harness, target, input.entryId);
+  checkRead(signal);
+  const binding = bindTranscriptRead({ target, entryId: input.entryId });
+  const cursor = input.cursor ? openCursor(harness, input.cursor, 'around', binding) : undefined;
+  const upper =
+    cursor?.upper ??
+    String(
+      (
+        await harness.commit(
+          (tx) =>
+            tx.scanEntries({ conversationId: cid(target.conversationId), order: 'descending' }, 1),
+          context,
+        )
+      ).items[0]!.id,
+    );
+  const entries: ChatHistoryPage['entries'] = [];
+  async function collect(direction: 'older' | 'newer', start: number, limit: number) {
+    let position = start;
+    for (let i = 0; i < limit; i++) {
+      checkRead(signal);
+      if (position < 1 || position > Number(upper)) break;
+      const row = (
+        await harness.commit(
+          (tx) =>
+            tx.scanEntries(
+              {
+                conversationId: cid(target.conversationId),
+                order: direction === 'older' ? 'descending' : 'ascending',
+                ...(direction === 'older'
+                  ? { maxEntryId: eid(String(position)) }
+                  : { minEntryId: eid(String(position)), maxEntryId: eid(upper) }),
+              },
+              1,
+            ),
+          context,
+        )
+      ).items[0];
+      if (!row) break;
+      checkRead(signal);
+      const entry = await projectEntry(harness, target, row, signal);
+      if (Buffer.byteLength(JSON.stringify([...entries, entry])) > 240 * 1024) break;
+      entries.push(entry);
+      position = Number(row.id) + (direction === 'older' ? -1 : 1);
+    }
+  }
+  if (cursor) {
+    if (!cursor.direction || !cursor.upper)
+      return V.fail('InvalidInput', 'Invalid history direction.');
+    await collect(cursor.direction, cursor.position, 32);
+  } else {
+    await collect('older', Number(input.entryId), 16);
+    await collect('newer', Number(input.entryId) + 1, 16);
+  }
+  entries.sort((a, b) => Number(b.id) - Number(a.id));
+  const first = Number(entries.at(-1)?.id ?? input.entryId),
+    last = Number(entries[0]?.id ?? input.entryId);
+  async function continuation(direction: 'older' | 'newer', position: number) {
+    checkRead(signal);
+    if (position < 1 || position > Number(upper)) return null;
+    const exists = (
+      await harness.commit(
+        (tx) =>
+          tx.scanEntries(
+            {
+              conversationId: cid(target.conversationId),
+              order: direction === 'older' ? 'descending' : 'ascending',
+              ...(direction === 'older'
+                ? { maxEntryId: eid(String(position)) }
+                : { minEntryId: eid(String(position)), maxEntryId: eid(upper) }),
+            },
+            1,
+          ),
+        context,
+      )
+    ).items.length;
+    return exists
+      ? sealCursor(harness, { kind: 'around', binding, position, upper, direction })
+      : null;
+  }
+  return {
+    target,
+    cursor: input.cursor ?? null,
+    entryId: input.entryId,
+    upperEntryId: upper,
+    entries,
+    olderCursor: await continuation('older', first - 1),
+    newerCursor: await continuation('newer', last + 1),
   };
 }

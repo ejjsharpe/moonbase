@@ -1,5 +1,5 @@
 // Controlled TCP child only: this is not SSH or host-key qualification.
-import { appendFileSync, existsSync, unlinkSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, unlinkSync } from 'node:fs';
 import net from 'node:net';
 const args = process.argv.slice(2),
   log = process.env.MOONBASE_CHAT_FORWARD_LOG;
@@ -14,7 +14,8 @@ if (args.includes('-G')) {
   const server = net.createServer((socket) => {
     const remote = net.connect({ host: '127.0.0.1', port: remotePort });
     let pending = Buffer.alloc(0),
-      drop = false;
+      drop = false,
+      tamper = false;
     socket.on('data', (chunk) => {
       pending = Buffer.concat([pending, chunk]);
       if (pending.length > 128 * 1024) {
@@ -34,15 +35,23 @@ if (args.includes('-G')) {
           existsSync(process.env.MOONBASE_CHAT_DROP_SEND)
         ) {
           try {
-            if (JSON.parse(body.toString()).operation === 'sendChat') {
+            const directive =
+              readFileSync(process.env.MOONBASE_CHAT_DROP_SEND, 'utf8') || 'sendChat';
+            const operation = directive.replace(/^tamper:/, '');
+            if (JSON.parse(body.toString()).operation === operation) {
               unlinkSync(process.env.MOONBASE_CHAT_DROP_SEND);
-              drop = true;
+              if (directive.startsWith('tamper:')) tamper = true;
+              else drop = true;
             }
           } catch {}
         }
       }
     });
-    remote.on('data', () => {
+    remote.on('data', (chunk) => {
+      if (tamper && chunk.length) {
+        chunk[chunk.length - 1] ^= 1;
+        tamper = false;
+      }
       if (drop) {
         appendFileSync(
           log,

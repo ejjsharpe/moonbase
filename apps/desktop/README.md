@@ -132,3 +132,5 @@ Tests use temporary repositories/user-data, fixture clipboard APIs and owned pro
 Build-generated resources/notices live in ignored `dist`/`release`. Notices come from actual bundled assets/dependencies, including Monaco workers/fonts, ripgrep and Electron/Chromium. Missing npm license files for StyleX, Pi and Standard Webhooks are fetched from exact upstream release commits and SHA256-checked; data-uri-to-buffer supplies its notice in its bundled README.
 
 Human acceptance remains **pending**. Real picker/clipboard/drag gestures, Finder Put Back, VoiceOver/full accessibility, performance, physical durability, Intel execution and signing/notarization/distribution require separate qualification. The previously observed rapid Open→Find dismissal remains unexplained; controlled tests do not establish its resolution.
+
+Chat IPC authorizes nested transcript `source.target` identities as well as ordinary targets before dispatching the optional [content and around-entry reads](../../packages/contracts/docs/TRANSCRIPTS.md). The browser demo remains an explicit legacy capability until its transcript presentation is supplied.

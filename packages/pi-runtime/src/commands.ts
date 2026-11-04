@@ -38,10 +38,12 @@ import {
 import {
   listConversations,
   readHistory,
+  readHistoryAround,
   projectSnapshot,
   summarizeConversation,
 } from './history.ts';
 import type { RuntimeConfiguration, RetainedWork } from './runtime-types.ts';
+import { readTranscriptContent, checkRead } from './transcript.ts';
 import * as V from './validation.ts';
 import * as S from './private-schema.ts';
 
@@ -201,10 +203,11 @@ export class Host {
         ),
       );
       if (mutation) this.mutations++;
-      const admission =
-        operation === 'sendChat'
-          ? this.admission((data as ChatInput<'sendChat'>).target.conversationId, invoke)
-          : Effect.uninterruptible(invoke);
+      let admission = invoke;
+      if (operation === 'sendChat')
+        admission = this.admission((data as ChatInput<'sendChat'>).target.conversationId, invoke);
+      else if (operation !== 'getChatTranscriptContent' && operation !== 'getChatHistoryAround')
+        admission = Effect.uninterruptible(invoke);
       return yield* this.own(
         preflight.pipe(
           Effect.andThen(admission),
@@ -217,15 +220,52 @@ export class Host {
       );
     });
   }
+  read<A>(handle: (signal: AbortSignal) => Promise<A>): Effect.Effect<A, ApplicationError> {
+    return Effect.acquireUseRelease(
+      Effect.sync(() => {
+        const controller = new AbortController();
+        const settled = handle(controller.signal).then(Exit.succeed, (error) =>
+          Exit.fail(safeError(error)),
+        );
+        return { controller, settled };
+      }),
+      ({ settled }) => Effect.promise(() => settled).pipe(Effect.flatMap((exit) => exit)),
+      ({ controller, settled }) =>
+        Effect.sync(() => controller.abort()).pipe(
+          // Caller cancellation ends its join; root work retains the actual SDK Promise until settlement.
+          Effect.andThen(Effect.promise(() => settled)),
+        ),
+    );
+  }
+  getTranscriptContent(d: ChatInput<'getChatTranscriptContent'>) {
+    return this.read(async (signal) => {
+      await this.metadata(d.source.target);
+      checkRead(signal);
+      return readTranscriptContent(this.harness, d, signal);
+    });
+  }
+  getHistoryAround(d: ChatInput<'getChatHistoryAround'>) {
+    return this.read(async (signal) => {
+      await this.metadata(d.target);
+      checkRead(signal);
+      return readHistoryAround(this.harness, d, signal);
+    });
+  }
   async getHost(d: ChatInput<'getChatHost'>): Promise<ChatOutput<'getChatHost'>> {
     if (!V.sameHost(d.host, this.config.host))
       V.fail('Incompatible', 'Chat host/store does not match this host.');
     S.savedStore(await this.harness.snapshot(Store, 'identity', context));
     if ('mode' in this.config)
-      return { host: { ...this.config.host }, actorId: this.config.actorId, mode: 'local' };
+      return {
+        host: { ...this.config.host },
+        actorId: this.config.actorId,
+        mode: 'local',
+        features: ['transcript-v1'],
+      };
     return {
       host: { ...this.config.host },
       actorId: this.config.actorId,
+      features: ['transcript-v1'],
       cwd: this.config.cwd,
       model: `${this.config.model.provider}/${this.config.model.modelId}`,
     };

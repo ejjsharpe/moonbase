@@ -49,3 +49,5 @@ bun run --cwd packages/application typecheck
 bun run --cwd packages/application lint
 bun run --cwd packages/application test
 ```
+
+Runtime-bound chat clients and shared dispatch also carry the optional [structured transcript reads](../contracts/docs/TRANSCRIPTS.md). The legacy controller and controlled demo capabilities do not advertise structured transcript support; navigation/hydration presentation is composed separately.

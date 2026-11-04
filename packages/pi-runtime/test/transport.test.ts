@@ -1255,3 +1255,122 @@ test('R1 incomplete pre-authentication request hits its real deadline without a 
     request?.destroy();
   }
 });
+
+test('legacy host replies without features/descriptors keep existing remote chat usable', async (t) => {
+  const f = await setup(t),
+    original = fetch;
+  t.mock.method(globalThis, 'fetch', async (...args: Parameters<typeof fetch>) => {
+    const response = await original(...args);
+    if (String(args[0]) !== f.origin + '/v1/chat') return response;
+    const request = JSON.parse(String(args[1]?.body)),
+      envelope = await response.json();
+    if (envelope.ok && request.operation === 'getChatHost') delete envelope.value.features;
+    if (envelope.ok && request.operation === 'getChat') {
+      delete envelope.value.transcriptBoundary;
+      if (envelope.value.run) delete envelope.value.run.transcript;
+      for (const entry of envelope.value.entries) delete entry.transcript;
+    }
+    const bytes = JSON.stringify(envelope),
+      headers = new Headers(response.headers);
+    headers.set(
+      'x-moonbase-proof',
+      mac(
+        f.token,
+        'response',
+        headers.get('x-moonbase-nonce'),
+        headers.get('x-moonbase-challenge'),
+        response.status,
+        hash(bytes),
+      ),
+    );
+    headers.delete('content-length');
+    return new Response(bytes, { status: response.status, headers });
+  });
+  assert.equal((await f.remote.command('getChatHost', { host })).features, undefined);
+  const target = (
+    await f.remote.command('createChat', { session, requestId: 'legacy', title: 'Legacy' })
+  ).conversation.target;
+  f.faux.setResponses([fauxAssistantMessage('Legacy completed')]);
+  const receipt = await f.remote.command('sendChat', {
+    target,
+    requestId: 'send',
+    text: 'Legacy prompt',
+  });
+  assert.equal(receipt.admission, 'admitted');
+  let view = await f.remote.command('getChat', { target });
+  for (let i = 0; view.run && i < 300; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    view = await f.remote.command('getChat', { target });
+  }
+  assert(view.entries.some((entry) => entry.text === 'Legacy completed'));
+  assert(view.entries.every((entry) => entry.transcript === undefined));
+  assert.equal(f.faux.state.callCount, 1);
+});
+
+test('transcript output validation rejects authenticated source/selection/cursor/target substitution', async (t) => {
+  const f = await setup(t),
+    target = (
+      await f.client.command('createChat', { session, requestId: 'source', title: 'Source' })
+    ).conversation.target;
+  f.faux.setResponses([fauxAssistantMessage('Retained')]);
+  await f.client.command('sendChat', { target, requestId: 'send', text: 'User' });
+  let view = await f.client.command('getChat', { target });
+  for (let i = 0; !view.entries.some((entry) => entry.role === 'user') && i < 300; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    view = await f.client.command('getChat', { target });
+  }
+  const source = view.entries.find((entry) => entry.role === 'user')!.transcript!.source;
+  const descriptor = view.entries.find((entry) => entry.role === 'user')!.transcript!.parts[0];
+  const selection = {
+    partId: descriptor.partId,
+    bytes: descriptor.bytes,
+    revision: descriptor.revision,
+  };
+  const original = fetch;
+  let change: (value: Record<string, unknown>) => void = () => {};
+  t.mock.method(globalThis, 'fetch', async (...args: Parameters<typeof fetch>) => {
+    const response = await original(...args);
+    if (String(args[0]) !== f.origin + '/v1/chat') return response;
+    const envelope = await response.json();
+    if (envelope.ok) change(envelope.value);
+    const bytes = JSON.stringify(envelope),
+      headers = new Headers(response.headers);
+    headers.set(
+      'x-moonbase-proof',
+      mac(
+        f.token,
+        'response',
+        headers.get('x-moonbase-nonce'),
+        headers.get('x-moonbase-challenge'),
+        response.status,
+        hash(bytes),
+      ),
+    );
+    headers.delete('content-length');
+    return new Response(bytes, { status: response.status, headers });
+  });
+  for (const substitute of [
+    (value: Record<string, unknown>) => {
+      value.source = { ...source, target: { ...target, actorId: 'other' } };
+    },
+    (value: Record<string, unknown>) => {
+      value.selection = { ...selection, partId: 'other' };
+    },
+    (value: Record<string, unknown>) => {
+      value.cursor = 'other';
+    },
+  ]) {
+    change = substitute;
+    await assert.rejects(f.remote.command('getChatTranscriptContent', { source, selection }), {
+      code: 'Incompatible',
+    });
+  }
+  change = (value) => {
+    value.entryId = 'other';
+  };
+  assert(source.kind === 'entry');
+  await assert.rejects(
+    f.remote.command('getChatHistoryAround', { target, entryId: source.entryId }),
+    { code: 'Incompatible' },
+  );
+});
