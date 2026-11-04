@@ -1,4 +1,4 @@
-import { marked, type Token, type Tokens } from 'marked';
+import { marked, type Token } from 'marked';
 import { locateFences, type CodeSource } from '../../chat/transcript-source.ts';
 export { locateFences } from '../../chat/transcript-source.ts';
 
@@ -27,49 +27,9 @@ export class MarkdownCache {
     } catch {
       tokens = [{ type: 'html', raw: source, text: source, block: true, pre: true }];
     }
-    const fences = locateFences(source);
-    const normalized = source.replace(/\r\n?/g, '\n');
-    let originalOffset = 0,
-      normalizedOffset = 0;
-    const locations = fences.map((fence) => {
-      normalizedOffset += source.slice(originalOffset, fence.start).replace(/\r\n?/g, '\n').length;
-      const offset = normalizedOffset;
-      const normalizedFence = source.slice(fence.start, fence.end).replace(/\r\n?/g, '\n');
-      normalizedOffset += normalizedFence.length;
-      originalOffset = fence.end;
-      return { fence, offset, end: offset + normalizedFence.trimEnd().length };
+    locateFences(source, tokens, (token, location) => {
+      (token as LocatedToken).sourceCode = location;
     });
-    let position = 0,
-      location = 0;
-    for (const outer of tokens) {
-      const start = normalized.indexOf(outer.raw, position);
-      if (start < 0) continue;
-      const end = start + outer.raw.length;
-      position = end;
-      while (locations[location] && locations[location]!.offset < start) location++;
-      const candidates: (typeof locations)[number][] = [];
-      while (locations[location] && locations[location]!.offset < end)
-        candidates.push(locations[location++]!);
-      let candidateIndex = 0;
-      marked.walkTokens([outer], (token) => {
-        if (token.type !== 'code') return;
-        if ((token as Tokens.Code).codeBlockStyle === 'indented') {
-          // Literal fences in this region cannot belong to a later fenced-code token.
-          candidateIndex += locateFences(token.raw).length;
-          return;
-        }
-        const candidate = candidates[candidateIndex++];
-        if (
-          candidate &&
-          candidate.fence.text.replace(/\r\n?/g, '\n').replace(/\n$/, '') ===
-            (token as Tokens.Code).text
-        )
-          (token as LocatedToken).sourceCode = {
-            ...candidate.fence,
-            closed: candidate.fence.closed && candidate.end <= end,
-          };
-      });
-    }
     const blocks = tokens.map((token) => ({ token, signature: JSON.stringify(token) }));
     const size = bytes(key) + bytes(source) + bytes(JSON.stringify(blocks));
     if (old) {

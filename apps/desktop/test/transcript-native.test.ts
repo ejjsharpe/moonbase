@@ -27,6 +27,79 @@ const select = (part: ChatTranscriptPart) => ({
   bytes: part.bytes,
   revision: part.revision,
 });
+for (const [name, text, start, body] of [
+  [
+    'unclosed indented literal',
+    '- item\n\n      ```js\n      literal\n\n  ```js\r\n  actual 🌔\t  \r\n  ```\r\n',
+    35,
+    'actual 🌔\t  \r\n',
+  ],
+  ['tabbed list continuation', '- item\n\n\t```js\r\n\t🌔 é\t  \r\n\t```\r\n', 8, '🌔 é\t  \r\n'],
+  ['tabbed quote', '>\t```js\r\n>\t🌔 é\t  \r\n>\t```\r\n', 0, '🌔 é\t  \r\n'],
+  ['tab after list marker', '-\t```js\r\n\t🌔 é\t  \r\n\t```\r\n', 0, '🌔 é\t  \r\n'],
+  ['nested tabbed list', '- item\n\n\t- ```js\r\n\t  🌔 é\t  \r\n\t  ```\r\n', 8, '🌔 é\t  \r\n'],
+  [
+    'list and quote tab columns retain a body tab',
+    '- >\t```js\r\n  >\t\t🌔 é\t  \r\n  >\t```\r\n',
+    0,
+    '\t🌔 é\t  \r\n',
+  ],
+] as const) {
+  test(`R2 renderer-selected native Copy: ${name}`, async () => {
+    const f = fixture(false, text);
+    try {
+      const blocks = new MarkdownCache().parse(name, '1', text);
+      const code: LocatedToken[] = [];
+      marked.walkTokens(
+        blocks.map((block) => block.token),
+        (token) => {
+          if (token.type === 'code' && token.codeBlockStyle !== 'indented') code.push(token);
+        },
+      );
+      assert.equal(code.length, 1);
+      assert.equal(code[0]!.sourceCode?.start, start);
+      await f.actions.copy({
+        source: f.source,
+        selection: select(f.part),
+        code: { start: code[0]!.sourceCode!.start },
+      });
+      assert.deepEqual(f.writes, [body]);
+    } finally {
+      await f.owner.dispose();
+    }
+  });
+  test(`R2 native validates original source region: ${name}`, async () => {
+    const f = fixture(false, text);
+    try {
+      await f.actions.copy({ source: f.source, selection: select(f.part), code: { start } });
+      assert.deepEqual(f.writes, [body]);
+    } finally {
+      await f.owner.dispose();
+    }
+  });
+}
+test('native rejects fence-looking offsets in classified indented and HTML regions', async () => {
+  for (const text of [
+    '- item\n\n      ```js\n      literal\n\n  ```js\r\n  actual 🌔\t  \r\n  ```\r\n',
+    '- item\n\n      ```js\n      same\n      ```\n\n  ```js\r\n  same\r\n  ```\r\n',
+    '<pre>\n```js\nmodel HTML\n```\n</pre>\n\n```js\r\nactual 🌔\r\n```\r\n',
+  ]) {
+    const f = fixture(false, text);
+    try {
+      await assert.rejects(
+        f.actions.copy({
+          source: f.source,
+          selection: select(f.part),
+          code: { start: text.startsWith('-') ? 8 : 6 },
+        }),
+        { code: 'InvalidInput' },
+      );
+      assert.deepEqual(f.writes, []);
+    } finally {
+      await f.owner.dispose();
+    }
+  }
+});
 for (const [name, indented, body] of [
   ['repeated mixed-ending body', 'same', 'same'],
   ['different Unicode/whitespace body', 'other', '🌔 é\t  '],

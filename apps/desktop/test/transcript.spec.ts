@@ -10,6 +10,32 @@ async function open(page: Page) {
 const transcript = (page: Page) =>
   page.getByRole('region', { name: 'Chat transcript', exact: true });
 const answer = (page: Page) => page.locator('[data-transcript-entry="reading-179"]');
+for (const [name, source, count, body] of [
+  [
+    'unclosed indented literal',
+    '- item\n\n      ```js\n      literal\n\n  ```js\r\n  actual 🌔\t  \r\n  ```\r\n',
+    2,
+    'actual 🌔\t  \r\n',
+  ],
+  ['tabbed list continuation', '- item\n\n\t```js\r\n\t🌔 é\t  \r\n\t```\r\n', 1, '🌔 é\t  \r\n'],
+  ['tabbed quote', '>\t```js\r\n>\t🌔 é\t  \r\n>\t```\r\n', 1, '🌔 é\t  \r\n'],
+] as const)
+  test(`R2 code Copy preserves original source: ${name}`, async ({ page }) => {
+    await open(page);
+    await page.evaluate((source) => window.demo.transcript!.live(source), source);
+    const live = page.locator('[data-transcript-live]');
+    await expect(live.locator('pre')).toHaveCount(count);
+    await expect(live.locator('pre').last()).toContainText(
+      name.startsWith('unclosed') ? 'actual 🌔' : '🌔 é',
+    );
+    await expect(live.getByRole('button', { name: 'Copy code', exact: true })).toHaveCount(1, {
+      timeout: 1000,
+    });
+    await live.getByRole('button', { name: 'Copy code', exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1))).toBe(body);
+    await mkdir(output, { recursive: true });
+    await page.screenshot({ path: resolve(output, `r2-${name.replaceAll(' ', '-')}.png`) });
+  });
 test('latest snapshot recovery diagnostics survive running metadata and pinned old live DOM', async ({
   page,
 }) => {
