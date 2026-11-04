@@ -21,6 +21,10 @@ test('safe GFM, literal user content, progressive source, exact native callbacks
   page.on('pageerror', (error) => errors.push(error.message));
   await open(page);
   const row = answer(page);
+  await expect(page.locator('[data-transcript-entry="reading-178"] code')).toHaveCount(0);
+  await expect(page.locator('[data-transcript-entry="reading-178"] pre')).toContainText(
+    '```typescript',
+  );
   await expect(row.locator('table')).toHaveCount(1);
   await expect(row.locator('blockquote')).toHaveCount(1);
   await expect(row.locator('ul')).toHaveCount(2);
@@ -36,14 +40,19 @@ test('safe GFM, literal user content, progressive source, exact native callbacks
   await expect
     .poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1)))
     .toBe('  const moon = "🌔";\t\r\nconsole.log(moon);\r\n');
-  await row.getByRole('button', { name: 'result', exact: true }).click();
+  await row.getByRole('button', { name: 'Output', exact: true }).click();
   await expect(row.getByText(/Read more/)).toBeVisible();
   await row.getByRole('button', { name: 'Copy part', exact: true }).first().click();
   await expect
     .poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1)?.length))
     .toBeGreaterThan(90000);
   await row.getByRole('button', { name: 'Load more parts' }).click();
-  await expect(row.getByRole('button', { name: /thinking.*redacted/ })).toBeVisible();
+  await expect(row.getByRole('button', { name: /Thinking.*redacted/ })).toBeVisible();
+  await expect(row.getByRole('button', { name: 'Load more parts' })).toHaveCount(0);
+  await row.getByRole('button', { name: /Notice.*unsupported/ }).click();
+  await expect(
+    row.getByText('Published unknown record description', { exact: true }),
+  ).toBeVisible();
   await mkdir(output, { recursive: true });
   await page.setViewportSize({ width: 1440, height: 900 });
   await row.getByRole('heading').scrollIntoViewIfNeeded();
@@ -145,7 +154,23 @@ test('128-row reuse, unchanged sibling DOM, selection/focus and anchors during l
   ).toBe(position!.entryId);
   await page.setViewportSize({ width: 900, height: 700 });
   await page.getByRole('button', { name: 'Jump to latest', exact: true }).click();
-  await expect(page.getByRole('article', { name: 'Live response' })).toBeVisible();
+  const live = page.getByRole('article', { name: 'Live response' });
+  await expect(live).toBeVisible();
+  const latestBefore = await page.evaluate(() => ({ ...window.demo.transcript!.metrics }));
+  for (let index = 0; index < 10; index++) {
+    await page.evaluate(
+      (index) => window.demo.transcript!.live(`Visible live update ${index}`),
+      index,
+    );
+    await expect(live.getByText(`Visible live update ${index}`, { exact: true })).toBeVisible();
+  }
+  const latestAfter = await page.evaluate(() => ({ ...window.demo.transcript!.metrics }));
+  expect(latestAfter.lex - latestBefore.lex).toBe(10);
+  expect(latestAfter.tokenize - latestBefore.tokenize).toBe(0);
+  await writeFile(
+    resolve(output, 'visible-live-reuse.json'),
+    JSON.stringify({ before: latestBefore, after: latestAfter, visibleUpdates: 10 }, null, 2),
+  );
 });
 
 test('incomplete/unknown/oversized code remains readable and copyable; fence/reference changes invalidate only affected output', async ({
@@ -220,9 +245,8 @@ test('automatic and keyboard history loading preserve semantic viewport anchors 
   const initial = await page.evaluate(
     () => window.demo.application.chat!.getSnapshot().transcript.entries.length,
   );
-  await transcript(page).evaluate((element) => {
-    element.scrollTop = 20;
-  });
+  await transcript(page).hover();
+  await page.mouse.wheel(0, -100000);
   await expect
     .poll(() =>
       page.evaluate(() => window.demo.application.chat!.getSnapshot().transcript.entries.length),
@@ -251,4 +275,35 @@ test('automatic and keyboard history loading preserve semantic viewport anchors 
       ),
     )
     .toBe(anchor!.entryId);
+});
+
+test('history retry repeats the captured navigation direction after a public read failure', async ({
+  page,
+}) => {
+  await open(page);
+  await page.getByRole('button', { name: 'Load earlier', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Read later', exact: true })).toBeEnabled();
+  await page.evaluate(() => {
+    const client = window.demo.chat.dependencies.chat,
+      original = client.command;
+    let failed = false;
+    client.command = async (operation, input, options) => {
+      if (operation === 'getChatHistoryAround') {
+        window.demo.chat.calls.push('navigation:' + JSON.stringify(input));
+        if (!failed) {
+          failed = true;
+          throw Error('Controlled history read failure');
+        }
+      }
+      return original(operation, input, options) as never;
+    };
+  });
+  await page.getByRole('button', { name: 'Read later', exact: true }).click();
+  await page.getByRole('button', { name: 'Retry history', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Retry history', exact: true })).toHaveCount(0);
+  const reads = await page.evaluate(() =>
+    window.demo.chat.calls.filter((call) => call.startsWith('navigation:')),
+  );
+  expect(reads).toHaveLength(2);
+  expect(reads[1]).toBe(reads[0]);
 });

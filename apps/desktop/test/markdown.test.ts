@@ -1,3 +1,4 @@
+import { getTranscriptDisclosureId } from '../src/chat/transcript-source.ts';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
@@ -54,4 +55,24 @@ test('highlighting limits never limit source and explicit HTTP(S) is the sole op
   ])
     assert.equal(getExternalLink(link), null);
   assert.equal(getExternalLink('https://example.com'), 'https://example.com/');
+});
+
+test('quote prefixes with fence-like text cannot make source-location matching backtrack', () => {
+  assert.deepEqual(locateFences('> '.repeat(5000) + 'not a fence ``` later'), []);
+  const source = '1. item\n\n    ```ts\r\n    🌔\r\n    ```\r\n';
+  assert.equal(locateFences(source)[0]!.text, '🌔\r\n');
+  const cache = new MarkdownCache();
+  const blocks = cache.parse('deep', '1', '> '.repeat(1000) + 'literal');
+  assert.ok(blocks.length);
+});
+
+test('disclosure IDs preserve exact identities within application memory bounds', async () => {
+  const first = await getTranscriptDisclosureId('🌔'.repeat(64), 'part'.repeat(64));
+  assert.ok(Buffer.byteLength(first) <= 256);
+  assert.equal(await getTranscriptDisclosureId('🌔'.repeat(64), 'part'.repeat(64)), first);
+  assert.notEqual(await getTranscriptDisclosureId('🌔'.repeat(64), 'other'.repeat(50)), first);
+  assert.notEqual(
+    await getTranscriptDisclosureId('entry:part', 'tail'),
+    await getTranscriptDisclosureId('entry', 'part:tail'),
+  );
 });

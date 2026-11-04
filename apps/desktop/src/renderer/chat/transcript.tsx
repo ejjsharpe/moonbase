@@ -6,6 +6,7 @@ import { colors, layout, radius, space, type } from '@moonbase/ui/tokens.stylex'
 import type { ChatController, ChatState, TranscriptContentState } from '@moonbase/application/chat';
 import type { ChatEntry, ChatTranscript, ChatTranscriptPart } from '@moonbase/contracts/chat';
 import type { TranscriptNative } from '../../chat/wire.ts';
+import { getTranscriptDisclosureId } from '../../chat/transcript-source.ts';
 import { Markdown } from './markdown.tsx';
 import { MarkdownCache } from './markdown-model.ts';
 
@@ -31,6 +32,8 @@ export function Transcript({
   const [following, setFollowing] = useState(!state.transcript.view.anchor);
   const [notice, setNotice] = useState<{ error: boolean; text: string } | null>(null);
   const navigation = useRef(false);
+  const topIntent = useRef(false);
+  const lastMove = useRef<'earlier' | 'later' | 'latest'>('earlier');
   const jobs = useRef(new Set<AbortController>());
   const [cache] = useState(() => new MarkdownCache());
   useEffect(
@@ -148,6 +151,8 @@ export function Transcript({
   }, [restore]);
   const move = useCallback(
     (direction: 'earlier' | 'later') => {
+      topIntent.current = false;
+      lastMove.current = direction;
       follow.current = false;
       setFollowing(false);
       capture();
@@ -156,6 +161,7 @@ export function Transcript({
       void pending.finally(() =>
         requestAnimationFrame(() => {
           navigation.current = false;
+          topIntent.current = false;
           restore();
           capture();
         }),
@@ -177,6 +183,8 @@ export function Transcript({
     } else move('earlier');
   }, [capture, move, earlierRow]);
   const latest = () => {
+    topIntent.current = false;
+    lastMove.current = 'latest';
     setEarlierRow(false);
     follow.current = true;
     anchor.current = null;
@@ -193,6 +201,8 @@ export function Transcript({
     setFollowing(follow.current);
     capture();
     if (
+      topIntent.current &&
+      !navigation.current &&
       element.scrollTop < 120 &&
       !follow.current &&
       state.transcript.earlier &&
@@ -216,7 +226,16 @@ export function Transcript({
       onWheel={(event) => {
         if (event.deltaY < 0) {
           follow.current = false;
+          topIntent.current = true;
           setFollowing(false);
+          if (
+            event.currentTarget.scrollTop < 120 &&
+            state.transcript.earlier &&
+            !state.transcript.loading &&
+            !navigation.current &&
+            window.getSelection()?.isCollapsed !== false
+          )
+            earlier();
         }
       }}
       onKeyDown={(event) => {
@@ -225,10 +244,12 @@ export function Transcript({
           ['PageUp', 'Home', 'ArrowUp'].includes(event.key)
         ) {
           follow.current = false;
+          topIntent.current = true;
           setFollowing(false);
         }
       }}
-      onPointerDown={() => {
+      onPointerDown={(event) => {
+        topIntent.current = event.target === event.currentTarget || event.pointerType === 'touch';
         follow.current = false;
         setFollowing(false);
       }}
@@ -265,7 +286,15 @@ export function Transcript({
         {transcript.error && (
           <p role="alert" {...stylex.props(styles.warning)}>
             {transcript.error}{' '}
-            <Button {...stylex.props(controls.button)} onClick={earlier}>
+            <Button
+              {...stylex.props(controls.button)}
+              onClick={() => {
+                const missing = transcript.view.anchor;
+                if (missing && !transcript.entries.some((entry) => entry.id === missing.entryId))
+                  void controller.jumpToEntry(missing.entryId);
+                else if (lastMove.current === 'latest') latest();
+                else move(lastMove.current);
+              }}>
               Retry history
             </Button>
           </p>
@@ -500,9 +529,33 @@ function Part({
 }) {
   const source = transcript.source;
   const identity = JSON.stringify([source, part.partId]);
-  const expansion = `${entryId}:${part.partId}`;
+  const disclosure = useMemo(
+    () => getTranscriptDisclosureId(entryId, part.partId),
+    [entryId, part.partId],
+  );
+  const [resolved, setResolved] = useState<string | null>(
+    typeof disclosure === 'string' ? disclosure : null,
+  );
+  const [disclosureError, setDisclosureError] = useState(false);
+  useEffect(() => {
+    if (typeof disclosure === 'string') return;
+    let active = true;
+    void disclosure.then(
+      (value) => {
+        if (active) setResolved(value);
+      },
+      () => {
+        if (active) setDisclosureError(true);
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [disclosure]);
+  const expansion = typeof disclosure === 'string' ? disclosure : resolved;
   const expanded =
-    state.view.expanded.includes(expansion) ||
+    disclosureError ||
+    (expansion !== null && state.view.expanded.includes(expansion)) ||
     (state.view.anchor?.entryId === entryId && state.view.anchor.partId === part.partId);
   const content = state.content.find(
     (item) =>
@@ -631,14 +684,21 @@ function Part({
   );
   return (
     <section data-transcript-part={part.partId}>
+      {disclosureError && (
+        <p role="alert" {...stylex.props(styles.small)}>
+          Could not remember this disclosure. Its content is expanded.
+        </p>
+      )}
       {ordinary ? (
         body
       ) : (
         <>
           <Button
             aria-expanded={expanded}
+            disabled={!expansion}
             {...stylex.props(controls.button, controls.quietButton)}
             onClick={() =>
+              expansion &&
               controller.setTranscriptView({
                 anchor: state.view.anchor,
                 expanded: expanded
@@ -647,7 +707,7 @@ function Part({
               })
             }>
             {part.toolName ? `${part.toolName} · ` : ''}
-            {part.kind}
+            {partLabels[part.kind]}
             {part.state ? ` · ${part.state}` : ''}
             {part.availability !== 'available' ? ` · ${part.availability}` : ''}
           </Button>
@@ -665,6 +725,18 @@ function Part({
     </section>
   );
 }
+const partLabels = {
+  text: 'Text',
+  thinking: 'Thinking',
+  arguments: 'Requested arguments',
+  'executed-arguments': 'Executed arguments',
+  result: 'Output',
+  details: 'Details',
+  patch: 'Recorded patch',
+  diff: 'Recorded diff',
+  image: 'Stored image',
+  notice: 'Notice',
+};
 const sameSource = (a: { source: unknown }, b: { source: unknown }) =>
   JSON.stringify(a.source) === JSON.stringify(b.source);
 function decodeText(content: TranscriptContentState) {

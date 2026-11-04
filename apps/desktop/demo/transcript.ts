@@ -55,15 +55,15 @@ export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabili
         ['  result 🌔\r\n' + 'long retained tool output\n'.repeat(4000), 'result'],
         ['*** original patch data ***\n@@ -1 +1 @@\n-old\n+new\n', 'patch'],
         ['1 - old\n2 + new\n', 'diff'],
-        ['withheld', 'thinking'],
+        ['', 'thinking'],
+        ['Published unknown record description', 'notice'],
       ];
       for (const [text, kind] of additional) {
         texts.push(text);
         parts.push(await part(text, `m0.b${parts.length}`, kind));
       }
-      parts.at(-1)!.availability = 'redacted';
-      parts.at(-1)!.text = '';
-      parts.at(-1)!.truncated = false;
+      parts.find((part) => part.kind === 'thinking')!.availability = 'redacted';
+      parts.find((part) => part.kind === 'notice')!.availability = 'unsupported';
     }
     sources.set(JSON.stringify(source), { source, parts, texts });
     entries.push({

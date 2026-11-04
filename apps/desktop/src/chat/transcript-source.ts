@@ -7,28 +7,39 @@ export type CodeSource = {
   closed: boolean;
 };
 
+function readQuotePrefix(line: string, count = Infinity) {
+  let offset = 0,
+    quotes = 0;
+  while (quotes < count) {
+    let marker = offset;
+    while (line[marker] === ' ' && marker < offset + 3) marker++;
+    if (line[marker] !== '>') break;
+    offset = marker + 1;
+    if (line[offset] === ' ') offset++;
+    quotes++;
+  }
+  return { offset, quotes };
+}
+
 /** Source locations only. Marked owns Markdown interpretation; normalized tokens never authorize Copy. */
 export function locateFences(source: string) {
   const lines = [...source.matchAll(/[^\n]*(?:\n|$)/g)].filter((line) => line[0].length);
   const results: CodeSource[] = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]![0];
-    const open =
-      /^((?: {0,3}> ?)*)( {0,3})((?:[-+*]|\d+[.)]) +)?(`{3,}|~{3,})([^\r\n]*)\r?\n?$/.exec(line);
-    if (!open || (open[4]![0] === '`' && open[5]!.includes('`'))) continue;
+    const prefix = readQuotePrefix(line);
+    const open = /^( *)((?:[-+*]|\d+[.)]) +)?(`{3,}|~{3,})([^\r\n]*)\r?\n?$/.exec(
+      line.slice(prefix.offset),
+    );
+    if (!open || (open[3]![0] === '`' && open[4]!.includes('`'))) continue;
     const start = lines[i]!.index!;
-    const marker = open[4]![0]!,
-      length = open[4]!.length;
-    const quotes = (open[1]!.match(/>/g) ?? []).length;
-    const indentSize = open[2]!.length + (open[3]?.length ?? 0);
+    const marker = open[3]![0]!,
+      length = open[3]!.length;
+    const indentSize = open[1]!.length + (open[2]?.length ?? 0);
     const strip = (value: string) => {
-      let offset = 0;
-      for (let quote = 0; quote < quotes; quote++) {
-        const prefix = /^ {0,3}> ?/.exec(value.slice(offset));
-        if (!prefix) return null;
-        offset += prefix[0].length;
-      }
-      return offset + Math.min(indentSize, /^ */.exec(value.slice(offset))![0].length);
+      const body = readQuotePrefix(value, prefix.quotes);
+      if (body.quotes !== prefix.quotes) return null;
+      return body.offset + Math.min(indentSize, /^ */.exec(value.slice(body.offset))![0].length);
     };
     const ranges: SourceRange[] = [];
     let closed = false;
@@ -61,4 +72,21 @@ export function locateFences(source: string) {
     });
   }
   return results;
+}
+
+/** View-memory keys must fit its byte bound even when both public IDs are maximal. */
+export function getTranscriptDisclosureId(
+  entryId: string,
+  partId: string,
+): string | Promise<string> {
+  const identity = JSON.stringify([entryId, partId]),
+    data = new TextEncoder().encode(identity);
+  if (data.length <= 256) return identity;
+  return crypto.subtle
+    .digest('SHA-256', data)
+    .then(
+      (digest) =>
+        'sha256:' +
+        [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join(''),
+    );
 }
