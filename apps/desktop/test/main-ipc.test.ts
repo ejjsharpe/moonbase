@@ -79,6 +79,20 @@ test('command IPC authenticates every channel, validates envelopes and tears dow
     [channels.cancel, 'call'],
     [channels.configured, null],
     [chatChannels.call, { kind: 'targets' }],
+    [
+      chatChannels.call,
+      { kind: 'transcript', operation: 'copy', input: {}, id: 'copy', backendId: 'local' },
+    ],
+    [
+      chatChannels.call,
+      {
+        kind: 'transcript',
+        operation: 'open-link',
+        input: { url: 'https://example.com' },
+        id: 'link',
+        backendId: 'local',
+      },
+    ],
     [chatChannels.cancel, { backendId: 'local', id: 'call' }],
   ] as const;
   for (const event of f.badEvents())

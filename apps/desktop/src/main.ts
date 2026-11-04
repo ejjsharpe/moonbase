@@ -180,6 +180,12 @@ async function main() {
     if (!window.isDestroyed()) window.webContents.send(channels.event, id, value);
   });
   const chatBackends = createChatBackends({
+    transcript: {
+      writeText: async (text) => {
+        await clipboard.writeText(text);
+      },
+      openExternal: (url) => shell.openExternal(url),
+    },
     runtime,
     localResult,
     acquireLocal,

@@ -1,3 +1,4 @@
+import type { NativeTranscriptActions } from '../chat/transcript-native.ts';
 import { randomUUID } from 'node:crypto';
 import type { ManagedRuntime } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/errors';
@@ -24,6 +25,7 @@ export function createChatBackends({
   connection,
   emit,
   pickFolder,
+  transcript,
 }: {
   runtime: ManagedRuntime.ManagedRuntime<never, ApplicationError>;
   localResult: LocalResult;
@@ -33,6 +35,7 @@ export function createChatBackends({
   connection: ConnectionClient | null;
   emit(backendId: string, id: string, result: Reply): void;
   pickFolder(): Promise<string | null>;
+  transcript?: NativeTranscriptActions;
 }) {
   let local = localResult.backend;
   let localRetry: Promise<void> | undefined;
@@ -52,6 +55,7 @@ export function createChatBackends({
           local.session,
           emitChat('local'),
           {
+            transcript,
             providers: bindProviderSetupClient(runtime, local.providers, documentId),
           },
         ),
@@ -65,6 +69,7 @@ export function createChatBackends({
           connection,
           chatConfiguration.context,
           emitChat('remote'),
+          { transcript },
         ),
       );
   };

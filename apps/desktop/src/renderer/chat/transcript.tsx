@@ -1,0 +1,736 @@
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Button } from '@base-ui/react/button';
+import * as stylex from '@stylexjs/stylex';
+import { controls } from '@moonbase/ui/controls';
+import { colors, layout, radius, space, type } from '@moonbase/ui/tokens.stylex';
+import type { ChatController, ChatState, TranscriptContentState } from '@moonbase/application/chat';
+import type { ChatEntry, ChatTranscript, ChatTranscriptPart } from '@moonbase/contracts/chat';
+import type { TranscriptNative } from '../../chat/wire.ts';
+import { Markdown } from './markdown.tsx';
+import { MarkdownCache } from './markdown-model.ts';
+
+type Anchor = ChatState['transcript']['view']['anchor'];
+export function Transcript({
+  controller,
+  state,
+  native,
+}: {
+  controller: ChatController;
+  state: ChatState;
+  native?: TranscriptNative;
+}) {
+  const root = useRef<HTMLElement>(null),
+    content = useRef<HTMLDivElement>(null);
+  const follow = useRef(!state.transcript.view.anchor),
+    anchor = useRef<Anchor>(state.transcript.view.anchor);
+  const current = useRef(state);
+  useLayoutEffect(() => {
+    current.current = state;
+  }, [state]);
+  const [earlierRow, setEarlierRow] = useState(false);
+  const [following, setFollowing] = useState(!state.transcript.view.anchor);
+  const [notice, setNotice] = useState<{ error: boolean; text: string } | null>(null);
+  const navigation = useRef(false);
+  const jobs = useRef(new Set<AbortController>());
+  const [cache] = useState(() => new MarkdownCache());
+  useEffect(
+    () => () => {
+      for (const job of jobs.current) job.abort();
+      cache.clear();
+    },
+    [controller, cache],
+  );
+  useEffect(() => {
+    if (state.transcript.observation === 'inactive' || !state.ready)
+      for (const job of jobs.current) job.abort();
+  }, [state.transcript.observation, state.ready]);
+  const run = useCallback((action: (signal: AbortSignal) => Promise<void>, success: string) => {
+    if (jobs.current.size >= 2) {
+      setNotice({
+        error: true,
+        text: 'Two native actions are still running. Wait for them to finish.',
+      });
+      return;
+    }
+    const job = new AbortController();
+    jobs.current.add(job);
+    setNotice({
+      error: false,
+      text: success === 'Copied.' ? 'Copying complete source…' : 'Opening link…',
+    });
+    void action(job.signal)
+      .then(
+        () => {
+          if (!job.signal.aborted) setNotice({ error: false, text: success });
+        },
+        (error) => {
+          if (!job.signal.aborted)
+            setNotice({
+              error: true,
+              text: error instanceof Error ? error.message : 'The action failed. Try again.',
+            });
+        },
+      )
+      .finally(() => jobs.current.delete(job));
+  }, []);
+  const openLink = useCallback(
+    (url: string) => {
+      if (native) run((signal) => native.openLink(url, signal), 'Opened in your browser.');
+      else setNotice({ error: true, text: 'Native link opening is unavailable in this view.' });
+    },
+    [native, run],
+  );
+  const capture = useCallback(() => {
+    const element = root.current;
+    if (!element) return;
+    const top = element.getBoundingClientRect().top;
+    const nodes = [
+      ...element.querySelectorAll<HTMLElement>('[data-transcript-part], [data-transcript-entry]'),
+    ];
+    const node =
+      nodes.find(
+        (node) =>
+          node.getBoundingClientRect().bottom > top && node.getBoundingClientRect().top >= top,
+      ) ?? nodes.find((node) => node.getBoundingClientRect().bottom > top);
+    if (node)
+      anchor.current = {
+        entryId:
+          node.dataset.transcriptEntry ??
+          node.closest<HTMLElement>('[data-transcript-entry]')!.dataset.transcriptEntry!,
+        ...(node.dataset.transcriptPart ? { partId: node.dataset.transcriptPart } : {}),
+        offset: node.getBoundingClientRect().top - top,
+      };
+    controller.setTranscriptView({
+      anchor: follow.current ? null : anchor.current,
+      expanded: current.current.transcript.view.expanded,
+    });
+  }, [controller]);
+  const restore = useCallback(() => {
+    const element = root.current;
+    if (!element) return;
+    if (
+      follow.current &&
+      current.current.transcript.atLatest &&
+      window.getSelection()?.isCollapsed !== false
+    ) {
+      element.scrollTop = element.scrollHeight;
+      return;
+    }
+    const target = anchor.current ?? current.current.transcript.view.anchor;
+    if (!target) return;
+    const nodes = [...element.querySelectorAll<HTMLElement>('[data-transcript-entry]')];
+    const entry = nodes.find((node) => node.dataset.transcriptEntry === target.entryId);
+    const part =
+      target.partId &&
+      [...(entry?.querySelectorAll<HTMLElement>('[data-transcript-part]') ?? [])].find(
+        (node) => node.dataset.transcriptPart === target.partId,
+      );
+    const node = part || entry;
+    if (node)
+      element.scrollTop +=
+        node.getBoundingClientRect().top - element.getBoundingClientRect().top - target.offset;
+  }, []);
+  useLayoutEffect(() => {
+    const view = state.transcript.view.anchor;
+    if (
+      !navigation.current &&
+      view &&
+      (view.entryId !== anchor.current?.entryId || view.partId !== anchor.current?.partId)
+    )
+      anchor.current = view;
+  }, [state.transcript.view.anchor]);
+  useLayoutEffect(restore, [state.transcript, state.snapshot?.run, restore]);
+  useEffect(() => {
+    if (!content.current) return;
+    const observer = new ResizeObserver(restore);
+    observer.observe(content.current);
+    return () => observer.disconnect();
+  }, [restore]);
+  const move = useCallback(
+    (direction: 'earlier' | 'later') => {
+      follow.current = false;
+      setFollowing(false);
+      capture();
+      navigation.current = true;
+      const pending = direction === 'earlier' ? controller.older() : controller.later();
+      void pending.finally(() =>
+        requestAnimationFrame(() => {
+          navigation.current = false;
+          restore();
+          capture();
+        }),
+      );
+    },
+    [capture, controller, restore],
+  );
+  const earlier = useCallback(() => {
+    if (
+      current.current.transcript.atLatest &&
+      current.current.snapshot?.run &&
+      current.current.transcript.entries.length === 128 &&
+      !earlierRow
+    ) {
+      follow.current = false;
+      setFollowing(false);
+      capture();
+      setEarlierRow(true);
+    } else move('earlier');
+  }, [capture, move, earlierRow]);
+  const latest = () => {
+    setEarlierRow(false);
+    follow.current = true;
+    anchor.current = null;
+    setFollowing(true);
+    controller.setTranscriptView({ anchor: null, expanded: state.transcript.view.expanded });
+    void controller.jumpToLatest();
+  };
+  const scroll = () => {
+    const element = root.current!;
+    follow.current =
+      state.transcript.atLatest &&
+      element.scrollHeight - element.scrollTop - element.clientHeight < 40 &&
+      window.getSelection()?.isCollapsed !== false;
+    setFollowing(follow.current);
+    capture();
+    if (
+      element.scrollTop < 120 &&
+      !follow.current &&
+      state.transcript.earlier &&
+      !state.transcript.loading &&
+      window.getSelection()?.isCollapsed !== false &&
+      !document.activeElement?.closest('[data-transcript-entry]')
+    )
+      earlier();
+  };
+  const transcript = state.transcript,
+    snapshot = state.snapshot,
+    live = transcript.atLatest && !earlierRow ? snapshot?.run : null;
+  const hiddenRow = !!live && transcript.entries.length === 128;
+  const entries = hiddenRow ? transcript.entries.slice(1) : transcript.entries;
+  return (
+    <section
+      ref={root}
+      aria-label="Chat transcript"
+      tabIndex={0}
+      onScroll={scroll}
+      onWheel={(event) => {
+        if (event.deltaY < 0) {
+          follow.current = false;
+          setFollowing(false);
+        }
+      }}
+      onKeyDown={(event) => {
+        if (
+          event.target === event.currentTarget &&
+          ['PageUp', 'Home', 'ArrowUp'].includes(event.key)
+        ) {
+          follow.current = false;
+          setFollowing(false);
+        }
+      }}
+      onPointerDown={() => {
+        follow.current = false;
+        setFollowing(false);
+      }}
+      {...stylex.props(styles.transcript)}>
+      <div ref={content} {...stylex.props(styles.measure)}>
+        {!snapshot && (
+          <p>
+            {state.ready
+              ? 'Reading the saved chat…'
+              : 'This view is offline. Its draft and unresolved command identities are retained.'}
+          </p>
+        )}
+        <div {...stylex.props(controls.row, styles.navigation)}>
+          <Button
+            {...stylex.props(controls.button, controls.quietButton)}
+            disabled={!state.ready || (!transcript.earlier && !hiddenRow) || transcript.loading}
+            onClick={earlier}>
+            {transcript.loading ? 'Loading history…' : 'Load earlier'}
+          </Button>
+          {transcript.later && (
+            <Button
+              {...stylex.props(controls.button, controls.quietButton)}
+              disabled={!state.ready || transcript.loading}
+              onClick={() => move('later')}>
+              Read later
+            </Button>
+          )}
+          {(!following || !transcript.atLatest) && (
+            <Button {...stylex.props(controls.button, controls.quietButton)} onClick={latest}>
+              Jump to latest
+            </Button>
+          )}
+        </div>
+        {transcript.error && (
+          <p role="alert" {...stylex.props(styles.warning)}>
+            {transcript.error}{' '}
+            <Button {...stylex.props(controls.button)} onClick={earlier}>
+              Retry history
+            </Button>
+          </p>
+        )}
+        {transcript.observation === 'reconnecting' && (
+          <p role="status" {...stylex.props(styles.small)}>
+            Reconnecting. Showing the last received content; live reads and Copy wait for a fresh
+            connection.
+          </p>
+        )}
+        {transcript.observation === 'failed' && (
+          <p role="alert" {...stylex.props(styles.warning)}>
+            Live updates stopped. Reopen the conversation to refresh.
+          </p>
+        )}
+        {transcript.observation === 'legacy' && (
+          <p {...stylex.props(styles.small)}>
+            This host updates periodically. Upgrade the host for streaming responses.
+          </p>
+        )}
+        {transcript.capabilities.transcript === 'legacy' && (
+          <p {...stylex.props(styles.small)}>
+            Upgrade this host for complete transcript reads and Copy. Previews remain readable.
+          </p>
+        )}
+        {notice && (
+          <p
+            role={notice.error ? 'alert' : 'status'}
+            {...stylex.props(notice.error ? styles.warning : styles.small, styles.feedback)}>
+            {notice.text}
+          </p>
+        )}
+        {entries.map((entry) => (
+          <Entry
+            key={entry.id}
+            entry={entry}
+            controller={controller}
+            state={transcript}
+            cache={cache}
+            native={native}
+            run={run}
+            openLink={openLink}
+          />
+        ))}
+        {live && (
+          <Entry
+            key="live"
+            entry={{
+              id: 'live',
+              role: 'assistant',
+              text: live.text || 'Working…',
+              truncated: live.truncated,
+              transcript: live.transcript,
+            }}
+            controller={controller}
+            state={transcript}
+            cache={cache}
+            native={native}
+            run={run}
+            openLink={openLink}
+            liveState={live.state}
+          />
+        )}
+        {live &&
+          !live.transcript &&
+          live.tools.map((tool) => (
+            <section key={tool.taskId} {...stylex.props(styles.message)}>
+              <strong>
+                {tool.name} · {tool.state}
+              </strong>
+              <pre tabIndex={0} {...stylex.props(styles.output)}>
+                {tool.text}
+              </pre>
+              {tool.truncated && (
+                <p {...stylex.props(styles.small)}>
+                  This host supplied a tool-output preview. Upgrade the host for complete reads.
+                </p>
+              )}
+            </section>
+          ))}
+      </div>
+    </section>
+  );
+}
+type EntryProps = {
+  entry: ChatEntry;
+  controller: ChatController;
+  state: ChatState['transcript'];
+  cache: MarkdownCache;
+  native?: TranscriptNative;
+  run(action: (signal: AbortSignal) => Promise<void>, success: string): void;
+  openLink(url: string): void;
+  liveState?: string;
+};
+const Entry = memo(function Entry({
+  entry,
+  controller,
+  state,
+  cache,
+  native,
+  run,
+  openLink,
+  liveState,
+}: EntryProps) {
+  const transcript = entry.transcript;
+  const manifest =
+    transcript && state.manifest && sameSource(transcript, state.manifest) ? state.manifest : null;
+  const parts = manifest?.parts.length ? manifest.parts : transcript?.parts;
+  const source = transcript?.source;
+  const copy = useCallback(() => {
+    if (native && source) run((signal) => native.copy({ source }, signal), 'Copied.');
+  }, [native, source, run]);
+  const loadMoreParts = async () => {
+    if (!source) return;
+    if (!manifest) {
+      await controller.loadTranscriptManifest(source);
+      const first = controller.getSnapshot().transcript.manifest;
+      if (first?.error || !first?.nextCursor || !sameSource(transcript!, first)) return;
+    }
+    await controller.loadTranscriptManifest(source);
+  };
+  let label = entry.toolName ?? entry.role;
+  if (entry.role === 'user') label = 'You';
+  if (entry.role === 'assistant') label = 'Assistant';
+  let body = <p {...stylex.props(styles.literal)}>{entry.text}</p>;
+  if (entry.role === 'assistant')
+    body = (
+      <Markdown
+        source={entry.text}
+        identity={entry.id}
+        revision={entry.text}
+        cache={cache}
+        openLink={openLink}
+      />
+    );
+  if (parts)
+    body = (
+      <>
+        {parts.map((part) => (
+          <Part
+            key={part.partId}
+            transcript={transcript!}
+            part={part}
+            controller={controller}
+            state={state}
+            cache={cache}
+            native={native}
+            run={run}
+            openLink={openLink}
+            entryId={entry.id}
+          />
+        ))}
+      </>
+    );
+  return (
+    <article
+      data-transcript-entry={entry.id}
+      aria-label={liveState ? 'Live response' : undefined}
+      {...stylex.props(styles.message)}>
+      <div {...stylex.props(styles.header)}>
+        <strong>{label}</strong>
+        <span>{entry.isError ? 'Failed' : liveState}</span>
+        {source && ['assistant', 'user'].includes(entry.role) && (
+          <Button
+            {...stylex.props(controls.button, controls.quietButton)}
+            disabled={
+              !native ||
+              (source.kind === 'live' &&
+                ['reconnecting', 'failed', 'inactive'].includes(state.observation))
+            }
+            onClick={copy}>
+            Copy message
+          </Button>
+        )}
+      </div>
+      {body}
+      {!parts && entry.truncated && (
+        <p {...stylex.props(styles.small)}>
+          Only a preview is available from this host. Upgrade the host to read the complete source.
+        </p>
+      )}
+      {transcript?.thinking === 'redacted' && !parts?.some((part) => part.kind === 'thinking') && (
+        <p {...stylex.props(styles.small)}>Thinking is redacted by the provider.</p>
+      )}
+      {source && (manifest?.nextCursor ?? transcript?.nextCursor) && (
+        <Button
+          {...stylex.props(controls.button)}
+          disabled={manifest?.status === 'loading'}
+          onClick={() => void loadMoreParts()}>
+          Load more parts
+        </Button>
+      )}
+      {manifest?.omittedParts ? (
+        <p {...stylex.props(styles.small)}>
+          Earlier part descriptions were released from memory.{' '}
+          <Button
+            {...stylex.props(controls.button)}
+            onClick={() => void controller.loadTranscriptManifest(source!, true)}>
+            Reload parts
+          </Button>
+        </p>
+      ) : null}
+      {manifest?.error && (
+        <p role="alert" {...stylex.props(styles.warning)}>
+          {manifest.error}{' '}
+          <Button
+            {...stylex.props(controls.button)}
+            onClick={() =>
+              void controller.loadTranscriptManifest(source!, manifest.status === 'source-changed')
+            }>
+            Retry parts
+          </Button>
+        </p>
+      )}
+    </article>
+  );
+});
+function Part({
+  transcript,
+  part,
+  controller,
+  state,
+  cache,
+  native,
+  run,
+  openLink,
+  entryId,
+}: Omit<EntryProps, 'entry' | 'liveState'> & {
+  transcript: ChatTranscript;
+  part: ChatTranscriptPart;
+  entryId: string;
+}) {
+  const source = transcript.source;
+  const identity = JSON.stringify([source, part.partId]);
+  const expansion = `${entryId}:${part.partId}`;
+  const expanded =
+    state.view.expanded.includes(expansion) ||
+    (state.view.anchor?.entryId === entryId && state.view.anchor.partId === part.partId);
+  const content = state.content.find(
+    (item) =>
+      sameSource(transcript, item) &&
+      item.selection.partId === part.partId &&
+      item.selection.revision === part.revision &&
+      item.selection.bytes === part.bytes,
+  );
+  const ordinary = part.kind === 'text' && ['user', 'assistant'].includes(part.role);
+  const readable = part.availability === 'available' && part.encoding === 'utf8';
+  const load = useCallback(
+    (restart = false) => {
+      void controller.loadTranscriptPart(
+        source,
+        { partId: part.partId, bytes: part.bytes, revision: part.revision },
+        restart,
+      );
+    },
+    [controller, source, part.partId, part.bytes, part.revision],
+  );
+  useEffect(() => {
+    if (readable && (ordinary || expanded) && part.truncated && !content) load();
+  }, [readable, ordinary, expanded, part.truncated, content, load]);
+  const selection = useMemo(
+    () => ({ partId: part.partId, bytes: part.bytes, revision: part.revision }),
+    [part.partId, part.bytes, part.revision],
+  );
+  const copy = useCallback(
+    (codeStart?: number) => {
+      if (native)
+        run(
+          (signal) =>
+            native.copy(
+              {
+                source,
+                selection,
+                ...(codeStart !== undefined ? { code: { start: codeStart } } : {}),
+              },
+              signal,
+            ),
+          'Copied.',
+        );
+    },
+    [native, run, source, selection],
+  );
+  const text = content?.chunks.length ? decodeText(content) : part.text;
+  let presentation = (
+    <p {...stylex.props(styles.small)}>
+      {part.kind === 'image'
+        ? `Stored image · ${part.mimeType ?? 'unknown type'} · ${part.bytes.toLocaleString()} bytes. Image preview is unavailable in this view.`
+        : `${part.availability} content`}
+    </p>
+  );
+  if (readable) {
+    presentation = (
+      <pre
+        tabIndex={ordinary ? undefined : 0}
+        {...stylex.props(ordinary ? styles.literal : styles.output)}>
+        {text}
+      </pre>
+    );
+    if (ordinary && part.role === 'assistant')
+      presentation = (
+        <Markdown
+          source={text}
+          identity={identity}
+          revision={part.revision}
+          cache={cache}
+          openLink={openLink}
+          copyCode={content?.retainedFrom === 0 || !part.truncated ? copy : undefined}
+        />
+      );
+  }
+  const body = (
+    <>
+      {presentation}
+      {part.pairing && part.pairing !== 'matched' && (
+        <p {...stylex.props(styles.small)}>Tool result pairing: {part.pairing}.</p>
+      )}
+      {!!part.droppedBytes && (
+        <p {...stylex.props(styles.small)}>
+          {part.droppedBytes.toLocaleString()} earlier bytes / {part.droppedLines ?? 0} lines were
+          not retained by the tool.
+        </p>
+      )}
+      {!!content?.retainedFrom && (
+        <p {...stylex.props(styles.small)}>
+          Showing retained content from byte {content.retainedFrom.toLocaleString()}. Copy still
+          reads the complete selected source.{' '}
+          <Button {...stylex.props(controls.button)} onClick={() => load(true)}>
+            Read from start
+          </Button>
+        </p>
+      )}
+      {content?.error && (
+        <p role="alert" {...stylex.props(styles.warning)}>
+          {content.error}{' '}
+          <Button
+            {...stylex.props(controls.button)}
+            onClick={() => load(content.status === 'source-changed')}>
+            Retry content
+          </Button>
+        </p>
+      )}
+      {readable &&
+        (content?.status === 'loading' ? (
+          <p role="status" {...stylex.props(styles.small)}>
+            Loading content…
+          </p>
+        ) : (
+          (content?.nextCursor || (!content && part.truncated)) && (
+            <Button {...stylex.props(controls.button, controls.quietButton)} onClick={() => load()}>
+              Read more · {content?.loadedBytes.toLocaleString() ?? 0} of{' '}
+              {part.bytes.toLocaleString()} bytes
+            </Button>
+          )
+        ))}
+    </>
+  );
+  return (
+    <section data-transcript-part={part.partId}>
+      {ordinary ? (
+        body
+      ) : (
+        <>
+          <Button
+            aria-expanded={expanded}
+            {...stylex.props(controls.button, controls.quietButton)}
+            onClick={() =>
+              controller.setTranscriptView({
+                anchor: state.view.anchor,
+                expanded: expanded
+                  ? state.view.expanded.filter((id) => id !== expansion)
+                  : [...state.view.expanded, expansion],
+              })
+            }>
+            {part.toolName ? `${part.toolName} · ` : ''}
+            {part.kind}
+            {part.state ? ` · ${part.state}` : ''}
+            {part.availability !== 'available' ? ` · ${part.availability}` : ''}
+          </Button>
+          {expanded && <div {...stylex.props(styles.disclosure)}>{body}</div>}
+        </>
+      )}
+      {readable && (
+        <Button
+          {...stylex.props(controls.button, controls.quietButton)}
+          disabled={!native}
+          onClick={() => copy()}>
+          Copy {ordinary ? 'text' : 'part'}
+        </Button>
+      )}
+    </section>
+  );
+}
+const sameSource = (a: { source: unknown }, b: { source: unknown }) =>
+  JSON.stringify(a.source) === JSON.stringify(b.source);
+function decodeText(content: TranscriptContentState) {
+  return content.chunks.map((chunk) => (chunk.encoding === 'utf8' ? chunk.data : '')).join('');
+}
+const styles = stylex.create({
+  transcript: {
+    overflowY: 'auto',
+    overflowAnchor: 'none',
+    flex: 1,
+    minHeight: 60,
+    padding: '8px 24px',
+    minWidth: 0,
+  },
+  measure: { maxWidth: layout.conversation, margin: '0 auto', minWidth: 0 },
+  navigation: {
+    flexWrap: 'wrap',
+    minHeight: 28,
+    position: 'sticky',
+    top: 0,
+    zIndex: 1,
+    backgroundColor: colors.canvas,
+  },
+  feedback: {
+    position: 'sticky',
+    top: 32,
+    zIndex: 1,
+    backgroundColor: colors.canvas,
+    padding: space.sm,
+  },
+  message: { margin: '24px 0', minWidth: 0 },
+  header: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: space.sm,
+    fontSize: type.small,
+    color: colors.secondary,
+  },
+  literal: {
+    fontFamily: type.sans,
+    fontSize: type.message,
+    lineHeight: 1.7,
+    whiteSpace: 'pre-wrap',
+    overflowWrap: 'anywhere',
+    margin: '8px 0',
+  },
+  output: {
+    fontFamily: type.mono,
+    fontSize: type.body,
+    lineHeight: 1.6,
+    maxHeight: 320,
+    overflow: 'auto',
+    whiteSpace: 'pre',
+    margin: '8px 0',
+    padding: space.md,
+    backgroundColor: colors.surface,
+    borderRadius: radius.panel,
+  },
+  disclosure: { minWidth: 0 },
+  small: {
+    color: colors.secondary,
+    fontSize: type.small,
+    lineHeight: 1.6,
+    overflowWrap: 'anywhere',
+  },
+  warning: {
+    backgroundColor: colors.warningSurface,
+    color: colors.warningText,
+    padding: space.md,
+    borderWidth: 1,
+    borderStyle: 'solid',
+    borderColor: colors.warningBorder,
+    borderRadius: radius.control,
+    overflowWrap: 'anywhere',
+  },
+});

@@ -15,7 +15,10 @@ safeStorage.decryptStringAsync = async (bytes) => {
     shouldReEncrypt: false,
   };
 };
-globalThis.fetch = async () => {
+const fetch = globalThis.fetch;
+globalThis.fetch = async (...args) => {
+  if (process.env.MOONBASE_TEST_ALLOW_LOOPBACK && new URL(String(args[0])).hostname === '127.0.0.1')
+    return fetch(...args);
   throw Error('Provider network access is disabled in this fixture.');
 };
 if (process.env.MOONBASE_TEST_STARTUP_FAILURE === 'editor') {
