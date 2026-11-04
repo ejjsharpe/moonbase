@@ -10,6 +10,56 @@ async function open(page: Page) {
 const transcript = (page: Page) =>
   page.getByRole('region', { name: 'Chat transcript', exact: true });
 const answer = (page: Page) => page.locator('[data-transcript-entry="reading-179"]');
+test('latest snapshot recovery diagnostics survive running metadata and pinned old live DOM', async ({
+  page,
+}) => {
+  await open(page);
+  await page.evaluate(() =>
+    window.demo.transcript!.live('```text\nRetain this selected source\n```\n'),
+  );
+  const live = page.locator('[data-transcript-live]');
+  for (const message of [
+    'Parked task requires recovery',
+    'Send intent retained for recovery',
+    'Submission failed',
+    'Working folder is unavailable',
+  ]) {
+    await page.evaluate((message) => {
+      window.demo.chat.snapshot.state = 'failed';
+      window.demo.chat.snapshot.message = message;
+      window.demo.chat.controls.receiveChat(structuredClone(window.demo.chat.snapshot));
+    }, message);
+    await expect(page.getByRole('alert', { name: 'Conversation status' })).toHaveText(
+      'Failed · ' + message,
+    );
+    await expect(live.locator(':scope > div').first()).not.toContainText('running');
+  }
+  await live.locator('pre').focus();
+  await live.locator('pre').evaluate((element) => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+  });
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
+  await page.evaluate(() => {
+    window.demo.chat.snapshot.run = null;
+    window.demo.chat.snapshot.state = 'uncertain';
+    window.demo.chat.snapshot.message = 'Current receipt needs recovery';
+    window.demo.chat.controls.receiveChat(structuredClone(window.demo.chat.snapshot));
+  });
+  await expect(page.getByText(/The response changed. Your selection is retained/)).toBeVisible();
+  await expect(page.getByRole('alert', { name: 'Conversation status' })).toHaveText(
+    'Uncertain · Current receipt needs recovery',
+  );
+  await expect(live.locator('pre')).toContainText('Retain this selected source');
+});
+
 test('safe GFM, literal user content, progressive source, exact native callbacks and normal/compact/200% reading', async ({
   page,
 }) => {

@@ -356,6 +356,7 @@ export function Transcript({
       earlier();
   };
   const status = latestState.transcript;
+  const currentSnapshot = latestState.snapshot;
   const transcript = state.transcript,
     snapshot = state.snapshot,
     live =
@@ -364,6 +365,10 @@ export function Transcript({
         : null;
   const hiddenRow = !!live && transcript.entries.length === 128;
   const entries = hiddenRow ? transcript.entries.slice(1) : transcript.entries;
+  let liveLabel: string | undefined = live?.state;
+  if (currentSnapshot && currentSnapshot.state !== 'running')
+    liveLabel = snapshotLabels[currentSnapshot.state];
+  if (preserve) liveLabel = 'Selected response';
   return (
     <section
       ref={root}
@@ -432,6 +437,20 @@ export function Transcript({
               </Button>
             )}
           </div>
+          {currentSnapshot && (
+            <p
+              aria-label="Conversation status"
+              role={['failed', 'uncertain'].includes(currentSnapshot.state) ? 'alert' : 'status'}
+              {...stylex.props(
+                ['failed', 'uncertain'].includes(currentSnapshot.state)
+                  ? styles.warning
+                  : styles.small,
+                styles.feedback,
+              )}>
+              {snapshotLabels[currentSnapshot.state]}
+              {currentSnapshot.message && ` · ${currentSnapshot.message}`}
+            </p>
+          )}
           {notice && (
             <p
               role={notice.error ? 'alert' : 'status'}
@@ -543,7 +562,7 @@ export function Transcript({
             native={native}
             run={run}
             openLink={openLink}
-            liveState={preserve ? 'Selected response' : live.state}
+            liveState={liveLabel}
           />
         )}
         {live &&
@@ -962,6 +981,13 @@ const partLabels = {
   diff: 'Recorded diff',
   image: 'Stored image',
   notice: 'Notice',
+};
+const snapshotLabels = {
+  idle: 'Idle',
+  running: 'Running',
+  stopped: 'Stopped',
+  failed: 'Failed',
+  uncertain: 'Uncertain',
 };
 const sameSource = (a: { source: unknown }, b: { source: unknown }) =>
   JSON.stringify(a.source) === JSON.stringify(b.source);
