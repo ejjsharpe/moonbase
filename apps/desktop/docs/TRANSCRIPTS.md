@@ -67,3 +67,25 @@ The final Impeccable mechanical source detector reports `[]`. Taste source lint 
 `bun audit --production --json` exits 1 for five pre-existing `dompurify@3.4.15` advisories under unchanged `monaco-editor@0.57.0`: three low, one high and one critical. The critical [GHSA-cg2g-xh64-v4q7](https://github.com/advisories/GHSA-cg2g-xh64-v4q7) and high [GHSA-mrv2-3pqr-j5jr](https://github.com/advisories/GHSA-mrv2-3pqr-j5jr) list 3.4.17 as the patched version. This requires a separate owning dependency update; the new transcript renderer inserts no model HTML and makes no sanitizer-based safety claim. Raw audit evidence is `package-audit-final.json`.
 
 Packaged execution, VoiceOver/manual accessibility and real OS clipboard preservation remain unqualified. The initial clipboard incident above must not be reported as successful restoration. All later controlled clipboard tests inject callbacks and leave OS clipboard state alone. Once an authorized OS write begins, cancellation cannot revoke it; the result is awaited and late cancellation is reported after settlement. Complete Copy also necessarily materializes its full string in native memory. No unresolved native freshness seam was found: native final-write authority remains independent of application live-view readiness and iterator success.
+
+## First independent #111 review corrections
+
+Reviewed parent: `cf7333e4e8c0b0a9d179c4c59031e968647fca01`; approved prerequisite remains `51a3c5410c5ac624947a60defe96dd63750b4cbc`. All three requested changes were reproduced before fixing, then addressed in separate focused commits. No application/contract/runtime, dependency, appearance-system or view-proof changes were made.
+
+- Fence pairing consumes literal candidates owned by indented-code tokens before pairing later real fences. The reported source selected offset 8 instead of 42 and copied LF instead of CRLF; a different-body variant lost Copy. Renderer-selected locations now pass through `browserTranscriptActions` → `ChatIpcSession` and produce the exact original CRLF/Unicode/whitespace body. Marked token strings still do not authorize clipboard content.
+- Conversation status/message comes from the current snapshot even while old live DOM is pinned. Failed/uncertain recovery diagnostics remain visible, and retained `run.state: running` cannot override the failed snapshot caption.
+- An anchor initially reveals a disclosure; an explicit collapse wins for that mounted anchor target. Offset updates and cloned observations do not reopen it. The actual body closes and `aria-expanded` becomes false while the same durable/live anchor, relative viewport offset and other expansions remain intact.
+
+Evidence is under ignored `test-results/transcript-111/`:
+
+| Check | Red before / green after |
+| --- | --- |
+| Parser/native regressions | `r1-parser-native-red.log`: 21 passed, three failed (wrong offset, wrong line ending, missing Copy). `r1-parser-native-green.log`: 24/24. Existing nested/repeated fences, CRLF/Unicode and source-authority checks retained. |
+| Status/disclosure handler regressions | `r1-status-disclosure-red.log`: all three failed. `r1-status-green.log`: 1/1; `r1-disclosure-green.log`: 2/2. |
+| Final focused native/parser/IPC | `r1-focused-native-final.log`: 25/25, all clipboard capabilities injected. |
+| Final transcript browser checks | `r1-focused-browser-final.log`: 11/11, including all three regressions and the existing reading/navigation/Copy checks. |
+| Controlled local Electron fixture | `r1-native-reading.log`: 1/1, held-completion/controller/IPC rendering and actual 200% reading; clipboard/open callbacks injected, no OS clipboard IO. |
+| Type/lint/format/foundation/build/renderer | `r1-{typecheck,lint,format,foundation,build,renderer}.log`: pass; 281 headless browser inputs and 8,631 renderer inputs, five workers/font, no privileged renderer modules. |
+| Mechanical detector and rendered checks | `r1-detector.json`: `[]`. Inspected `r1-current-status.png`, `r1-durable-collapsed.png`, `r1-live-collapsed.png`; prior production/Taste semantic exceptions remain recorded above. |
+
+Code qualification head: `9f502ea95849d972990027be9f5fafae1ec389bc`; delivery documentation is subsequent. The five independently reproduced baseline failures remain separate #116/owning-module qualification work. The 20:41 unrecoverable clipboard incident and existing dependency advisories remain unchanged and disclosed. No broad native baseline or production-inspection loop was repeated for these corrections. The parent commissions fresh R2; implementation work stops here pending instruction, without starting #112/#113/#114/#116 or creating a PR/app/delegate.
