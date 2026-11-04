@@ -84,6 +84,27 @@ test('safe GFM, literal user content, progressive source, exact native callbacks
   expect(requests).toEqual([]);
   expect(errors).toEqual([]);
 });
+test('disconnect cancels a held native action visibly and a late settlement cannot become success', async ({
+  page,
+}) => {
+  await page.goto('/?chat&design&transcript');
+  await page.getByRole('button', { name: 'Connect', exact: true }).click();
+  await page.getByRole('button', { name: /^Conversation/ }).click();
+  await expect(answer(page).getByRole('heading')).toBeAttached();
+  await page.evaluate(() => {
+    window.demo.transcript!.native.copy = (_input, signal) =>
+      new Promise<void>((resolve) => {
+        signal!.addEventListener('abort', () => setTimeout(resolve, 50), { once: true });
+      });
+  });
+  await answer(page).getByRole('button', { name: 'Copy message', exact: true }).click();
+  await expect(page.getByText('Copying complete source…', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Disconnect', exact: true }).click();
+  await expect(
+    page.getByRole('alert').filter({ hasText: 'Native action cancelled' }),
+  ).toBeVisible();
+  await expect(page.getByText('Copied.', { exact: true })).toHaveCount(0);
+});
 test('128-row reuse, unchanged sibling DOM, selection/focus and anchors during live progress/prepend/resize/folding', async ({
   page,
 }) => {

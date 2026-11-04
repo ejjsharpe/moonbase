@@ -67,8 +67,16 @@ export function Transcript({
     [controller, cache],
   );
   useEffect(() => {
-    if (latestState.transcript.observation === 'inactive' || !latestState.ready)
+    if (
+      (latestState.transcript.observation === 'inactive' || !latestState.ready) &&
+      [...jobs.current].some((job) => !job.signal.aborted)
+    ) {
       for (const job of jobs.current) job.abort();
+      setNotice({
+        error: true,
+        text: 'Native action cancelled because this view is offline. Reconnect and try again.',
+      });
+    }
   }, [latestState.transcript.observation, latestState.ready]);
   const run = useCallback((action: (signal: AbortSignal) => Promise<void>, success: string) => {
     if (jobs.current.size >= 2) {
