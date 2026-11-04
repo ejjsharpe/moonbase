@@ -322,7 +322,16 @@ test('snapshot/disconnect loops have a finite retry budget, visible stale state 
   assert.equal(attempts(), 4);
   assert(w.views.some((v) => v.observationStatus === 'reconnecting'));
   assert.equal(w.errors[0].code, 'Unavailable');
+  assert.equal(
+    w.views.at(-1)!.observationStatus,
+    'reconnecting',
+    'terminal failure must leave retained content stale',
+  );
+  assert.deepEqual(w.views.at(-1)!.conversation.target, target);
+  assert.equal(w.views.at(-1)!.transcriptBoundary, snapshot.transcriptBoundary);
   assert.equal(f.calls.filter((c) => c !== 'getChatHost').length, 0);
+  await wait(() => f.listeners.size === 0);
+  assert.equal(f.acquisitions, f.releases);
 });
 
 test('closing a held reader releases the server watch promptly and drops later replacements', async (t) => {
@@ -480,12 +489,15 @@ test('legacy capability absence retains the 250ms polling path and never opens a
   assert.deepEqual(w.errors, []);
 });
 
-test('an exact repeated frame after a valid snapshot is rejected without duplicating publication', async (t) => {
+test('an exact repeated frame is rejected while verified content becomes stale without accepting replayed data', async (t) => {
   const f = await fixture(t);
   interceptFrames(t, f.token, (frames) => [frames[0], frames[0]]);
   const w = f.observe();
   await wait(() => w.errors.length === 1);
-  assert.equal(w.views.length, 1);
+  assert(w.views.length >= 1 && w.views.length <= 2);
+  for (const { observationStatus: _status, ...retained } of w.views)
+    assert.deepEqual(retained, snapshot);
+  assert.equal(w.views.at(-1)!.observationStatus, 'reconnecting');
   assert.equal(w.errors[0].code, 'Incompatible');
 });
 

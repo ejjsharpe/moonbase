@@ -336,13 +336,17 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
                     if (Exit.isSuccess(result)) return;
                     if (Cause.hasInterruptsOnly(result.cause))
                       return yield* Effect.failCause(result.cause);
+                    yield* assertGeneration.pipe(
+                      Effect.catchCause((cause) =>
+                        Effect.failCause(Cause.combine(result.cause, cause)),
+                      ),
+                    );
+                    if (last) publish({ ...last, observationStatus: 'reconnecting' });
                     const transient = result.cause.reasons.every(
                       (reason) => Cause.isFailReason(reason) && reason.error.code === 'Unavailable',
                     );
                     if (!transient || attempt >= P.streamLimits.reconnectMs.length)
                       return yield* Effect.failCause(result.cause);
-                    yield* assertGeneration;
-                    if (last) publish({ ...last, observationStatus: 'reconnecting' });
                     yield* Effect.sleep(P.streamLimits.reconnectMs[attempt]);
                   }
                 }).pipe(
