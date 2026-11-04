@@ -572,7 +572,11 @@ const Entry = memo(function Entry({
   const source = transcript?.source;
   const saved = state.view.anchor;
   const revealPart =
-    saved?.source && state.viewStatus === 'ready' && transcript && sameSource(transcript, saved)
+    saved?.partId &&
+    transcript &&
+    (saved.source
+      ? state.viewStatus === 'ready' && sameSource(transcript, saved)
+      : saved.entryId === entry.id)
       ? saved.partId
       : undefined;
   useEffect(() => {

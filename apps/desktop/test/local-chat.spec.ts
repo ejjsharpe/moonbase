@@ -562,6 +562,9 @@ test('transcript local rendering precedes held completion; native Copy/link fail
       JSON.stringify(layout, null, 2),
     );
     expect(layout.mainWidth).toBeGreaterThan(layout.innerWidth - 2);
+    const reading = live.getByText('First local chunk 🌔 and second chunk', { exact: true });
+    await reading.scrollIntoViewIfNeeded();
+    await expect(reading).toBeInViewport();
     await captureNative(
       app,
       page,

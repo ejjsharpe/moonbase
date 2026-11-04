@@ -2,7 +2,7 @@ import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'reac
 import { Button } from '@base-ui/react/button';
 import * as stylex from '@stylexjs/stylex';
 import * as monaco from 'monaco-editor';
-import type { Token, Tokens } from 'marked';
+import { marked, type Token, type Tokens } from 'marked';
 import { controls } from '@moonbase/ui/controls';
 import { colors, radius, space, type } from '@moonbase/ui/tokens.stylex';
 import {
@@ -15,7 +15,11 @@ import {
 } from './markdown-model.ts';
 
 export { markdownMetrics } from './markdown-model.ts';
-type Actions = { openLink(url: string): void; copyCode?(start: number): void };
+type Actions = {
+  openLink(url: string): void;
+  copyCode?(start: number): void;
+  insideLink?: boolean;
+};
 export const Markdown = memo(function Markdown({
   source,
   identity,
@@ -123,8 +127,17 @@ function renderToken(token: Token, actions: Actions): ReactNode {
     case 'image': {
       const link = token as Tokens.Link;
       const url = getExternalLink(link.href);
-      const label = token.type === 'image' ? `Image: ${link.text || link.href}` : content();
-      return url ? (
+      const label =
+        token.type === 'image'
+          ? `Image: ${link.text || link.href}`
+          : inline(link.tokens, { ...actions, insideLink: true });
+      if (token.type === 'image' && actions.insideLink) return link.text || link.href;
+      const images: Token[] = [];
+      if (token.type === 'link')
+        marked.walkTokens(link.tokens ?? [], (child) => {
+          if (child.type === 'image') images.push(child);
+        });
+      const reference = url ? (
         <a
           href={url}
           rel="noopener noreferrer"
@@ -144,6 +157,14 @@ function renderToken(token: Token, actions: Actions): ReactNode {
           {label}{' '}
           {link.href !== link.text && <code {...stylex.props(styles.inlineCode)}>{link.href}</code>}
         </span>
+      );
+      return (
+        <>
+          {reference}
+          {images.map((image, index) => (
+            <span key={index}> {renderToken(image, actions)}</span>
+          ))}
+        </>
       );
     }
     case 'blockquote':

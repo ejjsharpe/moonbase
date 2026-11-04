@@ -34,9 +34,10 @@ export class MarkdownCache {
     const locations = fences.map((fence) => {
       normalizedOffset += source.slice(originalOffset, fence.start).replace(/\r\n?/g, '\n').length;
       const offset = normalizedOffset;
-      normalizedOffset += source.slice(fence.start, fence.end).replace(/\r\n?/g, '\n').length;
+      const normalizedFence = source.slice(fence.start, fence.end).replace(/\r\n?/g, '\n');
+      normalizedOffset += normalizedFence.length;
       originalOffset = fence.end;
-      return { fence, offset, end: normalizedOffset };
+      return { fence, offset, end: offset + normalizedFence.trimEnd().length };
     });
     let position = 0,
       location = 0;

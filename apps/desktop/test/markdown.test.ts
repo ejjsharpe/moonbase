@@ -104,6 +104,7 @@ test('many original CRLF fences keep their own source locations and cache keys c
   for (let i = 0; i < code.length; i++) {
     assert.equal(code[i]!.token.sourceCode!.start, i * fence.length);
     assert.equal(code[i]!.token.sourceCode!.text, 'const moon = "🌔";\r\n');
+    assert.equal(code[i]!.token.sourceCode!.closed, true);
   }
   cache.clear();
   cache.parse('x'.repeat(2 * 1024 * 1024), '1', 'small text');

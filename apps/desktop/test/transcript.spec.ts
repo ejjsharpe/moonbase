@@ -43,6 +43,13 @@ test('safe GFM, literal user content, progressive source, exact native callbacks
     'https://example.com/read',
     'https://example.com/read',
   ]);
+  await expect(row.locator('a a')).toHaveCount(0);
+  await row.getByRole('link', { name: 'Badge target', exact: true }).click();
+  await row.getByRole('link', { name: 'Image: Badge target', exact: true }).click();
+  expect(await page.evaluate(() => window.demo.transcript!.links.slice(-2))).toEqual([
+    'https://example.com/badge',
+    'https://example.com/never-fetch-badge.png',
+  ]);
   await row.getByRole('button', { name: 'Copy code', exact: true }).click();
   await expect
     .poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1)))
@@ -319,6 +326,17 @@ test('automatic and keyboard history loading preserve semantic viewport anchors 
       ),
     )
     .toBe(anchor!.entryId);
+  await page.evaluate(async () => {
+    const controller = window.demo.application.chat!;
+    await controller.jumpToEntry('reading-179');
+    controller.setTranscriptView({
+      anchor: { entryId: 'reading-179', partId: 'm0.b5', offset: 16 },
+      expanded: [],
+    });
+  });
+  await expect(
+    answer(page).getByText('Published unknown record description', { exact: true }),
+  ).toBeVisible();
 });
 
 test('history retry repeats the captured navigation direction after a public read failure', async ({
