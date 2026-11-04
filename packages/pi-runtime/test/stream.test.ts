@@ -433,30 +433,13 @@ test('establishment/first snapshot is bounded and releases a held observation wi
   await wait(() => f.listeners.size === 0);
   assert(!f.calls.includes('getChat'));
 });
-test('idle expiry is bounded separately after initial snapshot and signed heartbeats keep a healthy stream alive', async (t) => {
+test('idle expiry is bounded separately after the initial snapshot', async (t) => {
   shortenDeadline(t, P.streamLimits.idleMs);
   const f = await fixture(t),
     w = f.observe();
   await wait(() => w.errors.length === 1);
   assert(w.views.some((v) => v.observationStatus === 'reconnecting'));
   assert.equal(f.acquisitions, 4);
-  const interval = setInterval;
-  t.mock.method(globalThis, 'setInterval', ((
-    callback: (...args: unknown[]) => void,
-    ms?: number,
-    ...args: unknown[]
-  ) =>
-    interval(
-      callback,
-      ms === P.streamLimits.heartbeatMs ? 10 : ms,
-      ...args,
-    )) as typeof setInterval);
-  const healthy = f.observe();
-  await wait(() => healthy.views.length === 1);
-  await new Promise((r) => setTimeout(r, 150));
-  assert.deepEqual(healthy.errors, []);
-  assert.equal(healthy.views.length, 1);
-  await healthy.close();
 });
 
 test('legacy capability absence retains the 250ms polling path and never opens a stream', async (t) => {
@@ -1025,63 +1008,139 @@ for (const failure of ['initial', 'once', 'persistent'] as const)
     await assert.rejects(w.close(), { code: 'Unauthorized' });
   });
 
-test('a stalled terminal finish is bounded and releases its observation without blocking RPC', async (t) => {
-  const f = await fixture(t),
-    nonce = P.nonce();
-  const grant = await fetch(f.origin + '/v1/chat/challenge', {
-    headers: {
-      'X-Moonbase-Nonce': nonce,
-      Authorization: `Moonbase-RPC-HMAC-SHA256 ${P.mac(f.token, 'challenge-request', nonce, 'GET', '/v1/chat/challenge')}`,
-    },
-  });
-  const { challenge } = (await grant.json()) as { challenge: string },
-    body = JSON.stringify({ target, connectionId: 'raw' });
-  const response = await fetch(f.origin + P.streamPath, {
-    method: 'POST',
-    body,
-    headers: {
-      'content-type': 'application/json',
-      'X-Moonbase-Nonce': nonce,
-      'X-Moonbase-Challenge': challenge,
-      Authorization: `Moonbase-RPC-HMAC-SHA256 ${P.streamMac(f.token, 'request', nonce, challenge, 'POST', P.streamPath, P.hash(body))}`,
-    },
-  });
-  const reader = response.body!.getReader();
-  await reader.read();
-  const entered = Promise.withResolvers<void>(),
-    end = ServerResponse.prototype.end;
-  t.mock.method(
-    ServerResponse.prototype,
-    'end',
-    function (this: ServerResponse, ...args: Parameters<typeof end>) {
-      if (this.getHeader('content-type') === 'application/vnd.moonbase.chat-stream-v1') {
-        entered.resolve();
-        return this;
-      }
-      return end.apply(this, args);
-    },
-  );
-  t.mock.timers.enable({ apis: ['setTimeout'] });
-  try {
-    f.failSource(
-      new ApplicationError({ code: 'Unauthorized', message: 'controlled source error' }),
+test(
+  'a stalled terminal finish is bounded and releases its observation without blocking RPC',
+  { timeout: 5000 },
+  async (t) => {
+    const f = await fixture(t),
+      nonce = P.nonce();
+    const grant = await fetch(f.origin + '/v1/chat/challenge', {
+      headers: {
+        'X-Moonbase-Nonce': nonce,
+        Authorization: `Moonbase-RPC-HMAC-SHA256 ${P.mac(f.token, 'challenge-request', nonce, 'GET', '/v1/chat/challenge')}`,
+      },
+    });
+    const { challenge } = (await grant.json()) as { challenge: string },
+      body = JSON.stringify({ target, connectionId: 'raw' });
+    const response = await fetch(f.origin + P.streamPath, {
+      method: 'POST',
+      body,
+      headers: {
+        'content-type': 'application/json',
+        'X-Moonbase-Nonce': nonce,
+        'X-Moonbase-Challenge': challenge,
+        Authorization: `Moonbase-RPC-HMAC-SHA256 ${P.streamMac(f.token, 'request', nonce, challenge, 'POST', P.streamPath, P.hash(body))}`,
+      },
+    });
+    const reader = response.body!.getReader();
+    await reader.read();
+    const entered = Promise.withResolvers<void>(),
+      end = ServerResponse.prototype.end;
+    t.mock.method(
+      ServerResponse.prototype,
+      'end',
+      function (this: ServerResponse, ...args: Parameters<typeof end>) {
+        if (this.getHeader('content-type') === 'application/vnd.moonbase.chat-stream-v1') {
+          entered.resolve();
+          return this;
+        }
+        return end.apply(this, args);
+      },
     );
-    await entered.promise;
-    assert.equal(f.releases, 0);
-    assert((await f.client.command('getChatHost', { host })).features?.includes('chat-stream-v1'));
-    t.mock.timers.tick(P.streamLimits.drainMs - 1);
-    assert.equal(f.releases, 0);
-    t.mock.timers.tick(1);
-    t.mock.timers.reset();
-    await wait(() => f.releases === 1);
-    assert.equal(f.listeners.size, 0);
-  } finally {
-    t.mock.timers.reset();
+    t.mock.timers.enable({ apis: ['setTimeout'] });
     try {
-      await reader.cancel();
-    } catch {
-      /* The bounded finish deliberately destroys the unfinished response. */
+      f.failSource(
+        new ApplicationError({ code: 'Unauthorized', message: 'controlled source error' }),
+      );
+      await entered.promise;
+      assert.equal(f.releases, 0);
+      assert(
+        (await f.client.command('getChatHost', { host })).features?.includes('chat-stream-v1'),
+      );
+      t.mock.timers.tick(P.streamLimits.drainMs - 1);
+      assert.equal(f.releases, 0);
+      t.mock.timers.tick(1);
+      t.mock.timers.reset();
+      await wait(() => f.releases === 1);
+      assert.equal(f.listeners.size, 0);
+    } finally {
+      t.mock.timers.reset();
+      try {
+        await reader.cancel();
+      } catch {
+        /* The bounded finish deliberately destroys the unfinished response. */
+      }
+      reader.releaseLock();
     }
-    reader.releaseLock();
-  }
-});
+  },
+);
+
+test(
+  'verified heartbeats keep the stream alive across production idle periods on a controlled clock',
+  { timeout: 5000 },
+  async (t) => {
+    const original = fetch;
+    let nextHeartbeat: { resolve: () => void; reject: (error: unknown) => void } | undefined;
+    t.mock.method(
+      globalThis,
+      'fetch',
+      async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+        const response = await original(url, init);
+        if (!String(url).endsWith(P.streamPath)) return response;
+        const reader = response.body!.getReader(),
+          read = reader.read.bind(reader),
+          decoder = new P.FrameDecoder();
+        let heartbeat = false;
+        t.mock.method(reader, 'read', async () => {
+          // A subsequent read means the adapter has authenticated and processed this heartbeat.
+          if (heartbeat) {
+            heartbeat = false;
+            nextHeartbeat?.resolve();
+          }
+          const part = await read();
+          if (!part.done)
+            for (const frame of decoder.push(part.value))
+              if ((P.json(frame.body) as ChatStreamFrame).kind === 'heartbeat') heartbeat = true;
+          return part;
+        });
+        t.mock.method(response.body!, 'getReader', () => reader);
+        return response;
+      },
+    );
+    t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+    const f = await fixture(t),
+      initial = Promise.withResolvers<void>(),
+      views: ChatSnapshot[] = [],
+      errors: ApplicationError[] = [];
+    const close = f.client.watch(
+      { target },
+      (value) => {
+        views.push(value);
+        initial.resolve();
+        if (value.observationStatus !== 'connected')
+          nextHeartbeat?.reject(Error('Healthy heartbeat stream became stale'));
+      },
+      (error) => {
+        errors.push(error);
+        initial.reject(error);
+        nextHeartbeat?.reject(error);
+      },
+    );
+    try {
+      await initial.promise;
+      for (let i = 0; i < 4; i++) {
+        const consumed = Promise.withResolvers<void>();
+        nextHeartbeat = consumed;
+        t.mock.timers.tick(P.streamLimits.heartbeatMs);
+        await consumed.promise;
+        assert.equal(errors.length, 0);
+      }
+      assert.equal(views.length, 1);
+      assert.equal(views[0].observationStatus, 'connected');
+      assert(!f.calls.includes('getChat'));
+    } finally {
+      t.mock.timers.reset();
+      await close();
+    }
+  },
+);
