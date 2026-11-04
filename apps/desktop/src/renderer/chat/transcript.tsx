@@ -787,9 +787,14 @@ function Part({
   const anchored =
     saved?.partId === part.partId &&
     (saved.source ? sameSource(transcript, saved) : saved.entryId === entryId);
+  const anchorKey = anchored ? JSON.stringify({ ...saved, offset: 0 }) : null;
+  const [collapsedAnchor, setCollapsedAnchor] = useState<string | null>(null);
+  if (!anchored && collapsedAnchor !== null) setCollapsedAnchor(null);
   const expanded =
     disclosureError ||
-    (applyView && ((expansion !== null && state.view.expanded.includes(expansion)) || anchored));
+    (applyView &&
+      ((expansion !== null && state.view.expanded.includes(expansion)) ||
+        (anchored && collapsedAnchor !== anchorKey)));
   const content = state.content.find(
     (item) =>
       sameSource(transcript, item) &&
@@ -930,15 +935,17 @@ function Part({
             aria-expanded={expanded}
             disabled={!expansion}
             {...stylex.props(controls.button, controls.quietButton)}
-            onClick={() =>
-              expansion &&
+            onClick={() => {
+              if (!expansion) return;
+              // An anchor's initial reveal must not undo an explicit collapse.
+              if (expanded && anchored) setCollapsedAnchor(anchorKey);
               controller.setTranscriptView({
                 anchor: state.view.anchor,
                 expanded: expanded
                   ? state.view.expanded.filter((id) => id !== expansion)
                   : [...state.view.expanded, expansion],
-              })
-            }>
+              });
+            }}>
             {part.toolName ? `${part.toolName} · ` : ''}
             {partLabels[part.kind]}
             {part.state ? ` · ${part.state}` : ''}

@@ -58,8 +58,100 @@ test('latest snapshot recovery diagnostics survive running metadata and pinned o
     'Uncertain · Current receipt needs recovery',
   );
   await expect(live.locator('pre')).toContainText('Retain this selected source');
+  await mkdir(output, { recursive: true });
+  await page.screenshot({ path: resolve(output, 'r1-current-status.png') });
 });
 
+for (const mode of ['durable', 'live'] as const)
+  test(`${mode} anchored disclosure explicitly collapses without losing its viewport or other expansions`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 540 });
+    await open(page);
+    if (mode === 'live')
+      await page.evaluate(async () => {
+        await window.demo.transcript!.live(
+          'Live disclosure source',
+          Array.from({ length: 5 }, (_, index) => `Output ${index}\n` + 'line\n'.repeat(100)),
+        );
+        await window.demo.application.chat!.jumpToLatest();
+      });
+    const row = mode === 'live' ? page.locator('[data-transcript-live]') : answer(page);
+    const part = row.locator('[data-transcript-part="m0.b1"]');
+    for (const id of ['m0.b2', 'm0.b3'])
+      await row
+        .locator(`[data-transcript-part="${id}"]`)
+        .getByRole('button', { expanded: false })
+        .first()
+        .click();
+    const others = await page.evaluate(
+      () => window.demo.application.chat!.getSnapshot().transcript.view.expanded,
+    );
+    await part.getByRole('button', { expanded: false }).first().click();
+    await page.evaluate((mode) => {
+      const controller = window.demo.application.chat!;
+      const state = controller.getSnapshot();
+      const summary =
+        mode === 'live'
+          ? state.snapshot!.run!.transcript!
+          : state.transcript.entries.find((entry) => entry.id === 'reading-179')!.transcript!;
+      const descriptor = summary.parts.find((part) => part.partId === 'm0.b1')!;
+      const anchor =
+        summary.source.kind === 'live'
+          ? {
+              backendId: controller.backendId,
+              source: summary.source,
+              partId: descriptor.partId,
+              bytes: descriptor.bytes,
+              revision: descriptor.revision,
+              offset: 16,
+            }
+          : { entryId: 'reading-179', partId: descriptor.partId, offset: 16 };
+      controller.setTranscriptView({ anchor, expanded: state.transcript.view.expanded });
+    }, mode);
+    const offset = () =>
+      part.evaluate(
+        (element) =>
+          element.getBoundingClientRect().top -
+          document.querySelector('[data-transcript-chrome]')!.getBoundingClientRect().bottom,
+      );
+    await expect.poll(offset).toBeCloseTo(16, 0);
+    const anchor = await page.evaluate(
+      () => window.demo.application.chat!.getSnapshot().transcript.view.anchor,
+    );
+    const toggle = part.getByRole('button', { expanded: true }).first();
+    await toggle.click();
+    await expect(part.getByRole('button', { expanded: false }).first()).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
+    await expect(part.locator('pre')).toHaveCount(0);
+    await page.evaluate(() =>
+      window.demo.chat.controls.receiveChat(structuredClone(window.demo.chat.snapshot)),
+    );
+    await expect(part.getByRole('button', { expanded: false }).first()).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
+    await expect.poll(offset).toBeCloseTo(16, 0);
+    expect(
+      await page.evaluate(
+        () => window.demo.application.chat!.getSnapshot().transcript.view.expanded,
+      ),
+    ).toEqual(others);
+    expect(
+      await page.evaluate(() => window.demo.application.chat!.getSnapshot().transcript.view.anchor),
+    ).toEqual(anchor);
+    for (const id of ['m0.b2', 'm0.b3'])
+      await expect(
+        row
+          .locator(`[data-transcript-part="${id}"]`)
+          .getByRole('button', { expanded: true })
+          .first(),
+      ).toBeVisible();
+    await mkdir(output, { recursive: true });
+    await page.screenshot({ path: resolve(output, `r1-${mode}-collapsed.png`) });
+  });
 test('safe GFM, literal user content, progressive source, exact native callbacks and normal/compact/200% reading', async ({
   page,
 }) => {
