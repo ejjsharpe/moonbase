@@ -667,3 +667,32 @@ test('terminal onError invalidates completed live hydration even when a local wa
   await assert.rejects(collect(f.controller.iterateTranscript(source, { selection: chosen })));
   assert.match(f.controller.getSnapshot().error!, /^Unauthorized:/);
 });
+
+test('history traverses every entry backward and forward across summary eviction', async (t) => {
+  const f = await transcriptController(t, 640);
+  for (const direction of ['earlier', 'later'] as const) {
+    const seen = new Set<string>();
+    for (let step = 0; step < 100; step++) {
+      const state = f.controller.getSnapshot().transcript;
+      for (const entry of state.entries) seen.add(entry.id);
+      assert.equal(state.error, null);
+      assert(state.entries.length <= transcriptLimits.displayedRows);
+      assert(state.retained.summaries <= transcriptLimits.summaryRecords);
+      assert(state.retained.summaryBytes <= transcriptLimits.summaryBytes);
+      assert.deepEqual(
+        state.entries.map((entry) => entry.id),
+        f.entries
+          .filter((entry) => state.entries.some((value) => value.id === entry.id))
+          .map((entry) => entry.id),
+      );
+      if (!state[direction]) break;
+      await (direction === 'earlier' ? f.controller.older() : f.controller.later());
+    }
+    assert.equal(seen.size, 640, direction);
+    const state = f.controller.getSnapshot().transcript;
+    assert.equal(state[direction], false);
+    assert.equal(state.atLatest, direction === 'later');
+    assert.equal(state[direction === 'earlier' ? 'later' : 'earlier'], true);
+  }
+  assert.equal(f.controller.getSnapshot().transcript.entries.at(-1)!.id, 'e639');
+});

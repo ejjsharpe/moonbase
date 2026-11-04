@@ -639,18 +639,21 @@ export class TranscriptOwner {
   };
   private rememberWindow(direction: 'earlier' | 'later') {
     const entry = direction === 'earlier' ? this.records.at(-1) : this.records[this.start];
-    this.setView({
+    this.rememberView({
       ...this.state.view,
       anchor: this.following || !entry ? null : { entryId: entry.id, offset: 0 },
     });
   }
-  setView(view: TranscriptView) {
-    if (!this.alive) return;
+  private rememberView(view: TranscriptView) {
     this.dependencies.memory.set(this.dependencies.backend, this.dependencies.target, view);
     this.state = {
       ...this.state,
       view: this.dependencies.memory.get(this.dependencies.backend, this.dependencies.target),
     };
+  }
+  setView(view: TranscriptView) {
+    if (!this.alive) return;
+    this.rememberView(view);
     if (view.anchor) this.following = false;
     this.publish();
   }
