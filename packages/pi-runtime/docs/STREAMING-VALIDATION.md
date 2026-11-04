@@ -2,7 +2,7 @@
 
 Checked on 2026-11-04 in `/Users/elliotsharpe/.t3/worktrees/moonbase/t3-ac64d7c9`, branch `feat/chat-stream-123`, with Node `v26.13.0`, Bun `1.4.4`, pinned Pi Durable/AI/Chord `1.4.0` and unchanged dependencies/lockfile. Current #108/#123 were read through `gh`, along with root/module/architecture/lifecycle and #109/#122 contracts.
 
-## Prerequisites
+## Initial prerequisites before final rebase
 
 The checkout began at main `1bb0ad0917ffb1bdd08f06cadec416354ac680a4`. Requested prerequisites were applied in order:
 
@@ -16,6 +16,24 @@ The checkout began at main `1bb0ad0917ffb1bdd08f06cadec416354ac680a4`. Requested
 `e869be8` was not cherry-picked. The sole integration conflict was the transcript import list: both `ToolTaskCheckpoint` and `EntryId` were retained. There was no substantive #122 integration fix. All **25 combined transcript/observation tests passed before #123 coding** at initial prerequisite base `132e9d6e04a98156c296e0d3d64ed6c588a162c4`.
 
 The supplied #122 sustained-progress correction `008984dbf5c3a17bbe5e2fad4f25a7d7daa3bdbb` was cherry-picked separately as `399aafb7eb193479bf53fca50914da55bae8faa7`; its unsafe-invalidation fences and delayed-capture regression tests remain upstream-owned and unchanged.
+
+## Final combined prerequisite base
+
+The parent supplied **`ff26094b077fd03295518d31bdfccad1a2f8a000`** as the final combined #122 head, containing approved #109 **`467acb877591b00b1a257ceb8aea258c12dfb9f5`** and the #122 capture/inspection, progress and retirement-fence corrections. This is the **final #123 diff base**. The initial cherry-picked prerequisite history above was replaced, not replayed.
+
+Only the #123 commit was rebased:
+
+```sh
+git rebase --onto ff26094b077fd03295518d31bdfccad1a2f8a000 399aafb7eb193479bf53fca50914da55bae8faa7 feat/chat-stream-123
+```
+
+The rebased implementation is **`2912bd6a12cb24836633681e6cf0cf2448e3ab56`**. The sole conflict appended ownership documentation; both the upstream retirement paragraph and #123 network-observation section were retained. No behavior integration correction or separate upstream fix was needed. No #109/#122 checkout was modified. The final qualification commit changes only this evidence file.
+
+Delta-preservation evidence:
+
+- `git range-diff 399aafb7..04c92ef ff26094b..2912bd6` shows only ownership-document context changed by the retained upstream paragraph.
+- All **14 non-Markdown file patches** are byte-identical between the original and rebased #123 ranges. Their shared SHA-256 is **`fee43754c65a012012337ade15268a386a8f7348580e38ce6936e1cc953835a2`**.
+- A diff against `ff26094b` is empty for upstream `commands.ts`, `history.ts`, `transcript.ts`, `observation.test.ts`, `transcript.test.ts`, `OBSERVATION.md` and `OBSERVATION-VALIDATION.md`. Per-attempt capture/retry hooks, unsafe-control fences, selective private-retirement suppression and ordinary-error propagation are preserved exactly.
 
 ## Source and controlled evidence
 
@@ -35,7 +53,7 @@ The [protocol](STREAMING.md) documents actual proofs, capacity/byte bounds, sepa
 
 ## Checks before final prerequisite rebase
 
-At #123 commit `398852c` on prerequisite `399aafb` (before the forthcoming combined #109/#122 rebase):
+At the original #123 implementation tree (`04c92ef`, production code unchanged from `398852c`) on prerequisite `399aafb`, before the combined #109/#122 rebase:
 
 | Command | Result |
 | --- | --- |
@@ -50,6 +68,34 @@ At #123 commit `398852c` on prerequisite `399aafb` (before the forthcoming combi
 | `bun run test:chat-integration` | Pass, 10; run serially after root/resource-heavy work |
 
 The full root run includes the controlled Electron Node24 stream/graph check, 157 Pi tests and 55 desktop tests. Logs are `/tmp/stream123-*.log`. The completion-boundary assertion was then strengthened in the controlled integration suite and is verified separately from root package tests.
+
+## Fresh review corrections on the combined base
+
+The review of original `04c92ef` identified two remote-observation defects. Both corrections are separate commits above rebased implementation `2912bd6`; they do not change the approved #109/#122 source or tests.
+
+- **P1**, **`491600b2ddba5a11d9951e5c2788d3fdc62c409e`**: failed queues drain pending values, so enqueue-time authority checks were insufficient for a held public `ChatService.watch` consumer. The returned service stream now rechecks its captured generation at dequeue/publication. A controlled public service test waits until a second authenticated replacement is buffered, replaces the connection, then releases the first consumer. Before the fix it received two snapshots, including old-generation content after replacement; after the fix it receives only the initial snapshot and `Unavailable`, and server watch resources release. The test synchronizes through public transport readers and the supplied connection port, without application selection epochs or private queue access.
+- **P2**, **`d9aeb23dda6d062ad3608f24e478930dfa32acfb`**: stale marking previously followed the terminal/exhaustion branch. The adapter now marks retained verified content `reconnecting` after an in-generation failure and before retry or terminal error delivery. A failed generation check fences this update; combined failures retain the original cause. The four-attempt EOF regression failed with final `connected` before the fix and passes with final stale `reconnecting`, unchanged target/boundary, one terminal error and complete listener release. A repeated-frame terminal failure similarly retains only the verified content as stale while reporting `Incompatible`; independent reader cleanup failures remain observable. Existing status types and watch signatures are unchanged. #110 combines stale snapshot status with terminal `onError` to distinguish exhausted/permanent failure from active retry.
+
+The corrected implementation tested below is **`d9aeb23dda6d062ad3608f24e478930dfa32acfb`**, based on **`ff26094b077fd03295518d31bdfccad1a2f8a000`**. The subsequent qualification commit changes only this evidence file. The earlier patch-equality proof applies to the initial rebase at `2912bd6`; the two reviewed corrections are explicit subsequent deltas.
+
+## Final qualification after corrections
+
+The following checks ran on corrected code head `d9aeb23dda6d062ad3608f24e478930dfa32acfb` over final prerequisite base `ff26094b077fd03295518d31bdfccad1a2f8a000`. Resource-heavy runs were serial: focused Pi suites, then the full root suite, then cross-process chat integration. No assertion, deadline or runtime setting was weakened.
+
+| Command | Result |
+| --- | --- |
+| `node --experimental-strip-types --test --test-concurrency=1 --test-timeout=30000 packages/pi-runtime/test/{history,lifecycle,observation,transcript,stream}.test.ts` | Pass, **86**, including all 60 upstream focused cases and 26 stream cases |
+| `NX_DAEMON=false bun run check:foundation` | Pass; unchanged baseline bytes, ownership/exports and 278-input browser consumer |
+| `NX_DAEMON=false NX_SKIP_NX_CACHE=true bun run typecheck` | Pass, all **8** tasks, cache skipped |
+| `bun run lint`, `bun run format:check`, `git diff --check` | Pass |
+| `NX_DAEMON=false NX_SKIP_NX_CACHE=true bun run test --output-style=static` | Pass, repository script + all **8** package tasks, **783** tests total; cache skipped |
+| `bun run test:chat-integration` | Pass, **10** controlled process/forwarding tests |
+
+The final root run includes **163 Pi tests**, the compiled Electron Node24 remote stream/graph check, embedded-local Electron qualification, 68 contract tests, 300 application tests and 55 desktop tests. The process suite still sees first thinking/text before the explicit next-chunk gate opens and before completion, exact final boundary replacement, zero recurring capable-host `getChat`, unchanged progress-only history/status reads, no A publication/read from B, independent exact Stop and complete watch cleanup. Public watch signatures, DTO identities and legacy polling/mutation/health behavior remain unchanged.
+
+Logs: `/tmp/stream123-corrected-{focused,foundation,typecheck,root,integration}.log`; reviewer-regression red/green evidence: `/tmp/stream123-p1-{red,green}.log` and `/tmp/stream123-p2-{red,green}.log`.
+
+One earlier full run at the rebased implementation failed only the existing embedded-local Electron fixture with its generic `Embedded local qualification failed` message. The original unchanged fixture then passed **six isolated runs**, and the final uncached root run passed it as well. The failure was not reproduced in isolation and no unrelated production/test workaround was added; its cause remains unqualified. The remote Electron stream/graph test passed in both full runs. Earlier failure log: `/tmp/stream123-rebase-root.log`.
 
 ## Limits
 
