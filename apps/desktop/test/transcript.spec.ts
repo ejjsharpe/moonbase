@@ -195,13 +195,13 @@ test('incomplete/unknown/oversized code remains readable and copyable; fence/ref
     (await page.evaluate(() => window.demo.transcript!.metrics.tokenize)) - before.tokenize,
   ).toBe(0);
   await page.evaluate(() =>
-    window.demo.transcript!.live('```typescript\n' + 'const value = 1;\n'.repeat(4500) + '```\n'),
+    window.demo.transcript!.live('```typescript\n' + 'const value = 1;\n'.repeat(18000) + '```\n'),
   );
   await page.evaluate(async () => {
     const controller = window.demo.application.chat!;
     const summary = controller.getSnapshot().snapshot!.run!.transcript!,
       part = summary.parts[0]!;
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 24; i++) {
       await controller.loadTranscriptPart(summary.source, {
         partId: part.partId,
         bytes: part.bytes,
@@ -216,16 +216,17 @@ test('incomplete/unknown/oversized code remains readable and copyable; fence/ref
         break;
     }
   });
-  await expect(live.getByRole('button', { name: /Show all 4501 lines/ })).toBeVisible();
+  await expect(live.getByRole('button', { name: /Show all 18001 lines/ })).toBeVisible();
   await live.getByRole('button', { name: 'Copy code', exact: true }).click();
   await expect
     .poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1)))
-    .toBe('const value = 1;\n'.repeat(4500));
-  await live.getByRole('button', { name: /Show all 4501 lines/ }).click();
+    .toBe('const value = 1;\n'.repeat(18000));
+  await live.getByRole('button', { name: /Show all 18001 lines/ }).click();
   await expect(live.getByRole('button', { name: 'Fold code', exact: true })).toBeVisible();
   expect(
     await live.locator('pre').evaluate((element) => element.scrollHeight > element.clientHeight),
   ).toBe(true);
+  await expect(live.locator('pre code span')).toHaveCount(0);
   await page.evaluate(() =>
     window.demo.transcript!.live(
       'Replacement with &amp; and &#x1f314; <img src="https://example.com/no-fetch" onerror="alert(1)">',

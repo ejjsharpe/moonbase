@@ -23,9 +23,6 @@ export const Markdown = memo(function Markdown({
   cache,
   ...actions
 }: Actions & { source: string; identity: string; revision: string; cache: MarkdownCache }) {
-  // Very large prose remains progressive plain text; this bounds parser work without limiting retrieval or Copy.
-  if (new TextEncoder().encode(source).length > 256 * 1024)
-    return <pre {...stylex.props(styles.literal)}>{source}</pre>;
   return (
     <div {...stylex.props(styles.prose)}>
       {cache.parse(identity, revision, source).map((block, index) => (
@@ -45,15 +42,7 @@ const Block = memo(
       [pinned, setPinned] = useState(false);
     useEffect(() => {
       const update = () => {
-        const selection = window.getSelection();
-        setPinned(
-          !!root.current &&
-            (root.current.contains(document.activeElement) ||
-              (!!selection &&
-                !selection.isCollapsed &&
-                selection.rangeCount > 0 &&
-                selection.getRangeAt(0).intersectsNode(root.current))),
-        );
+        setPinned(isReadingNodePinned(root.current));
       };
       document.addEventListener('selectionchange', update);
       document.addEventListener('focusin', update);
@@ -73,6 +62,17 @@ const Block = memo(
     a.openLink === b.openLink &&
     a.copyCode === b.copyCode,
 );
+function isReadingNodePinned(node: HTMLElement | null) {
+  const selection = window.getSelection();
+  return (
+    !!node &&
+    (node.contains(document.activeElement) ||
+      (!!selection &&
+        !selection.isCollapsed &&
+        selection.rangeCount > 0 &&
+        selection.getRangeAt(0).intersectsNode(node)))
+  );
+}
 function inline(tokens: Token[] | undefined, actions: Actions): ReactNode {
   return tokens?.map((token, index) => <span key={index}>{renderToken(token, actions)}</span>);
 }
@@ -230,6 +230,7 @@ const Code = memo(function Code({
   closed: boolean;
   copy?: () => void;
 }) {
+  const pre = useRef<HTMLPreElement>(null);
   const [expanded, setExpanded] = useState(false);
   const known = monaco.languages
     .getLanguages()
@@ -244,15 +245,24 @@ const Code = memo(function Code({
   const supported = !!languageId && canHighlight(text, closed);
   useEffect(() => {
     if (!supported || !languageId) return;
-    let active = true;
+    let active = true,
+      loaded = false;
+    const apply = () => {
+      if (active && loaded && !isReadingNodePinned(pre.current)) setReady(languageId);
+    };
+    document.addEventListener('selectionchange', apply);
+    document.addEventListener('focusout', apply);
     void prepareLanguage(languageId).then(
       () => {
-        if (active) setReady(languageId);
+        loaded = true;
+        apply();
       },
       () => {},
     );
     return () => {
       active = false;
+      document.removeEventListener('selectionchange', apply);
+      document.removeEventListener('focusout', apply);
     };
   }, [supported, languageId]);
   const tokens = useMemo(
@@ -277,25 +287,27 @@ const Code = memo(function Code({
           </Button>
         )}
       </div>
-      <pre tabIndex={0} {...stylex.props(controls.pre, styles.codeText)}>
+      <pre ref={pre} tabIndex={0} {...stylex.props(controls.pre, styles.codeText)}>
         <code>
-          {visible.map((line, index) => (
-            <span key={index}>
-              {tokens?.[index]?.length
-                ? tokens[index]!.map((token, part) => (
-                    <span
-                      key={part}
-                      {...stylex.props(
-                        /comment/.test(token.type) && styles.comment,
-                        /keyword/.test(token.type) && styles.keyword,
-                      )}>
-                      {line.slice(token.offset, tokens![index]![part + 1]?.offset)}
-                    </span>
-                  ))
-                : line}
-              {index < visible.length - 1 ? '\n' : ''}
-            </span>
-          ))}
+          {tokens
+            ? visible.map((line, index) => (
+                <span key={index}>
+                  {tokens?.[index]?.length
+                    ? tokens[index]!.map((token, part) => (
+                        <span
+                          key={part}
+                          {...stylex.props(
+                            /comment/.test(token.type) && styles.comment,
+                            /keyword/.test(token.type) && styles.keyword,
+                          )}>
+                          {line.slice(token.offset, tokens![index]![part + 1]?.offset)}
+                        </span>
+                      ))
+                    : line}
+                  {index < visible.length - 1 ? '\n' : ''}
+                </span>
+              ))
+            : visible.join('\n')}
         </code>
       </pre>
       {lines.length > 40 && (

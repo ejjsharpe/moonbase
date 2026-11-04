@@ -86,7 +86,7 @@ export function Transcript({
   const capture = useCallback(() => {
     const element = root.current;
     if (!element) return;
-    const top = element.getBoundingClientRect().top;
+    const top = getReadingTop(element);
     const nodes = [
       ...element.querySelectorAll<HTMLElement>('[data-transcript-part], [data-transcript-entry]'),
     ];
@@ -131,7 +131,7 @@ export function Transcript({
     const node = part || entry;
     if (node)
       element.scrollTop +=
-        node.getBoundingClientRect().top - element.getBoundingClientRect().top - target.offset;
+        node.getBoundingClientRect().top - getReadingTop(element) - target.offset;
   }, []);
   useLayoutEffect(() => {
     const view = state.transcript.view.anchor;
@@ -262,25 +262,34 @@ export function Transcript({
               : 'This view is offline. Its draft and unresolved command identities are retained.'}
           </p>
         )}
-        <div {...stylex.props(controls.row, styles.navigation)}>
-          <Button
-            {...stylex.props(controls.button, controls.quietButton)}
-            disabled={!state.ready || (!transcript.earlier && !hiddenRow) || transcript.loading}
-            onClick={earlier}>
-            {transcript.loading ? 'Loading history…' : 'Load earlier'}
-          </Button>
-          {transcript.later && (
+        <div data-transcript-chrome {...stylex.props(styles.chrome)}>
+          <div {...stylex.props(controls.row, styles.navigation)}>
             <Button
               {...stylex.props(controls.button, controls.quietButton)}
-              disabled={!state.ready || transcript.loading}
-              onClick={() => move('later')}>
-              Read later
+              disabled={!state.ready || (!transcript.earlier && !hiddenRow) || transcript.loading}
+              onClick={earlier}>
+              {transcript.loading ? 'Loading history…' : 'Load earlier'}
             </Button>
-          )}
-          {(!following || !transcript.atLatest) && (
-            <Button {...stylex.props(controls.button, controls.quietButton)} onClick={latest}>
-              Jump to latest
-            </Button>
+            {transcript.later && (
+              <Button
+                {...stylex.props(controls.button, controls.quietButton)}
+                disabled={!state.ready || transcript.loading}
+                onClick={() => move('later')}>
+                Read later
+              </Button>
+            )}
+            {(!following || !transcript.atLatest) && (
+              <Button {...stylex.props(controls.button, controls.quietButton)} onClick={latest}>
+                Jump to latest
+              </Button>
+            )}
+          </div>
+          {notice && (
+            <p
+              role={notice.error ? 'alert' : 'status'}
+              {...stylex.props(notice.error ? styles.warning : styles.small, styles.feedback)}>
+              {notice.text}
+            </p>
           )}
         </div>
         {transcript.error && (
@@ -320,13 +329,7 @@ export function Transcript({
             Upgrade this host for complete transcript reads and Copy. Previews remain readable.
           </p>
         )}
-        {notice && (
-          <p
-            role={notice.error ? 'alert' : 'status'}
-            {...stylex.props(notice.error ? styles.warning : styles.small, styles.feedback)}>
-            {notice.text}
-          </p>
-        )}
+
         {entries.map((entry) => (
           <Entry
             key={entry.id}
@@ -725,6 +728,13 @@ function Part({
     </section>
   );
 }
+function getReadingTop(element: HTMLElement) {
+  return Math.max(
+    element.getBoundingClientRect().top,
+    element.querySelector<HTMLElement>('[data-transcript-chrome]')?.getBoundingClientRect()
+      .bottom ?? 0,
+  );
+}
 const partLabels = {
   text: 'Text',
   thinking: 'Thinking',
@@ -752,21 +762,9 @@ const styles = stylex.create({
     minWidth: 0,
   },
   measure: { maxWidth: layout.conversation, margin: '0 auto', minWidth: 0 },
-  navigation: {
-    flexWrap: 'wrap',
-    minHeight: 28,
-    position: 'sticky',
-    top: 0,
-    zIndex: 1,
-    backgroundColor: colors.canvas,
-  },
-  feedback: {
-    position: 'sticky',
-    top: 32,
-    zIndex: 1,
-    backgroundColor: colors.canvas,
-    padding: space.sm,
-  },
+  chrome: { position: 'sticky', top: 0, zIndex: 1, backgroundColor: colors.canvas },
+  navigation: { flexWrap: 'wrap', minHeight: 28 },
+  feedback: { padding: space.sm, margin: 0 },
   message: { margin: '24px 0', minWidth: 0 },
   header: {
     display: 'flex',
