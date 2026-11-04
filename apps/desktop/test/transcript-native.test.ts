@@ -185,6 +185,44 @@ test('native Copy reads complete authored Markdown beyond previews with exact Un
   assert.ok(f.reads > 4);
   await f.owner.dispose();
 });
+test('native actions retain their captured backend across a held Copy with identical public source identities', async () => {
+  const first = fixture(false, 'First backend 🌔\r\n'.repeat(5000)),
+    second = fixture(false, 'Different backend content');
+  let selected = 'first';
+  const held = Promise.withResolvers<void>(),
+    started = Promise.withResolvers<void>();
+  first.controls.beforeRead = async (read) => {
+    if (read === 2) {
+      started.resolve();
+      await held.promise;
+    }
+  };
+  const resolveOwner = (backend = selected) => (backend === 'first' ? first.owner : second.owner);
+  const bridge: ChatBridge = {
+    context: async () => context,
+    call: (kind, operation, input, id, backend) =>
+      resolveOwner(backend).call(kind, operation, input, id),
+    cancel: (id, backend) => resolveOwner(backend).cancel(id),
+    events: () => () => {},
+  };
+  const actions = browserTranscriptActions(bridge, selected);
+  try {
+    assert.deepEqual(first.source, second.source);
+    const copying = actions.copy({ source: first.source });
+    await started.promise;
+    selected = 'second';
+    held.resolve();
+    await copying;
+    await actions.openLink('https://example.com/retained-backend');
+    assert.deepEqual(first.writes, [first.original]);
+    assert.deepEqual(second.writes, []);
+    assert.deepEqual(first.links, ['https://example.com/retained-backend']);
+    assert.deepEqual(second.links, []);
+  } finally {
+    held.resolve();
+    await Promise.all([first.owner.dispose(), second.owner.dispose()]);
+  }
+});
 test('source ranges select original whitespace and repeated/nested fences; renderer supplies no text', async () => {
   const f = fixture(false, 'before\r\n```ts\r\n  🌔\t\r\n```\r\nafter');
   const start = f.original.indexOf('```ts');
