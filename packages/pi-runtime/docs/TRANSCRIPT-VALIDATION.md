@@ -63,3 +63,20 @@ The exact portable DTO/read/cursor/live-Copy/navigation contract is [TRANSCRIPTS
 Cursor MAC keys are transient: restart an immutable read from its source/entry after host restart. Live finalization without explicit tool-part correspondence requires a coherent reload; text/task/attempt equality is never proof. Complete live Copy must revalidate its fixed selection immediately before the native write and reject newer observed source changes. The public SDK materializes a retained record/document in memory; the new limits bound transport and paging, not the SDK's own record allocation. Multi-megabyte records were exercised, without claiming physical performance qualification.
 
 Full root `bun run test`, editor integration, desktop build/browser/native/package suites, old packaged executable compatibility, manual accessibility/performance, physical durability, Intel and real SSH/provider qualification were not run. They remain integrated-epic qualification; the focused desktop check here is a source test, not native IPC execution. SDK omission/redaction and unavailable media remain explicit, and no spill/current-file recovery is attempted.
+
+## Independent review correction: retained nested results (P1)
+
+Review base: rebased implementation `d6e297affa9fe035592ea91e2c2e6402c648496d` atop `main` `1bb0ad0`. The reviewer correctly found that Pi clears nested-slot progress at settlement; the complete result remains in the parent's public `NestedCallDoc` while that owner is live.
+
+The projection now reads that exact document using the validated child task's parent/key. It checks child/parent conversation ownership, task ownership, original call identity, the document's child task ID and the result's task ID before normalizing retained text, ordered media, program JSON, details/patch/diff and diagnostics. Missing results are explicit unavailable activity; retired sources return `Conflict`, and mismatched retained identities fail without content. It uses the existing bounded read/source revalidation and SDK Promise ownership; no new port, store, admission or lifecycle behavior is introduced.
+
+The public regression first failed with an available completed result containing zero bytes. After the fix it passes against temporary real Pi SQLite: the parent stays running after children finish, including a `progress: false` child; public content paging reconstructs the retained output/patch/diff/diagnostics, ordered image/text and empty program JSON. Tampered index/result IDs and a wrong conversation reject, and the captured live source becomes invalid after the parent ends.
+
+Checks for this correction:
+
+- `bun run --cwd packages/pi-runtime typecheck` — pass.
+- `bun run --cwd packages/pi-runtime lint` — pass.
+- `node --experimental-strip-types --test --test-name-pattern='completed nested results' packages/pi-runtime/test/transcript.test.ts` — pass, 1 test.
+- `git diff --check` — pass.
+
+This is source/controlled SDK evidence. Native/build/package/manual and real provider/SSH checks were not run for the correction.

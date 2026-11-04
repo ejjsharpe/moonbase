@@ -3,6 +3,9 @@ import { test, type TestContext } from 'node:test';
 import {
   Harness,
   LiveDoc,
+  NestedCallDoc,
+  type NestedCallState,
+  type TaskId,
   GenerationTask,
   ToolTask,
   hook,
@@ -702,4 +705,162 @@ test('live executed arguments, retained tails and interrupted tool evidence stay
   assert(retained.some((part) => part.kind === 'result' && part.text.includes('retained tail')));
   await f.restart();
   assert.deepEqual(await manifest(f.client, result.transcript!.source), retained);
+});
+
+test('completed nested results read their exact retained output, patch and diagnostics while the parent stays live', async (t) => {
+  let release!: () => void,
+    completed = false,
+    nestedTaskId = '',
+    mediaTaskId = '',
+    arrayTaskId = '';
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  t.after(() => release());
+  const output = 'retained child output 😀 '.repeat(1200),
+    patch = '--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+retained child change\n';
+  const registry = createRegistry();
+  registry.install(
+    defineExtension({
+      name: 'nested-result',
+      tools: [
+        defineTool({
+          name: 'parent',
+          description: 'Hold the nested result owner open',
+          parameters: Type.Object({}),
+          execute: async (_, api, ctx) => {
+            const result = await api.executeTool('child', {}, ctx, {
+              key: 'retained',
+              progress: false,
+            });
+            nestedTaskId = String(result.taskId);
+            assert.equal(result.structuredOutput, output);
+            mediaTaskId = String(
+              (await api.executeTool('media_child', {}, ctx, { key: 'media' })).taskId,
+            );
+            arrayTaskId = String(
+              (await api.executeTool('array_child', {}, ctx, { key: 'array' })).taskId,
+            );
+            completed = true;
+            await gate;
+            return { output: [{ type: 'text', text: 'Parent complete' }] };
+          },
+        }),
+        defineTool({
+          name: 'child',
+          description: 'Return retained nested content',
+          parameters: Type.Object({}),
+          execute: async () => ({
+            output: [{ type: 'text', text: output }],
+            details: { patch, diff: 'recorded numbered diff' },
+            diagnostics: [
+              { severity: 'warn', code: 'retained-fixture', message: 'Retained child notice' },
+            ],
+          }),
+        }),
+        defineTool({
+          name: 'media_child',
+          description: 'Retain ordered nested media',
+          parameters: Type.Object({}),
+          execute: async () => ({
+            output: [
+              { type: 'text', text: 'before image' },
+              {
+                type: 'image',
+                data: Buffer.from([0, 1, 2, 254, 255]).toString('base64'),
+                mimeType: 'image/png',
+              },
+              { type: 'text', text: 'after image' },
+            ],
+          }),
+        }),
+        defineTool({
+          name: 'array_child',
+          description: 'Retain empty program JSON',
+          parameters: Type.Object({}),
+          structuredOutputSchema: Type.Array(Type.Number()),
+          execute: async () => ({ structuredOutput: [] }),
+        }),
+      ],
+    }),
+  );
+  const getHarness = captureHarness(t),
+    f = await fixture(t, registry),
+    target = await f.create(),
+    other = await f.create('other');
+  f.faux.setResponses([
+    fauxAssistantMessage([fauxToolCall('parent', {})], { stopReason: 'toolUse' }),
+    fauxAssistantMessage('Done'),
+  ]);
+  await f.client.command('sendChat', { target, requestId: 'nested', text: 'Run a nested child' });
+  await until(async () => completed, Boolean);
+  const view = await f.client.command('getChat', { target });
+  assert(view.run);
+  const source = view.run.transcript!.source;
+  const allParts = await manifest(f.client, source);
+  const media = allParts.filter(
+    (part) => part.taskId === mediaTaskId && (part.kind === 'result' || part.kind === 'image'),
+  );
+  assert.deepEqual(
+    media.map((part) => part.kind),
+    ['result', 'image', 'result'],
+  );
+  assert.equal((await content(f.client, source, media[0])).toString(), 'before image');
+  assert.deepEqual(await content(f.client, source, media[1]), Buffer.from([0, 1, 2, 254, 255]));
+  assert.equal((await content(f.client, source, media[2])).toString(), 'after image');
+  const array = allParts.find((part) => part.taskId === arrayTaskId && part.kind === 'result')!;
+  assert.deepEqual(JSON.parse((await content(f.client, source, array)).toString()), []);
+  const parts = allParts.filter((part) => part.taskId === nestedTaskId);
+  const result = parts.find((part) => part.kind === 'result')!;
+  assert.equal(result.state, 'completed');
+  assert.equal(result.availability, 'available');
+  assert.equal((await content(f.client, source, result)).toString(), output);
+  assert.equal(
+    (
+      await content(
+        f.client,
+        source,
+        parts.find((part) => part.kind === 'patch')!,
+      )
+    ).toString(),
+    patch,
+  );
+  assert.equal(
+    (
+      await content(
+        f.client,
+        source,
+        parts.find((part) => part.kind === 'diff')!,
+      )
+    ).toString(),
+    'recorded numbered diff',
+  );
+  assert(
+    parts.some((part) => part.kind === 'details' && part.text.includes('Retained child notice')),
+  );
+  await assert.rejects(manifest(f.client, { ...source, target: other }));
+  const original = getHarness().snapshot.bind(getHarness());
+  for (const changed of ['index', 'result'] as const) {
+    const mocked = t.mock.method(
+      getHarness(),
+      'snapshot',
+      async (...args: Parameters<typeof original>) => {
+        const value = await original(...args);
+        if (args[0] !== NestedCallDoc) return value;
+        const record = structuredClone(value) as NestedCallState;
+        if (changed === 'index')
+          record.taskId = Number(view.run!.stop.taskId) as typeof record.taskId;
+        else record.result = { ...record.result!, taskId: Number(view.run!.stop.taskId) as TaskId };
+        return record;
+      },
+    );
+    try {
+      await assert.rejects(manifest(f.client, source), { code: 'Persistence' });
+    } finally {
+      mocked.mock.restore();
+    }
+  }
+  release();
+  await getHarness().waitForTask(Number(result.parentTaskId) as TaskId, context);
+  await assert.rejects(content(f.client, source, result), { code: 'Conflict' });
 });

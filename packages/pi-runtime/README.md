@@ -75,3 +75,5 @@ Tests use controlled providers and temporary SQLite. The host baseline is separa
 The [ownership extraction qualification](docs/VALIDATION.md) records exact revisions, fresh review, command results and unperformed checks.
 
 Structured transcripts use the private `transcript.ts` owner for ordered parts, exact sources, authenticated cursors and bounded retained-content reads. `history.ts` captures coherent live/history boundaries and around-entry windows. See [read contracts](../contracts/docs/TRANSCRIPTS.md) and [qualification](docs/TRANSCRIPT-VALIDATION.md).
+
+Completed nested-tool activity reads the exact retained public `NestedCallDoc` result, validated against its child/parent/call identities. Cleared live-slot previews are not completion evidence; missing retained content remains explicitly unavailable. See the [review correction evidence](docs/TRANSCRIPT-VALIDATION.md).

@@ -2,13 +2,16 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypt
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
 import {
   LiveDoc,
+  NestedCallDoc,
+  type NestedToolSlot,
+  type NestedToolExecutionResult,
   ToolResultEntry,
   type Harness,
   type EntryRecord,
   type LiveState,
   type ToolTaskInput,
 } from '@earendil-works/pi-durable';
-import type { Message } from '@earendil-works/pi-ai';
+import type { Message, ToolResultMessage } from '@earendil-works/pi-ai';
 import {
   chatContentChunkBytes,
   chatManifestPageSize,
@@ -358,6 +361,65 @@ export async function getEntryParts(
     }
   return parts;
 }
+async function readNestedCall(
+  harness: Harness,
+  target: ChatTarget,
+  tool: NestedToolSlot,
+  signal?: AbortSignal,
+) {
+  const task = await harness.getTask(tool.taskId, context);
+  checkRead(signal);
+  if (
+    !task ||
+    task.kind !== 'pi.tool' ||
+    task.conversationId !== cid(target.conversationId) ||
+    task.owner !== tool.parentTaskId
+  )
+    return V.fail('Persistence', 'Nested tool authority is invalid.');
+  const input = task.input as ToolTaskInput;
+  if (
+    input.kind !== 'nested' ||
+    input.parent !== tool.parentTaskId ||
+    input.parentCallId !== tool.parentCallId ||
+    input.call.id !== tool.callId ||
+    input.call.name !== tool.name ||
+    tool.callId !== `${input.parentCallId}/${input.key}`
+  )
+    return V.fail('Persistence', 'Nested tool call identity is invalid.');
+  const parent = await harness.getTask(input.parent, context);
+  checkRead(signal);
+  if (!parent || parent.kind !== 'pi.tool' || parent.conversationId !== task.conversationId)
+    return V.fail('Persistence', 'Nested tool parent authority is invalid.');
+  const record = await harness.snapshot(NestedCallDoc, input.parent, input.key, context);
+  checkRead(signal);
+  if (!record) return V.fail('Conflict', 'Nested tool source ended; reload the consistent view.');
+  if (record.taskId !== task.id || (record.result && record.result.taskId !== task.id))
+    return V.fail('Persistence', 'Retained nested result identity is invalid.');
+  if (tool.status === 'done' && tool.summary && !record.result)
+    return V.fail('Conflict', 'Retained nested result is unavailable; reload the source.');
+  return { task, input, result: record.result };
+}
+function getNestedOutput(
+  value: NestedToolExecutionResult['structuredOutput'],
+): ToolResultMessage['content'] {
+  if (value === undefined) return [];
+  if (typeof value === 'string') return [{ type: 'text', text: value }];
+  const blocks: unknown[] = Array.isArray(value) ? value : [value];
+  const isContent = (block: unknown): block is ToolResultMessage['content'][number] => {
+    if (!block || typeof block !== 'object' || !('type' in block)) return false;
+    if (block.type === 'text') return 'text' in block && typeof block.text === 'string';
+    return (
+      block.type === 'image' &&
+      'data' in block &&
+      typeof block.data === 'string' &&
+      'mimeType' in block &&
+      typeof block.mimeType === 'string'
+    );
+  };
+  return blocks.length > 0 && blocks.every(isContent)
+    ? blocks
+    : [{ type: 'text', text: JSON.stringify(value) }];
+}
 async function getLiveParts(
   harness: Harness,
   source: ChatTranscriptSource,
@@ -464,6 +526,7 @@ async function getLiveParts(
   for (const tool of capture.live.nestedTools ?? []) {
     checkRead(signal);
     const prefix = `nested.${tool.taskId}.`;
+    const { result } = await readNestedCall(harness, source.target, tool, signal);
     let state: ChatTranscriptPart['state'] = 'running';
     if (tool.status === 'done') {
       state = 'missing-result';
@@ -487,6 +550,59 @@ async function getLiveParts(
         common,
       ),
     );
+    if (tool.status === 'done') {
+      if (!result) {
+        parts.push(
+          makePart(prefix + 'output', 'result', 'tool', '', {
+            ...common,
+            state: 'missing-result',
+            availability: 'unavailable',
+          }),
+        );
+        continue;
+      }
+      const retained: Partial<ChatTranscriptPart> = {
+        ...common,
+        droppedBytes: undefined,
+        droppedLines: undefined,
+        state: result.isError ? ('failed' as const) : ('completed' as const),
+      };
+      if (result.diagnostics.some((item) => item.code === 'aborted' || item.code === 'interrupted'))
+        retained.state = 'interrupted';
+      for (const part of messageParts(
+        [
+          {
+            role: 'toolResult',
+            toolCallId: tool.callId,
+            toolName: tool.name,
+            content: getNestedOutput(result.structuredOutput),
+            isError: result.isError,
+            ...(result.details === undefined ? {} : { details: result.details }),
+            timestamp: 0,
+          },
+        ],
+        prefix,
+      ))
+        parts.push({ ...part, descriptor: { ...part.descriptor, ...retained } });
+      if (result.structuredOutput === undefined)
+        parts.push(
+          makePart(prefix + 'output', 'result', 'tool', '', {
+            ...retained,
+            availability: 'unavailable',
+          }),
+        );
+      if (result.diagnostics.length)
+        parts.push(
+          makePart(
+            prefix + 'diagnostics',
+            'details',
+            'tool',
+            JSON.stringify(result.diagnostics),
+            retained,
+          ),
+        );
+      continue;
+    }
     parts.push(
       makePart(
         prefix + 'output',
