@@ -7,39 +7,43 @@ export type CodeSource = {
   closed: boolean;
 };
 
-function readQuotePrefix(line: string, count = Infinity) {
-  let offset = 0,
-    quotes = 0;
-  while (quotes < count) {
-    let marker = offset;
-    while (line[marker] === ' ' && marker < offset + 3) marker++;
-    if (line[marker] !== '>') break;
-    offset = marker + 1;
-    if (line[offset] === ' ') offset++;
-    quotes++;
-  }
-  return { offset, quotes };
-}
-
 /** Source locations only. Marked owns Markdown interpretation; normalized tokens never authorize Copy. */
 export function locateFences(source: string) {
   const lines = [...source.matchAll(/[^\n]*(?:\n|$)/g)].filter((line) => line[0].length);
   const results: CodeSource[] = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]![0];
-    const prefix = readQuotePrefix(line);
-    const open = /^( *)((?:[-+*]|\d+[.)]) +)?(`{3,}|~{3,})([^\r\n]*)\r?\n?$/.exec(
-      line.slice(prefix.offset),
-    );
-    if (!open || (open[3]![0] === '`' && open[4]!.includes('`'))) continue;
+    let offset = 0;
+    const prefixes: (number | 'quote')[] = [];
+    for (;;) {
+      const container = /^( *)(> ?|(?:[-+*]|\d+[.)]) +)/.exec(line.slice(offset));
+      if (!container) break;
+      if (container[1]!.length) prefixes.push(container[1]!.length);
+      prefixes.push(container[2]!.startsWith('>') ? 'quote' : container[2]!.length);
+      offset += container[0].length;
+    }
+    const open = /^( *)(`{3,}|~{3,})([^\r\n]*)\r?\n?$/.exec(line.slice(offset));
+    if (!open || (open[2]![0] === '`' && open[3]!.includes('`'))) continue;
+    if (open[1]!.length) prefixes.push(open[1]!.length);
     const start = lines[i]!.index!;
-    const marker = open[3]![0]!,
-      length = open[3]!.length;
-    const indentSize = open[1]!.length + (open[2]?.length ?? 0);
+    const marker = open[2]![0]!,
+      length = open[2]!.length;
     const strip = (value: string) => {
-      const body = readQuotePrefix(value, prefix.quotes);
-      if (body.quotes !== prefix.quotes) return null;
-      return body.offset + Math.min(indentSize, /^ */.exec(value.slice(body.offset))![0].length);
+      let position = 0;
+      for (const prefix of prefixes) {
+        if (prefix === 'quote') {
+          const quote = /^ {0,3}> ?/.exec(value.slice(position));
+          if (!quote) return null;
+          position += quote[0].length;
+        } else {
+          let spaces = 0;
+          while (spaces < prefix && value[position] === ' ') {
+            spaces++;
+            position++;
+          }
+        }
+      }
+      return position;
     };
     const ranges: SourceRange[] = [];
     let closed = false;

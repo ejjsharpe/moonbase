@@ -13,6 +13,9 @@ test('exact original source ranges retain CRLF, whitespace, Unicode, repeated/em
     '````md\n```inner\n🌔\n```\n````\n',
     '> ```ts\r\n> \t🌔  \r\n> ```\r\n',
     '- ```ts\n  🌔\t\n  ```\n',
+    '- - ```ts\r\n    🌔\t\r\n    ```\r\n',
+    '- > ```ts\r\n  > 🌔\t\r\n  > ```\r\n',
+    '> - ```ts\r\n>   🌔\t\r\n>   ```\r\n',
     '~~~\none\n~~~\n\n~~~\ntwo\n~~~\n',
   ]) {
     const fences = locateFences(source);
@@ -26,6 +29,15 @@ test('exact original source ranges retain CRLF, whitespace, Unicode, repeated/em
     }
   }
   assert.equal(locateFences('> ```ts\r\n> \t🌔  \r\n> ```\r\n')[0]!.text, '\t🌔  \r\n');
+  const cache = new MarkdownCache();
+  for (const source of [
+    '- - ```ts\r\n    🌔\t\r\n    ```\r\n',
+    '- > ```ts\r\n  > 🌔\t\r\n  > ```\r\n',
+  ]) {
+    const blocks = cache.parse(source, '1', source);
+    assert.match(blocks[0]!.signature, /sourceCode/);
+    assert.equal(locateFences(source)[0]!.text, '🌔\t\r\n');
+  }
 });
 test('changed messages re-lex, references/fence closure invalidate interpretation, exact clones reuse bounded work', () => {
   const cache = new MarkdownCache();
