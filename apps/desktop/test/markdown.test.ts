@@ -1,12 +1,30 @@
 import { getTranscriptDisclosureId } from '../src/chat/transcript-source.ts';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { marked } from 'marked';
 import {
   MarkdownCache,
   canHighlight,
   getExternalLink,
   locateFences,
+  type LocatedToken,
 } from '../src/renderer/chat/markdown-model.ts';
+test('indented fence-looking text cannot consume the following real fence location', () => {
+  for (const body of ['same', '🌔 é\t  ']) {
+    const source = `- item\n\n      \`\`\`js\n      ${body}\n      \`\`\`\n\n  \`\`\`js\r\n  ${body}\r\n  \`\`\`\r\n`;
+    const blocks = new MarkdownCache().parse('mixed', body, source);
+    const code: LocatedToken[] = [];
+    marked.walkTokens(
+      blocks.map((block) => block.token),
+      (token) => {
+        if (token.type === 'code' && token.codeBlockStyle !== 'indented') code.push(token);
+      },
+    );
+    assert.equal(code.length, 1);
+    assert.equal(code[0]!.sourceCode?.start, source.indexOf('  ```js\r\n'));
+    assert.equal(code[0]!.sourceCode?.text, body + '\r\n');
+  }
+});
 test('exact original source ranges retain CRLF, whitespace, Unicode, repeated/embedded/nested fences', () => {
   for (const source of [
     '```ts\r\n  🌔\t\r\n```\r\n',

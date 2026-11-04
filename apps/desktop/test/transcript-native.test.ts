@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { test, after } from 'node:test';
+import { marked } from 'marked';
+import { MarkdownCache, type LocatedToken } from '../src/renderer/chat/markdown-model.ts';
 import { Layer, ManagedRuntime } from 'effect';
 import type {
   ChatClient,
@@ -25,6 +27,34 @@ const select = (part: ChatTranscriptPart) => ({
   bytes: part.bytes,
   revision: part.revision,
 });
+for (const [name, indented, body] of [
+  ['repeated mixed-ending body', 'same', 'same'],
+  ['different Unicode/whitespace body', 'other', '🌔 é\t  '],
+])
+  test(`renderer-selected native Copy skips indented literal fences: ${name}`, async () => {
+    const text = `- item\n\n      \`\`\`js\n      ${indented}\n      \`\`\`\n\n  \`\`\`js\r\n  ${body}\r\n  \`\`\`\r\n`;
+    const f = fixture(false, text);
+    try {
+      const blocks = new MarkdownCache().parse('mixed', '1', text);
+      let code: LocatedToken | undefined;
+      marked.walkTokens(
+        blocks.map((block) => block.token),
+        (token) => {
+          if (token.type === 'code' && token.codeBlockStyle !== 'indented') code = token;
+        },
+      );
+      assert.ok(code?.sourceCode, 'the real fenced block retains Copy');
+      await f.actions.copy({
+        source: f.source,
+        selection: select(f.part),
+        code: { start: code.sourceCode.start },
+      });
+      assert.deepEqual(f.writes, [body + '\r\n']);
+      assert.equal(code.sourceCode.start, text.indexOf('  ```js\r\n'));
+    } finally {
+      await f.owner.dispose();
+    }
+  });
 function fixture(live = false, text = '  **raw**\r\n\t🌔 é\r\n' + 'α'.repeat(40000)) {
   const original = text;
   const source: ChatTranscriptSource = live

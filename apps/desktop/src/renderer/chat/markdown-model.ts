@@ -52,7 +52,12 @@ export class MarkdownCache {
         candidates.push(locations[location++]!);
       let candidateIndex = 0;
       marked.walkTokens([outer], (token) => {
-        if (token.type !== 'code' || (token as Tokens.Code).codeBlockStyle === 'indented') return;
+        if (token.type !== 'code') return;
+        if ((token as Tokens.Code).codeBlockStyle === 'indented') {
+          // Literal fences in this region cannot belong to a later fenced-code token.
+          candidateIndex += locateFences(token.raw).length;
+          return;
+        }
         const candidate = candidates[candidateIndex++];
         if (
           candidate &&
