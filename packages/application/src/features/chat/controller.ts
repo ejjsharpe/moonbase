@@ -110,13 +110,13 @@ class ChatModelState {
   private readonly session: ChatSession;
   private storage: DraftStorage;
   private newId: () => string;
-  private readonly backendId: string;
+  private readonly backend: string;
   private readonly transcriptMemory: TranscriptViewMemory;
 
   constructor(scope: Scope.Closeable, dependencies: ChatDependencies) {
     this.scope = scope;
     this.chat = dependencies.chat;
-    this.backendId = dependencies.backendId ?? 'standalone';
+    this.backend = dependencies.backendId ?? 'standalone';
     this.transcriptMemory = dependencies.transcriptMemory ?? new TranscriptViewMemory();
     this.connection = dependencies.connection;
     this.mode = dependencies.mode ?? 'remote';
@@ -183,6 +183,9 @@ class ChatModelState {
     this.bound = true;
     this.runEffect = (effect) => runApplicationEffect(runtime, effect);
     return this;
+  }
+  get backendId(): string {
+    return this.backend;
   }
   get context(): ChatSession {
     return structuredClone(this.session);
@@ -624,7 +627,7 @@ class ChatModelState {
       const transcript = (owner.transcript = new TranscriptOwner({
         chat: this.chat,
         target: structuredClone(target),
-        backend: this.backendId,
+        backend: this.backend,
         memory: this.transcriptMemory,
         capable: this.state.host?.features?.includes('transcript-v1') ?? false,
         streaming: this.state.host?.features?.includes('chat-stream-v1') ?? false,
@@ -1068,6 +1071,7 @@ export type ChatModel = ChatModelState;
 export type ChatController = Pick<
   ChatModelState,
   | 'context'
+  | 'backendId'
   | 'providers'
   | 'getSnapshot'
   | 'subscribe'

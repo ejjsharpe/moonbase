@@ -18,7 +18,12 @@ export type {
   TranscriptIterationOptions,
 } from './transcript-read.ts';
 export { TranscriptViewMemory } from './view-memory.ts';
-export type { TranscriptView } from './view-memory.ts';
+export type {
+  TranscriptView,
+  TranscriptViewAnchor,
+  TranscriptEntryAnchor,
+  TranscriptLiveAnchor,
+} from './view-memory.ts';
 export { transcriptLimits } from './transcript.ts';
 export type {
   TranscriptState,

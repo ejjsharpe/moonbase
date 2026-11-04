@@ -8,7 +8,27 @@ Final propagated prerequisite: `23303e0432a60f7e5863d235086ed7ef5e657b65` (#109/
 
 `transcript.earlier`, `later`, `atLatest`, `loading` and `error` describe navigation. `capabilities.transcript` is `unknown`, `available` or `legacy`; advertised failed support remains a visible failure. `capabilities.find` is `unavailable`: there is no Find handler or stub here (#114). `observation` distinguishes `inactive`, `local`, `streaming`, `legacy`, `reconnecting` and terminal `failed`. Reconnecting snapshots retain stale content; stale/failed evidence cannot authorize live hydration or complete reads. Local and legacy observations can omit the runtime's optional observation status. No controller polling/reconnect loop exists.
 
-`setTranscriptView({anchor, expanded})` captures a semantic `{entryId, partId?, offset}` anchor (offset is viewport-relative pixels) and expansion IDs. Presentation (#111) owns DOM capture/restoration, following at the bottom and automatic near-top loading. The owner restores an anchor through around-entry navigation. Missing anchors and failed reads remain visible; no mutation/retry/Stop is synthesized.
+`setTranscriptView({anchor, expanded})` captures a semantic anchor (offset is viewport-relative pixels) and expansion IDs. `TranscriptViewAnchor` accepts the existing `TranscriptEntryAnchor` `{entryId, partId?, offset}` or an exact `TranscriptLiveAnchor`. All three types are exported from `/chat`. For a live descriptor captured from the current coherent run or manifest:
+
+```ts
+controller.setTranscriptView({
+  anchor: {
+    backendId: controller.backendId,
+    source, // exact kind: 'live', including full target/submission/task/attempt/incarnation
+    partId: descriptor.partId,
+    bytes: descriptor.bytes,
+    revision: descriptor.revision,
+    offset,
+  },
+  expanded,
+});
+```
+
+The readonly `controller.backendId` is the composition's backend identity; capture it with the source, rather than replacing it with the current backend when restoring. Foreign backend/target/source input rejects before changing memory. A synthetic `entryId: 'live'` rejects and never dispatches around-entry navigation. Other opaque durable IDs are validated by the authorized around-entry read, including anchors evicted from the current window. Presentation (#111) owns DOM capture/restoration, following at the bottom and automatic near-top loading; no renderer view-memory owner is needed.
+
+For live anchors, `transcript.viewStatus` is `pending`, `ready`, `source-changed` or `unavailable`, with `viewError: string | null`. Apply the saved live offset/expansions only at `ready`; this authorizes view restoration, not a native clipboard write. Pending restoration waits for a coherent matching observation; reconnecting evidence cannot authorize it. An exact available descriptor proves the saved part immediately. Appended revisions or parts beyond the first-four preview use one bounded content chunk of the original fixed selection, with the existing bounded fresh-prefix proof checks if observations supersede that read. This does not hydrate the content cache or iterate the whole part. Unchanged DTOs and offset/expansion changes reuse the proof. A newer observation after proof publication must still match the validated evidence; otherwise restoration reports source changed.
+
+Retired/replaced/finalized sources retain the captured anchor and explicit error, without applying expansions to a replacement. No text/task-based or automatic live-to-committed mapping is performed, including for tool parts with an explicit committed reference. `jumpToLatest()` explicitly clears a live anchor and its expansions; explicit recapture/reload retries a failed proof. Repeated progress does not silently retry failure. Historical navigation replaces live view memory with its durable anchor. Durable restoration continues to use navigation `loading`/`error` and around-entry reads; it does not use live `viewStatus` as authority. Missing anchors and failed reads remain visible; no mutation/retry/Stop is synthesized.
 
 ## Progressive content
 
@@ -42,7 +62,7 @@ Injected reads work without a model or mounted presentation. Live reads addition
 
 These are retention bounds, not total JS heap/CPU limits. Visible anchor and active selection identity remain pinned; an oversized active part still loses old chunks at the byte bound. Complete iteration keeps only a manifest page/current chunk and constant-space cursor-cycle evidence, and does not populate the LRU. No fixed total-history/source clipping exists.
 
-`createMoonbaseApplication` supplies one `TranscriptViewMemory` across panel and named-target controller replacement, keyed by backend plus full public target. Standalone models own scoped memory by default; explicit `backendId`/`transcriptMemory` injection supports another composition. Memory contains only anchors/expansions, clears on application disposal, and is never placed in saved data/storage. A fresh application starts latest even if version-one drafts restore conversation selection. Transcript data caches belong to the selected owner and are released on selection replacement/Hide/close/disposal.
+`createMoonbaseApplication` supplies one `TranscriptViewMemory` across panel and named-target controller replacement, keyed by backend plus full public target. Standalone models own scoped memory by default; explicit `backendId`/`transcriptMemory` injection supports another composition. Memory contains only anchors/expansions (including exact live source/fixed selection metadata), clears on application disposal, and is never placed in saved data/storage. Current live proof metadata counts toward the selected summary budget; no content is retained in view memory. A fresh application starts latest even if version-one drafts restore conversation selection. Transcript data caches belong to the selected owner and are released on selection replacement/Hide/close/disposal.
 
 ## Verification scope
 
@@ -116,3 +136,22 @@ Qualification for this correction used Node `v26.13.0` and Bun `1.4.4` in the sa
 | `bun run test:chat-integration` | 12/12; `/tmp/moonbase-110-round2-chat-integration.log` |
 
 Evidence remains source/controlled only. Native foreground, packaged/manual presentation and final clipboard writes were not exercised for this correction.
+
+### Live-part view memory consumption correction
+
+This focused correction starts at approved `1f20726b98245a37b544f9a1119ff69d23cd34ff`, retaining runtime prerequisite `23303e0432a60f7e5863d235086ed7ef5e657b65`. The public application regression first failed with `Invalid transcript view` before the live anchor variant existed: `/tmp/moonbase-110-live-anchor-red.log`.
+
+The 23 public regressions in `test/transcript-live-view.test.ts` cover panel and named-controller replacement with identical public IDs on different backends; fresh application versus restored draft selection; exact backend/host/store/actor/conversation and submission/task/attempt/incarnation checks; reconnecting-to-connected proof, appended prefixes and cloned DTO reuse; parts beyond the summary preview; unavailable, replaced and finalized sources; explicit proof retry; synthetic durable rejection; held proof retirement/navigation cancellation; drafting/Stop independence and actual cleanup settlement; and bounded, mutation-independent view memory. The approved history/navigation/Copy/cleanup regressions remain unchanged. No runtime, contracts, desktop, saved-schema, baseline fixture or dependency change is included.
+
+Qualification used Node `v26.13.0` / Bun `1.4.4` in the same isolated checkout. Heavy source/process and controlled integration suites ran serially.
+
+| Command | Result / evidence |
+| --- | --- |
+| `node --experimental-strip-types --test --test-concurrency=1 packages/application/test/transcript.test.ts packages/application/test/transcript-live-view.test.ts packages/application/test/application.test.ts packages/application/test/chat-controller.test.ts` | 183/183; `/tmp/moonbase-110-live-anchor-focused.log` |
+| `NX_DAEMON=false bun run typecheck` | 8 tasks passed; `/tmp/moonbase-110-live-anchor-typecheck.log` |
+| `bun run lint`; `bun run format:check`; `git diff --check` | Pass; `/tmp/moonbase-110-live-anchor-{lint,format}.log` |
+| `bun run check:foundation` | Pass, 281 browser inputs and unchanged saved-byte fixtures; `/tmp/moonbase-110-live-anchor-foundation.log` |
+| `NX_DAEMON=false bun run test` | 8 tasks passed; `/tmp/moonbase-110-live-anchor-source.log` |
+| `bun run test:chat-integration` | 12/12, including public controlled local/remote progress; `/tmp/moonbase-110-live-anchor-chat-integration.log` |
+
+No foreground/dev app, packaged/manual UI, final clipboard write, real provider/SSH, legacy operation, PR update/push or delegation was used. #111 consumes the additive `/chat` anchor types, readonly backend ID and live restoration status described above; it retains native final-write authority. Unproved retirement never maps to a committed entry automatically, and indefinitely superseded prefix proofs remain an explicit bounded uncertainty.
