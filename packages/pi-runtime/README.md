@@ -72,6 +72,8 @@ Tests use controlled providers and temporary SQLite. The host baseline is separa
 
 `test/commands.test.ts` covers immutable requests, saved-data rejection, authority and restart; `test/history.test.ts` covers bounded history/live projection and failure/tool states; `test/lifecycle.test.ts` covers admission, cancellation, Stop, watches and acquisition/shutdown. Each case acquires its own fixture from `test/runtime-fixture.ts`; Node's test-file isolation keeps SDK mocks separate. `test/transport.test.ts` and `test/host-process.test.ts` retain transport and actual host-process coverage, including an audit of the compiled remote bundle's actual inputs. Local/provider/credential suites remain separate.
 
+`test/observation.test.ts` instruments public SDK reads and subscriptions over temporary Pi stores. It covers held text/thinking/tool progress, unrelated conversations, history/status reuse, startup/recovery, scheduler blockage, slow consumers, bounded pages and held cleanup. See [local observation and #123 handoff](docs/OBSERVATION.md) for the selected public Pi API, invalidation and byte budgets, cleanup settlement and SDK limits, and [qualification](docs/OBSERVATION-VALIDATION.md) for exact evidence and remaining limits.
+
 The [ownership extraction qualification](docs/VALIDATION.md) records exact revisions, fresh review, command results and unperformed checks.
 
 Structured transcripts use the private `transcript.ts` owner for ordered parts, exact sources, authenticated cursors and bounded retained-content reads. `history.ts` captures coherent live/history boundaries and around-entry windows. See [read contracts](../contracts/docs/TRANSCRIPTS.md) and [qualification](docs/TRANSCRIPT-VALIDATION.md).
