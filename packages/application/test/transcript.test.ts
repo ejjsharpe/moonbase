@@ -696,3 +696,83 @@ test('history traverses every entry backward and forward across summary eviction
   }
   assert.equal(f.controller.getSnapshot().transcript.entries.at(-1)!.id, 'e639');
 });
+
+function appendTranscriptEntries(
+  f: Awaited<ReturnType<typeof transcriptController>>,
+  count: number,
+) {
+  for (let index = f.entries.length; index < count; index++) {
+    const id = digest('durable-entry-' + index).slice(0, 24);
+    f.entries.push({
+      ...f.entries[0],
+      id,
+      transcript: {
+        ...f.entries[0].transcript!,
+        source: { kind: 'entry', target: f.target, entryId: id },
+      },
+    });
+  }
+}
+
+test('disjoint coalesced latest snapshots leave all retained history reachable in both directions', async (t) => {
+  const f = await transcriptController(t, 64);
+  appendTranscriptEntries(f, 128);
+  f.publish({
+    ...f.snapshot,
+    entries: f.entries.slice(-32).reverse(),
+    transcriptBoundary: f.entries.at(-1)!.id,
+    olderCursor: '96',
+  });
+  for (const direction of ['earlier', 'later'] as const) {
+    const seen = new Set<string>();
+    for (let step = 0; step < 40; step++) {
+      const state = f.controller.getSnapshot().transcript;
+      state.entries.forEach((entry) => seen.add(entry.id));
+      assert.equal(state.error, null);
+      assert.deepEqual(
+        state.entries.map((entry) => entry.id),
+        f.entries
+          .filter((entry) => state.entries.some((value) => value.id === entry.id))
+          .map((entry) => entry.id),
+      );
+      if (!state[direction]) break;
+      await (direction === 'earlier' ? f.controller.older() : f.controller.later());
+    }
+    assert.equal(seen.size, 128, direction);
+    assert.equal(f.controller.getSnapshot().transcript[direction], false);
+  }
+  assert.equal(f.controller.getSnapshot().transcript.atLatest, true);
+});
+
+test('disjoint latest updates preserve an around-entry anchor and bridge to later history', async (t) => {
+  const f = await transcriptController(t, 64);
+  await f.controller.jumpToEntry('e16');
+  f.controller.setTranscriptView({
+    anchor: { entryId: 'e16', partId: 'm0.b0', offset: -13 },
+    expanded: ['thought'],
+  });
+  const before = f.controller.getSnapshot().transcript,
+    reads = f.calls.length;
+  appendTranscriptEntries(f, 640);
+  f.publish({
+    ...f.snapshot,
+    entries: f.entries.slice(-32).reverse(),
+    transcriptBoundary: f.entries.at(-1)!.id,
+    olderCursor: '608',
+  });
+  assert.equal(f.controller.getSnapshot().transcript.entries, before.entries);
+  assert.deepEqual(f.controller.getSnapshot().transcript.view, before.view);
+  assert.equal(f.calls.length, reads);
+  await f.controller.older();
+  const seen = new Set<string>();
+  for (let step = 0; step < 100; step++) {
+    const state = f.controller.getSnapshot().transcript;
+    state.entries.forEach((entry) => seen.add(entry.id));
+    assert.equal(state.error, null);
+    assert(state.retained.summaries <= transcriptLimits.summaryRecords);
+    if (!state.later) break;
+    await f.controller.later();
+  }
+  assert.equal(seen.size, 640);
+  assert.equal(f.controller.getSnapshot().transcript.atLatest, true);
+});

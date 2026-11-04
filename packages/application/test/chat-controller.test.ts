@@ -838,7 +838,7 @@ test('replacement watch snapshots and overlapping legacy history keep output bou
   }));
   f.publish({ ...snapshot, olderCursor: 'page' });
   for (let i = 0; i < 4; i++) await f.controller.older();
-  assert.equal(f.controller.getSnapshot().transcript.entries.length, 33);
+  assert.equal(f.controller.getSnapshot().transcript.entries.length, 32);
   await f.controller.dispose();
 });
 test('bounds reject oversized/invalid Unicode input without replacing retained draft or issuing Send', async (t) => {

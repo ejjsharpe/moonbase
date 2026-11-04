@@ -399,7 +399,15 @@ export class TranscriptOwner {
     this.state = { ...this.state, observation };
     this.latestCursor = input.olderCursor;
     if (this.following) {
-      this.records = mergeEntries(this.records, entries, 'later');
+      const continuous = entries.some(
+        (entry) =>
+          old?.entries.some((previous) => previous.id === entry.id) &&
+          this.records.some((cached) => cached.id === entry.id),
+      );
+      if (!continuous) {
+        this.records = entries;
+        this.navigation = undefined;
+      } else this.records = mergeEntries(this.records, entries, 'later');
       // A coherent new boundary replaces the live edge; historical navigation stays independent.
       this.start = 0;
       this.newerEnd = true;
