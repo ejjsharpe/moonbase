@@ -362,3 +362,112 @@ test('transcript reads cross the real child/forwarding boundary with identity, l
     1,
   );
 });
+
+test('cross-process capable observation streams thinking/text before completion, reuses history and ignores unrelated B without recurring reads', async (t) => {
+  const f = await controlledHostFixture(new URL('./stream-host.mjs', import.meta.url), true);
+  t.after(() => f.close().then(() => {}));
+  const root = f.root();
+  await root.connection.command('connect', { profileId: root.profile.id });
+  const target = (
+    await root.chat.command('createChat', { session: f.session, requestId: 'stream-A', title: 'A' })
+  ).conversation.target;
+  const other = (
+    await root.chat.command('createChat', { session: f.session, requestId: 'stream-B', title: 'B' })
+  ).conversation.target;
+  const views: ChatSnapshot[] = [],
+    errors: ApplicationError[] = [];
+  const close = root.chat.watch(
+    { target },
+    (value) => views.push(value),
+    (error) => errors.push(error),
+  );
+  t.after(() => close());
+  await until(
+    async () => views.at(-1),
+    (v) => !!v && v.state === 'idle',
+  );
+  await root.chat.command('sendChat', { target, requestId: 'stream-send', text: 'Stream' });
+  await until(
+    async () => views.at(-1),
+    (v) => v?.run?.text === 'first remote text 0',
+  );
+  const first = views.at(-1)!;
+  assert.equal(first.run!.transcript!.thinking, 'available');
+  assert(
+    first.run!.transcript!.parts.some(
+      (p) => p.kind === 'thinking' && p.text.includes('remote thinking'),
+    ),
+  );
+  const before = (await f.stats()).reads;
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(views.at(-1)!.run!.text, 'first remote text 0');
+  f.nextChunk();
+  await until(
+    async () => views.at(-1),
+    (v) => v?.run?.text === 'first remote text 4',
+  );
+  const after = await f.stats();
+  assert.deepEqual(after.reads, before);
+  assert.equal(after.commands.filter((c) => c === 'getChat').length, 0);
+  assert.deepEqual(views.at(-1)!.run!.transcript!.source, first.run!.transcript!.source);
+  assert.equal(views.at(-1)!.transcriptBoundary, first.transcriptBoundary);
+  const publications = after.publications;
+  await root.chat.command('sendChat', { target: other, requestId: 'unrelated-B', text: 'B' });
+  await until(f.stats, (s) => s.calls === 2);
+  await new Promise((r) => setTimeout(r, 300));
+  const b = await f.stats();
+  assert.equal(b.publications, publications);
+  assert.deepEqual(b.reads, after.reads);
+  f.release();
+  const complete = await until(
+    async () => views.at(-1),
+    (v) => !!v && !v.run && v.entries.some((entry) => entry.text === 'REMOTE COMPLETED'),
+  );
+  assert.notEqual(complete!.transcriptBoundary, first.transcriptBoundary);
+  assert.equal(complete!.entries.filter((entry) => entry.text === 'REMOTE COMPLETED').length, 1);
+  await close();
+  await until(f.stats, (s) => s.activeWatches === 0);
+  assert.deepEqual(errors, []);
+  assert.equal((await f.stats()).commands.filter((c) => c === 'sendChat').length, 2);
+});
+
+test('cross-process tool progress arrives while execution is held and independent Stop releases its observation', async (t) => {
+  const f = await controlledHostFixture(new URL('./tool-host.mjs', import.meta.url), true);
+  t.after(() => f.close().then(() => {}));
+  const root = f.root();
+  await root.connection.command('connect', { profileId: root.profile.id });
+  const target = (
+    await root.chat.command('createChat', {
+      session: f.session,
+      requestId: 'tool-stream',
+      title: 'Tool',
+    })
+  ).conversation.target;
+  const views: ChatSnapshot[] = [],
+    errors: ApplicationError[] = [];
+  const close = root.chat.watch(
+    { target },
+    (v) => views.push(v),
+    (e) => errors.push(e),
+  );
+  t.after(() => close());
+  await root.chat.command('sendChat', { target, requestId: 'tool-stream-send', text: 'Tool' });
+  await until(
+    async () => views.at(-1),
+    (v) => !!v?.run?.tools.some((tool) => tool.text.includes('Controlled remote tool activity')),
+  );
+  assert.equal((await f.stats()).commands.filter((c) => c === 'getChat').length, 0);
+  const started = Date.now();
+  await root.chat.command('stopChat', {
+    stop: views.at(-1)!.run!.stop,
+    requestId: 'tool-stream-stop',
+  });
+  assert(Date.now() - started < 3000);
+  await until(
+    async () => views.at(-1),
+    (v) => !!v && !v.run,
+  );
+  await close();
+  await until(f.stats, (s) => s.activeWatches === 0);
+  assert.deepEqual(errors, []);
+});

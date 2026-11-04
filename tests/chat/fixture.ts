@@ -18,6 +18,10 @@ export async function until<T>(get: () => Promise<T>, ready: (v: T) => boolean) 
   throw Error('Controlled state did not settle');
 }
 export type FixtureStats = {
+  watches: number;
+  publications: number;
+  activeWatches: number;
+  reads?: { scans: number; entries: number; inspections: number };
   calls: number;
   tools: number;
   commands: string[];
@@ -262,6 +266,7 @@ export async function controlledHostFixture(hostScript: URL, hold = false) {
     stopHost,
     close,
     release: () => host!.send({ type: 'release' }),
+    nextChunk: () => host!.send({ type: 'next-chunk' }),
     loseNextSend: () => writeFile(drop, ''),
     loseNextReply: (operation: string) => writeFile(drop, operation),
     tamperNextReply: (operation: string) => writeFile(drop, 'tamper:' + operation),

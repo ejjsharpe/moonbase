@@ -183,6 +183,59 @@ export const ChatSnapshotSchema = struct({
   state: Schema.Literals(['idle', 'running', 'stopped', 'failed', 'uncertain']),
   message: optional(text(512)),
   transcriptBoundary: optional(Schema.NullOr(ChatIdentifierSchema)),
+  observationStatus: optional(Schema.Literals(['connected', 'reconnecting'])),
+});
+// Network-only envelopes; ordinary snapshots/IPC remain browser-safe replacements.
+export const ChatStreamRequestSchema = struct({
+  target: ChatTargetSchema,
+  connectionId: ChatIdentifierSchema,
+});
+const streamIdentity = {
+  ...ChatStreamRequestSchema.fields,
+  streamId: unicode.check(Schema.isPattern(/^[A-Za-z0-9_-]{43}$/)),
+  sequence: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
+};
+export const ChatStreamFrameSchema = Schema.Union([
+  struct({
+    ...streamIdentity,
+    kind: Schema.Literal('snapshot'),
+    offset: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 256 * 1024 })),
+    total: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 256 * 1024 })),
+    data: Schema.String.check(
+      Schema.makeFilter((value) => {
+        try {
+          const decoded = atob(value);
+          return (
+            decoded.length > 0 && decoded.length <= chatContentChunkBytes && btoa(decoded) === value
+          );
+        } catch {
+          return false;
+        }
+      }),
+    ),
+  }),
+  struct({ ...streamIdentity, kind: Schema.Literal('heartbeat') }),
+  struct({
+    ...streamIdentity,
+    kind: Schema.Literal('error'),
+    code: Schema.Literals([
+      'InvalidInput',
+      'Unauthorized',
+      'Incompatible',
+      'Conflict',
+      'Persistence',
+      'Unavailable',
+      'Cancelled',
+    ]),
+  }),
+]);
+export const decodeChatStreamRequest = Schema.decodeUnknownSync(ChatStreamRequestSchema, {
+  onExcessProperty: 'error',
+  reportInput: false,
+});
+export const decodeChatStreamFrame = Schema.decodeUnknownSync(ChatStreamFrameSchema, {
+  onExcessProperty: 'error',
+  reportInput: false,
 });
 const receipt = { target: ChatTargetSchema, requestId: ChatIdentifierSchema };
 export const ChatSendReceiptSchema = Schema.Union([
