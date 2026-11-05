@@ -1161,7 +1161,7 @@ function Part({
     )
       return;
     if (match.start < base) load(true);
-    else if (!matchVisible && (!content || content.nextCursor)) load();
+    else if (!matchVisible && (!content || content.status === 'partial')) load();
   }, [
     match,
     readable,
