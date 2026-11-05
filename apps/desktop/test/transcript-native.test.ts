@@ -27,22 +27,20 @@ const select = (part: ChatTranscriptPart) => ({
   bytes: part.bytes,
   revision: part.revision,
 });
-for (const [name, text, start, body] of [
+for (const [name, text, body] of [
   [
     'unclosed indented literal',
     '- item\n\n      ```js\n      literal\n\n  ```js\r\n  actual 🌔\t  \r\n  ```\r\n',
-    35,
-    'actual 🌔\t  \r\n',
+    'actual 🌔\t  ',
   ],
-  ['tabbed list continuation', '- item\n\n\t```js\r\n\t🌔 é\t  \r\n\t```\r\n', 8, '🌔 é\t  \r\n'],
-  ['tabbed quote', '>\t```js\r\n>\t🌔 é\t  \r\n>\t```\r\n', 0, '🌔 é\t  \r\n'],
-  ['tab after list marker', '-\t```js\r\n\t🌔 é\t  \r\n\t```\r\n', 0, '🌔 é\t  \r\n'],
-  ['nested tabbed list', '- item\n\n\t- ```js\r\n\t  🌔 é\t  \r\n\t  ```\r\n', 8, '🌔 é\t  \r\n'],
+  ['tabbed list continuation', '- item\n\n\t```js\r\n\t🌔 é\t  \r\n\t```\r\n', '🌔 é\t  '],
+  ['tabbed quote', '>\t```js\r\n>\t🌔 é\t  \r\n>\t```\r\n', '🌔 é\t  '],
+  ['tab after list marker', '-\t```js\r\n\t🌔 é\t  \r\n\t```\r\n', '🌔 é\t  '],
+  ['nested tabbed list', '- item\n\n\t- ```js\r\n\t  🌔 é\t  \r\n\t  ```\r\n', '🌔 é\t  '],
   [
-    'list and quote tab columns retain a body tab',
+    'list and quote tab columns preserve parser indentation',
     '- >\t```js\r\n  >\t\t🌔 é\t  \r\n  >\t```\r\n',
-    0,
-    '\t🌔 é\t  \r\n',
+    '    🌔 é\t  ',
   ],
 ] as const) {
   test(`R2 renderer-selected native Copy: ${name}`, async () => {
@@ -57,47 +55,47 @@ for (const [name, text, start, body] of [
         },
       );
       assert.equal(code.length, 1);
-      assert.equal(code[0]!.sourceCode?.start, start);
+      assert.equal(code[0]!.codeBlock?.index, 0);
       await f.actions.copy({
         source: f.source,
         selection: select(f.part),
-        code: { start: code[0]!.sourceCode!.start },
+        code: { index: code[0]!.codeBlock!.index },
       });
       assert.deepEqual(f.writes, [body]);
     } finally {
       await f.owner.dispose();
     }
   });
-  test(`R2 native validates original source region: ${name}`, async () => {
+  test(`R2 native derives the parser-selected block: ${name}`, async () => {
     const f = fixture(false, text);
     try {
-      await f.actions.copy({ source: f.source, selection: select(f.part), code: { start } });
+      await f.actions.copy({ source: f.source, selection: select(f.part), code: { index: 0 } });
       assert.deepEqual(f.writes, [body]);
     } finally {
       await f.owner.dispose();
     }
   });
 }
-test('native rejects fence-looking offsets in classified indented and HTML regions', async () => {
-  for (const text of [
-    '- item\n\n      ```js\n      literal\n\n  ```js\r\n  actual 🌔\t  \r\n  ```\r\n',
-    '- item\n\n      ```js\n      same\n      ```\n\n  ```js\r\n  same\r\n  ```\r\n',
-    '<pre>\n```js\nmodel HTML\n```\n</pre>\n\n```js\r\nactual 🌔\r\n```\r\n',
-  ]) {
-    const f = fixture(false, text);
-    try {
+test('native validates bounded parser selectors and never accepts renderer code text or ranges', async () => {
+  const f = fixture(false, '```js\r\n  🌔\t\r\n```\r\n');
+  try {
+    for (const code of [
+      { index: -1 },
+      { index: 0.5 },
+      { index: Number.MAX_SAFE_INTEGER + 1 },
+      { index: 1 },
+      { index: 0, text: 'forged' },
+      { index: 0, ranges: [] },
+      { start: 0 },
+    ]) {
       await assert.rejects(
-        f.actions.copy({
-          source: f.source,
-          selection: select(f.part),
-          code: { start: text.startsWith('-') ? 8 : 6 },
-        }),
+        f.actions.copy({ source: f.source, selection: select(f.part), code } as never),
         { code: 'InvalidInput' },
       );
       assert.deepEqual(f.writes, []);
-    } finally {
-      await f.owner.dispose();
     }
+  } finally {
+    await f.owner.dispose();
   }
 });
 for (const [name, indented, body] of [
@@ -116,18 +114,67 @@ for (const [name, indented, body] of [
           if (token.type === 'code' && token.codeBlockStyle !== 'indented') code = token;
         },
       );
-      assert.ok(code?.sourceCode, 'the real fenced block retains Copy');
+      assert.ok(code?.codeBlock, 'the real fenced block retains Copy');
       await f.actions.copy({
         source: f.source,
         selection: select(f.part),
-        code: { start: code.sourceCode.start },
+        code: { index: code.codeBlock.index },
       });
-      assert.deepEqual(f.writes, [body + '\r\n']);
-      assert.equal(code.sourceCode.start, text.indexOf('  ```js\r\n'));
+      assert.deepEqual(f.writes, [body]);
+      assert.equal(code.codeBlock.index, 0);
     } finally {
       await f.owner.dispose();
     }
   });
+test('native parser code Copy preserves meaningful Python indentation in containers and incomplete blocks', async () => {
+  for (const prefix of ['> ', '>\t', '- ', '-\t', '- >\t', '> - ']) {
+    for (const closed of [false, true]) {
+      const continuation = prefix.replace(/-/g, ' ');
+      const text = `${prefix}\`\`\`python\r\n${continuation}def moon():\r\n${continuation}    print("🌔 é")\t  \r\n${closed ? continuation + '\`\`\`\r\n' : ''}`;
+      const f = fixture(false, text);
+      try {
+        await f.actions.copy({ source: f.source, selection: select(f.part), code: { index: 0 } });
+        assert.deepEqual(
+          f.writes,
+          ['def moon():\n    print("🌔 é")' + (!closed && prefix.includes('-') ? '' : '\t  ')],
+          prefix,
+        );
+      } finally {
+        await f.owner.dispose();
+      }
+    }
+  }
+});
+test('normalized live code still requires fixed original source proof across held replies', async () => {
+  for (const change of ['append', 'replace', 'source-normalization', 'finalize']) {
+    const body = 'def moon():\r\n' + '    print("🌔 é")\t  \r\n'.repeat(5000);
+    const f = fixture(true, '```python\r\n' + body);
+    try {
+      const selected = select(f.part);
+      f.controls.beforeRead = async (read) => {
+        if (read !== 2) return;
+        if (change === 'append') f.controls.setText(f.original + '\r\n```\r\nlater');
+        else if (change === 'replace') f.controls.setText('replacement');
+        else if (change === 'source-normalization')
+          f.controls.setText(f.original.replace(/\r\n/g, '\n'));
+        else {
+          f.controls.snapshot.run = null;
+          f.controls.publish();
+        }
+      };
+      const copying = f.actions.copy({ source: f.source, selection: selected, code: { index: 0 } });
+      if (change === 'append') {
+        await copying;
+        assert.deepEqual(f.writes, [body.replace(/\r\n/g, '\n').replace(/\n$/, '')]);
+      } else {
+        await assert.rejects(copying);
+        assert.deepEqual(f.writes, []);
+      }
+    } finally {
+      await f.owner.dispose();
+    }
+  }
+});
 function fixture(live = false, text = '  **raw**\r\n\t🌔 é\r\n' + 'α'.repeat(40000)) {
   const original = text;
   const source: ChatTranscriptSource = live
@@ -326,17 +373,24 @@ test('native actions retain their captured backend across a held Copy with ident
     await Promise.all([first.owner.dispose(), second.owner.dispose()]);
   }
 });
-test('source ranges select original whitespace and repeated/nested fences; renderer supplies no text', async () => {
-  const f = fixture(false, 'before\r\n```ts\r\n  🌔\t\r\n```\r\nafter');
-  const start = f.original.indexOf('```ts');
-  await f.actions.copy({ source: f.source, selection: select(f.part), code: { start } });
-  assert.deepEqual(f.writes, ['  🌔\t\r\n']);
-  for (const start of [-1, 999, f.original.indexOf('🌔') + 1])
-    await assert.rejects(
-      f.actions.copy({ source: f.source, selection: select(f.part), code: { start } }),
-    );
-  assert.equal(f.writes.length, 1);
-  await f.owner.dispose();
+test('parser selectors choose the correct repeated/nested block; renderer supplies no text', async () => {
+  const f = fixture(
+    false,
+    '```js\r\nsame\r\n```\r\n\n> ````md\r\n> ```inner\r\n> 🌔\r\n> ```\r\n> ````\r\n\n```js\nsame\n```\n',
+  );
+  try {
+    for (const [index, body] of ['same', '```inner\n🌔\n```', 'same'].entries()) {
+      await f.actions.copy({ source: f.source, selection: select(f.part), code: { index } });
+      assert.equal(f.writes.at(-1), body);
+    }
+    for (const index of [-1, 999, 1.5])
+      await assert.rejects(
+        f.actions.copy({ source: f.source, selection: select(f.part), code: { index } }),
+      );
+    assert.equal(f.writes.length, 3);
+  } finally {
+    await f.owner.dispose();
+  }
 });
 test('live Copy excludes a pure append and obtains fresh fixed-prefix proof before one write', async () => {
   const f = fixture(true);
@@ -373,15 +427,20 @@ test('held content/final proof cannot authorize replacement, rollover, finalizat
     await f.owner.dispose();
   }
 });
-test('cancel/document replacement fences late reads and joins actual settlement without blocking other commands', async () => {
-  const f = fixture();
+test('cancel/document replacement fences late code reads and joins actual settlement without blocking other commands', async () => {
+  const f = fixture(false, '```js\r\n  🌔\r\n```\r\n');
   const held = Promise.withResolvers<void>();
   let entered = false;
   f.controls.beforeRead = async () => {
     entered = true;
     await held.promise;
   };
-  const copy = f.owner.call('transcript', 'copy', { source: f.source }, 'copy');
+  const copy = f.owner.call(
+    'transcript',
+    'copy',
+    { source: f.source, selection: select(f.part), code: { index: 0 } },
+    'copy',
+  );
   while (!entered) await new Promise((resolve) => setTimeout(resolve, 1));
   let released = false;
   const closing = f.owner.releaseDocument().then(() => {
@@ -397,11 +456,14 @@ test('cancel/document replacement fences late reads and joins actual settlement 
   await f.owner.dispose();
 });
 test('OS write failure and unsafe links remain observable over the real bridge/session path', async () => {
-  const f = fixture();
+  const f = fixture(false, '```js\r\n  🌔\r\n```\r\n');
   f.controls.write = async () => {
     throw Error('controlled OS failure');
   };
   await assert.rejects(f.actions.copy({ source: f.source }));
+  await assert.rejects(
+    f.actions.copy({ source: f.source, selection: select(f.part), code: { index: 0 } }),
+  );
   assert.deepEqual(f.writes, []);
   await f.actions.openLink('https://example.com/read?q=1');
   assert.deepEqual(f.links, ['https://example.com/read?q=1']);
@@ -448,7 +510,7 @@ test('native final proof retries superseding appends at most three times without
   }
 });
 
-test('Copy code is independent of highlight/DOM/range-count limits, including a large nested fence', async () => {
+test('Copy code is independent of highlight/DOM limits, including a large nested fence', async () => {
   const body = ' 🌔\t  \r\n'.repeat(12000);
   const f = fixture(
     false,
@@ -460,8 +522,8 @@ test('Copy code is independent of highlight/DOM/range-count limits, including a 
         .join('') +
       '> ```\r\n',
   );
-  await f.actions.copy({ source: f.source, selection: select(f.part), code: { start: 0 } });
-  assert.deepEqual(f.writes, [body]);
+  await f.actions.copy({ source: f.source, selection: select(f.part), code: { index: 0 } });
+  assert.deepEqual(f.writes, [body.replace(/\r\n?/g, '\n').replace(/\n$/, '')]);
   await f.owner.dispose();
 });
 

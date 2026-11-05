@@ -1,8 +1,8 @@
-import { marked, type Token } from 'marked';
-import { locateFences, type CodeSource } from '../../chat/transcript-source.ts';
-export { locateFences } from '../../chat/transcript-source.ts';
-
-export type LocatedToken = Token & { sourceCode?: CodeSource };
+import {
+  parseTranscriptMarkdown,
+  type TranscriptMarkdownToken,
+} from '../../chat/transcript-source.ts';
+export type LocatedToken = TranscriptMarkdownToken;
 export type MarkdownBlock = { token: LocatedToken; signature: string };
 export const markdownMetrics = { lex: 0, tokenize: 0, retainedBytes: 0, messages: 0 };
 const bytes = (text: string) => new TextEncoder().encode(text).length;
@@ -21,15 +21,7 @@ export class MarkdownCache {
     }
     this.stats.lex++;
     markdownMetrics.lex++;
-    let tokens: Token[];
-    try {
-      tokens = marked.lexer(source, { gfm: true });
-    } catch {
-      tokens = [{ type: 'html', raw: source, text: source, block: true, pre: true }];
-    }
-    locateFences(source, tokens, (token, location) => {
-      (token as LocatedToken).sourceCode = location;
-    });
+    const { tokens } = parseTranscriptMarkdown(source);
     const blocks = tokens.map((token) => ({ token, signature: JSON.stringify(token) }));
     const size = bytes(key) + bytes(source) + bytes(JSON.stringify(blocks));
     if (old) {

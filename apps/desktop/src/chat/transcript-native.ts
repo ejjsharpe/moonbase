@@ -3,7 +3,7 @@ import { ApplicationError } from '@moonbase/contracts/errors';
 import { maximumChatReplyBytes } from '@moonbase/contracts/chat';
 import type { ChatClient, ChatSnapshot, ChatTranscriptSelection } from '@moonbase/contracts/chat';
 import { iterateTranscriptSource, type TranscriptRead } from '@moonbase/application/chat';
-import { locateFences } from './transcript-source.ts';
+import { parseTranscriptMarkdown } from './transcript-source.ts';
 import { fields, invalid, record, type TranscriptCopy } from './wire.ts';
 import type { IpcRequest } from '../ipc-lifetime.ts';
 
@@ -28,8 +28,8 @@ export function decodeTranscriptCopy(input: unknown): TranscriptCopy {
   });
   if (value.code !== undefined) {
     const code = record(value.code);
-    fields(code, ['start']);
-    if (!decoded.selection || !Number.isSafeInteger(code.start) || (code.start as number) < 0)
+    fields(code, ['index']);
+    if (!decoded.selection || !Number.isSafeInteger(code.index) || (code.index as number) < 0)
       invalid();
   }
   return { ...decoded, ...(value.code ? { code: value.code as TranscriptCopy['code'] } : {}) };
@@ -177,9 +177,9 @@ export async function copyTranscript(
       });
     let text = chunks.join('');
     if (code) {
-      const fence = locateFences(text).find((fence) => fence.start === code.start);
-      if (!fence) invalid();
-      text = fence!.text;
+      const block = parseTranscriptMarkdown(text).codeBlocks[code.index];
+      if (!block) invalid();
+      text = block!.text;
     }
     // Fresh fixed-prefix proofs after iteration, fenced by the live observation. A held earlier reply is insufficient.
     if (source.kind === 'live') {

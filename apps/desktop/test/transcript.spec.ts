@@ -20,7 +20,7 @@ for (const [name, source, count, body] of [
   ['tabbed list continuation', '- item\n\n\t```js\r\n\t🌔 é\t  \r\n\t```\r\n', 1, '🌔 é\t  \r\n'],
   ['tabbed quote', '>\t```js\r\n>\t🌔 é\t  \r\n>\t```\r\n', 1, '🌔 é\t  \r\n'],
 ] as const)
-  test(`R2 code Copy preserves original source: ${name}`, async ({ page }) => {
+  test(`R2 code Copy uses the correct parser block: ${name}`, async ({ page }) => {
     await open(page);
     await page.evaluate((source) => window.demo.transcript!.live(source), source);
     const live = page.locator('[data-transcript-live]');
@@ -32,7 +32,9 @@ for (const [name, source, count, body] of [
       timeout: 1000,
     });
     await live.getByRole('button', { name: 'Copy code', exact: true }).click();
-    await expect.poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1))).toBe(body);
+    await expect
+      .poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1)))
+      .toBe(body.replace(/\r\n?/g, '\n').replace(/\n$/, ''));
     await mkdir(output, { recursive: true });
     await page.screenshot({ path: resolve(output, `r2-${name.replaceAll(' ', '-')}.png`) });
   });
@@ -221,7 +223,7 @@ test('safe GFM, literal user content, progressive source, exact native callbacks
   await row.getByRole('button', { name: 'Copy code', exact: true }).click();
   await expect
     .poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1)))
-    .toBe('  const moon = "🌔";\t\r\nconsole.log(moon);\r\n');
+    .toBe('  const moon = "🌔";\t\nconsole.log(moon);');
   await row.getByRole('button', { name: 'Output', exact: true }).click();
   await expect(row.getByText(/Read more/)).toBeVisible();
   await row.getByRole('button', { name: 'Copy part', exact: true }).first().click();
@@ -425,7 +427,7 @@ test('incomplete/unknown/oversized code remains readable and copyable; fence/ref
         break;
     }
   });
-  await expect(live.getByRole('button', { name: /Show all 18001 lines/ })).toBeVisible();
+  await expect(live.getByRole('button', { name: /Show all 18000 lines/ })).toBeVisible();
   const unchanged = await page.evaluate(async () => {
     const before = window.demo.transcript!.metrics.lex;
     window.demo.chat.controls.receiveChat(structuredClone(window.demo.chat.snapshot));
@@ -438,8 +440,8 @@ test('incomplete/unknown/oversized code remains readable and copyable; fence/ref
   await live.getByRole('button', { name: 'Copy code', exact: true }).click();
   await expect
     .poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1)))
-    .toBe('const value = 1;\n'.repeat(18000));
-  await live.getByRole('button', { name: /Show all 18001 lines/ }).click();
+    .toBe('const value = 1;\n'.repeat(17999) + 'const value = 1;');
+  await live.getByRole('button', { name: /Show all 18000 lines/ }).click();
   await expect(live.getByRole('button', { name: 'Fold code', exact: true })).toBeVisible();
   await live.locator('pre code').evaluate((element) => {
     const range = document.createRange();

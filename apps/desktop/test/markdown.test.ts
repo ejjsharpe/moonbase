@@ -1,61 +1,44 @@
-import { getTranscriptDisclosureId } from '../src/chat/transcript-source.ts';
+import {
+  getTranscriptDisclosureId,
+  parseTranscriptMarkdown,
+} from '../src/chat/transcript-source.ts';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { marked } from 'marked';
 import {
   MarkdownCache,
   canHighlight,
   getExternalLink,
-  locateFences,
   type LocatedToken,
 } from '../src/renderer/chat/markdown-model.ts';
-test('indented fence-looking text cannot consume the following real fence location', () => {
-  for (const body of ['same', '🌔 é\t  ']) {
-    const source = `- item\n\n      \`\`\`js\n      ${body}\n      \`\`\`\n\n  \`\`\`js\r\n  ${body}\r\n  \`\`\`\r\n`;
-    const blocks = new MarkdownCache().parse('mixed', body, source);
-    const code: LocatedToken[] = [];
-    marked.walkTokens(
-      blocks.map((block) => block.token),
-      (token) => {
-        if (token.type === 'code' && token.codeBlockStyle !== 'indented') code.push(token);
-      },
-    );
-    assert.equal(code.length, 1);
-    assert.equal(code[0]!.sourceCode?.start, source.indexOf('  ```js\r\n'));
-    assert.equal(code[0]!.sourceCode?.text, body + '\r\n');
+test('parser block selection excludes indented literals and preserves meaningful code indentation', () => {
+  for (const literal of ['same\n      ```\n', 'unclosed\n']) {
+    const source = `- item\n\n      \`\`\`js\n      ${literal}\n  \`\`\`js\r\n  same\r\n  \`\`\`\r\n`;
+    const { codeBlocks } = parseTranscriptMarkdown(source);
+    assert.equal(codeBlocks.length, 1);
+    assert.equal(codeBlocks[0]!.text, 'same');
+    assert.equal((codeBlocks[0] as LocatedToken).codeBlock?.index, 0);
+  }
+  for (const prefix of ['> ', '>\t', '- ', '-\t', '- >\t', '> - ']) {
+    const continuation = prefix.replace(/-/g, ' ');
+    const source = `${prefix}\`\`\`python\r\n${continuation}def moon():\r\n${continuation}    print("🌔 é")\t  \r\n${continuation}\`\`\`\r\n`;
+    const parsed = parseTranscriptMarkdown(source);
+    assert.equal(parsed.codeBlocks.length, 1, prefix);
+    assert.equal(parsed.codeBlocks[0]!.text, 'def moon():\n    print("🌔 é")\t  ', prefix);
+    assert.equal((parsed.codeBlocks[0] as LocatedToken).codeBlock?.closed, true, prefix);
   }
 });
-test('exact original source ranges retain CRLF, whitespace, Unicode, repeated/embedded/nested fences', () => {
-  for (const source of [
-    '```ts\r\n  🌔\t\r\n```\r\n',
-    '````md\n```inner\n🌔\n```\n````\n',
-    '> ```ts\r\n> \t🌔  \r\n> ```\r\n',
-    '- ```ts\n  🌔\t\n  ```\n',
-    '- - ```ts\r\n    🌔\t\r\n    ```\r\n',
-    '- > ```ts\r\n  > 🌔\t\r\n  > ```\r\n',
-    '> - ```ts\r\n>   🌔\t\r\n>   ```\r\n',
-    '~~~\none\n~~~\n\n~~~\ntwo\n~~~\n',
-  ]) {
-    const fences = locateFences(source);
-    assert.ok(fences.length);
-    for (const fence of fences) {
-      assert.equal(fence.closed, true);
-      assert.equal(
-        fence.text,
-        fence.ranges.map((range) => source.slice(range.start, range.end)).join(''),
-      );
-    }
-  }
-  assert.equal(locateFences('> ```ts\r\n> \t🌔  \r\n> ```\r\n')[0]!.text, '\t🌔  \r\n');
-  const cache = new MarkdownCache();
-  for (const source of [
-    '- - ```ts\r\n    🌔\t\r\n    ```\r\n',
-    '- > ```ts\r\n  > 🌔\t\r\n  > ```\r\n',
-  ]) {
-    const blocks = cache.parse(source, '1', source);
-    assert.match(blocks[0]!.signature, /sourceCode/);
-    assert.equal(locateFences(source)[0]!.text, '🌔\t\r\n');
-  }
+test('repeated and nested fences use parser order without body matching or source reconstruction', () => {
+  const source =
+    '```js\r\nsame\r\n```\r\n\n> ````md\r\n> ```inner\r\n> 🌔\r\n> ```\r\n> ````\r\n\n```js\nsame\n```\n';
+  const parsed = parseTranscriptMarkdown(source);
+  assert.deepEqual(
+    parsed.codeBlocks.map((block) => block.text),
+    ['same', '```inner\n🌔\n```', 'same'],
+  );
+  assert.deepEqual(
+    parsed.codeBlocks.map((block) => (block as LocatedToken).codeBlock?.index),
+    [0, 1, 2],
+  );
 });
 test('changed messages re-lex, references/fence closure invalidate interpretation, exact clones reuse bounded work', () => {
   const cache = new MarkdownCache();
@@ -64,8 +47,15 @@ test('changed messages re-lex, references/fence closure invalidate interpretatio
   assert.equal(cache.stats.lex, 1);
   const next = cache.parse('entry', '2', '[read][ref]\n\n[ref]: https://example.com\n');
   assert.notEqual(next[0]!.signature, first[0]!.signature);
-  assert.equal(locateFences('```js\nconst n=1')[0]!.closed, false);
-  assert.equal(locateFences('```js\nconst n=1\n```')[0]!.closed, true);
+  assert.equal(
+    (parseTranscriptMarkdown('```js\nconst n=1').codeBlocks[0] as LocatedToken).codeBlock!.closed,
+    false,
+  );
+  assert.equal(
+    (parseTranscriptMarkdown('```js\nconst n=1\n```').codeBlocks[0] as LocatedToken).codeBlock!
+      .closed,
+    true,
+  );
   const nested = cache.parse(
     'nested',
     '1',
@@ -93,10 +83,13 @@ test('highlighting limits never limit source and explicit HTTP(S) is the sole op
   assert.equal(getExternalLink('https://example.com'), 'https://example.com/');
 });
 
-test('quote prefixes with fence-like text cannot make source-location matching backtrack', () => {
-  assert.deepEqual(locateFences('> '.repeat(5000) + 'not a fence ``` later'), []);
+test('deep quote and ordered-list input stays readable without source-location reconstruction', () => {
+  assert.deepEqual(
+    parseTranscriptMarkdown('> '.repeat(5000) + 'not a fence ``` later').codeBlocks,
+    [],
+  );
   const source = '1. item\n\n    ```ts\r\n    🌔\r\n    ```\r\n';
-  assert.equal(locateFences(source)[0]!.text, '🌔\r\n');
+  assert.equal(parseTranscriptMarkdown(source).codeBlocks[0]!.text, '🌔');
   const cache = new MarkdownCache();
   const blocks = cache.parse('deep', '1', '> '.repeat(1000) + 'literal');
   assert.ok(blocks.length);
@@ -113,16 +106,16 @@ test('disclosure IDs preserve exact identities within application memory bounds'
   );
 });
 
-test('many original CRLF fences keep their own source locations and cache keys count toward retention', () => {
+test('many repeated CRLF fences keep their own parser indexes and cache keys count toward retention', () => {
   const cache = new MarkdownCache();
   const fence = '```ts\r\nconst moon = "🌔";\r\n```\r\n\r\n';
   const blocks = cache.parse('many', '1', fence.repeat(1000));
   const code = blocks.filter((block) => block.token.type === 'code');
   assert.equal(code.length, 1000);
   for (let i = 0; i < code.length; i++) {
-    assert.equal(code[i]!.token.sourceCode!.start, i * fence.length);
-    assert.equal(code[i]!.token.sourceCode!.text, 'const moon = "🌔";\r\n');
-    assert.equal(code[i]!.token.sourceCode!.closed, true);
+    assert.equal(code[i]!.token.codeBlock!.index, i);
+    assert.equal((code[i]!.token as { text: string }).text, 'const moon = "🌔";');
+    assert.equal(code[i]!.token.codeBlock!.closed, true);
   }
   cache.clear();
   cache.parse('x'.repeat(2 * 1024 * 1024), '1', 'small text');

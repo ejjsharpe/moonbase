@@ -822,7 +822,7 @@ function Part({
     [part.partId, part.bytes, part.revision],
   );
   const copy = useCallback(
-    (codeStart?: number) => {
+    (codeIndex?: number) => {
       if (native)
         run(
           (signal) =>
@@ -830,7 +830,7 @@ function Part({
               {
                 source,
                 selection,
-                ...(codeStart !== undefined ? { code: { start: codeStart } } : {}),
+                ...(codeIndex !== undefined ? { code: { index: codeIndex } } : {}),
               },
               signal,
             ),

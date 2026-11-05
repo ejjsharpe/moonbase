@@ -8,7 +8,7 @@ import type {
 } from '@moonbase/contracts/chat';
 import type { TranscriptNative } from '../src/chat/wire.ts';
 import type { chatCapabilities } from './chat.ts';
-import { locateFences } from '../src/chat/transcript-source.ts';
+import { parseTranscriptMarkdown } from '../src/chat/transcript-source.ts';
 import { markdownMetrics } from '../src/renderer/chat/markdown.tsx';
 export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabilities>) {
   const sources = new Map<
@@ -171,9 +171,7 @@ export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabili
       }))
         text += chunk.data;
       copied.push(
-        input.code
-          ? locateFences(text).find((fence) => fence.start === input.code!.start)!.text
-          : text,
+        input.code ? parseTranscriptMarkdown(text).codeBlocks[input.code!.index]!.text : text,
       );
     },
     async openLink(url) {

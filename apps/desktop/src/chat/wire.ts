@@ -38,8 +38,8 @@ export type DesktopChatTarget = {
 export type TranscriptCopy = {
   source: ChatTranscriptSource;
   selection?: ChatTranscriptSelection;
-  /** Original UTF-16 fence location; main derives its complete body from source. */
-  code?: { start: number };
+  /** Parser block index within the exact selected part; main derives its complete value. */
+  code?: { index: number };
 };
 export type TranscriptNative = {
   copy(input: TranscriptCopy, signal?: AbortSignal): Promise<void>;

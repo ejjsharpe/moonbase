@@ -17,7 +17,7 @@ import {
 export { markdownMetrics } from './markdown-model.ts';
 type Actions = {
   openLink(url: string): void;
-  copyCode?(start: number): void;
+  copyCode?(index: number): void;
   insideLink?: boolean;
 };
 export const Markdown = memo(function Markdown({
@@ -93,7 +93,7 @@ function decodeEntities(text: string) {
   });
 }
 function renderToken(token: Token, actions: Actions): ReactNode {
-  const code = (token as LocatedToken).sourceCode;
+  const code = (token as LocatedToken).codeBlock;
   const value = token as Token & { text?: string; tokens?: Token[] };
   const content = () => (value.tokens ? inline(value.tokens, actions) : value.text);
   switch (token.type) {
@@ -236,10 +236,10 @@ function renderToken(token: Token, actions: Actions): ReactNode {
       const block = token as Tokens.Code;
       return (
         <Code
-          text={code?.text ?? block.text}
+          text={block.text}
           language={block.lang?.split(/\s/)[0] ?? ''}
           closed={code?.closed ?? block.codeBlockStyle === 'indented'}
-          copy={code && actions.copyCode ? () => actions.copyCode!(code.start) : undefined}
+          copy={code && actions.copyCode ? () => actions.copyCode!(code.index) : undefined}
         />
       );
     }
