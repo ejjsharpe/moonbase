@@ -273,6 +273,32 @@ test('late Close completion preserves newer sidebar resize and its first arrow',
   }
 });
 
+for (const release of ['after keyup', 'before keyup'] as const)
+  test(`late Close completion preserves new Tab entry from consumer chrome ${release}`, async ({
+    page,
+  }) => {
+    try {
+      await holdLateClose(page);
+      const chrome = page.getByRole('button', { name: 'Dispose second editor', exact: true });
+      await chrome.click();
+      await expect(chrome).toBeFocused();
+      if (release === 'before keyup') await page.keyboard.down('Tab');
+      else await page.keyboard.press('Tab');
+      const separator = first(page).getByRole('separator', { name: 'Resize sidebar', exact: true });
+      await expect(separator).toBeFocused();
+      await releaseLateClose(page);
+      if (release === 'before keyup') await page.keyboard.up('Tab');
+      await page.screenshot({ path: test.info().outputPath('tab-entry.png') });
+      const width = Number(await separator.getAttribute('aria-valuenow'));
+      await page.keyboard.press('ArrowRight');
+      await expect.soft(separator).toHaveAttribute('aria-valuenow', String(width + 10));
+      await expect(separator).toBeFocused();
+    } finally {
+      await page.keyboard.up('Tab');
+      await releaseLateClose(page);
+    }
+  });
+
 for (const survivor of [true, false])
   test(`keyboard context-menu Close restores ${survivor ? 'the surviving tab' : 'empty-editor'} focus and allows Reopen`, async ({
     page,
