@@ -23,7 +23,8 @@
     "@earendil-works/chord": "1.4.0",
     "@moonbase/contracts": "workspace:*",
     "@moonbase/effect": "workspace:*",
-    "@moonbase/ssh": "workspace:*"
+    "@moonbase/ssh": "workspace:*",
+    "lru-cache": "11.5.3"
   },
   "devDependencies": {
     "typebox": "1.3.27",

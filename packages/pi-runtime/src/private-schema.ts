@@ -188,6 +188,12 @@ const findPartPositionSchema = Schema.Struct({
   auxiliary: integer.check(Schema.makeFilter((value) => value >= 0)),
 });
 export type FindPartPosition = typeof findPartPositionSchema.Type;
+/**
+ * Find JSON token paths are bounded so a sealed find cursor always fits the 1024-character cursor
+ * schema: the other fields need at most 353 JSON bytes, leaving 382 of the 735 a cursor can encode.
+ */
+export const maximumFindPathDepth = 32;
+export const maximumFindPathChars = 360;
 const transcriptCursorSchema = Schema.Struct({
   kind: Schema.Literals(['manifest', 'content', 'around', 'find']),
   binding: Schema.String.check(Schema.makeFilter((value) => /^[a-f0-9]{64}$/.test(value))),
@@ -201,7 +207,8 @@ const transcriptCursorSchema = Schema.Struct({
   part: Schema.optional(findPartPositionSchema),
   path: Schema.optional(
     Schema.Array(integer.check(Schema.makeFilter((value) => value >= 0))).check(
-      Schema.isMaxLength(128),
+      Schema.isMaxLength(maximumFindPathDepth),
+      Schema.makeFilter((value) => JSON.stringify(value).length <= maximumFindPathChars),
     ),
   ),
   offset: Schema.optional(integer.check(Schema.makeFilter((value) => value >= 0))),

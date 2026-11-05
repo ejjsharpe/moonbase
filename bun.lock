@@ -118,6 +118,7 @@
         "@moonbase/effect": "workspace:*",
         "@moonbase/ssh": "workspace:*",
         "effect": "4.1.0",
+        "lru-cache": "11.5.3",
       },
       "devDependencies": {
         "@moonbase/application": "workspace:*",

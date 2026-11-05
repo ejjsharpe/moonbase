@@ -574,7 +574,16 @@ test('cancelled read releases its caller, keeps the SDK owned through settlement
     () => f.client.command('getChat', { target }),
     (view) => !!view.run,
   );
-  const source = view.entries.find((entry) => entry.role === 'user')!.transcript!.source;
+  // Saved transcripts are cached once projected, so read one getChat has not built yet.
+  const unread = await getHarness().commit(
+    (tx) =>
+      tx.appendEntry(Number(target.conversationId) as ConversationId, {
+        kind: 'app.unread-record',
+        data: {},
+      }),
+    context,
+  );
+  const source: ChatTranscriptSource = { kind: 'entry', target, entryId: String(unread.id) };
   let held = false,
     closed = false;
   const gate = new Promise<void>((resolve) => {

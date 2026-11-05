@@ -49,7 +49,7 @@ import {
 } from './history.ts';
 import type { RuntimeConfiguration, RetainedWork } from './runtime-types.ts';
 import { findTranscript } from './find.ts';
-import { NestedSourceRetired, readTranscriptContent, checkRead } from './transcript.ts';
+import { NestedSourceRetired, readTranscriptContent } from './transcript.ts';
 import * as V from './validation.ts';
 import * as S from './private-schema.ts';
 
@@ -330,21 +330,21 @@ export class Host {
   getTranscriptContent(d: ChatInput<'getChatTranscriptContent'>) {
     return this.read(async (signal) => {
       await this.metadata(d.source.target);
-      checkRead(signal);
+      signal.throwIfAborted();
       return readTranscriptContent(this.harness, d, signal);
     });
   }
   findTranscript(d: ChatInput<'findChatTranscript'>) {
     return this.read(async (signal) => {
       await this.metadata(d.target);
-      checkRead(signal);
+      signal.throwIfAborted();
       return findTranscript(this.harness, d, signal);
     });
   }
   getHistoryAround(d: ChatInput<'getChatHistoryAround'>) {
     return this.read(async (signal) => {
       await this.metadata(d.target);
-      checkRead(signal);
+      signal.throwIfAborted();
       return readHistoryAround(this.harness, d, signal);
     });
   }
@@ -498,7 +498,11 @@ export class Host {
   }
   async getHistory(d: ChatInput<'getChatHistory'>): Promise<ChatHistoryPage> {
     await this.metadata(d.target);
-    return readHistory(this.harness, this.identity, d.target, d.cursor);
+    return readHistory(this.harness, {
+      identity: this.identity,
+      target: d.target,
+      cursor: d.cursor,
+    });
   }
   async getSend(d: ChatInput<'getChatSend'>): Promise<ChatSendReceipt | null> {
     await this.metadata(d.target);
@@ -549,7 +553,7 @@ export class Host {
     signal?: AbortSignal,
   ): Promise<ChatSnapshot> {
     const meta = await this.metadata(target);
-    checkRead(signal);
+    signal?.throwIfAborted();
     const owner = S.savedStore(await this.harness.snapshot(Store, 'identity', context));
     if (owner.identity !== this.identity)
       V.fail('Unauthorized', 'Chat store authority changed. Preserve this store.');
@@ -557,16 +561,15 @@ export class Host {
       if (!(await this.harness.snapshot(LiveDoc, cid(target.conversationId), context)))
         V.fail('Persistence', 'Pi live state is unavailable. Reopen this conversation.');
     }
-    return projectSnapshot(
-      this.harness,
-      this.identity,
+    return projectSnapshot(this.harness, {
+      identity: this.identity,
       target,
-      this.summary(target.conversationId, meta),
-      meta.pending,
-      'mode' in this.config,
+      conversation: this.summary(target.conversationId, meta),
+      pending: meta.pending,
+      local: 'mode' in this.config,
       cache,
       signal,
-    );
+    });
   }
   async hasActiveWork(): Promise<boolean> {
     if (this.mutations || this.admissions.size) return true;
