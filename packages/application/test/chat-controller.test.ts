@@ -1683,6 +1683,63 @@ test('a held Connect reply cannot resurrect a generation that its watch already 
   assert.equal(f.controller.getSnapshot().host, null);
 });
 
+test('explicit Disconnect drains the captured observation before invalidating its connection', async (t) => {
+  const f = await fixture(t),
+    entered = event(),
+    held = event();
+  const watch = f.chat.watch;
+  f.chat.watch = (...args) => {
+    const close = watch(...args);
+    return async () => {
+      entered.resolve();
+      await held.promise;
+      await close();
+    };
+  };
+  await ready(f);
+  const disconnecting = f.controller.disconnect();
+  try {
+    await entered.promise;
+    assert.equal(f.calls.filter((call) => call.operation === 'disconnect').length, 0);
+    assert.equal(f.subscriptions, 1);
+    f.controller.setDraft('preserved while release is held');
+    await f.controller.send();
+    assert(!f.calls.some((call) => call.operation === 'sendChat'));
+  } finally {
+    held.resolve();
+    await disconnecting;
+  }
+  assert.equal(f.subscriptions, 0);
+  assert.equal(f.calls.filter((call) => call.operation === 'disconnect').length, 1);
+  assert.equal(f.controller.getSnapshot().draft, 'preserved while release is held');
+  assert.equal(f.controller.getSnapshot().connection!.state, 'disconnected');
+  assert(!f.calls.some((call) => call.operation === 'stopChat'));
+  await f.controller.connect();
+  await turn();
+  assert.equal(f.subscriptions, 1);
+  await f.controller.dispose();
+});
+
+test('explicit Disconnect retains a failed observation release without invalidating connectivity', async (t) => {
+  const cleanup: (() => Promise<void>)[] = [];
+  const f = await fixture({ after: (close) => cleanup.push(close) });
+  const failure = new ApplicationError({
+    code: 'Persistence',
+    message: 'Held watch release failed',
+  });
+  f.chat.watch = () => async () => {
+    throw failure;
+  };
+  t.after(async () => {
+    for (const close of cleanup) await assert.rejects(close(), /Held watch release failed/);
+  });
+  await ready(f);
+  await f.controller.disconnect();
+  assert.equal(f.calls.filter((call) => call.operation === 'disconnect').length, 0);
+  assert.match(f.controller.getSnapshot().error!, /Held watch release failed/);
+  await assert.rejects(f.controller.dispose(), /Held watch release failed/);
+});
+
 test('a held Disconnect status read cannot replace a newer watched generation', async (t) => {
   const f = await fixture(t),
     held = event<unknown>(),

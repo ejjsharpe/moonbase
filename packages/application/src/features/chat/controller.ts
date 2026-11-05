@@ -436,6 +436,8 @@ class ChatModelState {
         if (this.mode === 'local') return;
         const id = this.state.connection?.connectionId;
         if (!id) return;
+        this.update({ ready: false });
+        yield* Effect.promise(() => this.closeOwner(this.generation));
         yield* Effect.tryPromise({
           try: (signal) => this.connection!.command('disconnect', { connectionId: id }, { signal }),
           catch: normalizeApplicationError,
@@ -452,7 +454,8 @@ class ChatModelState {
     );
   private connected() {
     if (
-      this.mode === 'local' ? !this.generation?.alive : this.state.connection?.state !== 'connected'
+      !this.generation?.alive ||
+      (this.mode !== 'local' && this.state.connection?.state !== 'connected')
     )
       throw new ApplicationError({
         code: 'Unavailable',
