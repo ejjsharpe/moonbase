@@ -362,6 +362,34 @@ for (const source of [
       }
     });
 
+test('late Close completion preserves programmatic entry from consumer chrome', async ({
+  page,
+}) => {
+  try {
+    await holdLateClose(page);
+    const separator = first(page).getByRole('separator', { name: 'Resize sidebar', exact: true });
+    // A consumer moves focus into the view without Tab or pointer input, like a restored view switch.
+    await separator.evaluate((target: HTMLElement) => {
+      const last = [...document.querySelectorAll('button')].find(
+        (button) => button.textContent === 'Dispose second editor',
+      )!;
+      const consumer = document.createElement('button');
+      consumer.textContent = 'Consumer focus restore';
+      last.after(consumer);
+      consumer.focus();
+      target.focus();
+    });
+    await expect(separator).toBeFocused();
+    await expect(separator).toHaveAttribute('aria-valuenow', '270');
+    await releaseLateClose(page);
+    await page.keyboard.press('ArrowRight');
+    await expect.soft(separator).toHaveAttribute('aria-valuenow', '280');
+    await expect(separator).toBeFocused();
+  } finally {
+    await releaseLateClose(page);
+  }
+});
+
 for (const survivor of [true, false])
   test(`keyboard context-menu Close restores ${survivor ? 'the surviving tab' : 'empty-editor'} focus and allows Reopen`, async ({
     page,
