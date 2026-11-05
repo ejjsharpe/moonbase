@@ -1740,6 +1740,62 @@ test('explicit Disconnect retains a failed observation release without invalidat
   await assert.rejects(f.controller.dispose(), /Held watch release failed/);
 });
 
+test('Disconnect fences reentrant Send before publishing unavailable readiness', async (t) => {
+  const f = await fixture(t);
+  await ready(f);
+  f.controller.setDraft('preserved during Disconnect');
+  let attempted = false;
+  const off = f.controller.subscribe(() => {
+    const state = f.controller.getSnapshot();
+    if (!attempted && !state.ready && state.active.includes('disconnect')) {
+      attempted = true;
+      void f.controller.send();
+    }
+  });
+  try {
+    await f.controller.disconnect();
+    await turn();
+  } finally {
+    off();
+  }
+  assert(attempted);
+  assert(!f.calls.some((call) => call.operation === 'sendChat'));
+  assert.equal(f.controller.getSnapshot().draft, 'preserved during Disconnect');
+});
+
+for (const changedId of [false, true])
+  test(`Disconnect captured before observation close cannot invalidate a replacement owner (${changedId ? 'new' : 'same'} connection)`, async (t) => {
+    const f = await fixture(t),
+      watch = f.chat.watch;
+    let replaced = false;
+    f.chat.watch = (...args) => {
+      const close = watch(...args);
+      return async () => {
+        await close();
+        if (replaced) return;
+        replaced = true;
+        f.publishConnection({
+          state: 'connected',
+          connectionId: changedId
+            ? 'replacement-during-close'
+            : f.controller.getSnapshot().connection!.connectionId!,
+          profile,
+          health: { ...context.host, protocol: 1, version: '0.1.0', capabilities: ['chat-v0'] },
+        });
+      };
+    };
+    await ready(f);
+    const originalId = f.controller.getSnapshot().connection!.connectionId;
+    await f.controller.disconnect();
+    await f.controller.refresh();
+    assert.equal(f.calls.filter((call) => call.operation === 'disconnect').length, 0);
+    assert.equal(
+      f.controller.getSnapshot().connection!.connectionId,
+      changedId ? 'replacement-during-close' : originalId,
+    );
+    assert.equal(f.controller.getSnapshot().ready, true);
+  });
+
 test('a held Disconnect status read cannot replace a newer watched generation', async (t) => {
   const f = await fixture(t),
     held = event<unknown>(),
