@@ -538,8 +538,13 @@ test('dirty recovery and comparison metadata restore across actual process resta
     .toBe('dirty restored staged');
   await forceStop();
   await launch();
+  await page.getByRole('tab', { name: 'checkout · main', exact: true }).click();
   await expect(page.getByRole('textbox', { name: 'a.ts editor', exact: true })).toBeVisible();
-  await expect(page.getByRole('textbox', { name: /^staged · .* original$/ })).toBeVisible();
+  await expect(
+    page.getByRole('textbox', { name: 'HEAD ↔ working buffer original', exact: true }),
+  ).toBeVisible();
+  const restored = (await recovery()).state;
+  expect(restored.views[restored.selectedCheckoutId!].fileViews['a.ts']).toBe('staged');
   await expect(
     page.locator('.view-line').filter({ hasText: 'dirty restored staged' }).first(),
   ).toBeVisible();
@@ -812,7 +817,18 @@ test("controlled clipboard fixtures require native consent and capture real file
     ];
   }, source);
   await page.getByRole('tree', { name: 'Files', exact: true }).focus();
-  await page.keyboard.press('Meta+v');
+  expect(
+    await page.getByRole('tree', { name: 'Files', exact: true }).evaluate((element) =>
+      element.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'v',
+          metaKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    ),
+  ).toBe(false);
   await expect(page.getByRole('dialog', { name: 'Import files', exact: true })).toBeVisible();
   await expect(
     page.getByRole('dialog').getByRole('button', { name: 'Import files', exact: true }),
@@ -1204,6 +1220,7 @@ test('unacknowledged real move evidence restores dirty text on process restart w
   await expect.poll(() => existsSync(join(checkout, 'moved.ts'))).toBe(true);
   await forceStop();
   await launch();
+  await page.getByRole('tab', { name: 'checkout · main', exact: true }).click();
   await expect(page.getByRole('textbox', { name: 'moved.ts editor', exact: true })).toBeVisible();
   await expect(
     page.locator('.view-line').filter({ hasText: 'draft before uncertain move' }).first(),
@@ -1314,6 +1331,7 @@ test('app R1 filename maps preserve actual Save, positions, sibling drafts and r
       expect(consoleErrors).toEqual([]);
       await forceStop();
       await launch();
+      await page.getByRole('tab', { name: 'checkout · main', exact: true }).click();
       return page;
     });
   } finally {

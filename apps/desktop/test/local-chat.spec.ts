@@ -15,6 +15,8 @@ test.afterAll(async () => {
   if (fixtureDirectory) await rm(fixtureDirectory, { recursive: true, force: true });
 });
 test.beforeAll(async () => {
+  await mkdir(resolve('../../test-results/transcript-111'), { recursive: true });
+  await mkdir(resolve('../../test-results/transcript-112'), { recursive: true });
   fixtureDirectory = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-local-ui-')));
   for (const name of ['renderer', 'workspace', 'preload.cjs'])
     await symlink(resolve('dist', name), join(fixtureDirectory, name));
@@ -556,6 +558,14 @@ test('transcript local rendering precedes held completion; native Copy/link fail
       ),
     ).toBe(reads);
     await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
+    expect(
+      await app.evaluate(
+        ({ clipboard }) =>
+          clipboard.writeText ===
+          (globalThis as unknown as { moonbaseTestClipboardWrite: unknown })
+            .moonbaseTestClipboardWrite,
+      ),
+    ).toBe(true);
     await app.evaluate(({ clipboard, shell }) => {
       const original = clipboard.writeText.bind(clipboard);
       const control = (globalThis as unknown as { transcriptTest: Control }).transcriptTest;
@@ -787,12 +797,10 @@ for (const mode of ['local', 'remote'] as const)
         path: resolve(`../../test-results/transcript-112/native-${mode}-held-tool.png`),
       });
       await page.getByRole('button', { name: 'Stop', exact: true }).click();
-      await expect
-        .poll(async () => {
-          const stop = page.getByRole('button', { name: 'Stop', exact: true });
-          return !(await stop.isVisible()) || (await stop.isDisabled());
-        })
-        .toBe(true);
+      // One locator: Stop may leave the DOM between separate visibility and disabled checks.
+      await expect(
+        page.getByRole('button', { name: 'Stop', exact: true, disabled: false }),
+      ).toHaveCount(0);
       await expect(page.getByRole('status', { name: 'Conversation status' })).toContainText(
         'Stopped',
       );

@@ -8,6 +8,7 @@ import { ManagedRuntime, Layer } from 'effect';
 import { makeChatClient, makeConnectionClient } from '@moonbase/application/runtime/clients';
 import { RemoteChatLive } from '@moonbase/pi-runtime/remote';
 import { SshLive } from '@moonbase/ssh';
+import type { ChatTarget } from '@moonbase/contracts/chat';
 export async function until<T>(get: () => Promise<T>, ready: (v: T) => boolean) {
   const end = Date.now() + 15000;
   while (Date.now() < end) {
@@ -21,7 +22,15 @@ export type FixtureStats = {
   watches: number;
   publications: number;
   activeWatches: number;
-  reads?: { scans: number; entries: number; inspections: number };
+  reads?: {
+    scans: number;
+    entries: number;
+    inspections: number;
+    ranges?: { limit: number; min: string | null; max: string | null; rows: number }[];
+  };
+  seeded?: { target: ChatTarget; ids: string[] };
+  longSeeded?: { target: ChatTarget; entryId: string; bytes: number; units: number; late: number };
+  seedError?: string;
   calls: number;
   tools: number;
   commands: string[];
@@ -267,6 +276,26 @@ export async function controlledHostFixture(hostScript: URL, hold = false) {
     close,
     release: () => host!.send({ type: 'release' }),
     nextChunk: () => host!.send({ type: 'next-chunk' }),
+    seedHistory: async (target: ChatTarget) => {
+      host!.send({ type: 'seed-history', target });
+      const result = await until(
+        stats,
+        (value) =>
+          !!value.seedError || value.seeded?.target.conversationId === target.conversationId,
+      );
+      if (result.seedError) throw Error(result.seedError);
+      return result.seeded!.ids;
+    },
+    seedLongText: async (target: ChatTarget) => {
+      host!.send({ type: 'seed-long-text', target });
+      const result = await until(
+        stats,
+        (value) =>
+          !!value.seedError || value.longSeeded?.target.conversationId === target.conversationId,
+      );
+      if (result.seedError) throw Error(result.seedError);
+      return result.longSeeded!;
+    },
     loseNextSend: () => writeFile(drop, ''),
     loseNextReply: (operation: string) => writeFile(drop, operation),
     tamperNextReply: (operation: string) => writeFile(drop, 'tamper:' + operation),

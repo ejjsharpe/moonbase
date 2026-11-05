@@ -70,6 +70,7 @@ type Owner = {
 };
 type Observation = {
   ready: Deferred.Deferred<Exit.Exit<ObservationClose>>;
+  generation?: Owner;
   outcome?: Promise<Exit.Exit<void>>;
 };
 const maximumSavedBytes = 2 * 1024 * 1024;
@@ -275,11 +276,12 @@ class ChatModelState {
   private observe(
     owner: Owner,
     acquire: () => ObservationClose,
+    generation?: Owner,
   ): Effect.Effect<void, ApplicationError> {
     return Effect.gen({ self: this }, function* () {
       if (!owner.alive || this.closed) return;
       // A synchronous watch callback can reenter disposal before acquisition returns.
-      const observation: Observation = { ready: Deferred.makeUnsafe() };
+      const observation: Observation = { ready: Deferred.makeUnsafe(), generation };
       this.observations.add(observation);
       owner.observations.add(observation);
       const acquired = yield* Effect.exit(
@@ -400,7 +402,7 @@ class ChatModelState {
     this.epoch++;
     void this.selection?.transcript?.close();
     void this.closeOwner(this.generation);
-    this.generation = state.state === 'connected' ? this.owner(this.attachment) : undefined;
+    if (state.state === 'connected') this.generation = this.owner(this.attachment);
     this.selection = undefined;
     this.refreshOwner = undefined;
     this.update({
@@ -429,13 +431,35 @@ class ChatModelState {
           this.onConnection(connected);
       }),
     );
-  disconnect = () =>
-    this.action(
+  disconnect = () => {
+    const generation = this.generation,
+      id = this.state.connection?.connectionId;
+    return this.action(
       'disconnect',
       Effect.gen({ self: this }, function* () {
-        if (this.mode === 'local') return;
-        const id = this.state.connection?.connectionId;
-        if (!id) return;
+        if (
+          this.mode === 'local' ||
+          !id ||
+          this.generation !== generation ||
+          this.state.connection?.connectionId !== id
+        )
+          return;
+        const selection = this.selection;
+        void this.closeOwner(generation);
+        void selection?.transcript?.close();
+        if (this.generation === generation) this.update({ ready: false });
+        const outcomes = yield* Effect.promise(() =>
+          Promise.all(
+            [...this.observations]
+              .filter(
+                (observation) =>
+                  observation.generation !== undefined && observation.generation === generation,
+              )
+              .map((observation) => this.closeObservation(observation)),
+          ),
+        );
+        for (const outcome of outcomes) yield* outcome;
+        if (this.generation !== generation || this.state.connection?.connectionId !== id) return;
         yield* Effect.tryPromise({
           try: (signal) => this.connection!.command('disconnect', { connectionId: id }, { signal }),
           catch: normalizeApplicationError,
@@ -449,10 +473,15 @@ class ChatModelState {
         if (attachment === this.attachment && revision === this.connectionRevision)
           this.onConnection(state);
       }),
+      undefined,
+      true,
+      () => this.generation === generation,
     );
+  };
   private connected() {
     if (
-      this.mode === 'local' ? !this.generation?.alive : this.state.connection?.state !== 'connected'
+      !this.generation?.alive ||
+      (this.mode !== 'local' && this.state.connection?.state !== 'connected')
     )
       throw new ApplicationError({
         code: 'Unavailable',
@@ -669,20 +698,23 @@ class ChatModelState {
         }
       };
       const read = Effect.gen({ self: this }, function* () {
-        yield* this.observe(owner, () =>
-          this.chat.watch(
-            { target },
-            (snapshot) => {
-              received = true;
-              accept(snapshot);
-            },
-            (error) => {
-              if (owner.alive && this.selection === owner) {
-                transcript.fail(error);
-                this.error(error);
-              }
-            },
-          ),
+        yield* this.observe(
+          owner,
+          () =>
+            this.chat.watch(
+              { target },
+              (snapshot) => {
+                received = true;
+                accept(snapshot);
+              },
+              (error) => {
+                if (owner.alive && this.selection === owner) {
+                  transcript.fail(error);
+                  this.error(error);
+                }
+              },
+            ),
+          this.generation,
         );
         const snapshot = yield* this.call('getChat', { target });
         if (!received) accept(snapshot);
@@ -1011,8 +1043,10 @@ class ChatModelState {
     const owner = this.attachment;
     void this.selection?.transcript?.close();
     if (!owner) return this.detaching ?? Promise.resolve();
+    const closing = this.closeOwner(owner);
+    if (this.attachment !== owner) return closing;
+    this.detaching = closing;
     this.attachment = undefined;
-    this.generation = undefined;
     this.selection = undefined;
     this.refreshOwner = undefined;
     this.update({
@@ -1021,7 +1055,7 @@ class ChatModelState {
       host: null,
       ready: false,
     });
-    return (this.detaching = this.closeOwner(owner));
+    return closing;
   }
   private beginDisposal() {
     if (this.closed) return;

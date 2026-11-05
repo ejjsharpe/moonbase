@@ -109,6 +109,7 @@ export async function checkFilenameMaps(
     view = persisted.views[persisted.selectedCheckoutId!];
   for (const path of filenameCases) {
     expect(Object.hasOwn(view.fileViews, path)).toBe(true);
+    expect(view.fileViews[path]).toBe('staged');
     expect(Object.hasOwn(view.positions, path)).toBe(true);
   }
   expect(await prototypes(page)).toBe(before);
@@ -120,7 +121,10 @@ export async function checkFilenameMaps(
     restored = restarted.views[restarted.selectedCheckoutId!];
   for (const path of filenameCases) {
     await page.getByRole('tab', { name: path, exact: true }).click();
-    await expect(page.getByRole('textbox', { name: /^staged · .* original$/ })).toBeVisible();
+    await expect(
+      page.getByRole('textbox', { name: 'HEAD ↔ working buffer original', exact: true }),
+    ).toBeVisible();
+    expect(restored.fileViews[path]).toBe('staged');
     await expect(page.getByRole('textbox', { name: / original$/ })).toHaveJSProperty(
       'readOnly',
       true,
@@ -302,6 +306,17 @@ export async function pasteNativeFile(app: ElectronApplication, page: Page, path
     ];
   }, path);
   await page.getByRole('tree', { name: 'Files', exact: true }).focus();
-  await page.keyboard.press('Meta+v');
+  expect(
+    await page.getByRole('tree', { name: 'Files', exact: true }).evaluate((element) =>
+      element.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'v',
+          metaKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    ),
+  ).toBe(false);
   await expect(page.getByRole('dialog', { name: 'Import files', exact: true })).toBeVisible();
 }

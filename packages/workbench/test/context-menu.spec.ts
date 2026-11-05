@@ -392,10 +392,26 @@ test('portal typing and paste do not import files or navigate the explorer', asy
   page.on('pageerror', (error) => errors.push(error.message));
   await row(page, 'README.md').click({ button: 'right' });
   await expect(item(page, 'Rename')).toBeFocused();
-  await page.keyboard.press('Meta+v');
-  await menu(page).evaluate((element) =>
-    element.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true })),
-  );
+  expect(
+    await item(page, 'Rename').evaluate((element) => {
+      const key = new KeyboardEvent('keydown', {
+        key: 'v',
+        metaKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      element.dispatchEvent(key);
+      const data = new DataTransfer();
+      data.setData('text/plain', 'controlled menu paste');
+      const paste = new ClipboardEvent('paste', {
+        clipboardData: data,
+        bubbles: true,
+        cancelable: true,
+      });
+      element.dispatchEvent(paste);
+      return { keyPrevented: key.defaultPrevented, pastePrevented: paste.defaultPrevented };
+    }),
+  ).toEqual({ keyPrevented: false, pastePrevented: false });
   await page.keyboard.press('c');
   await expect(item(page, 'Copy')).toBeFocused();
   expect(await selected(page)).toEqual(['README.md']);

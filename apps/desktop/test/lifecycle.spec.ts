@@ -198,15 +198,42 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
         await expect
           .poll(() => readFile(join(f.cwd, 'a.ts'), 'utf8'))
           .toBe('retained local draft at reload');
+        let readiness: unknown;
         await until(
           () =>
             current.evaluate(async ({ BrowserWindow }) =>
               BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(
-                `(() => { const b = [...document.querySelectorAll("button")].find(b=>b.textContent==="Save"); return !!b && !b.disabled; })()`,
+                `(async () => {
+                  const reply = await window.moonbase.call('command', { operation: 'loadRecovery', input: { clientId: window.moonbase.clientId } }, crypto.randomUUID());
+                  return { reply,
+                    alerts: [...document.querySelectorAll('[role="alert"]')].filter(element => element.getClientRects().length && element.textContent.trim()).map(element => element.textContent),
+                    statuses: [...document.querySelectorAll('[role="status"]')].map(element => element.textContent)
+                  };
+                })()`,
               ),
             ),
-          Boolean,
-        );
+          (value) => {
+            readiness = value;
+            return (
+              value.reply.ok &&
+              value.reply.value.state.drafts.length === 0 &&
+              value.reply.value.errors.length === 0 &&
+              value.reply.value.operations.length === 0 &&
+              value.alerts.length === 0 &&
+              !value.statuses.some((status: string) =>
+                /Recovery confirmation pending|Recovery publication PENDING|Preserving edits/.test(
+                  status,
+                ),
+              )
+            );
+          },
+        ).finally(async () => {
+          await mkdir(evidence, { recursive: true });
+          await writeFile(
+            join(evidence, 'crash-save-readiness.json'),
+            JSON.stringify(readiness, null, 2),
+          );
+        });
         const stats = await f.stats();
         expect(stats.commands.filter((v) => v === 'sendChat')).toHaveLength(1);
         expect(stats.commands.filter((v) => v === 'stopChat')).toHaveLength(0);
