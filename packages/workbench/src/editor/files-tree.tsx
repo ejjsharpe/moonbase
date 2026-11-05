@@ -48,9 +48,9 @@ export function FilesTree({
     paths: string[];
     path: string;
     point: DOMRect;
+    scroll: number;
   } | null>(null);
-  const popup = useRef<HTMLDivElement>(null),
-    restoreMenuFocus = useRef(true),
+  const restoreMenuFocus = useRef(true),
     visibility = useRef(visible);
   useLayoutEffect(() => {
     visibility.current = visible;
@@ -95,6 +95,17 @@ export function FilesTree({
     !state.disposed &&
     checkoutKey(menu.checkout) === checkoutIdentity &&
     rows.some((row) => row.path === menu.path);
+  useLayoutEffect(() => {
+    if (!menuAvailable) return;
+    const ownerDocument = treeElement.current!.ownerDocument;
+    function dismissForDialog(event: FocusEvent) {
+      if (!(event.target instanceof Element) || !event.target.closest('[role="dialog"]')) return;
+      restoreMenuFocus.current = false;
+      setMenu(null);
+    }
+    ownerDocument.addEventListener('focusin', dismissForDialog);
+    return () => ownerDocument.removeEventListener('focusin', dismissForDialog);
+  }, [menuAvailable]);
   useEffect(() => {
     if (menu && !menuAvailable) {
       setMenu(null);
@@ -117,7 +128,13 @@ export function FilesTree({
     const paths = selected.has(path) ? [...tree.selected] : [path];
     if (!selected.has(path)) anchor.current = path;
     restoreMenuFocus.current = true;
-    setMenu({ checkout: { ...checkout }, paths, path, point: DOMRect.fromRect({ x, y }) });
+    setMenu({
+      checkout: { ...checkout },
+      paths,
+      path,
+      point: DOMRect.fromRect({ x, y }),
+      scroll: treeElement.current!.scrollTop,
+    });
     controller.tree(checkout, { focus: path, selected: paths });
   }
   useEffect(() => {
@@ -188,8 +205,8 @@ export function FilesTree({
         }}
         onScroll={(event) => {
           if (event.target !== event.currentTarget) return;
-          setMenu(null);
           const top = event.currentTarget.scrollTop;
+          setMenu((current) => (current?.scroll === top ? current : null));
           setGeometry((old) => ({ ...old, top }));
           controller.tree(checkout, { scroll: top });
         }}
@@ -353,9 +370,6 @@ export function FilesTree({
         open={menuAvailable}
         onOpenChange={(open) => {
           if (!open) setMenu(null);
-        }}
-        onOpenChangeComplete={(open) => {
-          if (open) popup.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
         }}>
         <ContextMenu.Portal>
           <ContextMenu.Backdrop
@@ -367,17 +381,11 @@ export function FilesTree({
             collisionPadding={8}
             {...stylex.props(overlays.positioner)}>
             <ContextMenu.Popup
-              ref={popup}
               aria-label="File actions"
               finalFocus={() => (restoreMenuFocus.current ? returnTreeFocus() : false)}
-              onBlur={(event) => {
-                if (
-                  event.relatedTarget instanceof Element &&
-                  event.relatedTarget.closest('[role="dialog"]')
-                ) {
-                  restoreMenuFocus.current = false;
-                  setMenu(null);
-                }
+              onFocus={(event) => {
+                if (event.target === event.currentTarget)
+                  event.currentTarget.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
               }}
               onKeyDownCapture={(event) => {
                 if (event.key === 'Tab') {
