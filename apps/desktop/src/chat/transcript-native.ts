@@ -28,8 +28,13 @@ export function decodeTranscriptCopy(input: unknown): TranscriptCopy {
   });
   if (value.code !== undefined) {
     const code = record(value.code);
-    fields(code, ['index']);
-    if (!decoded.selection || !Number.isSafeInteger(code.index) || (code.index as number) < 0)
+    fields(code, ['start']);
+    if (
+      !decoded.selection ||
+      !Number.isSafeInteger(code.start) ||
+      (code.start as number) < 0 ||
+      (code.start as number) >= decoded.selection.bytes
+    )
       invalid();
   }
   return { ...decoded, ...(value.code ? { code: value.code as TranscriptCopy['code'] } : {}) };
@@ -177,9 +182,16 @@ export async function copyTranscript(
       });
     let text = chunks.join('');
     if (code) {
-      const block = parseTranscriptMarkdown(text).codeBlocks[code.index];
-      if (!block) invalid();
-      text = block!.value;
+      const block = parseTranscriptMarkdown(text).codeBlocks.find(
+        (node) => node.position?.start.offset === code.start,
+      );
+      if (!block)
+        throw new ApplicationError({
+          code: 'Conflict',
+          message:
+            'The displayed code block changed as more Markdown was loaded. Read more and try Copy again.',
+        });
+      text = block.value;
     }
     // Fresh fixed-prefix proofs after iteration, fenced by the live observation. A held earlier reply is insufficient.
     if (source.kind === 'live') {

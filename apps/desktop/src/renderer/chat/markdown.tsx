@@ -27,7 +27,7 @@ import {
 export { markdownMetrics } from './markdown-model.ts';
 type Actions = {
   openLink(url: string): void;
-  copyCode?(index: number): void;
+  copyCode?(start: number): void;
 };
 export const Markdown = memo(function Markdown({
   source,
@@ -180,14 +180,14 @@ function ParsedBlock({ block, openLink, copyCode }: Actions & { block: MarkdownB
         const language = Array.isArray(classes)
           ? String(classes.find((name) => String(name).startsWith('language-')) ?? '').slice(9)
           : '';
-        const index = code.properties['data-code-index'];
+        const start = code.properties['data-code-start'];
         const closed = code.properties['data-code-closed'];
         return (
           <Code
             text={text}
             language={language}
-            closed={index === undefined || closed === true || closed === 'true'}
-            copy={typeof index === 'number' && copyCode ? () => copyCode(index) : undefined}
+            closed={start === undefined || closed === true || closed === 'true'}
+            copy={typeof start === 'number' && copyCode ? () => copyCode(start) : undefined}
           />
         );
       },

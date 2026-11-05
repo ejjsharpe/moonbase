@@ -7,7 +7,7 @@ import type { Extension } from 'mdast-util-from-markdown';
 
 declare module 'mdast' {
   interface CodeData {
-    codeBlock?: { index: number; closed: boolean };
+    codeBlock?: { closed: boolean };
   }
 }
 
@@ -20,7 +20,7 @@ const recordFences: Plugin = function () {
         const node = this.stack.findLast((node) => node.type === 'code');
         if (node?.type === 'code') {
           node.data ??= {};
-          node.data.codeBlock = { index: -1, closed: !!node.data.codeBlock };
+          node.data.codeBlock = { closed: !!node.data.codeBlock };
         }
       },
     },
@@ -35,10 +35,10 @@ export function parseTranscriptMarkdown(source: string): { tree: Root; codeBlock
     const tree = parser.parse(source),
       codeBlocks: Code[] = [];
     visit(tree, 'code', (node) => {
-      if (!node.data?.codeBlock) return;
-      node.data.codeBlock.index = codeBlocks.length;
+      const start = node.position?.start.offset;
+      if (!node.data?.codeBlock || start === undefined) return;
       node.data.hProperties = {
-        'data-code-index': codeBlocks.length,
+        'data-code-start': start,
         'data-code-closed': node.data.codeBlock.closed,
       };
       codeBlocks.push(node);

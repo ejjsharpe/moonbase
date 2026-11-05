@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { test, after } from 'node:test';
 import { visit } from 'unist-util-visit';
 import type { Code } from 'mdast';
+import { parseTranscriptMarkdown } from '../src/chat/transcript-source.ts';
 import { MarkdownCache } from '../src/renderer/chat/markdown-model.ts';
 import { Layer, ManagedRuntime } from 'effect';
 import type {
@@ -54,11 +55,11 @@ for (const [name, text, body] of [
           if (node.data?.codeBlock) code.push(node);
         });
       assert.equal(code.length, 1);
-      assert.equal(code[0]!.data?.codeBlock?.index, 0);
+      assert.equal(code[0]!.position!.start.offset, text.lastIndexOf('```js'));
       await f.actions.copy({
         source: f.source,
         selection: select(f.part),
-        code: { index: code[0]!.data?.codeBlock!.index },
+        code: { start: code[0]!.position!.start.offset! },
       });
       assert.deepEqual(f.writes, [body]);
     } finally {
@@ -68,7 +69,11 @@ for (const [name, text, body] of [
   test(`R2 native derives the parser-selected block: ${name}`, async () => {
     const f = fixture(false, text);
     try {
-      await f.actions.copy({ source: f.source, selection: select(f.part), code: { index: 0 } });
+      await f.actions.copy({
+        source: f.source,
+        selection: select(f.part),
+        code: { start: parseTranscriptMarkdown(f.original).codeBlocks[0]!.position!.start.offset! },
+      });
       assert.deepEqual(f.writes, [body]);
     } finally {
       await f.owner.dispose();
@@ -79,13 +84,14 @@ test('native validates bounded parser selectors and never accepts renderer code 
   const f = fixture(false, '```js\r\n  🌔\t\r\n```\r\n');
   try {
     for (const code of [
-      { index: -1 },
-      { index: 0.5 },
-      { index: Number.MAX_SAFE_INTEGER + 1 },
-      { index: 1 },
-      { index: 0, text: 'forged' },
-      { index: 0, ranges: [] },
-      { start: 0 },
+      { start: -1 },
+      { start: 0.5 },
+      { start: Number.MAX_SAFE_INTEGER + 1 },
+      { start: f.part.bytes },
+      { start: 0, text: 'forged' },
+      { start: 0, ranges: [] },
+      { index: 0 },
+      { start: 0, index: 0 },
     ]) {
       await assert.rejects(
         f.actions.copy({ source: f.source, selection: select(f.part), code } as never),
@@ -115,10 +121,10 @@ for (const [name, indented, body] of [
       await f.actions.copy({
         source: f.source,
         selection: select(f.part),
-        code: { index: code.data?.codeBlock.index },
+        code: { start: code.position!.start.offset! },
       });
       assert.deepEqual(f.writes, [body]);
-      assert.equal(code.data?.codeBlock.index, 0);
+      assert.equal(code.position!.start.offset, text.lastIndexOf('```js'));
     } finally {
       await f.owner.dispose();
     }
@@ -130,7 +136,13 @@ test('native parser code Copy preserves meaningful Python indentation in contain
       const text = `${prefix}\`\`\`python\r\n${continuation}def moon():\r\n${continuation}    print("🌔 é")\t  \r\n${closed ? continuation + '```\r\n' : ''}`;
       const f = fixture(false, text);
       try {
-        await f.actions.copy({ source: f.source, selection: select(f.part), code: { index: 0 } });
+        await f.actions.copy({
+          source: f.source,
+          selection: select(f.part),
+          code: {
+            start: parseTranscriptMarkdown(f.original).codeBlocks[0]!.position!.start.offset!,
+          },
+        });
         assert.deepEqual(f.writes, ['def moon():\r\n    print("🌔 é")\t  '], prefix);
       } finally {
         await f.owner.dispose();
@@ -155,7 +167,11 @@ test('normalized live code still requires fixed original source proof across hel
           f.controls.publish();
         }
       };
-      const copying = f.actions.copy({ source: f.source, selection: selected, code: { index: 0 } });
+      const copying = f.actions.copy({
+        source: f.source,
+        selection: selected,
+        code: { start: parseTranscriptMarkdown(f.original).codeBlocks[0]!.position!.start.offset! },
+      });
       if (change === 'append') {
         await copying;
         assert.deepEqual(f.writes, [body.replace(/\r\n$/, '')]);
@@ -373,12 +389,18 @@ test('parser selectors choose the correct repeated/nested block; renderer suppli
   );
   try {
     for (const [index, body] of ['same', '```inner\r\n🌔\r\n```', 'same'].entries()) {
-      await f.actions.copy({ source: f.source, selection: select(f.part), code: { index } });
+      await f.actions.copy({
+        source: f.source,
+        selection: select(f.part),
+        code: {
+          start: parseTranscriptMarkdown(f.original).codeBlocks[index]!.position!.start.offset!,
+        },
+      });
       assert.equal(f.writes.at(-1), body);
     }
-    for (const index of [-1, 999, 1.5])
+    for (const start of [-1, 999, 1.5])
       await assert.rejects(
-        f.actions.copy({ source: f.source, selection: select(f.part), code: { index } }),
+        f.actions.copy({ source: f.source, selection: select(f.part), code: { start } }),
       );
     assert.equal(f.writes.length, 3);
   } finally {
@@ -431,7 +453,11 @@ test('cancel/document replacement fences late code reads and joins actual settle
   const copy = f.owner.call(
     'transcript',
     'copy',
-    { source: f.source, selection: select(f.part), code: { index: 0 } },
+    {
+      source: f.source,
+      selection: select(f.part),
+      code: { start: parseTranscriptMarkdown(f.original).codeBlocks[0]!.position!.start.offset! },
+    },
     'copy',
   );
   while (!entered) await new Promise((resolve) => setTimeout(resolve, 1));
@@ -455,7 +481,11 @@ test('OS write failure and unsafe links remain observable over the real bridge/s
   };
   await assert.rejects(f.actions.copy({ source: f.source }));
   await assert.rejects(
-    f.actions.copy({ source: f.source, selection: select(f.part), code: { index: 0 } }),
+    f.actions.copy({
+      source: f.source,
+      selection: select(f.part),
+      code: { start: parseTranscriptMarkdown(f.original).codeBlocks[0]!.position!.start.offset! },
+    }),
   );
   assert.deepEqual(f.writes, []);
   await f.actions.openLink('https://example.com/read?q=1');
@@ -515,7 +545,11 @@ test('Copy code is independent of highlight/DOM limits, including a large nested
         .join('') +
       '> ```\r\n',
   );
-  await f.actions.copy({ source: f.source, selection: select(f.part), code: { index: 0 } });
+  await f.actions.copy({
+    source: f.source,
+    selection: select(f.part),
+    code: { start: parseTranscriptMarkdown(f.original).codeBlocks[0]!.position!.start.offset! },
+  });
   assert.deepEqual(f.writes, [body.replace(/\r\n$/, '')]);
   await f.owner.dispose();
 });
@@ -683,4 +717,31 @@ test('native link cancellation waits for its actual opener settlement', async ()
   await cancellation;
   assert.equal(f.links.length, 1);
   await f.owner.dispose();
+});
+
+test('native rejects a partial parser node reinterpreted as another block in the full source', async () => {
+  const prefix = 'x'.repeat(15993) + '\n\n```js';
+  const full = prefix + '`invalid\n\n```python\nWRONG BLOCK\n```\n';
+  const f = fixture(false, full);
+  try {
+    const partial = parseTranscriptMarkdown(prefix).codeBlocks[0]!;
+    assert.equal(partial.value, '');
+    const start = partial.position!.start.offset!;
+    assert.equal(start, 15995);
+    await assert.rejects(
+      f.actions.copy({ source: f.source, selection: select(f.part), code: { start } }),
+      { code: 'Conflict' },
+    );
+    assert.deepEqual(f.writes, []);
+    await f.actions.copy({
+      source: f.source,
+      selection: select(f.part),
+      code: { start: full.indexOf('```python') },
+    });
+    assert.deepEqual(f.writes, ['WRONG BLOCK']);
+    await f.actions.copy({ source: f.source });
+    assert.equal(f.writes.at(-1), full);
+  } finally {
+    await f.owner.dispose();
+  }
 });

@@ -16,7 +16,7 @@ test('parser block selection excludes indented literals and preserves meaningful
     const { codeBlocks } = parseTranscriptMarkdown(source);
     assert.equal(codeBlocks.length, 1);
     assert.equal(codeBlocks[0]!.value, 'same');
-    assert.equal(codeBlocks[0]!.data!.codeBlock?.index, 0);
+    assert.equal(codeBlocks[0]!.position!.start.offset, source.lastIndexOf('```js'));
   }
   for (const prefix of ['> ', '>\t', '- ', '-\t', '- >\t', '> - ']) {
     const continuation = prefix.replace(/-/g, ' ');
@@ -36,8 +36,8 @@ test('repeated and nested fences use parser order without body matching or sourc
     ['same', '```inner\r\n🌔\r\n```', 'same'],
   );
   assert.deepEqual(
-    parsed.codeBlocks.map((block) => block.data!.codeBlock?.index),
-    [0, 1, 2],
+    parsed.codeBlocks.map((block) => block.position!.start.offset),
+    [0, 21, 63],
   );
 });
 test('changed messages re-lex, references/fence closure invalidate interpretation, exact clones reuse bounded work', () => {
@@ -105,14 +105,14 @@ test('disclosure IDs preserve exact identities within application memory bounds'
   );
 });
 
-test('many repeated CRLF fences keep their own parser indexes and cache keys count toward retention', () => {
+test('many repeated CRLF fences keep their own parser positions and cache keys count toward retention', () => {
   const cache = new MarkdownCache();
   const fence = '```ts\r\nconst moon = "🌔";\r\n```\r\n\r\n';
   const blocks = cache.parse('many', '1', fence.repeat(1000));
   const code = blocks.filter((block) => block.tree.children[0]?.type === 'code');
   assert.equal(code.length, 1000);
   for (let i = 0; i < code.length; i++) {
-    assert.equal((code[i]!.tree.children[0] as Code).data!.codeBlock!.index, i);
+    assert.equal((code[i]!.tree.children[0] as Code).position!.start.offset, i * fence.length);
     assert.equal((code[i]!.tree.children[0] as Code).value, 'const moon = "🌔";');
     assert.equal((code[i]!.tree.children[0] as Code).data!.codeBlock!.closed, true);
   }
@@ -120,4 +120,14 @@ test('many repeated CRLF fences keep their own parser indexes and cache keys cou
   cache.parse('x'.repeat(2 * 1024 * 1024), '1', 'small text');
   assert.equal(cache.stats.messages, 0);
   assert.equal(cache.stats.retainedBytes, 0);
+});
+
+test('parser positions remain original UTF-16 and invalidate changed block action positions', () => {
+  const cache = new MarkdownCache();
+  const first = cache.parse('source', '1', '🌔\r\n\r\n```js\r\nbody\r\n```');
+  const next = cache.parse('source', '2', '🌔 extra\r\n\r\n```js\r\nbody\r\n```');
+  const before = first[1]!.tree.children[0] as Code;
+  assert.equal(before.position!.start.offset, 6);
+  assert.equal(before.data!.hProperties!['data-code-start'], 6);
+  assert.notEqual(first[1]!.signature, next[1]!.signature);
 });

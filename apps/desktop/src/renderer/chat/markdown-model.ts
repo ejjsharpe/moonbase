@@ -9,7 +9,7 @@ export class MarkdownCache {
   private retained = 0;
   readonly stats = { lex: 0, retainedBytes: 0, messages: 0 };
   parse(identity: string, revision: string, source: string): MarkdownBlock[] {
-    const key = JSON.stringify([identity, revision, 'remark-gfm-v1']);
+    const key = JSON.stringify([identity, revision, 'remark-gfm-v2']);
     const old = this.messages.get(key);
     if (old?.source === source) {
       this.messages.delete(key);

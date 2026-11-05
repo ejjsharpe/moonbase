@@ -814,7 +814,7 @@ function Part({
     [part.partId, part.bytes, part.revision],
   );
   const copy = useCallback(
-    (codeIndex?: number) => {
+    (codeStart?: number) => {
       if (native)
         run(
           (signal) =>
@@ -822,7 +822,7 @@ function Part({
               {
                 source,
                 selection,
-                ...(codeIndex !== undefined ? { code: { index: codeIndex } } : {}),
+                ...(codeStart !== undefined ? { code: { start: codeStart } } : {}),
               },
               signal,
             ),
@@ -862,7 +862,7 @@ function Part({
           revision={part.revision}
           cache={cache}
           openLink={openLink}
-          copyCode={content?.retainedFrom === 0 || !part.truncated ? copy : undefined}
+          copyCode={content?.retainedFrom === 0 || (!content && !part.truncated) ? copy : undefined}
         />
       );
   }

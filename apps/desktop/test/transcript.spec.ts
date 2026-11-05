@@ -895,3 +895,26 @@ for (const navigation of ['wheel', 'keyboard'] as const)
       await page.evaluate(() => window.demo.application.chat!.getSnapshot().transcript.view.anchor),
     ).toEqual(before.anchor);
   });
+
+test('partial Markdown cannot copy a different complete-source code node', async ({ page }) => {
+  await open(page);
+  const prefix = 'x'.repeat(15993) + '\n\n```js';
+  await page.evaluate(
+    (text) => window.demo.transcript!.live(text),
+    prefix + '`invalid\n\n```python\nWRONG BLOCK\n```\n',
+  );
+  const live = page.locator('[data-transcript-live]');
+  await expect(live.locator('pre')).toHaveText('');
+  await live.getByRole('button', { name: 'Copy code', exact: true }).click();
+  await expect(
+    page.getByRole('alert').filter({ hasText: 'displayed code block changed' }),
+  ).toBeVisible();
+  expect(await page.evaluate(() => window.demo.transcript!.copied)).toEqual([]);
+  await expect(page.getByRole('status').filter({ hasText: 'Copied.' })).toHaveCount(0);
+  await live.getByRole('button', { name: /^Read more/ }).click();
+  await expect(live.locator('pre')).toHaveText('WRONG BLOCK');
+  await live.getByRole('button', { name: 'Copy code', exact: true }).click();
+  await expect
+    .poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1)))
+    .toBe('WRONG BLOCK');
+});

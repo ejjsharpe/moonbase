@@ -170,9 +170,17 @@ export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabili
           chat.dependencies.chat.command('getChatTranscriptContent', input, options),
       }))
         text += chunk.data;
-      copied.push(
-        input.code ? parseTranscriptMarkdown(text).codeBlocks[input.code!.index]!.value : text,
-      );
+      if (input.code) {
+        const block = parseTranscriptMarkdown(text).codeBlocks.find(
+          (node) => node.position?.start.offset === input.code!.start,
+        );
+        if (!block)
+          throw Error(
+            'The displayed code block changed as more Markdown was loaded. Read more and try Copy again.',
+          );
+        text = block.value;
+      }
+      copied.push(text);
     },
     async openLink(url) {
       links.push(url);
