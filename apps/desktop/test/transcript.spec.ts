@@ -14,6 +14,90 @@ async function open(page: Page) {
 const transcript = (page: Page) =>
   page.getByRole('region', { name: 'Chat transcript', exact: true });
 const answer = (page: Page) => page.locator('[data-transcript-entry="reading-179"]');
+for (const pin of ['pointer', 'focus', 'selection'] as const)
+  for (const release of ['release', 'latest'] as const)
+    test(`oldest row ${pin} pin survives first live output until ${release}`, async ({ page }) => {
+      await open(page);
+      await page.evaluate(async () => {
+        const controller = window.demo.application.chat!;
+        for (let i = 0; i < 4; i++) await controller.older();
+        for (let i = 0; i < 8 && !controller.getSnapshot().transcript.atLatest; i++)
+          await controller.later();
+      });
+      await expect(page.locator('[data-transcript-entry]')).toHaveCount(128);
+      await transcript(page).dispatchEvent('wheel', { deltaY: 1 });
+      await transcript(page).evaluate((element) => {
+        const first = element.querySelector('[data-transcript-entry]')!;
+        const top = element
+          .querySelector('[data-transcript-chrome]')!
+          .getBoundingClientRect().bottom;
+        element.scrollTop += first.getBoundingClientRect().top - top + 60;
+      });
+      const first = page.locator('[data-transcript-entry]').first();
+      const firstId = await first.getAttribute('data-transcript-entry');
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () => window.demo.application.chat!.getSnapshot().transcript.view.anchor?.entryId,
+          ),
+        )
+        .not.toBe(firstId);
+      const pre = first.locator('pre');
+      if (pin === 'pointer') {
+        const box = (await pre.locator('code').boundingBox())!;
+        await page.mouse.move(box.x + 2, box.y + box.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(box.x + 90, box.y + box.height / 2, { steps: 8 });
+        await page.mouse.up();
+      } else if (pin === 'focus') await pre.evaluate((node) => node.focus({ preventScroll: true }));
+      else {
+        await transcript(page).evaluate((node) => node.focus({ preventScroll: true }));
+        await pre.evaluate((node) => {
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          window.getSelection()!.removeAllRanges();
+          window.getSelection()!.addRange(range);
+        });
+      }
+      await first.evaluate((node) => node.setAttribute('data-oldest-retained', 'true'));
+      const selected = await page.evaluate(() => window.getSelection()!.toString());
+      if (pin !== 'focus') expect(selected.length).toBeGreaterThan(0);
+      const anchor = await page.evaluate(
+        () => window.demo.application.chat!.getSnapshot().transcript.view.anchor,
+      );
+      expect(anchor?.entryId).toBeTruthy();
+      expect(anchor?.entryId).not.toBe(firstId);
+      for (const text of ['First live appearance', 'Further live progress']) {
+        await page.evaluate((text) => window.demo.transcript!.live(text), text);
+        await expect(page.locator('[data-oldest-retained]')).toHaveCount(1);
+        expect(await page.evaluate(() => window.getSelection()!.toString())).toBe(selected);
+        if (pin !== 'selection') await expect(pre).toBeFocused();
+        await expect(page.locator('[data-transcript-entry], [data-transcript-live]')).toHaveCount(
+          128,
+        );
+        await expect(page.locator('[data-transcript-live]')).toHaveCount(0);
+      }
+      if (pin === 'pointer' && release === 'release') {
+        await mkdir(output, { recursive: true });
+        await page.screenshot({ path: resolve(output, 'r5-oldest-pointer-retained.png') });
+      }
+      if (release === 'latest')
+        await page.getByRole('button', { name: 'Jump to latest', exact: true }).click();
+      else {
+        await page.evaluate(() => window.getSelection()!.removeAllRanges());
+        if (pin === 'pointer') {
+          await expect(pre).toBeFocused();
+          await expect(page.locator('[data-oldest-retained]')).toHaveCount(1);
+        }
+        await page.getByRole('textbox', { name: 'Message', exact: true }).focus();
+      }
+      await expect(page.locator('[data-transcript-live]')).toContainText('Further live progress');
+      await expect(page.locator('[data-oldest-retained]')).toHaveCount(0);
+      expect(
+        await page.locator('[data-transcript-entry], [data-transcript-live]').count(),
+      ).toBeLessThanOrEqual(128);
+      expect(await page.evaluate(() => window.getSelection()!.toString())).toBe('');
+    });
 test('a durable reading anchor in the newest window keeps the generic live text part visible', async ({
   page,
 }) => {

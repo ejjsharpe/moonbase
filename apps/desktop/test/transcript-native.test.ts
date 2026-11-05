@@ -13,6 +13,7 @@ import type {
   ChatTranscriptSource,
 } from '@moonbase/contracts/chat';
 import { ChatIpcSession } from '../src/chat/session.ts';
+import { ApplicationError } from '@moonbase/contracts/errors';
 import {
   browserClients,
   browserTranscriptActions,
@@ -234,6 +235,7 @@ function fixture(live = false, text = '  **raw**\r\n\t🌔 é\r\n' + 'α'.repea
   };
   const controls = {
     beforeRead: async (_read: number) => {},
+    close: async () => {},
     write: async (_text: string) => {},
     open: async (_url: string) => {},
     snapshot,
@@ -297,6 +299,7 @@ function fixture(live = false, text = '  **raw**\r\n\t🌔 é\r\n' + 'α'.repea
       return async () => {
         closed++;
         receive = undefined;
+        await controls.close();
       };
     },
   };
@@ -743,5 +746,141 @@ test('native rejects a partial parser node reinterpreted as another block in the
     assert.equal(f.writes.at(-1), full);
   } finally {
     await f.owner.dispose();
+  }
+});
+
+for (const action of ['cancel', 'document', 'dispose'] as const)
+  for (const failure of [false, true])
+    for (const held of ['read', 'close'] as const)
+      test(`native ${action} joins held ${held} and retains ${failure ? 'failed' : 'successful'} watch cleanup`, async () => {
+        const f = fixture(true, 'complete text');
+        const readGate = Promise.withResolvers<void>(),
+          readEntered = Promise.withResolvers<void>(),
+          closeGate = Promise.withResolvers<void>(),
+          closeEntered = Promise.withResolvers<void>();
+        let readSettled = false,
+          copyDone = false,
+          cleanupDone = false;
+        f.controls.beforeRead = async () => {
+          readEntered.resolve();
+          await readGate.promise;
+          readSettled = true;
+        };
+        f.controls.close = async () => {
+          closeEntered.resolve();
+          await closeGate.promise;
+          if (failure)
+            throw new ApplicationError({
+              code: 'Unavailable',
+              message: 'Controlled watch close failure',
+            });
+        };
+        if (held === 'read') closeGate.resolve();
+        const copying = f.owner
+          .call('transcript', 'copy', { source: f.source, selection: select(f.part) }, 'held-copy')
+          .then(
+            (reply) => ({ reply }),
+            (error: unknown) => ({ error }),
+          )
+          .finally(() => {
+            copyDone = true;
+          });
+        try {
+          await readEntered.promise;
+          let cleanup: Promise<Reply | void>;
+          if (action === 'cancel') cleanup = f.owner.cancel('held-copy');
+          else if (action === 'document') cleanup = f.owner.releaseDocument();
+          else cleanup = f.owner.dispose();
+          const closing = cleanup
+            .then(
+              (reply) => ({ reply }),
+              (error: unknown) => ({ error }),
+            )
+            .finally(() => {
+              cleanupDone = true;
+            });
+          await closeEntered.promise;
+          await new Promise(setImmediate);
+          assert.equal(readSettled, false);
+          assert.equal(copyDone, false);
+          assert.equal(cleanupDone, false);
+          if (action !== 'dispose') {
+            const command = f.chat.command;
+            f.chat.command = async (operation, input, options) =>
+              operation === 'stopChat' ? (null as never) : command(operation, input, options);
+            assert.equal(
+              (
+                await f.owner.call(
+                  'chat',
+                  'stopChat',
+                  { stop: f.controls.snapshot.run!.stop, requestId: 'independent-stop' },
+                  'stop',
+                )
+              ).ok,
+              true,
+            );
+          }
+          readGate.resolve();
+          if (held === 'close') {
+            await new Promise(setImmediate);
+            assert.equal(readSettled, true);
+            assert.equal(copyDone, false);
+            assert.equal(cleanupDone, false);
+            closeGate.resolve();
+          }
+          const copyResult = await copying,
+            cleanupResult = await closing;
+          assert.deepEqual(f.writes, []);
+          assert.equal(f.closed, 1);
+          assert.equal(readSettled, true);
+          if (failure) {
+            let error: unknown;
+            if ('error' in copyResult) error = copyResult.error;
+            else if (!copyResult.reply.ok) error = copyResult.reply.error;
+            assert(error);
+            assert.match((error as Error).message, /Controlled watch close failure/);
+            if (action === 'cancel') {
+              assert('reply' in cleanupResult && cleanupResult.reply);
+              assert.equal(cleanupResult.reply.ok, false);
+              if (!cleanupResult.reply.ok)
+                assert.match(cleanupResult.reply.error.message, /Controlled watch close failure/);
+            } else {
+              assert('error' in cleanupResult);
+              assert.match(
+                (cleanupResult.error as Error).message,
+                /Controlled watch close failure/,
+              );
+            }
+            await assert.rejects(f.owner.dispose(), /Controlled watch close failure/);
+          } else {
+            assert('reply' in copyResult && !copyResult.reply.ok);
+            assert.equal(copyResult.reply.error.code, 'Cancelled');
+            assert('reply' in cleanupResult);
+            if (action === 'cancel') assert.equal(cleanupResult.reply?.ok, true);
+            await f.owner.dispose();
+          }
+        } finally {
+          readGate.resolve();
+          closeGate.resolve();
+          await copying;
+          await f.owner.dispose().catch(() => {});
+        }
+      });
+
+test('completed Copy retains failed observation cleanup at document disposal after its reply', async () => {
+  const f = fixture(true, 'complete text');
+  f.controls.close = async () => {
+    throw new ApplicationError({ code: 'Unavailable', message: 'Controlled watch close failure' });
+  };
+  try {
+    await assert.rejects(f.actions.copy({ source: f.source, selection: select(f.part) }), {
+      code: 'Unavailable',
+    });
+    assert.deepEqual(f.writes, [f.original]);
+    assert.equal(f.closed, 1);
+    await assert.rejects(f.owner.releaseDocument(), /Controlled watch close failure/);
+    await assert.rejects(f.owner.dispose(), /Controlled watch close failure/);
+  } finally {
+    await f.owner.dispose().catch(() => {});
   }
 });

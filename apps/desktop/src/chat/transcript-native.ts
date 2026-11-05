@@ -235,6 +235,16 @@ export async function copyTranscript(
     // Await the OS result; a failed write must never become a success notification.
   } finally {
     request.signal.removeEventListener('abort', aborted);
-    await Promise.all([Promise.allSettled(pending), close?.()]);
+    const [, observation] = await Promise.allSettled([
+      Promise.allSettled(pending),
+      Promise.resolve().then(() => close?.()),
+    ]);
+    if (observation.status === 'rejected') {
+      // Retain failed cleanup at the captured document even when the Copy reply is lost.
+      const release = await request.retainDocumentRelease(async () => {
+        throw observation.reason;
+      });
+      await release();
+    }
   }
 }
