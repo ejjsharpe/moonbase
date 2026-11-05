@@ -9,6 +9,7 @@ import {
   groupTranscriptParts,
 } from '../src/renderer/chat/activity.ts';
 import { parseRecordedPatch } from '../src/renderer/chat/recorded-patch.ts';
+import { getTranscriptParts } from '../src/renderer/chat/transcript-parts.ts';
 const part = (
   id: string,
   kind: ChatTranscriptPart['kind'],
@@ -38,6 +39,89 @@ const transcript = (entryId: string, parts: ChatTranscriptPart[]): ChatTranscrip
   thinking: 'none',
   parts,
   nextCursor: null,
+});
+const liveTranscript = (parts: ChatTranscriptPart[]): ChatTranscript => ({
+  ...transcript('', parts),
+  source: {
+    kind: 'live',
+    target: transcript('', []).source.target,
+    submissionId: 'submission',
+    taskId: 'task',
+    attempt: 0,
+    incarnation: 'a'.repeat(64),
+  },
+});
+test('stale exact live descriptions use current prefix content and selection while retaining recorded paged order', () => {
+  const loaded = liveTranscript([
+    part('z-answer', 'text', { text: 'Before' }),
+    part('q-thought', 'thinking', { text: 'Thought first', bytes: 13 }),
+    part('b-output', 'result', { text: 'Output first', bytes: 12, state: 'running' }),
+    part('y-details', 'details'),
+    part('a-paged-only', 'details', { text: 'Retained fifth part' }),
+  ]);
+  const current = liveTranscript([
+    loaded.parts[0]!,
+    { ...loaded.parts[1]!, text: 'Thought first and next', bytes: 22, revision: 'b'.repeat(64) },
+    {
+      ...loaded.parts[2]!,
+      text: 'Output first and next',
+      bytes: 21,
+      revision: 'c'.repeat(64),
+      state: 'failed',
+    },
+    loaded.parts[3]!,
+  ]);
+  const parts = getTranscriptParts(current, { ...loaded, status: 'source-changed' });
+  assert.deepEqual(
+    parts.map((part) => part.partId),
+    ['z-answer', 'q-thought', 'b-output', 'y-details', 'a-paged-only'],
+  );
+  assert.equal(parts[1]?.text, 'Thought first and next');
+  assert.equal(parts[1]?.bytes, 22);
+  assert.equal(parts[1]?.revision, 'b'.repeat(64));
+  assert.equal(parts[2]?.text, 'Output first and next');
+  assert.equal(parts[2]?.bytes, 21);
+  assert.equal(parts[2]?.revision, 'c'.repeat(64));
+  assert.equal(parts[2]?.state, 'failed');
+  assert.equal(parts[4], loaded.parts[4]);
+});
+test('current loaded pages stay authoritative until stale, and empty pages keep their preview', () => {
+  const current = liveTranscript([part('part', 'thinking', { text: 'Observed' })]);
+  const parts = [part('part', 'thinking', { text: 'Newly read' })];
+  for (const status of ['partial', 'loading', 'complete', 'error'] as const)
+    assert.equal(getTranscriptParts(current, { ...current, parts, status }), parts);
+  assert.equal(
+    getTranscriptParts(current, { ...current, parts: [], status: 'error' }),
+    current.parts,
+  );
+  const durable = transcript('durable', current.parts);
+  assert.equal(getTranscriptParts(durable, { ...durable, parts, status: 'source-changed' }), parts);
+});
+test('foreign targets, entries and live attempts cannot supply loaded descriptions', () => {
+  const current = liveTranscript([part('part', 'thinking', { text: 'Current' })]);
+  const source = current.source;
+  assert.equal(source.kind, 'live');
+  const target = source.target;
+  for (const foreign of [
+    { ...source, target: { ...target, host: { ...target.host, hostId: 'foreign' } } },
+    { ...source, target: { ...target, host: { ...target.host, storeId: 'foreign' } } },
+    { ...source, target: { ...target, actorId: 'foreign' } },
+    { ...source, target: { ...target, conversationId: 'foreign' } },
+    { ...source, submissionId: 'foreign' },
+    { ...source, taskId: 'foreign' },
+    { ...source, attempt: 1 },
+    { ...source, incarnation: 'b'.repeat(64) },
+    transcript('foreign', []).source,
+  ]) {
+    assert.equal(
+      getTranscriptParts(current, {
+        source: foreign,
+        parts: [part('foreign', 'thinking', { text: 'Foreign' })],
+        status: 'source-changed',
+      }),
+      current.parts,
+    );
+  }
 });
 test('consecutive activity leaves every authored answer at its recorded position', () => {
   const parts = [

@@ -33,6 +33,7 @@ import {
   type ActivityEvidence,
 } from './activity.ts';
 import { RecordedPatch } from './recorded-patch.tsx';
+import { getTranscriptParts } from './transcript-parts.ts';
 
 export function Transcript({
   controller,
@@ -178,7 +179,7 @@ export function Transcript({
           ? node
           : row.querySelector<HTMLElement>('[data-transcript-part]');
         const manifest = observed.transcript.manifest;
-        const parts = manifest && sameSource(summary, manifest) ? manifest.parts : summary.parts;
+        const parts = getTranscriptParts(summary, manifest);
         const part =
           parts.find((part) => part.partId === partNode?.dataset.transcriptPart) ??
           summary.parts.find((part) => part.partId === partNode?.dataset.transcriptPart);
@@ -421,9 +422,10 @@ export function Transcript({
         ...getEntryTranscripts(transcript.entries, transcript.manifest),
         ...(live?.transcript
           ? [
-              transcript.manifest?.parts.length && sameSource(live.transcript, transcript.manifest)
-                ? transcript.manifest
-                : live.transcript,
+              {
+                ...live.transcript,
+                parts: getTranscriptParts(live.transcript, transcript.manifest),
+              },
             ]
           : []),
       ]),
@@ -664,7 +666,7 @@ const Entry = memo(function Entry({
   const transcript = entry.transcript;
   const manifest =
     transcript && state.manifest && sameSource(transcript, state.manifest) ? state.manifest : null;
-  const parts = manifest?.parts.length ? manifest.parts : transcript?.parts;
+  const parts = transcript ? getTranscriptParts(transcript, manifest) : undefined;
   const source = transcript?.source;
   const saved = state.view.anchor;
   const revealPart =
