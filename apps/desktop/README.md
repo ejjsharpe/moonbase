@@ -12,7 +12,7 @@ New and reopened project tabs append in the controller's open-checkout order; se
 
 Motion (`motion/react`) animates tab entry, exit and neighboring positions, including the project plus, after the existing Open/Close handlers complete. Exiting tabs become inert and disabled immediately; only their visual exit remains. Initial tabs appear without a load animation. Reduced motion uses short fades and immediate layout changes. Recovery/cleanup notices stay below the tab strip so they cannot move the native controls or disturb tab reflow.
 
-Type directly into the new-chat composer. For local chat, choose a working folder and configured model beside the composer, then Send; the first message creates the conversation and supplies its title. New-chat drafts are preserved before a conversation exists. A lost Create or Send retains its original identities and text for explicit recovery rather than creating another conversation. **New chat** returns to the unsent draft without closing an existing agent's work. The sidebar folds into a keyboard-accessible Conversations drawer in compact windows and at high zoom.
+Type directly into the new-chat composer. For local chat, choose a working folder and configured model beside the composer, then Send; the first message creates the conversation and supplies its title. New-chat drafts are preserved before a conversation exists. A lost Create or Send retains its original identities and text for explicit recovery rather than creating another conversation. **New chat** returns to the unsent draft without closing an existing agent's work. The sidebar folds into a keyboard-accessible Conversations drawer in compact windows and at high zoom. There, the Chat surface scrolls as a whole with a minimum content height so controls such as Stop stay reachable.
 
 The first local chat shows the configured provider's maintained Moonbase model/effort default. Changing either control saves that exact preference across new chats, panel reopening and app restarts. Existing conversations keep their captured settings. An unavailable saved model or effort stays preserved and requires an explicit replacement before Send; it never silently falls back. Retained first-message recovery shows the original text, Send identity and selected effort.
 
@@ -56,7 +56,7 @@ Reload requires the editor's synchronous recovery gate and chat preservation bef
 
 ## Local agents
 
-Open Chat, leave the target at **Local**, and expand **Provider setup**. Choose **ChatGPT subscription** for the current SDK browser sign-in flow, or OpenAI API key, Anthropic, Google Gemini or OpenRouter. ChatGPT and OpenAI API-key credentials are independent. The newer ChatGPT flow was selected during implementation in place of the ticket’s original legacy Codex/device-code route. It opens only the active provider’s validated sign-in URL and supports a full redirect-URL fallback; it does not offer device codes.
+Open Chat, leave the target at **Local**, and expand **Provider setup**. Choose **ChatGPT subscription** for the current SDK browser sign-in flow, or OpenAI API key, Anthropic, Google Gemini or OpenRouter. ChatGPT and OpenAI API-key credentials are independent. It opens only the active provider’s validated sign-in URL and supports a full redirect-URL fallback; it does not offer device codes.
 
 Before the first Send in a new local chat, choose an existing working folder through the native picker and a model from a configured provider. Send creates the saved conversation automatically. The saved chat retains those settings; create another chat to change them. Local read/write/edit/shell tools use your OS permissions: **the working folder is context, not a sandbox**. Local host/store/actor IDs persist in private `local-pi-v1/identity.json`; Pi owns conversations/tasks in that namespace’s SQLite store. No legacy state or external credential files are imported.
 
@@ -66,7 +66,7 @@ Target switching preserves separate drafts and original retained commands and wa
 
 After normal editor/chat preservation gates and admissions fencing, Quit inspects all local Pi work, including hidden conversations and unfinished admissions. **Keep running** cancels Quit and restores admissions. **Quit** releases local Pi normally; reopening follows Pi saved-task recovery. Neither action synthesizes Stop or rolls back external tool effects. Remote work remains on its host.
 
-See [runtime, credentials and qualification](../../packages/pi-runtime/docs/LOCAL.md) and [desktop lifecycle](docs/LIFECYCLE.md).
+See [local runtime and credentials](../../packages/pi-runtime/docs/LOCAL.md) and [desktop lifecycle](docs/LIFECYCLE.md).
 
 ## Optional remote chat
 
@@ -94,8 +94,6 @@ Remote host/store/cwd identity never grants local checkout access, even for equa
 
 Desktop supplies separate local storage under `moonbase.chat.local.v1` and keeps remote LocalStorage under `moonbase.chat.v1` for the controller's lifetime; the [application chat feature](../../packages/application/docs/CHAT.md) owns schema/preservation. No migration/import occurs.
 
-See [local acceptance evidence](docs/LOCAL-ACCEPTANCE.md) for source, controlled, embedded, native and packaged results and remaining manual checks.
-
 ## Private source and test map
 
 `src/main.ts` is the sole privileged composition root: user-data/single-instance setup, assets/CSP, runtime acquisition, window/security policy, menu and installation order. Its private owners create no runtime and expose no package API:
@@ -108,7 +106,7 @@ See [local acceptance evidence](docs/LOCAL-ACCEPTANCE.md) for source, controlled
 | `src/main/chat-backends.ts` | Existing local/remote sessions, explicit local retry, folder/provider document ownership and local activity inspection | `test/chat-backends.test.ts` |
 | `src/{session,ipc-lifetime}.ts`, `src/chat/session.ts` | Approval, payload policy, request/watch lifetimes and captured finalizers | `test/{session,session-lifetime,ipc-scopes,chat-session}.test.ts` |
 
-`test/main-window.ts` supplies a narrow controlled window adapter for the IPC/lifecycle tests. Source discovery remains `test/*.test.ts`. The test-only native harness still wraps actual IPC registration and imports shipped `dist/main.mjs`; production imports no test hooks. Existing native projects cover real Electron navigation/IPC, reload, crash recovery, local chat and composition; package projects exercise the final archive. Build/archive checks require all private main owners, and the renderer/preload graph checks reject the privileged subtree. See [privileged extraction evidence](docs/PRIVILEGED-VALIDATION.md).
+`test/main-window.ts` supplies a narrow controlled window adapter for the IPC/lifecycle tests. Source discovery remains `test/*.test.ts`. The test-only native harness still wraps actual IPC registration and imports shipped `dist/main.mjs`; production imports no test hooks. Existing native projects cover real Electron navigation/IPC, reload, crash recovery, local chat and composition; package projects exercise the final archive. Build/archive checks require all private main owners, and the renderer/preload graph checks reject the privileged subtree.
 
 ## Checks and limits
 
@@ -123,7 +121,7 @@ bun run --cwd apps/desktop check:package
 bun run --cwd apps/desktop test:package
 ```
 
-`test:browser` runs the desktop shell with memory/faux capabilities in Chromium, covering navigation, focus/undo retention, Quit prompts and Chat cleanup without Electron. Its fixture lives in `demo/`, runs with `demo:browser` and stays outside shipped renderer inputs. Set `MOONBASE_BROWSER_PORT` to isolate concurrent checkout fixtures (default 4177).
+`test:browser` runs the desktop shell with memory/faux capabilities in Chromium, covering navigation, focus/undo retention, Quit prompts and Chat cleanup without Electron. Its fixture lives in `demo/`, runs with `demo:browser` and stays outside shipped renderer inputs. Set `MOONBASE_BROWSER_PORT` to isolate concurrent checkout fixtures (default 4177). The tab-motion test installs Playwright's clock before application code and samples explicit 16 ms advances, so CPU throttling cannot skip intermediate frames; it does not change production Motion configuration. After resizing, compact-layout checks wait for the observable workspace width, because the `(max-width: 640px)` media-query update reaches React asynchronously.
 
 `test:local` exercises the local UI with network-disabled faux streams and a test cipher. `test:native` covers it alongside editor, configuration, reload, composition and recovery with one worker. `test:package` covers resources, reload and composition. Focused projects: `test:desktop`, `test:composition`, `test:reload`. For focused packaged runs set `MOONBASE_PACKAGED_TEST=1`; reload also accepts absolute `MOONBASE_RELOAD_EXECUTABLE`. `MOONBASE_NATIVE_OUTPUT` selects the output directory.
 
@@ -131,7 +129,7 @@ Tests use temporary repositories/user-data, fixture clipboard APIs and owned pro
 
 Build-generated resources/notices live in ignored `dist`/`release`. Notices come from actual bundled assets/dependencies, including Monaco workers/fonts, ripgrep and Electron/Chromium. Missing npm license files for StyleX, Pi and Standard Webhooks are fetched from exact upstream release commits and SHA256-checked; data-uri-to-buffer supplies its notice in its bundled README.
 
-Human acceptance remains **pending**. Real picker/clipboard/drag gestures, Finder Put Back, VoiceOver/full accessibility, performance, physical durability, Intel execution and signing/notarization/distribution require separate qualification. The previously observed rapid Open→Find dismissal remains unexplained; controlled tests do not establish its resolution.
+Human acceptance remains **pending**. Automated tests do not cover real picker/clipboard/drag gestures, Finder Put Back, VoiceOver/full accessibility, performance, physical durability, Intel execution or signing/notarization/distribution. A rapid Open→Find dismissal has been observed and remains unexplained; controlled tests do not establish its resolution.
 
 Chat IPC authorizes nested transcript `source.target` identities as well as ordinary targets before dispatching the optional [content and around-entry reads](../../packages/contracts/docs/TRANSCRIPTS.md). The default browser demo remains an explicit legacy capability; `/?local&design&transcript` supplies volatile structured reading fixtures without a provider or host.
 
@@ -147,6 +145,6 @@ Private `renderer/chat/transcript-parts.ts` shares descriptor selection across l
 
 Private `renderer/chat/part-body.ts` retains a selected plain activity body with its exact source/part descriptor. Current summaries, read errors and focus-only progress stay live. A loaded body can bridge replacement hydration while its old content window remains retained by application; clearing selection advances to available current content. Copy captures the displayed version before activation and still requires native source validation.
 
-Chat Find searches the full saved conversation through the selected headless controller. With Chat reading focus, Cmd/Ctrl+F opens or refocuses its bar; the Find button uses the same private activation action. Enter/Shift+Enter move next/previous and Escape closes. Composer/editor fields retain their shortcuts. Results page unloaded history and folded parts, then display a bounded original-source window with the exact UTF16 range highlighted; Markdown's rendered DOM is not used as a source map. Deliberate reading navigation cancels pending reveal. A later exact match resumes partial content even when cancellation preceded the first chunk and no continuation cursor exists. See [Find presentation](docs/TRANSCRIPTS.md#conversation-find-114).
+Chat Find searches the full saved conversation through the selected headless controller. With Chat reading focus, Cmd/Ctrl+F opens or refocuses its bar; the Find button uses the same private activation action. Enter/Shift+Enter move next/previous and Escape closes. Composer/editor fields retain their shortcuts. Results page unloaded history and folded parts, then display a bounded original-source window with the exact UTF16 range highlighted; Markdown's rendered DOM is not used as a source map. Deliberate reading navigation cancels pending reveal. A later exact match resumes partial content even when cancellation preceded the first chunk and no continuation cursor exists. See [Find presentation](docs/TRANSCRIPTS.md#conversation-find).
 
-Stored transcript PNG/JPEG images use bounded record-scoped reads, canvas thumbnails and a keyboard-accessible Base UI viewer. Its exact source remains a reading pin while focus is in the portal, so first live output cannot evict an oldest image being viewed at the 128-row limit. Other formats and invalid/missing/oversized data remain explicit. See [image validation, resource limits and qualification](docs/IMAGES.md). No file/network image authority or CSP expansion is added.
+Stored transcript PNG/JPEG images use bounded record-scoped reads, canvas thumbnails and a keyboard-accessible Base UI viewer. Its exact source remains a reading pin while focus is in the portal, so first live output cannot evict an oldest image being viewed at the 128-row limit. Other formats and invalid/missing/oversized data remain explicit. See [image validation and resource limits](docs/IMAGES.md). No file/network image authority or CSP expansion is added.

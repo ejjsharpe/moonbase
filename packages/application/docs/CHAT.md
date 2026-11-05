@@ -70,19 +70,11 @@ bun run check:foundation
 
 Tests use the public factory/facade, controlled completion gates and [HTTP/SQLite/process fixtures](../../../tests/chat/README.md). They cover scope races, strict saved data, two-model disposal, held/failing/reentrant watch cleanup and immutable mutation recovery. The foundation audit permits browser-safe Effect and excludes UI/privileged implementations. [Desktop](../../../apps/desktop/README.md) owns IPC, root cleanup reporting, private configuration and native/package qualification. Controlled tests do not qualify real SSH/provider access, physical durability or manual acceptance.
 
-## Composition handoff
+## Composition
 
 `makeChatModel(dependencies)` returns `Effect<ChatModel, ApplicationError, Scope>`; the caller supplies its shared runtime and removable acquisition scope. `makeChatController(runtime, model)` binds that exact acquired instance once. The fixed context and caller-bound storage namespace belong to that model; composition must prevent a replacement from using the same namespace while cleanup is pending or failed. No import, acquisition or binding connects a host, sends a message or stops remote work.
 
-`preserve(): boolean` remains a synchronous close/unload decision. Preserve before disposal; a failed preservation decision must retain the live model and its text. Calling `dispose(): Promise<void>` immediately blocks admissions and late writes, then joins its retained cleanup outcome. `detach(): Promise<void>` releases view observation without disposing the model or stopping an admitted remote command. Root-owned cleanup must observe those Promises outside the removed panel and drain them before runtime teardown. Cross-feature Quit and its admission policy belong to application composition, not this relocation.
-
-## Historical ticket #67 relocation evidence
-
-Ticket #67 moved the sole implementation and tests into application. Its temporary forwarding package and identity assertion were removed after the final caller audit in #72. At the relocation revision, controller and saved-data implementation bodies were byte-identical to dependency revision `0190bbf` after imports. Later composition added admission fencing; the baseline-produced saved/protocol fixture bytes remain unchanged.
-
-Validation used Node `v26.13.0` and pinned Bun `1.4.4` against this ticket's delivery tree. Source checks passed: frozen install, root typecheck (9/9 tasks), root lint, formatting and `git diff --check`; application tests passed 105/105, including 63 relocated controller tests, three controlled HTTP/SQLite/process protocol tests and the alias assertion. `bun run check:foundation` passed the canonical chat browser import, unchanged fixture checks and 270-input public headless bundle, with only the host-health and chat forwarding aliases left as exact #72 exceptions. `bun run test:chat-integration` passed 7/7 using temporary stores and controlled loopback/faux providers. Logs are `/private/tmp/moonbase-67-{application-tests,chat-integration,typecheck,lint,foundation,format}.log`.
-
-The application TypeScript library target now retains chat's existing ES2024 requirement; no runtime or protocol was changed. Desktop native/package execution and final renderer/archive audits belong to #70/#72. No real SSH/provider, physical durability, manual interaction or accessibility qualification is claimed here.
+`preserve(): boolean` remains a synchronous close/unload decision. Preserve before disposal; a failed preservation decision must retain the live model and its text. Calling `dispose(): Promise<void>` immediately blocks admissions and late writes, then joins its retained cleanup outcome. `detach(): Promise<void>` releases view observation without disposing the model or stopping an admitted remote command. Root-owned cleanup must observe those Promises outside the removed panel and drain them before runtime teardown. Cross-feature Quit and its admission policy belong to application composition. The application TypeScript library target retains chat's ES2024 requirement.
 
 ## Local mode and provider setup
 

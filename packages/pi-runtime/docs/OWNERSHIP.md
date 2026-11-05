@@ -24,7 +24,7 @@ Stop reserves its own immutable request and checks the captured conversation/sub
 
 Watch acquisition registers commit and close subscriptions before the initial snapshot. Each subscription has its own release finalizer. The awaitable client close fences delivery, joins finalizers and reports cleanup failure; root teardown also closes outstanding observations. Closing a watch never Stops a task.
 
-Local observation filters public committed changes before scheduling reads, retains one bounded history window and reuses safe scoped scheduler status between task/registry invalidations. The acquired registry and public parked/migration-failure reports notify only content-free status invalidation; no SDK diagnostics or task graph are retained. Each watch owns those additional listeners in the same observation scope. Unsafe authority/source/control changes fence captures; progress alone schedules replacement without starving coherent publications. Snapshot retirement attempts capture/project afresh with those same scoped caches. A private retirement failure superseded by an unsafe revision consumes the already queued refresh; ordinary errors propagate. Watch reads use root-owned `Host.read` settlement, so closing a listener need not wait for a noncancelable SDK read, while root disposal still must. See [observation budgets/API evaluation and downstream handoff](OBSERVATION.md).
+Local observation filters public committed changes before scheduling reads, retains one bounded history window and reuses safe scoped scheduler status between task/registry invalidations. The acquired registry and public parked/migration-failure reports notify only content-free status invalidation; no SDK diagnostics or task graph are retained. Each watch owns those additional listeners in the same observation scope. Unsafe authority/source/control changes fence captures; progress alone schedules replacement without starving coherent publications. Snapshot retirement attempts capture/project afresh with those same scoped caches. A private retirement failure superseded by an unsafe revision consumes the already queued refresh; ordinary errors propagate. Watch reads use root-owned `Host.read` settlement, so closing a listener need not wait for a noncancelable SDK read, while root disposal still must. See [observation budgets and API choice](OBSERVATION.md).
 
 ## Resource release
 
@@ -59,13 +59,13 @@ All private decoders reject unfamiliar object fields recursively with static err
 
 The public Pi document API enforces family kind, scope, semantics and version; no migration function is installed. Payload validation examines only Moonbase-owned values. It never inspects provider documents or SDK internals. Invalid/foreign/unsupported saved data blocks the affected operation before any automatic rewrite or resubmission, retaining original payload and binding bytes. No fields are projected away, no namespace is reset, and no legacy store is imported.
 
-## Qualification
+## Tests
 
 Package tests use temporary SQLite, counted faux models/tools, controlled SDK-boundary failures, Node child hosts and loopback HTTP. The compiled remote-entry check runs Electron 45.1.0 in Node mode without foreground UI. Cross-module chat tests use controlled forwarding. These checks do not qualify integrated desktop/native/package behavior, real providers/SSH, physical durability, Intel execution or distribution.
 
 ## Local ownership extension
 
-Local stores use a strict `{host, actorId, mode: "local"}` identity and require conversation metadata `settings: {cwd, model}`; fixed-settings remote identities and metadata remain unchanged. Local settings belong to immutable Create request bindings. The same resource/admission/Stop ownership above applies. See [local setup and qualification](LOCAL.md).
+Local stores use a strict `{host, actorId, mode: "local"}` identity and require conversation metadata `settings: {cwd, model}`; fixed-settings remote identities and metadata remain unchanged. Local settings belong to immutable Create request bindings. The same resource/admission/Stop ownership above applies. See [local setup](LOCAL.md).
 
 Transcript content/around-entry commands bypass admission and the legacy whole-invocation uninterruptible wrapper. `Host.read` owns the Promise through settlement in root work, signals cancellation between bounded reads/normalization slices, and drains before Harness release. Caller interruption closes only its join. Cursor MAC keys and live incarnations belong to the acquired Harness lifetime, with no new saved document/schema. See [exact DTO/cursor semantics](../../contracts/docs/TRANSCRIPTS.md).
 
@@ -77,4 +77,4 @@ Nested input projection keeps requested arguments independent of mutable slot ar
 
 ## Network observations
 
-`server.ts` owns up to 64 network watches and awaits their supplied observation closes, retaining release failures for root shutdown. The server transports existing projections without command/history reads. Peer close fences callbacks before joining cleanup; #122 root work retains noncancelable SDK reads through actual settlement. `remote.ts` owns the captured verified generation, connection subscription, bounded decoder/assembly/output queues, reader/AbortController and separate liveness/retry timers. It never disconnects SSH, replays a mutation or Stops work. [Stream protocol](STREAMING.md) records exact limits and failure behavior.
+`server.ts` owns up to 64 network watches and awaits their supplied observation closes, retaining release failures for root shutdown. The server transports existing projections without command/history reads. Peer close fences callbacks before joining cleanup; Pi root work retains noncancelable SDK reads through actual settlement. `remote.ts` owns the captured verified generation, connection subscription, bounded decoder/assembly/output queues, reader/AbortController and separate liveness/retry timers. It never disconnects SSH, replays a mutation or Stops work. [Stream protocol](STREAMING.md) records exact limits and failure behavior.

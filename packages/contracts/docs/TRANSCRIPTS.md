@@ -56,7 +56,7 @@ New reads use no admission lease. Cancellation interrupts the caller's wait, sig
 The installed network server additionally advertises `chat-stream-v1`. It transports these same coherent replacement snapshots, including boundaries/incarnations/part revisions, directly from the supplied watch. It performs no per-update history or `getChat` reads. Optional `observationStatus: 'connected' | 'reconnecting'` passes through existing snapshot validation and IPC. A reconnecting snapshot retains stale evidence; fresh stream establishment replaces it after validation. See [wire proofs, limits and lifetime](../../pi-runtime/docs/STREAMING.md).
 
 
-## Complete conversation Find (#114)
+## Complete conversation Find
 
 `findChatTranscript({target, query, cursor?})` searches only the saved displayable UTF-8 transcript of that exact conversation, including folded available thinking, requested tool arguments, published results/details/JSON and recorded patch/diff text. Available executed arguments are searchable when retained as displayable saved content; transient live task checkpoints are excluded. Images/base64, opaque signatures, redacted thinking, private provider diagnostics and internal task/configuration state are excluded. No filesystem, provider request, regex option, index or cross-conversation authority is added.
 
@@ -66,4 +66,4 @@ Replies echo the full `target`, exact `query` and request `cursor` (null initial
 
 After the initial one-row cutoff capture, each slice examines at most 32 SDK rows, 32 part positions and 256 KiB of newly consumed normalized text, returning at most 32 matches. Bounded lookahead preserves matches across windows and resumes at the next unconsumed position, without duplicate/skipped boundary matches. `progress.entries` counts examined row reads, including repeated reads of a split entry; `progress.bytes` counts newly consumed normalized UTF-8 bytes, not unique entries or a total estimate. The actual serialized reply/envelope stays below the existing 256 KiB bound. Deep/pathological content whose authenticated continuation cannot fit the existing cursor bound fails explicitly. There is no total conversation or part clipping.
 
-Find uses the same interruptible root-owned read path locally and over authenticated RPC, including server peer-close cancellation. Caller cancellation is prompt; cleanup still awaits actual SDK Promise settlement. Stop and unrelated reads do not share Find admission. See [runtime bounds and evidence](../../pi-runtime/docs/FIND.md).
+Find uses the same interruptible root-owned read path locally and over authenticated RPC, including server peer-close cancellation. Caller cancellation is prompt; cleanup still awaits actual SDK Promise settlement. Stop and unrelated reads do not share Find admission. See [runtime bounds and tests](../../pi-runtime/docs/FIND.md).

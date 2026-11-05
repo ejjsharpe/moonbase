@@ -62,4 +62,4 @@ bun run --cwd packages/workspace lint
 bun run --cwd packages/workspace test
 ```
 
-The [editor/workspace integration suite](../../tests/editor-workspace/README.md) checks the public module boundary. [Ownership refactor validation](docs/VALIDATION.md) records exact revisions, commands and separate qualification limits.
+Run native/process suites serially with other resource-heavy integration work. The workspace suite executes real controlled native helpers, temporary repositories and stores, and a restricted-PATH asset fixture; that fixture does not exercise a packaged Electron application. The [editor/workspace integration suite](../../tests/editor-workspace/README.md) checks the public module boundary.

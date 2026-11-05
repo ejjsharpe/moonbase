@@ -1,10 +1,10 @@
-# Scoped local chat observation (#122)
+# Scoped local chat observation
 
-`ChatService.watch({target})` / `ChatClient.watch` publish independently replaceable, authorized `ChatSnapshot` values. Both `LocalPiRuntimeLive` and the fixed-settings in-process `PiRuntimeLive` use this source. The remote adapter still uses its existing compatibility polling; this ticket adds no network protocol, status DTO or `chat-stream-v1` advertisement.
+`ChatService.watch({target})` / `ChatClient.watch` publish independently replaceable, authorized `ChatSnapshot` values. Both `LocalPiRuntimeLive` and the fixed-settings in-process `PiRuntimeLive` use this source. Network delivery to remote clients is described in [remote streaming](STREAMING.md).
 
-## Pinned SDK evaluation
+## Pinned SDK API choice
 
-Inspected the installed public declarations and implementation of Pi Durable/Chord **1.4.0**, including `Session.subscribeCommits`, document watches, conversation views/events, scheduler inspection and progress commits. The corresponding upstream Pi revision is `4a080252f06caf63a525d7873c5d94d3c23887e0`; no SDK upgrade is required.
+The adapter uses only public Pi Durable/Chord **1.4.0** APIs. The candidates were:
 
 | Public API | Useful behavior | Limit for this adapter |
 | --- | --- | --- |
@@ -23,7 +23,7 @@ Every publication revalidates the exact host/store/actor/conversation metadata a
 
 The existing transaction capture still freezes LiveDoc, exact generation/tool control and retained references with `transcriptBoundary`. Its boundary can be reused only while the subscribed entry/marker revision is unchanged; listeners invalidate it before another transaction can capture newer state. Cache pages are keyed by that captured boundary. Completion/recovery therefore cannot combine a committed partial/final with its prior live incarnation. Task/attempt/text equality never deduplicates retained records. The [transcript contract](../../contracts/docs/TRANSCRIPTS.md) remains unchanged.
 
-The corrected #109 snapshot path runs the entire capture/projection inside `projectSnapshotOnce` on each of at most three attempts. Only private `NestedSourceRetired` is retried, after an absent document and a fresh, identity-matching completing/terminal parent prove retirement. Observation's boundary/status hooks run within each attempt; the winning capture supplies its own source/control/history evidence. If that bounded attempt ends in `NestedSourceRetired` after an unsafe revision has already queued a replacement, watch discards that superseded failure and consumes the queued refresh. Other failures propagate, including ordinary `Conflict`; explicit manifest/content selections remain source-changed. This adds no general retry loop or mutation replay.
+The snapshot path runs the entire capture/projection inside `projectSnapshotOnce` on each of at most three attempts. Only private `NestedSourceRetired` is retried, after an absent document and a fresh, identity-matching completing/terminal parent prove retirement. Observation's boundary/status hooks run within each attempt; the winning capture supplies its own source/control/history evidence. If that bounded attempt ends in `NestedSourceRetired` after an unsafe revision has already queued a replacement, watch discards that superseded failure and consumes the queued refresh. Other failures propagate, including ordinary `Conflict`; explicit manifest/content selections remain source-changed. This adds no general retry loop or mutation replay.
 
 History is loaded initially and invalidated by entry/marker changes, document replacement/retirement or recovery; it reloads only while authority and live state remain available. Live-only progress reuses the bounded projected window, including its per-entry continuation cursors; it performs no retained-history scan/hydration. Explicit history/content/around-entry commands remain independent reads. If escaped live previews grow, the outgoing history page shrinks using those saved cursor positions without rereading entries; earlier rows remain navigable. Live manifest projection may still read exact immutable tool-attribution/result references; it does not rehydrate the saved history window.
 
@@ -34,11 +34,27 @@ Parked/blocked presentation comes from public `harness.inspect()` state/reasons,
 - At most **64** observations per acquired host. Each owns one commit subscription, one close subscription, one registry subscription and one content-free task-status notification callback.
 - Each observation queues **one `void` invalidation**, retaining no publication, raw document, event list or delta bytes. A held/slow consumer supersedes intermediate state and later receives a current replacement. There is one projection at a time per observation.
 - The history cache retains at most **32 projected rows / 250 KiB serialized page**, plus at most 32 existing cursors (each contract-bounded to 1 KiB). It retains no hydrated content. Snapshot fitting uses **250 KiB**, followed by existing output validation and the **256 KiB** serialized response limit; live tool previews remain capped at eight. Status/boundary state is fixed-size apart from bounded identifiers. These are serialized retention bounds, not JS heap measurements.
-- Full LiveDoc/record materialization and a status inspection's temporary session-wide result remain SDK allocation limits, as in #109. The adapter does not retain that inspection graph. A very large retained document or many tasks can still make an individual SDK read expensive; this is not a hard CPU/latency guarantee.
+- Full LiveDoc/record materialization and a status inspection's temporary session-wide result remain SDK allocation limits. The adapter does not retain that inspection graph. A very large retained document or many tasks can still make an individual SDK read expensive; this is not a hard CPU/latency guarantee.
 - The existing root work scope owns every SDK read Promise through actual settlement. Closing a client watch fences delivery immediately and joins its stream/listener finalizers. A noncancelable SDK read can remain in root work **after watch close resolves**; root disposal drains that Promise before Harness/storage close. Cancellation is checked between bounded history slices. Reads use no admission lease and do not join provider completion. Stop retains its independent exact target and deadline.
 
-## #123 handoff
+## Network consumers
 
-Consume the existing supplied `client.watch` directly; do not add a `getChat`/history read for every received update. Each value is a bounded complete replacement, so superseded values can be coalesced; the local queue guarantees current-state resynchronization rather than delivery of every intermediate progress state. Preserve `transcriptBoundary`, source/incarnation, task/submission/attempt and part/prefix evidence unchanged.
+Network streaming consumes the supplied `client.watch` directly, without a `getChat`/history read for every received update. Each value is a bounded complete replacement, so superseded values can be coalesced; the local queue guarantees current-state resynchronization rather than delivery of every intermediate progress state. `transcriptBoundary`, source/incarnation, task/submission/attempt and part/prefix evidence pass through unchanged.
 
-The network owner must budget the **actual authenticated framed bytes**, including target/session/sequence/proof fields. The RPC validator's envelope reserve is not a streaming-frame allowance. #123 owns stream advertisement in server host replies, proof/framing, liveness, reconnect/resynchronization and network status. Local observation has no periodic timer and no remote-stream feature flag. On stream close, await the client observation close for listener cleanup; do not claim all SDK work settled until the owning root has drained it. Closing/reconnecting never sends, retries or invents Stop.
+Local observation has no periodic timer and no remote-stream feature flag. Network budgets count actual authenticated framed bytes; the RPC validator's envelope reserve is not a streaming-frame allowance. On stream close, await the client observation close for listener cleanup; SDK work is settled only once the owning root has drained it. Closing/reconnecting never sends, retries or invents Stop.
+
+## Tests
+
+`test/observation.test.ts` uses newly created temporary Pi SQLite stores and public runtime/client/SDK interfaces. It instruments public `snapshot`, `commit`/`scanEntries`/`entry`, `inspect` and subscription boundaries without reading scheduler internals, and covers:
+
+- Held provider text/thinking and tool progress publish while completion is held, with no retained-history scans, entry hydrations or whole-session inspections for live-only updates.
+- Commits in an unrelated conversation cause no reads or publications for the observed one.
+- Completion during a held initial capture publishes only the coherent final replacement. Same-attempt Harness reopen retains its committed interrupted partial with a new live incarnation; a scheduler-finalized partial without `byTaskId` is retained without leaking its private fault.
+- Restart-limit, `missing_task`, migration-failure and registry-replacement status through public inspection and seeded task counters. These simulate crash counters; they are not process-crash or physical-durability checks.
+- Steady progress publishes even when projection is slower than the commit interval; each unsafe invalidation (attempt change, tool membership, retained history, metadata retirement, foreign Store authority, same-commit LiveDoc replacement) discards stale captures.
+- A held slow consumer receives one current replacement after release, verified by exact content revision rather than preview.
+- Growing escaped tool output shrinks the outgoing history page within the serialized bound without additional scans; older cursors still visit every stored entry once.
+- Authority changes, LiveDoc retirement, session close and storage failure terminate safely and release subscriptions. Closing a held SDK observation fences delivery while root disposal waits for actual SDK settlement.
+- Confirmed nested retirement after an unsafe revision consumes the queued refresh; ordinary `Conflict` after an unsafe invalidation fails once without retry.
+
+These are controlled source checks. They do not cover native or packaged UI, real providers/SSH, physical performance or durability, or hard SDK memory/latency bounds.

@@ -4,7 +4,7 @@
 
 Local ownership is `{host, actorId, mode: 'local'}` in a dedicated store. Each conversation's metadata retains strict `{cwd, model: {provider, modelId}}` settings. A new Create requires a canonical existing directory and installed model. Desktop injects `approveCreation(settings)` to validate native picker approval inside the shared Create handler, after exact committed-binding recovery and before new creation. Settings are included in the immutable original request binding; explicit matching retry recovers that conversation even if its folder later disappears. Each tool environment comes from the conversation's retained cwd and checks its current canonical directory. Folder context is **not a filesystem sandbox**: tools have the user's OS permissions.
 
-Remote `PiRuntimeLive` keeps its existing host/actor/cwd/model identity, metadata bytes and fixed settings. Remote Create rejects per-conversation settings before dispatch; there is no migration or import between stores. The standalone host retains Node >=26.13 qualification. The local layer additionally permits the exact pinned Electron 45.1.0 / embedded Node 24.22.1 pair. Package engines describe the standalone Node development/host requirement, not Electron's embedded runtime.
+Remote `PiRuntimeLive` keeps its existing host/actor/cwd/model identity, metadata bytes and fixed settings. Remote Create rejects per-conversation settings before dispatch; there is no migration or import between stores. The standalone host requires Node >=26.13. The local layer additionally permits the exact pinned Electron 45.1.0 / embedded Node 24.22.1 pair. Package engines describe the standalone Node development/host requirement, not Electron's embedded runtime.
 
 ## Providers and credentials
 
@@ -14,7 +14,7 @@ Local settings accept optional `reasoningEffort` (`off`, `minimal`, `low`, `medi
 
 `createLocalModels(credentials)` registers five pinned catalog choices: ChatGPT subscription (`openai`), OpenAI API key (`openai-api-key`), Anthropic, Google Gemini and OpenRouter. The API-key choice uses the SDK's OpenAI factory catalog/auth and Responses adapter under its own ID, keeping it independent of subscription credentials. It installs no ambient environment/file authentication or custom endpoint. No Codex/Pi credential file is read.
 
-The newer SDK OpenAI **Sign in with ChatGPT** flow supersedes the ticket's original legacy `openai-codex` route, following the implementation discussion. It uses a browser callback and full redirect-URL fallback, without device-code login. `ProviderSetupLive` delegates authentication and locked refresh to Pi's public `Models` API and supplies a stable installation UUID as device ID. It statically registers the SDK OAuth loaders through its public `bun-oauth` helper so bundler-opaque imports resolve inside Electron/ASAR. Only these five providers are registered, even though that helper embeds additional SDK flow implementations.
+ChatGPT sign-in uses the SDK OpenAI **Sign in with ChatGPT** flow, not the legacy `openai-codex` route. It uses a browser callback and full redirect-URL fallback, without device-code login. `ProviderSetupLive` delegates authentication and locked refresh to Pi's public `Models` API and supplies a stable installation UUID as device ID. It statically registers the SDK OAuth loaders through its public `bun-oauth` helper so bundler-opaque imports resolve inside Electron/ASAR. Only these five providers are registered, even though that helper embeds additional SDK flow implementations.
 
 The contracts provider client returns catalogs, configured status, bounded progress and flow/prompt IDs. Answers are transient; status never contains keys, tokens, authorization URLs or pasted callback URLs. Only the privileged service can open the active provider's validated HTTPS `auth.openai.com` URL. A live document owns its flow; cancellation, superseding login, prompt-level cancellation and document release invalidate old answers. Unknown SDK failures use fixed messages rather than provider diagnostics.
 
@@ -24,7 +24,7 @@ The contracts provider client returns catalogs, configured status, bounded progr
 
 `LocalPiControl.setAdmissionsOpen(false)` fences new local mutations. `hasActiveWork()` checks owned in-flight calls, all Pi tasks and all conversations' unfinished intent metadata, including hidden conversations. This control is privileged and has no renderer DTO. A head's final confirmation runs after application preservation/editor gates and client admission fencing. **Keep running** restores admissions; **Quit** leaves them fenced and closes the original scope normally. Neither choice invents Stop. Pi controls interruption/recovery after reopening; external tool effects cannot be rolled back.
 
-## Evidence and limits
+## Tests and limits
 
 Source tests also cover Send metadata validation while Quit fences admissions, committed Create receipt recovery through desktop after folder loss, cleanup of a new login when status cannot transfer its ownership, and the pinned SDK’s concurrent/cancelled OAuth refresh against encrypted persistence with retained clientId/scopes.
 

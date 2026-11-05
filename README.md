@@ -21,7 +21,7 @@ Pi remains one infrastructure owner. Its [private ownership map](packages/pi-run
 
 Use [`createMoonbaseApplication`](packages/application/docs/LIFECYCLE.md) with injected clients, stable identities and synchronous storage for editor-only, chat-only or combined applications. Each application owns one client runtime and independent feature scopes; Electron main keeps its privileged runtime. The [direct headless consumer](packages/application/docs/HEADLESS-CONSUMER.md) demonstrates ordinary TypeScript use and the separate responsibilities of a future process/language adapter.
 
-The [architecture and baseline](docs/HEADLESS-ARCHITECTURE.md) records enforced ownership, public exports, helper decisions and compatibility evidence. The [epic delivery ledger](https://github.com/ejjsharpe/moonbase/issues/63#issuecomment-6585556403) tracks final review, source, controlled, native and packaged acceptance separately.
+The [architecture](docs/HEADLESS-ARCHITECTURE.md) describes enforced ownership, public exports, helper decisions and fixed compatibility fixtures.
 
 ## Development
 

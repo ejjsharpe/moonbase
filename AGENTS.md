@@ -20,6 +20,8 @@ Workspace, Pi and SSH expose focused Effect services/layers consuming contracts 
 
 Test nontrivial behavior through public interfaces, including loss/conflict/uncertainty, disposal and exact local/remote identities. Distinguish source checks, controlled integration, packaged execution and real/manual checks. Preserve dirty work, trust-boundary validation, required notices and observable errors.
 
+Docs describe current behavior, limits and design rules; put provenance, test logs and handoff notes in PR descriptions.
+
 Use `packages/ui` StyleX tokens/recipes and Base UI interactions. Keep PRs focused on module boundaries, fix issues in their owning module and link PRs with T3 when available.
 
 No legacy-state import or deletion, real-provider quota without explicit authorization, unspecified SSH host, host-key bypass, deployment or GitHub PR merges.
