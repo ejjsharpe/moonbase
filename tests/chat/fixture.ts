@@ -29,6 +29,7 @@ export type FixtureStats = {
     ranges?: { limit: number; min: string | null; max: string | null; rows: number }[];
   };
   seeded?: { target: ChatTarget; ids: string[] };
+  longSeeded?: { target: ChatTarget; entryId: string; bytes: number; units: number; late: number };
   calls: number;
   tools: number;
   commands: string[];
@@ -281,6 +282,14 @@ export async function controlledHostFixture(hostScript: URL, hold = false) {
         (value) => value.seeded?.target.conversationId === target.conversationId,
       );
       return result.seeded!.ids;
+    },
+    seedLongText: async (target: ChatTarget) => {
+      host!.send({ type: 'seed-long-text', target });
+      const result = await until(
+        stats,
+        (value) => value.longSeeded?.target.conversationId === target.conversationId,
+      );
+      return result.longSeeded!;
     },
     loseNextSend: () => writeFile(drop, ''),
     loseNextReply: (operation: string) => writeFile(drop, operation),

@@ -29,6 +29,24 @@ export async function seedTranscriptHistory(harness: Harness, target: ChatTarget
   }, BACKGROUND_CONTEXT);
 }
 
+export async function seedTranscriptLongText(harness: Harness, target: ChatTarget) {
+  const text = 'early NEEDLE 😀\r\n' + '😀α'.repeat(1600000) + 'late ΣNEEDLE 😀\r\n';
+  const entry = await harness.commit(
+    (tx) =>
+      tx.appendEntry(Number(target.conversationId) as ConversationId, {
+        kind: 'pi.assistant',
+        model: [fauxAssistantMessage([{ type: 'thinking', thinking: text }])],
+      }),
+    BACKGROUND_CONTEXT,
+  );
+  return {
+    entryId: String(entry.id),
+    bytes: new TextEncoder().encode(text).length,
+    units: text.length,
+    late: text.indexOf('ΣNEEDLE') + 1,
+  };
+}
+
 export function instrumentTranscriptReads(harness: Harness) {
   const reads = {
     scans: 0,
