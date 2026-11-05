@@ -1720,6 +1720,67 @@ test('explicit Disconnect drains the captured observation before invalidating it
   await f.controller.dispose();
 });
 
+for (const failsClose of [false, true])
+  test(`Disconnect drains a former selection observation through its actual ${failsClose ? 'failure' : 'success'}`, async (t) => {
+    const cleanup: (() => Promise<void>)[] = [],
+      f = await fixture({ after: (close) => cleanup.push(close) }),
+      entered = event(),
+      held = event(),
+      watch = f.chat.watch;
+    let first = true;
+    f.chat.watch = (...args) => {
+      const close = watch(...args);
+      if (!first) return close;
+      first = false;
+      return async () => {
+        entered.resolve();
+        await held.promise;
+        await close();
+        assert.equal(f.controller.getSnapshot().connection?.state, 'connected');
+        if (failsClose)
+          throw new ApplicationError({
+            code: 'Persistence',
+            message: 'Former selection watch close failed',
+          });
+      };
+    };
+    t.after(async () => {
+      held.resolve();
+      for (const close of cleanup)
+        if (failsClose) await assert.rejects(close(), /Former selection watch close failed/);
+        else await close();
+    });
+    await ready(f);
+    f.answers.set('getChat', async (input: ChatCommands['getChat']['input']) => ({
+      ...snapshot,
+      conversation: { ...summary, target: input.target },
+    }));
+    await f.controller.select({ ...target, conversationId: 'other-chat' });
+    await entered.promise;
+    const disconnecting = f.controller.disconnect();
+    try {
+      await turn();
+      assert.equal(
+        f.calls.filter((call) => call.operation === 'disconnect').length,
+        0,
+        'the already-closing observation still owns connectivity',
+      );
+    } finally {
+      held.resolve();
+      await disconnecting;
+    }
+    assert.equal(f.subscriptions, 0);
+    assert.equal(
+      f.calls.filter((call) => call.operation === 'disconnect').length,
+      failsClose ? 0 : 1,
+    );
+    assert(!f.calls.some((call) => ['sendChat', 'stopChat'].includes(call.operation)));
+    if (failsClose) {
+      assert.match(f.controller.getSnapshot().error!, /Former selection watch close failed/);
+      await assert.rejects(f.controller.dispose(), /Former selection watch close failed/);
+    } else await f.controller.dispose();
+  });
+
 test('explicit Disconnect retains a failed observation release without invalidating connectivity', async (t) => {
   const cleanup: (() => Promise<void>)[] = [];
   const f = await fixture({ after: (close) => cleanup.push(close) });
