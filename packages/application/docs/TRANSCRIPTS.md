@@ -177,3 +177,8 @@ Retained UTF-8 chunks additionally carry original `textOffset`, and content carr
 
 
 Find's composed-base integration preserves the iterator-local raw-promise Set supplied to both data and fresh-prefix proof reads. Its nested finally always drains only that iterator's admitted IO, even if the inner iterator return rejects; cancellation fences progress immediately while generator completion waits for actual settlement. Find's query/reveal cancellation does not join or cancel those independent iterations or newer manual history jobs. The final integration public Find/transcript set passes 65/65 without weakening timing, current-view or stale-publication assertions. Only explicit Find reveal resets startup-restoration ownership; a non-reset startup around read keeps its original admission semantics.
+
+
+## Find R1 initial-publication correction
+
+A synchronous snapshot subscriber can close Find or start a replacement query during the initial searching publication. The superseded call now checks its captured query generation and AbortSignal before handling an inactive-owner error. It returns without publishing into the successor; a current generation on an inactive owner still gets the visible reconnect/reopen error. `find-reentrant.test.ts` preserves all three independent reviewer probes and assertions, including the held connection-generation replacement guard. Both initial-publication probes failed before this correction (`/tmp/moonbase-114-r1-red.log`); the focused green results are recorded in the follow-up handoff. No raw IO settlement, iterator, saved state or public API changed.

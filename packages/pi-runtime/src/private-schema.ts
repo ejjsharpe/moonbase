@@ -182,6 +182,12 @@ function savedIdentity(value: string) {
   }
 }
 
+const findPartPositionSchema = Schema.Struct({
+  message: integer.check(Schema.makeFilter((value) => value >= 0)),
+  block: integer.check(Schema.makeFilter((value) => value >= 0)),
+  auxiliary: integer.check(Schema.makeFilter((value) => value >= 0)),
+});
+export type FindPartPosition = typeof findPartPositionSchema.Type;
 const transcriptCursorSchema = Schema.Struct({
   kind: Schema.Literals(['manifest', 'content', 'around', 'find']),
   binding: Schema.String.check(Schema.makeFilter((value) => /^[a-f0-9]{64}$/.test(value))),
@@ -192,7 +198,7 @@ const transcriptCursorSchema = Schema.Struct({
   upper: Schema.optional(recordId),
   entries: Schema.optional(integer),
   bytes: Schema.optional(integer),
-  part: Schema.optional(integer.check(Schema.makeFilter((value) => value >= 0))),
+  part: Schema.optional(findPartPositionSchema),
   path: Schema.optional(
     Schema.Array(integer.check(Schema.makeFilter((value) => value >= 0))).check(
       Schema.isMaxLength(128),

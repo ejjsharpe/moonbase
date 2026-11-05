@@ -218,8 +218,24 @@ const makeValue = (
   value: TranscriptValue['value'],
   extra: Partial<ChatTranscriptPart> = {},
 ): TranscriptValue => ({ id, kind, role, value, extra });
+type TranscriptTextStep = {
+  position: S.FindPartPosition;
+  next: S.FindPartPosition;
+  part: TranscriptValue | null;
+};
+const getTextPosition = (message: number, block = 0, auxiliary = 0): S.FindPartPosition => ({
+  message,
+  block,
+  auxiliary,
+});
+const makeTextStep = (
+  position: S.FindPartPosition,
+  next: S.FindPartPosition,
+  part: TranscriptValue | null,
+): TranscriptTextStep => ({ position, next, part });
 function* messageParts(messages: readonly Message[], prefix = ''): Generator<Part> {
-  for (const part of messageValues(messages, prefix)) {
+  for (const { part } of messageSteps(messages, prefix)) {
+    if (!part) continue;
     let value: string | Buffer;
     const extra = { ...part.extra };
     if (typeof part.value === 'string') value = part.value;
@@ -234,21 +250,41 @@ function* messageParts(messages: readonly Message[], prefix = ''): Generator<Par
     yield makePart(part.id, part.kind, part.role, value, extra);
   }
 }
-/** The same display policy, without image decoding, JSON materialization or content hashing. */
-export function* getEntryTextValues(entry: EntryRecord): Generator<TranscriptValue> {
-  if (entry.kind === 'pi.reset' || entry.kind === 'pi.compaction')
-    yield makeValue(
-      'marker',
-      'notice',
-      'system',
-      entry.kind === 'pi.reset' ? 'Context reset.' : 'Context compacted.',
+/** Direct source positions share the display policy without constructing preceding parts. */
+export function* getEntryTextValues(
+  entry: EntryRecord,
+  start = getTextPosition(0),
+): Generator<TranscriptTextStep> {
+  if (start.message === 0 && (entry.kind === 'pi.reset' || entry.kind === 'pi.compaction'))
+    yield makeTextStep(
+      getTextPosition(0),
+      getTextPosition(1),
+      makeValue(
+        'marker',
+        'notice',
+        'system',
+        entry.kind === 'pi.reset' ? 'Context reset.' : 'Context compacted.',
+      ),
     );
-  yield* messageValues(entry.model ?? []);
+  const messages = entry.model ?? [];
+  yield* messageSteps(messages, '', start);
   const diagnostics = ToolResultEntry.is(entry) ? (entry.data?.diagnostics ?? []) : [];
-  if (diagnostics.length) yield makeValue('diagnostics', 'details', 'tool', { json: diagnostics });
+  if (diagnostics.length && start.message <= messages.length + 1)
+    yield makeTextStep(
+      getTextPosition(messages.length + 1),
+      getTextPosition(messages.length + 2),
+      makeValue('diagnostics', 'details', 'tool', { json: diagnostics }),
+    );
 }
-function* messageValues(messages: readonly Message[], prefix = ''): Generator<TranscriptValue> {
-  for (const [m, message] of messages.entries()) {
+function* messageSteps(
+  messages: readonly Message[],
+  prefix = '',
+  start = getTextPosition(1),
+): Generator<TranscriptTextStep> {
+  for (let m = Math.max(1, start.message) - 1; m < messages.length; m++) {
+    const message = messages[m];
+    const at = start.message === m + 1 ? start : getTextPosition(m + 1);
+    const nextMessage = getTextPosition(m + 2);
     const role = message.role === 'toolResult' ? 'tool' : message.role;
     let state: ChatTranscriptPart['state'];
     if (message.role === 'assistant') {
@@ -259,84 +295,134 @@ function* messageValues(messages: readonly Message[], prefix = ''): Generator<Tr
     const common: Partial<ChatTranscriptPart> = {
       ...(state ? { state } : {}),
       ...(message.role === 'toolResult'
-        ? {
-            toolName: getLabel(message.toolName),
-            callId: V.preview(message.toolCallId, 256).text,
-          }
+        ? { toolName: getLabel(message.toolName), callId: V.preview(message.toolCallId, 256).text }
         : {}),
     };
     const content =
       typeof message.content === 'string'
         ? [{ type: 'text' as const, text: message.content }]
         : message.content;
-    for (const [b, block] of content.entries()) {
-      const id = `${prefix}m${m}.b${b}`;
-      if (block.type === 'text')
-        yield makeValue(id, role === 'tool' ? 'result' : 'text', role, block.text, common);
-      else if (block.type === 'thinking')
-        yield makeValue(id, 'thinking', role, block.redacted ? '' : block.thinking, {
-          ...common,
-          ...(block.redacted ? { availability: 'redacted' as const } : {}),
-        });
-      else if (block.type === 'toolCall') {
-        yield makeValue(
-          id,
-          'arguments',
-          role,
-          { json: block.arguments },
-          {
-            toolName: getLabel(block.name),
-            callId: V.preview(block.id, 256).text,
-            state: 'requested',
-          },
+    const details =
+      message.role === 'toolResult' &&
+      message.details &&
+      typeof message.details === 'object' &&
+      !Array.isArray(message.details)
+        ? (message.details as Record<string, unknown>)
+        : undefined;
+    let lastAuxiliary = -1;
+    if (message.role === 'toolResult') {
+      if (message.nestedCalls !== undefined) lastAuxiliary = 0;
+      if (message.details !== undefined) lastAuxiliary = 1;
+      if (typeof details?.patch === 'string') lastAuxiliary = 2;
+      if (typeof details?.diff === 'string') lastAuxiliary = 3;
+    } else if (state === 'failed' && role === 'assistant') lastAuxiliary = 4;
+    for (let b = at.block; b < content.length; b++) {
+      const block = content[b],
+        id = `${prefix}m${m}.b${b}`;
+      const position = getTextPosition(m + 1, b);
+      const afterBlock =
+        b + 1 === content.length && lastAuxiliary < 0 ? nextMessage : getTextPosition(m + 1, b + 1);
+      const auxiliary = b === at.block ? at.auxiliary : 0;
+      if (auxiliary === 0) {
+        let part: TranscriptValue;
+        if (block.type === 'text')
+          part = makeValue(id, role === 'tool' ? 'result' : 'text', role, block.text, common);
+        else if (block.type === 'thinking')
+          part = makeValue(id, 'thinking', role, block.redacted ? '' : block.thinking, {
+            ...common,
+            ...(block.redacted ? { availability: 'redacted' as const } : {}),
+          });
+        else if (block.type === 'toolCall')
+          part = makeValue(
+            id,
+            'arguments',
+            role,
+            { json: block.arguments },
+            {
+              toolName: getLabel(block.name),
+              callId: V.preview(block.id, 256).text,
+              state: 'requested',
+            },
+          );
+        else if (block.type === 'image')
+          part = makeValue(
+            id,
+            'image',
+            role,
+            { image: block.data },
+            {
+              ...common,
+              mimeType: getLabel(block.mimeType, 'application/octet-stream'),
+            },
+          );
+        else
+          part = makeValue(id, 'notice', role, 'Unsupported recorded content.', {
+            availability: 'unsupported',
+          });
+        yield makeTextStep(
+          position,
+          block.type === 'toolCall' && block.argumentsError
+            ? getTextPosition(m + 1, b, 1)
+            : afterBlock,
+          part,
         );
-        if (block.argumentsError)
-          yield makeValue(id + '.arguments-error', 'notice', role, block.argumentsError, {
+      }
+      if (auxiliary <= 1 && block.type === 'toolCall' && block.argumentsError)
+        yield makeTextStep(
+          getTextPosition(m + 1, b, 1),
+          afterBlock,
+          makeValue(id + '.arguments-error', 'notice', role, block.argumentsError, {
             state: 'failed',
             toolName: getLabel(block.name),
-          });
-      } else if (block.type === 'image') {
-        yield makeValue(
-          id,
-          'image',
-          role,
-          { image: block.data },
-          { ...common, mimeType: getLabel(block.mimeType, 'application/octet-stream') },
+          }),
         );
-      } else
-        yield makeValue(id, 'notice', role, 'Unsupported recorded content.', {
-          availability: 'unsupported',
-        });
     }
-    if (message.role === 'toolResult' && message.nestedCalls !== undefined)
-      yield makeValue(
-        `${prefix}m${m}.nested-calls`,
-        'details',
-        role,
-        { json: message.nestedCalls },
-        common,
+    const auxiliary = at.block === content.length ? at.auxiliary : 0;
+    const emit = (index: number, part: TranscriptValue) =>
+      makeTextStep(
+        getTextPosition(m + 1, content.length, index),
+        index === lastAuxiliary ? nextMessage : getTextPosition(m + 1, content.length, index + 1),
+        part,
+      );
+    if (message.role === 'toolResult' && message.nestedCalls !== undefined && auxiliary <= 0)
+      yield emit(
+        0,
+        makeValue(
+          `${prefix}m${m}.nested-calls`,
+          'details',
+          role,
+          { json: message.nestedCalls },
+          common,
+        ),
       );
     if (message.role === 'toolResult' && message.details !== undefined) {
-      yield makeValue(`${prefix}m${m}.details`, 'details', role, { json: message.details }, common);
-      if (
-        message.details &&
-        typeof message.details === 'object' &&
-        !Array.isArray(message.details)
-      ) {
-        const details = message.details as Record<string, unknown>;
-        for (const kind of ['patch', 'diff'] as const)
-          if (typeof details[kind] === 'string')
-            yield makeValue(`${prefix}m${m}.${kind}`, kind, role, details[kind], common);
+      if (auxiliary <= 1)
+        yield emit(
+          1,
+          makeValue(`${prefix}m${m}.details`, 'details', role, { json: message.details }, common),
+        );
+      if (details) {
+        for (const [index, kind] of (['patch', 'diff'] as const).entries())
+          if (auxiliary <= index + 2 && typeof details[kind] === 'string')
+            yield emit(
+              index + 2,
+              makeValue(`${prefix}m${m}.${kind}`, kind, role, details[kind], common),
+            );
       }
     }
-    if (state === 'failed' && role === 'assistant')
-      yield makeValue(
-        `${prefix}m${m}.failure`,
-        'notice',
-        role,
-        'Model response failed. Provider diagnostics are private.',
-        { state },
+    if (state === 'failed' && role === 'assistant' && auxiliary <= 4)
+      yield emit(
+        4,
+        makeValue(
+          `${prefix}m${m}.failure`,
+          'notice',
+          role,
+          'Model response failed. Provider diagnostics are private.',
+          { state },
+        ),
       );
+    if (!content.length && lastAuxiliary < 0)
+      yield makeTextStep(getTextPosition(m + 1), nextMessage, null);
   }
 }
 async function getPairing(harness: Harness, entry: EntryRecord, signal?: AbortSignal) {
