@@ -156,7 +156,10 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     checkout: CheckoutTarget;
     path: string;
     origin: FocusOrigin;
+    from: Element | null;
+    interaction: number;
   } | null>(null);
+  const focusInteraction = useRef(0);
   const menuCapture = useRef<string[]>([]),
     menuKeyboard = useRef(false),
     root = useRef<HTMLDivElement>(null),
@@ -166,7 +169,15 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   const checkoutIdentity = checkout && checkoutKey(checkout);
   useLayoutEffect(() => {
     if (!focusRequest || choice || lookup || action || state.preserving) return;
+    const focused = document.activeElement;
+    const focusMoved =
+      focused !== null &&
+      focused !== document.body &&
+      focused !== focusRequest.from &&
+      !root.current?.contains(focused);
     if (
+      !focusMoved &&
+      focusRequest.interaction === focusInteraction.current &&
       root.current?.getClientRects().length &&
       checkoutIdentity &&
       checkoutIdentity === checkoutKey(focusRequest.checkout) &&
@@ -202,6 +213,8 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     state.preserving,
   ]);
   const withFocus = (opening: Promise<boolean>, origin: FocusOrigin, restore = false) => {
+    const from = document.activeElement;
+    const interaction = focusInteraction.current;
     const focus = () => {
       const next = controller.getSnapshot().recovery;
       if (checkout && next.openCheckoutIds.includes(checkout.checkoutId))
@@ -209,6 +222,8 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
           checkout,
           path: readOwn(next.views, checkout.checkoutId)!.active,
           origin,
+          from,
+          interaction,
         });
     };
     return opening.then(
@@ -276,6 +291,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   const actions: WorkbenchHandle = {
     importFiles,
     keyDown(event: KeyboardEvent) {
+      captureFocusInteraction();
       const element = event.target as HTMLElement;
       if (
         element.closest('[role="dialog"], [role="menu"]') ||
@@ -346,6 +362,22 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     },
   };
   useImperativeHandle(ref, () => actions);
+  function captureFocusInteraction() {
+    if (!controller.getSnapshot().closePrompt) focusInteraction.current++;
+  }
+  useEffect(() => {
+    const document = root.current?.ownerDocument;
+    const onExternalTab = (event: globalThis.KeyboardEvent) => {
+      if (
+        event.key === 'Tab' &&
+        !root.current?.contains(event.target as Node) &&
+        !controller.getSnapshot().closePrompt
+      )
+        focusInteraction.current++;
+    };
+    document?.addEventListener('keydown', onExternalTab, true);
+    return () => document?.removeEventListener('keydown', onExternalTab, true);
+  }, [controller]);
   function pasteFiles(event: React.ClipboardEvent | React.KeyboardEvent) {
     if (
       !checkout ||
@@ -851,7 +883,20 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       {...stylex.props(workbench.document, styles.root)}
       aria-label="Moonbase editor"
       tabIndex={-1}
+      onPointerDownCapture={captureFocusInteraction}
       onKeyDownCapture={actions.keyDown}
+      onFocusCapture={(event) => {
+        const from = event.relatedTarget;
+        // Programmatic entry from outside chrome is newer input; keep automatic menu/dialog return eligible.
+        if (
+          from instanceof Element &&
+          from.isConnected &&
+          from !== document.body &&
+          !event.currentTarget.contains(from) &&
+          !from.closest('[role="menu"], [role="dialog"]')
+        )
+          captureFocusInteraction();
+      }}
       onKeyUp={actions.keyUp}
       onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget)) setRecent(null);
