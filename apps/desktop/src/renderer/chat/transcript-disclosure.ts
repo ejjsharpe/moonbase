@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useContext, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import type { ChatController, TranscriptViewAnchor } from '@moonbase/application/chat';
 import type { ChatTranscriptMatch, ChatTranscriptSource } from '@moonbase/contracts/chat';
 import { getTranscriptDisclosureId } from '../../chat/transcript-source.ts';
+import { TranscriptViewSaver } from './transcript-view-saving.ts';
 
 /** An anchor's identity without its viewport offset. */
 export function getAnchorKey(anchor: TranscriptViewAnchor) {
@@ -35,6 +36,7 @@ export function useDisclosure({
   match: ChatTranscriptMatch | null;
   controller: ChatController;
 }) {
+  const saver = useContext(TranscriptViewSaver);
   const disclosure = useMemo(() => getTranscriptDisclosureId(entryId, id), [entryId, id]);
   const [resolved, setResolved] = useState<{ disclosure: typeof disclosure; value: string } | null>(
     null,
@@ -72,6 +74,8 @@ export function useDisclosure({
     if (!expansion) return;
     const collapse = pressedOpen.current ?? open;
     pressedOpen.current = null;
+    // A reading anchor still queued from scrolling is the one this rewrite must keep.
+    saver.flush();
     const { view, find } = controller.getSnapshot().transcript;
     const active = find.active;
     const inside =

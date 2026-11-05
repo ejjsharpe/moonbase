@@ -23,12 +23,12 @@ import { isReadingNodePinned, subscribeReadingChanges } from './reading-pin.ts';
 import { Entry, type EntryProps } from './transcript-entry.tsx';
 import { useTranscriptActions } from './transcript-actions.ts';
 import { getAnchorKey } from './transcript-disclosure.ts';
-import { useSourceGroups, useStableValue } from './stable-props.ts';
+import { groupBySource } from './stable-props.ts';
 import { TranscriptScroller, getReadingTop } from './transcript-geometry.ts';
+import { TranscriptViewSaver, createViewSaver } from './transcript-view-saving.ts';
 import { transcriptStyles as styles } from './transcript-styles.ts';
 import {
   createTranscriptScroll,
-  isSameAnchor,
   transitionTranscriptScroll,
   type TranscriptScroll,
   type TranscriptScrollEvent,
@@ -37,8 +37,6 @@ import {
 
 /** The application's newest window holds this many rows; live output can hide its oldest. */
 const windowRows = transcriptLimits.displayedRows;
-/** A scroll-captured reading anchor is saved to view memory once scrolling rests this long. */
-const viewSaveDelayMs = 150;
 const controlSelector = 'button, a[href], summary, [role="button"], input, select, label';
 
 export function Transcript({
@@ -67,7 +65,8 @@ export function Transcript({
   useLayoutEffect(() => {
     current.current = state;
   }, [state]);
-  const views = useViewSaving(controller, latestState.selected);
+  const [views] = useState(() => createViewSaver(controller));
+  useEffect(() => views.flush, [views]);
   const dispatch = useCallback(
     function dispatch(event: TranscriptScrollEvent) {
       const previous = scrollState.current;
@@ -148,8 +147,8 @@ export function Transcript({
   useLayoutEffect(() => {
     const anchor = state.transcript.view.anchor,
       { find } = current.current.transcript;
-    // This view's own saves need no re-application.
-    if (!anchor || views.isOwn(anchor)) return;
+    // This view's own saves, and rewrites of an unchanged anchor, need no re-application.
+    if (!anchor || !views.receive(anchor)) return;
     views.cancel();
     const reveal =
       find.revealing &&
@@ -300,9 +299,10 @@ export function Transcript({
       onPointerDown={(event) => {
         // A press on the scroller itself is on its scrollbar; touch can drag-scroll anywhere.
         const away = event.target === event.currentTarget || event.pointerType === 'touch';
+        // Disclosure triggers change the content around the reader, so they hold its anchor.
         const control =
-          !away && event.target instanceof Element && !!event.target.closest(controlSelector);
-        input(control ? 'control' : 'pointer', away);
+          !away && event.target instanceof Element ? event.target.closest(controlSelector) : null;
+        input(control && !control.hasAttribute('aria-expanded') ? 'control' : 'pointer', away);
       }}
       {...stylex.props(styles.transcript)}>
       <div ref={content} {...stylex.props(styles.measure)}>
@@ -447,16 +447,18 @@ export function Transcript({
   );
   return (
     <TranscriptScroller.Provider value={root}>
-      <StoredImages
-        native={native}
-        enabled={
-          latestState.ready &&
-          !['inactive', 'reconnecting', 'failed'].includes(latestState.transcript.observation)
-        }
-        fallback={root}
-        onReadingSourceChange={setImageSource}>
-        {body}
-      </StoredImages>
+      <TranscriptViewSaver.Provider value={views}>
+        <StoredImages
+          native={native}
+          enabled={
+            latestState.ready &&
+            !['inactive', 'reconnecting', 'failed'].includes(latestState.transcript.observation)
+          }
+          fallback={root}
+          onReadingSourceChange={setImageSource}>
+          {body}
+        </StoredImages>
+      </TranscriptViewSaver.Provider>
     </TranscriptScroller.Provider>
   );
 }
@@ -465,11 +467,9 @@ type RowProps = Omit<EntryProps, 'entry' | 'liveState' | keyof SharedRowProps>;
 type SharedRowProps = Pick<EntryProps, 'controller' | 'cache' | 'native' | 'actions' | 'evidence'>;
 /** Slices transcript state per row, in values that keep their identity while unchanged. */
 function useRowProps(transcript: ChatState['transcript']) {
-  const contents = useSourceGroups(transcript.content);
-  const matches = useSourceGroups(transcript.find.matches);
-  const { anchor } = transcript.view;
-  // Each view save decodes a fresh list.
-  const expanded = useStableValue(transcript.view.expanded);
+  const contents = useMemo(() => groupBySource(transcript.content), [transcript.content]);
+  const matches = useMemo(() => groupBySource(transcript.find.matches), [transcript.find.matches]);
+  const { anchor, expanded } = transcript.view;
   const anchorKey = useMemo(() => (anchor ? getAnchorKey(anchor) : null), [anchor]);
   const { active, revealing, query } = transcript.find;
   const { manifest, observation } = transcript;
@@ -486,8 +486,8 @@ function useRowProps(transcript: ChatState['transcript']) {
     return {
       manifest: manifest && key && JSON.stringify(manifest.source) === key ? manifest : null,
       anchorPart: anchored ? (anchor.partId ?? null) : null,
-      anchorKey: anchored ? anchorKey : null,
-      finding: !!active,
+      // An active Find match takes over revealing from the reading anchor.
+      anchorKey: anchored && !active ? anchorKey : null,
       findMatch,
       findRevealing: !!findMatch && revealing,
       findQuery: findMatch || findMatches.length ? query : '',
@@ -497,65 +497,6 @@ function useRowProps(transcript: ChatState['transcript']) {
       offline,
     };
   };
-}
-
-/**
- * Saves the reading anchor to view memory. Saves captured while scrolling wait until it rests, so
- * scrolling publishes nothing per event; navigation flushes them and jumping to latest drops them.
- */
-function useViewSaving(controller: ChatController, selected: ChatState['selected']) {
-  const [selection] = useState(() => JSON.stringify(selected));
-  const [views] = useState(() => {
-    let pending: { anchor: TranscriptViewAnchor | null } | null = null,
-      timer: ReturnType<typeof setTimeout> | undefined,
-      deferred = false,
-      own: TranscriptViewAnchor | null | undefined;
-    const write = (anchor: TranscriptViewAnchor | null) => {
-      const { view } = controller.getSnapshot().transcript;
-      // Following saves no anchor on each update; only a change needs a write.
-      if (!anchor && !view.anchor) return;
-      own = anchor;
-      controller.setTranscriptView({ anchor, expanded: view.expanded });
-    };
-    const cancel = () => {
-      clearTimeout(timer);
-      pending = null;
-    };
-    const flush = () => {
-      const saved = pending;
-      cancel();
-      // A row switch unmounts this view after the selection changed; its save would land there.
-      if (saved && JSON.stringify(controller.getSnapshot().selected) === selection)
-        write(saved.anchor);
-    };
-    return {
-      save(anchor: TranscriptViewAnchor | null) {
-        if (!deferred) {
-          cancel();
-          write(anchor);
-          return;
-        }
-        pending = { anchor };
-        clearTimeout(timer);
-        timer = setTimeout(flush, viewSaveDelayMs);
-      },
-      /** Runs `work` with its saves deferred until scrolling rests. */
-      deferring(work: () => void) {
-        deferred = true;
-        try {
-          work();
-        } finally {
-          deferred = false;
-        }
-      },
-      flush,
-      cancel,
-      /** Whether `anchor` is this view's last save, echoed back by the application. */
-      isOwn: (anchor: TranscriptViewAnchor) => own !== undefined && isSameAnchor(anchor, own),
-    };
-  });
-  useEffect(() => views.flush, [views]);
-  return views;
 }
 
 function getLiveIdentity(state: ChatState) {

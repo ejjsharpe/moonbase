@@ -2,6 +2,8 @@ import { test, expect, type Page } from '@playwright/test';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { readFindHighlight } from './find-highlight.ts';
+import type * as readingPins from '../src/renderer/chat/reading-pin.ts';
+type ReadingPins = typeof readingPins;
 const output = resolve('../../test-results/transcript-111');
 async function open(page: Page) {
   await page.goto('/?local&design&transcript');
@@ -10,8 +12,7 @@ async function open(page: Page) {
   await answer(page)
     .getByRole('button', { name: /^Activity/ })
     .click();
-  // Pressing a control keeps following the latest output.
-  await expect(page.getByRole('button', { name: 'Jump to latest', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Jump to latest', exact: true }).click();
 }
 const transcript = (page: Page) =>
   page.getByRole('region', { name: 'Chat transcript', exact: true });
@@ -618,8 +619,6 @@ test('incomplete/unknown/oversized code remains readable and copyable; late refe
     .toBe('const value = 1;\n'.repeat(17999) + 'const value = 1;');
   await live.getByRole('button', { name: /Show all 18000 lines/ }).click();
   await expect(live.getByRole('button', { name: 'Fold code', exact: true })).toBeVisible();
-  // Pressing a control kept following; a press on the text, as a reader selecting does, leaves it.
-  await live.locator('pre code').dispatchEvent('pointerdown');
   await live.locator('pre code').evaluate((element) => {
     const range = document.createRange();
     range.selectNodeContents(element);
@@ -2009,6 +2008,124 @@ test('scrolling and live progress re-render only the rows they change', async ({
   const renders = await rows.take();
   expect(renders.length).toBeGreaterThan(0);
   expect(renders.filter((id) => id !== 'live')).toEqual([]);
+});
+test('a row re-renders when its own disclosure, content or Find state changes', async ({
+  page,
+}) => {
+  const rows = await countRowRenders(page);
+  await open(page);
+  await settle(page);
+  await rows.take();
+  // Expanding Output changes the row's expanded state and loads its content.
+  await answer(page).getByRole('button', { name: 'Output', exact: true }).click();
+  await expect(answer(page).getByText(/Read more/)).toBeVisible();
+  await settle(page);
+  expect(await rows.take()).toContain('reading-179');
+  await page.evaluate(() => window.demo.transcript!.setEntry(179, ['Find the needle here.']));
+  await settle(page);
+  await rows.take();
+  await transcript(page).focus();
+  await page.keyboard.press('Control+f');
+  await page.getByRole('textbox', { name: 'Find in conversation', exact: true }).fill('needle');
+  await expect(page.getByRole('status').filter({ hasText: /1 of 1 match/ })).toBeVisible();
+  await settle(page);
+  expect(await rows.take()).toContain('reading-179');
+});
+test('a disclosure toggled before a scroll save lands keeps the scrolled reading position', async ({
+  page,
+}) => {
+  await open(page);
+  const saved = { entryId: 'reading-179', partId: 'm0.b0', offset: 16 };
+  await page.evaluate(
+    (anchor) => window.demo.application.chat!.setTranscriptView({ anchor, expanded: [] }),
+    saved,
+  );
+  await settle(page);
+  // Scroll, then toggle Activity in the same task: the scroll's save is still queued.
+  const scrolled = await transcript(page).evaluate((element) => {
+    element.scrollTop -= 300;
+    element.dispatchEvent(new Event('scroll'));
+    const toggle = [...element.querySelectorAll<HTMLButtonElement>('button')].find((button) =>
+      button.textContent?.startsWith('Activity'),
+    )!;
+    toggle.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    toggle.click();
+    return element.scrollTop;
+  });
+  await settle(page);
+  const after = await transcript(page).evaluate((element) => element.scrollTop);
+  expect(Math.abs(after - scrolled)).toBeLessThan(2);
+  const anchor = await page.evaluate(
+    () => window.demo.application.chat!.getSnapshot().transcript.view.anchor,
+  );
+  expect(anchor).not.toEqual(saved);
+});
+test('Copy keeps following live output; a disclosure press holds the reading position', async ({
+  page,
+}) => {
+  await open(page);
+  await page.evaluate(() => window.demo.transcript!.live('Streaming output'));
+  const jump = page.getByRole('button', { name: 'Jump to latest', exact: true });
+  await expect(jump).toHaveCount(0);
+  await page.locator('[data-transcript-live]').getByRole('button', { name: 'Copy text' }).click();
+  await page.evaluate(() => window.demo.transcript!.live('Streaming output, continued'));
+  await expect(page.locator('[data-transcript-live]')).toContainText('continued');
+  await expect(jump).toHaveCount(0);
+  await answer(page)
+    .getByRole('button', { name: /^Activity/ })
+    .click();
+  await expect(jump).toBeVisible();
+});
+test('reading pins share one set of document listeners, released with the last subscriber', async ({
+  page,
+}) => {
+  await page.goto('/?local&design&transcript');
+  const result = await page.evaluate(
+    async (path) => {
+      const added: string[] = [],
+        removed: string[] = [];
+      const add = document.addEventListener.bind(document),
+        remove = document.removeEventListener.bind(document);
+      document.addEventListener = ((type: string, ...rest: [EventListener]) => {
+        added.push(type);
+        add(type, ...rest);
+      }) as typeof document.addEventListener;
+      document.removeEventListener = ((type: string, ...rest: [EventListener]) => {
+        removed.push(type);
+        remove(type, ...rest);
+      }) as typeof document.removeEventListener;
+      const pins = (await import(/* @vite-ignore */ path)) as ReadingPins;
+      const node = document.createElement('p');
+      node.textContent = 'Pinned reading text';
+      document.body.append(node);
+      let first = 0,
+        second = 0;
+      const releaseFirst = pins.subscribeReadingChanges(() => first++);
+      const releaseSecond = pins.subscribeReadingChanges(() => second++);
+      const listening = [...added];
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      getSelection()!.removeAllRanges();
+      getSelection()!.addRange(range);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const pinned = pins.isReadingNodePinned(node);
+      releaseFirst();
+      const afterFirst = [...removed];
+      releaseSecond();
+      getSelection()!.removeAllRanges();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      document.addEventListener = add;
+      document.removeEventListener = remove;
+      return { listening, notified: [first, second], pinned, afterFirst, removed };
+    },
+    `/@fs${resolve('src/renderer/chat/reading-pin.ts')}`,
+  );
+  expect(result.listening).toEqual(['selectionchange', 'focusin', 'focusout']);
+  expect(result.notified[0]).toBeGreaterThan(0);
+  expect(result.notified[1]).toBe(result.notified[0]);
+  expect(result.pinned).toBe(true);
+  expect(result.afterFirst).toEqual([]);
+  expect(result.removed).toEqual(['selectionchange', 'focusin', 'focusout']);
 });
 test('footnotes render as plain references with a visually hidden label', async ({ page }) => {
   const errors: string[] = [];
