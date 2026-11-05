@@ -887,7 +887,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       onKeyDownCapture={actions.keyDown}
       onFocusCapture={(event) => {
         const from = event.relatedTarget;
-        // Traversal may start outside this view; keep automatic menu/dialog return eligible.
+        // Programmatic entry from outside chrome is newer input; keep automatic menu/dialog return eligible.
         if (
           from instanceof Element &&
           from.isConnected &&
