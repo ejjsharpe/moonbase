@@ -219,6 +219,7 @@ export function ChatView({
   );
   return (
     <div
+      data-chat-find-owner={JSON.stringify([controller.backendId, state.selected])}
       onKeyDown={(event) => openChatFind(event, controller)}
       {...stylex.props(workbench.page, styles.page)}>
       <div {...stylex.props(styles.workspace, !compact && styles.expandedWorkspace)}>

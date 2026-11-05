@@ -1640,3 +1640,92 @@ for (const late of ['reply', 'error'] as const)
       });
     }
   });
+
+for (const activation of ['Control+f', 'Meta+f', 'Find button'])
+  test(`R3 ${activation} refocuses an already-open Find bar after reading navigation`, async ({
+    page,
+  }) => {
+    await page.goto('/?local&design&transcript');
+    await page.getByRole('button', { name: /^Conversation/ }).click();
+    const region = page.getByRole('region', { name: 'Chat transcript', exact: true });
+    await region.focus();
+    await page.keyboard.press('Control+f');
+    const field = page.getByRole('textbox', { name: 'Find in conversation', exact: true });
+    await expect(field).toBeFocused();
+    await field.fill('Saved answer 0');
+    await expect(page.locator('[data-transcript-find-match]')).toHaveText('Saved answer 0');
+    await region.focus();
+    await page.keyboard.press('PageDown');
+    await expect(region).toBeFocused();
+    let previousTop = -1;
+    await expect
+      .poll(async () => {
+        const top = await region.evaluate((element) => element.scrollTop);
+        const settled = top > 0 && top === previousTop;
+        previousTop = top;
+        return settled;
+      })
+      .toBe(true);
+    await page.evaluate(async () => {
+      window.demo.chat.snapshot.message = 'Background update while reading';
+      window.demo.chat.controls.receiveChat(structuredClone(window.demo.chat.snapshot));
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      );
+    });
+    await expect(region).toBeFocused();
+    const before = await region.evaluate((element) => {
+      const state = window.demo.application.chat!.getSnapshot().transcript.find;
+      return {
+        top: element.scrollTop,
+        query: state.query,
+        active: state.active,
+        cutoff: state.upperEntryId,
+        revealing: state.revealing,
+      };
+    });
+    if (activation === 'Find button')
+      await region.getByRole('button', { name: 'Find', exact: true }).click();
+    else await page.keyboard.press(activation);
+    await page.screenshot({
+      path: resolve(
+        `../../test-results/find-114-r3/refocus-${activation.replaceAll(/[^a-z]/gi, '')}.png`,
+      ),
+    });
+    expect(
+      await page.evaluate(() => ({
+        open: window.demo.application.chat!.getSnapshot().transcript.find.open,
+        query: window.demo.application.chat!.getSnapshot().transcript.find.query,
+        tag: document.activeElement?.tagName,
+        label: document.activeElement?.getAttribute('aria-label'),
+      })),
+    ).toMatchObject({ open: true, query: 'Saved answer 0' });
+    await expect(field).toBeFocused();
+    const after = await region.evaluate((element) => {
+      const state = window.demo.application.chat!.getSnapshot().transcript.find;
+      return {
+        top: element.scrollTop,
+        query: state.query,
+        active: state.active,
+        cutoff: state.upperEntryId,
+        revealing: state.revealing,
+      };
+    });
+    expect(after).toEqual(before);
+    await field.press('End');
+    await page.keyboard.type('x');
+    await expect(field).toHaveValue('Saved answer 0x');
+    await expect
+      .poll(() =>
+        page.evaluate(() => window.demo.application.chat!.getSnapshot().transcript.find.query),
+      )
+      .toBe('Saved answer 0x');
+    await expect(field).toBeFocused();
+    const composer = page.getByRole('textbox', { name: 'Message', exact: true });
+    await composer.focus();
+    for (const key of ['Control+f', 'Meta+f']) {
+      await page.keyboard.press(key);
+      await expect(composer).toBeFocused();
+      await expect(field).toHaveValue('Saved answer 0x');
+    }
+  });

@@ -24,6 +24,7 @@ import type { TranscriptNative } from '../../chat/wire.ts';
 import { getTranscriptDisclosureId } from '../../chat/transcript-source.ts';
 import { Markdown, isReadingNodePinned } from './markdown.tsx';
 import { MarkdownCache } from './markdown-model.ts';
+import { activateChatFind } from './find.tsx';
 import {
   collectActivityEvidence,
   getActivityState,
@@ -525,7 +526,7 @@ export function Transcript({
             </Button>
             <Button
               {...stylex.props(controls.button, controls.quietButton)}
-              onClick={() => controller.openFind()}>
+              onClick={(event) => activateChatFind(controller, event.currentTarget)}>
               Find
             </Button>
             {transcript.later && (
