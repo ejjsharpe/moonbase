@@ -18,7 +18,6 @@
           "{workspaceRoot}/oxlint.config.mts",
           "{workspaceRoot}/oxfmt.config.mts",
           "{workspaceRoot}/scripts/**/*",
-          "{workspaceRoot}/docs/fixtures/headless-baseline/**/*",
           "{workspaceRoot}/{packages,apps,tests}/**/*",
           {
             "externalDependencies": [

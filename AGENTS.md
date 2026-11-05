@@ -1,25 +1,29 @@
 # Working on Moonbase
 
-Read the root README and the README of each module you change. Keep READMEs and agent instructions at their entry points; put supporting documentation in the owning app/package’s `docs/` folder, or root `docs/` for repository-wide guidance. For UI work, also read [DESIGN.md](docs/DESIGN.md).
+Moonbase is prerelease. The code and tests are the source of truth; docs only describe how things are today. Read the root README and the README of each module you change.
 
-## Modular design
+Nothing here is set in stone. If a task would be better served by changing the architecture, a design choice or a saved/wire format, propose it rather than working around it. Formats can change without migrations or compatibility shims unless the task asks for them.
 
-- Build reusable modules that can serve multiple clients. Packages own domain behavior; applications compose packages and supply platform integration, configuration and lifecycle.
-- Give each module a focused public interface that hides its implementation. Consume other modules through public exports. Keep domain rules in their owning module rather than duplicating them in UI, IPC or transport adapters.
-- Inject capabilities and dependencies. A module must be usable without importing a particular app, Electron shell or unrelated feature. Standalone editor and chat compositions install only their own capabilities.
-- Keep changes within scope. Reuse existing modules before adding abstractions; add flexibility only for a concrete consumer. Update affected public callers, tests and documentation together.
-- Name functions with verb phrases describing their action, such as `getMutationDestinations`, `findFile` or `saveDraft`. Use noun phrases for variables and types.
+## Structure
 
-## Runtime boundaries
+- Packages own behavior; apps compose packages and supply platform integration. Consume other modules through their public exports and inject dependencies rather than importing an app.
+- `bun run check:foundation` enforces the current package boundaries. If you intentionally change a boundary, change the checker in the same PR.
+- Keep changes in scope. Reuse existing modules before adding abstractions, and add flexibility only for a concrete consumer.
+- Name functions with verb phrases (`findFile`, `saveDraft`) and variables/types with noun phrases.
+- UI uses `packages/ui` StyleX tokens/recipes and Base UI. The tokens are the design reference.
 
-`packages/contracts` owns independent DTOs, schemas, errors and Effect service ports. `packages/application` owns headless editor/chat controllers, shared dispatch, cancellation, composition and lifecycle; `packages/workbench` owns project-scoped sidebar, buffer and editor presentation using a supplied editor controller and exact checkout. Applications own main navigation, project layout and separate Chat presentation. UI, keyboard, native and transport entry points use the same handlers. When changing dependency boundaries or public exports, read [the architecture](docs/HEADLESS-ARCHITECTURE.md); when changing feature acquisition, preservation or shutdown, read [application lifecycle](packages/application/docs/LIFECYCLE.md).
+## Testing
 
-Workspace, Pi and SSH expose focused Effect services/layers consuming contracts and own their validation, resources and domain rules. Shared normalization/release belongs to `packages/effect`; host authentication is the named `@moonbase/ssh/host-health` leaf. One `createMoonbaseApplication` owns each live client's runtime and feature scopes; privileged process roots own separate runtimes and acquire shared dependencies once. React receives browser-safe controllers. Buffers, rendering and pure editor calculations stay ordinary TypeScript. Pi Durable owns execution, transcripts and tasks. Use resource-appropriate concurrency so long work cannot block unrelated commands or Stop; keep the center small without another scheduler, event store or global command queue.
+- Test nontrivial behavior through public interfaces, including failure, cancellation and cleanup paths.
+- Tests use temporary directories, stores and repositories, faux providers and injected platform capabilities. Never read or write the real OS clipboard in tests; inject callbacks.
 
-## Verification and safety
+## Safety
 
-Test nontrivial behavior through public interfaces, including loss/conflict/uncertainty, disposal and exact local/remote identities. Distinguish source checks, controlled integration, packaged execution and real/manual checks. Preserve dirty work, trust-boundary validation, required notices and observable errors.
+- Never lose a user's unsaved work, and never delete or overwrite real user data or state outside temporary test locations.
+- Keep credentials and host keys out of the repository, logs, URLs, process arguments and renderer code.
+- Don't spend real provider quota, connect to an SSH host the user hasn't named, or bypass SSH host-key checking without explicit authorization.
+- Don't deploy, publish releases or merge PRs.
 
-Use `packages/ui` StyleX tokens/recipes and Base UI interactions. Keep PRs focused on module boundaries, fix issues in their owning module and link PRs with T3 when available.
+## PRs and docs
 
-No legacy-state import or deletion, real-provider quota without explicit authorization, unspecified SSH host, host-key bypass, deployment or GitHub PR merges.
+Use Conventional Commit PR titles and link PRs with T3 when available. Keep docs short. Put provenance, test logs and handoff notes in PR descriptions, not committed docs.

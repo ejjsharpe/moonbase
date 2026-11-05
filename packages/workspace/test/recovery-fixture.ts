@@ -30,9 +30,9 @@ export function fixture() {
   mkdirSync(root);
   execFileSync('/usr/bin/git', ['init', '-q', '-b', 'main', root]);
   writeFileSync(join(root, 'file.txt'), 'original');
-  const start = (filesystemHelper = binary, live = WorkspaceLive) => {
+  const start = (filesystemHelper = binary) => {
     const runtime = ManagedRuntime.make(
-      live({ dataDirectory, hostId: 'review-host', filesystemHelper }),
+      WorkspaceLive({ dataDirectory, hostId: 'review-host', filesystemHelper }),
     );
     return { runtime, client: makeEditorClient(runtime) };
   };
