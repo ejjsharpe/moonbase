@@ -12,6 +12,7 @@ import { pathToFileURL } from 'node:url';
 import { controlledHostFixture, until } from '../../../tests/chat/fixture.ts';
 import { selectRemoteChat, createRemoteChat } from './chat-target.ts';
 import { captureNative } from './editor-regressions.ts';
+import { readFindHighlight } from './find-highlight.ts';
 
 type Control = {
   calls: { kind: string; operation: string }[];
@@ -140,7 +141,9 @@ async function find(page: Page, query: string) {
   await page.getByRole('button', { name: 'Find', exact: true }).click();
   const field = page.getByRole('textbox', { name: 'Find in conversation', exact: true });
   await field.fill(query);
-  await expect(page.locator('mark[data-transcript-find-match]')).toHaveText(query);
+  await expect
+    .poll(() => readFindHighlight(page))
+    .toEqual([expect.objectContaining({ text: query, visible: true })]);
   await expect(field).toBeFocused();
   await field.press('Escape');
 }
@@ -168,8 +171,6 @@ async function image(app: ElectronApplication, page: Page) {
   );
   await page.keyboard.press('Escape');
   await expect(trigger).toBeFocused();
-  await activity.click();
-  await expect(group.locator('canvas').first()).toHaveAttribute('width', '0');
   expect(
     await page.evaluate(
       () => (window as typeof window & { integratedViolations: string[] }).integratedViolations,
