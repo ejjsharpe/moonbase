@@ -2042,6 +2042,118 @@ test('repeated Disconnect shares actual watch close and sends one command', asyn
   assert.equal(f.calls.filter((call) => call.operation === 'disconnect').length, 1);
 });
 
+for (const stage of ['rpc', 'status'] as const)
+  for (const changedId of [false, true])
+    test(`obsolete Disconnect ${stage} failure cannot overwrite a replacement ${changedId ? 'new' : 'same'} connection`, async (t) => {
+      const f = await fixture(t),
+        entered = event(),
+        held = event();
+      await ready(f);
+      const previous = f.controller.getSnapshot().connection!;
+      assert(previous.state === 'connected');
+      const original = f.connection.command;
+      f.connection.command = async (operation, input, options) => {
+        if (operation === 'disconnect') {
+          const result = await original(operation, input, options);
+          if (stage !== 'rpc') return result;
+        } else if (operation !== 'getConnection' || stage !== 'status')
+          return original(operation, input, options);
+        entered.resolve();
+        await held.promise;
+        throw new ApplicationError({
+          code: 'Unavailable',
+          message: 'Obsolete Disconnect response failed',
+        });
+      };
+      const disconnecting = f.controller.disconnect();
+      try {
+        await entered.promise;
+        f.publishConnection({
+          ...previous,
+          connectionId: changedId ? 'R3-new-owner' : previous.connectionId,
+        });
+        await f.controller.refresh();
+        assert.equal(f.controller.getSnapshot().ready, true);
+        assert.equal(f.controller.getSnapshot().error, null);
+        const replacement = f.controller.getSnapshot();
+        held.resolve();
+        await disconnecting;
+        assert.equal(f.controller.getSnapshot().ready, true);
+        assert.equal(f.controller.getSnapshot().connection, replacement.connection);
+        assert.equal(f.subscriptions, 1);
+        assert.equal(
+          f.controller.getSnapshot().error,
+          null,
+          'old command error must not publish over a newer verified owner',
+        );
+      } finally {
+        held.resolve();
+        await disconnecting;
+      }
+    });
+
+for (const stage of ['rpc', 'status'] as const)
+  for (const hide of [false, true])
+    test(`current Disconnect ${stage} failure remains visible ${hide ? 'across Hide' : 'while attached'}`, async (t) => {
+      const f = await fixture(t),
+        entered = event(),
+        held = event();
+      await ready(f);
+      const original = f.connection.command;
+      f.connection.command = async (operation, input, options) => {
+        if (operation === 'disconnect') {
+          const result = await original(operation, input, options);
+          if (stage !== 'rpc') return result;
+        } else if (operation !== 'getConnection' || stage !== 'status')
+          return original(operation, input, options);
+        entered.resolve();
+        await held.promise;
+        throw new ApplicationError({
+          code: 'Unavailable',
+          message: 'Current Disconnect response failed',
+        });
+      };
+      const disconnecting = f.controller.disconnect();
+      try {
+        await entered.promise;
+        if (hide) await f.controller.detach();
+      } finally {
+        held.resolve();
+        await disconnecting;
+      }
+      assert.match(f.controller.getSnapshot().error!, /Current Disconnect response failed/);
+      assert.equal(f.calls.filter((call) => call.operation === 'disconnect').length, 1);
+      assert(!f.calls.some((call) => ['sendChat', 'stopChat'].includes(call.operation)));
+    });
+
+for (const changedId of [false, true])
+  test(`Disconnect cannot migrate to a replacement from its admission publication (${changedId ? 'new' : 'same'} ID)`, async (t) => {
+    const f = await fixture(t);
+    await ready(f);
+    const previous = f.controller.getSnapshot().connection!;
+    assert(previous.state === 'connected');
+    let replaced = false;
+    const off = f.controller.subscribe(() => {
+      if (!replaced && f.controller.getSnapshot().active.includes('disconnect')) {
+        replaced = true;
+        if (changedId) f.publishConnection({ ...previous, connectionId: 'admission-replacement' });
+        else {
+          void f.controller.detach();
+          void f.controller.start();
+        }
+      }
+    });
+    try {
+      await f.controller.disconnect();
+      await f.controller.refresh();
+    } finally {
+      off();
+    }
+    assert(replaced);
+    assert.equal(f.calls.filter((call) => call.operation === 'disconnect').length, 0);
+    assert.equal(f.controller.getSnapshot().ready, true);
+  });
+
 test('a held Disconnect status read cannot replace a newer watched generation', async (t) => {
   const f = await fixture(t),
     held = event<unknown>(),
