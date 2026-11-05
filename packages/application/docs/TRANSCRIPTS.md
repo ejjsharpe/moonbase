@@ -26,11 +26,7 @@ controller.setTranscriptView({
 
 The readonly `controller.backendId` is the composition's backend identity; capture it with the source, rather than replacing it with the current backend when restoring. Foreign backend/target/source input rejects before changing memory. A synthetic `entryId: 'live'` rejects and never dispatches around-entry navigation. Other opaque durable IDs are validated by the authorized around-entry read, including anchors evicted from the current window. Presentation (#111) owns DOM capture/restoration, following at the bottom and automatic near-top loading; no renderer view-memory owner is needed.
 
-For live anchors, `transcript.viewStatus` is `pending`, `ready`, `source-changed` or `unavailable`, with `viewError: string | null`. Apply the saved live offset/expansions only at `ready`; this authorizes view restoration, not a native clipboard write. Pending restoration waits for a coherent matching observation; reconnecting evidence cannot authorize it. An exact available descriptor proves the saved part immediately. Appended revisions or parts beyond the first-four preview use one bounded content chunk of the original fixed selection, with the existing bounded fresh-prefix proof checks if observations supersede that read. This does not hydrate the content cache or iterate the whole part. Unchanged DTOs and offset/expansion changes reuse the proof. Proof completion stays private through iterator cleanup; the owning job rechecks current source/anchor/evidence synchronously with its final publication. If an observation supersedes that completion, it reports `source-changed` with `viewError`, requiring explicit recapture/reload. It cannot finish at `pending` without owned work or a pending coherent observation, and it does not reset proof budgets by automatically requeuing.
-
-History temporarily defers a pending live proof. Winning history and hydration job completions recheck the current live anchor after their final publication and resume its bounded proof once the history dependency is gone. A subscriber can replace the anchor or admit newer navigation during publication; the old completion cannot bypass that current dependency. A cancelled/superseded job cannot resume work, clear a newer error or delete the newer job. Proof completion never retries itself, and unrelated hydration does not retry explicit proof failure. Thus `pending` means an owned proof, an owned history dependency or a pending coherent observation.
-
-Retired/replaced/finalized sources retain the captured anchor and explicit error, without applying expansions to a replacement. No text/task-based or automatic live-to-committed mapping is performed, including for tool parts with an explicit committed reference. `jumpToLatest()` explicitly clears a live anchor and its expansions; explicit recapture/reload retries a failed proof. Repeated progress does not silently retry failure. Historical navigation replaces live view memory with its durable anchor. Durable restoration continues to use navigation `loading`/`error` and around-entry reads; it does not use live `viewStatus` as authority. Missing anchors and failed reads remain visible; no mutation/retry/Stop is synthesized.
+Saved anchors and expansions are best-effort view hints. Try the saved row/part and relative offset even when its text changed; if absent, presentation uses a nearby available row in the same exact backend/conversation. Once the reader navigates, their new position wins. Live source and selection fields retain their captured identity for location/expansion keys, but do not grant content authority. View restoration performs no live content read or prefix proof and has no proof-readiness/error state. Durable anchors outside the window use the existing around-entry read; true navigation/loading errors remain in `transcript.error`. `jumpToLatest()` clears a live anchor and its expansions. No mutation, retry or Stop is synthesized.
 
 ## Progressive content
 
@@ -139,59 +135,6 @@ Qualification for this correction used Node `v26.13.0` and Bun `1.4.4` in the sa
 
 Evidence remains source/controlled only. Native foreground, packaged/manual presentation and final clipboard writes were not exercised for this correction.
 
-### Live-part view memory consumption correction
+## Simplified view restoration on current main
 
-This focused correction starts at approved `1f20726b98245a37b544f9a1119ff69d23cd34ff`, retaining runtime prerequisite `23303e0432a60f7e5863d235086ed7ef5e657b65`. The public application regression first failed with `Invalid transcript view` before the live anchor variant existed: `/tmp/moonbase-110-live-anchor-red.log`.
-
-The 23 public regressions in `test/transcript-live-view.test.ts` cover panel and named-controller replacement with identical public IDs on different backends; fresh application versus restored draft selection; exact backend/host/store/actor/conversation and submission/task/attempt/incarnation checks; reconnecting-to-connected proof, appended prefixes and cloned DTO reuse; parts beyond the summary preview; unavailable, replaced and finalized sources; explicit proof retry; synthetic durable rejection; held proof retirement/navigation cancellation; drafting/Stop independence and actual cleanup settlement; and bounded, mutation-independent view memory. The approved history/navigation/Copy/cleanup regressions remain unchanged. No runtime, contracts, desktop, saved-schema, baseline fixture or dependency change is included.
-
-Qualification used Node `v26.13.0` / Bun `1.4.4` in the same isolated checkout. Heavy source/process and controlled integration suites ran serially.
-
-| Command | Result / evidence |
-| --- | --- |
-| `node --experimental-strip-types --test --test-concurrency=1 packages/application/test/transcript.test.ts packages/application/test/transcript-live-view.test.ts packages/application/test/application.test.ts packages/application/test/chat-controller.test.ts` | 183/183; `/tmp/moonbase-110-live-anchor-focused.log` |
-| `NX_DAEMON=false bun run typecheck` | 8 tasks passed; `/tmp/moonbase-110-live-anchor-typecheck.log` |
-| `bun run lint`; `bun run format:check`; `git diff --check` | Pass; `/tmp/moonbase-110-live-anchor-{lint,format}.log` |
-| `bun run check:foundation` | Pass, 281 browser inputs and unchanged saved-byte fixtures; `/tmp/moonbase-110-live-anchor-foundation.log` |
-| `NX_DAEMON=false bun run test` | 8 tasks passed; `/tmp/moonbase-110-live-anchor-source.log` |
-| `bun run test:chat-integration` | 12/12, including public controlled local/remote progress; `/tmp/moonbase-110-live-anchor-chat-integration.log` |
-
-No foreground/dev app, packaged/manual UI, final clipboard write, real provider/SSH, legacy operation, PR update/push or delegation was used. #111 consumes the additive `/chat` anchor types, readonly backend ID and live restoration status described above; it retains native final-write authority. Unproved retirement never maps to a committed entry automatically, and indefinitely superseded prefix proofs remain an explicit bounded uncertainty.
-
-### R4 live-proof completion ownership correction
-
-Based on `ee45a5399e005e1dfe7740320dbe9badd2241404` (change base `1f20726b98245a37b544f9a1119ff69d23cd34ff`, runtime prerequisite `23303e0432a60f7e5863d235086ed7ef5e657b65`). The public finite-append regression failed at microtask 12 before the fix: restoration finished at `pending` after the only content read settled, with no error or owned work. Red evidence: `/tmp/moonbase-110-r4-red.log`.
-
-Proof success/failure now stays private through all iterator cleanup. The existing job's final identity fence invokes a synchronous completion check immediately before publication. It validates the captured source/anchor and the winning observed evidence, then publishes `ready` or explicit `source-changed`/`viewError`. Supersession at this last boundary requires explicit recapture/reload; it does not start another proof with a reset budget. Cancellation and terminal/superseded owners cannot publish an obsolete success or error. The public surface, runtime/Copy implementation, cache budgets and saved bytes are unchanged.
-
-Four new public tests cover 100 finite-append microtask schedules (including explicit retry and fixed-selection/read bounds), 30 terminal authority/selection supersession schedules, and cancelled held proof IO with an independent failing watch close. All 27 live-view tests pass, as do the existing navigation/Copy/lifecycle regressions. The independent close error still rejects awaited application disposal while actual held IO remains owned through settlement. Green evidence: `/tmp/moonbase-110-r4-green.log`.
-
-| Command | Result / evidence |
-| --- | --- |
-| `node --experimental-strip-types --test --test-concurrency=1 packages/application/test/transcript.test.ts packages/application/test/transcript-live-view.test.ts packages/application/test/application.test.ts packages/application/test/chat-controller.test.ts` | 187/187; `/tmp/moonbase-110-r4-focused.log` |
-| `NX_DAEMON=false bun run typecheck` | 8 tasks passed; `/tmp/moonbase-110-r4-typecheck.log` |
-| `bun run lint`; `bun run format:check`; `git diff --check` | Pass; `/tmp/moonbase-110-r4-{lint,format}.log` |
-| `bun run check:foundation` | Pass, 281 browser inputs and unchanged saved-byte fixtures; `/tmp/moonbase-110-r4-foundation.log` |
-| `NX_DAEMON=false bun run test` | 8 tasks passed, 2 cached; `/tmp/moonbase-110-r4-source.log` |
-| `bun run test:chat-integration` | 12/12; `/tmp/moonbase-110-r4-chat-integration.log` |
-
-Evidence is source/controlled only, using Node `v26.13.0` / Bun `1.4.4` in the same isolated checkout. Heavy source/process and controlled integration suites ran serially. No foreground/native/package/manual UI, final clipboard write, real provider/SSH, legacy operation, PR update/push, dependency or delegation was used. #111 keeps its existing `ready` gate and native final-write authority; no public signature change is required.
-
-### R5 deferred live restoration completion correction
-
-Based on `496e36961b1fd371000855ab301c65c380a73f71`, retaining runtime prerequisite `23303e0432a60f7e5863d235086ed7ef5e657b65`. Both public 640-entry reproductions failed before the fix: failed earlier navigation after cancelling a held live proof, followed by successful durable hydration; and a live anchor captured by a synchronous subscriber during successful history publication. They quiesced at `pending` after 20 event-loop turns. The first case covers both late success and late failure of the cancelled proof. Red evidence: `/tmp/moonbase-110-r5-red.log`.
-
-The existing winning-job finalizer now hands off deferred restoration after publishing completion. It reuses the existing current-anchor/source/history admission checks and bounded proof owner. This applies once at the shared read completion point, including hydration; proof jobs are excluded from self-requeue. The R4 proof-through-cleanup/final-publication fence and explicit supersession uncertainty remain unchanged. No public signature, runtime, contracts, UI, saved data, cache budget or dependency changes are included.
-
-Nine new public tests cover both reproductions; old history success/error while newer history and a fresh proof are held; preservation of the winning navigation error; reconnecting observation dependency, terminal `Unauthorized` and Hide; and hydration completion after explicit proof failure without automatic retry. All 36 live-view tests pass. Green evidence: `/tmp/moonbase-110-r5-green.log`. Resource-heavy source/process and controlled integration checks remain serial; #111 retains its current `ready` gate and native clipboard authority.
-
-| Command | Result / evidence |
-| --- | --- |
-| `node --experimental-strip-types --test --test-concurrency=1 packages/application/test/transcript.test.ts packages/application/test/transcript-live-view.test.ts packages/application/test/application.test.ts packages/application/test/chat-controller.test.ts` | 196/196; `/tmp/moonbase-110-r5-focused.log` |
-| `NX_DAEMON=false bun run typecheck` | 8 tasks passed; `/tmp/moonbase-110-r5-typecheck.log` |
-| `bun run lint`; `bun run format:check`; `git diff --check` | Pass; `/tmp/moonbase-110-r5-{lint,format}.log` |
-| `bun run check:foundation` | Pass, 281 browser inputs and unchanged saved-byte fixtures; `/tmp/moonbase-110-r5-foundation.log` |
-| `NX_DAEMON=false bun run test` | 8 tasks passed, 2 cached; `/tmp/moonbase-110-r5-source.log` |
-| `bun run test:chat-integration` | 12/12; `/tmp/moonbase-110-r5-chat-integration.log` |
-
-Evidence is source/controlled only, using Node `v26.13.0` / Bun `1.4.4` in the same isolated checkout. No foreground/native/package/manual UI, final clipboard write, real provider/SSH, legacy operation, PR update/push, dependency or delegation was used. Pending reconnecting evidence still waits for a coherent observation; explicit failed/superseded proof still requires explicit recapture/reload. No public signature change is required.
+Transferred only `23303e0..51a3c54` onto `af7e7922a8eb8954f4d285245aa9a6ea85f93c28`; squashed foundation fixes were not replayed. The original navigation and renderer heads remain preserved. View-only prefix-proof jobs and their tests were replaced by public best-effort memory tests; all complete-source iterator proof tests remain. Backend/conversation validation, bounded memory, panel/target lifetime and restart behavior remain covered. Renderer fallback and user-navigation behavior belong to #111.
