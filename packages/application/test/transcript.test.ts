@@ -1282,3 +1282,33 @@ test('navigation at an unavailable boundary or failed observation does not move 
   assert.equal(f.calls.length, reads);
   assert.match(failed.transcript.error!, /observation authority revoked/);
 });
+
+test('large part manifests release descriptors before evicting navigable history', async (t) => {
+  const f = await transcriptController(t, 640);
+  const source = f.entries[320].transcript!.source;
+  f.fixture.sources.set(JSON.stringify(source), {
+    source,
+    data: Array.from({ length: 300 }, () => 'part'),
+  });
+  f.entries[320].transcript = {
+    source,
+    parts: Array.from({ length: 4 }, (_, index) => part(`m0.b${index}`, 'part')),
+    nextCursor: '4',
+    thinking: 'none',
+  };
+  await f.controller.jumpToEntry('e320');
+  for (let index = 0; index < 10; index++) await f.controller.loadTranscriptManifest(source);
+  const seen = new Set<string>();
+  for (let index = 0; index < 100; index++) {
+    const state = f.controller.getSnapshot().transcript;
+    for (const entry of state.entries) seen.add(entry.id);
+    assert.equal(state.error, null);
+    assert(state.retained.summaries <= transcriptLimits.summaryRecords);
+    if (!state.earlier) break;
+    await f.controller.older();
+  }
+  assert.deepEqual(
+    f.entries.slice(0, 321).filter((entry) => !seen.has(entry.id)),
+    [],
+  );
+});

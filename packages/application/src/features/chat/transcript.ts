@@ -283,16 +283,7 @@ export class TranscriptOwner {
       usage.summaries > transcriptLimits.summaryRecords ||
       usage.summaryBytes > transcriptLimits.summaryBytes
     ) {
-      const pinned = this.state.view.anchor?.entryId;
-      const indices = this.records.map((_, index) => index);
-      if (direction === 'later') indices.reverse();
-      const index = indices.find((index) => pinned !== this.records[index].id);
-      if (index !== undefined) {
-        this.records.splice(index, 1);
-        if (index < this.start) this.start--;
-        if (direction === 'earlier') this.newerEnd = false;
-        else this.olderEnd = false;
-      } else if (this.state.manifest?.parts.length) {
+      if (this.state.manifest?.parts.length) {
         this.state = {
           ...this.state,
           manifest: {
@@ -301,7 +292,22 @@ export class TranscriptOwner {
             omittedParts: this.state.manifest.omittedParts + 1,
           },
         };
-      } else break;
+      } else {
+        const pinned = this.state.view.anchor?.entryId;
+        const indices = this.records.map((_, index) => index);
+        if (direction === 'later') indices.reverse();
+        const index =
+          indices.find(
+            (index) =>
+              pinned !== this.records[index].id &&
+              (index < this.start || index >= this.start + transcriptLimits.displayedRows),
+          ) ?? indices.find((index) => pinned !== this.records[index].id);
+        if (index === undefined) break;
+        this.records.splice(index, 1);
+        if (index < this.start) this.start--;
+        if (direction === 'earlier') this.newerEnd = false;
+        else this.olderEnd = false;
+      }
       usage = this.summaryUsage();
     }
     while (this.contents.size > 128) this.contents.delete(this.contents.keys().next().value!);
