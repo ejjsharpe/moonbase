@@ -340,6 +340,7 @@ test('portal typing and paste do not import files or navigate the explorer', asy
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await row(page, 'README.md').click({ button: 'right' });
+  await expect(item(page, 'Rename')).toBeFocused();
   await page.keyboard.press('Meta+v');
   await menu(page).evaluate((element) =>
     element.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true })),
