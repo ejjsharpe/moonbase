@@ -89,7 +89,7 @@ test('canonical history traverses >2 overlapping pages, both continuations, evic
       state.entries.map((entry) => Number(entry.id.slice(1))).sort((a, b) => a - b),
     );
     if (!state.earlier) break;
-    await f.controller.older();
+    await f.controller.showEarlier();
     assert.equal(f.controller.getSnapshot().transcript.error, null);
   }
   assert.equal(seen.size, 640);
@@ -98,8 +98,8 @@ test('canonical history traverses >2 overlapping pages, both continuations, evic
   let state = f.controller.getSnapshot().transcript;
   assert(state.entries.some((entry) => entry.id === 'e320'));
   assert(state.earlier && state.later);
-  await f.controller.older();
-  await f.controller.later();
+  await f.controller.showEarlier();
+  await f.controller.showLater();
   state = f.controller.getSnapshot().transcript;
   assert(state.entries.some((entry) => entry.id === 'e320'));
   f.publish({ ...f.snapshot, state: 'running', message: 'latest changed' });
@@ -423,7 +423,7 @@ test('escaped summary data evicts at two MiB before the row limit without losing
     };
   });
   for (let i = 0; i < 25 && f.controller.getSnapshot().transcript.earlier; i++) {
-    await f.controller.older();
+    await f.controller.showEarlier();
     const state = f.controller.getSnapshot().transcript;
     assert.equal(state.error, null);
     assertBounds(state);
@@ -708,7 +708,7 @@ test('history traverses every entry backward and forward across summary eviction
           .map((entry) => entry.id),
       );
       if (!state[direction]) break;
-      await (direction === 'earlier' ? f.controller.older() : f.controller.later());
+      await (direction === 'earlier' ? f.controller.showEarlier() : f.controller.showLater());
     }
     assert.equal(seen.size, 640, direction);
     const state = f.controller.getSnapshot().transcript;
@@ -758,7 +758,7 @@ test('disjoint coalesced latest snapshots leave all retained history reachable i
           .map((entry) => entry.id),
       );
       if (!state[direction]) break;
-      await (direction === 'earlier' ? f.controller.older() : f.controller.later());
+      await (direction === 'earlier' ? f.controller.showEarlier() : f.controller.showLater());
     }
     assert.equal(seen.size, 128, direction);
     assert.equal(f.controller.getSnapshot().transcript[direction], false);
@@ -785,7 +785,7 @@ test('disjoint latest updates preserve an around-entry anchor and bridge to late
   assert.equal(f.controller.getSnapshot().transcript.entries, before.entries);
   assert.deepEqual(f.controller.getSnapshot().transcript.view, before.view);
   assert.equal(f.calls.length, reads);
-  await f.controller.older();
+  await f.controller.showEarlier();
   const seen = new Set<string>();
   for (let step = 0; step < 100; step++) {
     const state = f.controller.getSnapshot().transcript;
@@ -793,7 +793,7 @@ test('disjoint latest updates preserve an around-entry anchor and bridge to late
     assert.equal(state.error, null);
     assertBounds(state);
     if (!state.later) break;
-    await f.controller.later();
+    await f.controller.showLater();
   }
   assert.equal(seen.size, 640);
   assert.equal(f.controller.getSnapshot().transcript.atLatest, true);
@@ -814,7 +814,7 @@ test('held older navigation keeps its captured window through a disjoint latest 
     return page;
   });
   try {
-    const reading = f.controller.older();
+    const reading = f.controller.showEarlier();
     await entered.promise;
     assert.equal(upper, 'e63');
     appendTranscriptEntries(f, 128);
@@ -842,7 +842,7 @@ test('held older navigation keeps its captured window through a disjoint latest 
         assert.equal(state.error, null);
         assertBounds(state);
         if (!state[direction]) break;
-        await (direction === 'earlier' ? f.controller.older() : f.controller.later());
+        await (direction === 'earlier' ? f.controller.showEarlier() : f.controller.showLater());
       }
       assert.equal(f.controller.getSnapshot().transcript[direction], false);
     }
@@ -874,7 +874,7 @@ test('older navigation captures historical mode before a loading subscriber publ
     });
   });
   try {
-    await f.controller.older();
+    await f.controller.showEarlier();
     assert(published);
     const request = f.calls.find((call) => call.operation === 'getChatHistoryAround')!.input as {
       entryId: string;
@@ -922,7 +922,7 @@ for (const replacement of ['around', 'latest'] as const)
         return snapshot;
       });
       try {
-        const old = f.controller.older();
+        const old = f.controller.showEarlier();
         await oldEntered.promise;
         appendTranscriptEntries(f, 128);
         f.publish({
@@ -1006,7 +1006,7 @@ test('held anchor restoration preserves its upper bound and relative offset thro
     assert.equal(state.error, null);
     assert(state.later);
     for (let step = 0; step < 30 && f.controller.getSnapshot().transcript.later; step++)
-      await f.controller.later();
+      await f.controller.showLater();
     assert.equal(f.controller.getSnapshot().transcript.atLatest, true);
     assert.equal(f.controller.getSnapshot().transcript.entries.at(-1)!.id, f.entries.at(-1)!.id);
     assert.equal(f.controller.getSnapshot().transcript.error, null);
@@ -1019,19 +1019,19 @@ test('navigation at an unavailable boundary or failed observation does not move 
   const f = await transcriptController(t, 64);
   const latest = f.controller.getSnapshot(),
     calls = f.calls.length;
-  await f.controller.later();
+  await f.controller.showLater();
   assert.equal(f.controller.getSnapshot(), latest);
   assert.equal(f.calls.length, calls);
   await f.controller.jumpToEntry('e0');
   const beginning = f.controller.getSnapshot(),
     reads = f.calls.length;
-  await f.controller.older();
+  await f.controller.showEarlier();
   assert.equal(f.controller.getSnapshot(), beginning);
   assert.equal(f.calls.length, reads);
   f.fail(new ApplicationError({ code: 'Unauthorized', message: 'observation authority revoked' }));
   const failed = f.controller.getSnapshot();
-  await f.controller.older();
-  await f.controller.later();
+  await f.controller.showEarlier();
+  await f.controller.showLater();
   await f.controller.jumpToEntry('e10');
   await f.controller.jumpToLatest();
   assert.equal(f.controller.getSnapshot(), failed);
@@ -1061,7 +1061,7 @@ test('large part manifests release descriptors before evicting navigable history
     assert.equal(state.error, null);
     assertBounds(state);
     if (!state.earlier) break;
-    await f.controller.older();
+    await f.controller.showEarlier();
   }
   assert.deepEqual(
     f.entries.slice(0, 321).filter((entry) => !seen.has(entry.id)),
@@ -1113,10 +1113,10 @@ test('a delayed initial read must not supersede a newer explicit Latest navigati
 test('later navigation at the cached newer edge should advance the visible window', async (t) => {
   const f = await transcriptController(t, 640);
   for (let i = 0; i < 100 && f.controller.getSnapshot().transcript.earlier; i++)
-    await f.controller.older();
+    await f.controller.showEarlier();
   for (let i = 0; i < 100 && f.controller.getSnapshot().transcript.later; i++) {
     const before = f.controller.getSnapshot().transcript.entries.map((e) => e.id);
-    await f.controller.later();
+    await f.controller.showLater();
     const after = f.controller.getSnapshot().transcript;
     if (JSON.stringify(before) === JSON.stringify(after.entries.map((e) => e.id))) {
       assert.fail('Later returned the same visible window while later remained true');
@@ -1189,7 +1189,7 @@ test('capture before delayed initial read cancels restoration without losing old
       const s = f.controller.getSnapshot().transcript;
       s.entries.forEach((e) => seen.add(e.id));
       if (!s.earlier) break;
-      await f.controller.older();
+      await f.controller.showEarlier();
     }
     assert.equal(seen.size, 640);
   } finally {

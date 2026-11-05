@@ -838,7 +838,7 @@ test('replacement watch snapshots and overlapping legacy history keep output bou
     olderCursor: 'next-' + ++pageNumber,
   }));
   f.publish({ ...snapshot, olderCursor: 'page' });
-  for (let i = 0; i < 4; i++) await f.controller.older();
+  for (let i = 0; i < 4; i++) await f.controller.showEarlier();
   assert.equal(f.controller.getSnapshot().transcript.entries.length, 32);
   await f.controller.dispose();
 });

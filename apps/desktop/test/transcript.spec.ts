@@ -21,9 +21,9 @@ for (const pin of ['pointer', 'focus', 'selection'] as const)
       await open(page);
       await page.evaluate(async () => {
         const controller = window.demo.application.chat!;
-        for (let i = 0; i < 4; i++) await controller.older();
+        for (let i = 0; i < 4; i++) await controller.showEarlier();
         for (let i = 0; i < 8 && !controller.getSnapshot().transcript.atLatest; i++)
-          await controller.later();
+          await controller.showLater();
       });
       await expect(page.locator('[data-transcript-entry]')).toHaveCount(128);
       await transcript(page).dispatchEvent('wheel', { deltaY: 1 });
@@ -121,9 +121,9 @@ test('a durable reading anchor in the newest window keeps the generic live text 
   expect(boundary).toEqual({ following: false, later: false });
   await page.evaluate(async () => {
     const controller = window.demo.application.chat!;
-    for (let page = 0; page < 4; page++) await controller.older();
+    for (let page = 0; page < 4; page++) await controller.showEarlier();
     for (let page = 0; page < 8 && !controller.getSnapshot().transcript.atLatest; page++)
-      await controller.later();
+      await controller.showLater();
     const state = controller.getSnapshot().transcript;
     controller.setTranscriptView({
       anchor: { entryId: state.entries[0]!.id, partId: 'm0.b0', offset: 0 },
@@ -430,9 +430,9 @@ test('128-row reuse, unchanged sibling DOM, selection/focus and anchors during l
   await open(page);
   // Enter the maximum headless window through its public navigation, then return to its latest edge.
   await page.evaluate(async () => {
-    for (let i = 0; i < 4; i++) await window.demo.application.chat!.older();
+    for (let i = 0; i < 4; i++) await window.demo.application.chat!.showEarlier();
     for (let i = 0; i < 8 && !window.demo.application.chat!.getSnapshot().transcript.atLatest; i++)
-      await window.demo.application.chat!.later();
+      await window.demo.application.chat!.showLater();
   });
   await expect(page.locator('[data-transcript-entry], [data-transcript-live]')).toHaveCount(128);
   const before = await page.evaluate(() => {

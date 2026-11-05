@@ -119,8 +119,8 @@ export function Transcript({
           selection.removeAllRanges();
       }
       const pending = {
-        earlier: () => controller.older(),
-        later: () => controller.later(),
+        earlier: () => controller.showEarlier(),
+        later: () => controller.showLater(),
         latest: () => controller.jumpToLatest(),
         row: () => Promise.resolve(),
       }[navigation]();

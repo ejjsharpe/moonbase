@@ -520,9 +520,9 @@ test('a partially visible oldest image viewer remains stable when first live out
     );
     const controller = window.demo.application.chat!;
     await controller.jumpToLatest();
-    for (let index = 0; index < 4; index++) await controller.older();
+    for (let index = 0; index < 4; index++) await controller.showEarlier();
     for (let index = 0; index < 8 && !controller.getSnapshot().transcript.atLatest; index++)
-      await controller.later();
+      await controller.showLater();
   }, checker);
   await expect(page.locator('[data-transcript-entry]')).toHaveCount(128);
   const oldest = page.locator('[data-transcript-entry="image-row-52"]');

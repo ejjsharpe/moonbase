@@ -614,8 +614,8 @@ test('prepared controllers block all IO and state admissions while teardown sett
     current.setDraft('late');
     await current.select(chat.target);
     await current.closeView();
-    await current.older();
-    await current.later();
+    await current.showEarlier();
+    await current.showLater();
     await current.jumpToEntry('late');
     await current.jumpToLatest();
     current.setTranscriptView({ anchor: { entryId: 'late', offset: 0 }, expanded: ['late'] });

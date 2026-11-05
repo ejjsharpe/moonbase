@@ -29,7 +29,8 @@ import { makeProviderSetupController, type ProviderSetupController } from './pro
 import type { ProviderSetupClient } from '@moonbase/contracts/providers';
 import { decodeSaved, sameSession, sameTarget, type Saved, type Pending } from './saved.ts';
 export type { Pending } from './saved.ts';
-import { TranscriptOwner, makeEmptyTranscriptState, type TranscriptState } from './transcript.ts';
+import { TranscriptOwner } from './transcript.ts';
+import { makeEmptyTranscriptState, type TranscriptState } from './transcript-state.ts';
 import { TranscriptViewMemory, type TranscriptView } from './view-memory.ts';
 
 export interface DraftStorage {
@@ -683,6 +684,7 @@ class ChatModelState {
         findCapable: features.includes(chatFindFeature),
         streaming: features.includes(chatStreamFeature),
         local: this.mode === 'local',
+        scope: owner.scope,
         closeGraceMs: this.transcriptCloseGraceMs,
         publish: (state, snapshot) => {
           if (owner.alive && this.selection === owner)
@@ -707,7 +709,7 @@ class ChatModelState {
           transcript.getSnapshot().observation !== 'failed'
         ) {
           try {
-            transcript.accept(snapshot);
+            transcript.acceptSnapshot(snapshot);
           } catch (error) {
             transcript.fail(error);
             this.error(error);
@@ -736,7 +738,7 @@ class ChatModelState {
         const snapshot = yield* this.call('getChat', { target });
         if (!received) accept(snapshot);
         if (owner.alive && this.selection === owner)
-          yield* Effect.promise(() => transcript.restore());
+          yield* Effect.promise(() => transcript.restoreView());
       });
       yield* Effect.flatMap(
         Effect.forkIn(read, owner.scope, { startImmediately: true }),
@@ -755,10 +757,11 @@ class ChatModelState {
     this.transcriptOwner()?.findTranscript(query) ?? Promise.resolve();
   nextFindMatch = () => this.transcriptOwner()?.moveFind('next') ?? Promise.resolve();
   previousFindMatch = () => this.transcriptOwner()?.moveFind('previous') ?? Promise.resolve();
-  older = () => this.transcriptOwner()?.earlier() ?? Promise.resolve();
-  later = () => this.transcriptOwner()?.later() ?? Promise.resolve();
-  jumpToEntry = (entryId: string) => this.transcriptOwner()?.around(entryId) ?? Promise.resolve();
-  jumpToLatest = () => this.transcriptOwner()?.latest() ?? Promise.resolve();
+  showEarlier = () => this.transcriptOwner()?.showEarlier() ?? Promise.resolve();
+  showLater = () => this.transcriptOwner()?.showLater() ?? Promise.resolve();
+  jumpToEntry = (entryId: string) =>
+    this.transcriptOwner()?.jumpToEntry(entryId) ?? Promise.resolve();
+  jumpToLatest = () => this.transcriptOwner()?.jumpToLatest() ?? Promise.resolve();
   setTranscriptView = (view: TranscriptView) => this.transcriptOwner()?.setView(view);
   loadTranscriptManifest = (source: ChatTranscriptSource, restart = false) =>
     this.transcriptOwner()?.loadManifest(source, restart) ?? Promise.resolve();
@@ -1131,8 +1134,8 @@ export type ChatController = Pick<
   | 'setModelPreference'
   | 'select'
   | 'closeView'
-  | 'older'
-  | 'later'
+  | 'showEarlier'
+  | 'showLater'
   | 'openFind'
   | 'closeFind'
   | 'cancelFindReveal'

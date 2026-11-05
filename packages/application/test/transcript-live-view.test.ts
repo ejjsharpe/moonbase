@@ -248,7 +248,7 @@ test('failed navigation and observation remain visible independently of view mem
   f.fixture.handlers.set('getChatHistoryAround', async () => {
     throw new ApplicationError({ code: 'Unavailable', message: 'history unavailable' });
   });
-  await f.controller.older();
+  await f.controller.showEarlier();
   assert.match(f.controller.getSnapshot().transcript.error!, /history unavailable/);
   f.controller.setTranscriptView({ ...view, anchor: { ...view.anchor, offset: -2 } });
   assert.match(f.controller.getSnapshot().transcript.error!, /history unavailable/);
