@@ -244,10 +244,17 @@ test('unsigned macOS package runs with only system PATH, SQLite, native/rg resou
       child = app.process();
       page = await app.firstWindow();
       observe();
+      await page.getByRole('tab', { name: 'checkout · main', exact: true }).click();
       return page;
     });
     await screen('filename-maps');
-    await page.getByRole('button', { name: 'Close packaged-created.txt', exact: true }).click();
+    await page.getByRole('tab', { name: 'packaged-created.txt', exact: true }).hover();
+    const closeCreated = page.getByRole('button', {
+      name: 'Close packaged-created.txt',
+      exact: true,
+    });
+    await expect(closeCreated).toHaveCSS('pointer-events', 'auto');
+    await closeCreated.click();
     await expect(page.getByRole('tab', { name: 'packaged-created.txt', exact: true })).toHaveCount(
       0,
     );
