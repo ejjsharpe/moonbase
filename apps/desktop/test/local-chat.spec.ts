@@ -15,6 +15,8 @@ test.afterAll(async () => {
   if (fixtureDirectory) await rm(fixtureDirectory, { recursive: true, force: true });
 });
 test.beforeAll(async () => {
+  await mkdir(resolve('../../test-results/transcript-111'), { recursive: true });
+  await mkdir(resolve('../../test-results/transcript-112'), { recursive: true });
   fixtureDirectory = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-local-ui-')));
   for (const name of ['renderer', 'workspace', 'preload.cjs'])
     await symlink(resolve('dist', name), join(fixtureDirectory, name));
