@@ -233,10 +233,43 @@ test('snapshots read nested sources only for their embedded page while manifests
   release();
 });
 
-test('chunked reads of a saved entry reuse its built parts instead of revisiting the record', async (t) => {
+/** Counts how often each saved entry record is loaded, by entry ID. */
+function countEntryLoads(t: TestContext, harness: Harness) {
+  const loads = new Map<string, number>(),
+    commit = harness.commit.bind(harness);
+  t.mock.method(harness, 'commit', async (...args: Parameters<typeof commit>) => {
+    const value = await commit(...args);
+    const record = value as EntryRecord | undefined;
+    if (record && typeof record === 'object' && 'model' in record && 'conversationId' in record)
+      loads.set(String(record.id), (loads.get(String(record.id)) ?? 0) + 1);
+    return value;
+  });
+  return loads;
+}
+async function readFirstChunks(
+  client: ChatClient,
+  source: ChatTranscriptSource,
+  part: ChatTranscriptPart,
+  count: number,
+) {
+  const selection = { partId: part.partId, bytes: part.bytes, revision: part.revision };
+  let cursor: string | undefined;
+  for (let i = 0; i < count; i++) {
+    const page = await client.command('getChatTranscriptContent', {
+      source,
+      selection,
+      ...(cursor ? { cursor } : {}),
+    });
+    assert(page.kind === 'content' && page.nextCursor);
+    cursor = page.nextCursor;
+  }
+}
+
+test('chunked reads of a saved entry reuse its built parts without reloading the record', async (t) => {
   const getHarness = captureHarness(t),
     f = await fixture(t),
-    target = await f.create();
+    target = await f.create(),
+    other = await f.create('other');
   const text = 'retained 😀 text '.repeat(20000),
     image = Buffer.alloc(200001, 9);
   const entry = await getHarness().commit(
@@ -254,38 +287,122 @@ test('chunked reads of a saved entry reuse its built parts instead of revisiting
       }),
     context,
   );
-  const harness = getHarness(),
-    commit = harness.commit.bind(harness);
-  let visits = 0;
-  t.mock.method(harness, 'commit', async (...args: Parameters<typeof commit>) => {
-    const value = await commit(...args);
-    const record = value as EntryRecord | undefined;
-    if (record && typeof record === 'object' && 'model' in record && record.id === entry.id)
-      for (const message of record.model ?? [])
-        if (Array.isArray(message.content))
-          for (let i = 0; i < message.content.length; i++) {
-            const block = message.content[i];
-            Object.defineProperty(message.content, i, {
-              configurable: true,
-              get() {
-                visits++;
-                return block;
-              },
-            });
-          }
-    return value;
-  });
-  const source: ChatTranscriptSource = { kind: 'entry', target, entryId: String(entry.id) };
+  const loads = countEntryLoads(t, getHarness()),
+    id = String(entry.id);
+  const source: ChatTranscriptSource = { kind: 'entry', target, entryId: id };
   const parts = await manifest(f.client, source);
-  assert(visits > 0);
-  visits = 0;
+  assert.equal(loads.get(id), 1);
   assert.equal((await content(f.client, source, parts[0])).toString(), text);
   assert.deepEqual(JSON.parse((await content(f.client, source, parts[1])).toString()), {
     content: text,
   });
   assert.deepEqual(await content(f.client, source, parts[2]), image);
   assert.deepEqual(await manifest(f.client, source), parts);
-  assert.equal(visits, 0);
+  assert.equal(loads.get(id), 1);
+  // A cached transcript still authorizes the conversation it belongs to.
+  await assert.rejects(manifest(f.client, { ...source, target: other }), {
+    code: 'InvalidInput',
+  });
+  await assert.rejects(content(f.client, { ...source, target: other }, parts[0]), {
+    code: 'InvalidInput',
+  });
+});
+
+test('the saved transcript cache holds entries within its byte budget and evicts beyond it', async (t) => {
+  const getHarness = captureHarness(t),
+    f = await fixture(t),
+    target = await f.create();
+  // Two 18 MiB entries each fit the 32 MiB budget, but not together.
+  const [first, second] = await getHarness().commit(
+    async (tx) => [
+      await tx.appendEntry(Number(target.conversationId) as ConversationId, {
+        kind: 'pi.user',
+        model: [{ role: 'user', content: 'a'.repeat(18 << 20), timestamp: 1 }],
+      }),
+      await tx.appendEntry(Number(target.conversationId) as ConversationId, {
+        kind: 'pi.user',
+        model: [{ role: 'user', content: 'b'.repeat(18 << 20), timestamp: 1 }],
+      }),
+    ],
+    context,
+  );
+  const loads = countEntryLoads(t, getHarness());
+  const sources = [first, second].map((entry): ChatTranscriptSource => ({
+    kind: 'entry',
+    target,
+    entryId: String(entry.id),
+  }));
+  const [firstPart] = await manifest(f.client, sources[0]);
+  await readFirstChunks(f.client, sources[0], firstPart, 3);
+  assert.equal(loads.get(String(first.id)), 1);
+  const [secondPart] = await manifest(f.client, sources[1]);
+  await readFirstChunks(f.client, sources[1], secondPart, 3);
+  assert.equal(loads.get(String(second.id)), 1);
+  await readFirstChunks(f.client, sources[0], firstPart, 1);
+  assert.equal(loads.get(String(first.id)), 2);
+});
+
+test('empty interrupted, failed and completed messages are labelled in manifests, history and Find', async (t) => {
+  const getHarness = captureHarness(t),
+    f = await fixture(t),
+    target = await f.create();
+  const [aborted, failedTool, emptyTool] = await getHarness().commit(
+    async (tx) => [
+      await tx.appendEntry(Number(target.conversationId) as ConversationId, {
+        kind: 'pi.assistant',
+        model: [fauxAssistantMessage([], { stopReason: 'aborted' })],
+      }),
+      await tx.appendEntry(Number(target.conversationId) as ConversationId, {
+        kind: 'pi.assistant',
+        model: [
+          {
+            role: 'toolResult',
+            toolCallId: 'failed',
+            toolName: 'edit',
+            isError: true,
+            content: [],
+            timestamp: 1,
+          },
+        ],
+      }),
+      await tx.appendEntry(Number(target.conversationId) as ConversationId, {
+        kind: 'pi.assistant',
+        model: [
+          {
+            role: 'toolResult',
+            toolCallId: 'empty',
+            toolName: 'edit',
+            isError: false,
+            content: [],
+            timestamp: 1,
+          },
+        ],
+      }),
+    ],
+    context,
+  );
+  const expected = [
+    [aborted, 'assistant', 'interrupted', 'Response interrupted before any content.'],
+    [failedTool, 'tool', 'failed', 'Tool failed without output.'],
+    [emptyTool, 'tool', 'completed', 'Tool returned no output.'],
+  ] as const;
+  const view = await f.client.command('getChat', { target });
+  for (const [entry, role, state, text] of expected) {
+    const parts = await manifest(f.client, { kind: 'entry', target, entryId: String(entry.id) });
+    assert.deepEqual(
+      parts.map((part) => [part.partId, part.kind, part.role, part.state, part.text]),
+      [['m0.empty', 'notice', role, state, text]],
+    );
+    assert.equal(view.entries.find((row) => row.id === String(entry.id))!.text, text);
+  }
+  const found = await f.client.command('findChatTranscript', { target, query: 'interrupted' });
+  assert.deepEqual(
+    found.matches.map((match) => [
+      match.source.kind === 'entry' && match.source.entryId,
+      match.partId,
+    ]),
+    [[String(aborted.id), 'm0.empty']],
+  );
 });
 
 test('every live tool slot is read in the captured transaction and a missing result is a persistence fault', async (t) => {

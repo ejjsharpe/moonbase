@@ -129,7 +129,14 @@ export async function scanAdjacentEntry(
 export async function captureTranscript(
   harness: Harness,
   target: ChatTarget,
-  cache?: { boundary?: EntryId | null; retired?: boolean },
+  {
+    cache,
+    toolSlots = Infinity,
+  }: {
+    cache?: { boundary?: EntryId | null; retired?: boolean };
+    /** Leading tool slots to read; snapshots read only what their previews and first page show. */
+    toolSlots?: number;
+  } = {},
 ) {
   return harness.commit(async (tx) => {
     if (cache?.retired)
@@ -155,12 +162,13 @@ export async function captureTranscript(
         1,
       )
     ).items[0];
-    // Every tool slot is read here so one projection never mixes two control revisions.
+    // Tool slots are read here so one projection never mixes two control revisions.
+    const slots = (live.tools ?? []).slice(0, toolSlots);
     const tools = await Promise.all(
-      (live.tools ?? []).map((tool) => (tool.entry ? tx.entry(tool.entry) : undefined)),
+      slots.map((tool) => (tool.entry ? tx.entry(tool.entry) : undefined)),
     );
     const toolTasks = await Promise.all(
-      (live.tools ?? []).map((tool) => (tool.taskId ? tx.task(tool.taskId) : undefined)),
+      slots.map((tool) => (tool.taskId ? tx.task(tool.taskId) : undefined)),
     );
     return { live, boundary, task, latest, tools, toolTasks };
   }, context);
@@ -217,12 +225,14 @@ type Part = {
   id: string;
   kind: ChatTranscriptPart['kind'];
   role: ChatTranscriptPart['role'];
-  value: string | Buffer;
+  encoding: ChatTranscriptPart['encoding'];
+  /** Encoded once, so content reads slice it and caches measure it without copying. */
+  value: Buffer;
   /** Identity bound into every revision of this value, fixed when the part is first built. */
   evidence: string;
   extra: Partial<ChatTranscriptPart>;
   /** Facts derived from `value`, computed on first use and shared by relabelled copies. */
-  memo: { bytes?: number; revision?: string; preview?: { text: string; truncated: boolean } };
+  memo: { revision?: string; preview?: { text: string; truncated: boolean } };
 };
 function makePart(
   id: string,
@@ -241,29 +251,34 @@ function makePart(
     id,
     kind,
     role,
-    value,
+    encoding,
+    value: typeof value === 'string' ? Buffer.from(value) : value,
     extra,
     evidence: JSON.stringify([id, kind, role, encoding, evidence]),
     memo: {},
   };
 }
-const getByteLength = (part: Part) => (part.memo.bytes ??= Buffer.byteLength(part.value));
-const hashPrefix = (part: Part, prefix: string | Buffer) =>
-  createHash('sha256').update(part.evidence).update(prefix).digest('hex');
-const getRevision = (part: Part) => (part.memo.revision ??= hashPrefix(part, part.value));
+const hashPrefix = (part: Part, bytes: number) =>
+  createHash('sha256').update(part.evidence).update(part.value.subarray(0, bytes)).digest('hex');
+const getRevision = (part: Part) => (part.memo.revision ??= hashPrefix(part, part.value.length));
 const isAvailable = (part: Part) => (part.extra.availability ?? 'available') === 'available';
+/** Enough leading bytes for a 256-byte preview to know whether it was truncated. */
+const previewWindowBytes = 1024;
 function describePart(part: Part): ChatTranscriptPart {
-  const bytes = getByteLength(part);
+  const bytes = part.value.length;
   return {
     partId: part.id,
     kind: part.kind,
     role: part.role,
     availability: 'available',
-    encoding: typeof part.value === 'string' ? 'utf8' : 'base64',
+    encoding: part.encoding,
     bytes,
     revision: getRevision(part),
-    ...(typeof part.value === 'string'
-      ? (part.memo.preview ??= V.preview(part.value, 256))
+    ...(part.encoding === 'utf8'
+      ? (part.memo.preview ??= V.preview(
+          part.value.subarray(0, previewWindowBytes).toString('utf8'),
+          256,
+        ))
       : { text: '', truncated: bytes > 0 }),
     ...part.extra,
   };
@@ -495,9 +510,30 @@ function* getMessageSteps(
         value: 'Model response failed. Provider diagnostics are private.',
         extra: { state },
       });
-    if (!content.length && lastAuxiliary < 0)
-      yield { position: at(0), next: nextMessage, part: null };
+    if (!content.length && lastAuxiliary < 0) {
+      // Interrupted, failed and empty results are labelled rather than silently dropped.
+      const empty = state && getEmptyNotice(message.role, state);
+      yield {
+        position: at(0),
+        next: nextMessage,
+        part: empty
+          ? {
+              id: `${prefix}m${m}.empty`,
+              kind: 'notice',
+              role,
+              value: empty,
+              extra: { ...common, state },
+            }
+          : null,
+      };
+    }
   }
+}
+function getEmptyNotice(role: Message['role'], state: ChatTranscriptPart['state']) {
+  if (role === 'toolResult')
+    return state === 'failed' ? 'Tool failed without output.' : 'Tool returned no output.';
+  if (state === 'interrupted') return 'Response interrupted before any content.';
+  return state === 'completed' ? 'Model returned no content.' : undefined;
 }
 async function getPairing(harness: Harness, entry: EntryRecord, signal?: AbortSignal) {
   if (!entry.byTaskId || !entry.model?.some((message) => message.role === 'toolResult'))
@@ -549,10 +585,10 @@ function summarizeThinking(
   return thinking.length ? 'redacted' : fallback;
 }
 type EntryTranscript = {
+  /** Saved entries never move, so a cached transcript can authorize its own reads. */
+  conversationId: EntryRecord['conversationId'];
   parts: Part[];
   thinking: ChatTranscript['thinking'];
-  /** UTF-8 bytes of selected text parts, kept once a content read needs them. */
-  contents: Map<string, Buffer>;
 };
 const entryTranscripts = new WeakMap<Harness, LRUCache<string, EntryTranscript>>();
 function getEntryCache(harness: Harness) {
@@ -560,12 +596,12 @@ function getEntryCache(harness: Harness) {
   if (!cache) {
     cache = new LRUCache<string, EntryTranscript>({
       maxSize: entryCacheBytes,
-      sizeCalculation: (transcript) => {
-        let size = partOverheadBytes;
-        for (const part of transcript.parts) size += getByteLength(part) + partOverheadBytes;
-        for (const bytes of transcript.contents.values()) size += bytes.length;
-        return size;
-      },
+      // Parts are immutable once built, so this size never changes after insertion.
+      sizeCalculation: (transcript) =>
+        transcript.parts.reduce(
+          (size, part) => size + part.value.length + partOverheadBytes,
+          partOverheadBytes,
+        ),
     });
     entryTranscripts.set(harness, cache);
   }
@@ -600,9 +636,27 @@ async function getEntryTranscript(
     parts.push(built);
     if (signal && parts.length % partsPerTurn === 0) await setImmediate();
   }
-  const transcript = { parts, thinking: summarizeThinking(parts, 'none'), contents: new Map() };
+  const transcript = {
+    conversationId: entry.conversationId,
+    parts,
+    thinking: summarizeThinking(parts, 'none'),
+  };
   cache.set(String(entry.id), transcript);
   return transcript;
+}
+/** Reads a saved entry's transcript, loading the record only when it is not cached. */
+async function readSavedTranscript(
+  harness: Harness,
+  target: ChatTarget,
+  entryId: string,
+  signal?: AbortSignal,
+) {
+  const cached = getEntryCache(harness).get(String(eid(entryId)));
+  if (!cached)
+    return getEntryTranscript(harness, await readEntry(harness, target, entryId), signal);
+  if (cached.conversationId !== cid(target.conversationId))
+    return V.fail('InvalidInput', 'Entry does not belong to this conversation.');
+  return cached;
 }
 
 async function readNestedCall(
@@ -710,8 +764,7 @@ type TranscriptParts = {
 async function getLiveTranscript(
   harness: Harness,
   source: ChatTranscriptSource,
-  signal?: AbortSignal,
-  captured?: TranscriptCapture,
+  { signal, capture: captured }: { signal?: AbortSignal; capture?: TranscriptCapture } = {},
 ): Promise<TranscriptParts> {
   const capture = captured ?? (await captureTranscript(harness, source.target));
   signal?.throwIfAborted();
@@ -744,6 +797,8 @@ async function* listLiveParts(
   let built = 0;
   for (const [i, tool] of (capture.live.tools ?? []).entries()) {
     signal?.throwIfAborted();
+    // A bounded snapshot capture covers more slots than its first page can reach.
+    if (i >= capture.toolTasks.length) throw new Error('Live tool slot was not captured.');
     const task = capture.toolTasks[i];
     if (task && task.conversationId !== conversationId)
       V.fail('Persistence', 'Live tool authority is invalid.');
@@ -947,7 +1002,7 @@ export async function projectLiveTranscript(
   return projectManifest(
     harness,
     source,
-    await getLiveTranscript(harness, source, undefined, captured),
+    await getLiveTranscript(harness, source, { capture: captured }),
     0,
     embeddedManifestParts,
   );
@@ -956,22 +1011,18 @@ async function findPart(parts: TranscriptParts['parts'], partId: string) {
   for await (const part of parts) if (part.id === partId) return part;
   return undefined;
 }
-/** Returns the selected value's bytes once the selection's fixed prefix still matches it. */
-function readSelection(
-  part: Part | undefined,
-  selection: ChatTranscriptSelection,
-  bytes = part && (typeof part.value === 'string' ? Buffer.from(part.value) : part.value),
-) {
-  if (!part || !bytes || !isAvailable(part))
+/** Checks that the selection's fixed prefix still matches the part's value. */
+function checkSelection(part: Part | undefined, selection: ChatTranscriptSelection): Part {
+  if (!part || !isAvailable(part))
     return V.fail('InvalidInput', 'Transcript part is unavailable or invalid.');
   if (
-    selection.bytes > bytes.length ||
-    (selection.bytes === bytes.length
+    selection.bytes > part.value.length ||
+    (selection.bytes === part.value.length
       ? getRevision(part)
-      : hashPrefix(part, bytes.subarray(0, selection.bytes))) !== selection.revision
+      : hashPrefix(part, selection.bytes)) !== selection.revision
   )
     return V.fail('Conflict', 'Transcript prefix changed; reload the selected part.');
-  return bytes;
+  return part;
 }
 async function readSelectedPart(
   harness: Harness,
@@ -980,31 +1031,24 @@ async function readSelectedPart(
   signal?: AbortSignal,
 ) {
   if (source.kind === 'entry') {
-    const entry = await readEntry(harness, source.target, source.entryId);
-    const transcript = await getEntryTranscript(harness, entry, signal);
-    const part = transcript.parts.find((part) => part.id === selection.partId);
-    let bytes = transcript.contents.get(selection.partId);
-    if (part && !bytes && typeof part.value === 'string' && isAvailable(part)) {
-      bytes = Buffer.from(part.value);
-      transcript.contents.set(part.id, bytes);
-      // Reinsert so the cache accounts for the retained bytes.
-      getEntryCache(harness).set(String(entry.id), transcript);
-    }
-    return { part: part!, bytes: readSelection(part, selection, bytes) };
+    const transcript = await readSavedTranscript(harness, source.target, source.entryId, signal);
+    return checkSelection(
+      transcript.parts.find((part) => part.id === selection.partId),
+      selection,
+    );
   }
-  const transcript = await getLiveTranscript(harness, source, signal);
-  const part = await findPart(transcript.parts, selection.partId);
-  const bytes = readSelection(part, selection);
+  const transcript = await getLiveTranscript(harness, source, { signal });
+  const part = checkSelection(await findPart(transcript.parts, selection.partId), selection);
   // A live selection is served only while its source is still current.
   const current = await findPart(
-    (await getLiveTranscript(harness, source, signal)).parts,
+    (await getLiveTranscript(harness, source, { signal })).parts,
     selection.partId,
   );
   if (!current || !isAvailable(current))
     V.fail('Conflict', 'Transcript part disappeared; reload the source.');
-  readSelection(current, selection);
+  checkSelection(current, selection);
   signal?.throwIfAborted();
-  return { part: part!, bytes };
+  return part;
 }
 export async function readTranscriptContent(
   harness: Harness,
@@ -1019,12 +1063,8 @@ export async function readTranscriptContent(
       : undefined;
     const transcript =
       source.kind === 'entry'
-        ? await getEntryTranscript(
-            harness,
-            await readEntry(harness, source.target, source.entryId),
-            signal,
-          )
-        : await getLiveTranscript(harness, source, signal);
+        ? await readSavedTranscript(harness, source.target, source.entryId, signal)
+        : await getLiveTranscript(harness, source, { signal });
     signal?.throwIfAborted();
     return {
       kind: 'manifest',
@@ -1041,12 +1081,12 @@ export async function readTranscriptContent(
   }
   const binding = hashJson({ source, selection });
   const offset = input.cursor ? openCursor(harness, input.cursor, 'content', binding).position : 0;
-  const { part, bytes } = await readSelectedPart(harness, source, selection, signal);
+  const part = await readSelectedPart(harness, source, selection, signal);
   signal?.throwIfAborted();
   if (offset > selection.bytes) V.fail('InvalidInput', 'Invalid content position.');
-  const encoding = typeof part.value === 'string' ? 'utf8' : 'base64';
+  const bytes = part.value;
   let end = Math.min(offset + chatContentChunkBytes, selection.bytes);
-  if (encoding === 'utf8') {
+  if (part.encoding === 'utf8') {
     while (end < selection.bytes && (bytes[end] & 0xc0) === 0x80) end--;
     if (
       (offset < bytes.length && (bytes[offset] & 0xc0) === 0x80) ||
@@ -1060,8 +1100,8 @@ export async function readTranscriptContent(
     source,
     selection,
     offset,
-    encoding,
-    data: bytes.subarray(offset, end).toString(encoding),
+    encoding: part.encoding,
+    data: bytes.subarray(offset, end).toString(part.encoding),
     nextCursor:
       end < selection.bytes
         ? sealCursor(harness, { kind: 'content', binding, position: end })

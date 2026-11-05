@@ -245,7 +245,10 @@ async function projectSnapshotOnce(
   { identity, target, conversation, pending, local, cache, signal }: SnapshotInput,
 ): Promise<ChatSnapshot> {
   signal?.throwIfAborted();
-  const captured = await captureTranscript(harness, target, cache);
+  const captured = await captureTranscript(harness, target, {
+    cache,
+    toolSlots: liveToolPreviews,
+  });
   signal?.throwIfAborted();
   const { live, task, latest } = captured;
   let run: ChatRun | null = null,
@@ -419,11 +422,13 @@ export async function projectEntry(
           .map((x) => x.text)
           .join('');
   const failed = message.role === 'assistant' && message.stopReason === 'error';
+  // An empty interrupted or failed message shows the transcript's label instead of blank text.
+  const empty = transcript.parts.find((part) => part.partId === 'm0.empty')?.text;
   return {
     id: String(entry.id),
     transcript,
     role,
-    ...V.preview(failed ? 'Model response failed.' : text),
+    ...V.preview(failed ? 'Model response failed.' : text || empty || ''),
     ...(message.role === 'toolResult'
       ? { toolName: V.preview(message.toolName, 128).text, isError: message.isError }
       : {}),

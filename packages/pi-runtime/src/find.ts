@@ -1,5 +1,6 @@
 import { setImmediate } from 'node:timers/promises';
 import type { Harness } from '@earendil-works/pi-durable';
+import { LRUCache } from 'lru-cache';
 import {
   maximumChatReplyBytes,
   chatFindPageSize,
@@ -31,6 +32,24 @@ const tokensPerTurn = 32;
 /** One token adds at most three path elements to its node, each a safe integer and a comma. */
 const tokenPathChars = 3 * 17;
 type Token = { path: number[]; text: string };
+type Serialize = (subtree: object, path: number[]) => string;
+/**
+ * Subtrees past the path bound resume by serialized chunk across invocations; saved entries are
+ * immutable, so each Harness keeps recent serializations up to this many UTF-16 units.
+ */
+const subtreeCacheUnits = 8 * 1024 * 1024;
+const subtreeCaches = new WeakMap<Harness, LRUCache<string, string>>();
+function getSubtreeCache(harness: Harness) {
+  let cache = subtreeCaches.get(harness);
+  if (!cache) {
+    cache = new LRUCache<string, string>({
+      maxSize: subtreeCacheUnits,
+      sizeCalculation: (text) => Math.max(1, text.length),
+    });
+    subtreeCaches.set(harness, cache);
+  }
+  return cache;
+}
 const isBefore = (path: number[], seek: number[]) => {
   for (let i = 0; i < Math.min(path.length, seek.length); i++)
     if (path[i] !== seek[i]) return path[i] < seek[i];
@@ -45,7 +64,12 @@ const sliceChunk = (text: string, index: number) =>
   );
 
 /** JSON.stringify's display format, traversable at token paths without serializing earlier values. */
-function* jsonTokens(value: unknown, seek: number[], path: number[] = []): Generator<Token> {
+function* jsonTokens(
+  value: unknown,
+  seek: number[],
+  serialize: Serialize,
+  path: number[] = [],
+): Generator<Token> {
   if (isBefore(path, seek)) return;
   const position = path.every((item, index) => seek[index] === item)
     ? seek[path.length]
@@ -67,7 +91,7 @@ function* jsonTokens(value: unknown, seek: number[], path: number[] = []): Gener
       JSON.stringify(path).length + tokenPathChars > maximumFindPathChars)
   ) {
     // Deeper token paths could not fit a cursor, so this subtree resumes by serialized chunk.
-    const text = JSON.stringify(value);
+    const text = serialize(value, path);
     const count = Math.ceil(text.length / chunkUnits);
     for (let i = position ?? 0; i < count; i++) yield* emit(sliceChunk(text, i), i);
   } else if (value !== null && typeof value === 'object') {
@@ -87,14 +111,16 @@ function* jsonTokens(value: unknown, seek: number[], path: number[] = []): Gener
         });
         const comma = punctuation(i ? ',' : '', 0);
         if (!isBefore(comma.path, seek)) yield comma;
-        yield* jsonTokens(key, seek, [...keyPath, 1]);
+        yield* jsonTokens(key, seek, serialize, [...keyPath, 1]);
         const colon = punctuation(':', 2);
         if (!isBefore(colon.path, seek)) yield colon;
       }
-      yield* jsonTokens(array ? value[i] : (value as Record<string, unknown>)[key!], seek, [
-        ...path,
-        2 + 2 * i,
-      ]);
+      yield* jsonTokens(
+        array ? value[i] : (value as Record<string, unknown>)[key!],
+        seek,
+        serialize,
+        [...path, 2 + 2 * i],
+      );
     }
     yield* emit(array ? ']' : '}', 2 * length + 1);
   } else yield* emit(JSON.stringify(value) ?? 'null', 0);
@@ -105,6 +131,7 @@ async function readWindow(
   value: string | { json: unknown },
   position: Position,
   limit: number,
+  serialize: Serialize,
   signal?: AbortSignal,
 ) {
   const tokens =
@@ -112,7 +139,7 @@ async function readWindow(
       ? (function* () {
           yield { path: [], text: value };
         })()
-      : jsonTokens(value.json, position.path);
+      : jsonTokens(value.json, position.path, serialize);
   const segments: { token: Token; offset: number; start: number; length: number }[] = [];
   let text = '',
     count = 0,
@@ -179,6 +206,7 @@ export async function findTranscript(
   const startCursor = sealCursor(harness, start);
   const matches: ChatOutput<'findChatTranscript'>['matches'] = [];
   const expression = getChatFindExpression(query);
+  const subtrees = getSubtreeCache(harness);
   let rows = 0,
     examined = 0,
     parts = 0;
@@ -242,7 +270,19 @@ export async function findTranscript(
         finished = false;
         break;
       }
-      const window = await readWindow(value, position, scanLength + query.length + 256, signal);
+      const serialize: Serialize = (subtree, path) => {
+        const key = JSON.stringify([String(entry.id), part.id, path]);
+        let text = subtrees.get(key);
+        if (text === undefined) subtrees.set(key, (text = JSON.stringify(subtree)));
+        return text;
+      };
+      const window = await readWindow(
+        value,
+        position,
+        scanLength + query.length + 256,
+        serialize,
+        signal,
+      );
       const text = window.text;
       let consumed =
         window.done && text.length <= scanLength
