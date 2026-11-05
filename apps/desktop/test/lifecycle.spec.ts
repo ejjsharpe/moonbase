@@ -202,7 +202,12 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
           () =>
             current.evaluate(async ({ BrowserWindow }) =>
               BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(
-                `(() => { const b = [...document.querySelectorAll("button")].find(b=>b.textContent==="Save"); return !!b && !b.disabled; })()`,
+                `(async () => {
+                  const reply = await window.moonbase.call('command', { operation: 'loadRecovery', input: { clientId: window.moonbase.clientId } }, crypto.randomUUID());
+                  return reply.ok && reply.value.state.drafts.length === 0 &&
+                    ![...document.querySelectorAll('[role="alert"]')].some(element => element.getClientRects().length) &&
+                    ![...document.querySelectorAll('[role="status"]')].some(element => /Recovery confirmation pending|Preserving edits/.test(element.textContent));
+                })()`,
               ),
             ),
           Boolean,

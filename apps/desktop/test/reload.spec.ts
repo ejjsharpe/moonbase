@@ -128,6 +128,10 @@ test('native Reload retains text painted before ordinary recovery debounce', asy
     expect(before.text).toContain('fresh visible tail');
     expect(before.elapsed).toBeLessThan(150);
     const outcome = await reload();
+    const project = page
+      .getByRole('tablist', { name: 'Workbench views', exact: true })
+      .getByRole('tab', { name: 'checkout · main', exact: true });
+    if (outcome === 'reload') await project.click();
     await expect(editor()).toBeVisible();
     await page.evaluate(
       () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
@@ -146,6 +150,7 @@ test('native Reload retains text painted before ordinary recovery debounce', asy
       .poll(async () => (await recovery()).state.drafts[0]?.text)
       .toContain('fresh visible tail');
     await expect.poll(reload).toBe('reload');
+    await project.click();
     await expect(editor()).toBeVisible();
     await expect.poll(async () => await editor().inputValue()).toBeDefined();
     await expect
