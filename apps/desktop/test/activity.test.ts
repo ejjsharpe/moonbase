@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { ChatTranscript, ChatTranscriptPart } from '@moonbase/contracts/chat';
+import type { ChatEntry, ChatTranscript, ChatTranscriptPart } from '@moonbase/contracts/chat';
 import {
   collectActivityEvidence,
   getActivityState,
+  getEntryTranscripts,
   getToolSummary,
   groupTranscriptParts,
 } from '../src/renderer/chat/activity.ts';
@@ -62,6 +63,39 @@ test('consecutive activity leaves every authored answer at its recorded position
     grouped.flatMap((group) => group.parts),
     parts,
   );
+});
+for (const state of ['failed', 'interrupted', 'running'] as const)
+  test(`empty manifest retains preview ${state} evidence for the exact originating call`, () => {
+    const call = part('call', 'arguments', { state: 'requested' });
+    const origin = transcript('origin', [call]);
+    const result = transcript('result', [
+      part('result', 'result', {
+        role: 'tool',
+        state,
+        pairing: 'matched',
+        call: { entryId: 'origin', partId: 'call' },
+      }),
+    ]);
+    const entries: ChatEntry[] = [
+      { id: 'origin', role: 'assistant', text: '', truncated: false, transcript: origin },
+      { id: 'result', role: 'tool', text: '', truncated: false, transcript: result },
+    ];
+    for (const manifest of [null, { source: result.source, parts: [] }]) {
+      const evidence = collectActivityEvidence(getEntryTranscripts(entries, manifest));
+      assert.equal(getActivityState(call, origin, evidence), state);
+    }
+  });
+test('only a nonempty manifest with the exact result source can replace preview evidence', () => {
+  const result = transcript('result', [part('result', 'result', { state: 'failed' })]);
+  const entries: ChatEntry[] = [
+    { id: 'result', role: 'tool', text: '', truncated: false, transcript: result },
+  ];
+  const loaded = { ...result, parts: [part('result', 'result', { state: 'completed' })] };
+  assert.equal(getEntryTranscripts(entries, loaded)[0]?.parts[0]?.state, 'completed');
+  const foreignTarget = structuredClone(loaded);
+  foreignTarget.source.target.host.storeId = 'other';
+  for (const manifest of [transcript('other-entry', loaded.parts), foreignTarget])
+    assert.equal(getEntryTranscripts(entries, manifest)[0]?.parts[0]?.state, 'failed');
 });
 test('reused IDs, names and ambiguous results never provide another originating call state', () => {
   const call = part('call', 'arguments', {

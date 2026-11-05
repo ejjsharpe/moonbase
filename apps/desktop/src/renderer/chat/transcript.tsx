@@ -441,7 +441,7 @@ export function Transcript({
         ...getEntryTranscripts(transcript.entries, transcript.manifest),
         ...(live?.transcript
           ? [
-              transcript.manifest && sameSource(live.transcript, transcript.manifest)
+              transcript.manifest?.parts.length && sameSource(live.transcript, transcript.manifest)
                 ? transcript.manifest
                 : live.transcript,
             ]
