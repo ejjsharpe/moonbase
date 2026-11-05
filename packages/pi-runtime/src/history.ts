@@ -26,14 +26,23 @@ import {
   NestedSourceRetired,
   captureTranscript,
   getLiveSource,
+  hashJson,
   projectEntryTranscript,
   projectLiveTranscript,
   sealCursor,
   openCursor,
-  bindTranscriptRead,
-  checkRead,
   readEntry,
+  scanAdjacentEntry,
 } from './transcript.ts';
+
+/** Snapshots and history pages stay below the reply limit with room for their envelope. */
+const historyPageBytes = 250 * 1024;
+/** Listing and around-entry windows leave more room for their surrounding reply fields. */
+const entryListBytes = 240 * 1024;
+/** Rows one listing or history page may scan before returning a continuation. */
+const rowsPerPage = 32;
+/** The run summary previews at most this many live tools; the transcript holds the rest. */
+const liveToolPreviews = 8;
 
 const getCursorIdentity = (identity: string) => createHash('sha256').update(identity).digest('hex');
 type BlockedReason = Extract<TaskInspection['state'], { kind: 'blocked' }>['reason'];
@@ -119,35 +128,45 @@ export async function listConversations(
       );
       if (
         Buffer.byteLength(JSON.stringify({ conversations: [...conversations, summary] })) >
-        240 * 1024
+        entryListBytes
       )
         break;
       conversations.push(summary);
     }
     scan = page.next;
-  } while (scan && ++scanned < 32);
+  } while (scan && ++scanned < rowsPerPage);
   return { conversations, nextCursor: writeCursor(scan, 'list', getCursorIdentity(identity)) };
 }
 export async function readHistory(
   harness: Harness,
-  identity: string,
-  target: ChatTarget,
-  encoded?: string,
-  base: unknown = {},
-  upperEntryId?: string | null,
-  continuations?: (string | null)[],
-  signal?: AbortSignal,
+  {
+    identity,
+    target,
+    cursor,
+    upperEntryId,
+    continuations,
+    signal,
+  }: {
+    identity: string;
+    target: ChatTarget;
+    cursor?: string;
+    /** Newest entry to include; `null` reads an empty conversation. */
+    upperEntryId?: string | null;
+    /** Receives the older cursor after each returned entry. */
+    continuations?: (string | null)[];
+    signal?: AbortSignal;
+  },
 ): Promise<ChatHistoryPage> {
   if (upperEntryId === null) return { entries: [], olderCursor: null };
   let scan = readCursor(
-    encoded,
+    cursor,
     'history',
     getCursorIdentity(identity) + ':' + target.conversationId,
   );
   const entries: ChatHistoryPage['entries'] = [];
   let scanned = 0;
   do {
-    checkRead(signal);
+    signal?.throwIfAborted();
     const page = await harness.commit(
       (tx) =>
         tx.scanEntries(
@@ -168,7 +187,6 @@ export async function readHistory(
     }
     const entry = await projectEntry(harness, target, row, signal);
     const candidate = {
-      ...(base as object),
       entries: [...entries, entry],
       olderCursor: writeCursor(
         page.next,
@@ -176,7 +194,7 @@ export async function readHistory(
         getCursorIdentity(identity) + ':' + target.conversationId,
       ),
     };
-    if (Buffer.byteLength(JSON.stringify(candidate)) > 250 * 1024) {
+    if (Buffer.byteLength(JSON.stringify(candidate)) > historyPageBytes) {
       return {
         entries,
         olderCursor: writeCursor(
@@ -189,7 +207,7 @@ export async function readHistory(
     entries.push(entry);
     continuations?.push(candidate.olderCursor);
     scan = page.next;
-  } while (scan && ++scanned < 32);
+  } while (scan && ++scanned < rowsPerPage);
   return {
     entries,
     olderCursor: writeCursor(
@@ -199,12 +217,24 @@ export async function readHistory(
     ),
   };
 }
+type SnapshotInput = {
+  identity: string;
+  target: ChatTarget;
+  conversation: ChatSummary;
+  /** Pending Send intents recorded in metadata. */
+  pending: number;
+  /** Local conversations also report whether their saved working folder is available. */
+  local: boolean;
+  cache?: SnapshotCache;
+  signal?: AbortSignal;
+};
 export async function projectSnapshot(
-  ...input: Parameters<typeof projectSnapshotOnce>
+  harness: Harness,
+  input: SnapshotInput,
 ): Promise<ChatSnapshot> {
   for (let attempt = 0; ; attempt++) {
     try {
-      return await projectSnapshotOnce(...input);
+      return await projectSnapshotOnce(harness, input);
     } catch (error) {
       if (!(error instanceof NestedSourceRetired) || attempt === 2) throw error;
     }
@@ -212,17 +242,11 @@ export async function projectSnapshot(
 }
 async function projectSnapshotOnce(
   harness: Harness,
-  identity: string,
-  target: ChatTarget,
-  conversation: ChatSummary,
-  pending: number,
-  local: boolean,
-  cache?: SnapshotCache,
-  signal?: AbortSignal,
+  { identity, target, conversation, pending, local, cache, signal }: SnapshotInput,
 ): Promise<ChatSnapshot> {
-  checkRead(signal);
+  signal?.throwIfAborted();
   const captured = await captureTranscript(harness, target, cache);
-  checkRead(signal);
+  signal?.throwIfAborted();
   const { live, task, latest } = captured;
   let run: ChatRun | null = null,
     blocked: BlockedReason | undefined;
@@ -232,7 +256,7 @@ async function projectSnapshotOnce(
     if (!status || status.taskId !== String(live.run.taskId)) {
       const version = cache?.statusVersion;
       const inspection = await harness.inspect(context);
-      checkRead(signal);
+      signal?.throwIfAborted();
       const active = inspection.tasks.find((item) => item.record.id === live.run!.taskId);
       // An inspection from another control revision cannot describe this captured run.
       if (active && JSON.stringify(active.record) === JSON.stringify(task)) {
@@ -254,7 +278,7 @@ async function projectSnapshotOnce(
       }
     }
     blocked = status?.blocked;
-    const tools = (live.tools ?? []).slice(0, 8).map((tool, index) => {
+    const tools = (live.tools ?? []).slice(0, liveToolPreviews).map((tool, index) => {
       const entry = captured.tools[index];
       const result = entry?.model?.find((message) => message.role === 'toolResult');
       const text =
@@ -331,29 +355,26 @@ async function projectSnapshotOnce(
     state,
     ...(message === undefined ? {} : { message }),
   };
-  checkRead(signal);
+  signal?.throwIfAborted();
   let history = cache?.history;
   if (!history || history.boundary !== base.transcriptBoundary) {
     const continuations: (string | null)[] = [];
-    const page = await readHistory(
-      harness,
+    const page = await readHistory(harness, {
       identity,
       target,
-      undefined,
-      {},
-      base.transcriptBoundary,
+      upperEntryId: base.transcriptBoundary,
       continuations,
       signal,
-    );
+    });
     history = { boundary: base.transcriptBoundary, page, continuations };
     if (cache) cache.history = history;
   }
-  checkRead(signal);
+  signal?.throwIfAborted();
   const page = { ...history.page, entries: [...history.page.entries] };
   // A growing escaped live preview can shrink the page without rereading retained entries.
   while (
     page.entries.length &&
-    Buffer.byteLength(JSON.stringify({ ...base, ...page })) > 250 * 1024
+    Buffer.byteLength(JSON.stringify({ ...base, ...page })) > historyPageBytes
   ) {
     page.entries.pop();
     page.olderCursor = page.entries.length
@@ -416,46 +437,24 @@ export async function readHistoryAround(
 ): Promise<ChatOutput<'getChatHistoryAround'>> {
   const { target } = input;
   await readEntry(harness, target, input.entryId);
-  checkRead(signal);
-  const binding = bindTranscriptRead({ target, entryId: input.entryId });
+  signal?.throwIfAborted();
+  const binding = hashJson({ target, entryId: input.entryId });
   const cursor = input.cursor ? openCursor(harness, input.cursor, 'around', binding) : undefined;
-  const upper =
-    cursor?.upper ??
-    String(
-      (
-        await harness.commit(
-          (tx) =>
-            tx.scanEntries({ conversationId: cid(target.conversationId), order: 'descending' }, 1),
-          context,
-        )
-      ).items[0]!.id,
-    );
+  const upper = cursor?.upper ?? String((await scanAdjacentEntry(harness, target, 'older'))!.id);
   const entries: ChatHistoryPage['entries'] = [];
+  async function scanNearby(direction: 'older' | 'newer', position: number) {
+    signal?.throwIfAborted();
+    if (position < 1 || position > Number(upper)) return undefined;
+    return scanAdjacentEntry(harness, target, direction, position, upper);
+  }
   async function collect(direction: 'older' | 'newer', start: number, limit: number) {
     let position = start;
     for (let i = 0; i < limit; i++) {
-      checkRead(signal);
-      if (position < 1 || position > Number(upper)) break;
-      const row = (
-        await harness.commit(
-          (tx) =>
-            tx.scanEntries(
-              {
-                conversationId: cid(target.conversationId),
-                order: direction === 'older' ? 'descending' : 'ascending',
-                ...(direction === 'older'
-                  ? { maxEntryId: eid(String(position)) }
-                  : { minEntryId: eid(String(position)), maxEntryId: eid(upper) }),
-              },
-              1,
-            ),
-          context,
-        )
-      ).items[0];
+      const row = await scanNearby(direction, position);
       if (!row) break;
-      checkRead(signal);
+      signal?.throwIfAborted();
       const entry = await projectEntry(harness, target, row, signal);
-      if (Buffer.byteLength(JSON.stringify([...entries, entry])) > 240 * 1024) break;
+      if (Buffer.byteLength(JSON.stringify([...entries, entry])) > entryListBytes) break;
       entries.push(entry);
       position = Number(row.id) + (direction === 'older' ? -1 : 1);
     }
@@ -463,34 +462,16 @@ export async function readHistoryAround(
   if (cursor) {
     if (!cursor.direction || !cursor.upper)
       return V.fail('InvalidInput', 'Invalid history direction.');
-    await collect(cursor.direction, cursor.position, 32);
+    await collect(cursor.direction, cursor.position, rowsPerPage);
   } else {
-    await collect('older', Number(input.entryId), 16);
-    await collect('newer', Number(input.entryId) + 1, 16);
+    await collect('older', Number(input.entryId), rowsPerPage / 2);
+    await collect('newer', Number(input.entryId) + 1, rowsPerPage / 2);
   }
   entries.sort((a, b) => Number(b.id) - Number(a.id));
   const first = Number(entries.at(-1)?.id ?? input.entryId),
     last = Number(entries[0]?.id ?? input.entryId);
-  async function continuation(direction: 'older' | 'newer', position: number) {
-    checkRead(signal);
-    if (position < 1 || position > Number(upper)) return null;
-    const exists = (
-      await harness.commit(
-        (tx) =>
-          tx.scanEntries(
-            {
-              conversationId: cid(target.conversationId),
-              order: direction === 'older' ? 'descending' : 'ascending',
-              ...(direction === 'older'
-                ? { maxEntryId: eid(String(position)) }
-                : { minEntryId: eid(String(position)), maxEntryId: eid(upper) }),
-            },
-            1,
-          ),
-        context,
-      )
-    ).items.length;
-    return exists
+  async function sealContinuation(direction: 'older' | 'newer', position: number) {
+    return (await scanNearby(direction, position))
       ? sealCursor(harness, { kind: 'around', binding, position, upper, direction })
       : null;
   }
@@ -500,7 +481,7 @@ export async function readHistoryAround(
     entryId: input.entryId,
     upperEntryId: upper,
     entries,
-    olderCursor: await continuation('older', first - 1),
-    newerCursor: await continuation('newer', last + 1),
+    olderCursor: await sealContinuation('older', first - 1),
+    newerCursor: await sealContinuation('newer', last + 1),
   };
 }

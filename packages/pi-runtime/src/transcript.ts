@@ -1,4 +1,5 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { setImmediate } from 'node:timers/promises';
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
 import {
   LiveDoc,
@@ -9,11 +10,13 @@ import {
   type Harness,
   type EntryRecord,
   type LiveState,
+  type ToolSlot,
   type ToolTaskInput,
   type ToolTaskCheckpoint,
   type EntryId,
 } from '@earendil-works/pi-durable';
 import type { Message, ToolResultMessage } from '@earendil-works/pi-ai';
+import { LRUCache } from 'lru-cache';
 import {
   chatContentChunkBytes,
   chatManifestPageSize,
@@ -30,6 +33,14 @@ import { cid, eid } from './documents.ts';
 import * as V from './validation.ts';
 import * as S from './private-schema.ts';
 
+/** Long reads yield to other work after this many parts. */
+const partsPerTurn = 32;
+/** Saved entries are immutable, so each Harness shares their built parts up to this budget. */
+const entryCacheBytes = 32 * 1024 * 1024;
+const partOverheadBytes = 512;
+/** History and live snapshots embed only the first manifest page of each transcript. */
+const embeddedManifestParts = 4;
+
 const keys = new WeakMap<Harness, Buffer>();
 function getKey(harness: Harness) {
   let key = keys.get(harness);
@@ -39,8 +50,8 @@ function getKey(harness: Harness) {
   }
   return key;
 }
-const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
-const bind = (value: unknown) => hash(JSON.stringify(value));
+export const hashJson = (value: unknown) =>
+  createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const getLabel = (value: string, fallback = 'Tool') =>
   V.preview(value, 128).text.replaceAll('\0', '').trim() || fallback;
 export class NestedSourceRetired extends ApplicationError {
@@ -77,13 +88,43 @@ export function openCursor(
     return V.fail('InvalidInput', 'Transcript cursor does not belong to this read.');
   }
 }
-export const bindTranscriptRead = bind;
-export const checkRead = (signal?: AbortSignal) => signal?.throwIfAborted();
 export async function readEntry(harness: Harness, target: ChatTarget, id: string) {
   const entry = await harness.commit((tx) => tx.entry(eid(id)), context);
   if (!entry || entry.conversationId !== cid(target.conversationId))
     return V.fail('InvalidInput', 'Entry does not belong to this conversation.');
   return entry;
+}
+/**
+ * Reads the first entry at or past `position` in `direction`; newer scans stop at `upper`.
+ * Without a position, an older scan returns the conversation's latest entry.
+ */
+export async function scanAdjacentEntry(
+  harness: Harness,
+  target: ChatTarget,
+  direction: 'older' | 'newer',
+  position?: number,
+  upper?: string,
+) {
+  let range: { minEntryId?: EntryId; maxEntryId?: EntryId } = {};
+  if (direction === 'newer')
+    range = {
+      minEntryId: eid(String(position ?? 1)),
+      ...(upper === undefined ? {} : { maxEntryId: eid(upper) }),
+    };
+  else if (position !== undefined) range = { maxEntryId: eid(String(position)) };
+  const page = await harness.commit(
+    (tx) =>
+      tx.scanEntries(
+        {
+          conversationId: cid(target.conversationId),
+          order: direction === 'older' ? 'descending' : 'ascending',
+          ...range,
+        },
+        1,
+      ),
+    context,
+  );
+  return page.items[0];
 }
 export async function captureTranscript(
   harness: Harness,
@@ -114,21 +155,21 @@ export async function captureTranscript(
         1,
       )
     ).items[0];
+    // Every tool slot is read here so one projection never mixes two control revisions.
     const tools = await Promise.all(
-      (live.tools ?? []).slice(0, 8).map((tool) => (tool.entry ? tx.entry(tool.entry) : undefined)),
+      (live.tools ?? []).map((tool) => (tool.entry ? tx.entry(tool.entry) : undefined)),
     );
     const toolTasks = await Promise.all(
-      (live.tools ?? [])
-        .slice(0, 8)
-        .map((tool) => (tool.taskId ? tx.task(tool.taskId) : undefined)),
+      (live.tools ?? []).map((tool) => (tool.taskId ? tx.task(tool.taskId) : undefined)),
     );
     return { live, boundary, task, latest, tools, toolTasks };
   }, context);
 }
+type TranscriptCapture = Awaited<ReturnType<typeof captureTranscript>>;
 export function getLiveSource(
   harness: Harness,
   target: ChatTarget,
-  capture: Awaited<ReturnType<typeof captureTranscript>>,
+  capture: TranscriptCapture,
 ): ChatTranscriptSource | undefined {
   const { live, boundary, task } = capture;
   const submission = live.run?.inputs[0];
@@ -172,7 +213,17 @@ export function getLiveSource(
   };
 }
 
-type Part = { descriptor: ChatTranscriptPart; value: string | Buffer; evidence?: string };
+type Part = {
+  id: string;
+  kind: ChatTranscriptPart['kind'];
+  role: ChatTranscriptPart['role'];
+  value: string | Buffer;
+  /** Identity bound into every revision of this value, fixed when the part is first built. */
+  evidence: string;
+  extra: Partial<ChatTranscriptPart>;
+  /** Facts derived from `value`, computed on first use and shared by relabelled copies. */
+  memo: { bytes?: number; revision?: string; preview?: { text: string; truncated: boolean } };
+};
 function makePart(
   id: string,
   kind: ChatTranscriptPart['kind'],
@@ -186,105 +237,118 @@ function makePart(
     extra = { ...extra, availability: 'unavailable' };
   }
   const encoding = typeof value === 'string' ? 'utf8' : 'base64';
-  const bytes = Buffer.byteLength(value);
-  evidence = JSON.stringify([id, kind, role, encoding, evidence]);
   return {
+    id,
+    kind,
+    role,
     value,
-    evidence,
-    descriptor: {
-      partId: id,
-      kind,
-      role,
-      availability: 'available',
-      encoding,
-      bytes,
-      revision: hash(Buffer.concat([Buffer.from(evidence), Buffer.from(value)])),
-      ...(typeof value === 'string' ? V.preview(value, 256) : { text: '', truncated: bytes > 0 }),
-      ...extra,
-    },
+    extra,
+    evidence: JSON.stringify([id, kind, role, encoding, evidence]),
+    memo: {},
   };
 }
-export type TranscriptValue = {
+const getByteLength = (part: Part) => (part.memo.bytes ??= Buffer.byteLength(part.value));
+const hashPrefix = (part: Part, prefix: string | Buffer) =>
+  createHash('sha256').update(part.evidence).update(prefix).digest('hex');
+const getRevision = (part: Part) => (part.memo.revision ??= hashPrefix(part, part.value));
+const isAvailable = (part: Part) => (part.extra.availability ?? 'available') === 'available';
+function describePart(part: Part): ChatTranscriptPart {
+  const bytes = getByteLength(part);
+  return {
+    partId: part.id,
+    kind: part.kind,
+    role: part.role,
+    availability: 'available',
+    encoding: typeof part.value === 'string' ? 'utf8' : 'base64',
+    bytes,
+    revision: getRevision(part),
+    ...(typeof part.value === 'string'
+      ? (part.memo.preview ??= V.preview(part.value, 256))
+      : { text: '', truncated: bytes > 0 }),
+    ...part.extra,
+  };
+}
+type TranscriptValue = {
   id: string;
   kind: ChatTranscriptPart['kind'];
   role: ChatTranscriptPart['role'];
   value: string | { json: unknown } | { image: string };
   extra: Partial<ChatTranscriptPart>;
 };
-const makeValue = (
-  id: string,
-  kind: ChatTranscriptPart['kind'],
-  role: ChatTranscriptPart['role'],
-  value: TranscriptValue['value'],
-  extra: Partial<ChatTranscriptPart> = {},
-): TranscriptValue => ({ id, kind, role, value, extra });
 type TranscriptTextStep = {
   position: S.FindPartPosition;
   next: S.FindPartPosition;
   part: TranscriptValue | null;
 };
-const getTextPosition = (message: number, block = 0, auxiliary = 0): S.FindPartPosition => ({
-  message,
-  block,
-  auxiliary,
-});
-const makeTextStep = (
-  position: S.FindPartPosition,
-  next: S.FindPartPosition,
-  part: TranscriptValue | null,
-): TranscriptTextStep => ({ position, next, part });
-function* messageParts(messages: readonly Message[], prefix = ''): Generator<Part> {
-  for (const { part } of messageSteps(messages, prefix)) {
-    if (!part) continue;
-    let value: string | Buffer;
-    const extra = { ...part.extra };
-    if (typeof part.value === 'string') value = part.value;
-    else if ('json' in part.value) value = JSON.stringify(part.value.json);
-    else {
-      value = Buffer.from(part.value.image, 'base64');
-      if (value.toString('base64') !== part.value.image) {
-        value = Buffer.alloc(0);
-        extra.availability = 'unavailable';
-      }
-    }
-    yield makePart(part.id, part.kind, part.role, value, extra);
-  }
+function makeValuePart({ id, kind, role, value, extra }: TranscriptValue): Part {
+  if (typeof value === 'string') return makePart(id, kind, role, value, extra);
+  if ('json' in value) return makePart(id, kind, role, JSON.stringify(value.json), extra);
+  const image = Buffer.from(value.image, 'base64');
+  return image.toString('base64') === value.image
+    ? makePart(id, kind, role, image, extra)
+    : makePart(id, kind, role, Buffer.alloc(0), { ...extra, availability: 'unavailable' });
 }
-/** Direct source positions share the display policy without constructing preceding parts. */
+function* buildMessageParts(messages: readonly Message[], prefix: string): Generator<Part> {
+  for (const { part } of getMessageSteps(messages, prefix)) if (part) yield makeValuePart(part);
+}
+const origin: S.FindPartPosition = { message: 0, block: 0, auxiliary: 0 };
+/**
+ * The single display policy for a saved entry, in order. Direct source positions let Find resume
+ * without constructing preceding parts.
+ */
 export function* getEntryTextValues(
   entry: EntryRecord,
-  start = getTextPosition(0),
+  start = origin,
 ): Generator<TranscriptTextStep> {
-  if (start.message === 0 && (entry.kind === 'pi.reset' || entry.kind === 'pi.compaction'))
-    yield makeTextStep(
-      getTextPosition(0),
-      getTextPosition(1),
-      makeValue(
-        'marker',
-        'notice',
-        'system',
-        entry.kind === 'pi.reset' ? 'Context reset.' : 'Context compacted.',
-      ),
-    );
   const messages = entry.model ?? [];
-  yield* messageSteps(messages, '', start);
+  if (start.message === 0) {
+    const marker = getEntryMarker(entry, messages);
+    if (marker) yield { position: origin, next: { ...origin, message: 1 }, part: marker };
+  }
+  yield* getMessageSteps(messages, '', start);
   const diagnostics = ToolResultEntry.is(entry) ? (entry.data?.diagnostics ?? []) : [];
   if (diagnostics.length && start.message <= messages.length + 1)
-    yield makeTextStep(
-      getTextPosition(messages.length + 1),
-      getTextPosition(messages.length + 2),
-      makeValue('diagnostics', 'details', 'tool', { json: diagnostics }),
-    );
+    yield {
+      position: { ...origin, message: messages.length + 1 },
+      next: { ...origin, message: messages.length + 2 },
+      part: {
+        id: 'diagnostics',
+        kind: 'details',
+        role: 'tool',
+        value: { json: diagnostics },
+        extra: {},
+      },
+    };
 }
-function* messageSteps(
+function getEntryMarker(
+  entry: EntryRecord,
+  messages: readonly Message[],
+): TranscriptValue | undefined {
+  const marker = { id: 'marker', kind: 'notice', role: 'system' } as const;
+  if (entry.kind === 'pi.reset' || entry.kind === 'pi.compaction')
+    return {
+      ...marker,
+      value: entry.kind === 'pi.reset' ? 'Context reset.' : 'Context compacted.',
+      extra: {},
+    };
+  // Decided without reading messages, so Find keeps its per-slice work bound.
+  if (messages.length) return undefined;
+  return {
+    ...marker,
+    value: 'Unsupported transcript record.',
+    extra: { availability: 'unsupported' },
+  };
+}
+function* getMessageSteps(
   messages: readonly Message[],
   prefix = '',
-  start = getTextPosition(1),
+  start: S.FindPartPosition = { ...origin, message: 1 },
 ): Generator<TranscriptTextStep> {
   for (let m = Math.max(1, start.message) - 1; m < messages.length; m++) {
     const message = messages[m];
-    const at = start.message === m + 1 ? start : getTextPosition(m + 1);
-    const nextMessage = getTextPosition(m + 2);
+    const at = (block: number, auxiliary = 0) => ({ message: m + 1, block, auxiliary });
+    const resume = start.message === m + 1 ? start : at(0);
+    const nextMessage = { ...origin, message: m + 2 };
     const role = message.role === 'toolResult' ? 'tool' : message.role;
     let state: ChatTranscriptPart['state'];
     if (message.role === 'assistant') {
@@ -316,113 +380,123 @@ function* messageSteps(
       if (typeof details?.patch === 'string') lastAuxiliary = 2;
       if (typeof details?.diff === 'string') lastAuxiliary = 3;
     } else if (state === 'failed' && role === 'assistant') lastAuxiliary = 4;
-    for (let b = at.block; b < content.length; b++) {
+    for (let b = resume.block; b < content.length; b++) {
       const block = content[b],
         id = `${prefix}m${m}.b${b}`;
-      const position = getTextPosition(m + 1, b);
-      const afterBlock =
-        b + 1 === content.length && lastAuxiliary < 0 ? nextMessage : getTextPosition(m + 1, b + 1);
-      const auxiliary = b === at.block ? at.auxiliary : 0;
+      const afterBlock = b + 1 === content.length && lastAuxiliary < 0 ? nextMessage : at(b + 1);
+      const auxiliary = b === resume.block ? resume.auxiliary : 0;
       if (auxiliary === 0) {
         let part: TranscriptValue;
         if (block.type === 'text')
-          part = makeValue(id, role === 'tool' ? 'result' : 'text', role, block.text, common);
-        else if (block.type === 'thinking')
-          part = makeValue(id, 'thinking', role, block.redacted ? '' : block.thinking, {
-            ...common,
-            ...(block.redacted ? { availability: 'redacted' as const } : {}),
-          });
-        else if (block.type === 'toolCall')
-          part = makeValue(
+          part = {
             id,
-            'arguments',
+            kind: role === 'tool' ? 'result' : 'text',
             role,
-            { json: block.arguments },
-            {
+            value: block.text,
+            extra: common,
+          };
+        else if (block.type === 'thinking')
+          part = {
+            id,
+            kind: 'thinking',
+            role,
+            value: block.redacted ? '' : block.thinking,
+            extra: { ...common, ...(block.redacted ? { availability: 'redacted' as const } : {}) },
+          };
+        else if (block.type === 'toolCall')
+          part = {
+            id,
+            kind: 'arguments',
+            role,
+            value: { json: block.arguments },
+            extra: {
               toolName: getLabel(block.name),
               callId: V.preview(block.id, 256).text,
               state: 'requested',
             },
-          );
+          };
         else if (block.type === 'image')
-          part = makeValue(
+          part = {
             id,
-            'image',
+            kind: 'image',
             role,
-            { image: block.data },
-            {
-              ...common,
-              mimeType: getLabel(block.mimeType, 'application/octet-stream'),
-            },
-          );
+            value: { image: block.data },
+            extra: { ...common, mimeType: getLabel(block.mimeType, 'application/octet-stream') },
+          };
         else
-          part = makeValue(id, 'notice', role, 'Unsupported recorded content.', {
-            availability: 'unsupported',
-          });
-        yield makeTextStep(
-          position,
-          block.type === 'toolCall' && block.argumentsError
-            ? getTextPosition(m + 1, b, 1)
-            : afterBlock,
+          part = {
+            id,
+            kind: 'notice',
+            role,
+            value: 'Unsupported recorded content.',
+            extra: { availability: 'unsupported' },
+          };
+        yield {
+          position: at(b),
+          next: block.type === 'toolCall' && block.argumentsError ? at(b, 1) : afterBlock,
           part,
-        );
+        };
       }
       if (auxiliary <= 1 && block.type === 'toolCall' && block.argumentsError)
-        yield makeTextStep(
-          getTextPosition(m + 1, b, 1),
-          afterBlock,
-          makeValue(id + '.arguments-error', 'notice', role, block.argumentsError, {
-            state: 'failed',
-            toolName: getLabel(block.name),
-          }),
-        );
+        yield {
+          position: at(b, 1),
+          next: afterBlock,
+          part: {
+            id: id + '.arguments-error',
+            kind: 'notice',
+            role,
+            value: block.argumentsError,
+            extra: { state: 'failed', toolName: getLabel(block.name) },
+          },
+        };
     }
-    const auxiliary = at.block === content.length ? at.auxiliary : 0;
-    const emit = (index: number, part: TranscriptValue) =>
-      makeTextStep(
-        getTextPosition(m + 1, content.length, index),
-        index === lastAuxiliary ? nextMessage : getTextPosition(m + 1, content.length, index + 1),
-        part,
-      );
+    const auxiliary = resume.block === content.length ? resume.auxiliary : 0;
+    const emit = (index: number, part: TranscriptValue): TranscriptTextStep => ({
+      position: at(content.length, index),
+      next: index === lastAuxiliary ? nextMessage : at(content.length, index + 1),
+      part,
+    });
     if (message.role === 'toolResult' && message.nestedCalls !== undefined && auxiliary <= 0)
-      yield emit(
-        0,
-        makeValue(
-          `${prefix}m${m}.nested-calls`,
-          'details',
-          role,
-          { json: message.nestedCalls },
-          common,
-        ),
-      );
+      yield emit(0, {
+        id: `${prefix}m${m}.nested-calls`,
+        kind: 'details',
+        role,
+        value: { json: message.nestedCalls },
+        extra: common,
+      });
     if (message.role === 'toolResult' && message.details !== undefined) {
       if (auxiliary <= 1)
-        yield emit(
-          1,
-          makeValue(`${prefix}m${m}.details`, 'details', role, { json: message.details }, common),
-        );
+        yield emit(1, {
+          id: `${prefix}m${m}.details`,
+          kind: 'details',
+          role,
+          value: { json: message.details },
+          extra: common,
+        });
       if (details) {
-        for (const [index, kind] of (['patch', 'diff'] as const).entries())
-          if (auxiliary <= index + 2 && typeof details[kind] === 'string')
-            yield emit(
-              index + 2,
-              makeValue(`${prefix}m${m}.${kind}`, kind, role, details[kind], common),
-            );
+        for (const [index, kind] of (['patch', 'diff'] as const).entries()) {
+          const value = details[kind];
+          if (auxiliary <= index + 2 && typeof value === 'string')
+            yield emit(index + 2, {
+              id: `${prefix}m${m}.${kind}`,
+              kind,
+              role,
+              value,
+              extra: common,
+            });
+        }
       }
     }
     if (state === 'failed' && role === 'assistant' && auxiliary <= 4)
-      yield emit(
-        4,
-        makeValue(
-          `${prefix}m${m}.failure`,
-          'notice',
-          role,
-          'Model response failed. Provider diagnostics are private.',
-          { state },
-        ),
-      );
+      yield emit(4, {
+        id: `${prefix}m${m}.failure`,
+        kind: 'notice',
+        role,
+        value: 'Model response failed. Provider diagnostics are private.',
+        extra: { state },
+      });
     if (!content.length && lastAuxiliary < 0)
-      yield makeTextStep(getTextPosition(m + 1), nextMessage, null);
+      yield { position: at(0), next: nextMessage, part: null };
   }
 }
 async function getPairing(harness: Harness, entry: EntryRecord, signal?: AbortSignal) {
@@ -448,7 +522,7 @@ async function getTaskPairing(
   signal?: AbortSignal,
 ) {
   if (input.kind !== 'model') return undefined;
-  checkRead(signal);
+  signal?.throwIfAborted();
   const assistant = await harness.commit((tx) => tx.entry(input.assistant), context);
   if (!assistant || assistant.conversationId !== conversationId) return undefined;
   // Match the full call ID, never its preview, and never choose between duplicate IDs in one assistant entry.
@@ -465,51 +539,72 @@ async function getTaskPairing(
     call: { entryId: String(assistant.id), partId: positions[0] },
   };
 }
-export async function getEntryParts(
+
+function summarizeThinking(
+  parts: readonly Part[],
+  fallback: ChatTranscript['thinking'],
+): ChatTranscript['thinking'] {
+  const thinking = parts.filter((part) => part.kind === 'thinking');
+  if (thinking.some(isAvailable)) return 'available';
+  return thinking.length ? 'redacted' : fallback;
+}
+type EntryTranscript = {
+  parts: Part[];
+  thinking: ChatTranscript['thinking'];
+  /** UTF-8 bytes of selected text parts, kept once a content read needs them. */
+  contents: Map<string, Buffer>;
+};
+const entryTranscripts = new WeakMap<Harness, LRUCache<string, EntryTranscript>>();
+function getEntryCache(harness: Harness) {
+  let cache = entryTranscripts.get(harness);
+  if (!cache) {
+    cache = new LRUCache<string, EntryTranscript>({
+      maxSize: entryCacheBytes,
+      sizeCalculation: (transcript) => {
+        let size = partOverheadBytes;
+        for (const part of transcript.parts) size += getByteLength(part) + partOverheadBytes;
+        for (const bytes of transcript.contents.values()) size += bytes.length;
+        return size;
+      },
+    });
+    entryTranscripts.set(harness, cache);
+  }
+  return cache;
+}
+async function getEntryTranscript(
   harness: Harness,
   entry: EntryRecord,
   signal?: AbortSignal,
-): Promise<Part[]> {
-  checkRead(signal);
-  const pairing = await getPairing(harness, entry, signal);
-  checkRead(signal);
-  const parts: Part[] = [];
-  for (const part of messageParts(entry.model ?? [])) {
-    checkRead(signal);
-    parts.push(part);
-    if (signal && parts.length % 32 === 0)
-      await new Promise<void>((resolve) => setImmediate(resolve));
-  }
-  if (!parts.length && entry.kind !== 'pi.reset' && entry.kind !== 'pi.compaction')
-    parts.push(
-      makePart('marker', 'notice', 'system', 'Unsupported transcript record.', {
-        availability: 'unsupported',
-      }),
-    );
+): Promise<EntryTranscript> {
+  const cache = getEntryCache(harness);
+  const cached = cache.get(String(entry.id));
+  if (cached) return cached;
+  signal?.throwIfAborted();
+  const pairing = (await getPairing(harness, entry, signal)) ?? { pairing: 'unmatched' as const };
+  signal?.throwIfAborted();
   const diagnostics = ToolResultEntry.is(entry) ? (entry.data?.diagnostics ?? []) : [];
-  if (diagnostics.length)
-    parts.push(makePart('diagnostics', 'details', 'tool', JSON.stringify(diagnostics)));
-  if (entry.kind === 'pi.reset' || entry.kind === 'pi.compaction')
-    parts.unshift(
-      makePart(
-        'marker',
-        'notice',
-        'system',
-        entry.kind === 'pi.reset' ? 'Context reset.' : 'Context compacted.',
-      ),
-    );
-  for (const part of parts)
-    if (part.descriptor.role === 'tool') {
-      part.descriptor = {
-        ...part.descriptor,
-        ...(pairing ?? { pairing: 'unmatched' as const }),
-        ...(diagnostics.some((item) => item.code === 'aborted' || item.code === 'interrupted')
-          ? { state: 'interrupted' as const }
-          : {}),
+  const interrupted = diagnostics.some(
+    (item) => item.code === 'aborted' || item.code === 'interrupted',
+  );
+  const parts: Part[] = [];
+  for (const { part } of getEntryTextValues(entry)) {
+    if (!part) continue;
+    signal?.throwIfAborted();
+    const built = makeValuePart(part);
+    if (built.role === 'tool')
+      built.extra = {
+        ...built.extra,
+        ...pairing,
+        ...(interrupted ? { state: 'interrupted' as const } : {}),
       };
-    }
-  return parts;
+    parts.push(built);
+    if (signal && parts.length % partsPerTurn === 0) await setImmediate();
+  }
+  const transcript = { parts, thinking: summarizeThinking(parts, 'none'), contents: new Map() };
+  cache.set(String(entry.id), transcript);
+  return transcript;
 }
+
 async function readNestedCall(
   harness: Harness,
   target: ChatTarget,
@@ -517,7 +612,7 @@ async function readNestedCall(
   signal?: AbortSignal,
 ) {
   const task = await harness.getTask(tool.taskId, context);
-  checkRead(signal);
+  signal?.throwIfAborted();
   if (
     !task ||
     task.kind !== 'pi.tool' ||
@@ -536,14 +631,14 @@ async function readNestedCall(
   )
     return V.fail('Persistence', 'Nested tool call identity is invalid.');
   const parent = await harness.getTask(input.parent, context);
-  checkRead(signal);
+  signal?.throwIfAborted();
   if (!parent || parent.kind !== 'pi.tool' || parent.conversationId !== task.conversationId)
     return V.fail('Persistence', 'Nested tool parent authority is invalid.');
   const record = await harness.snapshot(NestedCallDoc, input.parent, input.key, context);
-  checkRead(signal);
+  signal?.throwIfAborted();
   if (!record) {
     const currentParent = await harness.getTask(input.parent, context);
-    checkRead(signal);
+    signal?.throwIfAborted();
     if (
       !currentParent ||
       currentParent.kind !== 'pi.tool' ||
@@ -587,111 +682,117 @@ function getNestedOutput(
     ? blocks
     : [{ type: 'text', text: JSON.stringify(value) }];
 }
-async function getLiveParts(
+/** Progress a running model-issued or nested call publishes before its result is retained. */
+function makeRunningToolParts(
+  prefix: string,
+  tool: Pick<ToolSlot, 'output' | 'diagnostics' | 'details' | 'droppedBytes' | 'droppedLines'>,
+  common: Partial<ChatTranscriptPart>,
+): Part[] {
+  const evidence = JSON.stringify([tool.droppedBytes ?? 0, tool.droppedLines ?? 0]);
+  const parts = [
+    makePart(prefix + 'output', 'result', 'tool', tool.output ?? '', common, evidence),
+  ];
+  if (tool.diagnostics?.length)
+    parts.push(
+      makePart(prefix + 'diagnostics', 'details', 'tool', JSON.stringify(tool.diagnostics), common),
+    );
+  if (tool.details !== undefined)
+    parts.push(
+      makePart(prefix + 'details', 'details', 'tool', JSON.stringify(tool.details), common),
+    );
+  return parts;
+}
+type TranscriptParts = {
+  /** Parts in display order; live sources build each one only when a reader reaches it. */
+  parts: Iterable<Part> | AsyncIterable<Part>;
+  thinking: ChatTranscript['thinking'];
+};
+async function getLiveTranscript(
   harness: Harness,
   source: ChatTranscriptSource,
   signal?: AbortSignal,
-  captured?: Awaited<ReturnType<typeof captureTranscript>>,
-): Promise<Part[]> {
+  captured?: TranscriptCapture,
+): Promise<TranscriptParts> {
   const capture = captured ?? (await captureTranscript(harness, source.target));
-  checkRead(signal);
+  signal?.throwIfAborted();
   const actual = getLiveSource(harness, source.target, capture);
-  if (!actual || bind(actual) !== bind(source))
+  if (!actual || hashJson(actual) !== hashJson(source))
     return V.fail('Conflict', 'Transcript source changed; reload the consistent view.');
-  const parts: Part[] = [];
-  for (const part of messageParts(
-    capture.live.generation?.message ? [capture.live.generation.message as Message] : [],
-    'generation.',
-  )) {
-    checkRead(signal);
-    part.descriptor.state = part.descriptor.kind === 'arguments' ? 'requested' : 'running';
-    parts.push(part);
-    if (signal && parts.length % 32 === 0)
-      await new Promise<void>((resolve) => setImmediate(resolve));
+  const message = capture.live.generation?.message as Message | undefined;
+  const generation: Part[] = [];
+  for (const part of buildMessageParts(message ? [message] : [], 'generation.')) {
+    signal?.throwIfAborted();
+    part.extra = { ...part.extra, state: part.kind === 'arguments' ? 'requested' : 'running' };
+    generation.push(part);
+    if (signal && generation.length % partsPerTurn === 0) await setImmediate();
   }
+  // Only generation parts can hold thinking; tool and nested parts are built lazily.
+  return {
+    parts: listLiveParts(harness, source, capture, generation, signal),
+    thinking: summarizeThinking(generation, 'pending'),
+  };
+}
+async function* listLiveParts(
+  harness: Harness,
+  source: ChatTranscriptSource,
+  capture: TranscriptCapture,
+  generation: Part[],
+  signal?: AbortSignal,
+): AsyncGenerator<Part> {
+  yield* generation;
+  const conversationId = cid(source.target.conversationId);
+  let built = 0;
   for (const [i, tool] of (capture.live.tools ?? []).entries()) {
-    checkRead(signal);
-    let task = capture.toolTasks[i];
-    const taskId = tool.taskId;
-    if (i >= 8 && taskId) task = await harness.commit((tx) => tx.task(taskId), context);
-    if (task && task.conversationId !== cid(source.target.conversationId))
+    signal?.throwIfAborted();
+    const task = capture.toolTasks[i];
+    if (task && task.conversationId !== conversationId)
       V.fail('Persistence', 'Live tool authority is invalid.');
     const prefix = `tool${i}.`;
-    const pairing =
-      task?.kind === 'pi.tool'
-        ? await getTaskPairing(harness, task.conversationId, task.input as ToolTaskInput, signal)
-        : undefined;
+    const pairing = (task?.kind === 'pi.tool'
+      ? await getTaskPairing(harness, task.conversationId, task.input as ToolTaskInput, signal)
+      : undefined) ?? { pairing: 'unmatched' as const };
+    const call = { toolName: getLabel(tool.name), callId: V.preview(tool.callId, 256).text };
     if (
       task?.kind === 'pi.tool' &&
       task.state.checkpoint &&
       typeof task.state.checkpoint === 'object' &&
       !Array.isArray(task.state.checkpoint) &&
       task.state.checkpoint.phase === 'execute'
-    ) {
-      parts.push(
-        makePart(
-          prefix + 'executed',
-          'executed-arguments',
-          'tool',
-          JSON.stringify(task.state.checkpoint.arguments),
-          {
-            ...(pairing ?? { pairing: 'unmatched' as const }),
-            toolName: getLabel(tool.name),
-            callId: V.preview(tool.callId, 256).text,
-            taskId: String(task.id),
-            state: 'running',
-          },
-        ),
+    )
+      yield makePart(
+        prefix + 'executed',
+        'executed-arguments',
+        'tool',
+        JSON.stringify(task.state.checkpoint.arguments),
+        { ...pairing, ...call, taskId: String(task.id), state: 'running' },
       );
-    }
+    const taskId = tool.taskId ? { taskId: String(tool.taskId) } : {};
     if (tool.entry) {
-      const entry =
-        capture.tools[i] ?? (await readEntry(harness, source.target, String(tool.entry)));
-      if (!entry || entry.conversationId !== cid(source.target.conversationId))
+      const entry = capture.tools[i];
+      if (!entry || entry.conversationId !== conversationId)
         return V.fail('Persistence', 'Recorded tool result is unavailable.');
-      parts.push(
-        ...(await getEntryParts(harness, entry, signal)).map((part) => ({
+      for (const part of (await getEntryTranscript(harness, entry, signal)).parts)
+        yield {
           ...part,
-          descriptor: {
-            ...part.descriptor,
-            partId: prefix + part.descriptor.partId,
-            committed: { entryId: String(entry.id), partId: part.descriptor.partId },
-            ...(tool.taskId ? { taskId: String(tool.taskId) } : {}),
+          id: prefix + part.id,
+          extra: {
+            ...part.extra,
+            committed: { entryId: String(entry.id), partId: part.id },
+            ...taskId,
           },
-        })),
-      );
-    } else {
-      const evidence = JSON.stringify([tool.droppedBytes ?? 0, tool.droppedLines ?? 0]);
-      const common = {
-        ...(pairing ?? { pairing: 'unmatched' as const }),
-        ...(tool.taskId ? { taskId: String(tool.taskId) } : {}),
-        toolName: getLabel(tool.name),
-        callId: V.preview(tool.callId, 256).text,
-        state: tool.status === 'done' ? ('missing-result' as const) : ('running' as const),
+        };
+    } else
+      yield* makeRunningToolParts(prefix, tool, {
+        ...pairing,
+        ...taskId,
+        ...call,
+        state: tool.status === 'done' ? 'missing-result' : 'running',
         droppedBytes: tool.droppedBytes ?? 0,
         droppedLines: tool.droppedLines ?? 0,
-      };
-      parts.push(
-        makePart(prefix + 'output', 'result', 'tool', tool.output ?? '', common, evidence),
-      );
-      if (tool.diagnostics?.length)
-        parts.push(
-          makePart(
-            prefix + 'diagnostics',
-            'details',
-            'tool',
-            JSON.stringify(tool.diagnostics),
-            common,
-          ),
-        );
-      if (tool.details !== undefined)
-        parts.push(
-          makePart(prefix + 'details', 'details', 'tool', JSON.stringify(tool.details), common),
-        );
-    }
+      });
   }
   for (const tool of capture.live.nestedTools ?? []) {
-    checkRead(signal);
+    signal?.throwIfAborted();
     const prefix = `nested.${tool.taskId}.`;
     const { task, input, result } = await readNestedCall(harness, source.target, tool, signal);
     let state: ChatTranscriptPart['state'] = 'running';
@@ -708,11 +809,15 @@ async function getLiveParts(
       droppedBytes: tool.droppedBytes ?? 0,
       droppedLines: tool.droppedLines ?? 0,
     };
-    parts.push(
-      makePart(prefix + 'arguments', 'arguments', 'tool', JSON.stringify(input.call.arguments), {
+    yield makePart(
+      prefix + 'arguments',
+      'arguments',
+      'tool',
+      JSON.stringify(input.call.arguments),
+      {
         ...common,
         state: 'requested',
-      }),
+      },
     );
     const checkpoint = task.state.checkpoint as ToolTaskCheckpoint | undefined;
     let executed: NestedToolSlot['arguments'] | undefined;
@@ -721,129 +826,102 @@ async function getLiveParts(
     // Terminal tasks drop checkpoints; duration proves this slot's final arguments reached execution.
     else if (tool.status === 'done' && result?.durationMs !== undefined) executed = tool.arguments;
     if (executed !== undefined)
-      parts.push(
-        makePart(
-          prefix + 'executed',
-          'executed-arguments',
-          'tool',
-          JSON.stringify(executed),
-          common,
-        ),
+      yield makePart(
+        prefix + 'executed',
+        'executed-arguments',
+        'tool',
+        JSON.stringify(executed),
+        common,
       );
-    if (tool.status === 'done') {
-      if (!result) {
-        parts.push(
-          makePart(prefix + 'output', 'result', 'tool', '', {
-            ...common,
-            state: 'missing-result',
-            availability: 'unavailable',
-          }),
-        );
-        continue;
-      }
-      const retained: Partial<ChatTranscriptPart> = {
-        ...common,
-        droppedBytes: undefined,
-        droppedLines: undefined,
-        state: result.isError ? ('failed' as const) : ('completed' as const),
-      };
-      if (result.diagnostics.some((item) => item.code === 'aborted' || item.code === 'interrupted'))
-        retained.state = 'interrupted';
-      for (const part of messageParts(
-        [
-          {
-            role: 'toolResult',
-            toolCallId: tool.callId,
-            toolName: tool.name,
-            content: getNestedOutput(result.structuredOutput),
-            isError: result.isError,
-            ...(result.details === undefined ? {} : { details: result.details }),
-            timestamp: 0,
-          },
-        ],
-        prefix,
-      )) {
-        checkRead(signal);
-        parts.push({ ...part, descriptor: { ...part.descriptor, ...retained } });
-        if (signal && parts.length % 32 === 0)
-          await new Promise<void>((resolve) => setImmediate(resolve));
-      }
-      if (result.structuredOutput === undefined)
-        parts.push(
-          makePart(prefix + 'output', 'result', 'tool', '', {
-            ...retained,
-            availability: 'unavailable',
-          }),
-        );
-      if (result.diagnostics.length)
-        parts.push(
-          makePart(
-            prefix + 'diagnostics',
-            'details',
-            'tool',
-            JSON.stringify(result.diagnostics),
-            retained,
-          ),
-        );
+    if (tool.status !== 'done') {
+      yield* makeRunningToolParts(prefix, tool, common);
       continue;
     }
-    parts.push(
-      makePart(
-        prefix + 'output',
-        'result',
+    if (!result) {
+      yield makePart(prefix + 'output', 'result', 'tool', '', {
+        ...common,
+        state: 'missing-result',
+        availability: 'unavailable',
+      });
+      continue;
+    }
+    const retained: Partial<ChatTranscriptPart> = {
+      ...common,
+      droppedBytes: undefined,
+      droppedLines: undefined,
+      state: result.isError ? 'failed' : 'completed',
+    };
+    if (result.diagnostics.some((item) => item.code === 'aborted' || item.code === 'interrupted'))
+      retained.state = 'interrupted';
+    const output: ToolResultMessage = {
+      role: 'toolResult',
+      toolCallId: tool.callId,
+      toolName: tool.name,
+      content: getNestedOutput(result.structuredOutput),
+      isError: result.isError,
+      ...(result.details === undefined ? {} : { details: result.details }),
+      timestamp: 0,
+    };
+    for (const part of buildMessageParts([output], prefix)) {
+      signal?.throwIfAborted();
+      yield { ...part, extra: { ...part.extra, ...retained } };
+      if (signal && ++built % partsPerTurn === 0) await setImmediate();
+    }
+    if (result.structuredOutput === undefined)
+      yield makePart(prefix + 'output', 'result', 'tool', '', {
+        ...retained,
+        availability: 'unavailable',
+      });
+    if (result.diagnostics.length)
+      yield makePart(
+        prefix + 'diagnostics',
+        'details',
         'tool',
-        tool.output ?? '',
-        common,
-        JSON.stringify([tool.droppedBytes ?? 0, tool.droppedLines ?? 0]),
-      ),
-    );
-    if (tool.diagnostics?.length)
-      parts.push(
-        makePart(
-          prefix + 'diagnostics',
-          'details',
-          'tool',
-          JSON.stringify(tool.diagnostics),
-          common,
-        ),
-      );
-    if (tool.details !== undefined)
-      parts.push(
-        makePart(prefix + 'details', 'details', 'tool', JSON.stringify(tool.details), common),
+        JSON.stringify(result.diagnostics),
+        retained,
       );
   }
-  return parts;
 }
-export function projectManifest(
+/**
+ * A manifest cursor binds the ordered part IDs and kinds before its position, so values may grow
+ * and later parts may appear without invalidating it; per-selection revisions cover content.
+ */
+async function projectManifest(
   harness: Harness,
   source: ChatTranscriptSource,
-  parts: Part[],
-  start = 0,
-  limit = chatManifestPageSize,
-): ChatTranscript {
-  const page = parts.slice(start, start + limit).map((part) => part.descriptor);
-  const position = start + page.length;
-  let thinking: ChatTranscript['thinking'] = source.kind === 'live' ? 'pending' : 'none';
-  if (parts.some((part) => part.descriptor.kind === 'thinking')) thinking = 'redacted';
+  transcript: TranscriptParts,
+  start: number,
+  limit: number,
+  revision?: string,
+): Promise<ChatTranscript> {
+  const seen: [string, ChatTranscriptPart['kind']][] = [];
+  const page: ChatTranscriptPart[] = [];
+  let more = false;
+  for await (const part of transcript.parts) {
+    if (seen.length === start + limit) {
+      more = true;
+      break;
+    }
+    if (seen.length >= start) page.push(describePart(part));
+    seen.push([part.id, part.kind]);
+  }
   if (
-    parts.some(
-      (part) => part.descriptor.kind === 'thinking' && part.descriptor.availability === 'available',
-    )
+    revision !== undefined &&
+    (seen.length < start || hashJson(seen.slice(0, start)) !== revision)
   )
-    thinking = 'available';
+    V.fail('Conflict', 'Transcript manifest changed; reload the source.');
   return {
     source,
     parts: page,
-    nextCursor:
-      position < parts.length
-        ? sealCursor(harness, {
-            kind: 'manifest',
-            binding: bind(source),
-            revision: bind(parts.map((part) => part.descriptor)),
-            position,
-          })
-        : null,
-    thinking,
+    nextCursor: more
+      ? sealCursor(harness, {
+          kind: 'manifest',
+          binding: hashJson(source),
+          revision: hashJson(seen),
+          position: seen.length,
+        })
+      : null,
+    thinking: transcript.thinking,
   };
 }
 export async function projectEntryTranscript(
@@ -853,33 +931,80 @@ export async function projectEntryTranscript(
   signal?: AbortSignal,
 ) {
   const source: ChatTranscriptSource = { kind: 'entry', target, entryId: String(entry.id) };
-  return projectManifest(harness, source, await getEntryParts(harness, entry, signal), 0, 4);
+  return projectManifest(
+    harness,
+    source,
+    await getEntryTranscript(harness, entry, signal),
+    0,
+    embeddedManifestParts,
+  );
 }
 export async function projectLiveTranscript(
   harness: Harness,
   source: ChatTranscriptSource,
-  captured: Awaited<ReturnType<typeof captureTranscript>>,
+  captured: TranscriptCapture,
 ) {
   return projectManifest(
     harness,
     source,
-    await getLiveParts(harness, source, undefined, captured),
+    await getLiveTranscript(harness, source, undefined, captured),
     0,
-    4,
+    embeddedManifestParts,
   );
 }
-function selectPart(parts: Part[], selection: ChatTranscriptSelection) {
-  const part = parts.find((part) => part.descriptor.partId === selection.partId);
-  if (!part || part.descriptor.availability !== 'available')
+async function findPart(parts: TranscriptParts['parts'], partId: string) {
+  for await (const part of parts) if (part.id === partId) return part;
+  return undefined;
+}
+/** Returns the selected value's bytes once the selection's fixed prefix still matches it. */
+function readSelection(
+  part: Part | undefined,
+  selection: ChatTranscriptSelection,
+  bytes = part && (typeof part.value === 'string' ? Buffer.from(part.value) : part.value),
+) {
+  if (!part || !bytes || !isAvailable(part))
     return V.fail('InvalidInput', 'Transcript part is unavailable or invalid.');
-  const bytes = Buffer.from(part.value);
   if (
     selection.bytes > bytes.length ||
-    hash(Buffer.concat([Buffer.from(part.evidence ?? ''), bytes.subarray(0, selection.bytes)])) !==
-      selection.revision
+    (selection.bytes === bytes.length
+      ? getRevision(part)
+      : hashPrefix(part, bytes.subarray(0, selection.bytes))) !== selection.revision
   )
     return V.fail('Conflict', 'Transcript prefix changed; reload the selected part.');
-  return { part, bytes };
+  return bytes;
+}
+async function readSelectedPart(
+  harness: Harness,
+  source: ChatTranscriptSource,
+  selection: ChatTranscriptSelection,
+  signal?: AbortSignal,
+) {
+  if (source.kind === 'entry') {
+    const entry = await readEntry(harness, source.target, source.entryId);
+    const transcript = await getEntryTranscript(harness, entry, signal);
+    const part = transcript.parts.find((part) => part.id === selection.partId);
+    let bytes = transcript.contents.get(selection.partId);
+    if (part && !bytes && typeof part.value === 'string' && isAvailable(part)) {
+      bytes = Buffer.from(part.value);
+      transcript.contents.set(part.id, bytes);
+      // Reinsert so the cache accounts for the retained bytes.
+      getEntryCache(harness).set(String(entry.id), transcript);
+    }
+    return { part: part!, bytes: readSelection(part, selection, bytes) };
+  }
+  const transcript = await getLiveTranscript(harness, source, signal);
+  const part = await findPart(transcript.parts, selection.partId);
+  const bytes = readSelection(part, selection);
+  // A live selection is served only while its source is still current.
+  const current = await findPart(
+    (await getLiveTranscript(harness, source, signal)).parts,
+    selection.partId,
+  );
+  if (!current || !isAvailable(current))
+    V.fail('Conflict', 'Transcript part disappeared; reload the source.');
+  readSelection(current, selection);
+  signal?.throwIfAborted();
+  return { part: part!, bytes };
 }
 export async function readTranscriptContent(
   harness: Harness,
@@ -887,57 +1012,41 @@ export async function readTranscriptContent(
   signal?: AbortSignal,
 ): Promise<ChatOutput<'getChatTranscriptContent'>> {
   const { source, selection } = input;
-  checkRead(signal);
-  const parts =
-    source.kind === 'entry'
-      ? await getEntryParts(
-          harness,
-          await readEntry(harness, source.target, source.entryId),
-          signal,
-        )
-      : await getLiveParts(harness, source, signal);
-  checkRead(signal);
+  signal?.throwIfAborted();
   if (!selection) {
-    if (source.kind === 'live') {
-      const current = await getLiveParts(harness, source, signal);
-      if (
-        bind(current.map((part) => part.descriptor)) !== bind(parts.map((part) => part.descriptor))
-      )
-        V.fail('Conflict', 'Transcript manifest changed; reload the source.');
-      checkRead(signal);
-    }
     const cursor = input.cursor
-      ? openCursor(harness, input.cursor, 'manifest', bind(source))
+      ? openCursor(harness, input.cursor, 'manifest', hashJson(source))
       : undefined;
-    if (cursor && cursor.revision !== bind(parts.map((part) => part.descriptor)))
-      V.fail('Conflict', 'Transcript manifest changed; reload the source.');
-    const start = cursor?.position ?? 0;
-    if (start > parts.length) V.fail('InvalidInput', 'Invalid manifest position.');
+    const transcript =
+      source.kind === 'entry'
+        ? await getEntryTranscript(
+            harness,
+            await readEntry(harness, source.target, source.entryId),
+            signal,
+          )
+        : await getLiveTranscript(harness, source, signal);
+    signal?.throwIfAborted();
     return {
       kind: 'manifest',
       cursor: input.cursor ?? null,
-      ...projectManifest(harness, source, parts, start),
+      ...(await projectManifest(
+        harness,
+        source,
+        transcript,
+        cursor?.position ?? 0,
+        chatManifestPageSize,
+        cursor ? (cursor.revision ?? '') : undefined,
+      )),
     };
   }
-  const { part, bytes } = selectPart(parts, selection);
-  if (source.kind === 'live') {
-    const current = await getLiveParts(harness, source, signal);
-    if (
-      !current.some(
-        (part) =>
-          part.descriptor.partId === selection.partId &&
-          part.descriptor.availability === 'available',
-      )
-    )
-      V.fail('Conflict', 'Transcript part disappeared; reload the source.');
-    selectPart(current, selection);
-    checkRead(signal);
-  }
-  const binding = bind({ source, selection });
+  const binding = hashJson({ source, selection });
   const offset = input.cursor ? openCursor(harness, input.cursor, 'content', binding).position : 0;
+  const { part, bytes } = await readSelectedPart(harness, source, selection, signal);
+  signal?.throwIfAborted();
   if (offset > selection.bytes) V.fail('InvalidInput', 'Invalid content position.');
+  const encoding = typeof part.value === 'string' ? 'utf8' : 'base64';
   let end = Math.min(offset + chatContentChunkBytes, selection.bytes);
-  if (part.descriptor.encoding === 'utf8') {
+  if (encoding === 'utf8') {
     while (end < selection.bytes && (bytes[end] & 0xc0) === 0x80) end--;
     if (
       (offset < bytes.length && (bytes[offset] & 0xc0) === 0x80) ||
@@ -951,10 +1060,8 @@ export async function readTranscriptContent(
     source,
     selection,
     offset,
-    encoding: part.descriptor.encoding,
-    data: bytes
-      .subarray(offset, end)
-      .toString(part.descriptor.encoding === 'utf8' ? 'utf8' : 'base64'),
+    encoding,
+    data: bytes.subarray(offset, end).toString(encoding),
     nextCursor:
       end < selection.bytes
         ? sealCursor(harness, { kind: 'content', binding, position: end })

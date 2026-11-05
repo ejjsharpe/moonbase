@@ -1,4 +1,4 @@
-import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
+import { setImmediate } from 'node:timers/promises';
 import type { Harness } from '@earendil-works/pi-durable';
 import {
   maximumChatReplyBytes,
@@ -7,54 +7,69 @@ import {
   type ChatInput,
   type ChatOutput,
 } from '@moonbase/contracts/chat';
-import { cid, eid } from './documents.ts';
 import {
-  bindTranscriptRead,
-  checkRead,
   getEntryTextValues,
+  hashJson,
   openCursor,
+  scanAdjacentEntry,
   sealCursor,
 } from './transcript.ts';
-import type { TranscriptCursor } from './private-schema.ts';
+import {
+  maximumFindPathChars,
+  maximumFindPathDepth,
+  type TranscriptCursor,
+} from './private-schema.ts';
 import * as V from './validation.ts';
 
 const windowSize = 16 * 1024;
 const sliceBytes = 256 * 1024;
+/** Work one Find invocation may do before returning a continuation. */
+const entriesPerSlice = 32;
+const partsPerSlice = 32;
+const chunkUnits = 4096;
+const tokensPerTurn = 32;
+/** One token adds at most three path elements to its node, each a safe integer and a comma. */
+const tokenPathChars = 3 * 17;
 type Token = { path: number[]; text: string };
-const before = (path: number[], seek: number[]) => {
+const isBefore = (path: number[], seek: number[]) => {
   for (let i = 0; i < Math.min(path.length, seek.length); i++)
     if (path[i] !== seek[i]) return path[i] < seek[i];
   return false;
 };
-const boundary = (text: string, offset: number) =>
+const alignBoundary = (text: string, offset: number) =>
   offset > 0 && /[\udc00-\udfff]/.test(text[offset] ?? '') ? offset - 1 : offset;
+const sliceChunk = (text: string, index: number) =>
+  text.slice(
+    alignBoundary(text, index * chunkUnits),
+    alignBoundary(text, Math.min(text.length, (index + 1) * chunkUnits)),
+  );
 
 /** JSON.stringify's display format, traversable at token paths without serializing earlier values. */
 function* jsonTokens(value: unknown, seek: number[], path: number[] = []): Generator<Token> {
-  if (path.length > 128) V.fail('InvalidInput', 'Find JSON exceeds a resumable cursor depth.');
-  if (before(path, seek)) return;
+  if (isBefore(path, seek)) return;
   const position = path.every((item, index) => seek[index] === item)
     ? seek[path.length]
     : undefined;
   const emit = function* (text: string, position: number): Generator<Token> {
     const next = [...path, position];
-    if (!before(next, seek)) yield { path: next, text };
+    if (!isBefore(next, seek)) yield { path: next, text };
   };
   if (typeof value === 'string') {
     yield* emit('"', 0);
-    const count = Math.ceil(value.length / 4096);
-    const start = Math.max(0, (position ?? 1) - 1);
-    for (let i = start; i < count; i++)
-      yield* emit(
-        JSON.stringify(
-          value.slice(
-            boundary(value, i * 4096),
-            boundary(value, Math.min(value.length, (i + 1) * 4096)),
-          ),
-        ).slice(1, -1),
-        i + 1,
-      );
+    const count = Math.ceil(value.length / chunkUnits);
+    for (let i = Math.max(0, (position ?? 1) - 1); i < count; i++)
+      yield* emit(JSON.stringify(sliceChunk(value, i)).slice(1, -1), i + 1);
     yield* emit('"', count + 1);
+  } else if (
+    value !== null &&
+    typeof value === 'object' &&
+    (path.length + 3 > maximumFindPathDepth ||
+      JSON.stringify(path).length + tokenPathChars > maximumFindPathChars)
+  ) {
+    // Deeper token paths could not fit a cursor, so this subtree resumes by serialized chunk.
+    const text = JSON.stringify(value);
+    const count = Math.ceil(text.length / chunkUnits);
+    for (let i = position ?? 0; i < count; i++) yield* emit(sliceChunk(text, i), i);
   } else if (value !== null && typeof value === 'object') {
     const array = Array.isArray(value);
     const keys = array ? undefined : Object.keys(value);
@@ -71,10 +86,10 @@ function* jsonTokens(value: unknown, seek: number[], path: number[] = []): Gener
           text,
         });
         const comma = punctuation(i ? ',' : '', 0);
-        if (!before(comma.path, seek)) yield comma;
+        if (!isBefore(comma.path, seek)) yield comma;
         yield* jsonTokens(key, seek, [...keyPath, 1]);
         const colon = punctuation(':', 2);
-        if (!before(colon.path, seek)) yield colon;
+        if (!isBefore(colon.path, seek)) yield colon;
       }
       yield* jsonTokens(array ? value[i] : (value as Record<string, unknown>)[key!], seek, [
         ...path,
@@ -103,11 +118,14 @@ async function readWindow(
     count = 0,
     done = true;
   for (const token of tokens) {
-    checkRead(signal);
-    if (++count % 32 === 0) await new Promise<void>((resolve) => setImmediate(resolve));
+    signal?.throwIfAborted();
+    if (++count % tokensPerTurn === 0) await setImmediate();
     const offset =
       JSON.stringify(token.path) === JSON.stringify(position.path) ? position.offset : 0;
-    const end = boundary(token.text, Math.min(token.text.length, offset + limit - text.length));
+    const end = alignBoundary(
+      token.text,
+      Math.min(token.text.length, offset + limit - text.length),
+    );
     const piece = token.text.slice(offset, end);
     segments.push({ token, offset, start: text.length, length: piece.length });
     text += piece;
@@ -139,23 +157,12 @@ export async function findTranscript(
   signal?: AbortSignal,
 ): Promise<ChatOutput<'findChatTranscript'>> {
   const { target, query } = input;
-  const binding = bindTranscriptRead({ operation: 'findChatTranscript', target, query });
+  const binding = hashJson({ operation: 'findChatTranscript', target, query });
   const cursor = input.cursor ? openCursor(harness, input.cursor, 'find', binding) : undefined;
   const upper = cursor
     ? (cursor.upper ?? null)
-    : String(
-        (
-          await harness.commit(
-            (tx) =>
-              tx.scanEntries(
-                { conversationId: cid(target.conversationId), order: 'descending' },
-                1,
-              ),
-            context,
-          )
-        ).items[0]?.id ?? '',
-      ) || null;
-  checkRead(signal);
+    : String((await scanAdjacentEntry(harness, target, 'older'))?.id ?? '') || null;
+  signal?.throwIfAborted();
   const start: TranscriptCursor = {
     kind: 'find',
     binding,
@@ -189,34 +196,20 @@ export async function findTranscript(
   while (
     upper &&
     next.position <= Number(upper) &&
-    rows < 32 &&
+    rows < entriesPerSlice &&
     examined < sliceBytes &&
-    parts < 32
+    parts < partsPerSlice
   ) {
-    checkRead(signal);
-    const entry = (
-      await harness.commit(
-        (tx) =>
-          tx.scanEntries(
-            {
-              conversationId: cid(target.conversationId),
-              order: 'ascending',
-              minEntryId: eid(String(next.position)),
-              maxEntryId: eid(upper),
-            },
-            1,
-          ),
-        context,
-      )
-    ).items[0];
-    checkRead(signal);
+    signal?.throwIfAborted();
+    const entry = await scanAdjacentEntry(harness, target, 'newer', next.position, upper);
+    signal?.throwIfAborted();
     if (!entry) return reply(true);
     rows++;
     next = { ...next, position: Number(entry.id), entries: (next.entries ?? 0) + 1 };
     let finished = true;
     for (const step of getEntryTextValues(entry, next.part)) {
-      checkRead(signal);
-      if (parts++ >= 32 || examined >= sliceBytes) {
+      signal?.throwIfAborted();
+      if (parts++ >= partsPerSlice || examined >= sliceBytes) {
         next = { ...next, part: step.position };
         finished = false;
         break;
@@ -254,7 +247,7 @@ export async function findTranscript(
       let consumed =
         window.done && text.length <= scanLength
           ? text.length
-          : boundary(text, Math.min(scanLength, text.length));
+          : alignBoundary(text, Math.min(scanLength, text.length));
       let envelopeFull = false;
       expression.lastIndex = 0;
       for (
@@ -264,8 +257,8 @@ export async function findTranscript(
       ) {
         const end = match.index + match[0].length;
         consumed = Math.max(consumed, end);
-        const snippetStart = boundary(text, Math.max(0, match.index - 80));
-        const snippetEnd = boundary(text, Math.min(text.length, end + 80));
+        const snippetStart = alignBoundary(text, Math.max(0, match.index - 80));
+        const snippetEnd = alignBoundary(text, Math.min(text.length, end + 80));
         const candidate: ChatOutput<'findChatTranscript'>['matches'][number] = {
           source: { kind: 'entry', target, entryId: String(entry.id) },
           partId: part.id,
@@ -313,7 +306,7 @@ export async function findTranscript(
       else finished = false;
       if (envelopeFull || matches.length === chatFindPageSize) return reply(false);
       if (!finished) break;
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await setImmediate();
     }
     if (finished)
       next = {
@@ -326,6 +319,6 @@ export async function findTranscript(
       };
     else break;
   }
-  checkRead(signal);
+  signal?.throwIfAborted();
   return reply(!upper || next.position > Number(upper));
 }

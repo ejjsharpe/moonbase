@@ -360,3 +360,42 @@ test('Find adapts dense escaped matches to actual JSON envelopes with maximum-si
     await runtime.dispose();
   }
 });
+
+test('Find continuations inside deeply nested JSON with wide indexes always fit the cursor limit', async (t) => {
+  let harness!: Harness;
+  const open = Harness.open;
+  t.mock.method(
+    Harness,
+    'open',
+    async (...args: Parameters<typeof open>) => (harness = await open(...args)),
+  );
+  const f = await fixture(t),
+    target = await f.create();
+  let deep: (string | number | unknown[])[] = Array.from(
+    { length: 80 },
+    (_, i) => 'DEEPNEEDLE ' + i,
+  );
+  for (let level = 0; level < 100; level++) deep = [...Array<number>(999).fill(0), deep];
+  const json = { deep } as Parameters<typeof fauxToolCall>[1];
+  const text = JSON.stringify(json);
+  await harness.commit(
+    (tx) =>
+      tx.appendEntry(Number(target.conversationId) as ConversationId, {
+        kind: 'pi.assistant',
+        model: [fauxAssistantMessage([fauxToolCall('edit', json)])],
+      }),
+    context,
+  );
+  const result = await collect(f.client, target, 'deepneedle');
+  assert(result.pages.length > 2);
+  for (const page of result.pages) assert((page.nextCursor ?? '').length <= 1024);
+  assert.deepEqual(
+    result.matches.map((match) => [match.start, match.end]),
+    [...text.matchAll(/deepneedle/giu)].map((match) => [match.index, match.index + 10]),
+  );
+  for (const match of result.matches)
+    assert.equal(
+      match.snippet.text,
+      text.slice(match.snippet.start, match.snippet.start + match.snippet.text.length),
+    );
+});
