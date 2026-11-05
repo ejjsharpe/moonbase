@@ -17,7 +17,6 @@ import { controls } from '@moonbase/ui/controls';
 import { workbench } from '@moonbase/ui/workbench';
 import { Choice } from '../chat/choice.tsx';
 import { ChatView } from '../chat/view.tsx';
-import { ImageResources } from '../chat/stored-image.ts';
 import { Workbench, type WorkbenchHandle } from '@moonbase/workbench';
 import { styles } from './styles.ts';
 import { MainTabs, tabValue } from './main-tabs.tsx';
@@ -58,7 +57,6 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
       controller?.getSnapshot ?? noEditor,
     ),
     chat = application.chat;
-  const [imageResources] = useState(() => new ImageResources());
   const [destination, setDestination] = useState<'project' | 'chat'>('chat');
   const handle = useRef<WorkbenchHandle>(null),
     requestedFocus = useRef<string | null>(null),
@@ -321,7 +319,6 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
           <ChatView
             key={lifecycle.chatTargetId}
             controller={chat}
-            imageResources={imageResources}
             chooseFolder={chooseChatFolder}
             transcriptNative={transcriptNative?.(lifecycle.chatTargetId ?? 'remote')}
           />

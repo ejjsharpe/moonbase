@@ -34,6 +34,7 @@ import { RemoteChatLive } from '@moonbase/pi-runtime/remote';
 import { SshLive } from '@moonbase/ssh';
 import { readConfiguration } from './chat/config.ts';
 import { channels as chatChannels } from './chat/wire.ts';
+import { respondTranscriptImage, transcriptImagePath } from './chat/transcript-native.ts';
 import { createNativeActions } from './main/native-actions.ts';
 import { createChatBackends } from './main/chat-backends.ts';
 import { createTrustedDocumentGuard, installCommandIpc } from './main/ipc.ts';
@@ -110,27 +111,6 @@ async function main() {
     ? bindConnectionClient(runtime, Context.get(remote, ConnectionService))
     : null;
   if (connection) await connection.command('getConnection', {});
-  const rendererRoot = join(directory, 'renderer');
-  protocol.handle('moonbase', async (request) => {
-    const url = new URL(request.url);
-    // Asset cache-busting queries do not grant document/IPC authority.
-    const path = resolve(rendererRoot, '.' + decodeURIComponent(url.pathname));
-    if (
-      url.host !== 'editor' ||
-      url.hash ||
-      (path !== rendererRoot && !path.startsWith(rendererRoot + sep))
-    )
-      return new Response('Forbidden', { status: 403 });
-    try {
-      const response = await net.fetch(pathToFileURL(path).href);
-      const headers = new Headers(response.headers);
-      headers.set('Content-Security-Policy', csp);
-      headers.set('X-Content-Type-Options', 'nosniff');
-      return new Response(response.body, { status: response.status, headers });
-    } catch {
-      return new Response('Not found', { status: 404 });
-    }
-  });
   const window = new BrowserWindow({
     title: 'Moonbase',
     titleBarStyle: 'hiddenInset',
@@ -202,6 +182,29 @@ async function main() {
       });
       return selection.canceled ? null : (selection.filePaths[0] ?? null);
     },
+  });
+  const rendererRoot = join(directory, 'renderer');
+  protocol.handle('moonbase', async (request) => {
+    const url = new URL(request.url);
+    if (url.pathname.startsWith(transcriptImagePath))
+      return respondTranscriptImage(request, csp, chatBackends.findTranscriptImage);
+    // Asset cache-busting queries do not grant document/IPC authority.
+    const path = resolve(rendererRoot, '.' + decodeURIComponent(url.pathname));
+    if (
+      url.host !== 'editor' ||
+      url.hash ||
+      (path !== rendererRoot && !path.startsWith(rendererRoot + sep))
+    )
+      return new Response('Forbidden', { status: 403 });
+    try {
+      const response = await net.fetch(pathToFileURL(path).href);
+      const headers = new Headers(response.headers);
+      headers.set('Content-Security-Policy', csp);
+      headers.set('X-Content-Type-Options', 'nosniff');
+      return new Response(response.body, { status: response.status, headers });
+    } catch {
+      return new Response('Not found', { status: 404 });
+    }
   });
   const lifecycle = installWindowLifecycle({
     app,

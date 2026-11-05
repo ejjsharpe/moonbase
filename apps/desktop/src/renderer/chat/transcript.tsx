@@ -39,8 +39,7 @@ import {
   type ActivityEvidence,
 } from './activity.ts';
 import { RecordedPatch } from './recorded-patch.tsx';
-import { ImageVisibility, StoredImage, StoredImages } from './stored-image.tsx';
-import type { ImageResources } from './stored-image.ts';
+import { StoredImage, StoredImages } from './stored-image.tsx';
 import { getTranscriptParts } from './transcript-parts.ts';
 import { usePartBody } from './part-body.ts';
 
@@ -48,10 +47,8 @@ export function Transcript({
   controller,
   state: latestState,
   native,
-  imageResources,
 }: {
   controller: ChatController;
-  imageResources: ImageResources;
   state: ChatState;
   native?: TranscriptNative;
 }) {
@@ -685,8 +682,7 @@ export function Transcript({
   return (
     <StoredImages
       key={controller.backendId + JSON.stringify(latestState.selected)}
-      controller={controller}
-      resources={imageResources}
+      native={native}
       enabled={
         latestState.ready &&
         !['inactive', 'reconnecting', 'failed'].includes(latestState.transcript.observation)
@@ -1040,9 +1036,7 @@ function Activity({
           Could not remember this activity disclosure. Its content is expanded.
         </p>
       )}
-      <ImageVisibility value={disclosure.expanded}>
-        <div hidden={!disclosure.expanded}>{children}</div>
-      </ImageVisibility>
+      <div hidden={!disclosure.expanded}>{children}</div>
     </section>
   );
 }

@@ -881,7 +881,7 @@ test('transcript remote first/next chunks render through authenticated stream an
 });
 
 for (const mode of ['local', 'remote'] as const)
-  test(`stored image ${mode} record renders under production custom-scheme CSP; viewer keyboard, close and actual zoom retain resources`, async () => {
+  test(`stored image ${mode} record is served over moonbase:// under production CSP; viewer keyboard, close and actual zoom`, async () => {
     const host =
       mode === 'remote'
         ? await controlledHostFixture(new URL('./stored-image-host.mjs', import.meta.url))
@@ -913,22 +913,11 @@ for (const mode of ['local', 'remote'] as const)
     try {
       expect(page.url()).toBe('moonbase://editor/index.html');
       await page.evaluate(() => {
-        const control = { violations: [] as string[], decoded: 0, closed: 0 };
+        const control = { violations: [] as string[] };
         (window as unknown as { nativeImages: typeof control }).nativeImages = control;
         window.addEventListener('securitypolicyviolation', (event) =>
           control.violations.push(event.violatedDirective),
         );
-        const decode = window.createImageBitmap.bind(window);
-        window.createImageBitmap = (async (...args: Parameters<typeof createImageBitmap>) => {
-          const bitmap = (await Reflect.apply(decode, window, args)) as ImageBitmap;
-          control.decoded++;
-          const close = bitmap.close.bind(bitmap);
-          bitmap.close = () => {
-            control.closed++;
-            close();
-          };
-          return bitmap;
-        }) as typeof createImageBitmap;
       });
       if (host) {
         await selectRemoteChat(page);
@@ -973,6 +962,25 @@ for (const mode of ['local', 'remote'] as const)
       const trigger = group.getByRole('button', { name: 'View stored image', exact: true }).first();
       await trigger.scrollIntoViewIfNeeded();
       await expect(trigger).toBeEnabled();
+      const thumbnail = trigger.getByRole('img', { name: 'Stored image thumbnail' });
+      const src = (await thumbnail.getAttribute('src'))!;
+      expect(src).toMatch(/^moonbase:\/\/editor\/transcript-image\/[A-Za-z0-9_-]{43}$/);
+      expect(await thumbnail.evaluate((node: HTMLImageElement) => node.naturalWidth)).toBe(192);
+      // The URL is only an opaque token; a guessed token and a non-image path grant nothing.
+      expect(
+        await page.evaluate(async (src) => {
+          const statuses = [];
+          for (const url of [src.replace(/.$/, (c) => (c === 'A' ? 'B' : 'A')), src])
+            statuses.push((await fetch(url, { cache: 'no-store' })).status);
+          const response = await fetch(src);
+          return [
+            ...statuses,
+            response.headers.get('Content-Type'),
+            response.headers.get('X-Content-Type-Options'),
+            response.headers.get('Cache-Control'),
+          ];
+        }, src),
+      ).toEqual([404, 200, 'image/png', 'nosniff', 'no-store']);
       for (let iteration = 0; iteration < 3; iteration++) {
         await trigger.press('Enter');
         const dialog = page.getByRole('dialog', { name: 'Stored image', exact: true });
@@ -996,11 +1004,11 @@ for (const mode of ['local', 'remote'] as const)
       await trigger.click();
       const dialog = page.getByRole('dialog', { name: 'Stored image', exact: true });
       await expect(dialog.getByRole('img', { name: 'Recorded image' })).toBeVisible();
-      await mkdir(resolve('../../test-results/transcript-113'), { recursive: true });
+      await mkdir(resolve('../../test-results/transcript-images'), { recursive: true });
       await captureNative(
         app,
         page,
-        resolve(`../../test-results/transcript-113/native-${mode}-zoom.png`),
+        resolve(`../../test-results/transcript-images/native-${mode}-zoom.png`),
       );
       const rect = await dialog.evaluate((node) => {
         const r = node.getBoundingClientRect();
@@ -1018,19 +1026,10 @@ for (const mode of ['local', 'remote'] as const)
       expect(rect.right).toBeLessThanOrEqual(rect.width);
       expect(rect.bottom).toBeLessThanOrEqual(rect.height);
       await page.keyboard.press('Escape');
-      await activity.press('Enter');
-      await expect(group.locator('canvas').first()).toHaveAttribute('width', '0');
       const stats = await page.evaluate(
-        () =>
-          (
-            window as unknown as {
-              nativeImages: { violations: string[]; decoded: number; closed: number };
-            }
-          ).nativeImages,
+        () => (window as unknown as { nativeImages: { violations: string[] } }).nativeImages,
       );
       expect(stats.violations).toEqual([]);
-      expect(stats.decoded).toBeGreaterThan(0);
-      expect(stats.closed).toBe(stats.decoded);
       expect(
         await app.evaluate(
           () =>
