@@ -542,8 +542,10 @@ export class TranscriptOwner {
     }
     for (const read of this.pending.values())
       if (read.source?.kind === 'live' && !this.current(read.source)) read.abort.abort();
-    // writeContent reorders the LRU, so iterate a snapshot.
-    for (const [key, content] of Array.from(this.contents.entries())) {
+    // writeContent reorders and trims the LRU, so iterate a key snapshot and read live values.
+    for (const key of Array.from(this.contents.keys())) {
+      const content = this.contents.peek(key);
+      if (!content) continue;
       const transcript =
         content.source.kind === 'live'
           ? run?.transcript
@@ -599,13 +601,15 @@ export class TranscriptOwner {
     for (const job of this.jobs.values()) job.abort.abort();
     for (const read of this.pending.values()) read.abort.abort();
     const failure = normalizeApplicationError(error).message;
-    for (const [key, content] of Array.from(this.contents.entries()))
-      if (content.source.kind === 'live' || content.status === 'loading')
+    for (const key of Array.from(this.contents.keys())) {
+      const content = this.contents.peek(key);
+      if (content?.source.kind === 'live' || content?.status === 'loading')
         this.writeContent(key, {
           ...content,
           status: content.source.kind === 'live' ? 'source-changed' : 'error',
           error: failure,
         });
+    }
     const manifest = this.state.manifest;
     this.state = {
       ...this.state,
