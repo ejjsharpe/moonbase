@@ -404,18 +404,24 @@ export function Transcript({
       onKeyDown={(event) => {
         if (
           event.target === event.currentTarget &&
-          ['PageUp', 'Home', 'ArrowUp'].includes(event.key)
+          ['PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown', ' '].includes(event.key)
         ) {
           restoring.current = false;
           anchor.current = null;
           follow.current = false;
-          topIntent.current = true;
+          topIntent.current =
+            ['PageUp', 'Home', 'ArrowUp'].includes(event.key) ||
+            (event.key === ' ' && event.shiftKey);
           capture();
           setFollowing(false);
         }
       }}
       onPointerDown={(event) => {
-        if (event.target === event.currentTarget || event.pointerType === 'touch') {
+        if (
+          restoring.current ||
+          event.target === event.currentTarget ||
+          event.pointerType === 'touch'
+        ) {
           restoring.current = false;
           anchor.current = null;
         }
