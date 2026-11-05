@@ -177,31 +177,60 @@ test('retained PNG/JPEG thumbnails and one keyboard viewer trap/restore focus, c
   await page.screenshot({ path: resolve(output, 'tall-overflow.png') });
   await page.keyboard.press('Escape');
 });
-test('unsupported, missing, corrupt, wrong MIME and oversized images fail honestly; huge headers never reach decode', async ({
-  page,
-}) => {
-  for (const [data, mime, message, decodes] of [
-    [png, 'image/jpeg', /corrupt/, 0],
-    [btoa('<svg onload="alert(1)"/>'), 'image/svg+xml', /unsupported/, 0],
-    [btoa('<html><script>alert(1)</script></html>'), 'image/png', /corrupt/, 0],
-    [png.slice(0, 40), 'image/png', /corrupt/, 0],
-  ] as const) {
+for (const [name, data, mime, message, readable] of [
+  ['PNG bytes labelled JPEG', png, 'image/jpeg', /corrupt/, true],
+  ['scriptable SVG', btoa('<svg onload="alert(1)"/>'), 'image/svg+xml', /unsupported/, false],
+  [
+    'HTML labelled PNG',
+    btoa('<html><script>alert(1)</script></html>'),
+    'image/png',
+    /corrupt/,
+    true,
+  ],
+  ['truncated PNG', png.slice(0, 40), 'image/png', /corrupt/, true],
+] as const)
+  test(`stored image validation rejects ${name} without decoding`, async ({ page }) => {
     await open(page, data, mime);
     await expect(page.getByRole('alert').filter({ hasText: message })).toBeVisible();
-    expect((await stats(page)).decoded).toBe(decodes);
-  }
+    const observed = await stats(page);
+    expect(observed.decoded).toBe(0);
+    if (readable) expect(observed.reads).toBeGreaterThan(0);
+    else expect(observed.reads).toBe(0);
+  });
+
+test('stored image validation rejects huge CRC-valid PNG dimensions before decoding', async ({
+  page,
+}) => {
   const huge = Buffer.from(png, 'base64');
   huge.writeUInt32BE(100000, 16);
   huge.writeUInt32BE(crc32(huge.subarray(12, 29)), 29);
   await open(page, huge.toString('base64'));
   await expect(page.getByRole('alert').filter({ hasText: /megapixel/ })).toBeVisible();
   expect((await stats(page)).decoded).toBe(0);
+});
+
+test('stored image validation rejects oversized source before reading or decoding', async ({
+  page,
+}) => {
   await open(page, Buffer.alloc(4 * 1024 * 1024 + 1).toString('base64'));
   await expect(page.getByRole('alert').filter({ hasText: /4 MiB/ })).toBeVisible();
   expect((await stats(page)).reads).toBe(0);
+  expect((await stats(page)).decoded).toBe(0);
+});
+
+test('stored image validation reports unavailable source without reading or decoding', async ({
+  page,
+}) => {
   await open(page, checker, 'image/png', 'unavailable');
   await expect(page.locator('[data-stored-image] [role="alert"]')).toContainText('unavailable');
   expect((await stats(page)).reads).toBe(0);
+  expect((await stats(page)).decoded).toBe(0);
+});
+
+test('stored image validation keeps UTF8 image descriptors out of text hydration and Copy', async ({
+  page,
+}) => {
+  await open(page, checker, 'image/png', 'unavailable');
   await page.evaluate(async () => {
     await window.demo.transcript!.record([
       {
@@ -224,12 +253,26 @@ test('unsupported, missing, corrupt, wrong MIME and oversized images fail honest
   await expect(page.locator('[data-stored-image] [role="alert"]')).toContainText('corrupt');
   expect((await stats(page)).reads).toBe(0);
   expect((await stats(page)).decoded).toBe(0);
+  const row = page.locator('[data-transcript-entry="wrong-encoding"]');
+  await expect(row.getByRole('button', { name: 'Copy part', exact: true })).toHaveCount(0);
+  await expect(row).not.toContainText('<html>not binary image data</html>');
+});
+
+test('stored image validation rechecks corrupt bytes on explicit Retry without decoding', async ({
+  page,
+}) => {
   const corrupt = Buffer.from(png, 'base64');
   corrupt[41] ^= 255;
   await open(page, corrupt.toString('base64'));
-  await expect(page.locator('[data-stored-image] [role="alert"]')).toBeVisible();
+  const alert = page.locator('[data-stored-image] [role="alert"]');
+  await expect(alert).toContainText('corrupt');
+  const reads = (await stats(page)).reads;
+  expect(reads).toBeGreaterThan(0);
+  expect((await stats(page)).decoded).toBe(0);
   await page.getByRole('button', { name: 'Retry image' }).click();
-  await expect(page.locator('[data-stored-image] [role="alert"]')).toBeVisible();
+  await expect.poll(async () => (await stats(page)).reads).toBeGreaterThan(reads);
+  await expect(alert).toContainText('corrupt');
+  expect((await stats(page)).decoded).toBe(0);
 });
 test('collapsed Activity, offscreen content and eviction release canvases without relying on child unmount', async ({
   page,

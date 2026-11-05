@@ -91,3 +91,32 @@ All new evidence lives in ignored `test-results/transcript-113-integration/`, se
 | Screenshot inspection | Opened and inspected all six normal/compact/emulated-200% thumbnail/viewer captures, `tall-overflow.png` and `oldest-image-viewer.png`; viewer/Close stay contained and keyboard overflow remains independent |
 
 The old base's keyboard disclosure workaround is superseded for these fresh browser results. The initial compact fixture failure is retained in `images-before-fixture-readiness.log`; it chose a toggle before auto-scroll capture settled. No production control change was made for that fixture. Fresh inherited captures are archived under `inherited-captures/`; every pre-existing file under the inherited capture directories was restored byte-for-byte from `prior-captures/` after testing. All recorded browser/server Node PIDs exited, and port 4193 was rebound and closed (`cleanup.txt`); no persistent server or app remains. The separately owned Activity Space fixture correction, zero-byte Find resume, native/custom-scheme production CSP, build/notices/package and manual/VoiceOver remain outside this follow-up's fresh acceptance.
+
+### Independent browser validation cases
+
+This fixture-only follow-up starts from delivery `591b6bf62e8d6bb5ad9ac37be3659bc9585a8af6` on `t3/transcript-image-ci-validation`. Original image `93213e3d51b075e844272b856158546e593b3952` and integration `3e9983d25e8291e74fe108c07343dd7aa435d70b` refs/artifacts remain preserved. Only `test/stored-image.spec.ts` and this document change; the shared `open` helper, default 30-second deadlines, production code, policies, dependencies and public interfaces are unchanged.
+
+Historical CI at that delivery has one successful modules run (`41982843235`, job `127096678569`) and one duplicate failure (`41982830122`, job `127096635909`, 129/130 browser cases passed). The failed combined validation case exhausted its 30-second deadline in `open`, waiting for Conversation after `page.goto`, before validation assertions. No CI trace/timing artifacts were available. Aggregate repeated boot cost is an inference for that failure, not a confirmed CI cause; neither a cold Vite failure nor a product bootstrap defect was established.
+
+Fresh evidence lives separately in ignored `test-results/transcript-113-ci-validation/`. A diagnostic copy preserves the original test body and adds per-boot/stage, module request/completion, console/page-error, DOM and IO/decode observations. Its ordinary baseline completes eight boots and all validation assertions in 18.4 seconds. A controlled response prepends a fixed 3,500 ms top-level startup wait to the served demo module on every boot. Four validation cases finish before the unchanged combined test reaches its 30-second deadline during boot five. Each startup hold releases; no page errors, failed requests or console errors precede that deadline. The controlled failure is during a later disclosure action, not the historical CI's Conversation wait. Request interception disables browser HTTP cache, so these timings are controlled fixture evidence, not a CI performance measurement.
+
+The validation inputs now have nine independent named public browser tests: PNG bytes labelled JPEG, scriptable SVG, HTML labelled PNG, truncated PNG, huge dimensions with a recomputed valid PNG header CRC, oversized source, unavailable source, a malformed UTF8 image descriptor, and corrupt-byte Retry. All prior errors and no-read/no-decode guards remain. The malformed descriptor additionally exposes no generic Copy part action or raw text; Retry must perform another source read and report corruption again without decoding. Each case reuses the existing helper with the unchanged default deadline; no retries, forced actions or timeout increase are added.
+
+| Fresh focused result | Evidence |
+| --- | --- |
+| Original ordinary baseline | 1/1 in 18.4 s; `baseline-ordinary.log`, `baseline-ordinary-summary.json` |
+| Controlled original baseline | Expected timeout at 30 s during fifth boot; `baseline-delay-3500.log`, `baseline-delay-3500-summary.json` |
+| Same controlled schedule after split | 9/9, each 6.4–7.4 s including fixture cleanup, all configured at 30 s; `candidate-delay-3500.log`, `candidate-delay-3500-summary.json` |
+| Ordinary checked-in validation matrix | 9/9, each 2.6–4.1 s; `ordinary-owned.log` |
+| Desktop typecheck / focused lint / format / diff | Pass; `typecheck.log`, `lint.log`, `format.log`; only the validation test block and this document differ from delivery |
+
+Exact commands, run from `apps/desktop`, with the retained ignored diagnostic config/copies:
+
+```sh
+IMAGE_CI_PHASE=baseline-ordinary MOONBASE_BROWSER_PORT=4193 bunx playwright test --config ../../test-results/transcript-113-ci-validation/diagnostic.config.ts --grep 'unsupported, missing'
+IMAGE_CI_PHASE=baseline-delay-3500 IMAGE_CI_BOOT_DELAY_MS=3500 MOONBASE_BROWSER_PORT=4193 bunx playwright test --config ../../test-results/transcript-113-ci-validation/diagnostic.config.ts --grep 'unsupported, missing'
+IMAGE_CI_PHASE=candidate-delay-3500 IMAGE_CI_CANDIDATE=1 IMAGE_CI_BOOT_DELAY_MS=3500 MOONBASE_BROWSER_PORT=4193 bunx playwright test --config ../../test-results/transcript-113-ci-validation/diagnostic.config.ts --grep 'stored image validation'
+MOONBASE_BROWSER_PORT=4193 bun run test:browser stored-image.spec.ts --grep 'stored image validation' --trace on --output ../../test-results/transcript-113-ci-validation/runs/ordinary-owned
+```
+
+`runs/` retains traces for every measured test; diagnostic runs also retain timing JSON, DOM/navigation/IO snapshots and screenshots. Original/candidate source copies and the failed CI log are retained beside them. Inspected the controlled failure and candidate SVG, huge-dimensions, UTF8-guard and corrupt-Retry screenshots: explicit errors stay readable in the existing contained transcript; malformed text is absent. Two diagnostic setup errors (config working directory and ESM mode) are retained separately and are not product reproductions. All 15 recorded owned Node processes exited, and port 4193 was rebound and closed (`cleanup.txt`); no persistent app/server or preview was opened. No other image/browser, broad root/source, build/native/package, provider/host or clipboard suite ran for this test-only correction. Earlier qualification remains historical; parent owns a new independent review before updating the delivery PR.
