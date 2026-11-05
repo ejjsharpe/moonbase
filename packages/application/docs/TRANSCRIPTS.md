@@ -150,3 +150,12 @@ The first fresh review of `4b34805` found three navigation defects; each has a f
 - `881d2f9`: a newer cursor behind an already retained window could make Later return the same historical page indefinitely. Bind cursors to their returned durable edge IDs, reuse only at the corresponding retained edge and rebase through an authorized edge read otherwise. Preserve already proved older-boundary evidence. `8e8a9d1` is a mechanical lint cleanup of this selection.
 
 The focused public set passes 176/176; the independent reviewer's unchanged three adversarial probes and three authority/Copy/navigation guards pass 6/6. The three initial failure logs and their green counterparts are preserved in the connected checkout's ignored evidence. All content iteration and native Copy proofs remain independent of best-effort view restoration. These results do not replace the parent's next independent review of its exact clean navigation-only candidate.
+
+### Further startup ownership corrections
+
+Fresh R3 of the parent's exact clean navigation candidate found two additional races, reproduced by its independent public probes:
+
+- `914b93f`: a newer validated `setTranscriptView` now cancels an already admitted startup restoration, fences its page merge and suppresses its stale success/error publication. Valid earlier/later navigation can also supersede startup; ordinary admitted history jobs keep their existing join behavior. The public regression holds the actual read and checks both late success and late failure, current rows/anchor/expansions, abort, loading and error state.
+- `bd10328`: the first snapshot establishes both history boundaries when it supplies initial fallback rows, including while a durable anchor is waiting. Capturing an available row before a delayed initial read no longer strands 608 older rows. The public regression traverses all 640 rows after this schedule.
+
+At connected code head `bd10328324525f0f1614b6b24d6b17d45cb77741`, the full application suite passes 368/368 and controlled chat integration passes 12/12. The focused application set plus the unchanged R1/R3 reviewer probes passes 188/188, including mixed byte/descriptor pressure with opaque IDs. Typechecking and lint pass; logs are in `test-results/transcript-simplified/` in the connected checkout. These are implementation checks, not independent approval of the parent's next exact candidate. No view content proof, Copy proof or public interface was added or removed by these corrections.
