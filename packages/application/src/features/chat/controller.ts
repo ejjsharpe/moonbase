@@ -436,8 +436,15 @@ class ChatModelState {
         if (this.mode === 'local') return;
         const id = this.state.connection?.connectionId;
         if (!id) return;
+        const selection = this.selection;
         this.update({ ready: false });
-        yield* Effect.promise(() => this.closeOwner(this.generation));
+        void selection?.transcript?.close();
+        void this.closeOwner(this.generation);
+        for (const observation of selection?.observations ?? [])
+          yield* Effect.flatMap(
+            Effect.promise(() => this.closeObservation(observation)),
+            (exit) => exit,
+          );
         yield* Effect.tryPromise({
           try: (signal) => this.connection!.command('disconnect', { connectionId: id }, { signal }),
           catch: normalizeApplicationError,

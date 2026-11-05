@@ -593,6 +593,55 @@ test('remote connection generation replacement cancels held reads and fences the
   }
 });
 
+for (const failure of [false, true])
+  test(`Disconnect closes observation without joining raw content ${failure ? 'failure' : 'success'}; root disposal still drains it`, async (t) => {
+    const f = await transcriptController(t, 1, false);
+    await f.controller.refresh();
+    await f.controller.select(f.target);
+    const entered = Promise.withResolvers<void>(),
+      held = Promise.withResolvers<void>();
+    f.handlers.set('getChatTranscriptContent', async (_input, _signal, fallback) => {
+      entered.resolve();
+      await held.promise;
+      if (failure)
+        throw new ApplicationError({ code: 'Unavailable', message: 'obsolete raw read failed' });
+      return fallback();
+    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const read = f.controller.loadTranscriptManifest(f.entries[0].transcript!.source);
+      await entered.promise;
+      const closes = f.fixture.watchCloses;
+      await Promise.race([
+        f.controller.disconnect(),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(Error('Disconnect joined held raw content')), 5000);
+        }),
+      ]);
+      clearTimeout(timer);
+      await read;
+      assert(f.fixture.watchCloses > closes);
+      assert(
+        f.calls.find((call) => call.operation === 'getChatTranscriptContent')!.signal!.aborted,
+      );
+      let disposed = false;
+      const disposal = f.controller.dispose().then(() => {
+        disposed = true;
+      });
+      await tick();
+      assert.equal(disposed, false);
+      held.resolve();
+      await disposal;
+      assert.equal(disposed, true);
+      assert(
+        !f.calls.some((call) => call.operation === 'stopChat' || call.operation === 'sendChat'),
+      );
+    } finally {
+      clearTimeout(timer);
+      held.resolve();
+    }
+  });
+
 test('an explicit around jump supersedes held navigation without late errors or finally replacing the chosen anchor', async (t) => {
   const f = await transcriptController(t);
   const entered = Promise.withResolvers<void>(),
