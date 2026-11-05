@@ -6,6 +6,10 @@ async function open(page: Page) {
   await page.goto('/?local&design&transcript');
   await page.getByRole('button', { name: /^Conversation/ }).click();
   await expect(page.getByRole('heading', { name: 'Reading a retained answer' })).toBeAttached();
+  await answer(page)
+    .getByRole('button', { name: /^Activity/ })
+    .click();
+  await page.getByRole('button', { name: 'Jump to latest', exact: true }).click();
 }
 const transcript = (page: Page) =>
   page.getByRole('region', { name: 'Chat transcript', exact: true });
@@ -238,6 +242,7 @@ for (const mode of ['durable', 'live'] as const)
         await window.demo.application.chat!.jumpToLatest();
       });
     const row = mode === 'live' ? page.locator('[data-transcript-live]') : answer(page);
+    if (mode === 'live') await row.getByRole('button', { name: /^Activity/ }).click();
     const part = row.locator('[data-transcript-part="m0.b1"]');
     for (const id of ['m0.b2', 'm0.b3'])
       await row
@@ -889,6 +894,14 @@ for (const navigation of ['wheel', 'keyboard', 'pointer-disclosure', 'child-keyb
         const source = controller.getSnapshot().snapshot!.run!.transcript!.source;
         await controller.loadTranscriptManifest(source);
         await controller.loadTranscriptManifest(source);
+      });
+      await page
+        .locator('[data-transcript-live]')
+        .getByRole('button', { name: /^Activity/ })
+        .click();
+      await page.evaluate(() => {
+        const controller = window.demo.application.chat!;
+        const source = controller.getSnapshot().snapshot!.run!.transcript!.source;
         const part = controller
           .getSnapshot()
           .transcript.manifest!.parts.find((part) => part.partId === 'm0.b5')!;
@@ -902,7 +915,10 @@ for (const navigation of ['wheel', 'keyboard', 'pointer-disclosure', 'child-keyb
             revision: part.revision,
             offset: 16,
           },
-          expanded: ['keep-another-disclosure'],
+          expanded: [
+            ...controller.getSnapshot().transcript.view.expanded,
+            'keep-another-disclosure',
+          ],
         });
       });
       await expect(

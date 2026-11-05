@@ -18,4 +18,6 @@ Transcript integration additionally covers both read operations, exact identity 
 
 `stream-host.mjs` publishes controlled thinking/text revisions, then holds completion. Public watch/SDK read counters prove zero recurring capable-host `getChat`, reuse of unchanged history/status, no A refresh from B, exact Stop independence and listener release. `tool-host.mjs` separately proves tool progress while execution is held. These are controlled process/forwarding checks, not real SSH/provider or packaged UI evidence.
 
+The tool host accepts the fixture's existing `nextChunk()` control to append another published output chunk while execution remains held. Its listener is released on tool settlement. Desktop's focused transcript native tests use this authenticated stream to check visible progress, expansion/focus, complete injected Copy and independent Stop without provider quota or real SSH.
+
 `transcript-controller.test.ts` exercises public application controllers against temporary local Pi and the authenticated controlled stream child host: successive pre-completion text, immutable summary references, independent held reads/drafting/exact Stop, and finalization. It uses no real provider or SSH destination.

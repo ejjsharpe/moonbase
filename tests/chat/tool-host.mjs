@@ -32,17 +32,25 @@ registry.install(
         parameters: Type.Object({}),
         execute: async (_input, api, ctx) => {
           tools++;
-          api.output(
-            'Controlled remote tool activity\nFixed folder observed by the test tool.\n' +
-              'preview '.repeat(800),
-          );
-          await Promise.race([
-            gate,
-            new Promise((r) => {
-              if (ctx.abortSignal?.aborted) return r();
-              ctx.abortSignal?.addEventListener('abort', () => r(), { once: true });
-            }),
-          ]);
+          const advance = (message) => {
+            if (message?.type === 'next-chunk') api.output('\nControlled remote next tool chunk');
+          };
+          process.on('message', advance);
+          try {
+            api.output(
+              'Controlled remote tool activity\nFixed folder observed by the test tool.\n' +
+                'preview '.repeat(800),
+            );
+            await Promise.race([
+              gate,
+              new Promise((r) => {
+                if (ctx.abortSignal?.aborted) return r();
+                ctx.abortSignal?.addEventListener('abort', () => r(), { once: true });
+              }),
+            ]);
+          } finally {
+            process.off('message', advance);
+          }
           return { output: [{ type: 'text', text: 'Controlled inspection completed' }] };
         },
       }),

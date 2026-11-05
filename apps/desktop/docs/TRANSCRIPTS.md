@@ -1,5 +1,7 @@
 # Transcript reading
 
+[Thinking, tool activity and recorded patches](ACTIVITY.md) documents #112 and its focused qualification. The generic ordered Part/source/Copy seams remain shared with images and Find.
+
 Current implementation checkout: `/Users/elliotsharpe/.t3/worktrees/moonbase/t3-eb376149`, branch `t3/simplify-transcript-navigation-rendering`, based on current main `af7e7922a8eb8954f4d285245aa9a6ea85f93c28`. Navigation-only ref: `feat/transcript-navigation-110-simplified` at `4b34805fac610585fafc73ab5496dc3d9d233468`. Only the navigation range `23303e0..51a3c54`, then the renderer range `51a3c54..a8de71f`, were transferred; squashed foundation commits were not replayed. The stopped writer checkout was read only. Original commits remain under `preservation/epic108-{110,111}-takeover-*`; the original PR127 branch is untouched.
 
 The saved `111-dirty.patch` was deliberately applied after the renderer range and matched the resulting binary diff byte for byte (SHA256 `ca722c138867bad09938766db2b5b108eb85db7936ee88de6cf50d0f23acb4ef`). Commit `8c3c81b` preserves that parser-produced Copy follow-up before this migration. The parent owns fresh independent review, PR work and the one approved app; no persistent dev app is part of this checkout's checks.
@@ -38,7 +40,7 @@ Only explicit HTTP(S) URLs without credentials/control characters, at most 8,192
 
 ## Follow-on seams
 
-- #112: private ordered `Part`, generic disclosure/overflow and fixed-part Copy; recorded patch and numbered diff remain inert, complete source. Add specialized grouping/diff interpretation here, with its own direct parser dependency.
+- #112: private consecutive activity groups share `Part` disclosure state, exact source/part anchors and fixed-part Copy. The direct maintained patch parser is consumed only by recorded unified-patch presentation; see [activity](ACTIVITY.md).
 - #113: stored-image metadata/disclosure and the existing resize-anchor observer; add bounded decode/viewer resources and release them on eviction/unmount.
 - #114: supplied `jumpToEntry`, `setTranscriptView` entry/part anchors, automatic disclosure and DOM `data-transcript-entry` / `data-transcript-part` locations. Add Find handlers and exact source-match reveal; no stub handler is advertised now.
 

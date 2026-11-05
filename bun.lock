@@ -52,6 +52,7 @@
         "@moonbase/workbench": "workspace:*",
         "@moonbase/workspace": "workspace:*",
         "@stylexjs/stylex": "0.19.1",
+        "diff": "8.0.4",
         "effect": "4.1.0",
         "mdast-util-from-markdown": "2.1.0",
         "monaco-editor": "0.57.0",

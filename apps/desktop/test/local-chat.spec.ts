@@ -29,6 +29,33 @@ test.beforeAll(async () => {
       {
         name: 'controlled-local-model',
         setup(builder) {
+          builder.onLoad({ filter: /pi-runtime\/src\/index\.ts$/ }, async ({ path }) => {
+            const source = await readFile(path, 'utf8');
+            return {
+              loader: 'ts',
+              contents:
+                "import { defineExtension, defineTool } from '@earendil-works/pi-durable'; import { Type } from 'typebox';\n" +
+                source
+                  .replace(
+                    '      if (!config.registry) registry.install(CodingTools);',
+                    `      if (!config.registry) registry.install(CodingTools);
+      if (process.env.MOONBASE_TEST_ACTIVITY) registry.install(defineExtension({ name: 'held-local-activity', tools: [defineTool({
+        name: 'controlled_activity', description: 'Controlled held output; no filesystem access', parameters: Type.Object({}),
+        execute: async (_input, api, ctx) => {
+          const control = globalThis.localActivity ??= {};
+          api.output('First local tool chunk');
+          control.next = () => api.output(' and next update');
+          await new Promise(resolve => { control.release = resolve; if (ctx.abortSignal.aborted) resolve(); else ctx.abortSignal.addEventListener('abort', () => resolve(), { once: true }); });
+          return { output: [{ type: 'text', text: 'Local tool completed' }] };
+        }
+      })] }));`,
+                  )
+                  .replace(
+                    "    getChat: (d) => host.run('getChat', d, (input) => host.snapshot(input.target)),",
+                    "    getChat: (d) => { (globalThis.activityReads ??= []).push('getChat'); return host.run('getChat', d, (input) => host.snapshot(input.target)); },",
+                  ),
+            };
+          });
           builder.onLoad({ filter: /desktop\/src\/main\/chat-backends\.ts$/ }, async ({ path }) => {
             const source = await readFile(path, 'utf8');
             const marker = '  let local = localResult.backend;';
@@ -55,7 +82,7 @@ test.beforeAll(async () => {
           const original = models.getProvider('openai-api-key');
           if (process.env.MOONBASE_TEST_TRANSCRIPT) {
             let stream;
-            const message = text => fauxAssistantMessage(text);
+            const message = text => fauxAssistantMessage([{type:'thinking',thinking:text.includes('second') ? 'Local thinking first and next' : 'Local thinking first'}, {type:'text',text}]);
             globalThis.transcriptTest = {
               first: () => stream.push({type:'text_delta',contentIndex:0,delta:'first',partial:message('## Held local response\\n\\nFirst local chunk 🌔')}),
               next: () => stream.push({type:'text_delta',contentIndex:0,delta:' second',partial:message('## Held local response\\n\\nFirst local chunk 🌔 and second chunk\\n\\n[Read](https://example.com/read)')}),
@@ -64,6 +91,13 @@ test.beforeAll(async () => {
             models.setProvider({...original,streamSimple:(_model,_context,options)=>{
               stream=createAssistantMessageEventStream(); options?.signal?.addEventListener('abort',()=>stream.end(fauxAssistantMessage('Stopped',{stopReason:'aborted'})),{once:true}); return stream;
             }});
+            return models;
+          }
+
+          if (process.env.MOONBASE_TEST_ACTIVITY) {
+            const faux = fauxProvider({provider:'openai-api-key',tokensPerSecond:500});
+            faux.setResponses([fauxAssistantMessage(fauxToolCall('controlled_activity',{}),{stopReason:'toolUse'}),fauxAssistantMessage('Local tool response finished')]);
+            models.setProvider({...original,streamSimple:(model,context,options)=>faux.provider.streamSimple(model,context,options)});
             return models;
           }
 
@@ -496,12 +530,28 @@ test('transcript local rendering precedes held completion; native Copy/link fail
     const live = page.getByRole('article', { name: 'Live response' });
     await expect(live.getByRole('heading', { name: 'Held local response' })).toBeVisible();
     await expect(live.getByText('First local chunk 🌔', { exact: true })).toBeVisible();
+    await live.getByRole('button', { name: /^Activity/ }).click();
+    const thought = live.getByRole('button', { name: /Thinking · running/ });
+    await thought.click();
+    await expect(live.getByText('Local thinking first', { exact: true })).toBeVisible();
+    await thought.focus();
+    const reads = await app.evaluate(
+      () => (globalThis as unknown as { activityReads: string[] }).activityReads.length,
+    );
     await app.evaluate(() =>
       (globalThis as unknown as { transcriptTest: Control }).transcriptTest.next(),
     );
     await expect(
       live.getByText('First local chunk 🌔 and second chunk', { exact: true }),
     ).toBeVisible();
+    await expect(live.getByText('Local thinking first and next', { exact: true })).toBeVisible();
+    await expect(thought).toBeFocused();
+    expect(
+      await app.evaluate(
+        () => (globalThis as unknown as { activityReads: string[] }).activityReads.length,
+      ),
+    ).toBe(reads);
+    await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
     await app.evaluate(({ clipboard, shell }) => {
       const original = clipboard.writeText.bind(clipboard);
       const control = (globalThis as unknown as { transcriptTest: Control }).transcriptTest;
@@ -539,6 +589,7 @@ test('transcript local rendering precedes held completion; native Copy/link fail
     });
     await live.getByRole('button', { name: 'Copy message', exact: true }).click();
     await expect(page.getByRole('alert')).toBeVisible();
+    if ((await thought.getAttribute('aria-expanded')) === 'true') await thought.click();
     await app.evaluate(({ BrowserWindow }) => {
       const window = BrowserWindow.getAllWindows()[0];
       window.setSize(1280, 850);
@@ -565,14 +616,13 @@ test('transcript local rendering precedes held completion; native Copy/link fail
     const reading = live.getByText('First local chunk 🌔 and second chunk', { exact: true });
     await reading.scrollIntoViewIfNeeded();
     await page.getByRole('region', { name: 'Chat transcript', exact: true }).hover();
-    for (let attempt = 0; attempt < 4; attempt++) {
+    for (let attempt = 0; attempt < 8; attempt++) {
       const gap = await reading.evaluate(
         (element) =>
           element.getBoundingClientRect().top -
-          document.querySelector('[data-transcript-chrome]')!.getBoundingClientRect().bottom -
-          4,
+          document.querySelector('[data-transcript-chrome]')!.getBoundingClientRect().bottom,
       );
-      if (Math.abs(gap) < 2) break;
+      if (Math.abs(gap) < 0.25) break;
       await page.mouse.wheel(0, gap);
       await page.evaluate(
         () =>
@@ -581,17 +631,24 @@ test('transcript local rendering precedes held completion; native Copy/link fail
           ),
       );
     }
-    expect(
-      await reading.evaluate((element) => {
-        const rect = element.getBoundingClientRect();
-        return (
-          rect.top >=
-            document.querySelector('[data-transcript-chrome]')!.getBoundingClientRect().bottom &&
-          rect.bottom <=
-            element.closest('[aria-label="Chat transcript"]')!.getBoundingClientRect().bottom
-        );
-      }),
-    ).toBe(true);
+    await page.screenshot({
+      path: resolve('../../test-results/transcript-112/native-local-zoom.png'),
+    });
+    const geometry = await reading.evaluate((element) => ({
+      reading: element.getBoundingClientRect().toJSON(),
+      chrome: document.querySelector('[data-transcript-chrome]')!.getBoundingClientRect().toJSON(),
+      transcript: element
+        .closest('[aria-label="Chat transcript"]')!
+        .getBoundingClientRect()
+        .toJSON(),
+    }));
+    await writeFile(
+      resolve('../../test-results/transcript-112/native-local-zoom.json'),
+      JSON.stringify(geometry, null, 2),
+    );
+    // Native scrolling at 200% rounds fractional CSS coordinates to device pixels.
+    expect(geometry.reading.top).toBeGreaterThanOrEqual(geometry.chrome.bottom - 1);
+    expect(geometry.reading.bottom).toBeLessThanOrEqual(geometry.transcript.bottom + 1);
     await captureNative(
       app,
       page,
@@ -616,6 +673,142 @@ test('transcript local rendering precedes held completion; native Copy/link fail
     await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   }
 });
+
+for (const mode of ['local', 'remote'] as const)
+  test(`transcript ${mode} tool progress renders before held completion; Copy is injected and Stop stays independent`, async () => {
+    test.setTimeout(60000);
+    const host =
+      mode === 'remote'
+        ? await controlledHostFixture(
+            new URL('../../../tests/chat/tool-host.mjs', import.meta.url),
+            true,
+          )
+        : undefined;
+    const directory =
+      host?.directory ??
+      (await realpath(await mkdtemp(join(tmpdir(), 'moonbase-activity-native-'))));
+    const app = await electron.launch({
+      args: [resolve('test/local-harness.mjs')],
+      env: {
+        PATH: '/usr/bin:/bin',
+        HOME: process.env.HOME!,
+        TMPDIR: process.env.TMPDIR!,
+        MOONBASE_USER_DATA: join(directory, 'desktop'),
+        MOONBASE_TEST_MAIN: pathToFileURL(join(fixtureDirectory, 'main.mjs')).href,
+        ...(host
+          ? {
+              MOONBASE_CHAT_CONFIG: host.clientConfig,
+              MOONBASE_CHAT_FORWARD_LOG: host.log,
+              MOONBASE_TEST_ALLOW_LOOPBACK: '1',
+            }
+          : { MOONBASE_TEST_ACTIVITY: '1' }),
+      },
+    });
+    const child = app.process(),
+      page = await app.firstWindow();
+    try {
+      if (host) {
+        await selectRemoteChat(page);
+        await page.getByRole('button', { name: 'Connect', exact: true }).click();
+        await createRemoteChat(page, 'Remote held activity');
+      } else {
+        await page.getByRole('combobox', { name: 'Provider', exact: true }).click();
+        await page.getByRole('option', { name: 'OpenAI API key', exact: true }).click();
+        await page.getByRole('button', { name: 'Set API key', exact: true }).click();
+        await page
+          .getByLabel('Enter OpenAI API key', { exact: true })
+          .fill('sk-controlled-activity-fixture');
+        await page.getByRole('button', { name: 'Continue setup', exact: true }).click();
+        await app.evaluate(({ dialog }, cwd) => {
+          dialog.showOpenDialog = (async () => ({
+            canceled: false,
+            filePaths: [cwd],
+          })) as typeof dialog.showOpenDialog;
+        }, directory);
+        await page.getByRole('button', { name: 'Choose working folder', exact: true }).click();
+      }
+      await page.getByLabel('Message', { exact: true }).fill('Observe held tool progress');
+      await page.getByRole('button', { name: 'Send message', exact: true }).click();
+      const live = page.getByRole('article', { name: 'Live response' });
+      await expect(live).toContainText(
+        host ? 'Controlled remote tool activity' : 'First local tool chunk',
+      );
+      const group = live.getByRole('button', { name: /^Activity/ });
+      await expect(group).toHaveAttribute('aria-expanded', 'false');
+      await expect(live).toContainText('running');
+      await group.click();
+      const part = live
+        .locator('[data-transcript-part]')
+        .filter({ has: page.getByRole('button', { name: /· Output · running/ }) });
+      await part.getByRole('button', { name: /· Output · running/ }).click();
+      await expect(part.locator('pre')).toContainText(
+        host ? 'Controlled remote tool activity' : 'First local tool chunk',
+      );
+      await part.locator('pre').focus();
+      const before = host
+        ? (await host.stats()).commands.filter((operation) => operation === 'getChat').length
+        : await app.evaluate(
+            () => (globalThis as unknown as { activityReads: string[] }).activityReads.length,
+          );
+      if (host) host.nextChunk();
+      else
+        await app.evaluate(() =>
+          (globalThis as unknown as { localActivity: { next(): void } }).localActivity.next(),
+        );
+      const next = host
+        ? 'Controlled remote tool activity\nFixed folder observed by the test tool.\n' +
+          'preview '.repeat(800) +
+          '\nControlled remote next tool chunk'
+        : 'First local tool chunk and next update';
+      await expect(part.locator('pre')).toHaveText(next);
+      await expect(part.locator('pre')).toBeFocused();
+      await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
+      const after = host
+        ? (await host.stats()).commands.filter((operation) => operation === 'getChat').length
+        : await app.evaluate(
+            () => (globalThis as unknown as { activityReads: string[] }).activityReads.length,
+          );
+      expect(after).toBe(before);
+      await part.getByRole('button', { name: 'Copy part', exact: true }).click();
+      await expect(page.getByRole('status').filter({ hasText: 'Copied.' })).toBeVisible();
+      expect(
+        await app.evaluate(() =>
+          (globalThis as unknown as { moonbaseTestClipboard: string[] }).moonbaseTestClipboard.at(
+            -1,
+          ),
+        ),
+      ).toBe(next);
+      await mkdir(resolve('../../test-results/transcript-112'), { recursive: true });
+      await page.screenshot({
+        path: resolve(`../../test-results/transcript-112/native-${mode}-held-tool.png`),
+      });
+      await page.getByRole('button', { name: 'Stop', exact: true }).click();
+      await expect
+        .poll(async () => {
+          const stop = page.getByRole('button', { name: 'Stop', exact: true });
+          return !(await stop.isVisible()) || (await stop.isDisabled());
+        })
+        .toBe(true);
+      await expect(page.getByRole('status', { name: 'Conversation status' })).toContainText(
+        'Stopped',
+      );
+    } finally {
+      host?.release();
+      if (child.exitCode === null) {
+        if (host) {
+          const disconnect = page.getByRole('button', { name: 'Disconnect', exact: true });
+          if (await disconnect.isVisible()) {
+            await disconnect.click();
+            await expect(page.getByRole('button', { name: 'Connect', exact: true })).toBeEnabled();
+          }
+        }
+        await app.evaluate(({ app }) => app.exit(0));
+      }
+      await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
+      if (host) await host.close();
+      else await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+    }
+  });
 
 test('transcript remote first/next chunks render through authenticated stream and Electron IPC before held completion', async () => {
   test.setTimeout(60000);
@@ -646,16 +839,27 @@ test('transcript remote first/next chunks render through authenticated stream an
     await page.getByRole('button', { name: 'Send message', exact: true }).click();
     const live = page.getByRole('article', { name: 'Live response' });
     await expect(live.getByText('first remote text 0', { exact: true })).toBeVisible();
+    await live.getByRole('button', { name: /^Activity/ }).click();
+    const thought = live.getByRole('button', { name: /Thinking · running/ });
+    await thought.click();
+    await expect(live.getByText('remote thinking 0', { exact: true })).toBeVisible();
+    await thought.focus();
     await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
     const before = await host.stats();
     host.nextChunk();
     await expect(live.getByText('first remote text 4', { exact: true })).toBeVisible();
+    await expect(live.getByText('remote thinking 4', { exact: true })).toBeVisible();
+    await expect(thought).toBeFocused();
     const after = await host.stats();
     expect(after.reads!.scans).toBe(before.reads!.scans);
+    expect(after.commands.filter((operation) => operation === 'getChat').length).toBe(
+      before.commands.filter((operation) => operation === 'getChat').length,
+    );
     await page.screenshot({
       path: resolve('../../test-results/transcript-111/native-remote-held.png'),
     });
     host.release();
+    await page.getByLabel('Message', { exact: true }).focus();
     await expect(page.getByText('REMOTE COMPLETED', { exact: true })).toBeVisible();
   } finally {
     host.release();

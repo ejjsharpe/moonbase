@@ -1,7 +1,12 @@
 // Controlled desktop qualification only; this entry never reaches shipped builds.
-import { ipcMain, safeStorage } from 'electron';
+import { ipcMain, safeStorage, clipboard } from 'electron';
 import { createCipheriv, createDecipheriv } from 'node:crypto';
 const key = Buffer.alloc(32, 7);
+// No controlled fixture may accidentally write the user's OS clipboard.
+globalThis.moonbaseTestClipboard = [];
+clipboard.writeText = async (text) => {
+  globalThis.moonbaseTestClipboard.push(text);
+};
 safeStorage.isAsyncEncryptionAvailable = async () => true;
 safeStorage.encryptStringAsync = async (plain) => {
   const cipher = createCipheriv('aes-256-gcm', key, Buffer.alloc(12, 1));
