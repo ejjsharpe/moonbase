@@ -259,7 +259,13 @@ export class TranscriptOwner {
     input: ChatInput<K>,
     signal?: AbortSignal,
     settlements?: Set<Promise<unknown>>,
-  ): Promise<ChatOutput<K>> {
+  ): Promise<K extends 'getChatTranscriptContent' ? unknown : ChatOutput<K>>;
+  private async command<K extends ChatCommand>(
+    operation: K,
+    input: ChatInput<K>,
+    signal?: AbortSignal,
+    settlements?: Set<Promise<unknown>>,
+  ): Promise<unknown> {
     this.assertCurrent();
     const abort = new AbortController();
     // readTranscript owns transcript content input/reply decoding, cloning and size bounds.
@@ -1342,6 +1348,7 @@ export class TranscriptOwner {
     const settlements = new Set<Promise<unknown>>();
     const read: TranscriptRead = (input, options) =>
       this.command('getChatTranscriptContent', input, options?.signal, settlements);
+    let readEvidence: unknown;
     let proofState:
       | {
           selection: ChatTranscriptSelection;
@@ -1384,12 +1391,9 @@ export class TranscriptOwner {
       selection,
       signal,
       isCurrent,
-      read: async (input, options) => {
-        const evidence = structuredClone(getEvidence(input.selection));
-        const reply = await read(input, options);
-        if (reply.kind === 'content' && input.selection)
-          proofState = { selection: { ...input.selection }, encoding: reply.encoding, evidence };
-        return reply;
+      read: (input, options) => {
+        readEvidence = structuredClone(getEvidence(input.selection));
+        return read(input, options);
       },
       onProgress: (value) => {
         progress = value;
@@ -1400,6 +1404,13 @@ export class TranscriptOwner {
       try {
         for (;;) {
           const next = await iterator.next();
+          // Each yielded chunk is the validated reply to the latest read; evidence predates it.
+          if (!next.done)
+            proofState = {
+              selection: next.value.selection,
+              encoding: next.value.encoding,
+              evidence: readEvidence,
+            };
           const budget = { remaining: 3 };
           for (;;) {
             await verifyCurrent(budget);

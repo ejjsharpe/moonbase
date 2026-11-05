@@ -371,22 +371,24 @@ test('complete-source iterator works with injected reads, reports progress, vali
 const invalidReplies = {
   oversized: (reply: object) => ({ ...reply, padding: 'x'.repeat(maximumChatReplyBytes) }),
   malformed: (reply: object) => ({ ...reply, kind: 'malformed' }),
+  missing: () => null,
 };
 const invalidReplyErrors = {
   oversized: 'Transcript reply exceeds its byte bound.',
   malformed: 'Invalid chat reply.',
+  missing: 'Invalid chat reply.',
 };
 const isInvalidReply = (corrupt: keyof typeof invalidReplies) => (error: unknown) =>
   ApplicationError.is(error) &&
   error.code === 'Incompatible' &&
   error.message === invalidReplyErrors[corrupt];
 
-test('injected complete-source iteration rejects oversized and malformed replies', async () => {
+test('injected complete-source iteration rejects oversized, malformed and missing replies', async () => {
   const f = transcriptFixture(1),
     source = f.entries[0].transcript!.source;
   for (const [corrupt, invalid] of Object.entries(invalidReplies) as [
     keyof typeof invalidReplies,
-    (reply: object) => object,
+    (reply: object) => object | null,
   ][]) {
     f.handlers.set('getChatTranscriptContent', async (_input, _signal, fallback) =>
       invalid(fallback() as object),
@@ -400,13 +402,13 @@ test('injected complete-source iteration rejects oversized and malformed replies
 });
 
 for (const entry of ['loadTranscriptManifest', 'loadTranscriptPart', 'iterateTranscript'] as const)
-  test(`controller ${entry} rejects oversized and malformed replies`, async (t) => {
+  test(`controller ${entry} rejects oversized, malformed and missing replies`, async (t) => {
     const f = await transcriptController(t, 1);
     const source = f.entries[0].transcript!.source,
       chosen = selection(f.entries[0].transcript!.parts[0]);
     for (const [corrupt, invalid] of Object.entries(invalidReplies) as [
       keyof typeof invalidReplies,
-      (reply: object) => object,
+      (reply: object) => object | null,
     ][]) {
       f.handlers.set('getChatTranscriptContent', async (_input, _signal, fallback) =>
         invalid(fallback() as object),
