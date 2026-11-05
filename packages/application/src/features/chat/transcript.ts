@@ -808,6 +808,7 @@ export class TranscriptOwner {
       capturedSignal ?? AbortSignal.any([this.findAbort.signal, this.findReveal.signal]);
     this.jobs.get('history')?.abort.abort();
     this.jobs.delete('history');
+    this.restoringView = false;
     this.following = false;
     this.restorePending = false;
     try {
@@ -1063,8 +1064,8 @@ export class TranscriptOwner {
     if (resetView) {
       this.restorePending = false;
       this.restoringView = false;
+      this.cancelFindReveal();
     }
-    this.cancelFindReveal();
     this.following = false;
     this.jobs.get('history')?.abort.abort();
     this.jobs.delete('history');

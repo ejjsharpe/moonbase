@@ -706,17 +706,26 @@ const Entry = memo(function Entry({
     (saved.source ? transcript.source.kind === 'live' : saved.entryId === entry.id)
       ? saved.partId
       : undefined);
+  const [replay, setReplay] = useState({ match, done: false });
+  if (replay.match !== match) setReplay({ match, done: false });
   useEffect(() => {
     if (
-      revealPart &&
-      source &&
-      !parts?.some((part) => part.partId === revealPart) &&
-      !manifest?.error &&
-      manifest?.status !== 'loading' &&
-      (!manifest || manifest.nextCursor)
+      !revealPart ||
+      !source ||
+      parts?.some((part) => part.partId === revealPart) ||
+      manifest?.error ||
+      manifest?.status === 'loading'
     )
-      void controller.loadTranscriptManifest(source);
-  }, [revealPart, source, parts, manifest, controller]);
+      return;
+    const restart =
+      !!matchedPart && manifest?.status === 'complete' && manifest.omittedParts > 0 && !replay.done;
+    if (!manifest || manifest.nextCursor || restart) {
+      void controller.loadTranscriptManifest(source, restart).then(() => {
+        if (restart && controller.getSnapshot().transcript.find.active === match)
+          setReplay((current) => (current === replay ? { ...current, done: true } : current));
+      });
+    }
+  }, [revealPart, matchedPart, match, source, parts, manifest, controller, replay]);
   const copy = useCallback(() => {
     if (native && source) run((signal) => native.copy({ source }, signal), 'Copied.');
   }, [native, source, run]);
@@ -806,6 +815,14 @@ const Entry = memo(function Entry({
         )}
       </div>
       {body}
+      {matchedPart &&
+        manifest?.status === 'complete' &&
+        (replay.done || !manifest.omittedParts) &&
+        !parts?.some((part) => part.partId === matchedPart) && (
+          <p role="alert" {...stylex.props(styles.warning)}>
+            The saved Find part is unavailable. Refresh Find.
+          </p>
+        )}
       {!parts && entry.truncated && (
         <p {...stylex.props(styles.small)}>
           Only a preview is available from this host. Upgrade the host to read the complete source.
@@ -1076,11 +1093,6 @@ function Part({
     },
     [native, run, source, selection],
   );
-  const complete =
-    !part.truncated ||
-    (content?.status === 'complete' &&
-      content.retainedFrom === 0 &&
-      content.loadedBytes === part.bytes);
   const [reading, setReading] = useState({ revision: part.revision, text: part.text });
   let text = reading.text;
   if (reading.revision !== part.revision) {
@@ -1090,6 +1102,12 @@ function Part({
     text = content?.chunks.length ? decodeText(content) : part.text;
     if (text !== reading.text) setReading({ revision: part.revision, text });
   }
+  const complete =
+    !part.truncated ||
+    (content?.status === 'complete' &&
+      content.retainedFrom === 0 &&
+      content.loadedBytes === part.bytes &&
+      (!match || text.length === content.loadedText));
   // Preserve the reading body while Find hydrates its separate bounded source window.
   const base = content?.chunks[0]?.textOffset ?? 0;
   const window = match ? getMatchWindow(content, part, match.start, match.end) : null;

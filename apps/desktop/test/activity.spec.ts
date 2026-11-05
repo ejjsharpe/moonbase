@@ -601,3 +601,63 @@ test('no thinking and redaction are honest; stopped partial activity survives wi
   await expect(row.locator('pre')).toHaveText('published partial');
   await expect(row.locator('[data-transcript-part="m0.b0"] button')).toHaveCount(1);
 });
+
+for (const input of ['pointer', 'Enter', 'Space'] as const)
+  test(`Find ${input} collapse persists in the matching Activity until its original range changes`, async ({
+    page,
+  }) => {
+    await open(page);
+    await page.evaluate(async () => {
+      await window.demo.transcript!.setEntry(
+        0,
+        ['first NEEDLE\n' + 'x'.repeat(300) + '\nsecond NEEDLE'],
+        ['thinking'],
+      );
+      await window.demo.transcript!.setEntry(1, ['Unrelated thought'], ['thinking']);
+    });
+    await page.getByRole('region', { name: 'Chat transcript', exact: true }).focus();
+    await page.keyboard.press('Control+f');
+    const find = page.getByRole('textbox', { name: 'Find in conversation', exact: true });
+    await find.fill('needle');
+    const row = page.locator('[data-transcript-entry="reading-0"]');
+    const activity = row.getByRole('button', { name: /^Activity/ });
+    const thought = row.getByRole('button', { name: /^Thinking/ });
+    await expect(activity).toHaveAttribute('aria-expanded', 'true');
+    await expect(thought).toHaveAttribute('aria-expanded', 'true');
+    await expect(row.locator('[data-transcript-find-match]')).toHaveText('NEEDLE');
+    if (input === 'pointer') await activity.click();
+    else {
+      await activity.focus();
+      await page.keyboard.press(input === 'Space' ? 'Space' : 'Enter');
+    }
+    await expect(activity).toHaveAttribute('aria-expanded', 'false');
+    const active = await page.evaluate(
+      () => window.demo.application.chat!.getSnapshot().transcript.find.active,
+    );
+    await page.evaluate(() => {
+      const controller = window.demo.application.chat!,
+        view = controller.getSnapshot().transcript.view;
+      controller.setTranscriptView({
+        ...view,
+        anchor: { entryId: 'reading-1', partId: 'm0.b0', offset: 16 },
+      });
+      window.demo.chat.controls.receiveChat(structuredClone(window.demo.chat.snapshot));
+    });
+    await expect(activity).toHaveAttribute('aria-expanded', 'false');
+    const unrelated = page
+      .locator('[data-transcript-entry="reading-1"]')
+      .getByRole('button', { name: /^Activity/ });
+    await expect(unrelated).toHaveAttribute('aria-expanded', 'false');
+    expect(
+      await page.evaluate(() => window.demo.application.chat!.getSnapshot().transcript.find.active),
+    ).toEqual(active);
+    await find.focus();
+    await find.press('Enter');
+    await expect(activity).toHaveAttribute('aria-expanded', 'true');
+    await expect(thought).toHaveAttribute('aria-expanded', 'true');
+    await expect(row.getByRole('region', { name: 'Matched original source' })).toContainText(
+      'second NEEDLE',
+    );
+    await expect(unrelated).toHaveAttribute('aria-expanded', 'false');
+    await expect(find).toBeFocused();
+  });

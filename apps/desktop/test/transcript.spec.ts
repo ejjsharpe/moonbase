@@ -1354,3 +1354,48 @@ test('Find respects explicit collapse until the active range changes in the same
   );
   await expect(find).toBeFocused();
 });
+
+test('Find Previous replays an evicted part manifest without changing its query cutoff', async ({
+  page,
+}) => {
+  await open(page);
+  await page.evaluate(async () => {
+    const texts = Array.from({ length: 300 }, (_, index) => `thought ${index}`);
+    texts[0] = 'first NEEDLE';
+    texts[299] = 'last NEEDLE';
+    await window.demo.transcript!.setEntry(
+      0,
+      texts,
+      texts.map(() => 'thinking'),
+    );
+  });
+  await transcript(page).focus();
+  await page.keyboard.press('Control+f');
+  const find = page.getByRole('textbox', { name: 'Find in conversation', exact: true });
+  await find.fill('needle');
+  await expect(page.locator('[data-transcript-find-match]')).toHaveText('NEEDLE');
+  const cutoff = await page.evaluate(
+    () => window.demo.application.chat!.getSnapshot().transcript.find.upperEntryId,
+  );
+  await find.press('Enter');
+  await expect(
+    page.locator('[data-transcript-part="m0.b299"] [data-transcript-find-match]'),
+  ).toHaveText('NEEDLE');
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => window.demo.application.chat!.getSnapshot().transcript.manifest?.omittedParts ?? 0,
+      ),
+    )
+    .toBeGreaterThan(0);
+  await find.press('Shift+Enter');
+  await expect(
+    page.locator('[data-transcript-part="m0.b0"] [data-transcript-find-match]'),
+  ).toHaveText('NEEDLE');
+  expect(
+    await page.evaluate(
+      () => window.demo.application.chat!.getSnapshot().transcript.find.upperEntryId,
+    ),
+  ).toBe(cutoff);
+  await expect(find).toBeFocused();
+});
