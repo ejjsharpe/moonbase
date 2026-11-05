@@ -583,6 +583,11 @@ test('actual 20-second grant expiry rejects an old RPC without dispatch and free
 
 test('signed hostile responses are bounded/projected and cannot reflect or tamper with authority', async (t) => {
   const f = await setup(t);
+  const manifestSource = {
+    kind: 'entry' as const,
+    target: { ...session, conversationId: 'conversation' },
+    entryId: 'entry',
+  };
   let mode = 'normal',
     posts = 0;
   const impostor = createServer(async (req, res) => {
@@ -604,13 +609,33 @@ test('signed hostile responses are bounded/projected and cannot reflect or tampe
     posts++;
     for await (const _ of req) {
     }
-    const value = {
-      ...session,
-      cwd: '/remote/fixed',
-      model: 'configured/model',
-      token: f.token,
-      host: { ...host, privateKey: f.token },
+    const part = {
+      partId: 'm0.b0',
+      bytes: 1,
+      revision: 'a'.repeat(64),
+      role: 'assistant',
+      kind: 'text',
+      availability: 'available',
+      encoding: 'utf8',
+      text: 'x',
+      truncated: false,
     };
+    const value = mode.endsWith('-parts')
+      ? {
+          kind: 'manifest',
+          cursor: null,
+          source: manifestSource,
+          parts: [part, { ...part, partId: mode === 'duplicate-parts' ? part.partId : 'm0.b1' }],
+          nextCursor: null,
+          thinking: 'available',
+        }
+      : {
+          ...session,
+          cwd: '/remote/fixed',
+          model: 'configured/model',
+          token: f.token,
+          host: { ...host, privateKey: f.token },
+        };
     let body = JSON.stringify({ ok: true, value });
     if (mode === 'oversized') body = ' '.repeat(256 * 1024 + 1);
     const pieces = body.split('configured/model'),
@@ -660,6 +685,12 @@ test('signed hostile responses are bounded/projected and cannot reflect or tampe
     );
     if (mode === 'wrong-health') assert.equal(posts, count);
   }
+  mode = 'distinct-parts';
+  await f.remote.command('getChatTranscriptContent', { source: manifestSource });
+  mode = 'duplicate-parts';
+  await assert.rejects(f.remote.command('getChatTranscriptContent', { source: manifestSource }), {
+    code: 'Incompatible',
+  });
 });
 test('unknown shapes, canonical nonces, malformed Unicode and raw body limits reject before chat mutation', async (t) => {
   const f = await setup(t),

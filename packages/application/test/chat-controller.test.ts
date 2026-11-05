@@ -58,6 +58,7 @@ async function fixture(
   const calls: { operation: string; input: unknown }[] = [];
   const answers = new Map<string, (v: never) => Promise<unknown>>();
   const signals = new Map<string, AbortSignal[]>();
+  // Trusted ChatClient: it stands in for a boundary that already decoded and bounded replies.
   const chat: ChatClient = {
     command: async (op, input, options) => {
       if (options?.signal) signals.set(op, [...(signals.get(op) ?? []), options.signal]);

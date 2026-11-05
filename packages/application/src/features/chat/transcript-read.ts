@@ -1,6 +1,5 @@
-import { maximumChatReplyBytes } from '@moonbase/contracts/chat';
 import { ApplicationError } from '@moonbase/contracts/errors';
-import { decodeChatInput, decodeChatOutput } from '@moonbase/contracts/chat-schema';
+import { decodeChatInput } from '@moonbase/contracts/chat-schema';
 import type {
   ChatClient,
   ChatInput,
@@ -9,11 +8,11 @@ import type {
   ChatTranscriptSelection,
 } from '@moonbase/contracts/chat';
 
-/** Returns an unvalidated reply; readTranscript bounds and decodes it. */
+/** A ChatClient read; its boundary has already decoded and bounded the reply. */
 export type TranscriptRead = (
   input: ChatInput<'getChatTranscriptContent'>,
   options: { signal?: AbortSignal },
-) => Promise<unknown>;
+) => Promise<ChatOutput<'getChatTranscriptContent'>>;
 export type TranscriptChunk = {
   source: ChatTranscriptSource;
   selection: ChatTranscriptSelection;
@@ -112,10 +111,7 @@ export async function readTranscript(
 ) {
   checkTranscriptRead(signal, isCurrent);
   const captured = structuredClone(decodeChatInput('getChatTranscriptContent', input));
-  const raw = await awaitTranscriptRead(read(structuredClone(captured), { signal }), signal);
-  if (countTranscriptBytes(raw) > maximumChatReplyBytes)
-    throw makeTranscriptFailure('Transcript reply exceeds its byte bound.');
-  const reply = decodeChatOutput('getChatTranscriptContent', raw);
+  const reply = await awaitTranscriptRead(read(structuredClone(captured), { signal }), signal);
   checkTranscriptRead(signal, isCurrent);
   if (
     !areTranscriptValuesEqual(reply.source, captured.source) ||

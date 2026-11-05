@@ -3,7 +3,7 @@ import {
   decodeApplicationErrorDTO,
   type ApplicationErrorDTOSchema,
 } from '@moonbase/contracts/error-schema';
-import { decodeChatOutput, isChatCommand } from '@moonbase/contracts/chat-schema';
+import { isChatCommand } from '@moonbase/contracts/chat-schema';
 import {
   decodeConnectionOutput,
   decodeConnectionSnapshot,
@@ -117,7 +117,8 @@ export function browserClients(
     try {
       const value = unwrap(await bridge.call(kind, operation, input, id, backendId));
       if (kind === 'providers' && isProviderCommand(operation)) return value;
-      if (kind === 'chat' && isChatCommand(operation)) return decodeChatOutput(operation, value);
+      // Main's ChatClient boundary (Pi runtime) already decoded and bounded chat replies.
+      if (kind === 'chat' && isChatCommand(operation)) return value;
       if (kind === 'connection' && isConnectionCommand(operation))
         return decodeConnectionOutput(operation, value);
       return invalid();
@@ -140,7 +141,7 @@ export function browserClients(
         try {
           receive(
             (kind === 'watch-chat'
-              ? decodeChatOutput('getChat', unwrap(result))
+              ? unwrap(result)
               : decodeConnectionSnapshot(unwrap(result))) as never,
           );
         } catch (e) {

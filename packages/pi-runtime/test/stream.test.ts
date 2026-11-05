@@ -271,6 +271,7 @@ for (const fault of [
   'reorder',
   'missing',
   'replay',
+  'malformed',
 ] as const)
   test(`authenticated stream rejects ${fault} before publication`, async (t) => {
     const f = await fixture(t);
@@ -284,6 +285,9 @@ for (const fault of [
         const headers = new Headers(init?.headers),
           nonce = headers.get('x-moonbase-nonce')!,
           challenge = headers.get('x-moonbase-challenge')!;
+        const body = JSON.stringify(
+          fault === 'malformed' ? { ...snapshot, state: 'unknown' } : snapshot,
+        );
         const value = {
           target,
           connectionId: 'one',
@@ -291,8 +295,8 @@ for (const fault of [
           sequence: 0,
           kind: 'snapshot',
           offset: 0,
-          total: Buffer.byteLength(JSON.stringify(snapshot)),
-          data: Buffer.from(JSON.stringify(snapshot)).toString('base64'),
+          total: Buffer.byteLength(body),
+          data: Buffer.from(body).toString('base64'),
         };
         const bad = {
           ...value,

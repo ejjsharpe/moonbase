@@ -277,6 +277,7 @@ test('transcript schemas bound decoded chunks, canonical base64, identities and 
   assert.deepEqual(decodeChatOutput('getChatTranscriptContent', chunk), chunk);
   for (const changed of [
     { data: '😀'.repeat(8193) },
+    { data: '😀'.repeat(8191) },
     { offset: 1 },
     { nextCursor: 'continues' },
     { encoding: 'base64', data: Buffer.alloc(32769).toString('base64') },
