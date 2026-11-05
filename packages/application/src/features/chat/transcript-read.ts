@@ -9,10 +9,11 @@ import type {
   ChatTranscriptSelection,
 } from '@moonbase/contracts/chat';
 
+/** Returns an unvalidated reply; readTranscript bounds and decodes it. */
 export type TranscriptRead = (
   input: ChatInput<'getChatTranscriptContent'>,
   options: { signal?: AbortSignal },
-) => Promise<ChatOutput<'getChatTranscriptContent'>>;
+) => Promise<unknown>;
 export type TranscriptChunk = {
   source: ChatTranscriptSource;
   selection: ChatTranscriptSelection;
