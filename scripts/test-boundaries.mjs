@@ -38,6 +38,15 @@ function check(sources) {
   });
 }
 assert.deepEqual(check({ 'packages/application/src/index.ts': 'export const value = 1;' }), []);
+assert.deepEqual(
+  check({ 'packages/application/src/index.ts': "import 'effect/Schema'; import 'lru-cache';" }),
+  [],
+);
+assert(
+  check({ 'packages/application/src/index.ts': "import 'lru-cache-extra';" }).some((error) =>
+    error.includes('portable external dependency is not allowlisted'),
+  ),
+);
 for (const source of [
   "import 'node:fs';",
   "import type { ReactNode } from 'react';",
