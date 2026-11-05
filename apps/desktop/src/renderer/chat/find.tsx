@@ -5,6 +5,7 @@ import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
 import { colors, space, type } from '@moonbase/ui/tokens.stylex';
 import type { ChatController, TranscriptFindState } from '@moonbase/application/chat';
+import { getChatFindExpression } from '@moonbase/contracts/chat';
 
 export function activateChatFind(controller: ChatController, element: Element) {
   const owner = element.closest<HTMLElement>('[data-chat-find-owner]');
@@ -42,6 +43,48 @@ export function openChatFind(event: KeyboardEvent, controller: ChatController) {
   event.preventDefault();
   event.stopPropagation();
   activateChatFind(controller, event.currentTarget);
+}
+/**
+ * Maps original-source match starts to the same occurrence in root's rendered text. Returns null
+ * when the rendered text has a different number of occurrences than source, so no mapping is safe.
+ */
+export function locateFindRanges(root: Node, source: string, query: string, starts: number[]) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: (node) =>
+      node.parentElement?.closest('button') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+  });
+  const nodes: { node: Node; start: number }[] = [];
+  let text = '';
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    nodes.push({ node, start: text.length });
+    text += node.nodeValue;
+  }
+  const expected = [...source.matchAll(getChatFindExpression(query))].map((hit) => hit.index),
+    rendered = [...text.matchAll(getChatFindExpression(query))];
+  if (expected.length !== rendered.length) return null;
+  return starts.map((start) => {
+    const hit = rendered[expected.indexOf(start)];
+    if (!hit) return null;
+    const end = hit.index + hit[0].length;
+    const first = nodes.findLast((item) => item.start <= hit.index)!,
+      last = nodes.findLast((item) => item.start < end)!;
+    const range = document.createRange();
+    range.setStart(first.node, hit.index - first.start);
+    range.setEnd(last.node, end - last.start);
+    return range;
+  });
+}
+/** Adds ranges to the named CSS custom highlight until the returned cleanup runs. */
+export function paintFindRanges(name: 'find-match' | 'find-active', ranges: Range[]) {
+  if (!ranges.length) return () => {};
+  const highlight = CSS.highlights.get(name) ?? new Highlight();
+  highlight.priority = name === 'find-active' ? 1 : 0;
+  CSS.highlights.set(name, highlight);
+  for (const range of ranges) highlight.add(range);
+  return () => {
+    for (const range of ranges) highlight.delete(range);
+    if (!highlight.size && CSS.highlights.get(name) === highlight) CSS.highlights.delete(name);
+  };
 }
 export function FindBar({
   controller,

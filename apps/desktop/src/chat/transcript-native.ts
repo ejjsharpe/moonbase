@@ -1,6 +1,5 @@
-import { decodeChatInput, decodeChatOutput } from '@moonbase/contracts/chat-schema';
+import { decodeChatInput } from '@moonbase/contracts/chat-schema';
 import { ApplicationError } from '@moonbase/contracts/errors';
-import { maximumChatReplyBytes } from '@moonbase/contracts/chat';
 import type { ChatClient, ChatSnapshot, ChatTranscriptSelection } from '@moonbase/contracts/chat';
 import { iterateTranscriptSource, type TranscriptRead } from '@moonbase/application/chat';
 import { parseTranscriptMarkdown } from './transcript-source.ts';
@@ -135,6 +134,7 @@ async function readTranscript<T>(
     epoch = 0;
   const ready = Promise.withResolvers<void>();
   const pending = new Set<Promise<unknown>>();
+  // The main-process ChatClient boundary has already decoded and bounded replies and snapshots.
   const read: TranscriptRead = (input, options) => {
     const promise = chat.command('getChatTranscriptContent', input, options);
     pending.add(promise);
@@ -161,14 +161,9 @@ async function readTranscript<T>(
       ? chat.watch(
           { target: source.target },
           (value) => {
-            try {
-              snapshot = decodeChatOutput('getChat', value);
-              epoch++;
-              ready.resolve();
-            } catch (error) {
-              observationError = error;
-              ready.resolve();
-            }
+            snapshot = value;
+            epoch++;
+            ready.resolve();
           },
           (error) => {
             observationError = error;
@@ -196,17 +191,7 @@ async function readTranscript<T>(
         return true;
       },
       read: async (input, options) => {
-        const raw = await read(input, options);
-        if (Buffer.byteLength(JSON.stringify(raw)) > maximumChatReplyBytes) invalid();
-        const reply = decodeChatOutput('getChatTranscriptContent', raw);
-        if (
-          reply.kind === 'manifest' &&
-          new Set(reply.parts.map((part) => part.partId)).size !== reply.parts.length
-        )
-          throw new ApplicationError({
-            code: 'Incompatible',
-            message: 'Transcript manifest repeats a part.',
-          });
+        const reply = await read(input, options);
         return !selection && reply.kind === 'manifest'
           ? {
               ...reply,
@@ -249,10 +234,7 @@ async function readTranscript<T>(
       for (let attempt = 0; attempt < 3 && !proved; attempt++) {
         const proofEpoch = epoch;
         for (const selected of selections) {
-          const reply = decodeChatOutput(
-            'getChatTranscriptContent',
-            await read({ source, selection: selected }, { signal: request.signal }),
-          );
+          const reply = await read({ source, selection: selected }, { signal: request.signal });
           check();
           if (
             reply.kind !== 'content' ||

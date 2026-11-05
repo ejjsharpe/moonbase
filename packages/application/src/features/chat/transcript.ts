@@ -1,5 +1,4 @@
 import { LRUCache } from 'lru-cache';
-import { maximumChatReplyBytes } from '@moonbase/contracts/chat';
 import type {
   ChatClient,
   ChatTranscriptMatch,
@@ -13,7 +12,7 @@ import type {
   ChatTranscriptSelection,
   ChatTranscriptPart,
 } from '@moonbase/contracts/chat';
-import { decodeChatInput, decodeChatOutput } from '@moonbase/contracts/chat-schema';
+import { decodeChatInput } from '@moonbase/contracts/chat-schema';
 import { normalizeApplicationError } from '../../runtime/effect-client.ts';
 import { sameTarget } from './saved.ts';
 import {
@@ -277,16 +276,10 @@ export class TranscriptOwner {
     input: ChatInput<K>,
     signal?: AbortSignal,
     settlements?: Set<Promise<unknown>>,
-  ): Promise<K extends 'getChatTranscriptContent' ? unknown : ChatOutput<K>>;
-  private async command<K extends ChatCommand>(
-    operation: K,
-    input: ChatInput<K>,
-    signal?: AbortSignal,
-    settlements?: Set<Promise<unknown>>,
-  ): Promise<unknown> {
+  ): Promise<ChatOutput<K>> {
     this.assertCurrent();
     const abort = new AbortController();
-    // readTranscript owns transcript content input/reply decoding, cloning and size bounds.
+    // readTranscript owns transcript content input decoding and cloning.
     const transcript = operation === 'getChatTranscriptContent';
     const source = transcript ? (input as ChatInput<'getChatTranscriptContent'>).source : undefined;
     this.assertCurrent(source);
@@ -311,10 +304,7 @@ export class TranscriptOwner {
     this.assertCurrent();
     if (signal?.aborted || abort.signal.aborted)
       throw makeTranscriptFailure('Transcript read cancelled.', 'Cancelled');
-    if (transcript) return result;
-    if (countTranscriptBytes(result) > maximumChatReplyBytes)
-      throw makeTranscriptFailure('Transcript reply exceeds its byte bound.');
-    return decodeChatOutput(operation, result);
+    return result;
   }
   private validateEntries(entries: ChatEntry[]) {
     for (const entry of entries)
@@ -449,10 +439,8 @@ export class TranscriptOwner {
     else this.published = this.state;
     if (notify && changed) this.dependencies.publish(this.state, this.snapshot);
   }
-  accept(raw: ChatSnapshot): ChatSnapshot {
-    if (countTranscriptBytes(raw) > maximumChatReplyBytes)
-      throw makeTranscriptFailure('Snapshot exceeds its byte bound.');
-    const input = decodeChatOutput('getChat', raw);
+  /** Trusts the ChatClient boundary's decoded, bounded snapshot; checks only its authority. */
+  accept(input: ChatSnapshot): ChatSnapshot {
     if (!sameTarget(input.conversation.target, this.dependencies.target))
       throw makeTranscriptFailure('Snapshot belongs to another conversation.');
     this.validateEntries(input.entries);
@@ -1327,6 +1315,8 @@ export class TranscriptOwner {
           if (reply.kind !== 'content' || reply.offset !== before.loadedBytes)
             throw makeTranscriptFailure('Transcript content has a missing or overlapping chunk.');
           const loadedBytes = reply.offset + countDecodedTranscriptBytes(reply);
+          if (reply.nextCursor === null && loadedBytes !== selected.bytes)
+            throw makeTranscriptFailure('Transcript content is incomplete.');
           const chunk = {
             source: captured.source,
             selection: selected,

@@ -6,11 +6,12 @@ import type { Code } from 'mdast';
 import { parseTranscriptMarkdown } from '../src/chat/transcript-source.ts';
 import { MarkdownCache } from '../src/renderer/chat/markdown-model.ts';
 import { Layer, ManagedRuntime } from 'effect';
-import type {
-  ChatClient,
-  ChatSnapshot,
-  ChatTranscriptPart,
-  ChatTranscriptSource,
+import {
+  maximumChatReplyBytes,
+  type ChatClient,
+  type ChatSnapshot,
+  type ChatTranscriptPart,
+  type ChatTranscriptSource,
 } from '@moonbase/contracts/chat';
 import { ChatIpcSession } from '../src/chat/session.ts';
 import { ApplicationError } from '@moonbase/contracts/errors';
@@ -249,6 +250,7 @@ function fixture(live = false, text = '  **raw**\r\n\t🌔 é\r\n' + 'α'.repea
       receive?.(structuredClone(snapshot));
     },
   };
+  // Trusted ChatClient: it stands in for a boundary that already decoded and bounded replies.
   const chat: ChatClient = {
     async command(operation, input) {
       if (operation === 'getChat') return structuredClone(snapshot) as never;
@@ -557,6 +559,18 @@ test('Copy code is independent of highlight/DOM limits, including a large nested
   await f.owner.dispose();
 });
 
+test('native Copy trusts main ChatClient replies and snapshots without decoding them again', async () => {
+  const f = fixture(true);
+  const padding = 'x'.repeat(maximumChatReplyBytes);
+  const { command, watch } = f.chat;
+  f.chat.command = async (operation, input, options) =>
+    ({ ...(await command(operation, input, options)), padding }) as never;
+  f.chat.watch = (input, receive, onError) =>
+    watch(input, (snapshot) => receive({ ...snapshot, padding } as ChatSnapshot), onError);
+  await f.actions.copy({ source: f.source });
+  assert.deepEqual(f.writes, [f.original]);
+  await f.owner.dispose();
+});
 test('native schema/content echoes and binary content cannot authorize a clipboard write', async () => {
   for (const corruption of ['source', 'selection', 'offset', 'binary']) {
     const f = fixture();
@@ -643,7 +657,8 @@ test('reentrant cancellation before the first native observation cannot strand C
   await f.owner.dispose();
 });
 
-test('native Copy validates unfiltered and cross-page manifest identities before writing', async () => {
+// Unfiltered duplicates are rejected at the ChatClient boundary (pi-runtime transport test).
+test('native Copy rejects repeated copied parts within and across manifest pages before writing', async () => {
   for (const acrossPages of [false, true]) {
     const f = fixture(),
       command = f.chat.command;
@@ -658,7 +673,7 @@ test('native Copy validates unfiltered and cross-page manifest identities before
           cursor: string | null;
           nextCursor: string | null;
         };
-        if (!acrossPages) reply.parts[1]!.partId = reply.parts[0]!.partId;
+        if (!acrossPages) reply.parts[1] = { ...reply.parts[0]! };
         else {
           reply.parts = [reply.parts[0]!];
           reply.cursor = (input as { cursor?: string }).cursor ?? null;
@@ -667,7 +682,12 @@ test('native Copy validates unfiltered and cross-page manifest identities before
       }
       return value as never;
     };
-    await assert.rejects(f.actions.copy({ source: f.source }), { code: 'Incompatible' });
+    await assert.rejects(f.actions.copy({ source: f.source }), {
+      code: 'Incompatible',
+      message: acrossPages
+        ? 'Transcript manifest repeats a selected part.'
+        : 'Transcript manifest repeats a part.',
+    });
     assert.deepEqual(f.writes, []);
     await f.owner.dispose();
   }
