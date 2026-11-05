@@ -3,9 +3,19 @@ import { Effect } from 'effect';
 import { releaseResource } from '@moonbase/effect';
 
 import { ApplicationError } from '@moonbase/contracts/workspace';
-export { maximumChatRequestBytes } from '@moonbase/contracts/chat';
+export { maximumChatRequestBytes, maximumChatReplyBytes } from '@moonbase/contracts/chat';
+import type { ChatCommand } from '@moonbase/contracts/chat';
+import { chatReplyErrorCodes } from '@moonbase/contracts/chat-schema';
 import type { ChatHostEndpoint } from '@moonbase/contracts/services';
 import { fail } from './validation.ts';
+
+/** Bounds one RPC exchange: its challenge grant, request body read and whole client call. */
+export const requestDeadlineMs = 20000;
+/** Reads a caller may abandon; every other command runs to completion once dispatched. */
+export const isCancellableRead = (operation: ChatCommand) =>
+  operation === 'getChatTranscriptContent' ||
+  operation === 'getChatHistoryAround' ||
+  operation === 'findChatTranscript';
 
 export const nonce = () => randomBytes(32).toString('base64url');
 export const validNonce = (value: unknown): value is string =>
@@ -54,16 +64,7 @@ export function json(bytes: Uint8Array): unknown {
     return fail('InvalidInput', 'Chat body must contain valid UTF-8 JSON.');
   }
 }
-export const codes = [
-  'InvalidInput',
-  'Unauthorized',
-  'Incompatible',
-  'Conflict',
-  'Persistence',
-  'Uncertain',
-  'Unavailable',
-  'Cancelled',
-] as const;
+export const codes = chatReplyErrorCodes;
 export function publicError(error: unknown, operation?: string) {
   const code =
     ApplicationError.is(error) && codes.includes(error.code as (typeof codes)[number])

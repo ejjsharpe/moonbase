@@ -11,6 +11,7 @@ import {
   chatContentChunkBytes,
   chatManifestPageSize,
   maximumChatInputBytes,
+  maximumChatReplyBytes,
   type ChatCommand,
   type ChatInput,
   type ChatOutput,
@@ -216,6 +217,21 @@ export const ChatSnapshotSchema = struct({
   transcriptBoundary: optional(Schema.NullOr(ChatIdentifierSchema)),
   observationStatus: optional(Schema.Literals(['connected', 'reconnecting'])),
 });
+/** Error codes a chat host may sign; a stream never carries a mutation's `Uncertain` outcome. */
+export const chatReplyErrorCodes = [
+  'InvalidInput',
+  'Unauthorized',
+  'Incompatible',
+  'Conflict',
+  'Persistence',
+  'Uncertain',
+  'Unavailable',
+  'Cancelled',
+] as const;
+export const chatStreamErrorCodes = chatReplyErrorCodes.filter(
+  (code): code is Exclude<(typeof chatReplyErrorCodes)[number], 'Uncertain'> =>
+    code !== 'Uncertain',
+);
 // Network-only envelopes; ordinary snapshots/IPC remain browser-safe replacements.
 export const ChatStreamRequestSchema = struct({
   target: ChatTargetSchema,
@@ -230,8 +246,8 @@ export const ChatStreamFrameSchema = Schema.Union([
   struct({
     ...streamIdentity,
     kind: Schema.Literal('snapshot'),
-    offset: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 256 * 1024 })),
-    total: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 256 * 1024 })),
+    offset: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: maximumChatReplyBytes })),
+    total: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: maximumChatReplyBytes })),
     data: Schema.String.check(
       Schema.makeFilter((value) => {
         try {
@@ -249,15 +265,7 @@ export const ChatStreamFrameSchema = Schema.Union([
   struct({
     ...streamIdentity,
     kind: Schema.Literal('error'),
-    code: Schema.Literals([
-      'InvalidInput',
-      'Unauthorized',
-      'Incompatible',
-      'Conflict',
-      'Persistence',
-      'Unavailable',
-      'Cancelled',
-    ]),
+    code: Schema.Literals(chatStreamErrorCodes),
   }),
 ]);
 export const decodeChatStreamRequest = Schema.decodeUnknownSync(ChatStreamRequestSchema, {

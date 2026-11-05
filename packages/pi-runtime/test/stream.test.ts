@@ -29,9 +29,9 @@ const snapshot: ChatSnapshot = {
   transcriptBoundary: null,
 };
 const wait = async (predicate: () => boolean) => {
-  const end = Date.now() + 6000;
+  const end = performance.now() + 6000;
   while (!predicate()) {
-    if (Date.now() > end) throw Error('Stream deadline');
+    if (performance.now() > end) throw Error('Stream deadline');
     await new Promise((r) => setTimeout(r, 5));
   }
 };
@@ -167,6 +167,7 @@ function interceptFrames(
     context: { nonce: string; challenge: string },
   ) => Uint8Array[],
   holdOpen = false,
+  beforeClose?: (attempt: number) => Promise<void>,
 ) {
   const original = fetch;
   let attempts = 0;
@@ -195,9 +196,11 @@ function interceptFrames(
       const parts = change(frames, attempt, { nonce, challenge });
       return new Response(
         new ReadableStream({
-          start(controller) {
+          async start(controller) {
             for (const part of parts) controller.enqueue(part);
-            if (!holdOpen) controller.close();
+            if (holdOpen) return;
+            await beforeClose?.(attempt);
+            controller.close();
           },
         }),
         { headers: response.headers, status: response.status },
@@ -345,6 +348,73 @@ test('snapshot/disconnect loops have a finite retry budget, visible stale state 
   assert.equal(f.calls.filter((c) => c !== 'getChatHost').length, 0);
   await wait(() => f.listeners.size === 0);
   assert.equal(f.acquisitions, f.releases);
+});
+
+test('drops separated by healthy periods keep reconnecting; back-to-back drops still exhaust the budget', async (t) => {
+  const f = await fixture(t),
+    now = Date.now,
+    healthy = 2 * P.streamLimits.reconnectMs.length;
+  let skew = 0;
+  t.mock.method(Date, 'now', () => now() + skew);
+  const connected = () => w.views.filter((v) => v.observationStatus === 'connected').length;
+  const attempts = interceptFrames(
+    t,
+    f.token,
+    (frames) => frames,
+    false,
+    async (attempt) => {
+      if (attempt >= healthy) return;
+      // This connection delivered its snapshot, then stays up for a heartbeat interval.
+      await wait(() => connected() === attempt + 1);
+      skew += P.streamLimits.heartbeatMs;
+    },
+  );
+  const w = f.observe();
+  await wait(() => w.errors.length > 0);
+  // Each healthy drop renews the budget; the final outage gets the original three reconnects.
+  assert.equal(attempts(), healthy + P.streamLimits.reconnectMs.length);
+  // The sliding view buffer may coalesce a back-to-back drop's snapshot with its stale view.
+  assert(connected() >= healthy);
+  assert.equal(w.errors.length, 1);
+  assert.equal(w.errors[0].code, 'Unavailable');
+  assert.equal(w.views.at(-1)!.observationStatus, 'reconnecting');
+  assert.equal(f.calls.filter((c) => c !== 'getChatHost').length, 0);
+  await wait(() => f.listeners.size === 0);
+  assert.equal(f.acquisitions, f.releases);
+});
+
+test('heartbeats fill only quiet intervals and never trail a written snapshot', async (t) => {
+  shortenDeadline(t, P.streamLimits.heartbeatMs);
+  const frames: { kind: ChatStreamFrame['kind']; at: number }[] = [],
+    write = ServerResponse.prototype.write;
+  t.mock.method(
+    ServerResponse.prototype,
+    'write',
+    function (this: ServerResponse, ...args: Parameters<typeof write>) {
+      if (this.getHeader('content-type') === 'application/vnd.moonbase.chat-stream-v1') {
+        const frame = P.json((args[0] as Buffer).subarray(4, -32)) as ChatStreamFrame;
+        frames.push({ kind: frame.kind, at: performance.now() });
+      }
+      return write.apply(this, args);
+    },
+  );
+  const f = await fixture(t),
+    w = f.observe(),
+    heartbeats = () => frames.filter((frame) => frame.kind === 'heartbeat').length;
+  await wait(() => heartbeats() >= 2);
+  f.publish({ ...snapshot, message: 'update' });
+  await wait(() => w.views.at(-1)?.message === 'update');
+  const written = frames.length;
+  await wait(() => heartbeats() >= 3 && frames.length > written);
+  await w.close();
+  assert.equal(frames[0].kind, 'snapshot');
+  assert.equal(frames.filter((frame) => frame.kind === 'snapshot').length, 2);
+  frames.forEach((frame, i) => {
+    if (frame.kind === 'heartbeat')
+      // Shortened to 40ms; an immediate trailing heartbeat would follow within a millisecond.
+      assert(frame.at - frames[i - 1].at >= 30, `heartbeat ${i} followed a frame too closely`);
+  });
+  assert.deepEqual(w.errors, []);
 });
 
 test('closing a held reader releases the server watch promptly and drops later replacements', async (t) => {
