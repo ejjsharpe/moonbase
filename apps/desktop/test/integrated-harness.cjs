@@ -1,5 +1,5 @@
 // Loaded with Electron -r before the unchanged built/archive main entry.
-const { clipboard, safeStorage, ipcMain } = require('electron');
+const { app, BrowserWindow, clipboard, safeStorage, ipcMain } = require('electron');
 const { createCipheriv, createDecipheriv } = require('node:crypto');
 const key = Buffer.alloc(32, 116);
 safeStorage.isAsyncEncryptionAvailable = async () => true;
@@ -19,6 +19,7 @@ const control = (globalThis.integratedTranscript = {
   calls: [],
   copied: [],
   requests: 0,
+  beforeMain: !app.isReady() && BrowserWindow.getAllWindows().length === 0,
   streams: [],
   held: null,
   release: null,
