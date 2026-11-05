@@ -4,9 +4,10 @@ import { createCipheriv, createDecipheriv } from 'node:crypto';
 const key = Buffer.alloc(32, 7);
 // No controlled fixture may accidentally write the user's OS clipboard.
 globalThis.moonbaseTestClipboard = [];
-clipboard.writeText = async (text) => {
+globalThis.moonbaseTestClipboardWrite = async (text) => {
   globalThis.moonbaseTestClipboard.push(text);
 };
+clipboard.writeText = globalThis.moonbaseTestClipboardWrite;
 safeStorage.isAsyncEncryptionAvailable = async () => true;
 safeStorage.encryptStringAsync = async (plain) => {
   const cipher = createCipheriv('aes-256-gcm', key, Buffer.alloc(12, 1));

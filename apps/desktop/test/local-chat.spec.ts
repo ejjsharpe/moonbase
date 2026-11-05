@@ -556,6 +556,14 @@ test('transcript local rendering precedes held completion; native Copy/link fail
       ),
     ).toBe(reads);
     await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
+    expect(
+      await app.evaluate(
+        ({ clipboard }) =>
+          clipboard.writeText ===
+          (globalThis as unknown as { moonbaseTestClipboardWrite: unknown })
+            .moonbaseTestClipboardWrite,
+      ),
+    ).toBe(true);
     await app.evaluate(({ clipboard, shell }) => {
       const original = clipboard.writeText.bind(clipboard);
       const control = (globalThis as unknown as { transcriptTest: Control }).transcriptTest;
