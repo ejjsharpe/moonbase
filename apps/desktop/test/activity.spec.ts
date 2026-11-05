@@ -83,6 +83,13 @@ for (const input of ['pointer', 'Enter', 'Space'] as const)
       if (input === 'pointer') await button.click();
       else {
         await button.focus();
+        // Settle focus-induced scrolling before testing the keyboard capture.
+        await page.evaluate(
+          () =>
+            new Promise<void>((resolve) =>
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+            ),
+        );
         await page.keyboard.press(input === 'Space' ? 'Space' : 'Enter');
       }
       await expect(button).toHaveAttribute('aria-expanded', 'true');
