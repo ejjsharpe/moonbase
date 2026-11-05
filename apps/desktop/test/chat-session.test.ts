@@ -379,3 +379,70 @@ test('local IPC captures its command and cannot route a late reply to a replacem
   assert.equal(owner.count, 0);
   await owner.dispose();
 });
+
+test('browser chat observation preserves reconnect status and document release fences late snapshots', async () => {
+  const ready = Promise.withResolvers<void>();
+  let receive!: (snapshot: ChatSnapshot) => void;
+  let event: Parameters<ChatBridge['events']>[0] = () => {},
+    releases = 0;
+  const chat: ChatClient = {
+    command: async () => null as never,
+    watch: (_input, next) => {
+      receive = next;
+      ready.resolve();
+      return async () => {
+        releases++;
+      };
+    },
+  };
+  const connection: ConnectionClient = {
+    command: async () => undefined as never,
+    watch: () => async () => {},
+  };
+  const owner = new ChatIpcSession(runtime, chat, connection, context, (id, value) =>
+    event(id, value),
+  );
+  const client = browserClients({
+    context: async () => context,
+    call: (kind, op, input, id) => owner.call(kind, op, input, id),
+    cancel: (id) => owner.cancel(id),
+    events: (next) => {
+      event = next;
+      return () => {
+        event = () => {};
+      };
+    },
+  }).chat;
+  const views: ChatSnapshot[] = [],
+    errors: ApplicationError[] = [];
+  const close = client.watch(
+    { target },
+    (value) => views.push(value),
+    (error) => errors.push(error),
+  );
+  await ready.promise;
+  const snapshot: ChatSnapshot = {
+    conversation: {
+      target,
+      title: 'Selected',
+      createdAt: '2026-11-04T00:00:00Z',
+      cwd: '/remote',
+      model: 'faux',
+    },
+    entries: [],
+    olderCursor: null,
+    run: null,
+    state: 'idle',
+    observationStatus: 'reconnecting',
+    transcriptBoundary: null,
+  };
+  receive(snapshot);
+  assert.equal(views[0].observationStatus, 'reconnecting');
+  await owner.releaseDocument();
+  receive({ ...snapshot, observationStatus: 'connected' });
+  assert.equal(views.length, 1);
+  assert.equal(releases, 1);
+  assert.deepEqual(errors, []);
+  await close();
+  await owner.dispose();
+});

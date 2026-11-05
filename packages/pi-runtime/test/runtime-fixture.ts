@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ManagedRuntime } from 'effect';
@@ -6,7 +6,7 @@ import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import { type Registry } from '@earendil-works/pi-durable';
-import { PiRuntimeLive } from '../src/index.ts';
+import { PiRuntimeLive, LocalPiRuntimeLive } from '../src/index.ts';
 import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
 
 export const session = {
@@ -26,6 +26,7 @@ export async function fixture(
   t: { after: (fn: () => Promise<void>) => void },
   registry?: Registry,
   fauxOptions: Parameters<typeof fauxProvider>[0] = {},
+  local = false,
 ) {
   const directory = await mkdtemp(join(tmpdir(), 'moonbase-pi-')),
     faux = fauxProvider({ tokensPerSecond: 100000, ...fauxOptions }),
@@ -39,7 +40,10 @@ export async function fixture(
     models,
     registry,
   };
-  let runtime = ManagedRuntime.make(PiRuntimeLive(config));
+  const layer = local
+    ? LocalPiRuntimeLive({ ...session, databasePath: config.databasePath, models, registry })
+    : PiRuntimeLive(config);
+  let runtime = ManagedRuntime.make(layer);
   t.after(async () => {
     try {
       await runtime.dispose();
@@ -50,12 +54,15 @@ export async function fixture(
   return {
     faux,
     config,
+    get runtime() {
+      return runtime;
+    },
     get client() {
       return makeChatClient(runtime);
     },
     async restart() {
       await runtime.dispose();
-      runtime = ManagedRuntime.make(PiRuntimeLive(config));
+      runtime = ManagedRuntime.make(layer);
     },
     async dispose() {
       await runtime.dispose();
@@ -69,6 +76,7 @@ export async function fixture(
           session,
           requestId,
           title: 'Saved chat',
+          ...(local ? { settings: { cwd: await realpath(directory), model: config.model } } : {}),
         })
       ).conversation.target;
     },

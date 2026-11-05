@@ -164,6 +164,8 @@ export function openHost(config: RuntimeConfiguration) {
     );
     databaseOwned = false;
     const aborts = yield* retainedWork('abort');
+    const registry = validated.registry ?? createRegistry();
+    let host: Host | undefined = undefined;
     const harness = yield* Effect.acquireRelease(
       Effect.tryPromise({
         try: () =>
@@ -171,12 +173,17 @@ export function openHost(config: RuntimeConfiguration) {
             storage,
             {
               models: validated.models,
-              registry: validated.registry ?? createRegistry(),
+              registry,
               env: getToolEnvironment,
               settings: {
                 retry: { enabled: false },
                 compaction: { enabled: false },
                 restartLimit: 5,
+              },
+              onReport: (_error, info) => {
+                if (info.type === 'migration_failed' || info.type === 'task_parked')
+                  for (const notify of host?.statusListeners ?? [])
+                    notify(info.task.conversationId);
               },
             },
             context,
@@ -214,14 +221,23 @@ export function openHost(config: RuntimeConfiguration) {
       waiters = yield* retainedWork('waiter'),
       observations = yield* Effect.acquireRelease(Scope.make(), (scope) =>
         Scope.close(scope, Exit.void),
-      ),
-      host = new Host(validated, harness, identity, work, aborts, waiters, observations);
+      );
+    host = new Host(
+      { ...validated, registry },
+      harness,
+      identity,
+      work,
+      aborts,
+      waiters,
+      observations,
+    );
+    const acquired = host;
     yield* Effect.addFinalizer(() =>
       Effect.sync(() => {
-        host.closed = true;
+        acquired.closed = true;
       }),
     );
     harness.resume();
-    return host;
+    return acquired;
   });
 }

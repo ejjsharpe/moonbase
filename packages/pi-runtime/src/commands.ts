@@ -2,11 +2,14 @@ import { realpath, stat } from 'node:fs/promises';
 import { BACKGROUND_CONTEXT as context, withCancel } from '@earendil-works/chord/context';
 import {
   LiveDoc,
+  NestedCallDoc,
   configure,
   ConversationBusy,
   type Harness,
   type TaskId,
   type Cursor,
+  type CommitPublication,
+  type ConversationId,
 } from '@earendil-works/pi-durable';
 import { Effect, Exit, Fiber, FiberSet, Option, Queue, Scope, Semaphore, Stream } from 'effect';
 import { normalizeApplicationError, releaseResource } from '@moonbase/effect';
@@ -41,9 +44,10 @@ import {
   readHistoryAround,
   projectSnapshot,
   summarizeConversation,
+  type SnapshotCache,
 } from './history.ts';
 import type { RuntimeConfiguration, RetainedWork } from './runtime-types.ts';
-import { readTranscriptContent, checkRead } from './transcript.ts';
+import { NestedSourceRetired, readTranscriptContent, checkRead } from './transcript.ts';
 import * as V from './validation.ts';
 import * as S from './private-schema.ts';
 
@@ -84,6 +88,7 @@ export class Host {
   readonly aborts: RetainedWork;
   readonly waiters: RetainedWork;
   readonly observations: Scope.Closeable;
+  readonly statusListeners = new Set<(conversationId: ConversationId) => void>();
   constructor(
     config: RuntimeConfiguration,
     harness: Harness,
@@ -446,8 +451,20 @@ export class Host {
       ? { target, requestId, admission: 'admitted', submissionId }
       : { target, requestId, admission: 'reserved', submissionId: null };
   }
-  async snapshot(target: ChatTarget): Promise<ChatSnapshot> {
+  async snapshot(
+    target: ChatTarget,
+    cache?: SnapshotCache,
+    signal?: AbortSignal,
+  ): Promise<ChatSnapshot> {
     const meta = await this.metadata(target);
+    checkRead(signal);
+    const owner = S.savedStore(await this.harness.snapshot(Store, 'identity', context));
+    if (owner.identity !== this.identity)
+      V.fail('Unauthorized', 'Chat store authority changed. Preserve this store.');
+    if (cache && cache.boundary === undefined) {
+      if (!(await this.harness.snapshot(LiveDoc, cid(target.conversationId), context)))
+        V.fail('Persistence', 'Pi live state is unavailable. Reopen this conversation.');
+    }
     return projectSnapshot(
       this.harness,
       this.identity,
@@ -455,6 +472,8 @@ export class Host {
       this.summary(target.conversationId, meta),
       meta.pending,
       'mode' in this.config,
+      cache,
+      signal,
     );
   }
   async hasActiveWork(): Promise<boolean> {
@@ -567,12 +586,20 @@ export class Host {
     return Stream.unwrap(
       Effect.gen({ self: this }, function* () {
         const queue = yield* Queue.sliding<void>(1);
+        const cache: SnapshotCache = { statusVersion: 0 };
+        let revision = 0,
+          active = true,
+          ended = false;
         const scope = yield* Effect.acquireRelease(Scope.fork(this.observations), (scope) =>
           Scope.close(scope, Exit.void),
         );
         yield* Scope.provide(scope)(
           Effect.gen({ self: this }, function* () {
-            yield* Effect.addFinalizer(() => Queue.shutdown(queue));
+            yield* Effect.addFinalizer(() =>
+              Effect.sync(() => {
+                active = false;
+              }).pipe(Effect.andThen(Queue.shutdown(queue))),
+            );
             yield* Effect.acquireRelease(
               Effect.try({
                 try: () => {
@@ -589,18 +616,132 @@ export class Host {
                   this.observers--;
                 }),
             );
-            const refresh = () => Queue.offerUnsafe(queue, undefined);
+            const refresh = (invalidatesCapture = true) => {
+              if (invalidatesCapture) revision++;
+              Queue.offerUnsafe(queue, undefined);
+            };
+            const invalidateStatus = () => {
+              cache.statusVersion++;
+              cache.status = undefined;
+            };
+            const invalidate = (publication: CommitPublication) => {
+              let relevant = false,
+                invalidatesCapture = false;
+              let liveRetired = false,
+                livePresent = false;
+              for (const change of publication.changes) {
+                if (change.type === 'document' || change.type === 'document.copy') {
+                  const kind = change.record.kind;
+                  if (change.conversationId === cid(target.conversationId)) {
+                    if (
+                      kind !== LiveDoc.definition.kind &&
+                      kind !== Metadata.definition.kind &&
+                      kind !== NestedCallDoc.definition.kind
+                    )
+                      continue;
+                    relevant = true;
+                    // Progress can outpace projection without invalidating its captured source/control.
+                    const progressOnly =
+                      kind === LiveDoc.definition.kind &&
+                      change.type === 'document' &&
+                      change.value !== null &&
+                      change.ops.length !== 0 &&
+                      change.ops.every((op) => {
+                        if (op[0] === 'r') return false;
+                        const path = op[1];
+                        return (
+                          (path[0] === 'generation' && path[1] === 'message') ||
+                          ((path[0] === 'tools' || path[0] === 'nestedTools') &&
+                            typeof path[1] === 'number' &&
+                            [
+                              'output',
+                              'details',
+                              'diagnostics',
+                              'droppedBytes',
+                              'droppedLines',
+                            ].includes(String(path[2])))
+                        );
+                      });
+                    invalidatesCapture ||= !progressOnly;
+                    if (kind === LiveDoc.definition.kind) {
+                      if (change.type === 'document' && change.value === null) liveRetired = true;
+                      else livePresent = true;
+                    }
+                    if (
+                      change.type === 'document.copy' ||
+                      (change.type === 'document' && (!change.ops.length || change.value === null))
+                    ) {
+                      cache.boundary = undefined;
+                      cache.history = undefined;
+                      invalidateStatus();
+                    }
+                  } else if (
+                    kind === Store.definition.kind &&
+                    change.record.scope.kind === 'session'
+                  ) {
+                    relevant = true;
+                    invalidatesCapture = true;
+                    cache.boundary = undefined;
+                    cache.history = undefined;
+                    invalidateStatus();
+                  }
+                } else {
+                  const conversationId =
+                    change.type === 'conversation' ? change.value.id : change.value.conversationId;
+                  if (conversationId !== cid(target.conversationId)) continue;
+                  relevant = true;
+                  invalidatesCapture = true;
+                  if (change.type === 'entry' || change.type === 'conversation') {
+                    cache.boundary = undefined;
+                    cache.history = undefined;
+                  }
+                  if (change.type === 'task' || change.type === 'conversation') invalidateStatus();
+                }
+              }
+              if (liveRetired || livePresent) cache.retired = liveRetired && !livePresent;
+              if (relevant) refresh(invalidatesCapture);
+            };
             yield* Effect.acquireRelease(
               Effect.try({
-                try: () => this.harness.subscribeCommits(refresh),
+                try: () => this.harness.subscribeCommits(invalidate),
                 catch: normalizeApplicationError,
               }),
               (off) => releaseResource(off),
             );
             yield* Effect.acquireRelease(
               Effect.try({
-                try: () => this.harness.subscribeClose(refresh),
+                try: () =>
+                  this.harness.subscribeClose(() => {
+                    ended = true;
+                    refresh();
+                  }),
                 catch: normalizeApplicationError,
+              }),
+              (off) => releaseResource(off),
+            );
+            yield* Effect.acquireRelease(
+              Effect.try({
+                try: () =>
+                  this.config.registry!.subscribe(() => {
+                    invalidateStatus();
+                    refresh();
+                  }),
+                catch: normalizeApplicationError,
+              }),
+              (off) => releaseResource(off),
+            );
+            yield* Effect.acquireRelease(
+              Effect.sync(() => {
+                const notify = (conversationId: ConversationId) => {
+                  if (conversationId === cid(target.conversationId)) {
+                    invalidateStatus();
+                    refresh();
+                  }
+                };
+                this.statusListeners.add(notify);
+                return () => {
+                  this.statusListeners.delete(notify);
+                };
               }),
               (off) => releaseResource(off),
             );
@@ -608,7 +749,28 @@ export class Host {
           }),
         );
         return Stream.fromQueue(queue).pipe(
-          Stream.mapEffect(() => this.run('getChat', { target }, (d) => this.snapshot(d.target))),
+          Stream.mapEffect(() => {
+            const version = revision;
+            if (ended || this.closed) return Effect.fail(safeError(null));
+            return this.own(this.read((signal) => this.snapshot(target, cache, signal))).pipe(
+              Effect.flatMap((snapshot) =>
+                Effect.try({
+                  try: () =>
+                    active && version === revision
+                      ? Option.some(V.output('getChat', snapshot, { target }))
+                      : Option.none(),
+                  catch: safeError,
+                }),
+              ),
+              Effect.catch((error) =>
+                error instanceof NestedSourceRetired && version !== revision
+                  ? Effect.succeed(Option.none())
+                  : Effect.fail(error),
+              ),
+            );
+          }),
+          Stream.filter(Option.isSome),
+          Stream.map((snapshot) => snapshot.value),
         );
       }),
     );

@@ -100,6 +100,7 @@ export function responseBytes(
         ? 'Chat mutation outcome could not be authenticated. Preserve its original request and query before retrying.'
         : message,
     );
+  let readFailure: { error: unknown } | undefined;
   return Effect.acquireUseRelease(
     Effect.try({
       try: () => response.body?.getReader(),
@@ -126,7 +127,10 @@ export function responseBytes(
           const chunks: Uint8Array[] = [];
           let total = 0;
           while (true) {
-            const part = await reader.read();
+            const part = await reader.read().catch((error) => {
+              readFailure = { error };
+              throw error;
+            });
             if (part.done) break;
             total += part.value.length;
             if (total > max)
@@ -151,6 +155,8 @@ export function responseBytes(
         try {
           try {
             await reader?.cancel();
+          } catch (error) {
+            if (!readFailure || error !== readFailure.error) throw error;
           } finally {
             reader?.releaseLock();
           }
@@ -165,4 +171,65 @@ export function responseBytes(
         }
       }),
   );
+}
+
+// Stream proofs cannot be reflected into health/RPC or request proofs.
+export const streamMac = (token: string, ...parts: unknown[]) =>
+  createHmac('sha256', token)
+    .update(JSON.stringify(['moonbase-chat-stream-v1', ...parts]))
+    .digest('hex');
+export const streamPath = '/v1/chat/watch';
+export const streamLimits = {
+  frameBytes: 256 * 1024,
+  requestBytes: 4096,
+  subscriptions: 64,
+  establishmentMs: 20000,
+  heartbeatMs: 10000,
+  idleMs: 30000,
+  drainMs: 20000,
+  reconnectMs: [250, 500, 1000],
+} as const;
+export function encodeFrame(token: string, nonce: string, challenge: string, value: unknown) {
+  const body = Buffer.from(JSON.stringify(value));
+  if (body.length + 36 > streamLimits.frameBytes)
+    fail('Incompatible', 'Chat stream frame exceeds its delivery limit.');
+  const frame = Buffer.allocUnsafe(body.length + 36);
+  frame.writeUInt32BE(body.length);
+  body.copy(frame, 4);
+  Buffer.from(streamMac(token, 'frame', nonce, challenge, hash(body)), 'hex').copy(
+    frame,
+    body.length + 4,
+  );
+  return frame;
+}
+/** Retains one bounded partial frame, including fragmented length/proof bytes. */
+export class FrameDecoder {
+  private buffer = Buffer.alloc(4);
+  private used = 0;
+  *push(bytes: Uint8Array): Generator<{ body: Uint8Array; proof: string }> {
+    let offset = 0;
+    while (offset < bytes.length) {
+      const size = Math.min(this.buffer.length - this.used, bytes.length - offset);
+      this.buffer.set(bytes.subarray(offset, offset + size), this.used);
+      this.used += size;
+      offset += size;
+      if (this.used !== this.buffer.length) continue;
+      if (this.buffer.length === 4) {
+        const length = this.buffer.readUInt32BE();
+        if (!length || length + 36 > streamLimits.frameBytes)
+          fail('Incompatible', 'Chat stream frame exceeds its delivery limit.');
+        const buffer = Buffer.allocUnsafe(length + 36);
+        this.buffer.copy(buffer);
+        this.buffer = buffer;
+      } else {
+        const frame = this.buffer;
+        this.buffer = Buffer.alloc(4);
+        this.used = 0;
+        yield { body: frame.subarray(4, -32), proof: frame.subarray(-32).toString('hex') };
+      }
+    }
+  }
+  get partial() {
+    return this.used !== 0;
+  }
 }
