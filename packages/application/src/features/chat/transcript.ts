@@ -1,5 +1,4 @@
 import { maximumChatReplyBytes } from '@moonbase/contracts/chat';
-import type { ApplicationError } from '@moonbase/contracts/errors';
 import type {
   ChatClient,
   ChatCommand,
@@ -70,8 +69,6 @@ export type TranscriptState = {
   loading: boolean;
   error: string | null;
   view: TranscriptView;
-  viewStatus: 'pending' | 'ready' | 'source-changed' | 'unavailable';
-  viewError: string | null;
   manifest: TranscriptManifestState | null;
   content: TranscriptContentState[];
   retained: { summaries: number; summaryBytes: number; contentBytes: number };
@@ -87,8 +84,6 @@ export function makeEmptyTranscriptState(): TranscriptState {
     loading: false,
     error: null,
     view: { anchor: null, expanded: [] },
-    viewStatus: 'ready',
-    viewError: null,
     manifest: null,
     content: [],
     retained: { summaries: 0, summaryBytes: 0, contentBytes: 0 },
@@ -159,7 +154,6 @@ export class TranscriptOwner {
   private state = makeEmptyTranscriptState();
   private published = this.state;
   private selectedEntry?: ChatEntry;
-  private viewEvidence: unknown;
   private records: ChatEntry[] = []; // newest first; public window is oldest first
   private start = 0;
   private snapshot?: ChatSnapshot;
@@ -183,7 +177,6 @@ export class TranscriptOwner {
     this.dependencies = dependencies;
     this.state.view = dependencies.memory.get(dependencies.backend, dependencies.target);
     this.following = !this.state.view.anchor || !!this.state.view.anchor.source;
-    if (this.state.view.anchor?.source) this.state.viewStatus = 'pending';
     this.state.capabilities = {
       transcript: dependencies.capable ? 'available' : 'legacy',
       find: 'unavailable',
@@ -272,14 +265,12 @@ export class TranscriptOwner {
       ).values(),
     ];
     return {
-      summaries:
-        entries.length + (this.state.manifest?.parts.length ?? 0) + (this.viewEvidence ? 1 : 0),
+      summaries: entries.length + (this.state.manifest?.parts.length ?? 0),
       summaryBytes: countTranscriptBytes({
         entries,
         manifest: this.state.manifest,
         navigation: this.navigation,
         view: this.state.view,
-        viewEvidence: this.viewEvidence,
       }),
     };
   }
@@ -427,7 +418,7 @@ export class TranscriptOwner {
       this.newerEnd = true;
       if (!this.navigation) this.olderEnd = input.olderCursor === null;
     } else {
-      this.records = this.records.map((entry) =>
+      this.records = (old ? this.records : entries).map((entry) =>
         reuseEntry(entry, entries.find((value) => value.id === entry.id) ?? entry),
       );
       if (old && old.transcriptBoundary !== input.transcriptBoundary) this.newerEnd = false;
@@ -481,9 +472,7 @@ export class TranscriptOwner {
         this.jobs.get('manifest')?.abort.abort();
       }
     }
-    this.updateLiveView();
     this.publish(false);
-    if (!this.jobs.has('history')) void this.restoreLiveView();
     return this.snapshot;
   }
   fail(error: unknown) {
@@ -503,9 +492,6 @@ export class TranscriptOwner {
       ...this.state,
       observation: 'failed',
       loading: false,
-      ...(this.state.view.anchor?.source
-        ? { viewStatus: 'source-changed' as const, viewError: failure }
-        : {}),
       error: failure,
       ...(manifest && (manifest.source.kind === 'live' || manifest.status === 'loading')
         ? {
@@ -519,16 +505,6 @@ export class TranscriptOwner {
     };
     this.publish();
   }
-  private getLiveAnchorIdentity(anchor: TranscriptView['anchor']) {
-    if (!anchor?.source) return null;
-    return {
-      backendId: anchor.backendId,
-      source: anchor.source,
-      partId: anchor.partId,
-      bytes: anchor.bytes,
-      revision: anchor.revision,
-    };
-  }
   private getLiveEvidence(selection?: ChatTranscriptSelection) {
     const transcript = this.snapshot?.run?.transcript;
     const part = selection && transcript?.parts.find((part) => part.partId === selection.partId);
@@ -541,121 +517,12 @@ export class TranscriptOwner {
         }
       : transcript;
   }
-  private cancelViewRestore() {
-    this.jobs.get('view')?.abort.abort();
-    this.jobs.delete('view');
-  }
-  private updateLiveView() {
-    const anchor = this.state.view.anchor;
-    if (
-      !anchor?.source ||
-      this.state.viewStatus === 'source-changed' ||
-      this.state.viewStatus === 'unavailable'
-    )
-      return;
-    if (!this.snapshot || this.snapshot.observationStatus === 'reconnecting') {
-      this.cancelViewRestore();
-      this.state = { ...this.state, viewStatus: 'pending', viewError: null };
-      return;
-    }
-    if (!this.current(anchor.source)) {
-      this.cancelViewRestore();
-      this.viewEvidence = undefined;
-      this.state = {
-        ...this.state,
-        viewStatus: 'source-changed',
-        viewError: 'The anchored live source retired or changed. Jump to latest or reload.',
-      };
-      return;
-    }
-    const transcript = this.snapshot.run!.transcript!;
-    const part = transcript.parts.find((part) => part.partId === anchor.partId);
-    const evidence = this.getLiveEvidence(anchor);
-    if ((part && part.availability !== 'available') || (!part && transcript.nextCursor === null)) {
-      this.cancelViewRestore();
-      this.viewEvidence = undefined;
-      this.state = {
-        ...this.state,
-        viewStatus: 'unavailable',
-        viewError: 'The anchored live part is unavailable. Jump to latest or reload.',
-      };
-    } else if (
-      (part?.bytes === anchor.bytes && part.revision === anchor.revision) ||
-      (this.viewEvidence && equal(this.viewEvidence, evidence))
-    ) {
-      this.cancelViewRestore();
-      this.viewEvidence = evidence;
-      this.state = { ...this.state, viewStatus: 'ready', viewError: null };
-    } else this.state = { ...this.state, viewStatus: 'pending', viewError: null };
-  }
-  private restoreLiveView(): Promise<void> {
-    const anchor = this.state.view.anchor;
-    if (
-      !anchor?.source ||
-      this.state.viewStatus !== 'pending' ||
-      !this.current(anchor.source) ||
-      this.jobs.has('history')
-    )
-      return Promise.resolve();
-    const isCurrent = () =>
-      this.current(anchor.source) &&
-      equal(this.getLiveAnchorIdentity(anchor), this.getLiveAnchorIdentity(this.state.view.anchor));
-    // Publish proof completion only after cleanup, in the owning job's final synchronous fence.
-    let evidence: unknown;
-    let failure: ApplicationError | undefined;
-    return this.run(
-      'view',
-      async (signal) => {
-        try {
-          const iterator = this.iterate(anchor.source, {
-            selection: { partId: anchor.partId, bytes: anchor.bytes, revision: anchor.revision },
-            signal,
-            onProgress: () => {
-              evidence = this.getLiveEvidence(anchor);
-            },
-          });
-          try {
-            const first = await iterator.next();
-            checkTranscriptRead(signal, isCurrent);
-            if (first.done)
-              throw makeTranscriptFailure('The anchored live part is unavailable.', 'Unavailable');
-          } finally {
-            await iterator.return(undefined);
-          }
-        } catch (error) {
-          failure = normalizeApplicationError(error);
-        }
-      },
-      (signal) => {
-        if (signal.aborted || !isCurrent()) return;
-        if (!failure && !equal(evidence, this.getLiveEvidence(anchor)))
-          failure = makeTranscriptFailure(
-            'Live evidence changed after the anchor proof. Reload the selected part.',
-            'Conflict',
-          );
-        if (failure)
-          this.state = {
-            ...this.state,
-            viewStatus: failure.code === 'Conflict' ? 'source-changed' : 'unavailable',
-            viewError: failure.message,
-          };
-        else {
-          this.viewEvidence = evidence;
-          this.state = { ...this.state, viewStatus: 'ready', viewError: null };
-        }
-      },
-    );
-  }
   restore() {
     const anchor = this.state.view.anchor;
-    if (anchor?.source) return this.restoreLiveView();
-    return anchor ? this.around(anchor.entryId, false) : Promise.resolve();
+    // View memory is a location hint; only content reads need source proofs.
+    return anchor && !anchor.source ? this.around(anchor.entryId, false) : Promise.resolve();
   }
-  private run(
-    name: string,
-    work: (signal: AbortSignal) => Promise<void>,
-    finish?: (signal: AbortSignal) => void,
-  ) {
+  private run(name: string, work: (signal: AbortSignal) => Promise<void>) {
     if (!this.current()) return Promise.resolve();
     const old = this.jobs.get(name);
     if (old) return old.promise;
@@ -676,16 +543,13 @@ export class TranscriptOwner {
         if (this.jobs.get(name) !== job) return;
         this.jobs.delete(name);
         if (this.alive) {
-          finish?.(job.abort.signal);
           this.state = { ...this.state, loading: this.jobs.has('history') };
           this.publish();
-          // Resume restoration deferred by a dependency; proofs never requeue themselves.
-          if (name !== 'view' && !job.abort.signal.aborted) void this.restoreLiveView();
         }
       });
     this.state = {
       ...this.state,
-      error: name === 'view' ? this.state.error : null,
+      error: null,
       loading: name === 'history' || this.state.loading,
     };
     this.publish();
@@ -697,7 +561,6 @@ export class TranscriptOwner {
     const pending = this.jobs.get('history');
     if (pending) return pending.promise;
     if (!this.current() || !this.state[direction]) return Promise.resolve();
-    this.cancelViewRestore();
     // Freeze the reading window before loading can notify a subscriber.
     this.following = false;
     return this.run('history', async (signal) => {
@@ -780,7 +643,6 @@ export class TranscriptOwner {
         : 0;
   }
   around(entryId: string, resetView = true) {
-    this.cancelViewRestore();
     this.following = false;
     this.jobs.get('history')?.abort.abort();
     this.jobs.delete('history');
@@ -800,7 +662,6 @@ export class TranscriptOwner {
     });
   }
   latest = () => {
-    this.cancelViewRestore();
     this.jobs.get('history')?.abort.abort();
     this.jobs.delete('history');
     return this.run('history', async (signal) => {
@@ -811,15 +672,12 @@ export class TranscriptOwner {
       this.start = 0;
       this.navigation = undefined;
       this.following = true;
-      this.viewEvidence = undefined;
       this.state = {
         ...this.state,
         view: {
           anchor: null,
           expanded: this.state.view.anchor?.source ? [] : this.state.view.expanded,
         },
-        viewStatus: 'ready',
-        viewError: null,
       };
       this.dependencies.memory.set(
         this.dependencies.backend,
@@ -838,22 +696,12 @@ export class TranscriptOwner {
     });
   }
   private rememberView(view: TranscriptView) {
-    const previous = this.state.view.anchor;
     this.dependencies.memory.set(this.dependencies.backend, this.dependencies.target, view);
     const captured = this.dependencies.memory.get(
       this.dependencies.backend,
       this.dependencies.target,
     );
-    if (!equal(this.getLiveAnchorIdentity(previous), this.getLiveAnchorIdentity(captured.anchor))) {
-      this.cancelViewRestore();
-      this.viewEvidence = undefined;
-    }
-    this.state = {
-      ...this.state,
-      view: captured,
-      viewStatus: captured.anchor?.source ? 'pending' : 'ready',
-      viewError: null,
-    };
+    this.state = { ...this.state, view: captured };
   }
   setView(view: TranscriptView) {
     if (!this.alive) return;
@@ -862,12 +710,9 @@ export class TranscriptOwner {
       this.dependencies.target,
       view,
     );
-    if (captured.anchor?.source) this.assertCurrent(captured.anchor.source);
     this.rememberView(captured);
     if (captured.anchor) this.following = !!captured.anchor.source;
-    this.updateLiveView();
     this.publish();
-    void this.restoreLiveView();
   }
   loadManifest(source: ChatTranscriptSource, restart = false) {
     const captured = structuredClone(
@@ -1143,7 +988,6 @@ export class TranscriptOwner {
     this.records = [];
     this.snapshot = undefined;
     this.selectedEntry = undefined;
-    this.viewEvidence = undefined;
     this.state = makeEmptyTranscriptState();
     this.published = this.state;
     for (const job of this.jobs.values()) job.abort.abort();
