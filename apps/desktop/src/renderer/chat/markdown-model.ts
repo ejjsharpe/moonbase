@@ -2,11 +2,11 @@ import { LRUCache } from 'lru-cache';
 import type { Root } from 'mdast';
 import { EXIT, visit } from 'unist-util-visit';
 import { parseTranscriptMarkdown } from '../../chat/transcript-source.ts';
-export type MarkdownBlock = { tree: Root; signature: string };
+export type MarkdownBlock = { key: string; tree: Root; signature: string };
 type ParsedMessage = { source: string; blocks: MarkdownBlock[] };
 export const markdownMetrics = { lex: 0, tokenize: 0, retainedBytes: 0, messages: 0 };
 const bytes = (text: string) => new TextEncoder().encode(text).length;
-/** A private, per-view bounded cache. Exact source and render inputs, never DTO object identity. */
+/** A private, per-view bounded cache keyed by exact identity/revision and checked against exact source, never DTO object identity. */
 export class MarkdownCache {
   private messages = new LRUCache<string, ParsedMessage>({
     max: 128,
@@ -30,7 +30,9 @@ export class MarkdownCache {
     });
     const blocks = (
       definitions ? [tree] : tree.children.map((node): Root => ({ type: 'root', children: [node] }))
-    ).map((block) => ({
+    ).map((block, index) => ({
+      // A merged document must not reuse a pinned split block's DOM.
+      key: definitions ? 'document' : String(index),
       tree: block,
       signature: JSON.stringify(block, (key, value) => (key === 'position' ? undefined : value)),
     }));

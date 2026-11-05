@@ -171,6 +171,10 @@ test('a late definition re-renders earlier references and keeps original code se
   assert.equal(countNodes(split!, 'linkReference'), 0);
   assert.equal(countNodes(split!, 'definition'), 0);
   assert.equal(reference!.length, 1);
+  assert.deepEqual(
+    [split!, reference!].map((blocks) => blocks.map((block) => block.key)),
+    [['0', '1', '2'], ['document']],
+  );
   assert.equal(countNodes(reference!, 'linkReference'), 1);
   assert.equal(countNodes(reference!, 'definition'), 1);
   assert.notEqual(reference![0]!.signature, split![0]!.signature);
