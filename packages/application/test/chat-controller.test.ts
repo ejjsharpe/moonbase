@@ -1857,6 +1857,131 @@ for (const changedId of [false, true])
     assert.equal(f.controller.getSnapshot().ready, true);
   });
 
+test('Hide without a replacement retains the model-owned admitted Disconnect', async (t) => {
+  const f = await fixture(t),
+    entered = event(),
+    held = event(),
+    watch = f.chat.watch;
+  f.chat.watch = (...args) => {
+    const close = watch(...args);
+    return async () => {
+      entered.resolve();
+      await held.promise;
+      await close();
+    };
+  };
+  await ready(f);
+  const disconnecting = f.controller.disconnect();
+  let detaching: Promise<void> | undefined;
+  try {
+    await entered.promise;
+    detaching = f.controller.detach();
+    assert(f.controller.getSnapshot().active.includes('disconnect'));
+    assert.equal(f.calls.filter((call) => call.operation === 'disconnect').length, 0);
+  } finally {
+    held.resolve();
+    await Promise.all([disconnecting, detaching]);
+  }
+  assert.equal(f.calls.filter((call) => call.operation === 'disconnect').length, 1);
+  assert.equal(f.subscriptions, 0);
+  assert(!f.calls.some((call) => ['sendChat', 'stopChat'].includes(call.operation)));
+  await f.controller.start();
+  assert.equal(f.controller.getSnapshot().connection?.state, 'disconnected');
+});
+
+for (const changedId of [false, true])
+  for (const hiddenReplacement of [false, true])
+    test(`Hide then replacement protects its ${changedId ? 'new' : 'same'} connection from old Disconnect (${hiddenReplacement ? 'hidden' : 'attached'})`, async (t) => {
+      const f = await fixture(t),
+        entered = event(),
+        held = event(),
+        watch = f.chat.watch;
+      let first = true;
+      f.chat.watch = (...args) => {
+        const close = watch(...args);
+        if (!first) return close;
+        first = false;
+        return async () => {
+          entered.resolve();
+          await held.promise;
+          await close();
+        };
+      };
+      await ready(f);
+      const previous = f.controller.getSnapshot().connection!;
+      assert(previous.state === 'connected');
+      const disconnecting = f.controller.disconnect();
+      let detaching: Promise<void> | undefined;
+      try {
+        await entered.promise;
+        detaching = f.controller.detach();
+        if (changedId) f.publishConnection({ ...previous, connectionId: 'resumed-connection' });
+        await f.controller.start();
+        await f.controller.refresh();
+        assert.equal(f.controller.getSnapshot().ready, true);
+        if (hiddenReplacement) await f.controller.detach();
+      } finally {
+        held.resolve();
+        await Promise.all([detaching, disconnecting]);
+      }
+      assert.equal(f.calls.filter((call) => call.operation === 'disconnect').length, 0);
+      assert.equal(f.controller.getSnapshot().ready, !hiddenReplacement);
+      assert.equal(
+        f.controller.getSnapshot().connection!.connectionId,
+        changedId ? 'resumed-connection' : previous.connectionId,
+      );
+    });
+
+test('Hide fences reentrant Send before publishing detached readiness', async (t) => {
+  const f = await fixture(t);
+  await ready(f);
+  f.controller.setDraft('retained hidden draft');
+  let attempted = false;
+  const off = f.controller.subscribe(() => {
+    if (!attempted && !f.controller.getSnapshot().ready) {
+      attempted = true;
+      void f.controller.send();
+    }
+  });
+  try {
+    await f.controller.detach();
+  } finally {
+    off();
+  }
+  assert(attempted);
+  assert.equal(f.controller.getSnapshot().draft, 'retained hidden draft');
+  assert(!f.calls.some((call) => ['sendChat', 'stopChat'].includes(call.operation)));
+});
+
+test('repeated Disconnect shares actual watch close and sends one command', async (t) => {
+  const f = await fixture(t),
+    entered = event(),
+    held = event(),
+    watch = f.chat.watch;
+  let closes = 0;
+  f.chat.watch = (...args) => {
+    const close = watch(...args);
+    return async () => {
+      closes++;
+      entered.resolve();
+      await held.promise;
+      await close();
+    };
+  };
+  await ready(f);
+  const disconnecting = f.controller.disconnect();
+  try {
+    await entered.promise;
+    await f.controller.disconnect();
+    assert.equal(closes, 1);
+    assert.equal(f.calls.filter((call) => call.operation === 'disconnect').length, 0);
+  } finally {
+    held.resolve();
+    await disconnecting;
+  }
+  assert.equal(f.calls.filter((call) => call.operation === 'disconnect').length, 1);
+});
+
 test('a held Disconnect status read cannot replace a newer watched generation', async (t) => {
   const f = await fixture(t),
     held = event<unknown>(),
