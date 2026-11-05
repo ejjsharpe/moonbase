@@ -234,6 +234,12 @@ async function readTranscript<T>(
         seenParts.add(chunk.selection.partId);
         selections.push(chunk.selection);
       }
+      // The iterator checks the final total; stop buffering as soon as a chunk starts past it.
+      if (chunk.offset >= chunk.selection.bytes)
+        throw new ApplicationError({
+          code: 'Incompatible',
+          message: 'Transcript content exceeds its selected size.',
+        });
       chunks.push(chunk.data);
       await new Promise<void>((resolve) => setImmediate(resolve));
     }
