@@ -10,6 +10,7 @@ import {
   MarkdownCache,
   canHighlight,
   getExternalLink,
+  getSyntaxTone,
 } from '../src/renderer/chat/markdown-model.ts';
 test('parser block selection excludes indented literals and preserves meaningful code indentation', () => {
   for (const literal of ['same\n      ```\n', 'unclosed\n']) {
@@ -61,7 +62,11 @@ test('changed messages re-lex, references/fence closure invalidate interpretatio
     '1',
     '- ```ts\r\n  body 🌔\t\r\noutside the list\r\n```\r\n',
   );
-  assert.match(nested[0]!.signature, /"closed":false/);
+  let closed: boolean | undefined;
+  visit(nested[0]!.tree, 'code', (node) => {
+    closed = node.data?.codeBlock?.closed;
+  });
+  assert.equal(closed, false);
   for (let i = 0; i < 256; i++) cache.parse(String(i), '1', 'message '.repeat(100));
   assert.ok(cache.stats.messages <= 128);
   assert.ok(cache.stats.retainedBytes <= 2 * 1024 * 1024);
@@ -224,4 +229,86 @@ test('least recently read messages leave first at the entry and byte bounds', ()
   const oversized = cache.parse('c', '1', 'y'.repeat(1024 * 1024));
   assert.equal(oversized.length, 1);
   assert.equal(cache.stats.messages, 1);
+});
+
+test('streamed text keeps unchanged block signatures and estimates retention from source length', () => {
+  const cache = new MarkdownCache();
+  const first = cache.parse(
+    'stream',
+    '',
+    '# Title\n\nFirst paragraph\n\n```ts\nconst a = 1;\n```\n\nTail',
+  );
+  const next = cache.parse(
+    'stream',
+    '',
+    '# Title\n\nFirst paragraph\n\n```ts\nconst a = 1;\n```\n\nTail grows',
+  );
+  assert.deepEqual(
+    first.slice(0, 3).map((block) => block.signature),
+    next.slice(0, 3).map((block) => block.signature),
+  );
+  assert.notEqual(first[3]!.signature, next[3]!.signature);
+  // One identity holds one parse, whatever the streamed revision.
+  assert.equal(cache.stats.messages, 1);
+  assert.equal(cache.stats.lex, 2);
+  assert.ok(cache.stats.retainedBytes < 1024);
+});
+
+test('Monaco token types map to highlight tones; identifiers and delimiters stay plain', () => {
+  const tones = Object.fromEntries(
+    [
+      'comment.ts',
+      'comment.doc.ts',
+      'keyword.ts',
+      'keyword.flow.python',
+      'string.ts',
+      'string.escape.ts',
+      'string.key.json',
+      'string.value.json',
+      'number.ts',
+      'number.hex.ts',
+      'type.identifier.ts',
+      'regexp.ts',
+      'tag.html',
+      'metatag.html',
+      'attribute.name.html',
+      'attribute.value.html',
+      'predefined.sql',
+      'variable.predefined.ruby',
+      'variable.ruby',
+      'operator.sql',
+      'support.function.css',
+      'annotation.java',
+      'identifier.ts',
+      'delimiter.parenthesis.ts',
+      '',
+    ].map((type) => [type, getSyntaxTone(type)]),
+  );
+  assert.deepEqual(tones, {
+    'comment.ts': 'comment',
+    'comment.doc.ts': 'comment',
+    'keyword.ts': 'keyword',
+    'keyword.flow.python': 'keyword',
+    'string.ts': 'string',
+    'string.escape.ts': 'string',
+    'string.key.json': 'property',
+    'string.value.json': 'string',
+    'number.ts': 'number',
+    'number.hex.ts': 'number',
+    'type.identifier.ts': 'type',
+    'regexp.ts': 'regexp',
+    'tag.html': 'tag',
+    'metatag.html': 'keyword',
+    'attribute.name.html': 'attribute',
+    'attribute.value.html': 'string',
+    'predefined.sql': 'constant',
+    'variable.predefined.ruby': 'constant',
+    'variable.ruby': 'variable',
+    'operator.sql': 'operator',
+    'support.function.css': 'function',
+    'annotation.java': 'keyword',
+    'identifier.ts': undefined,
+    'delimiter.parenthesis.ts': undefined,
+    '': undefined,
+  });
 });

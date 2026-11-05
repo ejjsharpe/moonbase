@@ -1,4 +1,5 @@
 import { parsePatch } from 'diff';
+import { fitsStructuredSource } from './source-limits.ts';
 
 export type PatchLine = {
   old?: number;
@@ -6,7 +7,7 @@ export type PatchLine = {
   kind: 'added' | 'removed' | 'context' | 'notice';
   text: string;
 };
-export type RecordedPatch =
+export type ParsedPatch =
   | {
       files: {
         old: string;
@@ -17,9 +18,9 @@ export type RecordedPatch =
   | { fallback: string };
 
 /** Interpret retained unified source only. No filesystem or edit reconstruction. */
-export function parseRecordedPatch(source: string, complete = true): RecordedPatch {
+export function parseRecordedPatch(source: string, complete = true): ParsedPatch {
   if (!complete) return { fallback: 'Incomplete patch source. Read more to view its hunks.' };
-  if (source.length > 64 * 1024 || source.split('\n').length > 2000)
+  if (!fitsStructuredSource(source))
     return { fallback: 'Large patch. Showing recorded source without parsing.' };
   try {
     // jsdiff can silently zero an unfulfilled count at bare EOF.

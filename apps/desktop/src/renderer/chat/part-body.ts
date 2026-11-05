@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useRef, useState, type KeyboardEvent } from 'react';
 import type { ChatTranscriptPart, ChatTranscriptSource } from '@moonbase/contracts/chat';
 import type { TranscriptContentState } from '@moonbase/application/chat';
+import { readingPin, useReadingPin } from './reading-pin.ts';
 
 type PartBody = {
   source: ChatTranscriptSource;
@@ -19,23 +20,10 @@ export function usePartBody(
   contents: readonly TranscriptContentState[],
 ) {
   const root = useRef<HTMLPreElement>(null);
-  const [selected, setSelected] = useState(false);
+  // A selection inside the output holds the version the reader selected.
+  const selected = (useReadingPin(root, enabled) & readingPin.selected) !== 0;
   const [retained, setRetained] = useState({ identity, body: current });
   const copyIntent = useRef<{ identity: string; body: PartBody } | null>(null);
-  useEffect(() => {
-    const update = () => {
-      const selection = window.getSelection();
-      setSelected(
-        !!root.current &&
-          !!selection &&
-          !selection.isCollapsed &&
-          selection.rangeCount > 0 &&
-          selection.getRangeAt(0).intersectsNode(root.current),
-      );
-    };
-    document.addEventListener('selectionchange', update);
-    return () => document.removeEventListener('selectionchange', update);
-  }, []);
   const waiting =
     retained.body.loaded &&
     current.part.truncated &&

@@ -10,7 +10,8 @@ async function open(page: Page) {
   await answer(page)
     .getByRole('button', { name: /^Activity/ })
     .click();
-  await page.getByRole('button', { name: 'Jump to latest', exact: true }).click();
+  // Pressing a control keeps following the latest output.
+  await expect(page.getByRole('button', { name: 'Jump to latest', exact: true })).toHaveCount(0);
 }
 const transcript = (page: Page) =>
   page.getByRole('region', { name: 'Chat transcript', exact: true });
@@ -469,8 +470,7 @@ test('128-row reuse, unchanged sibling DOM, selection/focus and anchors during l
   // Only the changed live message is re-lexed/re-tokenized; unchanged 128-row history is reused.
   expect(metrics.lex - before.metrics.lex).toBeLessThanOrEqual(22);
   expect(metrics.tokenize - before.metrics.tokenize).toBeLessThanOrEqual(22);
-  expect(metrics.retainedBytes).toBeLessThanOrEqual(2 * 1024 * 1024);
-  expect(metrics.messages).toBeLessThanOrEqual(128);
+  // The per-view cache's entry and byte bounds are covered by markdown.test.ts.
   await mkdir(output, { recursive: true });
   await writeFile(
     resolve(output, 'responsiveness.json'),
@@ -618,6 +618,8 @@ test('incomplete/unknown/oversized code remains readable and copyable; late refe
     .toBe('const value = 1;\n'.repeat(17999) + 'const value = 1;');
   await live.getByRole('button', { name: /Show all 18000 lines/ }).click();
   await expect(live.getByRole('button', { name: 'Fold code', exact: true })).toBeVisible();
+  // Pressing a control kept following; a press on the text, as a reader selecting does, leaves it.
+  await live.locator('pre code').dispatchEvent('pointerdown');
   await live.locator('pre code').evaluate((element) => {
     const range = document.createRange();
     range.selectNodeContents(element);
@@ -627,7 +629,8 @@ test('incomplete/unknown/oversized code remains readable and copyable; late refe
   expect(
     await live.locator('pre').evaluate((element) => element.scrollHeight > element.clientHeight),
   ).toBe(true);
-  await expect(live.locator('pre code span')).toHaveCount(0);
+  // Unhighlighted: the unfolded lines' panel holds plain text, with no line or token spans.
+  await expect(live.locator('pre code span span, pre code > span:not([id])')).toHaveCount(0);
   await page.evaluate(() =>
     window.demo.transcript!.live(
       'Replacement with &amp; and &#x1f314; <img src="https://example.com/no-fetch" onerror="alert(1)">',
@@ -659,16 +662,19 @@ test('automatic and keyboard history loading preserve semantic viewport anchors 
   await older.focus();
   await page.keyboard.press('Enter');
   await expect(older).toBeFocused();
-  const anchor = await page.evaluate(() => {
-    const controller = window.demo.application.chat!,
-      element = document.querySelector<HTMLElement>('[aria-label="Chat transcript"]')!;
+  await page.evaluate(() => {
+    const element = document.querySelector<HTMLElement>('[aria-label="Chat transcript"]')!;
     element.scrollTop = 1000;
     element.dispatchEvent(new Event('scroll'));
-    return controller.getSnapshot().transcript.view.anchor;
   });
   await expect
     .poll(() => page.evaluate(() => window.demo.application.chat!.getSnapshot().transcript.loading))
     .toBe(false);
+  // A scroll-captured anchor is saved once scrolling rests.
+  await settle(page);
+  const anchor = await page.evaluate(
+    () => window.demo.application.chat!.getSnapshot().transcript.view.anchor,
+  );
   await page.getByRole('button', { name: 'Close Chat panel', exact: true }).click();
   await page.getByRole('button', { name: 'Open Chat panel', exact: true }).click();
   await expect
@@ -1911,4 +1917,138 @@ test('a restoration that falls back to a nearby row keeps the saved view memory'
   expect(
     await page.evaluate(() => window.demo.application.chat!.getSnapshot().transcript.view.anchor),
   ).toEqual(saved);
+});
+
+/** Counts committed renders of transcript rows by entry ID through React's DevTools hook. */
+async function countRowRenders(page: Page) {
+  await page.addInitScript(() => {
+    type Fiber = {
+      type: unknown;
+      memoizedProps: { entry?: { id: string } } | null;
+      child: Fiber | null;
+      sibling: Fiber | null;
+    };
+    const seen = new WeakSet<object>();
+    const renders: string[] = [];
+    Object.assign(window, { rowRenders: renders });
+    Object.defineProperty(window, '__REACT_DEVTOOLS_GLOBAL_HOOK__', {
+      value: {
+        supportsFiber: true,
+        renderers: new Map(),
+        inject: () => 1,
+        checkDCE() {},
+        onScheduleFiberRoot() {},
+        onCommitFiberUnmount() {},
+        onPostCommitFiberRoot() {},
+        onCommitFiberRoot(_id: number, root: { current: Fiber }) {
+          const stack: Fiber[] = [root.current];
+          while (stack.length) {
+            const fiber = stack.pop()!;
+            const props = fiber.memoizedProps;
+            // A memoized row that skips rendering keeps its previous props object.
+            if (
+              typeof fiber.type === 'function' &&
+              fiber.type.name === 'Entry' &&
+              props?.entry &&
+              !seen.has(props)
+            ) {
+              seen.add(props);
+              renders.push(props.entry.id);
+            }
+            if (fiber.sibling) stack.push(fiber.sibling);
+            if (fiber.child) stack.push(fiber.child);
+          }
+        },
+      },
+    });
+  });
+  return {
+    take: () =>
+      page.evaluate(() => (window as unknown as { rowRenders: string[] }).rowRenders.splice(0)),
+  };
+}
+const settle = (page: Page) =>
+  page.evaluate(
+    () =>
+      new Promise<void>((resolve) => setTimeout(() => requestAnimationFrame(() => resolve()), 400)),
+  );
+test('scrolling and live progress re-render only the rows they change', async ({ page }) => {
+  const rows = await countRowRenders(page);
+  await open(page);
+  await settle(page);
+  expect((await rows.take()).length).toBeGreaterThan(0);
+  expect(await page.locator('[data-transcript-entry]').count()).toBeGreaterThan(16);
+  await transcript(page).hover();
+  for (let i = 0; i < 12; i++) {
+    await page.mouse.wheel(0, -120);
+    await page.evaluate(() => new Promise(requestAnimationFrame));
+  }
+  await settle(page);
+  const anchor = () =>
+    page.evaluate(() => window.demo.application.chat!.getSnapshot().transcript.view.anchor);
+  await expect.poll(anchor).not.toBeNull();
+  // Each settled save re-renders only the rows gaining or losing the reading anchor.
+  expect((await rows.take()).length).toBeLessThan(24);
+  // Twenty scroll events save one settled anchor, re-rendering at most the two rows it moves between.
+  for (let i = 0; i < 20; i++)
+    await transcript(page).evaluate(async (element) => {
+      element.scrollTop -= 1;
+      await new Promise(requestAnimationFrame);
+    });
+  await settle(page);
+  expect((await rows.take()).length).toBeLessThanOrEqual(2);
+  await page.getByRole('button', { name: 'Jump to latest', exact: true }).click();
+  await page.evaluate(() => window.demo.transcript!.live('First live progress'));
+  await expect(page.locator('[data-transcript-live]')).toContainText('First live progress');
+  await settle(page);
+  await rows.take();
+  for (let i = 0; i < 5; i++)
+    await page.evaluate((i) => window.demo.transcript!.live(`Further live progress ${i}`), i);
+  await expect(page.locator('[data-transcript-live]')).toContainText('Further live progress 4');
+  await settle(page);
+  const renders = await rows.take();
+  expect(renders.length).toBeGreaterThan(0);
+  expect(renders.filter((id) => id !== 'live')).toEqual([]);
+});
+test('footnotes render as plain references with a visually hidden label', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await open(page);
+  await page.evaluate(() =>
+    window.demo.transcript!.setEntry(179, [
+      'A claim with a footnote[^moon] and [another](https://example.com/read).\n\n[^moon]: The footnote text.\n',
+    ]),
+  );
+  const row = answer(page);
+  await expect(row.getByText('The footnote text.')).toBeVisible();
+  await expect(row.locator('sup')).toHaveText('1');
+  await expect(row.locator('sup a, sup code')).toHaveCount(0);
+  await expect(row.getByText(/user-content-fn/)).toHaveCount(0);
+  await expect(row.getByText('↩')).toHaveCount(0);
+  await expect(row.getByRole('link')).toHaveCount(1);
+  const label = row.getByRole('heading', { name: 'Footnotes', exact: true });
+  await expect(label).toBeAttached();
+  const box = (await label.boundingBox())!;
+  expect(box.width * box.height).toBeLessThanOrEqual(1);
+  await row.locator('sup').click();
+  expect(await page.evaluate(() => window.demo.transcript!.links)).toEqual([]);
+  expect(errors).toEqual([]);
+});
+test('a Copied notice clears itself while a failure stays', async ({ page }) => {
+  await open(page);
+  await answer(page).getByRole('button', { name: 'Copy code', exact: true }).click();
+  const copied = page.getByRole('status').filter({ hasText: 'Copied.' });
+  await expect(copied).toBeVisible();
+  await expect(copied).toHaveCount(0, { timeout: 8000 });
+  await page.evaluate(() => {
+    window.demo.transcript!.native.copy = async () => {
+      throw Error('Copy failed in the fixture.');
+    };
+  });
+  await answer(page).getByRole('button', { name: 'Copy code', exact: true }).click();
+  const failure = page.getByRole('alert').filter({ hasText: 'Copy failed in the fixture.' });
+  await expect(failure).toBeVisible();
+  await page.waitForTimeout(5000);
+  await expect(failure).toBeVisible();
+  await expect(page.getByText('Copied.', { exact: true })).toHaveCount(0);
 });
