@@ -904,3 +904,60 @@ test('completed Copy retains failed observation cleanup at document disposal aft
     await f.owner.dispose().catch(() => {});
   }
 });
+
+test('Copy accepts an empty authored text part', async () => {
+  const source: ChatTranscriptSource = { kind: 'entry', target, entryId: 'entry' };
+  const empty: ChatTranscriptPart = {
+    partId: 'm0.b0',
+    bytes: 0,
+    revision: revision(''),
+    kind: 'text',
+    role: 'assistant',
+    availability: 'available',
+    encoding: 'utf8',
+    text: '',
+    truncated: false,
+  };
+  const writes: string[] = [];
+  const chat: ChatClient = {
+    async command(_operation, input) {
+      const { selection } = input as { selection?: object };
+      return (
+        selection
+          ? {
+              kind: 'content',
+              source,
+              selection: select(empty),
+              cursor: null,
+              offset: 0,
+              encoding: 'utf8',
+              data: '',
+              nextCursor: null,
+            }
+          : {
+              kind: 'manifest',
+              source,
+              cursor: null,
+              parts: [empty],
+              thinking: 'none',
+              nextCursor: null,
+            }
+      ) as never;
+    },
+    watch: () => () => Promise.resolve(),
+  };
+  const session = new ChatIpcSession(runtime, chat, null, context, () => {}, {
+    transcript: {
+      writeText: async (text) => {
+        writes.push(text);
+      },
+      openExternal: async () => {},
+    },
+  });
+  assert.deepEqual(await session.call('transcript', 'copy', { source }, 'empty-copy'), {
+    ok: true,
+    value: null,
+  });
+  assert.deepEqual(writes, ['']);
+  await session.dispose();
+});

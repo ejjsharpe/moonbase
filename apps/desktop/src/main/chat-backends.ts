@@ -115,6 +115,8 @@ export function createChatBackends({
     hasLocalChat: () => local !== null,
     getSession: (backendId: string) => sessions.get(backendId),
     getSessions: (): Pick<ChatIpcSession, 'dispose'>[] => [...sessions.values()],
+    findTranscriptImage: (token: string) =>
+      [...sessions.values()].map((session) => session.findImage(token)).find(Boolean),
     async getContext(backendId: string) {
       if (backendId === 'local' && !local) {
         localRetry ??= (async () => {

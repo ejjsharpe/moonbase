@@ -273,6 +273,19 @@ export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabili
     async openLink(url) {
       links.push(url);
     },
+    // Without Electron main, serve the volatile fixture bytes directly; production uses moonbase:// tokens.
+    async imageUrl({ mimeType, ...input }, signal) {
+      const chunks: Uint8Array<ArrayBuffer>[] = [];
+      for await (const chunk of iterateTranscriptSource({
+        ...input,
+        signal,
+        isCurrent: () => true,
+        read: (input, options) =>
+          chat.dependencies.chat.command('getChatTranscriptContent', input, options),
+      }))
+        chunks.push(Uint8Array.from(atob(chunk.data), (char) => char.charCodeAt(0)));
+      return URL.createObjectURL(new Blob(chunks, { type: mimeType }));
+    },
   };
   type DemoPart = { data?: string } & Pick<ChatTranscriptPart, 'text' | 'kind'> &
     Partial<Omit<ChatTranscriptPart, 'text' | 'kind' | 'bytes' | 'revision' | 'truncated'>>;

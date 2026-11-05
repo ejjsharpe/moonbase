@@ -1,17 +1,24 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { iterateTranscriptSource } from '@moonbase/application/chat';
-import type { ChatController } from '@moonbase/application/chat';
-import type { ChatClient, ChatTranscriptSource } from '@moonbase/contracts/chat';
+import { Layer, ManagedRuntime } from 'effect';
+import type {
+  ChatClient,
+  ChatTranscriptPart,
+  ChatTranscriptSource,
+} from '@moonbase/contracts/chat';
 import { controlledHostFixture, until } from '../../../tests/chat/fixture.ts';
 import { createImageRuntime, retainedImage } from './stored-image-fixture.ts';
-import { ImageResources, readStoredImage } from '../src/renderer/chat/stored-image.ts';
+import { ChatIpcSession } from '../src/chat/session.ts';
+import { respondTranscriptImage } from '../src/chat/transcript-native.ts';
+
+const ipcRuntime = ManagedRuntime.make(Layer.empty);
+after(() => ipcRuntime.dispose());
 
 for (const mode of ['local', 'remote'] as const)
-  test(`${mode} retained real images use exact record ownership and independently padded authenticated chunks`, async () => {
+  test(`${mode} retained real images are served by main from exact record ownership and independently padded authenticated chunks`, async () => {
     const host =
       mode === 'remote'
         ? await controlledHostFixture(new URL('./stored-image-host.mjs', import.meta.url))
@@ -66,68 +73,66 @@ for (const mode of ['local', 'remote'] as const)
       assert.equal(images.length, 3);
       let chunks = 0,
         padded = 0;
-      const adapter: Pick<ChatController, 'iterateTranscript'> = {
-        iterateTranscript: (source, options) =>
-          iterateTranscriptSource({
-            source,
-            ...options,
-            read: async (input, options) => {
-              const chunk = await client.command('getChatTranscriptContent', input, options);
-              if (chunk.kind === 'content') {
-                chunks++;
-                if (chunk.data.endsWith('=')) padded++;
-              }
-              return chunk;
-            },
-          }),
+      const reader: ChatClient = {
+        ...client,
+        command: async (operation, input, options) => {
+          const reply = await client.command(operation, input, options);
+          if (operation === 'getChatTranscriptContent' && reply && 'data' in reply) {
+            chunks++;
+            if (reply.data.endsWith('=')) padded++;
+          }
+          return reply;
+        },
       };
-      const resources = new ImageResources(),
-        signal = new AbortController().signal;
-      const image = await readStoredImage(
-        adapter,
-        transcript.source,
-        images[0]!,
-        resources,
-        signal,
-      );
-      assert.deepEqual(Buffer.from(image.bytes), retainedImage);
-      image.release();
+      const ipc = new ChatIpcSession(ipcRuntime, reader, null, session, () => {});
+      let id = 0;
+      const serve = async (source: ChatTranscriptSource, part: ChatTranscriptPart) => {
+        const reply = await ipc
+          .call(
+            'transcript',
+            'image',
+            {
+              source,
+              selection: { partId: part.partId, bytes: part.bytes, revision: part.revision },
+              mimeType: part.mimeType,
+            },
+            `image-${id++}`,
+          )
+          .catch((error: { code: string }) => ({ ok: false as const, error }));
+        if (!reply.ok) return reply.error.code;
+        const response = await respondTranscriptImage(
+          new Request(reply.value as string),
+          'csp',
+          (token) => ipc.findImage(token),
+        );
+        return response.ok ? Buffer.from(await response.arrayBuffer()) : response.status;
+      };
+      assert.deepEqual(await serve(transcript.source, images[0]!), retainedImage);
       assert(chunks > 1);
       assert(padded > 1);
       for (const source of [
-        { ...transcript.source, target: other },
         { ...transcript.source, target: { ...target, actorId: 'foreign' } },
         {
           ...transcript.source,
           target: { ...target, host: { ...target.host, storeId: 'foreign' } },
         },
+      ] as ChatTranscriptSource[])
+        assert.equal(await serve(source, images[0]!), 'Unauthorized');
+      for (const source of [
+        { ...transcript.source, target: other },
         { ...transcript.source, entryId: '999999999' },
       ] as ChatTranscriptSource[])
-        await assert.rejects(readStoredImage(adapter, source, images[0]!, resources, signal));
-      await assert.rejects(
-        readStoredImage(
-          adapter,
-          transcript.source,
-          { ...images[0]!, revision: 'b'.repeat(64) },
-          resources,
-          signal,
-        ),
+        assert.equal(await serve(source, images[0]!), 502);
+      assert.equal(
+        await serve(transcript.source, { ...images[0]!, revision: 'b'.repeat(64) }),
+        502,
       );
-      await assert.rejects(
-        readStoredImage(
-          adapter,
-          transcript.source,
-          { ...images[0]!, partId: 'm99.b99' },
-          resources,
-          signal,
-        ),
-      );
-      for (const corrupt of images.slice(1))
-        await assert.rejects(
-          readStoredImage(adapter, transcript.source, corrupt, resources, signal),
-          /corrupt/,
-        );
-      resources.reserve(20 * 1024 * 1024, 16 * 1024 * 1024, 2).release();
+      assert.equal(await serve(transcript.source, { ...images[0]!, partId: 'm99.b99' }), 502);
+      // A truncated PNG keeps its signature, so Chromium's decoder reports it; HTML is refused here.
+      assert.deepEqual(await serve(transcript.source, images[1]!), retainedImage.subarray(0, -1));
+      assert.equal(await serve(transcript.source, images[2]!), 415);
+      await ipc.dispose();
+      assert.equal(ipc.count, 0);
     } finally {
       if (root && connectionId)
         await root.connection.command('disconnect', { connectionId }).catch(() => {});

@@ -1,3 +1,4 @@
+import { randomBytes, randomUUID } from 'node:crypto';
 import type { ManagedRuntime } from 'effect';
 import { decodeConnectionInput, isConnectionCommand } from '@moonbase/contracts/connection-schema';
 import type { ProviderSetupClient } from '@moonbase/contracts/providers';
@@ -11,12 +12,24 @@ import {
   type ChatSession,
 } from '@moonbase/contracts/chat';
 import type { ConnectionClient, ConnectionCommand } from '@moonbase/contracts/connection';
-import { fields, record, requestId, errorDTO, invalid, type Reply } from './wire.ts';
+import {
+  fields,
+  record,
+  requestId,
+  errorDTO,
+  invalid,
+  type Reply,
+  type TranscriptImage,
+} from './wire.ts';
 import {
   copyTranscript,
   decodeTranscriptCopy,
+  decodeTranscriptImage,
   decodeTranscriptLink,
+  readTranscriptImage,
+  transcriptImagePath,
   type NativeTranscriptActions,
+  type TranscriptImageReader,
 } from './transcript-native.ts';
 import { IpcLifetime } from '../ipc-lifetime.ts';
 
@@ -30,6 +43,9 @@ export class ChatIpcSession {
     transcript?: NativeTranscriptActions;
   };
   private copies = 0;
+  /** Opaque image URL tokens; this document's session revokes them on release. */
+  private images = new Map<string, TranscriptImage>();
+  private imageReads = 0;
   readonly context: ChatSession;
   private emit: (id: string, result: Reply) => void;
   constructor(
@@ -77,6 +93,11 @@ export class ChatIpcSession {
       invalid();
     }
     let v = record(input);
+    if (kind === 'transcript' && operation === 'image') {
+      const image = decodeTranscriptImage(v);
+      this.authority(image);
+      return { ok: true, value: this.issueImage(image) };
+    }
     if (kind === 'transcript') {
       if (!this.capabilities.transcript || !['copy', 'open-link'].includes(operation as string))
         invalid();
@@ -174,14 +195,48 @@ export class ChatIpcSession {
       await request.finish();
     }
   }
+  private issueImage(image: TranscriptImage) {
+    const key = JSON.stringify(image);
+    const token =
+      [...this.images].find(([, issued]) => JSON.stringify(issued) === key)?.[0] ??
+      randomBytes(32).toString('base64url');
+    // Reinsert so the cap evicts the least recently requested binding.
+    this.images.delete(token);
+    this.images.set(token, image);
+    if (this.images.size > 256) this.images.delete(this.images.keys().next().value!);
+    return `moonbase://editor${transcriptImagePath}${token}`;
+  }
+  findImage(token: string): TranscriptImageReader | undefined {
+    const image = this.images.get(token);
+    return image && { image, read: (signal) => this.readImage(image, signal) };
+  }
+  private async readImage(image: TranscriptImage, signal: AbortSignal) {
+    const id = `image:${randomUUID()}`;
+    // Leave request capacity for Stop and unrelated commands.
+    if (signal.aborted || this.imageReads >= 6 || this.lifetime.getAdmissionError(id, false))
+      throw new ApplicationError({ code: 'Unavailable', message: 'Image reads are busy.' });
+    this.imageReads++;
+    const request = this.lifetime.reserveRequest(id, false);
+    const cancel = () => void this.lifetime.cancel(id);
+    signal.addEventListener('abort', cancel, { once: true });
+    try {
+      return await readTranscriptImage(this.chat, image, request);
+    } finally {
+      signal.removeEventListener('abort', cancel);
+      this.imageReads--;
+      await request.finish();
+    }
+  }
   cancel(id: unknown): Promise<Reply> {
     requestId(id);
     return this.lifetime.cancel(id);
   }
   releaseDocument() {
+    this.images.clear();
     return this.lifetime.releaseDocument();
   }
   dispose() {
+    this.images.clear();
     return this.lifetime.dispose();
   }
   get count() {

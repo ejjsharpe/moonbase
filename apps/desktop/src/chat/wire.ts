@@ -41,9 +41,16 @@ export type TranscriptCopy = {
   /** Parser-provided original UTF-16 start within the selected part; main revalidates the node. */
   code?: { start: number };
 };
+/** Main binds an issued image URL to this exact backend, source and fixed selection. */
+export type TranscriptImage = {
+  source: ChatTranscriptSource;
+  selection: ChatTranscriptSelection;
+  mimeType: 'image/png' | 'image/jpeg';
+};
 export type TranscriptNative = {
   copy(input: TranscriptCopy, signal?: AbortSignal): Promise<void>;
   openLink(url: string, signal?: AbortSignal): Promise<void>;
+  imageUrl(input: TranscriptImage, signal?: AbortSignal): Promise<string>;
 };
 
 export interface ChatBridge {
@@ -214,13 +221,21 @@ export function browserTranscriptActions(bridge: ChatBridge, backendId: string):
     };
     signal?.addEventListener('abort', cancel, { once: true });
     try {
-      unwrap(await bridge.call('transcript', operation, input, id, backendId));
+      return unwrap(await bridge.call('transcript', operation, input, id, backendId));
     } finally {
       signal?.removeEventListener('abort', cancel);
     }
   };
   return {
-    copy: (input, signal) => call('copy', input, signal),
-    openLink: (url, signal) => call('open-link', { url }, signal),
+    copy: async (input, signal) => {
+      await call('copy', input, signal);
+    },
+    openLink: async (url, signal) => {
+      await call('open-link', { url }, signal);
+    },
+    imageUrl: async (input, signal) => {
+      const url = await call('image', input, signal);
+      return typeof url === 'string' ? url : invalid();
+    },
   };
 }
