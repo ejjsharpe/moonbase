@@ -1,6 +1,30 @@
 import { test, expect, type Page } from '@playwright/test';
 import type { DirectoryListing } from '@moonbase/contracts/workspace';
 
+declare global {
+  interface Window {
+    finishMenuOpening(): Promise<void>;
+  }
+}
+
+async function holdMenuOpening(page: Page) {
+  await page.addInitScript(() => {
+    const observer = new MutationObserver(() => {
+      const popup = document.querySelector<HTMLElement>('[role="menu"][aria-label="File actions"]');
+      if (!popup) return;
+      // Release a real opening animation explicitly so keyboard input can precede completion.
+      const animation = popup.animate([{}, {}], { duration: 1 });
+      animation.pause();
+      window.finishMenuOpening = async () => {
+        animation.finish();
+        await animation.finished;
+      };
+      observer.disconnect();
+    });
+    observer.observe(document, { childList: true, subtree: true });
+  });
+}
+
 const region = (page: Page) =>
   page.getByRole('region', { name: 'First editor', exact: true, includeHidden: true });
 const tree = (page: Page) =>
@@ -447,33 +471,47 @@ test('another workbench preservation dialog dismisses the menu and owns the firs
   ).toBe('Other editor dirty text');
 });
 
-test('keyboard activation runs the captured action after later selection changes', async ({
-  page,
-}) => {
-  await page.goto('/');
-  await row(page, 'README.md').click({ button: 'right' });
-  await page.evaluate(() =>
-    window.demo.first.tree(window.demo.checkout, { selected: ['welcome.ts'], focus: 'welcome.ts' }),
-  );
-  await page.keyboard.press('ArrowDown');
-  await page.keyboard.press('Space');
-  const dialog = page.getByRole('dialog', { name: 'Copy', exact: true });
-  await expect(dialog).toContainText('README.md');
-  await dialog.getByLabel('Destination relative path', { exact: true }).fill('copied.md');
-  await dialog.getByRole('button', { name: 'Copy', exact: true }).click();
-  await expect(dialog).toHaveCount(0);
-  expect(
-    await page.evaluate(
-      async () =>
-        (
-          await window.demo.client.command('readFile', {
-            checkout: window.demo.checkout,
-            path: 'copied.md',
-          })
-        ).text,
-    ),
-  ).toContain('# Volatile demo');
-});
+for (const timing of ['normal', 'before completion', 'late completion'])
+  test(`keyboard activation runs the captured action after later selection changes (${timing})`, async ({
+    page,
+  }) => {
+    if (timing !== 'normal') await holdMenuOpening(page);
+    await page.goto('/');
+    await row(page, 'README.md').click({ button: 'right' });
+    if (timing !== 'normal') await page.waitForFunction(() => !!window.finishMenuOpening);
+    if (timing === 'late completion') await menu(page).press('Home');
+    else await expect(item(page, 'Rename')).toBeFocused();
+    await page.evaluate(() =>
+      window.demo.first.tree(window.demo.checkout, {
+        selected: ['welcome.ts'],
+        focus: 'welcome.ts',
+      }),
+    );
+    await page.keyboard.press('ArrowDown');
+    await expect(item(page, 'Copy')).toBeFocused();
+    if (timing === 'late completion') {
+      await page.evaluate(() => window.finishMenuOpening());
+      await expect(item(page, 'Copy')).toBeFocused();
+    }
+    await page.keyboard.press('Space');
+    if (timing === 'before completion') await page.evaluate(() => window.finishMenuOpening());
+    const dialog = page.getByRole('dialog', { name: 'Copy', exact: true });
+    await expect(dialog).toContainText('README.md');
+    await dialog.getByLabel('Destination relative path', { exact: true }).fill('copied.md');
+    await dialog.getByRole('button', { name: 'Copy', exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    expect(
+      await page.evaluate(
+        async () =>
+          (
+            await window.demo.client.command('readFile', {
+              checkout: window.demo.checkout,
+              path: 'copied.md',
+            })
+          ).text,
+      ),
+    ).toContain('# Volatile demo');
+  });
 
 test('empty-tree keyboard invocations remain unhandled', async ({ page }) => {
   await page.goto('/');

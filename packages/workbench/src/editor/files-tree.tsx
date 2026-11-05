@@ -49,8 +49,7 @@ export function FilesTree({
     path: string;
     point: DOMRect;
   } | null>(null);
-  const popup = useRef<HTMLDivElement>(null),
-    restoreMenuFocus = useRef(true),
+  const restoreMenuFocus = useRef(true),
     visibility = useRef(visible);
   useLayoutEffect(() => {
     visibility.current = visible;
@@ -353,9 +352,6 @@ export function FilesTree({
         open={menuAvailable}
         onOpenChange={(open) => {
           if (!open) setMenu(null);
-        }}
-        onOpenChangeComplete={(open) => {
-          if (open) popup.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
         }}>
         <ContextMenu.Portal>
           <ContextMenu.Backdrop
@@ -367,9 +363,12 @@ export function FilesTree({
             collisionPadding={8}
             {...stylex.props(overlays.positioner)}>
             <ContextMenu.Popup
-              ref={popup}
               aria-label="File actions"
               finalFocus={() => (restoreMenuFocus.current ? returnTreeFocus() : false)}
+              onFocus={(event) => {
+                if (event.target === event.currentTarget)
+                  event.currentTarget.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+              }}
               onBlur={(event) => {
                 if (
                   event.relatedTarget instanceof Element &&
