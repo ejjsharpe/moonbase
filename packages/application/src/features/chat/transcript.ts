@@ -702,7 +702,7 @@ export class TranscriptOwner {
       },
     };
     this.publish();
-    if (!query) return Promise.resolve();
+    if (!query || generation !== this.findGeneration || signal.aborted) return Promise.resolve();
     if (!current()) {
       if (this.alive) {
         this.state = {
