@@ -893,6 +893,7 @@ for (const scrolled of [false, true]) {
     page,
   }) => {
     await page.emulateMedia({ reducedMotion: 'no-preference' });
+    await page.clock.install();
     await page.setViewportSize({ width: scrolled ? 768 : 1440, height: 900 });
     await page.goto('/?local&design');
     await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
@@ -911,28 +912,36 @@ for (const scrolled of [false, true]) {
     await page
       .getByRole('tab', { name: scrolled ? 'other · main' : 'moonbase · main', exact: true })
       .click();
-    const frames = await page.evaluate(async (scrolled) => {
-      const other = () =>
-        [...document.querySelectorAll<HTMLElement>('[role="tab"]')].find(
-          (tab) => tab.textContent === (scrolled ? 'third · main' : 'other · main'),
-        )!.parentElement!;
-      const plus = document.querySelector<HTMLElement>('button[aria-label="Open checkout"]')!;
-      const read = () => {
-        const bounds = other().getBoundingClientRect();
-        return { x: bounds.x, y: bounds.y, plus: plus.getBoundingClientRect().x };
-      };
-      const frames = [read()];
-      document
-        .querySelector<HTMLButtonElement>(
-          `button[aria-label="Close checkout /demo/${scrolled ? 'other' : 'moonbase'}"]`,
-        )!
-        .click();
-      for (let i = 0; i < 32; i++) {
-        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-        frames.push(read());
-      }
-      return frames;
-    }, scrolled);
+    // Sample on a paused clock so a slow runner frame cannot skip the whole animation.
+    await page.clock.pauseAt(await page.evaluate(() => Date.now() + 60_000));
+    const read = (close: boolean) =>
+      page.evaluate(
+        ({ scrolled, close }) => {
+          const bounds = [...document.querySelectorAll<HTMLElement>('[role="tab"]')]
+            .find((tab) => tab.textContent === (scrolled ? 'third · main' : 'other · main'))!
+            .parentElement!.getBoundingClientRect();
+          const frame = {
+            x: bounds.x,
+            y: bounds.y,
+            plus: document
+              .querySelector<HTMLElement>('button[aria-label="Open checkout"]')!
+              .getBoundingClientRect().x,
+          };
+          if (close)
+            document
+              .querySelector<HTMLButtonElement>(
+                `button[aria-label="Close checkout /demo/${scrolled ? 'other' : 'moonbase'}"]`,
+              )!
+              .click();
+          return frame;
+        },
+        { scrolled, close },
+      );
+    const frames = [await read(true)];
+    for (let i = 0; i < 32; i++) {
+      await page.clock.runFor(16);
+      frames.push(await read(false));
+    }
     await mkdir(resolve('../../test-results/redesign-review'), { recursive: true });
     await writeFile(
       resolve(

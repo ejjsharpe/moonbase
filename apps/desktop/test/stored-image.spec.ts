@@ -178,19 +178,22 @@ test('retained PNG/JPEG thumbnails and one keyboard viewer trap/restore focus, c
   await page.screenshot({ path: resolve(output, 'tall-overflow.png') });
   await page.keyboard.press('Escape');
 });
-test('unsupported, missing, corrupt, wrong MIME and oversized images fail honestly; huge headers never reach decode', async ({
-  page,
-}) => {
-  for (const [data, mime, message, decodes] of [
-    [png, 'image/jpeg', /corrupt/, 0],
-    [btoa('<svg onload="alert(1)"/>'), 'image/svg+xml', /unsupported/, 0],
-    [btoa('<html><script>alert(1)</script></html>'), 'image/png', /corrupt/, 0],
-    [png.slice(0, 40), 'image/png', /corrupt/, 0],
-  ] as const) {
+// Each case reloads the fixture, so cases run as separate tests rather than sharing one budget.
+for (const [name, data, mime, message] of [
+  ['wrong MIME', png, 'image/jpeg', /corrupt/],
+  ['unsupported SVG', btoa('<svg onload="alert(1)"/>'), 'image/svg+xml', /unsupported/],
+  ['HTML labelled PNG', btoa('<html><script>alert(1)</script></html>'), 'image/png', /corrupt/],
+  ['truncated PNG', png.slice(0, 40), 'image/png', /corrupt/],
+] as const) {
+  test(`${name} images fail honestly without decoding`, async ({ page }) => {
     await open(page, data, mime);
     await expect(page.getByRole('alert').filter({ hasText: message })).toBeVisible();
-    expect((await stats(page)).decoded).toBe(decodes);
-  }
+    expect((await stats(page)).decoded).toBe(0);
+  });
+}
+test('missing, corrupt and oversized images fail honestly; huge headers never reach decode', async ({
+  page,
+}) => {
   const huge = Buffer.from(png, 'base64');
   huge.writeUInt32BE(100000, 16);
   huge.writeUInt32BE(crc32(huge.subarray(12, 29)), 29);

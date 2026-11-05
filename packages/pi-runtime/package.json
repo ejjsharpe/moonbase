@@ -14,7 +14,7 @@
     "build": "tsc --noEmit -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "oxlint .",
-    "test": "node --experimental-strip-types --test test/*.test.ts"
+    "test": "node --experimental-strip-types --test --test-global-setup=test/electron-setup.mjs test/*.test.ts"
   },
   "dependencies": {
     "effect": "4.1.0",

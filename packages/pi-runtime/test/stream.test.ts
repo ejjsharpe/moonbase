@@ -528,10 +528,13 @@ test('reconnection uses a fresh authorized replacement and keeps its exact new b
 });
 
 test('a blocked writer has its own drain deadline and releases its watch while RPC remains usable', async (t) => {
-  shortenDeadline(t, P.streamLimits.drainMs);
   const f = await fixture(t),
-    original = ServerResponse.prototype.write;
-  let writes = 0;
+    original = ServerResponse.prototype.write,
+    schedule = setTimeout,
+    held: (() => void)[] = [];
+  let writes = 0,
+    blocked = false,
+    expired = false;
   t.mock.method(
     ServerResponse.prototype,
     'write',
@@ -539,15 +542,36 @@ test('a blocked writer has its own drain deadline and releases its watch while R
       if (
         this.getHeader('content-type') === 'application/vnd.moonbase.chat-stream-v1' &&
         ++writes > 1
-      )
+      ) {
+        blocked = true;
         return false;
+      }
       return original.apply(this, args);
     },
   );
+  // A blocked write arms its drain deadline synchronously. RPC and establishment deadlines share
+  // its duration, so hold only drain deadlines until RPC is proved usable, then expire each one.
+  t.mock.method(globalThis, 'setTimeout', ((
+    callback: () => void,
+    ms?: number,
+    ...args: unknown[]
+  ) => {
+    if (blocked && ms === P.streamLimits.drainMs) {
+      blocked = false;
+      if (expired) ms = 0;
+      else held.push(callback);
+    }
+    return schedule(callback, ms, ...args);
+  }) as typeof setTimeout);
   const w = f.observe();
   await wait(() => w.views.length === 1);
   f.publish({ ...snapshot, message: 'blocked' });
+  await wait(() => held.length === 1);
   assert((await f.client.command('getChatHost', { host })).features?.includes('chat-stream-v1'));
+  assert.equal(w.errors.length, 0);
+  assert.equal(f.listeners.size, 1);
+  expired = true;
+  held[0]();
   await wait(() => w.errors.length === 1);
   await wait(() => f.listeners.size === 0);
   assert.equal(w.errors[0].code, 'Unavailable');
