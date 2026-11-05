@@ -160,7 +160,7 @@ export async function findTranscript(
     binding,
     position: 1,
     ...(upper ? { upper } : {}),
-    part: 0,
+    part: { message: 0, block: 0, auxiliary: 0 },
     path: [],
     offset: 0,
     textOffset: 0,
@@ -212,28 +212,26 @@ export async function findTranscript(
     if (!entry) return reply(true);
     rows++;
     next = { ...next, position: Number(entry.id), entries: (next.entries ?? 0) + 1 };
-    let index = 0,
-      finished = true;
-    for (const part of getEntryTextValues(entry)) {
+    let finished = true;
+    for (const step of getEntryTextValues(entry, next.part)) {
       checkRead(signal);
-      if (index++ < (next.part ?? 0)) {
-        if (index % 32 === 0) await new Promise<void>((resolve) => setImmediate(resolve));
-        continue;
-      }
       if (parts++ >= 32 || examined >= sliceBytes) {
+        next = { ...next, part: step.position };
         finished = false;
         break;
       }
+      const part = step.part;
       if (
+        !part ||
         (part.extra.availability && part.extra.availability !== 'available') ||
         (typeof part.value !== 'string' && 'image' in part.value)
       ) {
-        next = { ...next, part: index, path: [], offset: 0, textOffset: 0 };
+        next = { ...next, part: step.next, path: [], offset: 0, textOffset: 0 };
         continue;
       }
       const value = part.value as string | { json: unknown };
       if (typeof value === 'string' && !value.isWellFormed()) {
-        next = { ...next, part: index, path: [], offset: 0, textOffset: 0 };
+        next = { ...next, part: step.next, path: [], offset: 0, textOffset: 0 };
         continue;
       }
       const position = {
@@ -246,6 +244,7 @@ export async function findTranscript(
         Math.floor((sliceBytes - examined) / 4) - query.length,
       );
       if (scanLength < 1) {
+        next = { ...next, part: step.position };
         finished = false;
         break;
       }
@@ -302,9 +301,14 @@ export async function findTranscript(
       }
       const bytes = Buffer.byteLength(text.slice(0, consumed));
       examined += bytes;
-      next = { ...next, ...window.at(consumed), bytes: (next.bytes ?? 0) + bytes, part: index - 1 };
+      next = {
+        ...next,
+        ...window.at(consumed),
+        bytes: (next.bytes ?? 0) + bytes,
+        part: step.position,
+      };
       if (window.done && consumed === text.length)
-        next = { ...next, part: index, path: [], offset: 0, textOffset: 0 };
+        next = { ...next, part: step.next, path: [], offset: 0, textOffset: 0 };
       else finished = false;
       if (envelopeFull || matches.length === chatFindPageSize) return reply(false);
       if (!finished) break;
@@ -314,7 +318,7 @@ export async function findTranscript(
       next = {
         ...next,
         position: Number(entry.id) + 1,
-        part: 0,
+        part: { message: 0, block: 0, auxiliary: 0 },
         path: [],
         offset: 0,
         textOffset: 0,
