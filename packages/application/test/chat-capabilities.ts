@@ -46,6 +46,7 @@ export function chatCapabilities() {
         controls.closed++;
       }));
   };
+  // Trusted ChatClient: it stands in for a boundary that already decoded and bounded replies.
   const chat: ChatClient = {
     async command(operation, input) {
       calls.push(operation);

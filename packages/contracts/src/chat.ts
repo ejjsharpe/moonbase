@@ -45,6 +45,7 @@ export type ChatCommands = {
 };
 export type ChatInput<K extends ChatCommand> = ChatCommands[K]['input'];
 export type ChatOutput<K extends ChatCommand> = ChatCommands[K]['output'];
+/** An implementation that receives untrusted data decodes and bounds every reply and snapshot. */
 export interface ChatClient {
   command<K extends ChatCommand>(
     operation: K,

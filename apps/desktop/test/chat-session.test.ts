@@ -5,13 +5,14 @@ const runtime = ManagedRuntime.make(Layer.empty);
 after(() => runtime.dispose());
 import {
   maximumChatInputBytes,
+  maximumChatReplyBytes,
   type ChatClient,
   type ChatSnapshot,
 } from '@moonbase/contracts/chat';
 import type { ConnectionClient } from '@moonbase/contracts/connection';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import { ChatIpcSession } from '../src/chat/session.ts';
-import { browserClients, type ChatBridge } from '../src/chat/wire.ts';
+import { browserClients, type ChatBridge, type Reply } from '../src/chat/wire.ts';
 const context = { host: { hostId: 'host', storeId: 'store' }, actorId: 'owner' },
   target = { ...context, conversationId: 'saved' };
 function fixture() {
@@ -139,6 +140,30 @@ test('provider browser replies project private fields and reject malformed statu
   assert.deepEqual(await client.command('getProviders', {}), { providers: [], flow: null });
   value = { providers: [], flow: { id: 'incomplete' } };
   await assert.rejects(client.command('getProviders', {}), { code: 'Incompatible' });
+});
+// Main's ChatClient is a Pi runtime service; its own tests reject oversized and malformed replies.
+test('renderer chat transport forwards main replies and snapshots without decoding them again', async () => {
+  const value = { padding: 'x'.repeat(maximumChatReplyBytes) };
+  let event: (id: string, result: Reply) => void = () => {},
+    watchId = '';
+  const client = browserClients({
+    context: async () => context,
+    call: async (kind, _operation, _input, id) => {
+      if (kind === 'watch-chat') watchId = id;
+      return { ok: true, value: kind === 'watch-chat' ? null : value };
+    },
+    cancel: async () => ({ ok: true, value: null }),
+    events: (receive) => {
+      event = receive;
+      return () => {};
+    },
+  }).chat;
+  const received: unknown[] = [];
+  const close = client.watch({ target }, (next) => received.push(next), assert.fail);
+  assert.deepEqual(await client.command('getChat', { target }), value);
+  event(watchId, { ok: true, value });
+  assert.deepEqual(received, [value]);
+  await close();
 });
 test('local provider waits use the shared document lifetime without a remote connection', async (t) => {
   const started = Promise.withResolvers<AbortSignal>();

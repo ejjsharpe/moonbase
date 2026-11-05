@@ -368,69 +368,39 @@ test('complete-source iterator works with injected reads, reports progress, vali
   );
 });
 
-const invalidReplies = {
-  oversized: (reply: object) => ({ ...reply, padding: 'x'.repeat(maximumChatReplyBytes) }),
-  malformed: (reply: object) => ({ ...reply, kind: 'malformed' }),
-  missing: () => null,
-};
-const invalidReplyErrors = {
-  oversized: 'Transcript reply exceeds its byte bound.',
-  malformed: 'Invalid chat reply.',
-  missing: 'Invalid chat reply.',
-};
-const isInvalidReply = (corrupt: keyof typeof invalidReplies) => (error: unknown) =>
-  ApplicationError.is(error) &&
-  error.code === 'Incompatible' &&
-  error.message === invalidReplyErrors[corrupt];
-
-test('injected complete-source iteration rejects oversized, malformed and missing replies', async () => {
-  const f = transcriptFixture(1),
-    source = f.entries[0].transcript!.source;
-  for (const [corrupt, invalid] of Object.entries(invalidReplies) as [
-    keyof typeof invalidReplies,
-    (reply: object) => object | null,
-  ][]) {
-    f.handlers.set('getChatTranscriptContent', async (_input, _signal, fallback) =>
-      invalid(fallback() as object),
-    );
-    await assert.rejects(
-      collect(iterateTranscriptSource({ read: makeTranscriptReader(f.chat), source })),
-      isInvalidReply(corrupt),
-      corrupt,
-    );
-  }
-});
-
-for (const entry of ['loadTranscriptManifest', 'loadTranscriptPart', 'iterateTranscript'] as const)
-  test(`controller ${entry} rejects oversized, malformed and missing replies`, async (t) => {
-    const f = await transcriptController(t, 1);
-    const source = f.entries[0].transcript!.source,
-      chosen = selection(f.entries[0].transcript!.parts[0]);
-    for (const [corrupt, invalid] of Object.entries(invalidReplies) as [
-      keyof typeof invalidReplies,
-      (reply: object) => object | null,
-    ][]) {
-      f.handlers.set('getChatTranscriptContent', async (_input, _signal, fallback) =>
-        invalid(fallback() as object),
-      );
-      if (entry === 'iterateTranscript') {
-        await assert.rejects(
-          collect(f.controller.iterateTranscript(source)),
-          isInvalidReply(corrupt),
-          corrupt,
-        );
-        continue;
-      }
-      const state =
-        entry === 'loadTranscriptManifest'
-          ? (await f.controller.loadTranscriptManifest(source, true),
-            f.controller.getSnapshot().transcript.manifest!)
-          : (await f.controller.loadTranscriptPart(source, chosen, true),
-            f.controller.getSnapshot().transcript.content[0]);
-      assert.equal(state.status, 'error', corrupt);
-      assert.equal(state.error, invalidReplyErrors[corrupt], corrupt);
-    }
+// The fixture client is trusted: the Pi runtime's ChatClient services own decoding and size bounds
+// and test them. Shared code checks only meaning.
+test('trusted ChatClient replies and snapshots are not decoded or size-bounded again', async (t) => {
+  const f = await transcriptController(t, 1);
+  const source = f.entries[0].transcript!.source,
+    chosen = selection(f.entries[0].transcript!.parts[0]),
+    padding = 'x'.repeat(maximumChatReplyBytes);
+  f.handlers.set('getChatTranscriptContent', async (_input, _signal, fallback) => ({
+    ...(fallback() as object),
+    padding,
+  }));
+  assert.equal(
+    await collect(iterateTranscriptSource({ read: makeTranscriptReader(f.chat), source })),
+    'same text',
+  );
+  assert.equal(await collect(f.controller.iterateTranscript(source)), 'same text');
+  await f.controller.loadTranscriptManifest(source, true);
+  assert.equal(f.controller.getSnapshot().transcript.manifest!.status, 'complete');
+  await f.controller.loadTranscriptPart(source, chosen, true);
+  assert.equal(f.controller.getSnapshot().transcript.content[0].status, 'complete');
+  f.publish({ ...f.snapshot, padding } as ChatSnapshot);
+  await tick();
+  assert.equal(f.controller.getSnapshot().transcript.observation, 'local');
+  assert.equal(f.controller.getSnapshot().error, null);
+  f.handlers.set('getChatTranscriptContent', async (_input, _signal, fallback) => ({
+    ...(fallback() as object),
+    kind: 'manifest',
+  }));
+  await assert.rejects(collect(f.controller.iterateTranscript(source, { selection: chosen })), {
+    code: 'Incompatible',
+    message: 'Transcript reply does not match the captured selection.',
   });
+});
 
 test('escaped summary data evicts at two MiB before the row limit without losing earlier/later navigation', async (t) => {
   const f = await transcriptController(t, 160);

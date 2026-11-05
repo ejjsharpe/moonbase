@@ -8,7 +8,7 @@ import type {
 } from '@moonbase/contracts/chat';
 import type { ConnectionClient, ConnectionSnapshot } from '@moonbase/contracts/connection';
 
-/** Volatile browser demo capabilities; no host, transport or provider is installed. */
+/** Volatile, trusted browser demo capabilities; no host, transport or provider is installed. */
 export function chatCapabilities(local = false) {
   const context = { host: { hostId: 'host', storeId: 'store' }, actorId: 'actor' };
   const target = { ...context, conversationId: 'conversation' };
