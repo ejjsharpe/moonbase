@@ -197,12 +197,13 @@ export class ChatIpcSession {
   }
   private issueImage(image: TranscriptImage) {
     const key = JSON.stringify(image);
-    let token = [...this.images].find(([, issued]) => JSON.stringify(issued) === key)?.[0];
-    if (!token) {
-      token = randomBytes(32).toString('base64url');
-      this.images.set(token, image);
-      if (this.images.size > 256) this.images.delete(this.images.keys().next().value!);
-    }
+    const token =
+      [...this.images].find(([, issued]) => JSON.stringify(issued) === key)?.[0] ??
+      randomBytes(32).toString('base64url');
+    // Reinsert so the cap evicts the least recently requested binding.
+    this.images.delete(token);
+    this.images.set(token, image);
+    if (this.images.size > 256) this.images.delete(this.images.keys().next().value!);
     return `moonbase://editor${transcriptImagePath}${token}`;
   }
   findImage(token: string): TranscriptImageReader | undefined {

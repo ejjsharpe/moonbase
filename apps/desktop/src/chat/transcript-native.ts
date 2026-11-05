@@ -102,6 +102,7 @@ export async function respondTranscriptImage(
     });
   const url = new URL(request.url);
   if (url.host !== 'editor' || url.search || url.hash) return fail(403, 'Forbidden');
+  if (request.method !== 'GET') return fail(405, 'Method not allowed');
   const found = findImage(url.pathname.slice(transcriptImagePath.length));
   if (!found) return fail(404, 'Not found');
   if (found.image.selection.bytes > maximumTranscriptImageBytes)
@@ -234,12 +235,6 @@ async function readTranscript<T>(
         seenParts.add(chunk.selection.partId);
         selections.push(chunk.selection);
       }
-      // The iterator checks the final total; stop buffering as soon as a chunk starts past it.
-      if (chunk.offset >= chunk.selection.bytes)
-        throw new ApplicationError({
-          code: 'Incompatible',
-          message: 'Transcript content exceeds its selected size.',
-        });
       chunks.push(chunk.data);
       await new Promise<void>((resolve) => setImmediate(resolve));
     }

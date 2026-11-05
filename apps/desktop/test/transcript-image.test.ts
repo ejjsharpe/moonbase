@@ -61,8 +61,10 @@ function fixture(bytes: Buffer, served = bytes) {
     assert(reply.ok);
     return reply.value as string;
   };
-  const serve = (url: string, signal?: AbortSignal) =>
-    respondTranscriptImage(new Request(url, { signal }), csp, (token) => session.findImage(token));
+  const serve = (url: string, signal?: AbortSignal, method = 'GET') =>
+    respondTranscriptImage(new Request(url, { signal, method }), csp, (token) =>
+      session.findImage(token),
+    );
   return {
     session,
     issue,
@@ -106,6 +108,8 @@ test('unknown, revoked and wrong-host image URLs grant nothing', async () => {
   assert.equal((await f.serve('moonbase://editor/transcript-image/unknown')).status, 404);
   assert.equal((await f.serve(`moonbase://other/transcript-image/${token}`)).status, 403);
   assert.equal((await f.serve(`${url}?retry`)).status, 403);
+  for (const method of ['HEAD', 'POST'])
+    assert.equal((await f.serve(url, undefined, method)).status, 405);
   await f.session.releaseDocument();
   assert.equal((await f.serve(url)).status, 404);
   const replacement = await f.issue('image/png');
@@ -113,6 +117,19 @@ test('unknown, revoked and wrong-host image URLs grant nothing', async () => {
   await f.session.dispose();
   assert.equal((await f.serve(replacement)).status, 404);
   assert.equal(f.reads, 0);
+});
+
+test('the 256-token cap evicts the least recently requested binding', async () => {
+  const f = fixture(png);
+  const first = await f.issue('image/png');
+  const second = await f.issue('image/png', { ...f.selection, partId: 'image-0' });
+  for (let index = 1; index < 255; index++)
+    await f.issue('image/png', { ...f.selection, partId: `image-${index}` });
+  assert.equal(await f.issue('image/png'), first, 'reuse refreshes the first binding');
+  await f.issue('image/png', { ...f.selection, partId: 'image-overflow' });
+  assert.equal((await f.serve(second)).status, 404);
+  assert.equal((await f.serve(first)).status, 200);
+  await f.session.dispose();
 });
 
 test('issuance rejects SVG/HTML types and foreign authority before any read', async () => {
