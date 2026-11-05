@@ -18,7 +18,7 @@ export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabili
       source: ChatTranscriptSource;
       parts: ChatTranscriptPart[];
       texts: string[];
-      encoded?: Uint8Array[];
+      encoded?: Uint8Array<ArrayBuffer>[];
     }
   >();
   const digestBytes = async (bytes: Uint8Array<ArrayBuffer>) =>

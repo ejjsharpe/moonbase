@@ -19,7 +19,12 @@ import type {
   TranscriptContentState,
   TranscriptViewAnchor,
 } from '@moonbase/application/chat';
-import type { ChatEntry, ChatTranscript, ChatTranscriptPart } from '@moonbase/contracts/chat';
+import type {
+  ChatEntry,
+  ChatTranscript,
+  ChatTranscriptPart,
+  ChatTranscriptSource,
+} from '@moonbase/contracts/chat';
 import type { TranscriptNative } from '../../chat/wire.ts';
 import { getTranscriptDisclosureId } from '../../chat/transcript-source.ts';
 import { Markdown, isReadingNodePinned } from './markdown.tsx';
@@ -51,6 +56,7 @@ export function Transcript({
     content = useRef<HTMLDivElement>(null);
   const [pinned, setPinned] = useState(false),
     [pinnedEntry, setPinnedEntry] = useState<string | null>(null),
+    [imageSource, setImageSource] = useState<ChatTranscriptSource | null>(null),
     [presented, setPresented] = useState(latestState);
   const preserve = pinned && getLiveIdentity(presented) !== getLiveIdentity(latestState);
   if (!preserve && presented !== latestState) setPresented(latestState);
@@ -434,7 +440,10 @@ export function Transcript({
     oldestPinned =
       transcript.entries.length === 128 &&
       (transcript.view.anchor?.entryId === transcript.entries[0]?.id ||
-        pinnedEntry === transcript.entries[0]?.id),
+        pinnedEntry === transcript.entries[0]?.id ||
+        (!!imageSource &&
+          !!transcript.entries[0]?.transcript &&
+          sameSource(transcript.entries[0].transcript, { source: imageSource }))),
     live = !earlierRow && !oldestPinned && !transcript.later ? snapshot?.run : null;
   const hiddenRow = !!live && transcript.entries.length === 128;
   const entries = hiddenRow ? transcript.entries.slice(1) : transcript.entries;
@@ -678,7 +687,8 @@ export function Transcript({
         latestState.ready &&
         !['inactive', 'reconnecting', 'failed'].includes(latestState.transcript.observation)
       }
-      fallback={root}>
+      fallback={root}
+      onReadingSourceChange={setImageSource}>
       {body}
     </StoredImages>
   );

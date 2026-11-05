@@ -42,23 +42,47 @@ export function StoredImages({
   resources,
   enabled,
   fallback,
+  onReadingSourceChange,
   children,
 }: {
   controller: ChatController;
   resources: ImageResources;
   enabled: boolean;
   fallback: RefObject<HTMLElement | null>;
+  onReadingSourceChange(source: ChatTranscriptSource | null): void;
   children: ReactNode;
 }) {
   const [viewer, setViewer] = useState<Viewer | null>(null);
+  const current = useRef<Viewer | null>(null);
   const trigger = useRef<HTMLElement | null>(null);
-  const open = useCallback((next: Viewer) => {
-    trigger.current = next.trigger;
-    setViewer(next);
-  }, []);
+  const open = useCallback(
+    (next: Viewer) => {
+      current.current = next;
+      trigger.current = next.trigger;
+      onReadingSourceChange(next.source);
+      setViewer(next);
+    },
+    [onReadingSourceChange],
+  );
   const close = useCallback((key: string) => {
-    setViewer((current) => (current?.key === key ? null : current));
+    if (current.current?.key !== key) return;
+    current.current = null;
+    setViewer(null);
   }, []);
+  useEffect(() => {
+    // Keep the row until Base UI returns focus; the transcript then owns its normal focus pin.
+    const release = () => {
+      if (!current.current) onReadingSourceChange(null);
+    };
+    document.addEventListener('focusin', release);
+    return () => {
+      document.removeEventListener('focusin', release);
+      onReadingSourceChange(null);
+    };
+  }, [onReadingSourceChange]);
+  useEffect(() => {
+    if (!enabled) onReadingSourceChange(null);
+  }, [enabled, onReadingSourceChange]);
   const context = useMemo(
     () => ({ resources, controller, enabled, open, close }),
     [resources, controller, enabled, open, close],
@@ -66,7 +90,11 @@ export function StoredImages({
   return (
     <Images value={context}>
       {children}
-      <Dialog.Root open={enabled && !!viewer} onOpenChange={(open) => !open && setViewer(null)}>
+      <Dialog.Root
+        open={enabled && !!viewer}
+        onOpenChange={(open) => {
+          if (!open && current.current) close(current.current.key);
+        }}>
         <Dialog.Portal>
           <Dialog.Backdrop {...stylex.props(styles.backdrop)} />
           <Dialog.Popup
