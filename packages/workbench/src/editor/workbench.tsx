@@ -157,7 +157,9 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     path: string;
     origin: FocusOrigin;
     from: Element | null;
+    interaction: number;
   } | null>(null);
+  const focusInteraction = useRef(0);
   const menuCapture = useRef<string[]>([]),
     menuKeyboard = useRef(false),
     root = useRef<HTMLDivElement>(null),
@@ -175,6 +177,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       !root.current?.contains(focused);
     if (
       !focusMoved &&
+      focusRequest.interaction === focusInteraction.current &&
       root.current?.getClientRects().length &&
       checkoutIdentity &&
       checkoutIdentity === checkoutKey(focusRequest.checkout) &&
@@ -211,6 +214,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   ]);
   const withFocus = (opening: Promise<boolean>, origin: FocusOrigin, restore = false) => {
     const from = document.activeElement;
+    const interaction = focusInteraction.current;
     const focus = () => {
       const next = controller.getSnapshot().recovery;
       if (checkout && next.openCheckoutIds.includes(checkout.checkoutId))
@@ -219,6 +223,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
           path: readOwn(next.views, checkout.checkoutId)!.active,
           origin,
           from,
+          interaction,
         });
     };
     return opening.then(
@@ -286,6 +291,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   const actions: WorkbenchHandle = {
     importFiles,
     keyDown(event: KeyboardEvent) {
+      captureFocusInteraction();
       const element = event.target as HTMLElement;
       if (
         element.closest('[role="dialog"], [role="menu"]') ||
@@ -356,6 +362,9 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     },
   };
   useImperativeHandle(ref, () => actions);
+  function captureFocusInteraction() {
+    if (!controller.getSnapshot().closePrompt) focusInteraction.current++;
+  }
   function pasteFiles(event: React.ClipboardEvent | React.KeyboardEvent) {
     if (
       !checkout ||
@@ -861,6 +870,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       {...stylex.props(workbench.document, styles.root)}
       aria-label="Moonbase editor"
       tabIndex={-1}
+      onPointerDownCapture={captureFocusInteraction}
       onKeyDownCapture={actions.keyDown}
       onKeyUp={actions.keyUp}
       onBlur={(event) => {

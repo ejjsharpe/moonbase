@@ -110,33 +110,45 @@ test('a background tab context menu closes its captured file and keeps the curre
   ).toHaveText('/example.ts');
 });
 
+async function holdLateClose(page: Page) {
+  await page.goto('/');
+  await page.evaluate(async () => {
+    const { first, checkout } = window.demo;
+    await first.open({ checkout, path: 'README.md' }, { intent: 'keep' });
+    const open = first.open.bind(first);
+    let held = false;
+    window.tabCloseHeld = false;
+    window.releaseTabClose = () => {};
+    first.open = async (...args) => {
+      const result = await open(...args);
+      if (!held) {
+        held = true;
+        window.tabCloseHeld = true;
+        await new Promise<void>((resolve) => {
+          window.releaseTabClose = resolve;
+        });
+      }
+      return result;
+    };
+  });
+  await openTabMenu(first(page));
+  await page.getByRole('menuitem', { name: 'Close', exact: true }).click();
+  await expect(first(page).getByRole('tab', { name: 'README.md', exact: true })).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => window.tabCloseHeld)).toBe(true);
+}
+async function releaseLateClose(page: Page) {
+  await page.evaluate(() => {
+    window.releaseTabClose?.();
+    return new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+    );
+  });
+}
+
 for (const destination of ['tab menu', 'file menu', 'second editor'] as const)
   test(`late Close completion keeps newer focus in ${destination}`, async ({ page }) => {
-    await page.goto('/');
-    await page.evaluate(async () => {
-      const { first, checkout } = window.demo;
-      await first.open({ checkout, path: 'README.md' }, { intent: 'keep' });
-      const open = first.open.bind(first);
-      let held = false;
-      window.tabCloseHeld = false;
-      window.releaseTabClose = () => {};
-      first.open = async (...args) => {
-        const result = await open(...args);
-        if (!held) {
-          held = true;
-          window.tabCloseHeld = true;
-          await new Promise<void>((resolve) => {
-            window.releaseTabClose = resolve;
-          });
-        }
-        return result;
-      };
-    });
     try {
-      await openTabMenu(first(page));
-      await page.getByRole('menuitem', { name: 'Close', exact: true }).click();
-      await expect(first(page).getByRole('tab', { name: 'README.md', exact: true })).toHaveCount(0);
-      await expect.poll(() => page.evaluate(() => window.tabCloseHeld)).toBe(true);
+      await holdLateClose(page);
       let focused: Locator;
       if (destination === 'tab menu') {
         const tab = first(page).getByRole('tab', { name: 'welcome.ts', exact: true });
@@ -158,21 +170,108 @@ for (const destination of ['tab menu', 'file menu', 'second editor'] as const)
         await focused.focus();
       }
       await expect(focused).toBeFocused();
-      await page.evaluate(() => {
-        window.releaseTabClose();
-        return new Promise<void>((resolve) =>
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-        );
-      });
+      await releaseLateClose(page);
       await expect(focused).toBeFocused();
       if (destination === 'tab menu') {
         await page.keyboard.press('Enter');
         await expect(page.getByRole('menu')).toHaveCount(0);
       }
     } finally {
-      await page.evaluate(() => window.releaseTabClose());
+      await releaseLateClose(page);
     }
   });
+
+test('late Close completion preserves newer editor typing and its first key', async ({ page }) => {
+  try {
+    await holdLateClose(page);
+    const input = first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true });
+    await first(page)
+      .locator('.monaco-editor .view-lines')
+      .first()
+      .click({ position: { x: 80, y: 10 } });
+    await page.keyboard.type('before completion ');
+    await expect(input).toBeFocused();
+    await releaseLateClose(page);
+    await page.screenshot({ path: test.info().outputPath('same-workbench-typing.png') });
+    await page.keyboard.type('first key after completion ');
+    const text = await page.evaluate(
+      () => window.demo.first.buffer({ checkout: window.demo.checkout, path: 'welcome.ts' })!.text,
+    );
+    expect.soft(text).toContain('first key after completion ');
+    await expect(input).toBeFocused();
+  } finally {
+    await releaseLateClose(page);
+  }
+});
+
+test('late Close completion preserves newer tree navigation and its first arrow', async ({
+  page,
+}) => {
+  try {
+    await holdLateClose(page);
+    const tree = first(page).getByRole('tree', { name: 'Files', exact: true });
+    await first(page).getByRole('treeitem', { name: 'src', exact: true }).click();
+    await tree.press('Home');
+    await expect(tree).toBeFocused();
+    await releaseLateClose(page);
+    await page.screenshot({ path: test.info().outputPath('same-workbench-tree.png') });
+    const before = await page.evaluate(
+      () => window.demo.first.getSnapshot().recovery.views.sample.tree.focus,
+    );
+    await page.keyboard.press('ArrowDown');
+    expect
+      .soft(
+        await page.evaluate(() => window.demo.first.getSnapshot().recovery.views.sample.tree.focus),
+      )
+      .not.toBe(before);
+    await expect(tree).toBeFocused();
+  } finally {
+    await releaseLateClose(page);
+  }
+});
+
+test('late Close completion preserves a newly chosen file and its first key', async ({ page }) => {
+  try {
+    await holdLateClose(page);
+    await first(page).getByRole('treeitem', { name: 'README.md', exact: true }).dblclick();
+    const input = first(page).getByRole('textbox', { name: 'README.md editor', exact: true });
+    await first(page)
+      .locator('.monaco-editor .view-lines')
+      .first()
+      .click({ position: { x: 80, y: 10 } });
+    await expect(input).toBeFocused();
+    await releaseLateClose(page);
+    await page.keyboard.type('new file first key ');
+    expect
+      .soft(
+        await page.evaluate(
+          () =>
+            window.demo.first.buffer({ checkout: window.demo.checkout, path: 'README.md' })!.text,
+        ),
+      )
+      .toContain('new file first key ');
+    await expect(input).toBeFocused();
+  } finally {
+    await releaseLateClose(page);
+  }
+});
+
+test('late Close completion preserves newer sidebar resize and its first arrow', async ({
+  page,
+}) => {
+  try {
+    await holdLateClose(page);
+    const separator = first(page).getByRole('separator', { name: 'Resize sidebar', exact: true });
+    await separator.click();
+    await expect(separator).toBeFocused();
+    const width = Number(await separator.getAttribute('aria-valuenow'));
+    await releaseLateClose(page);
+    await page.keyboard.press('ArrowRight');
+    await expect(separator).toHaveAttribute('aria-valuenow', String(width + 10));
+  } finally {
+    await releaseLateClose(page);
+  }
+});
 
 for (const survivor of [true, false])
   test(`keyboard context-menu Close restores ${survivor ? 'the surviving tab' : 'empty-editor'} focus and allows Reopen`, async ({
