@@ -14,10 +14,10 @@ export { iterateTranscriptSource, makeTranscriptReader } from './transcript-read
 export type { TranscriptRead, TranscriptChunk } from './transcript-read.ts';
 export { TranscriptViewMemory } from './view-memory.ts';
 export type { TranscriptView, TranscriptViewAnchor, TranscriptLiveAnchor } from './view-memory.ts';
-export { transcriptLimits } from './transcript.ts';
+export { transcriptLimits } from './transcript-state.ts';
 export type {
   TranscriptState,
   TranscriptFindState,
   TranscriptManifestState,
   TranscriptContentState,
-} from './transcript.ts';
+} from './transcript-state.ts';

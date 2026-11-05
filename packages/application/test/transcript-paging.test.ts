@@ -29,7 +29,7 @@ test('legacy older paging keeps its furthest-back cursor through later snapshots
   await controller.select(f.target);
   assert.equal(controller.getSnapshot().transcript.capabilities.transcript, 'legacy');
   for (let page = 0; page < 3; page++) {
-    await controller.older();
+    await controller.showEarlier();
     // Any watch update (here a running state) must not rewind the paging position.
     f.publish({ ...f.snapshot, state: page % 2 ? 'idle' : 'running' });
   }
@@ -70,9 +70,9 @@ test('legacy older paging rereads history evicted while following instead of ski
   const controller = await root.make(f.dependencies);
   await controller.start();
   await controller.select(f.target);
-  for (let page = 0; page < 4; page++) await controller.older();
+  for (let page = 0; page < 4; page++) await controller.showEarlier();
   assert.deepEqual(cursors, ['368', '336', '304', '272']);
-  while (controller.getSnapshot().transcript.later) await controller.later();
+  while (controller.getSnapshot().transcript.later) await controller.showLater();
   assert.equal(controller.getSnapshot().transcript.atLatest, true);
   // Following continuous snapshots evicts the oldest cached pages (e240 to e303).
   for (let end = 420; end <= 560; end += 20) f.publish(head(end));
@@ -82,7 +82,7 @@ test('legacy older paging rereads history evicted while following instead of ski
     assert.equal(state.error, null);
     state.entries.forEach((entry) => seen.add(entry.id));
     if (!state.earlier) break;
-    await controller.older();
+    await controller.showEarlier();
   }
   assert.equal(cursors[4], '304', 'resume from the oldest cached checkpoint');
   assert.deepEqual(
@@ -95,13 +95,13 @@ test('legacy older paging rereads history evicted while following instead of ski
 test('cached paging remembers the displayed edge row, not an off-screen cached row', async (t) => {
   const f = await transcriptController(t, 640);
   for (let i = 0; i < 100 && f.controller.getSnapshot().transcript.earlier; i++)
-    await f.controller.older();
+    await f.controller.showEarlier();
   for (let i = 0; i < 3; i++) {
-    await f.controller.later();
+    await f.controller.showLater();
     const state = f.controller.getSnapshot().transcript;
     assert.equal(state.view.anchor?.entryId, state.entries.at(-1)!.id);
   }
-  await f.controller.older();
+  await f.controller.showEarlier();
   const state = f.controller.getSnapshot().transcript;
   assert.notEqual(state.entries[0].id, 'e0', 'the window is inside the cached history');
   assert.equal(state.view.anchor?.entryId, state.entries[0].id);

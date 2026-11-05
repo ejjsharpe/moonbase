@@ -240,7 +240,7 @@ export async function transcriptController(
   t: { after: (close: () => Promise<void>) => void },
   count = 640,
   local = true,
-  options: Pick<ChatDependencies, 'transcriptCloseGraceMs'> = {},
+  options: Pick<ChatDependencies, 'transcriptCloseGraceMs' | 'transcriptWatchRetryMs'> = {},
 ) {
   const fixture = transcriptFixture(count, local),
     root = modelRoot();

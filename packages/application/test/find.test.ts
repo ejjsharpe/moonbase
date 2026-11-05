@@ -317,7 +317,7 @@ test('reading before a delayed first result suppresses automatic reveal without 
 
 test('reconnecting and failed observations cancel Find and keep a visible retry state without stale publication', async (t) => {
   for (const failure of ['reconnecting', 'failed'] as const) {
-    const f = await transcriptController(t, 64, false);
+    const f = await transcriptController(t, 64, false, { transcriptWatchRetryMs: [] });
     let release!: () => void, signal: AbortSignal | undefined;
     const held = new Promise<void>((resolve) => (release = resolve));
     f.handlers.set('findChatTranscript', async (_input, abort, fallback) => {

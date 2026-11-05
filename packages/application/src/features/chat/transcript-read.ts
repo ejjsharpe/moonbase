@@ -76,13 +76,13 @@ export function trackTranscriptCursor() {
     }
   };
 }
-export function checkTranscriptRead(signal?: AbortSignal, isCurrent?: () => boolean) {
+function checkTranscriptRead(signal?: AbortSignal, isCurrent?: () => boolean) {
   if (signal?.aborted) throw makeTranscriptFailure('Transcript read cancelled.', 'Cancelled');
   if (isCurrent && !isCurrent())
     throw makeTranscriptFailure('Transcript source changed or is stale.', 'Conflict');
 }
-/** Cancel the caller's wait; the IO owner still joins the underlying Promise settlement. */
-export function awaitTranscriptRead<T>(pending: Promise<T>, signal?: AbortSignal): Promise<T> {
+/** Cancel the caller's wait even when the reader ignores the signal. */
+function awaitTranscriptRead<T>(pending: Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!signal) return pending;
   return new Promise((resolve, reject) => {
     const cancel = () => {
@@ -103,8 +103,8 @@ export function awaitTranscriptRead<T>(pending: Promise<T>, signal?: AbortSignal
     else signal.addEventListener('abort', cancel, { once: true });
   });
 }
-/** Reads one page for an input the caller has already decoded and owns; checks only its echo. */
-export async function readTranscript(
+/** Reads one page for an input the caller has already decoded and owns. */
+async function readTranscript(
   read: TranscriptRead,
   input: ChatInput<'getChatTranscriptContent'>,
   signal?: AbortSignal,
@@ -113,6 +113,13 @@ export async function readTranscript(
   checkTranscriptRead(signal, isCurrent);
   const reply = await awaitTranscriptRead(read(input, { signal }), signal);
   checkTranscriptRead(signal, isCurrent);
+  return checkTranscriptReply(input, reply);
+}
+/** Checks that a reply echoes the input it answers; the ChatClient boundary checked its shape. */
+export function checkTranscriptReply(
+  input: ChatInput<'getChatTranscriptContent'>,
+  reply: ChatOutput<'getChatTranscriptContent'>,
+) {
   if (
     !areTranscriptValuesEqual(reply.source, input.source) ||
     reply.cursor !== (input.cursor ?? null) ||

@@ -29,7 +29,12 @@ import { makeProviderSetupController, type ProviderSetupController } from './pro
 import type { ProviderSetupClient } from '@moonbase/contracts/providers';
 import { decodeSaved, sameSession, sameTarget, type Saved, type Pending } from './saved.ts';
 export type { Pending } from './saved.ts';
-import { TranscriptOwner, makeEmptyTranscriptState, type TranscriptState } from './transcript.ts';
+import { TranscriptOwner } from './transcript.ts';
+import {
+  makeEmptyTranscriptState,
+  transcriptLimits,
+  type TranscriptState,
+} from './transcript-state.ts';
 import { TranscriptViewMemory, type TranscriptView } from './view-memory.ts';
 
 export interface DraftStorage {
@@ -66,6 +71,16 @@ export type ChatDependencies = {
   transcriptMemory?: TranscriptViewMemory;
   /** How long closing a chat waits for cancelled reads; defaults to `transcriptLimits.closeGraceMs`. */
   transcriptCloseGraceMs?: number;
+  /**
+   * Backoff before each re-watch of the selected chat after a retryable stream failure; its length
+   * caps consecutive attempts. Defaults to `transcriptLimits.watchRetryMs`.
+   */
+  transcriptWatchRetryMs?: readonly number[];
+  /**
+   * How long a watch must stay up after its first snapshot for its failure to renew the retry cap.
+   * Defaults to `transcriptLimits.watchHealthyMs`.
+   */
+  transcriptWatchHealthyMs?: number;
 };
 type Owner = {
   scope: Scope.Closeable;
@@ -78,6 +93,14 @@ type Observation = {
   ready: Deferred.Deferred<Exit.Exit<ObservationClose>>;
   generation?: Owner;
   outcome?: Promise<Exit.Exit<void>>;
+};
+/** One watch of the selected chat; it stops delivering once it fails. */
+type WatchAttempt = {
+  open: boolean;
+  received: boolean;
+  /** Monotonic time of the first snapshot this watch delivered. */
+  firstSnapshotAt?: number;
+  observation?: Observation;
 };
 const maximumSavedBytes = 2 * 1024 * 1024;
 const bytes = (value: string) => new TextEncoder().encode(value).length;
@@ -121,6 +144,8 @@ class ChatModelState {
   private readonly backend: string;
   private readonly transcriptMemory: TranscriptViewMemory;
   private readonly transcriptCloseGraceMs?: number;
+  private readonly transcriptWatchRetryMs: readonly number[];
+  private readonly transcriptWatchHealthyMs: number;
 
   constructor(scope: Scope.Closeable, dependencies: ChatDependencies) {
     this.scope = scope;
@@ -128,6 +153,10 @@ class ChatModelState {
     this.backend = dependencies.backendId ?? 'chat';
     this.transcriptMemory = dependencies.transcriptMemory ?? new TranscriptViewMemory();
     this.transcriptCloseGraceMs = dependencies.transcriptCloseGraceMs;
+    this.transcriptWatchRetryMs =
+      dependencies.transcriptWatchRetryMs ?? transcriptLimits.watchRetryMs;
+    this.transcriptWatchHealthyMs =
+      dependencies.transcriptWatchHealthyMs ?? transcriptLimits.watchHealthyMs;
     this.connection = dependencies.connection;
     this.mode = dependencies.mode ?? 'remote';
     if (this.mode === 'remote' && !this.connection)
@@ -286,9 +315,9 @@ class ChatModelState {
     owner: Owner,
     acquire: () => ObservationClose,
     generation?: Owner,
-  ): Effect.Effect<void, ApplicationError> {
+  ): Effect.Effect<Observation | undefined, ApplicationError> {
     return Effect.gen({ self: this }, function* () {
-      if (!owner.alive || this.closed) return;
+      if (!owner.alive || this.closed) return undefined;
       // A synchronous watch callback can reenter disposal before acquisition returns.
       const observation: Observation = { ready: Deferred.makeUnsafe(), generation };
       this.observations.add(observation);
@@ -305,6 +334,7 @@ class ChatModelState {
         ),
       );
       if (Exit.isFailure(acquired)) yield* acquired;
+      return observation;
     }).pipe(Effect.uninterruptible);
   }
   private closeOwner(owner?: Owner): Promise<void> {
@@ -673,7 +703,6 @@ class ChatModelState {
       }));
       const epoch = this.epoch;
       this.update({ snapshot: null, transcript: makeEmptyTranscriptState() });
-      let received = false;
       const transcript = (owner.transcript = new TranscriptOwner({
         chat: this.chat,
         target: structuredClone(target),
@@ -683,6 +712,7 @@ class ChatModelState {
         findCapable: features.includes(chatFindFeature),
         streaming: features.includes(chatStreamFeature),
         local: this.mode === 'local',
+        scope: owner.scope,
         closeGraceMs: this.transcriptCloseGraceMs,
         publish: (state, snapshot) => {
           if (owner.alive && this.selection === owner)
@@ -707,36 +737,94 @@ class ChatModelState {
           transcript.getSnapshot().observation !== 'failed'
         ) {
           try {
-            transcript.accept(snapshot);
+            transcript.acceptSnapshot(snapshot);
           } catch (error) {
             transcript.fail(error);
             this.error(error);
           }
         }
       };
-      const read = Effect.gen({ self: this }, function* () {
-        yield* this.observe(
-          owner,
-          () =>
-            this.chat.watch(
-              { target },
-              (snapshot) => {
-                received = true;
-                accept(snapshot);
-              },
-              (error) => {
-                if (owner.alive && this.selection === owner) {
-                  transcript.fail(error);
-                  this.error(error);
-                }
-              },
+      // A watch delivers until it fails, so a late result from a failed watch never reaches its
+      // successor. Hosts send a snapshot as soon as a watch subscribes, so only a watch that stayed
+      // up for the healthy period after its first snapshot renews the count of failed watches.
+      let failures = 0;
+      const watch = (attempt: WatchAttempt) =>
+        Effect.gen({ self: this }, function* () {
+          attempt.observation = yield* this.observe(
+            owner,
+            () =>
+              this.chat.watch(
+                { target },
+                (snapshot) => {
+                  if (!attempt.open) return;
+                  attempt.received = true;
+                  attempt.firstSnapshotAt ??= performance.now();
+                  accept(snapshot);
+                },
+                (error) => {
+                  if (!attempt.open || !owner.alive || this.selection !== owner) return;
+                  attempt.open = false;
+                  recover(error, attempt);
+                },
+              ),
+            this.generation,
+          );
+          // A watch that failed while subscribing still holds its subscription.
+          if (!attempt.open && attempt.observation) void this.closeObservation(attempt.observation);
+          const snapshot = yield* this.call('getChat', { target });
+          if (attempt.open && !attempt.received) accept(snapshot);
+        });
+      // Retryable stream failures re-watch after a bounded backoff; reads only, never a resend.
+      const recover = (error: unknown, failed: WatchAttempt) => {
+        // Release the failed subscription now, so it holds no host observer through the backoff.
+        if (failed.observation) void this.closeObservation(failed.observation);
+        // A transcript that already failed stays failed until Refresh or reopening.
+        if (transcript.getSnapshot().observation === 'failed') return;
+        if (
+          failed.firstSnapshotAt !== undefined &&
+          performance.now() - failed.firstSnapshotAt >= this.transcriptWatchHealthyMs
+        )
+          failures = 0;
+        const failure = normalizeApplicationError(error);
+        const delay = this.transcriptWatchRetryMs[failures];
+        if (failure.code !== 'Unavailable' || delay === undefined) {
+          const stopped =
+            failure.code === 'Unavailable'
+              ? new ApplicationError({
+                  code: 'Unavailable',
+                  message:
+                    'Live updates stopped and could not reconnect. Refresh or reopen the conversation to retry.',
+                })
+              : error;
+          transcript.fail(stopped);
+          this.error(stopped);
+          return;
+        }
+        failures++;
+        transcript.markReconnecting();
+        const rewatch = Effect.gen({ self: this }, function* () {
+          yield* Effect.sleep(delay);
+          if (!owner.alive || this.selection !== owner) return;
+          const attempt: WatchAttempt = { open: true, received: false };
+          // A watch that throws while subscribing fails with a defect; it is a failure too.
+          yield* watch(attempt).pipe(
+            Effect.catchCause((cause) =>
+              Effect.sync(() => {
+                if (Cause.hasInterruptsOnly(cause)) return;
+                if (!attempt.open || !owner.alive || this.selection !== owner) return;
+                attempt.open = false;
+                recover(Cause.squash(cause), attempt);
+              }),
             ),
-          this.generation,
-        );
-        const snapshot = yield* this.call('getChat', { target });
-        if (!received) accept(snapshot);
+          );
+        });
+        // The selection's scope ends the backoff on switch, close or disconnect.
+        void this.runEffect(Effect.forkIn(rewatch, owner.scope)).catch(this.error);
+      };
+      const read = Effect.gen({ self: this }, function* () {
+        yield* watch({ open: true, received: false });
         if (owner.alive && this.selection === owner)
-          yield* Effect.promise(() => transcript.restore());
+          yield* Effect.promise(() => transcript.restoreView());
       });
       yield* Effect.flatMap(
         Effect.forkIn(read, owner.scope, { startImmediately: true }),
@@ -755,10 +843,11 @@ class ChatModelState {
     this.transcriptOwner()?.findTranscript(query) ?? Promise.resolve();
   nextFindMatch = () => this.transcriptOwner()?.moveFind('next') ?? Promise.resolve();
   previousFindMatch = () => this.transcriptOwner()?.moveFind('previous') ?? Promise.resolve();
-  older = () => this.transcriptOwner()?.earlier() ?? Promise.resolve();
-  later = () => this.transcriptOwner()?.later() ?? Promise.resolve();
-  jumpToEntry = (entryId: string) => this.transcriptOwner()?.around(entryId) ?? Promise.resolve();
-  jumpToLatest = () => this.transcriptOwner()?.latest() ?? Promise.resolve();
+  showEarlier = () => this.transcriptOwner()?.showEarlier() ?? Promise.resolve();
+  showLater = () => this.transcriptOwner()?.showLater() ?? Promise.resolve();
+  jumpToEntry = (entryId: string) =>
+    this.transcriptOwner()?.jumpToEntry(entryId) ?? Promise.resolve();
+  jumpToLatest = () => this.transcriptOwner()?.jumpToLatest() ?? Promise.resolve();
   setTranscriptView = (view: TranscriptView) => this.transcriptOwner()?.setView(view);
   loadTranscriptManifest = (source: ChatTranscriptSource, restart = false) =>
     this.transcriptOwner()?.loadManifest(source, restart) ?? Promise.resolve();
@@ -1131,8 +1220,8 @@ export type ChatController = Pick<
   | 'setModelPreference'
   | 'select'
   | 'closeView'
-  | 'older'
-  | 'later'
+  | 'showEarlier'
+  | 'showLater'
   | 'openFind'
   | 'closeFind'
   | 'cancelFindReveal'
