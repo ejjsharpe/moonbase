@@ -1,5 +1,7 @@
 # Headless transcript navigation (#110)
 
+Current connected implementation starts on main `af7e7922a8eb8954f4d285245aa9a6ea85f93c28`. The original navigation-only range was transferred without replaying squashed foundations; `feat/transcript-navigation-110-simplified` preserves the first simplified head at `4b34805fac610585fafc73ab5496dc3d9d233468`. The parent assembles independently reviewed correction candidates separately. Prerequisite and qualification records below are historical evidence at their stated heads.
+
 Final propagated prerequisite: `23303e0432a60f7e5863d235086ed7ef5e657b65` (#109/#122/#123 and R2 runtime review corrections). Initial requested prerequisite: `c75d837ee777f13ccf6143c866c1c3421895a081`, fast-forwarded from generated checkout `1bb0ad0917ffb1bdd08f06cadec416354ac680a4`. Only the #110 delta was rebased from that initial prerequisite. Implementation checkout: `/Users/elliotsharpe/.t3/worktrees/moonbase/t3-c084abad`, branch `feat/transcript-navigation-110`. Runtime/protocol semantics remain with Pi; this owner consumes the finalized [read contract](../../contracts/docs/TRANSCRIPTS.md) and supplied watch. The parent independently approved #123 R3 at this exact propagated prerequisite; no further runtime fixes are pending.
 
 ## Public consumption
@@ -138,3 +140,13 @@ Evidence remains source/controlled only. Native foreground, packaged/manual pres
 ## Simplified view restoration on current main
 
 Transferred only `23303e0..51a3c54` onto `af7e7922a8eb8954f4d285245aa9a6ea85f93c28`; squashed foundation fixes were not replayed. The original navigation and renderer heads remain preserved. View-only prefix-proof jobs and their tests were replaced by public best-effort memory tests; all complete-source iterator proof tests remain. Backend/conversation validation, bounded memory, panel/target lifetime and restart behavior remain covered. Renderer fallback and user-navigation behavior belong to #111.
+
+## Independent simplified-navigation review corrections
+
+The first fresh review of `4b34805` found three navigation defects; each has a focused application-only correction with a public regression:
+
+- `f810db9`: a 300-part manifest could evict the navigable history interval down to its anchor and skip older rows. Evict rereadable manifest descriptors first, then offscreen rows before active rows. The 640-entry/300-part regression reaches every row through entry 320 within the summary budget.
+- `42eb612`: a held initial `getChat` could start saved-anchor restoration after a newer explicit Latest request, cancelling that navigation. Startup owns one restore intent that yields to explicit navigation or view capture.
+- `881d2f9`: a newer cursor behind an already retained window could make Later return the same historical page indefinitely. Bind cursors to their returned durable edge IDs, reuse only at the corresponding retained edge and rebase through an authorized edge read otherwise. Preserve already proved older-boundary evidence. `8e8a9d1` is a mechanical lint cleanup of this selection.
+
+The focused public set passes 176/176; the independent reviewer's unchanged three adversarial probes and three authority/Copy/navigation guards pass 6/6. The three initial failure logs and their green counterparts are preserved in the connected checkout's ignored evidence. All content iteration and native Copy proofs remain independent of best-effort view restoration. These results do not replace the parent's next independent review of its exact clean navigation-only candidate.
