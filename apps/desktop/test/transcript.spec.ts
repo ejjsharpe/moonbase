@@ -808,6 +808,14 @@ for (const navigation of ['wheel', 'keyboard', 'pointer-disclosure', 'child-keyb
         const source = controller.getSnapshot().snapshot!.run!.transcript!.source;
         await controller.loadTranscriptManifest(source);
         await controller.loadTranscriptManifest(source);
+      });
+      await page
+        .locator('[data-transcript-live]')
+        .getByRole('button', { name: /^Activity/ })
+        .click();
+      await page.evaluate(() => {
+        const controller = window.demo.application.chat!;
+        const source = controller.getSnapshot().snapshot!.run!.transcript!.source;
         const part = controller
           .getSnapshot()
           .transcript.manifest!.parts.find((part) => part.partId === 'm0.b5')!;
@@ -821,7 +829,10 @@ for (const navigation of ['wheel', 'keyboard', 'pointer-disclosure', 'child-keyb
             revision: part.revision,
             offset: 16,
           },
-          expanded: ['keep-another-disclosure'],
+          expanded: [
+            ...controller.getSnapshot().transcript.view.expanded,
+            'keep-another-disclosure',
+          ],
         });
       });
       await expect(

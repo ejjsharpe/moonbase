@@ -8,6 +8,124 @@ async function open(page: Page) {
   await expect(page.getByRole('heading', { name: 'Reading a retained answer' })).toBeAttached();
 }
 const live = (page: Page) => page.locator('[data-transcript-live]');
+for (const input of ['pointer', 'Enter', 'Space'] as const)
+  for (const outcome of ['success', 'error'] as const)
+    test(`activity ${input} keeps pre-input toggle intent and new reading anchor through held manifest ${outcome}`, async ({
+      page,
+    }) => {
+      await open(page);
+      await page.evaluate(async () => {
+        await window.demo.transcript!.live(
+          'Live reading\n\n'.repeat(80),
+          Array.from({ length: 5 }, (_, index) => `Output ${index}\n` + 'line\n'.repeat(80)),
+        );
+        const controller = window.demo.application.chat!;
+        await controller.jumpToLatest();
+        const source = controller.getSnapshot().snapshot!.run!.transcript!.source;
+        await controller.loadTranscriptManifest(source);
+        await controller.loadTranscriptManifest(source);
+        const part = controller
+          .getSnapshot()
+          .transcript.manifest!.parts.find((part) => part.partId === 'm0.b5')!;
+        if (source.kind !== 'live') throw Error('Expected live source');
+        controller.setTranscriptView({
+          anchor: {
+            backendId: controller.backendId,
+            source,
+            partId: part.partId,
+            bytes: part.bytes,
+            revision: part.revision,
+            offset: 16,
+          },
+          expanded: ['keep-another-disclosure'],
+        });
+      });
+      await expect(live(page).locator('[data-transcript-part="m0.b5"] pre')).toBeVisible();
+      await page.getByRole('button', { name: 'Close Chat panel', exact: true }).click();
+      await page.evaluate((outcome) => {
+        const original = window.demo.chat.dependencies.chat.command;
+        const gate = Promise.withResolvers<void>();
+        Object.assign(window, {
+          releaseActivityManifest: () => gate.resolve(),
+          activityManifestHeld: false,
+        });
+        window.demo.chat.dependencies.chat.command = async (operation, input, options) => {
+          if (
+            operation === 'getChatTranscriptContent' &&
+            'source' in input &&
+            !('selection' in input)
+          ) {
+            Object.assign(window, { activityManifestHeld: true });
+            await gate.promise;
+            if (outcome === 'error') throw Error('Controlled manifest failure');
+          }
+          return original(operation, input, options) as never;
+        };
+      }, outcome);
+      await page.getByRole('button', { name: 'Open Chat panel', exact: true }).click();
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              (window as typeof window & { activityManifestHeld: boolean }).activityManifestHeld,
+          ),
+        )
+        .toBe(true);
+      const button = live(page).getByRole('button', { name: /^Activity/ });
+      await expect(button).toHaveAttribute('aria-expanded', 'false');
+      await button.evaluate((element) => {
+        const root = element.closest<HTMLElement>('[aria-label="Chat transcript"]')!;
+        root.scrollTop +=
+          element.getBoundingClientRect().top -
+          root.querySelector('[data-transcript-chrome]')!.getBoundingClientRect().bottom -
+          16;
+      });
+      if (input === 'pointer') await button.click();
+      else {
+        await button.focus();
+        await page.keyboard.press(input === 'Space' ? 'Space' : 'Enter');
+      }
+      await expect(button).toHaveAttribute('aria-expanded', 'true');
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const anchor = window.demo.application.chat!.getSnapshot().transcript.view.anchor;
+            return anchor?.source ? anchor.partId !== 'm0.b5' : !!anchor?.entryId;
+          }),
+        )
+        .toBe(true);
+      await button.click();
+      await expect(button).toHaveAttribute('aria-expanded', 'false');
+      const before = await page.evaluate(
+        () => window.demo.application.chat!.getSnapshot().transcript.view.anchor,
+      );
+      await page.evaluate(() =>
+        (window as typeof window & { releaseActivityManifest(): void }).releaseActivityManifest(),
+      );
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () => window.demo.application.chat!.getSnapshot().transcript.manifest?.status,
+          ),
+        )
+        .toBe(outcome === 'success' ? 'partial' : 'error');
+      await page.evaluate(() =>
+        window.demo.chat.controls.receiveChat(structuredClone(window.demo.chat.snapshot)),
+      );
+      await expect(button).toHaveAttribute('aria-expanded', 'false');
+      expect(
+        await page.evaluate(
+          () => window.demo.application.chat!.getSnapshot().transcript.view.anchor,
+        ),
+      ).toEqual(before);
+      expect(
+        await page.evaluate(
+          () => window.demo.application.chat!.getSnapshot().transcript.view.expanded,
+        ),
+      ).toContain('keep-another-disclosure');
+      if (outcome === 'error')
+        await expect(page.getByRole('alert').filter({ hasText: 'Retry parts' })).toBeVisible();
+    });
 test('ordered activity stays between authored answers across manifest and history pages; exact call references alone supply failure', async ({
   page,
 }) => {
