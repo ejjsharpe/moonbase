@@ -80,7 +80,8 @@ export function getEntryTranscripts(
   return entries.flatMap((entry) =>
     entry.transcript
       ? [
-          manifest && JSON.stringify(manifest.source) === JSON.stringify(entry.transcript.source)
+          manifest?.parts.length &&
+          JSON.stringify(manifest.source) === JSON.stringify(entry.transcript.source)
             ? manifest
             : entry.transcript,
         ]
