@@ -13,11 +13,7 @@ export const maximumChatFindQueryBytes = 1024;
 export const chatFindPageSize = 32;
 export const chatTranscriptFeature = 'transcript-v1';
 export const chatFindFeature = 'transcript-find-v1';
-/**
- * Find's literal matching rule over original text: simple Unicode case folding (`iu`) without
- * normalization, so offsets stay exact. ẞ matches ß and Σ/σ/ς match, but ß never matches SS and
- * NFC and NFD spellings differ.
- */
+/** Find's literal matching rule over original text; Unicode behaviour is in the README. */
 export const getChatFindExpression = (query: string) =>
   new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu');
 export type ChatTranscriptMatch = typeof Contracts.ChatTranscriptMatchSchema.Type;

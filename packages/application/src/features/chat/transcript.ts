@@ -186,6 +186,8 @@ type TranscriptDependencies = {
   streaming: boolean;
   findCapable: boolean;
   local: boolean;
+  /** Defaults to `transcriptLimits.closeGraceMs`. */
+  closeGraceMs?: number;
   publish: (state: TranscriptState, snapshot?: ChatSnapshot) => void;
 };
 type Navigation = {
@@ -206,7 +208,8 @@ export class TranscriptOwner {
   private start = 0;
   private snapshot?: ChatSnapshot;
   private navigation?: Navigation;
-  private latestCursor: string | null = null;
+  /** Legacy paging: each page or snapshot's oldest entry ID maps to its older-page cursor. */
+  private olderCursors = new Map<string, string | null>();
   private olderEnd = true;
   private newerEnd = true;
   private following = true;
@@ -472,7 +475,6 @@ export class TranscriptOwner {
         },
       };
     }
-    // Legacy older paging keeps the furthest-back cursor it reached unless the window is replaced.
     if (this.following) {
       const continuous = entries.some(
         (entry) =>
@@ -482,7 +484,6 @@ export class TranscriptOwner {
       if (!continuous) {
         this.records = entries;
         this.navigation = undefined;
-        this.latestCursor = input.olderCursor;
       } else this.records = mergeEntries(this.records, entries, 'later');
       // A coherent new boundary replaces the live edge; historical navigation stays independent.
       this.start = 0;
@@ -495,9 +496,9 @@ export class TranscriptOwner {
       if (!old) {
         this.olderEnd = input.olderCursor === null;
         this.newerEnd = true;
-        this.latestCursor = input.olderCursor;
       } else if (old.transcriptBoundary !== input.transcriptBoundary) this.newerEnd = false;
     }
+    this.rememberOlderCursor(entries, input.olderCursor);
     for (const read of this.pending.values())
       if (read.source?.kind === 'live' && !this.current(read.source)) read.abort.abort();
     // writeContent reorders the LRU, so iterate a key snapshot and read live values.
@@ -970,8 +971,8 @@ export class TranscriptOwner {
         if (nav && cursor && edge?.id === cursorEdge)
           await this.readAround(nav.entryId, cursor, direction, signal);
         else if (edge) await this.readAround(edge.id, undefined, direction, signal);
-      } else if (direction === 'earlier' && this.latestCursor) {
-        const cursor = this.latestCursor;
+      } else if (direction === 'earlier' && this.getOlderCursor()) {
+        const cursor = this.getOlderCursor()!;
         const page = await this.command(
           'getChatHistory',
           { target: this.dependencies.target, cursor },
@@ -982,7 +983,7 @@ export class TranscriptOwner {
           throw makeTranscriptFailure('History cursor did not advance.');
         this.validateEntries(page.entries);
         this.records = mergeEntries(this.records, page.entries, 'earlier');
-        this.latestCursor = page.olderCursor;
+        this.rememberOlderCursor(page.entries, page.olderCursor);
         this.olderEnd = page.olderCursor === null;
         this.start = Math.max(0, this.records.length - transcriptLimits.displayedRows);
       }
@@ -991,6 +992,24 @@ export class TranscriptOwner {
       if (this.start !== previous || this.state.entries.length) this.rememberWindow(direction);
       this.publish(direction);
     });
+  }
+  private rememberOlderCursor(entries: ChatEntry[], cursor: string | null) {
+    const oldest = entries.at(-1);
+    if (oldest) this.olderCursors.set(oldest.id, cursor);
+    const cached = new Set(this.records.map((entry) => entry.id));
+    for (const id of this.olderCursors.keys()) if (!cached.has(id)) this.olderCursors.delete(id);
+  }
+  /**
+   * Resumes legacy paging from the oldest cached checkpoint, so records evicted from the older end
+   * are read again rather than skipped; mergeEntries drops the overlap by entry ID.
+   */
+  private getOlderCursor() {
+    for (let index = this.records.length - 1; index >= 0; index--) {
+      const cursor = this.olderCursors.get(this.records[index].id);
+      if (cursor !== undefined) return cursor;
+    }
+    // An empty window pages from the snapshot's own older cursor.
+    return this.records.length ? null : (this.snapshot?.olderCursor ?? null);
   }
   private async readAround(
     entryId: string,
@@ -1297,7 +1316,10 @@ export class TranscriptOwner {
     return Promise.race([
       Promise.allSettled(this.pending.keys()),
       new Promise((resolve) => {
-        timer = setTimeout(resolve, transcriptLimits.closeGraceMs);
+        timer = setTimeout(
+          resolve,
+          this.dependencies.closeGraceMs ?? transcriptLimits.closeGraceMs,
+        );
       }),
     ]).then(() => clearTimeout(timer));
   }

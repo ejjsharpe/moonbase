@@ -64,6 +64,8 @@ export type ChatDependencies = {
   newId?: () => string;
   backendId?: string;
   transcriptMemory?: TranscriptViewMemory;
+  /** How long closing a chat waits for cancelled reads; defaults to `transcriptLimits.closeGraceMs`. */
+  transcriptCloseGraceMs?: number;
 };
 type Owner = {
   scope: Scope.Closeable;
@@ -118,12 +120,14 @@ class ChatModelState {
   private newId: () => string;
   private readonly backend: string;
   private readonly transcriptMemory: TranscriptViewMemory;
+  private readonly transcriptCloseGraceMs?: number;
 
   constructor(scope: Scope.Closeable, dependencies: ChatDependencies) {
     this.scope = scope;
     this.chat = dependencies.chat;
     this.backend = dependencies.backendId ?? 'chat';
     this.transcriptMemory = dependencies.transcriptMemory ?? new TranscriptViewMemory();
+    this.transcriptCloseGraceMs = dependencies.transcriptCloseGraceMs;
     this.connection = dependencies.connection;
     this.mode = dependencies.mode ?? 'remote';
     if (this.mode === 'remote' && !this.connection)
@@ -521,18 +525,20 @@ class ChatModelState {
             code: 'Incompatible',
             message: 'Host actor does not match the configured chat context.',
           });
-        const page = yield* this.call('listChats', { session: this.session });
         if (!owner.alive || epoch !== this.epoch) return;
+        // Opening a chat needs only the verified host, so a failed chat list cannot block it.
         this.update({
           host,
           ready: true,
-          chats: page.conversations,
-          nextChats: page.nextCursor,
           notice:
             this.mode === 'local'
               ? 'Local tools use this computer’s permissions. The selected folder is context, not a sandbox.'
               : 'Verified host. Reconnection reads saved state; it does not send.',
         });
+        const listed = yield* Effect.exit(this.call('listChats', { session: this.session }));
+        if (!owner.alive || epoch !== this.epoch) return;
+        if (Exit.isSuccess(listed))
+          this.update({ chats: listed.value.conversations, nextChats: listed.value.nextCursor });
         if (this.state.transcript.observation === 'failed') {
           void this.closeOwner(this.selection);
           this.selection = undefined;
@@ -541,6 +547,7 @@ class ChatModelState {
           yield* this.openSelected(this.saved.selected);
         for (const pending of this.saved.pending)
           if (pending.operation === 'sendChat') yield* this.queryPending(pending);
+        if (Exit.isFailure(listed)) yield* listed;
       }),
       owner,
       false,
@@ -619,17 +626,20 @@ class ChatModelState {
       void this.closeOwner(this.selection);
       this.selection = undefined;
       // A selection supersedes an old list read without suppressing the new view's refresh. Until
-      // refresh verifies the host's features, it owns opening the selection.
-      if (!this.state.host || (this.refreshOwner?.alive && this.actions.has('refresh')))
-        void this.refresh();
+      // refresh verifies the host's features, it owns opening the selection, and Select awaits it.
+      const verifying = !this.state.host;
+      let refreshing: Promise<void> | undefined;
+      if (verifying || (this.refreshOwner?.alive && this.actions.has('refresh')))
+        refreshing = this.refresh();
       const epoch = this.epoch;
-      return this.action(
+      const opening = this.action(
         'open',
         this.openSelected(captured),
         this.generation,
         false,
         () => epoch === this.epoch && sameTarget(this.saved.selected, captured),
       );
+      return verifying ? Promise.all([opening, refreshing]).then(() => {}) : opening;
     } catch (error) {
       this.error(error);
       return Promise.resolve();
@@ -673,6 +683,7 @@ class ChatModelState {
         findCapable: features.includes(chatFindFeature),
         streaming: features.includes(chatStreamFeature),
         local: this.mode === 'local',
+        closeGraceMs: this.transcriptCloseGraceMs,
         publish: (state, snapshot) => {
           if (owner.alive && this.selection === owner)
             this.update({ transcript: state, ...(snapshot ? { snapshot } : {}) });

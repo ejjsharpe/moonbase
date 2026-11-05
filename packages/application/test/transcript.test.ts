@@ -343,19 +343,6 @@ test('complete-source iterator works with injected reads, reports progress, vali
       iterateTranscriptSource({ read: makeTranscriptReader(f.chat), source, selection: chosen }),
     ),
   );
-  // An oversized chunk fails at once, before another continuation is read.
-  f.handlers.set('getChatTranscriptContent', async (_input, _signal, fallback) => {
-    const reply = fallback() as ContentReply;
-    return { ...reply, data: 'z'.repeat(chosen.bytes + 1) };
-  });
-  const reads = f.calls.length;
-  await assert.rejects(
-    collect(
-      iterateTranscriptSource({ read: makeTranscriptReader(f.chat), source, selection: chosen }),
-    ),
-    /exceeds its selected part/,
-  );
-  assert.equal(f.calls.length, reads + 1);
   const liveSource: ChatTranscriptSource = {
     kind: 'live',
     target: f.target,

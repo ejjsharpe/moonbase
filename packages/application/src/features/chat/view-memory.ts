@@ -1,5 +1,5 @@
 import { LRUCache } from 'lru-cache';
-import { Schema, Struct } from 'effect';
+import { Schema } from 'effect';
 import type {
   ChatTarget,
   ChatTranscriptSource,
@@ -10,6 +10,7 @@ import {
   ChatTranscriptSelectionSchema,
   ChatTranscriptSourceSchema,
 } from '@moonbase/contracts/chat-schema';
+import { optional, struct } from '@moonbase/contracts/schema';
 import { sameTarget } from './saved.ts';
 import { countTranscriptBytes, makeTranscriptFailure } from './transcript-read.ts';
 
@@ -28,8 +29,6 @@ export type TranscriptLiveAnchor = ChatTranscriptSelection & {
 export type TranscriptViewAnchor = TranscriptEntryAnchor | TranscriptLiveAnchor;
 export type TranscriptView = { anchor: TranscriptViewAnchor | null; expanded: string[] };
 
-const struct = <const F extends Schema.Struct.Fields>(fields: F) =>
-  Schema.Struct(fields).mapFields(Struct.map(Schema.mutableKey));
 /** Renderer-owned keys (expansions, backend IDs) are opaque, bounded, well-formed text. */
 const opaqueKey = Schema.String.check(
   Schema.makeFilter(
@@ -43,16 +42,19 @@ const opaqueKey = Schema.String.check(
 const TranscriptViewSchema = struct({
   anchor: Schema.NullOr(
     Schema.Union([
+      // Optional keys accept `undefined` (as the types allow) and omit it.
       struct({
         entryId: ChatIdentifierSchema,
-        partId: Schema.optionalKey(ChatIdentifierSchema),
+        partId: optional(ChatIdentifierSchema),
         offset: Schema.Finite,
+        source: optional(Schema.Never),
       }),
       struct({
         ...ChatTranscriptSelectionSchema.fields,
         backendId: opaqueKey,
         source: ChatTranscriptSourceSchema,
         offset: Schema.Finite,
+        entryId: optional(Schema.Never),
       }),
     ]),
   ),
@@ -87,14 +89,14 @@ export function decodeTranscriptView(
     throw makeTranscriptFailure('Invalid transcript view.');
   }
   const anchor = decoded.anchor;
-  if (anchor && 'source' in anchor) {
+  if (anchor?.source) {
     if (
       anchor.source.kind !== 'live' ||
       anchor.backendId !== backend ||
       !sameTarget(anchor.source.target, target)
     )
       throw makeTranscriptFailure('Live transcript anchor belongs to another backend or target.');
-  } else if (anchor && anchor.entryId === 'live')
+  } else if (anchor?.entryId === 'live')
     throw makeTranscriptFailure('Use a durable entry identity or an exact live-part anchor.');
   return freeze({
     anchor: anchor as TranscriptViewAnchor | null,

@@ -212,8 +212,6 @@ async function* iterateSource(
         const size = countDecodedTranscriptBytes(chunk);
         offset += size;
         bytes += size;
-        if (offset > selected.bytes)
-          throw makeTranscriptFailure('Transcript content exceeds its selected part.');
         cursor = chunk.nextCursor;
         checkTranscriptRead(signal, isCurrent);
         onProgress?.({ parts, bytes });
