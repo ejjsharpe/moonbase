@@ -100,7 +100,8 @@ for (const mode of ['local', 'remote'] as const)
     await until(
       async () => controller.getSnapshot(),
       (state) =>
-        state.snapshot?.transcriptBoundary === ids.at(-1) &&
+        state.snapshot !== null &&
+        state.snapshot.transcriptBoundary === ids.at(-1) &&
         (!remote || state.snapshot.observationStatus === 'connected'),
     );
     const counters = async () => (remote ? (await remote.stats()).reads! : structuredClone(reads));
