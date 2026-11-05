@@ -42,8 +42,8 @@ export const Markdown = memo(function Markdown({
   );
   return (
     <div {...stylex.props(styles.prose)}>
-      {blocks.map((block, index) => (
-        <Block key={index} block={block} {...actions} />
+      {blocks.map((block) => (
+        <Block key={block.key} block={block} {...actions} />
       ))}
     </div>
   );

@@ -1,10 +1,11 @@
-import type { Code } from 'mdast';
+import type { Code, Root } from 'mdast';
 import {
   getTranscriptDisclosureId,
   parseTranscriptMarkdown,
 } from '../src/chat/transcript-source.ts';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { visit } from 'unist-util-visit';
 import {
   MarkdownCache,
   canHighlight,
@@ -130,4 +131,97 @@ test('parser positions remain original UTF-16 and invalidate changed block actio
   assert.equal(before.position!.start.offset, 6);
   assert.equal(before.data!.hProperties!['data-code-start'], 6);
   assert.notEqual(first[1]!.signature, next[1]!.signature);
+});
+
+const countNodes = (blocks: { tree: Root }[], type: string) => {
+  let count = 0;
+  for (const block of blocks) visit(block.tree, type, () => void count++);
+  return count;
+};
+
+test('reference definitions keep one document block within the cache bound', () => {
+  const source =
+    Array.from({ length: 150 }, (_, i) => `Paragraph ${i} uses [text][ref${i}].`).join('\n\n') +
+    '\n\n' +
+    Array.from({ length: 150 }, (_, i) => `[ref${i}]: https://example.com/${i}`).join('\n') +
+    '\n';
+  const cache = new MarkdownCache();
+  const blocks = cache.parse('references', '1', source);
+  assert.equal(blocks.length, 1);
+  assert.equal(countNodes(blocks, 'definition'), 150);
+  assert.equal(countNodes(blocks, 'linkReference'), 150);
+  assert.equal(cache.stats.messages, 1);
+  assert.ok(cache.stats.retainedBytes < 512 * 1024, String(cache.stats.retainedBytes));
+  assert.equal(cache.parse('references', '1', source), blocks);
+  assert.equal(cache.stats.lex, 1);
+});
+
+test('a late definition re-renders earlier references and keeps original code selectors', () => {
+  const cache = new MarkdownCache();
+  const streamed = '🌔 [read][ref] and [^note]\r\n\r\n```js\r\nbody\r\n```\r\n\r\n> quoted\r\n';
+  const sources = [
+    streamed,
+    streamed + '\r\n> [ref]: https://example.com\r\n',
+    streamed + '\r\n> [ref]: https://example.com\r\n\r\n[^note]: Footnote\r\n',
+  ];
+  const [split, reference, footnote] = sources.map((source, revision) =>
+    cache.parse('late', String(revision), source),
+  );
+  assert.equal(split!.length, 3);
+  assert.equal(countNodes(split!, 'linkReference'), 0);
+  assert.equal(countNodes(split!, 'definition'), 0);
+  assert.equal(reference!.length, 1);
+  assert.deepEqual(
+    [split!, reference!].map((blocks) => blocks.map((block) => block.key)),
+    [['0', '1', '2'], ['document']],
+  );
+  assert.equal(countNodes(reference!, 'linkReference'), 1);
+  assert.equal(countNodes(reference!, 'definition'), 1);
+  assert.notEqual(reference![0]!.signature, split![0]!.signature);
+  assert.equal(footnote!.length, 1);
+  assert.equal(countNodes(footnote!, 'footnoteReference'), 1);
+  for (const [index, blocks] of [split!, reference!, footnote!].entries()) {
+    const selectors: unknown[] = [];
+    for (const block of blocks)
+      visit(block.tree, 'code', (node) => {
+        selectors.push(node.data?.hProperties?.['data-code-start']);
+      });
+    assert.deepEqual(
+      selectors,
+      parseTranscriptMarkdown(sources[index]!).codeBlocks.map(
+        (node) => node.position!.start.offset,
+      ),
+    );
+    assert.deepEqual(selectors, [sources[index]!.indexOf('```js')]);
+  }
+});
+
+test('least recently read messages leave first at the entry and byte bounds', () => {
+  const cache = new MarkdownCache();
+  cache.parse('kept', '1', 'kept');
+  for (let i = 0; i < 127; i++) cache.parse(String(i), '1', 'message');
+  assert.equal(cache.stats.messages, 128);
+  cache.parse('kept', '1', 'kept');
+  cache.parse('new', '1', 'message');
+  assert.equal(cache.stats.messages, 128);
+  assert.equal(cache.stats.lex, 129);
+  cache.parse('kept', '1', 'kept');
+  assert.equal(cache.stats.lex, 129);
+  cache.parse('0', '1', 'message');
+  assert.equal(cache.stats.lex, 130);
+
+  cache.clear();
+  assert.equal(cache.stats.messages, 0);
+  const large = 'x'.repeat(256 * 1024);
+  for (const identity of ['a', 'b', 'c']) cache.parse(identity, '1', large);
+  assert.equal(cache.stats.messages, 2);
+  assert.ok(cache.stats.retainedBytes <= 2 * 1024 * 1024);
+  const lexed = cache.stats.lex;
+  cache.parse('c', '1', large);
+  assert.equal(cache.stats.lex, lexed);
+  cache.parse('a', '1', large);
+  assert.equal(cache.stats.lex, lexed + 1);
+  const oversized = cache.parse('c', '1', 'y'.repeat(1024 * 1024));
+  assert.equal(oversized.length, 1);
+  assert.equal(cache.stats.messages, 1);
 });

@@ -1,63 +1,52 @@
-import { parseTranscriptMarkdown } from '../../chat/transcript-source.ts';
+import { LRUCache } from 'lru-cache';
 import type { Root } from 'mdast';
-export type MarkdownBlock = { tree: Root; signature: string };
+import { EXIT, visit } from 'unist-util-visit';
+import { parseTranscriptMarkdown } from '../../chat/transcript-source.ts';
+export type MarkdownBlock = { key: string; tree: Root; signature: string };
+type ParsedMessage = { source: string; blocks: MarkdownBlock[] };
 export const markdownMetrics = { lex: 0, tokenize: 0, retainedBytes: 0, messages: 0 };
 const bytes = (text: string) => new TextEncoder().encode(text).length;
-/** A private, per-view bounded cache. Exact source and render inputs, never DTO object identity. */
+/** A private, per-view bounded cache keyed by exact identity/revision and checked against exact source, never DTO object identity. */
 export class MarkdownCache {
-  private messages = new Map<string, { source: string; blocks: MarkdownBlock[]; bytes: number }>();
-  private retained = 0;
+  private messages = new LRUCache<string, ParsedMessage>({
+    max: 128,
+    maxSize: 2 * 1024 * 1024,
+    sizeCalculation: ({ source, blocks }, key) =>
+      bytes(key) + bytes(source) + bytes(JSON.stringify(blocks)),
+  });
   readonly stats = { lex: 0, retainedBytes: 0, messages: 0 };
   parse(identity: string, revision: string, source: string): MarkdownBlock[] {
-    const key = JSON.stringify([identity, revision, 'remark-gfm-v2']);
+    const key = JSON.stringify([identity, revision]);
     const old = this.messages.get(key);
-    if (old?.source === source) {
-      this.messages.delete(key);
-      this.messages.set(key, old);
-      return old.blocks;
-    }
+    if (old?.source === source) return old.blocks;
     this.stats.lex++;
     markdownMetrics.lex++;
     const { tree } = parseTranscriptMarkdown(source);
-    const definitions = tree.children.filter(
-      (node) => node.type === 'definition' || node.type === 'footnoteDefinition',
-    );
-    const blocks = tree.children
-      .filter((node) => node.type !== 'definition' && node.type !== 'footnoteDefinition')
-      .map((node) => {
-        const block: Root = { type: 'root', children: [node, ...definitions] };
-        return {
-          tree: block,
-          signature: JSON.stringify(block, (key, value) =>
-            key === 'position' ? undefined : value,
-          ),
-        };
-      });
-    const size = bytes(key) + bytes(source) + bytes(JSON.stringify(blocks));
-    if (old) {
-      this.messages.delete(key);
-      this.retained -= old.bytes;
-    }
-    if (size <= 2 * 1024 * 1024) {
-      this.messages.set(key, { source, blocks, bytes: size });
-      this.retained += size;
-    }
-    while (this.messages.size > 128 || this.retained > 2 * 1024 * 1024) {
-      const first = this.messages.keys().next().value!;
-      this.retained -= this.messages.get(first)!.bytes;
-      this.messages.delete(first);
-    }
-    this.stats.retainedBytes = this.retained;
-    this.stats.messages = this.messages.size;
-    markdownMetrics.retainedBytes = this.retained;
-    markdownMetrics.messages = this.messages.size;
+    // Definitions apply document-wide, so only messages without them split into blocks.
+    let definitions = false;
+    visit(tree, ['definition', 'footnoteDefinition'], () => {
+      definitions = true;
+      return EXIT;
+    });
+    const blocks = (
+      definitions ? [tree] : tree.children.map((node): Root => ({ type: 'root', children: [node] }))
+    ).map((block, index) => ({
+      // A merged document must not reuse a pinned split block's DOM.
+      key: definitions ? 'document' : String(index),
+      tree: block,
+      signature: JSON.stringify(block, (key, value) => (key === 'position' ? undefined : value)),
+    }));
+    this.messages.set(key, { source, blocks });
+    this.recordRetention();
     return blocks;
   }
   clear() {
     this.messages.clear();
-    this.retained = 0;
-    this.stats.retainedBytes = 0;
-    this.stats.messages = 0;
+    this.recordRetention();
+  }
+  private recordRetention() {
+    this.stats.retainedBytes = markdownMetrics.retainedBytes = this.messages.calculatedSize;
+    this.stats.messages = markdownMetrics.messages = this.messages.size;
   }
 }
 export function getExternalLink(value: string): string | null {

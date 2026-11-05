@@ -533,7 +533,32 @@ test('128-row reuse, unchanged sibling DOM, selection/focus and anchors during l
   );
 });
 
-test('incomplete/unknown/oversized code remains readable and copyable; fence/reference changes invalidate only affected output', async ({
+test('a late definition replaces a selected split message with the complete document', async ({
+  page,
+}) => {
+  await open(page);
+  await page.evaluate(() => window.demo.transcript!.live('Intro [Read][ref]\n\nLater text\n'));
+  const live = page.getByRole('article', { name: 'Live response' });
+  await expect(live.getByText('Later text', { exact: true })).toBeVisible();
+  await live
+    .locator('p')
+    .first()
+    .evaluate((paragraph) => {
+      const range = document.createRange();
+      range.selectNodeContents(paragraph);
+      window.getSelection()!.removeAllRanges();
+      window.getSelection()!.addRange(range);
+    });
+  await page.evaluate(() =>
+    window.demo.transcript!.live(
+      'Intro [Read][ref]\n\nLater text\n\n[ref]: https://example.com/reference\n',
+    ),
+  );
+  await expect(live.getByRole('link', { name: 'Read', exact: true })).toBeVisible();
+  await expect(live.getByText('Later text', { exact: true })).toBeVisible();
+});
+
+test('incomplete/unknown/oversized code remains readable and copyable; late references re-render their message', async ({
   page,
 }) => {
   await open(page);
