@@ -156,7 +156,9 @@ export function Transcript({
           : row.querySelector<HTMLElement>('[data-transcript-part]');
         const manifest = observed.transcript.manifest;
         const parts = manifest && sameSource(summary, manifest) ? manifest.parts : summary.parts;
-        const part = parts.find((part) => part.partId === partNode?.dataset.transcriptPart);
+        const part =
+          parts.find((part) => part.partId === partNode?.dataset.transcriptPart) ??
+          summary.parts.find((part) => part.partId === partNode?.dataset.transcriptPart);
         if (!part || part.availability !== 'available') return;
         anchor.current = {
           backendId: controller.backendId,
@@ -175,9 +177,20 @@ export function Transcript({
     }
     controller.setTranscriptView({
       anchor: follow.current ? null : anchor.current,
-      expanded: current.current.transcript.view.expanded,
+      expanded: observed.transcript.view.expanded,
     });
   }, [controller]);
+  const captureReadingPosition = useCallback(() => {
+    restoring.current = false;
+    anchor.current = null;
+    follow.current = false;
+    if (scrollFrame.current !== null) {
+      cancelAnimationFrame(scrollFrame.current);
+      scrollFrame.current = null;
+    }
+    capture();
+    setFollowing(false);
+  }, [capture]);
   const restore = useCallback(() => {
     const element = root.current;
     if (!element) return;
@@ -402,32 +415,29 @@ export function Transcript({
         }
       }}
       onKeyDown={(event) => {
+        const target = event.target;
         if (
-          event.target === event.currentTarget &&
-          ['PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown', ' '].includes(event.key)
+          target instanceof HTMLElement &&
+          !target.closest(
+            'input, textarea, select, [contenteditable]:not([contenteditable="false"])',
+          ) &&
+          ['PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown', ' ', 'Enter'].includes(
+            event.key,
+          )
         ) {
-          restoring.current = false;
-          anchor.current = null;
-          follow.current = false;
           topIntent.current =
             ['PageUp', 'Home', 'ArrowUp'].includes(event.key) ||
             (event.key === ' ' && event.shiftKey);
-          capture();
-          setFollowing(false);
+          if (restoring.current || ![' ', 'Enter'].includes(event.key)) captureReadingPosition();
         }
       }}
       onPointerDown={(event) => {
-        if (
-          restoring.current ||
-          event.target === event.currentTarget ||
-          event.pointerType === 'touch'
-        ) {
-          restoring.current = false;
-          anchor.current = null;
-        }
         topIntent.current = event.target === event.currentTarget || event.pointerType === 'touch';
-        follow.current = false;
-        setFollowing(false);
+        if (restoring.current) captureReadingPosition();
+        else {
+          follow.current = false;
+          setFollowing(false);
+        }
       }}
       {...stylex.props(styles.transcript)}>
       <div ref={content} {...stylex.props(styles.measure)}>
@@ -782,6 +792,7 @@ function Part({
     (saved.source ? transcript.source.kind === 'live' : saved.entryId === entryId);
   const anchorKey = anchored ? JSON.stringify({ ...saved, offset: 0 }) : null;
   const [collapsedAnchor, setCollapsedAnchor] = useState<string | null>(null);
+  const toggleExpanded = useRef<boolean | null>(null);
   if (!anchored && collapsedAnchor !== null) setCollapsedAnchor(null);
   const expanded =
     disclosureError ||
@@ -927,15 +938,29 @@ function Part({
             aria-expanded={expanded}
             disabled={!expansion}
             {...stylex.props(controls.button, controls.quietButton)}
+            onPointerDown={() => {
+              toggleExpanded.current = expanded;
+            }}
+            onPointerCancel={() => {
+              toggleExpanded.current = null;
+            }}
+            onKeyDown={(event) => {
+              if (!event.repeat)
+                toggleExpanded.current = [' ', 'Enter'].includes(event.key) ? expanded : null;
+            }}
             onClick={() => {
               if (!expansion) return;
-              // An anchor's initial reveal must not undo an explicit collapse.
-              if (expanded && anchored) setCollapsedAnchor(anchorKey);
+              const collapse = toggleExpanded.current ?? expanded;
+              toggleExpanded.current = null;
+              const view = controller.getSnapshot().transcript.view;
+              // Reading capture can reveal this part between pointer/key down and click.
+              if (collapse && view.anchor?.partId === part.partId)
+                setCollapsedAnchor(JSON.stringify({ ...view.anchor, offset: 0 }));
               controller.setTranscriptView({
-                anchor: state.view.anchor,
-                expanded: expanded
-                  ? state.view.expanded.filter((id) => id !== expansion)
-                  : [...state.view.expanded, expansion],
+                ...view,
+                expanded: collapse
+                  ? view.expanded.filter((id) => id !== expansion)
+                  : [...view.expanded, expansion],
               });
             }}>
             {part.toolName ? `${part.toolName} · ` : ''}

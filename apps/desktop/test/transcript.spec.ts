@@ -787,114 +787,179 @@ test('application live-part memory restores a saved row after changed text and f
   await expect(page.getByRole('alert').filter({ hasText: 'anchored live source' })).toHaveCount(0);
 });
 
-for (const navigation of ['wheel', 'keyboard'] as const)
-  test(`${navigation} navigation releases a saved part restoration while its manifest is held`, async ({
-    page,
-  }) => {
-    await open(page);
-    await page.evaluate(async () => {
-      await window.demo.transcript!.live(
-        'Live reading\n'.repeat(80),
-        Array.from({ length: 5 }, (_, index) => `Output ${index}\n` + 'line\n'.repeat(80)),
-      );
-      const controller = window.demo.application.chat!;
-      await controller.jumpToLatest();
-      const source = controller.getSnapshot().snapshot!.run!.transcript!.source;
-      await controller.loadTranscriptManifest(source);
-      await controller.loadTranscriptManifest(source);
-      const part = controller
-        .getSnapshot()
-        .transcript.manifest!.parts.find((part) => part.partId === 'm0.b5')!;
-      if (source.kind !== 'live') throw Error('Expected live source');
-      controller.setTranscriptView({
-        anchor: {
-          backendId: controller.backendId,
-          source,
-          partId: part.partId,
-          bytes: part.bytes,
-          revision: part.revision,
-          offset: 16,
-        },
-        expanded: [],
+for (const navigation of ['wheel', 'keyboard', 'pointer-disclosure', 'child-keyboard'] as const)
+  for (const outcome of navigation.includes('-') ? ['success', 'error'] : ['success'])
+    test(`${navigation} navigation releases saved restoration after held manifest ${outcome}`, async ({
+      page,
+    }) => {
+      await open(page);
+      await page.evaluate(async () => {
+        await window.demo.transcript!.live(
+          'Live reading\n\n'.repeat(80),
+          Array.from({ length: 5 }, (_, index) => `Output ${index}\n` + 'line\n'.repeat(80)),
+        );
+        const controller = window.demo.application.chat!;
+        await controller.jumpToLatest();
+        const source = controller.getSnapshot().snapshot!.run!.transcript!.source;
+        await controller.loadTranscriptManifest(source);
+        await controller.loadTranscriptManifest(source);
+        const part = controller
+          .getSnapshot()
+          .transcript.manifest!.parts.find((part) => part.partId === 'm0.b5')!;
+        if (source.kind !== 'live') throw Error('Expected live source');
+        controller.setTranscriptView({
+          anchor: {
+            backendId: controller.backendId,
+            source,
+            partId: part.partId,
+            bytes: part.bytes,
+            revision: part.revision,
+            offset: 16,
+          },
+          expanded: ['keep-another-disclosure'],
+        });
       });
-    });
-    await expect(
-      page.locator('[data-transcript-live] [data-transcript-part="m0.b5"] pre'),
-    ).toBeVisible();
-    await page.getByRole('button', { name: 'Close Chat panel', exact: true }).click();
-    await page.evaluate(() => {
-      const original = window.demo.chat.dependencies.chat.command;
-      const gate = Promise.withResolvers<void>();
-      Object.assign(window, { releaseManifest: () => gate.resolve(), manifestHeld: false });
-      window.demo.chat.dependencies.chat.command = async (operation, input, options) => {
-        if (
-          operation === 'getChatTranscriptContent' &&
-          'source' in input &&
-          !('selection' in input)
-        ) {
-          Object.assign(window, { manifestHeld: true });
-          await gate.promise;
+      await expect(
+        page.locator('[data-transcript-live] [data-transcript-part="m0.b5"] pre'),
+      ).toBeVisible();
+      await page.getByRole('button', { name: 'Close Chat panel', exact: true }).click();
+      await page.evaluate((outcome) => {
+        const original = window.demo.chat.dependencies.chat.command;
+        const gate = Promise.withResolvers<void>();
+        Object.assign(window, { releaseManifest: () => gate.resolve(), manifestHeld: false });
+        window.demo.chat.dependencies.chat.command = async (operation, input, options) => {
+          if (
+            operation === 'getChatTranscriptContent' &&
+            'source' in input &&
+            !('selection' in input)
+          ) {
+            Object.assign(window, { manifestHeld: true });
+            await gate.promise;
+            if (outcome === 'error') throw Error('Controlled manifest failure');
+          }
+          return original(operation, input, options) as never;
+        };
+      }, outcome);
+      await page.getByRole('button', { name: 'Open Chat panel', exact: true }).click();
+      await expect
+        .poll(() =>
+          page.evaluate(() => (window as typeof window & { manifestHeld: boolean }).manifestHeld),
+        )
+        .toBe(true);
+      if (navigation === 'wheel') {
+        await transcript(page).hover();
+        await page.mouse.wheel(0, 480);
+      } else if (navigation === 'keyboard') {
+        await transcript(page).focus();
+        await page.keyboard.press('PageDown');
+      } else {
+        const button = page
+          .locator('[data-transcript-live] [data-transcript-part="m0.b1"]')
+          .getByRole('button', { expanded: false });
+        await button.evaluate((element) => {
+          const root = element.closest<HTMLElement>('[aria-label="Chat transcript"]')!;
+          const chrome = root.querySelector('[data-transcript-chrome]')!;
+          root.scrollTop +=
+            element.getBoundingClientRect().top - chrome.getBoundingClientRect().bottom - 16;
+        });
+        if (navigation === 'pointer-disclosure') {
+          await button.click();
+          await expect(
+            page
+              .locator('[data-transcript-live] [data-transcript-part="m0.b1"]')
+              .getByRole('button', { expanded: true }),
+          ).toBeVisible();
+        } else {
+          await button.focus();
+          await page.keyboard.press('PageUp');
         }
-        return original(operation, input, options) as never;
-      };
+      }
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const anchor = window.demo.application.chat!.getSnapshot().transcript.view.anchor;
+            return anchor?.source ? anchor.partId !== 'm0.b5' : !!anchor?.entryId;
+          }),
+        )
+        .toBe(true);
+      let previousTop = -1;
+      await expect
+        .poll(async () => {
+          const top = await transcript(page).evaluate((element) => element.scrollTop);
+          const settled = top > 0 && top === previousTop;
+          previousTop = top;
+          return settled;
+        })
+        .toBe(true);
+      const before = await transcript(page).evaluate((element) => ({
+        top: element.scrollTop,
+        anchor: window.demo.application.chat!.getSnapshot().transcript.view.anchor,
+      }));
+      await page.evaluate(() =>
+        (window as typeof window & { releaseManifest(): void }).releaseManifest(),
+      );
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () => window.demo.application.chat!.getSnapshot().transcript.manifest?.status,
+          ),
+        )
+        .toBe(outcome === 'success' ? 'partial' : 'error');
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+          ),
+      );
+      if (outcome === 'success')
+        expect(await transcript(page).evaluate((element) => element.scrollTop)).toBeCloseTo(
+          before.top,
+          0,
+        );
+      else await expect(page.getByRole('alert').filter({ hasText: 'Retry parts' })).toBeVisible();
+      await expect
+        .poll(() =>
+          transcript(page).evaluate((element) => {
+            const anchor = window.demo.application.chat!.getSnapshot().transcript.view.anchor!;
+            const row = [
+              ...element.querySelectorAll<HTMLElement>(
+                '[data-transcript-entry], [data-transcript-live]',
+              ),
+            ].find((row) =>
+              anchor.source
+                ? row.dataset.transcriptLive === JSON.stringify(anchor.source)
+                : row.dataset.transcriptEntry === anchor.entryId,
+            )!;
+            const node = anchor.partId
+              ? [...row.querySelectorAll<HTMLElement>('[data-transcript-part]')].find(
+                  (node) => node.dataset.transcriptPart === anchor.partId,
+                )!
+              : row;
+            return (
+              node.getBoundingClientRect().top -
+              Math.max(
+                element.getBoundingClientRect().top,
+                element.querySelector('[data-transcript-chrome]')!.getBoundingClientRect().bottom,
+              )
+            );
+          }),
+        )
+        .toBeCloseTo(before.anchor!.offset, 0);
+      expect(
+        await page.evaluate(
+          () => window.demo.application.chat!.getSnapshot().transcript.view.expanded,
+        ),
+      ).toContain('keep-another-disclosure');
+      expect(
+        await page.evaluate(
+          () => window.demo.application.chat!.getSnapshot().transcript.view.anchor,
+        ),
+      ).toEqual(before.anchor);
+      if (navigation.includes('-')) {
+        await mkdir(output, { recursive: true });
+        await page.screenshot({ path: resolve(output, `r4-${navigation}-${outcome}.png`) });
+      }
     });
-    await page.getByRole('button', { name: 'Open Chat panel', exact: true }).click();
-    await expect
-      .poll(() =>
-        page.evaluate(() => (window as typeof window & { manifestHeld: boolean }).manifestHeld),
-      )
-      .toBe(true);
-    if (navigation === 'wheel') {
-      await transcript(page).hover();
-      await page.mouse.wheel(0, 480);
-    } else {
-      await transcript(page).focus();
-      await page.keyboard.press('PageDown');
-    }
-    await expect
-      .poll(() =>
-        page.evaluate(
-          () => window.demo.application.chat!.getSnapshot().transcript.view.anchor?.entryId,
-        ),
-      )
-      .toBeTruthy();
-    let previousTop = -1;
-    await expect
-      .poll(async () => {
-        const top = await transcript(page).evaluate((element) => element.scrollTop);
-        const settled = top > 0 && top === previousTop;
-        previousTop = top;
-        return settled;
-      })
-      .toBe(true);
-    const before = await transcript(page).evaluate((element) => ({
-      top: element.scrollTop,
-      anchor: window.demo.application.chat!.getSnapshot().transcript.view.anchor,
-    }));
-    await page.evaluate(() =>
-      (window as typeof window & { releaseManifest(): void }).releaseManifest(),
-    );
-    await expect
-      .poll(() =>
-        page.evaluate(
-          () => window.demo.application.chat!.getSnapshot().transcript.manifest?.status,
-        ),
-      )
-      .toBe('partial');
-    await page.evaluate(
-      () =>
-        new Promise<void>((resolve) =>
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-        ),
-    );
-    expect(await transcript(page).evaluate((element) => element.scrollTop)).toBeCloseTo(
-      before.top,
-      0,
-    );
-    expect(
-      await page.evaluate(() => window.demo.application.chat!.getSnapshot().transcript.view.anchor),
-    ).toEqual(before.anchor);
-  });
 
 test('partial Markdown cannot copy a different complete-source code node', async ({ page }) => {
   await open(page);
@@ -910,6 +975,8 @@ test('partial Markdown cannot copy a different complete-source code node', async
     page.getByRole('alert').filter({ hasText: 'displayed code block changed' }),
   ).toBeVisible();
   expect(await page.evaluate(() => window.demo.transcript!.copied)).toEqual([]);
+  await mkdir(output, { recursive: true });
+  await page.screenshot({ path: resolve(output, 'r4-reinterpreted-code.png') });
   await expect(page.getByRole('status').filter({ hasText: 'Copied.' })).toHaveCount(0);
   await live.getByRole('button', { name: /^Read more/ }).click();
   await expect(live.locator('pre')).toHaveText('WRONG BLOCK');
