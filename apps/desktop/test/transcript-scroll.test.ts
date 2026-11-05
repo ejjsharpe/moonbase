@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import type { TranscriptViewAnchor } from '@moonbase/application/chat';
 import {
   createTranscriptScroll,
+  isSameAnchor,
   transitionTranscriptScroll,
   type TranscriptScroll,
   type TranscriptScrollEvent,
@@ -54,12 +55,40 @@ test('bottom follow keeps the end visible only at latest without a selection', (
   assert.equal(play(reading(), scrolled({ bottom: 10, selected: true })).state.mode, 'reading');
   assert.equal(play(reading(), scrolled({ bottom: 10, atLatest: false })).state.mode, 'reading');
   assert.equal(play(following, scrolled({ bottom: 400 })).state.mode, 'reading');
-  // A downward wheel or key at the end keeps following; pointer and upward input leave it.
+  // A downward wheel or key at the end keeps following; upward input leaves it.
   assert.equal(play(following, wheel(false)).state.mode, 'following');
   const key = { type: 'input', device: 'key', upward: false, viewport: viewport() } as const;
   assert.equal(play(following, key).state.mode, 'following');
-  assert.equal(play(following, { ...key, device: 'pointer' }).state.mode, 'reading');
   assert.equal(play(following, wheel(true)).state.mode, 'reading');
+});
+
+test('pressing a control keeps following; a press that can select text or scroll leaves it', () => {
+  const following = createTranscriptScroll(null);
+  const press = (device: 'pointer' | 'control', upward = false) =>
+    ({ type: 'input', device, upward, viewport: viewport() }) as const;
+  // Copy, Activity and other controls at the end keep the end in view as output grows.
+  const control = play(following, press('control'), resized());
+  assert.equal(control.state.mode, 'following');
+  assert.deepEqual(control.last, { scroll: 'end' });
+  // Content may start a selection; the scrollbar or touch (upward) scrolls away.
+  assert.equal(play(following, press('pointer')).state.mode, 'reading');
+  assert.equal(play(following, press('pointer', true)).state.mode, 'reading');
+  // A control press that is followed by scrolling away still leaves following.
+  assert.equal(play(following, press('control'), scrolled({ bottom: 400 })).state.mode, 'reading');
+  // A control press while restoring still captures the reader's actual position.
+  const restoring = createTranscriptScroll(saved);
+  assert.deepEqual(play(restoring, press('control')).last, { cancelReveal: true, capture: true });
+});
+
+test('anchors compare by value whatever their key order', () => {
+  assert.ok(
+    isSameAnchor(
+      { entryId: 'a', partId: 'b', offset: 1 },
+      { offset: 1, partId: 'b', entryId: 'a' },
+    ),
+  );
+  assert.ok(!isSameAnchor({ entryId: 'a', offset: 1 }, { entryId: 'a', offset: 2 }));
+  assert.ok(!isSameAnchor({ entryId: 'a', offset: 1 }, null));
 });
 
 test('automatic earlier loading needs upward reader intent near a loadable top', () => {

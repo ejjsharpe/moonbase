@@ -2,25 +2,36 @@ import { LRUCache } from 'lru-cache';
 import type { Root } from 'mdast';
 import { EXIT, visit } from 'unist-util-visit';
 import { parseTranscriptMarkdown } from '../../chat/transcript-source.ts';
+import { fitsStructuredSource } from './source-limits.ts';
+/** `signature` changes whenever the block's rendering can: its source text or its offset. */
 export type MarkdownBlock = { key: string; tree: Root; signature: string };
 type ParsedMessage = { source: string; blocks: MarkdownBlock[] };
-export const markdownMetrics = { lex: 0, tokenize: 0, retainedBytes: 0, messages: 0 };
-const bytes = (text: string) => new TextEncoder().encode(text).length;
+const cacheLimits = { messages: 128, bytes: 2 * 1024 * 1024 } as const;
+/** UTF-16 source/key (2 bytes per unit) plus the parsed tree, estimated from source length. */
+const retainedBytesPerUnit = 3;
+/** Work counted across every cache, so a fixture can prove reading does not redo it. */
+export const markdownWork = { lex: 0, tokenize: 0 };
 /** A private, per-view bounded cache keyed by exact identity/revision and checked against exact source, never DTO object identity. */
 export class MarkdownCache {
   private messages = new LRUCache<string, ParsedMessage>({
-    max: 128,
-    maxSize: 2 * 1024 * 1024,
-    sizeCalculation: ({ source, blocks }, key) =>
-      bytes(key) + bytes(source) + bytes(JSON.stringify(blocks)),
+    max: cacheLimits.messages,
+    maxSize: cacheLimits.bytes,
+    sizeCalculation: ({ source }, key) => retainedBytesPerUnit * (key.length + source.length),
   });
-  readonly stats = { lex: 0, retainedBytes: 0, messages: 0 };
+  private lexed = 0;
+  get stats() {
+    return {
+      lex: this.lexed,
+      retainedBytes: this.messages.calculatedSize,
+      messages: this.messages.size,
+    };
+  }
   parse(identity: string, revision: string, source: string): MarkdownBlock[] {
     const key = JSON.stringify([identity, revision]);
     const old = this.messages.get(key);
     if (old?.source === source) return old.blocks;
-    this.stats.lex++;
-    markdownMetrics.lex++;
+    this.lexed++;
+    markdownWork.lex++;
     const { tree } = parseTranscriptMarkdown(source);
     // Definitions apply document-wide, so only messages without them split into blocks.
     let definitions = false;
@@ -34,20 +45,25 @@ export class MarkdownCache {
       // A merged document must not reuse a pinned split block's DOM.
       key: definitions ? 'document' : String(index),
       tree: block,
-      signature: JSON.stringify(block, (key, value) => (key === 'position' ? undefined : value)),
+      signature: definitions ? source : getBlockSignature(block, source),
     }));
     this.messages.set(key, { source, blocks });
-    this.recordRetention();
     return blocks;
   }
   clear() {
     this.messages.clear();
-    this.recordRetention();
   }
-  private recordRetention() {
-    this.stats.retainedBytes = markdownMetrics.retainedBytes = this.messages.calculatedSize;
-    this.stats.messages = markdownMetrics.messages = this.messages.size;
-  }
+}
+/**
+ * A split block's tree is determined by its own source slice, and its code actions by the slice's
+ * offset in the message.
+ */
+function getBlockSignature(block: Root, source: string) {
+  const position = block.children[0]?.position;
+  const start = position?.start.offset,
+    end = position?.end.offset;
+  if (start === undefined || end === undefined) return 'whole:' + source;
+  return `${start}:${source.slice(start, end)}`;
 }
 export function getExternalLink(value: string): string | null {
   if (
@@ -65,5 +81,40 @@ export function getExternalLink(value: string): string | null {
   }
 }
 export function canHighlight(text: string, closed: boolean) {
-  return closed && bytes(text) <= 64 * 1024 && text.split(/\r?\n/).length <= 2000;
+  return closed && fitsStructuredSource(text);
+}
+export type SyntaxTone =
+  | 'comment'
+  | 'keyword'
+  | 'string'
+  | 'number'
+  | 'type'
+  | 'function'
+  | 'variable'
+  | 'constant'
+  | 'property'
+  | 'operator'
+  | 'regexp'
+  | 'tag'
+  | 'attribute';
+/** Ordered so specific Monaco token types win (`string.key.json`, `attribute.value`). */
+const syntaxTones: [RegExp, SyntaxTone][] = [
+  [/(^|\.)comment(\.|$)/, 'comment'],
+  [/(^|\.)regexp(\.|$)/, 'regexp'],
+  [/(^|\.)key(\.|$)/, 'property'],
+  [/(^|\.)attribute\.value(\.|$)/, 'string'],
+  [/(^|\.)attribute(\.|$)/, 'attribute'],
+  [/(^|\.)(string|char)(\.|$)/, 'string'],
+  [/(^|\.)number(\.|$)/, 'number'],
+  [/(^|\.)(keyword|metatag|annotation)(\.|$)/, 'keyword'],
+  [/(^|\.)tag(\.|$)/, 'tag'],
+  [/(^|\.)type(\.|$)/, 'type'],
+  [/(^|\.)(function|method)(\.|$)/, 'function'],
+  [/(^|\.)(constant|predefined)(\.|$)/, 'constant'],
+  [/(^|\.)variable(\.|$)/, 'variable'],
+  [/(^|\.)operators?(\.|$)/, 'operator'],
+];
+/** Maps a Monaco Monarch token type to a highlight tone; identifiers and delimiters stay plain. */
+export function getSyntaxTone(tokenType: string): SyntaxTone | undefined {
+  return syntaxTones.find(([pattern]) => pattern.test(tokenType))?.[1];
 }

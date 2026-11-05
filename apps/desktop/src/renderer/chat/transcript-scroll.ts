@@ -41,7 +41,16 @@ export type TranscriptScrollEvent =
   | { type: 'supplied'; anchor: TranscriptViewAnchor }
   /** Find moved its window around a match and owns its reveal. */
   | { type: 'reveal' }
-  | { type: 'input'; device: 'wheel' | 'key' | 'pointer'; upward: boolean; viewport: Viewport }
+  /**
+   * Reader input. `control` is a press on a button or link, which neither selects text nor
+   * scrolls; any other `pointer` press may start a selection.
+   */
+  | {
+      type: 'input';
+      device: 'wheel' | 'key' | 'pointer' | 'control';
+      upward: boolean;
+      viewport: Viewport;
+    }
   /** `held`: the position is the one last written, or the recorded anchor is at its offset. */
   | { type: 'scrolled'; held: boolean; viewport: Viewport }
   | { type: 'captured'; position: TranscriptViewAnchor | undefined }
@@ -92,11 +101,12 @@ export function transitionTranscriptScroll(
     atLatest && !selected ? ({ scroll: 'end' } as const) : {};
   switch (event.type) {
     case 'supplied':
-      if (state.mode === 'navigating' || sameAnchor(state.anchor, event.anchor)) return stay();
+      if (state.mode === 'navigating' || isSameAnchor(state.anchor, event.anchor)) return stay();
       return next({ mode: 'restoring', anchor: event.anchor }, { scroll: 'anchor' });
     case 'reveal':
       return next({ mode: 'revealing', anchor: null, revision: state.revision + 1 });
     case 'input': {
+      // Following survives downward wheel/key input and control presses at the end.
       const keep =
         state.mode === 'navigating' ||
         (state.mode === 'following' && !event.upward && event.device !== 'pointer');
@@ -199,5 +209,15 @@ function loadEarlier(result: ReturnType<typeof transitionTranscriptScroll>, view
   return { ...navigation, instruction: { ...result.instruction, ...navigation.instruction } };
 }
 
-const sameAnchor = (a: TranscriptViewAnchor | null, b: TranscriptViewAnchor | null) =>
-  JSON.stringify(a) === JSON.stringify(b);
+/** Compares anchors by value, whatever their key order after decoding. */
+export function isSameAnchor(
+  a: TranscriptViewAnchor | null | undefined,
+  b: TranscriptViewAnchor | null | undefined,
+) {
+  return JSON.stringify(a, sortKeys) === JSON.stringify(b, sortKeys);
+}
+function sortKeys(_key: string, value: unknown) {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => (a < b ? -1 : 1)))
+    : value;
+}

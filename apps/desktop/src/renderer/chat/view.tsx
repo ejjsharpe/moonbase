@@ -355,7 +355,7 @@ export function ChatView({
           )}
           {state.selected && (
             <Transcript
-              key={state.selected.conversationId}
+              key={controller.backendId + JSON.stringify(state.selected)}
               controller={controller}
               state={state}
               native={transcriptNative}
@@ -696,7 +696,8 @@ const styles = stylex.create({
     margin: '4px 0',
   },
   pending: {
-    padding: '8px 24px',
+    paddingBlock: space.sm,
+    paddingInline: space.xl,
     maxHeight: '30vh',
     overflowY: 'auto',
     flexShrink: 0,
@@ -704,7 +705,7 @@ const styles = stylex.create({
     borderBottomStyle: 'solid',
     borderBottomColor: colors.border,
   },
-  pendingItem: { margin: '8px 0', color: colors.warningText },
+  pendingItem: { marginBlock: space.sm, marginInline: 0, color: colors.warningText },
   pendingText: { maxHeight: 100, overflowY: 'auto', color: colors.text },
   identity: {
     fontFamily: type.mono,

@@ -9,24 +9,32 @@ import {
   type ReactNode,
 } from 'react';
 import { Button } from '@base-ui/react/button';
+import { Collapsible } from '@base-ui/react/collapsible';
 import * as stylex from '@stylexjs/stylex';
 import * as monaco from 'monaco-editor';
-import ReactMarkdown, { type Components } from 'react-markdown';
+import ReactMarkdown, { type Components, type ExtraProps } from 'react-markdown';
 import type { Plugin } from 'unified';
 import { visit } from 'unist-util-visit';
 import { controls } from '@moonbase/ui/controls';
-import { colors, radius, space, type } from '@moonbase/ui/tokens.stylex';
+import { colors, radius, space, syntax, type } from '@moonbase/ui/tokens.stylex';
 import {
-  markdownMetrics,
+  markdownWork,
   type MarkdownCache,
   canHighlight,
   getExternalLink,
+  getSyntaxTone,
   type MarkdownBlock,
+  type SyntaxTone,
 } from './markdown-model.ts';
+import { useReadingPin } from './reading-pin.ts';
 
-export { markdownMetrics } from './markdown-model.ts';
+/** Lines a code block shows before "Show all". */
+const foldedCodeLines = 40;
+/** Pixels a code block grows before scrolling. */
+const codeMaxHeight = 400;
 type Actions = {
   openLink(url: string): void;
+  /** Must keep its identity while the message streams, or every block re-renders. */
   copyCode?(start: number): void;
 };
 export const Markdown = memo(function Markdown({
@@ -55,21 +63,9 @@ const Block = memo(
       () => ({ block, openLink: actions.openLink, copyCode: actions.copyCode }),
       [block, actions.openLink, actions.copyCode],
     );
-    const [retained, setRetained] = useState(current),
-      [pinned, setPinned] = useState(false);
-    useEffect(() => {
-      const update = () => {
-        setPinned(isReadingNodePinned(root.current));
-      };
-      document.addEventListener('selectionchange', update);
-      document.addEventListener('focusin', update);
-      document.addEventListener('focusout', update);
-      return () => {
-        document.removeEventListener('selectionchange', update);
-        document.removeEventListener('focusin', update);
-        document.removeEventListener('focusout', update);
-      };
-    }, []);
+    const [retained, setRetained] = useState(current);
+    // A reader's focus or selection holds the block they are reading still.
+    const pinned = useReadingPin(root) !== 0;
     if (!pinned && retained !== current) setRetained(current);
     const selected = pinned ? retained : current;
     return (
@@ -87,17 +83,6 @@ const Block = memo(
     a.openLink === b.openLink &&
     a.copyCode === b.copyCode,
 );
-export function isReadingNodePinned(node: HTMLElement | null) {
-  const selection = window.getSelection();
-  return (
-    !!node &&
-    (node.contains(document.activeElement) ||
-      (!!selection &&
-        !selection.isCollapsed &&
-        selection.rangeCount > 0 &&
-        selection.getRangeAt(0).intersectsNode(node)))
-  );
-}
 const insideLink = createContext(false);
 function ExternalLink({
   href = '',
@@ -160,7 +145,12 @@ function ParsedBlock({ block, openLink, copyCode }: Actions & { block: MarkdownB
     () => ({
       p: ({ children }) => <p {...stylex.props(styles.paragraph)}>{children}</p>,
       h1: ({ children }) => <h1 {...stylex.props(styles.heading)}>{children}</h1>,
-      h2: ({ children }) => <h2 {...stylex.props(styles.heading)}>{children}</h2>,
+      // GFM labels its footnotes with a visually hidden heading.
+      h2: ({ children, node }) => (
+        <h2 {...stylex.props(isFootnoteLabel(node) ? styles.visuallyHidden : styles.heading)}>
+          {children}
+        </h2>
+      ),
       h3: ({ children }) => <h3 {...stylex.props(styles.heading)}>{children}</h3>,
       h4: ({ children }) => <h4 {...stylex.props(styles.heading)}>{children}</h4>,
       h5: ({ children }) => <h5 {...stylex.props(styles.heading)}>{children}</h5>,
@@ -192,6 +182,9 @@ function ParsedBlock({ block, openLink, copyCode }: Actions & { block: MarkdownB
         );
       },
       a: ({ href, children, node }) => {
+        // Footnote links jump within this message; with no safe target they render as plain text.
+        if (node?.properties.dataFootnoteBackref !== undefined) return null;
+        if (node?.properties.dataFootnoteRef !== undefined) return <>{children}</>;
         const images: { src: string; alt: string }[] = [];
         if (node)
           visit(node, 'element', (child) => {
@@ -231,6 +224,12 @@ function ParsedBlock({ block, openLink, copyCode }: Actions & { block: MarkdownB
         </ol>
       ),
       hr: () => <hr {...stylex.props(styles.rule)} />,
+      section: ({ children, node }) => (
+        <section
+          {...stylex.props(node?.properties.dataFootnotes !== undefined && styles.footnotes)}>
+          {children}
+        </section>
+      ),
       table: ({ children }) => (
         <div role="region" aria-label="Table" tabIndex={0} {...stylex.props(styles.overflow)}>
           <table {...stylex.props(styles.table)}>{children}</table>
@@ -265,6 +264,10 @@ function ParsedBlock({ block, openLink, copyCode }: Actions & { block: MarkdownB
     </ReactMarkdown>
   );
 }
+function isFootnoteLabel(node: ExtraProps['node']) {
+  const classes = node?.properties.className;
+  return Array.isArray(classes) && classes.includes('sr-only');
+}
 const languages = new Map<string, Promise<void>>();
 function prepareLanguage(language: string) {
   if (!languages.has(language))
@@ -275,7 +278,7 @@ function prepareLanguage(language: string) {
   return languages.get(language)!;
 }
 function tokenize(text: string, language: string) {
-  markdownMetrics.tokenize++;
+  markdownWork.tokenize++;
   return monaco.editor.tokenize(text, language);
 }
 const Code = memo(function Code({
@@ -290,7 +293,8 @@ const Code = memo(function Code({
   copy?: () => void;
 }) {
   const pre = useRef<HTMLPreElement>(null);
-  const [expanded, setExpanded] = useState(false);
+  /** Folded code shows its first lines; the rest render only while unfolded. */
+  const [unfolded, setUnfolded] = useState(false);
   const known = monaco.languages
     .getLanguages()
     .find(
@@ -300,30 +304,27 @@ const Code = memo(function Code({
         value.extensions?.includes(`.${language}`),
     );
   const languageId = known?.id;
-  const [ready, setReady] = useState('');
   const supported = !!languageId && canHighlight(text, closed);
+  const [loaded, setLoaded] = useState('');
+  const [ready, setReady] = useState('');
   useEffect(() => {
     if (!supported || !languageId) return;
-    let active = true,
-      loaded = false;
-    const apply = () => {
-      if (active && loaded && !isReadingNodePinned(pre.current)) setReady(languageId);
-    };
-    document.addEventListener('selectionchange', apply);
-    document.addEventListener('focusout', apply);
+    let active = true;
     void prepareLanguage(languageId).then(
       () => {
-        loaded = true;
-        apply();
+        if (active) setLoaded(languageId);
       },
       () => {},
     );
     return () => {
       active = false;
-      document.removeEventListener('selectionchange', apply);
-      document.removeEventListener('focusout', apply);
     };
   }, [supported, languageId]);
+  // Highlighting replaces the text nodes, so it waits until no reader focus or selection is
+  // inside, and stops listening once applied.
+  const waiting = supported && ready !== languageId;
+  const pinned = useReadingPin(pre, waiting) !== 0;
+  if (waiting && languageId && loaded === languageId && !pinned) setReady(languageId);
   const tokens = useMemo(
     () =>
       languageId && ready === languageId && canHighlight(text, closed)
@@ -332,9 +333,32 @@ const Code = memo(function Code({
     [text, languageId, closed, ready],
   );
   const lines = text.split('\n');
-  const visible = expanded ? lines : lines.slice(0, 40);
+  const foldable = lines.length > foldedCodeLines;
+  const renderLines = (from: number, to: number) => {
+    const shown = lines.slice(from, to);
+    if (!tokens) return shown.join('\n');
+    return shown.map((line, offset) => {
+      const index = from + offset,
+        lineTokens = tokens[index];
+      return (
+        <span key={index}>
+          {lineTokens?.length
+            ? lineTokens.map((token, part) => {
+                const tone = getSyntaxTone(token.type);
+                return (
+                  <span key={part} {...stylex.props(tone && toneStyles[tone])}>
+                    {line.slice(token.offset, lineTokens[part + 1]?.offset)}
+                  </span>
+                );
+              })
+            : line}
+          {offset < shown.length - 1 ? '\n' : ''}
+        </span>
+      );
+    });
+  };
   return (
-    <div {...stylex.props(styles.code)}>
+    <Collapsible.Root open={unfolded} onOpenChange={setUnfolded} {...stylex.props(styles.code)}>
       <div {...stylex.props(controls.row, styles.codeHeader)}>
         <span>
           {language || 'Plain text'}
@@ -348,48 +372,52 @@ const Code = memo(function Code({
       </div>
       <pre ref={pre} tabIndex={0} {...stylex.props(controls.pre, styles.codeText)}>
         <code>
-          {tokens
-            ? visible.map((line, index) => (
-                <span key={index}>
-                  {tokens?.[index]?.length
-                    ? tokens[index]!.map((token, part) => (
-                        <span
-                          key={part}
-                          {...stylex.props(
-                            /comment/.test(token.type) && styles.comment,
-                            /keyword/.test(token.type) && styles.keyword,
-                          )}>
-                          {line.slice(token.offset, tokens![index]![part + 1]?.offset)}
-                        </span>
-                      ))
-                    : line}
-                  {index < visible.length - 1 ? '\n' : ''}
-                </span>
-              ))
-            : visible.join('\n')}
+          {renderLines(0, foldable ? foldedCodeLines : lines.length)}
+          {foldable && (
+            <Collapsible.Panel render={<span />}>
+              {'\n'}
+              {renderLines(foldedCodeLines, lines.length)}
+            </Collapsible.Panel>
+          )}
         </code>
       </pre>
-      {lines.length > 40 && (
-        <Button
-          {...stylex.props(controls.button, controls.quietButton)}
-          onClick={() => setExpanded(!expanded)}>
-          {expanded ? 'Fold code' : `Show all ${lines.length} lines`}
-        </Button>
+      {foldable && (
+        <Collapsible.Trigger {...stylex.props(controls.button, controls.quietButton)}>
+          {unfolded ? 'Fold code' : `Show all ${lines.length} lines`}
+        </Collapsible.Trigger>
       )}
-    </div>
+    </Collapsible.Root>
   );
 });
 const styles = stylex.create({
   prose: { fontSize: type.message, lineHeight: 1.7, overflowWrap: 'anywhere', minWidth: 0 },
-  literal: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontFamily: 'inherit', margin: 0 },
-  paragraph: { margin: '8px 0' },
-  heading: { fontSize: type.heading, fontWeight: 600, lineHeight: 1.5, margin: '24px 0 8px' },
+  paragraph: { marginBlock: space.sm, marginInline: 0 },
+  heading: {
+    fontSize: type.heading,
+    fontWeight: 600,
+    lineHeight: 1.5,
+    marginTop: space.xl,
+    marginBottom: space.sm,
+    marginInline: 0,
+  },
+  visuallyHidden: {
+    position: 'absolute',
+    width: 1,
+    height: 1,
+    margin: -1,
+    padding: 0,
+    overflow: 'hidden',
+    clipPath: 'inset(50%)',
+    whiteSpace: 'nowrap',
+    borderWidth: 0,
+  },
+  footnotes: { color: colors.secondary, fontSize: type.small },
   inlineCode: {
     fontFamily: type.mono,
     fontSize: type.body,
     backgroundColor: colors.elevated,
     borderRadius: radius.control,
-    padding: '1px 4px',
+    paddingInline: space.xs,
   },
   link: {
     color: colors.link,
@@ -399,21 +427,23 @@ const styles = stylex.create({
   },
   quote: {
     color: colors.secondary,
-    margin: '12px 0',
+    marginBlock: space.md,
+    marginInline: 0,
     paddingLeft: space.lg,
     borderLeftWidth: 1,
     borderLeftStyle: 'solid',
     borderLeftColor: colors.controlBorder,
   },
-  list: { paddingLeft: space.xl, margin: '8px 0' },
+  list: { paddingLeft: space.xl, marginBlock: space.sm, marginInline: 0 },
   rule: {
     borderWidth: 0,
     borderTopWidth: 1,
     borderTopStyle: 'solid',
     borderTopColor: colors.border,
-    margin: '24px 0',
+    marginBlock: space.xl,
+    marginInline: 0,
   },
-  overflow: { overflowX: 'auto', maxWidth: '100%', margin: '12px 0' },
+  overflow: { overflowX: 'auto', maxWidth: '100%', marginBlock: space.md, marginInline: 0 },
   table: {
     borderCollapse: 'collapse',
     fontSize: type.body,
@@ -427,18 +457,21 @@ const styles = stylex.create({
     borderBottomStyle: 'solid',
     borderBottomColor: colors.border,
     textAlign: 'left',
-    padding: '6px 12px',
+    paddingBlock: space.xs,
+    paddingInline: space.md,
   },
   code: {
     backgroundColor: colors.surface,
     borderRadius: radius.panel,
-    margin: '12px 0',
+    marginBlock: space.md,
+    marginInline: 0,
     minWidth: 0,
     overflow: 'hidden',
   },
   codeHeader: {
     justifyContent: 'space-between',
-    padding: '4px 12px',
+    paddingBlock: space.xs,
+    paddingInline: space.md,
     fontSize: type.small,
     color: colors.secondary,
   },
@@ -449,9 +482,23 @@ const styles = stylex.create({
     padding: space.md,
     margin: 0,
     whiteSpace: 'pre',
-    maxHeight: 400,
+    maxHeight: codeMaxHeight,
     overflow: 'auto',
   },
-  comment: { color: colors.secondary },
-  keyword: { fontWeight: 600 },
 });
+const tones = stylex.create({
+  comment: { color: syntax.comment },
+  keyword: { color: syntax.keyword },
+  string: { color: syntax.string },
+  number: { color: syntax.number },
+  type: { color: syntax.type },
+  function: { color: syntax.function },
+  variable: { color: syntax.variable },
+  constant: { color: syntax.constant },
+  property: { color: syntax.variable },
+  operator: { color: syntax.operator },
+  regexp: { color: syntax.regexp },
+  tag: { color: syntax.keyword },
+  attribute: { color: syntax.variable },
+});
+const toneStyles: Record<SyntaxTone, stylex.StyleXStyles> = tones;

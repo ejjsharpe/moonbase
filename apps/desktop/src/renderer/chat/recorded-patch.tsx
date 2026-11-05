@@ -5,6 +5,9 @@ import { colors, radius, space, type } from '@moonbase/ui/tokens.stylex';
 import { controls } from '@moonbase/ui/controls';
 import { parseRecordedPatch, type PatchLine } from './recorded-patch.ts';
 
+/** Characters of unparsed source shown per page. */
+const sourcePageUnits = 16000;
+
 export function RecordedPatch({
   text,
   complete,
@@ -22,8 +25,9 @@ export function RecordedPatch({
     [text, complete, numbered],
   );
   const [page, setPage] = useState(0);
-  let start = Math.min(page * 16000, Math.max(0, Math.ceil(text.length / 16000) - 1) * 16000);
-  let end = Math.min(start + 16000, text.length);
+  const lastPage = Math.max(0, Math.ceil(text.length / sourcePageUnits) - 1);
+  let start = Math.min(page, lastPage) * sourcePageUnits;
+  let end = Math.min(start + sourcePageUnits, text.length);
   if (text.charCodeAt(start) >= 0xdc00 && text.charCodeAt(start) <= 0xdfff) start--;
   if (text.charCodeAt(end) >= 0xdc00 && text.charCodeAt(end) <= 0xdfff) end++;
   return (
@@ -35,7 +39,7 @@ export function RecordedPatch({
           <pre tabIndex={0} {...stylex.props(styles.source)}>
             {text.slice(start, end)}
           </pre>
-          {text.length > 16000 && (
+          {text.length > sourcePageUnits && (
             <div {...stylex.props(styles.pages)}>
               <Button
                 {...stylex.props(controls.button, controls.quietButton)}
@@ -128,17 +132,19 @@ const styles = stylex.create({
     backgroundColor: colors.surface,
     borderRadius: radius.panel,
     padding: space.sm,
-    margin: '8px 0',
+    marginBlock: space.sm,
+    marginInline: 0,
   },
   table: { borderCollapse: 'collapse', width: '100%', textAlign: 'left', fontWeight: 400 },
   number: {
     color: colors.secondary,
     textAlign: 'right',
-    padding: '0 8px',
+    paddingBlock: 0,
+    paddingInline: space.sm,
     userSelect: 'none',
     verticalAlign: 'top',
   },
-  line: { whiteSpace: 'pre', padding: '0 8px' },
+  line: { whiteSpace: 'pre', paddingBlock: 0, paddingInline: space.sm },
   added: { backgroundColor: colors.selected },
   removed: { backgroundColor: colors.warningSurface },
   pages: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: space.xs },

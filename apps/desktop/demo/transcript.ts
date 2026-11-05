@@ -10,7 +10,7 @@ import type {
 import type { TranscriptNative } from '../src/chat/wire.ts';
 import type { chatCapabilities } from './chat.ts';
 import { parseTranscriptMarkdown } from '../src/chat/transcript-source.ts';
-import { markdownMetrics } from '../src/renderer/chat/markdown.tsx';
+import { markdownWork } from '../src/renderer/chat/markdown-model.ts';
 export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabilities>) {
   const sources = new Map<
     string,
@@ -420,7 +420,7 @@ export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabili
     live,
     activity,
     record,
-    metrics: markdownMetrics,
+    metrics: markdownWork,
     snapshot: chat.snapshot as ChatSnapshot,
   };
 }

@@ -1,6 +1,7 @@
 import type { ChatEntry, ChatTranscript, ChatTranscriptPart } from '@moonbase/contracts/chat';
+import { structuredSourceLimits } from './source-limits.ts';
 
-export function isActivityPart(part: ChatTranscriptPart) {
+function isActivityPart(part: ChatTranscriptPart) {
   return (
     part.kind === 'thinking' ||
     part.role === 'tool' ||
@@ -42,7 +43,7 @@ export function collectActivityEvidence(
 
 export function getActivityState(
   part: ChatTranscriptPart,
-  transcript: ChatTranscript,
+  transcript: Pick<ChatTranscript, 'source'>,
   evidence: ActivityEvidence,
 ) {
   const recorded =
@@ -55,9 +56,52 @@ export function getActivityState(
   );
 }
 
+/** Activity reads only recorded states, so evidence with the same states is interchangeable. */
+export function isSameActivityEvidence(a: ActivityEvidence, b: ActivityEvidence) {
+  if (a.size !== b.size) return false;
+  for (const [key, parts] of a) {
+    const other = b.get(key);
+    if (other?.length !== parts.length || parts.some((part, i) => part.state !== other[i]!.state))
+      return false;
+  }
+  return true;
+}
+
+/** Characters of a running or failed result's progress shown in a folded summary. */
+const progressExcerptUnits = 100;
+
+/** Folded Activity still shows each part's state, and a running or failed result's progress. */
+export function describeActivityPart(
+  part: ChatTranscriptPart,
+  transcript: Pick<ChatTranscript, 'source'>,
+  evidence: ActivityEvidence,
+) {
+  const status = getActivityState(part, transcript, evidence);
+  if (part.kind === 'thinking') {
+    const details = ['Thinking', part.availability];
+    if (status && status !== 'completed') details.push(status);
+    if (part.availability === 'available') details.push(`${part.bytes.toLocaleString()} bytes`);
+    return details.join(' · ');
+  }
+  const details = [getToolSummary(part)];
+  if (status) details.push(status === 'requested' ? 'requested · result not shown' : status);
+  if (part.pairing && part.pairing !== 'matched') details.push(part.pairing);
+  if (part.kind === 'result') {
+    details.push(`${part.bytes.toLocaleString()} bytes`);
+    if (['running', 'failed', 'interrupted'].includes(status ?? '') && part.text)
+      details.push(
+        part.text.replace(/\s+/g, ' ').slice(0, progressExcerptUnits) + (part.truncated ? '…' : ''),
+      );
+  }
+  return details.join(' · ');
+}
+
 export function getToolSummary(part: ChatTranscriptPart, text = part.text) {
   const name = part.toolName ?? 'Tool';
-  if (!['arguments', 'executed-arguments'].includes(part.kind) || text.length > 64 * 1024)
+  if (
+    !['arguments', 'executed-arguments'].includes(part.kind) ||
+    text.length > structuredSourceLimits.units
+  )
     return name;
   try {
     const args: unknown = JSON.parse(text);

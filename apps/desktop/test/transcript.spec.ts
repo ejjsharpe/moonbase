@@ -2,6 +2,8 @@ import { test, expect, type Page } from '@playwright/test';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { readFindHighlight } from './find-highlight.ts';
+import type * as readingPins from '../src/renderer/chat/reading-pin.ts';
+type ReadingPins = typeof readingPins;
 const output = resolve('../../test-results/transcript-111');
 async function open(page: Page) {
   await page.goto('/?local&design&transcript');
@@ -362,7 +364,18 @@ test('safe GFM, literal user content, progressive source, exact native callbacks
   await expect
     .poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1)))
     .toBe('  const moon = "🌔";\t\r\nconsole.log(moon);');
-  await row.getByRole('button', { name: 'Output', exact: true }).click();
+  // A press toggles what the reader sees, and a reading anchor saved inside Output reveals it, so
+  // let a queued scroll save (150 ms) land before choosing whether to press.
+  const outputPart = row.getByRole('button', { name: 'Output', exact: true });
+  await outputPart.scrollIntoViewIfNeeded();
+  await page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        setTimeout(() => requestAnimationFrame(() => requestAnimationFrame(resolve)), 200),
+      ),
+  );
+  if ((await outputPart.getAttribute('aria-expanded')) !== 'true') await outputPart.click();
+  await expect(outputPart).toHaveAttribute('aria-expanded', 'true');
   await expect(row.getByText(/Read more/)).toBeVisible();
   await row.getByRole('button', { name: 'Copy part', exact: true }).first().click();
   await expect
@@ -469,8 +482,7 @@ test('128-row reuse, unchanged sibling DOM, selection/focus and anchors during l
   // Only the changed live message is re-lexed/re-tokenized; unchanged 128-row history is reused.
   expect(metrics.lex - before.metrics.lex).toBeLessThanOrEqual(22);
   expect(metrics.tokenize - before.metrics.tokenize).toBeLessThanOrEqual(22);
-  expect(metrics.retainedBytes).toBeLessThanOrEqual(2 * 1024 * 1024);
-  expect(metrics.messages).toBeLessThanOrEqual(128);
+  // The per-view cache's entry and byte bounds are covered by markdown.test.ts.
   await mkdir(output, { recursive: true });
   await writeFile(
     resolve(output, 'responsiveness.json'),
@@ -627,7 +639,8 @@ test('incomplete/unknown/oversized code remains readable and copyable; late refe
   expect(
     await live.locator('pre').evaluate((element) => element.scrollHeight > element.clientHeight),
   ).toBe(true);
-  await expect(live.locator('pre code span')).toHaveCount(0);
+  // Unhighlighted: the unfolded lines' panel holds plain text, with no line or token spans.
+  await expect(live.locator('pre code span span, pre code > span:not([id])')).toHaveCount(0);
   await page.evaluate(() =>
     window.demo.transcript!.live(
       'Replacement with &amp; and &#x1f314; <img src="https://example.com/no-fetch" onerror="alert(1)">',
@@ -659,16 +672,19 @@ test('automatic and keyboard history loading preserve semantic viewport anchors 
   await older.focus();
   await page.keyboard.press('Enter');
   await expect(older).toBeFocused();
-  const anchor = await page.evaluate(() => {
-    const controller = window.demo.application.chat!,
-      element = document.querySelector<HTMLElement>('[aria-label="Chat transcript"]')!;
+  await page.evaluate(() => {
+    const element = document.querySelector<HTMLElement>('[aria-label="Chat transcript"]')!;
     element.scrollTop = 1000;
     element.dispatchEvent(new Event('scroll'));
-    return controller.getSnapshot().transcript.view.anchor;
   });
   await expect
     .poll(() => page.evaluate(() => window.demo.application.chat!.getSnapshot().transcript.loading))
     .toBe(false);
+  // A scroll-captured anchor is saved once scrolling rests.
+  await settle(page);
+  const anchor = await page.evaluate(
+    () => window.demo.application.chat!.getSnapshot().transcript.view.anchor,
+  );
   await page.getByRole('button', { name: 'Close Chat panel', exact: true }).click();
   await page.getByRole('button', { name: 'Open Chat panel', exact: true }).click();
   await expect
@@ -1916,4 +1932,256 @@ test('a restoration that falls back to a nearby row keeps the saved view memory'
   expect(
     await page.evaluate(() => window.demo.application.chat!.getSnapshot().transcript.view.anchor),
   ).toEqual(saved);
+});
+
+/** Counts committed renders of transcript rows by entry ID through React's DevTools hook. */
+async function countRowRenders(page: Page) {
+  await page.addInitScript(() => {
+    type Fiber = {
+      type: unknown;
+      memoizedProps: { entry?: { id: string } } | null;
+      child: Fiber | null;
+      sibling: Fiber | null;
+    };
+    const seen = new WeakSet<object>();
+    const renders: string[] = [];
+    Object.assign(window, { rowRenders: renders });
+    Object.defineProperty(window, '__REACT_DEVTOOLS_GLOBAL_HOOK__', {
+      value: {
+        supportsFiber: true,
+        renderers: new Map(),
+        inject: () => 1,
+        checkDCE() {},
+        onScheduleFiberRoot() {},
+        onCommitFiberUnmount() {},
+        onPostCommitFiberRoot() {},
+        onCommitFiberRoot(_id: number, root: { current: Fiber }) {
+          const stack: Fiber[] = [root.current];
+          while (stack.length) {
+            const fiber = stack.pop()!;
+            const props = fiber.memoizedProps;
+            // A memoized row that skips rendering keeps its previous props object.
+            if (
+              typeof fiber.type === 'function' &&
+              fiber.type.name === 'Entry' &&
+              props?.entry &&
+              !seen.has(props)
+            ) {
+              seen.add(props);
+              renders.push(props.entry.id);
+            }
+            if (fiber.sibling) stack.push(fiber.sibling);
+            if (fiber.child) stack.push(fiber.child);
+          }
+        },
+      },
+    });
+  });
+  return {
+    take: () =>
+      page.evaluate(() => (window as unknown as { rowRenders: string[] }).rowRenders.splice(0)),
+  };
+}
+const settle = (page: Page) =>
+  page.evaluate(
+    () =>
+      new Promise<void>((resolve) => setTimeout(() => requestAnimationFrame(() => resolve()), 400)),
+  );
+test('scrolling and live progress re-render only the rows they change', async ({ page }) => {
+  const rows = await countRowRenders(page);
+  await open(page);
+  await settle(page);
+  expect((await rows.take()).length).toBeGreaterThan(0);
+  expect(await page.locator('[data-transcript-entry]').count()).toBeGreaterThan(16);
+  await transcript(page).hover();
+  for (let i = 0; i < 12; i++) {
+    await page.mouse.wheel(0, -120);
+    await page.evaluate(() => new Promise(requestAnimationFrame));
+  }
+  await settle(page);
+  const anchor = () =>
+    page.evaluate(() => window.demo.application.chat!.getSnapshot().transcript.view.anchor);
+  await expect.poll(anchor).not.toBeNull();
+  // Each settled save re-renders only the rows gaining or losing the reading anchor.
+  expect((await rows.take()).length).toBeLessThan(24);
+  // Twenty scroll events save one settled anchor, re-rendering at most the two rows it moves between.
+  for (let i = 0; i < 20; i++)
+    await transcript(page).evaluate(async (element) => {
+      element.scrollTop -= 1;
+      await new Promise(requestAnimationFrame);
+    });
+  await settle(page);
+  expect((await rows.take()).length).toBeLessThanOrEqual(2);
+  await page.getByRole('button', { name: 'Jump to latest', exact: true }).click();
+  await page.evaluate(() => window.demo.transcript!.live('First live progress'));
+  await expect(page.locator('[data-transcript-live]')).toContainText('First live progress');
+  await settle(page);
+  await rows.take();
+  for (let i = 0; i < 5; i++)
+    await page.evaluate((i) => window.demo.transcript!.live(`Further live progress ${i}`), i);
+  await expect(page.locator('[data-transcript-live]')).toContainText('Further live progress 4');
+  await settle(page);
+  const renders = await rows.take();
+  expect(renders.length).toBeGreaterThan(0);
+  expect(renders.filter((id) => id !== 'live')).toEqual([]);
+});
+test('a row re-renders when its own disclosure, content or Find state changes', async ({
+  page,
+}) => {
+  const rows = await countRowRenders(page);
+  await open(page);
+  await settle(page);
+  await rows.take();
+  // Expanding Output changes the row's expanded state and loads its content.
+  await answer(page).getByRole('button', { name: 'Output', exact: true }).click();
+  await expect(answer(page).getByText(/Read more/)).toBeVisible();
+  await settle(page);
+  expect(await rows.take()).toContain('reading-179');
+  await page.evaluate(() => window.demo.transcript!.setEntry(179, ['Find the needle here.']));
+  await settle(page);
+  await rows.take();
+  await transcript(page).focus();
+  await page.keyboard.press('Control+f');
+  await page.getByRole('textbox', { name: 'Find in conversation', exact: true }).fill('needle');
+  await expect(page.getByRole('status').filter({ hasText: /1 of 1 match/ })).toBeVisible();
+  await settle(page);
+  expect(await rows.take()).toContain('reading-179');
+});
+test('a disclosure toggled before a scroll save lands keeps the scrolled reading position', async ({
+  page,
+}) => {
+  await open(page);
+  const saved = { entryId: 'reading-179', partId: 'm0.b0', offset: 16 };
+  await page.evaluate(
+    (anchor) => window.demo.application.chat!.setTranscriptView({ anchor, expanded: [] }),
+    saved,
+  );
+  await settle(page);
+  // Scroll, then toggle Activity in the same task: the scroll's save is still queued.
+  const scrolled = await transcript(page).evaluate((element) => {
+    element.scrollTop -= 300;
+    element.dispatchEvent(new Event('scroll'));
+    const toggle = [...element.querySelectorAll<HTMLButtonElement>('button')].find((button) =>
+      button.textContent?.startsWith('Activity'),
+    )!;
+    toggle.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    toggle.click();
+    return element.scrollTop;
+  });
+  await settle(page);
+  const after = await transcript(page).evaluate((element) => element.scrollTop);
+  expect(Math.abs(after - scrolled)).toBeLessThan(2);
+  const anchor = await page.evaluate(
+    () => window.demo.application.chat!.getSnapshot().transcript.view.anchor,
+  );
+  expect(anchor).not.toEqual(saved);
+});
+test('Copy keeps following live output; a disclosure press holds the reading position', async ({
+  page,
+}) => {
+  await open(page);
+  await page.evaluate(() => window.demo.transcript!.live('Streaming output'));
+  const jump = page.getByRole('button', { name: 'Jump to latest', exact: true });
+  await expect(jump).toHaveCount(0);
+  await page.locator('[data-transcript-live]').getByRole('button', { name: 'Copy text' }).click();
+  await page.evaluate(() => window.demo.transcript!.live('Streaming output, continued'));
+  await expect(page.locator('[data-transcript-live]')).toContainText('continued');
+  await expect(jump).toHaveCount(0);
+  await answer(page)
+    .getByRole('button', { name: /^Activity/ })
+    .click();
+  await expect(jump).toBeVisible();
+});
+test('reading pins share one set of document listeners, released with the last subscriber', async ({
+  page,
+}) => {
+  await page.goto('/?local&design&transcript');
+  const result = await page.evaluate(
+    async (path) => {
+      const added: string[] = [],
+        removed: string[] = [];
+      const add = document.addEventListener.bind(document),
+        remove = document.removeEventListener.bind(document);
+      document.addEventListener = ((type: string, ...rest: [EventListener]) => {
+        added.push(type);
+        add(type, ...rest);
+      }) as typeof document.addEventListener;
+      document.removeEventListener = ((type: string, ...rest: [EventListener]) => {
+        removed.push(type);
+        remove(type, ...rest);
+      }) as typeof document.removeEventListener;
+      const pins = (await import(/* @vite-ignore */ path)) as ReadingPins;
+      const node = document.createElement('p');
+      node.textContent = 'Pinned reading text';
+      document.body.append(node);
+      let first = 0,
+        second = 0;
+      const releaseFirst = pins.subscribeReadingChanges(() => first++);
+      const releaseSecond = pins.subscribeReadingChanges(() => second++);
+      const listening = [...added];
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      getSelection()!.removeAllRanges();
+      getSelection()!.addRange(range);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const pinned = pins.isReadingNodePinned(node);
+      releaseFirst();
+      const afterFirst = [...removed];
+      releaseSecond();
+      getSelection()!.removeAllRanges();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      document.addEventListener = add;
+      document.removeEventListener = remove;
+      return { listening, notified: [first, second], pinned, afterFirst, removed };
+    },
+    `/@fs${resolve('src/renderer/chat/reading-pin.ts')}`,
+  );
+  expect(result.listening).toEqual(['selectionchange', 'focusin', 'focusout']);
+  expect(result.notified[0]).toBeGreaterThan(0);
+  expect(result.notified[1]).toBe(result.notified[0]);
+  expect(result.pinned).toBe(true);
+  expect(result.afterFirst).toEqual([]);
+  expect(result.removed).toEqual(['selectionchange', 'focusin', 'focusout']);
+});
+test('footnotes render as plain references with a visually hidden label', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await open(page);
+  await page.evaluate(() =>
+    window.demo.transcript!.setEntry(179, [
+      'A claim with a footnote[^moon] and [another](https://example.com/read).\n\n[^moon]: The footnote text.\n',
+    ]),
+  );
+  const row = answer(page);
+  await expect(row.getByText('The footnote text.')).toBeVisible();
+  await expect(row.locator('sup')).toHaveText('1');
+  await expect(row.locator('sup a, sup code')).toHaveCount(0);
+  await expect(row.getByText(/user-content-fn/)).toHaveCount(0);
+  await expect(row.getByText('↩')).toHaveCount(0);
+  await expect(row.getByRole('link')).toHaveCount(1);
+  const label = row.getByRole('heading', { name: 'Footnotes', exact: true });
+  await expect(label).toBeAttached();
+  const box = (await label.boundingBox())!;
+  expect(box.width * box.height).toBeLessThanOrEqual(1);
+  await row.locator('sup').click();
+  expect(await page.evaluate(() => window.demo.transcript!.links)).toEqual([]);
+  expect(errors).toEqual([]);
+});
+test('a Copied notice clears itself while a failure stays', async ({ page }) => {
+  await open(page);
+  await answer(page).getByRole('button', { name: 'Copy code', exact: true }).click();
+  const copied = page.getByRole('status').filter({ hasText: 'Copied.' });
+  await expect(copied).toBeVisible();
+  await expect(copied).toHaveCount(0, { timeout: 8000 });
+  await page.evaluate(() => {
+    window.demo.transcript!.native.copy = async () => {
+      throw Error('Copy failed in the fixture.');
+    };
+  });
+  await answer(page).getByRole('button', { name: 'Copy code', exact: true }).click();
+  const failure = page.getByRole('alert').filter({ hasText: 'Copy failed in the fixture.' });
+  await expect(failure).toBeVisible();
+  await page.waitForTimeout(5000);
+  await expect(failure).toBeVisible();
+  await expect(page.getByText('Copied.', { exact: true })).toHaveCount(0);
 });

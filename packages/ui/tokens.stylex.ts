@@ -26,6 +26,20 @@ export const colors = stylex.defineConsts({
   backdrop: '#0008',
 });
 
+// Read-only code highlighting on `colors.surface`; matches the editor's inherited vs-dark tokens.
+export const syntax = stylex.defineConsts({
+  comment: '#6a9955',
+  keyword: '#569cd6',
+  string: '#ce9178',
+  number: '#b5cea8',
+  type: '#4ec9b0',
+  function: '#dcdcaa',
+  variable: '#9cdcfe',
+  constant: '#4fc1ff',
+  operator: '#d4d4d4',
+  regexp: '#d16969',
+});
+
 export const space = stylex.defineConsts({
   xs: 4,
   sm: 8,
