@@ -402,7 +402,7 @@ class ChatModelState {
     this.epoch++;
     void this.selection?.transcript?.close();
     void this.closeOwner(this.generation);
-    this.generation = state.state === 'connected' ? this.owner(this.attachment) : undefined;
+    if (state.state === 'connected') this.generation = this.owner(this.attachment);
     this.selection = undefined;
     this.refreshOwner = undefined;
     this.update({
@@ -431,15 +431,20 @@ class ChatModelState {
           this.onConnection(connected);
       }),
     );
-  disconnect = () =>
-    this.action(
+  disconnect = () => {
+    const generation = this.generation,
+      id = this.state.connection?.connectionId;
+    return this.action(
       'disconnect',
       Effect.gen({ self: this }, function* () {
-        if (this.mode === 'local') return;
-        const id = this.state.connection?.connectionId;
-        if (!id) return;
-        const selection = this.selection,
-          generation = this.generation;
+        if (
+          this.mode === 'local' ||
+          !id ||
+          this.generation !== generation ||
+          this.state.connection?.connectionId !== id
+        )
+          return;
+        const selection = this.selection;
         void this.closeOwner(generation);
         void selection?.transcript?.close();
         if (this.generation === generation) this.update({ ready: false });
@@ -468,7 +473,11 @@ class ChatModelState {
         if (attachment === this.attachment && revision === this.connectionRevision)
           this.onConnection(state);
       }),
+      undefined,
+      true,
+      () => this.generation === generation,
     );
+  };
   private connected() {
     if (
       !this.generation?.alive ||
