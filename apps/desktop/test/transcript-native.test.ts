@@ -14,6 +14,10 @@ import {
   type ChatTranscriptSource,
 } from '@moonbase/contracts/chat';
 import { ChatIpcSession } from '../src/chat/session.ts';
+import {
+  maximumTranscriptCodeCopyBytes,
+  maximumTranscriptCopyBytes,
+} from '../src/chat/transcript-native.ts';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import {
   browserClients,
@@ -425,15 +429,15 @@ test('live Copy excludes a pure append and obtains fresh fixed-prefix proof befo
   await f.owner.dispose();
 });
 test('held content/final proof cannot authorize replacement, rollover, finalization or reconnect', async () => {
-  for (const change of ['replace', 'finalize', 'reconnect', 'proof-replace']) {
+  for (const change of ['replace', 'finalize', 'reconnect', 'proof-finalize', 'proof-reconnect']) {
     const f = fixture(true);
     const selected = select(f.part);
     let changed = false;
     f.controls.beforeRead = async (read) => {
-      if (!changed && read === (change === 'proof-replace' ? 7 : 2)) {
+      if (!changed && read === (change.startsWith('proof-') ? 7 : 2)) {
         changed = true;
         if (change.endsWith('replace')) f.controls.setText('replacement');
-        else if (change === 'finalize') {
+        else if (change.endsWith('finalize')) {
           f.controls.snapshot.run = null;
           f.controls.publish();
         } else {
@@ -442,10 +446,25 @@ test('held content/final proof cannot authorize replacement, rollover, finalizat
         }
       }
     };
-    await assert.rejects(f.actions.copy({ source: f.source, selection: selected }));
+    // The host refuses a replaced prefix on the next read; main refuses observed source changes.
+    await assert.rejects(
+      f.actions.copy({ source: f.source, selection: selected }),
+      change === 'replace' ? ApplicationError : { code: 'Conflict' },
+    );
     assert.deepEqual(f.writes, []);
     await f.owner.dispose();
   }
+});
+test('a replacement after the host answers the proof copies the proven prefix', async () => {
+  const f = fixture(true);
+  f.controls.beforeRead = async (read) => {
+    // The proof reply was computed from the original prefix before this replacement.
+    if (read === 7) f.controls.setText('replacement');
+  };
+  await f.actions.copy({ source: f.source, selection: select(f.part) });
+  assert.deepEqual(f.writes, [f.original]);
+  assert.equal(f.reads, 7);
+  await f.owner.dispose();
 });
 test('cancel/document replacement fences late code reads and joins actual settlement without blocking other commands', async () => {
   const f = fixture(false, '```js\r\n  🌔\r\n```\r\n');
@@ -467,7 +486,7 @@ test('cancel/document replacement fences late code reads and joins actual settle
   );
   while (!entered) await new Promise((resolve) => setTimeout(resolve, 1));
   let released = false;
-  const closing = f.owner.releaseDocument().then(() => {
+  const closing = f.owner.dispose().then(() => {
     released = true;
   });
   await new Promise((resolve) => setTimeout(resolve, 10));
@@ -514,28 +533,30 @@ test('OS write failure and unsafe links remain observable over the real bridge/s
   await f.owner.dispose();
 });
 
-test('native final proof retries superseding appends at most three times without restarting content iteration', async () => {
-  for (const appends of [2, 3]) {
-    const f = fixture(true);
-    const selected = select(f.part);
-    let count = 0;
-    f.controls.beforeRead = async (read) => {
-      if (read >= 7 && count < appends) {
-        count++;
-        f.controls.setText(f.original + 'later'.repeat(count));
-      }
-    };
-    const copying = f.actions.copy({ source: f.source, selection: selected });
-    if (appends === 3) {
-      await assert.rejects(copying, { code: 'Conflict' });
-      assert.deepEqual(f.writes, []);
-    } else {
-      await copying;
-      assert.deepEqual(f.writes, [f.original]);
-    }
-    assert.equal(f.reads, 9);
-    await f.owner.dispose();
-  }
+test('streaming appends during every content and proof read keep the copied prefix', async () => {
+  const f = fixture(true);
+  const selected = select(f.part);
+  let appended = '';
+  f.controls.beforeRead = async () => {
+    appended += 'later';
+    f.controls.setText(f.original + appended);
+  };
+  await f.actions.copy({ source: f.source, selection: selected });
+  assert.deepEqual(f.writes, [f.original]);
+  assert.equal(f.reads, 7, 'one proof read, never restarted');
+  await f.owner.dispose();
+});
+test('a live rewrite that keeps growing is still refused by the fixed-prefix proof', async () => {
+  const f = fixture(true);
+  f.controls.beforeRead = async (read) => {
+    // The last content reply was captured first; the proof then reads the rewritten source.
+    if (read === 6) f.controls.setText('rewritten '.repeat(f.original.length));
+  };
+  // The host refuses the changed prefix.
+  await assert.rejects(f.actions.copy({ source: f.source, selection: select(f.part) }));
+  assert.deepEqual(f.writes, []);
+  assert.equal(f.reads, 7);
+  await f.owner.dispose();
 });
 
 test('Copy code is independent of highlight/DOM limits, including a large nested fence', async () => {
@@ -769,7 +790,7 @@ test('native rejects a partial parser node reinterpreted as another block in the
   }
 });
 
-for (const action of ['cancel', 'document', 'dispose'] as const)
+for (const action of ['cancel', 'dispose'] as const)
   for (const failure of [false, true])
     for (const held of ['read', 'close'] as const)
       test(`native ${action} joins held ${held} and retains ${failure ? 'failed' : 'successful'} watch cleanup`, async () => {
@@ -809,7 +830,6 @@ for (const action of ['cancel', 'document', 'dispose'] as const)
           await readEntered.promise;
           let cleanup: Promise<Reply | void>;
           if (action === 'cancel') cleanup = f.owner.cancel('held-copy');
-          else if (action === 'document') cleanup = f.owner.releaseDocument();
           else cleanup = f.owner.dispose();
           const closing = cleanup
             .then(
@@ -824,7 +844,7 @@ for (const action of ['cancel', 'document', 'dispose'] as const)
           assert.equal(readSettled, false);
           assert.equal(copyDone, false);
           assert.equal(cleanupDone, false);
-          if (action !== 'dispose') {
+          if (action === 'cancel') {
             const command = f.chat.command;
             f.chat.command = async (operation, input, options) =>
               operation === 'stopChat' ? (null as never) : command(operation, input, options);
@@ -898,7 +918,6 @@ test('completed Copy retains failed observation cleanup at document disposal aft
     });
     assert.deepEqual(f.writes, [f.original]);
     assert.equal(f.closed, 1);
-    await assert.rejects(f.owner.releaseDocument(), /Controlled watch close failure/);
     await assert.rejects(f.owner.dispose(), /Controlled watch close failure/);
   } finally {
     await f.owner.dispose().catch(() => {});
@@ -960,4 +979,179 @@ test('Copy accepts an empty authored text part', async () => {
   });
   assert.deepEqual(writes, ['']);
   await session.dispose();
+});
+
+/** An entry with several authored text parts, served in fixed-size chunks. */
+function partsFixture(texts: string[], chunkBytes = 4) {
+  const source: ChatTranscriptSource = { kind: 'entry', target, entryId: 'entry' };
+  const parts = texts.map((text, index): ChatTranscriptPart => ({
+    partId: `m0.b${index}`,
+    bytes: Buffer.byteLength(text),
+    revision: revision(text),
+    kind: 'text',
+    role: index % 2 ? 'user' : 'assistant',
+    availability: 'available',
+    encoding: 'utf8',
+    text: text.slice(0, 40),
+    truncated: text.length > 40,
+  }));
+  const reads: string[] = [],
+    writes: string[] = [];
+  const chat: ChatClient = {
+    async command(_operation, input) {
+      const { selection, cursor } = input as { selection?: { partId: string }; cursor?: string };
+      if (!selection)
+        return {
+          kind: 'manifest',
+          source,
+          cursor: null,
+          parts: [...parts, { ...parts[0]!, partId: 'thinking', kind: 'thinking' }],
+          thinking: 'available',
+          nextCursor: null,
+        } as never;
+      reads.push(selection.partId);
+      const index = parts.findIndex((part) => part.partId === selection.partId);
+      const bytes = Buffer.from(texts[index]!),
+        offset = Number(cursor ?? 0),
+        end = Math.min(offset + chunkBytes, bytes.length);
+      return {
+        kind: 'content',
+        source,
+        selection: select(parts[index]!),
+        cursor: cursor ?? null,
+        offset,
+        encoding: 'utf8',
+        data: bytes.subarray(offset, end).toString(),
+        nextCursor: end < bytes.length ? String(end) : null,
+      } as never;
+    },
+    watch: () => () => Promise.resolve(),
+  };
+  const owner = new ChatIpcSession(runtime, chat, null, context, () => {}, {
+    transcript: {
+      writeText: async (text) => {
+        writes.push(text);
+      },
+      openExternal: async () => {},
+    },
+  });
+  let id = 0;
+  return {
+    owner,
+    source,
+    parts,
+    reads,
+    writes,
+    copy: async (input: object = {}) => {
+      const reply = await owner.call('transcript', 'copy', { source, ...input }, `copy-${id++}`);
+      if (!reply.ok) throw reply.error;
+    },
+  };
+}
+
+test('whole-message Copy separates authored text parts while chunks of one part stay joined', async () => {
+  const f = partsFixture(['First part', 'Second part 🌔']);
+  try {
+    await f.copy();
+    assert.deepEqual(f.writes, ['First part\n\nSecond part 🌔']);
+    assert(f.reads.length > 2, 'parts arrive in several chunks');
+    await f.copy({ selection: select(f.parts[1]!) });
+    assert.equal(f.writes.at(-1), 'Second part 🌔');
+  } finally {
+    await f.owner.dispose();
+  }
+});
+
+test('Copy refuses more than its byte limit as soon as a part would exceed it', async () => {
+  const mib = 1024 * 1024;
+  const f = partsFixture(['a'.repeat(3 * mib), 'b'.repeat(3 * mib), 'c'.repeat(3 * mib)], mib);
+  try {
+    await assert.rejects(f.copy(), { code: 'Unavailable', message: /8 MiB/ });
+    assert.deepEqual(f.writes, []);
+    assert.deepEqual(
+      f.reads.filter((partId) => partId === 'm0.b2'),
+      ['m0.b2'],
+      'the over-limit part is not buffered',
+    );
+    const over = { ...select(f.parts[0]!), bytes: maximumTranscriptCopyBytes + 1 };
+    const reads = f.reads.length;
+    await assert.rejects(f.copy({ selection: over }), { code: 'Unavailable', message: /8 MiB/ });
+    assert.equal(f.reads.length, reads, 'an over-limit selection is refused before reading');
+    assert.deepEqual(f.writes, []);
+  } finally {
+    await f.owner.dispose();
+  }
+});
+
+test('Copy accepts exactly its byte limit including part separators', async () => {
+  const mib = 1024 * 1024;
+  const first = 'a'.repeat(4 * mib),
+    second = 'b'.repeat(maximumTranscriptCopyBytes - first.length - 2);
+  const exact = partsFixture([first, second], mib);
+  try {
+    await exact.copy();
+    assert.equal(exact.writes[0]!.length, maximumTranscriptCopyBytes);
+  } finally {
+    await exact.owner.dispose();
+  }
+  const over = partsFixture([first, second + 'b'], mib);
+  try {
+    await assert.rejects(over.copy(), { code: 'Unavailable', message: /8 MiB/ });
+    assert.deepEqual(over.writes, []);
+  } finally {
+    await over.owner.dispose();
+  }
+});
+
+test('link opening pins URL normalisation of slashless and uppercase forms', async () => {
+  const f = fixture();
+  try {
+    await f.actions.openLink('https:example.com');
+    await f.actions.openLink('HTTPS://Example.com/a%20b');
+    assert.deepEqual(f.links, ['https://example.com/', 'https://example.com/a%20b']);
+  } finally {
+    await f.owner.dispose();
+  }
+});
+
+test('code Copy refuses parts too large to parse on main without reading them', async () => {
+  const text = '```js\nmoon\n```\n' + 'x'.repeat(maximumTranscriptCodeCopyBytes);
+  const f = partsFixture([text], 64 * 1024);
+  try {
+    await assert.rejects(f.copy({ selection: select(f.parts[0]!), code: { start: 0 } }), {
+      code: 'Unavailable',
+      message: /1 MiB/,
+    });
+    assert.deepEqual(f.reads, []);
+    await f.copy({ selection: select(f.parts[0]!) });
+    assert.deepEqual(f.writes, [text], 'the whole part still copies');
+  } finally {
+    await f.owner.dispose();
+  }
+});
+
+test('a third concurrent Copy is refused as busy, not invalid', async () => {
+  const f = fixture();
+  const held = Promise.withResolvers<void>();
+  let entered = 0;
+  f.controls.beforeRead = async () => {
+    entered++;
+    await held.promise;
+  };
+  try {
+    const copies = ['first', 'second'].map((id) =>
+      f.owner.call('transcript', 'copy', { source: f.source }, id),
+    );
+    while (entered < 2) await new Promise((resolve) => setImmediate(resolve));
+    await assert.rejects(f.owner.call('transcript', 'copy', { source: f.source }, 'third'), {
+      code: 'Unavailable',
+      message: /Another Copy is in progress/,
+    });
+    held.resolve();
+    for (const reply of await Promise.all(copies)) assert(reply.ok);
+    assert.deepEqual(f.writes, [f.original, f.original]);
+  } finally {
+    held.resolve();
+    await f.owner.dispose();
+  }
 });

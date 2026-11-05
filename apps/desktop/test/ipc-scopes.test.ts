@@ -10,7 +10,7 @@ import { runApplicationEffect } from '@moonbase/application/runtime/effect-clien
 import { cancellation } from '../src/wire.ts';
 import { ChatIpcSession } from '../src/chat/session.ts';
 
-for (const closing of ['cancel', 'document', 'dispose'] as const) {
+for (const closing of ['cancel', 'dispose'] as const) {
   test(`${closing} acknowledgment joins actual runtime-client stream finalizers and retains safe failures`, async () => {
     const ready = Promise.withResolvers<void>(),
       releasing = Promise.withResolvers<void>(),
@@ -69,7 +69,6 @@ for (const closing of ['cancel', 'document', 'dispose'] as const) {
       let settled = false;
       let completion: Promise<unknown>;
       if (closing === 'cancel') completion = owner.cancel('owned');
-      else if (closing === 'document') completion = owner.releaseDocument();
       else completion = owner.dispose();
       const outcome = completion.then(
         (value) => ({ value }),

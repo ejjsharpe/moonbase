@@ -17,7 +17,11 @@ import { overlays } from '@moonbase/ui/overlays';
 import { workbench } from '@moonbase/ui/workbench';
 import { colors, radius, space, type } from '@moonbase/ui/tokens.stylex';
 import type { ChatTranscriptPart, ChatTranscriptSource } from '@moonbase/contracts/chat';
-import type { TranscriptImage, TranscriptNative } from '../../chat/wire.ts';
+import {
+  maximumTranscriptImageBytes,
+  type TranscriptImage,
+  type TranscriptNative,
+} from '../../chat/wire.ts';
 
 type ImageRequest = { source: ChatTranscriptSource; part: ChatTranscriptPart; key: string };
 type Viewer = ImageRequest & { trigger: HTMLElement };
@@ -36,7 +40,8 @@ function getImageIssue(part: ChatTranscriptPart, native?: TranscriptNative) {
     return 'Preview supports PNG and JPEG only. This stored type is unsupported.';
   if (part.encoding !== 'base64' || part.bytes <= 0)
     return 'The stored image is corrupt or its bytes do not match its type.';
-  if (part.bytes > 4 * 1024 * 1024) return 'Stored image exceeds the 4 MiB preview limit.';
+  if (part.bytes > maximumTranscriptImageBytes)
+    return 'Stored image exceeds the 4 MiB preview limit.';
   if (!native) return 'Image preview is unavailable here.';
 }
 

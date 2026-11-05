@@ -88,3 +88,82 @@ test('chat backends join explicit local retry and revoke pending folder selectio
     await runtime.dispose();
   }
 });
+
+for (const failure of [false, true])
+  test(`document replacement routes a reused ID to the new session and joins ${failure ? 'failing' : 'held'} old release`, async () => {
+    const runtime = ManagedRuntime.make(Layer.empty);
+    const context = { host: { hostId: 'host', storeId: 'store' }, actorId: 'actor' };
+    const target = { ...context, conversationId: 'chat' };
+    type Dependencies = Parameters<typeof createChatBackends>[0];
+    const releasing = Promise.withResolvers<void>(),
+      gate = Promise.withResolvers<void>();
+    const receives: ((snapshot: never) => void)[] = [],
+      releases = [0, 0],
+      emitted: [string, string][] = [];
+    const remoteChat: Dependencies['remoteChat'] = {
+      command: async () => null as never,
+      watch: (_input, receive) => {
+        const index = receives.length;
+        receives.push(receive as (snapshot: never) => void);
+        return async () => {
+          releases[index]++;
+          if (index === 0) {
+            releasing.resolve();
+            await gate.promise;
+          }
+        };
+      },
+    };
+    const backends = createChatBackends({
+      runtime,
+      localResult: {
+        backend: null,
+        error: new ApplicationError({ code: 'Unavailable', message: 'No local chat' }),
+      },
+      acquireLocal: () => new Promise(() => {}),
+      // Only the remote context and label are read when installing the session.
+      chatConfiguration: {
+        context,
+        ssh: { profile: { label: 'Remote' } },
+      } as unknown as Dependencies['chatConfiguration'],
+      remoteChat,
+      connection: { command: async () => ({}) as never, watch: () => async () => {} },
+      emit: (backendId, id) => emitted.push([backendId, id]),
+      pickFolder: async () => null,
+    });
+    try {
+      const old = backends.getSession('remote')!;
+      assert((await old.call('watch-chat', '', { target }, 'reused')).ok);
+      const replacement = backends.releaseDocument().then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      let settled = false;
+      void replacement.then(() => {
+        settled = true;
+      });
+      await releasing.promise;
+      const current = backends.getSession('remote')!;
+      assert.notEqual(current, old);
+      assert((await current.call('watch-chat', '', { target }, 'reused')).ok);
+      receives[0]!({} as never);
+      receives[1]!({} as never);
+      assert.deepEqual(emitted, [['remote', 'reused']], 'the old watch is fenced');
+      assert((await current.call('connection', 'getConnection', {}, 'unrelated')).ok);
+      assert.equal(settled, false, 'replacement joins the held old release');
+      if (failure)
+        gate.reject(new ApplicationError({ code: 'Persistence', message: 'Old release failed' }));
+      else gate.resolve();
+      const error = await replacement;
+      if (failure) {
+        assert(ApplicationError.is(error));
+        assert.equal(error.code, 'Persistence');
+      } else assert.equal(error, undefined);
+      assert((await current.cancel('reused')).ok);
+      assert.deepEqual(releases, [1, 1]);
+    } finally {
+      gate.resolve();
+      for (const session of backends.getSessions()) await session.dispose().catch(() => {});
+      await runtime.dispose();
+    }
+  });
