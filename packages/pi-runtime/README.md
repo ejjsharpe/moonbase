@@ -83,3 +83,6 @@ Completed nested-tool activity reads the exact retained public `NestedCallDoc` r
 Nested requested arguments come from immutable task input. Executed arguments require an execute checkpoint or a settled result with SDK execution-time evidence; pending and blocked requests are never labeled executed.
 
 Snapshot projection recaptures the full live/history view up to three times when a nested document disappears and the SDK confirms its parent is ending. Other failures propagate immediately. Explicit content selections keep their captured source and still fail with `Conflict` on retirement.
+
+
+Complete saved-conversation Find is implemented by private `find.ts`, sharing `transcript.ts`'s display-content policy without eagerly hashing parts or decoding images. Local and authenticated remote handlers advertise `transcript-find-v1`. See [Find bounds, cancellation and qualification](docs/FIND.md); existing mutation formats, stores and observation behavior are unchanged.

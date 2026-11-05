@@ -97,6 +97,7 @@ export function chatCapabilities(local = false) {
             submissionId: 'submission',
           } as never;
         case 'getChatTranscriptContent':
+        case 'findChatTranscript':
         case 'getChatHistoryAround':
           throw new ApplicationError({
             code: 'Incompatible',

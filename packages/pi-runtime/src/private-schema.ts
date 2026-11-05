@@ -183,13 +183,23 @@ function savedIdentity(value: string) {
 }
 
 const transcriptCursorSchema = Schema.Struct({
-  kind: Schema.Literals(['manifest', 'content', 'around']),
+  kind: Schema.Literals(['manifest', 'content', 'around', 'find']),
   binding: Schema.String.check(Schema.makeFilter((value) => /^[a-f0-9]{64}$/.test(value))),
   position: integer.check(Schema.makeFilter((value) => value >= 0)),
   revision: Schema.optional(
     Schema.String.check(Schema.makeFilter((value) => /^[a-f0-9]{64}$/.test(value))),
   ),
   upper: Schema.optional(recordId),
+  entries: Schema.optional(integer),
+  bytes: Schema.optional(integer),
+  part: Schema.optional(integer.check(Schema.makeFilter((value) => value >= 0))),
+  path: Schema.optional(
+    Schema.Array(integer.check(Schema.makeFilter((value) => value >= 0))).check(
+      Schema.isMaxLength(128),
+    ),
+  ),
+  offset: Schema.optional(integer.check(Schema.makeFilter((value) => value >= 0))),
+  textOffset: Schema.optional(integer.check(Schema.makeFilter((value) => value >= 0))),
   direction: Schema.optional(Schema.Literals(['older', 'newer'])),
 });
 export type TranscriptCursor = typeof transcriptCursorSchema.Type;

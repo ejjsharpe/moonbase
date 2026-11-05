@@ -255,7 +255,9 @@ export const serveChat = (config: ChatServerConfiguration, client: ChatClient) =
                 await client.command(
                   operation,
                   input,
-                  operation === 'getChatTranscriptContent' || operation === 'getChatHistoryAround'
+                  operation === 'getChatTranscriptContent' ||
+                    operation === 'getChatHistoryAround' ||
+                    operation === 'findChatTranscript'
                     ? { signal: controller.signal }
                     : undefined,
                 ),

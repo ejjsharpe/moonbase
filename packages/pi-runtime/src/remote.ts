@@ -390,6 +390,7 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
       getChat: (d) => call('getChat', d),
       getChatHistory: (d) => call('getChatHistory', d),
       getChatTranscriptContent: (d) => call('getChatTranscriptContent', d),
+      findChatTranscript: (d) => call('findChatTranscript', d),
       getChatHistoryAround: (d) => call('getChatHistoryAround', d),
       sendChat: (d) => call('sendChat', d),
       getChatSend: (d) => call('getChatSend', d),

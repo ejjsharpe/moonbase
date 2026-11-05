@@ -204,7 +204,50 @@ function makePart(
     },
   };
 }
+export type TranscriptValue = {
+  id: string;
+  kind: ChatTranscriptPart['kind'];
+  role: ChatTranscriptPart['role'];
+  value: string | { json: unknown } | { image: string };
+  extra: Partial<ChatTranscriptPart>;
+};
+const makeValue = (
+  id: string,
+  kind: ChatTranscriptPart['kind'],
+  role: ChatTranscriptPart['role'],
+  value: TranscriptValue['value'],
+  extra: Partial<ChatTranscriptPart> = {},
+): TranscriptValue => ({ id, kind, role, value, extra });
 function* messageParts(messages: readonly Message[], prefix = ''): Generator<Part> {
+  for (const part of messageValues(messages, prefix)) {
+    let value: string | Buffer;
+    const extra = { ...part.extra };
+    if (typeof part.value === 'string') value = part.value;
+    else if ('json' in part.value) value = JSON.stringify(part.value.json);
+    else {
+      value = Buffer.from(part.value.image, 'base64');
+      if (value.toString('base64') !== part.value.image) {
+        value = Buffer.alloc(0);
+        extra.availability = 'unavailable';
+      }
+    }
+    yield makePart(part.id, part.kind, part.role, value, extra);
+  }
+}
+/** The same display policy, without image decoding, JSON materialization or content hashing. */
+export function* getEntryTextValues(entry: EntryRecord): Generator<TranscriptValue> {
+  if (entry.kind === 'pi.reset' || entry.kind === 'pi.compaction')
+    yield makeValue(
+      'marker',
+      'notice',
+      'system',
+      entry.kind === 'pi.reset' ? 'Context reset.' : 'Context compacted.',
+    );
+  yield* messageValues(entry.model ?? []);
+  const diagnostics = ToolResultEntry.is(entry) ? (entry.data?.diagnostics ?? []) : [];
+  if (diagnostics.length) yield makeValue('diagnostics', 'details', 'tool', { json: diagnostics });
+}
+function* messageValues(messages: readonly Message[], prefix = ''): Generator<TranscriptValue> {
   for (const [m, message] of messages.entries()) {
     const role = message.role === 'toolResult' ? 'tool' : message.role;
     let state: ChatTranscriptPart['state'];
@@ -229,53 +272,52 @@ function* messageParts(messages: readonly Message[], prefix = ''): Generator<Par
     for (const [b, block] of content.entries()) {
       const id = `${prefix}m${m}.b${b}`;
       if (block.type === 'text')
-        yield makePart(id, role === 'tool' ? 'result' : 'text', role, block.text, common);
+        yield makeValue(id, role === 'tool' ? 'result' : 'text', role, block.text, common);
       else if (block.type === 'thinking')
-        yield makePart(id, 'thinking', role, block.redacted ? '' : block.thinking, {
+        yield makeValue(id, 'thinking', role, block.redacted ? '' : block.thinking, {
           ...common,
           ...(block.redacted ? { availability: 'redacted' as const } : {}),
         });
       else if (block.type === 'toolCall') {
-        yield makePart(id, 'arguments', role, JSON.stringify(block.arguments), {
-          toolName: getLabel(block.name),
-          callId: V.preview(block.id, 256).text,
-          state: 'requested',
-        });
+        yield makeValue(
+          id,
+          'arguments',
+          role,
+          { json: block.arguments },
+          {
+            toolName: getLabel(block.name),
+            callId: V.preview(block.id, 256).text,
+            state: 'requested',
+          },
+        );
         if (block.argumentsError)
-          yield makePart(id + '.arguments-error', 'notice', role, block.argumentsError, {
+          yield makeValue(id + '.arguments-error', 'notice', role, block.argumentsError, {
             state: 'failed',
             toolName: getLabel(block.name),
           });
       } else if (block.type === 'image') {
-        const decoded = Buffer.from(block.data, 'base64');
-        const valid = decoded.toString('base64') === block.data;
-        const bytes = valid ? decoded : Buffer.alloc(0);
-        yield makePart(id, 'image', role, bytes, {
-          ...common,
-          mimeType: getLabel(block.mimeType, 'application/octet-stream'),
-          ...(!valid ? { availability: 'unavailable' as const } : {}),
-        });
+        yield makeValue(
+          id,
+          'image',
+          role,
+          { image: block.data },
+          { ...common, mimeType: getLabel(block.mimeType, 'application/octet-stream') },
+        );
       } else
-        yield makePart(id, 'notice', role, 'Unsupported recorded content.', {
+        yield makeValue(id, 'notice', role, 'Unsupported recorded content.', {
           availability: 'unsupported',
         });
     }
     if (message.role === 'toolResult' && message.nestedCalls !== undefined)
-      yield makePart(
+      yield makeValue(
         `${prefix}m${m}.nested-calls`,
         'details',
         role,
-        JSON.stringify(message.nestedCalls),
+        { json: message.nestedCalls },
         common,
       );
     if (message.role === 'toolResult' && message.details !== undefined) {
-      yield makePart(
-        `${prefix}m${m}.details`,
-        'details',
-        role,
-        JSON.stringify(message.details),
-        common,
-      );
+      yield makeValue(`${prefix}m${m}.details`, 'details', role, { json: message.details }, common);
       if (
         message.details &&
         typeof message.details === 'object' &&
@@ -284,11 +326,11 @@ function* messageParts(messages: readonly Message[], prefix = ''): Generator<Par
         const details = message.details as Record<string, unknown>;
         for (const kind of ['patch', 'diff'] as const)
           if (typeof details[kind] === 'string')
-            yield makePart(`${prefix}m${m}.${kind}`, kind, role, details[kind], common);
+            yield makeValue(`${prefix}m${m}.${kind}`, kind, role, details[kind], common);
       }
     }
     if (state === 'failed' && role === 'assistant')
-      yield makePart(
+      yield makeValue(
         `${prefix}m${m}.failure`,
         'notice',
         role,

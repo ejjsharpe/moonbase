@@ -33,6 +33,6 @@ Local Create includes immutable folder/model settings; local host replies contai
 
 Local settings and conversation summaries accept optional `reasoningEffort`. Provider catalogs expose supported efforts, a model's initial effort and a maintained per-provider default. `ChatModelPreference` describes the portable model/effort choice without folder authority; all additions preserve existing field-absent payloads.
 
-Structured transcript DTOs and bounded content/around-entry reads are documented in [transcript contracts](docs/TRANSCRIPTS.md). Optional `transcript-v1` negotiation preserves legacy chat and unchanged mutation/saved formats.
+Structured transcript DTOs and bounded content/around-entry reads are documented in [transcript contracts](docs/TRANSCRIPTS.md). Optional `transcript-v1` and `transcript-find-v1` negotiation preserves legacy chat and unchanged mutation/saved formats. `findChatTranscript` searches one saved conversation with literal Unicode case-insensitive matching, bounded progress and a fixed replayable cutoff.
 
 `ChatStreamRequestSchema` and `ChatStreamFrameSchema` strictly decode the optional `chat-stream-v1` wire envelopes. Snapshot observation status is additive; existing watch signatures, health/RPC and mutation formats remain unchanged. See [stream protocol](../pi-runtime/docs/STREAMING.md).

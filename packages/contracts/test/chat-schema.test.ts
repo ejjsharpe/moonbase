@@ -30,6 +30,7 @@ const inputs = {
   getChat: { target },
   getChatHistory: { target, cursor: 'opaque cursor' },
   getChatTranscriptContent: { source: { kind: 'entry', target, entryId: 'entry' } },
+  findChatTranscript: { target, query: '  literal  ' },
   getChatHistoryAround: { target, entryId: 'entry' },
   sendChat: { target, requestId: 'send', text: '  Keep original text  ' },
   getChatSend: { target, requestId: 'send' },
@@ -48,6 +49,16 @@ const outputs = {
     parts: [],
     nextCursor: null,
     thinking: 'none',
+  },
+  findChatTranscript: {
+    target,
+    query: '  literal  ',
+    cursor: null,
+    startCursor: 'start',
+    upperEntryId: null,
+    matches: [],
+    progress: { entries: 0, bytes: 0 },
+    nextCursor: null,
   },
   getChatHistoryAround: {
     entries: [],
@@ -292,7 +303,7 @@ test('transcript schemas bound decoded chunks, canonical base64, identities and 
     }).features,
     ['transcript-v1', 'future-feature'],
   );
-  assert.equal(isChatCommand('findChatTranscript'), false);
+  assert.equal(isChatCommand('findChatTranscript'), true);
 });
 
 test('stream envelopes are strict and bound authority, sequences and decoded fragments', async () => {
@@ -326,4 +337,37 @@ test('stream envelopes are strict and bound authority, sequences and decoded fra
       .observationStatus,
     'reconnecting',
   );
+});
+
+test('Find preserves literal whitespace and independently bounds queries and original UTF16 ranges', () => {
+  for (const query of [' ', '\r\n', '[.*]', 'Σ𐐀😀'])
+    assert.equal(decodeChatInput('findChatTranscript', { target, query }).query, query);
+  for (const query of ['', '\0', '\ud800', 'x'.repeat(1025), '😀'.repeat(257)])
+    assert.throws(() => decodeChatInput('findChatTranscript', { target, query }));
+  const page = {
+    ...outputs.findChatTranscript,
+    upperEntryId: 'entry',
+    matches: [
+      {
+        source: { kind: 'entry', target, entryId: 'entry' },
+        partId: 'm0.b0',
+        start: 2,
+        end: 4,
+        snippet: { start: 0, text: 'a 😀 z' },
+      },
+    ],
+  };
+  assert.deepEqual(decodeChatOutput('findChatTranscript', page), page);
+  for (const changed of [
+    { start: -1 },
+    { end: 1 },
+    { end: 999 },
+    { source: { kind: 'live', target } },
+  ])
+    assert.throws(() =>
+      decodeChatOutput('findChatTranscript', {
+        ...page,
+        matches: [{ ...page.matches[0], ...changed }],
+      }),
+    );
 });

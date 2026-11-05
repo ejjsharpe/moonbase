@@ -52,7 +52,7 @@ test('local conversations retain distinct folders/models, coding tools, immutabl
   assert.deepEqual(await client.command('getChatHost', { host: session.host }), {
     ...session,
     mode: 'local',
-    features: ['transcript-v1'],
+    features: ['transcript-v1', 'transcript-find-v1'],
   });
   await assert.rejects(
     client.command('createChat', { session, requestId: 'missing', title: 'No settings' }),

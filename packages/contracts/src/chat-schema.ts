@@ -5,6 +5,8 @@ export { ChatIdentifierSchema, ChatHostTargetSchema } from './host-schema.ts';
 import { ApplicationError } from './errors.ts';
 import {
   chatPageSize,
+  maximumChatFindQueryBytes,
+  chatFindPageSize,
   chatPreviewBytes,
   chatContentChunkBytes,
   chatManifestPageSize,
@@ -95,6 +97,35 @@ export const ChatTranscriptSourceSchema = Schema.Union([
     incarnation: digest,
   }),
 ]);
+export const ChatFindQuerySchema = unicode.check(
+  Schema.makeFilter(
+    (value) =>
+      value.length > 0 &&
+      !value.includes('\0') &&
+      new TextEncoder().encode(value).length <= maximumChatFindQueryBytes,
+  ),
+);
+export const ChatTranscriptMatchSchema = struct({
+  source: struct({
+    kind: Schema.Literal('entry'),
+    target: ChatTargetSchema,
+    entryId: ChatIdentifierSchema,
+  }),
+  partId: ChatIdentifierSchema,
+  start: integer,
+  end: integer,
+  snippet: struct({ start: integer, text: preview }),
+}).check(
+  Schema.makeFilter(
+    (value) =>
+      value.end > value.start &&
+      value.snippet.start <= value.start &&
+      value.end <= value.snippet.start + value.snippet.text.length &&
+      !/[\ud800-\udfff]/u.test(value.snippet.text) &&
+      !/[\ud800-\udfff]/u.test(value.snippet.text.slice(0, value.start - value.snippet.start)) &&
+      !/[\ud800-\udfff]/u.test(value.snippet.text.slice(value.end - value.snippet.start)),
+  ),
+);
 export const ChatTranscriptSelectionSchema = struct({
   partId: ChatIdentifierSchema,
   bytes: integer,
@@ -259,6 +290,11 @@ export const chatInputSchemas = {
     selection: optional(ChatTranscriptSelectionSchema),
     cursor: optional(cursor),
   }),
+  findChatTranscript: struct({
+    target: ChatTargetSchema,
+    query: ChatFindQuerySchema,
+    cursor: optional(cursor),
+  }),
   getChatHistoryAround: struct({
     target: ChatTargetSchema,
     entryId: ChatIdentifierSchema,
@@ -324,6 +360,25 @@ export const chatOutputSchemas = {
       }),
     ),
   ]),
+  findChatTranscript: struct({
+    target: ChatTargetSchema,
+    query: ChatFindQuerySchema,
+    cursor: Schema.NullOr(cursor),
+    startCursor: cursor,
+    upperEntryId: Schema.NullOr(ChatIdentifierSchema),
+    matches: Schema.mutable(Schema.Array(ChatTranscriptMatchSchema)).check(
+      Schema.isMaxLength(chatFindPageSize),
+    ),
+    progress: struct({ entries: integer, bytes: integer }),
+    nextCursor: Schema.NullOr(cursor),
+  }).check(
+    Schema.makeFilter(
+      (value) =>
+        value.nextCursor === null ||
+        (value.nextCursor !== value.cursor &&
+          (value.progress.entries > 0 || value.progress.bytes > 0 || value.matches.length > 0)),
+    ),
+  ),
   getChatHistoryAround: struct({
     ...ChatHistoryPageSchema.fields,
     target: ChatTargetSchema,
