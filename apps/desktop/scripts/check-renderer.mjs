@@ -19,10 +19,17 @@ assert(inputs.some((p) => p.endsWith('application/src/features/editor/editor.ts'
 assert(!inputs.some((p) => p.endsWith('desktop/src/renderer/cleanup.ts')));
 assert(inputs.some((p) => p.endsWith('contracts/src/errors.ts')));
 assert(inputs.some((p) => p.includes('monaco-editor')));
+assert(
+  inputs.some((p) => /node_modules\/react-markdown\//.test(p)) &&
+    inputs.some((p) => /node_modules\/remark-gfm\//.test(p)),
+  'Missing direct maintained Markdown parser',
+);
 for (const entry of [
   'packages/workbench/src/editor/workbench.tsx',
   'apps/desktop/src/renderer/shell/workbench.tsx',
   'apps/desktop/src/renderer/chat/view.tsx',
+  'apps/desktop/src/renderer/chat/transcript.tsx',
+  'apps/desktop/src/renderer/chat/markdown.tsx',
 ])
   assert(inputs.some((p) => p.endsWith(entry)));
 assert(!inputs.some((p) => /packages\/editor\//.test(p)));

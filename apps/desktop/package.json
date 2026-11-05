@@ -33,15 +33,22 @@
     "@moonbase/workspace": "workspace:*",
     "@stylexjs/stylex": "0.19.1",
     "effect": "4.1.0",
+    "mdast-util-from-markdown": "2.1.0",
     "monaco-editor": "0.57.0",
     "motion": "14.9.0",
     "react": "19.3.1",
-    "react-dom": "19.3.1"
+    "react-dom": "19.3.1",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1",
+    "remark-parse": "11.0.0",
+    "unified": "11.0.5",
+    "unist-util-visit": "5.2.0"
   },
   "devDependencies": {
+    "@moonbase/effect": "workspace:*",
+    "@types/mdast": "4.0.4",
     "electron": "45.1.0",
-    "electron-builder": "26.18.0",
-    "@moonbase/effect": "workspace:*"
+    "electron-builder": "26.18.0"
   },
   "nx": {
     "targets": {

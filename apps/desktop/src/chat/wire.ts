@@ -11,7 +11,12 @@ import {
 } from '@moonbase/contracts/connection-schema';
 import { cancellation, unwrap as unwrapReply } from '../wire.ts';
 import { ApplicationError } from '@moonbase/contracts/workspace';
-import type { ChatClient, ChatSession } from '@moonbase/contracts/chat';
+import type {
+  ChatClient,
+  ChatSession,
+  ChatTranscriptSource,
+  ChatTranscriptSelection,
+} from '@moonbase/contracts/chat';
 import type { ProviderSetupClient } from '@moonbase/contracts/providers';
 import { decodeProviderOutput, isProviderCommand } from '@moonbase/contracts/providers-schema';
 import type { ConnectionClient } from '@moonbase/contracts/connection';
@@ -30,13 +35,24 @@ export type DesktopChatTarget = {
   mode: 'local' | 'remote';
   context: ChatSession;
 };
+export type TranscriptCopy = {
+  source: ChatTranscriptSource;
+  selection?: ChatTranscriptSelection;
+  /** Parser-provided original UTF-16 start within the selected part; main revalidates the node. */
+  code?: { start: number };
+};
+export type TranscriptNative = {
+  copy(input: TranscriptCopy, signal?: AbortSignal): Promise<void>;
+  openLink(url: string, signal?: AbortSignal): Promise<void>;
+};
+
 export interface ChatBridge {
   targets?(): Promise<DesktopChatTarget[]>;
   chooseFolder?(): Promise<string | null>;
   confirmQuit?(): Promise<boolean>;
   context(backendId?: string): Promise<ChatSession>;
   call(
-    kind: 'chat' | 'connection' | 'watch-chat' | 'watch-connection' | 'providers',
+    kind: 'chat' | 'connection' | 'watch-chat' | 'watch-connection' | 'providers' | 'transcript',
     operation: string,
     input: unknown,
     id: string,
@@ -83,7 +99,7 @@ export function browserClients(
   providers: ProviderSetupClient;
 } {
   const command = async (
-    kind: 'chat' | 'connection' | 'providers',
+    kind: 'chat' | 'connection' | 'providers' | 'transcript',
     operation: string,
     input: unknown,
     options?: { signal?: AbortSignal },
@@ -181,4 +197,29 @@ function unwrapError(r: Reply) {
     return e;
   }
   return Error('Invalid reply');
+}
+
+/** Capture this backend once; selected UI target changes cannot reroute a pending action. */
+export function browserTranscriptActions(bridge: ChatBridge, backendId: string): TranscriptNative {
+  const call = async (operation: string, input: unknown, signal?: AbortSignal) => {
+    if (signal?.aborted)
+      throw new ApplicationError({ code: 'Cancelled', message: 'Action cancelled.' });
+    const id = crypto.randomUUID();
+    const cancel = () => {
+      void bridge
+        .cancel(id, backendId)
+        .then(cancellation)
+        .catch(() => {});
+    };
+    signal?.addEventListener('abort', cancel, { once: true });
+    try {
+      unwrap(await bridge.call('transcript', operation, input, id, backendId));
+    } finally {
+      signal?.removeEventListener('abort', cancel);
+    }
+  };
+  return {
+    copy: (input, signal) => call('copy', input, signal),
+    openLink: (url, signal) => call('open-link', { url }, signal),
+  };
 }

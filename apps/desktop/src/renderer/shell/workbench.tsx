@@ -1,3 +1,4 @@
+import type { TranscriptNative } from '../../chat/wire.ts';
 import {
   forwardRef,
   useEffect,
@@ -28,6 +29,7 @@ export type DesktopShellProps = {
   application: MoonbaseApplication;
   closing?: boolean;
   /** These callbacks return user-approved roots or opaque native references, never source paths. */
+  transcriptNative?: (backendId: string) => TranscriptNative;
   chooseChatFolder?: () => Promise<string | null>;
   selectCheckout?: () => Promise<string | null>;
   selectClipboardImports?: (checkout: CheckoutTarget) => Promise<string[]>;
@@ -41,6 +43,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
     application,
     closing = false,
     chooseChatFolder,
+    transcriptNative,
     selectCheckout,
     selectClipboardImports,
     selectDroppedImports,
@@ -317,6 +320,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
             key={lifecycle.chatTargetId}
             controller={chat}
             chooseFolder={chooseChatFolder}
+            transcriptNative={transcriptNative?.(lifecycle.chatTargetId ?? 'remote')}
           />
         ) : (
           <section {...stylex.props(styles.empty)} aria-label="Chat configuration">

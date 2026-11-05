@@ -1,4 +1,5 @@
 import { createMoonbaseApplication } from '@moonbase/application';
+import { installTranscriptDemo } from './transcript.ts';
 import { chatCapabilities } from './chat.ts';
 import { createRoot } from 'react-dom/client';
 import { createRef, StrictMode, useState } from 'react';
@@ -51,6 +52,9 @@ const memory = memoryWorkspace([
 const runtime = ManagedRuntime.make(memory.layer),
   client = makeEditorClient(runtime);
 const chat = chatCapabilities(new URLSearchParams(location.search).has('local'));
+const transcriptDemo = new URLSearchParams(location.search).has('transcript')
+  ? await installTranscriptDemo(chat)
+  : null;
 let failChat = new URLSearchParams(location.search).has('fail-chat');
 const firstApplication = await createMoonbaseApplication({
     editors: [{ client, clientId: 'demo-first' }],
@@ -114,6 +118,7 @@ function Demo() {
       <main {...stylex.props(workbench.document, styles.app)}>
         <DesktopShell
           application={firstApplication}
+          transcriptNative={transcriptDemo ? () => transcriptDemo.native : undefined}
           chooseChatFolder={async () => '/demo/moonbase'}
           selectCheckout={() => window.demo.selectCheckout()}
           selectClipboardImports={(checkout) => window.demo.selectClipboardImports(checkout)}
@@ -170,6 +175,7 @@ function Demo() {
           <DesktopShell
             ref={firstHandle}
             application={firstApplication}
+            transcriptNative={transcriptDemo ? () => transcriptDemo.native : undefined}
             selectCheckout={() => window.demo.selectCheckout()}
             selectClipboardImports={(checkout) => window.demo.selectClipboardImports(checkout)}
             selectDroppedImports={(checkout, files) =>
@@ -185,6 +191,14 @@ function Demo() {
       </div>
     </main>
   );
+}
+if (transcriptDemo && new URLSearchParams(location.search).has('reading')) {
+  await firstApplication.chat!.start();
+  await firstApplication.chat!.select(chat.target);
+  firstApplication.chat!.setTranscriptView({
+    anchor: { entryId: 'reading-179', partId: 'm0.b0', offset: 0 },
+    expanded: [],
+  });
 }
 createRoot(document.getElementById('root')!).render(
   new URLSearchParams(location.search).has('strict') ? (
@@ -205,6 +219,7 @@ declare global {
       workbench(): DesktopShellHandle;
       application: typeof firstApplication;
       chat: typeof chat;
+      transcript: typeof transcriptDemo;
       retryChat(): void;
       selectCheckout(): Promise<string | null>;
       selectClipboardImports(target: typeof checkout): Promise<string[]>;
@@ -221,6 +236,7 @@ window.demo = {
   second,
   application: firstApplication,
   chat,
+  transcript: transcriptDemo,
   retryChat: () => {
     failChat = false;
   },

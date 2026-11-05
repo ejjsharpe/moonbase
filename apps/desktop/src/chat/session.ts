@@ -12,6 +12,12 @@ import {
 } from '@moonbase/contracts/chat';
 import type { ConnectionClient, ConnectionCommand } from '@moonbase/contracts/connection';
 import { fields, record, requestId, errorDTO, invalid, type Reply } from './wire.ts';
+import {
+  copyTranscript,
+  decodeTranscriptCopy,
+  decodeTranscriptLink,
+  type NativeTranscriptActions,
+} from './transcript-native.ts';
 import { IpcLifetime } from '../ipc-lifetime.ts';
 
 /** A window's bounded IPC waits and observations; commands still enter shared application handlers. */
@@ -21,7 +27,9 @@ export class ChatIpcSession {
   private connection: ConnectionClient | null;
   private capabilities: {
     providers?: ProviderSetupClient;
+    transcript?: NativeTranscriptActions;
   };
+  private copies = 0;
   readonly context: ChatSession;
   private emit: (id: string, result: Reply) => void;
   constructor(
@@ -32,6 +40,7 @@ export class ChatIpcSession {
     emit: (id: string, result: Reply) => void,
     capabilities: {
       providers?: ProviderSetupClient;
+      transcript?: NativeTranscriptActions;
     } = {},
   ) {
     this.lifetime = new IpcLifetime(runtime, 64, errorDTO);
@@ -68,7 +77,15 @@ export class ChatIpcSession {
       invalid();
     }
     let v = record(input);
-    if (kind === 'chat') {
+    if (kind === 'transcript') {
+      if (!this.capabilities.transcript || !['copy', 'open-link'].includes(operation as string))
+        invalid();
+      if (operation === 'copy') {
+        if (this.copies >= 2) invalid();
+        v = decodeTranscriptCopy(v);
+        this.authority(v);
+      } else v = { url: decodeTranscriptLink(v) };
+    } else if (kind === 'chat') {
       if (!isChatCommand(operation)) return invalid();
       v = decodeChatInput(operation, v);
       this.authority(v);
@@ -103,6 +120,33 @@ export class ChatIpcSession {
             ? this.chat.watch(v as never, receive, error)
             : this.connection!.watch(receive, error),
         );
+        return { ok: true, value: null };
+      }
+      if (kind === 'transcript') {
+        if (operation === 'copy') {
+          this.copies++;
+          try {
+            await copyTranscript(this.chat, v as never, request, this.capabilities.transcript!);
+          } finally {
+            this.copies--;
+          }
+        } else {
+          if (!live())
+            throw new ApplicationError({ code: 'Cancelled', message: 'Link opening cancelled.' });
+          try {
+            await this.capabilities.transcript!.openExternal(v.url as string);
+          } catch {
+            throw new ApplicationError({
+              code: 'Unavailable',
+              message: 'Could not open the link in your browser. Try again.',
+            });
+          }
+          if (!live())
+            throw new ApplicationError({
+              code: 'Cancelled',
+              message: 'Link opening was cancelled after it began.',
+            });
+        }
         return { ok: true, value: null };
       }
       if (kind === 'chat' && operation === 'createChat') {

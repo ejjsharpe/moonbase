@@ -5,7 +5,7 @@ import { createMoonbaseApplication, type MoonbaseApplication } from '@moonbase/a
 import { DesktopShell, type DesktopShellHandle } from './shell/workbench.tsx';
 import { WorkbenchStartupFailure } from './shell/startup-failure.tsx';
 import { configureMonacoWorkers } from '@moonbase/workbench/workers';
-import { browserClients, type ChatBridge } from '../chat/wire.ts';
+import { browserClients, browserTranscriptActions, type ChatBridge } from '../chat/wire.ts';
 import {
   bridgeClient,
   unwrap,
@@ -27,6 +27,12 @@ declare global {
 document.body.className = stylex.props(workbench.document).className ?? '';
 const bridge = window.moonbase,
   root = createRoot(document.getElementById('root')!);
+const transcriptActions = new Map<string, ReturnType<typeof browserTranscriptActions>>();
+function getTranscriptActions(backend: string) {
+  if (!transcriptActions.has(backend))
+    transcriptActions.set(backend, browserTranscriptActions(window.moonbaseChat, backend));
+  return transcriptActions.get(backend)!;
+}
 function Desktop({ application }: { application: MoonbaseApplication }) {
   const handle = useRef<DesktopShellHandle>(null),
     [closing, setClosing] = useState(false),
@@ -74,6 +80,7 @@ function Desktop({ application }: { application: MoonbaseApplication }) {
       ref={handle}
       application={application}
       closing={closing}
+      transcriptNative={getTranscriptActions}
       chooseChatFolder={() => window.moonbaseChat.chooseFolder!()}
       selectCheckout={async () =>
         application.getSnapshot().phase === 'live'

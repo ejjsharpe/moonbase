@@ -1,12 +1,14 @@
-import { useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import { Dialog } from '@base-ui/react/dialog';
 import { Button } from '@base-ui/react/button';
 import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
 import { workbench } from '@moonbase/ui/workbench';
 import { colors, layout, radius, space, type } from '@moonbase/ui/tokens.stylex';
-import type { ChatEntry, ChatModelPreference } from '@moonbase/contracts/chat';
+import type { ChatModelPreference } from '@moonbase/contracts/chat';
 import type { ChatController } from '@moonbase/application/chat';
+import { Transcript } from './transcript.tsx';
+import type { TranscriptNative } from '../../chat/wire.ts';
 import { ProviderSetup } from './setup.tsx';
 import { Choice } from './choice.tsx';
 import { Icon } from '../icon.tsx';
@@ -19,9 +21,11 @@ const subscribeLayout = (listener: () => void) => {
 export function ChatView({
   controller,
   chooseFolder,
+  transcriptNative,
 }: {
   controller: ChatController;
   chooseFolder?: () => Promise<string | null>;
+  transcriptNative?: TranscriptNative;
 }) {
   const compact = useSyncExternalStore(subscribeLayout, () => compactLayout.matches);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -93,13 +97,6 @@ export function ChatView({
     busy = (id: string) => state.active.includes(id);
   const snapshot = state.snapshot,
     run = snapshot?.run;
-  const transcript = useRef<HTMLElement>(null),
-    follow = useRef(true);
-  useLayoutEffect(() => {
-    if (follow.current && transcript.current)
-      transcript.current.scrollTop = transcript.current.scrollHeight;
-  }, [snapshot, state.pending.length]);
-  const entries = state.transcript.entries;
   const sidebar = (
     <aside
       aria-label="Saved chats"
@@ -221,7 +218,7 @@ export function ChatView({
   );
   return (
     <div {...stylex.props(workbench.page, styles.page)}>
-      <div {...stylex.props(styles.workspace)}>
+      <div {...stylex.props(styles.workspace, !compact && styles.expandedWorkspace)}>
         {!compact && sidebar}
         <main aria-label="Agent workspace" {...stylex.props(styles.content)}>
           <header
@@ -258,18 +255,6 @@ export function ChatView({
               )}
             </div>
             <div {...stylex.props(controls.row)}>
-              {(run || !state.transcript.atLatest) && (
-                <Button
-                  {...stylex.props(controls.button, controls.quietButton)}
-                  onClick={() => {
-                    void controller.jumpToLatest();
-                    follow.current = true;
-                    if (transcript.current)
-                      transcript.current.scrollTop = transcript.current.scrollHeight;
-                  }}>
-                  Latest output
-                </Button>
-              )}
               {state.selected && (
                 <Button
                   aria-label="Close view"
@@ -362,104 +347,12 @@ export function ChatView({
             </section>
           )}
           {state.selected && (
-            <section
-              ref={transcript}
-              onWheel={(event) => {
-                if (event.deltaY < 0) follow.current = false;
-                else {
-                  const el = event.currentTarget;
-                  if (el.scrollHeight - el.scrollTop - el.clientHeight < 80) follow.current = true;
-                }
-              }}
-              onKeyDown={(event) => {
-                if (['PageUp', 'Home', 'ArrowUp'].includes(event.key)) follow.current = false;
-                if (event.key === 'End') follow.current = true;
-              }}
-              onPointerDown={() => {
-                follow.current = false;
-              }}
-              aria-label="Chat transcript"
-              {...stylex.props(styles.transcript)}>
-              {state.selected && !snapshot && (
-                <div {...stylex.props(styles.empty)}>
-                  <p>
-                    {connected
-                      ? 'Reading the saved chat…'
-                      : 'This view is offline. Its draft and unresolved command identities are retained.'}
-                  </p>
-                </div>
-              )}
-              {state.selected && snapshot && (
-                <div {...stylex.props(styles.measure)}>
-                  {state.transcript.earlier && (
-                    <Button
-                      {...stylex.props(controls.button)}
-                      disabled={!connected || state.transcript.loading}
-                      onClick={() => {
-                        follow.current = false;
-                        void controller.older();
-                      }}>
-                      Read older page
-                    </Button>
-                  )}
-                  {state.transcript.later && (
-                    <Button
-                      {...stylex.props(controls.button)}
-                      disabled={!connected || state.transcript.loading}
-                      onClick={() => void controller.later()}>
-                      Read later page
-                    </Button>
-                  )}
-                  {state.transcript.error && (
-                    <p role="alert" {...stylex.props(styles.warning)}>
-                      {state.transcript.error}
-                    </p>
-                  )}
-                  {state.transcript.observation === 'reconnecting' && (
-                    <p role="status" {...stylex.props(styles.small)}>
-                      Reconnecting. Transcript content is stale.
-                    </p>
-                  )}
-                  {state.transcript.capabilities.transcript === 'legacy' && (
-                    <p {...stylex.props(styles.small)}>
-                      Upgrade this host for complete transcript reads.
-                    </p>
-                  )}
-                  {entries.map((e) => (
-                    <Entry key={e.id} entry={e} />
-                  ))}
-                  {run && (
-                    <article aria-label="Live response" {...stylex.props(styles.message)}>
-                      <div {...stylex.props(styles.messageHeader)}>
-                        <strong>Assistant</strong>
-                        <span>{run.state}</span>
-                      </div>
-                      <p {...stylex.props(styles.messageText)}>{run.text || 'Working…'}</p>
-                      {run.truncated && (
-                        <p {...stylex.props(styles.small)}>Live preview truncated to 4 KiB.</p>
-                      )}
-                      {run.tools.map((t) => (
-                        <details key={t.taskId} open {...stylex.props(styles.tool)}>
-                          <summary {...stylex.props(controls.summary)}>
-                            {t.name} · {t.state}
-                          </summary>
-                          <pre {...stylex.props(controls.pre, styles.toolText)}>
-                            {t.text || 'Tool activity in progress…'}
-                          </pre>
-                          {t.truncated && (
-                            <p {...stylex.props(styles.small)}>Tool preview truncated.</p>
-                          )}
-                        </details>
-                      ))}
-                    </article>
-                  )}
-                  <p role="status" {...stylex.props(styles.small)}>
-                    Chat {snapshot.state}
-                    {snapshot.message ? ` · ${snapshot.message}` : ''}
-                  </p>
-                </div>
-              )}
-            </section>
+            <Transcript
+              key={state.selected.conversationId}
+              controller={controller}
+              state={state}
+              native={transcriptNative}
+            />
           )}
           <div {...stylex.props(styles.composeArea, !state.selected && styles.starter)}>
             {!state.selected && local && (
@@ -649,25 +542,6 @@ const effortLabels = {
   xhigh: 'Extra high',
   max: 'Max',
 };
-function Entry({ entry: e }: { entry: ChatEntry }) {
-  let label = e.toolName ?? e.role;
-  if (e.role === 'user') label = 'You';
-  else if (e.role === 'assistant') label = 'Assistant';
-  return (
-    <article {...stylex.props(styles.message)}>
-      <div {...stylex.props(styles.messageHeader)}>
-        <strong>{label}</strong>
-        {e.isError && <span>Failed</span>}
-      </div>
-      <p {...stylex.props(styles.messageText)}>{e.text}</p>
-      {e.truncated && (
-        <p {...stylex.props(styles.small)}>
-          Preview truncated to 4 KiB. The full transcript remains on the host.
-        </p>
-      )}
-    </article>
-  );
-}
 const styles = stylex.create({
   drawerBackdrop: { position: 'fixed', inset: 0, zIndex: 50, backgroundColor: colors.backdrop },
   drawer: {
@@ -692,13 +566,15 @@ const styles = stylex.create({
   },
   workspace: {
     display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr)',
+    flex: 1,
+    minHeight: 0,
+  },
+  expandedWorkspace: {
     gridTemplateColumns: {
       default: '288px minmax(0, 1fr)',
       '@media (max-width: 760px)': '210px minmax(0, 1fr)',
-      '@media (max-width: 640px)': 'minmax(0, 1fr)',
     },
-    flex: 1,
-    minHeight: 0,
   },
   sidebar: {
     flex: 1,
@@ -829,37 +705,6 @@ const styles = stylex.create({
     overflowWrap: 'anywhere',
     color: colors.secondary,
   },
-  transcript: { overflowY: 'auto', flex: 1, minHeight: 60, padding: '8px 24px' },
-  empty: {
-    maxWidth: layout.conversation,
-    margin: '48px auto',
-    lineHeight: 1.7,
-    color: colors.secondary,
-  },
-  emptyTitle: { fontSize: type.heading, color: colors.text, fontWeight: 500 },
-  measure: { maxWidth: layout.conversation, margin: '0 auto' },
-  message: { margin: '24px 0' },
-  messageHeader: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    gap: space.sm,
-    fontSize: type.small,
-    color: colors.secondary,
-  },
-  messageText: {
-    fontSize: type.message,
-    lineHeight: 1.7,
-    whiteSpace: 'pre-wrap',
-    overflowWrap: 'anywhere',
-    margin: '8px 0',
-  },
-  tool: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.row,
-    padding: space.md,
-    marginTop: space.md,
-  },
-  toolText: { maxHeight: 96, overflowY: 'auto' },
   composeArea: {
     width: 'calc(100% - 48px)',
     maxWidth: layout.conversation,

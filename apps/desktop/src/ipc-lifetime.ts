@@ -10,7 +10,7 @@ export type IpcRequest = {
   signal: AbortSignal;
   isLive(): boolean;
   acquireWatch(acquire: () => ObservationClose): Promise<void>;
-  retainDocumentRelease(release: () => Promise<void>): Promise<void>;
+  retainDocumentRelease(release: () => Promise<void>): Promise<() => Promise<void>>;
   fail(): void;
   finish(): Promise<void>;
 };
@@ -105,13 +105,22 @@ export class IpcLifetime {
         return isLive() ? Promise.resolve() : this.closeRequest(id, request);
       },
       retainDocumentRelease: async (release) => {
+        const retained = async () => {
+          try {
+            await release();
+          } catch (error) {
+            request.cleanupError = normalizeApplicationError(error);
+            throw request.cleanupError;
+          }
+        };
         // Capture the admitting document even if replacement closes it before acquisition completes.
         try {
           await runApplicationEffect(
             this.runtime,
-            Scope.addFinalizer(document, Effect.promise(release)),
+            Scope.addFinalizer(document, Effect.promise(retained)),
           );
-          if (generation === this.generation && !isLive()) await release();
+          if (generation === this.generation && !isLive()) await retained();
+          return retained;
         } catch (error) {
           // A late finalizer can fail after document close; keep that failure even if its reply is lost.
           request.cleanupError = normalizeApplicationError(error);
