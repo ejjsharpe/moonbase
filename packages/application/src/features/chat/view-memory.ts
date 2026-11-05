@@ -1,3 +1,4 @@
+import { LRUCache } from 'lru-cache';
 import type {
   ChatTarget,
   ChatTranscriptSource,
@@ -74,22 +75,18 @@ export function decodeTranscriptView(
 
 /** Content-free, application-lifetime LRU. A standalone model owns one by default. */
 export class TranscriptViewMemory {
-  private views = new Map<string, TranscriptView>();
+  // Each [key, view] pair plus its separator; the opening bracket completes the former array measure.
+  private views = new LRUCache<string, TranscriptView>({
+    max: 64,
+    maxSize: 256 * 1024 - 1,
+    sizeCalculation: (view, key) => countTranscriptBytes([key, view]) + 1,
+  });
   get(backend: string, target: ChatTarget): TranscriptView {
-    const key = this.key(backend, target),
-      value = this.views.get(key);
-    if (!value) return emptyView();
-    this.views.delete(key);
-    this.views.set(key, value);
-    return structuredClone(value);
+    const value = this.views.get(this.key(backend, target));
+    return value ? structuredClone(value) : emptyView();
   }
   set(backend: string, target: ChatTarget, view: TranscriptView) {
-    const captured = decodeTranscriptView(backend, target, view);
-    const key = this.key(backend, target);
-    this.views.delete(key);
-    this.views.set(key, captured);
-    while (this.views.size > 64 || countTranscriptBytes([...this.views]) > 256 * 1024)
-      this.views.delete(this.views.keys().next().value!);
+    this.views.set(this.key(backend, target), decodeTranscriptView(backend, target, view));
   }
   clear() {
     this.views.clear();

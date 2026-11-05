@@ -1,3 +1,4 @@
+import { LRUCache } from 'lru-cache';
 import { maximumChatReplyBytes } from '@moonbase/contracts/chat';
 import type {
   ChatClient,
@@ -172,6 +173,18 @@ function mergeEntries(previous: ChatEntry[], page: ChatEntry[], direction: 'earl
   return result;
 }
 
+const chunkBytes = new WeakMap<TranscriptChunk, number>();
+/** Serialized bytes plus one JSON array separator; each retained chunk is serialized once. */
+function measureContent(content: TranscriptContentState) {
+  let bytes = countTranscriptBytes({ ...content, chunks: [] }) + (content.chunks.length ? 0 : 1);
+  for (const chunk of content.chunks) {
+    let size = chunkBytes.get(chunk);
+    if (size === undefined) chunkBytes.set(chunk, (size = countTranscriptBytes(chunk)));
+    bytes += size + 1;
+  }
+  return bytes;
+}
+
 type TranscriptDependencies = {
   chat: ChatClient;
   target: ChatTarget;
@@ -214,7 +227,12 @@ export class TranscriptOwner {
     { abort: AbortController; source?: ChatTranscriptSource }
   >();
   private jobs = new Map<string, { abort: AbortController; promise: Promise<void> }>();
-  private contents = new Map<string, TranscriptContentState>();
+  // The running total plus the opening bracket equals the serialized content array.
+  private contents = new LRUCache<string, TranscriptContentState>({
+    max: 128,
+    maxSize: transcriptLimits.contentBytes - 1,
+    sizeCalculation: measureContent,
+  });
   private manifestAdvance = trackTranscriptCursor();
   private findGeneration = 0;
   private findAbort = new AbortController();
@@ -328,8 +346,35 @@ export class TranscriptOwner {
       }),
     };
   }
-  private contentUsage() {
-    return countTranscriptBytes([...this.contents.values()]);
+  /**
+   * Only `touch` makes a selection most recent; chunk and status updates keep its recency. Least
+   * recent chunks are trimmed first, so the LRU drops whole selections only once none remain.
+   */
+  private writeContent(key: string, content: TranscriptContentState, touch = false) {
+    const keys = [...this.contents.rkeys()].filter((other) => !touch || other !== key);
+    if (!keys.includes(key)) {
+      if (keys.length === this.contents.max) this.contents.delete(keys.shift()!);
+      keys.push(key);
+    }
+    let excess =
+      this.contents.calculatedSize -
+      (this.contents.info(key)?.size ?? 0) +
+      measureContent(content) -
+      this.contents.maxSize;
+    for (const other of keys) {
+      if (excess <= 0) break;
+      let value = other === key ? content : this.contents.peek(other)!;
+      while (excess > 0 && value.chunks.length) {
+        const chunks = value.chunks.slice(1);
+        const trimmed = { ...value, chunks, retainedFrom: chunks[0]?.offset ?? value.loadedBytes };
+        excess -= measureContent(value) - measureContent(trimmed);
+        value = trimmed;
+      }
+      if (other === key) content = value;
+      else this.contents.set(other, value);
+    }
+    this.contents.set(key, content);
+    for (const other of keys) this.contents.get(other);
   }
   private enforceBounds(direction: 'earlier' | 'later') {
     let usage = this.summaryUsage();
@@ -364,19 +409,6 @@ export class TranscriptOwner {
       }
       usage = this.summaryUsage();
     }
-    while (this.contents.size > 128) this.contents.delete(this.contents.keys().next().value!);
-    while (this.contentUsage() > transcriptLimits.contentBytes) {
-      const item = [...this.contents].find(([, value]) => value.chunks.length);
-      if (item) {
-        const [key, value] = item;
-        const chunks = value.chunks.slice(1);
-        this.contents.set(key, {
-          ...value,
-          chunks,
-          retainedFrom: chunks[0]?.offset ?? value.loadedBytes,
-        });
-      } else this.contents.delete(this.contents.keys().next().value!);
-    }
     this.start = Math.max(
       0,
       Math.min(this.start, Math.max(0, this.records.length - transcriptLimits.displayedRows)),
@@ -402,8 +434,11 @@ export class TranscriptOwner {
       earlier: this.start + entries.length < this.records.length || !this.olderEnd,
       later: this.start > 0 || !this.newerEnd,
       atLatest: this.following,
-      content: [...this.contents.values()],
-      retained: { ...this.summaryUsage(), contentBytes: this.contentUsage() },
+      content: [...this.contents.values()].reverse(),
+      retained: {
+        ...this.summaryUsage(),
+        contentBytes: this.contents.size && this.contents.calculatedSize + 1,
+      },
     };
     const changed = !equal(this.published, this.state);
     if (!changed) this.state = this.published;
@@ -507,7 +542,8 @@ export class TranscriptOwner {
     }
     for (const read of this.pending.values())
       if (read.source?.kind === 'live' && !this.current(read.source)) read.abort.abort();
-    for (const [key, content] of this.contents) {
+    // writeContent reorders the LRU, so iterate a snapshot.
+    for (const [key, content] of Array.from(this.contents.entries())) {
       const transcript =
         content.source.kind === 'live'
           ? run?.transcript
@@ -523,7 +559,7 @@ export class TranscriptOwner {
             part.revision !== content.selection.revision ||
             part.availability !== 'available'))
       ) {
-        this.contents.set(key, {
+        this.writeContent(key, {
           ...content,
           status: 'source-changed',
           error: 'Transcript source changed or is stale. Reload the selected part.',
@@ -563,9 +599,9 @@ export class TranscriptOwner {
     for (const job of this.jobs.values()) job.abort.abort();
     for (const read of this.pending.values()) read.abort.abort();
     const failure = normalizeApplicationError(error).message;
-    for (const [key, content] of this.contents)
+    for (const [key, content] of Array.from(this.contents.entries()))
       if (content.source.kind === 'live' || content.status === 'loading')
-        this.contents.set(key, {
+        this.writeContent(key, {
           ...content,
           status: content.source.kind === 'live' ? 'source-changed' : 'error',
           error: failure,
@@ -944,9 +980,9 @@ export class TranscriptOwner {
         if (this.jobs.get(name) !== job) return;
         this.jobs.delete(name);
         if (job.abort.signal.aborted) {
-          const content = this.contents.get(name);
+          const content = this.contents.peek(name);
           if (content?.status === 'loading')
-            this.contents.set(name, { ...content, status: 'partial' });
+            this.writeContent(name, { ...content, status: 'partial' });
           if (name === 'manifest' && this.state.manifest?.status === 'loading')
             this.state = { ...this.state, manifest: { ...this.state.manifest, status: 'partial' } };
         }
@@ -1236,7 +1272,7 @@ export class TranscriptOwner {
       this.records.find((entry) => entry.id === entryId) ??
       this.snapshot?.entries.find((entry) => entry.id === entryId);
     const key = getTranscriptKey([captured.source, selected]);
-    let content = this.contents.get(key);
+    let content = this.contents.peek(key);
     if (restart) {
       this.jobs.get(key)?.abort.abort();
       this.jobs.delete(key);
@@ -1253,8 +1289,7 @@ export class TranscriptOwner {
       status: 'partial',
       error: null,
     };
-    this.contents.delete(key);
-    this.contents.set(key, content);
+    this.writeContent(key, content, true);
     if (content.status === 'complete' || content.status === 'source-changed') {
       this.publish();
       return Promise.resolve();
@@ -1268,8 +1303,8 @@ export class TranscriptOwner {
             'This host requires an upgrade for transcript content.',
             'Unavailable',
           );
-        this.contents.set(key, {
-          ...(this.contents.get(key) ?? before),
+        this.writeContent(key, {
+          ...(this.contents.peek(key) ?? before),
           status: 'loading',
           error: null,
         });
@@ -1292,8 +1327,8 @@ export class TranscriptOwner {
             encoding: reply.encoding,
             data: reply.data,
           };
-          const chunks = [...(this.contents.get(key)?.chunks ?? []), chunk];
-          this.contents.set(key, {
+          const chunks = [...(this.contents.peek(key)?.chunks ?? []), chunk];
+          this.writeContent(key, {
             ...before,
             chunks,
             retainedFrom: chunks[0]?.offset ?? loadedBytes,
@@ -1305,8 +1340,8 @@ export class TranscriptOwner {
           });
         } catch (error) {
           if (this.current() && !signal.aborted)
-            this.contents.set(key, {
-              ...(this.contents.get(key) ?? before),
+            this.writeContent(key, {
+              ...(this.contents.peek(key) ?? before),
               status:
                 normalizeApplicationError(error).code === 'Conflict' ? 'source-changed' : 'error',
               error: normalizeApplicationError(error).message,
