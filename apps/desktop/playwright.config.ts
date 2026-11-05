@@ -9,6 +9,7 @@ export default defineConfig({
   projects: [
     { name: 'editor', testMatch: 'desktop.spec.ts' },
     { name: 'local', testMatch: 'local-chat.spec.ts' },
+    { name: 'transcripts', testMatch: 'integrated-transcript.spec.ts' },
     { name: 'configuration', testMatch: 'configuration.spec.ts' },
     { name: 'reload', testMatch: ['reload.spec.ts', 'document-lifecycle.spec.ts'] },
     { name: 'composition', testMatch: ['composition.spec.ts', 'lifecycle.spec.ts'] },

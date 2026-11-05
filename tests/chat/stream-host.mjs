@@ -1,5 +1,9 @@
 // Controlled host process composition root; public SDK/service APIs only, no provider network.
 import { hostControl } from './host-control.mjs';
+import {
+  seedTranscriptHistory,
+  instrumentTranscriptReads,
+} from '../../packages/pi-runtime/test/transcript-history-fixture.ts';
 import { readFileSync } from 'node:fs';
 import { ManagedRuntime, Effect } from 'effect';
 import { Harness } from '@earendil-works/pi-durable';
@@ -14,39 +18,11 @@ const config = JSON.parse(readFileSync(process.argv[2], 'utf8'));
 const faux = fauxProvider({ tokensPerSecond: 100000 }),
   models = createModels();
 models.setProvider(faux.provider);
-const reads = { scans: 0, entries: 0, inspections: 0 };
+let reads, harness, seeded;
 const open = Harness.open;
 Harness.open = async (...args) => {
-  const harness = await open(...args),
-    commit = harness.commit.bind(harness),
-    inspect = harness.inspect.bind(harness);
-  harness.commit = (change, ctx) =>
-    commit(
-      (tx) =>
-        change(
-          new Proxy(tx, {
-            get(object, key) {
-              const value = Reflect.get(object, key);
-              if (key === 'scanEntries')
-                return (...values) => {
-                  reads.scans++;
-                  return value.apply(object, values);
-                };
-              if (key === 'entry')
-                return (...values) => {
-                  reads.entries++;
-                  return value.apply(object, values);
-                };
-              return typeof value === 'function' ? value.bind(object) : value;
-            },
-          }),
-        ),
-      ctx,
-    );
-  harness.inspect = (...args) => {
-    reads.inspections++;
-    return inspect(...args);
-  };
+  harness = await open(...args);
+  reads = instrumentTranscriptReads(harness);
   return harness;
 };
 let release;
@@ -60,6 +36,10 @@ let invocations = 0;
 const progress = Promise.withResolvers();
 const advance = (message) => {
   if (message?.type === 'next-chunk') progress.resolve();
+  if (message?.type === 'seed-history')
+    void seedTranscriptHistory(harness, message.target).then((ids) => {
+      seeded = { target: message.target, ids };
+    });
 };
 process.on('message', advance);
 faux.provider.streamSimple = (...args) => {
@@ -112,7 +92,7 @@ const runtime = ManagedRuntime.make(
 const client = makeChatClient(runtime);
 const { bound, ended, close } = hostControl(
   client,
-  () => ({ calls: invocations, tools: 0, reads: { ...reads } }),
+  () => ({ calls: invocations, tools: 0, reads: { ...reads }, seeded }),
   () => {
     release?.();
     progress.resolve();
