@@ -959,38 +959,66 @@ for (const reducedMotion of [false, true]) {
     page,
   }) => {
     await page.emulateMedia({ reducedMotion: reducedMotion ? 'reduce' : 'no-preference' });
+    await page.clock.install();
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto('/?local&design');
     await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
     await page.evaluate(() => {
       window.demo.selectCheckout = async () => '/demo/other';
     });
-    const capture = async (action: 'open' | 'close') =>
-      page.evaluate(async (action) => {
-        const plus = document.querySelector<HTMLButtonElement>(
-          'button[aria-label="Open checkout"]',
-        )!;
-        const close = () =>
-          document.querySelector<HTMLButtonElement>(
-            'button[aria-label="Close checkout /demo/other"]',
-          );
-        const frames = [{ x: plus.getBoundingClientRect().x, inert: false, disabled: false }];
-        (action === 'open' ? plus : close()!).click();
-        for (let i = 0; i < 32; i++) {
-          await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-          const exiting = close();
-          frames.push({
+    await page.clock.pauseAt(await page.evaluate(() => Date.now() + 60_000));
+    const capture = async (action: 'open' | 'close') => {
+      const frames = [
+        await page.evaluate((action) => {
+          const plus = document.querySelector<HTMLButtonElement>(
+            'button[aria-label="Open checkout"]',
+          )!;
+          const frame = {
+            at: performance.now(),
             x: plus.getBoundingClientRect().x,
-            inert: Boolean(exiting?.closest('[inert]')),
-            disabled: exiting?.disabled ?? false,
-          });
-        }
-        return frames;
-      }, action);
+            inert: false,
+            disabled: false,
+          };
+          (action === 'open'
+            ? plus
+            : document.querySelector<HTMLButtonElement>(
+                'button[aria-label="Close checkout /demo/other"]',
+              )!
+          ).click();
+          return frame;
+        }, action),
+      ];
+      for (let i = 0; i < 32; i++) {
+        await page.clock.runFor(16);
+        frames.push(
+          await page.evaluate(() => {
+            const plus = document.querySelector<HTMLButtonElement>(
+              'button[aria-label="Open checkout"]',
+            )!;
+            const exiting = document.querySelector<HTMLButtonElement>(
+              'button[aria-label="Close checkout /demo/other"]',
+            );
+            return {
+              at: performance.now(),
+              x: plus.getBoundingClientRect().x,
+              inert: Boolean(exiting?.closest('[inert]')),
+              disabled: exiting?.disabled ?? false,
+            };
+          }),
+        );
+      }
+      return frames;
+    };
     const opened = await capture('open');
     await expect(page.getByRole('tab', { name: 'other · main', exact: true })).toBeVisible();
     const closed = await capture('close');
     await expect(page.getByRole('tab', { name: 'other · main', exact: true })).toHaveCount(0);
+    await mkdir(test.info().outputDir, { recursive: true });
+    const framesPath = test.info().outputPath('tab-motion-frames.json');
+    await writeFile(framesPath, JSON.stringify({ reducedMotion, opened, closed }, null, 2));
+    await test
+      .info()
+      .attach('tab-motion-frames', { path: framesPath, contentType: 'application/json' });
     for (const frames of [opened, closed]) {
       const start = frames[0].x,
         end = frames.at(-1)!.x;
@@ -1001,13 +1029,7 @@ for (const reducedMotion of [false, true]) {
       expect(intermediate).toBe(!reducedMotion);
     }
     if (!reducedMotion) expect(closed.some((frame) => frame.inert && frame.disabled)).toBe(true);
-    await mkdir(resolve('../../test-results/redesign-review'), { recursive: true });
-    await writeFile(
-      resolve(
-        `../../test-results/redesign-review/tab-motion-${reducedMotion ? 'reduced' : 'normal'}.json`,
-      ),
-      JSON.stringify({ reducedMotion, opened, closed }, null, 2),
-    );
+    await page.clock.resume();
     if (!reducedMotion) {
       await page.evaluate(async () => {
         const plus = document.querySelector<HTMLButtonElement>(
