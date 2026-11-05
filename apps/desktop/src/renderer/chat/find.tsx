@@ -6,6 +6,22 @@ import { controls } from '@moonbase/ui/controls';
 import { colors, space, type } from '@moonbase/ui/tokens.stylex';
 import type { ChatController, TranscriptFindState } from '@moonbase/application/chat';
 
+export function activateChatFind(controller: ChatController, element: Element) {
+  const owner = element.closest<HTMLElement>('[data-chat-find-owner]');
+  const selected = controller.getSnapshot().selected;
+  const identity = JSON.stringify([controller.backendId, selected]);
+  if (!selected || !owner?.isConnected || owner.dataset.chatFindOwner !== identity) return;
+  controller.openFind();
+  const current = controller.getSnapshot();
+  if (
+    !current.transcript.find.open ||
+    JSON.stringify([controller.backendId, current.selected]) !== identity
+  )
+    return;
+  owner
+    .querySelector<HTMLInputElement>('input[aria-label="Find in conversation"]')
+    ?.focus({ preventScroll: true });
+}
 export function openChatFind(event: KeyboardEvent, controller: ChatController) {
   if (event.key === 'Escape' && controller.getSnapshot().transcript.find.open) {
     event.preventDefault();
@@ -25,7 +41,7 @@ export function openChatFind(event: KeyboardEvent, controller: ChatController) {
   if (!controller.getSnapshot().selected) return;
   event.preventDefault();
   event.stopPropagation();
-  controller.openFind();
+  activateChatFind(controller, event.currentTarget);
 }
 export function FindBar({
   controller,
