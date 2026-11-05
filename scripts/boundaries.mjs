@@ -93,6 +93,8 @@ export const processRoots = new Set([
 ]);
 const infrastructure = new Set(['workspace', 'pi-runtime', 'ssh']);
 const portable = new Set(['application', 'contracts', 'effect']);
+// Browser-safe, dependency-free externals portable packages may import.
+const portableExternal = /^(?:effect|lru-cache)(?:\/|$)/;
 const forbiddenPortable =
   /^(?:node:|electron(?:\/|$)|react(?:-dom)?(?:\/|$)|monaco-editor(?:\/|$)|@effect\/platform|@earendil-works\/|(?:fs|path|crypto|http|net|child_process)$)/;
 const owner = (path) => path.match(/^packages\/([^/]+)\//)?.[1];
@@ -173,9 +175,9 @@ export function checkBoundaries({ files, packages }) {
         if (
           !edge.specifier.startsWith('.') &&
           !edge.specifier.startsWith('@moonbase/') &&
-          !/^effect(?:\/|$)/.test(edge.specifier)
+          !portableExternal.test(edge.specifier)
         )
-          reject(path, edge, 'portable external dependency must be portable Effect');
+          reject(path, edge, 'portable external dependency is not allowlisted');
         if (
           destination &&
           destination !== sourceOwner &&

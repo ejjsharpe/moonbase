@@ -24,6 +24,10 @@ test('Foundation verifies browser-only command contracts and headless models wit
       path.join(root, 'node_modules/effect'),
       path.join(directory, 'node_modules/effect'),
     );
+    symlinkSync(
+      path.join(root, 'packages/application/node_modules/lru-cache'),
+      path.join(directory, 'node_modules/lru-cache'),
+    );
     const check = () =>
       spawnSync(process.execPath, [path.join(root, 'scripts/check-foundation.mjs')], {
         cwd: directory,
