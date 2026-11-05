@@ -38,10 +38,14 @@ import { IpcLifetime } from '../ipc-lifetime.ts';
 export const transcriptImageTokenLifetime = 10 * 60 * 1000;
 /** Concurrent stored-image reads; later ones queue, leaving request capacity for Stop and other commands. */
 const maximumImageReads = 6;
+/** Image requests the renderer never aborts must not grow the queue without bound. */
+const maximumQueuedImageReads = 64;
 type ImageBinding = { key: string; image: TranscriptImage };
 type ImageReadWaiter = { resolve(): void; reject(error: ApplicationError): void };
 const makeImageReadCancelledError = () =>
   new ApplicationError({ code: 'Cancelled', message: 'Image read cancelled.' });
+const makeImageReadsBusyError = () =>
+  new ApplicationError({ code: 'Unavailable', message: 'Image reads are busy.' });
 
 /** A window's bounded IPC waits and observations; commands still enter shared application handlers. */
 export class ChatIpcSession {
@@ -56,6 +60,8 @@ export class ChatIpcSession {
   private imageTokens = new Map<string, string>();
   private imageReads = 0;
   private imageReadQueue: ImageReadWaiter[] = [];
+  /** In-flight image request IDs, cancelled when their URLs are revoked. */
+  private imageRequests = new Set<string>();
   private closed = false;
   readonly context: ChatSession;
   private emit: (id: string, result: Reply) => void;
@@ -78,7 +84,7 @@ export class ChatIpcSession {
       ttl: transcriptImageTokenLifetime,
       ttlResolution: 0,
       updateAgeOnGet: true,
-      ...(capabilities.clock ? { perf: capabilities.clock } : {}),
+      ...(capabilities.perf ? { perf: capabilities.perf } : {}),
       dispose: ({ key }, token) => {
         if (this.imageTokens.get(key) === token) this.imageTokens.delete(key);
       },
@@ -205,12 +211,18 @@ export class ChatIpcSession {
         value = await this.chat.command(operation as ChatCommand, v as never, {
           signal: request.signal,
         });
+      else if (operation === 'getConnection')
+        value = await this.connection!.command(operation, v as never, { signal: request.signal });
       else {
-        // Image URLs belong to the connection that issued them.
-        if (operation !== 'getConnection') this.revokeImages();
-        value = await this.connection!.command(operation as ConnectionCommand, v as never, {
-          signal: request.signal,
-        });
+        // Image URLs belong to the connection that issued them, including ones issued mid-change.
+        this.revokeImages();
+        try {
+          value = await this.connection!.command(operation as ConnectionCommand, v as never, {
+            signal: request.signal,
+          });
+        } finally {
+          this.revokeImages();
+        }
       }
       return { ok: true, value };
     } catch (e) {
@@ -235,8 +247,13 @@ export class ChatIpcSession {
     const image = this.images.get(token)?.image;
     return image && { image, read: (signal) => this.readImage(image, signal) };
   }
+  /** Revokes every issued URL, fails queued reads and cancels in-flight ones. */
   private revokeImages() {
     this.images.clear();
+    const queued = this.imageReadQueue;
+    this.imageReadQueue = [];
+    for (const waiter of queued) waiter.reject(makeImageReadCancelledError());
+    for (const id of this.imageRequests) void this.lifetime.cancel(id);
   }
   private async acquireImageRead(signal: AbortSignal) {
     if (this.closed || signal.aborted) throw makeImageReadCancelledError();
@@ -244,6 +261,7 @@ export class ChatIpcSession {
       this.imageReads++;
       return;
     }
+    if (this.imageReadQueue.length >= maximumQueuedImageReads) throw makeImageReadsBusyError();
     const queued = Promise.withResolvers<void>();
     const waiter: ImageReadWaiter = { resolve: queued.resolve, reject: queued.reject };
     const abort = () => {
@@ -269,13 +287,15 @@ export class ChatIpcSession {
     try {
       const id = `image:${randomUUID()}`;
       if (signal.aborted || this.lifetime.getAdmissionError(id, false))
-        throw new ApplicationError({ code: 'Unavailable', message: 'Image reads are busy.' });
+        throw makeImageReadsBusyError();
       const request = this.lifetime.reserveRequest(id, false);
       const cancel = () => void this.lifetime.cancel(id);
       signal.addEventListener('abort', cancel, { once: true });
+      this.imageRequests.add(id);
       try {
         return await readTranscriptImage(this.chat, image, request);
       } finally {
+        this.imageRequests.delete(id);
         signal.removeEventListener('abort', cancel);
         await request.finish();
       }
@@ -290,9 +310,6 @@ export class ChatIpcSession {
   dispose() {
     this.closed = true;
     this.revokeImages();
-    const queued = this.imageReadQueue;
-    this.imageReadQueue = [];
-    for (const waiter of queued) waiter.reject(makeImageReadCancelledError());
     return this.lifetime.dispose();
   }
   get count() {
@@ -303,5 +320,5 @@ export type ChatIpcCapabilities = {
   providers?: ProviderSetupClient;
   transcript?: NativeTranscriptActions;
   /** lru-cache clock for image URL expiry; tests inject one. */
-  clock?: { now(): number };
+  perf?: { now(): number };
 };

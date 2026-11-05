@@ -132,86 +132,6 @@ for (const kind of ['editor', 'chat'] as const) {
     }
   });
 
-  // Only the editor replaces its document in place; chat backends dispose and recreate sessions.
-  for (const failure of kind === 'editor' ? [false, true] : []) {
-    test(`${kind} reentrant document replacement isolates a reused ID and joins ${failure ? 'failing' : 'held'} release`, async () => {
-      const releasing = Promise.withResolvers<void>(),
-        gate = Promise.withResolvers<void>();
-      const receives: (() => void)[] = [],
-        releases = [0, 0];
-      let replacement: Promise<void> | undefined,
-        newWatch: ReturnType<EditorSession['call']> | undefined,
-        delivered = 0;
-      const f = await createSession(
-        kind,
-        (receive) => {
-          const index = receives.length;
-          receives.push(receive);
-          receive();
-          if (index === 0) receive();
-          return async () => {
-            releases[index]++;
-            if (index === 0) {
-              releasing.resolve();
-              await gate.promise;
-            }
-          };
-        },
-        () => {
-          delivered++;
-          if (delivered === 1) {
-            assert(f.owner instanceof EditorSession);
-            replacement = f.owner.releaseDocument();
-            newWatch = f.watch('reused');
-          }
-        },
-      );
-      try {
-        const oldWatch = f.watch('reused');
-        assert(replacement);
-        const outcome = replacement.then(
-          () => undefined,
-          (error: unknown) => error,
-        );
-        let settled = false;
-        void outcome.then(() => {
-          settled = true;
-        });
-        await releasing.promise;
-        assert.equal(settled, false);
-        assert((await newWatch)?.ok);
-        receives[0]();
-        receives[1]();
-        assert.equal(delivered, 3);
-        assert((await f.command('unrelated')).ok);
-        assert.equal(await runApplicationEffect(f.runtime, Effect.succeed('usable')), 'usable');
-        assert((await f.owner.cancel('reused')).ok);
-        assert.deepEqual(releases, [1, 1]);
-        receives[1]();
-        assert.equal(delivered, 3);
-        if (failure)
-          gate.reject(new ApplicationError({ code: 'Persistence', message: 'Old release failed' }));
-        else gate.resolve();
-        assert((await oldWatch).ok);
-        const error = await outcome;
-        const disposal = f.owner.dispose();
-        assert.equal(f.owner.dispose(), disposal);
-        if (failure) {
-          assert(ApplicationError.is(error));
-          assert.equal(error.code, 'Persistence');
-          await assert.rejects(disposal, { code: 'Persistence' });
-        } else {
-          assert.equal(error, undefined);
-          await disposal;
-        }
-        assert.deepEqual(releases, [1, 1]);
-      } finally {
-        gate.resolve();
-        await f.dispose();
-      }
-    });
-  }
-
   test(`${kind} keeps command/watch capacity separate`, async () => {
     const gate = Promise.withResolvers<void>();
     const f = await createSession(
@@ -278,6 +198,86 @@ for (const kind of ['editor', 'chat'] as const) {
       assert.equal(f.owner.dispose(), disposal);
       await assert.rejects(disposal, { code: 'Persistence' });
     } finally {
+      await f.dispose();
+    }
+  });
+}
+
+// Only the editor replaces its document in place; chat-backends.test.ts covers chat document replacement.
+for (const failure of [false, true]) {
+  test(`editor reentrant document replacement isolates a reused ID and joins ${failure ? 'failing' : 'held'} release`, async () => {
+    const releasing = Promise.withResolvers<void>(),
+      gate = Promise.withResolvers<void>();
+    const receives: (() => void)[] = [],
+      releases = [0, 0];
+    let replacement: Promise<void> | undefined,
+      newWatch: ReturnType<EditorSession['call']> | undefined,
+      delivered = 0;
+    const f = await createSession(
+      'editor',
+      (receive) => {
+        const index = receives.length;
+        receives.push(receive);
+        receive();
+        if (index === 0) receive();
+        return async () => {
+          releases[index]++;
+          if (index === 0) {
+            releasing.resolve();
+            await gate.promise;
+          }
+        };
+      },
+      () => {
+        delivered++;
+        if (delivered === 1) {
+          assert(f.owner instanceof EditorSession);
+          replacement = f.owner.releaseDocument();
+          newWatch = f.watch('reused');
+        }
+      },
+    );
+    try {
+      const oldWatch = f.watch('reused');
+      assert(replacement);
+      const outcome = replacement.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      let settled = false;
+      void outcome.then(() => {
+        settled = true;
+      });
+      await releasing.promise;
+      assert.equal(settled, false);
+      assert((await newWatch)?.ok);
+      receives[0]();
+      receives[1]();
+      assert.equal(delivered, 3);
+      assert((await f.command('unrelated')).ok);
+      assert.equal(await runApplicationEffect(f.runtime, Effect.succeed('usable')), 'usable');
+      assert((await f.owner.cancel('reused')).ok);
+      assert.deepEqual(releases, [1, 1]);
+      receives[1]();
+      assert.equal(delivered, 3);
+      if (failure)
+        gate.reject(new ApplicationError({ code: 'Persistence', message: 'Old release failed' }));
+      else gate.resolve();
+      assert((await oldWatch).ok);
+      const error = await outcome;
+      const disposal = f.owner.dispose();
+      assert.equal(f.owner.dispose(), disposal);
+      if (failure) {
+        assert(ApplicationError.is(error));
+        assert.equal(error.code, 'Persistence');
+        await assert.rejects(disposal, { code: 'Persistence' });
+      } else {
+        assert.equal(error, undefined);
+        await disposal;
+      }
+      assert.deepEqual(releases, [1, 1]);
+    } finally {
+      gate.resolve();
       await f.dispose();
     }
   });

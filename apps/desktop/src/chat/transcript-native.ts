@@ -1,11 +1,6 @@
 import { decodeChatInput } from '@moonbase/contracts/chat-schema';
 import { ApplicationError } from '@moonbase/contracts/errors';
-import type {
-  ChatClient,
-  ChatSnapshot,
-  ChatTranscriptPart,
-  ChatTranscriptSelection,
-} from '@moonbase/contracts/chat';
+import type { ChatClient, ChatSnapshot, ChatTranscriptSelection } from '@moonbase/contracts/chat';
 import {
   iterateTranscriptSource,
   makeTranscriptReader,
@@ -140,8 +135,6 @@ export async function respondTranscriptImage(
   });
 }
 
-type ObservedPart = Pick<ChatTranscriptPart, 'bytes' | 'revision' | 'availability'>;
-
 /** Main-only validated source retrieval; the request owns observation and actual IO settlement. */
 async function readTranscript<T>(
   chat: ChatClient,
@@ -159,23 +152,6 @@ async function readTranscript<T>(
   const ready = Promise.withResolvers<void>();
   const pending = new Set<Promise<unknown>>();
   const selections: ChatTranscriptSelection[] = [];
-  // Live parts grow by appending; a later snapshot that shrinks or rewrites a part is a real change.
-  const observed = new Map<string, ObservedPart>();
-  const rewritten = new Set<string>();
-  const observe = (next: ChatSnapshot) => {
-    for (const { partId, bytes, revision, availability } of next.run?.transcript?.parts ?? []) {
-      const previous = observed.get(partId);
-      if (
-        previous &&
-        (bytes < previous.bytes ||
-          (bytes === previous.bytes && revision !== previous.revision) ||
-          availability !== previous.availability)
-      )
-        rewritten.add(partId);
-      observed.set(partId, { bytes, revision, availability });
-    }
-    snapshot = next;
-  };
   const readContent = makeTranscriptReader(chat);
   // The main-process ChatClient boundary has already decoded and bounded replies and snapshots.
   const read: TranscriptRead = (input, options) => {
@@ -195,9 +171,7 @@ async function readTranscript<T>(
       source.kind === 'live' &&
       (!snapshot ||
         snapshot.observationStatus === 'reconnecting' ||
-        !areTranscriptValuesEqual(snapshot.run?.transcript?.source, source) ||
-        (selection && rewritten.has(selection.partId)) ||
-        selections.some(({ partId }) => rewritten.has(partId)))
+        !areTranscriptValuesEqual(snapshot.run?.transcript?.source, source))
     )
       throw makeSourceChangedError();
   };
@@ -206,7 +180,7 @@ async function readTranscript<T>(
       ? chat.watch(
           { target: source.target },
           (value) => {
-            observe(value);
+            snapshot = value;
             ready.resolve();
           },
           (error) => {
@@ -223,7 +197,7 @@ async function readTranscript<T>(
     check();
     // The iterator validates every manifest/content echo, chunk and continuation independently of UI retention.
     const parts: string[][] = [];
-    let bytes = 0;
+    let total = 0;
     for await (const chunk of iterateTranscriptSource({
       source,
       selection,
@@ -260,8 +234,8 @@ async function readTranscript<T>(
             message: 'Transcript manifest repeats a selected part.',
           });
         // Iteration proves each part delivers exactly its selected bytes, so refuse before buffering it.
-        bytes += chunk.selection.bytes + (parts.length ? transcriptPartSeparator.length : 0);
-        if (bytes > limit.bytes) throw makeTooLargeError();
+        total += chunk.selection.bytes + (parts.length ? transcriptPartSeparator.length : 0);
+        if (total > limit.bytes) throw makeTooLargeError();
         selections.push(chunk.selection);
         parts.push([]);
       }
@@ -273,8 +247,9 @@ async function readTranscript<T>(
         code: 'Unavailable',
         message: 'No authored text is available to copy.',
       });
-    // A fresh fixed-prefix proof per part after iteration; a held earlier reply is insufficient. Appends
-    // keep the copied prefix, while check() refuses a source change, reconnect or observed rewrite.
+    // The host re-hashes the selected prefix on every read, so one fresh read per part after iteration
+    // fixes the copied snapshot point; appends keep that prefix. check() still refuses a source change,
+    // reconnect, finalisation or observation failure.
     if (source.kind === 'live')
       for (const selected of selections) {
         const reply = await read({ source, selection: selected }, { signal: request.signal });

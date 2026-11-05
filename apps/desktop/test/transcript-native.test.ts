@@ -429,14 +429,7 @@ test('live Copy excludes a pure append and obtains fresh fixed-prefix proof befo
   await f.owner.dispose();
 });
 test('held content/final proof cannot authorize replacement, rollover, finalization or reconnect', async () => {
-  for (const change of [
-    'replace',
-    'finalize',
-    'reconnect',
-    'proof-replace',
-    'proof-finalize',
-    'proof-reconnect',
-  ]) {
+  for (const change of ['replace', 'finalize', 'reconnect', 'proof-finalize', 'proof-reconnect']) {
     const f = fixture(true);
     const selected = select(f.part);
     let changed = false;
@@ -453,12 +446,25 @@ test('held content/final proof cannot authorize replacement, rollover, finalizat
         }
       }
     };
-    await assert.rejects(f.actions.copy({ source: f.source, selection: selected }), {
-      code: 'Conflict',
-    });
+    // The host refuses a replaced prefix on the next read; main refuses observed source changes.
+    await assert.rejects(
+      f.actions.copy({ source: f.source, selection: selected }),
+      change === 'replace' ? ApplicationError : { code: 'Conflict' },
+    );
     assert.deepEqual(f.writes, []);
     await f.owner.dispose();
   }
+});
+test('a replacement after the host answers the proof copies the proven prefix', async () => {
+  const f = fixture(true);
+  f.controls.beforeRead = async (read) => {
+    // The proof reply was computed from the original prefix before this replacement.
+    if (read === 7) f.controls.setText('replacement');
+  };
+  await f.actions.copy({ source: f.source, selection: select(f.part) });
+  assert.deepEqual(f.writes, [f.original]);
+  assert.equal(f.reads, 7);
+  await f.owner.dispose();
 });
 test('cancel/document replacement fences late code reads and joins actual settlement without blocking other commands', async () => {
   const f = fixture(false, '```js\r\n  🌔\r\n```\r\n');
@@ -1072,6 +1078,37 @@ test('Copy refuses more than its byte limit as soon as a part would exceed it', 
     await assert.rejects(f.copy({ selection: over }), { code: 'Unavailable', message: /8 MiB/ });
     assert.equal(f.reads.length, reads, 'an over-limit selection is refused before reading');
     assert.deepEqual(f.writes, []);
+  } finally {
+    await f.owner.dispose();
+  }
+});
+
+test('Copy accepts exactly its byte limit including part separators', async () => {
+  const mib = 1024 * 1024;
+  const first = 'a'.repeat(4 * mib),
+    second = 'b'.repeat(maximumTranscriptCopyBytes - first.length - 2);
+  const exact = partsFixture([first, second], mib);
+  try {
+    await exact.copy();
+    assert.equal(exact.writes[0]!.length, maximumTranscriptCopyBytes);
+  } finally {
+    await exact.owner.dispose();
+  }
+  const over = partsFixture([first, second + 'b'], mib);
+  try {
+    await assert.rejects(over.copy(), { code: 'Unavailable', message: /8 MiB/ });
+    assert.deepEqual(over.writes, []);
+  } finally {
+    await over.owner.dispose();
+  }
+});
+
+test('link opening pins URL normalisation of slashless and uppercase forms', async () => {
+  const f = fixture();
+  try {
+    await f.actions.openLink('https:example.com');
+    await f.actions.openLink('HTTPS://Example.com/a%20b');
+    assert.deepEqual(f.links, ['https://example.com/', 'https://example.com/a%20b']);
   } finally {
     await f.owner.dispose();
   }

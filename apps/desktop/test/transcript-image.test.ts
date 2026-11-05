@@ -22,7 +22,12 @@ const csp = "default-src 'none'; img-src 'self' data:";
 
 function fixture(
   bytes: Buffer,
-  options: { clock?: { now(): number }; connection?: ConnectionClient } = {},
+  options: {
+    perf?: { now(): number };
+    connection?: ConnectionClient;
+    /** Holds unrelated chat commands so they occupy request capacity. */
+    commands?: Promise<void>;
+  } = {},
 ) {
   const selection = {
     partId: 'image',
@@ -34,10 +39,14 @@ function fixture(
     hold: Promise<void> | undefined;
   // Trusted ChatClient: chunks past the selected size are rejected at the ChatClient boundary.
   const chat: ChatClient = {
-    async command(operation, input, options) {
+    async command(operation, input, commandOptions) {
+      if (operation === 'getChat') {
+        await options.commands;
+        return null as never;
+      }
       assert.equal(operation, 'getChatTranscriptContent');
       reads++;
-      signals.push(options!.signal!);
+      signals.push(commandOptions!.signal!);
       await hold;
       const offset = Number((input as { cursor?: string }).cursor ?? 0),
         end = Math.min(offset + 256, bytes.length);
@@ -55,7 +64,7 @@ function fixture(
     watch: () => () => Promise.resolve(),
   };
   const session = new ChatIpcSession(runtime, chat, options.connection ?? null, context, () => {}, {
-    clock: options.clock,
+    perf: options.perf,
   });
   let id = 0;
   const issue = async (mimeType: string, value = selection) => {
@@ -125,7 +134,7 @@ test('unknown, revoked and wrong-host image URLs grant nothing', async () => {
 
 test('an unrequested token expires while each request extends its lifetime', async () => {
   let now = 1000;
-  const f = fixture(png, { clock: { now: () => now } });
+  const f = fixture(png, { perf: { now: () => now } });
   const url = await f.issue('image/png');
   now += transcriptImageTokenLifetime - 1;
   assert.equal((await f.serve(url)).status, 200, 'a request refreshes the binding');
@@ -161,6 +170,97 @@ test('connecting or disconnecting revokes issued tokens', async () => {
     assert.equal((await f.serve(issued)).status, 404);
   }
   assert.deepEqual(operations, ['getConnection', 'disconnect', 'connect']);
+  await f.session.dispose();
+});
+
+test('a token issued while connect is held is revoked once connect settles', async () => {
+  const gate = Promise.withResolvers<void>(),
+    entered = Promise.withResolvers<void>();
+  const connection: ConnectionClient = {
+    command: async () => {
+      entered.resolve();
+      await gate.promise;
+      return { state: 'connected' } as never;
+    },
+    watch: () => async () => {},
+  };
+  const f = fixture(png, { connection });
+  const connecting = f.session.call('connection', 'connect', { profileId: 'profile' }, 'connect');
+  await entered.promise;
+  const issued = await f.issue('image/png');
+  gate.resolve();
+  assert((await connecting).ok);
+  assert.equal((await f.serve(issued)).status, 404);
+  assert.equal(f.reads, 0);
+  await f.session.dispose();
+});
+
+test('revocation fails queued reads and cancels in-flight ones', async () => {
+  const connection: ConnectionClient = {
+    command: async () => undefined as never,
+    watch: () => async () => {},
+  };
+  const f = fixture(png, { connection });
+  const urls = await Promise.all(
+    Array.from({ length: 7 }, (_, index) =>
+      f.issue('image/png', { ...f.selection, partId: `image-${index}` }),
+    ),
+  );
+  const gate = Promise.withResolvers<void>();
+  f.hold(gate.promise);
+  const running = urls.slice(0, 6).map((url) => f.serve(url));
+  while (f.reads < 6) await new Promise((resolve) => setImmediate(resolve));
+  const queued = f.serve(urls[6]!);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert(
+    (await f.session.call('connection', 'disconnect', { connectionId: 'c' }, 'disconnect')).ok,
+  );
+  assert.equal((await queued).status, 502);
+  assert(f.signals.every((signal) => signal.aborted));
+  gate.resolve();
+  for (const response of await Promise.all(running)) assert.equal(response.status, 502);
+  assert.equal(f.reads, 6);
+  assert.equal(f.session.count, 0);
+  await f.session.dispose();
+});
+
+test('the image read queue is bounded and refuses overflow as busy', async () => {
+  const f = fixture(png);
+  const urls = await Promise.all(
+    Array.from({ length: 6 + 64 + 1 }, (_, index) =>
+      f.issue('image/png', { ...f.selection, partId: `image-${index}` }),
+    ),
+  );
+  const gate = Promise.withResolvers<void>();
+  f.hold(gate.promise);
+  const running = urls.slice(0, 6).map((url) => f.serve(url));
+  while (f.reads < 6) await new Promise((resolve) => setImmediate(resolve));
+  const queued = urls.slice(6, 70).map((url) => f.serve(url));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal((await f.serve(urls[70]!)).status, 502);
+  assert.equal(f.reads, 6);
+  gate.resolve();
+  for (const response of await Promise.all([...running, ...queued]))
+    assert.equal(response.status, 200);
+  await f.session.dispose();
+});
+
+test('a read slot is released when the session request limit is full', async () => {
+  const commands = Promise.withResolvers<void>();
+  const f = fixture(png, { commands: commands.promise });
+  const url = await f.issue('image/png');
+  const target = { ...context, conversationId: 'chat' };
+  const held = Array.from({ length: 64 }, (_, index) =>
+    f.session.call('chat', 'getChat', { target }, `held-${index}`),
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(f.session.count, 64);
+  for (let attempt = 0; attempt < 7; attempt++)
+    assert.equal((await f.serve(url)).status, 502, 'Image reads are busy');
+  assert.equal(f.reads, 0);
+  commands.resolve();
+  for (const reply of await Promise.all(held)) assert(reply.ok);
+  assert.equal((await f.serve(url)).status, 200, 'every refused read released its slot');
   await f.session.dispose();
 });
 
