@@ -59,12 +59,75 @@ export function transcriptFixture(count = 640, local = true) {
     if (operation === 'getChatHost')
       return {
         ...base.dependencies.context,
-        features: ['transcript-v1', 'chat-stream-v1'],
+        features: ['transcript-v1', 'chat-stream-v1', 'transcript-find-v1'],
         ...(local ? { mode: 'local' } : { cwd: '/controlled', model: 'controlled' }),
       };
     if (operation === 'listChats')
       return { conversations: [snapshot.conversation], nextCursor: null };
     if (operation === 'getChat') return structuredClone(snapshot);
+    if (operation === 'findChatTranscript') {
+      const request = input as ChatInput<'findChatTranscript'>;
+      const position = request.cursor
+        ? (JSON.parse(request.cursor) as {
+            upper: number;
+            index: number;
+            part: number;
+            offset: number;
+            bytes: number;
+          })
+        : { upper: entries.length, index: 0, part: 0, offset: 0, bytes: 0 };
+      const startCursor = JSON.stringify({
+        upper: position.upper,
+        index: 0,
+        part: 0,
+        offset: 0,
+        bytes: 0,
+      });
+      const matches: ChatOutput<'findChatTranscript'>['matches'] = [];
+      const expression = new RegExp(request.query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu');
+      let rows = 0;
+      while (position.index < position.upper && rows++ < 32 && matches.length < 32) {
+        const entry = entries[position.index],
+          source = entry.transcript!.source;
+        const data = sources.get(JSON.stringify(source))!.data;
+        for (; position.part < data.length; position.part++, position.offset = 0) {
+          expression.lastIndex = position.offset;
+          let found: RegExpExecArray | null;
+          while ((found = expression.exec(data[position.part]))) {
+            const start = found.index,
+              end = start + found[0].length;
+            matches.push({
+              source: source as never,
+              partId: `m0.b${position.part}`,
+              start,
+              end,
+              snippet: {
+                start: Math.max(0, start - 30),
+                text: data[position.part].slice(Math.max(0, start - 30), end + 30),
+              },
+            });
+            position.offset = end;
+            if (matches.length === 32) break;
+          }
+          if (matches.length === 32) break;
+        }
+        if (matches.length === 32) break;
+        position.index++;
+        position.part = 0;
+        position.offset = 0;
+      }
+      position.bytes++;
+      return {
+        target: request.target,
+        query: request.query,
+        cursor: request.cursor ?? null,
+        startCursor,
+        upperEntryId: entries[position.upper - 1]?.id ?? null,
+        matches,
+        progress: { entries: position.index, bytes: position.bytes },
+        nextCursor: position.index < position.upper ? JSON.stringify(position) : null,
+      };
+    }
     if (operation === 'getChatHistoryAround') {
       const request = input as ChatInput<'getChatHistoryAround'>;
       const index = entries.findIndex((entry) => entry.id === request.entryId);

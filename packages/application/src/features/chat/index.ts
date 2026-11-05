@@ -27,6 +27,7 @@ export type {
 export { transcriptLimits } from './transcript.ts';
 export type {
   TranscriptState,
+  TranscriptFindState,
   TranscriptManifestState,
   TranscriptContentState,
 } from './transcript.ts';

@@ -630,6 +630,7 @@ class ChatModelState {
         backend: this.backend,
         memory: this.transcriptMemory,
         capable: this.state.host?.features?.includes('transcript-v1') ?? false,
+        findCapable: this.state.host?.features?.includes('transcript-find-v1') ?? false,
         streaming: this.state.host?.features?.includes('chat-stream-v1') ?? false,
         local: this.mode === 'local',
         publish: (state, snapshot) => {
@@ -698,6 +699,13 @@ class ChatModelState {
     if (!this.admissionsOpen || this.closed) return undefined;
     return this.selection?.alive ? this.selection.transcript : undefined;
   }
+  openFind = () => this.transcriptOwner()?.openFind();
+  cancelFindReveal = () => this.transcriptOwner()?.cancelFindReveal();
+  closeFind = () => this.transcriptOwner()?.closeFind();
+  findTranscript = (query: string) =>
+    this.transcriptOwner()?.findTranscript(query) ?? Promise.resolve();
+  nextFindMatch = () => this.transcriptOwner()?.moveFind('next') ?? Promise.resolve();
+  previousFindMatch = () => this.transcriptOwner()?.moveFind('previous') ?? Promise.resolve();
   older = () => this.transcriptOwner()?.earlier() ?? Promise.resolve();
   later = () => this.transcriptOwner()?.later() ?? Promise.resolve();
   jumpToEntry = (entryId: string) => this.transcriptOwner()?.around(entryId) ?? Promise.resolve();
@@ -1087,6 +1095,12 @@ export type ChatController = Pick<
   | 'closeView'
   | 'older'
   | 'later'
+  | 'openFind'
+  | 'closeFind'
+  | 'cancelFindReveal'
+  | 'findTranscript'
+  | 'nextFindMatch'
+  | 'previousFindMatch'
   | 'jumpToEntry'
   | 'jumpToLatest'
   | 'setTranscriptView'
