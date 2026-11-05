@@ -406,6 +406,11 @@ export class TranscriptOwner {
     for (const key of stale) this.interruptJob(key);
     this.publish();
   }
+  /** Shows the last accepted snapshot as reconnecting while the watch is reopened. */
+  markReconnecting() {
+    if (this.snapshot && this.isCurrent())
+      this.acceptSnapshot({ ...this.snapshot, observationStatus: 'reconnecting' });
+  }
   fail(error: unknown) {
     this.failed = true;
     const failure = normalizeApplicationError(error).message;

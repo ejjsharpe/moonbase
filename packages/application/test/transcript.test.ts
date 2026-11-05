@@ -490,7 +490,7 @@ test('complete iteration rejects a manifest continuation cycle', async (t) => {
 });
 
 test('changed entry descriptors invalidate relevant hydration; explicit refresh reattaches a failed observation', async (t) => {
-  const f = await transcriptController(t, 1);
+  const f = await transcriptController(t, 1, true, { transcriptWatchRetryMs: [] });
   const entry = f.entries[0],
     source = entry.transcript!.source;
   await f.controller.loadTranscriptPart(source, selection(entry.transcript!.parts[0]));
