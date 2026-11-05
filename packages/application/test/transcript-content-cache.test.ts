@@ -57,6 +57,7 @@ function assertReportedUsage(f: Awaited<ReturnType<typeof transcriptController>>
 test('content eviction trims least-recently read prefixes first; chunk and status updates keep recency', async (t) => {
   // a, b and c fill 5.6 MiB; d adds 4.5 MiB, so b empties and c loses its oldest chunks.
   const { f, held, load, loadAll, content } = await largeParts(t, [60, 60, 60, 144]);
+  assert.equal(f.controller.getSnapshot().transcript.retained.contentBytes, serialized([]));
   await loadAll(0);
   await loadAll(1);
   for (let chunk = 0; chunk < 59; chunk++) await load(2);

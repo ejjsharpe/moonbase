@@ -227,7 +227,7 @@ export class TranscriptOwner {
     { abort: AbortController; source?: ChatTranscriptSource }
   >();
   private jobs = new Map<string, { abort: AbortController; promise: Promise<void> }>();
-  // The running total plus the opening bracket equals the serialized content array.
+  // The running total plus the opening bracket (or `[]` when empty) equals the serialized array.
   private contents = new LRUCache<string, TranscriptContentState>({
     max: 128,
     maxSize: transcriptLimits.contentBytes - 1,
@@ -437,7 +437,7 @@ export class TranscriptOwner {
       content: [...this.contents.values()].reverse(),
       retained: {
         ...this.summaryUsage(),
-        contentBytes: this.contents.size && this.contents.calculatedSize + 1,
+        contentBytes: this.contents.calculatedSize + (this.contents.size ? 1 : 2),
       },
     };
     const changed = !equal(this.published, this.state);
