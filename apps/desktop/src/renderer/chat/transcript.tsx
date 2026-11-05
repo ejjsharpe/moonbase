@@ -73,32 +73,47 @@ export function Transcript({
   if (!preserve && presented !== latestState) setPresented(latestState);
   const state = preserve ? presented : latestState;
   const scrollState = useRef(scroll),
-    current = useRef(state);
+    current = useRef(state),
+    /** The scrollTop last written here, so the scroll event it causes records nothing. */
+    written = useRef<number | null>(null);
   useLayoutEffect(() => {
     current.current = state;
   }, [state]);
   const dispatch = useCallback(
     function dispatch(event: TranscriptScrollEvent) {
-      const { state: next, instruction } = transitionTranscriptScroll(scrollState.current, event);
+      const previous = scrollState.current;
+      const { state: next, instruction } = transitionTranscriptScroll(previous, event);
       scrollState.current = next;
-      setScroll(next);
+      // Rendering reads only these; the anchor and intent change on every scroll.
+      if (
+        next.mode !== previous.mode ||
+        next.pins !== previous.pins ||
+        next.earlierRow !== previous.earlierRow ||
+        next.retry !== previous.retry
+      )
+        setScroll(next);
       const element = root.current;
       if (!element) return;
       if (instruction.cancelReveal) controller.cancelFindReveal();
-      if (instruction.scroll === 'end') element.scrollTop = element.scrollHeight;
+      const write = (top: number) => {
+        const before = element.scrollTop;
+        element.scrollTop = top;
+        // Only a moved position dispatches a scroll event to fence.
+        if (element.scrollTop !== before) written.current = element.scrollTop;
+      };
+      if (instruction.scroll === 'end') write(element.scrollHeight);
       const top =
         instruction.scroll === 'anchor' && getAnchorTop(element, next, current.current, controller);
       if (typeof top === 'number') {
-        element.scrollTop = top;
+        write(top);
         dispatch({ type: 'applied' });
       }
       if (instruction.capture)
         dispatch({ type: 'captured', position: captureAnchor(element, controller) });
-      if (instruction.save !== undefined)
-        controller.setTranscriptView({
-          anchor: instruction.save,
-          expanded: controller.getSnapshot().transcript.view.expanded,
-        });
+      const view = controller.getSnapshot().transcript.view;
+      // Following saves no anchor on each update; only a change needs a write.
+      if (instruction.save !== undefined && (instruction.save || view.anchor))
+        controller.setTranscriptView({ anchor: instruction.save, expanded: view.expanded });
       const navigation = instruction.navigate;
       if (!navigation) return;
       if (navigation === 'latest') {
@@ -214,6 +229,12 @@ export function Transcript({
       anchor.partId === find.active.partId;
     dispatch(reveal ? { type: 'reveal' } : { type: 'supplied', anchor });
   }, [state.transcript.view.anchor, dispatch]);
+  const { active: findActive, revealing: findRevealing } = state.transcript.find;
+  // Declared before the resize re-anchor: a Part has already revealed a rendered match in this
+  // commit, and re-applying the previous anchor would scroll it away again.
+  useLayoutEffect(() => {
+    if (findActive && findRevealing) dispatch({ type: 'reveal' });
+  }, [findActive, findRevealing, dispatch]);
   const resize = useCallback(() => {
     if (root.current)
       dispatch({ type: 'resized', viewport: getViewport(root.current, current.current) });
@@ -225,10 +246,11 @@ export function Transcript({
     observer.observe(content.current);
     return () => observer.disconnect();
   }, [resize]);
-  const navigate = (direction: 'earlier' | 'later') =>
+  const navigate = (direction: 'earlier' | 'later', retry?: true) =>
     dispatch({
       type: 'navigate',
       direction,
+      ...(retry && { retry }),
       viewport: getViewport(root.current!, current.current),
     });
   const input = (device: 'wheel' | 'key' | 'pointer', upward: boolean) =>
@@ -240,10 +262,13 @@ export function Transcript({
     });
   const onScroll = () => {
     const element = root.current!,
-      top = getAnchorTop(element, scrollState.current, current.current, controller);
+      top = getAnchorTop(element, scrollState.current, current.current, controller),
+      at = (target: number | null) => target !== null && Math.abs(target - element.scrollTop) < 1;
+    const held = at(written.current) || at(top);
+    written.current = null;
     dispatch({
       type: 'scrolled',
-      held: top !== null && Math.abs(top - element.scrollTop) < 1,
+      held,
       viewport: getViewport(element, current.current),
     });
   };
@@ -384,7 +409,7 @@ export function Transcript({
                 )
                   void controller.jumpToEntry(missing.entryId);
                 else if (scroll.retry === 'latest') dispatch({ type: 'latest' });
-                else navigate(scroll.retry);
+                else navigate(scroll.retry, true);
               }}>
               Retry history
             </Button>

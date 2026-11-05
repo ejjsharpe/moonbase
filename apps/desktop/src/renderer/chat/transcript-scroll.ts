@@ -42,11 +42,12 @@ export type TranscriptScrollEvent =
   /** Find moved its window around a match and owns its reveal. */
   | { type: 'reveal' }
   | { type: 'input'; device: 'wheel' | 'key' | 'pointer'; upward: boolean; viewport: Viewport }
-  /** `held`: the recorded anchor (or its fallback) is at its offset, as after programmatic scrolls. */
+  /** `held`: the position is the one last written, or the recorded anchor is at its offset. */
   | { type: 'scrolled'; held: boolean; viewport: Viewport }
   | { type: 'captured'; position: TranscriptViewAnchor | undefined }
   | { type: 'resized'; viewport: Viewport }
-  | { type: 'navigate'; direction: 'earlier' | 'later'; viewport: Viewport }
+  /** `retry` repeats the failed read rather than first revealing the boundary row. */
+  | { type: 'navigate'; direction: 'earlier' | 'later'; retry?: true; viewport: Viewport }
   | { type: 'navigated'; revision: number; saved: TranscriptViewAnchor | null; viewport: Viewport }
   /** A supplied anchor was applied, at its row/part or nearby. */
   | { type: 'applied' }
@@ -88,7 +89,7 @@ export function transitionTranscriptScroll(
     instruction: TranscriptScrollInstruction = {},
   ) => ({ state: { ...state, ...change }, instruction });
   const end = ({ atLatest, selected }: TranscriptViewport) =>
-    atLatest && !selected ? stay({ scroll: 'end' }) : stay();
+    atLatest && !selected ? ({ scroll: 'end' } as const) : {};
   switch (event.type) {
     case 'supplied':
       if (state.mode === 'navigating' || sameAnchor(state.anchor, event.anchor)) return stay();
@@ -111,7 +112,9 @@ export function transitionTranscriptScroll(
         : result;
     }
     case 'scrolled': {
-      if (event.held || state.mode === 'restoring') return stay();
+      // Following keeps tracking the anchor that input leaving it will keep.
+      if (event.held) return state.mode === 'following' ? stay({ capture: true }) : stay();
+      if (state.mode === 'restoring') return stay();
       if (state.mode === 'navigating') return stay({ capture: true });
       const { viewport } = event;
       if (viewport.atLatest && !viewport.selected && viewport.bottom < endDistance)
@@ -131,10 +134,16 @@ export function transitionTranscriptScroll(
       );
     }
     case 'resized':
-      if (state.mode === 'following') return end(event.viewport);
+      if (state.mode === 'following' && event.viewport.atLatest && !event.viewport.selected)
+        return stay({ scroll: 'end' });
+      // Selected text while following, like any reading position, holds its anchor.
       return state.anchor ? stay({ scroll: 'anchor' }) : stay();
     case 'navigate': {
-      const row = event.direction === 'earlier' && event.viewport.boundary && !state.earlierRow;
+      const row =
+        !event.retry &&
+        event.direction === 'earlier' &&
+        event.viewport.boundary &&
+        !state.earlierRow;
       return next(
         {
           mode: 'navigating',
@@ -148,9 +157,14 @@ export function transitionTranscriptScroll(
     }
     case 'navigated':
       if (event.revision !== state.revision) return stay();
-      if (state.mode === 'following') return end(event.viewport);
+      // Settlement ends the upward intent that admitted it.
+      if (state.mode === 'following') return next({ upward: false }, end(event.viewport));
       return next(
-        { mode: 'reading', anchor: event.saved?.partId ? event.saved : state.anchor },
+        {
+          mode: 'reading',
+          upward: false,
+          anchor: event.saved?.partId ? event.saved : state.anchor,
+        },
         { scroll: 'anchor', capture: true },
       );
     case 'applied':

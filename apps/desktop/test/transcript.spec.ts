@@ -1196,7 +1196,9 @@ test('Find next/previous reports completion and leaves composer shortcuts scoped
   await find.press('Shift+Enter');
   await expect
     .poll(() => readFindHighlight(page))
-    .toEqual([expect.objectContaining({ text: 'Saved answer', entry: 'reading-0' })]);
+    .toEqual([
+      expect.objectContaining({ text: 'Saved answer', entry: 'reading-0', visible: true }),
+    ]);
   await expect(page.getByRole('status').filter({ hasText: /1 of 179 matches/ })).toBeVisible();
   await expect(page.locator('[data-transcript-find-match]')).toHaveCount(0);
   await expect(find).toBeFocused();
@@ -1882,4 +1884,31 @@ test('the reading position and its view memory survive content growing above it'
   expect(
     await page.evaluate(() => window.demo.application.chat!.getSnapshot().transcript.view.anchor),
   ).toEqual(anchor);
+});
+test('a restoration that falls back to a nearby row keeps the saved view memory', async ({
+  page,
+}) => {
+  await open(page);
+  // Supplied memory names a row outside the loaded latest window.
+  const saved = { entryId: 'reading-0', offset: 16 };
+  const before = await transcript(page).evaluate((element) => element.scrollTop);
+  await page.evaluate((anchor) => {
+    const controller = window.demo.application.chat!;
+    if (controller.getSnapshot().transcript.entries.some((entry) => entry.id === anchor.entryId))
+      throw new Error('The saved row must be outside the loaded window.');
+    controller.setTranscriptView({ anchor, expanded: [] });
+  }, saved);
+  await expect
+    .poll(() => transcript(page).evaluate((element) => element.scrollTop))
+    .not.toBe(before);
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
+  // Its own fallback scroll records nothing, so the saved row can still be restored.
+  expect(
+    await page.evaluate(() => window.demo.application.chat!.getSnapshot().transcript.view.anchor),
+  ).toEqual(saved);
 });

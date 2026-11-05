@@ -252,3 +252,44 @@ test('Find reveal owns position until reader input cancels it', () => {
   assert.deepEqual(cancelled.last, { cancelReveal: true, capture: true });
   assert.equal(play(reading(), wheel(true)).last.cancelReveal, true);
 });
+
+test('following tracks its anchor through its own scrolls and holds it for a selection', () => {
+  const following = createTranscriptScroll(null);
+  // Its own end scroll is held but still records the anchor input leaving it will keep.
+  assert.deepEqual(play(following, scrolled({ bottom: 0 }, true)).last, { capture: true });
+  const tracked = play(following, { type: 'captured', position }).state;
+  assert.equal(tracked.mode, 'following');
+  assert.deepEqual(play(tracked, resized()).last, { scroll: 'end' });
+  // Selected text, made without input that leaves following, stays where the reader selected it.
+  assert.deepEqual(play(tracked, resized({ selected: true })).last, { scroll: 'anchor' });
+  assert.deepEqual(play(tracked, resized({ atLatest: false })).last, { scroll: 'anchor' });
+});
+
+test('navigation settlement ends the upward intent that admitted it', () => {
+  const near = { top: 10 };
+  const loading = play(reading(), wheel(true, near));
+  assert.equal(loading.last.navigate, 'earlier');
+  // Upward input during the read does not admit automatic loading after it settles.
+  const during = play(loading.state, wheel(true, near)).state;
+  assert.equal(during.upward, true);
+  const settled = play(during, {
+    type: 'navigated',
+    revision: during.revision,
+    saved: null,
+    viewport: viewport(near),
+  }).state;
+  assert.equal(settled.upward, false);
+  assert.equal(play(settled, scrolled(near)).last.navigate, undefined);
+});
+
+test('Retry history repeats the failed read instead of revealing the boundary row', () => {
+  const retry = {
+    type: 'navigate',
+    direction: 'earlier',
+    retry: true,
+    viewport: viewport({ boundary: true }),
+  } as const;
+  const repeated = play(reading(), retry);
+  assert.equal(repeated.state.earlierRow, false);
+  assert.deepEqual(repeated.last, { capture: true, navigate: 'earlier' });
+});
