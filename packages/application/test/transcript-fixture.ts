@@ -9,6 +9,7 @@ import type {
   ChatTranscriptPart,
   ChatTranscriptSource,
 } from '@moonbase/contracts/chat';
+import type { ChatDependencies } from '@moonbase/application/chat';
 import { chatCapabilities } from './chat-capabilities.ts';
 import { modelRoot } from './chat-model-fixture.ts';
 
@@ -239,11 +240,12 @@ export async function transcriptController(
   t: { after: (close: () => Promise<void>) => void },
   count = 640,
   local = true,
+  options: Pick<ChatDependencies, 'transcriptCloseGraceMs'> = {},
 ) {
   const fixture = transcriptFixture(count, local),
     root = modelRoot();
   t.after(() => root.close());
-  const controller = await root.make(fixture.dependencies);
+  const controller = await root.make({ ...fixture.dependencies, ...options });
   await controller.start();
   if (!local) await controller.connect();
   await controller.select(fixture.target);

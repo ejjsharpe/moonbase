@@ -256,3 +256,26 @@ test('failed navigation and observation remain visible independently of view mem
   assert.equal(f.controller.getSnapshot().transcript.observation, 'failed');
   assert.match(f.controller.getSnapshot().transcript.error!, /authority lost/);
 });
+
+test('view input accepts optional anchor keys set to undefined and omits them', async (t) => {
+  const f = await transcriptController(t, 64);
+  f.controller.setTranscriptView({
+    anchor: { entryId: 'e16', partId: undefined, offset: -2, source: undefined },
+    expanded: [],
+  });
+  assert.deepEqual(f.controller.getSnapshot().transcript.view, {
+    anchor: { entryId: 'e16', offset: -2 },
+    expanded: [],
+  });
+  const view = captureView(f.controller, publishLive(f.fixture));
+  f.controller.setTranscriptView({ ...view, anchor: { ...view.anchor, entryId: undefined } });
+  assert.deepEqual(f.controller.getSnapshot().transcript.view, view);
+  assert.throws(
+    () =>
+      f.controller.setTranscriptView({
+        anchor: { ...view.anchor, entryId: 'e16' } as never,
+        expanded: [],
+      }),
+    ApplicationError.is,
+  );
+});

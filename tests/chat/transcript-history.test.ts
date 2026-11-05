@@ -220,7 +220,15 @@ for (const mode of ['local', 'remote'] as const)
       await controller.loadTranscriptPart(source, selection);
       assert.equal(content()?.error, null);
       assert(content()!.loadedBytes > before);
-      peak = Math.max(peak, controller.getSnapshot().transcript.retained.contentBytes);
+      peak = Math.max(
+        peak,
+        controller
+          .getSnapshot()
+          .transcript.content.reduce(
+            (total, item) => total + Buffer.byteLength(JSON.stringify(item)),
+            0,
+          ),
+      );
       assert(peak <= 8 * 1024 * 1024);
       chunks++;
     }

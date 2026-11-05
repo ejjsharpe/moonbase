@@ -9,6 +9,8 @@
 | `*-schema`, `schema` | Request, saved-data and wire-reply decoders, and shared schema constructors |
 | `services` | Privileged Effect service ports and endpoint types |
 
+Chat Find (`getChatFindExpression`) matches the literal query in original text with simple Unicode case folding and no normalization: ẞ matches ß and Σ matches ς, but ß never matches SS and NFC/NFD spellings differ.
+
 Client entries use type-only schema imports, so they emit no Effect runtime code. `services` is privileged: `ConnectionService.endpoint` carries origin and key data that must never reach renderers, settings or logs.
 
 ```sh

@@ -103,6 +103,7 @@ export function awaitTranscriptRead<T>(pending: Promise<T>, signal?: AbortSignal
     else signal.addEventListener('abort', cancel, { once: true });
   });
 }
+/** Reads one page for an input the caller has already decoded and owns; checks only its echo. */
 export async function readTranscript(
   read: TranscriptRead,
   input: ChatInput<'getChatTranscriptContent'>,
@@ -110,19 +111,16 @@ export async function readTranscript(
   isCurrent?: () => boolean,
 ) {
   checkTranscriptRead(signal, isCurrent);
-  const captured = structuredClone(decodeChatInput('getChatTranscriptContent', input));
-  const reply = await awaitTranscriptRead(read(structuredClone(captured), { signal }), signal);
+  const reply = await awaitTranscriptRead(read(input, { signal }), signal);
   checkTranscriptRead(signal, isCurrent);
   if (
-    !areTranscriptValuesEqual(reply.source, captured.source) ||
-    reply.cursor !== (captured.cursor ?? null) ||
-    (captured.selection
-      ? reply.kind !== 'content' || !areTranscriptValuesEqual(reply.selection, captured.selection)
+    !areTranscriptValuesEqual(reply.source, input.source) ||
+    reply.cursor !== (input.cursor ?? null) ||
+    (input.selection
+      ? reply.kind !== 'content' || !areTranscriptValuesEqual(reply.selection, input.selection)
       : reply.kind !== 'manifest')
   )
     throw makeTranscriptFailure('Transcript reply does not match the captured selection.');
-  if (reply.nextCursor === reply.cursor && reply.nextCursor !== null)
-    throw makeTranscriptFailure('Transcript cursor did not advance.');
   if (
     reply.kind === 'manifest' &&
     new Set(reply.parts.map((part) => part.partId)).size !== reply.parts.length
@@ -149,13 +147,11 @@ export type TranscriptIterationOptions = {
 export function iterateTranscriptSource(
   options: TranscriptIterationOptions,
 ): AsyncGenerator<TranscriptChunk> {
-  const captured = structuredClone(
-    decodeChatInput(
-      'getChatTranscriptContent',
-      options.selection
-        ? { source: options.source, selection: options.selection }
-        : { source: options.source },
-    ),
+  const captured = decodeChatInput(
+    'getChatTranscriptContent',
+    options.selection
+      ? { source: options.source, selection: options.selection }
+      : { source: options.source },
   );
   return iterateSource({ ...options, ...captured });
 }
@@ -213,8 +209,9 @@ async function* iterateSource(
         if (encoding && encoding !== chunk.encoding)
           throw makeTranscriptFailure('Transcript encoding changed within a selected part.');
         encoding = chunk.encoding;
-        offset += countDecodedTranscriptBytes(chunk);
-        bytes += countDecodedTranscriptBytes(chunk);
+        const size = countDecodedTranscriptBytes(chunk);
+        offset += size;
+        bytes += size;
         cursor = chunk.nextCursor;
         checkTranscriptRead(signal, isCurrent);
         onProgress?.({ parts, bytes });

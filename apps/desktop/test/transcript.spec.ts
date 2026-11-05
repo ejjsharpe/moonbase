@@ -1330,7 +1330,12 @@ test('Find highlights original text beyond the 8MiB cache and rereads evicted pr
       base: state.content.find(
         (item) => item.source.kind === 'entry' && item.source.entryId === 'reading-0',
       )?.chunks[0]?.textOffset,
-      retained: state.retained.contentBytes,
+      retained: state.content
+        .flatMap((item) => item.chunks)
+        .reduce(
+          (total, chunk) => total + new TextEncoder().encode(JSON.stringify(chunk)).length,
+          0,
+        ),
       window: document.querySelector('[aria-label="Matched original source"] pre')?.textContent,
     };
   });
