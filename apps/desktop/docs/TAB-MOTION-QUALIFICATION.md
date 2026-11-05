@@ -1,6 +1,6 @@
 # Tab motion sampling
 
-The #127 CI failure in run `41964055784` reached the intermediate-position assertion after the full 222 px open/close displacement passed. Its old fixture wrote frames only after assertions, so that run supplies no frame-time evidence.
+The #127 CI failure in run `41964055784` reached the intermediate-position assertion after the 222 px opening displacement passed. Its old fixture wrote frames only after assertions, so that run supplies no frame-time evidence.
 
 The same symptom is reproducible with the actual shell at a controlled Chromium CPU throttle of 40: open/close still move 222 px, but the original 32-rAF sampler records no intermediate positions. Fresh timestamped evidence has gaps of 2,711 ms on open and 6,803 ms on close, exceeding the existing 200 ms animation. This reproduces the sampling limitation; it does not retrospectively prove the unrecorded CI scheduler timing.
 
