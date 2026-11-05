@@ -50,6 +50,6 @@ Reveal scrolls only the transcript and keeps the Find field/selection focus. Whe
 
 ## Testing
 
-`test/transcript.spec.ts` covers reading, navigation, restoration, disclosure, Copy and Find in controlled browser fixtures, including unloaded folded parts, literal Unicode/metacharacters, Find shortcuts and reactivation, and a 9.6 MB non-ASCII source beyond prefix eviction followed by navigation back. Controlled fixtures use temporary stores, faux providers and authenticated loopback forwarding; they use no real provider quota or SSH host. Generated output belongs in desktop's ignored `test-results/`.
+`test/transcript.spec.ts` covers reading, navigation, restoration, disclosure, Copy and Find in controlled browser fixtures, including unloaded folded parts, literal Unicode/metacharacters, Find shortcuts and reactivation, and a 9.6 MB non-ASCII source beyond prefix eviction followed by navigation back. Controlled fixtures use temporary stores, faux providers and authenticated loopback forwarding; they use no real provider quota or SSH host.
 
 Tests must not read or write the real OS clipboard; inject clipboard and open callbacks, including awaited failures. Timing observations from fixtures are not device performance guarantees. Packaged execution, VoiceOver/manual accessibility and real OS clipboard behavior are outside the automated suites.

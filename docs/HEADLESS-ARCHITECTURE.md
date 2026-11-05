@@ -51,13 +51,7 @@ The root source test command runs package suites serially because simultaneous n
 
 `docs/fixtures/headless-baseline/*.txt` contains literal compact JSON bytes captured before extraction from the baseline public APIs: chat restore+preserve with an uncertain original Send and newer draft, empty editor recovery, whitespace-preserving Send and exact Stop with `taskId: null`. `scripts/check-compatibility.mjs` reopens/preserves chat through its public factory with capabilities that throw if invoked, and verifies decoded data serializes to the same bytes. Keep these files unchanged; move only consumer imports. Rejected saved-data and full recovery behavior remain covered by the existing feature/integration suites, not this small smoke check.
 
-| Fixture | SHA256 |
-| --- | --- |
-| `chat-v1.txt` | `f38bdeec3aa07541b8792ad729eb355734b64744e5127cf3e86c101f87961277` |
-| `recovery-v1.txt` | `20b7db711b18ada502b19c49a2674d570be2fc662f8e106f184fe7d7ddc6894f` |
-| `send-v1.txt` | `f6a5201d904478d1e2cf46e34882098d7af6ac2417aaf16473edfe5e88644672` |
-| `stop-v1.txt` | `3afc970241a178621a3c48a56e427f5b7e08c77502544e6c89b2fb4bd44235ad` |
-| Existing `packages/workspace/test/fixtures/workspace-53a0996.tar.gz` | `4b9e54649f195a18e8d93502f86bf21ba12e070c10261aa47a61d6f6b8aa510b` |
+These fixtures are fixed bytes; compatibility checks compare current output against them, and they must not be regenerated. `packages/workspace/test/save-recovery.test.ts` asserts the SHA-256 of the archived `workspace-53a0996.tar.gz` source.
 
 The archived workspace source generates prior-producer SQLite records; its checksum remains fixed, and the harness rewires only extracted dependency imports to contracts/helpers. The existing unfamiliar-nested-data test verifies rejection without overwriting original rows. No saved data is imported, migrated, deleted, reset or projected-and-overwritten.
 
