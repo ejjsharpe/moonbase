@@ -27,17 +27,21 @@ export function Transcript({
   const root = useRef<HTMLElement>(null),
     content = useRef<HTMLDivElement>(null);
   const [pinned, setPinned] = useState(false),
+    [pinnedEntry, setPinnedEntry] = useState<string | null>(null),
     [presented, setPresented] = useState(latestState);
   const preserve = pinned && getLiveIdentity(presented) !== getLiveIdentity(latestState);
   if (!preserve && presented !== latestState) setPresented(latestState);
   const state = preserve ? presented : latestState;
   useEffect(() => {
-    const update = () =>
+    const update = () => {
       setPinned(
         isReadingNodePinned(
           root.current?.querySelector<HTMLElement>('[data-transcript-live]') ?? null,
         ),
       );
+      const oldest = root.current?.querySelector<HTMLElement>('[data-transcript-entry]') ?? null;
+      setPinnedEntry(isReadingNodePinned(oldest) ? oldest!.dataset.transcriptEntry! : null);
+    };
     document.addEventListener('selectionchange', update);
     document.addEventListener('focusin', update);
     document.addEventListener('focusout', update);
@@ -334,6 +338,7 @@ export function Transcript({
     )
       selection.removeAllRanges();
     setPinned(false);
+    setPinnedEntry(null);
     topIntent.current = false;
     lastMove.current = 'latest';
     setEarlierRow(false);
@@ -378,10 +383,11 @@ export function Transcript({
   const currentSnapshot = latestState.snapshot;
   const transcript = state.transcript,
     snapshot = state.snapshot,
-    oldestAnchored =
+    oldestPinned =
       transcript.entries.length === 128 &&
-      transcript.view.anchor?.entryId === transcript.entries[0]?.id,
-    live = !earlierRow && !oldestAnchored && !transcript.later ? snapshot?.run : null;
+      (transcript.view.anchor?.entryId === transcript.entries[0]?.id ||
+        pinnedEntry === transcript.entries[0]?.id),
+    live = !earlierRow && !oldestPinned && !transcript.later ? snapshot?.run : null;
   const hiddenRow = !!live && transcript.entries.length === 128;
   const entries = hiddenRow ? transcript.entries.slice(1) : transcript.entries;
   let liveLabel: string | undefined = live?.state;
