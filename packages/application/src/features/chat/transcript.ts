@@ -262,10 +262,9 @@ export class TranscriptOwner {
   ): Promise<ChatOutput<K>> {
     this.assertCurrent();
     const abort = new AbortController();
-    const source =
-      operation === 'getChatTranscriptContent'
-        ? (input as ChatInput<'getChatTranscriptContent'>).source
-        : undefined;
+    // readTranscript owns transcript content input/reply decoding, cloning and size bounds.
+    const transcript = operation === 'getChatTranscriptContent';
+    const source = transcript ? (input as ChatInput<'getChatTranscriptContent'>).source : undefined;
     this.assertCurrent(source);
     const combined = AbortSignal.any([
       ...(signal ? [signal] : []),
@@ -274,10 +273,8 @@ export class TranscriptOwner {
     ]);
     const pending = this.dependencies.chat.command(
       operation,
-      structuredClone(decodeChatInput(operation, input)),
-      {
-        signal: combined,
-      },
+      transcript ? input : structuredClone(decodeChatInput(operation, input)),
+      { signal: combined },
     );
     this.pending.set(pending, { abort, source });
     settlements?.add(pending);
@@ -290,6 +287,7 @@ export class TranscriptOwner {
     this.assertCurrent();
     if (signal?.aborted || abort.signal.aborted)
       throw makeTranscriptFailure('Transcript read cancelled.', 'Cancelled');
+    if (transcript) return result;
     if (countTranscriptBytes(result) > maximumChatReplyBytes)
       throw makeTranscriptFailure('Transcript reply exceeds its byte bound.');
     return decodeChatOutput(operation, result);

@@ -6,6 +6,7 @@ import {
   makeTranscriptReader,
   transcriptLimits,
 } from '@moonbase/application/chat';
+import { maximumChatReplyBytes } from '@moonbase/contracts/chat';
 import type { ChatSnapshot, ChatTranscriptSource } from '@moonbase/contracts/chat';
 import {
   digest,
@@ -366,6 +367,68 @@ test('complete-source iterator works with injected reads, reports progress, vali
     /authority/,
   );
 });
+
+const invalidReplies = {
+  oversized: (reply: object) => ({ ...reply, padding: 'x'.repeat(maximumChatReplyBytes) }),
+  malformed: (reply: object) => ({ ...reply, kind: 'malformed' }),
+};
+const invalidReplyErrors = {
+  oversized: 'Transcript reply exceeds its byte bound.',
+  malformed: 'Invalid chat reply.',
+};
+const isInvalidReply = (corrupt: keyof typeof invalidReplies) => (error: unknown) =>
+  ApplicationError.is(error) &&
+  error.code === 'Incompatible' &&
+  error.message === invalidReplyErrors[corrupt];
+
+test('injected complete-source iteration rejects oversized and malformed replies', async () => {
+  const f = transcriptFixture(1),
+    source = f.entries[0].transcript!.source;
+  for (const [corrupt, invalid] of Object.entries(invalidReplies) as [
+    keyof typeof invalidReplies,
+    (reply: object) => object,
+  ][]) {
+    f.handlers.set('getChatTranscriptContent', async (_input, _signal, fallback) =>
+      invalid(fallback() as object),
+    );
+    await assert.rejects(
+      collect(iterateTranscriptSource({ read: makeTranscriptReader(f.chat), source })),
+      isInvalidReply(corrupt),
+      corrupt,
+    );
+  }
+});
+
+for (const entry of ['loadTranscriptManifest', 'loadTranscriptPart', 'iterateTranscript'] as const)
+  test(`controller ${entry} rejects oversized and malformed replies`, async (t) => {
+    const f = await transcriptController(t, 1);
+    const source = f.entries[0].transcript!.source,
+      chosen = selection(f.entries[0].transcript!.parts[0]);
+    for (const [corrupt, invalid] of Object.entries(invalidReplies) as [
+      keyof typeof invalidReplies,
+      (reply: object) => object,
+    ][]) {
+      f.handlers.set('getChatTranscriptContent', async (_input, _signal, fallback) =>
+        invalid(fallback() as object),
+      );
+      if (entry === 'iterateTranscript') {
+        await assert.rejects(
+          collect(f.controller.iterateTranscript(source)),
+          isInvalidReply(corrupt),
+          corrupt,
+        );
+        continue;
+      }
+      const state =
+        entry === 'loadTranscriptManifest'
+          ? (await f.controller.loadTranscriptManifest(source, true),
+            f.controller.getSnapshot().transcript.manifest!)
+          : (await f.controller.loadTranscriptPart(source, chosen, true),
+            f.controller.getSnapshot().transcript.content[0]);
+      assert.equal(state.status, 'error', corrupt);
+      assert.equal(state.error, invalidReplyErrors[corrupt], corrupt);
+    }
+  });
 
 test('escaped summary data evicts at two MiB before the row limit without losing earlier/later navigation', async (t) => {
   const f = await transcriptController(t, 160);
