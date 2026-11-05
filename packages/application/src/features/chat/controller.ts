@@ -1034,7 +1034,9 @@ class ChatModelState {
     const owner = this.attachment;
     void this.selection?.transcript?.close();
     if (!owner) return this.detaching ?? Promise.resolve();
-    this.detaching = this.closeOwner(owner);
+    const closing = this.closeOwner(owner);
+    if (this.attachment !== owner) return closing;
+    this.detaching = closing;
     this.attachment = undefined;
     this.selection = undefined;
     this.refreshOwner = undefined;
@@ -1044,7 +1046,7 @@ class ChatModelState {
       host: null,
       ready: false,
     });
-    return this.detaching;
+    return closing;
   }
   private beginDisposal() {
     if (this.closed) return;

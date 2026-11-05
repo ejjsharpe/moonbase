@@ -1932,6 +1932,66 @@ for (const changedId of [false, true])
       );
     });
 
+for (const at of ['close', 'publication'] as const)
+  test(
+    `R2 reentrant resume at Hide ${at} keeps replacement usable`,
+    { timeout: 3000 },
+    async (t) => {
+      const f = await fixture(t);
+      const connectionWatch = f.connection.watch;
+      let connectionWatches = 0;
+      f.connection.watch = (...args) => {
+        const close = connectionWatch(...args);
+        connectionWatches++;
+        return async () => {
+          await close();
+          connectionWatches--;
+        };
+      };
+      await ready(f);
+      const original = f.chat.watch;
+      let resuming: Promise<void> | undefined;
+      if (at === 'close') {
+        await f.controller.closeView();
+        f.chat.watch = (...args) => {
+          const close = original(...args);
+          return () => {
+            resuming ??= f.controller.start();
+            return close();
+          };
+        };
+        await f.controller.select(target);
+      }
+      let off = () => {};
+      if (at === 'publication')
+        off = f.controller.subscribe(() => {
+          if (!f.controller.getSnapshot().ready && !resuming) resuming = f.controller.start();
+        });
+      try {
+        await f.controller.detach();
+        await resuming;
+      } finally {
+        off();
+      }
+      assert(resuming, 'resume callback must have run');
+      await f.controller.refresh();
+      const resumedState = f.controller.getSnapshot();
+      if (!resumedState.ready) {
+        await f.controller.detach();
+        t.diagnostic(
+          `After resumed start and refresh: ready=${resumedState.ready}; after another Hide: live connection watches=${connectionWatches}`,
+        );
+      }
+      assert.equal(resumedState.ready, true, 'replacement remains ready');
+      assert(f.controller.getSnapshot().host, 'replacement keeps host');
+      assert(f.controller.getSnapshot().snapshot, 'replacement keeps selected snapshot');
+      assert.equal(f.subscriptions, 1, 'replacement owns one watch');
+      await f.controller.detach();
+      assert.equal(f.subscriptions, 0, 'replacement remains attached so Hide can close it');
+      assert.equal(connectionWatches, 0, 'replacement connection watch closes with its attachment');
+    },
+  );
+
 test('Hide fences reentrant Send before publishing detached readiness', async (t) => {
   const f = await fixture(t);
   await ready(f);
