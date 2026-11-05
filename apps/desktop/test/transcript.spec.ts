@@ -1399,3 +1399,244 @@ test('Find Previous replays an evicted part manifest without changing its query 
   ).toBe(cutoff);
   await expect(find).toBeFocused();
 });
+
+type FindResumeProbe = {
+  held: boolean;
+  reads: number;
+  cursors: (string | null)[];
+  signal?: AbortSignal;
+  settled: boolean;
+  releaseOld: () => void;
+  manualSignal?: AbortSignal;
+  manual?: Promise<void>;
+  releaseManual: () => void;
+};
+for (const late of ['reply', 'error'] as const)
+  test(`Find resumes a cancelled first content read for a new same-part range before its late ${late} settles`, async ({
+    page,
+  }) => {
+    await open(page);
+    const expected = await page.evaluate(async (late) => {
+      const text = 'α😀'.repeat(6000) + 'first NEEDLE and second NEEDLE\r\n';
+      await window.demo.transcript!.setEntry(0, [text], ['thinking']);
+      const command = window.demo.chat.dependencies.chat.command;
+      const old = Promise.withResolvers<void>(),
+        manual = Promise.withResolvers<void>();
+      const controlled = window as typeof window & { findResume: FindResumeProbe };
+      const probe: FindResumeProbe = (controlled.findResume = {
+        held: false,
+        reads: 0,
+        cursors: [],
+        settled: false,
+        releaseOld: () => old.resolve(),
+        releaseManual: () => manual.resolve(),
+      });
+      window.demo.chat.dependencies.chat.command = async (operation, input, options) => {
+        const selected =
+          operation === 'getChatTranscriptContent' &&
+          'selection' in input &&
+          input.selection?.partId === 'm0.b0' &&
+          'source' in input &&
+          input.source.kind === 'entry' &&
+          input.source.entryId === 'reading-0';
+        const count = selected ? ++probe.reads : 0;
+        if (selected) probe.cursors.push('cursor' in input ? (input.cursor ?? null) : null);
+        const reply = await command(operation, input, options);
+        if (count === 1) {
+          probe.signal = options?.signal;
+          probe.held = true;
+          await old.promise;
+          probe.settled = true;
+          if (late === 'error') throw Error('obsolete first Find content error');
+        }
+        if (
+          operation === 'getChatHistoryAround' &&
+          'entryId' in input &&
+          input.entryId === 'reading-50'
+        ) {
+          probe.manualSignal = options?.signal;
+          await manual.promise;
+        }
+        return reply;
+      };
+      return { start: text.lastIndexOf('NEEDLE'), bytes: new TextEncoder().encode(text).length };
+    }, late);
+    try {
+      await transcript(page).focus();
+      await page.keyboard.press('Control+f');
+      const find = page.getByRole('textbox', { name: 'Find in conversation', exact: true });
+      await find.fill('needle');
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () => (window as typeof window & { findResume: FindResumeProbe }).findResume.held,
+          ),
+        )
+        .toBe(true);
+      const first = await page.evaluate(
+        () => window.demo.application.chat!.getSnapshot().transcript.find.active,
+      );
+      const row = page.locator('[data-transcript-entry="reading-0"]');
+      const thinking = row.getByRole('button', { name: /^Thinking/ });
+      await expect(thinking).toHaveAttribute('aria-expanded', 'true');
+      await thinking.click();
+      await expect(thinking).toBeFocused();
+      await expect(thinking).toHaveAttribute('aria-expanded', 'false');
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const state = window.demo.application.chat!.getSnapshot().transcript;
+            const probe = (window as typeof window & { findResume: FindResumeProbe }).findResume;
+            const content = state.content.find(
+              (item) => item.source.kind === 'entry' && item.source.entryId === 'reading-0',
+            );
+            return {
+              aborted: probe.signal?.aborted,
+              reads: probe.reads,
+              settled: probe.settled,
+              revealing: state.find.revealing,
+              query: state.find.query,
+              active: state.find.active,
+              content: content && {
+                status: content.status,
+                bytes: content.loadedBytes,
+                cursor: content.nextCursor,
+                error: content.error,
+              },
+            };
+          }),
+        )
+        .toEqual({
+          aborted: true,
+          reads: 1,
+          settled: false,
+          revealing: false,
+          query: 'needle',
+          active: first,
+          content: { status: 'partial', bytes: 0, cursor: null, error: null },
+        });
+      await find.press('Enter');
+      await expect
+        .poll(
+          () =>
+            page.evaluate(
+              () => (window as typeof window & { findResume: FindResumeProbe }).findResume.reads,
+            ),
+          { timeout: 2000 },
+        )
+        .toBeGreaterThan(1);
+      await expect(thinking).toHaveAttribute('aria-expanded', 'true');
+      const mark = row.locator('[data-transcript-find-match]');
+      await expect(mark).toHaveText('NEEDLE');
+      await expect(mark).toBeInViewport();
+      await expect(find).toBeFocused();
+      const second = await page.evaluate(
+        () => window.demo.application.chat!.getSnapshot().transcript.find.active,
+      );
+      expect(second).toMatchObject({
+        source: first!.source,
+        partId: first!.partId,
+        start: expected.start,
+        end: expected.start + 6,
+      });
+      expect(second!.start).toBeGreaterThan(first!.start);
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const state = window.demo.application.chat!.getSnapshot().transcript;
+            const probe = (window as typeof window & { findResume: FindResumeProbe }).findResume;
+            const content = state.content.find(
+              (item) => item.source.kind === 'entry' && item.source.entryId === 'reading-0',
+            );
+            return {
+              status: content?.status,
+              bytes: content?.loadedBytes,
+              reads: probe.reads,
+              firstCursors: probe.cursors.slice(0, 2),
+              settled: probe.settled,
+            };
+          }),
+        )
+        .toEqual({
+          status: 'complete',
+          bytes: expected.bytes,
+          reads: 4,
+          firstCursors: [null, null],
+          settled: false,
+        });
+      if (late === 'reply') {
+        await mkdir(resolve('../../test-results/find-114'), { recursive: true });
+        await page.screenshot({
+          path: resolve('../../test-results/find-114/resume-zero-byte.png'),
+        });
+      }
+      await page.evaluate(() => {
+        const probe = (window as typeof window & { findResume: FindResumeProbe }).findResume;
+        probe.manual = window.demo.application.chat!.jumpToEntry('reading-50');
+      });
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              !!(window as typeof window & { findResume: FindResumeProbe }).findResume.manualSignal,
+          ),
+        )
+        .toBe(true);
+      await page.evaluate(() => {
+        window.demo.application.chat!.cancelFindReveal();
+        (window as typeof window & { findResume: FindResumeProbe }).findResume.releaseOld();
+      });
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () => (window as typeof window & { findResume: FindResumeProbe }).findResume.settled,
+          ),
+        )
+        .toBe(true);
+      const current = await page.evaluate(() => {
+        const state = window.demo.application.chat!.getSnapshot().transcript;
+        const probe = (window as typeof window & { findResume: FindResumeProbe }).findResume;
+        return {
+          aborted: probe.manualSignal?.aborted,
+          loading: state.loading,
+          error: state.error,
+          findError: state.find.error,
+          active: state.find.active,
+          query: state.find.query,
+          reads: probe.reads,
+          content: state.content.find(
+            (item) => item.source.kind === 'entry' && item.source.entryId === 'reading-0',
+          ),
+        };
+      });
+      expect(current).toMatchObject({
+        aborted: false,
+        loading: true,
+        error: null,
+        findError: null,
+        active: second,
+        query: 'needle',
+        reads: 4,
+        content: { status: 'complete', loadedBytes: expected.bytes, error: null },
+      });
+      await page.evaluate(async () => {
+        const probe = (window as typeof window & { findResume: FindResumeProbe }).findResume;
+        probe.releaseManual();
+        await probe.manual;
+      });
+      const final = await page.evaluate(
+        () => window.demo.application.chat!.getSnapshot().transcript,
+      );
+      expect(final.view.anchor?.entryId).toBe('reading-50');
+      expect(final.error).toBe(null);
+      expect(final.find.active).toEqual(second);
+      expect(final.find.query).toBe('needle');
+      expect(final.find.revealing).toBe(false);
+    } finally {
+      await page.evaluate(() => {
+        const probe = (window as typeof window & { findResume: FindResumeProbe }).findResume;
+        probe.releaseOld();
+        probe.releaseManual();
+      });
+    }
+  });
