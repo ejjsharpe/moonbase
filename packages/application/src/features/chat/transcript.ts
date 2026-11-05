@@ -148,6 +148,8 @@ type Navigation = {
   upperEntryId: string;
   olderCursor: string | null;
   newerCursor: string | null;
+  olderEdge: string | undefined;
+  newerEdge: string | undefined;
 };
 /** One selected read owner, subordinate to the existing selection scope. */
 export class TranscriptOwner {
@@ -587,7 +589,14 @@ export class TranscriptOwner {
       else if (this.dependencies.capable && this.records.length) {
         const edge = direction === 'earlier' ? this.state.entries[0] : this.state.entries.at(-1);
         const nav = this.navigation;
-        const cursor = direction === 'earlier' ? nav?.olderCursor : nav?.newerCursor;
+        const cursor =
+          direction === 'earlier'
+            ? edge?.id === nav?.olderEdge
+              ? nav?.olderCursor
+              : null
+            : edge?.id === nav?.newerEdge
+              ? nav?.newerCursor
+              : null;
         if (nav && cursor) await this.readAround(nav.entryId, cursor, direction, signal);
         else if (edge) await this.readAround(edge.id, undefined, direction, signal);
       } else if (direction === 'earlier' && this.latestCursor) {
@@ -643,10 +652,15 @@ export class TranscriptOwner {
       upperEntryId: page.upperEntryId,
       olderCursor: page.olderCursor,
       newerCursor: page.newerCursor,
+      olderEdge: page.entries.at(-1)?.id,
+      newerEdge: page.entries[0]?.id,
     };
-    this.olderEnd = page.olderCursor === null;
+    if (page.entries.at(-1)?.id === this.records.at(-1)?.id)
+      this.olderEnd = page.olderCursor === null;
     this.newerEnd =
-      page.newerCursor === null && this.snapshot?.entries[0]?.id === this.records[0]?.id;
+      page.newerCursor === null &&
+      page.entries[0]?.id === this.records[0]?.id &&
+      this.snapshot?.entries[0]?.id === this.records[0]?.id;
     this.start =
       direction === 'earlier'
         ? Math.max(0, this.records.length - transcriptLimits.displayedRows)

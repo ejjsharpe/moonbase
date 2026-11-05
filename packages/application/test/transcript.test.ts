@@ -1353,3 +1353,17 @@ test('a delayed initial read must not supersede a newer explicit Latest navigati
     secondGate.resolve();
   }
 });
+
+test('later navigation at the cached newer edge should advance the visible window', async (t) => {
+  const f = await transcriptController(t, 640);
+  for (let i = 0; i < 100 && f.controller.getSnapshot().transcript.earlier; i++)
+    await f.controller.older();
+  for (let i = 0; i < 100 && f.controller.getSnapshot().transcript.later; i++) {
+    const before = f.controller.getSnapshot().transcript.entries.map((e) => e.id);
+    await f.controller.later();
+    const after = f.controller.getSnapshot().transcript;
+    if (JSON.stringify(before) === JSON.stringify(after.entries.map((e) => e.id))) {
+      assert.fail('Later returned the same visible window while later remained true');
+    }
+  }
+});
