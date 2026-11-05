@@ -589,15 +589,10 @@ export class TranscriptOwner {
       else if (this.dependencies.capable && this.records.length) {
         const edge = direction === 'earlier' ? this.state.entries[0] : this.state.entries.at(-1);
         const nav = this.navigation;
-        const cursor =
-          direction === 'earlier'
-            ? edge?.id === nav?.olderEdge
-              ? nav?.olderCursor
-              : null
-            : edge?.id === nav?.newerEdge
-              ? nav?.newerCursor
-              : null;
-        if (nav && cursor) await this.readAround(nav.entryId, cursor, direction, signal);
+        const cursor = direction === 'earlier' ? nav?.olderCursor : nav?.newerCursor;
+        const cursorEdge = direction === 'earlier' ? nav?.olderEdge : nav?.newerEdge;
+        if (nav && cursor && edge?.id === cursorEdge)
+          await this.readAround(nav.entryId, cursor, direction, signal);
         else if (edge) await this.readAround(edge.id, undefined, direction, signal);
       } else if (direction === 'earlier' && this.latestCursor) {
         const cursor = this.latestCursor;
