@@ -19,7 +19,7 @@ const config = JSON.parse(readFileSync(process.argv[2], 'utf8'));
 const faux = fauxProvider({ tokensPerSecond: 100000 }),
   models = createModels();
 models.setProvider(faux.provider);
-let reads, harness, seeded, longSeeded;
+let reads, harness, seeded, longSeeded, seedError;
 const open = Harness.open;
 Harness.open = async (...args) => {
   harness = await open(...args);
@@ -35,16 +35,19 @@ const gate = config.hold
 const original = faux.provider.streamSimple.bind(faux.provider);
 let invocations = 0;
 const progress = Promise.withResolvers();
+const fail = (error) => {
+  seedError = String(error?.stack ?? error);
+};
 const advance = (message) => {
   if (message?.type === 'next-chunk') progress.resolve();
   if (message?.type === 'seed-history')
     void seedTranscriptHistory(harness, message.target).then((ids) => {
       seeded = { target: message.target, ids };
-    });
+    }, fail);
   if (message?.type === 'seed-long-text')
     void seedTranscriptLongText(harness, message.target).then((record) => {
       longSeeded = { target: message.target, ...record };
-    });
+    }, fail);
 };
 process.on('message', advance);
 faux.provider.streamSimple = (...args) => {
@@ -97,7 +100,7 @@ const runtime = ManagedRuntime.make(
 const client = makeChatClient(runtime);
 const { bound, ended, close } = hostControl(
   client,
-  () => ({ calls: invocations, tools: 0, reads: { ...reads }, seeded, longSeeded }),
+  () => ({ calls: invocations, tools: 0, reads: { ...reads }, seeded, longSeeded, seedError }),
   () => {
     release?.();
     progress.resolve();

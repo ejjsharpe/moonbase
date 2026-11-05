@@ -1975,14 +1975,7 @@ for (const at of ['close', 'publication'] as const)
       }
       assert(resuming, 'resume callback must have run');
       await f.controller.refresh();
-      const resumedState = f.controller.getSnapshot();
-      if (!resumedState.ready) {
-        await f.controller.detach();
-        t.diagnostic(
-          `After resumed start and refresh: ready=${resumedState.ready}; after another Hide: live connection watches=${connectionWatches}`,
-        );
-      }
-      assert.equal(resumedState.ready, true, 'replacement remains ready');
+      assert.equal(f.controller.getSnapshot().ready, true, 'replacement remains ready');
       assert(f.controller.getSnapshot().host, 'replacement keeps host');
       assert(f.controller.getSnapshot().snapshot, 'replacement keeps selected snapshot');
       assert.equal(f.subscriptions, 1, 'replacement owns one watch');

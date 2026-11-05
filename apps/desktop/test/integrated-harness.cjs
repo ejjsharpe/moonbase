@@ -21,8 +21,6 @@ const control = (globalThis.integratedTranscript = {
   requests: 0,
   beforeMain: !app.isReady() && BrowserWindow.getAllWindows().length === 0,
   streams: [],
-  held: null,
-  release: null,
 });
 clipboard.writeText = async (text) => {
   control.copied.push(text);
@@ -35,12 +33,7 @@ ipcMain.handle = (name, listener) =>
   register(name, async (event, input) => {
     if (name === 'moonbase-chat:call')
       control.calls.push({ kind: input.kind, operation: input.operation, backend: input.backend });
-    const reply = await listener(event, input);
-    if (name === 'moonbase-chat:call' && input.operation === control.held)
-      await new Promise((resolve) => {
-        control.release = resolve;
-      });
-    return reply;
+    return listener(event, input);
   });
 const send = (stream, event) =>
   stream.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));

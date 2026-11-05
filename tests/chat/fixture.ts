@@ -30,6 +30,7 @@ export type FixtureStats = {
   };
   seeded?: { target: ChatTarget; ids: string[] };
   longSeeded?: { target: ChatTarget; entryId: string; bytes: number; units: number; late: number };
+  seedError?: string;
   calls: number;
   tools: number;
   commands: string[];
@@ -279,16 +280,20 @@ export async function controlledHostFixture(hostScript: URL, hold = false) {
       host!.send({ type: 'seed-history', target });
       const result = await until(
         stats,
-        (value) => value.seeded?.target.conversationId === target.conversationId,
+        (value) =>
+          !!value.seedError || value.seeded?.target.conversationId === target.conversationId,
       );
+      if (result.seedError) throw Error(result.seedError);
       return result.seeded!.ids;
     },
     seedLongText: async (target: ChatTarget) => {
       host!.send({ type: 'seed-long-text', target });
       const result = await until(
         stats,
-        (value) => value.longSeeded?.target.conversationId === target.conversationId,
+        (value) =>
+          !!value.seedError || value.longSeeded?.target.conversationId === target.conversationId,
       );
+      if (result.seedError) throw Error(result.seedError);
       return result.longSeeded!;
     },
     loseNextSend: () => writeFile(drop, ''),
