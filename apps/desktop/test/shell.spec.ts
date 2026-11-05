@@ -893,6 +893,7 @@ for (const scrolled of [false, true]) {
     page,
   }) => {
     await page.emulateMedia({ reducedMotion: 'no-preference' });
+    await page.clock.install();
     await page.setViewportSize({ width: scrolled ? 768 : 1440, height: 900 });
     await page.goto('/?local&design');
     await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
@@ -911,28 +912,41 @@ for (const scrolled of [false, true]) {
     await page
       .getByRole('tab', { name: scrolled ? 'other · main' : 'moonbase · main', exact: true })
       .click();
-    const frames = await page.evaluate(async (scrolled) => {
-      const other = () =>
-        [...document.querySelectorAll<HTMLElement>('[role="tab"]')].find(
+    await page.clock.pauseAt(await page.evaluate(() => Date.now() + 60_000));
+    const read = () =>
+      page.evaluate((scrolled) => {
+        const survivor = [...document.querySelectorAll<HTMLElement>('[role="tab"]')].find(
           (tab) => tab.textContent === (scrolled ? 'third · main' : 'other · main'),
         )!.parentElement!;
-      const plus = document.querySelector<HTMLElement>('button[aria-label="Open checkout"]')!;
-      const read = () => {
-        const bounds = other().getBoundingClientRect();
-        return { x: bounds.x, y: bounds.y, plus: plus.getBoundingClientRect().x };
-      };
-      const frames = [read()];
+        const plus = document.querySelector<HTMLElement>('button[aria-label="Open checkout"]')!;
+        const bounds = survivor.getBoundingClientRect();
+        return {
+          at: performance.now(),
+          x: bounds.x,
+          y: bounds.y,
+          plus: plus.getBoundingClientRect().x,
+          transform: getComputedStyle(survivor).transform,
+          plusTransform: getComputedStyle(plus).transform,
+        };
+      }, scrolled);
+    const frames = [await read()];
+    await page.evaluate((scrolled) => {
       document
         .querySelector<HTMLButtonElement>(
           `button[aria-label="Close checkout /demo/${scrolled ? 'other' : 'moonbase'}"]`,
         )!
         .click();
-      for (let i = 0; i < 32; i++) {
-        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-        frames.push(read());
-      }
-      return frames;
     }, scrolled);
+    for (let i = 0; i < 32; i++) {
+      await page.clock.runFor(16);
+      frames.push(await read());
+    }
+    await mkdir(test.info().outputDir, { recursive: true });
+    const framesPath = test.info().outputPath('middle-tab-motion-frames.json');
+    await writeFile(framesPath, JSON.stringify({ scrolled, frames }, null, 2));
+    await test
+      .info()
+      .attach('middle-tab-motion-frames', { path: framesPath, contentType: 'application/json' });
     await mkdir(resolve('../../test-results/redesign-review'), { recursive: true });
     await writeFile(
       resolve(
@@ -951,6 +965,7 @@ for (const scrolled of [false, true]) {
       expect(frames[i].x).toBeGreaterThanOrEqual(last.x - 1);
       expect(frames[i].plus).toBeLessThanOrEqual(frames[i - 1].plus + 1);
     }
+    await page.clock.resume();
   });
 }
 
