@@ -7,6 +7,7 @@ import { workbench } from '@moonbase/ui/workbench';
 import { colors, layout, radius, space, type } from '@moonbase/ui/tokens.stylex';
 import type { ChatModelPreference } from '@moonbase/contracts/chat';
 import type { ChatController } from '@moonbase/application/chat';
+import { FindBar, openChatFind } from './find.tsx';
 import { Transcript } from './transcript.tsx';
 import type { TranscriptNative } from '../../chat/wire.ts';
 import { ProviderSetup } from './setup.tsx';
@@ -217,10 +218,15 @@ export function ChatView({
     </aside>
   );
   return (
-    <div {...stylex.props(workbench.page, styles.page)}>
+    <div
+      onKeyDown={(event) => openChatFind(event, controller)}
+      {...stylex.props(workbench.page, styles.page)}>
       <div {...stylex.props(styles.workspace, !compact && styles.expandedWorkspace)}>
         {!compact && sidebar}
         <main aria-label="Agent workspace" {...stylex.props(styles.content)}>
+          {state.transcript.find.open && (
+            <FindBar controller={controller} state={state.transcript.find} />
+          )}
           <header
             {...stylex.props(styles.context, !state.selected && !compact && styles.newChatContext)}>
             {compact && (

@@ -21,3 +21,6 @@ Transcript integration additionally covers both read operations, exact identity 
 The tool host accepts the fixture's existing `nextChunk()` control to append another published output chunk while execution remains held. Its listener is released on tool settlement. Desktop's focused transcript native tests use this authenticated stream to check visible progress, expansion/focus, complete injected Copy and independent Stop without provider quota or real SSH.
 
 `transcript-controller.test.ts` exercises public application controllers against temporary local Pi and the authenticated controlled stream child host: successive pre-completion text, immutable summary references, independent held reads/drafting/exact Stop, and finalization. It uses no real provider or SSH destination.
+
+
+Find uses the same authenticated command/connection generations and selected controller. Focused contract/runtime/controller/desktop Find suites document exact ranges, cutoff replay, cancellation and bounded reveal in their owning modules. Run the cross-process integration suite serially with other resource-heavy qualification; no new recurring polling or real host/provider is introduced.

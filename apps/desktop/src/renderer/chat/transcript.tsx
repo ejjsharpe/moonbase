@@ -214,6 +214,13 @@ export function Transcript({
     capture();
     setFollowing(false);
   }, [capture]);
+  const cancelFindReveal = () => {
+    if (controller.getSnapshot().transcript.find.revealing) {
+      domAnchor.current = null;
+      captureReadingPosition();
+    }
+    controller.cancelFindReveal();
+  };
   const restore = useCallback(() => {
     const element = root.current;
     if (!element) return;
@@ -234,6 +241,18 @@ export function Transcript({
       return;
     }
     const target = anchor.current;
+    const match = current.current.transcript.find.active;
+    if (
+      current.current.transcript.find.revealing &&
+      match &&
+      target &&
+      !target.source &&
+      target.entryId === match.source.entryId &&
+      target.partId === match.partId
+    ) {
+      restoring.current = false;
+      return;
+    }
     if (!target) {
       const saved = domAnchor.current;
       if (saved?.node.isConnected)
@@ -440,6 +459,7 @@ export function Transcript({
       tabIndex={0}
       onScroll={scroll}
       onWheel={(event) => {
+        cancelFindReveal();
         if (restoring.current) {
           restoring.current = false;
           anchor.current = null;
@@ -470,6 +490,7 @@ export function Transcript({
             event.key,
           )
         ) {
+          cancelFindReveal();
           topIntent.current =
             ['PageUp', 'Home', 'ArrowUp'].includes(event.key) ||
             (event.key === ' ' && event.shiftKey);
@@ -477,6 +498,7 @@ export function Transcript({
         }
       }}
       onPointerDown={(event) => {
+        cancelFindReveal();
         topIntent.current = event.target === event.currentTarget || event.pointerType === 'touch';
         if (restoring.current) captureReadingPosition();
         else {
@@ -500,6 +522,11 @@ export function Transcript({
               disabled={!state.ready || (!transcript.earlier && !hiddenRow) || transcript.loading}
               onClick={earlier}>
               {transcript.loading ? 'Loading history…' : 'Load earlier'}
+            </Button>
+            <Button
+              {...stylex.props(controls.button, controls.quietButton)}
+              onClick={() => controller.openFind()}>
+              Find
             </Button>
             {transcript.later && (
               <Button
@@ -667,12 +694,18 @@ const Entry = memo(function Entry({
   const parts = manifest?.parts.length ? manifest.parts : transcript?.parts;
   const source = transcript?.source;
   const saved = state.view.anchor;
+  const match = state.find.active;
+  const matchedPart =
+    state.find.revealing && match && source && sameSource({ source }, match)
+      ? match.partId
+      : undefined;
   const revealPart =
-    saved?.partId &&
+    matchedPart ??
+    (saved?.partId &&
     transcript &&
     (saved.source ? transcript.source.kind === 'live' : saved.entryId === entry.id)
       ? saved.partId
-      : undefined;
+      : undefined);
   useEffect(() => {
     if (
       revealPart &&
@@ -821,6 +854,7 @@ function useDisclosure(
   state: ChatState['transcript'],
   controller: ChatController,
   partIds: readonly string[],
+  source: ChatTranscript['source'],
 ) {
   const disclosure = useMemo(() => getTranscriptDisclosureId(entryId, id), [entryId, id]);
   const [resolved, setResolved] = useState<{ disclosure: typeof disclosure; value: string } | null>(
@@ -846,14 +880,19 @@ function useDisclosure(
   if (typeof disclosure === 'string') expansion = disclosure;
   else if (resolved?.disclosure === disclosure) expansion = resolved.value;
   const disclosureError = failed === disclosure;
-  const anchorKey = anchored ? JSON.stringify({ ...state.view.anchor, offset: 0 }) : null;
+  const active = state.find.active;
+  const match =
+    active && sameSource({ source }, active) && partIds.includes(active.partId) ? active : null;
+  let anchorKey: string | null = null;
+  if (!active && anchored) anchorKey = JSON.stringify({ ...state.view.anchor, offset: 0 });
+  if (match) anchorKey = JSON.stringify(match);
   const [collapsedAnchor, setCollapsedAnchor] = useState<string | null>(null);
   const toggleExpanded = useRef<boolean | null>(null);
-  if (!anchored && collapsedAnchor !== null) setCollapsedAnchor(null);
+  if (anchorKey === null && collapsedAnchor !== null) setCollapsedAnchor(null);
   const expanded =
     disclosureError ||
     (expansion !== null && state.view.expanded.includes(expansion)) ||
-    (anchored && collapsedAnchor !== anchorKey);
+    (anchorKey !== null && collapsedAnchor !== anchorKey);
   return {
     expanded,
     disclosureError,
@@ -875,7 +914,13 @@ function useDisclosure(
         toggleExpanded.current = null;
         const view = controller.getSnapshot().transcript.view;
         // Reading capture can reveal a child between pointer/key down and click.
-        if (collapse && view.anchor?.partId && partIds.includes(view.anchor.partId))
+        const active = controller.getSnapshot().transcript.find.active;
+        const match =
+          active && sameSource({ source }, active) && partIds.includes(active.partId)
+            ? active
+            : null;
+        if (collapse && match) setCollapsedAnchor(JSON.stringify(match));
+        else if (collapse && !active && view.anchor?.partId && partIds.includes(view.anchor.partId))
           setCollapsedAnchor(JSON.stringify({ ...view.anchor, offset: 0 }));
         controller.setTranscriptView({
           ...view,
@@ -916,6 +961,7 @@ function Activity({
     state,
     controller,
     parts.map((part) => part.partId),
+    transcript.source,
   );
   const summaries = [
     ...new Set(
@@ -970,7 +1016,11 @@ function Part({
   const [source, setSource] = useState(transcript.source);
   if (JSON.stringify(source) !== JSON.stringify(transcript.source)) setSource(transcript.source);
   const saved = state.view.anchor;
+  const active = state.find.active;
+  const match =
+    active && sameSource(transcript, active) && active.partId === part.partId ? active : null;
   const anchored =
+    (!active || !!match) &&
     saved?.partId === part.partId &&
     (saved.source ? transcript.source.kind === 'live' : saved.entryId === entryId);
   const { expanded, disclosureError, disabled, toggleProps } = useDisclosure(
@@ -980,6 +1030,7 @@ function Part({
     state,
     controller,
     [part.partId],
+    transcript.source,
   );
   const content = state.content.find(
     (item) =>
@@ -1025,12 +1076,64 @@ function Part({
     },
     [native, run, source, selection],
   );
-  const text = content?.chunks.length ? decodeText(content) : part.text;
   const complete =
     !part.truncated ||
     (content?.status === 'complete' &&
       content.retainedFrom === 0 &&
       content.loadedBytes === part.bytes);
+  const [reading, setReading] = useState({ revision: part.revision, text: part.text });
+  let text = reading.text;
+  if (reading.revision !== part.revision) {
+    text = part.text;
+    setReading({ revision: part.revision, text });
+  } else if (!match) {
+    text = content?.chunks.length ? decodeText(content) : part.text;
+    if (text !== reading.text) setReading({ revision: part.revision, text });
+  }
+  // Preserve the reading body while Find hydrates its separate bounded source window.
+  const base = content?.chunks[0]?.textOffset ?? 0;
+  const window = match ? getMatchWindow(content, part, match.start, match.end) : null;
+  const matchedText =
+    match && window
+      ? window.text.slice(match.start - window.start, match.end - window.start)
+      : null;
+  const expectedText = match?.snippet.text.slice(
+    match.start - match.snippet.start,
+    match.end - match.snippet.start,
+  );
+  const matchVisible = !!match && matchedText === expectedText;
+  useEffect(() => {
+    if (
+      !match ||
+      !state.find.revealing ||
+      !readable ||
+      (!expanded && !ordinary) ||
+      content?.error ||
+      content?.status === 'loading'
+    )
+      return;
+    if (match.start < base) load(true);
+    else if (!matchVisible && (!content || content.nextCursor)) load();
+  }, [
+    match,
+    readable,
+    expanded,
+    ordinary,
+    content,
+    base,
+    matchVisible,
+    load,
+    state.find.revealing,
+  ]);
+  const mark = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    if (!state.find.revealing || !matchVisible || !mark.current) return;
+    const element = mark.current;
+    const scroller = element.closest<HTMLElement>('[aria-label="Chat transcript"]');
+    if (!scroller) return;
+    // Move only the transcript; keep the Find field and the reader's selection/focus intact.
+    scroller.scrollTop += element.getBoundingClientRect().top - getReadingTop(scroller) - 24;
+  }, [matchVisible, match, state.find.revealing]);
   let presentation = (
     <p {...stylex.props(styles.small)}>
       {part.kind === 'image'
@@ -1081,6 +1184,27 @@ function Part({
       {part.kind === 'arguments' && part.toolName === 'write' && (
         <p {...stylex.props(styles.small)}>
           Captured write content is in the arguments. No before/after diff was recorded here.
+        </p>
+      )}
+      {match && matchVisible && (
+        <section aria-label="Matched original source">
+          <p {...stylex.props(styles.small)}>Match in original source</p>
+          <pre {...stylex.props(styles.literal)}>
+            {window!.text.slice(0, match.start - window!.start)}
+            <mark ref={mark} data-transcript-find-match {...stylex.props(styles.match)}>
+              {matchedText}
+            </mark>
+            {window!.text.slice(match.end - window!.start)}
+          </pre>
+        </section>
+      )}
+      {match && !matchVisible && (
+        <p
+          role={content?.status === 'complete' ? 'alert' : 'status'}
+          {...stylex.props(styles.small)}>
+          {content?.status === 'complete'
+            ? 'The saved match differs from this source. Refresh Find.'
+            : 'Loading original source through this match…'}
         </p>
       )}
       {part.pairing && part.pairing !== 'matched' && (
@@ -1199,6 +1323,31 @@ const snapshotLabels = {
 };
 const sameSource = (a: { source: unknown }, b: { source: unknown }) =>
   JSON.stringify(a.source) === JSON.stringify(b.source);
+function getMatchWindow(
+  content: TranscriptContentState | undefined,
+  part: ChatTranscriptPart,
+  start: number,
+  end: number,
+) {
+  const chunks =
+    content?.chunks ??
+    (!part.truncated ? [{ textOffset: 0, data: part.text, encoding: 'utf8' }] : []);
+  const pieces = chunks.filter(
+    (chunk) =>
+      chunk.encoding === 'utf8' &&
+      (chunk.textOffset ?? 0) < end + 120 &&
+      (chunk.textOffset ?? 0) + chunk.data.length > Math.max(0, start - 120),
+  );
+  if (!pieces.length) return null;
+  const first = pieces[0]!.textOffset ?? 0;
+  const text = pieces.map((chunk) => chunk.data).join('');
+  if (start < first || end > first + text.length) return null;
+  let lo = Math.max(0, start - first - 120),
+    hi = Math.min(text.length, end - first + 120);
+  if (/[\udc00-\udfff]/.test(text[lo] ?? '')) lo--;
+  if (/[\udc00-\udfff]/.test(text[hi] ?? '')) hi--;
+  return { start: first + lo, text: text.slice(lo, hi) };
+}
 function decodeText(content: TranscriptContentState) {
   return content.chunks.map((chunk) => (chunk.encoding === 'utf8' ? chunk.data : '')).join('');
 }
@@ -1244,6 +1393,7 @@ const styles = stylex.create({
     backgroundColor: colors.surface,
     borderRadius: radius.panel,
   },
+  match: { backgroundColor: colors.selection, color: colors.text, fontWeight: 700 },
   disclosure: { minWidth: 0 },
   activity: { minWidth: 0, margin: '8px 0' },
   activityToggle: { textAlign: 'left', whiteSpace: 'normal' },

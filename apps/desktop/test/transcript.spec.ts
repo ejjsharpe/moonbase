@@ -1085,3 +1085,272 @@ test('partial Markdown cannot copy a different complete-source code node', async
     .poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1)))
     .toBe('WRONG BLOCK');
 });
+
+test('Find reveals unloaded folded manifest parts and exact Unicode source while keeping field focus', async ({
+  page,
+}) => {
+  await open(page);
+  await page.evaluate(async () => {
+    await window.demo.transcript!.setEntry(
+      0,
+      [
+        'ordinary',
+        'other',
+        'third',
+        'fourth',
+        'fifth',
+        'sixth',
+        'x'.repeat(70000) + '😀 Σneedle [.*]\r\n',
+      ],
+      ['text', 'text', 'text', 'text', 'text', 'text', 'thinking'],
+    );
+  });
+  await transcript(page).focus();
+  await page.keyboard.press('Control+f');
+  const find = page.getByRole('textbox', { name: 'Find in conversation', exact: true });
+  await expect(find).toBeFocused();
+  await find.fill('σNEEDLE [.*]');
+  const match = page.locator('[data-transcript-find-match]');
+  await expect(match).toHaveText('Σneedle [.*]');
+  await expect(match).toBeInViewport();
+  await expect(find).toBeFocused();
+  const row = page.locator('[data-transcript-entry="reading-0"]');
+  await expect(row.locator('[data-transcript-part="m0.b6"]')).toContainText(
+    'Match in original source',
+  );
+  await expect(row.getByRole('button', { name: /^Thinking/ })).toHaveAttribute(
+    'aria-expanded',
+    'true',
+  );
+  const active = await page.evaluate(
+    () => window.demo.application.chat!.getSnapshot().transcript.find.active,
+  );
+  expect(active?.start).toBe(70003);
+  await page.screenshot({ path: resolve('../../test-results/find-114/unloaded.png') });
+  await find.press('Escape');
+  await expect(find).toHaveCount(0);
+  await expect(transcript(page)).toBeFocused();
+});
+
+test('Find next/previous reports completion and leaves composer shortcuts scoped', async ({
+  page,
+}) => {
+  await open(page);
+  const composer = page.getByRole('textbox', { name: 'Message', exact: true });
+  await composer.focus();
+  await page.keyboard.press('Control+f');
+  await expect(
+    page.getByRole('textbox', { name: 'Find in conversation', exact: true }),
+  ).toHaveCount(0);
+  await transcript(page).focus();
+  await page.keyboard.press('Control+f');
+  const find = page.getByRole('textbox', { name: 'Find in conversation', exact: true });
+  await find.fill('Saved answer');
+  await expect(page.getByRole('status').filter({ hasText: /1 of 179 matches/ })).toBeVisible();
+  await find.press('Enter');
+  await expect(
+    page.locator('[data-transcript-entry="reading-1"] [data-transcript-find-match]'),
+  ).toHaveText('Saved answer');
+  await find.press('Shift+Enter');
+  await expect(
+    page.locator('[data-transcript-entry="reading-0"] [data-transcript-find-match]'),
+  ).toHaveText('Saved answer');
+  await expect(find).toBeFocused();
+  await find.fill('nothing in this saved conversation');
+  await expect(
+    page.getByRole('status').filter({ hasText: 'No matches in the saved conversation.' }),
+  ).toBeVisible();
+  await find.press('Escape');
+});
+
+test('Find highlights original text beyond the 8MiB cache and rereads evicted prefixes without changing query authority', async ({
+  page,
+}) => {
+  test.setTimeout(120000);
+  await open(page);
+  const expected = await page.evaluate(async () => {
+    const text = 'early NEEDLE 😀\r\n' + '😀α'.repeat(1600000) + 'late ΣNEEDLE 😀\r\n';
+    await window.demo.transcript!.setEntry(0, [text], ['thinking']);
+    return { start: text.indexOf('ΣNEEDLE'), end: text.indexOf('ΣNEEDLE') + 'ΣNEEDLE'.length };
+  });
+  await transcript(page).focus();
+  await page.keyboard.press('Control+f');
+  const find = page.getByRole('textbox', { name: 'Find in conversation', exact: true });
+  await find.fill('needle');
+  await expect(page.getByRole('status').filter({ hasText: /1 of 2 matches/ })).toBeVisible();
+  await find.press('Enter');
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            window.demo.application
+              .chat!.getSnapshot()
+              .transcript.content.find(
+                (item) => item.source.kind === 'entry' && item.source.entryId === 'reading-0',
+              )?.loadedText ?? 0,
+        ),
+      { timeout: 100000 },
+    )
+    .toBeGreaterThanOrEqual(expected.end);
+  await expect(page.locator('[data-transcript-find-match]')).toHaveText('NEEDLE');
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            window.demo.application
+              .chat!.getSnapshot()
+              .transcript.content.find(
+                (item) => item.source.kind === 'entry' && item.source.entryId === 'reading-0',
+              )?.retainedFrom,
+        ),
+      { timeout: 100000 },
+    )
+    .toBeGreaterThan(0);
+  await expect(page.locator('[data-transcript-find-match]')).toBeInViewport();
+  const state = await page.evaluate(() => {
+    const state = window.demo.application.chat!.getSnapshot().transcript;
+    return {
+      active: state.find.active,
+      upper: state.find.upperEntryId,
+      base: state.content.find(
+        (item) => item.source.kind === 'entry' && item.source.entryId === 'reading-0',
+      )?.chunks[0]?.textOffset,
+      retained: state.retained.contentBytes,
+      window: document.querySelector('[aria-label="Matched original source"] pre')?.textContent,
+    };
+  });
+  expect(state.active?.start).toBe(expected.start + 1);
+  expect(state.active?.end).toBe(expected.end);
+  expect(state.base).toBeGreaterThan(0);
+  expect(state.retained).toBeLessThanOrEqual(8 * 1024 * 1024);
+  expect(state.window!.length).toBeLessThan(300);
+  await expect(find).toBeFocused();
+  await find.press('Shift+Enter');
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          window.demo.application
+            .chat!.getSnapshot()
+            .transcript.content.find(
+              (item) => item.source.kind === 'entry' && item.source.entryId === 'reading-0',
+            )?.retainedFrom,
+      ),
+    )
+    .toBe(0);
+  await expect(page.locator('[data-transcript-find-match]')).toHaveText('NEEDLE');
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => window.demo.application.chat!.getSnapshot().transcript.find.active?.start,
+      ),
+    )
+    .toBe(6);
+  expect(
+    await page.evaluate(
+      () => window.demo.application.chat!.getSnapshot().transcript.find.upperEntryId,
+    ),
+  ).toBe(state.upper);
+  await expect(find).toBeFocused();
+  await find.press('Escape');
+});
+
+test('Find reading navigation cancels held reveal and editor shortcuts retain their own handler', async ({
+  page,
+}) => {
+  await open(page);
+  await page.evaluate(() => {
+    const client = window.demo.chat.dependencies.chat,
+      original = client.command;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const controlled = window as typeof window & {
+      releaseFind: () => void;
+      findRevealHeld: boolean;
+    };
+    controlled.releaseFind = release;
+    client.command = async (operation, input, options) => {
+      if (operation === 'getChatHistoryAround') {
+        controlled.findRevealHeld = true;
+        await gate;
+      }
+      return original(operation, input, options);
+    };
+  });
+  await transcript(page).focus();
+  await page.keyboard.press('Control+f');
+  await page
+    .getByRole('textbox', { name: 'Find in conversation', exact: true })
+    .fill('Saved answer 0');
+  await expect
+    .poll(() =>
+      page.evaluate(() => (window as typeof window & { findRevealHeld: boolean }).findRevealHeld),
+    )
+    .toBe(true);
+  await transcript(page).focus();
+  await page.keyboard.press('PageDown');
+  await page.evaluate(() => (window as typeof window & { releaseFind: () => void }).releaseFind());
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.demo.application.chat!.getSnapshot().transcript.find.revealing),
+    )
+    .toBe(false);
+  await expect(page.locator('[data-transcript-entry="reading-0"]')).toHaveCount(0);
+  expect(
+    await page.evaluate(
+      () => window.demo.application.chat!.getSnapshot().transcript.find.active?.source.entryId,
+    ),
+  ).toBe('reading-0');
+  await page.keyboard.press('Escape');
+  await expect(
+    page.getByRole('textbox', { name: 'Find in conversation', exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole('tab', { name: 'moonbase · main', exact: true }).click();
+  const editor = page.getByRole('textbox', { name: 'welcome.ts editor', exact: true });
+  await expect(editor).toBeVisible();
+  await editor.focus();
+  await page.keyboard.press('Control+f');
+  await expect(
+    page.getByRole('textbox', { name: 'Find in conversation', exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole('tab', { name: 'moonbase · main', exact: true }).press('Meta+p');
+  await expect(page.getByRole('dialog', { name: 'Find file', exact: true })).toBeVisible();
+});
+
+test('Find respects explicit collapse until the active range changes in the same part', async ({
+  page,
+}) => {
+  await open(page);
+  await page.evaluate(async () => {
+    await window.demo.transcript!.setEntry(
+      0,
+      ['first NEEDLE\n' + 'x'.repeat(300) + '\nsecond NEEDLE'],
+      ['thinking'],
+    );
+  });
+  await transcript(page).focus();
+  await page.keyboard.press('Control+f');
+  const find = page.getByRole('textbox', { name: 'Find in conversation', exact: true });
+  await find.fill('needle');
+  const thinking = page
+    .locator('[data-transcript-entry="reading-0"]')
+    .getByRole('button', { name: /^Thinking/ });
+  await expect(thinking).toHaveAttribute('aria-expanded', 'true');
+  await thinking.click();
+  await expect(thinking).toHaveAttribute('aria-expanded', 'false');
+  await page.evaluate(() => {
+    window.demo.chat.snapshot.message = 'Status updated';
+    window.demo.chat.controls.receiveChat(structuredClone(window.demo.chat.snapshot));
+  });
+  await expect(thinking).toHaveAttribute('aria-expanded', 'false');
+  await find.focus();
+  await find.press('Enter');
+  await expect(thinking).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('[data-transcript-find-match]')).toHaveText('NEEDLE');
+  await expect(page.getByRole('region', { name: 'Matched original source' })).toContainText(
+    'second NEEDLE',
+  );
+  await expect(find).toBeFocused();
+});

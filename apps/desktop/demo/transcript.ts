@@ -14,7 +14,12 @@ import { markdownMetrics } from '../src/renderer/chat/markdown.tsx';
 export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabilities>) {
   const sources = new Map<
     string,
-    { source: ChatTranscriptSource; parts: ChatTranscriptPart[]; texts: string[] }
+    {
+      source: ChatTranscriptSource;
+      parts: ChatTranscriptPart[];
+      texts: string[];
+      encoded?: Uint8Array[];
+    }
   >();
   const digest = async (text: string) =>
     [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))]
@@ -88,7 +93,7 @@ export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabili
     if (operation === 'getChatHost')
       return {
         ...chat.dependencies.context,
-        features: ['transcript-v1', 'chat-stream-v1'],
+        features: ['transcript-v1', 'chat-stream-v1', 'transcript-find-v1'],
         ...(chat.dependencies.mode === 'local'
           ? { mode: 'local' }
           : { cwd: '/controlled', model: 'controlled' }),
@@ -99,6 +104,72 @@ export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabili
       return {
         entries: entries.slice(lo, hi).reverse(),
         olderCursor: lo ? String(lo) : null,
+      } as never;
+    }
+    if (operation === 'findChatTranscript') {
+      const request = input as ChatInput<'findChatTranscript'>;
+      const position = request.cursor
+        ? (JSON.parse(request.cursor) as {
+            upper: number;
+            index: number;
+            part: number;
+            offset: number;
+            bytes: number;
+          })
+        : { upper: entries.length, index: 0, part: 0, offset: 0, bytes: 0 };
+      const startCursor = JSON.stringify({
+        upper: position.upper,
+        index: 0,
+        part: 0,
+        offset: 0,
+        bytes: 0,
+      });
+      const matches = [];
+      const expression = new RegExp(request.query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu');
+      let rows = 0;
+      while (position.index < position.upper && rows++ < 32 && matches.length < 32) {
+        const entry = entries[position.index]!,
+          found = sources.get(JSON.stringify(entry.transcript!.source))!;
+        for (; position.part < found.parts.length; position.part++, position.offset = 0) {
+          const part = found.parts[position.part]!;
+          if (part.availability !== 'available' || part.encoding !== 'utf8') continue;
+          const text = found.texts[position.part]!;
+          expression.lastIndex = position.offset;
+          let match: RegExpExecArray | null;
+          while ((match = expression.exec(text))) {
+            const start = match.index,
+              end = start + match[0].length;
+            let lo = Math.max(0, start - 80),
+              hi = Math.min(text.length, end + 80);
+            if (/[\udc00-\udfff]/.test(text[lo] ?? '')) lo--;
+            if (/[\udc00-\udfff]/.test(text[hi] ?? '')) hi--;
+            matches.push({
+              source: found.source,
+              partId: part.partId,
+              start,
+              end,
+              snippet: { start: lo, text: text.slice(lo, hi) },
+            });
+            position.offset = end;
+            if (matches.length === 32) break;
+          }
+          if (matches.length === 32) break;
+        }
+        if (matches.length === 32) break;
+        position.index++;
+        position.part = 0;
+        position.offset = 0;
+      }
+      position.bytes++;
+      return {
+        target: request.target,
+        query: request.query,
+        cursor: request.cursor ?? null,
+        startCursor,
+        upperEntryId: entries[position.upper - 1]?.id ?? null,
+        matches,
+        progress: { entries: position.index, bytes: position.bytes },
+        nextCursor: position.index < position.upper ? JSON.stringify(position) : null,
       } as never;
     }
     if (operation === 'getChatHistoryAround') {
@@ -139,8 +210,16 @@ export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabili
       }
       const index = found.parts.findIndex((part) => part.partId === request.selection!.partId),
         data = found.texts[index]!;
-      const bytes = new TextEncoder().encode(data).slice(0, request.selection.bytes);
-      if ((await digest(new TextDecoder().decode(bytes))) !== request.selection.revision)
+      const retained = found.encoded?.[index] ?? new TextEncoder().encode(data);
+      const bytes = retained.subarray(0, request.selection.bytes);
+      const descriptor = found.parts[index]!;
+      if (
+        !(
+          request.selection.bytes === descriptor.bytes &&
+          request.selection.revision === descriptor.revision
+        ) &&
+        (await digest(new TextDecoder().decode(bytes))) !== request.selection.revision
+      )
         throw Error('Demo fixed prefix changed.');
       const offset = Number(request.cursor ?? 0);
       let end = Math.min(offset + 16000, bytes.length);
@@ -285,6 +364,24 @@ export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabili
     );
   }
   return {
+    async setEntry(index: number, texts: string[], kinds: ChatTranscriptPart['kind'][] = []) {
+      const entry = entries[index]!;
+      const parts = await Promise.all(
+        texts.map((text, i) => part(text, `m0.b${i}`, kinds[i] ?? 'text')),
+      );
+      sources.set(JSON.stringify(entry.transcript!.source), {
+        source: entry.transcript!.source,
+        parts,
+        texts,
+      });
+      entry.transcript = {
+        ...entry.transcript!,
+        parts: parts.slice(0, 4),
+        nextCursor: parts.length > 4 ? '4' : null,
+      };
+      chat.snapshot.entries = entries.slice(-32).reverse();
+      chat.controls.receiveChat(structuredClone(chat.snapshot));
+    },
     native,
     copied,
     links,
