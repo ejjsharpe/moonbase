@@ -43,6 +43,13 @@ import { ImageVisibility, StoredImage, StoredImages } from './stored-image.tsx';
 import type { ImageResources } from './stored-image.ts';
 import { getTranscriptParts } from './transcript-parts.ts';
 import { usePartBody } from './part-body.ts';
+import {
+  createTranscriptScroll,
+  transitionTranscriptScroll,
+  type TranscriptScroll,
+  type TranscriptScrollEvent,
+  type TranscriptViewport,
+} from './transcript-scroll.ts';
 
 export function Transcript({
   controller,
@@ -57,22 +64,92 @@ export function Transcript({
 }) {
   const root = useRef<HTMLElement>(null),
     content = useRef<HTMLDivElement>(null);
-  const [pinned, setPinned] = useState(false),
-    [pinnedEntry, setPinnedEntry] = useState<string | null>(null),
+  const [scroll, setScroll] = useState(() =>
+      createTranscriptScroll(latestState.transcript.view.anchor),
+    ),
     [imageSource, setImageSource] = useState<ChatTranscriptSource | null>(null),
     [presented, setPresented] = useState(latestState);
-  const preserve = pinned && getLiveIdentity(presented) !== getLiveIdentity(latestState);
+  const preserve = scroll.pins.live && getLiveIdentity(presented) !== getLiveIdentity(latestState);
   if (!preserve && presented !== latestState) setPresented(latestState);
   const state = preserve ? presented : latestState;
+  const scrollState = useRef(scroll),
+    current = useRef(state),
+    /** The scrollTop last written here, so the scroll event it causes records nothing. */
+    written = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    current.current = state;
+  }, [state]);
+  const dispatch = useCallback(
+    function dispatch(event: TranscriptScrollEvent) {
+      const previous = scrollState.current;
+      const { state: next, instruction } = transitionTranscriptScroll(previous, event);
+      scrollState.current = next;
+      // Rendering reads only these; the anchor and intent change on every scroll.
+      if (
+        next.mode !== previous.mode ||
+        next.pins !== previous.pins ||
+        next.earlierRow !== previous.earlierRow ||
+        next.retry !== previous.retry
+      )
+        setScroll(next);
+      const element = root.current;
+      if (!element) return;
+      if (instruction.cancelReveal) controller.cancelFindReveal();
+      const write = (top: number) => {
+        const before = element.scrollTop;
+        element.scrollTop = top;
+        // Only a moved position dispatches a scroll event to fence.
+        if (element.scrollTop !== before) written.current = element.scrollTop;
+      };
+      if (instruction.scroll === 'end') write(element.scrollHeight);
+      const top =
+        instruction.scroll === 'anchor' && getAnchorTop(element, next, current.current, controller);
+      if (typeof top === 'number') {
+        write(top);
+        dispatch({ type: 'applied' });
+      }
+      if (instruction.capture)
+        dispatch({ type: 'captured', position: captureAnchor(element, controller) });
+      const view = controller.getSnapshot().transcript.view;
+      // Following saves no anchor on each update; only a change needs a write.
+      if (instruction.save !== undefined && (instruction.save || view.anchor))
+        controller.setTranscriptView({ anchor: instruction.save, expanded: view.expanded });
+      const navigation = instruction.navigate;
+      if (!navigation) return;
+      if (navigation === 'latest') {
+        const selection = window.getSelection();
+        if (selection?.rangeCount && selection.getRangeAt(0).intersectsNode(element))
+          selection.removeAllRanges();
+      }
+      const pending = {
+        earlier: () => controller.older(),
+        later: () => controller.later(),
+        latest: () => controller.jumpToLatest(),
+        row: () => Promise.resolve(),
+      }[navigation]();
+      void pending.finally(() =>
+        requestAnimationFrame(() => {
+          if (root.current)
+            dispatch({
+              type: 'navigated',
+              revision: next.revision,
+              saved: controller.getSnapshot().transcript.view.anchor,
+              viewport: getViewport(root.current, current.current),
+            });
+        }),
+      );
+    },
+    [controller],
+  );
   useEffect(() => {
     const update = () => {
-      setPinned(
-        isReadingNodePinned(
-          root.current?.querySelector<HTMLElement>('[data-transcript-live]') ?? null,
-        ),
-      );
+      const live = root.current?.querySelector<HTMLElement>('[data-transcript-live]') ?? null;
       const oldest = root.current?.querySelector<HTMLElement>('[data-transcript-entry]') ?? null;
-      setPinnedEntry(isReadingNodePinned(oldest) ? oldest!.dataset.transcriptEntry! : null);
+      dispatch({
+        type: 'pinned',
+        live: isReadingNodePinned(live),
+        oldest: isReadingNodePinned(oldest) ? oldest!.dataset.transcriptEntry! : null,
+      });
     };
     document.addEventListener('selectionchange', update);
     document.addEventListener('focusin', update);
@@ -82,30 +159,13 @@ export function Transcript({
       document.removeEventListener('focusin', update);
       document.removeEventListener('focusout', update);
     };
-  }, []);
-  const follow = useRef(!state.transcript.view.anchor),
-    anchor = useRef<TranscriptViewAnchor | null>(state.transcript.view.anchor),
-    restoring = useRef(!!state.transcript.view.anchor),
-    domAnchor = useRef<{ node: HTMLElement; offset: number } | null>(null);
-  const current = useRef(state);
-  useLayoutEffect(() => {
-    current.current = state;
-  }, [state]);
-  const [earlierRow, setEarlierRow] = useState(false);
-  const [following, setFollowing] = useState(!state.transcript.view.anchor);
+  }, [dispatch]);
   const [notice, setNotice] = useState<{ error: boolean; text: string } | null>(null);
-  const navigation = useRef(false);
-  const navigationRevision = useRef(0);
-  const scrollFrame = useRef<number | null>(null);
-  const topIntent = useRef(false);
-  const lastMove = useRef<'earlier' | 'later' | 'latest'>('earlier');
   const jobs = useRef(new Set<AbortController>());
   const [cache] = useState(() => new MarkdownCache());
   useEffect(
     () => () => {
-      navigationRevision.current++;
       for (const job of jobs.current) job.abort();
-      if (scrollFrame.current !== null) cancelAnimationFrame(scrollFrame.current);
       cache.clear();
     },
     [controller, cache],
@@ -158,283 +218,59 @@ export function Transcript({
     },
     [native, run],
   );
-  const capture = useCallback(() => {
-    const element = root.current;
-    if (!element) return;
-    const observed = controller.getSnapshot();
-    if (restoring.current) return;
-    const top = getReadingTop(element);
-    const nodes = [
-      ...element.querySelectorAll<HTMLElement>(
-        '[data-transcript-part], [data-transcript-entry], [data-transcript-live]',
-      ),
-    ];
-    const node =
-      nodes.find(
-        (node) =>
-          node.getBoundingClientRect().bottom > top && node.getBoundingClientRect().top >= top,
-      ) ?? nodes.find((node) => node.getBoundingClientRect().bottom > top);
-    if (node) {
-      const row = node.closest<HTMLElement>('[data-transcript-entry], [data-transcript-live]')!;
-      domAnchor.current = { node, offset: node.getBoundingClientRect().top - top };
-      if (row.dataset.transcriptLive) {
-        const summary = observed.snapshot?.run?.transcript;
-        if (
-          !observed.ready ||
-          !summary ||
-          row.dataset.transcriptLive !== JSON.stringify(summary.source) ||
-          summary.source.kind !== 'live' ||
-          ['inactive', 'reconnecting', 'failed'].includes(observed.transcript.observation)
-        )
-          return;
-        const partNode = node.dataset.transcriptPart
-          ? node
-          : row.querySelector<HTMLElement>('[data-transcript-part]');
-        const manifest = observed.transcript.manifest;
-        const parts = getTranscriptParts(summary, manifest);
-        const part =
-          parts.find((part) => part.partId === partNode?.dataset.transcriptPart) ??
-          summary.parts.find((part) => part.partId === partNode?.dataset.transcriptPart);
-        if (!part || part.availability !== 'available') return;
-        anchor.current = {
-          backendId: controller.backendId,
-          source: summary.source,
-          partId: part.partId,
-          bytes: part.bytes,
-          revision: part.revision,
-          offset: partNode!.getBoundingClientRect().top - top,
-        };
-      } else
-        anchor.current = {
-          entryId: row.dataset.transcriptEntry!,
-          ...(node.dataset.transcriptPart ? { partId: node.dataset.transcriptPart } : {}),
-          offset: domAnchor.current.offset,
-        };
-    }
-    controller.setTranscriptView({
-      anchor: follow.current ? null : anchor.current,
-      expanded: observed.transcript.view.expanded,
-    });
-  }, [controller]);
-  const captureReadingPosition = useCallback(() => {
-    restoring.current = false;
-    anchor.current = null;
-    follow.current = false;
-    if (scrollFrame.current !== null) {
-      cancelAnimationFrame(scrollFrame.current);
-      scrollFrame.current = null;
-    }
-    capture();
-    setFollowing(false);
-  }, [capture]);
-  const cancelFindReveal = () => {
-    if (controller.getSnapshot().transcript.find.revealing) {
-      domAnchor.current = null;
-      captureReadingPosition();
-    }
-    controller.cancelFindReveal();
-  };
-  const restore = useCallback(() => {
-    const element = root.current;
-    if (!element) return;
-    const setTop = (top: number) => {
-      if (element.scrollTop === top) return;
-      if (scrollFrame.current !== null) cancelAnimationFrame(scrollFrame.current);
-      element.scrollTop = top;
-      scrollFrame.current = requestAnimationFrame(() => {
-        scrollFrame.current = null;
-      });
-    };
-    if (
-      follow.current &&
-      current.current.transcript.atLatest &&
-      window.getSelection()?.isCollapsed !== false
-    ) {
-      setTop(element.scrollHeight);
-      return;
-    }
-    const target = anchor.current;
-    const match = current.current.transcript.find.active;
-    if (
-      current.current.transcript.find.revealing &&
-      match &&
-      target &&
-      !target.source &&
-      target.entryId === match.source.entryId &&
-      target.partId === match.partId
-    ) {
-      restoring.current = false;
-      return;
-    }
-    if (!target) {
-      const saved = domAnchor.current;
-      if (saved?.node.isConnected)
-        setTop(
-          element.scrollTop +
-            saved.node.getBoundingClientRect().top -
-            getReadingTop(element) -
-            saved.offset,
-        );
-      return;
-    }
-    if (target.source && target.backendId !== controller.backendId) return;
-    if (restoring.current && (!current.current.snapshot || current.current.transcript.loading))
-      return;
-    const nodes = [
-      ...element.querySelectorAll<HTMLElement>('[data-transcript-entry], [data-transcript-live]'),
-    ];
-    const entry = nodes.find((node) =>
-      target.source
-        ? !!node.dataset.transcriptLive
-        : node.dataset.transcriptEntry === target.entryId,
-    );
-    const part =
-      target.partId &&
-      [...(entry?.querySelectorAll<HTMLElement>('[data-transcript-part]') ?? [])].find(
-        (node) => node.dataset.transcriptPart === target.partId,
-      );
-    const manifest = current.current.transcript.manifest;
-    const summary = target.source
-      ? current.current.snapshot?.run?.transcript
-      : current.current.transcript.entries.find((entry) => entry.id === target.entryId)?.transcript;
-    if (
-      restoring.current &&
-      target.partId &&
-      !part &&
-      summary &&
-      (manifest && sameSource(summary, manifest)
-        ? !manifest.error && manifest.status !== 'complete'
-        : !!summary.nextCursor)
-    )
-      return;
-    const node =
-      (part &&
-        (part.getClientRects().length
-          ? part
-          : part.closest<HTMLElement>('[data-transcript-activity]'))) ||
-      entry ||
-      (restoring.current ? nodes.at(-1) : undefined);
-    if (node) {
-      setTop(
-        element.scrollTop +
-          node.getBoundingClientRect().top -
-          getReadingTop(element) -
-          target.offset,
-      );
-      const fallback = (!part && !!target.partId) || !entry;
-      restoring.current = false;
-      if (fallback) {
-        anchor.current = null;
-        domAnchor.current = {
-          node,
-          offset: node.getBoundingClientRect().top - getReadingTop(element),
-        };
-      }
-    }
-  }, [controller]);
   useLayoutEffect(() => {
-    const view = state.transcript.view.anchor;
-    if (!navigation.current && view && JSON.stringify(view) !== JSON.stringify(anchor.current)) {
-      anchor.current = view;
-      restoring.current = true;
-      follow.current = false;
-      setFollowing(false);
-    }
-  }, [state.transcript.view.anchor]);
-  useLayoutEffect(restore, [state.transcript, state.snapshot?.run, restore]);
+    const anchor = state.transcript.view.anchor,
+      { find } = current.current.transcript;
+    if (!anchor) return;
+    const reveal =
+      find.revealing &&
+      !anchor.source &&
+      anchor.entryId === find.active?.source.entryId &&
+      anchor.partId === find.active.partId;
+    dispatch(reveal ? { type: 'reveal' } : { type: 'supplied', anchor });
+  }, [state.transcript.view.anchor, dispatch]);
+  const { active: findActive, revealing: findRevealing } = state.transcript.find;
+  // Declared before the resize re-anchor: a Part has already revealed a rendered match in this
+  // commit, and re-applying the previous anchor would scroll it away again.
+  useLayoutEffect(() => {
+    if (findActive && findRevealing) dispatch({ type: 'reveal' });
+  }, [findActive, findRevealing, dispatch]);
+  const resize = useCallback(() => {
+    if (root.current)
+      dispatch({ type: 'resized', viewport: getViewport(root.current, current.current) });
+  }, [dispatch]);
+  useLayoutEffect(resize, [state.transcript, state.snapshot?.run, resize]);
   useEffect(() => {
     if (!content.current) return;
-    const observer = new ResizeObserver(restore);
+    const observer = new ResizeObserver(resize);
     observer.observe(content.current);
     return () => observer.disconnect();
-  }, [restore]);
-  const move = useCallback(
-    (direction: 'earlier' | 'later') => {
-      restoring.current = false;
-      topIntent.current = false;
-      lastMove.current = direction;
-      follow.current = false;
-      setFollowing(false);
-      capture();
-      const revision = ++navigationRevision.current;
-      navigation.current = true;
-      const pending = direction === 'earlier' ? controller.older() : controller.later();
-      void pending.finally(() =>
-        requestAnimationFrame(() => {
-          if (revision !== navigationRevision.current) return;
-          navigation.current = false;
-          topIntent.current = false;
-          const saved = controller.getSnapshot().transcript.view.anchor;
-          if (saved?.partId) anchor.current = saved;
-          restore();
-          capture();
-        }),
-      );
-    },
-    [capture, controller, restore],
-  );
-  const earlier = useCallback(() => {
-    if (
-      current.current.transcript.atLatest &&
-      current.current.snapshot?.run &&
-      current.current.transcript.entries.length === 128 &&
-      !earlierRow
-    ) {
-      follow.current = false;
-      setFollowing(false);
-      capture();
-      setEarlierRow(true);
-    } else move('earlier');
-  }, [capture, move, earlierRow]);
-  const latest = () => {
-    const selection = window.getSelection();
-    if (
-      root.current &&
-      selection?.rangeCount &&
-      selection.getRangeAt(0).intersectsNode(root.current)
-    )
-      selection.removeAllRanges();
-    setPinned(false);
-    setPinnedEntry(null);
-    topIntent.current = false;
-    lastMove.current = 'latest';
-    setEarlierRow(false);
-    follow.current = true;
-    anchor.current = null;
-    restoring.current = false;
-    domAnchor.current = null;
-    setFollowing(true);
-    const revision = ++navigationRevision.current;
-    navigation.current = true;
-    void controller.jumpToLatest().finally(() =>
-      requestAnimationFrame(() => {
-        if (revision !== navigationRevision.current) return;
-        navigation.current = false;
-        topIntent.current = false;
-        restore();
-      }),
-    );
-  };
-  const scroll = () => {
-    if (scrollFrame.current !== null) return;
-    const element = root.current!;
-    follow.current =
-      state.transcript.atLatest &&
-      element.scrollHeight - element.scrollTop - element.clientHeight < 40 &&
-      window.getSelection()?.isCollapsed !== false;
-    setFollowing(follow.current);
-    capture();
-    if (
-      topIntent.current &&
-      !navigation.current &&
-      element.scrollTop < 120 &&
-      !follow.current &&
-      state.transcript.earlier &&
-      !state.transcript.loading &&
-      window.getSelection()?.isCollapsed !== false &&
-      !document.activeElement?.closest('[data-transcript-entry], [data-transcript-live]')
-    )
-      earlier();
+  }, [resize]);
+  const navigate = (direction: 'earlier' | 'later', retry?: true) =>
+    dispatch({
+      type: 'navigate',
+      direction,
+      ...(retry && { retry }),
+      viewport: getViewport(root.current!, current.current),
+    });
+  const input = (device: 'wheel' | 'key' | 'pointer', upward: boolean) =>
+    dispatch({
+      type: 'input',
+      device,
+      upward,
+      viewport: getViewport(root.current!, current.current),
+    });
+  const onScroll = () => {
+    const element = root.current!,
+      top = getAnchorTop(element, scrollState.current, current.current, controller),
+      at = (target: number | null) => target !== null && Math.abs(target - element.scrollTop) < 1;
+    const held = at(written.current) || at(top);
+    written.current = null;
+    dispatch({
+      type: 'scrolled',
+      held,
+      viewport: getViewport(element, current.current),
+    });
   };
   const status = latestState.transcript;
   const currentSnapshot = latestState.snapshot;
@@ -443,11 +279,11 @@ export function Transcript({
     oldestPinned =
       transcript.entries.length === 128 &&
       (transcript.view.anchor?.entryId === transcript.entries[0]?.id ||
-        pinnedEntry === transcript.entries[0]?.id ||
+        scroll.pins.oldest === transcript.entries[0]?.id ||
         (!!imageSource &&
           !!transcript.entries[0]?.transcript &&
           sameSource(transcript.entries[0].transcript, { source: imageSource }))),
-    live = !earlierRow && !oldestPinned && !transcript.later ? snapshot?.run : null;
+    live = !scroll.earlierRow && !oldestPinned && !transcript.later ? snapshot?.run : null;
   const hiddenRow = !!live && transcript.entries.length === 128;
   const entries = hiddenRow ? transcript.entries.slice(1) : transcript.entries;
   const evidence = useMemo(
@@ -474,28 +310,8 @@ export function Transcript({
       ref={root}
       aria-label="Chat transcript"
       tabIndex={0}
-      onScroll={scroll}
-      onWheel={(event) => {
-        cancelFindReveal();
-        if (restoring.current) {
-          restoring.current = false;
-          anchor.current = null;
-        }
-        if (event.deltaY < 0) {
-          follow.current = false;
-          topIntent.current = true;
-          setFollowing(false);
-          if (
-            event.currentTarget.scrollTop < 120 &&
-            state.transcript.earlier &&
-            !state.transcript.loading &&
-            !navigation.current &&
-            window.getSelection()?.isCollapsed !== false &&
-            !document.activeElement?.closest('[data-transcript-entry], [data-transcript-live]')
-          )
-            earlier();
-        }
-      }}
+      onScroll={onScroll}
+      onWheel={(event) => input('wheel', event.deltaY < 0)}
       onKeyDown={(event) => {
         const target = event.target;
         if (
@@ -506,23 +322,16 @@ export function Transcript({
           ['PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown', ' ', 'Enter'].includes(
             event.key,
           )
-        ) {
-          cancelFindReveal();
-          topIntent.current =
+        )
+          input(
+            'key',
             ['PageUp', 'Home', 'ArrowUp'].includes(event.key) ||
-            (event.key === ' ' && event.shiftKey);
-          if (restoring.current || ![' ', 'Enter'].includes(event.key)) captureReadingPosition();
-        }
+              (event.key === ' ' && event.shiftKey),
+          );
       }}
-      onPointerDown={(event) => {
-        cancelFindReveal();
-        topIntent.current = event.target === event.currentTarget || event.pointerType === 'touch';
-        if (restoring.current) captureReadingPosition();
-        else {
-          follow.current = false;
-          setFollowing(false);
-        }
-      }}
+      onPointerDown={(event) =>
+        input('pointer', event.target === event.currentTarget || event.pointerType === 'touch')
+      }
       {...stylex.props(styles.transcript)}>
       <div ref={content} {...stylex.props(styles.measure)}>
         {!snapshot && (
@@ -537,7 +346,7 @@ export function Transcript({
             <Button
               {...stylex.props(controls.button, controls.quietButton)}
               disabled={!state.ready || (!transcript.earlier && !hiddenRow) || transcript.loading}
-              onClick={earlier}>
+              onClick={() => navigate('earlier')}>
               {transcript.loading ? 'Loading history…' : 'Load earlier'}
             </Button>
             <Button
@@ -549,12 +358,17 @@ export function Transcript({
               <Button
                 {...stylex.props(controls.button, controls.quietButton)}
                 disabled={!state.ready || transcript.loading}
-                onClick={() => move('later')}>
+                onClick={() => navigate('later')}>
                 Read later
               </Button>
             )}
-            {(status.view.anchor?.source || preserve || !following || !transcript.atLatest) && (
-              <Button {...stylex.props(controls.button, controls.quietButton)} onClick={latest}>
+            {(status.view.anchor?.source ||
+              preserve ||
+              scroll.mode !== 'following' ||
+              !transcript.atLatest) && (
+              <Button
+                {...stylex.props(controls.button, controls.quietButton)}
+                onClick={() => dispatch({ type: 'latest' })}>
                 Jump to latest
               </Button>
             )}
@@ -594,8 +408,8 @@ export function Transcript({
                   !transcript.entries.some((entry) => entry.id === missing.entryId)
                 )
                   void controller.jumpToEntry(missing.entryId);
-                else if (lastMove.current === 'latest') latest();
-                else move(lastMove.current);
+                else if (scroll.retry === 'latest') dispatch({ type: 'latest' });
+                else navigate(scroll.retry, true);
               }}>
               Retry history
             </Button>
@@ -1439,6 +1253,123 @@ function scrollToReading(target: Range | HTMLElement) {
   }
   scroller.scrollTop += target.getBoundingClientRect().top - getReadingTop(scroller) - 24;
 }
+function getViewport(
+  element: HTMLElement,
+  { transcript, snapshot }: ChatState,
+): TranscriptViewport {
+  return {
+    top: element.scrollTop,
+    bottom: element.scrollHeight - element.scrollTop - element.clientHeight,
+    atLatest: transcript.atLatest,
+    selected: window.getSelection()?.isCollapsed === false,
+    earlier:
+      transcript.earlier &&
+      !transcript.loading &&
+      !document.activeElement?.closest('[data-transcript-entry], [data-transcript-live]'),
+    boundary: transcript.atLatest && !!snapshot?.run && transcript.entries.length === 128,
+  };
+}
+/** Records the first visible entry/part as a semantic, viewport-relative anchor. */
+function captureAnchor(
+  element: HTMLElement,
+  controller: ChatController,
+): TranscriptViewAnchor | undefined {
+  const observed = controller.getSnapshot();
+  const top = getReadingTop(element);
+  const nodes = [
+    ...element.querySelectorAll<HTMLElement>(
+      '[data-transcript-part], [data-transcript-entry], [data-transcript-live]',
+    ),
+  ];
+  const node =
+    nodes.find(
+      (node) =>
+        node.getBoundingClientRect().bottom > top && node.getBoundingClientRect().top >= top,
+    ) ?? nodes.find((node) => node.getBoundingClientRect().bottom > top);
+  if (!node) return;
+  const row = node.closest<HTMLElement>('[data-transcript-entry], [data-transcript-live]')!;
+  if (!row.dataset.transcriptLive)
+    return {
+      entryId: row.dataset.transcriptEntry!,
+      ...(node.dataset.transcriptPart ? { partId: node.dataset.transcriptPart } : {}),
+      offset: node.getBoundingClientRect().top - top,
+    };
+  const summary = observed.snapshot?.run?.transcript;
+  if (
+    !observed.ready ||
+    !summary ||
+    row.dataset.transcriptLive !== JSON.stringify(summary.source) ||
+    summary.source.kind !== 'live' ||
+    ['inactive', 'reconnecting', 'failed'].includes(observed.transcript.observation)
+  )
+    return;
+  const partNode = node.dataset.transcriptPart
+    ? node
+    : row.querySelector<HTMLElement>('[data-transcript-part]');
+  const part =
+    getTranscriptParts(summary, observed.transcript.manifest).find(
+      (part) => part.partId === partNode?.dataset.transcriptPart,
+    ) ?? summary.parts.find((part) => part.partId === partNode?.dataset.transcriptPart);
+  if (!part || part.availability !== 'available') return;
+  return {
+    backendId: controller.backendId,
+    source: summary.source,
+    partId: part.partId,
+    bytes: part.bytes,
+    revision: part.revision,
+    offset: partNode!.getBoundingClientRect().top - top,
+  };
+}
+/**
+ * Finds the scroll position that places the anchor at its offset, or a missing row/part nearby. A
+ * pending restoration waits for its window and parts.
+ */
+function getAnchorTop(
+  element: HTMLElement,
+  { anchor: target, mode }: TranscriptScroll,
+  state: ChatState,
+  { backendId }: ChatController,
+) {
+  const restoring = mode === 'restoring';
+  if (!target || (target.source && target.backendId !== backendId)) return null;
+  if (restoring && (!state.snapshot || state.transcript.loading)) return null;
+  const nodes = [
+    ...element.querySelectorAll<HTMLElement>('[data-transcript-entry], [data-transcript-live]'),
+  ];
+  const entry = nodes.find((node) =>
+    target.source ? !!node.dataset.transcriptLive : node.dataset.transcriptEntry === target.entryId,
+  );
+  const part =
+    target.partId &&
+    [...(entry?.querySelectorAll<HTMLElement>('[data-transcript-part]') ?? [])].find(
+      (node) => node.dataset.transcriptPart === target.partId,
+    );
+  const manifest = state.transcript.manifest;
+  const summary = target.source
+    ? state.snapshot?.run?.transcript
+    : state.transcript.entries.find((entry) => entry.id === target.entryId)?.transcript;
+  if (
+    restoring &&
+    target.partId &&
+    !part &&
+    summary &&
+    (manifest && sameSource(summary, manifest)
+      ? !manifest.error && manifest.status !== 'complete'
+      : !!summary.nextCursor)
+  )
+    return null;
+  const node =
+    (part &&
+      (part.getClientRects().length
+        ? part
+        : part.closest<HTMLElement>('[data-transcript-activity]'))) ||
+    entry ||
+    (restoring ? nodes.at(-1) : undefined);
+  if (!node) return null;
+  const top =
+    element.scrollTop + node.getBoundingClientRect().top - getReadingTop(element) - target.offset;
+  return Math.max(0, Math.min(top, element.scrollHeight - element.clientHeight));
+}
 function getReadingTop(element: HTMLElement) {
   return Math.max(
     element.getBoundingClientRect().top,
@@ -1473,6 +1404,8 @@ function decodeText(content: TranscriptContentState) {
 const styles = stylex.create({
   transcript: {
     overflowY: 'auto',
+    // Reading anchors sit below the sticky chrome, whose status/notice height changes; native
+    // anchoring would hold rows against the scroller top instead, hiding them under the chrome.
     overflowAnchor: 'none',
     flex: 1,
     minHeight: 60,
