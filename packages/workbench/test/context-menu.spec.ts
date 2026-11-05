@@ -1,6 +1,65 @@
 import { test, expect, type Page } from '@playwright/test';
 import type { DirectoryListing } from '@moonbase/contracts/workspace';
 
+declare global {
+  interface Window {
+    finishMenuOpening(): Promise<void>;
+    releaseTreeScroll(): void;
+    resumeMenuFrames(): number;
+    releaseMenuFocus(): void;
+  }
+}
+
+async function holdMenuOpening(page: Page) {
+  await page.addInitScript(() => {
+    const observer = new MutationObserver(() => {
+      const popup = document.querySelector<HTMLElement>('[role="menu"][aria-label="File actions"]');
+      if (!popup) return;
+      // Release a real opening animation explicitly so keyboard input can precede completion.
+      const animation = popup.animate([{}, {}], { duration: 1 });
+      animation.pause();
+      window.finishMenuOpening = async () => {
+        animation.finish();
+        await animation.finished;
+      };
+      observer.disconnect();
+    });
+    observer.observe(document, { childList: true, subtree: true });
+  });
+}
+
+async function holdMenuFocus(page: Page) {
+  await page.addInitScript(() => {
+    document.addEventListener(
+      'contextmenu',
+      () => {
+        const request = window.requestAnimationFrame.bind(window);
+        const cancel = window.cancelAnimationFrame.bind(window);
+        const frames = new Map<number, FrameRequestCallback>();
+        let id = 0;
+        window.requestAnimationFrame = (callback) => {
+          frames.set(--id, callback);
+          return id;
+        };
+        window.cancelAnimationFrame = (handle) => {
+          if (!frames.delete(handle)) cancel(handle);
+        };
+        window.resumeMenuFrames = () => {
+          window.requestAnimationFrame = request;
+          return frames.size;
+        };
+        window.releaseMenuFocus = () => {
+          window.requestAnimationFrame = request;
+          window.cancelAnimationFrame = cancel;
+          for (const callback of frames.values()) request(callback);
+          frames.clear();
+        };
+      },
+      { once: true, capture: true },
+    );
+  });
+}
+
 const region = (page: Page) =>
   page.getByRole('region', { name: 'First editor', exact: true, includeHidden: true });
 const tree = (page: Page) =>
@@ -157,42 +216,58 @@ test('outside dismissal consumes the row click; background invocation stays nati
   await expect(menu(page)).toHaveCount(0);
 });
 
-test('large-tree menus capture all offscreen paths and keep row virtualization', async ({
-  page,
-}) => {
-  await page.goto('/');
-  await expect(tree(page)).toBeVisible();
-  await page.evaluate(async () => {
-    const { first, client, checkout } = window.demo;
-    const command = client.command.bind(client);
-    client.command = async (name, input, options) => {
-      const result = await command(name, input, options);
-      if (name === 'listDirectory' && (input as { path: string }).path === '')
-        (result as DirectoryListing).entries = Array.from({ length: 10000 }, (_, index) => ({
-          path: `file-${String(index).padStart(5, '0')}`,
-          directory: false,
-        }));
-      return result;
-    };
-    await first.list(checkout);
+for (const timing of ['normal', 'pending scroll'])
+  test(`large-tree menus capture all offscreen paths and keep row virtualization (${timing})`, async ({
+    page,
+  }) => {
+    await page.goto('/');
+    await expect(tree(page)).toBeVisible();
+    await page.evaluate(async () => {
+      const { first, client, checkout } = window.demo;
+      const command = client.command.bind(client);
+      client.command = async (name, input, options) => {
+        const result = await command(name, input, options);
+        if (name === 'listDirectory' && (input as { path: string }).path === '')
+          (result as DirectoryListing).entries = Array.from({ length: 10000 }, (_, index) => ({
+            path: `file-${String(index).padStart(5, '0')}`,
+            directory: false,
+          }));
+        return result;
+      };
+      await first.list(checkout);
+    });
+    if (timing === 'pending scroll')
+      await tree(page).evaluate((element) => {
+        element.addEventListener(
+          'scroll',
+          (event) => {
+            event.stopImmediatePropagation();
+            window.releaseTreeScroll = () => element.dispatchEvent(event);
+          },
+          { once: true, capture: true },
+        );
+      });
+    await tree(page).focus();
+    await tree(page).press('Home');
+    await tree(page).press('Shift+End');
+    if (timing === 'pending scroll') await page.waitForFunction(() => !!window.releaseTreeScroll);
+    await tree(page).press('ContextMenu');
+    await expect(menu(page)).toBeVisible();
+    if (timing === 'pending scroll') await page.evaluate(() => window.releaseTreeScroll());
+    await expect(menu(page)).toBeVisible();
+    expect(await tree(page).getByRole('treeitem').count()).toBeLessThan(80);
+    expect(await selected(page)).toHaveLength(10000);
+    await item(page, 'Move to Trash').click();
+    const dialog = page.getByRole('dialog', { name: 'Move to Trash', exact: true });
+    await expect(dialog).toContainText('file-00000');
+    await expect(dialog).toContainText('file-09999');
+    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await row(page, 'file-09999').click({ button: 'right' });
+    await tree(page).evaluate((element) => {
+      element.scrollTop = 0;
+    });
+    await expect(menu(page)).toHaveCount(0);
   });
-  await tree(page).focus();
-  await tree(page).press('Home');
-  await tree(page).press('Shift+End');
-  await tree(page).press('ContextMenu');
-  expect(await tree(page).getByRole('treeitem').count()).toBeLessThan(80);
-  expect(await selected(page)).toHaveLength(10000);
-  await item(page, 'Move to Trash').click();
-  const dialog = page.getByRole('dialog', { name: 'Move to Trash', exact: true });
-  await expect(dialog).toContainText('file-00000');
-  await expect(dialog).toContainText('file-09999');
-  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
-  await row(page, 'file-09999').click({ button: 'right' });
-  await tree(page).evaluate((element) => {
-    element.scrollTop = 0;
-  });
-  await expect(menu(page)).toHaveCount(0);
-});
 
 test('menus dismiss on hide, target loss, checkout navigation and unmount', async ({ page }) => {
   await page.goto('/');
@@ -316,6 +391,7 @@ test('portal typing and paste do not import files or navigate the explorer', asy
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await row(page, 'README.md').click({ button: 'right' });
+  await expect(item(page, 'Rename')).toBeFocused();
   await page.keyboard.press('Meta+v');
   await menu(page).evaluate((element) =>
     element.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true })),
@@ -421,59 +497,80 @@ test('an externally opened mutation dialog dismisses an unchosen menu without re
   await expect(dialog).toHaveCount(0);
 });
 
-test('another workbench preservation dialog dismisses the menu and owns the first click', async ({
-  page,
-}) => {
-  await page.goto('/');
-  await row(page, 'README.md').click({ button: 'right' });
-  await page.evaluate(() => {
-    const { second, checkout } = window.demo;
-    second.edit({ checkout, path: 'welcome.ts' }, 'Other editor dirty text');
-    void second.close([{ checkout, path: 'welcome.ts' }]);
+for (const timing of ['focused', 'pending focus'])
+  test(`another workbench preservation dialog dismisses the menu and owns the first click (${timing})`, async ({
+    page,
+  }) => {
+    if (timing === 'pending focus') await holdMenuFocus(page);
+    await page.goto('/');
+    await row(page, 'README.md').click({ button: 'right' });
+    if (timing === 'pending focus')
+      expect(await page.evaluate(() => window.resumeMenuFrames())).toBeGreaterThan(0);
+    else await expect(item(page, 'Rename')).toBeFocused();
+    await page.evaluate(() => {
+      const { second, checkout } = window.demo;
+      second.edit({ checkout, path: 'welcome.ts' }, 'Other editor dirty text');
+      void second.close([{ checkout, path: 'welcome.ts' }]);
+    });
+    const dialog = page.getByRole('dialog', { name: 'Save changes before closing?', exact: true });
+    await expect(dialog.getByRole('button', { name: 'Save', exact: true })).toBeFocused();
+    if (timing === 'pending focus') await page.evaluate(() => window.releaseMenuFocus());
+    await expect(menu(page)).toHaveCount(0);
+    await expect(dialog.getByRole('button', { name: 'Save', exact: true })).toBeFocused();
+    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(tree(page)).not.toBeFocused();
+    expect(
+      await page.evaluate(
+        () =>
+          window.demo.second
+            .getSnapshot()
+            .buffers.find((buffer) => buffer.target.path === 'welcome.ts')?.text,
+      ),
+    ).toBe('Other editor dirty text');
   });
-  const dialog = page.getByRole('dialog', { name: 'Save changes before closing?', exact: true });
-  await expect(menu(page)).toHaveCount(0);
-  await expect(dialog.getByRole('button', { name: 'Save', exact: true })).toBeFocused();
-  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
-  await expect(dialog).toHaveCount(0);
-  await expect(tree(page)).not.toBeFocused();
-  expect(
-    await page.evaluate(
-      () =>
-        window.demo.second
-          .getSnapshot()
-          .buffers.find((buffer) => buffer.target.path === 'welcome.ts')?.text,
-    ),
-  ).toBe('Other editor dirty text');
-});
 
-test('keyboard activation runs the captured action after later selection changes', async ({
-  page,
-}) => {
-  await page.goto('/');
-  await row(page, 'README.md').click({ button: 'right' });
-  await page.evaluate(() =>
-    window.demo.first.tree(window.demo.checkout, { selected: ['welcome.ts'], focus: 'welcome.ts' }),
-  );
-  await page.keyboard.press('ArrowDown');
-  await page.keyboard.press('Space');
-  const dialog = page.getByRole('dialog', { name: 'Copy', exact: true });
-  await expect(dialog).toContainText('README.md');
-  await dialog.getByLabel('Destination relative path', { exact: true }).fill('copied.md');
-  await dialog.getByRole('button', { name: 'Copy', exact: true }).click();
-  await expect(dialog).toHaveCount(0);
-  expect(
-    await page.evaluate(
-      async () =>
-        (
-          await window.demo.client.command('readFile', {
-            checkout: window.demo.checkout,
-            path: 'copied.md',
-          })
-        ).text,
-    ),
-  ).toContain('# Volatile demo');
-});
+for (const timing of ['normal', 'before completion', 'late completion'])
+  test(`keyboard activation runs the captured action after later selection changes (${timing})`, async ({
+    page,
+  }) => {
+    if (timing !== 'normal') await holdMenuOpening(page);
+    await page.goto('/');
+    await row(page, 'README.md').click({ button: 'right' });
+    if (timing !== 'normal') await page.waitForFunction(() => !!window.finishMenuOpening);
+    if (timing === 'late completion') await menu(page).press('Home');
+    else await expect(item(page, 'Rename')).toBeFocused();
+    await page.evaluate(() =>
+      window.demo.first.tree(window.demo.checkout, {
+        selected: ['welcome.ts'],
+        focus: 'welcome.ts',
+      }),
+    );
+    await page.keyboard.press('ArrowDown');
+    await expect(item(page, 'Copy')).toBeFocused();
+    if (timing === 'late completion') {
+      await page.evaluate(() => window.finishMenuOpening());
+      await expect(item(page, 'Copy')).toBeFocused();
+    }
+    await page.keyboard.press('Space');
+    if (timing === 'before completion') await page.evaluate(() => window.finishMenuOpening());
+    const dialog = page.getByRole('dialog', { name: 'Copy', exact: true });
+    await expect(dialog).toContainText('README.md');
+    await dialog.getByLabel('Destination relative path', { exact: true }).fill('copied.md');
+    await dialog.getByRole('button', { name: 'Copy', exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    expect(
+      await page.evaluate(
+        async () =>
+          (
+            await window.demo.client.command('readFile', {
+              checkout: window.demo.checkout,
+              path: 'copied.md',
+            })
+          ).text,
+      ),
+    ).toContain('# Volatile demo');
+  });
 
 test('empty-tree keyboard invocations remain unhandled', async ({ page }) => {
   await page.goto('/');
