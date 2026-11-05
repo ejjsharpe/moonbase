@@ -431,7 +431,10 @@ export class TranscriptOwner {
       this.records = (old ? this.records : entries).map((entry) =>
         reuseEntry(entry, entries.find((value) => value.id === entry.id) ?? entry),
       );
-      if (old && old.transcriptBoundary !== input.transcriptBoundary) this.newerEnd = false;
+      if (!old) {
+        this.olderEnd = input.olderCursor === null;
+        this.newerEnd = true;
+      } else if (old.transcriptBoundary !== input.transcriptBoundary) this.newerEnd = false;
     }
     for (const read of this.pending.values())
       if (read.source?.kind === 'live' && !this.current(read.source)) read.abort.abort();

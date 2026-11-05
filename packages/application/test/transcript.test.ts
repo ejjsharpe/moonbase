@@ -1405,3 +1405,38 @@ for (const outcome of ['success', 'error'] as const)
       held.resolve();
     }
   });
+
+test('capture before delayed initial read cancels restoration without losing older history', async (t) => {
+  const f = await transcriptController(t, 640);
+  f.controller.setTranscriptView({ anchor: { entryId: 'e100', offset: -4 }, expanded: [] });
+  await f.controller.detach();
+  const entered = Promise.withResolvers<void>(),
+    held = Promise.withResolvers<void>();
+  f.handlers.set('getChat', async (_raw, _signal, fallback) => {
+    const reply = fallback();
+    entered.resolve();
+    await held.promise;
+    return reply;
+  });
+  try {
+    const starting = f.controller.start();
+    await entered.promise;
+    f.fixture.publish(f.fixture.snapshot);
+    f.controller.setTranscriptView({ anchor: { entryId: 'e620', offset: -21 }, expanded: [] });
+    held.resolve();
+    await starting;
+    await tick();
+    const state = f.controller.getSnapshot().transcript;
+    assert.equal(state.earlier, true);
+    const seen = new Set<string>();
+    for (let i = 0; i < 100; i++) {
+      const s = f.controller.getSnapshot().transcript;
+      s.entries.forEach((e) => seen.add(e.id));
+      if (!s.earlier) break;
+      await f.controller.older();
+    }
+    assert.equal(seen.size, 640);
+  } finally {
+    held.resolve();
+  }
+});
