@@ -1,4 +1,5 @@
-import { Effect, Layer, Stream, Schedule, Exit, Cause, Queue } from 'effect';
+import { Effect, Layer, Stream, Schedule, Exit, Cause, Queue, Clock } from 'effect';
+import type { ChatHostTarget } from '@moonbase/contracts/host';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import {
   chatStreamFeature,
@@ -8,17 +9,20 @@ import {
   type ChatTarget,
   type ChatSnapshot,
 } from '@moonbase/contracts/chat';
-import { decodeChatStreamFrame } from '@moonbase/contracts/chat-schema';
+import { chatReplyErrorCodes, decodeChatStreamFrame } from '@moonbase/contracts/chat-schema';
 import { releaseResource } from '@moonbase/effect';
 import {
   ChatService,
   ConnectionService,
   type ChatServiceShape,
+  type ConnectionServiceShape,
   type VerifiedChatEndpoint,
 } from '@moonbase/contracts/services';
 import { validateHostHealth } from '@moonbase/ssh/host-health';
 import * as P from './protocol.ts';
 import * as V from './validation.ts';
+
+const renewAfterNanos = BigInt(P.streamLimits.renewMs) * 1_000_000n;
 
 /** Client graph imports no engine, SQLite, provider or local workspace implementation. */
 export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> = Layer.effect(
@@ -66,80 +70,29 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
                 ? 'Connection changed after a chat mutation may have dispatched. Preserve its original request and reconcile through its authority.'
                 : 'Connection generation changed; query through the selected authority again.',
           });
-        const assertGeneration = Effect.flatMap(
-          connections
-            .endpoint({ host })
-            .pipe(Effect.mapError((error) => (mutation && dispatched ? changed() : error))),
-          (current) =>
-            current.connectionId === endpoint.connectionId &&
-            current.origin === endpoint.origin &&
-            current.token === endpoint.token &&
-            V.sameHost(current.expected, endpoint.expected)
-              ? Effect.void
-              : Effect.fail(changed()),
+        const assertGeneration = makeGenerationCheck(
+          connections,
+          host,
+          endpoint,
+          changed,
+          (error) => (mutation && dispatched ? changed() : error),
         );
         const prepared = yield* Effect.try({
           try: () => ({ origin: P.origin(endpoint), nonce: P.nonce() }),
           catch: ApplicationError.fromUnknown,
         });
         const controller = new AbortController(),
-          timer = setTimeout(() => controller.abort(), 20000);
+          timer = setTimeout(() => controller.abort(), P.requestDeadlineMs),
+          request = makeChatRequest(prepared.origin, controller.signal);
         const attempt = yield* Effect.exit(
           Effect.ensuring(
             Effect.gen(function* () {
-              const challengeResponse = yield* Effect.tryPromise({
-                try: (signal) =>
-                  fetch(`${prepared.origin}/v1/chat/challenge`, {
-                    headers: {
-                      'X-Moonbase-Nonce': prepared.nonce,
-                      Authorization: `Moonbase-RPC-HMAC-SHA256 ${P.mac(endpoint.token, 'challenge-request', prepared.nonce, 'GET', '/v1/chat/challenge')}`,
-                    },
-                    redirect: 'error',
-                    signal: AbortSignal.any([signal, controller.signal]),
-                    cache: 'no-store',
-                    credentials: 'omit',
-                  }),
-                catch: () =>
-                  new ApplicationError({
-                    code: 'Unavailable',
-                    message: 'Chat challenge could not be reached.',
-                  }),
-              });
-              const challengeBytes = yield* P.responseBytes(challengeResponse, 8192);
-              const challenge = yield* Effect.try({
-                try: () => {
-                  const response = challengeResponse,
-                    bytes = challengeBytes;
-                  if (
-                    response.headers.get('x-moonbase-nonce') !== prepared.nonce ||
-                    !P.proof(
-                      response.headers.get('x-moonbase-proof'),
-                      P.mac(
-                        endpoint.token,
-                        'challenge-response',
-                        prepared.nonce,
-                        response.status,
-                        P.hash(bytes),
-                      ),
-                    )
-                  )
-                    V.fail('Unauthorized', 'Chat host did not prove its challenge.');
-                  if (response.status !== 200)
-                    V.fail('Unavailable', 'Chat host could not issue a challenge.');
-                  const data = V.object(P.json(bytes));
-                  validateHostHealth(data.health, host);
-                  if (!P.validNonce(data.challenge))
-                    V.fail('Incompatible', 'Chat host returned an invalid challenge.');
-                  return data.challenge as string;
-                },
-                catch: (error) =>
-                  ApplicationError.is(error)
-                    ? error
-                    : new ApplicationError({
-                        code: 'Unavailable',
-                        message: 'Chat challenge could not be verified within its deadline.',
-                      }),
-              });
+              const challenge = yield* authenticateChallenge(
+                request,
+                endpoint.token,
+                prepared.nonce,
+                host,
+              );
               yield* assertGeneration;
               const body = JSON.stringify({ operation, input });
               if (Buffer.byteLength(body) > P.maximumChatRequestBytes)
@@ -149,10 +102,18 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
                     message: 'Chat input exceeds its transport limit.',
                   }),
                 );
-              const response = yield* Effect.tryPromise({
-                try: (signal) => {
-                  dispatched = true;
-                  return fetch(`${prepared.origin}/v1/chat`, {
+              const lost = () =>
+                new ApplicationError({
+                  code: mutation ? 'Uncertain' : 'Unavailable',
+                  message: mutation
+                    ? 'Chat reply was lost. Query the original request; do not invent another Send.'
+                    : 'Chat reply was lost. Retry the read through the selected authority.',
+                });
+              const response = yield* Effect.suspend(() => {
+                dispatched = true;
+                return request(
+                  '/v1/chat',
+                  {
                     method: 'POST',
                     body,
                     headers: {
@@ -161,23 +122,13 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
                       'X-Moonbase-Challenge': challenge,
                       Authorization: `Moonbase-RPC-HMAC-SHA256 ${P.mac(endpoint.token, 'request', prepared.nonce, challenge, 'POST', '/v1/chat', P.hash(body))}`,
                     },
-                    redirect: 'error',
-                    signal: AbortSignal.any([signal, controller.signal]),
-                    cache: 'no-store',
-                    credentials: 'omit',
-                  });
-                },
-                catch: () =>
-                  new ApplicationError({
-                    code: mutation ? 'Uncertain' : 'Unavailable',
-                    message: mutation
-                      ? 'Chat reply was lost. Query the original request; do not invent another Send.'
-                      : 'Chat reply was lost. Retry the read through the selected authority.',
-                  }),
+                  },
+                  lost,
+                );
               });
               const bytes = yield* P.responseBytes(
                 response,
-                256 * 1024,
+                P.maximumChatReplyBytes,
                 mutation ? 'Uncertain' : 'Unavailable',
                 mutation,
               );
@@ -212,21 +163,11 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
                   } catch {
                     return invalid('Incompatible', 'Chat returned invalid response data.');
                   }
-                  if (envelope.ok === false) {
-                    let code: (typeof P.codes)[number] | undefined;
-                    try {
-                      const error = V.object(envelope.error);
-                      code = P.codes.find((value) => value === error.code);
-                    } catch {
-                      return invalid('Incompatible', 'Chat returned an invalid error.');
-                    }
-                    if (!code) return invalid('Incompatible', 'Chat returned an invalid error.');
-                    throw new ApplicationError({
-                      code,
-                      message: P.publicError(new ApplicationError({ code, message: '' }), operation)
-                        .message,
-                    });
-                  }
+                  if (envelope.ok === false)
+                    throw (
+                      decodeErrorEnvelope(envelope.error, operation) ??
+                      invalid('Incompatible', 'Chat returned an invalid error.')
+                    );
                   if (envelope.ok !== true || response.status !== 200)
                     return invalid('Incompatible', 'Chat reply has an unexpected status or shape.');
                   try {
@@ -241,15 +182,7 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
                     return invalid('Incompatible', 'Chat returned invalid response data.');
                   }
                 },
-                catch: (error) =>
-                  ApplicationError.is(error)
-                    ? error
-                    : new ApplicationError({
-                        code: mutation ? 'Uncertain' : 'Unavailable',
-                        message: mutation
-                          ? 'Chat reply was lost. Query the original request; do not invent another Send.'
-                          : 'Chat reply was lost. Retry the read through the selected authority.',
-                      }),
+                catch: (error) => (ApplicationError.is(error) ? error : lost()),
               });
               return result;
             }),
@@ -277,20 +210,15 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
         Effect.gen(function* () {
           yield* Effect.try({ try: () => V.target(target), catch: ApplicationError.fromUnknown });
           const endpoint = yield* connections.endpoint({ host: target.host });
-          const assertGeneration = Effect.flatMap(
-            connections.endpoint({ host: target.host }),
-            (current) =>
-              current.connectionId === endpoint.connectionId &&
-              current.origin === endpoint.origin &&
-              current.token === endpoint.token &&
-              V.sameHost(current.expected, endpoint.expected)
-                ? Effect.void
-                : Effect.fail(
-                    new ApplicationError({
-                      code: 'Unavailable',
-                      message: 'Chat stream connection generation changed.',
-                    }),
-                  ),
+          const assertGeneration = makeGenerationCheck(
+            connections,
+            target.host,
+            endpoint,
+            () =>
+              new ApplicationError({
+                code: 'Unavailable',
+                message: 'Chat stream connection generation changed.',
+              }),
           );
           const configuration = yield* call('getChatHost', { host: target.host });
           yield* assertGeneration;
@@ -349,29 +277,43 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
                 yield* forkObservation(
                   connections.watch().pipe(Stream.runForEach(() => assertGeneration)),
                 );
+                // The retry budget spans one outage: back-to-back drops and stalls exhaust it,
+                // while a connection proven healthy by a later authenticated frame renews it.
                 yield* forkObservation(
                   Effect.gen(function* () {
-                    for (let attempt = 0; ; attempt++) {
+                    for (let failures = 0; ;) {
                       yield* assertGeneration;
-                      const result = yield* Effect.exit(
-                        readStream(endpoint, target, assertGeneration, publish),
-                      );
-                      if (Exit.isSuccess(result)) return;
-                      if (Cause.hasInterruptsOnly(result.cause))
-                        return yield* Effect.failCause(result.cause);
+                      let connectedAt: bigint | undefined,
+                        renewed = false;
+                      const frameArrived = (snapshot: boolean) =>
+                        Effect.map(Clock.monotonicTimeNanos, (now) => {
+                          if (connectedAt === undefined) {
+                            if (snapshot) connectedAt = now;
+                          } else if (now - connectedAt >= renewAfterNanos) renewed = true;
+                        });
+                      // A stream never completes; each end is a failure whose cause decides the retry.
+                      const failure = yield* readStream(
+                        endpoint,
+                        target,
+                        assertGeneration,
+                        publish,
+                        frameArrived,
+                      ).pipe(Effect.catchCause((cause) => Effect.succeed(cause)));
+                      if (Cause.hasInterruptsOnly(failure)) return yield* Effect.failCause(failure);
                       yield* assertGeneration.pipe(
                         Effect.catchCause((cause) =>
-                          Effect.failCause(Cause.combine(result.cause, cause)),
+                          Effect.failCause(Cause.combine(failure, cause)),
                         ),
                       );
                       if (last) publish({ ...last, observationStatus: 'reconnecting' });
-                      const transient = result.cause.reasons.every(
+                      if (renewed) failures = 0;
+                      const transient = failure.reasons.every(
                         (reason) =>
                           Cause.isFailReason(reason) && reason.error.code === 'Unavailable',
                       );
-                      if (!transient || attempt >= P.streamLimits.reconnectMs.length)
-                        return yield* Effect.failCause(result.cause);
-                      yield* Effect.sleep(P.streamLimits.reconnectMs[attempt]);
+                      if (!transient || failures >= P.streamLimits.reconnectMs.length)
+                        return yield* Effect.failCause(failure);
+                      yield* Effect.sleep(P.streamLimits.reconnectMs[failures++]);
                     }
                   }),
                 );
@@ -400,12 +342,126 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
   }),
 );
 
+type ChatRequest = (
+  path: string,
+  init: RequestInit,
+  lost: () => ApplicationError,
+) => Effect.Effect<Response, ApplicationError>;
+
+/** Sends one request to a verified loopback origin; `lost` describes a transport failure. */
+const makeChatRequest =
+  (origin: string, abort: AbortSignal): ChatRequest =>
+  (path, init, lost) =>
+    Effect.tryPromise({
+      try: (signal) =>
+        fetch(origin + path, {
+          ...init,
+          redirect: 'error',
+          credentials: 'omit',
+          cache: 'no-store',
+          signal: AbortSignal.any([signal, abort]),
+        }),
+      catch: lost,
+    });
+
+/** Obtains a single-use challenge after verifying its proof and the host's health. */
+function authenticateChallenge(
+  request: ChatRequest,
+  token: string,
+  nonce: string,
+  host: ChatHostTarget,
+): Effect.Effect<string, ApplicationError> {
+  return Effect.gen(function* () {
+    const response = yield* request(
+      '/v1/chat/challenge',
+      {
+        headers: {
+          'X-Moonbase-Nonce': nonce,
+          Authorization: `Moonbase-RPC-HMAC-SHA256 ${P.mac(token, 'challenge-request', nonce, 'GET', '/v1/chat/challenge')}`,
+        },
+      },
+      () =>
+        new ApplicationError({
+          code: 'Unavailable',
+          message: 'Chat challenge could not be reached.',
+        }),
+    );
+    const bytes = yield* P.responseBytes(response, 8192);
+    return yield* Effect.try({
+      try: () => {
+        if (
+          response.headers.get('x-moonbase-nonce') !== nonce ||
+          !P.proof(
+            response.headers.get('x-moonbase-proof'),
+            P.mac(token, 'challenge-response', nonce, response.status, P.hash(bytes)),
+          )
+        )
+          V.fail('Unauthorized', 'Chat host did not prove its challenge.');
+        if (response.status !== 200)
+          V.fail('Unavailable', 'Chat host could not issue a challenge.');
+        const data = V.object(P.json(bytes));
+        validateHostHealth(data.health, host);
+        if (!P.validNonce(data.challenge))
+          V.fail('Incompatible', 'Chat host returned an invalid challenge.');
+        return data.challenge as string;
+      },
+      catch: (error) =>
+        ApplicationError.is(error)
+          ? error
+          : new ApplicationError({
+              code: 'Unavailable',
+              message: 'Chat challenge could not be verified within its deadline.',
+            }),
+    });
+  });
+}
+
+/** Rebuilds a host failure from its public code alone; host-supplied messages are never shown. */
+const publicFailure = (code: (typeof chatReplyErrorCodes)[number], operation?: string) =>
+  new ApplicationError({
+    code,
+    message: P.publicError(new ApplicationError({ code, message: '' }), operation).message,
+  });
+
+/** Decodes a signed reply's `error` field; undefined when it carries no public error code. */
+function decodeErrorEnvelope(error: unknown, operation?: string): ApplicationError | undefined {
+  try {
+    const record = V.object(error);
+    const code = chatReplyErrorCodes.find((value) => value === record.code);
+    return code && publicFailure(code, operation);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Fails once the connection no longer serves the endpoint an exchange authenticated against. */
+function makeGenerationCheck(
+  connections: ConnectionServiceShape,
+  host: ChatHostTarget,
+  endpoint: VerifiedChatEndpoint,
+  changed: () => ApplicationError,
+  lookupFailed: (error: ApplicationError) => ApplicationError = (error) => error,
+): Effect.Effect<void, ApplicationError> {
+  return Effect.flatMap(
+    connections.endpoint({ host }).pipe(Effect.mapError(lookupFailed)),
+    (current) =>
+      current.connectionId === endpoint.connectionId &&
+      current.origin === endpoint.origin &&
+      current.token === endpoint.token &&
+      V.sameHost(current.expected, endpoint.expected)
+        ? Effect.void
+        : Effect.fail(changed()),
+  );
+}
+
 function readStream(
   endpoint: VerifiedChatEndpoint,
   target: ChatTarget,
   assertGeneration: Effect.Effect<void, ApplicationError>,
   publish: (snapshot: ChatSnapshot) => void,
-) {
+  /** Observes each authenticated frame, noting whether it completed a snapshot. */
+  frameArrived: (snapshot: boolean) => Effect.Effect<void>,
+): Effect.Effect<never, ApplicationError> {
   return Effect.acquireUseRelease(
     Effect.sync(() => {
       const controller = new AbortController();
@@ -418,68 +474,29 @@ function readStream(
     (state) =>
       Effect.gen(function* () {
         const nonce = P.nonce(),
-          origin = P.origin(endpoint);
-        const request = (path: string, init: RequestInit) =>
-          Effect.tryPromise({
-            try: (signal) =>
-              fetch(origin + path, {
-                ...init,
-                redirect: 'error',
-                credentials: 'omit',
-                cache: 'no-store',
-                signal: AbortSignal.any([signal, state.controller.signal]),
-              }),
-            catch: () =>
-              new ApplicationError({
-                code: 'Unavailable',
-                message: 'Chat stream transport was lost.',
-              }),
-          });
-        const response = yield* request('/v1/chat/challenge', {
-          headers: {
-            'X-Moonbase-Nonce': nonce,
-            Authorization: `Moonbase-RPC-HMAC-SHA256 ${P.mac(endpoint.token, 'challenge-request', nonce, 'GET', '/v1/chat/challenge')}`,
-          },
-        });
-        const challengeBytes = yield* P.responseBytes(response, 8192);
-        const challenge = yield* Effect.try({
-          try: () => {
-            if (
-              response.headers.get('x-moonbase-nonce') !== nonce ||
-              !P.proof(
-                response.headers.get('x-moonbase-proof'),
-                P.mac(
-                  endpoint.token,
-                  'challenge-response',
-                  nonce,
-                  response.status,
-                  P.hash(challengeBytes),
-                ),
-              )
-            )
-              V.fail('Unauthorized', 'Chat stream challenge could not be authenticated.');
-            if (response.status !== 200)
-              V.fail('Unavailable', 'Chat stream challenge is unavailable.');
-            const data = V.object(P.json(challengeBytes));
-            validateHostHealth(data.health, target.host);
-            if (!P.validNonce(data.challenge))
-              V.fail('Incompatible', 'Chat stream challenge is invalid.');
-            return data.challenge as string;
-          },
-          catch: ApplicationError.fromUnknown,
-        });
+          request = makeChatRequest(P.origin(endpoint), state.controller.signal),
+          lost = () =>
+            new ApplicationError({
+              code: 'Unavailable',
+              message: 'Chat stream transport was lost.',
+            });
+        const challenge = yield* authenticateChallenge(request, endpoint.token, nonce, target.host);
         yield* assertGeneration;
         const body = JSON.stringify({ target, connectionId: endpoint.connectionId });
-        const stream = yield* request(P.streamPath, {
-          method: 'POST',
-          body,
-          headers: {
-            'content-type': 'application/json',
-            'X-Moonbase-Nonce': nonce,
-            'X-Moonbase-Challenge': challenge,
-            Authorization: `Moonbase-RPC-HMAC-SHA256 ${P.streamMac(endpoint.token, 'request', nonce, challenge, 'POST', P.streamPath, P.hash(body))}`,
+        const stream = yield* request(
+          P.streamPath,
+          {
+            method: 'POST',
+            body,
+            headers: {
+              'content-type': 'application/json',
+              'X-Moonbase-Nonce': nonce,
+              'X-Moonbase-Challenge': challenge,
+              Authorization: `Moonbase-RPC-HMAC-SHA256 ${P.streamMac(endpoint.token, 'request', nonce, challenge, 'POST', P.streamPath, P.hash(body))}`,
+            },
           },
-        });
+          lost,
+        );
         if (stream.status !== 200) {
           const bytes = yield* P.responseBytes(stream, 8192);
           yield* Effect.try({
@@ -493,25 +510,16 @@ function readStream(
                 )
               )
                 V.fail('Unauthorized', 'Chat stream failure could not be authenticated.');
-              const data = V.object(P.json(bytes)),
-                error = V.object(data.error);
-              if (!P.codes.includes(error.code as (typeof P.codes)[number]))
-                V.fail('Incompatible', 'Chat stream error is invalid.');
-              throw new ApplicationError({
-                code: error.code as (typeof P.codes)[number],
-                message: P.publicError(
-                  new ApplicationError({
-                    code: error.code as (typeof P.codes)[number],
-                    message: '',
-                  }),
-                ).message,
-              });
+              throw (
+                decodeErrorEnvelope(V.object(P.json(bytes)).error) ??
+                V.fail('Incompatible', 'Chat stream error is invalid.')
+              );
             },
             catch: ApplicationError.fromUnknown,
           });
         }
         let readFailure: { error: unknown } | undefined;
-        yield* Effect.acquireUseRelease(
+        return yield* Effect.acquireUseRelease(
           Effect.try({
             try: () => {
               if (
@@ -582,13 +590,7 @@ function readStream(
                       )
                         V.fail('Incompatible', 'Chat stream authority or sequence changed.');
                       streamId = value.streamId;
-                      if (value.kind === 'error')
-                        throw new ApplicationError({
-                          code: value.code,
-                          message: P.publicError(
-                            new ApplicationError({ code: value.code, message: '' }),
-                          ).message,
-                        });
+                      if (value.kind === 'error') throw publicFailure(value.code);
                       if (value.kind === 'heartbeat') {
                         if (initial || snapshot)
                           V.fail('Incompatible', 'Chat stream heartbeat interrupted a snapshot.');
@@ -631,6 +633,7 @@ function readStream(
                     clearTimeout(state.timer);
                     state.timer = setTimeout(() => state.controller.abort(), P.streamLimits.idleMs);
                   }
+                  yield* frameArrived(update !== undefined);
                   if (update) {
                     yield* assertGeneration;
                     yield* Effect.sync(() => publish(update));

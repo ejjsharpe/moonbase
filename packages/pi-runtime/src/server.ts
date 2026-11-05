@@ -5,6 +5,7 @@ import {
   chatStreamFeature,
   chatContentChunkBytes,
   type ChatClient,
+  type ChatOutput,
   type ChatStreamRequest,
   type ChatStreamFrame,
 } from '@moonbase/contracts/chat';
@@ -23,7 +24,11 @@ import * as V from './validation.ts';
 import * as S from './private-schema.ts';
 
 export type ChatServerConfiguration = { host: ChatHostTarget; token: string; port: number };
-/** The injected client is bound to the consumer's process root and shared handlers. */
+/**
+ * The injected client is bound to the consumer's process root and shared handlers. It is the
+ * trusted local service, which already validates its replies and snapshots; only wire input is
+ * decoded here.
+ */
 export const serveChat = (config: ChatServerConfiguration, client: ChatClient) =>
   Effect.acquireRelease(
     Effect.tryPromise({
@@ -73,7 +78,7 @@ export const serveChat = (config: ChatServerConfiguration, client: ChatClient) =
               active--;
             });
         });
-        server.requestTimeout = 20000;
+        server.requestTimeout = P.requestDeadlineMs;
         server.headersTimeout = 10000;
         server.maxConnections = 128;
         server.keepAliveTimeout = 1000;
@@ -113,7 +118,7 @@ export const serveChat = (config: ChatServerConfiguration, client: ChatClient) =
           }
           const send = (status: number, value: unknown, challenge?: string) => {
             const body = JSON.stringify(value);
-            if (Buffer.byteLength(body) > 256 * 1024)
+            if (Buffer.byteLength(body) > P.maximumChatReplyBytes)
               V.fail('InvalidInput', 'Chat reply exceeds its delivery limit.');
             response.setHeader('X-Moonbase-Nonce', clientNonce);
             if (challenge) response.setHeader('X-Moonbase-Challenge', challenge);
@@ -151,7 +156,7 @@ export const serveChat = (config: ChatServerConfiguration, client: ChatClient) =
                   },
                 });
               const challenge = P.nonce();
-              grants.set(challenge, { nonce: clientNonce, expires: now + 20000 });
+              grants.set(challenge, { nonce: clientNonce, expires: now + P.requestDeadlineMs });
               send(200, { challenge, health });
             } catch (error) {
               send(503, { ok: false, error: P.publicError(error) });
@@ -176,7 +181,7 @@ export const serveChat = (config: ChatServerConfiguration, client: ChatClient) =
           let timer: ReturnType<typeof setTimeout> | undefined;
           let dispatchedOperation: string | undefined;
           try {
-            timer = setTimeout(() => request.destroy(), 20000);
+            timer = setTimeout(() => request.destroy(), P.requestDeadlineMs);
             if (!/^application\/json(?:\s*;|$)/i.test(request.headers['content-type'] ?? ''))
               V.fail('InvalidInput', 'Chat request must be JSON.');
             for await (const chunk of request) {
@@ -250,18 +255,10 @@ export const serveChat = (config: ChatServerConfiguration, client: ChatClient) =
             };
             response.once('close', cancelRead);
             try {
-              const value = V.output(
+              const value = await client.command(
                 operation,
-                await client.command(
-                  operation,
-                  input,
-                  operation === 'getChatTranscriptContent' ||
-                    operation === 'getChatHistoryAround' ||
-                    operation === 'findChatTranscript'
-                    ? { signal: controller.signal }
-                    : undefined,
-                ),
                 input,
+                V.isCancellableRead(operation) ? { signal: controller.signal } : undefined,
               );
               send(
                 200,
@@ -273,7 +270,7 @@ export const serveChat = (config: ChatServerConfiguration, client: ChatClient) =
                           ...value,
                           features: [
                             ...new Set([
-                              ...((value as typeof configuration).features ?? []),
+                              ...((value as ChatOutput<'getChatHost'>).features ?? []),
                               chatStreamFeature,
                             ]),
                           ],
@@ -346,7 +343,7 @@ async function streamChat(
   let wake: (() => void) | undefined,
     active = true,
     sequence = 0,
-    initial = true;
+    heartbeatDue = false;
   const streamId = P.nonce();
   const notify = () => {
     wake?.();
@@ -360,7 +357,16 @@ async function streamChat(
   response.once('close', stop);
   response.once('error', stop);
   const deadline = setTimeout(stop, P.streamLimits.establishmentMs);
-  const heartbeat = setInterval(notify, P.streamLimits.heartbeatMs);
+  // Only a full interval without any frame earns a heartbeat; none precedes the first frame.
+  let heartbeat: ReturnType<typeof setTimeout> | undefined;
+  const scheduleHeartbeat = () => {
+    heartbeatDue = false;
+    clearTimeout(heartbeat);
+    heartbeat = setTimeout(() => {
+      heartbeatDue = true;
+      notify();
+    }, P.streamLimits.heartbeatMs);
+  };
   let close: ReturnType<ChatClient['watch']> | undefined;
   const write = async <Frame extends ChatStreamFrame>(
     frame: Frame extends ChatStreamFrame
@@ -377,6 +383,7 @@ async function streamChat(
     });
     if (!response.headersSent)
       response.writeHead(200, { 'content-type': 'application/vnd.moonbase.chat-stream-v1' });
+    scheduleHeartbeat();
     if (response.write(bytes)) return;
     await new Promise<void>((resolve) => {
       const done = () => {
@@ -397,9 +404,10 @@ async function streamChat(
       (snapshot) => {
         if (!active || terminal) return;
         try {
-          pending = Buffer.from(
-            JSON.stringify(V.output('getChat', snapshot, { target: input.target })),
-          );
+          const bytes = Buffer.from(JSON.stringify(snapshot));
+          if (bytes.length > P.maximumChatReplyBytes)
+            V.fail('InvalidInput', 'Chat reply exceeds its delivery limit.');
+          pending = bytes;
         } catch (error) {
           terminal = P.publicError(error);
           pending = undefined;
@@ -447,10 +455,9 @@ async function streamChat(
             total: bytes.length,
             data: bytes.subarray(offset, offset + chatContentChunkBytes).toString('base64'),
           });
-        initial = false;
         clearTimeout(deadline);
       } else {
-        if (!initial) await write({ kind: 'heartbeat' });
+        if (heartbeatDue) await write({ kind: 'heartbeat' });
         if (active && !pending && !terminal)
           await new Promise<void>((resolve) => {
             wake = resolve;
@@ -460,7 +467,7 @@ async function streamChat(
   } finally {
     stop();
     clearTimeout(deadline);
-    clearInterval(heartbeat);
+    clearTimeout(heartbeat);
     response.off('close', stop);
     response.off('error', stop);
     // A completed terminal response must keep its flushed bytes on the socket.

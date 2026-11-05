@@ -11,6 +11,7 @@ import {
   chatContentChunkBytes,
   chatManifestPageSize,
   maximumChatInputBytes,
+  maximumChatReplyBytes,
   type ChatCommand,
   type ChatInput,
   type ChatOutput,
@@ -216,6 +217,18 @@ export const ChatSnapshotSchema = struct({
   transcriptBoundary: optional(Schema.NullOr(ChatIdentifierSchema)),
   observationStatus: optional(Schema.Literals(['connected', 'reconnecting'])),
 });
+/** Error codes a chat stream may sign; a stream never carries a mutation's `Uncertain` outcome. */
+const chatStreamErrorCodes = [
+  'InvalidInput',
+  'Unauthorized',
+  'Incompatible',
+  'Conflict',
+  'Persistence',
+  'Unavailable',
+  'Cancelled',
+] as const;
+/** Error codes a chat host may sign in an RPC reply. */
+export const chatReplyErrorCodes = [...chatStreamErrorCodes, 'Uncertain'] as const;
 // Network-only envelopes; ordinary snapshots/IPC remain browser-safe replacements.
 export const ChatStreamRequestSchema = struct({
   target: ChatTargetSchema,
@@ -230,8 +243,8 @@ export const ChatStreamFrameSchema = Schema.Union([
   struct({
     ...streamIdentity,
     kind: Schema.Literal('snapshot'),
-    offset: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 256 * 1024 })),
-    total: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 256 * 1024 })),
+    offset: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: maximumChatReplyBytes })),
+    total: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: maximumChatReplyBytes })),
     data: Schema.String.check(
       Schema.makeFilter((value) => {
         try {
@@ -249,15 +262,7 @@ export const ChatStreamFrameSchema = Schema.Union([
   struct({
     ...streamIdentity,
     kind: Schema.Literal('error'),
-    code: Schema.Literals([
-      'InvalidInput',
-      'Unauthorized',
-      'Incompatible',
-      'Conflict',
-      'Persistence',
-      'Unavailable',
-      'Cancelled',
-    ]),
+    code: Schema.Literals(chatStreamErrorCodes),
   }),
 ]);
 export const decodeChatStreamRequest = Schema.decodeUnknownSync(ChatStreamRequestSchema, {

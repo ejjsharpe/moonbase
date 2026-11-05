@@ -76,6 +76,90 @@ export const safeError = (error: unknown, uncertain = false): ApplicationError =
       'Pi storage or execution is unavailable. Reopen this explicit store after resolving its failure.',
   });
 };
+/** What one commit means for a watched conversation's projection and its caches. */
+export type PublicationEffect = {
+  /** The watched view must be read again. */
+  relevant: boolean;
+  /** An in-flight capture is stale, not only outpaced by streamed progress. */
+  invalidatesCapture: boolean;
+  /** The cached transcript boundary and history page are stale. */
+  resetsHistory: boolean;
+  /** The cached run status is stale. */
+  resetsStatus: boolean;
+  /** Whether the live document is retired; undefined when this commit did not touch it. */
+  liveRetired: boolean | undefined;
+};
+const progressPaths = ['output', 'details', 'diagnostics', 'droppedBytes', 'droppedLines'];
+export function classifyPublication(
+  publication: CommitPublication,
+  conversationId: ConversationId,
+): PublicationEffect {
+  const effect: PublicationEffect = {
+    relevant: false,
+    invalidatesCapture: false,
+    resetsHistory: false,
+    resetsStatus: false,
+    liveRetired: undefined,
+  };
+  let liveRetired = false,
+    livePresent = false;
+  for (const change of publication.changes) {
+    if (change.type === 'document' || change.type === 'document.copy') {
+      const kind = change.record.kind;
+      if (change.conversationId === conversationId) {
+        if (
+          kind !== LiveDoc.definition.kind &&
+          kind !== Metadata.definition.kind &&
+          kind !== NestedCallDoc.definition.kind
+        )
+          continue;
+        effect.relevant = true;
+        // Progress can outpace projection without invalidating its captured source/control.
+        const progressOnly =
+          kind === LiveDoc.definition.kind &&
+          change.type === 'document' &&
+          change.value !== null &&
+          change.ops.length !== 0 &&
+          change.ops.every((op) => {
+            if (op[0] === 'r') return false;
+            const path = op[1];
+            return (
+              (path[0] === 'generation' && path[1] === 'message') ||
+              ((path[0] === 'tools' || path[0] === 'nestedTools') &&
+                typeof path[1] === 'number' &&
+                progressPaths.includes(String(path[2])))
+            );
+          });
+        effect.invalidatesCapture ||= !progressOnly;
+        if (kind === LiveDoc.definition.kind) {
+          if (change.type === 'document' && change.value === null) liveRetired = true;
+          else livePresent = true;
+        }
+        if (
+          change.type === 'document.copy' ||
+          (change.type === 'document' && (!change.ops.length || change.value === null))
+        ) {
+          effect.resetsHistory = true;
+          effect.resetsStatus = true;
+        }
+      } else if (kind === Store.definition.kind && change.record.scope.kind === 'session') {
+        effect.relevant = true;
+        effect.invalidatesCapture = true;
+        effect.resetsHistory = true;
+        effect.resetsStatus = true;
+      }
+    } else {
+      const owner = change.type === 'conversation' ? change.value.id : change.value.conversationId;
+      if (owner !== conversationId) continue;
+      effect.relevant = true;
+      effect.invalidatesCapture = true;
+      if (change.type === 'entry' || change.type === 'conversation') effect.resetsHistory = true;
+      if (change.type === 'task' || change.type === 'conversation') effect.resetsStatus = true;
+    }
+  }
+  if (liveRetired || livePresent) effect.liveRetired = liveRetired && !livePresent;
+  return effect;
+}
 export class Host {
   readonly admissions = new Map<string, { semaphore: Semaphore.Semaphore; users: number }>();
   closed = false;
@@ -212,12 +296,7 @@ export class Host {
       let admission = invoke;
       if (operation === 'sendChat')
         admission = this.admission((data as ChatInput<'sendChat'>).target.conversationId, invoke);
-      else if (
-        operation !== 'getChatTranscriptContent' &&
-        operation !== 'getChatHistoryAround' &&
-        operation !== 'findChatTranscript'
-      )
-        admission = Effect.uninterruptible(invoke);
+      else if (!V.isCancellableRead(operation)) admission = Effect.uninterruptible(invoke);
       return yield* this.own(
         preflight.pipe(
           Effect.andThen(admission),
@@ -637,81 +716,14 @@ export class Host {
               cache.status = undefined;
             };
             const invalidate = (publication: CommitPublication) => {
-              let relevant = false,
-                invalidatesCapture = false;
-              let liveRetired = false,
-                livePresent = false;
-              for (const change of publication.changes) {
-                if (change.type === 'document' || change.type === 'document.copy') {
-                  const kind = change.record.kind;
-                  if (change.conversationId === cid(target.conversationId)) {
-                    if (
-                      kind !== LiveDoc.definition.kind &&
-                      kind !== Metadata.definition.kind &&
-                      kind !== NestedCallDoc.definition.kind
-                    )
-                      continue;
-                    relevant = true;
-                    // Progress can outpace projection without invalidating its captured source/control.
-                    const progressOnly =
-                      kind === LiveDoc.definition.kind &&
-                      change.type === 'document' &&
-                      change.value !== null &&
-                      change.ops.length !== 0 &&
-                      change.ops.every((op) => {
-                        if (op[0] === 'r') return false;
-                        const path = op[1];
-                        return (
-                          (path[0] === 'generation' && path[1] === 'message') ||
-                          ((path[0] === 'tools' || path[0] === 'nestedTools') &&
-                            typeof path[1] === 'number' &&
-                            [
-                              'output',
-                              'details',
-                              'diagnostics',
-                              'droppedBytes',
-                              'droppedLines',
-                            ].includes(String(path[2])))
-                        );
-                      });
-                    invalidatesCapture ||= !progressOnly;
-                    if (kind === LiveDoc.definition.kind) {
-                      if (change.type === 'document' && change.value === null) liveRetired = true;
-                      else livePresent = true;
-                    }
-                    if (
-                      change.type === 'document.copy' ||
-                      (change.type === 'document' && (!change.ops.length || change.value === null))
-                    ) {
-                      cache.boundary = undefined;
-                      cache.history = undefined;
-                      invalidateStatus();
-                    }
-                  } else if (
-                    kind === Store.definition.kind &&
-                    change.record.scope.kind === 'session'
-                  ) {
-                    relevant = true;
-                    invalidatesCapture = true;
-                    cache.boundary = undefined;
-                    cache.history = undefined;
-                    invalidateStatus();
-                  }
-                } else {
-                  const conversationId =
-                    change.type === 'conversation' ? change.value.id : change.value.conversationId;
-                  if (conversationId !== cid(target.conversationId)) continue;
-                  relevant = true;
-                  invalidatesCapture = true;
-                  if (change.type === 'entry' || change.type === 'conversation') {
-                    cache.boundary = undefined;
-                    cache.history = undefined;
-                  }
-                  if (change.type === 'task' || change.type === 'conversation') invalidateStatus();
-                }
+              const effect = classifyPublication(publication, cid(target.conversationId));
+              if (effect.resetsHistory) {
+                cache.boundary = undefined;
+                cache.history = undefined;
               }
-              if (liveRetired || livePresent) cache.retired = liveRetired && !livePresent;
-              if (relevant) refresh(invalidatesCapture);
+              if (effect.resetsStatus) invalidateStatus();
+              if (effect.liveRetired !== undefined) cache.retired = effect.liveRetired;
+              if (effect.relevant) refresh(effect.invalidatesCapture);
             };
             yield* Effect.acquireRelease(
               Effect.try({
