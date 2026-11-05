@@ -28,6 +28,7 @@ export function chatCapabilities() {
     remotePort: 8787,
     expected: context.host,
   };
+  let connectionGeneration = 0;
   let connectionState: ConnectionSnapshot = { state: 'disconnected', connectionId: null, profile };
   let receiveConnection: (state: ConnectionSnapshot) => void = () => {};
   const calls: string[] = [];
@@ -90,7 +91,7 @@ export function chatCapabilities() {
       if (operation === 'connect')
         connectionState = {
           state: 'connected',
-          connectionId: 'connection',
+          connectionId: 'connection-' + ++connectionGeneration,
           profile,
           health: { ...context.host, protocol: 1, version: '0.1.0', capabilities: ['chat-v0'] },
         };

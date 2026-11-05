@@ -57,7 +57,7 @@ Use one model per caller-bound namespace; storage must return current data, comp
 
 Create/Send/Stop retain immutable original inputs across uncertain outcomes. Reconnect only observes; explicit retry queries first, rechecks synchronous preservation, then may repeat only the captured input. Create recovers through a matching original retry. Stop captures the exact submission/task, including a null queued task, and never follows a successor. Cancellation does not prove remote termination or undo tool effects. See the [chat contract](../../contracts/docs/CHAT.md).
 
-Snapshots replace output. State retains at most 32 current and 32 older 4 KiB previews and eight live tool previews; another older page replaces the previous page. Stored transcripts remain in Pi. Safe application invocation/error helpers preserve typed failures and redact unknown Promise/cleanup diagnostics.
+Snapshots replace current run/status output. `ChatState.transcript` owns the canonical bounded history window, earlier/later/around navigation, progressive hydration and application-lifetime anchors. Complete-source iteration streams independently of cache retention and propagates failures. See [transcript API, bounds and native handoff](TRANSCRIPTS.md). Stored transcripts remain in Pi. Safe application invocation/error helpers preserve typed failures and redact unknown Promise/cleanup diagnostics.
 
 ## Checks
 

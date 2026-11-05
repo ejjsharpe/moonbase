@@ -816,7 +816,7 @@ test('read-only admitted lookup resolves without Send; foreign storage writes ar
   assert(f.controller.getSnapshot().storageError);
   await f.controller.dispose();
 });
-test('replacement watch snapshots and one older page keep output bounded', async (t) => {
+test('replacement watch snapshots and overlapping legacy history keep output bounded', async (t) => {
   const f = await fixture(t);
   await ready(f);
   for (let i = 0; i < 500; i++)
@@ -826,6 +826,7 @@ test('replacement watch snapshots and one older page keep output bounded', async
     });
   assert.equal(f.controller.getSnapshot().snapshot!.entries.length, 1);
   assert.equal(f.controller.getSnapshot().snapshot!.entries[0].text, '499');
+  let pageNumber = 0;
   f.answers.set('getChatHistory', async () => ({
     entries: Array.from({ length: 32 }, (_, i) => ({
       id: 'older-' + i,
@@ -833,11 +834,11 @@ test('replacement watch snapshots and one older page keep output bounded', async
       text: 'bounded',
       truncated: false,
     })),
-    olderCursor: 'next',
+    olderCursor: 'next-' + ++pageNumber,
   }));
   f.publish({ ...snapshot, olderCursor: 'page' });
   for (let i = 0; i < 4; i++) await f.controller.older();
-  assert.equal(f.controller.getSnapshot().older.length, 32);
+  assert.equal(f.controller.getSnapshot().transcript.entries.length, 32);
   await f.controller.dispose();
 });
 test('bounds reject oversized/invalid Unicode input without replacing retained draft or issuing Send', async (t) => {

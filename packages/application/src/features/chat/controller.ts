@@ -16,13 +16,17 @@ import type {
   ChatSummary,
   ChatTarget,
   ChatStopTarget,
-  ChatEntry,
+  ChatTranscriptSource,
+  ChatTranscriptSelection,
 } from '@moonbase/contracts/chat';
 import type { ConnectionClient, ConnectionSnapshot } from '@moonbase/contracts/connection';
 import { makeProviderSetupController, type ProviderSetupController } from './providers.ts';
 import type { ProviderSetupClient } from '@moonbase/contracts/providers';
 import { decodeSaved, sameSession, sameTarget, type Saved, type Pending } from './saved.ts';
 export type { Pending } from './saved.ts';
+import { TranscriptOwner, makeEmptyTranscriptState, type TranscriptState } from './transcript.ts';
+import { TranscriptViewMemory, type TranscriptView } from './view-memory.ts';
+import type { TranscriptReadProgress } from './transcript-read.ts';
 
 export interface DraftStorage {
   read(): string | null;
@@ -36,8 +40,7 @@ export type ChatState = {
   chats: ChatSummary[];
   nextChats: string | null;
   snapshot: ChatSnapshot | null;
-  older: ChatEntry[];
-  olderCursor: string | null;
+  transcript: TranscriptState;
   selected: ChatTarget | null;
   draft: string;
   modelPreference: ChatModelPreference | null;
@@ -55,12 +58,15 @@ export type ChatDependencies = {
   context: ChatSession;
   storage: DraftStorage;
   newId?: () => string;
+  backendId?: string;
+  transcriptMemory?: TranscriptViewMemory;
 };
 type Owner = {
   scope: Scope.Closeable;
   alive: boolean;
   observations: Set<Observation>;
   completion?: Promise<void>;
+  transcript?: TranscriptOwner;
 };
 type Observation = {
   ready: Deferred.Deferred<Exit.Exit<ObservationClose>>;
@@ -86,6 +92,7 @@ class ChatModelState {
   private selection?: Owner & { target: ChatTarget };
   private refreshOwner?: Owner;
   private observations = new Set<Observation>();
+  private transcripts = new Set<TranscriptOwner>();
   private epoch = 0;
   private connectionRevision = 0;
   private closed = false;
@@ -103,10 +110,14 @@ class ChatModelState {
   private readonly session: ChatSession;
   private storage: DraftStorage;
   private newId: () => string;
+  private readonly backend: string;
+  private readonly transcriptMemory: TranscriptViewMemory;
 
   constructor(scope: Scope.Closeable, dependencies: ChatDependencies) {
     this.scope = scope;
     this.chat = dependencies.chat;
+    this.backend = dependencies.backendId ?? 'standalone';
+    this.transcriptMemory = dependencies.transcriptMemory ?? new TranscriptViewMemory();
     this.connection = dependencies.connection;
     this.mode = dependencies.mode ?? 'remote';
     if (this.mode === 'remote' && !this.connection)
@@ -146,8 +157,7 @@ class ChatModelState {
       chats: [],
       nextChats: null,
       snapshot: null,
-      older: [],
-      olderCursor: null,
+      transcript: makeEmptyTranscriptState(),
       selected: this.saved.selected,
       draft: this.draft(),
       modelPreference: this.saved.modelPreference ?? null,
@@ -173,6 +183,9 @@ class ChatModelState {
     this.bound = true;
     this.runEffect = (effect) => runApplicationEffect(runtime, effect);
     return this;
+  }
+  get backendId(): string {
+    return this.backend;
   }
   get context(): ChatSession {
     return structuredClone(this.session);
@@ -287,6 +300,7 @@ class ChatModelState {
     if (!owner) return Promise.resolve();
     if (!owner.completion) {
       owner.alive = false;
+      void owner.transcript?.close();
       for (const observation of owner.observations) this.closeObservation(observation);
       owner.completion = this.runEffect(
         Scope.close(owner.scope, Exit.void).pipe(Effect.uninterruptible),
@@ -384,11 +398,17 @@ class ChatModelState {
     this.update({ connection: state, ready: state.state === 'connected' });
     if (!changed) return;
     this.epoch++;
+    void this.selection?.transcript?.close();
     void this.closeOwner(this.generation);
     this.generation = state.state === 'connected' ? this.owner(this.attachment) : undefined;
     this.selection = undefined;
     this.refreshOwner = undefined;
-    this.update({ snapshot: null, older: [], olderCursor: null, host: null, ready: false });
+    this.update({
+      snapshot: null,
+      transcript: makeEmptyTranscriptState(),
+      host: null,
+      ready: false,
+    });
     if (state.state === 'connected') void this.refresh();
   }
   connect = () =>
@@ -478,6 +498,10 @@ class ChatModelState {
               ? 'Local tools use this computer’s permissions. The selected folder is context, not a sandbox.'
               : 'Verified host. Reconnection reads saved state; it does not send.',
         });
+        if (this.state.transcript.observation === 'failed') {
+          void this.closeOwner(this.selection);
+          this.selection = undefined;
+        }
         if (this.saved.selected && !this.selection?.alive)
           yield* this.openSelected(this.saved.selected);
         for (const pending of this.saved.pending)
@@ -582,7 +606,7 @@ class ChatModelState {
       if (this.refreshOwner?.alive && this.actions.has('refresh')) void this.refresh();
       const closing = this.closeOwner(this.selection);
       this.selection = undefined;
-      this.update({ snapshot: null, older: [], olderCursor: null });
+      this.update({ snapshot: null, transcript: makeEmptyTranscriptState() });
       return closing;
     } catch (error) {
       this.error(error);
@@ -598,19 +622,50 @@ class ChatModelState {
         target: structuredClone(target),
       }));
       const epoch = this.epoch;
-      this.update({ snapshot: null, older: [], olderCursor: null });
+      this.update({ snapshot: null, transcript: makeEmptyTranscriptState() });
       let received = false;
+      const transcript = (owner.transcript = new TranscriptOwner({
+        chat: this.chat,
+        target: structuredClone(target),
+        backend: this.backend,
+        memory: this.transcriptMemory,
+        capable: this.state.host?.features?.includes('transcript-v1') ?? false,
+        streaming: this.state.host?.features?.includes('chat-stream-v1') ?? false,
+        local: this.mode === 'local',
+        publish: (state, snapshot) => {
+          if (owner.alive && this.selection === owner)
+            this.update({ transcript: state, ...(snapshot ? { snapshot } : {}) });
+        },
+      }));
+      this.transcripts.add(transcript);
+      yield* Scope.addFinalizer(
+        owner.scope,
+        Effect.promise(() =>
+          transcript.close().then(() => {
+            this.transcripts.delete(transcript);
+          }),
+        ),
+      );
       const accept = (snapshot: ChatSnapshot) => {
         if (
           owner.alive &&
           this.selection === owner &&
           epoch === this.epoch &&
-          sameTarget(this.saved.selected, target)
-        )
-          this.update({
-            snapshot,
-            ...(this.state.older.length ? {} : { olderCursor: snapshot.olderCursor }),
-          });
+          sameTarget(this.saved.selected, target) &&
+          transcript.getSnapshot().observation !== 'failed'
+        ) {
+          try {
+            const stable = transcript.accept(snapshot);
+            if (
+              stable !== this.state.snapshot ||
+              transcript.getSnapshot() !== this.state.transcript
+            )
+              this.update({ snapshot: stable, transcript: transcript.getSnapshot() });
+          } catch (error) {
+            transcript.fail(error);
+            this.error(error);
+          }
+        }
       };
       const read = Effect.gen({ self: this }, function* () {
         yield* this.observe(owner, () =>
@@ -621,12 +676,17 @@ class ChatModelState {
               accept(snapshot);
             },
             (error) => {
-              if (owner.alive && this.selection === owner) this.error(error);
+              if (owner.alive && this.selection === owner) {
+                transcript.fail(error);
+                this.error(error);
+              }
             },
           ),
         );
         const snapshot = yield* this.call('getChat', { target });
         if (!received) accept(snapshot);
+        if (owner.alive && this.selection === owner)
+          yield* Effect.promise(() => transcript.restore());
       });
       yield* Effect.flatMap(
         Effect.forkIn(read, owner.scope, { startImmediately: true }),
@@ -634,27 +694,35 @@ class ChatModelState {
       );
     });
   }
-  older = () => {
-    const owner = this.selection;
-    return this.action(
-      'history',
-      Effect.gen({ self: this }, function* () {
-        const target = this.saved.selected,
-          cursor = this.state.olderCursor,
-          epoch = this.connected();
-        if (!target || !cursor) return;
-        const page = yield* this.call('getChatHistory', { target, cursor });
-        if (
-          owner?.alive &&
-          this.selection === owner &&
-          epoch === this.epoch &&
-          sameTarget(target, this.saved.selected)
-        )
-          this.update({ older: page.entries, olderCursor: page.olderCursor });
-      }),
-      owner,
-    );
-  };
+  private transcriptOwner() {
+    if (!this.admissionsOpen || this.closed) return undefined;
+    return this.selection?.alive ? this.selection.transcript : undefined;
+  }
+  older = () => this.transcriptOwner()?.earlier() ?? Promise.resolve();
+  later = () => this.transcriptOwner()?.later() ?? Promise.resolve();
+  jumpToEntry = (entryId: string) => this.transcriptOwner()?.around(entryId) ?? Promise.resolve();
+  jumpToLatest = () => this.transcriptOwner()?.latest() ?? Promise.resolve();
+  setTranscriptView = (view: TranscriptView) => this.transcriptOwner()?.setView(view);
+  loadTranscriptManifest = (source: ChatTranscriptSource, restart = false) =>
+    this.transcriptOwner()?.loadManifest(source, restart) ?? Promise.resolve();
+  loadTranscriptPart = (
+    source: ChatTranscriptSource,
+    selection: ChatTranscriptSelection,
+    restart = false,
+  ) => this.transcriptOwner()?.loadPart(source, selection, restart) ?? Promise.resolve();
+  iterateTranscript(
+    source: ChatTranscriptSource,
+    options?: {
+      selection?: ChatTranscriptSelection;
+      signal?: AbortSignal;
+      onProgress?: (progress: TranscriptReadProgress) => void;
+    },
+  ) {
+    const owner = this.transcriptOwner();
+    if (!owner)
+      throw new ApplicationError({ code: 'Cancelled', message: 'Transcript view is inactive.' });
+    return owner.iterate(source, options);
+  }
   private reserve(pending: Pending) {
     const next = structuredClone(this.saved);
     if (next.pending.length >= 16)
@@ -933,12 +1001,18 @@ class ChatModelState {
   detach(): Promise<void> {
     this.epoch++;
     const owner = this.attachment;
+    void this.selection?.transcript?.close();
     if (!owner) return this.detaching ?? Promise.resolve();
     this.attachment = undefined;
     this.generation = undefined;
     this.selection = undefined;
     this.refreshOwner = undefined;
-    this.update({ snapshot: null, older: [], olderCursor: null, host: null, ready: false });
+    this.update({
+      snapshot: null,
+      transcript: makeEmptyTranscriptState(),
+      host: null,
+      ready: false,
+    });
     return (this.detaching = this.closeOwner(owner));
   }
   private beginDisposal() {
@@ -949,8 +1023,7 @@ class ChatModelState {
       ...this.state,
       host: null,
       snapshot: null,
-      older: [],
-      olderCursor: null,
+      transcript: makeEmptyTranscriptState(),
       active: [],
     };
     void this.detach();
@@ -965,6 +1038,9 @@ class ChatModelState {
         const exits = yield* Effect.all(
           [
             Effect.exit(Scope.close(this.scope, Exit.void)),
+            ...[...this.transcripts].map((transcript) =>
+              Effect.exit(Effect.promise(() => transcript.close())),
+            ),
             Effect.exit(Effect.promise(() => this.providers?.dispose() ?? Promise.resolve())),
             ...[...this.observations].map((observation) =>
               Effect.promise(() => this.closeObservation(observation)),
@@ -995,6 +1071,7 @@ export type ChatModel = ChatModelState;
 export type ChatController = Pick<
   ChatModelState,
   | 'context'
+  | 'backendId'
   | 'providers'
   | 'getSnapshot'
   | 'subscribe'
@@ -1009,6 +1086,13 @@ export type ChatController = Pick<
   | 'select'
   | 'closeView'
   | 'older'
+  | 'later'
+  | 'jumpToEntry'
+  | 'jumpToLatest'
+  | 'setTranscriptView'
+  | 'loadTranscriptManifest'
+  | 'loadTranscriptPart'
+  | 'iterateTranscript'
   | 'create'
   | 'send'
   | 'stop'

@@ -1,5 +1,10 @@
 // Public-entry smoke fixture: retain executable factories in the emitted browser graph.
-export { makeChatModel, makeChatController } from '@moonbase/application/chat';
+export {
+  makeChatModel,
+  makeChatController,
+  iterateTranscriptSource,
+  makeTranscriptReader,
+} from '@moonbase/application/chat';
 export { makeEditorModel, makeEditorController } from '@moonbase/application/editor';
 export { makeChatClient, makeEditorClient } from '@moonbase/application/runtime/clients';
 export {
