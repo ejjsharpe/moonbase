@@ -22,7 +22,8 @@ export function parseRecordedPatch(source: string, complete = true): RecordedPat
   if (source.length > 64 * 1024 || source.split('\n').length > 2000)
     return { fallback: 'Large patch. Showing recorded source without parsing.' };
   try {
-    const patches = parsePatch(source);
+    // jsdiff can silently zero an unfulfilled count at bare EOF.
+    const patches = parsePatch(source.endsWith('\n') ? source : source + '\n');
     if (!patches.length || !patches.every((patch) => patch.hunks.length)) throw Error();
     return {
       files: patches.map((patch) => ({
