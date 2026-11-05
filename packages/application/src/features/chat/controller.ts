@@ -70,6 +70,7 @@ type Owner = {
 };
 type Observation = {
   ready: Deferred.Deferred<Exit.Exit<ObservationClose>>;
+  generation?: Owner;
   outcome?: Promise<Exit.Exit<void>>;
 };
 const maximumSavedBytes = 2 * 1024 * 1024;
@@ -275,11 +276,12 @@ class ChatModelState {
   private observe(
     owner: Owner,
     acquire: () => ObservationClose,
+    generation?: Owner,
   ): Effect.Effect<void, ApplicationError> {
     return Effect.gen({ self: this }, function* () {
       if (!owner.alive || this.closed) return;
       // A synchronous watch callback can reenter disposal before acquisition returns.
-      const observation: Observation = { ready: Deferred.makeUnsafe() };
+      const observation: Observation = { ready: Deferred.makeUnsafe(), generation };
       this.observations.add(observation);
       owner.observations.add(observation);
       const acquired = yield* Effect.exit(
@@ -441,11 +443,14 @@ class ChatModelState {
         void this.closeOwner(generation);
         void selection?.transcript?.close();
         if (this.generation === generation) this.update({ ready: false });
-        for (const observation of selection?.observations ?? [])
-          yield* Effect.flatMap(
-            Effect.promise(() => this.closeObservation(observation)),
-            (exit) => exit,
-          );
+        const outcomes = yield* Effect.promise(() =>
+          Promise.all(
+            [...this.observations]
+              .filter((observation) => observation.generation === generation)
+              .map((observation) => this.closeObservation(observation)),
+          ),
+        );
+        for (const outcome of outcomes) yield* outcome;
         if (this.generation !== generation || this.state.connection?.connectionId !== id) return;
         yield* Effect.tryPromise({
           try: (signal) => this.connection!.command('disconnect', { connectionId: id }, { signal }),
@@ -681,20 +686,23 @@ class ChatModelState {
         }
       };
       const read = Effect.gen({ self: this }, function* () {
-        yield* this.observe(owner, () =>
-          this.chat.watch(
-            { target },
-            (snapshot) => {
-              received = true;
-              accept(snapshot);
-            },
-            (error) => {
-              if (owner.alive && this.selection === owner) {
-                transcript.fail(error);
-                this.error(error);
-              }
-            },
-          ),
+        yield* this.observe(
+          owner,
+          () =>
+            this.chat.watch(
+              { target },
+              (snapshot) => {
+                received = true;
+                accept(snapshot);
+              },
+              (error) => {
+                if (owner.alive && this.selection === owner) {
+                  transcript.fail(error);
+                  this.error(error);
+                }
+              },
+            ),
+          this.generation,
         );
         const snapshot = yield* this.call('getChat', { target });
         if (!received) accept(snapshot);
