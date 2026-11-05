@@ -21,6 +21,13 @@ async function selectFileView(editor: Page | Locator, view: string) {
     .click();
 }
 
+declare global {
+  interface Window {
+    releaseTabClose(): void;
+    tabCloseHeld: boolean;
+  }
+}
+
 const first = (page: Page) => page.getByRole('region', { name: 'First editor', exact: true });
 async function expectSaveEnabled(editor: Page | Locator, enabled: boolean) {
   const page = 'page' in editor ? editor.page() : editor;
@@ -102,6 +109,70 @@ test('a background tab context menu closes its captured file and keeps the curre
       .locator('[aria-current="page"]'),
   ).toHaveText('/example.ts');
 });
+
+for (const destination of ['tab menu', 'file menu', 'second editor'] as const)
+  test(`late Close completion keeps newer focus in ${destination}`, async ({ page }) => {
+    await page.goto('/');
+    await page.evaluate(async () => {
+      const { first, checkout } = window.demo;
+      await first.open({ checkout, path: 'README.md' }, { intent: 'keep' });
+      const open = first.open.bind(first);
+      let held = false;
+      window.tabCloseHeld = false;
+      window.releaseTabClose = () => {};
+      first.open = async (...args) => {
+        const result = await open(...args);
+        if (!held) {
+          held = true;
+          window.tabCloseHeld = true;
+          await new Promise<void>((resolve) => {
+            window.releaseTabClose = resolve;
+          });
+        }
+        return result;
+      };
+    });
+    try {
+      await openTabMenu(first(page));
+      await page.getByRole('menuitem', { name: 'Close', exact: true }).click();
+      await expect(first(page).getByRole('tab', { name: 'README.md', exact: true })).toHaveCount(0);
+      await expect.poll(() => page.evaluate(() => window.tabCloseHeld)).toBe(true);
+      let focused: Locator;
+      if (destination === 'tab menu') {
+        const tab = first(page).getByRole('tab', { name: 'welcome.ts', exact: true });
+        await tab.press('Shift+F10');
+        focused = page.getByRole('menuitem', { name: 'Keep Open', exact: true });
+      } else if (destination === 'file menu') {
+        await first(page)
+          .getByRole('treeitem', { name: 'welcome.ts', exact: true })
+          .click({ button: 'right' });
+        await page.keyboard.press('Home');
+        focused = page
+          .getByRole('menu', { name: 'File actions', exact: true })
+          .getByRole('menuitem')
+          .first();
+      } else {
+        focused = page
+          .getByRole('region', { name: 'Second editor', exact: true })
+          .getByRole('textbox', { name: 'welcome.ts editor', exact: true });
+        await focused.focus();
+      }
+      await expect(focused).toBeFocused();
+      await page.evaluate(() => {
+        window.releaseTabClose();
+        return new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        );
+      });
+      await expect(focused).toBeFocused();
+      if (destination === 'tab menu') {
+        await page.keyboard.press('Enter');
+        await expect(page.getByRole('menu')).toHaveCount(0);
+      }
+    } finally {
+      await page.evaluate(() => window.releaseTabClose());
+    }
+  });
 
 for (const survivor of [true, false])
   test(`keyboard context-menu Close restores ${survivor ? 'the surviving tab' : 'empty-editor'} focus and allows Reopen`, async ({
