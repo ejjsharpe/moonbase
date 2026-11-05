@@ -31,6 +31,7 @@ import {
   makeTranscriptFailure,
   getTranscriptKey,
   type TranscriptChunk,
+  type TranscriptRead,
   type TranscriptReadProgress,
 } from './transcript-read.ts';
 
@@ -211,6 +212,7 @@ export class TranscriptOwner {
     operation: K,
     input: ChatInput<K>,
     signal?: AbortSignal,
+    settlements?: Set<Promise<unknown>>,
   ): Promise<ChatOutput<K>> {
     this.assertCurrent();
     const abort = new AbortController();
@@ -232,10 +234,12 @@ export class TranscriptOwner {
       },
     );
     this.pending.set(pending, { abort, source });
-    void pending.then(
-      () => this.pending.delete(pending),
-      () => this.pending.delete(pending),
-    );
+    settlements?.add(pending);
+    const settle = () => {
+      this.pending.delete(pending);
+      settlements?.delete(pending);
+    };
+    void pending.then(settle, settle);
     const result = await awaitTranscriptRead(pending, combined);
     this.assertCurrent();
     if (signal?.aborted || abort.signal.aborted)
@@ -944,6 +948,9 @@ export class TranscriptOwner {
     const signal = options.signal
       ? AbortSignal.any([options.signal, this.lifetime.signal])
       : this.lifetime.signal;
+    const settlements = new Set<Promise<unknown>>();
+    const read: TranscriptRead = (input, options) =>
+      this.command('getChatTranscriptContent', input, options?.signal, settlements);
     let proofState:
       | {
           selection: ChatTranscriptSelection;
@@ -969,7 +976,7 @@ export class TranscriptOwner {
         budget.remaining--;
         const evidence = structuredClone(getEvidence(selected.selection));
         const proof = await readTranscript(
-          this.read,
+          read,
           { source: captured, selection: selected.selection },
           signal,
           isCurrent,
@@ -988,7 +995,7 @@ export class TranscriptOwner {
       isCurrent,
       read: async (input, options) => {
         const evidence = structuredClone(getEvidence(input.selection));
-        const reply = await this.read(input, options);
+        const reply = await read(input, options);
         if (reply.kind === 'content' && input.selection)
           proofState = { selection: { ...input.selection }, encoding: reply.encoding, evidence };
         return reply;
@@ -1020,7 +1027,12 @@ export class TranscriptOwner {
           }
         }
       } finally {
-        await iterator.return(undefined);
+        try {
+          await iterator.return(undefined);
+        } finally {
+          // Consumers retain capacity until their own cancelled data/proof IO actually settles.
+          await Promise.allSettled(settlements);
+        }
       }
     })();
   }
