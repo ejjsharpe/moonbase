@@ -7,6 +7,7 @@ export default defineConfig({
     'transcript.spec.ts',
     'activity.spec.ts',
     'activity-selection.spec.ts',
+    'stored-image.spec.ts',
   ],
   workers: 1,
   fullyParallel: false,

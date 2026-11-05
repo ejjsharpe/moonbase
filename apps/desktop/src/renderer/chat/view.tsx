@@ -9,6 +9,7 @@ import type { ChatModelPreference } from '@moonbase/contracts/chat';
 import type { ChatController } from '@moonbase/application/chat';
 import { FindBar, openChatFind } from './find.tsx';
 import { Transcript } from './transcript.tsx';
+import type { ImageResources } from './stored-image.ts';
 import type { TranscriptNative } from '../../chat/wire.ts';
 import { ProviderSetup } from './setup.tsx';
 import { Choice } from './choice.tsx';
@@ -23,8 +24,10 @@ export function ChatView({
   controller,
   chooseFolder,
   transcriptNative,
+  imageResources,
 }: {
   controller: ChatController;
+  imageResources: ImageResources;
   chooseFolder?: () => Promise<string | null>;
   transcriptNative?: TranscriptNative;
 }) {
@@ -357,6 +360,7 @@ export function ChatView({
             <Transcript
               key={state.selected.conversationId}
               controller={controller}
+              imageResources={imageResources}
               state={state}
               native={transcriptNative}
             />

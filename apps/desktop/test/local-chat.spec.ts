@@ -8,8 +8,12 @@ import { pathToFileURL } from 'node:url';
 import { controlledHostFixture } from '../../../tests/chat/fixture.ts';
 import { selectRemoteChat, createRemoteChat } from './chat-target.ts';
 import { captureNative } from './editor-regressions.ts';
+import { retainedImage } from './stored-image-fixture.ts';
 
 let fixtureDirectory: string;
+test.afterAll(async () => {
+  if (fixtureDirectory) await rm(fixtureDirectory, { recursive: true, force: true });
+});
 test.beforeAll(async () => {
   fixtureDirectory = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-local-ui-')));
   for (const name of ['renderer', 'workspace', 'preload.cjs'])
@@ -46,7 +50,7 @@ test.beforeAll(async () => {
           api.output('First local tool chunk');
           control.next = () => api.output(' and next update');
           await new Promise(resolve => { control.release = resolve; if (ctx.abortSignal.aborted) resolve(); else ctx.abortSignal.addEventListener('abort', () => resolve(), { once: true }); });
-          return { output: [{ type: 'text', text: 'Local tool completed' }] };
+          return { output: [{ type: 'text', text: 'Local tool completed' }, ...(process.env.MOONBASE_TEST_IMAGES ? [{ type: 'image', data: process.env.MOONBASE_TEST_IMAGES, mimeType: 'image/png' }] : [])] };
         }
       })] }));`,
                   )
@@ -875,3 +879,187 @@ test('transcript remote first/next chunks render through authenticated stream an
     await host.close();
   }
 });
+
+for (const mode of ['local', 'remote'] as const)
+  test(`stored image ${mode} record renders under production custom-scheme CSP; viewer keyboard, close and actual zoom retain resources`, async () => {
+    const host =
+      mode === 'remote'
+        ? await controlledHostFixture(new URL('./stored-image-host.mjs', import.meta.url))
+        : undefined;
+    const directory =
+      host?.directory ?? (await realpath(await mkdtemp(join(tmpdir(), 'moonbase-image-native-'))));
+    const app = await electron.launch({
+      args: [resolve('test/local-harness.mjs')],
+      env: {
+        PATH: '/usr/bin:/bin',
+        HOME: process.env.HOME!,
+        TMPDIR: process.env.TMPDIR!,
+        MOONBASE_USER_DATA: join(directory, 'desktop'),
+        MOONBASE_TEST_MAIN: pathToFileURL(join(fixtureDirectory, 'main.mjs')).href,
+        ...(host
+          ? {
+              MOONBASE_CHAT_CONFIG: host.clientConfig,
+              MOONBASE_CHAT_FORWARD_LOG: host.log,
+              MOONBASE_TEST_ALLOW_LOOPBACK: '1',
+            }
+          : {
+              MOONBASE_TEST_ACTIVITY: '1',
+              MOONBASE_TEST_IMAGES: retainedImage.toString('base64'),
+            }),
+      },
+    });
+    const child = app.process(),
+      page = await app.firstWindow();
+    try {
+      expect(page.url()).toBe('moonbase://editor/index.html');
+      await page.evaluate(() => {
+        const control = { violations: [] as string[], decoded: 0, closed: 0 };
+        (window as unknown as { nativeImages: typeof control }).nativeImages = control;
+        window.addEventListener('securitypolicyviolation', (event) =>
+          control.violations.push(event.violatedDirective),
+        );
+        const decode = window.createImageBitmap.bind(window);
+        window.createImageBitmap = (async (...args: Parameters<typeof createImageBitmap>) => {
+          const bitmap = (await Reflect.apply(decode, window, args)) as ImageBitmap;
+          control.decoded++;
+          const close = bitmap.close.bind(bitmap);
+          bitmap.close = () => {
+            control.closed++;
+            close();
+          };
+          return bitmap;
+        }) as typeof createImageBitmap;
+      });
+      if (host) {
+        await selectRemoteChat(page);
+        await page.getByRole('button', { name: 'Connect', exact: true }).click();
+        await createRemoteChat(page, 'Retained remote images');
+      } else {
+        await page.getByRole('combobox', { name: 'Provider', exact: true }).click();
+        await page.getByRole('option', { name: 'OpenAI API key', exact: true }).click();
+        await page.getByRole('button', { name: 'Set API key', exact: true }).click();
+        await page
+          .getByLabel('Enter OpenAI API key', { exact: true })
+          .fill('sk-controlled-image-fixture');
+        await page.getByRole('button', { name: 'Continue setup', exact: true }).click();
+        await app.evaluate(({ dialog }, cwd) => {
+          dialog.showOpenDialog = (async () => ({
+            canceled: false,
+            filePaths: [cwd],
+          })) as typeof dialog.showOpenDialog;
+        }, directory);
+        await page.getByRole('button', { name: 'Choose working folder', exact: true }).click();
+      }
+      await page.getByLabel('Message', { exact: true }).fill('Inspect retained images');
+      await page.getByRole('button', { name: 'Send message', exact: true }).click();
+      if (!host) {
+        await expect(page.getByRole('article', { name: 'Live response' })).toContainText(
+          'First local tool chunk',
+        );
+        await app.evaluate(() =>
+          (globalThis as unknown as { localActivity: { release(): void } }).localActivity.release(),
+        );
+      }
+      const group = page
+        .locator('[data-transcript-activity]')
+        .filter({ has: page.getByRole('button', { name: /Stored image/, includeHidden: true }) })
+        .first();
+      await expect(group).toBeAttached();
+      const activity = group.getByRole('button', { name: /^Activity/ });
+      if ((await activity.getAttribute('aria-expanded')) !== 'true') await activity.press('Enter');
+      const disclosure = group.getByRole('button', { name: /Stored image/ }).first();
+      if ((await disclosure.getAttribute('aria-expanded')) !== 'true')
+        await disclosure.press('Enter');
+      const trigger = group.getByRole('button', { name: 'View stored image', exact: true }).first();
+      await trigger.scrollIntoViewIfNeeded();
+      await expect(trigger).toBeEnabled();
+      for (let iteration = 0; iteration < 3; iteration++) {
+        await trigger.press('Enter');
+        const dialog = page.getByRole('dialog', { name: 'Stored image', exact: true });
+        await expect(dialog.getByRole('img', { name: 'Recorded image' })).toBeVisible();
+        await expect(dialog.getByRole('button', { name: 'Close image viewer' })).toBeFocused();
+        await page.keyboard.press('Tab');
+        await expect
+          .poll(() => dialog.evaluate((node) => node.contains(document.activeElement)))
+          .toBe(true);
+        await page.keyboard.press('Escape');
+        await expect(dialog).toHaveCount(0);
+        await expect(trigger).toBeFocused();
+      }
+      await app.evaluate(({ BrowserWindow }) => {
+        const window = BrowserWindow.getAllWindows()[0];
+        window.setSize(1280, 850);
+        window.webContents.setZoomFactor(2);
+      });
+      await trigger.scrollIntoViewIfNeeded();
+      await expect(trigger).toBeEnabled();
+      await trigger.click();
+      const dialog = page.getByRole('dialog', { name: 'Stored image', exact: true });
+      await expect(dialog.getByRole('img', { name: 'Recorded image' })).toBeVisible();
+      await mkdir(resolve('../../test-results/transcript-113'), { recursive: true });
+      await captureNative(
+        app,
+        page,
+        resolve(`../../test-results/transcript-113/native-${mode}-zoom.png`),
+      );
+      const rect = await dialog.evaluate((node) => {
+        const r = node.getBoundingClientRect();
+        return {
+          left: r.left,
+          top: r.top,
+          right: r.right,
+          bottom: r.bottom,
+          width: innerWidth,
+          height: innerHeight,
+        };
+      });
+      expect(rect.left).toBeGreaterThanOrEqual(0);
+      expect(rect.top).toBeGreaterThanOrEqual(0);
+      expect(rect.right).toBeLessThanOrEqual(rect.width);
+      expect(rect.bottom).toBeLessThanOrEqual(rect.height);
+      await page.keyboard.press('Escape');
+      await activity.press('Enter');
+      await expect(group.locator('canvas').first()).toHaveAttribute('width', '0');
+      const stats = await page.evaluate(
+        () =>
+          (
+            window as unknown as {
+              nativeImages: { violations: string[]; decoded: number; closed: number };
+            }
+          ).nativeImages,
+      );
+      expect(stats.violations).toEqual([]);
+      expect(stats.decoded).toBeGreaterThan(0);
+      expect(stats.closed).toBe(stats.decoded);
+      expect(
+        await app.evaluate(
+          () =>
+            (globalThis as unknown as { moonbaseTestClipboard: string[] }).moonbaseTestClipboard,
+        ),
+      ).toEqual([]);
+    } finally {
+      try {
+        if (child.exitCode === null && host) {
+          await app.evaluate(({ BrowserWindow }) => {
+            const window = BrowserWindow.getAllWindows()[0];
+            window.setSize(1280, 850);
+            window.webContents.setZoomFactor(1);
+          });
+          const disconnect = page.getByRole('button', { name: 'Disconnect', exact: true });
+          await expect(disconnect).toBeVisible();
+          await disconnect.click();
+          await expect(page.getByRole('button', { name: 'Connect', exact: true })).toBeEnabled();
+        }
+      } finally {
+        try {
+          if (child.exitCode === null) await app.evaluate(({ app }) => app.exit(0));
+          await expect
+            .poll(() => child.exitCode !== null || child.signalCode !== null, { timeout: 15000 })
+            .toBe(true);
+        } finally {
+          if (host) console.info('Image native remote cleanup', await host.close());
+          else await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+        }
+      }
+    }
+  });

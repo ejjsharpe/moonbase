@@ -19,7 +19,12 @@ import type {
   TranscriptContentState,
   TranscriptViewAnchor,
 } from '@moonbase/application/chat';
-import type { ChatEntry, ChatTranscript, ChatTranscriptPart } from '@moonbase/contracts/chat';
+import type {
+  ChatEntry,
+  ChatTranscript,
+  ChatTranscriptPart,
+  ChatTranscriptSource,
+} from '@moonbase/contracts/chat';
 import type { TranscriptNative } from '../../chat/wire.ts';
 import { getTranscriptDisclosureId } from '../../chat/transcript-source.ts';
 import { Markdown, isReadingNodePinned } from './markdown.tsx';
@@ -34,6 +39,8 @@ import {
   type ActivityEvidence,
 } from './activity.ts';
 import { RecordedPatch } from './recorded-patch.tsx';
+import { ImageVisibility, StoredImage, StoredImages } from './stored-image.tsx';
+import type { ImageResources } from './stored-image.ts';
 import { getTranscriptParts } from './transcript-parts.ts';
 import { usePartBody } from './part-body.ts';
 
@@ -41,8 +48,10 @@ export function Transcript({
   controller,
   state: latestState,
   native,
+  imageResources,
 }: {
   controller: ChatController;
+  imageResources: ImageResources;
   state: ChatState;
   native?: TranscriptNative;
 }) {
@@ -50,6 +59,7 @@ export function Transcript({
     content = useRef<HTMLDivElement>(null);
   const [pinned, setPinned] = useState(false),
     [pinnedEntry, setPinnedEntry] = useState<string | null>(null),
+    [imageSource, setImageSource] = useState<ChatTranscriptSource | null>(null),
     [presented, setPresented] = useState(latestState);
   const preserve = pinned && getLiveIdentity(presented) !== getLiveIdentity(latestState);
   if (!preserve && presented !== latestState) setPresented(latestState);
@@ -433,7 +443,10 @@ export function Transcript({
     oldestPinned =
       transcript.entries.length === 128 &&
       (transcript.view.anchor?.entryId === transcript.entries[0]?.id ||
-        pinnedEntry === transcript.entries[0]?.id),
+        pinnedEntry === transcript.entries[0]?.id ||
+        (!!imageSource &&
+          !!transcript.entries[0]?.transcript &&
+          sameSource(transcript.entries[0].transcript, { source: imageSource }))),
     live = !earlierRow && !oldestPinned && !transcript.later ? snapshot?.run : null;
   const hiddenRow = !!live && transcript.entries.length === 128;
   const entries = hiddenRow ? transcript.entries.slice(1) : transcript.entries;
@@ -456,7 +469,7 @@ export function Transcript({
   if (currentSnapshot && currentSnapshot.state !== 'running')
     liveLabel = snapshotLabels[currentSnapshot.state];
   if (preserve) liveLabel = 'Selected response';
-  return (
+  const body = (
     <section
       ref={root}
       aria-label="Chat transcript"
@@ -668,6 +681,20 @@ export function Transcript({
           ))}
       </div>
     </section>
+  );
+  return (
+    <StoredImages
+      key={controller.backendId + JSON.stringify(latestState.selected)}
+      controller={controller}
+      resources={imageResources}
+      enabled={
+        latestState.ready &&
+        !['inactive', 'reconnecting', 'failed'].includes(latestState.transcript.observation)
+      }
+      fallback={root}
+      onReadingSourceChange={setImageSource}>
+      {body}
+    </StoredImages>
   );
 }
 type EntryProps = {
@@ -1013,7 +1040,9 @@ function Activity({
           Could not remember this activity disclosure. Its content is expanded.
         </p>
       )}
-      <div hidden={!disclosure.expanded}>{children}</div>
+      <ImageVisibility value={disclosure.expanded}>
+        <div hidden={!disclosure.expanded}>{children}</div>
+      </ImageVisibility>
     </section>
   );
 }
@@ -1061,7 +1090,8 @@ function Part({
       item.selection.bytes === part.bytes,
   );
   const ordinary = part.kind === 'text' && ['user', 'assistant'].includes(part.role);
-  const readable = part.availability === 'available' && part.encoding === 'utf8';
+  const readable =
+    part.kind !== 'image' && part.availability === 'available' && part.encoding === 'utf8';
   const load = useCallback(
     (restart = false) => {
       void controller.loadTranscriptPart(
@@ -1183,14 +1213,9 @@ function Part({
     },
     [native, run, takeCopyBody],
   );
-  let presentation = (
-    <p {...stylex.props(styles.small)}>
-      {part.kind === 'image'
-        ? `Stored image · ${part.mimeType ?? 'unknown type'} · ${part.bytes.toLocaleString()} bytes. Image preview is unavailable in this view.`
-        : `${part.availability} content`}
-    </p>
-  );
-  if (!readable && part.availability !== 'redacted' && part.text)
+  let presentation = <p {...stylex.props(styles.small)}>{part.availability} content</p>;
+  if (part.kind === 'image') presentation = <StoredImage source={source} part={part} />;
+  if (part.kind !== 'image' && !readable && part.availability !== 'redacted' && part.text)
     presentation = (
       <>
         {presentation}
