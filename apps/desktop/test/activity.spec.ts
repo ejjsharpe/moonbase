@@ -8,6 +8,93 @@ async function open(page: Page) {
   await expect(page.getByRole('heading', { name: 'Reading a retained answer' })).toBeAttached();
 }
 const live = (page: Page) => page.locator('[data-transcript-live]');
+for (const source of ['durable', 'live'] as const)
+  test(`${source} failed result keeps originating call evidence through a held and failed first manifest read`, async ({
+    page,
+  }, testInfo) => {
+    await open(page);
+    await page.evaluate(async (source) => {
+      const result = [
+        {
+          kind: 'result' as const,
+          role: 'tool' as const,
+          toolName: 'read',
+          state: 'failed' as const,
+          pairing: 'matched' as const,
+          call: { entryId: 'origin', partId: 'call' },
+          text: 'Partial failed output retained',
+        },
+        ...Array.from({ length: 4 }, (_, index) => ({
+          kind: 'details' as const,
+          role: 'tool' as const,
+          toolName: 'read',
+          text: JSON.stringify({ detail: index }),
+        })),
+      ];
+      await window.demo.transcript!.record([
+        {
+          id: 'origin',
+          parts: [
+            {
+              kind: 'arguments',
+              partId: 'call',
+              toolName: 'read',
+              state: 'requested',
+              text: '{"path":"failed.txt"}',
+            },
+          ],
+        },
+        ...(source === 'durable' ? [{ id: 'result', role: 'tool' as const, parts: result }] : []),
+      ]);
+      if (source === 'live') await window.demo.transcript!.activity(result, 'none');
+      const controller = window.demo.application.chat!;
+      await controller.jumpToLatest();
+      const state = controller.getSnapshot();
+      const resultSource =
+        source === 'live'
+          ? state.snapshot!.run!.transcript!.source
+          : state.transcript.entries.find((entry) => entry.id === 'result')!.transcript!.source;
+      const command = window.demo.chat.dependencies.chat.command;
+      const gate = Promise.withResolvers<void>();
+      Object.assign(window, { releaseEvidenceManifest: () => gate.resolve() });
+      window.demo.chat.dependencies.chat.command = async (operation, input, options) => {
+        if (
+          operation === 'getChatTranscriptContent' &&
+          'source' in input &&
+          !('selection' in input) &&
+          JSON.stringify(input.source) === JSON.stringify(resultSource)
+        ) {
+          await gate.promise;
+          throw Error('Controlled first manifest failure');
+        }
+        return command(operation, input, options) as never;
+      };
+    }, source);
+    const origin = page.locator('[data-transcript-entry="origin"]');
+    const result =
+      source === 'live' ? live(page) : page.locator('[data-transcript-entry="result"]');
+    await expect(origin).toContainText('read · failed.txt · failed');
+    await result.getByRole('button', { name: 'Load more parts', exact: true }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const manifest = window.demo.application.chat!.getSnapshot().transcript.manifest;
+          return [manifest?.status, manifest?.parts.length];
+        }),
+      )
+      .toEqual(['loading', 0]);
+    await expect(result).toContainText('read · failed');
+    await expect(result.getByText(/read · failed ·.*Partial failed output retained/)).toBeVisible();
+    await expect.soft(origin).toContainText('read · failed.txt · failed');
+    await page.evaluate(() =>
+      (window as typeof window & { releaseEvidenceManifest(): void }).releaseEvidenceManifest(),
+    );
+    await expect(result.getByRole('alert')).toContainText('Retry parts');
+    await expect(result).toContainText('read · failed');
+    await expect(result.getByText(/read · failed ·.*Partial failed output retained/)).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath('failed-first-manifest.png') });
+    await expect(origin).toContainText('read · failed.txt · failed');
+  });
 for (const input of ['pointer', 'Enter', 'Space'] as const)
   for (const outcome of ['success', 'error'] as const)
     test(`activity ${input} keeps pre-input toggle intent and new reading anchor through held manifest ${outcome}`, async ({
