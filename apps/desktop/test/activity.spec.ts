@@ -411,6 +411,254 @@ test('requested and executed arguments, unknown JSON and interrupted partial res
     );
   }
 });
+for (const manifest of [false, true])
+  for (const focus of [false, true])
+    test(`same-source thinking/tool appends after loaded manifest=${manifest} focus=${focus}`, async ({
+      page,
+    }, testInfo) => {
+      await open(page);
+      await page.evaluate(async () => {
+        await window.demo.transcript!.record([
+          {
+            id: 'stream-origin',
+            parts: [
+              {
+                kind: 'arguments',
+                partId: 'call',
+                toolName: 'bash',
+                state: 'requested',
+                text: '{"command":"stream moon"}',
+              },
+            ],
+          },
+        ]);
+        const command = window.demo.chat.dependencies.chat.command;
+        Object.assign(window, { progressHistoryReads: 0 });
+        window.demo.chat.dependencies.chat.command = async (operation, input, options) => {
+          if (
+            ['getChat', 'getChatHistory', 'getChatHistoryAround'].includes(operation) ||
+            (operation === 'getChatTranscriptContent' && !('selection' in input))
+          )
+            (window as typeof window & { progressHistoryReads: number }).progressHistoryReads++;
+          return command(operation, input, options) as never;
+        };
+      });
+      const update = (suffix: string, failed = false) =>
+        page.evaluate(
+          async ({ suffix, failed }) => {
+            await window.demo.transcript!.activity([
+              { kind: 'text', text: 'Authored before' },
+              { kind: 'thinking', text: `Thought ${suffix}`, state: 'running' },
+              {
+                kind: 'result',
+                role: 'tool',
+                toolName: 'bash',
+                text: `Output ${suffix}`,
+                state: failed ? 'failed' : 'running',
+                pairing: 'matched',
+                call: { entryId: 'stream-origin', partId: 'call' },
+              },
+              { kind: 'details', role: 'tool', toolName: 'bash', text: 'Detail A' },
+              { kind: 'details', role: 'tool', toolName: 'bash', text: 'Detail B' },
+            ]);
+          },
+          { suffix, failed },
+        );
+      await update('first');
+      await page.evaluate(() => window.demo.application.chat!.jumpToLatest());
+      const row = live(page);
+      if (manifest) {
+        await row.getByRole('button', { name: 'Load more parts', exact: true }).click();
+        await expect
+          .poll(() =>
+            page.evaluate(
+              () => window.demo.application.chat!.getSnapshot().transcript.manifest?.status,
+            ),
+          )
+          .toBe('complete');
+      }
+      const group = row.getByRole('button', { name: /^Activity/ });
+      await group.click();
+      const thought = row.locator('[data-transcript-part="m0.b1"]');
+      const output = row.locator('[data-transcript-part="m0.b2"]');
+      await thought.getByRole('button', { name: /Thinking/ }).click();
+      await output.getByRole('button', { name: /Output/ }).click();
+      const tail = row.locator('[data-transcript-part="m0.b4"]');
+      if (manifest) await tail.getByRole('button', { name: /Details/ }).click();
+      await expect(thought.locator('pre')).toHaveText('Thought first');
+      await expect(output.locator('pre')).toHaveText('Output first');
+      if (focus) await output.locator('pre').focus();
+      if (manifest)
+        await tail.locator('pre').evaluate((element) => {
+          const range = document.createRange();
+          range.selectNodeContents(element);
+          window.getSelection()!.removeAllRanges();
+          window.getSelection()!.addRange(range);
+        });
+      const source = await row.getAttribute('data-transcript-live');
+      const reads = () =>
+        page.evaluate(
+          () => (window as typeof window & { progressHistoryReads: number }).progressHistoryReads,
+        );
+      const beforeReads = await reads();
+      for (const suffix of ['first and next', 'first and next again']) {
+        await update(suffix, suffix.endsWith('again'));
+        await expect(row).toHaveAttribute('data-transcript-live', source!);
+        await expect
+          .soft(thought.locator('pre'))
+          .toHaveText(`Thought ${suffix}`, { timeout: 1500 });
+        await expect.soft(output.locator('pre')).toHaveText(`Output ${suffix}`, { timeout: 1500 });
+        await expect
+          .soft(row.locator('[data-transcript-activity] > p'))
+          .toContainText(`${new TextEncoder().encode(`Thought ${suffix}`).length} bytes`, {
+            timeout: 1500,
+          });
+        if (focus) await expect(output.locator('pre')).toBeFocused();
+        await expect(group).toHaveAttribute('aria-expanded', 'true');
+      }
+      expect(await reads()).toBe(beforeReads);
+      if (manifest)
+        expect(await page.evaluate(() => window.getSelection()?.toString())).toBe('Detail B');
+      await expect
+        .soft(page.locator('[data-transcript-entry="stream-origin"]'))
+        .toContainText('bash · stream moon · failed', { timeout: 1500 });
+      if (manifest) {
+        await expect(row.getByRole('alert')).toContainText('Retry parts');
+        expect(
+          await row
+            .locator('[data-transcript-part]')
+            .evaluateAll((parts) => parts.map((part) => part.getAttribute('data-transcript-part'))),
+        ).toEqual(['m0.b0', 'm0.b1', 'm0.b2', 'm0.b3', 'm0.b4']);
+      }
+      await output.getByRole('button', { name: 'Copy part', exact: true }).click();
+      await expect
+        .configure({ soft: true })
+        .poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1)))
+        .toBe('Output first and next again');
+      await group.click();
+      await update('first and next again, held locally', true);
+      await expect(group).toHaveAttribute('aria-expanded', 'false');
+      await expect(thought.locator('pre')).not.toBeVisible();
+      await page.screenshot({ path: testInfo.outputPath('same-source-progress.png') });
+    });
+for (const outcome of ['success', 'error'] as const)
+  test(`same-source current content and complete Copy survive held old content ${outcome}`, async ({
+    page,
+  }) => {
+    await open(page);
+    const update = (suffix: string) =>
+      page.evaluate(async (suffix) => {
+        await window.demo.transcript!.activity([
+          { kind: 'text', text: 'Before' },
+          { kind: 'thinking', text: 'Thought first\n'.repeat(20) + suffix, state: 'running' },
+          {
+            kind: 'result',
+            role: 'tool',
+            toolName: 'bash',
+            state: 'running',
+            text: 'Output first\n'.repeat(20) + suffix,
+          },
+          { kind: 'details', text: 'Detail A' },
+          { kind: 'details', text: 'Detail B' },
+        ]);
+      }, suffix);
+    await update('');
+    await page.evaluate(() => window.demo.application.chat!.jumpToLatest());
+    const row = live(page);
+    await row.getByRole('button', { name: 'Load more parts', exact: true }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => window.demo.application.chat!.getSnapshot().transcript.manifest?.status,
+        ),
+      )
+      .toBe('complete');
+    await page.evaluate((outcome) => {
+      const command = window.demo.chat.dependencies.chat.command;
+      const old = window.demo.application.chat!.getSnapshot().snapshot!.run!.transcript!.parts[2]!;
+      const gate = Promise.withResolvers<void>();
+      let failCurrent = false;
+      Object.assign(window, {
+        oldContentHeld: false,
+        oldContentSettled: false,
+        releaseOldContent: () => gate.resolve(),
+        failCurrentContent: () => {
+          failCurrent = true;
+        },
+      });
+      let held = false;
+      window.demo.chat.dependencies.chat.command = async (operation, input, options) => {
+        if (
+          failCurrent &&
+          operation === 'getChatTranscriptContent' &&
+          'selection' in input &&
+          input.selection?.partId === old.partId
+        )
+          throw Error('Controlled current read failure');
+        if (
+          operation === 'getChatTranscriptContent' &&
+          'selection' in input &&
+          input.selection?.partId === old.partId &&
+          input.selection.revision === old.revision &&
+          !held
+        ) {
+          held = true;
+          const reply = await command(operation, input, options);
+          Object.assign(window, { oldContentHeld: true });
+          await gate.promise;
+          Object.assign(window, { oldContentSettled: true });
+          if (outcome === 'error') throw Error('Controlled late old read failure');
+          return reply as never;
+        }
+        return command(operation, input, options) as never;
+      };
+    }, outcome);
+    await row.getByRole('button', { name: /^Activity/ }).click();
+    const thought = row.locator('[data-transcript-part="m0.b1"]');
+    const output = row.locator('[data-transcript-part="m0.b2"]');
+    await thought.getByRole('button', { name: /Thinking/ }).click();
+    await output.getByRole('button', { name: /Output/ }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(() => (window as typeof window & { oldContentHeld: boolean }).oldContentHeld),
+      )
+      .toBe(true);
+    await output.locator('pre').focus();
+    await update('and current appended 🌔');
+    const expected = 'Output first\n'.repeat(20) + 'and current appended 🌔';
+    await expect(output.locator('pre')).toHaveText(expected);
+    await expect(thought.locator('pre')).toHaveText(
+      'Thought first\n'.repeat(20) + 'and current appended 🌔',
+    );
+    await expect(output.locator('pre')).toBeFocused();
+    await expect(row.getByRole('alert')).toContainText('Retry parts');
+    await output.getByRole('button', { name: 'Copy part', exact: true }).click();
+    await expect
+      .poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1)))
+      .toBe(expected);
+    expect(
+      await page.evaluate(
+        () => (window as typeof window & { oldContentSettled: boolean }).oldContentSettled,
+      ),
+    ).toBe(false);
+    await page.evaluate(() =>
+      (window as typeof window & { releaseOldContent(): void }).releaseOldContent(),
+    );
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => (window as typeof window & { oldContentSettled: boolean }).oldContentSettled,
+        ),
+      )
+      .toBe(true);
+    await expect(output.locator('pre')).toHaveText(expected);
+    await expect(output.getByRole('alert')).toHaveCount(0);
+    await page.evaluate(() =>
+      (window as typeof window & { failCurrentContent(): void }).failCurrentContent(),
+    );
+    await update('and current appended 🌔, then another append');
+    await expect(output.getByRole('alert')).toContainText('Retry content');
+  });
 test('thinking/tool progress changes before completion with stable focus and expansion; group collapse survives a retained part anchor', async ({
   page,
 }) => {
