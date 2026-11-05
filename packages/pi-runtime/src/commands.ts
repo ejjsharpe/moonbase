@@ -47,6 +47,7 @@ import {
   type SnapshotCache,
 } from './history.ts';
 import type { RuntimeConfiguration, RetainedWork } from './runtime-types.ts';
+import { findTranscript } from './find.ts';
 import { NestedSourceRetired, readTranscriptContent, checkRead } from './transcript.ts';
 import * as V from './validation.ts';
 import * as S from './private-schema.ts';
@@ -211,7 +212,11 @@ export class Host {
       let admission = invoke;
       if (operation === 'sendChat')
         admission = this.admission((data as ChatInput<'sendChat'>).target.conversationId, invoke);
-      else if (operation !== 'getChatTranscriptContent' && operation !== 'getChatHistoryAround')
+      else if (
+        operation !== 'getChatTranscriptContent' &&
+        operation !== 'getChatHistoryAround' &&
+        operation !== 'findChatTranscript'
+      )
         admission = Effect.uninterruptible(invoke);
       return yield* this.own(
         preflight.pipe(
@@ -249,6 +254,13 @@ export class Host {
       return readTranscriptContent(this.harness, d, signal);
     });
   }
+  findTranscript(d: ChatInput<'findChatTranscript'>) {
+    return this.read(async (signal) => {
+      await this.metadata(d.target);
+      checkRead(signal);
+      return findTranscript(this.harness, d, signal);
+    });
+  }
   getHistoryAround(d: ChatInput<'getChatHistoryAround'>) {
     return this.read(async (signal) => {
       await this.metadata(d.target);
@@ -265,12 +277,12 @@ export class Host {
         host: { ...this.config.host },
         actorId: this.config.actorId,
         mode: 'local',
-        features: ['transcript-v1'],
+        features: ['transcript-v1', 'transcript-find-v1'],
       };
     return {
       host: { ...this.config.host },
       actorId: this.config.actorId,
-      features: ['transcript-v1'],
+      features: ['transcript-v1', 'transcript-find-v1'],
       cwd: this.config.cwd,
       model: `${this.config.model.provider}/${this.config.model.modelId}`,
     };

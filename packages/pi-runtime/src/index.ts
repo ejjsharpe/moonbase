@@ -26,6 +26,8 @@ function makeChatService(host: Host): ChatServiceShape {
     getChatHistory: (d) => host.run('getChatHistory', d, (input) => host.getHistory(input)),
     getChatTranscriptContent: (d) =>
       host.run('getChatTranscriptContent', d, (input) => host.getTranscriptContent(input)),
+    findChatTranscript: (d) =>
+      host.run('findChatTranscript', d, (input) => host.findTranscript(input)),
     getChatHistoryAround: (d) =>
       host.run('getChatHistoryAround', d, (input) => host.getHistoryAround(input)),
     sendChat: (d) => host.run('sendChat', d, (input) => host.send(input)),

@@ -17,6 +17,8 @@ export type TranscriptChunk = {
   source: ChatTranscriptSource;
   selection: ChatTranscriptSelection;
   offset: number;
+  /** UTF16 base when retained for presentation; wire offsets remain bytes. */
+  textOffset?: number;
   encoding: 'utf8' | 'base64';
   data: string;
 };

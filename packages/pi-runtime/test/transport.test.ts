@@ -1,3 +1,4 @@
+import type { ConversationId, Harness as HarnessType } from '@earendil-works/pi-durable';
 import type { AddressInfo } from 'node:net';
 import type { ChatInput, ChatStopTarget } from '@moonbase/contracts/chat';
 import { maximumChatInputBytes } from '@moonbase/contracts/chat';
@@ -47,12 +48,12 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
   );
   const client = makeChatClient(runtime),
     calls: string[] = [];
-  let intercept: ((operation: string) => Promise<void>) | undefined,
+  let intercept: ((operation: string, signal?: AbortSignal) => Promise<void>) | undefined,
     afterDispatch: ((operation: string) => Promise<void>) | undefined;
   const bound: ChatClient = {
     command: async (operation, input, options) => {
       calls.push(operation);
-      await intercept?.(operation);
+      await intercept?.(operation, options?.signal);
       const value = await client.command(operation, input, options);
       await afterDispatch?.(operation);
       return value;
@@ -227,7 +228,7 @@ test('production remote/server route shared commands and immutable retries witho
   const f = await setup(t);
   assert.deepEqual(await f.remote.command('getChatHost', { host }), {
     ...(await f.client.command('getChatHost', { host })),
-    features: ['transcript-v1', 'chat-stream-v1'],
+    features: ['transcript-v1', 'transcript-find-v1', 'chat-stream-v1'],
   });
   const created = await f.remote.command('createChat', {
       session,
@@ -1372,5 +1373,184 @@ test('transcript output validation rejects authenticated source/selection/cursor
   await assert.rejects(
     f.remote.command('getChatHistoryAround', { target, entryId: source.entryId }),
     { code: 'Incompatible' },
+  );
+});
+
+test('authenticated Find transports saved matches, rejects foreign continuations and cancels peer waits', async (t) => {
+  const f = await setup(t);
+  const target = (
+    await f.remote.command('createChat', { session, requestId: 'create', title: 'Find fixture' })
+  ).conversation.target;
+  await f.remote.command('sendChat', {
+    target,
+    requestId: 'send',
+    text: 'Retained Σ literal [.*]',
+  });
+  const first = await f.remote.command('findChatTranscript', { target, query: 'σ' });
+  assert.equal(
+    first.matches[0].snippet.text.slice(
+      first.matches[0].start - first.matches[0].snippet.start,
+      first.matches[0].end - first.matches[0].snippet.start,
+    ),
+    'Σ',
+  );
+  assert.deepEqual(
+    (
+      await f.remote.command('findChatTranscript', {
+        target,
+        query: 'σ',
+        cursor: first.startCursor,
+      })
+    ).matches,
+    first.matches,
+  );
+  await assert.rejects(
+    f.remote.command('findChatTranscript', {
+      target,
+      query: 'different',
+      cursor: first.startCursor,
+    }),
+    { code: 'InvalidInput' },
+  );
+  await assert.rejects(
+    f.remote.command('findChatTranscript', {
+      target: { ...target, actorId: 'foreign' },
+      query: 'σ',
+    }),
+  );
+  let release!: () => void,
+    entered = false;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  t.after(() => release());
+  let peerSignal: AbortSignal | undefined;
+  f.intercept = async (operation, signal) => {
+    if (operation === 'findChatTranscript') {
+      peerSignal = signal;
+      entered = true;
+      await gate;
+    }
+  };
+  const abort = new AbortController();
+  const pending = f.remote.command(
+    'findChatTranscript',
+    { target, query: 'literal' },
+    { signal: abort.signal },
+  );
+  const rejected = assert.rejects(pending, { code: 'Cancelled' });
+  for (let i = 0; i < 100 && !entered; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert(entered);
+  abort.abort();
+  await rejected;
+  for (let i = 0; i < 100 && !peerSignal?.aborted; i++)
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  assert(peerSignal?.aborted);
+  assert.equal(
+    (await f.remote.command('getChat', { target })).conversation.target.conversationId,
+    target.conversationId,
+  );
+  release();
+});
+
+test('authenticated Find and around-entry navigation reach all 1,100 retained rows across a fixed replay cutoff', async (t) => {
+  const { Harness } = await import('@earendil-works/pi-durable');
+  const { BACKGROUND_CONTEXT } = await import('@earendil-works/chord/context');
+  let harness!: HarnessType;
+  const open = Harness.open;
+  t.mock.method(
+    Harness,
+    'open',
+    async (...args: Parameters<typeof open>) => (harness = await open(...args)),
+  );
+  const f = await setup(t);
+  const target = (
+    await f.remote.command('createChat', {
+      session,
+      requestId: 'large-find',
+      title: 'Retained Find navigation',
+    })
+  ).conversation.target;
+  const ids = await harness.commit(async (tx) => {
+    const ids: string[] = [];
+    for (let i = 0; i < 1100; i++) {
+      const text = [0, 550, 1099].includes(i) ? `landmark ${i} Σ` : `ordinary ${i}`;
+      const entry = await tx.appendEntry(
+        Number(target.conversationId) as ConversationId,
+        i % 3 === 0
+          ? {
+              kind: 'pi.assistant',
+              model: [fauxAssistantMessage([{ type: 'thinking', thinking: text }])],
+            }
+          : { kind: 'pi.user', model: [{ role: 'user', content: text, timestamp: 1 }] },
+      );
+      ids.push(String(entry.id));
+    }
+    return ids;
+  }, BACKGROUND_CONTEXT);
+  async function scan(cursor?: string) {
+    const matches = [];
+    let start = '',
+      upper: string | null = null,
+      empty = false;
+    do {
+      const page = await f.remote.command('findChatTranscript', {
+        target,
+        query: 'LANDMARK',
+        ...(cursor ? { cursor } : {}),
+      });
+      if (start) assert.equal(page.startCursor, start);
+      start = page.startCursor;
+      upper = page.upperEntryId;
+      matches.push(...page.matches);
+      empty ||= !page.matches.length && page.nextCursor !== null;
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor);
+    return { matches, start, upper, empty };
+  }
+  const first = await scan();
+  assert(first.empty);
+  assert.deepEqual(
+    first.matches.map((match) => match.source.entryId),
+    [ids[0], ids[550], ids[1099]],
+  );
+  for (const match of first.matches) {
+    const around = await f.remote.command('getChatHistoryAround', {
+      target,
+      entryId: match.source.entryId,
+    });
+    assert(around.entries.some((entry) => entry.id === match.source.entryId));
+    for (const cursor of [around.olderCursor, around.newerCursor])
+      if (cursor) {
+        const next = await f.remote.command('getChatHistoryAround', {
+          target,
+          entryId: match.source.entryId,
+          cursor,
+        });
+        assert.equal(next.upperEntryId, around.upperEntryId);
+        assert(!next.entries.some((entry) => around.entries.some((old) => old.id === entry.id)));
+      }
+  }
+  await harness.commit(
+    (tx) =>
+      tx.appendEntry(Number(target.conversationId) as ConversationId, {
+        kind: 'pi.user',
+        model: [{ role: 'user', content: 'LANDMARK appended', timestamp: 1 }],
+      }),
+    BACKGROUND_CONTEXT,
+  );
+  assert.deepEqual((await scan(first.start)).matches, first.matches);
+  assert.equal((await scan()).matches.length, 4);
+  await assert.rejects(f.remote.command('getChatHistoryAround', { target, entryId: '999999999' }), {
+    code: 'InvalidInput',
+  });
+  const other = (
+    await f.remote.command('createChat', { session, requestId: 'other-find', title: 'Other' })
+  ).conversation.target;
+  await assert.rejects(
+    f.remote.command('findChatTranscript', {
+      target: other,
+      query: 'LANDMARK',
+      cursor: first.start,
+    }),
+    { code: 'InvalidInput' },
   );
 });

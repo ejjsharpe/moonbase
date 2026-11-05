@@ -72,6 +72,8 @@ function fixture(options: { slowSend?: boolean; cleanupFailure?: boolean } = {})
       }),
     getChatTranscriptContent: () =>
       Effect.fail(new ApplicationError({ code: 'Incompatible', message: 'Legacy fixture.' })),
+    findChatTranscript: () =>
+      Effect.fail(new ApplicationError({ code: 'Incompatible', message: 'Legacy fixture.' })),
     getChatHistoryAround: () =>
       Effect.fail(new ApplicationError({ code: 'Incompatible', message: 'Legacy fixture.' })),
     sendChat: (input) =>

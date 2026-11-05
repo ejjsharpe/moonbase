@@ -154,6 +154,16 @@ export function output<K extends ChatCommand>(
       }
     }
   }
+  if (operation === 'findChatTranscript') {
+    const data = result as ChatOutput<'findChatTranscript'>,
+      input = request as ChatInput<'findChatTranscript'>;
+    if (
+      data.query !== input.query ||
+      data.cursor !== (input.cursor ?? null) ||
+      data.matches.some((match) => !sameTarget(match.source.target, input.target))
+    )
+      fail('Incompatible', 'Find read identity changed.');
+  }
   if (operation === 'getChatHistoryAround') {
     if (r!.entryId !== q.entryId || r!.cursor !== (q.cursor ?? null))
       fail('Incompatible', 'History read identity changed.');
