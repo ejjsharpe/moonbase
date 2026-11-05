@@ -602,8 +602,8 @@ export class TranscriptOwner {
     this.publish();
   }
   cancelFindReveal() {
-    if (!this.state.find.revealing) return;
     this.findReveal.abort();
+    if (!this.state.find.revealing) return;
     this.state = { ...this.state, find: { ...this.state.find, revealing: false } };
     this.publish();
   }
