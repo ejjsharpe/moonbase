@@ -5,6 +5,7 @@ import type {
   ChatSnapshot,
   ChatTranscriptPart,
   ChatTranscriptSource,
+  ChatTranscript,
 } from '@moonbase/contracts/chat';
 import type { TranscriptNative } from '../src/chat/wire.ts';
 import type { chatCapabilities } from './chat.ts';
@@ -186,19 +187,80 @@ export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabili
       links.push(url);
     },
   };
-  async function live(text: string, outputs: string[] = []) {
+  type DemoPart = Pick<ChatTranscriptPart, 'text' | 'kind'> &
+    Partial<Omit<ChatTranscriptPart, 'text' | 'kind' | 'bytes' | 'revision' | 'truncated'>>;
+  async function makeParts(values: DemoPart[]) {
+    return Promise.all(
+      values.map(async ({ text, ...value }, index) => ({
+        ...(await part(text, value.partId ?? `m0.b${index}`, value.kind)),
+        ...value,
+      })),
+    );
+  }
+  async function record(
+    records: {
+      id: string;
+      role?: ChatEntry['role'];
+      thinking?: ChatTranscript['thinking'];
+      parts: DemoPart[];
+    }[],
+  ) {
+    const next: ChatEntry[] = [];
+    for (const record of records) {
+      const source: ChatTranscriptSource = {
+        kind: 'entry',
+        target: chat.target,
+        entryId: record.id,
+      };
+      const parts = await makeParts(record.parts);
+      sources.set(JSON.stringify(source), {
+        source,
+        parts,
+        texts: record.parts.map((part) => part.text),
+      });
+      next.push({
+        id: record.id,
+        role: record.role ?? 'assistant',
+        text: record.parts
+          .filter((part) => part.kind === 'text')
+          .map((part) => part.text)
+          .join(''),
+        truncated: false,
+        transcript: {
+          source,
+          parts: parts.slice(0, 4),
+          nextCursor: parts.length > 4 ? '4' : null,
+          thinking: record.thinking ?? 'none',
+        },
+      });
+    }
+    entries.splice(0, entries.length, ...next);
+    chat.snapshot.entries = entries.slice(-32).reverse();
+    chat.snapshot.olderCursor = entries.length > 32 ? String(entries.length - 32) : null;
+    chat.snapshot.transcriptBoundary = entries.at(-1)?.id;
+    chat.snapshot.run = null;
+    chat.snapshot.state = 'idle';
+    chat.controls.receiveChat(structuredClone(chat.snapshot));
+  }
+  async function activity(
+    values: DemoPart[],
+    thinking: ChatTranscript['thinking'] = 'available',
+    attempt = 0,
+  ) {
     const source: ChatTranscriptSource = {
       kind: 'live',
       target: chat.target,
       submissionId: 'demo-submission',
       taskId: 'demo-task',
-      attempt: 0,
-      incarnation: 'a'.repeat(64),
+      attempt,
+      incarnation: (attempt ? 'b' : 'a').repeat(64),
     };
-    const texts = [text, ...outputs];
-    const parts = await Promise.all(
-      texts.map((value, index) => part(value, `m0.b${index}`, index ? 'result' : 'text')),
-    );
+    const texts = values.map((part) => part.text),
+      parts = await makeParts(values);
+    const text = values
+      .filter((part) => part.kind === 'text')
+      .map((part) => part.text)
+      .join('');
     sources.set(JSON.stringify(source), { source, parts, texts });
     chat.snapshot.run = {
       stop: { target: chat.target, submissionId: 'demo-submission', taskId: 'demo-task' },
@@ -210,11 +272,17 @@ export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabili
         source,
         parts: parts.slice(0, 4),
         nextCursor: parts.length > 4 ? '4' : null,
-        thinking: 'none',
+        thinking,
       },
     };
     chat.snapshot.state = 'running';
     chat.controls.receiveChat(structuredClone(chat.snapshot));
+  }
+  async function live(text: string, outputs: string[] = []) {
+    await activity(
+      [{ text, kind: 'text' }, ...outputs.map((text): DemoPart => ({ text, kind: 'result' }))],
+      'none',
+    );
   }
   return {
     native,
@@ -223,6 +291,8 @@ export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabili
     entries,
     markdown,
     live,
+    activity,
+    record,
     metrics: markdownMetrics,
     snapshot: chat.snapshot as ChatSnapshot,
   };

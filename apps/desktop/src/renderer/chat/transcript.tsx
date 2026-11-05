@@ -1,4 +1,14 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from 'react';
 import { Button } from '@base-ui/react/button';
 import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
@@ -14,6 +24,15 @@ import type { TranscriptNative } from '../../chat/wire.ts';
 import { getTranscriptDisclosureId } from '../../chat/transcript-source.ts';
 import { Markdown, isReadingNodePinned } from './markdown.tsx';
 import { MarkdownCache } from './markdown-model.ts';
+import {
+  collectActivityEvidence,
+  getActivityState,
+  getEntryTranscripts,
+  getToolSummary,
+  groupTranscriptParts,
+  type ActivityEvidence,
+} from './activity.ts';
+import { RecordedPatch } from './recorded-patch.tsx';
 
 export function Transcript({
   controller,
@@ -252,7 +271,13 @@ export function Transcript({
         : !!summary.nextCursor)
     )
       return;
-    const node = part || entry || (restoring.current ? nodes.at(-1) : undefined);
+    const node =
+      (part &&
+        (part.getClientRects().length
+          ? part
+          : part.closest<HTMLElement>('[data-transcript-activity]'))) ||
+      entry ||
+      (restoring.current ? nodes.at(-1) : undefined);
     if (node) {
       setTop(
         element.scrollTop +
@@ -384,6 +409,20 @@ export function Transcript({
     live = !earlierRow && !oldestAnchored && !transcript.later ? snapshot?.run : null;
   const hiddenRow = !!live && transcript.entries.length === 128;
   const entries = hiddenRow ? transcript.entries.slice(1) : transcript.entries;
+  const evidence = useMemo(
+    () =>
+      collectActivityEvidence([
+        ...getEntryTranscripts(transcript.entries, transcript.manifest),
+        ...(live?.transcript
+          ? [
+              transcript.manifest && sameSource(live.transcript, transcript.manifest)
+                ? transcript.manifest
+                : live.transcript,
+            ]
+          : []),
+      ]),
+    [transcript.entries, transcript.manifest, live],
+  );
   let liveLabel: string | undefined = live?.state;
   if (currentSnapshot && currentSnapshot.state !== 'running')
     liveLabel = snapshotLabels[currentSnapshot.state];
@@ -544,6 +583,7 @@ export function Transcript({
           <Entry
             key={'entry:' + entry.id}
             entry={entry}
+            evidence={evidence}
             controller={controller}
             state={transcript}
             cache={cache}
@@ -555,6 +595,7 @@ export function Transcript({
         {live && (
           <Entry
             key="live"
+            evidence={evidence}
             entry={{
               id: 'live',
               role: 'assistant',
@@ -601,6 +642,7 @@ type EntryProps = {
   run(action: (signal: AbortSignal) => Promise<void>, success: string): void;
   openLink(url: string): void;
   liveState?: string;
+  evidence: ActivityEvidence;
 };
 const Entry = memo(function Entry({
   entry,
@@ -611,6 +653,7 @@ const Entry = memo(function Entry({
   run,
   openLink,
   liveState,
+  evidence,
 }: EntryProps) {
   const transcript = entry.transcript;
   const manifest =
@@ -664,20 +707,37 @@ const Entry = memo(function Entry({
   if (parts)
     body = (
       <>
-        {parts.map((part) => (
-          <Part
-            key={part.partId}
-            transcript={transcript!}
-            part={part}
-            controller={controller}
-            state={state}
-            cache={cache}
-            native={native}
-            run={run}
-            openLink={openLink}
-            entryId={source?.kind === 'live' ? JSON.stringify(source) : entry.id}
-          />
-        ))}
+        {groupTranscriptParts(parts).map((group) => {
+          const children = group.parts.map((part) => (
+            <Part
+              key={part.partId}
+              transcript={transcript!}
+              part={part}
+              controller={controller}
+              state={state}
+              cache={cache}
+              native={native}
+              run={run}
+              openLink={openLink}
+              entryId={source?.kind === 'live' ? JSON.stringify(source) : entry.id}
+              evidence={evidence}
+            />
+          ));
+          return group.activity ? (
+            <Activity
+              key={group.parts[0]!.partId}
+              transcript={transcript!}
+              parts={group.parts}
+              state={state}
+              controller={controller}
+              entryId={source?.kind === 'live' ? JSON.stringify(source) : entry.id}
+              evidence={evidence}>
+              {children}
+            </Activity>
+          ) : (
+            children
+          );
+        })}
       </>
     );
   return (
@@ -689,6 +749,10 @@ const Entry = memo(function Entry({
       <div {...stylex.props(styles.header)}>
         <strong>{label}</strong>
         <span>{entry.isError ? 'Failed' : liveState}</span>
+        {liveState && transcript?.thinking === 'none' && <span>No thinking supplied</span>}
+        {liveState && transcript?.thinking === 'pending' && (
+          <span>Working · thinking not yet supplied</span>
+        )}
         {source && ['assistant', 'user'].includes(entry.role) && (
           <Button
             {...stylex.props(controls.button, controls.quietButton)}
@@ -744,6 +808,142 @@ const Entry = memo(function Entry({
     </article>
   );
 });
+function useDisclosure(
+  entryId: string,
+  id: string,
+  anchored: boolean,
+  state: ChatState['transcript'],
+  controller: ChatController,
+  partIds: readonly string[],
+) {
+  const disclosure = useMemo(() => getTranscriptDisclosureId(entryId, id), [entryId, id]);
+  const [resolved, setResolved] = useState<{ disclosure: typeof disclosure; value: string } | null>(
+    null,
+  );
+  const [failed, setFailed] = useState<typeof disclosure | null>(null);
+  useEffect(() => {
+    if (typeof disclosure === 'string') return;
+    let active = true;
+    void disclosure.then(
+      (value) => {
+        if (active) setResolved({ disclosure, value });
+      },
+      () => {
+        if (active) setFailed(disclosure);
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [disclosure]);
+  let expansion: string | null = null;
+  if (typeof disclosure === 'string') expansion = disclosure;
+  else if (resolved?.disclosure === disclosure) expansion = resolved.value;
+  const disclosureError = failed === disclosure;
+  const anchorKey = anchored ? JSON.stringify({ ...state.view.anchor, offset: 0 }) : null;
+  const [collapsedAnchor, setCollapsedAnchor] = useState<string | null>(null);
+  const toggleExpanded = useRef<boolean | null>(null);
+  if (!anchored && collapsedAnchor !== null) setCollapsedAnchor(null);
+  const expanded =
+    disclosureError ||
+    (expansion !== null && state.view.expanded.includes(expansion)) ||
+    (anchored && collapsedAnchor !== anchorKey);
+  return {
+    expanded,
+    disclosureError,
+    disabled: !expansion,
+    toggleProps: {
+      onPointerDown: () => {
+        toggleExpanded.current = expanded;
+      },
+      onPointerCancel: () => {
+        toggleExpanded.current = null;
+      },
+      onKeyDown: (event: KeyboardEvent) => {
+        if (!event.repeat)
+          toggleExpanded.current = [' ', 'Enter'].includes(event.key) ? expanded : null;
+      },
+      onClick: () => {
+        if (!expansion) return;
+        const collapse = toggleExpanded.current ?? expanded;
+        toggleExpanded.current = null;
+        const view = controller.getSnapshot().transcript.view;
+        // Reading capture can reveal a child between pointer/key down and click.
+        if (collapse && view.anchor?.partId && partIds.includes(view.anchor.partId))
+          setCollapsedAnchor(JSON.stringify({ ...view.anchor, offset: 0 }));
+        controller.setTranscriptView({
+          ...view,
+          expanded: collapse
+            ? view.expanded.filter((id) => id !== expansion)
+            : [...view.expanded, expansion],
+        });
+      },
+    },
+  };
+}
+function Activity({
+  transcript,
+  parts,
+  state,
+  controller,
+  entryId,
+  evidence,
+  children,
+}: {
+  transcript: ChatTranscript;
+  parts: ChatTranscriptPart[];
+  state: ChatState['transcript'];
+  controller: ChatController;
+  entryId: string;
+  evidence: ActivityEvidence;
+  children: ReactNode;
+}) {
+  const saved = state.view.anchor;
+  const anchored =
+    !!saved?.partId &&
+    parts.some((part) => part.partId === saved.partId) &&
+    (saved.source ? transcript.source.kind === 'live' : saved.entryId === entryId);
+  const disclosure = useDisclosure(
+    entryId,
+    'activity:' + parts[0]!.partId,
+    anchored,
+    state,
+    controller,
+    parts.map((part) => part.partId),
+  );
+  const summaries = [
+    ...new Set(
+      parts.map((part) => {
+        const status = getActivityState(part, transcript, evidence);
+        if (part.kind === 'thinking')
+          return `Thinking · ${part.availability}${status && status !== 'completed' ? ` · ${status}` : ''}${part.availability === 'available' ? ` · ${part.bytes.toLocaleString()} bytes` : ''}`;
+        const progress =
+          part.kind === 'result'
+            ? ` · ${part.bytes.toLocaleString()} bytes${['running', 'failed', 'interrupted'].includes(status ?? '') && part.text ? ` · ${part.text.replace(/\s+/g, ' ').slice(0, 100)}${part.truncated ? '…' : ''}` : ''}`
+            : '';
+        return `${getToolSummary(part)}${status ? ` · ${status === 'requested' ? 'requested · result not shown' : status}` : ''}${part.pairing && part.pairing !== 'matched' ? ` · ${part.pairing}` : ''}${progress}`;
+      }),
+    ),
+  ];
+  return (
+    <section data-transcript-activity {...stylex.props(styles.activity)}>
+      <Button
+        aria-expanded={disclosure.expanded}
+        disabled={disclosure.disabled}
+        {...disclosure.toggleProps}
+        {...stylex.props(controls.button, controls.quietButton, styles.activityToggle)}>
+        Activity · {parts.length} recorded {parts.length === 1 ? 'part' : 'parts'}
+      </Button>
+      <p {...stylex.props(styles.small, styles.activitySummary)}>{summaries.join(' · ')}</p>
+      {disclosure.disclosureError && (
+        <p role="alert" {...stylex.props(styles.small)}>
+          Could not remember this activity disclosure. Its content is expanded.
+        </p>
+      )}
+      <div hidden={!disclosure.expanded}>{children}</div>
+    </section>
+  );
+}
 function Part({
   transcript,
   part,
@@ -754,6 +954,7 @@ function Part({
   run,
   openLink,
   entryId,
+  evidence,
 }: Omit<EntryProps, 'entry' | 'liveState'> & {
   transcript: ChatTranscript;
   part: ChatTranscriptPart;
@@ -762,42 +963,18 @@ function Part({
   const identity = JSON.stringify([transcript.source, part.partId]);
   const [source, setSource] = useState(transcript.source);
   if (JSON.stringify(source) !== JSON.stringify(transcript.source)) setSource(transcript.source);
-  const disclosure = useMemo(
-    () => getTranscriptDisclosureId(entryId, part.partId),
-    [entryId, part.partId],
-  );
-  const [resolved, setResolved] = useState<string | null>(
-    typeof disclosure === 'string' ? disclosure : null,
-  );
-  const [disclosureError, setDisclosureError] = useState(false);
-  useEffect(() => {
-    if (typeof disclosure === 'string') return;
-    let active = true;
-    void disclosure.then(
-      (value) => {
-        if (active) setResolved(value);
-      },
-      () => {
-        if (active) setDisclosureError(true);
-      },
-    );
-    return () => {
-      active = false;
-    };
-  }, [disclosure]);
-  const expansion = typeof disclosure === 'string' ? disclosure : resolved;
   const saved = state.view.anchor;
   const anchored =
     saved?.partId === part.partId &&
     (saved.source ? transcript.source.kind === 'live' : saved.entryId === entryId);
-  const anchorKey = anchored ? JSON.stringify({ ...saved, offset: 0 }) : null;
-  const [collapsedAnchor, setCollapsedAnchor] = useState<string | null>(null);
-  const toggleExpanded = useRef<boolean | null>(null);
-  if (!anchored && collapsedAnchor !== null) setCollapsedAnchor(null);
-  const expanded =
-    disclosureError ||
-    (expansion !== null && state.view.expanded.includes(expansion)) ||
-    (anchored && collapsedAnchor !== anchorKey);
+  const { expanded, disclosureError, disabled, toggleProps } = useDisclosure(
+    entryId,
+    part.partId,
+    anchored,
+    state,
+    controller,
+    [part.partId],
+  );
   const content = state.content.find(
     (item) =>
       sameSource(transcript, item) &&
@@ -843,6 +1020,11 @@ function Part({
     [native, run, source, selection],
   );
   const text = content?.chunks.length ? decodeText(content) : part.text;
+  const complete =
+    !part.truncated ||
+    (content?.status === 'complete' &&
+      content.retainedFrom === 0 &&
+      content.loadedBytes === part.bytes);
   let presentation = (
     <p {...stylex.props(styles.small)}>
       {part.kind === 'image'
@@ -876,10 +1058,25 @@ function Part({
           copyCode={content?.retainedFrom === 0 || (!content && !part.truncated) ? copy : undefined}
         />
       );
+    if (part.kind === 'patch' || part.kind === 'diff')
+      presentation = (
+        <RecordedPatch text={text} complete={complete} numbered={part.kind === 'diff'} />
+      );
   }
   const body = (
     <>
       {presentation}
+      {part.kind === 'arguments' && (
+        <p {...stylex.props(styles.small)}>
+          Recorded request. Executed arguments are labelled separately when available; this request
+          alone does not prove execution.
+        </p>
+      )}
+      {part.kind === 'arguments' && part.toolName === 'write' && (
+        <p {...stylex.props(styles.small)}>
+          Captured write content is in the arguments. No before/after diff was recorded here.
+        </p>
+      )}
       {part.pairing && part.pairing !== 'matched' && (
         <p {...stylex.props(styles.small)}>Tool result pairing: {part.pairing}.</p>
       )}
@@ -923,6 +1120,9 @@ function Part({
         ))}
     </>
   );
+  let copyLabel = 'part';
+  if (ordinary) copyLabel = 'text';
+  else if (part.kind === 'patch' || part.kind === 'diff') copyLabel = part.kind;
   return (
     <section data-transcript-part={part.partId}>
       {disclosureError && (
@@ -936,36 +1136,14 @@ function Part({
         <>
           <Button
             aria-expanded={expanded}
-            disabled={!expansion}
+            disabled={disabled}
             {...stylex.props(controls.button, controls.quietButton)}
-            onPointerDown={() => {
-              toggleExpanded.current = expanded;
-            }}
-            onPointerCancel={() => {
-              toggleExpanded.current = null;
-            }}
-            onKeyDown={(event) => {
-              if (!event.repeat)
-                toggleExpanded.current = [' ', 'Enter'].includes(event.key) ? expanded : null;
-            }}
-            onClick={() => {
-              if (!expansion) return;
-              const collapse = toggleExpanded.current ?? expanded;
-              toggleExpanded.current = null;
-              const view = controller.getSnapshot().transcript.view;
-              // Reading capture can reveal this part between pointer/key down and click.
-              if (collapse && view.anchor?.partId === part.partId)
-                setCollapsedAnchor(JSON.stringify({ ...view.anchor, offset: 0 }));
-              controller.setTranscriptView({
-                ...view,
-                expanded: collapse
-                  ? view.expanded.filter((id) => id !== expansion)
-                  : [...view.expanded, expansion],
-              });
-            }}>
-            {part.toolName ? `${part.toolName} · ` : ''}
+            {...toggleProps}>
+            {part.toolName ? `${getToolSummary(part, text)} · ` : ''}
             {partLabels[part.kind]}
-            {part.state ? ` · ${part.state}` : ''}
+            {getActivityState(part, transcript, evidence)
+              ? ` · ${getActivityState(part, transcript, evidence)}`
+              : ''}
             {part.availability !== 'available' ? ` · ${part.availability}` : ''}
           </Button>
           {expanded && <div {...stylex.props(styles.disclosure)}>{body}</div>}
@@ -976,7 +1154,7 @@ function Part({
           {...stylex.props(controls.button, controls.quietButton)}
           disabled={!native}
           onClick={() => copy()}>
-          Copy {ordinary ? 'text' : 'part'}
+          Copy {copyLabel}
         </Button>
       )}
     </section>
@@ -1038,6 +1216,7 @@ const styles = stylex.create({
     gap: space.sm,
     fontSize: type.small,
     color: colors.secondary,
+    flexWrap: 'wrap',
   },
   literal: {
     fontFamily: type.sans,
@@ -1060,6 +1239,9 @@ const styles = stylex.create({
     borderRadius: radius.panel,
   },
   disclosure: { minWidth: 0 },
+  activity: { minWidth: 0, margin: '8px 0' },
+  activityToggle: { textAlign: 'left', whiteSpace: 'normal' },
+  activitySummary: { margin: '0 0 8px', paddingInline: space.sm },
   small: {
     color: colors.secondary,
     fontSize: type.small,

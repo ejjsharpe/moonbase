@@ -6,6 +6,10 @@ async function open(page: Page) {
   await page.goto('/?local&design&transcript');
   await page.getByRole('button', { name: /^Conversation/ }).click();
   await expect(page.getByRole('heading', { name: 'Reading a retained answer' })).toBeAttached();
+  await answer(page)
+    .getByRole('button', { name: /^Activity/ })
+    .click();
+  await page.getByRole('button', { name: 'Jump to latest', exact: true }).click();
 }
 const transcript = (page: Page) =>
   page.getByRole('region', { name: 'Chat transcript', exact: true });
@@ -154,6 +158,7 @@ for (const mode of ['durable', 'live'] as const)
         await window.demo.application.chat!.jumpToLatest();
       });
     const row = mode === 'live' ? page.locator('[data-transcript-live]') : answer(page);
+    if (mode === 'live') await row.getByRole('button', { name: /^Activity/ }).click();
     const part = row.locator('[data-transcript-part="m0.b1"]');
     for (const id of ['m0.b2', 'm0.b3'])
       await row
