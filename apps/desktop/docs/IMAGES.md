@@ -1,0 +1,71 @@
+# Stored transcript images (#113)
+
+This integration starts from parent-local `review/transcript-find-114-r1` at `f757364ed8d19c95077b520e94e8c9a149b3f5f1` on `t3/transcript-image-integration-f757`. Only desktop feature `93213e3d51b075e844272b856158546e593b3952` is replayed; original branch `t3/transcript-image-viewer` stays at that commit. The base already contains the application iterator drain. Its application source remains byte-for-byte unchanged here. The delivery evidence below belongs to the original feature and does not qualify this newly composed Find/control integration; fresh integration results are recorded separately at the end.
+
+Desktop's private `renderer/chat/stored-image.ts` and `.tsx` consume the supplied controller's complete-content iterator. No contract metadata, Pi normalization, runtime acquisition, saved state or native authority changes. A focused private application correction makes controller iteration completion/cancelled rejection join its own admitted raw data/proof IO, so the image resource budget cannot be released by an abort race while that IO is still alive. A visible MIME/descriptor never authorizes a path or URL. Markdown images remain explicit links, and transcript images never fetch network/file URLs.
+
+A disclosed image in the visible transcript reads its exact source and fixed `{partId, bytes, revision}`. The controller retains schema, echo, cursor/progress/completion, current-selection, generation and lifecycle checks, including actual IO settlement on cancellation. The image consumer additionally checks encoding/echoes/offsets/complete byte count and canonical base64. Each independently padded chunk is decoded separately into one bounded byte array. It never joins encoded strings or relies on the hydration LRU retaining a complete image.
+
+## Validation and presentation
+
+Static PNG and 8-bit baseline/progressive JPEG are supported. PNG signature, chunk bounds/types, CRCs, required header/data/end and positive dimensions are checked before decode; animated PNG is explicitly unsupported. JPEG parsing checks marker/segment bounds, a single supported frame, dimensions, scans and terminal end, rejecting deferred height, alternate frames and unsupported variants. MIME must agree with the actual raster container. Image parts always enter this policy, including malformed descriptors claiming UTF-8; they cannot fall through to generic text hydration/Copy. Unknown MIME, SVG/HTML, missing/unavailable, corrupt/truncated and oversized content receive visible metadata/errors. Nothing is inserted as authored HTML.
+
+The container rules follow the [W3C PNG specification](https://www.w3.org/TR/png/) and [ITU-T T.81 JPEG specification](https://www.w3.org/Graphics/JPEG/itu-t81.pdf). These checks bound dimensions before invoking the platform decoder. `createImageBitmap(Blob)` must then succeed, and its dimensions must match the validated header (JPEG orientation may swap width/height). The [HTML ImageBitmap API](https://html.spec.whatwg.org/multipage/imagebitmap-and-animations.html) supplies decode and explicit bitmap close. Failed pixel decoding remains observable and retryable.
+
+Images draw into canvases; no object URLs or `<img>` resources are created. Production `moonbase://editor/index.html` retains its existing CSP, including `img-src 'self' data:` and every script/frame/connect/navigation/permission rule. There is no Blob CSP expansion. Thumbnails use a fixed 336 × 196 control frame and at most 320 × 180 pixels, with caption space reserved before decode. The existing per-view ResizeObserver/Part anchor handles settled metadata and layout changes; image overflow stays contained.
+
+One Base UI dialog per transcript provides a title/description, labelled Close, focus trap, Escape and focus return to the original visible trigger. If its record disappears, it falls back to the visible transcript region. Opening rereads/revalidates the exact fixed selection through the same controller; it grants no new authority. There are no attachment, clipboard, save/download, export or OCR actions.
+
+## Scoped resource limits
+
+| Resource | Bound |
+| --- | --- |
+| One source | 4 MiB |
+| One decoded image | 4,194,304 pixels; neither side over 8,192 |
+| View's encoded reservations | 20 MiB, including source array + decoder Blob copy + 128 KiB chunk/string allowance per read |
+| View's managed decoded reservations | 16,777,216 pixels, including simultaneous full decode/canvas allocation before shrinking to retained canvas size |
+| Concurrent view work | Two reads/decodes; no background queue |
+| Retained thumbnail | At most 320 × 180 pixels; source bytes released after drawing |
+
+DesktopShell owns the reservations across conversation, target and Chat panel replacement, so pending old work cannot obtain a fresh budget by replacing the view. These bound managed resources rather than every browser decoder/GPU allocation. A full-budget image can temporarily prevent another decode; the visible busy state offers Retry after other work releases. There is no additional cache/store/scheduler. Stop and unrelated controller actions retain their existing independent paths.
+
+Bitmap handles close immediately after drawing, and on failed/cancelled/late decode. Clearing an owned canvas sets both dimensions to zero and releases its pixel reservation idempotently. A weak per-canvas owner token prevents an old cancelled decode/cleanup from clearing a canvas repainted by a newer visibility session. Source arrays/Blob copies remain reserved until actual read/decode settlement; cancellation cannot free capacity early while ignored-abort IO or a platform decode is still pending.
+
+IntersectionObserver cancels and clears offscreen content. A private `ImageVisibility` context explicitly propagates Activity collapse because #112 retains children under `hidden`; unmount alone is insufficient. Part collapse, row/descriptor eviction, source/target/controller changes, offline/hidden view and disposal fence late publication and release presentation resources. The existing controller owns and awaits actual read cleanup even after panel removal. Pending platform decode is fenced and its eventual bitmap closes without publication.
+
+## Fixtures and qualification
+
+`test/fixtures/images/retained.png` is deterministic RGB noise (192 × 128, Python standard-library zlib, seed 113), large enough for multiple independently padded production chunks. `checker.png` is a generated two-color 256 × 128 checker, `retained.jpg` is its `sips` JPEG conversion, and `tall.png` is a 128 × 1,024 checker for thumbnail scaling and independent viewer overflow. These are controlled test pixels, not design assets. Existing runtime arbitrary-bytes-labelled-PNG transport fixtures are unchanged.
+
+`stored-image.test.ts` exercises container/MIME/CRC/dimensions, malformed echoes/encoding/completion, aggregate reservations, held actual read/decode settlement, late close and decoder/canvas release. `stored-image-runtime.test.ts` uses real LocalPi SQLite plus a separately authenticated child host/forwarder, exact record/actor/store isolation, reconstruction, missing selections and corrupt stored fixtures. `stored-image.spec.ts` and the two focused `local-chat.spec.ts` cases cover browser/native presentation. Clipboard capabilities remain injected; these tests perform no OS clipboard IO.
+
+The implementation starts at composed candidate `c551e396f6fcf56fc2dc71a07f6d8d3465405a5c`. That base predates the parent's control-navigation correction. Disclosures in these focused fixtures use keyboard setup to avoid duplicating its known pre-input capture race. Pointer thumbnail activation and keyboard viewer interaction are exercised, but final integrated qualification must exercise pointer Part/Activity disclosure after the corrected shared helper is composed. No speculative Find API or private specialist reveal seam is added.
+
+Fresh results, screenshot inspection and remaining limits are recorded below at handoff. Historical #111/#112 results in other documents do not qualify this implementation.
+
+
+### Delivery evidence
+
+Application companion commit: `b00cea981b4734c055a4594b84b252c4cb75f11d`. The subsequent desktop feature commit identifies the complete delivered tree on `t3/transcript-image-viewer`; the starting composed candidate remains `c551e396f6fcf56fc2dc71a07f6d8d3465405a5c`. All logs/captures below live in ignored `test-results/transcript-113/` in this worktree. Node `v26.13.0`, Bun `1.4.4`; frozen install left the lockfile unchanged.
+
+| Check | Observed result / evidence |
+| --- | --- |
+| Public application transcript tests | 54/54, `iterator-settlement.log`; held data success/failure and prefix-proof cancellation await actual IO, fence progress immediately and keep unrelated iteration/replacement startup independent |
+| Full application / desktop source | 370/370 and final 109/109 after iterator/canvas ownership corrections, `application-final.log`, `desktop-source-final.log` |
+| Local + authenticated child/forwarder image source tests | 8/8 initial validation/resource/runtime tests, `image-source-runtime-final.log`; final JPEG subset and canvas ownership validation 7/7 in `image-validation-final.log` |
+| Controlled chat integration | 12/12 after iterator correction, `chat-integration-final.log` |
+| Root source | All 8 targets pass after iterator correction, `source-after-settlement.log`; the earlier 8-target pass in `source-final.log` predates that correction. `source-delivery.log` records the final delivery rerun |
+| Original transcript/activity + image browser regression set | 33/33 before the iterator correction, `browser-regressions.log`; covers parser-position Copy, indentation/nesting/tabs, recovery notices, durable/live collapse, selection/focus, 128 rows and navigation |
+| Final complete image browser suite | 9/9 after iterator correction, `images-final.log`; includes independent padded chunks, real PNG/JPEG, metadata/error states, pre-decode huge/oversize rejection, focus/Escape/return/fallback, hidden/offscreen/eviction, scroll geometry and panel cleanup, cross-conversation pending decode capacity and ignored-abort actual IO capacity, plus late cancelled decode preserving the newer visible canvas |
+| Capacity red/green | `controller-capacity-red.log` preserves the demonstrated abort-race failure; `controller-capacity-green.log` passes all 3 related controller/panel/decode cases after the private owning fix |
+| Type / lint / format / foundation | Pass, `typecheck-final.log`, `lint-final.log`, `format-final.log`, `foundation-final.log`; 8 typecheck targets, 281 actual headless browser inputs and fixed saved bytes unchanged |
+| Actual desktop build / renderer / notices | Full 5-target build passes after iterator correction, `build-after-settlement.log`; final delivery in `build-delivery.log`. Renderer has 8,904 actual inputs, five workers/font, no privileged modules; `renderer-final.log`. Build collects notices for 134 bundled packages, including Base UI and StyleX; no dependency change |
+| Native custom-scheme image cases | Local + authenticated remote 2/2 after iterator correction, `native-final.log`; final delivery in `native-delivery.log`. Production `moonbase://editor/index.html`, unchanged CSP with no violations, repeated open/close, focus trap/Escape/return, bitmap/canvas release, pointer thumbnail and actual zoom 2; clipboard callback array stays empty |
+
+Inspected all six browser normal/compact/emulated-200% thumbnail/viewer PNGs, `tall-overflow.png`, and native local/remote `capturePage` PNGs with their geometry/hash JSON. Both native captures are 2,560 × 1,700 pixels, viewport 640 × 425 at zoom 2. Close, image, labels and viewport-contained layout are visible. The tall capture verifies keyboard-scrollable image overflow with Close still visible. The mechanical UI detector returned `[]` before the final reserved-caption refinement; existing design-system files/tokens/CSS/motion are unchanged. Parent commissions a fresh independent review; these implementation checks are not that approval.
+
+Earlier browser failures distinguish fixture locator/focus settlement mistakes and a real 26px post-decode caption growth, now fixed by reserving caption geometry. Native fixture corrections account for tool-name-prefixed image labels, use actual native capture rather than a cropped protocol screenshot, and restore zoom before Disconnect so hidden sidebar controls cannot skip remote cleanup. The cleanup failure left two owned fixture forwarders (PID/PGID 98703 and 99002); both were identified by exact temporary command paths, terminated, and ports 61311/61581 rebound. Later successful runs verify host/forwarder PID and process-group exit plus port rebinding through the shared fixture. The final delivery log records its exact fresh process IDs/ports. A later final native run passed all image assertions but exceeded the fixture’s five-second child-exit observation deadline (`native-exit-settlement-failure.log`). Teardown now always attempts both app and host cleanup through nested finally blocks, allowing up to fifteen seconds to observe actual child exit; no timeout declares cleanup successful. Native test compilation directories are removed by the fixture's `afterAll`. Browser port 4193 and the owned preview tab close after checks; no persistent app, provider quota, real SSH host, OS clipboard IO, legacy-state operation, PR, push or merge is involved.
+
+Packaged archive/execution, full inherited native shell suites, manual/VoiceOver and real-provider/SSH/performance qualification were not run. The inherited full-native failures and dependency advisories retain their existing ownership in TRANSCRIPTS.md. Final integrated image qualification must compose the parent's corrected shared disclosure helper and exercise pointer Part/Activity disclosure; this old-base implementation deliberately does not duplicate that correction.
+
+Final delivery cleanup independently rechecked host PID 20274, forwarder PIDs/process groups 20318/20319 and rebound ports 4193/58977/58986 after the final native 2/2 pass. The owned preview tab is closed. All final source/build/native delivery logs are green; the earlier capacity and exit-observation failure logs remain preserved.

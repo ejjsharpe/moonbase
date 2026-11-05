@@ -21,10 +21,11 @@ export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabili
       encoded?: Uint8Array[];
     }
   >();
-  const digest = async (text: string) =>
-    [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))]
+  const digestBytes = async (bytes: Uint8Array<ArrayBuffer>) =>
+    [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))]
       .map((byte) => byte.toString(16).padStart(2, '0'))
       .join('');
+  const digest = (text: string) => digestBytes(new TextEncoder().encode(text));
   async function part(
     text: string,
     partId = 'm0.b0',
@@ -210,28 +211,35 @@ export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabili
       }
       const index = found.parts.findIndex((part) => part.partId === request.selection!.partId),
         data = found.texts[index]!;
-      const retained = found.encoded?.[index] ?? new TextEncoder().encode(data);
-      const bytes = retained.subarray(0, request.selection.bytes);
       const descriptor = found.parts[index]!;
+      const binary = descriptor.encoding === 'base64';
+      const retained =
+        found.encoded?.[index] ??
+        (binary
+          ? Uint8Array.from(atob(data), (char) => char.charCodeAt(0))
+          : new TextEncoder().encode(data));
+      const bytes = retained.subarray(0, request.selection.bytes);
       if (
         !(
           request.selection.bytes === descriptor.bytes &&
           request.selection.revision === descriptor.revision
         ) &&
-        (await digest(new TextDecoder().decode(bytes))) !== request.selection.revision
+        (await digestBytes(bytes)) !== request.selection.revision
       )
         throw Error('Demo fixed prefix changed.');
       const offset = Number(request.cursor ?? 0);
       let end = Math.min(offset + 16000, bytes.length);
-      while (end < bytes.length && (bytes[end]! & 0xc0) === 0x80) end--;
+      while (!binary && end < bytes.length && (bytes[end]! & 0xc0) === 0x80) end--;
       return {
         kind: 'content',
         source: request.source,
         selection: request.selection,
         cursor: request.cursor ?? null,
         offset,
-        encoding: 'utf8',
-        data: new TextDecoder().decode(bytes.slice(offset, end)),
+        encoding: binary ? 'base64' : 'utf8',
+        data: binary
+          ? btoa(String.fromCharCode(...bytes.slice(offset, end)))
+          : new TextDecoder().decode(bytes.slice(offset, end)),
         nextCursor: end < bytes.length ? String(end) : null,
       } as never;
     }
@@ -266,13 +274,22 @@ export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabili
       links.push(url);
     },
   };
-  type DemoPart = Pick<ChatTranscriptPart, 'text' | 'kind'> &
+  type DemoPart = { data?: string } & Pick<ChatTranscriptPart, 'text' | 'kind'> &
     Partial<Omit<ChatTranscriptPart, 'text' | 'kind' | 'bytes' | 'revision' | 'truncated'>>;
   async function makeParts(values: DemoPart[]) {
     return Promise.all(
-      values.map(async ({ text, ...value }, index) => ({
+      values.map(async ({ text, data, ...value }, index) => ({
         ...(await part(text, value.partId ?? `m0.b${index}`, value.kind)),
         ...value,
+        ...(data === undefined
+          ? {}
+          : {
+              encoding: 'base64' as const,
+              bytes: atob(data).length,
+              revision: await digestBytes(
+                Uint8Array.from(atob(data), (char) => char.charCodeAt(0)),
+              ),
+            }),
       })),
     );
   }
@@ -295,7 +312,7 @@ export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabili
       sources.set(JSON.stringify(source), {
         source,
         parts,
-        texts: record.parts.map((part) => part.text),
+        texts: record.parts.map((part) => part.data ?? part.text),
       });
       next.push({
         id: record.id,
@@ -334,7 +351,7 @@ export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabili
       attempt,
       incarnation: (attempt ? 'b' : 'a').repeat(64),
     };
-    const texts = values.map((part) => part.text),
+    const texts = values.map((part) => part.data ?? part.text),
       parts = await makeParts(values);
     const text = values
       .filter((part) => part.kind === 'text')

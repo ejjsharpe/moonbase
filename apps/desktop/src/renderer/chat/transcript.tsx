@@ -33,13 +33,17 @@ import {
   type ActivityEvidence,
 } from './activity.ts';
 import { RecordedPatch } from './recorded-patch.tsx';
+import { ImageVisibility, StoredImage, StoredImages } from './stored-image.tsx';
+import type { ImageResources } from './stored-image.ts';
 
 export function Transcript({
   controller,
   state: latestState,
   native,
+  imageResources,
 }: {
   controller: ChatController;
+  imageResources: ImageResources;
   state: ChatState;
   native?: TranscriptNative;
 }) {
@@ -452,7 +456,7 @@ export function Transcript({
   if (currentSnapshot && currentSnapshot.state !== 'running')
     liveLabel = snapshotLabels[currentSnapshot.state];
   if (preserve) liveLabel = 'Selected response';
-  return (
+  const body = (
     <section
       ref={root}
       aria-label="Chat transcript"
@@ -664,6 +668,19 @@ export function Transcript({
           ))}
       </div>
     </section>
+  );
+  return (
+    <StoredImages
+      key={controller.backendId + JSON.stringify(latestState.selected)}
+      controller={controller}
+      resources={imageResources}
+      enabled={
+        latestState.ready &&
+        !['inactive', 'reconnecting', 'failed'].includes(latestState.transcript.observation)
+      }
+      fallback={root}>
+      {body}
+    </StoredImages>
   );
 }
 type EntryProps = {
@@ -1009,7 +1026,9 @@ function Activity({
           Could not remember this activity disclosure. Its content is expanded.
         </p>
       )}
-      <div hidden={!disclosure.expanded}>{children}</div>
+      <ImageVisibility value={disclosure.expanded}>
+        <div hidden={!disclosure.expanded}>{children}</div>
+      </ImageVisibility>
     </section>
   );
 }
@@ -1057,7 +1076,8 @@ function Part({
       item.selection.bytes === part.bytes,
   );
   const ordinary = part.kind === 'text' && ['user', 'assistant'].includes(part.role);
-  const readable = part.availability === 'available' && part.encoding === 'utf8';
+  const readable =
+    part.kind !== 'image' && part.availability === 'available' && part.encoding === 'utf8';
   const load = useCallback(
     (restart = false) => {
       void controller.loadTranscriptPart(
@@ -1152,14 +1172,9 @@ function Part({
     // Move only the transcript; keep the Find field and the reader's selection/focus intact.
     scroller.scrollTop += element.getBoundingClientRect().top - getReadingTop(scroller) - 24;
   }, [matchVisible, match, state.find.revealing]);
-  let presentation = (
-    <p {...stylex.props(styles.small)}>
-      {part.kind === 'image'
-        ? `Stored image · ${part.mimeType ?? 'unknown type'} · ${part.bytes.toLocaleString()} bytes. Image preview is unavailable in this view.`
-        : `${part.availability} content`}
-    </p>
-  );
-  if (!readable && part.availability !== 'redacted' && part.text)
+  let presentation = <p {...stylex.props(styles.small)}>{part.availability} content</p>;
+  if (part.kind === 'image') presentation = <StoredImage source={source} part={part} />;
+  if (part.kind !== 'image' && !readable && part.availability !== 'redacted' && part.text)
     presentation = (
       <>
         {presentation}

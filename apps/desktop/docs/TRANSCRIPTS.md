@@ -41,7 +41,7 @@ Only explicit HTTP(S) URLs without credentials/control characters, at most 8,192
 ## Follow-on seams
 
 - #112: private consecutive activity groups share `Part` disclosure state, exact source/part anchors and fixed-part Copy. The direct maintained patch parser is consumed only by recorded unified-patch presentation; see [activity](ACTIVITY.md).
-- #113: stored-image metadata/disclosure and the existing resize-anchor observer; add bounded decode/viewer resources and release them on eviction/unmount.
+- #113: [stored-image validation, canvas thumbnails/viewer and scoped resource limits](IMAGES.md) consume fixed selections through the controller iterator and explicitly release hidden/offscreen content.
 - #114: Find uses `jumpToEntry`/around reads, exact source/part/original UTF16 intent in the shared disclosure hook, progressive source windows and the existing DOM source attributes. Only complete handlers advertise the Find capability.
 
 ## Historical qualification from the preserved writer
