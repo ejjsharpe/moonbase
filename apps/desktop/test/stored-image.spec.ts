@@ -2,6 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { readFile, mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { crc32 } from 'node:zlib';
+import { readFindHighlight } from './find-highlight.ts';
 type ImageWindow = Window & {
   imageStats: { decoded: number; closed: number; reads: number; bytes: number };
   releaseImage(): void;
@@ -763,7 +764,9 @@ test('pointer image reading cancels held Find reveal before collapse; only a new
           expect.objectContaining({ part: 'result', status: 'complete' }),
         ]),
       });
-    await expect(row.locator('[data-transcript-find-match]')).toHaveText('NEEDLE');
+    await expect
+      .poll(() => readFindHighlight(page))
+      .toEqual([expect.objectContaining({ text: 'NEEDLE', part: 'result' })]);
     const next = await page.evaluate(
       () => window.demo.application.chat!.getSnapshot().transcript.find.active,
     );

@@ -12,6 +12,9 @@ export const chatManifestPageSize = 32;
 export const maximumChatFindQueryBytes = 1024;
 export const chatFindPageSize = 32;
 export const chatFindFeature = 'transcript-find-v1';
+/** Find's literal, case-insensitive Unicode matching rule. */
+export const getChatFindExpression = (query: string) =>
+  new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu');
 export type ChatTranscriptMatch = typeof Contracts.ChatTranscriptMatchSchema.Type;
 export const chatStreamFeature = 'chat-stream-v1';
 export type ChatStreamRequest = typeof Contracts.ChatStreamRequestSchema.Type;

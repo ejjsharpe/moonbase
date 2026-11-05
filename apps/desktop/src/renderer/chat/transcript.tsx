@@ -29,7 +29,7 @@ import type { TranscriptNative } from '../../chat/wire.ts';
 import { getTranscriptDisclosureId } from '../../chat/transcript-source.ts';
 import { Markdown, isReadingNodePinned } from './markdown.tsx';
 import { MarkdownCache } from './markdown-model.ts';
-import { activateChatFind } from './find.tsx';
+import { activateChatFind, locateFindRanges, paintFindRanges } from './find.tsx';
 import {
   collectActivityEvidence,
   getActivityState,
@@ -1105,13 +1105,27 @@ function Part({
   useEffect(() => {
     if (readable && (ordinary || expanded) && part.truncated && !content) load();
   }, [readable, ordinary, expanded, part.truncated, content, load]);
+  const base = content?.chunks[0]?.textOffset ?? 0;
+  const original = useMemo(() => {
+    if (content?.chunks.length) return decodeText(content);
+    return part.truncated ? '' : part.text;
+  }, [content, part]);
+  const matchedText =
+    match && match.start >= base ? original.slice(match.start - base, match.end - base) : null;
+  const expectedText = match?.snippet.text.slice(
+    match.start - match.snippet.start,
+    match.end - match.snippet.start,
+  );
+  const matchVisible = !!match && matchedText === expectedText;
+  // Preserve the reading body while Find hydrates; show the source once it contains the match.
+  const frozen = !!match && !(matchVisible && base === 0);
   const [reading, setReading] = useState({ revision: part.revision, text: part.text });
   const text = useMemo(() => {
     if (reading.revision !== part.revision) return part.text;
-    if (match) return reading.text;
-    return content?.chunks.length ? decodeText(content) : part.text;
-  }, [reading, part, match, content]);
-  if (reading.revision !== part.revision || (!match && text !== reading.text))
+    if (frozen) return reading.text;
+    return content?.chunks.length ? original : part.text;
+  }, [reading, part, frozen, content, original]);
+  if (reading.revision !== part.revision || (!frozen && text !== reading.text))
     setReading({ revision: part.revision, text });
   const complete =
     !part.truncated ||
@@ -1119,18 +1133,6 @@ function Part({
       content.retainedFrom === 0 &&
       content.loadedBytes === part.bytes &&
       (!match || text.length === content.loadedText));
-  // Preserve the reading body while Find hydrates its separate bounded source window.
-  const base = content?.chunks[0]?.textOffset ?? 0;
-  const window = match ? getMatchWindow(content, part, match.start, match.end) : null;
-  const matchedText =
-    match && window
-      ? window.text.slice(match.start - window.start, match.end - window.start)
-      : null;
-  const expectedText = match?.snippet.text.slice(
-    match.start - match.snippet.start,
-    match.end - match.snippet.start,
-  );
-  const matchVisible = !!match && matchedText === expectedText;
   useEffect(() => {
     if (
       !match ||
@@ -1154,15 +1156,6 @@ function Part({
     load,
     state.find.revealing,
   ]);
-  const mark = useRef<HTMLElement>(null);
-  useLayoutEffect(() => {
-    if (!state.find.revealing || !matchVisible || !mark.current) return;
-    const element = mark.current;
-    const scroller = element.closest<HTMLElement>('[aria-label="Chat transcript"]');
-    if (!scroller) return;
-    // Move only the transcript; keep the Find field and the reader's selection/focus intact.
-    scroller.scrollTop += element.getBoundingClientRect().top - getReadingTop(scroller) - 24;
-  }, [matchVisible, match, state.find.revealing]);
   const plain = !match && readable && !ordinary && !['patch', 'diff', 'image'].includes(part.kind);
   const currentBody = useMemo(
     () => ({
@@ -1191,6 +1184,54 @@ function Part({
     state.content,
   );
   const takeCopyBody = displayed.takeCopyBody;
+  const query = state.find.query,
+    revealing = state.find.revealing;
+  const findStarts = useMemo(() => {
+    const starts = state.find.matches
+      .filter((item) => sameSource({ source }, item) && item.partId === part.partId)
+      .map((item) => item.start)
+      .filter((start) => start !== match?.start);
+    return match ? [match.start, ...starts] : starts;
+  }, [state.find.matches, source, part.partId, match]);
+  const shown = plain ? displayed.body : { text, retainedFrom: content?.retainedFrom ?? 0 };
+  const rendered = useRef<HTMLDivElement>(null),
+    activeRange = useRef<Range | null>(null),
+    mark = useRef<HTMLElement>(null);
+  const [unlocated, setUnlocated] = useState<typeof match>(null);
+  useLayoutEffect(() => {
+    const root = rendered.current;
+    if (!root || !findStarts.length) return;
+    let clear = () => {};
+    const paint = () => {
+      clear();
+      // Rendered text can be mapped only when it renders the original source from its start.
+      const ranges =
+        frozen || shown.retainedFrom ? null : locateFindRanges(root, shown.text, query, findStarts);
+      const active = (match && ranges?.[0]) || null;
+      activeRange.current = active;
+      const others = ranges?.slice(match ? 1 : 0).filter((range) => !!range) ?? [];
+      const clearMatches = paintFindRanges('find-match', others),
+        clearActive = paintFindRanges('find-active', active ? [active] : []);
+      clear = () => {
+        clearMatches();
+        clearActive();
+      };
+      setUnlocated(match && !active ? match : null);
+    };
+    paint();
+    const observer = new MutationObserver(paint);
+    observer.observe(root, { childList: true, subtree: true, characterData: true });
+    return () => {
+      observer.disconnect();
+      clear();
+      activeRange.current = null;
+    };
+  }, [findStarts, frozen, shown.text, shown.retainedFrom, query, match, expanded]);
+  const excerpt = !!match && matchVisible && unlocated === match;
+  useLayoutEffect(() => {
+    const target = excerpt ? mark.current : activeRange.current;
+    if (revealing && target) scrollToReading(target);
+  }, [match, revealing, frozen, excerpt, expanded]);
   const copy = useCallback(
     (codeStart?: number) => {
       const body = takeCopyBody();
@@ -1250,7 +1291,9 @@ function Part({
   const retainedFrom = plain ? displayed.body.retainedFrom : (content?.retainedFrom ?? 0);
   const body = (
     <>
-      {presentation}
+      <div ref={rendered} {...stylex.props(styles.findable)}>
+        {presentation}
+      </div>
       {displayed.held && (
         <p role="status" {...stylex.props(styles.small)}>
           Showing previously read output. Copy uses this version; latest progress remains above.
@@ -1267,15 +1310,19 @@ function Part({
           Captured write content is in the arguments. No before/after diff was recorded here.
         </p>
       )}
-      {match && matchVisible && (
+      {excerpt && (
         <section aria-label="Matched original source">
           <p {...stylex.props(styles.small)}>Match in original source</p>
           <pre {...stylex.props(styles.literal)}>
-            {window!.text.slice(0, match.start - window!.start)}
+            {original
+              .slice(Math.max(0, match.start - base - 120), match.start - base)
+              .replace(/^[\udc00-\udfff]/, '')}
             <mark ref={mark} data-transcript-find-match {...stylex.props(styles.match)}>
               {matchedText}
             </mark>
-            {window!.text.slice(match.end - window!.start)}
+            {original
+              .slice(match.end - base, match.end - base + 120)
+              .replace(/[\ud800-\udbff]$/, '')}
           </pre>
         </section>
       )}
@@ -1377,6 +1424,21 @@ function getLiveIdentity(state: ChatState) {
     state.snapshot?.run?.transcript?.source ?? state.snapshot?.run?.stop ?? null,
   );
 }
+function scrollToReading(target: Range | HTMLElement) {
+  const start = target instanceof Range ? target.startContainer.parentElement : target;
+  const scroller = start?.closest<HTMLElement>('[aria-label="Chat transcript"]');
+  if (!scroller) return;
+  // Move only the transcript and scrolling output inside it; keep the Find field and the reader's
+  // selection/focus intact.
+  for (let element = start; element && element !== scroller; element = element.parentElement) {
+    if (!/auto|scroll/.test(getComputedStyle(element).overflow)) continue;
+    const box = element.getBoundingClientRect(),
+      rect = target.getBoundingClientRect();
+    element.scrollLeft += rect.left - box.left - element.clientWidth / 2;
+    element.scrollTop += rect.top - box.top - element.clientHeight / 2;
+  }
+  scroller.scrollTop += target.getBoundingClientRect().top - getReadingTop(scroller) - 24;
+}
 function getReadingTop(element: HTMLElement) {
   return Math.max(
     element.getBoundingClientRect().top,
@@ -1405,31 +1467,6 @@ const snapshotLabels = {
 };
 const sameSource = (a: { source: unknown }, b: { source: unknown }) =>
   JSON.stringify(a.source) === JSON.stringify(b.source);
-function getMatchWindow(
-  content: TranscriptContentState | undefined,
-  part: ChatTranscriptPart,
-  start: number,
-  end: number,
-) {
-  const chunks =
-    content?.chunks ??
-    (!part.truncated ? [{ textOffset: 0, data: part.text, encoding: 'utf8' }] : []);
-  const pieces = chunks.filter(
-    (chunk) =>
-      chunk.encoding === 'utf8' &&
-      (chunk.textOffset ?? 0) < end + 120 &&
-      (chunk.textOffset ?? 0) + chunk.data.length > Math.max(0, start - 120),
-  );
-  if (!pieces.length) return null;
-  const first = pieces[0]!.textOffset ?? 0;
-  const text = pieces.map((chunk) => chunk.data).join('');
-  if (start < first || end > first + text.length) return null;
-  let lo = Math.max(0, start - first - 120),
-    hi = Math.min(text.length, end - first + 120);
-  if (/[\udc00-\udfff]/.test(text[lo] ?? '')) lo--;
-  if (/[\udc00-\udfff]/.test(text[hi] ?? '')) hi--;
-  return { start: first + lo, text: text.slice(lo, hi) };
-}
 function decodeText(content: TranscriptContentState) {
   return content.chunks.map((chunk) => (chunk.encoding === 'utf8' ? chunk.data : '')).join('');
 }
@@ -1476,6 +1513,10 @@ const styles = stylex.create({
     borderRadius: radius.panel,
   },
   match: { backgroundColor: colors.selection, color: colors.text, fontWeight: 700 },
+  findable: {
+    '::highlight(find-match)': { backgroundColor: colors.selection, color: colors.text },
+    '::highlight(find-active)': { backgroundColor: colors.accent, color: colors.onAccent },
+  },
   disclosure: { minWidth: 0 },
   activity: { minWidth: 0, margin: '8px 0' },
   activityToggle: { textAlign: 'left', whiteSpace: 'normal' },

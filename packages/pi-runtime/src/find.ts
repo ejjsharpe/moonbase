@@ -3,6 +3,7 @@ import type { Harness } from '@earendil-works/pi-durable';
 import {
   maximumChatReplyBytes,
   chatFindPageSize,
+  getChatFindExpression,
   type ChatInput,
   type ChatOutput,
 } from '@moonbase/contracts/chat';
@@ -170,7 +171,7 @@ export async function findTranscript(
   let next = cursor ?? start;
   const startCursor = sealCursor(harness, start);
   const matches: ChatOutput<'findChatTranscript'>['matches'] = [];
-  const expression = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu');
+  const expression = getChatFindExpression(query);
   let rows = 0,
     examined = 0,
     parts = 0;

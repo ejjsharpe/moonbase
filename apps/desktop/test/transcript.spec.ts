@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { readFindHighlight } from './find-highlight.ts';
 const output = resolve('../../test-results/transcript-111');
 async function open(page: Page) {
   await page.goto('/?local&design&transcript');
@@ -1112,14 +1113,20 @@ test('Find reveals unloaded folded manifest parts and exact Unicode source while
   const find = page.getByRole('textbox', { name: 'Find in conversation', exact: true });
   await expect(find).toBeFocused();
   await find.fill('σNEEDLE [.*]');
-  const match = page.locator('[data-transcript-find-match]');
-  await expect(match).toHaveText('Σneedle [.*]');
-  await expect(match).toBeInViewport();
+  await expect
+    .poll(() => readFindHighlight(page))
+    .toEqual([
+      {
+        text: 'Σneedle [.*]',
+        entry: 'reading-0',
+        part: 'm0.b6',
+        before: 'xxxxxxxxxxxxx😀 ',
+        visible: true,
+      },
+    ]);
   await expect(find).toBeFocused();
   const row = page.locator('[data-transcript-entry="reading-0"]');
-  await expect(row.locator('[data-transcript-part="m0.b6"]')).toContainText(
-    'Match in original source',
-  );
+  await expect(row.getByRole('region', { name: 'Matched original source' })).toHaveCount(0);
   await expect(row.getByRole('button', { name: /^Thinking/ })).toHaveAttribute(
     'aria-expanded',
     'true',
@@ -1149,20 +1156,91 @@ test('Find next/previous reports completion and leaves composer shortcuts scoped
   const find = page.getByRole('textbox', { name: 'Find in conversation', exact: true });
   await find.fill('Saved answer');
   await expect(page.getByRole('status').filter({ hasText: /1 of 179 matches/ })).toBeVisible();
+  await expect
+    .poll(() => readFindHighlight(page))
+    .toEqual([
+      expect.objectContaining({ text: 'Saved answer', entry: 'reading-0', visible: true }),
+    ]);
   await find.press('Enter');
-  await expect(
-    page.locator('[data-transcript-entry="reading-1"] [data-transcript-find-match]'),
-  ).toHaveText('Saved answer');
+  await expect
+    .poll(() => readFindHighlight(page))
+    .toEqual([
+      expect.objectContaining({ text: 'Saved answer', entry: 'reading-1', visible: true }),
+    ]);
+  await expect(page.getByRole('status').filter({ hasText: /2 of 179 matches/ })).toBeVisible();
   await find.press('Shift+Enter');
-  await expect(
-    page.locator('[data-transcript-entry="reading-0"] [data-transcript-find-match]'),
-  ).toHaveText('Saved answer');
+  await expect
+    .poll(() => readFindHighlight(page))
+    .toEqual([expect.objectContaining({ text: 'Saved answer', entry: 'reading-0' })]);
+  await expect(page.getByRole('status').filter({ hasText: /1 of 179 matches/ })).toBeVisible();
+  await expect(page.locator('[data-transcript-find-match]')).toHaveCount(0);
   await expect(find).toBeFocused();
   await find.fill('nothing in this saved conversation');
   await expect(
     page.getByRole('status').filter({ hasText: 'No matches in the saved conversation.' }),
   ).toBeVisible();
   await find.press('Escape');
+});
+
+test('Find paints prose matches in the rendered message and clears them on close', async ({
+  page,
+}) => {
+  await open(page);
+  await page.evaluate(async () => {
+    await window.demo.transcript!.setEntry(0, [
+      'First **Needle** one, needle two.\n\nLast NEEDLE.',
+    ]);
+  });
+  await transcript(page).focus();
+  await page.keyboard.press('Control+f');
+  const find = page.getByRole('textbox', { name: 'Find in conversation', exact: true });
+  await find.fill('needle');
+  await expect(page.getByRole('status').filter({ hasText: /1 of 3 matches/ })).toBeVisible();
+  const painted = async () => ({
+    active: (await readFindHighlight(page)).map((range) => range.text + '@' + range.before),
+    matches: (await readFindHighlight(page, 'find-match')).map((range) => range.text).sort(),
+  });
+  await expect.poll(painted).toEqual({ active: ['Needle@'], matches: ['NEEDLE', 'needle'] });
+  await find.press('Enter');
+  await expect.poll(painted).toEqual({ active: ['needle@ one, '], matches: ['NEEDLE', 'Needle'] });
+  await expect(page.getByRole('status').filter({ hasText: /2 of 3 matches/ })).toBeVisible();
+  await find.press('Enter');
+  await expect.poll(painted).toEqual({ active: ['NEEDLE@Last '], matches: ['Needle', 'needle'] });
+  await find.press('Shift+Enter');
+  await expect.poll(painted).toEqual({ active: ['needle@ one, '], matches: ['NEEDLE', 'Needle'] });
+  const row = page.locator('[data-transcript-entry="reading-0"]');
+  await expect(row.getByRole('region', { name: 'Matched original source' })).toHaveCount(0);
+  await expect(row.locator('[data-transcript-part] strong')).toHaveText('Needle');
+  await find.press('Escape');
+  await expect(find).toHaveCount(0);
+  await expect.poll(painted).toEqual({ active: [], matches: [] });
+  expect(
+    await page.evaluate(() => [
+      CSS.highlights.has('find-active'),
+      CSS.highlights.has('find-match'),
+    ]),
+  ).toEqual([false, false]);
+});
+
+test('Find shows the original-source excerpt for a match inside a link URL', async ({ page }) => {
+  await open(page);
+  await page.evaluate(async () => {
+    await window.demo.transcript!.setEntry(0, ['See [docs](https://example.com/needle) here.']);
+  });
+  await transcript(page).focus();
+  await page.keyboard.press('Control+f');
+  const find = page.getByRole('textbox', { name: 'Find in conversation', exact: true });
+  await find.fill('needle');
+  const excerpt = page
+    .locator('[data-transcript-entry="reading-0"]')
+    .getByRole('region', { name: 'Matched original source' });
+  await expect(excerpt).toContainText('See [docs](https://example.com/needle) here.');
+  await expect(excerpt.locator('[data-transcript-find-match]')).toHaveText('needle');
+  await expect(excerpt.locator('[data-transcript-find-match]')).toBeInViewport();
+  expect(await readFindHighlight(page)).toEqual([]);
+  await expect(find).toBeFocused();
+  await find.press('Escape');
+  await expect(excerpt).toHaveCount(0);
 });
 
 test('Find highlights original text beyond the 8MiB cache and rereads evicted prefixes without changing query authority', async ({
@@ -1242,7 +1320,9 @@ test('Find highlights original text beyond the 8MiB cache and rereads evicted pr
       ),
     )
     .toBe(0);
-  await expect(page.locator('[data-transcript-find-match]')).toHaveText('NEEDLE');
+  await expect
+    .poll(() => readFindHighlight(page))
+    .toEqual([expect.objectContaining({ text: 'NEEDLE', before: 'early ', visible: true })]);
   await expect
     .poll(() =>
       page.evaluate(
@@ -1350,10 +1430,9 @@ test('Find respects explicit collapse until the active range changes in the same
   await find.focus();
   await find.press('Enter');
   await expect(thinking).toHaveAttribute('aria-expanded', 'true');
-  await expect(page.locator('[data-transcript-find-match]')).toHaveText('NEEDLE');
-  await expect(page.getByRole('region', { name: 'Matched original source' })).toContainText(
-    'second NEEDLE',
-  );
+  await expect
+    .poll(() => readFindHighlight(page))
+    .toEqual([expect.objectContaining({ text: 'NEEDLE', before: 'xxxxxxxx\nsecond ' })]);
   await expect(find).toBeFocused();
 });
 
@@ -1375,14 +1454,16 @@ test('Find Previous replays an evicted part manifest without changing its query 
   await page.keyboard.press('Control+f');
   const find = page.getByRole('textbox', { name: 'Find in conversation', exact: true });
   await find.fill('needle');
-  await expect(page.locator('[data-transcript-find-match]')).toHaveText('NEEDLE');
+  await expect
+    .poll(() => readFindHighlight(page))
+    .toEqual([expect.objectContaining({ text: 'NEEDLE', part: 'm0.b0' })]);
   const cutoff = await page.evaluate(
     () => window.demo.application.chat!.getSnapshot().transcript.find.upperEntryId,
   );
   await find.press('Enter');
-  await expect(
-    page.locator('[data-transcript-part="m0.b299"] [data-transcript-find-match]'),
-  ).toHaveText('NEEDLE');
+  await expect
+    .poll(() => readFindHighlight(page))
+    .toEqual([expect.objectContaining({ text: 'NEEDLE', part: 'm0.b299' })]);
   await expect
     .poll(() =>
       page.evaluate(
@@ -1391,9 +1472,9 @@ test('Find Previous replays an evicted part manifest without changing its query 
     )
     .toBeGreaterThan(0);
   await find.press('Shift+Enter');
-  await expect(
-    page.locator('[data-transcript-part="m0.b0"] [data-transcript-find-match]'),
-  ).toHaveText('NEEDLE');
+  await expect
+    .poll(() => readFindHighlight(page))
+    .toEqual([expect.objectContaining({ text: 'NEEDLE', part: 'm0.b0' })]);
   expect(
     await page.evaluate(
       () => window.demo.application.chat!.getSnapshot().transcript.find.upperEntryId,
@@ -1528,9 +1609,11 @@ for (const late of ['reply', 'error'] as const)
         )
         .toBeGreaterThan(1);
       await expect(thinking).toHaveAttribute('aria-expanded', 'true');
-      const mark = row.locator('[data-transcript-find-match]');
-      await expect(mark).toHaveText('NEEDLE');
-      await expect(mark).toBeInViewport();
+      await expect
+        .poll(() => readFindHighlight(page))
+        .toEqual([
+          expect.objectContaining({ text: 'NEEDLE', before: 'EDLE and second ', visible: true }),
+        ]);
       await expect(find).toBeFocused();
       const second = await page.evaluate(
         () => window.demo.application.chat!.getSnapshot().transcript.find.active,
@@ -1655,7 +1738,9 @@ for (const activation of ['Control+f', 'Meta+f', 'Find button'])
     const field = page.getByRole('textbox', { name: 'Find in conversation', exact: true });
     await expect(field).toBeFocused();
     await field.fill('Saved answer 0');
-    await expect(page.locator('[data-transcript-find-match]')).toHaveText('Saved answer 0');
+    await expect
+      .poll(() => readFindHighlight(page))
+      .toEqual([expect.objectContaining({ text: 'Saved answer 0', entry: 'reading-0' })]);
     await region.focus();
     await page.keyboard.press('PageDown');
     await expect(region).toBeFocused();
