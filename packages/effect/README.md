@@ -1,12 +1,10 @@
-# Focused Effect helpers
+# Effect helpers
 
-`@moonbase/effect` owns three existing portable helpers used by application, workspace, Pi and SSH. It depends only on independent contracts and Effect; it creates no runtime or scheduler.
+`@moonbase/effect` holds small Effect helpers shared by application, workspace, Pi and SSH:
 
-- `safeApplicationFailure(value, fallback)` preserves an owner-authored branded error, otherwise returns a fixed safe `Unavailable` diagnostic.
-- `normalizeApplicationError(value)` uses the existing `Application effect failed` fallback without inspecting unknown diagnostics.
-- `releaseResource(release)` awaits actual cleanup and makes a redacted cleanup failure observable as an Effect defect. Typed owner errors retain their safe diagnostics.
-
-Runtime-bound invocation/observation remains application behavior. This package contains no general utilities, backend implementations or authority. Its four existing consumers justify this shared ownership without service-to-application back edges.
+- `safeApplicationFailure(value, fallback)` keeps an owner-authored `ApplicationError`, otherwise returns a safe `Unavailable` error.
+- `normalizeApplicationError(value)` does the same with a fixed fallback message, without exposing unknown diagnostics.
+- `releaseResource(release)` awaits cleanup and surfaces a redacted cleanup failure as an Effect defect.
 
 ```sh
 bun run --cwd packages/effect typecheck
