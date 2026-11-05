@@ -446,7 +446,10 @@ class ChatModelState {
         const outcomes = yield* Effect.promise(() =>
           Promise.all(
             [...this.observations]
-              .filter((observation) => observation.generation === generation)
+              .filter(
+                (observation) =>
+                  observation.generation !== undefined && observation.generation === generation,
+              )
               .map((observation) => this.closeObservation(observation)),
           ),
         );
@@ -1031,8 +1034,8 @@ class ChatModelState {
     const owner = this.attachment;
     void this.selection?.transcript?.close();
     if (!owner) return this.detaching ?? Promise.resolve();
+    this.detaching = this.closeOwner(owner);
     this.attachment = undefined;
-    this.generation = undefined;
     this.selection = undefined;
     this.refreshOwner = undefined;
     this.update({
@@ -1041,7 +1044,7 @@ class ChatModelState {
       host: null,
       ready: false,
     });
-    return (this.detaching = this.closeOwner(owner));
+    return this.detaching;
   }
   private beginDisposal() {
     if (this.closed) return;
