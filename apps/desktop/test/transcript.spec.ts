@@ -1847,3 +1847,39 @@ for (const activation of ['Control+f', 'Meta+f', 'Find button'])
       await expect(field).toHaveValue('Saved answer 0x');
     }
   });
+test('the reading position and its view memory survive content growing above it', async ({
+  page,
+}) => {
+  await open(page);
+  await transcript(page).hover();
+  await page.mouse.wheel(0, -600);
+  let previousTop = -1;
+  await expect
+    .poll(async () => {
+      const top = await transcript(page).evaluate((element) => element.scrollTop);
+      const settled = top === previousTop;
+      previousTop = top;
+      return settled;
+    })
+    .toBe(true);
+  const top = () => answer(page).evaluate((row) => row.getBoundingClientRect().top);
+  const before = await top();
+  const anchor = await page.evaluate(
+    () => window.demo.application.chat!.getSnapshot().transcript.view.anchor,
+  );
+  expect(anchor?.entryId).toBeTruthy();
+  // Hydration, unfolding or an image load above the viewport grows an earlier row.
+  await page.locator('[data-transcript-entry="reading-170"]').evaluate((row) => {
+    row.style.paddingTop = '600px';
+  });
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
+  expect(Math.abs((await top()) - before)).toBeLessThan(1);
+  expect(
+    await page.evaluate(() => window.demo.application.chat!.getSnapshot().transcript.view.anchor),
+  ).toEqual(anchor);
+});
