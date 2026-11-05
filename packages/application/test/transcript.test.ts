@@ -1367,3 +1367,41 @@ test('later navigation at the cached newer edge should advance the visible windo
     }
   }
 });
+
+for (const outcome of ['success', 'error'] as const)
+  test(`new view capture fences held startup restoration ${outcome}`, async (t) => {
+    const f = await transcriptController(t, 640);
+    f.controller.setTranscriptView({ anchor: { entryId: 'e100', offset: -4 }, expanded: [] });
+    await f.controller.detach();
+    const entered = Promise.withResolvers<void>(),
+      held = Promise.withResolvers<void>();
+    let signal: AbortSignal | undefined;
+    f.handlers.set('getChatHistoryAround', async (_input, abort, fallback) => {
+      signal = abort;
+      const reply = fallback();
+      entered.resolve();
+      await held.promise;
+      if (outcome === 'error')
+        throw new ApplicationError({ code: 'Unavailable', message: 'obsolete restore failed' });
+      return reply;
+    });
+    try {
+      const starting = f.controller.start();
+      await entered.promise;
+      const before = f.controller.getSnapshot().transcript.entries;
+      assert(before.some((entry) => entry.id === 'e620'));
+      const view = { anchor: { entryId: 'e620', offset: -21 }, expanded: ['new'] };
+      f.controller.setTranscriptView(view);
+      assert.equal(signal?.aborted, true);
+      held.resolve();
+      await starting;
+      await tick();
+      const after = f.controller.getSnapshot().transcript;
+      assert.deepEqual(after.entries, before);
+      assert.deepEqual(after.view, view);
+      assert.equal(after.loading, false);
+      assert.equal(after.error, null);
+    } finally {
+      held.resolve();
+    }
+  });

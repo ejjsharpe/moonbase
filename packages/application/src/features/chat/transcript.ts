@@ -165,6 +165,7 @@ export class TranscriptOwner {
   private newerEnd = true;
   private following = true;
   private restorePending = true;
+  private restoringView = false;
   private alive = true;
   private failed = false;
   private lifetime = new AbortController();
@@ -531,7 +532,18 @@ export class TranscriptOwner {
     this.restorePending = false;
     const anchor = this.state.view.anchor;
     // View memory is a location hint; only content reads need source proofs.
-    return anchor && !anchor.source ? this.around(anchor.entryId, false) : Promise.resolve();
+    if (!anchor || anchor.source) return Promise.resolve();
+    this.restoringView = true;
+    return this.around(anchor.entryId, false).finally(() => {
+      this.restoringView = false;
+    });
+  }
+  private cancelViewRestore() {
+    if (!this.restoringView) return;
+    this.restoringView = false;
+    this.jobs.get('history')?.abort.abort();
+    this.jobs.delete('history');
+    this.state = { ...this.state, loading: false };
   }
   private run(name: string, work: (signal: AbortSignal) => Promise<void>) {
     if (!this.current()) return Promise.resolve();
@@ -570,8 +582,9 @@ export class TranscriptOwner {
   later = () => this.move('later');
   private move(direction: 'earlier' | 'later') {
     const pending = this.jobs.get('history');
-    if (pending) return pending.promise;
-    if (!this.current() || !this.state[direction]) return Promise.resolve();
+    if (pending && !this.restoringView) return pending.promise;
+    if (!this.current() || !this.state[direction]) return pending?.promise ?? Promise.resolve();
+    this.cancelViewRestore();
     this.restorePending = false;
     // Freeze the reading window before loading can notify a subscriber.
     this.following = false;
@@ -662,7 +675,10 @@ export class TranscriptOwner {
         : 0;
   }
   around(entryId: string, resetView = true) {
-    if (resetView) this.restorePending = false;
+    if (resetView) {
+      this.restorePending = false;
+      this.restoringView = false;
+    }
     this.following = false;
     this.jobs.get('history')?.abort.abort();
     this.jobs.delete('history');
@@ -682,6 +698,7 @@ export class TranscriptOwner {
     });
   }
   latest = () => {
+    this.restoringView = false;
     this.restorePending = false;
     this.jobs.get('history')?.abort.abort();
     this.jobs.delete('history');
@@ -731,6 +748,7 @@ export class TranscriptOwner {
       this.dependencies.target,
       view,
     );
+    this.cancelViewRestore();
     this.restorePending = false;
     this.rememberView(captured);
     if (captured.anchor) this.following = !!captured.anchor.source;
