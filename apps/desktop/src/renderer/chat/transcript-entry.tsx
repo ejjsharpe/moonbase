@@ -411,6 +411,13 @@ const Part = memo(
     });
     const plain =
       !match && readable && !ordinary && !['patch', 'diff', 'image'].includes(part.kind);
+    // Folded code and other patch pages reveal the active match once its source is shown.
+    const findStart = match && matchVisible && !frozen ? match.start : null,
+      findEnd = match?.end ?? 0;
+    const findTarget = useMemo(
+      () => (findStart === null ? null : { start: findStart, end: findEnd }),
+      [findStart, findEnd],
+    );
     const currentBody = useMemo(
       () => ({
         source,
@@ -508,11 +515,17 @@ const Part = memo(
             copyCode={
               content?.retainedFrom === 0 || (!content && !part.truncated) ? copy : undefined
             }
+            findTarget={findTarget}
           />
         );
       if (part.kind === 'patch' || part.kind === 'diff')
         presentation = (
-          <RecordedPatch text={text} complete={complete} numbered={part.kind === 'diff'} />
+          <RecordedPatch
+            text={text}
+            complete={complete}
+            numbered={part.kind === 'diff'}
+            findStart={findStart}
+          />
         );
     }
     const retainedFrom = plain ? displayed.body.retainedFrom : (content?.retainedFrom ?? 0);

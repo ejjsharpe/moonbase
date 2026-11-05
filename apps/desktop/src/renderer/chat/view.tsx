@@ -1,4 +1,4 @@
-import { useState, useSyncExternalStore } from 'react';
+import { useRef, useState, useSyncExternalStore } from 'react';
 import { Dialog } from '@base-ui/react/dialog';
 import { Button } from '@base-ui/react/button';
 import * as stylex from '@stylexjs/stylex';
@@ -7,7 +7,7 @@ import { workbench } from '@moonbase/ui/workbench';
 import { colors, layout, radius, space, type } from '@moonbase/ui/tokens.stylex';
 import type { ChatModelPreference } from '@moonbase/contracts/chat';
 import type { ChatController } from '@moonbase/application/chat';
-import { FindBar, openChatFind } from './find.tsx';
+import { FindBar, handleChatFindKeyDown } from './find.tsx';
 import { Transcript } from './transcript.tsx';
 import type { TranscriptNative } from '../../chat/wire.ts';
 import { ProviderSetup } from './setup.tsx';
@@ -30,6 +30,7 @@ export function ChatView({
 }) {
   const compact = useSyncExternalStore(subscribeLayout, () => compactLayout.matches);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const findInput = useRef<HTMLInputElement>(null);
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot),
     [cwd, setCwd] = useState(''),
     [folderError, setFolderError] = useState<string | null>(null);
@@ -220,13 +221,13 @@ export function ChatView({
   return (
     <div
       data-chat-find-owner={JSON.stringify([controller.backendId, state.selected])}
-      onKeyDown={(event) => openChatFind(event, controller)}
+      onKeyDown={(event) => handleChatFindKeyDown(event, controller, findInput)}
       {...stylex.props(workbench.page, styles.page)}>
       <div {...stylex.props(styles.workspace, !compact && styles.expandedWorkspace)}>
         {!compact && sidebar}
         <main aria-label="Agent workspace" {...stylex.props(styles.content)}>
           {state.transcript.find.open && (
-            <FindBar controller={controller} state={state.transcript.find} />
+            <FindBar controller={controller} state={state.transcript.find} input={findInput} />
           )}
           <header
             {...stylex.props(styles.context, !state.selected && !compact && styles.newChatContext)}>
@@ -359,6 +360,7 @@ export function ChatView({
               controller={controller}
               state={state}
               native={transcriptNative}
+              findInput={findInput}
             />
           )}
           <div {...stylex.props(styles.composeArea, !state.selected && styles.starter)}>

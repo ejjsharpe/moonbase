@@ -4,6 +4,7 @@ import * as stylex from '@stylexjs/stylex';
 import { colors, radius, space, type } from '@moonbase/ui/tokens.stylex';
 import { controls } from '@moonbase/ui/controls';
 import { parseRecordedPatch, type PatchLine } from './recorded-patch.ts';
+import { getFindSourceProps } from './part-find.tsx';
 
 /** Characters of unparsed source shown per page. */
 const sourcePageUnits = 16000;
@@ -12,10 +13,13 @@ export function RecordedPatch({
   text,
   complete,
   numbered = false,
+  findStart = null,
 }: {
   text: string;
   complete: boolean;
   numbered?: boolean;
+  /** The active Find match's source offset. */
+  findStart?: number | null;
 }) {
   const parsed = useMemo(
     () =>
@@ -25,6 +29,13 @@ export function RecordedPatch({
     [text, complete, numbered],
   );
   const [page, setPage] = useState(0);
+  const [revealed, setRevealed] = useState<number | null>(null);
+  // A newly active Find match turns to its source page once.
+  if (findStart !== revealed) {
+    setRevealed(findStart);
+    if (findStart !== null && findStart < text.length)
+      setPage(Math.floor(findStart / sourcePageUnits));
+  }
   const lastPage = Math.max(0, Math.ceil(text.length / sourcePageUnits) - 1);
   let start = Math.min(page, lastPage) * sourcePageUnits;
   let end = Math.min(start + sourcePageUnits, text.length);
@@ -32,11 +43,15 @@ export function RecordedPatch({
   if (text.charCodeAt(end) >= 0xdc00 && text.charCodeAt(end) <= 0xdfff) end++;
   return (
     <>
-      <p {...stylex.props(styles.caption)}>Historical record · read only</p>
+      <p data-find-ignore {...stylex.props(styles.caption)}>
+        Historical record · read only
+      </p>
       {'fallback' in parsed ? (
         <>
-          <p {...stylex.props(styles.caption)}>{parsed.fallback}</p>
-          <pre tabIndex={0} {...stylex.props(styles.source)}>
+          <p data-find-ignore {...stylex.props(styles.caption)}>
+            {parsed.fallback}
+          </p>
+          <pre tabIndex={0} {...getFindSourceProps(start, end)} {...stylex.props(styles.source)}>
             {text.slice(start, end)}
           </pre>
           {text.length > sourcePageUnits && (
@@ -47,7 +62,7 @@ export function RecordedPatch({
                 onClick={() => setPage(Math.max(0, page - 1))}>
                 Previous source
               </Button>
-              <span {...stylex.props(styles.caption)}>
+              <span data-find-ignore {...stylex.props(styles.caption)}>
                 Source {start.toLocaleString()}–{end.toLocaleString()} of{' '}
                 {text.length.toLocaleString()} characters · Copy reads the complete source
               </span>
@@ -63,7 +78,7 @@ export function RecordedPatch({
       ) : (
         parsed.files.map((file, index) => (
           <div key={index}>
-            <p {...stylex.props(styles.caption)}>
+            <p data-find-ignore {...stylex.props(styles.caption)}>
               {file.old} → {file.next}
             </p>
             <div
@@ -72,7 +87,7 @@ export function RecordedPatch({
               aria-label="Recorded unified patch"
               {...stylex.props(styles.source)}>
               <table {...stylex.props(styles.table)}>
-                <thead>
+                <thead data-find-ignore>
                   <tr>
                     <th>Old</th>
                     <th>New</th>
@@ -96,7 +111,7 @@ function Hunk({ hunk }: { hunk: { old: number; next: number; lines: PatchLine[] 
   return (
     <>
       <tr>
-        <td colSpan={3} {...stylex.props(styles.caption)}>
+        <td colSpan={3} data-find-ignore {...stylex.props(styles.caption)}>
           Hunk · old {hunk.old}, new {hunk.next}
         </td>
       </tr>
@@ -107,9 +122,19 @@ function Hunk({ hunk }: { hunk: { old: number; next: number; lines: PatchLine[] 
             line.kind === 'added' && styles.added,
             line.kind === 'removed' && styles.removed,
           )}>
-          <td {...stylex.props(styles.number)}>{line.old}</td>
-          <td {...stylex.props(styles.number)}>{line.next}</td>
-          <td {...stylex.props(styles.line)}>{line.text}</td>
+          <td data-find-ignore {...stylex.props(styles.number)}>
+            {line.old}
+          </td>
+          <td data-find-ignore {...stylex.props(styles.number)}>
+            {line.next}
+          </td>
+          <td
+            {...(line.start === undefined
+              ? {}
+              : getFindSourceProps(line.start, line.start + line.text.length))}
+            {...stylex.props(styles.line)}>
+            {line.text}
+          </td>
         </tr>
       ))}
     </>

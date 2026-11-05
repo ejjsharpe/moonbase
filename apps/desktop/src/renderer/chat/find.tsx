@@ -1,13 +1,17 @@
-import { useEffect, useRef, type KeyboardEvent } from 'react';
+import { useEffect, useRef, type KeyboardEvent, type RefObject } from 'react';
 import { Button } from '@base-ui/react/button';
 import { Input } from '@base-ui/react/input';
 import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
 import { colors, space, type } from '@moonbase/ui/tokens.stylex';
 import type { ChatController, TranscriptFindState } from '@moonbase/application/chat';
-import { getChatFindExpression } from '@moonbase/contracts/chat';
 
-export function activateChatFind(controller: ChatController, element: Element) {
+/** Opens Find for the conversation `element` belongs to, and focuses an already open field. */
+export function activateChatFind(
+  controller: ChatController,
+  element: Element,
+  input: RefObject<HTMLInputElement | null>,
+) {
   const owner = element.closest<HTMLElement>('[data-chat-find-owner]');
   const selected = controller.getSnapshot().selected;
   const identity = JSON.stringify([controller.backendId, selected]);
@@ -19,85 +23,64 @@ export function activateChatFind(controller: ChatController, element: Element) {
     JSON.stringify([controller.backendId, current.selected]) !== identity
   )
     return;
-  owner
-    .querySelector<HTMLInputElement>('input[aria-label="Find in conversation"]')
-    ?.focus({ preventScroll: true });
+  // A newly opened bar focuses its own field when it mounts.
+  input.current?.focus({ preventScroll: true });
 }
-export function openChatFind(event: KeyboardEvent, controller: ChatController) {
-  if (event.key === 'Escape' && controller.getSnapshot().transcript.find.open) {
+/** Cmd/Ctrl+F by the layout's letter, or by the physical F key when the layout's isn't Latin. */
+function isFindShortcut(event: KeyboardEvent) {
+  if (!(event.metaKey || event.ctrlKey) || event.altKey) return false;
+  return /^[a-z]$/i.test(event.key) ? event.key.toLowerCase() === 'f' : event.code === 'KeyF';
+}
+/**
+ * Chat's own Find keys: Cmd/Ctrl+F opens Find unless a text field has focus, and Escape closes it.
+ * Keys something else already handled, and keys from portalled overlays such as the image viewer
+ * (React bubbles them through Chat, but they are not in its DOM), are left alone.
+ */
+export function handleChatFindKeyDown(
+  event: KeyboardEvent<HTMLElement>,
+  controller: ChatController,
+  input: RefObject<HTMLInputElement | null>,
+) {
+  const target = event.target;
+  if (
+    event.defaultPrevented ||
+    !(target instanceof Element) ||
+    !event.currentTarget.contains(target) ||
+    target.closest('[role="dialog"]')
+  )
+    return;
+  if (event.key === 'Escape') {
+    if (!controller.getSnapshot().transcript.find.open) return;
     event.preventDefault();
     event.stopPropagation();
     controller.closeFind();
     return;
   }
+  if (!isFindShortcut(event)) return;
   if (
-    event.defaultPrevented ||
-    !(event.metaKey || event.ctrlKey) ||
-    event.altKey ||
-    event.key.toLowerCase() !== 'f'
+    target.closest('input, textarea, select') ||
+    (target instanceof HTMLElement && target.isContentEditable)
   )
     return;
-  const target = event.target as HTMLElement;
-  if (target.closest('input, textarea, [contenteditable="true"]')) return;
   if (!controller.getSnapshot().selected) return;
   event.preventDefault();
   event.stopPropagation();
-  activateChatFind(controller, event.currentTarget);
-}
-/**
- * Maps original-source match starts to the same occurrence in root's rendered text. Returns null
- * when the rendered text has a different number of occurrences than source, so no mapping is safe.
- */
-export function locateFindRanges(root: Node, source: string, query: string, starts: number[]) {
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-    acceptNode: (node) =>
-      node.parentElement?.closest('button') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
-  });
-  const nodes: { node: Node; start: number }[] = [];
-  let text = '';
-  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    nodes.push({ node, start: text.length });
-    text += node.nodeValue;
-  }
-  const expected = [...source.matchAll(getChatFindExpression(query))].map((hit) => hit.index),
-    rendered = [...text.matchAll(getChatFindExpression(query))];
-  if (expected.length !== rendered.length) return null;
-  return starts.map((start) => {
-    const hit = rendered[expected.indexOf(start)];
-    if (!hit) return null;
-    const end = hit.index + hit[0].length;
-    const first = nodes.findLast((item) => item.start <= hit.index)!,
-      last = nodes.findLast((item) => item.start < end)!;
-    const range = document.createRange();
-    range.setStart(first.node, hit.index - first.start);
-    range.setEnd(last.node, end - last.start);
-    return range;
-  });
-}
-/** Adds ranges to the named CSS custom highlight until the returned cleanup runs. */
-export function paintFindRanges(name: 'find-match' | 'find-active', ranges: Range[]) {
-  if (!ranges.length) return () => {};
-  const highlight = CSS.highlights.get(name) ?? new Highlight();
-  highlight.priority = name === 'find-active' ? 1 : 0;
-  CSS.highlights.set(name, highlight);
-  for (const range of ranges) highlight.add(range);
-  return () => {
-    for (const range of ranges) highlight.delete(range);
-    if (!highlight.size && CSS.highlights.get(name) === highlight) CSS.highlights.delete(name);
-  };
+  activateChatFind(controller, event.currentTarget, input);
 }
 export function FindBar({
   controller,
   state,
+  input,
 }: {
   controller: ChatController;
   state: TranscriptFindState;
+  /** Holds the field, so a repeated Find request can focus it. */
+  input: RefObject<HTMLInputElement | null>;
 }) {
-  const input = useRef<HTMLInputElement>(null);
   const previousFocus = useRef(document.activeElement);
   useEffect(() => {
     input.current?.focus({ preventScroll: true });
-  }, []);
+  }, [input]);
   const close = () => {
     controller.closeFind();
     if (previousFocus.current instanceof HTMLElement && previousFocus.current.isConnected)
@@ -122,7 +105,12 @@ export function FindBar({
           event.stopPropagation();
           close();
         }
-        if (event.key === 'Enter') {
+        // Enter on a button presses that button.
+        if (
+          event.key === 'Enter' &&
+          event.target === input.current &&
+          !event.nativeEvent.isComposing
+        ) {
           event.preventDefault();
           event.stopPropagation();
           void (event.shiftKey ? controller.previousFindMatch() : controller.nextFindMatch());

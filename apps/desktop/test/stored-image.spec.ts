@@ -209,6 +209,29 @@ test('unsupported, missing and oversized images stay explicit without a request;
     await expect(alert).toContainText('Could not load this stored image');
   }
 });
+test('with Find open, the image viewer keeps Find keys: Escape closes it first and Find stays open', async ({
+  page,
+}) => {
+  await open(page);
+  await page.getByRole('button', { name: 'Find', exact: true }).click();
+  const find = page.getByRole('textbox', { name: 'Find in conversation', exact: true });
+  await expect(find).toBeFocused();
+  const trigger = page.getByRole('button', { name: 'View stored image', exact: true });
+  await trigger.click();
+  const dialog = page.getByRole('dialog', { name: 'Stored image', exact: true });
+  const close = dialog.getByRole('button', { name: 'Close image viewer' });
+  await expect(close).toBeFocused();
+  // The modal viewer is portalled out of Chat; Find must not take focus from behind it.
+  await page.keyboard.press('Control+f');
+  await expect(close).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  await expect(find).toBeVisible();
+  await expect(trigger).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(find).toHaveCount(0);
+});
+
 test('replacing the transcript closes an open viewer and returns focus to the transcript', async ({
   page,
 }) => {
