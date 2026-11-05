@@ -2,6 +2,7 @@
 import { hostControl } from './host-control.mjs';
 import {
   seedTranscriptHistory,
+  seedTranscriptLongText,
   instrumentTranscriptReads,
 } from '../../packages/pi-runtime/test/transcript-history-fixture.ts';
 import { readFileSync } from 'node:fs';
@@ -18,7 +19,7 @@ const config = JSON.parse(readFileSync(process.argv[2], 'utf8'));
 const faux = fauxProvider({ tokensPerSecond: 100000 }),
   models = createModels();
 models.setProvider(faux.provider);
-let reads, harness, seeded;
+let reads, harness, seeded, longSeeded;
 const open = Harness.open;
 Harness.open = async (...args) => {
   harness = await open(...args);
@@ -39,6 +40,10 @@ const advance = (message) => {
   if (message?.type === 'seed-history')
     void seedTranscriptHistory(harness, message.target).then((ids) => {
       seeded = { target: message.target, ids };
+    });
+  if (message?.type === 'seed-long-text')
+    void seedTranscriptLongText(harness, message.target).then((record) => {
+      longSeeded = { target: message.target, ...record };
     });
 };
 process.on('message', advance);
@@ -92,7 +97,7 @@ const runtime = ManagedRuntime.make(
 const client = makeChatClient(runtime);
 const { bound, ended, close } = hostControl(
   client,
-  () => ({ calls: invocations, tools: 0, reads: { ...reads }, seeded }),
+  () => ({ calls: invocations, tools: 0, reads: { ...reads }, seeded, longSeeded }),
   () => {
     release?.();
     progress.resolve();

@@ -14,6 +14,7 @@ import { controlledHostFixture, until } from './fixture.ts';
 import {
   instrumentTranscriptReads,
   seedTranscriptHistory,
+  seedTranscriptLongText,
 } from '../../packages/pi-runtime/test/transcript-history-fixture.ts';
 
 for (const mode of ['local', 'remote'] as const)
@@ -185,6 +186,86 @@ for (const mode of ['local', 'remote'] as const)
         entryId: ids[561],
       }),
     );
+    const long = remote
+      ? await remote.seedLongText(target)
+      : await seedTranscriptLongText(harness, target);
+    const started = performance.now();
+    await until(
+      async () => controller.getSnapshot(),
+      (state) => state.snapshot?.transcriptBoundary === long.entryId,
+    );
+    await controller.findTranscript('needle');
+    await controller.nextFindMatch();
+    await until(
+      async () => controller.getSnapshot().transcript,
+      (state) => state.view.anchor?.entryId === long.entryId,
+    );
+    const row = controller
+      .getSnapshot()
+      .transcript.entries.find((entry) => entry.id === long.entryId)!;
+    const source = row.transcript!.source,
+      part = row.transcript!.parts[0];
+    const selection = { partId: part.partId, bytes: part.bytes, revision: part.revision };
+    assert.equal(part.bytes, long.bytes);
+    const content = () =>
+      controller
+        .getSnapshot()
+        .transcript.content.find(
+          (item) => item.source.kind === 'entry' && item.source.entryId === long.entryId,
+        );
+    let peak = 0,
+      chunks = 0;
+    while ((content()?.loadedText ?? 0) < long.late + 6) {
+      const before = content()?.loadedBytes ?? 0;
+      await controller.loadTranscriptPart(source, selection);
+      assert.equal(content()?.error, null);
+      assert(content()!.loadedBytes > before);
+      peak = Math.max(peak, controller.getSnapshot().transcript.retained.contentBytes);
+      assert(peak <= 8 * 1024 * 1024);
+      chunks++;
+    }
+    const tail = content()!,
+      near = controller.getSnapshot().transcript.find;
+    assert.equal(near.error, null);
+    assert.equal(near.count, 2);
+    assert.equal(near.active?.start, long.late);
+    assert.equal(near.upperEntryId, long.entryId);
+    const retainedUTF16Base = tail.chunks[0].textOffset;
+    assert(tail.retainedFrom > 0 && retainedUTF16Base !== undefined && retainedUTF16Base > 0);
+    const marked = tail.chunks.find(
+      (chunk) =>
+        chunk.textOffset !== undefined &&
+        chunk.textOffset <= long.late &&
+        chunk.textOffset + chunk.data.length >= long.late + 6,
+    );
+    assert(marked && marked.textOffset !== undefined);
+    assert.equal(
+      marked.data.slice(long.late - marked.textOffset, long.late - marked.textOffset + 6),
+      'NEEDLE',
+    );
+    await controller.previousFindMatch();
+    const beforePrefix = await counters();
+    await controller.loadTranscriptPart(source, selection, true);
+    const afterPrefix = await counters();
+    assert(
+      afterPrefix.entries > beforePrefix.entries,
+      'Previous actually rereads the evicted SDK prefix',
+    );
+    assert.equal(content()!.retainedFrom, 0);
+    assert.equal(content()!.chunks[0].textOffset, 0);
+    assert(content()!.chunks[0].data.startsWith('early NEEDLE 😀\r\n'));
+    assert.equal(controller.getSnapshot().transcript.find.active?.start, 6);
+    assert.equal(controller.getSnapshot().transcript.find.upperEntryId, near.upperEntryId);
+    work.push({
+      longFind: long,
+      chunks,
+      peakSerializedCache: peak,
+      retainedByteBase: tail.retainedFrom,
+      retainedUTF16Base,
+      previousRereadEntries: afterPrefix.entries - beforePrefix.entries,
+      milliseconds: performance.now() - started,
+    });
+    controller.closeFind();
     await mkdir('test-results/qualification-116', { recursive: true });
     await writeFile(
       `test-results/qualification-116/around-${mode}.json`,
@@ -201,6 +282,7 @@ for (const mode of ['local', 'remote'] as const)
       ),
     );
     assert(!JSON.stringify(saved).includes('qualification record'));
+    assert(!JSON.stringify(saved).includes('NEEDLE'));
     if (remote)
       assert(
         !(await remote.stats()).commands.some((command) =>
