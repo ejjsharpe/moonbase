@@ -217,21 +217,18 @@ export const ChatSnapshotSchema = struct({
   transcriptBoundary: optional(Schema.NullOr(ChatIdentifierSchema)),
   observationStatus: optional(Schema.Literals(['connected', 'reconnecting'])),
 });
-/** Error codes a chat host may sign; a stream never carries a mutation's `Uncertain` outcome. */
-export const chatReplyErrorCodes = [
+/** Error codes a chat stream may sign; a stream never carries a mutation's `Uncertain` outcome. */
+const chatStreamErrorCodes = [
   'InvalidInput',
   'Unauthorized',
   'Incompatible',
   'Conflict',
   'Persistence',
-  'Uncertain',
   'Unavailable',
   'Cancelled',
 ] as const;
-export const chatStreamErrorCodes = chatReplyErrorCodes.filter(
-  (code): code is Exclude<(typeof chatReplyErrorCodes)[number], 'Uncertain'> =>
-    code !== 'Uncertain',
-);
+/** Error codes a chat host may sign in an RPC reply. */
+export const chatReplyErrorCodes = [...chatStreamErrorCodes, 'Uncertain'] as const;
 // Network-only envelopes; ordinary snapshots/IPC remain browser-safe replacements.
 export const ChatStreamRequestSchema = struct({
   target: ChatTargetSchema,

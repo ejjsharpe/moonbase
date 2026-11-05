@@ -4,18 +4,12 @@ import { releaseResource } from '@moonbase/effect';
 
 import { ApplicationError } from '@moonbase/contracts/workspace';
 export { maximumChatRequestBytes, maximumChatReplyBytes } from '@moonbase/contracts/chat';
-import type { ChatCommand } from '@moonbase/contracts/chat';
 import { chatReplyErrorCodes } from '@moonbase/contracts/chat-schema';
 import type { ChatHostEndpoint } from '@moonbase/contracts/services';
 import { fail } from './validation.ts';
 
 /** Bounds one RPC exchange: its challenge grant, request body read and whole client call. */
 export const requestDeadlineMs = 20000;
-/** Reads a caller may abandon; every other command runs to completion once dispatched. */
-export const isCancellableRead = (operation: ChatCommand) =>
-  operation === 'getChatTranscriptContent' ||
-  operation === 'getChatHistoryAround' ||
-  operation === 'findChatTranscript';
 
 export const nonce = () => randomBytes(32).toString('base64url');
 export const validNonce = (value: unknown): value is string =>
@@ -64,10 +58,10 @@ export function json(bytes: Uint8Array): unknown {
     return fail('InvalidInput', 'Chat body must contain valid UTF-8 JSON.');
   }
 }
-export const codes = chatReplyErrorCodes;
 export function publicError(error: unknown, operation?: string) {
   const code =
-    ApplicationError.is(error) && codes.includes(error.code as (typeof codes)[number])
+    ApplicationError.is(error) &&
+    chatReplyErrorCodes.includes(error.code as (typeof chatReplyErrorCodes)[number])
       ? error.code
       : 'Unavailable';
   const messages: Record<string, string> = {
@@ -186,6 +180,9 @@ export const streamLimits = {
   subscriptions: 64,
   establishmentMs: 20000,
   heartbeatMs: 10000,
+  // A frame this long after a connection's first snapshot proves it healthy and renews its
+  // reconnect budget; half a heartbeat interval tolerates timer skew around the first heartbeat.
+  renewMs: 5000,
   idleMs: 30000,
   drainMs: 20000,
   reconnectMs: [250, 500, 1000],

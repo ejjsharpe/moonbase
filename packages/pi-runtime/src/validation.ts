@@ -71,6 +71,11 @@ export const sameTarget = (a: ChatTarget, b: ChatTarget) =>
 export function cursor(value: unknown): string {
   return string(value, 1024);
 }
+/** Reads a caller may abandon; every other command runs to completion once dispatched. */
+export const isCancellableRead = (operation: ChatCommand) =>
+  operation === 'getChatTranscriptContent' ||
+  operation === 'getChatHistoryAround' ||
+  operation === 'findChatTranscript';
 export function command(value: unknown): ChatCommand {
   if (!isChatCommand(value)) return fail('InvalidInput', 'Unknown chat operation.');
   return value;

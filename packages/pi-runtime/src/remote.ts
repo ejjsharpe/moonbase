@@ -1,4 +1,4 @@
-import { Effect, Layer, Stream, Schedule, Exit, Cause, Queue } from 'effect';
+import { Effect, Layer, Stream, Schedule, Exit, Cause, Queue, Clock } from 'effect';
 import type { ChatHostTarget } from '@moonbase/contracts/host';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import {
@@ -9,7 +9,7 @@ import {
   type ChatTarget,
   type ChatSnapshot,
 } from '@moonbase/contracts/chat';
-import { decodeChatStreamFrame } from '@moonbase/contracts/chat-schema';
+import { chatReplyErrorCodes, decodeChatStreamFrame } from '@moonbase/contracts/chat-schema';
 import { releaseResource } from '@moonbase/effect';
 import {
   ChatService,
@@ -21,6 +21,8 @@ import {
 import { validateHostHealth } from '@moonbase/ssh/host-health';
 import * as P from './protocol.ts';
 import * as V from './validation.ts';
+
+const renewAfterNanos = BigInt(P.streamLimits.renewMs) * 1_000_000n;
 
 /** Client graph imports no engine, SQLite, provider or local workspace implementation. */
 export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> = Layer.effect(
@@ -275,22 +277,27 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
                 yield* forkObservation(
                   connections.watch().pipe(Stream.runForEach(() => assertGeneration)),
                 );
-                // The retry budget spans one outage: back-to-back drops exhaust it, while a
-                // connection that stayed up for a heartbeat interval after its snapshot renews it.
+                // The retry budget spans one outage: back-to-back drops and stalls exhaust it,
+                // while a connection proven healthy by a later authenticated frame renews it.
                 yield* forkObservation(
                   Effect.gen(function* () {
                     for (let failures = 0; ;) {
                       yield* assertGeneration;
-                      let connectedAt: number | undefined;
+                      let connectedAt: bigint | undefined,
+                        renewed = false;
+                      const frameArrived = (snapshot: boolean) =>
+                        Effect.map(Clock.monotonicTimeNanos, (now) => {
+                          if (connectedAt === undefined) {
+                            if (snapshot) connectedAt = now;
+                          } else if (now - connectedAt >= renewAfterNanos) renewed = true;
+                        });
                       // A stream never completes; each end is a failure whose cause decides the retry.
                       const failure = yield* readStream(
                         endpoint,
                         target,
                         assertGeneration,
-                        (snapshot) => {
-                          connectedAt ??= Date.now();
-                          publish(snapshot);
-                        },
+                        publish,
+                        frameArrived,
                       ).pipe(Effect.catchCause((cause) => Effect.succeed(cause)));
                       if (Cause.hasInterruptsOnly(failure)) return yield* Effect.failCause(failure);
                       yield* assertGeneration.pipe(
@@ -299,11 +306,7 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
                         ),
                       );
                       if (last) publish({ ...last, observationStatus: 'reconnecting' });
-                      if (
-                        connectedAt !== undefined &&
-                        Date.now() - connectedAt >= P.streamLimits.heartbeatMs
-                      )
-                        failures = 0;
+                      if (renewed) failures = 0;
                       const transient = failure.reasons.every(
                         (reason) =>
                           Cause.isFailReason(reason) && reason.error.code === 'Unavailable',
@@ -414,7 +417,7 @@ function authenticateChallenge(
 }
 
 /** Rebuilds a host failure from its public code alone; host-supplied messages are never shown. */
-const publicFailure = (code: (typeof P.codes)[number], operation?: string) =>
+const publicFailure = (code: (typeof chatReplyErrorCodes)[number], operation?: string) =>
   new ApplicationError({
     code,
     message: P.publicError(new ApplicationError({ code, message: '' }), operation).message,
@@ -424,7 +427,7 @@ const publicFailure = (code: (typeof P.codes)[number], operation?: string) =>
 function decodeErrorEnvelope(error: unknown, operation?: string): ApplicationError | undefined {
   try {
     const record = V.object(error);
-    const code = P.codes.find((value) => value === record.code);
+    const code = chatReplyErrorCodes.find((value) => value === record.code);
     return code && publicFailure(code, operation);
   } catch {
     return undefined;
@@ -456,6 +459,8 @@ function readStream(
   target: ChatTarget,
   assertGeneration: Effect.Effect<void, ApplicationError>,
   publish: (snapshot: ChatSnapshot) => void,
+  /** Observes each authenticated frame, noting whether it completed a snapshot. */
+  frameArrived: (snapshot: boolean) => Effect.Effect<void>,
 ): Effect.Effect<never, ApplicationError> {
   return Effect.acquireUseRelease(
     Effect.sync(() => {
@@ -628,6 +633,7 @@ function readStream(
                     clearTimeout(state.timer);
                     state.timer = setTimeout(() => state.controller.abort(), P.streamLimits.idleMs);
                   }
+                  yield* frameArrived(update !== undefined);
                   if (update) {
                     yield* assertGeneration;
                     yield* Effect.sync(() => publish(update));

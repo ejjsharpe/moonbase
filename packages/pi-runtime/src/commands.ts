@@ -51,7 +51,6 @@ import { findTranscript } from './find.ts';
 import { NestedSourceRetired, readTranscriptContent, checkRead } from './transcript.ts';
 import * as V from './validation.ts';
 import * as S from './private-schema.ts';
-import { isCancellableRead } from './protocol.ts';
 
 const unknownOutcome = () =>
   new ApplicationError({
@@ -297,7 +296,7 @@ export class Host {
       let admission = invoke;
       if (operation === 'sendChat')
         admission = this.admission((data as ChatInput<'sendChat'>).target.conversationId, invoke);
-      else if (!isCancellableRead(operation)) admission = Effect.uninterruptible(invoke);
+      else if (!V.isCancellableRead(operation)) admission = Effect.uninterruptible(invoke);
       return yield* this.own(
         preflight.pipe(
           Effect.andThen(admission),

@@ -258,7 +258,7 @@ export const serveChat = (config: ChatServerConfiguration, client: ChatClient) =
               const value = await client.command(
                 operation,
                 input,
-                P.isCancellableRead(operation) ? { signal: controller.signal } : undefined,
+                V.isCancellableRead(operation) ? { signal: controller.signal } : undefined,
               );
               send(
                 200,
@@ -404,7 +404,10 @@ async function streamChat(
       (snapshot) => {
         if (!active || terminal) return;
         try {
-          pending = Buffer.from(JSON.stringify(snapshot));
+          const bytes = Buffer.from(JSON.stringify(snapshot));
+          if (bytes.length > P.maximumChatReplyBytes)
+            V.fail('InvalidInput', 'Chat reply exceeds its delivery limit.');
+          pending = bytes;
         } catch (error) {
           terminal = P.publicError(error);
           pending = undefined;
