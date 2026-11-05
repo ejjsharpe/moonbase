@@ -364,7 +364,18 @@ test('safe GFM, literal user content, progressive source, exact native callbacks
   await expect
     .poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1)))
     .toBe('  const moon = "🌔";\t\r\nconsole.log(moon);');
-  await row.getByRole('button', { name: 'Output', exact: true }).click();
+  // A press toggles what the reader sees, and a reading anchor saved inside Output reveals it, so
+  // let a queued scroll save (150 ms) land before choosing whether to press.
+  const outputPart = row.getByRole('button', { name: 'Output', exact: true });
+  await outputPart.scrollIntoViewIfNeeded();
+  await page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        setTimeout(() => requestAnimationFrame(() => requestAnimationFrame(resolve)), 200),
+      ),
+  );
+  if ((await outputPart.getAttribute('aria-expanded')) !== 'true') await outputPart.click();
+  await expect(outputPart).toHaveAttribute('aria-expanded', 'true');
   await expect(row.getByText(/Read more/)).toBeVisible();
   await row.getByRole('button', { name: 'Copy part', exact: true }).first().click();
   await expect
