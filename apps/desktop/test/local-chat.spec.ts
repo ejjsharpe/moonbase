@@ -797,12 +797,10 @@ for (const mode of ['local', 'remote'] as const)
         path: resolve(`../../test-results/transcript-112/native-${mode}-held-tool.png`),
       });
       await page.getByRole('button', { name: 'Stop', exact: true }).click();
-      await expect
-        .poll(async () => {
-          const stop = page.getByRole('button', { name: 'Stop', exact: true });
-          return !(await stop.isVisible()) || (await stop.isDisabled());
-        })
-        .toBe(true);
+      // One locator: Stop may leave the DOM between separate visibility and disabled checks.
+      await expect(
+        page.getByRole('button', { name: 'Stop', exact: true, disabled: false }),
+      ).toHaveCount(0);
       await expect(page.getByRole('status', { name: 'Conversation status' })).toContainText(
         'Stopped',
       );
