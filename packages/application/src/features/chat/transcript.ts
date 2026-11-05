@@ -88,9 +88,15 @@ const tapFailure =
 const interruptFiber = (fiber: Option.Option<Fiber.Fiber<unknown, unknown>>) => {
   if (Option.isSome(fiber)) fiber.value.interruptUnsafe();
 };
-/** A promise for the fiber's end that never rejects; failures were already published. */
+/**
+ * A promise for the fiber's end. Read failures were already published and interruption is a
+ * cancellation, so it rejects only with a defect, such as one thrown while publishing a failure.
+ */
 const joinFiber = (fiber: Fiber.Fiber<void, unknown>) =>
-  Effect.runPromise(Fiber.await(fiber)).then(() => undefined);
+  Effect.runPromise(Fiber.await(fiber)).then((exit) => {
+    if (Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause))
+      throw normalizeApplicationError(Cause.squash(exit.cause));
+  });
 
 /**
  * One selected read owner, subordinate to the existing selection scope. Every read runs in a fiber
@@ -116,10 +122,11 @@ export class TranscriptOwner {
   private jobs: FiberMap.FiberMap<string, void>;
   private search: FiberHandle.FiberHandle<void>;
   private reveal: FiberHandle.FiberHandle<void>;
-  /** Job sources, so a snapshot can interrupt reads of a live source it made stale. */
-  private jobSources = new Map<string, ChatTranscriptSource>();
-  /** Content jobs started for the revealed Find match; cancelling the reveal interrupts them. */
-  private revealJobs = new Set<string>();
+  /**
+   * What each running job reads: a snapshot interrupts reads of a live source it made stale, and
+   * cancelling the reveal interrupts content reads started for the revealed Find match.
+   */
+  private jobReads = new Map<string, { source?: ChatTranscriptSource; revealing: boolean }>();
   /**
    * Interrupting a read aborts its signal without waiting for the ChatClient's promise, so close
    * joins the promises still settling here, bounded by the close grace.
@@ -206,18 +213,23 @@ export class TranscriptOwner {
   }
   /**
    * Forks `work` through `install` (a FiberMap key or a FiberHandle) but starts it only after
-   * `admit` has published, so a subscriber that `admit` notifies can join or supersede it.
+   * `admit` has published, so a subscriber that `admit` notifies can join or supersede it. Joins
+   * the fiber; a closed owner starts nothing.
    */
-  private start(
+  private startGated(
     install: (effect: Effect.Effect<void>) => Effect.Effect<Fiber.Fiber<void>>,
     work: Effect.Effect<void>,
     admit?: () => void,
   ) {
+    if (this.scope.state._tag === 'Closed') return Promise.resolve();
     const gate = Deferred.makeUnsafe<void>();
     const fiber = Effect.runSync(install(Effect.andThen(Deferred.await(gate), work)));
-    admit?.();
-    Deferred.doneUnsafe(gate, Exit.void);
-    return fiber;
+    try {
+      admit?.();
+    } finally {
+      Deferred.doneUnsafe(gate, Exit.void);
+    }
+    return joinFiber(fiber);
   }
   /**
    * Runs a keyed read. An existing job for `key` is joined, or interrupted and replaced when
@@ -242,12 +254,11 @@ export class TranscriptOwner {
         Effect.withFiber((fiber) => Effect.sync(() => this.settleJob(key, fiber, exit))),
       ),
     );
-    const fiber = this.start(
+    return this.startGated(
       (effect) => FiberMap.run(this.jobs, key, effect, { onlyIfMissing: !options.replace }),
       job,
       () => {
-        if (options.source) this.jobSources.set(key, options.source);
-        if (options.revealing) this.revealJobs.add(key);
+        this.jobReads.set(key, { source: options.source, revealing: !!options.revealing });
         this.state = {
           ...this.state,
           error: null,
@@ -256,13 +267,12 @@ export class TranscriptOwner {
         this.publish();
       },
     );
-    return joinFiber(fiber);
   }
+  /** A defect thrown here fails the job's fiber, so its joined promise rejects with it. */
   private settleJob(key: string, fiber: Fiber.Fiber<unknown, unknown>, exit: Exit.Exit<void>) {
     // A replaced job leaves the key to its successor; a closed map has no jobs left to settle.
     if (Option.getOrUndefined(FiberMap.getUnsafe(this.jobs, key)) !== fiber) return;
-    this.jobSources.delete(key);
-    this.revealJobs.delete(key);
+    this.jobReads.delete(key);
     const interrupted = Exit.hasInterrupts(exit);
     if (interrupted) {
       if (this.contents.peek(key)?.status === 'loading')
@@ -382,8 +392,8 @@ export class TranscriptOwner {
     }
     this.history.acceptSnapshot(entries, old, input);
     const stale = new Set<string>();
-    for (const [key, source] of this.jobSources)
-      if (source.kind === 'live' && !this.isCurrent(source)) stale.add(key);
+    for (const [key, { source }] of this.jobReads)
+      if (source?.kind === 'live' && !this.isCurrent(source)) stale.add(key);
     const changed = this.contents.markStale(
       (content) => !this.isCurrent(content.source) || isContentChanged(content, next),
     );
@@ -442,7 +452,7 @@ export class TranscriptOwner {
   }
   private cancelReveal() {
     interruptFiber(FiberHandle.getUnsafe(this.reveal));
-    for (const key of this.revealJobs) this.interruptJob(key);
+    for (const [key, { revealing }] of this.jobReads) if (revealing) this.interruptJob(key);
   }
   private cancelFind() {
     interruptFiber(FiberHandle.getUnsafe(this.search));
@@ -475,7 +485,7 @@ export class TranscriptOwner {
   findTranscript(query: string): Promise<void> {
     this.cancelFind();
     if (!this.alive) return Promise.resolve();
-    const fiber = this.start(
+    return this.startGated(
       (effect) => FiberHandle.run(this.search, effect),
       this.searchTranscript(query),
       () => {
@@ -492,8 +502,8 @@ export class TranscriptOwner {
         this.publish();
       },
     );
-    return joinFiber(fiber);
   }
+  /** A defect thrown by its failure handler fails the fiber, so the joined Find rejects. */
   private searchTranscript(query: string): Effect.Effect<void> {
     return Effect.gen({ self: this }, function* () {
       if (!query) return;
@@ -534,7 +544,10 @@ export class TranscriptOwner {
         };
         yield* this.notify;
         const first = previous.active === null ? page.matches[0] : undefined;
-        if (first && this.state.find.revealing) void this.revealMatch(first);
+        if (first && this.state.find.revealing)
+          void this.revealMatch(first).catch((error) =>
+            this.showFindError(normalizeApplicationError(error)),
+          );
         cursor = page.nextCursor;
         if (cursor) yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 0)));
       } while (cursor);
@@ -551,9 +564,7 @@ export class TranscriptOwner {
   /** Replaces any reveal with one of `match`; the search continues independently. */
   private revealMatch(match: ChatTranscriptMatch) {
     this.cancelReveal();
-    return joinFiber(
-      this.start((effect) => FiberHandle.run(this.reveal, effect), this.showMatch(match)),
-    );
+    return this.startGated((effect) => FiberHandle.run(this.reveal, effect), this.showMatch(match));
   }
   private showMatch(match: ChatTranscriptMatch): Effect.Effect<void> {
     return Effect.gen({ self: this }, function* () {
@@ -580,11 +591,9 @@ export class TranscriptOwner {
     const index = Math.max(0, (previous.activeIndex ?? -1) + (direction === 'next' ? 1 : -1));
     if (index >= previous.count) return Promise.resolve();
     this.cancelReveal();
-    return joinFiber(
-      this.start(
-        (effect) => FiberHandle.run(this.reveal, effect),
-        this.moveToMatch(previous, index),
-      ),
+    return this.startGated(
+      (effect) => FiberHandle.run(this.reveal, effect),
+      this.moveToMatch(previous, index),
     );
   }
   private moveToMatch(previous: TranscriptState['find'], index: number): Effect.Effect<void> {

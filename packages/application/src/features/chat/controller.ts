@@ -76,6 +76,11 @@ export type ChatDependencies = {
    * caps consecutive attempts. Defaults to `transcriptLimits.watchRetryMs`.
    */
   transcriptWatchRetryMs?: readonly number[];
+  /**
+   * How long a watch must stay up after its first snapshot for its failure to renew the retry cap.
+   * Defaults to `transcriptLimits.watchHealthyMs`.
+   */
+  transcriptWatchHealthyMs?: number;
 };
 type Owner = {
   scope: Scope.Closeable;
@@ -90,7 +95,13 @@ type Observation = {
   outcome?: Promise<Exit.Exit<void>>;
 };
 /** One watch of the selected chat; it stops delivering once it fails. */
-type WatchAttempt = { open: boolean; received: boolean; observation?: Observation };
+type WatchAttempt = {
+  open: boolean;
+  received: boolean;
+  /** Monotonic time of the first snapshot this watch delivered. */
+  firstSnapshotAt?: number;
+  observation?: Observation;
+};
 const maximumSavedBytes = 2 * 1024 * 1024;
 const bytes = (value: string) => new TextEncoder().encode(value).length;
 const text = (value: string, limit: number) =>
@@ -134,6 +145,7 @@ class ChatModelState {
   private readonly transcriptMemory: TranscriptViewMemory;
   private readonly transcriptCloseGraceMs?: number;
   private readonly transcriptWatchRetryMs: readonly number[];
+  private readonly transcriptWatchHealthyMs: number;
 
   constructor(scope: Scope.Closeable, dependencies: ChatDependencies) {
     this.scope = scope;
@@ -143,6 +155,8 @@ class ChatModelState {
     this.transcriptCloseGraceMs = dependencies.transcriptCloseGraceMs;
     this.transcriptWatchRetryMs =
       dependencies.transcriptWatchRetryMs ?? transcriptLimits.watchRetryMs;
+    this.transcriptWatchHealthyMs =
+      dependencies.transcriptWatchHealthyMs ?? transcriptLimits.watchHealthyMs;
     this.connection = dependencies.connection;
     this.mode = dependencies.mode ?? 'remote';
     if (this.mode === 'remote' && !this.connection)
@@ -731,7 +745,8 @@ class ChatModelState {
         }
       };
       // A watch delivers until it fails, so a late result from a failed watch never reaches its
-      // successor. A delivered snapshot resets the count of consecutive failed watches.
+      // successor. Hosts send a snapshot as soon as a watch subscribes, so only a watch that stayed
+      // up for the healthy period after its first snapshot renews the count of failed watches.
       let failures = 0;
       const watch = (attempt: WatchAttempt) =>
         Effect.gen({ self: this }, function* () {
@@ -743,7 +758,7 @@ class ChatModelState {
                 (snapshot) => {
                   if (!attempt.open) return;
                   attempt.received = true;
-                  failures = 0;
+                  attempt.firstSnapshotAt ??= performance.now();
                   accept(snapshot);
                 },
                 (error) => {
@@ -754,11 +769,22 @@ class ChatModelState {
               ),
             this.generation,
           );
+          // A watch that failed while subscribing still holds its subscription.
+          if (!attempt.open && attempt.observation) void this.closeObservation(attempt.observation);
           const snapshot = yield* this.call('getChat', { target });
           if (attempt.open && !attempt.received) accept(snapshot);
         });
       // Retryable stream failures re-watch after a bounded backoff; reads only, never a resend.
       const recover = (error: unknown, failed: WatchAttempt) => {
+        // Release the failed subscription now, so it holds no host observer through the backoff.
+        if (failed.observation) void this.closeObservation(failed.observation);
+        // A transcript that already failed stays failed until Refresh or reopening.
+        if (transcript.getSnapshot().observation === 'failed') return;
+        if (
+          failed.firstSnapshotAt !== undefined &&
+          performance.now() - failed.firstSnapshotAt >= this.transcriptWatchHealthyMs
+        )
+          failures = 0;
         const failure = normalizeApplicationError(error);
         const delay = this.transcriptWatchRetryMs[failures];
         if (failure.code !== 'Unavailable' || delay === undefined) {
@@ -778,16 +804,16 @@ class ChatModelState {
         transcript.markReconnecting();
         const rewatch = Effect.gen({ self: this }, function* () {
           yield* Effect.sleep(delay);
-          if (failed.observation)
-            yield* Effect.promise(() => this.closeObservation(failed.observation!));
           if (!owner.alive || this.selection !== owner) return;
           const attempt: WatchAttempt = { open: true, received: false };
+          // A watch that throws while subscribing fails with a defect; it is a failure too.
           yield* watch(attempt).pipe(
-            Effect.catch((error) =>
+            Effect.catchCause((cause) =>
               Effect.sync(() => {
+                if (Cause.hasInterruptsOnly(cause)) return;
                 if (!attempt.open || !owner.alive || this.selection !== owner) return;
                 attempt.open = false;
-                recover(error, attempt);
+                recover(Cause.squash(cause), attempt);
               }),
             ),
           );

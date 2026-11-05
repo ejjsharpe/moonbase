@@ -1196,3 +1196,42 @@ test('capture before delayed initial read cancels restoration without losing old
     held.resolve();
   }
 });
+
+test('a reconnecting snapshot cancels an evicted live part read without an error or re-adding it', async (t) => {
+  const f = await transcriptController(t, 200);
+  const running = live(f.snapshot, 'live text');
+  f.publish(running);
+  const transcript = running.run!.transcript!;
+  const held = Promise.withResolvers<void>();
+  let signal: AbortSignal | undefined;
+  f.handlers.set('getChatTranscriptContent', async (raw, abort, fallback) => {
+    if ((raw as { source: ChatTranscriptSource }).source.kind !== 'live') return fallback();
+    signal = abort;
+    await held.promise;
+    throw new ApplicationError({ code: 'Unavailable', message: 'late live failure' });
+  });
+  const pending = f.controller.loadTranscriptPart(
+    transcript.source,
+    selection(transcript.parts[0]),
+  );
+  for (let i = 0; i < 100 && !signal; i++) await tick();
+  assert(signal);
+  // Filling the cache with other selections evicts the loading live part.
+  for (const entry of f.entries.slice(0, 128))
+    await f.controller.loadTranscriptPart(
+      entry.transcript!.source,
+      selection(entry.transcript!.parts[0]),
+    );
+  const hasLive = (state: TranscriptState) =>
+    state.content.some((content) => content.source.kind === 'live');
+  assert.equal(hasLive(f.controller.getSnapshot().transcript), false);
+  f.publish({ ...running, observationStatus: 'reconnecting' });
+  assert.equal(signal.aborted, true);
+  held.resolve();
+  await pending;
+  await tick();
+  const state = f.controller.getSnapshot();
+  assert.equal(state.transcript.error, null);
+  assert.equal(state.error, null);
+  assert.equal(hasLive(state.transcript), false);
+});

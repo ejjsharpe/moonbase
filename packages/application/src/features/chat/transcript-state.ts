@@ -18,6 +18,8 @@ export const transcriptLimits = {
   closeGraceMs: 1000,
   /** Backoff before each re-watch after a retryable live-stream failure; its length is the cap. */
   watchRetryMs: [1000, 5000, 15000],
+  /** How long a watch must stay up after its first snapshot before its failure renews the cap. */
+  watchHealthyMs: 15000,
 } as const;
 export type TranscriptReadStatus = 'partial' | 'loading' | 'complete' | 'error' | 'source-changed';
 export type TranscriptContentState = {
