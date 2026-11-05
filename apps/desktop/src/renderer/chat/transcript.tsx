@@ -42,6 +42,7 @@ import { RecordedPatch } from './recorded-patch.tsx';
 import { ImageVisibility, StoredImage, StoredImages } from './stored-image.tsx';
 import type { ImageResources } from './stored-image.ts';
 import { getTranscriptParts } from './transcript-parts.ts';
+import { usePartBody } from './part-body.ts';
 
 export function Transcript({
   controller,
@@ -1104,37 +1105,14 @@ function Part({
   useEffect(() => {
     if (readable && (ordinary || expanded) && part.truncated && !content) load();
   }, [readable, ordinary, expanded, part.truncated, content, load]);
-  const selection = useMemo(
-    () => ({ partId: part.partId, bytes: part.bytes, revision: part.revision }),
-    [part.partId, part.bytes, part.revision],
-  );
-  const copy = useCallback(
-    (codeStart?: number) => {
-      if (native)
-        run(
-          (signal) =>
-            native.copy(
-              {
-                source,
-                selection,
-                ...(codeStart !== undefined ? { code: { start: codeStart } } : {}),
-              },
-              signal,
-            ),
-          'Copied.',
-        );
-    },
-    [native, run, source, selection],
-  );
   const [reading, setReading] = useState({ revision: part.revision, text: part.text });
-  let text = reading.text;
-  if (reading.revision !== part.revision) {
-    text = part.text;
+  const text = useMemo(() => {
+    if (reading.revision !== part.revision) return part.text;
+    if (match) return reading.text;
+    return content?.chunks.length ? decodeText(content) : part.text;
+  }, [reading, part, match, content]);
+  if (reading.revision !== part.revision || (!match && text !== reading.text))
     setReading({ revision: part.revision, text });
-  } else if (!match) {
-    text = content?.chunks.length ? decodeText(content) : part.text;
-    if (text !== reading.text) setReading({ revision: part.revision, text });
-  }
   const complete =
     !part.truncated ||
     (content?.status === 'complete' &&
@@ -1185,6 +1163,56 @@ function Part({
     // Move only the transcript; keep the Find field and the reader's selection/focus intact.
     scroller.scrollTop += element.getBoundingClientRect().top - getReadingTop(scroller) - 24;
   }, [matchVisible, match, state.find.revealing]);
+  const plain = !match && readable && !ordinary && !['patch', 'diff', 'image'].includes(part.kind);
+  const currentBody = useMemo(
+    () => ({
+      source,
+      part,
+      text,
+      complete,
+      loaded: !!content?.chunks.length,
+      retainedFrom: content?.retainedFrom ?? 0,
+      loadedBytes: content?.loadedBytes ?? 0,
+    }),
+    [
+      source,
+      part,
+      text,
+      complete,
+      content?.chunks.length,
+      content?.retainedFrom,
+      content?.loadedBytes,
+    ],
+  );
+  const displayed = usePartBody(
+    JSON.stringify([controller.backendId, transcript.source, part.partId]),
+    currentBody,
+    plain && expanded,
+    state.content,
+  );
+  const takeCopyBody = displayed.takeCopyBody;
+  const copy = useCallback(
+    (codeStart?: number) => {
+      const body = takeCopyBody();
+      if (native)
+        run(async (signal) => {
+          if (!body) throw Error('The displayed output changed. Try Copy again.');
+          await native.copy(
+            {
+              source: body.source,
+              selection: {
+                partId: body.part.partId,
+                bytes: body.part.bytes,
+                revision: body.part.revision,
+              },
+              ...(codeStart !== undefined ? { code: { start: codeStart } } : {}),
+            },
+            signal,
+          );
+        }, 'Copied.');
+    },
+    [native, run, takeCopyBody],
+  );
   let presentation = <p {...stylex.props(styles.small)}>{part.availability} content</p>;
   if (part.kind === 'image') presentation = <StoredImage source={source} part={part} />;
   if (part.kind !== 'image' && !readable && part.availability !== 'redacted' && part.text)
@@ -1197,9 +1225,10 @@ function Part({
   if (readable) {
     presentation = (
       <pre
+        ref={plain ? displayed.root : undefined}
         tabIndex={ordinary ? undefined : 0}
         {...stylex.props(ordinary ? styles.literal : styles.output)}>
-        {text}
+        {plain ? displayed.body.text : text}
       </pre>
     );
     if (ordinary && part.role === 'assistant')
@@ -1218,9 +1247,15 @@ function Part({
         <RecordedPatch text={text} complete={complete} numbered={part.kind === 'diff'} />
       );
   }
+  const retainedFrom = plain ? displayed.body.retainedFrom : (content?.retainedFrom ?? 0);
   const body = (
     <>
       {presentation}
+      {displayed.held && (
+        <p role="status" {...stylex.props(styles.small)}>
+          Showing previously read output. Copy uses this version; latest progress remains above.
+        </p>
+      )}
       {part.kind === 'arguments' && (
         <p {...stylex.props(styles.small)}>
           Recorded request. Executed arguments are labelled separately when available; this request
@@ -1262,10 +1297,10 @@ function Part({
           were not retained by the tool.
         </p>
       )}
-      {!!content?.retainedFrom && (
+      {!!retainedFrom && (
         <p {...stylex.props(styles.small)}>
-          Showing retained content from byte {content.retainedFrom.toLocaleString()}. Copy still
-          reads the complete selected source.{' '}
+          Showing retained content from byte {retainedFrom.toLocaleString()}. Copy still reads the
+          complete selected source.{' '}
           <Button {...stylex.props(controls.button)} onClick={() => load(true)}>
             Read from start
           </Button>
@@ -1329,6 +1364,7 @@ function Part({
         <Button
           {...stylex.props(controls.button, controls.quietButton)}
           disabled={!native}
+          {...(plain ? displayed.copyProps : {})}
           onClick={() => copy()}>
           Copy {copyLabel}
         </Button>
