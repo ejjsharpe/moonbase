@@ -302,6 +302,17 @@ export async function pasteNativeFile(app: ElectronApplication, page: Page, path
     ];
   }, path);
   await page.getByRole('tree', { name: 'Files', exact: true }).focus();
-  await page.keyboard.press('Meta+v');
+  expect(
+    await page.getByRole('tree', { name: 'Files', exact: true }).evaluate((element) =>
+      element.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'v',
+          metaKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    ),
+  ).toBe(false);
   await expect(page.getByRole('dialog', { name: 'Import files', exact: true })).toBeVisible();
 }

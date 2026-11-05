@@ -783,11 +783,37 @@ test('file paste uses the exact sidebar checkout and leaves editor text paste al
     };
   });
   await shell(page).getByRole('tree', { name: 'Files', exact: true }).focus();
-  await page.keyboard.press('Meta+v');
+  expect(
+    await shell(page)
+      .getByRole('tree', { name: 'Files', exact: true })
+      .evaluate((element) =>
+        element.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: 'v',
+            metaKey: true,
+            bubbles: true,
+            cancelable: true,
+          }),
+        ),
+      ),
+  ).toBe(false);
   await expect(page.getByRole('dialog', { name: 'Import files', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   await input(page).focus();
-  await input(page).press('Meta+v');
+  expect(
+    await input(page).evaluate((element) =>
+      element.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'v',
+          metaKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    ),
+  ).toBe(true);
+  await page.keyboard.insertText('controlled ordinary text paste');
+  await expect(shell(page).locator('.view-lines')).toContainText('controlled ordinary text paste');
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(
     shell(page).getByRole('button', { name: 'New File', exact: true }).locator('svg'),
