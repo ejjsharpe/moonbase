@@ -872,6 +872,18 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       tabIndex={-1}
       onPointerDownCapture={captureFocusInteraction}
       onKeyDownCapture={actions.keyDown}
+      onFocusCapture={(event) => {
+        const from = event.relatedTarget;
+        // Traversal may start outside this view; keep automatic menu/dialog return eligible.
+        if (
+          from instanceof Element &&
+          from.isConnected &&
+          from !== document.body &&
+          !event.currentTarget.contains(from) &&
+          !from.closest('[role="menu"], [role="dialog"]')
+        )
+          captureFocusInteraction();
+      }}
       onKeyUp={actions.keyUp}
       onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget)) setRecent(null);
