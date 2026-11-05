@@ -1,9 +1,25 @@
 import { decodeChatInput } from '@moonbase/contracts/chat-schema';
 import { ApplicationError } from '@moonbase/contracts/errors';
-import type { ChatClient, ChatSnapshot, ChatTranscriptSelection } from '@moonbase/contracts/chat';
-import { iterateTranscriptSource, type TranscriptRead } from '@moonbase/application/chat';
+import type {
+  ChatClient,
+  ChatSnapshot,
+  ChatTranscriptPart,
+  ChatTranscriptSelection,
+} from '@moonbase/contracts/chat';
+import {
+  iterateTranscriptSource,
+  makeTranscriptReader,
+  type TranscriptRead,
+} from '@moonbase/application/chat';
 import { parseTranscriptMarkdown } from './transcript-source.ts';
-import { fields, invalid, record, type TranscriptCopy, type TranscriptImage } from './wire.ts';
+import {
+  fields,
+  invalid,
+  maximumTranscriptImageBytes,
+  record,
+  type TranscriptCopy,
+  type TranscriptImage,
+} from './wire.ts';
 import type { IpcRequest } from '../ipc-lifetime.ts';
 
 const areTranscriptValuesEqual = (a: unknown, b: unknown) =>
@@ -13,7 +29,13 @@ export type NativeTranscriptActions = {
   writeText(text: string): Promise<void>;
   openExternal(url: string): Promise<void>;
 };
-const changed = () =>
+/** Bounds main's buffered text and the clipboard write for one Copy. */
+export const maximumTranscriptCopyBytes = 8 * 1024 * 1024;
+/** Code Copy parses its whole part synchronously on main, so larger parts are refused. */
+export const maximumTranscriptCodeCopyBytes = 1024 * 1024;
+/** Whole-message Copy separates authored text parts like paragraphs. */
+const transcriptPartSeparator = '\n\n';
+const makeSourceChangedError = () =>
   new ApplicationError({
     code: 'Conflict',
     message: 'Transcript source changed. Reload the content and try Copy again.',
@@ -44,7 +66,6 @@ export function decodeTranscriptLink(input: unknown) {
   if (
     typeof value.url !== 'string' ||
     value.url.length > 8192 ||
-    !/^https?:\/\//i.test(value.url) ||
     [...(value.url as string)].some(
       (char) => char.charCodeAt(0) <= 32 || char.charCodeAt(0) === 127,
     )
@@ -66,7 +87,6 @@ const imageSignatures: Record<TranscriptImage['mimeType'], number[]> = {
   'image/png': [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
   'image/jpeg': [0xff, 0xd8, 0xff],
 };
-export const maximumTranscriptImageBytes = 4 * 1024 * 1024;
 export function decodeTranscriptImage(input: unknown): TranscriptImage {
   const value = record(input);
   fields(value, ['source', 'selection', 'mimeType']);
@@ -120,23 +140,46 @@ export async function respondTranscriptImage(
   });
 }
 
+type ObservedPart = Pick<ChatTranscriptPart, 'bytes' | 'revision' | 'availability'>;
+
 /** Main-only validated source retrieval; the request owns observation and actual IO settlement. */
 async function readTranscript<T>(
   chat: ChatClient,
   input: Pick<TranscriptCopy, 'source' | 'selection'>,
   request: IpcRequest,
   encoding: 'utf8' | 'base64',
-  finish: (chunks: string[], check: () => void) => Promise<T>,
+  limit: { bytes: number; message: string },
+  finish: (parts: string[][], check: () => void) => Promise<T>,
 ): Promise<T> {
   const { source, selection } = input;
-  let snapshot: ChatSnapshot | undefined,
-    observationError: unknown,
-    epoch = 0;
+  const makeTooLargeError = () =>
+    new ApplicationError({ code: 'Unavailable', message: limit.message });
+  if (selection && selection.bytes > limit.bytes) throw makeTooLargeError();
+  let snapshot: ChatSnapshot | undefined, observationError: unknown;
   const ready = Promise.withResolvers<void>();
   const pending = new Set<Promise<unknown>>();
+  const selections: ChatTranscriptSelection[] = [];
+  // Live parts grow by appending; a later snapshot that shrinks or rewrites a part is a real change.
+  const observed = new Map<string, ObservedPart>();
+  const rewritten = new Set<string>();
+  const observe = (next: ChatSnapshot) => {
+    for (const { partId, bytes, revision, availability } of next.run?.transcript?.parts ?? []) {
+      const previous = observed.get(partId);
+      if (
+        previous &&
+        (bytes < previous.bytes ||
+          (bytes === previous.bytes && revision !== previous.revision) ||
+          availability !== previous.availability)
+      )
+        rewritten.add(partId);
+      observed.set(partId, { bytes, revision, availability });
+    }
+    snapshot = next;
+  };
+  const readContent = makeTranscriptReader(chat);
   // The main-process ChatClient boundary has already decoded and bounded replies and snapshots.
   const read: TranscriptRead = (input, options) => {
-    const promise = chat.command('getChatTranscriptContent', input, options);
+    const promise = readContent(input, options);
     pending.add(promise);
     void promise.then(
       () => pending.delete(promise),
@@ -152,22 +195,22 @@ async function readTranscript<T>(
       source.kind === 'live' &&
       (!snapshot ||
         snapshot.observationStatus === 'reconnecting' ||
-        !areTranscriptValuesEqual(snapshot.run?.transcript?.source, source))
+        !areTranscriptValuesEqual(snapshot.run?.transcript?.source, source) ||
+        (selection && rewritten.has(selection.partId)) ||
+        selections.some(({ partId }) => rewritten.has(partId)))
     )
-      throw changed();
+      throw makeSourceChangedError();
   };
   const close =
     source.kind === 'live'
       ? chat.watch(
           { target: source.target },
           (value) => {
-            snapshot = value;
-            epoch++;
+            observe(value);
             ready.resolve();
           },
           (error) => {
             observationError = error;
-            epoch++;
             ready.resolve();
           },
         )
@@ -178,10 +221,9 @@ async function readTranscript<T>(
   try {
     if (close) await ready.promise;
     check();
-    const selections: ChatTranscriptSelection[] = [];
     // The iterator validates every manifest/content echo, chunk and continuation independently of UI retention.
-    const chunks: string[] = [];
-    const seenParts = new Set<string>();
+    const parts: string[][] = [];
+    let bytes = 0;
     for await (const chunk of iterateTranscriptSource({
       source,
       selection,
@@ -212,15 +254,18 @@ async function readTranscript<T>(
               : 'This part is text, not stored image data.',
         });
       if (chunk.offset === 0) {
-        if (seenParts.has(chunk.selection.partId))
+        if (selections.some(({ partId }) => partId === chunk.selection.partId))
           throw new ApplicationError({
             code: 'Incompatible',
             message: 'Transcript manifest repeats a selected part.',
           });
-        seenParts.add(chunk.selection.partId);
+        // Iteration proves each part delivers exactly its selected bytes, so refuse before buffering it.
+        bytes += chunk.selection.bytes + (parts.length ? transcriptPartSeparator.length : 0);
+        if (bytes > limit.bytes) throw makeTooLargeError();
         selections.push(chunk.selection);
+        parts.push([]);
       }
-      chunks.push(chunk.data);
+      parts.at(-1)!.push(chunk.data);
       await new Promise<void>((resolve) => setImmediate(resolve));
     }
     if (!selections.length)
@@ -228,30 +273,23 @@ async function readTranscript<T>(
         code: 'Unavailable',
         message: 'No authored text is available to copy.',
       });
-    // Fresh fixed-prefix proofs after iteration, fenced by the live observation. A held earlier reply is insufficient.
-    if (source.kind === 'live') {
-      let proved = false;
-      for (let attempt = 0; attempt < 3 && !proved; attempt++) {
-        const proofEpoch = epoch;
-        for (const selected of selections) {
-          const reply = await read({ source, selection: selected }, { signal: request.signal });
-          check();
-          if (
-            reply.kind !== 'content' ||
-            reply.offset !== 0 ||
-            reply.cursor !== null ||
-            !areTranscriptValuesEqual(reply.source, source) ||
-            !areTranscriptValuesEqual(reply.selection, selected)
-          )
-            throw changed();
-          if (epoch !== proofEpoch) break;
-        }
-        proved = epoch === proofEpoch;
+    // A fresh fixed-prefix proof per part after iteration; a held earlier reply is insufficient. Appends
+    // keep the copied prefix, while check() refuses a source change, reconnect or observed rewrite.
+    if (source.kind === 'live')
+      for (const selected of selections) {
+        const reply = await read({ source, selection: selected }, { signal: request.signal });
+        check();
+        if (
+          reply.kind !== 'content' ||
+          reply.offset !== 0 ||
+          reply.cursor !== null ||
+          !areTranscriptValuesEqual(reply.source, source) ||
+          !areTranscriptValuesEqual(reply.selection, selected)
+        )
+          throw makeSourceChangedError();
       }
-      if (!proved) throw changed();
-    }
     check();
-    return await finish(chunks, check);
+    return await finish(parts, check);
   } finally {
     request.signal.removeEventListener('abort', aborted);
     const [, observation] = await Promise.allSettled([
@@ -275,9 +313,19 @@ export function copyTranscript(
   request: IpcRequest,
   native: NativeTranscriptActions,
 ) {
-  return readTranscript(chat, input, request, 'utf8', async (chunks, check) => {
-    const { code } = input;
-    let text = chunks.join('');
+  const { code } = input;
+  const limit = code
+    ? {
+        bytes: maximumTranscriptCodeCopyBytes,
+        message: 'Code Copy supports parts up to 1 MiB. Copy the whole message instead.',
+      }
+    : {
+        bytes: maximumTranscriptCopyBytes,
+        message: 'Copy supports up to 8 MiB of text. This content is larger.',
+      };
+  return readTranscript(chat, input, request, 'utf8', limit, async (parts, check) => {
+    // Code Copy always selects one part, so its parser offsets match the renderer's per-part parse.
+    let text = parts.map((chunks) => chunks.join('')).join(transcriptPartSeparator);
     if (code) {
       const block = parseTranscriptMarkdown(text).codeBlocks.find(
         (node) => node.position?.start.offset === code.start,
@@ -309,7 +357,11 @@ export function copyTranscript(
 }
 
 export function readTranscriptImage(chat: ChatClient, image: TranscriptImage, request: IpcRequest) {
-  return readTranscript(chat, image, request, 'base64', async (chunks) =>
-    Buffer.concat(chunks.map((chunk) => Buffer.from(chunk, 'base64'))),
+  const limit = {
+    bytes: maximumTranscriptImageBytes,
+    message: 'Stored image exceeds the 4 MiB preview limit.',
+  };
+  return readTranscript(chat, image, request, 'base64', limit, async (parts) =>
+    Buffer.concat(parts.flat().map((chunk) => Buffer.from(chunk, 'base64'))),
   );
 }

@@ -193,7 +193,7 @@ test('local provider waits use the shared document lifetime without a remote con
   t.after(() => owner.dispose());
   const pending = owner.call('providers', 'getProviders', {}, 'setup');
   const signal = await started.promise;
-  await owner.releaseDocument();
+  await owner.dispose();
   const reply = await pending;
   assert(signal.aborted);
   assert(!reply.ok && reply.error.code === 'Cancelled');
@@ -399,7 +399,7 @@ test('local IPC captures its command and cannot route a late reply to a replacem
     },
     'captured',
   );
-  const release = owner.releaseDocument();
+  const release = owner.dispose();
   gate.resolve();
   await pending;
   await release;
@@ -465,7 +465,7 @@ test('browser chat observation preserves reconnect status and document release f
   };
   receive(snapshot);
   assert.equal(views[0].observationStatus, 'reconnecting');
-  await owner.releaseDocument();
+  await owner.dispose();
   receive({ ...snapshot, observationStatus: 'connected' });
   assert.equal(views.length, 1);
   assert.equal(releases, 1);

@@ -132,7 +132,8 @@ for (const kind of ['editor', 'chat'] as const) {
     }
   });
 
-  for (const failure of [false, true]) {
+  // Only the editor replaces its document in place; chat backends dispose and recreate sessions.
+  for (const failure of kind === 'editor' ? [false, true] : []) {
     test(`${kind} reentrant document replacement isolates a reused ID and joins ${failure ? 'failing' : 'held'} release`, async () => {
       const releasing = Promise.withResolvers<void>(),
         gate = Promise.withResolvers<void>();
@@ -159,6 +160,7 @@ for (const kind of ['editor', 'chat'] as const) {
         () => {
           delivered++;
           if (delivered === 1) {
+            assert(f.owner instanceof EditorSession);
             replacement = f.owner.releaseDocument();
             newWatch = f.watch('reused');
           }

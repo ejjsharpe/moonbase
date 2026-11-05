@@ -41,6 +41,8 @@ export type TranscriptCopy = {
   /** Parser-provided original UTF-16 start within the selected part; main revalidates the node. */
   code?: { start: number };
 };
+/** Stored images larger than this are never read or previewed. */
+export const maximumTranscriptImageBytes = 4 * 1024 * 1024;
 /** Main binds an issued image URL to this exact backend, source and fixed selection. */
 export type TranscriptImage = {
   source: ChatTranscriptSource;
@@ -106,7 +108,7 @@ export function browserClients(
   providers: ProviderSetupClient;
 } {
   const command = async (
-    kind: 'chat' | 'connection' | 'providers' | 'transcript',
+    kind: 'chat' | 'connection' | 'providers',
     operation: string,
     input: unknown,
     options?: { signal?: AbortSignal },
