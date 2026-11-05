@@ -1211,6 +1211,12 @@ test('Find paints prose matches in the rendered message and clears them on close
   const row = page.locator('[data-transcript-entry="reading-0"]');
   await expect(row.getByRole('region', { name: 'Matched original source' })).toHaveCount(0);
   await expect(row.locator('[data-transcript-part] strong')).toHaveText('Needle');
+  // Replacing the painted text node collapses its range; the part's observer repaints it.
+  await page.evaluate(() => {
+    const node = [...(CSS.highlights.get('find-active') ?? [])][0]!.startContainer as Text;
+    node.replaceWith(node.data);
+  });
+  await expect.poll(painted).toEqual({ active: ['needle@ one, '], matches: ['NEEDLE', 'Needle'] });
   await find.press('Escape');
   await expect(find).toHaveCount(0);
   await expect.poll(painted).toEqual({ active: [], matches: [] });
