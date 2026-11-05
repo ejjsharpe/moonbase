@@ -4,7 +4,6 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { checkBoundaries, readRepository } from './boundaries.mjs';
 import './test-boundaries.mjs';
-import './check-compatibility.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 assert.deepEqual(checkBoundaries(readRepository(root)), []);

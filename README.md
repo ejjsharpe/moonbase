@@ -1,33 +1,25 @@
 # Moonbase
 
-A macOS workbench for local editing and local/optional remote Pi Durable chat. Reusable packages own feature behavior; clients compose them through public interfaces and supply platform capabilities.
+A macOS workbench for editing local projects and chatting with Pi Durable agents, locally or on a remote host over SSH.
 
 | Module | Owns |
 | --- | --- |
-| [Contracts](packages/contracts/README.md) | Independent DTOs, schemas, clients and Effect service ports |
-| [Effect helpers](packages/effect/README.md) | Safe shared failure normalization and resource release |
-| [Application](packages/application/README.md) | Headless editor/chat features, composition, lifecycle and shared dispatch |
-| [Workbench](packages/workbench/README.md) | Project-scoped file sidebar, buffers and React/Monaco editor presentation |
-| [Workspace](packages/workspace/README.md) | Local files/Git, recovery and scoped native/watch resources |
-| [Pi runtime](packages/pi-runtime/README.md) | Pi chat execution, local provider setup, host transport and remote adapter |
-| [SSH](packages/ssh/README.md) | Scoped, authenticated SSH connectivity |
-| [UI](packages/ui/README.md) | Shared StyleX tokens and recipes |
+| [Contracts](packages/contracts/README.md) | Shared DTOs, schemas, client interfaces and Effect service ports |
+| [Effect helpers](packages/effect/README.md) | Shared failure normalization and resource release |
+| [Application](packages/application/README.md) | Headless editor/chat controllers, composition and lifecycle |
+| [Workbench](packages/workbench/README.md) | Project file sidebar, buffers and React/Monaco editor |
+| [Workspace](packages/workspace/README.md) | Local files, Git, recovery storage and file watching |
+| [Pi runtime](packages/pi-runtime/README.md) | Pi chat execution, provider setup, host server and remote adapter |
+| [SSH](packages/ssh/README.md) | Authenticated SSH port forwarding to a chat host |
+| [UI](packages/ui/README.md) | Shared StyleX tokens, recipes and icons |
 | [Config](packages/config/README.md) | Lint, formatting and TypeScript defaults |
-| [Desktop](apps/desktop/README.md) | Main navigation, project/Chat composition, native authority and packaging |
+| [Desktop](apps/desktop/README.md) | Electron app: navigation, Chat view, native capabilities and packaging |
 
-Packages consume public exports, accept injected dependencies and stay independent of client applications. Each process owns one scoped Effect runtime; standalone clients acquire only the capabilities they use. See [AGENTS.md](AGENTS.md) for contribution rules and [DESIGN.md](docs/DESIGN.md) for UI guidance.
-
-Pi remains one infrastructure owner. Its [private ownership map](packages/pi-runtime/docs/OWNERSHIP.md) separates command coordination, bounded history/live projection and scoped resource acquisition behind the existing layers and transport exports.
-
-Use [`createMoonbaseApplication`](packages/application/docs/LIFECYCLE.md) with injected clients, stable identities and synchronous storage for editor-only, chat-only or combined applications. Each application owns one client runtime and independent feature scopes; Electron main keeps its privileged runtime. The [direct headless consumer](packages/application/docs/HEADLESS-CONSUMER.md) demonstrates ordinary TypeScript use and the separate responsibilities of a future process/language adapter.
-
-The [architecture](docs/HEADLESS-ARCHITECTURE.md) describes enforced ownership, public exports, helper decisions and fixed compatibility fixtures.
+See [AGENTS.md](AGENTS.md) for contribution rules.
 
 ## Development
 
-Use Conventional Commit PR titles, for example `fix(editor): retain drafts` or `feat: add workspace search`. The required `conventional-commits` check validates titles, and PRs use squash merging with the PR title as the commit subject. Keep that generated subject when merging.
-
-Use Bun 1.4.4 and Node 26.13.0. Workspace/native desktop builds require macOS and Xcode command-line tools.
+Use Bun 1.4.4 and Node 26.13.0. Native workspace and desktop builds require macOS and Xcode command-line tools.
 
 ```sh
 bun install --frozen-lockfile
@@ -36,10 +28,10 @@ bun run typecheck
 bun run lint
 bun run test
 bun run format:check
+bun run test:editor-integration
+bun run test:chat-integration
 ```
 
-The root source test command checks repository scripts, then runs package suites serially because concurrent native/process fixtures can delay filesystem watcher delivery beyond its existing deadline. Each package retains its own test concurrency and timeouts.
+`bun run test` runs package suites serially, because concurrent native/process fixtures can delay file-watcher delivery past test deadlines. Generated test output goes in ignored `test-results/`; build output goes in `dist/` and `release/`.
 
-Package READMEs cover setup and focused checks. The [editor/workspace](tests/editor-workspace/README.md) and [chat](tests/chat/README.md) suites test cross-module integration. Generated test output belongs in ignored `test-results/`; build/package output belongs in `dist/` and `release/`.
-
-Human acceptance remains pending. Controlled tests do not qualify real SSH/providers, packaged/native interaction, signing/notarization, VoiceOver, physical durability or Intel execution.
+PR titles use Conventional Commits, for example `fix(editor): retain drafts`; the `conventional-commits` check enforces this. PRs are squash-merged with the PR title as the commit subject.
