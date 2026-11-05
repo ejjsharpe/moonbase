@@ -1312,3 +1312,44 @@ test('large part manifests release descriptors before evicting navigable history
     [],
   );
 });
+
+test('a delayed initial read must not supersede a newer explicit Latest navigation', async (t) => {
+  const f = await transcriptController(t, 640);
+  f.controller.setTranscriptView({ anchor: { entryId: 'e100', offset: -4 }, expanded: [] });
+  await f.controller.detach();
+  const firstEntered = Promise.withResolvers<void>();
+  const secondEntered = Promise.withResolvers<void>();
+  const firstGate = Promise.withResolvers<void>();
+  const secondGate = Promise.withResolvers<void>();
+  let requests = 0;
+  f.handlers.set('getChat', async (_input, _signal, fallback) => {
+    const reply = fallback();
+    if (++requests === 1) {
+      firstEntered.resolve();
+      await firstGate.promise;
+    } else {
+      secondEntered.resolve();
+      await secondGate.promise;
+    }
+    return reply;
+  });
+  try {
+    const starting = f.controller.start();
+    await firstEntered.promise;
+    f.fixture.publish(f.fixture.snapshot);
+    const latest = f.controller.jumpToLatest();
+    await secondEntered.promise;
+    firstGate.resolve();
+    await starting;
+    secondGate.resolve();
+    await latest;
+    await tick();
+    const state = f.controller.getSnapshot().transcript;
+    assert.equal(state.atLatest, true);
+    assert.equal(state.view.anchor, null);
+    assert.equal(state.entries.at(-1)?.id, 'e639');
+  } finally {
+    firstGate.resolve();
+    secondGate.resolve();
+  }
+});

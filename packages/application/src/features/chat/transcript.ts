@@ -162,6 +162,7 @@ export class TranscriptOwner {
   private olderEnd = true;
   private newerEnd = true;
   private following = true;
+  private restorePending = true;
   private alive = true;
   private failed = false;
   private lifetime = new AbortController();
@@ -524,6 +525,8 @@ export class TranscriptOwner {
       : transcript;
   }
   restore() {
+    if (!this.restorePending) return Promise.resolve();
+    this.restorePending = false;
     const anchor = this.state.view.anchor;
     // View memory is a location hint; only content reads need source proofs.
     return anchor && !anchor.source ? this.around(anchor.entryId, false) : Promise.resolve();
@@ -567,6 +570,7 @@ export class TranscriptOwner {
     const pending = this.jobs.get('history');
     if (pending) return pending.promise;
     if (!this.current() || !this.state[direction]) return Promise.resolve();
+    this.restorePending = false;
     // Freeze the reading window before loading can notify a subscriber.
     this.following = false;
     return this.run('history', async (signal) => {
@@ -649,6 +653,7 @@ export class TranscriptOwner {
         : 0;
   }
   around(entryId: string, resetView = true) {
+    if (resetView) this.restorePending = false;
     this.following = false;
     this.jobs.get('history')?.abort.abort();
     this.jobs.delete('history');
@@ -668,6 +673,7 @@ export class TranscriptOwner {
     });
   }
   latest = () => {
+    this.restorePending = false;
     this.jobs.get('history')?.abort.abort();
     this.jobs.delete('history');
     return this.run('history', async (signal) => {
@@ -716,6 +722,7 @@ export class TranscriptOwner {
       this.dependencies.target,
       view,
     );
+    this.restorePending = false;
     this.rememberView(captured);
     if (captured.anchor) this.following = !!captured.anchor.source;
     this.publish();
