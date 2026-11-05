@@ -49,7 +49,7 @@ export function Transcript({
   }, []);
   const follow = useRef(!state.transcript.view.anchor),
     anchor = useRef<TranscriptViewAnchor | null>(state.transcript.view.anchor),
-    restoringLive = useRef(!!state.transcript.view.anchor?.source),
+    restoring = useRef(!!state.transcript.view.anchor),
     domAnchor = useRef<{ node: HTMLElement; offset: number } | null>(null);
   const current = useRef(state);
   useLayoutEffect(() => {
@@ -126,13 +126,7 @@ export function Transcript({
     const element = root.current;
     if (!element) return;
     const observed = controller.getSnapshot();
-    if (
-      observed.transcript.view.anchor?.source &&
-      (observed.transcript.viewStatus !== 'ready' ||
-        restoringLive.current ||
-        JSON.stringify(observed.transcript.view.anchor) !== JSON.stringify(anchor.current))
-    )
-      return;
+    if (restoring.current) return;
     const top = getReadingTop(element);
     const nodes = [
       ...element.querySelectorAll<HTMLElement>(
@@ -164,17 +158,12 @@ export function Transcript({
         const parts = manifest && sameSource(summary, manifest) ? manifest.parts : summary.parts;
         const part = parts.find((part) => part.partId === partNode?.dataset.transcriptPart);
         if (!part || part.availability !== 'available') return;
-        const saved = observed.transcript.view.anchor;
-        const selection =
-          saved?.source && saved.partId === part.partId && sameSource(summary, saved)
-            ? saved
-            : part;
         anchor.current = {
           backendId: controller.backendId,
           source: summary.source,
           partId: part.partId,
-          bytes: selection.bytes,
-          revision: selection.revision,
+          bytes: part.bytes,
+          revision: part.revision,
           offset: partNode!.getBoundingClientRect().top - top,
         };
       } else
@@ -208,7 +197,7 @@ export function Transcript({
       setTop(element.scrollHeight);
       return;
     }
-    const target = anchor.current ?? current.current.transcript.view.anchor;
+    const target = anchor.current;
     if (!target) {
       const saved = domAnchor.current;
       if (saved?.node.isConnected)
@@ -220,21 +209,15 @@ export function Transcript({
         );
       return;
     }
-    const observed = controller.getSnapshot();
-    if (
-      target.source &&
-      (observed.transcript.viewStatus !== 'ready' ||
-        target.backendId !== controller.backendId ||
-        JSON.stringify(target.source) !==
-          JSON.stringify(observed.snapshot?.run?.transcript?.source))
-    )
+    if (target.source && target.backendId !== controller.backendId) return;
+    if (restoring.current && (!current.current.snapshot || current.current.transcript.loading))
       return;
     const nodes = [
       ...element.querySelectorAll<HTMLElement>('[data-transcript-entry], [data-transcript-live]'),
     ];
     const entry = nodes.find((node) =>
       target.source
-        ? node.dataset.transcriptLive === JSON.stringify(target.source)
+        ? !!node.dataset.transcriptLive
         : node.dataset.transcriptEntry === target.entryId,
     );
     const part =
@@ -242,7 +225,21 @@ export function Transcript({
       [...(entry?.querySelectorAll<HTMLElement>('[data-transcript-part]') ?? [])].find(
         (node) => node.dataset.transcriptPart === target.partId,
       );
-    const node = part || (target.source && target.partId ? undefined : entry);
+    const manifest = current.current.transcript.manifest;
+    const summary = target.source
+      ? current.current.snapshot?.run?.transcript
+      : current.current.transcript.entries.find((entry) => entry.id === target.entryId)?.transcript;
+    if (
+      restoring.current &&
+      target.partId &&
+      !part &&
+      summary &&
+      (manifest && sameSource(summary, manifest)
+        ? !manifest.error && manifest.status !== 'complete'
+        : !!summary.nextCursor)
+    )
+      return;
+    const node = part || entry || (restoring.current ? nodes.at(-1) : undefined);
     if (node) {
       setTop(
         element.scrollTop +
@@ -250,14 +247,22 @@ export function Transcript({
           getReadingTop(element) -
           target.offset,
       );
-      restoringLive.current = false;
+      const fallback = (!part && !!target.partId) || !entry;
+      restoring.current = false;
+      if (fallback) {
+        anchor.current = null;
+        domAnchor.current = {
+          node,
+          offset: node.getBoundingClientRect().top - getReadingTop(element),
+        };
+      }
     }
   }, [controller]);
   useLayoutEffect(() => {
     const view = state.transcript.view.anchor;
     if (!navigation.current && view && JSON.stringify(view) !== JSON.stringify(anchor.current)) {
       anchor.current = view;
-      restoringLive.current = !!view.source;
+      restoring.current = true;
       follow.current = false;
       setFollowing(false);
     }
@@ -271,6 +276,7 @@ export function Transcript({
   }, [restore]);
   const move = useCallback(
     (direction: 'earlier' | 'later') => {
+      restoring.current = false;
       topIntent.current = false;
       lastMove.current = direction;
       follow.current = false;
@@ -320,7 +326,7 @@ export function Transcript({
     setEarlierRow(false);
     follow.current = true;
     anchor.current = null;
-    restoringLive.current = false;
+    restoring.current = false;
     domAnchor.current = null;
     setFollowing(true);
     const revision = ++navigationRevision.current;
@@ -376,6 +382,10 @@ export function Transcript({
       tabIndex={0}
       onScroll={scroll}
       onWheel={(event) => {
+        if (restoring.current) {
+          restoring.current = false;
+          anchor.current = null;
+        }
         if (event.deltaY < 0) {
           follow.current = false;
           topIntent.current = true;
@@ -396,12 +406,19 @@ export function Transcript({
           event.target === event.currentTarget &&
           ['PageUp', 'Home', 'ArrowUp'].includes(event.key)
         ) {
+          restoring.current = false;
+          anchor.current = null;
           follow.current = false;
           topIntent.current = true;
+          capture();
           setFollowing(false);
         }
       }}
       onPointerDown={(event) => {
+        if (event.target === event.currentTarget || event.pointerType === 'touch') {
+          restoring.current = false;
+          anchor.current = null;
+        }
         topIntent.current = event.target === event.currentTarget || event.pointerType === 'touch';
         follow.current = false;
         setFollowing(false);
@@ -456,33 +473,6 @@ export function Transcript({
               role={notice.error ? 'alert' : 'status'}
               {...stylex.props(notice.error ? styles.warning : styles.small, styles.feedback)}>
               {notice.text}
-            </p>
-          )}
-          {status.view.anchor?.source && status.viewStatus === 'pending' && (
-            <p role="status" {...stylex.props(styles.small)}>
-              Restoring the saved live position…
-            </p>
-          )}
-          {status.viewError && (
-            <p role="alert" {...stylex.props(styles.warning)}>
-              {status.viewError}{' '}
-              <Button
-                {...stylex.props(controls.button)}
-                onClick={() => {
-                  try {
-                    controller.setTranscriptView(status.view);
-                  } catch (error) {
-                    setNotice({
-                      error: true,
-                      text:
-                        error instanceof Error
-                          ? error.message
-                          : 'The saved live position is unavailable. Jump to latest.',
-                    });
-                  }
-                }}>
-                Reload live position
-              </Button>
             </p>
           )}
         </div>
@@ -615,9 +605,7 @@ const Entry = memo(function Entry({
   const revealPart =
     saved?.partId &&
     transcript &&
-    (saved.source
-      ? state.viewStatus === 'ready' && sameSource(transcript, saved)
-      : saved.entryId === entry.id)
+    (saved.source ? transcript.source.kind === 'live' : saved.entryId === entry.id)
       ? saved.partId
       : undefined;
   useEffect(() => {
@@ -783,18 +771,16 @@ function Part({
   }, [disclosure]);
   const expansion = typeof disclosure === 'string' ? disclosure : resolved;
   const saved = state.view.anchor;
-  const applyView = !saved?.source || state.viewStatus === 'ready';
   const anchored =
     saved?.partId === part.partId &&
-    (saved.source ? sameSource(transcript, saved) : saved.entryId === entryId);
+    (saved.source ? transcript.source.kind === 'live' : saved.entryId === entryId);
   const anchorKey = anchored ? JSON.stringify({ ...saved, offset: 0 }) : null;
   const [collapsedAnchor, setCollapsedAnchor] = useState<string | null>(null);
   if (!anchored && collapsedAnchor !== null) setCollapsedAnchor(null);
   const expanded =
     disclosureError ||
-    (applyView &&
-      ((expansion !== null && state.view.expanded.includes(expansion)) ||
-        (anchored && collapsedAnchor !== anchorKey)));
+    (expansion !== null && state.view.expanded.includes(expansion)) ||
+    (anchored && collapsedAnchor !== anchorKey);
   const content = state.content.find(
     (item) =>
       sameSource(transcript, item) &&

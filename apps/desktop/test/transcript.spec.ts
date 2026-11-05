@@ -34,7 +34,7 @@ for (const [name, source, count, body] of [
     await live.getByRole('button', { name: 'Copy code', exact: true }).click();
     await expect
       .poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1)))
-      .toBe(body.replace(/\r\n?/g, '\n').replace(/\n$/, ''));
+      .toBe(body.replace(/\r\n$/, ''));
     await mkdir(output, { recursive: true });
     await page.screenshot({ path: resolve(output, `r2-${name.replaceAll(' ', '-')}.png`) });
   });
@@ -115,7 +115,6 @@ for (const mode of ['durable', 'live'] as const)
     const others = await page.evaluate(
       () => window.demo.application.chat!.getSnapshot().transcript.view.expanded,
     );
-    await part.getByRole('button', { expanded: false }).first().click();
     await page.evaluate((mode) => {
       const controller = window.demo.application.chat!;
       const state = controller.getSnapshot();
@@ -223,7 +222,7 @@ test('safe GFM, literal user content, progressive source, exact native callbacks
   await row.getByRole('button', { name: 'Copy code', exact: true }).click();
   await expect
     .poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1)))
-    .toBe('  const moon = "🌔";\t\nconsole.log(moon);');
+    .toBe('  const moon = "🌔";\t\r\nconsole.log(moon);');
   await row.getByRole('button', { name: 'Output', exact: true }).click();
   await expect(row.getByText(/Read more/)).toBeVisible();
   await row.getByRole('button', { name: 'Copy part', exact: true }).first().click();
@@ -351,13 +350,23 @@ test('128-row reuse, unchanged sibling DOM, selection/focus and anchors during l
   await transcript(page).evaluate((element) => {
     element.scrollTop = 2000;
   });
-  await page.waitForTimeout(100);
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
   const position = await page.evaluate(
     () => window.demo.application.chat!.getSnapshot().transcript.view.anchor,
   );
   expect(position).not.toBeNull();
   await page.evaluate(() => window.demo.transcript!.live('A much larger live answer\n'.repeat(40)));
-  await page.waitForTimeout(100);
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
   expect(
     await page.evaluate(
       () => window.demo.application.chat!.getSnapshot().transcript.view.anchor?.entryId,
@@ -584,7 +593,7 @@ test('retired live DOM stays pinned for focus/selection and never enters durable
   await expect(page.locator('[data-retained-selection]')).toHaveCount(0);
 });
 
-test('application live-part memory restores only the exact source across panel replacement, then reports retirement', async ({
+test('application live-part memory restores a saved row after changed text and falls back nearby after retirement', async ({
   page,
 }) => {
   await open(page);
@@ -657,33 +666,7 @@ test('application live-part memory restores only the exact source across panel r
       ),
     ),
   );
-  await page.evaluate(() => {
-    const original = window.demo.chat.dependencies.chat.command;
-    const gate = Promise.withResolvers<void>();
-    let released = false;
-    Object.assign(window, {
-      releaseLiveProof: () => {
-        released = true;
-        gate.resolve();
-      },
-    });
-    window.demo.chat.dependencies.chat.command = async (operation, input, options) => {
-      if (
-        operation === 'getChatTranscriptContent' &&
-        'selection' in input &&
-        input.selection?.partId === 'm0.b5' &&
-        !released
-      )
-        await gate.promise;
-      return original(operation, input, options) as never;
-    };
-  });
   await page.getByRole('button', { name: 'Open Chat panel', exact: true }).click();
-  await expect(page.getByText('Restoring the saved live position…', { exact: true })).toBeVisible();
-  await expect(selected.getByText('Output 4', { exact: false })).toHaveCount(0);
-  await page.evaluate(() =>
-    (window as typeof window & { releaseLiveProof(): void }).releaseLiveProof(),
-  );
   await expect(selected.getByText('Output 4', { exact: false })).toBeVisible();
   await expect
     .poll(() =>
@@ -696,6 +679,15 @@ test('application live-part memory restores only the exact source across panel r
       ),
     )
     .toBe(true);
+  await expect
+    .poll(() =>
+      selected.evaluate(
+        (part) =>
+          part.getBoundingClientRect().top -
+          document.querySelector('[data-transcript-chrome]')!.getBoundingClientRect().bottom,
+      ),
+    )
+    .toBeCloseTo(before!.offset, 0);
   const restored = await page.evaluate(() => {
     const controller = window.demo.application.chat!;
     const part = document.querySelector<HTMLElement>(
@@ -706,13 +698,11 @@ test('application live-part memory restores only the exact source across panel r
       replacement:
         controller !== (window as typeof window & { replacedChat: unknown }).replacedChat,
       anchor: controller.getSnapshot().transcript.view.anchor,
-      status: controller.getSnapshot().transcript.viewStatus,
       offset: part.getBoundingClientRect().top - chrome.getBoundingClientRect().bottom,
     };
   });
   expect(restored.replacement).toBe(true);
   expect(restored.anchor).toEqual(before);
-  expect(restored.status).toBe('ready');
   expect(Math.abs(restored.offset - before!.offset)).toBeLessThan(3);
   await page.evaluate(() => {
     const run = window.demo.chat.snapshot.run!;
@@ -720,18 +710,16 @@ test('application live-part memory restores only the exact source across panel r
     run.transcript!.source = { ...run.transcript!.source, attempt: 1, incarnation: 'b'.repeat(64) };
     window.demo.chat.controls.receiveChat(structuredClone(window.demo.chat.snapshot));
   });
+  await expect(selected.getByText('Output 4', { exact: false })).toHaveCount(0);
   await expect(
-    page.getByRole('alert').filter({ hasText: 'anchored live source retired or changed' }),
+    page.getByRole('alert').filter({ hasText: /Application effect failed\s*Retry parts/ }),
   ).toBeVisible();
-  expect(
-    await page.evaluate(() => window.demo.application.chat!.getSnapshot().transcript.view.anchor),
-  ).toEqual(before);
   await page.getByRole('button', { name: 'Close Chat panel', exact: true }).click();
   await page.getByRole('button', { name: 'Open Chat panel', exact: true }).click();
+  await expect(page.locator('[data-transcript-live]')).toBeVisible();
   await expect(
-    page.getByRole('alert').filter({ hasText: 'anchored live source retired or changed' }),
+    page.getByRole('alert').filter({ hasText: /Application effect failed\s*Retry parts/ }),
   ).toBeVisible();
-  await expect(selected.getByText('Output 4', { exact: false })).toHaveCount(0);
   await page.getByRole('button', { name: 'Jump to latest', exact: true }).click();
   await expect
     .poll(() =>
@@ -741,4 +729,103 @@ test('application live-part memory restores only the exact source across panel r
   expect(
     await page.evaluate(() => window.demo.application.chat!.getSnapshot().transcript.view.expanded),
   ).toEqual([]);
+  await page.evaluate(() => {
+    window.demo.chat.snapshot.run = null;
+    window.demo.chat.controls.receiveChat(structuredClone(window.demo.chat.snapshot));
+  });
+  await expect(page.locator('[data-transcript-live]')).toHaveCount(0);
+  await expect(answer(page)).toBeAttached();
+  await expect(page.getByRole('alert').filter({ hasText: 'anchored live source' })).toHaveCount(0);
+});
+
+test('user scrolling releases a saved part restoration while its manifest is held', async ({
+  page,
+}) => {
+  await open(page);
+  await page.evaluate(async () => {
+    await window.demo.transcript!.live(
+      'Live reading\n'.repeat(80),
+      Array.from({ length: 5 }, (_, index) => `Output ${index}\n` + 'line\n'.repeat(80)),
+    );
+    const controller = window.demo.application.chat!;
+    await controller.jumpToLatest();
+    const source = controller.getSnapshot().snapshot!.run!.transcript!.source;
+    await controller.loadTranscriptManifest(source);
+    await controller.loadTranscriptManifest(source);
+    const part = controller
+      .getSnapshot()
+      .transcript.manifest!.parts.find((part) => part.partId === 'm0.b5')!;
+    if (source.kind !== 'live') throw Error('Expected live source');
+    controller.setTranscriptView({
+      anchor: {
+        backendId: controller.backendId,
+        source,
+        partId: part.partId,
+        bytes: part.bytes,
+        revision: part.revision,
+        offset: 16,
+      },
+      expanded: [],
+    });
+  });
+  await expect(
+    page.locator('[data-transcript-live] [data-transcript-part="m0.b5"] pre'),
+  ).toBeVisible();
+  await page.getByRole('button', { name: 'Close Chat panel', exact: true }).click();
+  await page.evaluate(() => {
+    const original = window.demo.chat.dependencies.chat.command;
+    const gate = Promise.withResolvers<void>();
+    Object.assign(window, { releaseManifest: () => gate.resolve(), manifestHeld: false });
+    window.demo.chat.dependencies.chat.command = async (operation, input, options) => {
+      if (
+        operation === 'getChatTranscriptContent' &&
+        'source' in input &&
+        !('selection' in input)
+      ) {
+        Object.assign(window, { manifestHeld: true });
+        await gate.promise;
+      }
+      return original(operation, input, options) as never;
+    };
+  });
+  await page.getByRole('button', { name: 'Open Chat panel', exact: true }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(() => (window as typeof window & { manifestHeld: boolean }).manifestHeld),
+    )
+    .toBe(true);
+  await transcript(page).hover();
+  await page.mouse.wheel(0, 480);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => window.demo.application.chat!.getSnapshot().transcript.view.anchor?.entryId,
+      ),
+    )
+    .toBeTruthy();
+  const before = await transcript(page).evaluate((element) => ({
+    top: element.scrollTop,
+    anchor: window.demo.application.chat!.getSnapshot().transcript.view.anchor,
+  }));
+  await page.evaluate(() =>
+    (window as typeof window & { releaseManifest(): void }).releaseManifest(),
+  );
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.demo.application.chat!.getSnapshot().transcript.manifest?.status),
+    )
+    .toBe('partial');
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
+  expect(await transcript(page).evaluate((element) => element.scrollTop)).toBeCloseTo(
+    before.top,
+    0,
+  );
+  expect(
+    await page.evaluate(() => window.demo.application.chat!.getSnapshot().transcript.view.anchor),
+  ).toEqual(before.anchor);
 });
