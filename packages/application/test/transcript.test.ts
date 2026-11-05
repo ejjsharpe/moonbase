@@ -1018,29 +1018,90 @@ test('cancelling a held prefix proof fences progress and retains actual cleanup 
     selection: chosen,
     onProgress: () => progress++,
   });
-  const rejected = assert.rejects(
-    iterator.next(),
-    (error) => ApplicationError.is(error) && error.code === 'Cancelled',
-  );
+  let iterationSettled = false;
+  const rejected = assert
+    .rejects(iterator.next(), (error) => ApplicationError.is(error) && error.code === 'Cancelled')
+    .then(() => {
+      iterationSettled = true;
+    });
   try {
     await entered.promise;
     let settled = false;
     const closing = f.controller.detach().then(() => {
       settled = true;
     });
-    await rejected;
+    await tick();
+    assert.equal(iterationSettled, false);
     assert.equal(progress, 0);
     assert.equal(settled, false);
     await f.controller.start();
     const replacement = f.controller.getSnapshot();
     held.resolve();
-    await closing;
+    await Promise.all([closing, rejected]);
     assert.equal(f.controller.getSnapshot(), replacement);
   } finally {
     held.resolve();
     await iterator.return(undefined);
   }
 });
+
+for (const failure of [false, true])
+  test(`cancelled controller iteration joins its own held IO (${failure ? 'failure' : 'success'}) while unrelated iteration remains usable`, async (t) => {
+    const f = await transcriptController(t, 2),
+      source = f.entries[0].transcript!.source,
+      chosen = selection(f.entries[0].transcript!.parts[0]);
+    const entered = Promise.withResolvers<void>(),
+      held = Promise.withResolvers<void>();
+    f.handlers.set('getChatTranscriptContent', async (raw, _signal, fallback) => {
+      const result = fallback();
+      if (JSON.stringify((raw as { source: unknown }).source) === JSON.stringify(source)) {
+        entered.resolve();
+        await held.promise;
+        if (failure)
+          throw new ApplicationError({
+            code: 'Persistence',
+            message: 'Controlled late read failure',
+          });
+      }
+      return result;
+    });
+    const job = new AbortController();
+    let settled = false,
+      progress = 0;
+    const reading = assert
+      .rejects(
+        collect(
+          f.controller.iterateTranscript(source, {
+            selection: chosen,
+            signal: job.signal,
+            onProgress: () => progress++,
+          }),
+        ),
+        (error) => ApplicationError.is(error) && error.code === 'Cancelled',
+      )
+      .then(() => {
+        settled = true;
+      });
+    try {
+      await entered.promise;
+      job.abort();
+      await tick();
+      assert.equal(settled, false);
+      assert.equal(progress, 0);
+      assert.equal(
+        await collect(f.controller.iterateTranscript(f.entries[1].transcript!.source)),
+        'same text',
+      );
+      assert.equal(settled, false);
+      held.resolve();
+      await reading;
+      assert.equal(settled, true);
+      assert.equal(progress, 0);
+    } finally {
+      held.resolve();
+      await reading;
+    }
+  });
 
 test('held older navigation keeps its captured window through a disjoint latest snapshot', async (t) => {
   const f = await transcriptController(t, 64);
