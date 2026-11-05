@@ -95,6 +95,17 @@ export function FilesTree({
     !state.disposed &&
     checkoutKey(menu.checkout) === checkoutIdentity &&
     rows.some((row) => row.path === menu.path);
+  useLayoutEffect(() => {
+    if (!menuAvailable) return;
+    const ownerDocument = treeElement.current!.ownerDocument;
+    function dismissForDialog(event: FocusEvent) {
+      if (!(event.target instanceof Element) || !event.target.closest('[role="dialog"]')) return;
+      restoreMenuFocus.current = false;
+      setMenu(null);
+    }
+    ownerDocument.addEventListener('focusin', dismissForDialog);
+    return () => ownerDocument.removeEventListener('focusin', dismissForDialog);
+  }, [menuAvailable]);
   useEffect(() => {
     if (menu && !menuAvailable) {
       setMenu(null);
@@ -375,15 +386,6 @@ export function FilesTree({
               onFocus={(event) => {
                 if (event.target === event.currentTarget)
                   event.currentTarget.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
-              }}
-              onBlur={(event) => {
-                if (
-                  event.relatedTarget instanceof Element &&
-                  event.relatedTarget.closest('[role="dialog"]')
-                ) {
-                  restoreMenuFocus.current = false;
-                  setMenu(null);
-                }
               }}
               onKeyDownCapture={(event) => {
                 if (event.key === 'Tab') {

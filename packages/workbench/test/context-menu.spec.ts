@@ -5,6 +5,8 @@ declare global {
   interface Window {
     finishMenuOpening(): Promise<void>;
     releaseTreeScroll(): void;
+    resumeMenuFrames(): number;
+    releaseMenuFocus(): void;
   }
 }
 
@@ -23,6 +25,38 @@ async function holdMenuOpening(page: Page) {
       observer.disconnect();
     });
     observer.observe(document, { childList: true, subtree: true });
+  });
+}
+
+async function holdMenuFocus(page: Page) {
+  await page.addInitScript(() => {
+    document.addEventListener(
+      'contextmenu',
+      () => {
+        const request = window.requestAnimationFrame.bind(window);
+        const cancel = window.cancelAnimationFrame.bind(window);
+        const frames = new Map<number, FrameRequestCallback>();
+        let id = 0;
+        window.requestAnimationFrame = (callback) => {
+          frames.set(--id, callback);
+          return id;
+        };
+        window.cancelAnimationFrame = (handle) => {
+          if (!frames.delete(handle)) cancel(handle);
+        };
+        window.resumeMenuFrames = () => {
+          window.requestAnimationFrame = request;
+          return frames.size;
+        };
+        window.releaseMenuFocus = () => {
+          window.requestAnimationFrame = request;
+          window.cancelAnimationFrame = cancel;
+          for (const callback of frames.values()) request(callback);
+          frames.clear();
+        };
+      },
+      { once: true, capture: true },
+    );
   });
 }
 
@@ -463,31 +497,38 @@ test('an externally opened mutation dialog dismisses an unchosen menu without re
   await expect(dialog).toHaveCount(0);
 });
 
-test('another workbench preservation dialog dismisses the menu and owns the first click', async ({
-  page,
-}) => {
-  await page.goto('/');
-  await row(page, 'README.md').click({ button: 'right' });
-  await page.evaluate(() => {
-    const { second, checkout } = window.demo;
-    second.edit({ checkout, path: 'welcome.ts' }, 'Other editor dirty text');
-    void second.close([{ checkout, path: 'welcome.ts' }]);
+for (const timing of ['focused', 'pending focus'])
+  test(`another workbench preservation dialog dismisses the menu and owns the first click (${timing})`, async ({
+    page,
+  }) => {
+    if (timing === 'pending focus') await holdMenuFocus(page);
+    await page.goto('/');
+    await row(page, 'README.md').click({ button: 'right' });
+    if (timing === 'pending focus')
+      expect(await page.evaluate(() => window.resumeMenuFrames())).toBeGreaterThan(0);
+    else await expect(item(page, 'Rename')).toBeFocused();
+    await page.evaluate(() => {
+      const { second, checkout } = window.demo;
+      second.edit({ checkout, path: 'welcome.ts' }, 'Other editor dirty text');
+      void second.close([{ checkout, path: 'welcome.ts' }]);
+    });
+    const dialog = page.getByRole('dialog', { name: 'Save changes before closing?', exact: true });
+    await expect(dialog.getByRole('button', { name: 'Save', exact: true })).toBeFocused();
+    if (timing === 'pending focus') await page.evaluate(() => window.releaseMenuFocus());
+    await expect(menu(page)).toHaveCount(0);
+    await expect(dialog.getByRole('button', { name: 'Save', exact: true })).toBeFocused();
+    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(tree(page)).not.toBeFocused();
+    expect(
+      await page.evaluate(
+        () =>
+          window.demo.second
+            .getSnapshot()
+            .buffers.find((buffer) => buffer.target.path === 'welcome.ts')?.text,
+      ),
+    ).toBe('Other editor dirty text');
   });
-  const dialog = page.getByRole('dialog', { name: 'Save changes before closing?', exact: true });
-  await expect(menu(page)).toHaveCount(0);
-  await expect(dialog.getByRole('button', { name: 'Save', exact: true })).toBeFocused();
-  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
-  await expect(dialog).toHaveCount(0);
-  await expect(tree(page)).not.toBeFocused();
-  expect(
-    await page.evaluate(
-      () =>
-        window.demo.second
-          .getSnapshot()
-          .buffers.find((buffer) => buffer.target.path === 'welcome.ts')?.text,
-    ),
-  ).toBe('Other editor dirty text');
-});
 
 for (const timing of ['normal', 'before completion', 'late completion'])
   test(`keyboard activation runs the captured action after later selection changes (${timing})`, async ({
