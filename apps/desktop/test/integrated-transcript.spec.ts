@@ -8,6 +8,7 @@ import {
 import { mkdtemp, realpath, rm, copyFile, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { controlledHostFixture, until } from '../../../tests/chat/fixture.ts';
 import { selectRemoteChat, createRemoteChat } from './chat-target.ts';
 import { captureNative } from './editor-regressions.ts';
@@ -16,6 +17,7 @@ type Control = {
   calls: { kind: string; operation: string }[];
   copied: string[];
   requests: number;
+  beforeMain: boolean;
   first(): void;
   next(): void;
   finish(): void;
@@ -33,19 +35,23 @@ async function recordEvidence(name: string, value: unknown) {
   await test.info().attach(name, { path, contentType: 'application/json' });
 }
 async function launch(directory: string, host?: Host) {
+  const launcher = join(directory, 'package-launcher');
+  if (packaged) {
+    if (/\s/.test(process.execPath))
+      throw Error('Controlled Node executable path contains whitespace');
+    await writeFile(
+      launcher,
+      `#!${process.execPath}\nvoid import(${JSON.stringify(pathToFileURL(resolve('test/package-transcript-launcher.mjs')).href)});\n`,
+      { mode: 0o700 },
+    );
+  }
   const app = await electron.launch({
     ...(packaged
       ? {
-          executablePath: resolve(
-            `release/${process.arch === 'arm64' ? 'mac-arm64' : 'mac'}/Moonbase.app/Contents/MacOS/Moonbase`,
-          ),
+          executablePath: launcher,
         }
       : {}),
-    args: [
-      '-r',
-      resolve('test/integrated-harness.cjs'),
-      ...(packaged ? [] : [resolve('dist/main.mjs')]),
-    ],
+    args: packaged ? [] : ['-r', resolve('test/integrated-harness.cjs'), resolve('dist/main.mjs')],
     env: {
       PATH: '/usr/bin:/bin',
       HOME: process.env.HOME!,
@@ -60,6 +66,7 @@ async function launch(directory: string, host?: Host) {
   const page = await app.firstWindow();
   expect(await app.evaluate(({ app }) => app.isPackaged)).toBe(packaged);
   expect(await app.evaluate(() => !!globalThis.integratedTranscript)).toBe(true);
+  expect(await app.evaluate(() => globalThis.integratedTranscript.beforeMain)).toBe(true);
   expect(page.url()).toBe('moonbase://editor/index.html');
   await page.evaluate(() => {
     Object.assign(window, { integratedViolations: [] as string[] });
@@ -88,7 +95,12 @@ async function quit(app: ElectronApplication) {
         return (error as NodeJS.ErrnoException).code === 'ESRCH';
       }
     }, Boolean);
-  await recordEvidence('process-cleanup', { pids, absent: true, normalQuit: true });
+  await recordEvidence('process-cleanup', {
+    launcherPid: child.pid,
+    pids,
+    absent: true,
+    normalQuit: true,
+  });
 }
 async function cleanup(app: ElectronApplication | undefined, host?: Host) {
   const child = app && children.get(app);
