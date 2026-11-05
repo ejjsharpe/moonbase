@@ -171,7 +171,7 @@ export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabili
       }))
         text += chunk.data;
       copied.push(
-        input.code ? parseTranscriptMarkdown(text).codeBlocks[input.code!.index]!.text : text,
+        input.code ? parseTranscriptMarkdown(text).codeBlocks[input.code!.index]!.value : text,
       );
     },
     async openLink(url) {

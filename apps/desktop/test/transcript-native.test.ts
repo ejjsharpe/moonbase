@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { test, after } from 'node:test';
-import { marked } from 'marked';
-import { MarkdownCache, type LocatedToken } from '../src/renderer/chat/markdown-model.ts';
+import { visit } from 'unist-util-visit';
+import type { Code } from 'mdast';
+import { MarkdownCache } from '../src/renderer/chat/markdown-model.ts';
 import { Layer, ManagedRuntime } from 'effect';
 import type {
   ChatClient,
@@ -40,26 +41,24 @@ for (const [name, text, body] of [
   [
     'list and quote tab columns preserve parser indentation',
     '- >\t```js\r\n  >\t\t🌔 é\t  \r\n  >\t```\r\n',
-    '    🌔 é\t  ',
+    '\t🌔 é\t  ',
   ],
 ] as const) {
   test(`R2 renderer-selected native Copy: ${name}`, async () => {
     const f = fixture(false, text);
     try {
       const blocks = new MarkdownCache().parse(name, '1', text);
-      const code: LocatedToken[] = [];
-      marked.walkTokens(
-        blocks.map((block) => block.token),
-        (token) => {
-          if (token.type === 'code' && token.codeBlockStyle !== 'indented') code.push(token);
-        },
-      );
+      const code: Code[] = [];
+      for (const block of blocks)
+        visit(block.tree, 'code', (node) => {
+          if (node.data?.codeBlock) code.push(node);
+        });
       assert.equal(code.length, 1);
-      assert.equal(code[0]!.codeBlock?.index, 0);
+      assert.equal(code[0]!.data?.codeBlock?.index, 0);
       await f.actions.copy({
         source: f.source,
         selection: select(f.part),
-        code: { index: code[0]!.codeBlock!.index },
+        code: { index: code[0]!.data?.codeBlock!.index },
       });
       assert.deepEqual(f.writes, [body]);
     } finally {
@@ -107,21 +106,19 @@ for (const [name, indented, body] of [
     const f = fixture(false, text);
     try {
       const blocks = new MarkdownCache().parse('mixed', '1', text);
-      let code: LocatedToken | undefined;
-      marked.walkTokens(
-        blocks.map((block) => block.token),
-        (token) => {
-          if (token.type === 'code' && token.codeBlockStyle !== 'indented') code = token;
-        },
-      );
-      assert.ok(code?.codeBlock, 'the real fenced block retains Copy');
+      let code: Code | undefined;
+      for (const block of blocks)
+        visit(block.tree, 'code', (node) => {
+          if (node.data?.codeBlock) code = node;
+        });
+      assert.ok(code?.data?.codeBlock, 'the real fenced block retains Copy');
       await f.actions.copy({
         source: f.source,
         selection: select(f.part),
-        code: { index: code.codeBlock.index },
+        code: { index: code.data?.codeBlock.index },
       });
       assert.deepEqual(f.writes, [body]);
-      assert.equal(code.codeBlock.index, 0);
+      assert.equal(code.data?.codeBlock.index, 0);
     } finally {
       await f.owner.dispose();
     }
@@ -130,15 +127,11 @@ test('native parser code Copy preserves meaningful Python indentation in contain
   for (const prefix of ['> ', '>\t', '- ', '-\t', '- >\t', '> - ']) {
     for (const closed of [false, true]) {
       const continuation = prefix.replace(/-/g, ' ');
-      const text = `${prefix}\`\`\`python\r\n${continuation}def moon():\r\n${continuation}    print("🌔 é")\t  \r\n${closed ? continuation + '\`\`\`\r\n' : ''}`;
+      const text = `${prefix}\`\`\`python\r\n${continuation}def moon():\r\n${continuation}    print("🌔 é")\t  \r\n${closed ? continuation + '```\r\n' : ''}`;
       const f = fixture(false, text);
       try {
         await f.actions.copy({ source: f.source, selection: select(f.part), code: { index: 0 } });
-        assert.deepEqual(
-          f.writes,
-          ['def moon():\n    print("🌔 é")' + (!closed && prefix.includes('-') ? '' : '\t  ')],
-          prefix,
-        );
+        assert.deepEqual(f.writes, ['def moon():\r\n    print("🌔 é")\t  '], prefix);
       } finally {
         await f.owner.dispose();
       }
@@ -165,7 +158,7 @@ test('normalized live code still requires fixed original source proof across hel
       const copying = f.actions.copy({ source: f.source, selection: selected, code: { index: 0 } });
       if (change === 'append') {
         await copying;
-        assert.deepEqual(f.writes, [body.replace(/\r\n/g, '\n').replace(/\n$/, '')]);
+        assert.deepEqual(f.writes, [body.replace(/\r\n$/, '')]);
       } else {
         await assert.rejects(copying);
         assert.deepEqual(f.writes, []);
@@ -379,7 +372,7 @@ test('parser selectors choose the correct repeated/nested block; renderer suppli
     '```js\r\nsame\r\n```\r\n\n> ````md\r\n> ```inner\r\n> 🌔\r\n> ```\r\n> ````\r\n\n```js\nsame\n```\n',
   );
   try {
-    for (const [index, body] of ['same', '```inner\n🌔\n```', 'same'].entries()) {
+    for (const [index, body] of ['same', '```inner\r\n🌔\r\n```', 'same'].entries()) {
       await f.actions.copy({ source: f.source, selection: select(f.part), code: { index } });
       assert.equal(f.writes.at(-1), body);
     }
@@ -523,7 +516,7 @@ test('Copy code is independent of highlight/DOM limits, including a large nested
       '> ```\r\n',
   );
   await f.actions.copy({ source: f.source, selection: select(f.part), code: { index: 0 } });
-  assert.deepEqual(f.writes, [body.replace(/\r\n?/g, '\n').replace(/\n$/, '')]);
+  assert.deepEqual(f.writes, [body.replace(/\r\n$/, '')]);
   await f.owner.dispose();
 });
 

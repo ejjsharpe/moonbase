@@ -1,28 +1,56 @@
-import { marked, type Token, type Tokens } from 'marked';
+import { unified, type Plugin } from 'unified';
+import remarkParse from 'remark-parse';
+import remarkGfm from 'remark-gfm';
+import { visit } from 'unist-util-visit';
+import type { Code, Root } from 'mdast';
+import type { Extension } from 'mdast-util-from-markdown';
 
-export type TranscriptMarkdownToken = Token & { codeBlock?: { index: number; closed: boolean } };
+declare module 'mdast' {
+  interface CodeData {
+    codeBlock?: { index: number; closed: boolean };
+  }
+}
 
-/** Both presentations and native Copy use the same parser-owned block order and value. */
-export function parseTranscriptMarkdown(source: string) {
+// Observe parser fence events; indented literals never produce these events.
+const recordFences: Plugin = function () {
+  const extensions = this.data('fromMarkdownExtensions') ?? [];
+  const extension: Extension = {
+    enter: {
+      codeFencedFence() {
+        const node = this.stack.findLast((node) => node.type === 'code');
+        if (node?.type === 'code') {
+          node.data ??= {};
+          node.data.codeBlock = { index: -1, closed: !!node.data.codeBlock };
+        }
+      },
+    },
+  };
+  this.data('fromMarkdownExtensions', [...extensions, extension]);
+};
+const parser = unified().use(remarkParse).use(remarkGfm).use(recordFences);
+
+/** Rendering and privileged Copy share this exact Markdown interpretation. */
+export function parseTranscriptMarkdown(source: string): { tree: Root; codeBlocks: Code[] } {
   try {
-    const tokens: Token[] = marked.lexer(source, { gfm: true }),
-      codeBlocks: Tokens.Code[] = [];
-    marked.walkTokens(tokens, (token) => {
-      if (token.type !== 'code' || token.codeBlockStyle === 'indented') return;
-      const opening = /^ {0,3}(`{3,}|~{3,})/.exec(token.raw)?.[1];
-      const closing = /\n {0,3}(`+|~+)[ \t]*\n*$/.exec(token.raw)?.[1];
-      (token as TranscriptMarkdownToken).codeBlock = {
-        index: codeBlocks.length,
-        closed:
-          !!opening && !!closing && opening[0] === closing[0] && closing.length >= opening.length,
+    const tree = parser.parse(source),
+      codeBlocks: Code[] = [];
+    visit(tree, 'code', (node) => {
+      if (!node.data?.codeBlock) return;
+      node.data.codeBlock.index = codeBlocks.length;
+      node.data.hProperties = {
+        'data-code-index': codeBlocks.length,
+        'data-code-closed': node.data.codeBlock.closed,
       };
-      codeBlocks.push(token as Tokens.Code);
+      codeBlocks.push(node);
     });
-    return { tokens, codeBlocks };
+    return { tree, codeBlocks };
   } catch {
     return {
-      tokens: [{ type: 'html', raw: source, text: source, block: true, pre: true }] as Token[],
-      codeBlocks: [] as Tokens.Code[],
+      tree: {
+        type: 'root',
+        children: [{ type: 'paragraph', children: [{ type: 'text', value: source }] }],
+      },
+      codeBlocks: [],
     };
   }
 }

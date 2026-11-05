@@ -1,9 +1,6 @@
-import {
-  parseTranscriptMarkdown,
-  type TranscriptMarkdownToken,
-} from '../../chat/transcript-source.ts';
-export type LocatedToken = TranscriptMarkdownToken;
-export type MarkdownBlock = { token: LocatedToken; signature: string };
+import { parseTranscriptMarkdown } from '../../chat/transcript-source.ts';
+import type { Root } from 'mdast';
+export type MarkdownBlock = { tree: Root; signature: string };
 export const markdownMetrics = { lex: 0, tokenize: 0, retainedBytes: 0, messages: 0 };
 const bytes = (text: string) => new TextEncoder().encode(text).length;
 /** A private, per-view bounded cache. Exact source and render inputs, never DTO object identity. */
@@ -12,7 +9,7 @@ export class MarkdownCache {
   private retained = 0;
   readonly stats = { lex: 0, retainedBytes: 0, messages: 0 };
   parse(identity: string, revision: string, source: string): MarkdownBlock[] {
-    const key = JSON.stringify([identity, revision, 'gfm-v1']);
+    const key = JSON.stringify([identity, revision, 'remark-gfm-v1']);
     const old = this.messages.get(key);
     if (old?.source === source) {
       this.messages.delete(key);
@@ -21,8 +18,21 @@ export class MarkdownCache {
     }
     this.stats.lex++;
     markdownMetrics.lex++;
-    const { tokens } = parseTranscriptMarkdown(source);
-    const blocks = tokens.map((token) => ({ token, signature: JSON.stringify(token) }));
+    const { tree } = parseTranscriptMarkdown(source);
+    const definitions = tree.children.filter(
+      (node) => node.type === 'definition' || node.type === 'footnoteDefinition',
+    );
+    const blocks = tree.children
+      .filter((node) => node.type !== 'definition' && node.type !== 'footnoteDefinition')
+      .map((node) => {
+        const block: Root = { type: 'root', children: [node, ...definitions] };
+        return {
+          tree: block,
+          signature: JSON.stringify(block, (key, value) =>
+            key === 'position' ? undefined : value,
+          ),
+        };
+      });
     const size = bytes(key) + bytes(source) + bytes(JSON.stringify(blocks));
     if (old) {
       this.messages.delete(key);

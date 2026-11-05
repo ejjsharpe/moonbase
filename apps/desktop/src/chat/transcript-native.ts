@@ -179,7 +179,7 @@ export async function copyTranscript(
     if (code) {
       const block = parseTranscriptMarkdown(text).codeBlocks[code.index];
       if (!block) invalid();
-      text = block!.text;
+      text = block!.value;
     }
     // Fresh fixed-prefix proofs after iteration, fenced by the live observation. A held earlier reply is insufficient.
     if (source.kind === 'live') {

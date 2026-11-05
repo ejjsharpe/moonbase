@@ -1,8 +1,19 @@
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  memo,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  createContext,
+  useContext,
+  type ReactNode,
+} from 'react';
 import { Button } from '@base-ui/react/button';
 import * as stylex from '@stylexjs/stylex';
 import * as monaco from 'monaco-editor';
-import { marked, type Token, type Tokens } from 'marked';
+import ReactMarkdown, { type Components } from 'react-markdown';
+import type { Plugin } from 'unified';
+import { visit } from 'unist-util-visit';
 import { controls } from '@moonbase/ui/controls';
 import { colors, radius, space, type } from '@moonbase/ui/tokens.stylex';
 import {
@@ -11,14 +22,12 @@ import {
   canHighlight,
   getExternalLink,
   type MarkdownBlock,
-  type LocatedToken,
 } from './markdown-model.ts';
 
 export { markdownMetrics } from './markdown-model.ts';
 type Actions = {
   openLink(url: string): void;
   copyCode?(index: number): void;
-  insideLink?: boolean;
 };
 export const Markdown = memo(function Markdown({
   source,
@@ -63,7 +72,15 @@ const Block = memo(
     }, []);
     if (!pinned && retained !== current) setRetained(current);
     const selected = pinned ? retained : current;
-    return <div ref={root}>{renderToken(selected.block.token, selected)}</div>;
+    return (
+      <div ref={root}>
+        <ParsedBlock
+          block={selected.block}
+          openLink={selected.openLink}
+          copyCode={selected.copyCode}
+        />
+      </div>
+    );
   },
   (a, b) =>
     a.block.signature === b.block.signature &&
@@ -81,171 +98,172 @@ export function isReadingNodePinned(node: HTMLElement | null) {
         selection.getRangeAt(0).intersectsNode(node)))
   );
 }
-function inline(tokens: Token[] | undefined, actions: Actions): ReactNode {
-  return tokens?.map((token, index) => <span key={index}>{renderToken(token, actions)}</span>);
+const insideLink = createContext(false);
+function ExternalLink({
+  href = '',
+  children,
+  openLink,
+}: {
+  href?: string;
+  children: ReactNode;
+  openLink(url: string): void;
+}) {
+  const url = getExternalLink(href);
+  return url ? (
+    <a
+      href={url}
+      rel="noopener noreferrer"
+      {...stylex.props(styles.link)}
+      onClick={(event) => {
+        event.preventDefault();
+        openLink(url);
+      }}
+      onAuxClick={(event) => {
+        event.preventDefault();
+        if (event.button === 1) openLink(url);
+      }}>
+      {children}
+    </a>
+  ) : (
+    <span>
+      {children} {href && <code {...stylex.props(styles.inlineCode)}>{href}</code>}
+    </span>
+  );
 }
-function decodeEntities(text: string) {
-  return text.replace(/&(?:#[0-9]+|#x[0-9a-f]+|[a-z][a-z0-9]+);/gi, (entity) => {
-    const field = document.createElement('textarea');
-    // Only entity syntax enters this detached text field; model HTML never enters a parser or the DOM.
-    field.innerHTML = entity;
-    return field.value;
-  });
+function ImageLink({
+  src,
+  alt,
+  openLink,
+}: {
+  src?: string;
+  alt?: string;
+  openLink(url: string): void;
+}) {
+  const nested = useContext(insideLink);
+  return nested ? (
+    alt || src
+  ) : (
+    <ExternalLink href={src} openLink={openLink}>
+      Image: {alt || src}
+    </ExternalLink>
+  );
 }
-function renderToken(token: Token, actions: Actions): ReactNode {
-  const code = (token as LocatedToken).codeBlock;
-  const value = token as Token & { text?: string; tokens?: Token[] };
-  const content = () => (value.tokens ? inline(value.tokens, actions) : value.text);
-  switch (token.type) {
-    case 'space':
-      return null;
-    case 'heading': {
-      const heading = token as Tokens.Heading;
-      const Tag = `h${Math.min(6, Math.max(1, heading.depth))}` as 'h1';
-      return <Tag {...stylex.props(styles.heading)}>{content()}</Tag>;
-    }
-    case 'paragraph':
-      return <p {...stylex.props(styles.paragraph)}>{content()}</p>;
-    case 'text':
-    case 'escape':
-      return value.tokens ? inline(value.tokens, actions) : decodeEntities(value.text ?? '');
-    case 'strong':
-      return <strong>{content()}</strong>;
-    case 'em':
-      return <em>{content()}</em>;
-    case 'del':
-      return <del>{content()}</del>;
-    case 'codespan':
-      return <code {...stylex.props(styles.inlineCode)}>{value.text}</code>;
-    case 'br':
-      return <br />;
-    case 'hr':
-      return <hr {...stylex.props(styles.rule)} />;
-    case 'html':
-      return <span {...stylex.props(styles.literal)}>{token.raw}</span>;
-    case 'link':
-    case 'image': {
-      const link = token as Tokens.Link;
-      const url = getExternalLink(link.href);
-      const label =
-        token.type === 'image'
-          ? `Image: ${link.text || link.href}`
-          : inline(link.tokens, { ...actions, insideLink: true });
-      if (token.type === 'image' && actions.insideLink) return link.text || link.href;
-      const images: Token[] = [];
-      if (token.type === 'link')
-        marked.walkTokens(link.tokens ?? [], (child) => {
-          if (child.type === 'image') images.push(child);
-        });
-      const reference = url ? (
-        <a
-          href={url}
-          rel="noopener noreferrer"
-          {...stylex.props(styles.link)}
-          onClick={(event) => {
-            event.preventDefault();
-            actions.openLink(url);
-          }}
-          onAuxClick={(event) => {
-            event.preventDefault();
-            if (event.button === 1) actions.openLink(url);
-          }}>
-          {label}
-        </a>
-      ) : (
-        <span>
-          {label}{' '}
-          {link.href !== link.text && <code {...stylex.props(styles.inlineCode)}>{link.href}</code>}
-        </span>
-      );
-      return (
-        <>
-          {reference}
-          {images.map((image, index) => (
-            <span key={index}> {renderToken(image, actions)}</span>
-          ))}
-        </>
-      );
-    }
-    case 'blockquote':
-      return (
-        <blockquote {...stylex.props(styles.quote)}>{inline(value.tokens, actions)}</blockquote>
-      );
-    case 'list': {
-      const list = token as Tokens.List,
-        Tag = list.ordered ? 'ol' : 'ul';
-      return (
-        <Tag
-          start={list.ordered ? (list.start as number) : undefined}
-          {...stylex.props(styles.list)}>
-          {list.items.map((item, index) => (
-            <li key={index}>
-              {item.task && (
-                <span aria-label={item.checked ? 'Completed' : 'Incomplete'}>
-                  {item.checked ? '[x] ' : '[ ] '}
-                </span>
-              )}
-              {inline(item.tokens, actions)}
-            </li>
-          ))}
-        </Tag>
-      );
-    }
-    case 'table': {
-      const table = token as Tokens.Table;
-      return (
+function ParsedBlock({ block, openLink, copyCode }: Actions & { block: MarkdownBlock }) {
+  const plugins = useMemo(() => {
+    // ReactMarkdown consumes our shared cached mdast through unified's public parser hook.
+    const useTree: Plugin = function () {
+      this.parser = () => block.tree;
+    };
+    return [useTree];
+  }, [block]);
+  const components = useMemo<Components>(
+    () => ({
+      p: ({ children }) => <p {...stylex.props(styles.paragraph)}>{children}</p>,
+      h1: ({ children }) => <h1 {...stylex.props(styles.heading)}>{children}</h1>,
+      h2: ({ children }) => <h2 {...stylex.props(styles.heading)}>{children}</h2>,
+      h3: ({ children }) => <h3 {...stylex.props(styles.heading)}>{children}</h3>,
+      h4: ({ children }) => <h4 {...stylex.props(styles.heading)}>{children}</h4>,
+      h5: ({ children }) => <h5 {...stylex.props(styles.heading)}>{children}</h5>,
+      h6: ({ children }) => <h6 {...stylex.props(styles.heading)}>{children}</h6>,
+      code: ({ children }) => <code {...stylex.props(styles.inlineCode)}>{children}</code>,
+      pre: ({ node }) => {
+        const code = node?.children.find(
+          (child) => child.type === 'element' && child.tagName === 'code',
+        );
+        if (code?.type !== 'element') return null;
+        const text = code.children
+          .map((child) => (child.type === 'text' ? child.value : ''))
+          .join('')
+          .replace(/\n$/, '')
+          .replace(/\r\n?/g, '\n');
+        const classes = code.properties.className;
+        const language = Array.isArray(classes)
+          ? String(classes.find((name) => String(name).startsWith('language-')) ?? '').slice(9)
+          : '';
+        const index = code.properties['data-code-index'];
+        const closed = code.properties['data-code-closed'];
+        return (
+          <Code
+            text={text}
+            language={language}
+            closed={index === undefined || closed === true || closed === 'true'}
+            copy={typeof index === 'number' && copyCode ? () => copyCode(index) : undefined}
+          />
+        );
+      },
+      a: ({ href, children, node }) => {
+        const images: { src: string; alt: string }[] = [];
+        if (node)
+          visit(node, 'element', (child) => {
+            if (child.tagName === 'img')
+              images.push({
+                src: String(child.properties.src ?? ''),
+                alt: String(child.properties.alt ?? ''),
+              });
+          });
+        return (
+          <>
+            <ExternalLink href={href} openLink={openLink}>
+              <insideLink.Provider value={true}>{children}</insideLink.Provider>
+            </ExternalLink>
+            {images.map((image, index) => (
+              <span key={index}>
+                {' '}
+                <ImageLink {...image} openLink={openLink} />
+              </span>
+            ))}
+          </>
+        );
+      },
+      img: ({ src, alt }) => (
+        <ImageLink src={typeof src === 'string' ? src : undefined} alt={alt} openLink={openLink} />
+      ),
+      input: ({ checked }) => (
+        <span aria-label={checked ? 'Completed' : 'Incomplete'}>{checked ? '[x] ' : '[ ] '}</span>
+      ),
+      blockquote: ({ children }) => (
+        <blockquote {...stylex.props(styles.quote)}>{children}</blockquote>
+      ),
+      ul: ({ children }) => <ul {...stylex.props(styles.list)}>{children}</ul>,
+      ol: ({ children, start }) => (
+        <ol start={start} {...stylex.props(styles.list)}>
+          {children}
+        </ol>
+      ),
+      hr: () => <hr {...stylex.props(styles.rule)} />,
+      table: ({ children }) => (
         <div role="region" aria-label="Table" tabIndex={0} {...stylex.props(styles.overflow)}>
-          <table {...stylex.props(styles.table)}>
-            <thead>
-              <tr>
-                {table.header.map((cell, index) => (
-                  <th
-                    key={index}
-                    {...stylex.props(
-                      styles.cell,
-                      table.align[index] === 'right' && styles.cellRight,
-                      table.align[index] === 'center' && styles.cellCenter,
-                    )}>
-                    {inline(cell.tokens, actions)}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {table.rows.map((row, index) => (
-                <tr key={index}>
-                  {row.map((cell, index) => (
-                    <td
-                      key={index}
-                      {...stylex.props(
-                        styles.cell,
-                        table.align[index] === 'right' && styles.cellRight,
-                        table.align[index] === 'center' && styles.cellCenter,
-                      )}>
-                      {inline(cell.tokens, actions)}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <table {...stylex.props(styles.table)}>{children}</table>
         </div>
-      );
-    }
-    case 'code': {
-      const block = token as Tokens.Code;
-      return (
-        <Code
-          text={block.text}
-          language={block.lang?.split(/\s/)[0] ?? ''}
-          closed={code?.closed ?? block.codeBlockStyle === 'indented'}
-          copy={code && actions.copyCode ? () => actions.copyCode!(code.index) : undefined}
-        />
-      );
-    }
-    default:
-      return <span {...stylex.props(styles.literal)}>{token.raw}</span>;
-  }
+      ),
+      th: ({ children, style }) => (
+        <th
+          {...stylex.props(
+            styles.cell,
+            style?.textAlign === 'right' && styles.cellRight,
+            style?.textAlign === 'center' && styles.cellCenter,
+          )}>
+          {children}
+        </th>
+      ),
+      td: ({ children, style }) => (
+        <td
+          {...stylex.props(
+            styles.cell,
+            style?.textAlign === 'right' && styles.cellRight,
+            style?.textAlign === 'center' && styles.cellCenter,
+          )}>
+          {children}
+        </td>
+      ),
+    }),
+    [openLink, copyCode],
+  );
+  return (
+    <ReactMarkdown remarkPlugins={plugins} components={components} urlTransform={(url) => url}>
+      {''}
+    </ReactMarkdown>
+  );
 }
 const languages = new Map<string, Promise<void>>();
 function prepareLanguage(language: string) {

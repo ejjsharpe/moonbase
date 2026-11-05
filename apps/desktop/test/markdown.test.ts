@@ -1,3 +1,4 @@
+import type { Code } from 'mdast';
 import {
   getTranscriptDisclosureId,
   parseTranscriptMarkdown,
@@ -8,23 +9,22 @@ import {
   MarkdownCache,
   canHighlight,
   getExternalLink,
-  type LocatedToken,
 } from '../src/renderer/chat/markdown-model.ts';
 test('parser block selection excludes indented literals and preserves meaningful code indentation', () => {
   for (const literal of ['same\n      ```\n', 'unclosed\n']) {
     const source = `- item\n\n      \`\`\`js\n      ${literal}\n  \`\`\`js\r\n  same\r\n  \`\`\`\r\n`;
     const { codeBlocks } = parseTranscriptMarkdown(source);
     assert.equal(codeBlocks.length, 1);
-    assert.equal(codeBlocks[0]!.text, 'same');
-    assert.equal((codeBlocks[0] as LocatedToken).codeBlock?.index, 0);
+    assert.equal(codeBlocks[0]!.value, 'same');
+    assert.equal(codeBlocks[0]!.data!.codeBlock?.index, 0);
   }
   for (const prefix of ['> ', '>\t', '- ', '-\t', '- >\t', '> - ']) {
     const continuation = prefix.replace(/-/g, ' ');
     const source = `${prefix}\`\`\`python\r\n${continuation}def moon():\r\n${continuation}    print("🌔 é")\t  \r\n${continuation}\`\`\`\r\n`;
     const parsed = parseTranscriptMarkdown(source);
     assert.equal(parsed.codeBlocks.length, 1, prefix);
-    assert.equal(parsed.codeBlocks[0]!.text, 'def moon():\n    print("🌔 é")\t  ', prefix);
-    assert.equal((parsed.codeBlocks[0] as LocatedToken).codeBlock?.closed, true, prefix);
+    assert.equal(parsed.codeBlocks[0]!.value, 'def moon():\r\n    print("🌔 é")\t  ', prefix);
+    assert.equal(parsed.codeBlocks[0]!.data!.codeBlock?.closed, true, prefix);
   }
 });
 test('repeated and nested fences use parser order without body matching or source reconstruction', () => {
@@ -32,11 +32,11 @@ test('repeated and nested fences use parser order without body matching or sourc
     '```js\r\nsame\r\n```\r\n\n> ````md\r\n> ```inner\r\n> 🌔\r\n> ```\r\n> ````\r\n\n```js\nsame\n```\n';
   const parsed = parseTranscriptMarkdown(source);
   assert.deepEqual(
-    parsed.codeBlocks.map((block) => block.text),
-    ['same', '```inner\n🌔\n```', 'same'],
+    parsed.codeBlocks.map((block) => block.value),
+    ['same', '```inner\r\n🌔\r\n```', 'same'],
   );
   assert.deepEqual(
-    parsed.codeBlocks.map((block) => (block as LocatedToken).codeBlock?.index),
+    parsed.codeBlocks.map((block) => block.data!.codeBlock?.index),
     [0, 1, 2],
   );
 });
@@ -48,12 +48,11 @@ test('changed messages re-lex, references/fence closure invalidate interpretatio
   const next = cache.parse('entry', '2', '[read][ref]\n\n[ref]: https://example.com\n');
   assert.notEqual(next[0]!.signature, first[0]!.signature);
   assert.equal(
-    (parseTranscriptMarkdown('```js\nconst n=1').codeBlocks[0] as LocatedToken).codeBlock!.closed,
+    parseTranscriptMarkdown('```js\nconst n=1').codeBlocks[0]!.data!.codeBlock!.closed,
     false,
   );
   assert.equal(
-    (parseTranscriptMarkdown('```js\nconst n=1\n```').codeBlocks[0] as LocatedToken).codeBlock!
-      .closed,
+    parseTranscriptMarkdown('```js\nconst n=1\n```').codeBlocks[0]!.data!.codeBlock!.closed,
     true,
   );
   const nested = cache.parse(
@@ -89,7 +88,7 @@ test('deep quote and ordered-list input stays readable without source-location r
     [],
   );
   const source = '1. item\n\n    ```ts\r\n    🌔\r\n    ```\r\n';
-  assert.equal(parseTranscriptMarkdown(source).codeBlocks[0]!.text, '🌔');
+  assert.equal(parseTranscriptMarkdown(source).codeBlocks[0]!.value, '🌔');
   const cache = new MarkdownCache();
   const blocks = cache.parse('deep', '1', '> '.repeat(1000) + 'literal');
   assert.ok(blocks.length);
@@ -110,12 +109,12 @@ test('many repeated CRLF fences keep their own parser indexes and cache keys cou
   const cache = new MarkdownCache();
   const fence = '```ts\r\nconst moon = "🌔";\r\n```\r\n\r\n';
   const blocks = cache.parse('many', '1', fence.repeat(1000));
-  const code = blocks.filter((block) => block.token.type === 'code');
+  const code = blocks.filter((block) => block.tree.children[0]?.type === 'code');
   assert.equal(code.length, 1000);
   for (let i = 0; i < code.length; i++) {
-    assert.equal(code[i]!.token.codeBlock!.index, i);
-    assert.equal((code[i]!.token as { text: string }).text, 'const moon = "🌔";');
-    assert.equal(code[i]!.token.codeBlock!.closed, true);
+    assert.equal((code[i]!.tree.children[0] as Code).data!.codeBlock!.index, i);
+    assert.equal((code[i]!.tree.children[0] as Code).value, 'const moon = "🌔";');
+    assert.equal((code[i]!.tree.children[0] as Code).data!.codeBlock!.closed, true);
   }
   cache.clear();
   cache.parse('x'.repeat(2 * 1024 * 1024), '1', 'small text');
