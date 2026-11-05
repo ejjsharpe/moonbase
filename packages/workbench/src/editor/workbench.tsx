@@ -156,6 +156,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     checkout: CheckoutTarget;
     path: string;
     origin: FocusOrigin;
+    from: Element | null;
   } | null>(null);
   const menuCapture = useRef<string[]>([]),
     menuKeyboard = useRef(false),
@@ -166,7 +167,14 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   const checkoutIdentity = checkout && checkoutKey(checkout);
   useLayoutEffect(() => {
     if (!focusRequest || choice || lookup || action || state.preserving) return;
+    const focused = document.activeElement;
+    const focusMoved =
+      focused !== null &&
+      focused !== document.body &&
+      focused !== focusRequest.from &&
+      !root.current?.contains(focused);
     if (
+      !focusMoved &&
       root.current?.getClientRects().length &&
       checkoutIdentity &&
       checkoutIdentity === checkoutKey(focusRequest.checkout) &&
@@ -202,6 +210,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     state.preserving,
   ]);
   const withFocus = (opening: Promise<boolean>, origin: FocusOrigin, restore = false) => {
+    const from = document.activeElement;
     const focus = () => {
       const next = controller.getSnapshot().recovery;
       if (checkout && next.openCheckoutIds.includes(checkout.checkoutId))
@@ -209,6 +218,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
           checkout,
           path: readOwn(next.views, checkout.checkoutId)!.active,
           origin,
+          from,
         });
     };
     return opening.then(

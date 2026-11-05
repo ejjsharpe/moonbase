@@ -34,6 +34,8 @@ Buffer tabs are square and flush, with shared file icons, truncated filenames an
 
 `WorkbenchHandle.keyDown/keyUp` lets a consumer forward shortcuts from its own project navigation. The workbench handles keys within its own view. Consumers can forward unhandled bubbling events from their navigation, checking `event.defaultPrevented`; handled editor shortcuts stop propagation. `visible={false}` suppresses hidden Monaco position writes; the consumer hides the containing panel. Unmount cancels an outstanding close prompt and releases presentation resources, without disposing the controller.
 
+An asynchronous editor action restores its owning view's focus without taking focus back from a newer menu, dialog or another workbench. Its focus request retains the initiating element and is consumed once after the target renders.
+
 ## Composition and lifecycle
 
 ```tsx
