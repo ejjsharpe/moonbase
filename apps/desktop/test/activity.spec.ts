@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { readFindHighlight } from './find-highlight.ts';
 const output = resolve('../../test-results/transcript-112');
 async function open(page: Page) {
   await page.goto('/?local&design&transcript');
@@ -1004,7 +1005,9 @@ for (const input of ['pointer', 'Enter', 'Space'] as const)
     const thought = row.getByRole('button', { name: /^Thinking/ });
     await expect(activity).toHaveAttribute('aria-expanded', 'true');
     await expect(thought).toHaveAttribute('aria-expanded', 'true');
-    await expect(row.locator('[data-transcript-find-match]')).toHaveText('NEEDLE');
+    await expect
+      .poll(() => readFindHighlight(page))
+      .toEqual([expect.objectContaining({ text: 'NEEDLE', entry: 'reading-0' })]);
     if (input === 'pointer') await activity.click();
     else {
       await activity.focus();
@@ -1035,9 +1038,9 @@ for (const input of ['pointer', 'Enter', 'Space'] as const)
     await find.press('Enter');
     await expect(activity).toHaveAttribute('aria-expanded', 'true');
     await expect(thought).toHaveAttribute('aria-expanded', 'true');
-    await expect(row.getByRole('region', { name: 'Matched original source' })).toContainText(
-      'second NEEDLE',
-    );
+    await expect
+      .poll(() => readFindHighlight(page))
+      .toEqual([expect.objectContaining({ text: 'NEEDLE', before: 'xxxxxxxx\nsecond ' })]);
     await expect(unrelated).toHaveAttribute('aria-expanded', 'false');
     await expect(find).toBeFocused();
   });
