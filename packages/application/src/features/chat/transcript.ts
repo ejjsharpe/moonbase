@@ -12,28 +12,22 @@ import type {
   ChatTranscriptSelection,
   ChatTranscriptPart,
 } from '@moonbase/contracts/chat';
+import { chatPageSize, getChatFindExpression } from '@moonbase/contracts/chat';
 import { decodeChatInput } from '@moonbase/contracts/chat-schema';
 import { normalizeApplicationError } from '../../runtime/effect-client.ts';
 import { sameTarget } from './saved.ts';
-import {
-  decodeTranscriptView,
-  type TranscriptViewMemory,
-  type TranscriptView,
-} from './view-memory.ts';
+import type { TranscriptViewMemory, TranscriptView } from './view-memory.ts';
 import {
   awaitTranscriptRead,
   checkTranscriptRead,
   countDecodedTranscriptBytes,
   areTranscriptValuesEqual as equal,
-  iterateTranscriptSource,
   readTranscript,
   trackTranscriptCursor,
   countTranscriptBytes,
   makeTranscriptFailure,
   getTranscriptKey,
   type TranscriptChunk,
-  type TranscriptRead,
-  type TranscriptReadProgress,
 } from './transcript-read.ts';
 
 export const transcriptLimits = {
@@ -42,6 +36,8 @@ export const transcriptLimits = {
   summaryBytes: 2 * 1024 * 1024,
   contentBytes: 8 * 1024 * 1024,
   findMatches: 256,
+  /** How long closing waits for cancelled ChatClient reads to settle before releasing anyway. */
+  closeGraceMs: 1000,
 } as const;
 type ReadStatus = 'partial' | 'loading' | 'complete' | 'error' | 'source-changed';
 export type TranscriptContentState = {
@@ -79,7 +75,6 @@ export type TranscriptState = {
   view: TranscriptView;
   manifest: TranscriptManifestState | null;
   content: TranscriptContentState[];
-  retained: { summaries: number; summaryBytes: number; contentBytes: number };
 };
 export type TranscriptFindState = {
   open: boolean;
@@ -93,7 +88,6 @@ export type TranscriptFindState = {
   active: ChatTranscriptMatch | null;
   activeIndex: number | null;
   upperEntryId: string | null;
-  progress: { entries: number; bytes: number };
   refreshAvailable: boolean;
 };
 const emptyFind = (): TranscriptFindState => ({
@@ -108,7 +102,6 @@ const emptyFind = (): TranscriptFindState => ({
   active: null,
   activeIndex: null,
   upperEntryId: null,
-  progress: { entries: 0, bytes: 0 },
   refreshAvailable: false,
 });
 export function makeEmptyTranscriptState(): TranscriptState {
@@ -125,7 +118,6 @@ export function makeEmptyTranscriptState(): TranscriptState {
     view: { anchor: null, expanded: [] },
     manifest: null,
     content: [],
-    retained: { summaries: 0, summaryBytes: 0, contentBytes: 0 },
   };
 }
 const reuseParts = (previous: ChatTranscriptPart[], next: ChatTranscriptPart[]) =>
@@ -172,15 +164,16 @@ function mergeEntries(previous: ChatEntry[], page: ChatEntry[], direction: 'earl
   return result;
 }
 
-const chunkBytes = new WeakMap<TranscriptChunk, number>();
-/** Serialized bytes plus one JSON array separator; each retained chunk is serialized once. */
+const measured = new WeakMap<object, number>();
+/** Serialized bytes of an immutable retained value (entry, part, chunk, view), measured once. */
+function measure(value: object) {
+  let size = measured.get(value);
+  if (size === undefined) measured.set(value, (size = countTranscriptBytes(value)));
+  return size;
+}
 function measureContent(content: TranscriptContentState) {
-  let bytes = countTranscriptBytes({ ...content, chunks: [] }) + (content.chunks.length ? 0 : 1);
-  for (const chunk of content.chunks) {
-    let size = chunkBytes.get(chunk);
-    if (size === undefined) chunkBytes.set(chunk, (size = countTranscriptBytes(chunk)));
-    bytes += size + 1;
-  }
+  let bytes = countTranscriptBytes({ ...content, chunks: [] });
+  for (const chunk of content.chunks) bytes += measure(chunk);
   return bytes;
 }
 
@@ -207,6 +200,7 @@ type Navigation = {
 export class TranscriptOwner {
   private state = makeEmptyTranscriptState();
   private published = this.state;
+  private publishedSnapshot?: ChatSnapshot;
   private selectedEntry?: ChatEntry;
   private records: ChatEntry[] = []; // newest first; public window is oldest first
   private start = 0;
@@ -226,10 +220,9 @@ export class TranscriptOwner {
     { abort: AbortController; source?: ChatTranscriptSource }
   >();
   private jobs = new Map<string, { abort: AbortController; promise: Promise<void> }>();
-  // The running total plus the opening bracket (or `[]` when empty) equals the serialized array.
   private contents = new LRUCache<string, TranscriptContentState>({
     max: 128,
-    maxSize: transcriptLimits.contentBytes - 1,
+    maxSize: transcriptLimits.contentBytes,
     sizeCalculation: measureContent,
   });
   private manifestAdvance = trackTranscriptCursor();
@@ -238,8 +231,6 @@ export class TranscriptOwner {
   private findReveal = new AbortController();
   private findStart: string | null = null;
   private findUpper: string | null | undefined;
-  private findProgress = { entries: 0, bytes: 0 };
-  private findAdvance = trackTranscriptCursor();
   private dependencies: TranscriptDependencies;
   constructor(dependencies: TranscriptDependencies) {
     this.dependencies = dependencies;
@@ -275,11 +266,10 @@ export class TranscriptOwner {
     operation: K,
     input: ChatInput<K>,
     signal?: AbortSignal,
-    settlements?: Set<Promise<unknown>>,
   ): Promise<ChatOutput<K>> {
     this.assertCurrent();
     const abort = new AbortController();
-    // readTranscript owns transcript content input decoding and cloning.
+    // Transcript content inputs were decoded once by loadManifest/loadPart.
     const transcript = operation === 'getChatTranscriptContent';
     const source = transcript ? (input as ChatInput<'getChatTranscriptContent'>).source : undefined;
     this.assertCurrent(source);
@@ -290,14 +280,12 @@ export class TranscriptOwner {
     ]);
     const pending = this.dependencies.chat.command(
       operation,
-      transcript ? input : structuredClone(decodeChatInput(operation, input)),
+      transcript ? input : decodeChatInput(operation, input),
       { signal: combined },
     );
     this.pending.set(pending, { abort, source });
-    settlements?.add(pending);
     const settle = () => {
       this.pending.delete(pending);
-      settlements?.delete(pending);
     };
     void pending.then(settle, settle);
     const result = await awaitTranscriptRead(pending, combined);
@@ -320,68 +308,44 @@ export class TranscriptOwner {
     input: ChatInput<'getChatTranscriptContent'>,
     options: { signal?: AbortSignal },
   ) => this.command('getChatTranscriptContent', input, options.signal);
-  private summaryUsage() {
-    const entries = [
-      ...new Map(
-        [
-          ...(this.snapshot?.entries ?? []),
-          ...(this.selectedEntry ? [this.selectedEntry] : []),
-          ...this.records,
-        ].map((entry) => [entry.id, entry]),
-      ).values(),
-    ];
-    return {
-      summaries: entries.length + (this.state.manifest?.parts.length ?? 0),
-      summaryBytes: countTranscriptBytes({
-        entries,
-        manifest: this.state.manifest,
-        navigation: this.navigation,
-        view: this.state.view,
-      }),
-    };
-  }
   /**
-   * Only `touch` makes a selection most recent; chunk and status updates keep its recency. Least
-   * recent chunks are trimmed first, so the LRU drops whole selections only once none remain.
+   * Writing a selection makes it most recent. Only that selection is trimmed (oldest chunks first)
+   * to fit the budget alone; the LRU then evicts whole least-recent selections.
    */
-  private writeContent(key: string, content: TranscriptContentState, touch = false) {
-    const keys = [...this.contents.rkeys()].filter((other) => !touch || other !== key);
-    if (!keys.includes(key)) {
-      if (keys.length === this.contents.max) this.contents.delete(keys.shift()!);
-      keys.push(key);
-    }
-    let excess =
-      this.contents.calculatedSize -
-      (this.contents.info(key)?.size ?? 0) +
-      measureContent(content) -
-      this.contents.maxSize;
-    for (const other of keys) {
-      if (excess <= 0) break;
-      let value = other === key ? content : this.contents.peek(other)!;
-      while (excess > 0 && value.chunks.length) {
-        const chunks = value.chunks.slice(1);
-        const trimmed = { ...value, chunks, retainedFrom: chunks[0]?.offset ?? value.loadedBytes };
-        excess -= measureContent(value) - measureContent(trimmed);
-        value = trimmed;
-      }
-      if (other === key) content = value;
-      else this.contents.set(other, value);
+  private writeContent(key: string, content: TranscriptContentState) {
+    let size = measureContent(content);
+    while (size > transcriptLimits.contentBytes && content.chunks.length) {
+      size -= measure(content.chunks[0]);
+      const chunks = content.chunks.slice(1);
+      content = { ...content, chunks, retainedFrom: chunks[0]?.offset ?? content.loadedBytes };
     }
     this.contents.set(key, content);
-    for (const other of keys) this.contents.get(other);
   }
+  /** Summary budgets count each retained entry/part once, from cached per-value byte sizes. */
   private enforceBounds(direction: 'earlier' | 'later') {
-    let usage = this.summaryUsage();
-    while (
-      usage.summaries > transcriptLimits.summaryRecords ||
-      usage.summaryBytes > transcriptLimits.summaryBytes
-    ) {
+    const others = new Map((this.snapshot?.entries ?? []).map((entry) => [entry.id, entry]));
+    if (this.selectedEntry) others.set(this.selectedEntry.id, this.selectedEntry);
+    const sizes = new Map([...others].map(([id, entry]) => [id, measure(entry)]));
+    for (const entry of this.records) sizes.set(entry.id, measure(entry));
+    const manifest = this.state.manifest;
+    let summaries = sizes.size + (manifest?.parts.length ?? 0);
+    let bytes = countTranscriptBytes({
+      manifest: manifest && { ...manifest, parts: [] },
+      navigation: this.navigation,
+    });
+    bytes += measure(this.state.view);
+    for (const size of sizes.values()) bytes += size;
+    for (const part of manifest?.parts ?? []) bytes += measure(part);
+    while (summaries > transcriptLimits.summaryRecords || bytes > transcriptLimits.summaryBytes) {
       if (this.state.manifest?.parts.length) {
+        const [part, ...parts] = this.state.manifest.parts;
+        summaries--;
+        bytes -= measure(part);
         this.state = {
           ...this.state,
           manifest: {
             ...this.state.manifest,
-            parts: this.state.manifest.parts.slice(1),
+            parts,
             omittedParts: this.state.manifest.omittedParts + 1,
           },
         };
@@ -396,22 +360,24 @@ export class TranscriptOwner {
               (index < this.start || index >= this.start + transcriptLimits.displayedRows),
           ) ?? indices.find((index) => pinned !== this.records[index].id);
         if (index === undefined) break;
-        this.records.splice(index, 1);
+        const [removed] = this.records.splice(index, 1);
+        const other = others.get(removed.id);
+        bytes -= sizes.get(removed.id)!;
+        if (other) bytes += measure(other);
+        else summaries--;
+        sizes.delete(removed.id);
         if (index < this.start) this.start--;
         if (direction === 'earlier') this.newerEnd = false;
         else this.olderEnd = false;
       }
-      usage = this.summaryUsage();
     }
     this.start = Math.max(
       0,
       Math.min(this.start, Math.max(0, this.records.length - transcriptLimits.displayedRows)),
     );
   }
-  private publish(
-    notify = true,
-    direction: 'earlier' | 'later' = this.following ? 'later' : 'earlier',
-  ) {
+  /** Publishes whenever the window state or the accepted snapshot changed. */
+  private publish(direction: 'earlier' | 'later' = this.following ? 'later' : 'earlier') {
     if (!this.alive) return;
     this.enforceBounds(direction);
     const entries = this.records
@@ -429,18 +395,16 @@ export class TranscriptOwner {
       later: this.start > 0 || !this.newerEnd,
       atLatest: this.following,
       content: [...this.contents.values()].reverse(),
-      retained: {
-        ...this.summaryUsage(),
-        contentBytes: this.contents.calculatedSize + (this.contents.size ? 1 : 2),
-      },
     };
     const changed = !equal(this.published, this.state);
-    if (!changed) this.state = this.published;
-    else this.published = this.state;
-    if (notify && changed) this.dependencies.publish(this.state, this.snapshot);
+    if (changed) this.published = this.state;
+    else this.state = this.published;
+    if (!changed && this.snapshot === this.publishedSnapshot) return;
+    this.publishedSnapshot = this.snapshot;
+    this.dependencies.publish(this.state, this.snapshot);
   }
   /** Trusts the ChatClient boundary's decoded, bounded snapshot; checks only its authority. */
-  accept(input: ChatSnapshot): ChatSnapshot {
+  accept(input: ChatSnapshot) {
     if (!sameTarget(input.conversation.target, this.dependencies.target))
       throw makeTranscriptFailure('Snapshot belongs to another conversation.');
     this.validateEntries(input.entries);
@@ -508,7 +472,7 @@ export class TranscriptOwner {
         },
       };
     }
-    this.latestCursor = input.olderCursor;
+    // Legacy older paging keeps the furthest-back cursor it reached unless the window is replaced.
     if (this.following) {
       const continuous = entries.some(
         (entry) =>
@@ -518,6 +482,7 @@ export class TranscriptOwner {
       if (!continuous) {
         this.records = entries;
         this.navigation = undefined;
+        this.latestCursor = input.olderCursor;
       } else this.records = mergeEntries(this.records, entries, 'later');
       // A coherent new boundary replaces the live edge; historical navigation stays independent.
       this.start = 0;
@@ -530,11 +495,12 @@ export class TranscriptOwner {
       if (!old) {
         this.olderEnd = input.olderCursor === null;
         this.newerEnd = true;
+        this.latestCursor = input.olderCursor;
       } else if (old.transcriptBoundary !== input.transcriptBoundary) this.newerEnd = false;
     }
     for (const read of this.pending.values())
       if (read.source?.kind === 'live' && !this.current(read.source)) read.abort.abort();
-    // writeContent reorders and trims the LRU, so iterate a key snapshot and read live values.
+    // writeContent reorders the LRU, so iterate a key snapshot and read live values.
     for (const key of Array.from(this.contents.keys())) {
       const content = this.contents.peek(key);
       if (!content) continue;
@@ -584,8 +550,7 @@ export class TranscriptOwner {
         this.jobs.get('manifest')?.abort.abort();
       }
     }
-    this.publish(false);
-    return this.snapshot;
+    this.publish();
   }
   fail(error: unknown) {
     this.cancelFind();
@@ -627,6 +592,9 @@ export class TranscriptOwner {
     this.findGeneration++;
     this.findAbort.abort();
     this.findReveal.abort();
+    // A cancelled Find has no fixed boundary to replay or refresh against.
+    this.findStart = null;
+    this.findUpper = undefined;
     this.state = { ...this.state, find: { ...this.state.find, revealing: false } };
   }
   openFind() {
@@ -673,10 +641,7 @@ export class TranscriptOwner {
       throw makeTranscriptFailure(
         'Find reply does not match the query or advance its fixed boundary.',
       );
-    const expression = new RegExp(
-      '^(?:' + query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')',
-      'iu',
-    );
+    const expression = getChatFindExpression(query);
     let last = previous;
     const seen = new Set<string>();
     for (const match of page.matches) {
@@ -697,15 +662,16 @@ export class TranscriptOwner {
       last = match;
       const start = match.start - match.snippet.start,
         end = match.end - match.snippet.start;
+      expression.lastIndex = 0;
+      const hit = expression.exec(match.snippet.text.slice(start, end));
       if (
         !sameTarget(match.source.target, this.dependencies.target) ||
         page.upperEntryId === null ||
         (/^\d+$/.test(match.source.entryId) &&
           /^\d+$/.test(page.upperEntryId) &&
           Number(match.source.entryId) > Number(page.upperEntryId)) ||
-        !match.snippet.text.slice(0, start).isWellFormed() ||
-        !match.snippet.text.slice(end).isWellFormed() ||
-        expression.exec(match.snippet.text.slice(start, end))?.[0].length !== end - start
+        hit?.index !== 0 ||
+        hit[0].length !== end - start
       )
         throw makeTranscriptFailure('Find returned an invalid original-text match.');
     }
@@ -716,10 +682,8 @@ export class TranscriptOwner {
     this.cancelFind();
     this.findAbort = new AbortController();
     this.findReveal = new AbortController();
-    this.findStart = null;
-    this.findUpper = undefined;
-    this.findProgress = { entries: 0, bytes: 0 };
-    this.findAdvance = trackTranscriptCursor();
+    const advance = trackTranscriptCursor();
+    let progress = { entries: 0, bytes: 0 };
     const generation = this.findGeneration,
       signal = this.findAbort.signal;
     const current = () => generation === this.findGeneration && this.current() && !signal.aborted;
@@ -761,19 +725,12 @@ export class TranscriptOwner {
         let cursor: string | null = null;
         let last: ChatTranscriptMatch | undefined;
         do {
-          const page = await this.readFind(
-            query,
-            cursor,
-            signal,
-            this.findProgress,
-            this.findAdvance,
-            last,
-          );
+          const page = await this.readFind(query, cursor, signal, progress, advance, last);
           checkTranscriptRead(signal, current);
           last = page.matches.at(-1) ?? last;
           this.findStart = page.startCursor;
           this.findUpper = page.upperEntryId;
-          this.findProgress = page.progress;
+          progress = page.progress;
           const previous = this.state.find;
           const all = [...previous.matches, ...page.matches];
           const matches = all.slice(-transcriptLimits.findMatches);
@@ -785,7 +742,6 @@ export class TranscriptOwner {
               matches,
               retainedFrom: count - matches.length,
               count,
-              progress: page.progress,
               upperEntryId: page.upperEntryId,
               refreshAvailable: page.upperEntryId !== this.snapshot?.transcriptBoundary,
               status: page.nextCursor ? 'searching' : 'complete',
@@ -916,18 +872,6 @@ export class TranscriptOwner {
       this.publish();
     }
   }
-  private getLiveEvidence(selection?: ChatTranscriptSelection) {
-    const transcript = this.snapshot?.run?.transcript;
-    const part = selection && transcript?.parts.find((part) => part.partId === selection.partId);
-    return part
-      ? {
-          partId: part.partId,
-          bytes: part.bytes,
-          revision: part.revision,
-          availability: part.availability,
-        }
-      : transcript;
-  }
   restore() {
     if (!this.restorePending) return Promise.resolve();
     this.restorePending = false;
@@ -1014,9 +958,10 @@ export class TranscriptOwner {
       ) {
         this.start = Math.min(
           this.records.length - transcriptLimits.displayedRows,
-          this.start + 32,
+          this.start + chatPageSize,
         );
-      } else if (direction === 'later' && this.start > 0) this.start = Math.max(0, this.start - 32);
+      } else if (direction === 'later' && this.start > 0)
+        this.start = Math.max(0, this.start - chatPageSize);
       else if (this.dependencies.capable && this.records.length) {
         const edge = direction === 'earlier' ? this.state.entries[0] : this.state.entries.at(-1);
         const nav = this.navigation;
@@ -1044,7 +989,7 @@ export class TranscriptOwner {
       checkTranscriptRead(signal, () => this.current());
       if (direction === 'later' && this.start === 0 && this.newerEnd) this.following = true;
       if (this.start !== previous || this.state.entries.length) this.rememberWindow(direction);
-      this.publish(true, direction);
+      this.publish(direction);
     });
   }
   private async readAround(
@@ -1130,54 +1075,43 @@ export class TranscriptOwner {
       this.start = 0;
       this.navigation = undefined;
       this.following = true;
-      this.state = {
-        ...this.state,
-        view: {
-          anchor: null,
-          expanded: this.state.view.anchor?.source ? [] : this.state.view.expanded,
-        },
-      };
-      this.dependencies.memory.set(
-        this.dependencies.backend,
-        this.dependencies.target,
-        this.state.view,
-      );
+      this.rememberView({
+        anchor: null,
+        expanded: this.state.view.anchor?.source ? [] : this.state.view.expanded,
+      });
       // A watch received during this explicit read wins its coherent live boundary.
       this.accept(this.snapshot !== previous && this.snapshot ? this.snapshot : snapshot);
     });
   };
+  /** Remembers the displayed edge row in the direction moved: oldest shown, or newest shown. */
   private rememberWindow(direction: 'earlier' | 'later') {
-    const entry = direction === 'earlier' ? this.records.at(-1) : this.records[this.start];
+    const oldest = Math.min(this.records.length, this.start + transcriptLimits.displayedRows) - 1;
+    const entry = this.records[direction === 'earlier' ? oldest : this.start];
     this.rememberView({
       expanded: this.state.view.anchor?.source ? [] : this.state.view.expanded,
       anchor: this.following || !entry ? null : { entryId: entry.id, offset: 0 },
     });
   }
+  /** View memory decodes once and returns the frozen view it remembered; invalid views throw. */
   private rememberView(view: TranscriptView) {
-    this.dependencies.memory.set(this.dependencies.backend, this.dependencies.target, view);
-    const captured = this.dependencies.memory.get(
-      this.dependencies.backend,
-      this.dependencies.target,
-    );
-    this.state = { ...this.state, view: captured };
-  }
-  setView(view: TranscriptView) {
-    if (!this.alive) return;
-    const captured = decodeTranscriptView(
+    const remembered = this.dependencies.memory.set(
       this.dependencies.backend,
       this.dependencies.target,
       view,
     );
+    this.state = { ...this.state, view: remembered };
+    return remembered;
+  }
+  setView(view: TranscriptView) {
+    if (!this.alive) return;
+    const captured = this.rememberView(view);
     this.cancelViewRestore();
     this.restorePending = false;
-    this.rememberView(captured);
     if (captured.anchor) this.following = !!captured.anchor.source;
     this.publish();
   }
   loadManifest(source: ChatTranscriptSource, restart = false) {
-    const captured = structuredClone(
-      decodeChatInput('getChatTranscriptContent', { source }).source,
-    );
+    const captured = decodeChatInput('getChatTranscriptContent', { source }).source;
     const old = this.state.manifest;
     if (restart || !equal(old?.source, captured)) {
       this.jobs.get('manifest')?.abort.abort();
@@ -1259,9 +1193,7 @@ export class TranscriptOwner {
     );
   }
   loadPart(source: ChatTranscriptSource, selection: ChatTranscriptSelection, restart = false) {
-    const captured = structuredClone(
-      decodeChatInput('getChatTranscriptContent', { source, selection }),
-    );
+    const captured = decodeChatInput('getChatTranscriptContent', { source, selection });
     const selected = captured.selection!;
     const entryId = captured.source.kind === 'entry' ? captured.source.entryId : undefined;
     this.selectedEntry =
@@ -1285,7 +1217,7 @@ export class TranscriptOwner {
       status: 'partial',
       error: null,
     };
-    this.writeContent(key, content, true);
+    this.writeContent(key, content);
     if (content.status === 'complete' || content.status === 'source-changed') {
       this.publish();
       return Promise.resolve();
@@ -1315,8 +1247,6 @@ export class TranscriptOwner {
           if (reply.kind !== 'content' || reply.offset !== before.loadedBytes)
             throw makeTranscriptFailure('Transcript content has a missing or overlapping chunk.');
           const loadedBytes = reply.offset + countDecodedTranscriptBytes(reply);
-          if (reply.nextCursor === null && loadedBytes !== selected.bytes)
-            throw makeTranscriptFailure('Transcript content is incomplete.');
           const chunk = {
             source: captured.source,
             selection: selected,
@@ -1350,123 +1280,6 @@ export class TranscriptOwner {
       this.getFindSignal(captured.source),
     );
   }
-  iterate(
-    source: ChatTranscriptSource,
-    options: {
-      selection?: ChatTranscriptSelection;
-      signal?: AbortSignal;
-      onProgress?: (progress: TranscriptReadProgress) => void;
-    } = {},
-  ): AsyncGenerator<TranscriptChunk> {
-    if (!this.dependencies.capable)
-      throw makeTranscriptFailure(
-        'This host requires an upgrade for complete transcript reads.',
-        'Unavailable',
-      );
-    const captured = structuredClone(source);
-    const selection = options.selection ? { ...options.selection } : undefined;
-    const getEvidence = (selected?: ChatTranscriptSelection) => this.getLiveEvidence(selected);
-    const manifestEvidence =
-      captured.kind === 'live' && !selection ? structuredClone(getEvidence()) : undefined;
-    const isCurrent = () =>
-      this.current(captured) &&
-      (captured.kind !== 'live' || !!selection || equal(manifestEvidence, getEvidence()));
-    const signal = options.signal
-      ? AbortSignal.any([options.signal, this.lifetime.signal])
-      : this.lifetime.signal;
-    const settlements = new Set<Promise<unknown>>();
-    const read: TranscriptRead = (input, options) =>
-      this.command('getChatTranscriptContent', input, options?.signal, settlements);
-    let readEvidence: unknown;
-    let proofState:
-      | {
-          selection: ChatTranscriptSelection;
-          encoding: TranscriptChunk['encoding'];
-          evidence: unknown;
-        }
-      | undefined;
-    let progress: TranscriptReadProgress | undefined;
-    const needsProof = () =>
-      captured.kind === 'live' &&
-      proofState &&
-      !equal(proofState.evidence, getEvidence(proofState.selection));
-    const verifyCurrent = async (budget: { remaining: number }) => {
-      checkTranscriptRead(signal, isCurrent);
-      if (captured.kind !== 'live' || !proofState) return;
-      const selected = proofState;
-      while (!equal(selected.evidence, getEvidence(selected.selection))) {
-        if (budget.remaining === 0)
-          throw makeTranscriptFailure(
-            'Transcript prefix proof was repeatedly superseded.',
-            'Conflict',
-          );
-        budget.remaining--;
-        const evidence = structuredClone(getEvidence(selected.selection));
-        const proof = await readTranscript(
-          read,
-          { source: captured, selection: selected.selection },
-          signal,
-          isCurrent,
-        );
-        if (proof.kind !== 'content' || proof.offset !== 0 || proof.encoding !== selected.encoding)
-          throw makeTranscriptFailure('Transcript prefix proof does not match the captured part.');
-        // A held proof covers only the evidence observed before its request.
-        selected.evidence = evidence;
-      }
-      checkTranscriptRead(signal, isCurrent);
-    };
-    const iterator = iterateTranscriptSource({
-      source: captured,
-      selection,
-      signal,
-      isCurrent,
-      read: (input, options) => {
-        readEvidence = structuredClone(getEvidence(input.selection));
-        return read(input, options);
-      },
-      onProgress: (value) => {
-        progress = value;
-      },
-    });
-    const onProgress = options.onProgress;
-    return (async function* () {
-      try {
-        for (;;) {
-          const next = await iterator.next();
-          // Each yielded chunk is the validated reply to the latest read; evidence predates it.
-          if (!next.done)
-            proofState = {
-              selection: next.value.selection,
-              encoding: next.value.encoding,
-              evidence: readEvidence,
-            };
-          const budget = { remaining: 3 };
-          for (;;) {
-            await verifyCurrent(budget);
-            checkTranscriptRead(signal, isCurrent);
-            if (needsProof()) continue;
-            if (progress) {
-              const current = progress;
-              progress = undefined;
-              onProgress?.(current);
-              checkTranscriptRead(signal, isCurrent);
-              if (needsProof()) continue;
-            }
-            if (next.done) return;
-            yield next.value;
-            break;
-          }
-        }
-      } finally {
-        try {
-          await iterator.return(undefined);
-        } finally {
-          // Consumers retain capacity until their own cancelled data/proof IO actually settles.
-          await Promise.allSettled(settlements);
-        }
-      }
-    })();
-  }
   close() {
     this.cancelFind();
     this.alive = false;
@@ -1478,6 +1291,14 @@ export class TranscriptOwner {
     this.state = makeEmptyTranscriptState();
     this.published = this.state;
     for (const job of this.jobs.values()) job.abort.abort();
-    return Promise.allSettled(this.pending.keys()).then(() => {});
+    if (!this.pending.size) return Promise.resolve();
+    // Join cancelled reads, but a ChatClient that ignores cancellation cannot hold Quit or a switch.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    return Promise.race([
+      Promise.allSettled(this.pending.keys()),
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, transcriptLimits.closeGraceMs);
+      }),
+    ]).then(() => clearTimeout(timer));
   }
 }

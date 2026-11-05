@@ -346,3 +346,41 @@ test('reconnecting and failed observations cancel Find and keep a visible retry 
     }
   }
 });
+
+test('closing Find forgets its fixed boundary, so later snapshots never offer a refresh', async (t) => {
+  const f = await transcriptController(t, 64);
+  await f.controller.findTranscript('same');
+  assert.equal(f.controller.getSnapshot().transcript.find.upperEntryId, 'e63');
+  f.publish({ ...f.snapshot, transcriptBoundary: 'e10' });
+  assert.equal(f.controller.getSnapshot().transcript.find.refreshAvailable, true);
+  f.controller.closeFind();
+  f.publish({ ...f.snapshot, transcriptBoundary: 'e11' });
+  const find = f.controller.getSnapshot().transcript.find;
+  assert.equal(find.open, false);
+  assert.equal(find.refreshAvailable, false);
+});
+
+test('Find accepts original-text matches under simple Unicode case folding', async (t) => {
+  const f = await transcriptController(t, 1);
+  const source = f.entries[0].transcript!.source;
+  f.fixture.sources.set(JSON.stringify(source), {
+    source,
+    data: ['Ein STRAẞE 🌔 und ΣΟΦΟΣ, then straße 🌔 and σοφος'],
+  });
+  await f.controller.findTranscript('straße 🌔');
+  let find = f.controller.getSnapshot().transcript.find;
+  assert.equal(find.error, null);
+  assert.deepEqual(
+    find.matches.map((match) => [match.start, match.end]),
+    [
+      [4, 13],
+      [30, 39],
+    ],
+  );
+  await f.controller.findTranscript('σοφοσ');
+  find = f.controller.getSnapshot().transcript.find;
+  assert.equal(find.error, null);
+  assert.equal(find.count, 2);
+  await f.controller.findTranscript('STRASSE');
+  assert.equal(f.controller.getSnapshot().transcript.find.count, 0);
+});

@@ -48,21 +48,22 @@ async function largeParts(t: Parameters<typeof transcriptController>[0], sizes: 
   return { f, held, load, loadAll, content };
 }
 
-function assertReportedUsage(f: Awaited<ReturnType<typeof transcriptController>>) {
-  const transcript = f.controller.getSnapshot().transcript;
-  assert.equal(transcript.retained.contentBytes, serialized(transcript.content));
-  assert(transcript.retained.contentBytes <= transcriptLimits.contentBytes);
+/** Each retained selection counts its own serialized bytes against the content budget. */
+function assertContentBudget(f: Awaited<ReturnType<typeof transcriptController>>) {
+  const { content } = f.controller.getSnapshot().transcript;
+  const bytes = content.reduce((total, value) => total + serialized(value), 0);
+  assert(bytes <= transcriptLimits.contentBytes, `${bytes} retained content bytes`);
 }
 
-test('content eviction trims least-recently read prefixes first; chunk and status updates keep recency', async (t) => {
-  // a, b and c fill 5.6 MiB; d adds 4.5 MiB, so b empties and c loses its oldest chunks.
+test('content eviction drops whole least-recently written selections and trims only the written one', async (t) => {
+  // a, b and c fill 5.6 MiB; d adds 4.5 MiB, so the two least recent selections leave whole.
   const { f, held, load, loadAll, content } = await largeParts(t, [60, 60, 60, 144]);
-  assert.equal(f.controller.getSnapshot().transcript.retained.contentBytes, serialized([]));
+  assert.deepEqual(f.controller.getSnapshot().transcript.content, []);
   await loadAll(0);
   await loadAll(1);
   for (let chunk = 0; chunk < 59; chunk++) await load(2);
-  assertReportedUsage(f);
-  // c's final chunk lands after a is read again; that update must not make c newer than a.
+  assertContentBudget(f);
+  // c's final chunk lands after a is read again, so c becomes the most recent selection.
   const release = Promise.withResolvers<void>();
   held.set(`m0.b2@${59 * chunkBytes}`, release.promise);
   const finishing = load(2);
@@ -73,31 +74,30 @@ test('content eviction trims least-recently read prefixes first; chunk and statu
   assert.equal(content(2).status, 'complete');
   assert.deepEqual(
     f.controller.getSnapshot().transcript.content.map((value) => value.selection.partId),
-    ['m0.b1', 'm0.b2', 'm0.b0'],
+    ['m0.b1', 'm0.b0', 'm0.b2'],
   );
   for (let chunk = 0; chunk < 144; chunk++) {
     await load(3);
-    assertReportedUsage(f);
+    assertContentBudget(f);
   }
-  const b = content(1),
-    c = content(2);
-  assert.equal(b.chunks.length, 0);
-  assert.equal(b.retainedFrom, b.loadedBytes);
-  assert.equal(c.retainedFrom, 11 * chunkBytes);
-  assert.equal(c.chunks[0].offset, c.retainedFrom);
-  assert.equal(content(0).retainedFrom, 0);
+  assert.deepEqual(
+    f.controller.getSnapshot().transcript.content.map((value) => value.selection.partId),
+    ['m0.b2', 'm0.b3'],
+  );
+  assert.equal(content(2).retainedFrom, 0);
+  assert.equal(content(2).chunks.length, 60);
   assert.equal(content(3).retainedFrom, 0);
   assert.equal(content(3).status, 'complete');
 });
 
-test('reported content usage stays exact through one oversized part and disposal', async (t) => {
+test('one oversized part trims only its own oldest chunks and is released on disposal', async (t) => {
   const { f, loadAll, content } = await largeParts(t, [288]);
   await loadAll(0);
-  assertReportedUsage(f);
+  assertContentBudget(f);
   assert.equal(content(0).retainedFrom, 35 * chunkBytes);
   assert.equal(content(0).loadedBytes, 288 * chunkBytes);
   await f.controller.loadTranscriptPart(content(0).source, content(0).selection, true);
-  assertReportedUsage(f);
+  assertContentBudget(f);
   assert.equal(content(0).chunks.length, 1);
   await f.controller.detach();
   assert.deepEqual(f.controller.getSnapshot().transcript.content, []);
@@ -120,7 +120,7 @@ test('one publication measures only the selection it changed', async (t) => {
   );
   const bytes = stringify.mock.calls.reduce((total, call) => total + (call.result?.length ?? 0), 0);
   assert(bytes < chunkBytes, `serialized ${bytes} bytes for one small chunk`);
-  assertReportedUsage(f);
+  assertContentBudget(f);
 });
 
 test('view memory keeps the former recency and byte budget', () => {

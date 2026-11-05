@@ -27,6 +27,7 @@ import type {
   ChatHistoryPage,
   ChatSendReceipt,
 } from '@moonbase/contracts/chat';
+import { chatFindFeature, chatTranscriptFeature } from '@moonbase/contracts/chat';
 import {
   Request,
   Store,
@@ -356,12 +357,12 @@ export class Host {
         host: { ...this.config.host },
         actorId: this.config.actorId,
         mode: 'local',
-        features: ['transcript-v1', 'transcript-find-v1'],
+        features: [chatTranscriptFeature, chatFindFeature],
       };
     return {
       host: { ...this.config.host },
       actorId: this.config.actorId,
-      features: ['transcript-v1', 'transcript-find-v1'],
+      features: [chatTranscriptFeature, chatFindFeature],
       cwd: this.config.cwd,
       model: `${this.config.model.provider}/${this.config.model.modelId}`,
     };

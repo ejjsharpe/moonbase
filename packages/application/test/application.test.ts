@@ -626,7 +626,6 @@ test('prepared controllers block all IO and state admissions while teardown sett
       bytes: 0,
       revision: '0'.repeat(64),
     });
-    assert.throws(() => current.iterateTranscript(source), { code: 'Cancelled' });
     await current.create('late');
     await current.send();
     await current.stop();

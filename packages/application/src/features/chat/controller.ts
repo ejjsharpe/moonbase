@@ -19,6 +19,11 @@ import type {
   ChatTranscriptSource,
   ChatTranscriptSelection,
 } from '@moonbase/contracts/chat';
+import {
+  chatFindFeature,
+  chatStreamFeature,
+  chatTranscriptFeature,
+} from '@moonbase/contracts/chat';
 import type { ConnectionClient, ConnectionSnapshot } from '@moonbase/contracts/connection';
 import { makeProviderSetupController, type ProviderSetupController } from './providers.ts';
 import type { ProviderSetupClient } from '@moonbase/contracts/providers';
@@ -26,7 +31,6 @@ import { decodeSaved, sameSession, sameTarget, type Saved, type Pending } from '
 export type { Pending } from './saved.ts';
 import { TranscriptOwner, makeEmptyTranscriptState, type TranscriptState } from './transcript.ts';
 import { TranscriptViewMemory, type TranscriptView } from './view-memory.ts';
-import type { TranscriptReadProgress } from './transcript-read.ts';
 
 export interface DraftStorage {
   read(): string | null;
@@ -93,6 +97,7 @@ class ChatModelState {
   private selection?: Owner & { target: ChatTarget };
   private refreshOwner?: Owner;
   private observations = new Set<Observation>();
+  // A closing child scope detaches from its parent, so disposal joins already-closing owners here.
   private transcripts = new Set<TranscriptOwner>();
   private epoch = 0;
   private connectionRevision = 0;
@@ -117,7 +122,7 @@ class ChatModelState {
   constructor(scope: Scope.Closeable, dependencies: ChatDependencies) {
     this.scope = scope;
     this.chat = dependencies.chat;
-    this.backend = dependencies.backendId ?? 'standalone';
+    this.backend = dependencies.backendId ?? 'chat';
     this.transcriptMemory = dependencies.transcriptMemory ?? new TranscriptViewMemory();
     this.connection = dependencies.connection;
     this.mode = dependencies.mode ?? 'remote';
@@ -397,7 +402,8 @@ class ChatModelState {
       previous?.connectionId !== state.connectionId ||
       previous?.state !== state.state ||
       (state.state === 'connected' && !this.generation?.alive);
-    this.update({ connection: state, ready: state.state === 'connected' });
+    // A repeated event is ready only once refresh has verified this generation's host.
+    this.update({ connection: state, ready: state.state === 'connected' && !!this.state.host });
     if (!changed) return;
     this.epoch++;
     void this.selection?.transcript?.close();
@@ -612,8 +618,10 @@ class ChatModelState {
       this.epoch++;
       void this.closeOwner(this.selection);
       this.selection = undefined;
-      // A selection supersedes an old list read without suppressing the new view's refresh.
-      if (this.refreshOwner?.alive && this.actions.has('refresh')) void this.refresh();
+      // A selection supersedes an old list read without suppressing the new view's refresh. Until
+      // refresh verifies the host's features, it owns opening the selection.
+      if (!this.state.host || (this.refreshOwner?.alive && this.actions.has('refresh')))
+        void this.refresh();
       const epoch = this.epoch;
       return this.action(
         'open',
@@ -645,6 +653,9 @@ class ChatModelState {
   private openSelected(target: ChatTarget): Effect.Effect<void, ApplicationError> {
     return Effect.gen({ self: this }, function* () {
       if (!this.attachment?.alive || !this.generation?.alive || this.closed) return;
+      // Transcript capabilities are fixed at open, so wait for refresh to read the host's features.
+      if (!this.state.host) return;
+      const features = this.state.host.features ?? [];
       if (this.selection?.alive && sameTarget(this.selection.target, target)) return;
       void this.closeOwner(this.selection);
       const owner = (this.selection = Object.assign(this.owner(this.generation), {
@@ -658,9 +669,9 @@ class ChatModelState {
         target: structuredClone(target),
         backend: this.backend,
         memory: this.transcriptMemory,
-        capable: this.state.host?.features?.includes('transcript-v1') ?? false,
-        findCapable: this.state.host?.features?.includes('transcript-find-v1') ?? false,
-        streaming: this.state.host?.features?.includes('chat-stream-v1') ?? false,
+        capable: features.includes(chatTranscriptFeature),
+        findCapable: features.includes(chatFindFeature),
+        streaming: features.includes(chatStreamFeature),
         local: this.mode === 'local',
         publish: (state, snapshot) => {
           if (owner.alive && this.selection === owner)
@@ -685,12 +696,7 @@ class ChatModelState {
           transcript.getSnapshot().observation !== 'failed'
         ) {
           try {
-            const stable = transcript.accept(snapshot);
-            if (
-              stable !== this.state.snapshot ||
-              transcript.getSnapshot() !== this.state.transcript
-            )
-              this.update({ snapshot: stable, transcript: transcript.getSnapshot() });
+            transcript.accept(snapshot);
           } catch (error) {
             transcript.fail(error);
             this.error(error);
@@ -750,19 +756,6 @@ class ChatModelState {
     selection: ChatTranscriptSelection,
     restart = false,
   ) => this.transcriptOwner()?.loadPart(source, selection, restart) ?? Promise.resolve();
-  iterateTranscript(
-    source: ChatTranscriptSource,
-    options?: {
-      selection?: ChatTranscriptSelection;
-      signal?: AbortSignal;
-      onProgress?: (progress: TranscriptReadProgress) => void;
-    },
-  ) {
-    const owner = this.transcriptOwner();
-    if (!owner)
-      throw new ApplicationError({ code: 'Cancelled', message: 'Transcript view is inactive.' });
-    return owner.iterate(source, options);
-  }
   private reserve(pending: Pending) {
     const next = structuredClone(this.saved);
     if (next.pending.length >= 16)
@@ -1140,7 +1133,6 @@ export type ChatController = Pick<
   | 'setTranscriptView'
   | 'loadTranscriptManifest'
   | 'loadTranscriptPart'
-  | 'iterateTranscript'
   | 'create'
   | 'send'
   | 'stop'

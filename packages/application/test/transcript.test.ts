@@ -8,6 +8,7 @@ import {
 } from '@moonbase/application/chat';
 import { maximumChatReplyBytes } from '@moonbase/contracts/chat';
 import type { ChatSnapshot, ChatTranscriptSource } from '@moonbase/contracts/chat';
+import type { TranscriptState } from '@moonbase/application/chat';
 import {
   digest,
   part,
@@ -26,6 +27,22 @@ async function collect(iterator: AsyncIterable<{ data: string }>) {
   let text = '';
   for await (const chunk of iterator) text += chunk.data;
   return text;
+}
+const serialized = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
+/** Published summaries and content stay within their budgets. */
+function assertBounds(state: TranscriptState) {
+  assert(state.entries.length <= transcriptLimits.displayedRows);
+  assert(
+    state.entries.length + (state.manifest?.parts.length ?? 0) <= transcriptLimits.summaryRecords,
+  );
+  assert(
+    serialized({ entries: state.entries, manifest: state.manifest }) <=
+      transcriptLimits.summaryBytes,
+  );
+  assert(
+    state.content.reduce((total, content) => total + serialized(content), 0) <=
+      transcriptLimits.contentBytes,
+  );
 }
 function live(
   snapshot: ChatSnapshot,
@@ -66,9 +83,7 @@ test('canonical history traverses >2 overlapping pages, both continuations, evic
   for (let page = 0; page < 25; page++) {
     const state = f.controller.getSnapshot().transcript;
     state.entries.forEach((entry) => seen.add(entry.id));
-    assert(state.entries.length <= 128);
-    assert(state.retained.summaries <= 256);
-    assert(state.retained.summaryBytes <= transcriptLimits.summaryBytes);
+    assertBounds(state);
     assert.deepEqual(
       state.entries.map((entry) => Number(entry.id.slice(1))),
       state.entries.map((entry) => Number(entry.id.slice(1))).sort((a, b) => a - b),
@@ -136,7 +151,7 @@ test('cloned live-only DTOs preserve summary/part/cache identity and unrelated r
   off();
 });
 
-test('selected manifest hydration advances and retries errors; content validates exact echoes, offsets and terminal proof', async (t) => {
+test('selected manifest hydration advances and retries errors; content validates exact echoes and offsets', async (t) => {
   const f = await transcriptController(t, 1);
   const source = f.entries[0].transcript!.source;
   f.fixture.sources.set(JSON.stringify(source), {
@@ -161,13 +176,13 @@ test('selected manifest hydration advances and retries errors; content validates
   f.fixture.sources.set(JSON.stringify(source), { source, data: [data] });
   await f.controller.loadTranscriptPart(source, chosen);
   assert.equal(f.controller.getSnapshot().transcript.content[0].loadedBytes, 32768);
-  for (const corrupt of ['offset', 'target', 'revision', 'terminal'] as const) {
+  // A short terminal chunk is rejected by the ChatClient boundary's reply schema.
+  for (const corrupt of ['offset', 'target', 'revision'] as const) {
     f.handlers.set('getChatTranscriptContent', async (_input, _signal, fallback) => {
       const reply = structuredClone(fallback()) as ContentReply;
       if (corrupt === 'offset') reply.offset--;
       if (corrupt === 'target') reply.source.target.actorId = 'foreign';
       if (corrupt === 'revision') reply.selection.revision = digest('foreign');
-      if (corrupt === 'terminal') reply.nextCursor = null;
       return reply;
     });
     await f.controller.loadTranscriptPart(source, chosen);
@@ -196,10 +211,15 @@ test('one oversized part stays incrementally readable within the LRU; complete-s
   for (let i = 0; i < Math.ceil(data.length / 32768); i++)
     await f.controller.loadTranscriptPart(source, chosen);
   const view = f.controller.getSnapshot().transcript;
-  assert(view.retained.contentBytes <= transcriptLimits.contentBytes);
+  assertBounds(view);
   assert(view.content[0].retainedFrom > 0, 'oversized active selection is not exempt from budget');
   assert.equal(view.content[0].loadedBytes, data.length);
-  assert.equal(await collect(f.controller.iterateTranscript(source, { selection: chosen })), data);
+  assert.equal(
+    await collect(
+      iterateTranscriptSource({ read: makeTranscriptReader(f.chat), source, selection: chosen }),
+    ),
+    data,
+  );
 });
 
 test('summary byte and record budgets include hydrated descriptors and envelopes; complete iteration passes descriptor eviction', async (t) => {
@@ -209,9 +229,12 @@ test('summary byte and record budgets include hydrated descriptors and envelopes
   f.fixture.sources.set(JSON.stringify(source), { source, data });
   for (let i = 0; i < 10; i++) await f.controller.loadTranscriptManifest(source);
   const state = f.controller.getSnapshot().transcript;
-  assert(state.retained.summaries <= 256);
+  assertBounds(state);
   assert(state.manifest!.omittedParts > 0);
-  assert.equal(await collect(f.controller.iterateTranscript(source)), data.join(''));
+  assert.equal(
+    await collect(iterateTranscriptSource({ read: makeTranscriptReader(f.chat), source })),
+    data.join(''),
+  );
 });
 
 for (const lifecycle of ['selection', 'hide', 'close', 'dispose', 'reconnect'] as const)
@@ -259,7 +282,7 @@ for (const lifecycle of ['selection', 'hide', 'close', 'dispose', 'reconnect'] a
     }
   });
 
-test('stale/replaced/recovered/finalized live sources cannot authorize hydration or complete reads; fixed prefixes exclude later appends', async (t) => {
+test('stale/replaced/recovered/finalized live sources cannot authorize hydration', async (t) => {
   const f = await transcriptController(t, 1);
   let value = live(f.snapshot, 'prefix');
   const source = value.run!.transcript!.source,
@@ -267,45 +290,17 @@ test('stale/replaced/recovered/finalized live sources cannot authorize hydration
   f.fixture.sources.set(JSON.stringify(source), { source, data: ['prefix'] });
   f.publish(value);
   await f.controller.loadTranscriptPart(source, chosen);
-  value = live(value, 'prefix APPENDED');
-  f.publish(value);
-  f.fixture.sources.set(JSON.stringify(source), { source, data: ['prefix APPENDED'] });
-  assert.equal(
-    await collect(f.controller.iterateTranscript(source, { selection: chosen })),
-    'prefix',
-  );
-  f.fixture.sources.set(JSON.stringify(source), { source, data: ['replacement'] });
-  await assert.rejects(
-    collect(f.controller.iterateTranscript(source, { selection: chosen })),
-    (error) => ApplicationError.is(error) && error.code === 'Conflict',
-  );
+  assert.equal(f.controller.getSnapshot().transcript.content[0].status, 'complete');
   f.publish({ ...value, observationStatus: 'reconnecting' });
+  assert.equal(f.controller.getSnapshot().transcript.content[0].status, 'source-changed');
   const calls = f.calls.length;
   await f.controller.loadTranscriptPart(source, chosen, true);
-  await assert.rejects(collect(f.controller.iterateTranscript(source, { selection: chosen })));
-  assert.equal(f.calls.length, calls);
   value = live(value, 'recovery', digest('replacement incarnation'));
   f.publish(value);
-  await assert.rejects(collect(f.controller.iterateTranscript(source, { selection: chosen })));
-  f.publish({
-    ...value,
-    state: 'idle',
-    run: null,
-    entries: [
-      ...value.entries,
-      {
-        ...value.entries[0],
-        id: 'distinct-identical-partial',
-        transcript: {
-          ...value.entries[0].transcript!,
-          source: { kind: 'entry', target: f.target, entryId: 'distinct-identical-partial' },
-        },
-      },
-    ],
-    transcriptBoundary: 'distinct-identical-partial',
-  });
-  assert.equal(f.controller.getSnapshot().transcript.entries.length, 2);
-  await assert.rejects(collect(f.controller.iterateTranscript(source, { selection: chosen })));
+  await f.controller.loadTranscriptPart(source, chosen, true);
+  f.publish({ ...value, state: 'idle', run: null });
+  await f.controller.loadTranscriptPart(source, chosen, true);
+  assert.equal(f.calls.length, calls);
 });
 
 test('complete-source iterator works with injected reads, reports progress, validates cycles, and rejects cancellation/missing chunks', async () => {
@@ -348,6 +343,19 @@ test('complete-source iterator works with injected reads, reports progress, vali
       iterateTranscriptSource({ read: makeTranscriptReader(f.chat), source, selection: chosen }),
     ),
   );
+  // An oversized chunk fails at once, before another continuation is read.
+  f.handlers.set('getChatTranscriptContent', async (_input, _signal, fallback) => {
+    const reply = fallback() as ContentReply;
+    return { ...reply, data: 'z'.repeat(chosen.bytes + 1) };
+  });
+  const reads = f.calls.length;
+  await assert.rejects(
+    collect(
+      iterateTranscriptSource({ read: makeTranscriptReader(f.chat), source, selection: chosen }),
+    ),
+    /exceeds its selected part/,
+  );
+  assert.equal(f.calls.length, reads + 1);
   const liveSource: ChatTranscriptSource = {
     kind: 'live',
     target: f.target,
@@ -383,7 +391,6 @@ test('trusted ChatClient replies and snapshots are not decoded or size-bounded a
     await collect(iterateTranscriptSource({ read: makeTranscriptReader(f.chat), source })),
     'same text',
   );
-  assert.equal(await collect(f.controller.iterateTranscript(source)), 'same text');
   await f.controller.loadTranscriptManifest(source, true);
   assert.equal(f.controller.getSnapshot().transcript.manifest!.status, 'complete');
   await f.controller.loadTranscriptPart(source, chosen, true);
@@ -396,10 +403,15 @@ test('trusted ChatClient replies and snapshots are not decoded or size-bounded a
     ...(fallback() as object),
     kind: 'manifest',
   }));
-  await assert.rejects(collect(f.controller.iterateTranscript(source, { selection: chosen })), {
-    code: 'Incompatible',
-    message: 'Transcript reply does not match the captured selection.',
-  });
+  await assert.rejects(
+    collect(
+      iterateTranscriptSource({ read: makeTranscriptReader(f.chat), source, selection: chosen }),
+    ),
+    {
+      code: 'Incompatible',
+      message: 'Transcript reply does not match the captured selection.',
+    },
+  );
 });
 
 test('escaped summary data evicts at two MiB before the row limit without losing earlier/later navigation', async (t) => {
@@ -427,8 +439,7 @@ test('escaped summary data evicts at two MiB before the row limit without losing
     await f.controller.older();
     const state = f.controller.getSnapshot().transcript;
     assert.equal(state.error, null);
-    assert(state.retained.summaryBytes <= transcriptLimits.summaryBytes);
-    assert(state.retained.summaries <= 256);
+    assertBounds(state);
   }
   const state = f.controller.getSnapshot().transcript;
   assert.equal(state.entries[0].id, 'e0');
@@ -469,7 +480,7 @@ test('manifest and content LRU are bounded; view and expansion ID memory has fin
   );
 });
 
-test('complete iteration rejects a manifest continuation cycle and a held live result after observation becomes stale', async (t) => {
+test('complete iteration rejects a manifest continuation cycle', async (t) => {
   const f = await transcriptController(t, 1);
   const source = f.entries[0].transcript!.source;
   f.handlers.set('getChatTranscriptContent', async (raw, _signal, fallback) => {
@@ -485,34 +496,10 @@ test('complete iteration rejects a manifest continuation cycle and a held live r
       thinking: 'none',
     };
   });
-  await assert.rejects(collect(f.controller.iterateTranscript(source)), /advance/);
-  f.handlers.clear();
-  const value = live(f.snapshot, 'live');
-  f.publish(value);
-  const liveSource = value.run!.transcript!.source,
-    selected = selection(value.run!.transcript!.parts[0]);
-  f.fixture.sources.set(JSON.stringify(liveSource), { source: liveSource, data: ['live'] });
-  const entered = Promise.withResolvers<void>(),
-    held = Promise.withResolvers<void>();
-  f.handlers.set('getChatTranscriptContent', async (_raw, _signal, fallback) => {
-    entered.resolve();
-    const result = fallback();
-    await held.promise;
-    return result;
-  });
-  const progress: number[] = [];
-  const reading = collect(
-    f.controller.iterateTranscript(liveSource, {
-      selection: selected,
-      onProgress: (state) => progress.push(state.bytes),
-    }),
+  await assert.rejects(
+    collect(iterateTranscriptSource({ read: makeTranscriptReader(f.chat), source })),
+    /advance/,
   );
-  await entered.promise;
-  f.publish({ ...value, observationStatus: 'reconnecting' });
-  assert(f.calls.at(-1)!.signal!.aborted);
-  held.resolve();
-  await assert.rejects(reading);
-  assert.deepEqual(progress, []);
 });
 
 test('changed entry descriptors invalidate relevant hydration; explicit refresh reattaches a failed observation', async (t) => {
@@ -542,16 +529,8 @@ test('changed entry descriptors invalidate relevant hydration; explicit refresh 
   assert.equal(f.fixture.watchCloses, 1);
 });
 
-test('iterator creation captures the exact owner/source before first pull, including A to B to A replacement', async (t) => {
+test('injected iteration captures its source before the first pull', async (t) => {
   const f = await transcriptController(t, 1);
-  const source = structuredClone(f.entries[0].transcript!.source);
-  const iterator = f.controller.iterateTranscript(source);
-  if (source.kind === 'entry') source.entryId = 'mutated';
-  await f.controller.select(f.target);
-  await assert.rejects(
-    collect(iterator),
-    (error) => ApplicationError.is(error) && error.code === 'Cancelled',
-  );
   const injectedSource = structuredClone(f.entries[0].transcript!.source);
   const injected = iterateTranscriptSource({
     source: injectedSource,
@@ -671,31 +650,6 @@ test('an explicit around jump supersedes held navigation without late errors or 
   }
 });
 
-test('held live content cannot complete after an observed same-incarnation prefix replacement', async (t) => {
-  const f = await transcriptController(t, 1);
-  const initial = live(f.snapshot, 'prefix');
-  f.publish(initial);
-  const source = initial.run!.transcript!.source;
-  f.fixture.sources.set(JSON.stringify(source), { source, data: ['prefix'] });
-  const entered = Promise.withResolvers<void>(),
-    held = Promise.withResolvers<void>();
-  f.handlers.set('getChatTranscriptContent', async (_input, _signal, fallback) => {
-    const result = fallback();
-    entered.resolve();
-    await held.promise;
-    return result;
-  });
-  const reading = collect(
-    f.controller.iterateTranscript(source, {
-      selection: selection(initial.run!.transcript!.parts[0]),
-    }),
-  );
-  await entered.promise;
-  publishLiveCopy(f, 'REPLACED');
-  held.resolve();
-  await assert.rejects(reading, (error) => ApplicationError.is(error) && error.code === 'Conflict');
-});
-
 test('a held continuation reports its actual retained offset after another selection evicts its cached prefix', async (t) => {
   const f = await transcriptController(t, 1),
     source = f.entries[0].transcript!.source;
@@ -748,7 +702,6 @@ test('terminal onError invalidates completed live hydration even when a local wa
   const calls = f.calls.length;
   await f.controller.loadTranscriptPart(source, chosen);
   assert.equal(f.calls.length, calls);
-  await assert.rejects(collect(f.controller.iterateTranscript(source, { selection: chosen })));
   assert.match(f.controller.getSnapshot().error!, /^Unauthorized:/);
 });
 
@@ -760,9 +713,7 @@ test('history traverses every entry backward and forward across summary eviction
       const state = f.controller.getSnapshot().transcript;
       for (const entry of state.entries) seen.add(entry.id);
       assert.equal(state.error, null);
-      assert(state.entries.length <= transcriptLimits.displayedRows);
-      assert(state.retained.summaries <= transcriptLimits.summaryRecords);
-      assert(state.retained.summaryBytes <= transcriptLimits.summaryBytes);
+      assertBounds(state);
       assert.deepEqual(
         state.entries.map((entry) => entry.id),
         f.entries
@@ -853,339 +804,13 @@ test('disjoint latest updates preserve an around-entry anchor and bridge to late
     const state = f.controller.getSnapshot().transcript;
     state.entries.forEach((entry) => seen.add(entry.id));
     assert.equal(state.error, null);
-    assert(state.retained.summaries <= transcriptLimits.summaryRecords);
+    assertBounds(state);
     if (!state.later) break;
     await f.controller.later();
   }
   assert.equal(seen.size, 640);
   assert.equal(f.controller.getSnapshot().transcript.atLatest, true);
 });
-
-function publishLiveCopy(f: Awaited<ReturnType<typeof transcriptController>>, data: string) {
-  const value = live(f.fixture.snapshot, data);
-  value.run!.text = data.slice(0, 64);
-  value.run!.truncated = data.length > 64;
-  const source = value.run!.transcript!.source;
-  f.fixture.sources.set(JSON.stringify(source), { source, data: [data] });
-  f.publish(value);
-  return value.run!.transcript!;
-}
-
-test('fixed live Copy survives a pure append while its second response is held', async (t) => {
-  const f = await transcriptController(t, 1),
-    data = 'x'.repeat(70000);
-  const transcript = publishLiveCopy(f, data),
-    chosen = selection(transcript.parts[0]);
-  const progress: number[] = [];
-  const iterator = f.controller.iterateTranscript(transcript.source, {
-    selection: chosen,
-    onProgress: (state) => progress.push(state.bytes),
-  });
-  const first = await iterator.next();
-  const entered = Promise.withResolvers<void>(),
-    held = Promise.withResolvers<void>();
-  f.handlers.set('getChatTranscriptContent', async (raw, _signal, fallback) => {
-    const reply = fallback();
-    if ((raw as { cursor?: string }).cursor === '32768') {
-      entered.resolve();
-      await held.promise;
-    }
-    return reply;
-  });
-  try {
-    const reading = iterator.next();
-    await entered.promise;
-    publishLiveCopy(f, data + ' appended');
-    held.resolve();
-    const second = await reading;
-    assert.equal(first.value!.data + second.value!.data + (await collect(iterator)), data);
-    assert.equal(progress.at(-1), 70000);
-    const inputs = f.calls
-      .filter((call) => call.operation === 'getChatTranscriptContent')
-      .map((call) => call.input as { selection: unknown; cursor?: string });
-    assert(inputs.every((input) => JSON.stringify(input.selection) === JSON.stringify(chosen)));
-    assert.equal(
-      inputs.filter((input) => !input.cursor).length,
-      2,
-      'one fresh prefix proof, no whole-Copy restart',
-    );
-    assert.equal(inputs.filter((input) => input.cursor === '32768').length, 1);
-  } finally {
-    held.resolve();
-    await iterator.return(undefined);
-  }
-});
-
-test('fixed live Copy completes through successive appends and final-progress reentrancy without restarting data', async (t) => {
-  const f = await transcriptController(t, 1),
-    data = 'x'.repeat(70000);
-  const transcript = publishLiveCopy(f, data),
-    chosen = selection(transcript.parts[0]);
-  let offset = 0,
-    appends = 0,
-    finalProgress = 0;
-  f.handlers.set('getChatTranscriptContent', async (raw, _signal, fallback) => {
-    const input = raw as { cursor?: string };
-    const reply = fallback() as ContentReply;
-    if (Number(input.cursor ?? 0) === offset) {
-      offset += Buffer.byteLength(reply.data);
-      publishLiveCopy(f, data + 'append'.repeat(++appends));
-    }
-    return reply;
-  });
-  const progress: number[] = [];
-  const result = await collect(
-    f.controller.iterateTranscript(transcript.source, {
-      selection: chosen,
-      onProgress(value) {
-        progress.push(value.bytes);
-        if (value.parts === 1) {
-          finalProgress++;
-          publishLiveCopy(f, data + 'append'.repeat(++appends));
-        }
-      },
-    }),
-  );
-  assert.equal(result, data);
-  assert.equal(offset, 70000);
-  assert.equal(appends, 4);
-  assert.equal(finalProgress, 1);
-  assert.deepEqual(progress, [32768, 65536, 70000, 70000]);
-  const inputs = f.calls
-    .filter((call) => call.operation === 'getChatTranscriptContent')
-    .map((call) => call.input as { cursor?: string });
-  assert.equal(
-    inputs.filter((input) => input.cursor).length,
-    2,
-    'each continuation is consumed once',
-  );
-  assert.equal(
-    inputs.filter((input) => !input.cursor).length,
-    5,
-    'three chunk proofs and one final-progress proof',
-  );
-});
-
-for (const change of ['replacement', 'rollover', 'reconnecting', 'finalized'] as const)
-  test(`a held fresh live prefix proof rejects ${change} without publishing its old chunk`, async (t) => {
-    const f = await transcriptController(t, 1),
-      data = 'x'.repeat(70000);
-    const transcript = publishLiveCopy(f, data),
-      chosen = selection(transcript.parts[0]);
-    const iterator = f.controller.iterateTranscript(transcript.source, { selection: chosen });
-    await iterator.next();
-    const entered = Promise.withResolvers<void>(),
-      held = Promise.withResolvers<void>();
-    let second = false,
-      proofs = 0;
-    f.handlers.set('getChatTranscriptContent', async (raw, _signal, fallback) => {
-      const input = raw as { cursor?: string },
-        reply = fallback();
-      if (input.cursor === '32768') {
-        second = true;
-        publishLiveCopy(f, data + ' appended');
-      } else if (second && !input.cursor) {
-        proofs++;
-        entered.resolve();
-        await held.promise;
-      }
-      return reply;
-    });
-    const reading = iterator.next();
-    const rejected = assert.rejects(
-      reading,
-      (error) =>
-        ApplicationError.is(error) &&
-        error.code ===
-          (change === 'replacement' || change === 'rollover' ? 'Conflict' : 'Cancelled'),
-    );
-    try {
-      await entered.promise;
-      if (change === 'replacement')
-        publishLiveCopy(f, data.slice(0, 40000) + 'REPLACED' + data.slice(40008));
-      if (change === 'rollover') publishLiveCopy(f, 'tail after rollover');
-      if (change === 'reconnecting')
-        f.publish({ ...f.fixture.snapshot, observationStatus: 'reconnecting' });
-      if (change === 'finalized') f.publish({ ...f.fixture.snapshot, run: null, state: 'idle' });
-      held.resolve();
-      await rejected;
-      assert.equal(
-        proofs,
-        1,
-        'replacement/rollover fail the next fresh read; stale control fails before another read',
-      );
-    } finally {
-      held.resolve();
-      await iterator.return(undefined);
-    }
-  });
-
-test('fresh live prefix proof attempts are bounded when every response is superseded', async (t) => {
-  const f = await transcriptController(t, 1),
-    data = 'x'.repeat(70000);
-  const transcript = publishLiveCopy(f, data),
-    chosen = selection(transcript.parts[0]);
-  let requests = 0,
-    progress = 0;
-  f.handlers.set('getChatTranscriptContent', async (_raw, _signal, fallback) => {
-    const reply = fallback();
-    publishLiveCopy(f, data + 'append'.repeat(++requests));
-    return reply;
-  });
-  await assert.rejects(
-    collect(
-      f.controller.iterateTranscript(transcript.source, {
-        selection: chosen,
-        onProgress: () => progress++,
-      }),
-    ),
-    (error) =>
-      ApplicationError.is(error) && error.code === 'Conflict' && /superseded/.test(error.message),
-  );
-  assert.equal(requests, 4, 'one data read and at most three fresh proofs');
-  assert.equal(progress, 0);
-  assert(
-    f.calls
-      .filter((call) => call.operation === 'getChatTranscriptContent')
-      .every((call) => !(call.input as { cursor?: string }).cursor),
-  );
-});
-
-for (const corrupt of ['offset', 'source', 'selection', 'cursor', 'encoding'] as const)
-  test(`fresh live prefix proofs validate ${corrupt}`, async (t) => {
-    const f = await transcriptController(t, 1),
-      data = 'x'.repeat(70000);
-    const transcript = publishLiveCopy(f, data),
-      chosen = selection(transcript.parts[0]);
-    let requests = 0;
-    f.handlers.set('getChatTranscriptContent', async (_raw, _signal, fallback) => {
-      const reply = fallback() as ContentReply;
-      if (++requests === 1) publishLiveCopy(f, data + ' appended');
-      else {
-        if (corrupt === 'offset') reply.offset++;
-        if (corrupt === 'source') reply.source.target.actorId = 'another-actor';
-        if (corrupt === 'cursor') reply.cursor = 'another-cursor';
-        if (corrupt === 'selection') reply.selection.partId = 'another-part';
-        if (corrupt === 'encoding') {
-          reply.encoding = 'base64';
-          reply.data = Buffer.from(reply.data).toString('base64');
-        }
-      }
-      return reply;
-    });
-    await assert.rejects(
-      collect(f.controller.iterateTranscript(transcript.source, { selection: chosen })),
-      (error) => ApplicationError.is(error) && error.code === 'Incompatible',
-    );
-    assert.equal(requests, 2);
-  });
-
-test('cancelling a held prefix proof fences progress and retains actual cleanup settlement', async (t) => {
-  const f = await transcriptController(t, 1),
-    data = 'x'.repeat(70000);
-  const transcript = publishLiveCopy(f, data),
-    chosen = selection(transcript.parts[0]);
-  const entered = Promise.withResolvers<void>(),
-    held = Promise.withResolvers<void>();
-  let requests = 0,
-    progress = 0;
-  f.handlers.set('getChatTranscriptContent', async (_raw, _signal, fallback) => {
-    const reply = fallback();
-    if (++requests === 1) publishLiveCopy(f, data + ' appended');
-    else {
-      entered.resolve();
-      await held.promise;
-    }
-    return reply;
-  });
-  const iterator = f.controller.iterateTranscript(transcript.source, {
-    selection: chosen,
-    onProgress: () => progress++,
-  });
-  let iterationSettled = false;
-  const rejected = assert
-    .rejects(iterator.next(), (error) => ApplicationError.is(error) && error.code === 'Cancelled')
-    .then(() => {
-      iterationSettled = true;
-    });
-  try {
-    await entered.promise;
-    let settled = false;
-    const closing = f.controller.detach().then(() => {
-      settled = true;
-    });
-    await tick();
-    assert.equal(iterationSettled, false);
-    assert.equal(progress, 0);
-    assert.equal(settled, false);
-    await f.controller.start();
-    const replacement = f.controller.getSnapshot();
-    held.resolve();
-    await Promise.all([closing, rejected]);
-    assert.equal(f.controller.getSnapshot(), replacement);
-  } finally {
-    held.resolve();
-    await iterator.return(undefined);
-  }
-});
-
-for (const failure of [false, true])
-  test(`cancelled controller iteration joins its own held IO (${failure ? 'failure' : 'success'}) while unrelated iteration remains usable`, async (t) => {
-    const f = await transcriptController(t, 2),
-      source = f.entries[0].transcript!.source,
-      chosen = selection(f.entries[0].transcript!.parts[0]);
-    const entered = Promise.withResolvers<void>(),
-      held = Promise.withResolvers<void>();
-    f.handlers.set('getChatTranscriptContent', async (raw, _signal, fallback) => {
-      const result = fallback();
-      if (JSON.stringify((raw as { source: unknown }).source) === JSON.stringify(source)) {
-        entered.resolve();
-        await held.promise;
-        if (failure)
-          throw new ApplicationError({
-            code: 'Persistence',
-            message: 'Controlled late read failure',
-          });
-      }
-      return result;
-    });
-    const job = new AbortController();
-    let settled = false,
-      progress = 0;
-    const reading = assert
-      .rejects(
-        collect(
-          f.controller.iterateTranscript(source, {
-            selection: chosen,
-            signal: job.signal,
-            onProgress: () => progress++,
-          }),
-        ),
-        (error) => ApplicationError.is(error) && error.code === 'Cancelled',
-      )
-      .then(() => {
-        settled = true;
-      });
-    try {
-      await entered.promise;
-      job.abort();
-      await tick();
-      assert.equal(settled, false);
-      assert.equal(progress, 0);
-      assert.equal(
-        await collect(f.controller.iterateTranscript(f.entries[1].transcript!.source)),
-        'same text',
-      );
-      assert.equal(settled, false);
-      held.resolve();
-      await reading;
-      assert.equal(settled, true);
-      assert.equal(progress, 0);
-    } finally {
-      held.resolve();
-      await reading;
-    }
-  });
 
 test('held older navigation keeps its captured window through a disjoint latest snapshot', async (t) => {
   const f = await transcriptController(t, 64);
@@ -1228,8 +853,7 @@ test('held older navigation keeps its captured window through a disjoint latest 
           'canonical window order',
         );
         assert.equal(state.error, null);
-        assert(state.entries.length <= transcriptLimits.displayedRows);
-        assert(state.retained.summaries <= transcriptLimits.summaryRecords);
+        assertBounds(state);
         if (!state[direction]) break;
         await (direction === 'earlier' ? f.controller.older() : f.controller.later());
       }
@@ -1448,7 +1072,7 @@ test('large part manifests release descriptors before evicting navigable history
     const state = f.controller.getSnapshot().transcript;
     for (const entry of state.entries) seen.add(entry.id);
     assert.equal(state.error, null);
-    assert(state.retained.summaries <= transcriptLimits.summaryRecords);
+    assertBounds(state);
     if (!state.earlier) break;
     await f.controller.older();
   }

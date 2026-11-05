@@ -250,7 +250,7 @@ class Application {
           this.runtime,
           makeChatModel({
             ...dependencies,
-            backendId: this.targetId ?? dependencies.backendId ?? 'chat',
+            backendId: this.targetId ?? dependencies.backendId,
             transcriptMemory: this.transcriptMemory,
           }).pipe(Effect.provideService(Scope.Scope, scope)),
         );

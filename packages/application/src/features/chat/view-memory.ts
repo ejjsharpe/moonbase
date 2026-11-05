@@ -1,10 +1,15 @@
 import { LRUCache } from 'lru-cache';
+import { Schema, Struct } from 'effect';
 import type {
   ChatTarget,
   ChatTranscriptSource,
   ChatTranscriptSelection,
 } from '@moonbase/contracts/chat';
-import { decodeChatInput } from '@moonbase/contracts/chat-schema';
+import {
+  ChatIdentifierSchema,
+  ChatTranscriptSelectionSchema,
+  ChatTranscriptSourceSchema,
+} from '@moonbase/contracts/chat-schema';
 import { sameTarget } from './saved.ts';
 import { countTranscriptBytes, makeTranscriptFailure } from './transcript-read.ts';
 
@@ -22,71 +27,97 @@ export type TranscriptLiveAnchor = ChatTranscriptSelection & {
 };
 export type TranscriptViewAnchor = TranscriptEntryAnchor | TranscriptLiveAnchor;
 export type TranscriptView = { anchor: TranscriptViewAnchor | null; expanded: string[] };
-const emptyView = (): TranscriptView => ({ anchor: null, expanded: [] });
-const identifier = (value: string) =>
-  typeof value === 'string' &&
-  !!value.trim() &&
-  value.isWellFormed() &&
-  !value.includes('\0') &&
-  new TextEncoder().encode(value).length <= 256;
 
+const struct = <const F extends Schema.Struct.Fields>(fields: F) =>
+  Schema.Struct(fields).mapFields(Struct.map(Schema.mutableKey));
+/** Renderer-owned keys (expansions, backend IDs) are opaque, bounded, well-formed text. */
+const opaqueKey = Schema.String.check(
+  Schema.makeFilter(
+    (value) =>
+      !!value.trim() &&
+      value.isWellFormed() &&
+      !value.includes('\0') &&
+      new TextEncoder().encode(value).length <= 256,
+  ),
+);
+const TranscriptViewSchema = struct({
+  anchor: Schema.NullOr(
+    Schema.Union([
+      struct({
+        entryId: ChatIdentifierSchema,
+        partId: Schema.optionalKey(ChatIdentifierSchema),
+        offset: Schema.Finite,
+      }),
+      struct({
+        ...ChatTranscriptSelectionSchema.fields,
+        backendId: opaqueKey,
+        source: ChatTranscriptSourceSchema,
+        offset: Schema.Finite,
+      }),
+    ]),
+  ),
+  expanded: Schema.mutable(Schema.Array(opaqueKey)),
+});
+const decodeView = Schema.decodeUnknownSync(TranscriptViewSchema, {
+  onExcessProperty: 'error',
+  reportInput: false,
+});
+const emptyView: TranscriptView = Object.freeze({
+  anchor: null,
+  expanded: Object.freeze([]),
+}) as never;
+function freeze<T>(value: T): T {
+  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+    for (const item of Object.values(value)) freeze(item);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+/** Decodes a view for one backend and target into a fresh, frozen value. */
 export function decodeTranscriptView(
   backend: string,
   target: ChatTarget,
   view: TranscriptView,
 ): TranscriptView {
-  if (
-    !Array.isArray(view.expanded) ||
-    view.expanded.some((id) => !identifier(id)) ||
-    (view.anchor && !Number.isFinite(view.anchor.offset))
-  )
+  let decoded: typeof TranscriptViewSchema.Type;
+  try {
+    decoded = decodeView(view);
+  } catch {
     throw makeTranscriptFailure('Invalid transcript view.');
-  let anchor: TranscriptViewAnchor | null = null;
-  if (view.anchor?.source) {
-    const live = view.anchor;
-    const input = decodeChatInput('getChatTranscriptContent', {
-      source: live.source,
-      selection: { partId: live.partId, bytes: live.bytes, revision: live.revision },
-    });
+  }
+  const anchor = decoded.anchor;
+  if (anchor && 'source' in anchor) {
     if (
-      input.source.kind !== 'live' ||
-      live.entryId !== undefined ||
-      !identifier(live.backendId) ||
-      live.backendId !== backend ||
-      !sameTarget(input.source.target, target)
+      anchor.source.kind !== 'live' ||
+      anchor.backendId !== backend ||
+      !sameTarget(anchor.source.target, target)
     )
       throw makeTranscriptFailure('Live transcript anchor belongs to another backend or target.');
-    anchor = { backendId: backend, source: input.source, ...input.selection!, offset: live.offset };
-  } else if (view.anchor) {
-    if (
-      !identifier(view.anchor.entryId!) ||
-      view.anchor.entryId === 'live' ||
-      (view.anchor.partId !== undefined && !identifier(view.anchor.partId))
-    )
-      throw makeTranscriptFailure('Use a durable entry identity or an exact live-part anchor.');
-    anchor = {
-      entryId: view.anchor.entryId!,
-      ...(view.anchor.partId !== undefined ? { partId: view.anchor.partId } : {}),
-      offset: view.anchor.offset,
-    };
-  }
-  return structuredClone({ anchor, expanded: [...new Set(view.expanded)].slice(-128) });
+  } else if (anchor && anchor.entryId === 'live')
+    throw makeTranscriptFailure('Use a durable entry identity or an exact live-part anchor.');
+  return freeze({
+    anchor: anchor as TranscriptViewAnchor | null,
+    expanded: [...new Set(decoded.expanded)].slice(-128),
+  });
 }
 
-/** Content-free, application-lifetime LRU. A standalone model owns one by default. */
+/** Content-free, application-lifetime LRU of frozen views. A standalone model owns one by default. */
 export class TranscriptViewMemory {
-  // Each [key, view] pair plus its separator; the opening bracket completes the former array measure.
   private views = new LRUCache<string, TranscriptView>({
     max: 64,
-    maxSize: 256 * 1024 - 1,
-    sizeCalculation: (view, key) => countTranscriptBytes([key, view]) + 1,
+    maxSize: 256 * 1024,
+    sizeCalculation: (view, key) =>
+      countTranscriptBytes(view) + new TextEncoder().encode(key).length,
   });
   get(backend: string, target: ChatTarget): TranscriptView {
-    const value = this.views.get(this.key(backend, target));
-    return value ? structuredClone(value) : emptyView();
+    return this.views.get(this.key(backend, target)) ?? emptyView;
   }
-  set(backend: string, target: ChatTarget, view: TranscriptView) {
-    this.views.set(this.key(backend, target), decodeTranscriptView(backend, target, view));
+  /** Returns the decoded view that was remembered. */
+  set(backend: string, target: ChatTarget, view: TranscriptView): TranscriptView {
+    const decoded = decodeTranscriptView(backend, target, view);
+    this.views.set(this.key(backend, target), decoded);
+    return decoded;
   }
   clear() {
     this.views.clear();
