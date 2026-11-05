@@ -48,6 +48,7 @@ export function FilesTree({
     paths: string[];
     path: string;
     point: DOMRect;
+    scroll: number;
   } | null>(null);
   const restoreMenuFocus = useRef(true),
     visibility = useRef(visible);
@@ -116,7 +117,13 @@ export function FilesTree({
     const paths = selected.has(path) ? [...tree.selected] : [path];
     if (!selected.has(path)) anchor.current = path;
     restoreMenuFocus.current = true;
-    setMenu({ checkout: { ...checkout }, paths, path, point: DOMRect.fromRect({ x, y }) });
+    setMenu({
+      checkout: { ...checkout },
+      paths,
+      path,
+      point: DOMRect.fromRect({ x, y }),
+      scroll: treeElement.current!.scrollTop,
+    });
     controller.tree(checkout, { focus: path, selected: paths });
   }
   useEffect(() => {
@@ -187,8 +194,8 @@ export function FilesTree({
         }}
         onScroll={(event) => {
           if (event.target !== event.currentTarget) return;
-          setMenu(null);
           const top = event.currentTarget.scrollTop;
+          setMenu((current) => (current?.scroll === top ? current : null));
           setGeometry((old) => ({ ...old, top }));
           controller.tree(checkout, { scroll: top });
         }}
