@@ -2,7 +2,12 @@ import { defineConfig } from '@playwright/test';
 const port = Number(process.env.MOONBASE_BROWSER_PORT ?? 4177);
 export default defineConfig({
   testDir: './test',
-  testMatch: ['shell.spec.ts', 'transcript.spec.ts', 'activity.spec.ts'],
+  testMatch: [
+    'shell.spec.ts',
+    'transcript.spec.ts',
+    'activity.spec.ts',
+    'activity-selection.spec.ts',
+  ],
   workers: 1,
   fullyParallel: false,
   use: {
