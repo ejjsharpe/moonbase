@@ -365,10 +365,10 @@ export function Transcript({
   const currentSnapshot = latestState.snapshot;
   const transcript = state.transcript,
     snapshot = state.snapshot,
-    live =
-      !earlierRow && (transcript.atLatest || (transcript.view.anchor?.source && !transcript.later))
-        ? snapshot?.run
-        : null;
+    oldestAnchored =
+      transcript.entries.length === 128 &&
+      transcript.view.anchor?.entryId === transcript.entries[0]?.id,
+    live = !earlierRow && !oldestAnchored && !transcript.later ? snapshot?.run : null;
   const hiddenRow = !!live && transcript.entries.length === 128;
   const entries = hiddenRow ? transcript.entries.slice(1) : transcript.entries;
   let liveLabel: string | undefined = live?.state;

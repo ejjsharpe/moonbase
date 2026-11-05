@@ -10,6 +10,55 @@ async function open(page: Page) {
 const transcript = (page: Page) =>
   page.getByRole('region', { name: 'Chat transcript', exact: true });
 const answer = (page: Page) => page.locator('[data-transcript-entry="reading-179"]');
+test('a durable reading anchor in the newest window keeps the generic live text part visible', async ({
+  page,
+}) => {
+  await page.goto('/?local&design&transcript');
+  await page.getByRole('button', { name: /^Conversation/ }).click();
+  await page.evaluate(async () => {
+    await window.demo.transcript!.live('Current generic text source');
+    window.demo.application.chat!.setTranscriptView({
+      anchor: { entryId: 'reading-179', partId: 'm0.b0', offset: 16 },
+      expanded: [],
+    });
+  });
+  await expect(page.locator('[data-transcript-live] [data-transcript-part="m0.b0"]')).toContainText(
+    'Current generic text source',
+  );
+  const boundary = await page.evaluate(() => {
+    const state = window.demo.application.chat!.getSnapshot().transcript;
+    return { following: state.atLatest, later: state.later };
+  });
+  expect(boundary).toEqual({ following: false, later: false });
+  await page.evaluate(async () => {
+    const controller = window.demo.application.chat!;
+    for (let page = 0; page < 4; page++) await controller.older();
+    for (let page = 0; page < 8 && !controller.getSnapshot().transcript.atLatest; page++)
+      await controller.later();
+    const state = controller.getSnapshot().transcript;
+    controller.setTranscriptView({
+      anchor: { entryId: state.entries[0]!.id, partId: 'm0.b0', offset: 0 },
+      expanded: [],
+    });
+  });
+  await expect(page.locator('[data-transcript-entry]')).toHaveCount(128);
+  await expect(page.locator('[data-transcript-live]')).toHaveCount(0);
+  const first = page.locator('[data-transcript-entry]').first();
+  await first.locator('pre').focus();
+  const selected = await first.locator('pre').evaluate((node) => {
+    node.dataset.readingSelection = 'retained';
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+    return window.getSelection()!.toString();
+  });
+  await page.evaluate(() => window.demo.transcript!.live('Current generic text source'));
+  await expect(page.locator('[data-reading-selection="retained"]')).toBeFocused();
+  expect(await page.evaluate(() => window.getSelection()!.toString())).toBe(selected);
+  await page.getByRole('button', { name: 'Jump to latest', exact: true }).click();
+  await expect(page.locator('[data-transcript-live]')).toContainText('Current generic text source');
+});
 for (const [name, source, count, body] of [
   [
     'unclosed indented literal',
