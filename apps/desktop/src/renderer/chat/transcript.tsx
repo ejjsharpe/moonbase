@@ -34,6 +34,7 @@ import {
 } from './activity.ts';
 import { RecordedPatch } from './recorded-patch.tsx';
 import { getTranscriptParts } from './transcript-parts.ts';
+import { usePartBody } from './part-body.ts';
 
 export function Transcript({
   controller,
@@ -1005,34 +1006,65 @@ function Part({
   useEffect(() => {
     if (readable && (ordinary || expanded) && part.truncated && !content) load();
   }, [readable, ordinary, expanded, part.truncated, content, load]);
-  const selection = useMemo(
-    () => ({ partId: part.partId, bytes: part.bytes, revision: part.revision }),
-    [part.partId, part.bytes, part.revision],
+  const text = useMemo(
+    () => (content?.chunks.length ? decodeText(content) : part.text),
+    [content, part.text],
   );
-  const copy = useCallback(
-    (codeStart?: number) => {
-      if (native)
-        run(
-          (signal) =>
-            native.copy(
-              {
-                source,
-                selection,
-                ...(codeStart !== undefined ? { code: { start: codeStart } } : {}),
-              },
-              signal,
-            ),
-          'Copied.',
-        );
-    },
-    [native, run, source, selection],
-  );
-  const text = content?.chunks.length ? decodeText(content) : part.text;
   const complete =
     !part.truncated ||
     (content?.status === 'complete' &&
       content.retainedFrom === 0 &&
       content.loadedBytes === part.bytes);
+  const plain = readable && !ordinary && !['patch', 'diff', 'image'].includes(part.kind);
+  const currentBody = useMemo(
+    () => ({
+      source,
+      part,
+      text,
+      complete,
+      loaded: !!content?.chunks.length,
+      retainedFrom: content?.retainedFrom ?? 0,
+      loadedBytes: content?.loadedBytes ?? 0,
+    }),
+    [
+      source,
+      part,
+      text,
+      complete,
+      content?.chunks.length,
+      content?.retainedFrom,
+      content?.loadedBytes,
+    ],
+  );
+  const displayed = usePartBody(
+    JSON.stringify([controller.backendId, transcript.source, part.partId]),
+    currentBody,
+    plain && expanded,
+    state.content,
+  );
+  const takeCopyBody = displayed.takeCopyBody;
+  const copy = useCallback(
+    (codeStart?: number) => {
+      const body = takeCopyBody();
+      if (native)
+        run(async (signal) => {
+          if (!body) throw Error('The displayed output changed. Try Copy again.');
+          await native.copy(
+            {
+              source: body.source,
+              selection: {
+                partId: body.part.partId,
+                bytes: body.part.bytes,
+                revision: body.part.revision,
+              },
+              ...(codeStart !== undefined ? { code: { start: codeStart } } : {}),
+            },
+            signal,
+          );
+        }, 'Copied.');
+    },
+    [native, run, takeCopyBody],
+  );
   let presentation = (
     <p {...stylex.props(styles.small)}>
       {part.kind === 'image'
@@ -1050,9 +1082,10 @@ function Part({
   if (readable) {
     presentation = (
       <pre
+        ref={plain ? displayed.root : undefined}
         tabIndex={ordinary ? undefined : 0}
         {...stylex.props(ordinary ? styles.literal : styles.output)}>
-        {text}
+        {plain ? displayed.body.text : text}
       </pre>
     );
     if (ordinary && part.role === 'assistant')
@@ -1071,9 +1104,15 @@ function Part({
         <RecordedPatch text={text} complete={complete} numbered={part.kind === 'diff'} />
       );
   }
+  const retainedFrom = plain ? displayed.body.retainedFrom : (content?.retainedFrom ?? 0);
   const body = (
     <>
       {presentation}
+      {displayed.held && (
+        <p role="status" {...stylex.props(styles.small)}>
+          Showing previously read output. Copy uses this version; latest progress remains above.
+        </p>
+      )}
       {part.kind === 'arguments' && (
         <p {...stylex.props(styles.small)}>
           Recorded request. Executed arguments are labelled separately when available; this request
@@ -1094,10 +1133,10 @@ function Part({
           were not retained by the tool.
         </p>
       )}
-      {!!content?.retainedFrom && (
+      {!!retainedFrom && (
         <p {...stylex.props(styles.small)}>
-          Showing retained content from byte {content.retainedFrom.toLocaleString()}. Copy still
-          reads the complete selected source.{' '}
+          Showing retained content from byte {retainedFrom.toLocaleString()}. Copy still reads the
+          complete selected source.{' '}
           <Button {...stylex.props(controls.button)} onClick={() => load(true)}>
             Read from start
           </Button>
@@ -1161,6 +1200,7 @@ function Part({
         <Button
           {...stylex.props(controls.button, controls.quietButton)}
           disabled={!native}
+          {...(plain ? displayed.copyProps : {})}
           onClick={() => copy()}>
           Copy {copyLabel}
         </Button>
