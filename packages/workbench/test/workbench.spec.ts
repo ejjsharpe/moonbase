@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import type { Page, Locator } from '@playwright/test';
+import { resolve } from 'node:path';
 
 async function openTabMenu(editor: Page | Locator) {
   await editor
@@ -290,6 +291,7 @@ for (const release of ['after keyup', 'before keyup'] as const)
       if (release === 'before keyup') await page.keyboard.up('Tab');
       await page.screenshot({ path: test.info().outputPath('tab-entry.png') });
       const width = Number(await separator.getAttribute('aria-valuenow'));
+      expect(width).toBe(270);
       await page.keyboard.press('ArrowRight');
       await expect.soft(separator).toHaveAttribute('aria-valuenow', String(width + 10));
       await expect(separator).toBeFocused();
@@ -298,6 +300,67 @@ for (const release of ['after keyup', 'before keyup'] as const)
       await releaseLateClose(page);
     }
   });
+
+for (const source of [
+  'nonfocusable consumer surface',
+  'disconnected consumer button',
+  'menu',
+] as const)
+  for (const release of ['after keyup', 'before keyup'] as const)
+    test(`late Close completion preserves Tab entry from ${source} ${release}`, async ({
+      page,
+    }) => {
+      try {
+        await holdLateClose(page);
+        if (source === 'menu') {
+          await page.evaluate(
+            async (path) => import(/* @vite-ignore */ path),
+            `/@fs/${resolve('test/fixtures/consumer-menu.tsx')}`,
+          );
+          await page.getByRole('button', { name: 'Consumer overlay', exact: true }).click();
+          await page.keyboard.press('ArrowDown');
+          await expect(
+            page.getByRole('menuitem', { name: 'Last consumer action', exact: true }),
+          ).toBeFocused();
+        } else {
+          await page.evaluate((kind) => {
+            const last = [...document.querySelectorAll('button')].find(
+              (button) => button.textContent === 'Dispose second editor',
+            )!;
+            const element = document.createElement(
+              kind === 'nonfocusable consumer surface' ? 'span' : 'button',
+            );
+            element.textContent = 'Consumer navigation surface';
+            last.after(element);
+            if (kind === 'disconnected consumer button')
+              element.addEventListener('blur', () => element.remove(), { once: true });
+          }, source);
+          await page.getByText('Consumer navigation surface', { exact: true }).click();
+          if (source === 'nonfocusable consumer surface')
+            expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
+        }
+        if (release === 'before keyup') await page.keyboard.down('Tab');
+        else await page.keyboard.press('Tab');
+        if (source === 'menu')
+          await expect(
+            page.getByRole('menu', { name: 'Consumer navigation', exact: true }),
+          ).toHaveCount(0);
+        const separator = first(page).getByRole('separator', {
+          name: 'Resize sidebar',
+          exact: true,
+        });
+        await expect(separator).toBeFocused();
+        await expect(separator).toHaveAttribute('aria-valuenow', '270');
+        await releaseLateClose(page);
+        if (release === 'before keyup') await page.keyboard.up('Tab');
+        await page.keyboard.press('ArrowRight');
+        await expect.soft(separator).toHaveAttribute('aria-valuenow', '280');
+        await expect(separator).toBeFocused();
+      } finally {
+        await page.keyboard.up('Tab');
+        await releaseLateClose(page);
+      }
+    });
 
 for (const survivor of [true, false])
   test(`keyboard context-menu Close restores ${survivor ? 'the surviving tab' : 'empty-editor'} focus and allows Reopen`, async ({
@@ -809,6 +872,31 @@ test('keyboard close cancellation and failed publication preserve typing focus a
       () => window.demo.first.buffer({ checkout: window.demo.checkout, path: 'welcome.ts' })!.text,
     ),
   ).toContain('after failed close');
+});
+
+test('Tab traversal within the preservation prompt keeps its survivor focus', async ({ page }) => {
+  await page.goto('/');
+  await first(page).getByRole('treeitem', { name: 'README.md', exact: true }).dblclick();
+  const input = first(page).getByRole('textbox', { name: 'README.md editor', exact: true });
+  await input.focus();
+  await input.press('Meta+a');
+  await input.pressSequentially('dirty readme ');
+  await page.keyboard.press('Meta+w');
+  const dialog = page.getByRole('dialog', { name: 'Save changes before closing?', exact: true });
+  await dialog.getByRole('button', { name: 'Save', exact: true }).focus();
+  await page.keyboard.press('Tab');
+  await expect(dialog.getByRole('button', { name: 'Discard', exact: true })).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(dialog).toHaveCount(0);
+  await expect(
+    first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true }),
+  ).toBeFocused();
+  await page.keyboard.type('after tab discard ');
+  expect(
+    await page.evaluate(
+      () => window.demo.first.buffer({ checkout: window.demo.checkout, path: 'welcome.ts' })!.text,
+    ),
+  ).toContain('after tab discard');
 });
 
 test('keyboard close/reopen retains tree or strip origin and meaningful empty-editor focus', async ({

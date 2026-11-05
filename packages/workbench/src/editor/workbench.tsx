@@ -365,6 +365,19 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   function captureFocusInteraction() {
     if (!controller.getSnapshot().closePrompt) focusInteraction.current++;
   }
+  useEffect(() => {
+    const document = root.current?.ownerDocument;
+    const onExternalTab = (event: globalThis.KeyboardEvent) => {
+      if (
+        event.key === 'Tab' &&
+        !root.current?.contains(event.target as Node) &&
+        !controller.getSnapshot().closePrompt
+      )
+        focusInteraction.current++;
+    };
+    document?.addEventListener('keydown', onExternalTab, true);
+    return () => document?.removeEventListener('keydown', onExternalTab, true);
+  }, [controller]);
   function pasteFiles(event: React.ClipboardEvent | React.KeyboardEvent) {
     if (
       !checkout ||
