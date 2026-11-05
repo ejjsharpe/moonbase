@@ -134,3 +134,46 @@ test('incomplete, malformed, unsupported and huge patches return readable labell
     assert.ok('fallback' in parseRecordedPatch(source));
   assert.ok('fallback' in parseRecordedPatch('@@ -1 +1 @@\n-old\n+new\n', false));
 });
+for (const [name, source] of [
+  ['header only', '@@ -1 +1 @@'],
+  ['missing added line', '--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old'],
+  ['missing removed line', '--- a/x\n+++ b/x\n@@ -1 +1 @@\n+new'],
+  [
+    'missing added line with EOF notice',
+    '--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n\\ No newline at end of file',
+  ],
+] as const)
+  test(`EOF-truncated patch gets labelled source fallback: ${name}`, () => {
+    const result = parseRecordedPatch(source);
+    assert.ok('fallback' in result);
+    assert.match(result.fallback, /Malformed or unsupported/);
+  });
+
+for (const [name, hunk, lines] of [
+  [
+    'replacement',
+    '@@ -1 +1 @@\n-old\n+new',
+    [
+      { old: 1, kind: 'removed', text: '-old' },
+      { next: 1, kind: 'added', text: '+new' },
+    ],
+  ],
+  ['insertion', '@@ -1,0 +2 @@\n+new', [{ next: 2, kind: 'added', text: '+new' }]],
+  ['deletion', '@@ -1 +1,0 @@\n-old', [{ old: 1, kind: 'removed', text: '-old' }]],
+  [
+    'replacement with EOF notice',
+    '@@ -1 +1 @@\n-old\n+new\n\\ No newline at end of file',
+    [
+      { old: 1, kind: 'removed', text: '-old' },
+      { next: 1, kind: 'added', text: '+new' },
+      { kind: 'notice', text: '\\ No newline at end of file' },
+    ],
+  ],
+] as const)
+  test(`valid patch without terminal newline retains recorded line coordinates: ${name}`, () => {
+    const result = parseRecordedPatch('--- a/x\n+++ b/x\n' + hunk);
+    assert.ok('files' in result);
+    assert.equal(result.files.length, 1);
+    assert.equal(result.files[0]!.hunks.length, 1);
+    assert.deepEqual(result.files[0]!.hunks[0]!.lines, lines);
+  });

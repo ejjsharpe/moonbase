@@ -498,6 +498,44 @@ test('reading a durable row in the latest window retains current live activity b
     await page.evaluate(() => window.demo.application.chat!.getSnapshot().transcript.atLatest),
   ).toBe(false);
 });
+for (const valid of [false, true])
+  test(`EOF patch source without terminal newline stays exact in Copy: ${valid ? 'valid replacement' : 'truncated replacement'}`, async ({
+    page,
+  }, testInfo) => {
+    await open(page);
+    const source = '--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old' + (valid ? '\n+new' : '');
+    await page.evaluate(async (source) => {
+      await window.demo.transcript!.record([
+        {
+          id: 'eof-patch',
+          role: 'tool',
+          parts: [
+            { text: source, kind: 'patch', role: 'tool', toolName: 'edit', state: 'completed' },
+          ],
+        },
+      ]);
+      await window.demo.application.chat!.jumpToLatest();
+    }, source);
+    const row = page.locator('[data-transcript-entry="eof-patch"]');
+    await row.getByRole('button', { name: /^Activity/ }).click();
+    await row.getByRole('button', { name: /Recorded patch/ }).click();
+    await row.getByRole('button', { name: 'Copy patch', exact: true }).click();
+    await expect
+      .poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1)))
+      .toBe(source);
+    await page.screenshot({ path: testInfo.outputPath('patch.png') });
+    if (valid) {
+      const table = row.getByRole('table');
+      await expect(table.getByRole('row').filter({ hasText: '-old' })).toHaveText('1-old');
+      await expect(table.getByRole('row').filter({ hasText: '+new' })).toHaveText('1+new');
+      await expect(row.getByText(/Malformed or unsupported/)).toHaveCount(0);
+    } else {
+      await expect(row).toContainText('Malformed or unsupported');
+      await expect(row.getByRole('table')).toHaveCount(0);
+      expect(await row.locator('pre').textContent()).toBe(source);
+    }
+  });
+
 test('historical patches retain real coordinates, malformed/numbered/large fallback and complete source Copy', async ({
   page,
 }) => {
