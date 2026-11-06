@@ -78,6 +78,7 @@ const followThreshold = 0.1;
 /** Holds the reader's position through prepends, far-end evictions and disclosure toggles. */
 const keepPosition = { data: true, size: true } as const;
 type Paging = 'earlier' | 'later' | 'latest';
+type HistoryEdge = Exclude<Paging, 'latest'>;
 
 export function Transcript({
   controller,
@@ -117,8 +118,10 @@ export function Transcript({
   const [cache] = useState(() => new MarkdownCache());
   useEffect(() => () => cache.clear(), [cache]);
   const [paging, setPaging] = useState<Paging | null>(null);
-  /** The last history read, which Retry repeats and whose edge shows its error. */
+  /** The last history read, which Retry repeats. */
   const [lastPaging, setLastPaging] = useState<Paging>('earlier');
+  /** The edge whose own paging read published the history error, which it then shows inline. */
+  const [failedEdge, setFailedEdge] = useState<HistoryEdge | null>(null);
   const page = useCallback(
     (direction: Paging) => {
       const { transcript } = current.current;
@@ -132,6 +135,8 @@ export function Transcript({
       }[direction]();
       void read.finally(() => {
         setPaging(null);
+        const failed = direction !== 'latest' && !!controller.getSnapshot().transcript.error;
+        setFailedEdge(failed ? direction : null);
         if (direction === 'latest') void list.current?.scrollToEnd({ animated: false });
       });
     },
@@ -146,6 +151,8 @@ export function Transcript({
   };
 
   const status = latestState.transcript;
+  // A later read cleared the error, or replaced it with its own.
+  if (failedEdge && !status.error) setFailedEdge(null);
   const currentSnapshot = latestState.snapshot;
   const { transcript, snapshot } = state;
   const rows = transcript.rows;
@@ -180,10 +187,16 @@ export function Transcript({
   const mounted = useMountedRowKeys(rows, reading, imageSource, transcript.find.active);
   const failed = currentSnapshot && ['failed', 'uncertain'].includes(currentSnapshot.state);
   const [followingEnd, setFollowingEnd] = useState(true);
+  // An edge's paging read shows its failure at that edge, where the reader is; any other read
+  // (restoring the saved view, a jump, Jump to latest) shows its failure above the list, which
+  // may have opened at its end or virtualized that edge away.
+  let errorEdge: HistoryEdge | null = failedEdge;
+  if (!errorEdge && (paging === 'earlier' || paging === 'later')) errorEdge = paging;
   const retry = () => {
     const anchor = transcript.view.anchor;
     const missing = anchor && findRowEntryId(anchor.key);
-    if (missing && !rows.some((row) => row.key === anchor!.key))
+    if (errorEdge) page(errorEdge);
+    else if (missing && !rows.some((row) => row.key === anchor!.key))
       void controller.jumpToEntry(missing);
     else page(lastPaging);
   };
@@ -195,7 +208,7 @@ export function Transcript({
       </Button>
     </p>
   );
-  const edgeError = (direction: Paging) => lastPaging === direction && error;
+  const edgeError = (edge: HistoryEdge) => errorEdge === edge && error;
 
   const body = (
     <section aria-label="Chat conversation" {...stylex.props(styles.transcript)}>
@@ -234,7 +247,7 @@ export function Transcript({
               {notice.text}
             </p>
           )}
-          {lastPaging === 'latest' && error}
+          {!errorEdge && error}
           {status.observation === 'reconnecting' && (
             <p role="status" {...stylex.props(styles.small)}>
               Reconnecting. Showing the last received content; live reads and Copy wait for a fresh

@@ -493,6 +493,33 @@ test.describe('the virtualized transcript', () => {
     await expect(transcriptList(page)).toBeFocused();
     expect(await focusedRow()).toBe('Chat transcript');
   });
+
+  test('a failed view restore shows its error and Retry above the list', async ({ page }) => {
+    await openLong(page, 400);
+    await page.evaluate(() => window.demo.application.chat!.jumpToEntry('long-100'));
+    await expect(page.locator('[data-transcript-row="entry:long-100"]')).toBeVisible();
+    await page.getByRole('button', { name: 'Close Chat panel', exact: true }).click();
+    await page.evaluate(() => {
+      const client = window.demo.chat.dependencies.chat,
+        original = client.command;
+      let failed = false;
+      client.command = async (operation, input, options) => {
+        if (operation === 'getChatHistoryAround' && !failed) {
+          failed = true;
+          throw Error('Controlled restore failure');
+        }
+        return original(operation, input, options) as never;
+      };
+    });
+    await page.getByRole('button', { name: 'Open Chat panel', exact: true }).click();
+    const alert = page.getByRole('alert').filter({ hasText: 'Retry history' });
+    await expect(alert).toBeInViewport();
+    // Outside the list, so scrolling and virtualization never take it away.
+    await expect(transcriptList(page).getByRole('alert')).toHaveCount(0);
+    await alert.getByRole('button', { name: 'Retry history', exact: true }).click();
+    await expect(alert).toHaveCount(0);
+    await expect(page.locator('[data-transcript-row="entry:long-100"]')).toBeVisible();
+  });
 });
 
 test("the image viewer's row stays mounted while the transcript scrolls", async ({ page }) => {
