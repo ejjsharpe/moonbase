@@ -71,6 +71,8 @@ export const type = stylex.defineConsts({
   heading: 16,
 });
 
+/** Lift for surfaces that float over the canvas, such as a new chat's composer. */
+export const shadow = stylex.defineConsts({ raised: '0 18px 44px #00000080' });
 export const radius = stylex.defineConsts({ control: 7, row: 7, panel: 10, composer: 10 });
 export const layout = stylex.defineConsts({ conversation: 640, treeRow: 28 });
 export const sidebar = stylex.defineVars({ width: '270px' });
