@@ -144,7 +144,6 @@ export const workbench = stylex.create({
     whiteSpace: 'nowrap',
   },
   activeView: { color: colors.text, boxShadow: `inset 0 -1px ${colors.accent}` },
-  directory: { overflowWrap: 'anywhere', fontSize: type.small, color: colors.muted },
   navDirectory: { flexBasis: '100%', width: '100%', margin: '4px 0', fontSize: type.caption },
   breadcrumbs: {
     height: 28,

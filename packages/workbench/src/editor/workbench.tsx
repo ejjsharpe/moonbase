@@ -33,6 +33,7 @@ import {
   type EditorSnapshot,
 } from '@moonbase/application/editor';
 import { MonacoView } from './monaco-view.tsx';
+import { WorktreeSwitcher } from './worktree-switcher.tsx';
 import { styles } from './styles.ts';
 import { Icon } from './icon.tsx';
 
@@ -401,6 +402,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
           if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'v')
             pasteFiles(event);
         }}>
+        <WorktreeSwitcher controller={controller} checkout={checkout} run={run} />
         <div {...stylex.props(workbench.viewNav)}>
           <Button
             {...stylex.props(
@@ -438,9 +440,6 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
             <Icon name="refresh" />
           </Button>
         </div>
-        <p title={checkout.root} {...stylex.props(workbench.directory, styles.directory)}>
-          {checkout.branch} · {checkout.root}
-        </p>
         {panel === 'files' ? (
           <>
             <div {...stylex.props(filesUI.tools)}>

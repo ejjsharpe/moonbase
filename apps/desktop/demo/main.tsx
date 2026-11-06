@@ -42,12 +42,22 @@ const memory = memoryWorkspace([
     ignored: ['ignored.txt'],
   },
   {
-    checkout: { ...checkout, checkoutId: 'other', root: '/demo/other' },
+    checkout: { ...checkout, checkoutId: 'other', projectId: 'demo-other', root: '/demo/other' },
     files: { 'elsewhere.ts': 'export const other = true;\n' },
   },
   {
-    checkout: { ...checkout, checkoutId: 'third', root: '/demo/third' },
+    checkout: { ...checkout, checkoutId: 'third', projectId: 'demo-third', root: '/demo/third' },
     files: { 'third.ts': 'export const third = true;\n' },
+  },
+  {
+    checkout: {
+      ...checkout,
+      checkoutId: 'legend',
+      root: '/demo/legend-list',
+      branch: 'feat/legend-list',
+      worktree: 'linked',
+    },
+    files: { 'welcome.ts': "export const greeting = 'Hello from a worktree';\n" },
   },
 ]);
 // One demo composition root. Feature packages do not construct runtimes.
