@@ -404,6 +404,7 @@ function Activity({
             return (
               <li
                 key={summary}
+                title={summary}
                 data-glyph="↳"
                 {...stylex.props(
                   styles.activityStep,
@@ -418,6 +419,7 @@ function Activity({
           return (
             <li
               key={summary}
+              title={summary}
               data-glyph={(state && stepGlyphs[state]) ?? '·'}
               {...stylex.props(styles.activityStep, stepStyles[state ?? 'unknown'])}>
               <span {...stylex.props(styles.activityTool)}>

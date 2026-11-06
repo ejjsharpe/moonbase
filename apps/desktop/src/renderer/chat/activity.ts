@@ -116,10 +116,18 @@ export function isSameActivityEvidence(a: ActivityEvidence, b: ActivityEvidence)
   return true;
 }
 
-/** Characters of a running or failed result's progress shown in a folded summary. */
+/** Characters of output or thought shown in a folded summary. */
 const progressExcerptUnits = 100;
 
-/** Folded Activity still shows each part's state, and a running or failed result's progress. */
+/** The start of recorded text on one line, as a step's glimpse of what came back. */
+function excerpt(part: ChatTranscriptPart) {
+  const text = part.text.replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  const cut = text.length > progressExcerptUnits || part.truncated;
+  return text.slice(0, progressExcerptUnits) + (cut ? '…' : '');
+}
+
+/** Folded Activity shows each part's state, and the start of what a result or thought holds. */
 export function describeActivityPart(
   part: ChatTranscriptPart,
   transcript: Pick<ChatTranscript, 'source'>,
@@ -131,7 +139,7 @@ export function describeActivityPart(
     const details = ['Thinking'];
     if (part.availability !== 'available') details.push(part.availability);
     if (status && status !== 'completed') details.push(status);
-    if (part.availability === 'available') details.push(`${part.bytes.toLocaleString()} bytes`);
+    if (part.availability === 'available' && excerpt(part)) details.push(excerpt(part));
     return details.join(' · ');
   }
   // A completed step's ✓ already says so.
@@ -139,13 +147,7 @@ export function describeActivityPart(
   if (status && status !== 'completed')
     details.push(status === 'requested' ? 'requested · result not shown' : status);
   if (part.pairing && part.pairing !== 'matched') details.push(part.pairing);
-  if (part.kind === 'result') {
-    details.push(`${part.bytes.toLocaleString()} bytes`);
-    if (['running', 'failed', 'interrupted'].includes(status ?? '') && part.text)
-      details.push(
-        part.text.replace(/\s+/g, ' ').slice(0, progressExcerptUnits) + (part.truncated ? '…' : ''),
-      );
-  }
+  if (part.kind === 'result') details.push(excerpt(part) || 'no output');
   return details.join(' · ');
 }
 
@@ -196,7 +198,7 @@ function countPatchLines(part: ChatTranscriptPart) {
 
 /**
  * A step reads as its lead part. Answers add a recorded patch's line counts, and a later output's
- * failure or running progress; their sizes stay in the expanded parts.
+ * failure or running progress.
  */
 export function describeActivityStep(
   step: ActivityStep,
@@ -212,10 +214,7 @@ export function describeActivityStep(
   for (const answer of step.answers) {
     const status = getActivityState(answer, transcript, evidence);
     if (answer.kind === 'result' && ['running', 'failed', 'interrupted'].includes(status ?? ''))
-      details.push(
-        answer.text.replace(/\s+/g, ' ').slice(0, progressExcerptUnits) +
-          (answer.truncated ? '…' : ''),
-      );
+      details.push(excerpt(answer));
   }
   return details.join(' · ');
 }

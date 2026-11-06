@@ -388,9 +388,7 @@ for (const manifest of [false, true])
         await expect.soft(output.locator('pre')).toHaveText(`Output ${suffix}`, { timeout: 1500 });
         await expect
           .soft(row.locator('[data-transcript-activity] > ul'))
-          .toContainText(`${new TextEncoder().encode(`Thought ${suffix}`).length} bytes`, {
-            timeout: 1500,
-          });
+          .toContainText(`Thinking · Thought ${suffix}`, { timeout: 1500 });
         if (focus) await expect(output.locator('pre')).toBeFocused();
         await expect(group).toHaveAttribute('aria-expanded', 'true');
       }

@@ -153,7 +153,10 @@ export const transcriptStyles = stylex.create({
   },
   activityStep: {
     paddingInline: '14px 36px',
-    overflowWrap: 'anywhere',
+    // One line per step; the full text is in its title.
+    overflow: 'hidden',
+    whiteSpace: 'nowrap',
+    textOverflow: 'ellipsis',
     '::before': {
       content: 'attr(data-glyph)',
       display: 'inline-block',
