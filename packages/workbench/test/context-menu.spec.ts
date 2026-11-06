@@ -665,7 +665,7 @@ for (const width of [1440, 768, 390])
       width,
     );
     await expect(item(page, 'Rename')).toBeFocused();
-    await expect(item(page, 'Rename')).toHaveCSS('background-color', 'rgb(43, 43, 46)');
+    await expect(item(page, 'Rename')).toHaveCSS('background-color', 'rgb(32, 34, 43)');
     await expect
       .poll(() =>
         menu(page).evaluate((element) => {

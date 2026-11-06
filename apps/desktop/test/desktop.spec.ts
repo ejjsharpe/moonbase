@@ -309,7 +309,7 @@ test('first native folder open displays ignored files before Git classification 
     await expect(ignored).toHaveAttribute('aria-description', 'Git-ignored');
     await expect(ignored.getByText('ignored.ts', { exact: true })).toHaveCSS(
       'color',
-      'rgb(151, 151, 159)',
+      'rgb(139, 144, 160)',
     );
     await capture('ignored-files-first-open');
   } finally {

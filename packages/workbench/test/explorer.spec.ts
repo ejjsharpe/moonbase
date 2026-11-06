@@ -47,11 +47,11 @@ test('first folder open displays every file before Git finishes and then fades i
     await expect(ignored).toHaveAttribute('aria-description', 'Git-ignored');
     await expect(ignored.getByText('ignored.ts', { exact: true })).toHaveCSS(
       'color',
-      'rgb(151, 151, 159)',
+      'rgb(139, 144, 160)',
     );
     await expect(normal.getByText('example.ts', { exact: true })).toHaveCSS(
       'color',
-      'rgb(178, 178, 184)',
+      'rgb(180, 184, 198)',
     );
     await ignored.click();
     await expect(
@@ -60,7 +60,7 @@ test('first folder open displays every file before Git finishes and then fades i
     await expect(ignored).toHaveAttribute('aria-selected', 'true');
     await expect(ignored.getByText('ignored.ts', { exact: true })).toHaveCSS(
       'color',
-      'rgb(151, 151, 159)',
+      'rgb(139, 144, 160)',
     );
     await page.screenshot({ path: 'test-results/explorer-ignored-files.png', fullPage: true });
   } finally {
