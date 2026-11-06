@@ -44,6 +44,7 @@ import { RowExpansionContext, useDisclosure } from './transcript-disclosure.ts';
 import type { TranscriptActions } from './transcript-actions.ts';
 import { compareProps } from './stable-props.ts';
 import { transcriptStyles as styles } from './transcript-styles.ts';
+import { Icon } from '../icon.tsx';
 
 /**
  * A row's slice of transcript state. The transcript passes each row only what concerns it, in
@@ -142,9 +143,16 @@ export const Entry = memo(
       }
       await controller.loadTranscriptManifest(source);
     };
-    let label = entry.toolName ?? entry.role;
-    if (entry.role === 'user') label = 'you';
-    if (entry.role === 'assistant') label = 'agent';
+    // Your bubbles and the agent's plain replies need no names; other roles keep theirs.
+    const conversational = ['assistant', 'user'].includes(entry.role);
+    const label = conversational ? '' : (entry.toolName ?? entry.role);
+    const notes = [
+      label,
+      entry.isError ? 'Failed' : liveState,
+      liveState && transcript?.thinking === 'none' && 'No thinking supplied',
+      liveState && transcript?.thinking === 'pending' && 'Working · thinking not yet supplied',
+    ].filter(Boolean);
+    const user = entry.role === 'user';
     let body = <p {...stylex.props(styles.literal)}>{entry.text}</p>;
     if (entry.role === 'assistant')
       body = (
@@ -199,26 +207,28 @@ export const Entry = memo(
         data-transcript-entry={liveState ? undefined : entry.id}
         data-transcript-live={liveState ? JSON.stringify(source ?? 'legacy') : undefined}
         aria-label={liveState ? 'Live response' : undefined}
-        {...stylex.props(styles.message)}>
-        <div {...stylex.props(styles.header)}>
-          <span {...stylex.props(styles.role, entry.role === 'user' && styles.userRole)}>
-            {label}
-          </span>
-          <span>{entry.isError ? 'Failed' : liveState}</span>
-          {liveState && transcript?.thinking === 'none' && <span>No thinking supplied</span>}
-          {liveState && transcript?.thinking === 'pending' && (
-            <span>Working · thinking not yet supplied</span>
-          )}
-          {source && ['assistant', 'user'].includes(entry.role) && (
+        {...stylex.props(stylex.defaultMarker(), styles.message, user && styles.userMessage)}>
+        {notes.length > 0 && (
+          <div {...stylex.props(styles.header)}>
+            {label && <span {...stylex.props(styles.role)}>{label}</span>}
+            {notes.slice(label ? 1 : 0).map((note) => (
+              <span key={String(note)}>{note}</span>
+            ))}
+          </div>
+        )}
+        {user ? <div {...stylex.props(styles.bubble)}>{body}</div> : body}
+        {source && conversational && (
+          <div {...stylex.props(styles.messageActions)}>
             <Button
-              {...stylex.props(controls.button, controls.quietButton, styles.copyMessage)}
+              aria-label="Copy message"
+              title="Copy message"
+              {...stylex.props(controls.button, controls.iconButton, styles.revealed)}
               disabled={!native || (source.kind === 'live' && offline)}
               onClick={copy}>
-              Copy message
+              <Icon name="copy" />
             </Button>
-          )}
-        </div>
-        {entry.role === 'user' ? <div {...stylex.props(styles.bubble)}>{body}</div> : body}
+          </div>
+        )}
         {matchedPart &&
           manifest?.status === 'complete' &&
           (replay.done || !manifest.omittedParts) &&
@@ -622,9 +632,10 @@ const Part = memo(
     let copyLabel = 'part';
     if (ordinary) copyLabel = 'text';
     else if (part.kind === 'patch' || part.kind === 'diff') copyLabel = part.kind;
-    const copyButton = readable && (
+    // Your bubble copies through Copy message; only the agent's text keeps a part copy.
+    const copyButton = readable && !(ordinary && part.role === 'user') && (
       <Button
-        {...stylex.props(controls.button, controls.quietButton)}
+        {...stylex.props(controls.button, controls.quietButton, ordinary && styles.revealed)}
         disabled={!native}
         {...(plain ? displayed.copyProps : {})}
         onClick={() => copy()}>

@@ -39,15 +39,28 @@ export const transcriptStyles = stylex.create({
     color: colors.secondary,
     flexWrap: 'wrap',
   },
-  /** Role names read like a terminal prompt: lowercase mono, the agent brighter than you. */
-  role: { fontFamily: type.mono, fontSize: type.small, fontWeight: 700, color: colors.text },
-  userRole: { color: colors.secondary },
-  copyMessage: { marginLeft: 'auto', color: colors.muted },
+  /** Only roles other than you and the agent are named, such as a standalone tool entry. */
+  role: { fontFamily: type.mono, fontWeight: 700, color: colors.text },
+  /** Your messages sit on the right in bubbles; the agent's replies keep the full width. */
+  userMessage: { display: 'flex', flexDirection: 'column', alignItems: 'flex-end' },
   bubble: {
+    maxWidth: '82%',
+    minWidth: 0,
     padding: '2px 14px',
-    marginTop: space.xs,
     backgroundColor: colors.elevated,
-    borderRadius: 8,
+    borderWidth: 1,
+    borderStyle: 'solid',
+    borderColor: colors.border,
+    borderRadius: '14px 14px 4px 14px',
+  },
+  messageActions: { display: 'flex', alignItems: 'center', gap: 2, minHeight: 28 },
+  /** Row actions stay quiet until the row is hovered or holds focus. */
+  revealed: {
+    opacity: {
+      default: 0,
+      [stylex.when.ancestor(':hover')]: 1,
+      [stylex.when.ancestor(':focus-within')]: 1,
+    },
   },
   literal: {
     fontFamily: type.ui,
