@@ -17,6 +17,7 @@ const checkout = {
   projectId: 'race',
   root: '/controlled/save-race',
   branch: 'main',
+  worktree: 'main' as 'main' | 'linked',
 };
 const memory = memoryWorkspace([{ checkout, files: { 'a.ts': 'A', 'b.ts': 'B' } }]);
 const runtime = ManagedRuntime.make(memory.layer),

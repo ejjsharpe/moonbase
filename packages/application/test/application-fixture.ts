@@ -8,6 +8,7 @@ export const checkout = {
   projectId: 'project',
   root: '/memory/application',
   branch: 'main',
+  worktree: 'main' as 'main' | 'linked',
 };
 export const target = { checkout, path: 'a.ts' };
 export function editorCapabilities() {

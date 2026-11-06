@@ -18,6 +18,7 @@ const checkout = {
   projectId: 'project',
   root: '/approved',
   branch: 'main',
+  worktree: 'main' as 'main' | 'linked',
 };
 const context = { host: { hostId: 'host', storeId: 'store' }, actorId: 'actor' };
 

@@ -21,6 +21,7 @@ const checkout = {
   projectId: 'measurement',
   root: '/memory/snapshot-measurement',
   branch: 'main',
+  worktree: 'main',
 };
 const target = { checkout, path: 'file0.ts' };
 const describe = (samples) => {

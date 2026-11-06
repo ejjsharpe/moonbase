@@ -43,6 +43,7 @@ test('native imports require consent, preserve capture identity and cancel befor
     projectId: 'p',
     root: '/checkout',
     branch: 'main',
+    worktree: 'main' as 'main' | 'linked',
   };
   assert.deepEqual(await actions.imports(checkout, 'clipboard'), []);
   assert.equal(clipboardReads, 0);

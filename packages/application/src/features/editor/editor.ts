@@ -414,7 +414,21 @@ class EditorModelState {
   async openCheckout(root: string) {
     this.assertAdmission();
     this.assertReady();
-    const target = await this.command('openCheckout', { root });
+    return this.addCheckout(await this.command('openCheckout', { root }));
+  }
+  async listWorktrees(checkout: CheckoutTarget) {
+    this.assertAdmission();
+    this.checkout(checkout);
+    return this.command('listWorktrees', { checkout });
+  }
+  /** Creates a branch from `base` in a new linked worktree, then opens and selects it. */
+  async createWorktree(input: CommandInput<'createWorktree'>) {
+    this.assertAdmission();
+    this.assertReady();
+    this.checkout(input.checkout);
+    return this.addCheckout(await this.command('createWorktree', input));
+  }
+  private async addCheckout(target: CheckoutTarget) {
     if (this.closing) return target;
     const collision = this.recovery.checkouts.find(
       (item) => item.checkoutId === target.checkoutId && !sameCheckout(item, target),
@@ -1655,6 +1669,8 @@ export interface EditorController {
   clearErrors(): void;
   load(): Promise<void>;
   openCheckout(root: string): Promise<CheckoutTarget>;
+  listWorktrees(checkout: CheckoutTarget): Promise<CommandOutput<'listWorktrees'>>;
+  createWorktree(input: CommandInput<'createWorktree'>): Promise<CheckoutTarget>;
   selectCheckout(target: CheckoutTarget): Promise<boolean>;
   resolveRecoveryPublication(): Promise<boolean>;
   flush(): Promise<void>;

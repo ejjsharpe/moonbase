@@ -18,6 +18,7 @@ const checkout: CheckoutTarget = {
   projectId: 'project',
   root: '/memory/ready',
   branch: 'main',
+  worktree: 'main' as 'main' | 'linked',
 };
 const target = { checkout, path: 'a.ts' };
 const gate = () => {

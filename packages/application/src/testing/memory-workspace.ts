@@ -281,7 +281,7 @@ export function memoryWorkspace(seeds: Seed[]) {
     }
     return { bounds, updates };
   }
-  for (const seed of seeds) {
+  const addSeed = (seed: Seed) => {
     const map = new Map<string, Entry>();
     files.set(checkoutKey(seed.checkout), map);
     for (const [path, text] of Object.entries(seed.files)) {
@@ -295,7 +295,11 @@ export function memoryWorkspace(seeds: Seed[]) {
           directory: true,
         });
     }
-  }
+  };
+  seeds = [...seeds];
+  for (const seed of seeds) addSeed(seed);
+  const projectSeeds = (checkout: CheckoutTarget) =>
+    seeds.filter((seed) => seed.checkout.projectId === exact(checkout).checkout.projectId);
   const call = <A>(name: WorkspaceCommand, action: () => A) =>
     Effect.try({
       try: () => {
@@ -417,6 +421,44 @@ export function memoryWorkspace(seeds: Seed[]) {
               changes.push({ path, area: 'staged' });
           }
         return { branch: checkout.branch, changes };
+      }),
+    listWorktrees: ({ checkout }) =>
+      call('listWorktrees', () => ({
+        worktrees: projectSeeds(checkout)
+          .map(({ checkout }) => ({
+            root: checkout.root,
+            branch: checkout.branch,
+            main: checkout.worktree === 'main',
+            locked: false,
+            prunable: false,
+          }))
+          .sort((a, b) => Number(b.main) - Number(a.main)),
+      })),
+    // Seeds the new linked worktree with the base branch's committed files.
+    createWorktree: ({ checkout, base, branch, location }) =>
+      call('createWorktree', () => {
+        const project = projectSeeds(checkout);
+        const source = project.find((seed) => seed.checkout.branch === base);
+        if (!source) fail(`Base ${base} is not a commit.`);
+        if (project.some((seed) => seed.checkout.branch === branch))
+          fail(`Branch ${branch} already exists.`, 'Conflict');
+        if (seeds.some((seed) => seed.checkout.root === location))
+          fail('The worktree location already exists.', 'Conflict');
+        const head = { ...(source!.head ?? source!.files) };
+        const seed: Seed = {
+          checkout: {
+            ...checkout,
+            checkoutId: `${checkout.projectId}:${location}`,
+            root: location,
+            branch,
+            worktree: 'linked',
+          },
+          files: head,
+          head,
+        };
+        seeds.push(seed);
+        addSeed(seed);
+        return seed.checkout;
       }),
     readComparison: ({ target, area }) =>
       call('readComparison', () => {

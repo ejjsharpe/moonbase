@@ -24,6 +24,7 @@ import { WorkspaceObservations } from './observations.ts';
 import { Directory, identity, makeRunner } from './filesystem.ts';
 import type { NativeImport } from './native-import.ts';
 import { NativeReferences } from './native-references.ts';
+import { WorkspaceWorktrees } from './worktrees.ts';
 import {
   canonical,
   checkout,
@@ -96,6 +97,7 @@ export class LocalWorkspace {
   readonly recovery: WorkspaceRecovery;
   readonly run;
   readonly discovery: WorkspaceDiscovery;
+  readonly worktrees: WorkspaceWorktrees;
   closed = false;
   readonly config: WorkspaceConfiguration;
   constructor(config: WorkspaceConfiguration, ownership: WorkspaceOwnership) {
@@ -114,6 +116,11 @@ export class LocalWorkspace {
       (target) => this.policy(target),
       config.gitExecutable ?? '/usr/bin/git',
       config.ripgrepExecutable,
+    );
+    this.worktrees = new WorkspaceWorktrees(
+      (target) => this.directory(target),
+      (root, signal) => this.open(root, signal),
+      (root) => this.protected(root),
     );
     this.store = new Store(config.dataDirectory, config.hostId);
     this.run = makeRunner(helper, ownership.runHelper, (cause) => this.cleanupFailures.push(cause));
@@ -195,6 +202,12 @@ export class LocalWorkspace {
       ),
       gitStatus: call<'gitStatus'>('gitStatus', (input, signal) =>
         this.discovery.getStatus(input.checkout, signal),
+      ),
+      listWorktrees: call<'listWorktrees'>('listWorktrees', (input, signal) =>
+        this.worktrees.listWorktrees(input.checkout, signal),
+      ),
+      createWorktree: call<'createWorktree'>('createWorktree', (input, signal) =>
+        this.worktrees.createWorktree(input, signal),
       ),
       readComparison: call<'readComparison'>('readComparison', (input, signal) =>
         this.discovery.readComparison(input, signal),
@@ -528,14 +541,13 @@ export class LocalWorkspace {
         .toString()
         .trim();
       ensure(realpathSync(top) === root, 'Choose the repository checkout root.');
-      const common = realpathSync(
-        resolve(
-          root,
-          (await directory.git(['rev-parse', '--git-common-dir'], undefined, signal))
-            .toString()
-            .trim(),
-        ),
-      );
+      const [gitDirectory, common] = (
+        await directory.git(['rev-parse', '--git-dir', '--git-common-dir'], undefined, signal)
+      )
+        .toString()
+        .trim()
+        .split('\n')
+        .map((p) => realpathSync(resolve(root, p)));
       const commonFd = openSync(common, constants.O_RDONLY | constants.O_DIRECTORY | 0x20000000);
       const commonIdentity = identity(fstatSync(commonFd));
       const projectId = hash(canonical([this.config.hostId, common, commonIdentity]));
@@ -555,6 +567,7 @@ export class LocalWorkspace {
         projectId,
         root,
         branch,
+        worktree: gitDirectory === common ? ('main' as const) : ('linked' as const),
       };
       this.store.put('approvals', target.checkoutId, {
         target,

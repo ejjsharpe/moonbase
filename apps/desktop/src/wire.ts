@@ -67,7 +67,7 @@ export function requestId(value: unknown): asserts value is string {
 }
 export function checkout(value: unknown): asserts value is CheckoutTarget {
   const v = record(value);
-  keys(v, ['hostId', 'checkoutId', 'projectId', 'root', 'branch']);
+  keys(v, ['hostId', 'checkoutId', 'projectId', 'root', 'branch', 'worktree']);
   for (const field of Object.values(v)) string(field);
 }
 export function errorDTO(error: unknown): ErrorDTO {

@@ -25,6 +25,8 @@ export const CheckoutTargetSchema = struct({
   projectId: nonempty,
   root: path.check(Schema.isMinLength(1)),
   branch: nonempty,
+  /** Whether `root` is the repository's main working tree or a linked `git worktree`. */
+  worktree: Schema.Literals(['main', 'linked']),
 });
 export const FileTargetSchema = struct({
   checkout: CheckoutTargetSchema,
@@ -172,6 +174,17 @@ export const GitStatusSchema = struct({
   changes: array(GitChangeSchema),
   error: optional(Schema.String),
 });
+export const WorktreeSchema = struct({
+  root: path.check(Schema.isMinLength(1)),
+  branch: Schema.String,
+  main: Schema.Boolean,
+  locked: Schema.Boolean,
+  prunable: Schema.Boolean,
+});
+const refName = nonempty.check(
+  Schema.isMaxLength(255),
+  Schema.makeFilter((value) => !value.startsWith('-') && !/[\0-\x20\x7f]/.test(value)),
+);
 export const ComparisonSchema = struct({
   original: text,
   title: Schema.String,
@@ -211,6 +224,13 @@ export const workspaceInputSchemas = {
     paths: array(path).check(Schema.isMaxLength(20000)),
   }),
   gitStatus: struct({ checkout: CheckoutTargetSchema }),
+  listWorktrees: struct({ checkout: CheckoutTargetSchema }),
+  createWorktree: struct({
+    checkout: CheckoutTargetSchema,
+    base: refName,
+    branch: refName,
+    location: path.check(Schema.isMinLength(2)),
+  }),
   readComparison: struct({
     target: FileTargetSchema,
     area: Schema.Literals(['staged', 'unstaged', 'untracked']),
@@ -259,6 +279,8 @@ export const workspaceOutputSchemas = {
   listDirectory: DirectoryListingSchema,
   getIgnoredPaths: struct({ paths: array(path), error: optional(Schema.String) }),
   gitStatus: GitStatusSchema,
+  listWorktrees: struct({ worktrees: array(WorktreeSchema).check(Schema.isMaxLength(1000)) }),
+  createWorktree: CheckoutTargetSchema,
   readComparison: ComparisonSchema,
   lookupFiles: struct({
     matches: array(LookupMatchSchema).check(Schema.isMaxLength(100)),

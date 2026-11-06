@@ -26,6 +26,7 @@ const alpha = {
   projectId: 'race',
   root: '/race/alpha',
   branch: 'main',
+  worktree: 'main' as 'main' | 'linked',
 };
 const beta = { ...alpha, checkoutId: 'beta', root: '/race/beta' };
 const memory = memoryWorkspace(
