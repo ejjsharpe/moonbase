@@ -50,14 +50,11 @@ function useExpansionId(entryId: string, id: string) {
   return { expansion, failed: failed === disclosure };
 }
 
-/** Writes one expansion into view memory, keeping a reading anchor still queued from scrolling. */
-function setExpansion(
-  controller: ChatController,
-  saver: { flush(): void },
-  expansion: string,
-  open: boolean,
-) {
-  saver.flush();
+/**
+ * Writes one expansion into view memory. A reader's press saves their position first (see
+ * `TranscriptViewSaver`), so this rewrite keeps where they are.
+ */
+function setExpansion(controller: ChatController, expansion: string, open: boolean) {
   const { view } = controller.getSnapshot().transcript;
   if (view.expanded.includes(expansion) === open) return;
   controller.setTranscriptView({
@@ -90,7 +87,9 @@ export function useRememberedExpansion(id: string | null) {
   return {
     open: failed || (expansion !== null && row.expandedIds.includes(expansion)),
     setOpen: (open: boolean) => {
-      if (expansion) setExpansion(row.controller, saver, expansion, open);
+      if (!expansion) return;
+      saver.flush();
+      setExpansion(row.controller, expansion, open);
     },
   };
 }
@@ -140,7 +139,8 @@ export function useDisclosure({
     if (!expansion) return;
     const collapse = pressedOpen.current ?? open;
     pressedOpen.current = null;
-    // A reading anchor still queued from scrolling is the one this rewrite must keep.
+    // Save the reader's position before reading it (and before the view is rewritten), so a fold
+    // is recorded against the anchor where they are.
     saver.flush();
     const { view, find } = controller.getSnapshot().transcript;
     const active = find.active;
@@ -151,7 +151,7 @@ export function useDisclosure({
     if (collapse && inside) setCollapsedReveal(JSON.stringify(inside));
     else if (collapse && !active && view.anchor?.partId && partIds.includes(view.anchor.partId))
       setCollapsedReveal(getAnchorKey(view.anchor));
-    setExpansion(controller, saver, expansion, !collapse);
+    setExpansion(controller, expansion, !collapse);
   };
   return {
     open,
