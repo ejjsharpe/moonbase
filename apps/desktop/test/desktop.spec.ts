@@ -405,7 +405,7 @@ test('actual conflict Compare, Cancel, Overwrite and Reload retain one dirty wor
         .first(),
     ).toBeVisible();
   }
-  await page.getByRole('button', { name: 'Diff', exact: true }).click();
+  await page.getByRole('button', { name: 'Changes', exact: true }).click();
   await expect(
     page.locator('.view-line').filter({ hasText: 'shared unstaged' }).first(),
   ).toBeVisible();

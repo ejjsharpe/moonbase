@@ -71,6 +71,38 @@ test('compact breadcrumbs show the checkout and path without toolbar actions', a
   await expect(breadcrumbs).toHaveCount(0);
 });
 
+test('the Changes view groups changed files by area, counts them and opens their comparison', async ({
+  page,
+}) => {
+  await page.goto('/');
+  const editor = first(page);
+  const files = editor.getByRole('button', { name: 'Files', exact: true });
+  const changes = editor.getByRole('button', { name: 'Changes', exact: true });
+  await expect(files).toHaveAttribute('aria-pressed', 'true');
+  const badge = changes.locator('[aria-hidden="true"]');
+  await expect(badge).toHaveText(/^\d+$/);
+  const count = Number(await badge.textContent());
+  await changes.click();
+  await expect(changes).toHaveAttribute('aria-pressed', 'true');
+  const staged = editor.getByRole('region', { name: 'Staged', exact: true });
+  const unstaged = editor.getByRole('region', { name: 'Changes', exact: true });
+  await expect(staged.getByRole('heading')).toHaveText(/^Staged\s*1$/);
+  await expect(
+    editor.getByRole('region', { name: /^(Staged|Changes|Untracked)$/ }).getByRole('listitem'),
+  ).toHaveCount(count);
+  const stagedWelcome = staged.getByRole('button', { name: 'welcome.ts', exact: true });
+  const unstagedWelcome = unstaged.getByRole('button', { name: 'welcome.ts', exact: true });
+  await stagedWelcome.click();
+  await expect(
+    editor.getByRole('textbox', { name: 'staged · welcome.ts original', exact: true }),
+  ).toBeVisible();
+  await expect(stagedWelcome).toHaveAttribute('aria-current', 'true');
+  await expect(unstagedWelcome).not.toHaveAttribute('aria-current', 'true');
+  await page.screenshot({ path: 'test-results/changes-view.png' });
+  await files.click();
+  await expect(editor.getByRole('tree')).toBeVisible();
+});
+
 test('the editor uses a subtle scroll shadow below the breadcrumbs', async ({ page }) => {
   await page.goto('/');
   await page.evaluate(() => {

@@ -68,6 +68,13 @@ export function MonacoView({
         'editorWidget.background': colors.elevated,
         'editorWidget.border': colors.controlBorder,
         'scrollbar.shadow': colors.scrollShadow,
+        // Comparisons tint added and removed code softly with the palette's green and red.
+        'diffEditor.insertedLineBackground': syntax.string + '1a',
+        'diffEditor.insertedTextBackground': syntax.string + '33',
+        'diffEditor.removedLineBackground': colors.danger + '1a',
+        'diffEditor.removedTextBackground': colors.danger + '33',
+        'diffEditorGutter.insertedLineBackground': syntax.string + '26',
+        'diffEditorGutter.removedLineBackground': colors.danger + '26',
       },
     });
     // Monaco measures glyphs once; measure again after the bundled font finishes loading.
