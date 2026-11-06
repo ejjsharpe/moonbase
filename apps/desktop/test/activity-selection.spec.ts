@@ -388,16 +388,14 @@ test('held Copy intent does not migrate to a new source after navigation', async
       await controller.jumpToLatest();
       const transcript = controller.getSnapshot().snapshot!.run!.transcript!;
       if (transcript.source.kind !== 'live') throw Error('Expected live source');
-      const part = transcript.parts[1]!;
       controller.setTranscriptView({
-        anchor: {
-          key: `live:${transcript.source.submissionId}`,
-          partId: part.partId,
-          offset: 16,
-        },
+        anchor: { key: `live:${transcript.source.submissionId}`, offset: 16 },
         expanded: [],
       });
     });
+    // The new attempt's disclosures start folded; the keyboard opens them while the press is held.
+    await row.getByRole('button', { name: /^Activity/ }).press('Enter');
+    await output.getByRole('button', { name: /Output/ }).press('Enter');
     await expect(output.locator('pre')).toHaveText(initial + ' new source');
     const after = await button.boundingBox();
     await page.mouse.move(after!.x + after!.width / 2, after!.y + after!.height / 2);

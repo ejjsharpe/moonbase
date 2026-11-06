@@ -1091,7 +1091,7 @@ test('transcript anchors/expansions belong to application lifetime and exact bac
     await chat.select(a.target);
     await chat.jumpToEntry('e320');
     chat.setTranscriptView({
-      anchor: { key: 'entry:e320', partId: 'm0.b0', offset: -37.5 },
+      anchor: { key: 'entry:e320', offset: -37.5 },
       expanded: ['tool-1', 'thought-2'],
     });
     const saved = a.storage.value!;
@@ -1102,7 +1102,6 @@ test('transcript anchors/expansions belong to application lifetime and exact bac
     await chat.start();
     assert.deepEqual(chat.getSnapshot().transcript.view.anchor, {
       key: 'entry:e320',
-      partId: 'm0.b0',
       offset: -37.5,
     });
     assert(chat.getSnapshot().transcript.entries.some((entry) => entry.id === 'e320'));
@@ -1118,7 +1117,7 @@ test('transcript anchors/expansions belong to application lifetime and exact bac
     chat = (await app.selectChatTarget('backend-A'))!;
     await chat.start();
     assert.deepEqual(chat.getSnapshot().transcript.view, {
-      anchor: { key: 'entry:e320', partId: 'm0.b0', offset: -37.5 },
+      anchor: { key: 'entry:e320', offset: -37.5 },
       expanded: ['tool-1', 'thought-2'],
     });
     assert(app.closeChat());

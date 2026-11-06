@@ -25,7 +25,6 @@ import {
   type ChatController,
   type ChatState,
   type TranscriptRow,
-  type TranscriptViewAnchor,
 } from '@moonbase/application/chat';
 import type {
   ChatEntry,
@@ -47,16 +46,9 @@ import { getTranscriptParts } from './transcript-parts.ts';
 import { isReadingNodePinned, subscribeReadingChanges } from './reading-pin.ts';
 import { Entry, type EntryProps } from './transcript-entry.tsx';
 import { useTranscriptActions } from './transcript-actions.ts';
-import { getAnchorKey } from './transcript-disclosure.ts';
 import { groupBySource } from './stable-props.ts';
-import {
-  TranscriptScroller,
-  applyPartOffset,
-  findReadingAnchor,
-  isAnchorHeld,
-  revealFindMatch,
-} from './transcript-geometry.ts';
-import { TranscriptViewSaver, createViewSaver, type ViewSaver } from './transcript-view-saving.ts';
+import { TranscriptScroller, revealFindMatch } from './transcript-geometry.ts';
+import { createViewSaver, type ViewSaver } from './transcript-view-saving.ts';
 import { TranscriptRowState, TranscriptRowStore } from './transcript-row-state.ts';
 import { holdTranscriptSelection } from './transcript-selection.ts';
 import { transcriptStyles as styles } from './transcript-styles.ts';
@@ -73,8 +65,6 @@ const estimatedRowSize = 200;
  * oldest rows evicted as new ones arrive at the record budget (not a pure append).
  */
 const following = { animated: false } as const;
-/** The share of the viewport from the end within which the list follows (its default). */
-const followThreshold = 0.1;
 /** Holds the reader's position through prepends, far-end evictions and disclosure toggles. */
 const keepPosition = { data: true, size: true } as const;
 type Paging = 'earlier' | 'later' | 'latest';
@@ -348,8 +338,7 @@ export function Transcript({
 
 /**
  * The retained rows. When the application replaces them (`dataset`), the list keeps its DOM and
- * measured sizes but places the new dataset afresh (`dataKey`), so a jump starts at its anchor, or
- * at the end, instead of holding the old position. Placement state below is per dataset.
+ * measured sizes but places the new dataset afresh (`dataKey`): at its saved anchor, or the end.
  */
 function TranscriptList({
   list,
@@ -380,110 +369,25 @@ function TranscriptList({
     current.current = transcript;
   }, [transcript]);
   const { dataset } = transcript;
-  /**
-   * The saved anchor when this dataset arrived, placed by the list's initial scroll and refined
-   * once ready.
-   */
+  /** Where this dataset opens: its saved anchor's row when it has one. */
   const [placement, setPlacement] = useState(() => findPlacement(transcript));
-  /** Following pauses while an anchor is placed, so the list doesn't pull away from it. */
-  const [holding, setHolding] = useState(!!placement);
-  const [placedDataset, setPlacedDataset] = useState(dataset);
-  if (placedDataset !== dataset) {
-    const next = findPlacement(transcript);
-    setPlacedDataset(dataset);
-    setPlacement(next);
-    setHolding(!!next);
-  }
+  if (placement.dataset !== dataset) setPlacement(findPlacement(transcript));
   /** The dataset the list last finished placing; until then this one isn't ready. */
   const readyDataset = useRef<number | null>(null);
   const isReady = useCallback(() => readyDataset.current === current.current.dataset, []);
-  /** Since the last save, the reader scrolled, or pressed, typed or moved focus in the list. */
-  const scrolled = useRef(false),
-    pressed = useRef(false);
-  /**
-   * An anchor the list is placing for the application, held until the reader scrolls: content
-   * around it can still unfold (an anchor in a part reveals its disclosure) after it is placed.
-   */
-  const placing = useRef(placement?.anchor ?? null);
-  const place = useCallback((anchor: TranscriptViewAnchor | null) => {
-    placing.current = anchor;
-    setHolding(!!anchor);
-  }, []);
-  /** The scroll position when scrolling last ended. */
-  const lastTop = useRef(0);
-  // A new dataset starts placing its own anchor, with nothing from the last one's scrolling.
-  const shownDataset = useRef(dataset);
-  useLayoutEffect(() => {
-    if (shownDataset.current === dataset) return;
-    shownDataset.current = dataset;
-    placing.current = placement?.anchor ?? null;
-    scrolled.current = pressed.current = false;
-    lastTop.current = 0;
-  }, [dataset, placement]);
+  /** Saves where the reader is once scrolling ends: the first visible row, or null following. */
   const save = useCallback(() => {
-    const ref = list.current,
-      node = ref?.getScrollableNode();
+    const ref = list.current;
     const { view, rows, loading, later } = current.current;
-    if (!ref || !node || !isReady()) return;
+    if (!ref || !isReady()) return;
     // A restoration still reading its anchor's history saves nothing over it.
     if (view.anchor && loading && !rows.some((row) => row.key === view.anchor!.key)) return;
-    const position = ref.getState();
-    let following = position.isFollowingEnd && !later;
-    // Positions the list reaches for the application (placing its anchor, holding position through
-    // a prepend, following, layout settling) leave that anchor in place. The reader's scroll saves
-    // where they are; otherwise only an anchor that moved away is saved over, and a press while
-    // following clears an anchor left from before.
-    let user = scrolled.current;
-    const press = pressed.current;
-    scrolled.current = pressed.current = false;
-    // The list releases following only for scroll gestures. Anything else that scrolled up away
-    // from the end (focus moving to a control, assistive technology) is the reader's move too;
-    // rows growing below only lengthen the distance until the list follows them.
-    const top = node.scrollTop,
-      movedUp = top < lastTop.current - 1;
-    lastTop.current = top;
-    if (
-      following &&
-      movedUp &&
-      position.distanceFromEnd > followThreshold * position.scrollLength
-    ) {
-      ref.cancelScroll();
-      following = false;
-      user = true;
+    if (ref.getState().isFollowingEnd && !later) views.save(null);
+    else {
+      const anchor = ref.anchorVisibleContent({ hold: false });
+      if (anchor) views.save(anchor);
     }
-    if (user) place(null);
-    else if (
-      placing.current ||
-      !view.anchor ||
-      isAnchorHeld(node, view.anchor) ||
-      (following && !press)
-    )
-      return;
-    if (following) {
-      views.save(null);
-      return;
-    }
-    const visible = ref.anchorVisibleContent({ hold: false });
-    const anchor = visible && findReadingAnchor(node, visible.key);
-    if (anchor) views.save(anchor);
-  }, [list, views, place, isReady]);
-  const saver = useMemo(() => ({ flush: save }), [save]);
-  /**
-   * Re-applies a placing anchor once its row has been laid out at a new size: content in it can
-   * unfold after placement. Other rows' sizes are the list's to hold.
-   */
-  const frame = useRef(0);
-  const holdPlacing = useCallback(
-    ({ itemKey }: { itemKey: string }) => {
-      if (placing.current?.key !== itemKey || frame.current) return;
-      frame.current = requestAnimationFrame(() => {
-        frame.current = 0;
-        if (placing.current && list.current) applyPartOffset(list.current, placing.current);
-      });
-    },
-    [list],
-  );
-  useEffect(() => () => cancelAnimationFrame(frame.current), []);
+  }, [list, views, isReady]);
   useEffect(() => {
     const node = list.current?.getScrollableNode();
     node?.addEventListener('scrollend', save);
@@ -493,59 +397,52 @@ function TranscriptList({
     const node = list.current?.getScrollableNode();
     return node ? holdTranscriptSelection(node) : undefined;
   }, [list]);
-  /** The reader pressed, typed or moved focus in the list: placing ends, and a held Find reveal. */
-  const read = () => {
-    pressed.current = true;
-    place(null);
-    onReaderInput();
-  };
   useEffect(() => {
     const ref = list.current;
     if (!ref) return;
     onFollowingChange(ref.getState().isFollowingEnd);
     return ref.getState().listen('isFollowingEnd', onFollowingChange);
   }, [list, onFollowingChange]);
-  // Anchors the application supplies after mount (around-entry navigation) scroll to their row.
-  // An active Find match is revealed by its part instead.
+  // Anchors the application supplies to a placed dataset (around-entry navigation) scroll to their
+  // row; a new dataset is placed at its anchor by the list. An active Find match is revealed below.
   const anchor = transcript.view.anchor;
-  const anchoredDataset = useRef<number | null>(null);
   useLayoutEffect(() => {
-    const fresh = !!anchor && views.receive(anchor);
-    // A new dataset's anchor is placed by its initial scroll.
-    if (anchoredDataset.current !== dataset) {
-      anchoredDataset.current = dataset;
-      return;
-    }
-    // No anchor is following the end (Jump to latest): nothing is placed any more.
-    if (!anchor) placing.current = null;
-    if (!anchor || !fresh) return;
+    const ref = list.current;
+    if (!anchor || !views.receive(anchor) || !ref || !isReady()) return;
     const { find } = current.current;
     if (find.revealing && find.active && getEntryRowKey(find.active.source.entryId) === anchor.key)
       return;
-    const ref = list.current;
-    if (!ref) return;
-    place(anchor);
-    void ref
-      .scrollToKey({ key: anchor.key, animated: false, viewOffset: -anchor.offset })
-      .then(() => {
-        // A replaced dataset (a jump) placed itself.
-        if (placing.current === anchor && current.current.dataset === dataset)
-          applyPartOffset(ref, anchor);
-      });
-  }, [anchor, dataset, list, views, place]);
+    void ref.scrollToKey({ key: anchor.key, animated: false, viewOffset: -anchor.offset });
+  }, [anchor, list, views, isReady]);
   // A newly revealed Find match: scrolling to its row releases following, then the match itself
   // is revealed inside it. A match rendered later is revealed by its part.
   const { active: findActive, revealing: findRevealing } = transcript.find;
   useLayoutEffect(() => {
     const ref = list.current;
     if (!findActive || !findRevealing || !ref || !isReady()) return;
-    const key = getEntryRowKey(findActive.source.entryId);
-    // The reveal owns the position now.
-    place(null);
-    void ref.scrollToKey({ key, animated: false }).then(() => {
-      if (current.current.dataset === dataset) revealFindMatch(ref);
-    });
-  }, [findActive, findRevealing, dataset, list, place, isReady]);
+    void ref
+      .scrollToKey({ key: getEntryRowKey(findActive.source.entryId), animated: false })
+      .then(() => {
+        if (current.current.dataset === dataset) revealFindMatch(ref);
+      });
+  }, [findActive, findRevealing, dataset, list, isReady]);
+  /**
+   * Holds a revealing Find match in view while its row grows (its part loading or unfolding): the
+   * list holds the row's top, not the match inside it. Reader input ends revealing.
+   */
+  const frame = useRef(0);
+  const holdFindReveal = useCallback(
+    ({ itemKey }: { itemKey: string }) => {
+      const { active, revealing } = current.current.find;
+      if (!revealing || !active || getEntryRowKey(active.source.entryId) !== itemKey) return;
+      cancelAnimationFrame(frame.current);
+      frame.current = requestAnimationFrame(() => {
+        if (list.current && current.current.find.revealing) revealFindMatch(list.current);
+      });
+    },
+    [list],
+  );
+  useEffect(() => () => cancelAnimationFrame(frame.current), []);
   // The list reports reaching an edge once; one reached while history was loading pages when
   // loading settles. A failed read waits for Retry.
   const { loading, earlier, later, error } = transcript;
@@ -563,72 +460,63 @@ function TranscriptList({
   }, [loading, error, earlier, later, list, onPage, isReady]);
   const alwaysRender = useMemo(() => ({ keys: mounted }), [mounted]);
   return (
-    <TranscriptViewSaver.Provider value={saver}>
-      <LegendList<TranscriptRow>
-        ref={list}
-        role="region"
-        aria-label="Chat transcript"
-        data-transcript-list=""
-        tabIndex={0}
-        data={transcript.rows}
-        dataKey={dataset}
-        keyExtractor={getRowKey}
-        getItemType={getRowType}
-        renderItem={renderRow}
-        estimatedItemSize={estimatedRowSize}
-        {...(placement
-          ? {
-              initialScrollIndex: {
-                index: placement.index,
-                viewOffset: -placement.anchor.offset,
-              },
-            }
-          : { initialScrollAtEnd: true })}
-        maintainScrollAtEnd={!selecting && !(holding && anchor) && following}
-        maintainScrollAtEndThreshold={followThreshold}
-        maintainVisibleContentPosition={keepPosition}
-        alwaysRender={alwaysRender}
-        // An edge with no more history has no callback: the list gates its edge callbacks on the
-        // previous one, so an ignored call would hold back the other edge.
-        onStartReached={earlier ? pageEarlier : undefined}
-        onEndReached={later ? pageLater : undefined}
-        onUserScroll={() => {
-          scrolled.current = true;
-          onReaderInput();
-        }}
-        onItemSizeChanged={holdPlacing}
-        // Before the row's own handlers, which can save the view (a disclosure toggle).
-        onPointerDownCapture={read}
-        onKeyDownCapture={read}
-        onFocusCapture={read}
-        onReady={() => {
-          readyDataset.current = dataset;
-          const { find } = current.current;
-          const revealing =
-            find.revealing &&
-            !!find.active &&
-            getEntryRowKey(find.active.source.entryId) === placement?.anchor.key;
-          // A Find match placed by a jump is revealed once the list has placed its row.
-          if (revealing) {
-            place(null);
-            if (list.current) revealFindMatch(list.current);
-          } else if (placing.current && list.current)
-            applyPartOffset(list.current, placing.current);
-        }}
-        ListHeaderComponent={header}
-        ListFooterComponent={footer}
-        contentContainerStyle={{ gap: rowGap }}
-        {...stylex.props(styles.list)}
-      />
-    </TranscriptViewSaver.Provider>
+    <LegendList<TranscriptRow>
+      ref={list}
+      role="region"
+      aria-label="Chat transcript"
+      data-transcript-list=""
+      tabIndex={0}
+      data={transcript.rows}
+      dataKey={dataset}
+      keyExtractor={getRowKey}
+      getItemType={getRowType}
+      renderItem={renderRow}
+      estimatedItemSize={estimatedRowSize}
+      {...(placement.anchor
+        ? {
+            initialScrollIndex: {
+              index: placement.index,
+              viewOffset: -placement.anchor.offset,
+            },
+          }
+        : { initialScrollAtEnd: true })}
+      maintainScrollAtEnd={!selecting && following}
+      maintainVisibleContentPosition={keepPosition}
+      alwaysRender={alwaysRender}
+      // An edge with no more history has no callback: the list gates its edge callbacks on the
+      // previous one, so an ignored call would hold back the other edge.
+      onStartReached={earlier ? pageEarlier : undefined}
+      onEndReached={later ? pageLater : undefined}
+      onUserScroll={onReaderInput}
+      onItemSizeChanged={holdFindReveal}
+      onPointerDownCapture={onReaderInput}
+      onKeyDownCapture={onReaderInput}
+      onFocusCapture={onReaderInput}
+      onReady={() => {
+        readyDataset.current = dataset;
+        // A Find match placed by a jump is revealed once the list has placed its row.
+        const { find } = current.current;
+        if (
+          find.revealing &&
+          find.active &&
+          list.current &&
+          getEntryRowKey(find.active.source.entryId) === placement.anchor?.key
+        )
+          revealFindMatch(list.current);
+      }}
+      ListHeaderComponent={header}
+      ListFooterComponent={footer}
+      contentContainerStyle={{ gap: rowGap }}
+      {...stylex.props(styles.list)}
+    />
   );
 }
 
-/** Where the saved anchor's row is in the retained rows, or null to open at the end. */
-function findPlacement({ view, rows }: ChatState['transcript']) {
+/** Where the saved anchor's row is in the dataset's rows; without an anchor it opens at the end. */
+function findPlacement({ dataset, view, rows }: ChatState['transcript']) {
   const anchor = view.anchor;
   const index = anchor ? rows.findIndex((row) => row.key === anchor.key) : -1;
-  return anchor && index >= 0 ? { anchor, index } : null;
+  return index >= 0 ? { dataset, anchor, index } : { dataset, anchor: null, index: -1 };
 }
 const getRowKey = (row: TranscriptRow) => row.key;
 const getRowType = (row: TranscriptRow) => (row.kind === 'entry' ? row.entry.role : row.kind);
@@ -639,7 +527,7 @@ type SharedRowProps = Pick<EntryProps, 'controller' | 'cache' | 'native' | 'acti
 /** What every row reads from the transcript: shared props, and its own slice of state. */
 const RowContext = createContext<{
   shared: SharedRowProps;
-  getRowProps(key: string, entry: ChatEntry): RowProps;
+  getRowProps(entry: ChatEntry): RowProps;
   liveLabel: string | undefined;
 } | null>(null);
 
@@ -655,7 +543,7 @@ function Row({ row }: { row: TranscriptRow }) {
             entry={row.entry}
             liveState={row.kind === 'live' ? (context.liveLabel ?? row.state) : undefined}
             {...context.shared}
-            {...context.getRowProps(row.key, row.entry)}
+            {...context.getRowProps(row.entry)}
           />
         )}
       </div>
@@ -692,24 +580,19 @@ function ToolPreview({ tool }: { tool: ChatToolActivity }) {
 function useRowProps(transcript: ChatState['transcript']) {
   const contents = useMemo(() => groupBySource(transcript.content), [transcript.content]);
   const matches = useMemo(() => groupBySource(transcript.find.matches), [transcript.find.matches]);
-  const { anchor, expanded } = transcript.view;
-  const anchorKey = useMemo(() => (anchor ? getAnchorKey(anchor) : null), [anchor]);
+  const { expanded } = transcript.view;
   const { active, revealing, query } = transcript.find;
   const { manifest, observation } = transcript;
   const offline = ['reconnecting', 'failed', 'inactive'].includes(observation);
   return useCallback(
-    (key: string, entry: ChatEntry): RowProps => {
+    (entry: ChatEntry): RowProps => {
       const source = entry.transcript?.source;
-      const anchored = !!anchor && !!source && anchor.key === key;
       const findMatch =
         active && source && areJsonValuesEqual(active.source, source) ? active : null;
       const findMatches = matches(source);
       return {
         manifest:
           manifest && source && areJsonValuesEqual(manifest.source, source) ? manifest : null,
-        anchorPart: anchored ? (anchor.partId ?? null) : null,
-        // An active Find match takes over revealing from the reading anchor.
-        anchorKey: anchored && !active ? anchorKey : null,
         findMatch,
         findRevealing: !!findMatch && revealing,
         findQuery: findMatch || findMatches.length ? query : '',
@@ -719,7 +602,7 @@ function useRowProps(transcript: ChatState['transcript']) {
         offline,
       };
     },
-    [anchor, anchorKey, active, revealing, query, manifest, matches, contents, expanded, offline],
+    [active, revealing, query, manifest, matches, contents, expanded, offline],
   );
 }
 

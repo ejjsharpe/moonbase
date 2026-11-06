@@ -846,7 +846,7 @@ class ChatModelState {
   showEarlier = () => this.transcriptOwner()?.showEarlier() ?? Promise.resolve();
   showLater = () => this.transcriptOwner()?.showLater() ?? Promise.resolve();
   jumpToEntry = (entryId: string) =>
-    this.transcriptOwner()?.jumpToEntry(entryId) ?? Promise.resolve(null);
+    this.transcriptOwner()?.jumpToEntry(entryId) ?? Promise.resolve();
   jumpToLatest = () => this.transcriptOwner()?.jumpToLatest() ?? Promise.resolve();
   setTranscriptView = (view: TranscriptView) => this.transcriptOwner()?.setView(view);
   loadTranscriptManifest = (source: ChatTranscriptSource, restart = false) =>

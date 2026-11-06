@@ -590,7 +590,7 @@ export class TranscriptOwner {
       if (!this.history.findRecord(entryId))
         yield* this.readAround(entryId, undefined, 'earlier', true);
       this.setView({
-        anchor: { key: getEntryRowKey(entryId), partId: match.partId, offset: 0 },
+        anchor: { key: getEntryRowKey(entryId), offset: 0 },
         expanded: this.state.view.expanded,
       });
     }).pipe(catchFailure((error) => this.showFindError(error)));
@@ -650,12 +650,12 @@ export class TranscriptOwner {
     });
   }
   restoreView() {
-    if (!this.restorePending) return Promise.resolve(null);
+    if (!this.restorePending) return Promise.resolve();
     this.restorePending = false;
     const anchor = this.state.view.anchor;
     // View memory is a location hint; a live row is at the live edge the history follows.
     const entryId = anchor && findRowEntryId(anchor.key);
-    if (!entryId) return Promise.resolve(null);
+    if (!entryId) return Promise.resolve();
     this.restoringView = true;
     return this.jumpToEntry(entryId, false).finally(() => {
       this.restoringView = false;
@@ -729,15 +729,14 @@ export class TranscriptOwner {
       this.history.applyAroundPage(page, direction, replace, this.snapshot?.entries[0]?.id);
     });
   }
-  /** Shows `entryId`, reading history around it unless it is retained; resolves its row key. */
-  jumpToEntry(entryId: string, resetView = true): Promise<string | null> {
+  /** Shows `entryId`, reading history around it unless it is retained. */
+  jumpToEntry(entryId: string, resetView = true) {
     if (resetView) {
       this.restorePending = false;
       this.restoringView = false;
       this.cancelFindReveal();
     }
     this.history.following = false;
-    const key = getEntryRowKey(entryId);
     const work = Effect.gen({ self: this }, function* () {
       if (!this.history.findRecord(entryId)) {
         if (!this.dependencies.capable)
@@ -748,11 +747,12 @@ export class TranscriptOwner {
         yield* this.readAround(entryId, undefined, 'earlier', true);
       }
       if (resetView)
-        this.setView({ anchor: { key, offset: 0 }, expanded: this.state.view.expanded });
+        this.setView({
+          anchor: { key: getEntryRowKey(entryId), offset: 0 },
+          expanded: this.state.view.expanded,
+        });
     });
-    return this.runJob(historyJob, work, { replace: true }).then(() =>
-      this.history.findRecord(entryId) ? key : null,
-    );
+    return this.runJob(historyJob, work, { replace: true });
   }
   /** Follows the live edge again, reading the latest snapshot only when history has a gap. */
   jumpToLatest() {

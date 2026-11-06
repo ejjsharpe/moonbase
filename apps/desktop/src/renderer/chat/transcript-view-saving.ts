@@ -1,10 +1,7 @@
-import { createContext } from 'react';
 import type { ChatController, TranscriptViewAnchor } from '@moonbase/application/chat';
 import { areJsonValuesEqual } from '@moonbase/contracts/common';
 
 export type ViewSaver = ReturnType<typeof createViewSaver>;
-/** Lets rows save the current reading position before they read and rewrite the view. */
-export const TranscriptViewSaver = createContext<{ flush(): void }>({ flush() {} });
 
 /**
  * Saves the reading anchor (null while following) to view memory for one conversation. The

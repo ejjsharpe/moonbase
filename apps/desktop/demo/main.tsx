@@ -200,7 +200,7 @@ if (transcriptDemo && new URLSearchParams(location.search).has('reading')) {
   await firstApplication.chat!.start();
   await firstApplication.chat!.select(chat.target);
   firstApplication.chat!.setTranscriptView({
-    anchor: { key: 'entry:reading-179', partId: 'm0.b0', offset: 0 },
+    anchor: { key: 'entry:reading-179', offset: 0 },
     expanded: [],
   });
 }

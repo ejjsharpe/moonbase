@@ -273,7 +273,7 @@ test('fixed thumbnail geometry keeps the following Part in place while an image 
   await page.evaluate(() => {
     const controller = window.demo.application.chat!;
     controller.setTranscriptView({
-      anchor: { key: 'entry:stored-image', partId: 'm0.b2', offset: 12 },
+      anchor: { key: 'entry:stored-image', offset: 12 },
       expanded: controller.getSnapshot().transcript.view.expanded,
     });
   });
@@ -288,85 +288,6 @@ test('fixed thumbnail geometry keeps the following Part in place while an image 
   await expect
     .poll(async () => Math.abs((await after.boundingBox())!.y - before))
     .toBeLessThanOrEqual(1);
-});
-
-test('pointer image and Activity disclosures retain pre-input intent and newer current view through a held manifest', async ({
-  page,
-}) => {
-  const row = await open(page);
-  const image = row.getByRole('button', { name: 'Stored image', exact: true });
-  const group = row.getByRole('button', { name: /^Activity/ });
-  await expect(row.getByRole('button', { name: 'View stored image' })).toBeEnabled();
-  await page.evaluate(() => {
-    const command = window.demo.chat.dependencies.chat.command,
-      gate = Promise.withResolvers<void>();
-    Object.assign(window, { imageManifestHeld: false, releaseImageManifest: () => gate.resolve() });
-    window.demo.chat.dependencies.chat.command = async (operation, input, options) => {
-      if (operation === 'getChatTranscriptContent' && !('selection' in input)) {
-        Object.assign(window, { imageManifestHeld: true });
-        await gate.promise;
-      }
-      return command(operation, input, options) as never;
-    };
-    const controller = window.demo.application.chat!;
-    controller.setTranscriptView({
-      anchor: { key: 'entry:stored-image', partId: 'image', offset: 13 },
-      expanded: controller.getSnapshot().transcript.view.expanded,
-    });
-    void controller.loadTranscriptManifest(
-      controller.getSnapshot().transcript.entries[0]!.transcript!.source,
-    );
-  });
-  await expect
-    .poll(() =>
-      page.evaluate(() => (window as unknown as { imageManifestHeld: boolean }).imageManifestHeld),
-    )
-    .toBe(true);
-  try {
-    const box = (await image.boundingBox())!;
-    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-    await page.mouse.down();
-    const newer = await page.evaluate(() => {
-      const controller = window.demo.application.chat!;
-      const view = {
-        anchor: { key: 'entry:stored-image', partId: 'image', offset: 27 },
-        expanded: [...controller.getSnapshot().transcript.view.expanded, 'newer-image-capture'],
-      };
-      controller.setTranscriptView(view);
-      return view;
-    });
-    await page.mouse.up();
-    await expect(image).toHaveAttribute('aria-expanded', 'false');
-    const observed = await page.evaluate(
-      () => window.demo.application.chat!.getSnapshot().transcript.view,
-    );
-    expect(observed.anchor).toEqual(newer.anchor);
-    expect(observed.expanded).toContain('newer-image-capture');
-    await page.evaluate(() =>
-      (window as unknown as { releaseImageManifest(): void }).releaseImageManifest(),
-    );
-    await expect
-      .poll(() =>
-        page.evaluate(
-          () => window.demo.application.chat!.getSnapshot().transcript.manifest?.status,
-        ),
-      )
-      .toBe('complete');
-    await expect(image).toHaveAttribute('aria-expanded', 'false');
-    await group.click();
-    await expect(group).toHaveAttribute('aria-expanded', 'false');
-    await group.click();
-    await expect(group).toHaveAttribute('aria-expanded', 'true');
-    await expect(image).toHaveAttribute('aria-expanded', 'false');
-    await image.click();
-    await expect(row.getByRole('button', { name: 'View stored image' })).toBeEnabled();
-    await image.click();
-    await expect(image).toHaveAttribute('aria-expanded', 'false');
-  } finally {
-    await page.evaluate(() =>
-      (window as unknown as { releaseImageManifest(): void }).releaseImageManifest(),
-    );
-  }
 });
 
 test('pointer image reading cancels held Find reveal before collapse; only a new exact range reopens its owning Activity', async ({

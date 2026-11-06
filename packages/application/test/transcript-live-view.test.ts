@@ -61,7 +61,7 @@ test('application restores the exact live part and expansions across panel and n
     ],
   };
   const view: TranscriptView = {
-    anchor: { key: 'live:submission', partId: live.descriptor.partId, offset: -17.5 },
+    anchor: { key: 'live:submission', offset: -17.5 },
     expanded: ['thought', 'tool'],
   };
   const app = await createMoonbaseApplication(options);
@@ -106,7 +106,7 @@ test('application restores the exact live part and expansions across panel and n
 
 function captureView(live: ReturnType<typeof publishLive>, offset = -12) {
   return {
-    anchor: { key: `live:${live.source.submissionId}`, partId: live.descriptor.partId, offset },
+    anchor: { key: `live:${live.source.submissionId}`, offset },
     expanded: ['live-thought', 'live-tool'],
   } satisfies TranscriptView;
 }
@@ -129,20 +129,20 @@ test('view input rejects anchors that name no row', async (t) => {
   assert.equal(f.controller.getSnapshot().transcript.view.anchor, null);
   await f.controller.jumpToEntry('e16');
   f.controller.setTranscriptView({
-    anchor: { key: 'entry:e16', partId: 'm0.b0', offset: -3 },
+    anchor: { key: 'entry:e16', offset: -3 },
     expanded: ['durable'],
   });
   await f.controller.detach();
   await f.controller.start();
   assert.deepEqual(f.controller.getSnapshot().transcript.view, {
-    anchor: { key: 'entry:e16', partId: 'm0.b0', offset: -3 },
+    anchor: { key: 'entry:e16', offset: -3 },
     expanded: ['durable'],
   });
   assert(f.controller.getSnapshot().transcript.entries.some((entry) => entry.id === 'e16'));
   await f.controller.jumpToEntry('invented-row');
   assert(f.controller.getSnapshot().transcript.error, 'unrecognized durable IDs fail explicitly');
   assert.deepEqual(f.controller.getSnapshot().transcript.view, {
-    anchor: { key: 'entry:e16', partId: 'm0.b0', offset: -3 },
+    anchor: { key: 'entry:e16', offset: -3 },
     expanded: ['durable'],
   });
 });
@@ -151,7 +151,7 @@ test('view memory remains bounded, isolated, and independent of caller mutation'
   const { TranscriptViewMemory } = await import('@moonbase/application/chat');
   const f = transcriptFixture(1);
   const memory = new TranscriptViewMemory();
-  const anchor = { key: 'live:submission', partId: 'm0.b0', offset: -1 };
+  const anchor = { key: 'live:submission', offset: -1 };
   memory.set('A', f.target, { anchor, expanded: ['live'] });
   anchor.offset = 99;
   assert.equal(memory.get('A', f.target).anchor!.offset, -1);
@@ -217,23 +217,15 @@ test('failed navigation and observation remain visible independently of view mem
   assert.match(f.controller.getSnapshot().transcript.error!, /authority lost/);
 });
 
-test('view input accepts optional anchor keys set to undefined and omits them', async (t) => {
+test('view input rejects anchor fields beyond the row key and offset', async (t) => {
   const f = await transcriptController(t, 64);
-  f.controller.setTranscriptView({
-    anchor: { key: 'entry:e16', partId: undefined, offset: -2 },
-    expanded: [],
-  });
-  assert.deepEqual(f.controller.getSnapshot().transcript.view, {
-    anchor: { key: 'entry:e16', offset: -2 },
-    expanded: [],
-  });
-  const view = captureView(publishLive(f.fixture));
-  assert.throws(
-    () =>
-      f.controller.setTranscriptView({
-        anchor: { ...view.anchor, entryId: 'e16' } as never,
-        expanded: [],
-      }),
-    ApplicationError.is,
-  );
+  for (const extra of [{ entryId: 'e16' }, { partId: 'm0.b0' }])
+    assert.throws(
+      () =>
+        f.controller.setTranscriptView({
+          anchor: { key: 'entry:e16', offset: -2, ...extra } as never,
+          expanded: [],
+        }),
+      ApplicationError.is,
+    );
 });

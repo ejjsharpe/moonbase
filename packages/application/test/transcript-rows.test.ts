@@ -116,7 +116,7 @@ test('reading history around an entry hides the live row until later history ret
   const f = await transcriptController(t, 640);
   f.publish(running(f.snapshot, 'live'));
   const dataset = f.controller.getSnapshot().transcript.dataset;
-  assert.equal(await f.controller.jumpToEntry('e100'), 'entry:e100');
+  await f.controller.jumpToEntry('e100');
   let state = f.controller.getSnapshot().transcript;
   assert.equal(state.dataset, dataset + 1, 'a jump replaces the rows');
   assert(state.earlier && state.later);
@@ -159,12 +159,12 @@ test('a jump to a retained entry reads nothing and keeps the rows', async (t) =>
   const f = await transcriptController(t, 640);
   const before = f.controller.getSnapshot().transcript;
   const reads = f.calls.length;
-  assert.equal(await f.controller.jumpToEntry('e620'), 'entry:e620');
+  await f.controller.jumpToEntry('e620');
   const after = f.controller.getSnapshot().transcript;
   assert.equal(f.calls.length, reads);
   assert.equal(after.rows, before.rows);
   assert.equal(after.dataset, before.dataset);
   assert.deepEqual(after.view.anchor, { key: 'entry:e620', offset: 0 });
-  assert.equal(await f.controller.jumpToEntry('missing'), null);
+  await f.controller.jumpToEntry('missing');
   assert(f.controller.getSnapshot().transcript.error);
 });

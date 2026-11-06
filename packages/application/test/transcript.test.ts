@@ -96,9 +96,9 @@ test('canonical history traverses >2 overlapping pages, both continuations, evic
   // Retained history needs no read to show an entry; evicted history reads around it.
   const arounds = () => f.calls.filter((call) => call.operation === 'getChatHistoryAround').length;
   let reads = arounds();
-  assert.equal(await f.controller.jumpToEntry('e320'), 'entry:e320');
+  await f.controller.jumpToEntry('e320');
   assert.equal(arounds(), reads);
-  assert.equal(await f.controller.jumpToEntry('e1600'), 'entry:e1600');
+  await f.controller.jumpToEntry('e1600');
   assert.equal(arounds(), reads + 1);
   let state = f.controller.getSnapshot().transcript;
   assert(state.entries.some((entry) => entry.id === 'e1600'));
@@ -782,7 +782,7 @@ test('disjoint latest updates preserve an around-entry anchor and bridge to late
   const f = await transcriptController(t, 64);
   await f.controller.jumpToEntry('e16');
   f.controller.setTranscriptView({
-    anchor: { key: 'entry:e16', partId: 'm0.b0', offset: -13 },
+    anchor: { key: 'entry:e16', offset: -13 },
     expanded: ['thought'],
   });
   const before = f.controller.getSnapshot().transcript,
@@ -977,7 +977,7 @@ for (const replacement of ['around', 'latest'] as const)
 test('held anchor restoration preserves its upper bound and relative offset through a disjoint snapshot', async (t) => {
   const f = await transcriptController(t, 64);
   f.controller.setTranscriptView({
-    anchor: { key: 'entry:e16', partId: 'm0.b0', offset: -9 },
+    anchor: { key: 'entry:e16', offset: -9 },
     expanded: ['thought'],
   });
   await f.controller.detach();
@@ -1008,7 +1008,7 @@ test('held anchor restoration preserves its upper bound and relative offset thro
     const state = f.controller.getSnapshot().transcript;
     assert.equal(upper, 'e63');
     assert.deepEqual(state.view, {
-      anchor: { key: 'entry:e16', partId: 'm0.b0', offset: -9 },
+      anchor: { key: 'entry:e16', offset: -9 },
       expanded: ['thought'],
     });
     assert(

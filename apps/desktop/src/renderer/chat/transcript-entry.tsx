@@ -60,11 +60,6 @@ export type EntryProps = {
   evidence: ActivityEvidence;
   /** The loaded manifest, when it describes this row's source. */
   manifest: TranscriptManifestState | null;
-  /** The saved reading anchor's part, when the anchor is in this row. */
-  anchorPart: string | null;
-  /** The saved reading anchor's identity without its offset, when it is in this row and no Find
-   * match is active. */
-  anchorKey: string | null;
   /** The active Find match, when it is in this row. */
   findMatch: ChatTranscriptMatch | null;
   findRevealing: boolean;
@@ -98,8 +93,6 @@ export const Entry = memo(
     controller,
     cache,
     manifest,
-    anchorPart,
-    anchorKey,
     findMatch,
     findRevealing,
     offline,
@@ -118,30 +111,25 @@ export const Entry = memo(
       [transcript, manifest],
     );
     const matchedPart = findRevealing && findMatch ? findMatch.partId : undefined;
-    const revealPart = matchedPart ?? anchorPart ?? undefined;
     const [replay, setReplay] = useState({ match: findMatch, done: false });
     if (replay.match !== findMatch) setReplay({ match: findMatch, done: false });
     useEffect(() => {
       if (
-        !revealPart ||
+        !matchedPart ||
         !source ||
-        parts.some((part) => part.partId === revealPart) ||
+        parts.some((part) => part.partId === matchedPart) ||
         manifest?.error ||
         manifest?.status === 'loading'
       )
         return;
-      const restart =
-        !!matchedPart &&
-        manifest?.status === 'complete' &&
-        manifest.omittedParts > 0 &&
-        !replay.done;
+      const restart = manifest?.status === 'complete' && manifest.omittedParts > 0 && !replay.done;
       if (!manifest || manifest.nextCursor || restart) {
         void controller.loadTranscriptManifest(source, restart).then(() => {
           if (restart && controller.getSnapshot().transcript.find.active === findMatch)
             setReplay((current) => (current === replay ? { ...current, done: true } : current));
         });
       }
-    }, [revealPart, matchedPart, findMatch, source, parts, manifest, controller, replay]);
+    }, [matchedPart, findMatch, source, parts, manifest, controller, replay]);
     const copy = useCallback(() => {
       if (native && source) actions.run((signal) => native.copy({ source }, signal), 'copy');
     }, [native, source, actions]);
@@ -181,7 +169,6 @@ export const Entry = memo(
                 entryId={entryId}
                 controller={controller}
                 cache={cache}
-                anchorKey={anchorPart === part.partId ? anchorKey : null}
                 match={findMatch?.partId === part.partId ? findMatch : null}
                 findRevealing={findRevealing}
                 {...context}
@@ -197,7 +184,6 @@ export const Entry = memo(
                 controller={controller}
                 evidence={context.evidence}
                 expandedIds={context.expandedIds}
-                anchorKey={anchorPart && partIds.includes(anchorPart) ? anchorKey : null}
                 match={findMatch && partIds.includes(findMatch.partId) ? findMatch : null}
                 revealing={findRevealing}>
                 {children}
@@ -295,7 +281,6 @@ function Activity({
   controller,
   evidence,
   expandedIds,
-  anchorKey,
   match,
   revealing,
   children,
@@ -306,7 +291,6 @@ function Activity({
   controller: ChatController;
   evidence: ActivityEvidence;
   expandedIds: readonly string[];
-  anchorKey: string | null;
   match: ChatTranscriptMatch | null;
   revealing: boolean;
   children: ReactNode;
@@ -317,7 +301,6 @@ function Activity({
     partIds: parts.map((part) => part.partId),
     source,
     expandedIds,
-    anchorKey,
     match,
     revealing,
     controller,
@@ -333,7 +316,6 @@ function Activity({
       render={<section data-transcript-activity />}
       {...stylex.props(styles.activity)}>
       <Collapsible.Trigger
-        {...disclosure.triggerProps}
         {...stylex.props(controls.button, controls.quietButton, styles.activityToggle)}>
         Activity · {parts.length} recorded {parts.length === 1 ? 'part' : 'parts'}
       </Collapsible.Trigger>
@@ -343,7 +325,7 @@ function Activity({
           Could not remember this activity disclosure. Its content is expanded.
         </p>
       )}
-      {/* Kept mounted so folded parts stay anchorable and Find can hydrate them. */}
+      {/* Kept mounted so Find can hydrate folded parts. */}
       <Collapsible.Panel keepMounted>{children}</Collapsible.Panel>
     </Collapsible.Root>
   );
@@ -353,8 +335,6 @@ type PartProps = PartContext & {
   source: ChatTranscriptSource;
   part: ChatTranscriptPart;
   entryId: string;
-  /** The saved reading anchor's identity, when it is this part and no Find match is active. */
-  anchorKey: string | null;
   /** The active Find match, when it is in this part. */
   match: ChatTranscriptMatch | null;
 };
@@ -363,7 +343,6 @@ const Part = memo(
     source,
     part,
     entryId,
-    anchorKey,
     match,
     controller,
     cache,
@@ -383,7 +362,6 @@ const Part = memo(
       partIds: [part.partId],
       source,
       expandedIds,
-      anchorKey,
       match,
       revealing,
       controller,
@@ -646,20 +624,13 @@ const Part = memo(
         open={expanded}
         onOpenChange={disclosure.onOpenChange}
         disabled={disclosure.disabled}
-        render={
-          <section
-            data-transcript-part={part.partId}
-            data-transcript-folded={expanded ? undefined : ''}
-          />
-        }>
+        render={<section data-transcript-part={part.partId} />}>
         {disclosure.disclosureError && (
           <p role="alert" {...stylex.props(styles.small)}>
             Could not remember this disclosure. Its content is expanded.
           </p>
         )}
-        <Collapsible.Trigger
-          {...disclosure.triggerProps}
-          {...stylex.props(controls.button, controls.quietButton)}>
+        <Collapsible.Trigger {...stylex.props(controls.button, controls.quietButton)}>
           {part.toolName ? `${getToolSummary(part, text)} · ` : ''}
           {partLabels[part.kind]}
           {status ? ` · ${status}` : ''}

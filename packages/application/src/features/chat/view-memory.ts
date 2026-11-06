@@ -1,15 +1,14 @@
 import { LRUCache } from 'lru-cache';
 import { Schema } from 'effect';
 import type { ChatTarget } from '@moonbase/contracts/chat';
-import { ChatIdentifierSchema } from '@moonbase/contracts/chat-schema';
-import { optional, struct } from '@moonbase/contracts/schema';
+import { struct } from '@moonbase/contracts/schema';
 import { countTranscriptBytes, makeTranscriptFailure } from './transcript-read.ts';
 
 /**
- * A reading position: the row at the top of the viewport (a `TranscriptRow` key), optionally the
- * part inside it, and the pixels from the viewport top to that row or part.
+ * A reading position, as the list reports it: the first visible row (a `TranscriptRow` key) and
+ * the pixels from the viewport top to that row.
  */
-export type TranscriptViewAnchor = { key: string; partId?: string; offset: number };
+export type TranscriptViewAnchor = { key: string; offset: number };
 export type TranscriptView = { anchor: TranscriptViewAnchor | null; expanded: string[] };
 
 /** Renderer-owned keys (expansions) are opaque, bounded, well-formed text. */
@@ -31,10 +30,7 @@ const opaqueKey = Schema.String.check(
 const expandedLimit = 128;
 const rowKey = opaqueKey.check(Schema.makeFilter((value) => /^(entry|live|tool):./.test(value)));
 const TranscriptViewSchema = struct({
-  anchor: Schema.NullOr(
-    // Optional keys accept `undefined` (as the types allow) and omit it.
-    struct({ key: rowKey, partId: optional(ChatIdentifierSchema), offset: Schema.Finite }),
-  ),
+  anchor: Schema.NullOr(struct({ key: rowKey, offset: Schema.Finite })),
   expanded: Schema.mutable(Schema.Array(opaqueKey)),
 });
 const decodeView = Schema.decodeUnknownSync(TranscriptViewSchema, {

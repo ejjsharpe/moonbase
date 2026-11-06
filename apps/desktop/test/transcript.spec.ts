@@ -221,27 +221,22 @@ test.describe('the virtualized transcript', () => {
     expect(Math.abs(after.offset - before.offset)).toBeLessThan(1);
   });
 
-  test('reopening restores a part-level reading anchor within a pixel', async ({ page }) => {
+  test('reopening restores the reading position within a pixel', async ({ page }) => {
     await openLong(page, 400);
     await wheelUp(page, 2300);
-    await expect
-      .poll(() => savedAnchor(page))
-      .toEqual(expect.objectContaining({ partId: 'm0.b0' }));
+    await expect.poll(() => savedAnchor(page)).not.toBeNull();
     const saved = (await savedAnchor(page))!;
+    const before = await readFirstVisible(page);
     await page.getByRole('button', { name: 'Close Chat panel', exact: true }).click();
     await page.getByRole('button', { name: 'Open Chat panel', exact: true }).click();
     await expect(page.locator(`[data-transcript-row="${saved.key}"]`)).toBeVisible();
     await expect
-      .poll(() =>
-        transcriptList(page).evaluate((node, saved) => {
-          const part = node.querySelector(
-            `[data-transcript-row="${saved.key}"] [data-transcript-part="${saved.partId}"]`,
-          )!;
-          return Math.abs(
-            part.getBoundingClientRect().top - node.getBoundingClientRect().top - saved.offset,
-          );
-        }, saved),
-      )
+      .poll(async () => {
+        const after = await readFirstVisible(page);
+        return after.part === before.part && after.row === before.row
+          ? Math.abs(after.offset - before.offset)
+          : Infinity;
+      })
       .toBeLessThan(1);
     expect(await savedAnchor(page)).toEqual(saved);
   });
@@ -431,7 +426,7 @@ test.describe('the virtualized transcript', () => {
     await expect(row.getByText('const line59 = 191;')).toBeAttached();
   });
 
-  test('closing Find returns focus to the same row, or the transcript once that row is gone', async ({
+  test('closing Find returns focus where it was, or to the transcript once that row unmounted', async ({
     page,
   }) => {
     // Every answer has a table, so the tables share one label; two far-apart answers match.
@@ -469,19 +464,14 @@ test.describe('the virtualized transcript', () => {
         .poll(() => readFindHighlight(page))
         .toEqual([expect.objectContaining({ entry, visible: true })]);
 
-    // The match far back replaces the list, and Next returns to the focused row: its table is
-    // a new element, found again in that row rather than by its label.
+    // A focused element that stayed mounted gets focus back.
     await table(398).focus();
     await page.keyboard.press('ControlOrMeta+f');
-    await field.fill('needle');
-    await highlighted('table-5');
-    await expect(findStatus(page, /1 of 2 matches/)).toBeVisible();
-    await field.press('Enter');
-    await highlighted('table-398');
+    await expect(field).toBeFocused();
     await field.press('Escape');
     await expect(table(398)).toBeFocused();
 
-    // A focused row that is no longer retained leaves focus on the transcript.
+    // A match far back unmounts the focused row, which leaves focus on the transcript.
     await table(399).focus();
     await page.keyboard.press('ControlOrMeta+f');
     await field.fill('needle');
@@ -643,93 +633,6 @@ test('latest snapshot recovery diagnostics survive running metadata and pinned o
   await page.screenshot({ path: resolve(output, 'r1-current-status.png') });
 });
 
-for (const mode of ['durable', 'live'] as const)
-  test(`${mode} anchored disclosure explicitly collapses without losing its viewport or other expansions`, async ({
-    page,
-  }) => {
-    await page.setViewportSize({ width: 1440, height: 540 });
-    await open(page);
-    if (mode === 'live')
-      await page.evaluate(async () => {
-        await window.demo.transcript!.live(
-          'Live disclosure source',
-          Array.from({ length: 5 }, (_, index) => `Output ${index}\n` + 'line\n'.repeat(100)),
-        );
-        await window.demo.application.chat!.jumpToLatest();
-      });
-    const row = mode === 'live' ? page.locator('[data-transcript-live]') : answer(page);
-    if (mode === 'live') await row.getByRole('button', { name: /^Activity/ }).click();
-    const part = row.locator('[data-transcript-part="m0.b1"]');
-    for (const id of ['m0.b2', 'm0.b3'])
-      await row
-        .locator(`[data-transcript-part="${id}"]`)
-        .getByRole('button', { expanded: false })
-        .first()
-        .click();
-    const others = await page.evaluate(
-      () => window.demo.application.chat!.getSnapshot().transcript.view.expanded,
-    );
-    await page.evaluate((mode) => {
-      const controller = window.demo.application.chat!;
-      const state = controller.getSnapshot();
-      const summary =
-        mode === 'live'
-          ? state.snapshot!.run!.transcript!
-          : state.transcript.entries.find((entry) => entry.id === 'reading-179')!.transcript!;
-      const descriptor = summary.parts.find((part) => part.partId === 'm0.b1')!;
-      const anchor = {
-        key:
-          summary.source.kind === 'live'
-            ? `live:${summary.source.submissionId}`
-            : 'entry:reading-179',
-        partId: descriptor.partId,
-        offset: 16,
-      };
-      controller.setTranscriptView({ anchor, expanded: state.transcript.view.expanded });
-    }, mode);
-    const offset = () =>
-      part.evaluate(
-        (element) =>
-          element.getBoundingClientRect().top -
-          document.querySelector('[aria-label="Chat transcript"]')!.getBoundingClientRect().top,
-      );
-    await expect.poll(offset).toBeCloseTo(16, 0);
-    const anchor = await page.evaluate(
-      () => window.demo.application.chat!.getSnapshot().transcript.view.anchor,
-    );
-    const toggle = part.getByRole('button', { expanded: true }).first();
-    await toggle.click();
-    await expect(part.getByRole('button', { expanded: false }).first()).toHaveAttribute(
-      'aria-expanded',
-      'false',
-    );
-    await expect(part.locator('pre')).toHaveCount(0);
-    await page.evaluate(() =>
-      window.demo.chat.controls.receiveChat(structuredClone(window.demo.chat.snapshot)),
-    );
-    await expect(part.getByRole('button', { expanded: false }).first()).toHaveAttribute(
-      'aria-expanded',
-      'false',
-    );
-    await expect.poll(offset).toBeCloseTo(16, 0);
-    expect(
-      await page.evaluate(
-        () => window.demo.application.chat!.getSnapshot().transcript.view.expanded,
-      ),
-    ).toEqual(others);
-    expect(
-      await page.evaluate(() => window.demo.application.chat!.getSnapshot().transcript.view.anchor),
-    ).toEqual(anchor);
-    for (const id of ['m0.b2', 'm0.b3'])
-      await expect(
-        row
-          .locator(`[data-transcript-part="${id}"]`)
-          .getByRole('button', { expanded: true })
-          .first(),
-      ).toBeVisible();
-    await mkdir(output, { recursive: true });
-    await page.screenshot({ path: resolve(output, `r1-${mode}-collapsed.png`) });
-  });
 test('safe GFM, literal user content, progressive source, exact native callbacks and normal/compact/200% reading', async ({
   page,
 }) => {
@@ -2191,32 +2094,6 @@ test('a row re-renders when its own disclosure, content or Find state changes', 
   await expect(page.getByRole('status').filter({ hasText: /1 of 1 match/ })).toBeVisible();
   await settle(page);
   expect(await rows.take()).toContain('reading-179');
-});
-test('scrolling a folded part to the reading line saves an anchor that leaves it folded', async ({
-  page,
-}) => {
-  // Short enough that the parts below Output can scroll it to the reading line.
-  await page.setViewportSize({ width: 1600, height: 420 });
-  await open(page);
-  const output = answer(page).getByRole('button', { name: 'Output', exact: true });
-  await expect(output).toHaveAttribute('aria-expanded', 'false');
-  await transcript(page).dispatchEvent('wheel', { deltaY: -1 });
-  await transcript(page).evaluate((element) => {
-    const part = element.querySelector(
-      '[data-transcript-entry="reading-179"] [data-transcript-part="m0.b1"]',
-    )!;
-    const top = element.getBoundingClientRect().top;
-    element.scrollTop += part.getBoundingClientRect().top - top - 2;
-    element.dispatchEvent(new Event('scroll'));
-  });
-  await settle(page);
-  const anchor = await page.evaluate(
-    () => window.demo.application.chat!.getSnapshot().transcript.view.anchor,
-  );
-  expect(anchor?.key).toBe('entry:reading-179');
-  expect(anchor?.partId).not.toBe('m0.b1');
-  await settle(page);
-  await expect(output).toHaveAttribute('aria-expanded', 'false');
 });
 test('Copy keeps following live output', async ({ page }) => {
   await open(page);
