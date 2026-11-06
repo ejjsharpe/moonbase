@@ -193,6 +193,8 @@ export function Transcript({
   let errorEdge: HistoryEdge | null = failedEdge;
   if (!errorEdge && (paging === 'earlier' || paging === 'later')) errorEdge = paging;
   const retry = () => {
+    // Retry is the reader's move, so it ends a held Find reveal; automatic paging leaves it.
+    controller.cancelFindReveal();
     const anchor = transcript.view.anchor;
     const missing = anchor && findRowEntryId(anchor.key);
     if (errorEdge) page(errorEdge);
@@ -208,7 +210,7 @@ export function Transcript({
       </Button>
     </p>
   );
-  const edgeError = (edge: HistoryEdge) => errorEdge === edge && error;
+  const renderEdgeError = (edge: HistoryEdge) => errorEdge === edge && error;
 
   const body = (
     <section aria-label="Chat conversation" {...stylex.props(styles.transcript)}>
@@ -281,7 +283,6 @@ export function Transcript({
         {snapshot && (
           <RowContext.Provider value={rowContext}>
             <TranscriptList
-              key={transcript.dataset}
               list={list}
               transcript={transcript}
               views={views}
@@ -297,7 +298,7 @@ export function Transcript({
                       Loading earlier…
                     </p>
                   )}
-                  {edgeError('earlier')}
+                  {renderEdgeError('earlier')}
                   {!transcript.earlier && (
                     <p {...stylex.props(styles.small)}>Start of conversation</p>
                   )}
@@ -310,7 +311,7 @@ export function Transcript({
                       Loading later…
                     </p>
                   )}
-                  {edgeError('later')}
+                  {renderEdgeError('later')}
                 </Edge>
               }
             />
@@ -346,8 +347,9 @@ export function Transcript({
 }
 
 /**
- * One placement of the retained rows. It remounts when the application replaces them (`dataset`),
- * so a jump starts at its anchor, or at the end, instead of holding the old position.
+ * The retained rows. When the application replaces them (`dataset`), the list keeps its DOM and
+ * measured sizes but places the new dataset afresh (`dataKey`), so a jump starts at its anchor, or
+ * at the end, instead of holding the old position. Placement state below is per dataset.
  */
 function TranscriptList({
   list,
@@ -377,13 +379,24 @@ function TranscriptList({
   useLayoutEffect(() => {
     current.current = transcript;
   }, [transcript]);
-  /** The saved anchor at mount, placed by the list's initial scroll and refined once ready. */
-  const [placement] = useState(() => {
-    const anchor = transcript.view.anchor;
-    const index = anchor ? transcript.rows.findIndex((row) => row.key === anchor.key) : -1;
-    return anchor && index >= 0 ? { anchor, index } : null;
-  });
-  const ready = useRef(false);
+  const { dataset } = transcript;
+  /**
+   * The saved anchor when this dataset arrived, placed by the list's initial scroll and refined
+   * once ready.
+   */
+  const [placement, setPlacement] = useState(() => findPlacement(transcript));
+  /** Following pauses while an anchor is placed, so the list doesn't pull away from it. */
+  const [holding, setHolding] = useState(!!placement);
+  const [placedDataset, setPlacedDataset] = useState(dataset);
+  if (placedDataset !== dataset) {
+    const next = findPlacement(transcript);
+    setPlacedDataset(dataset);
+    setPlacement(next);
+    setHolding(!!next);
+  }
+  /** The dataset the list last finished placing; until then this one isn't ready. */
+  const readyDataset = useRef<number | null>(null);
+  const isReady = useCallback(() => readyDataset.current === current.current.dataset, []);
   /** Since the last save, the reader scrolled, or pressed, typed or moved focus in the list. */
   const scrolled = useRef(false),
     pressed = useRef(false);
@@ -392,19 +405,26 @@ function TranscriptList({
    * around it can still unfold (an anchor in a part reveals its disclosure) after it is placed.
    */
   const placing = useRef(placement?.anchor ?? null);
-  /** Following pauses while an anchor is placed, so the list doesn't pull away from it. */
-  const [holding, setHolding] = useState(!!placement);
   const place = useCallback((anchor: TranscriptViewAnchor | null) => {
     placing.current = anchor;
     setHolding(!!anchor);
   }, []);
   /** The scroll position when scrolling last ended. */
   const lastTop = useRef(0);
+  // A new dataset starts placing its own anchor, with nothing from the last one's scrolling.
+  const shownDataset = useRef(dataset);
+  useLayoutEffect(() => {
+    if (shownDataset.current === dataset) return;
+    shownDataset.current = dataset;
+    placing.current = placement?.anchor ?? null;
+    scrolled.current = pressed.current = false;
+    lastTop.current = 0;
+  }, [dataset, placement]);
   const save = useCallback(() => {
     const ref = list.current,
       node = ref?.getScrollableNode();
     const { view, rows, loading, later } = current.current;
-    if (!ref || !node || !ready.current) return;
+    if (!ref || !node || !isReady()) return;
     // A restoration still reading its anchor's history saves nothing over it.
     if (view.anchor && loading && !rows.some((row) => row.key === view.anchor!.key)) return;
     const position = ref.getState();
@@ -446,7 +466,7 @@ function TranscriptList({
     const visible = ref.anchorVisibleContent({ hold: false });
     const anchor = visible && findReadingAnchor(node, visible.key);
     if (anchor) views.save(anchor);
-  }, [list, views, place]);
+  }, [list, views, place, isReady]);
   const saver = useMemo(() => ({ flush: save }), [save]);
   /**
    * Re-applies a placing anchor once its row has been laid out at a new size: content in it can
@@ -488,11 +508,12 @@ function TranscriptList({
   // Anchors the application supplies after mount (around-entry navigation) scroll to their row.
   // An active Find match is revealed by its part instead.
   const anchor = transcript.view.anchor;
-  const placed = useRef(false);
+  const anchoredDataset = useRef<number | null>(null);
   useLayoutEffect(() => {
     const fresh = !!anchor && views.receive(anchor);
-    if (!placed.current) {
-      placed.current = true;
+    // A new dataset's anchor is placed by its initial scroll.
+    if (anchoredDataset.current !== dataset) {
+      anchoredDataset.current = dataset;
       return;
     }
     // No anchor is following the end (Jump to latest): nothing is placed any more.
@@ -507,23 +528,24 @@ function TranscriptList({
     void ref
       .scrollToKey({ key: anchor.key, animated: false, viewOffset: -anchor.offset })
       .then(() => {
-        // A replaced list (a jump) placed itself.
-        if (list.current === ref && placing.current === anchor) applyPartOffset(ref, anchor);
+        // A replaced dataset (a jump) placed itself.
+        if (placing.current === anchor && current.current.dataset === dataset)
+          applyPartOffset(ref, anchor);
       });
-  }, [anchor, list, views, place]);
+  }, [anchor, dataset, list, views, place]);
   // A newly revealed Find match: scrolling to its row releases following, then the match itself
   // is revealed inside it. A match rendered later is revealed by its part.
   const { active: findActive, revealing: findRevealing } = transcript.find;
   useLayoutEffect(() => {
     const ref = list.current;
-    if (!findActive || !findRevealing || !ref || !ready.current) return;
+    if (!findActive || !findRevealing || !ref || !isReady()) return;
     const key = getEntryRowKey(findActive.source.entryId);
     // The reveal owns the position now.
     place(null);
     void ref.scrollToKey({ key, animated: false }).then(() => {
-      if (list.current === ref) revealFindMatch(ref);
+      if (current.current.dataset === dataset) revealFindMatch(ref);
     });
-  }, [findActive, findRevealing, list, place]);
+  }, [findActive, findRevealing, dataset, list, place, isReady]);
   // The list reports reaching an edge once; one reached while history was loading pages when
   // loading settles. A failed read waits for Retry.
   const { loading, earlier, later, error } = transcript;
@@ -535,10 +557,10 @@ function TranscriptList({
   }, [onPage]);
   useEffect(() => {
     const state = list.current?.getState();
-    if (loading || error || !state || !ready.current) return;
+    if (loading || error || !state || !isReady()) return;
     if (earlier && state.isNearStart) onPage('earlier');
     else if (later && state.isNearEnd) onPage('later');
-  }, [loading, error, earlier, later, list, onPage]);
+  }, [loading, error, earlier, later, list, onPage, isReady]);
   const alwaysRender = useMemo(() => ({ keys: mounted }), [mounted]);
   return (
     <TranscriptViewSaver.Provider value={saver}>
@@ -549,6 +571,7 @@ function TranscriptList({
         data-transcript-list=""
         tabIndex={0}
         data={transcript.rows}
+        dataKey={dataset}
         keyExtractor={getRowKey}
         getItemType={getRowType}
         renderItem={renderRow}
@@ -579,7 +602,7 @@ function TranscriptList({
         onKeyDownCapture={read}
         onFocusCapture={read}
         onReady={() => {
-          ready.current = true;
+          readyDataset.current = dataset;
           const { find } = current.current;
           const revealing =
             find.revealing &&
@@ -601,6 +624,12 @@ function TranscriptList({
   );
 }
 
+/** Where the saved anchor's row is in the retained rows, or null to open at the end. */
+function findPlacement({ view, rows }: ChatState['transcript']) {
+  const anchor = view.anchor;
+  const index = anchor ? rows.findIndex((row) => row.key === anchor.key) : -1;
+  return anchor && index >= 0 ? { anchor, index } : null;
+}
 const getRowKey = (row: TranscriptRow) => row.key;
 const getRowType = (row: TranscriptRow) => (row.kind === 'entry' ? row.entry.role : row.kind);
 const renderRow = ({ item }: LegendListRenderItemProps<TranscriptRow>) => <Row row={item} />;
