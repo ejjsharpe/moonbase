@@ -309,7 +309,7 @@ test('first native folder open displays ignored files before Git classification 
     await expect(ignored).toHaveAttribute('aria-description', 'Git-ignored');
     await expect(ignored.getByText('ignored.ts', { exact: true })).toHaveCSS(
       'color',
-      'rgb(151, 151, 159)',
+      'rgb(139, 144, 160)',
     );
     await capture('ignored-files-first-open');
   } finally {
@@ -1139,9 +1139,17 @@ test('exact checkout tabs preserve independent dirty paths, views and closed met
   await expect(
     page.locator('.view-line').filter({ hasText: 'alpha dirty a' }).first(),
   ).toBeVisible();
+  await page
+    .getByRole('button', { name: `Close checkout ${checkout}`, exact: true })
+    .locator('..')
+    .hover();
   await page.getByRole('button', { name: `Close checkout ${checkout}`, exact: true }).click();
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(first).toBeVisible();
+  await page
+    .getByRole('button', { name: `Close checkout ${checkout}`, exact: true })
+    .locator('..')
+    .hover();
   await page.getByRole('button', { name: `Close checkout ${checkout}`, exact: true }).click();
   await page.getByRole('button', { name: 'Discard', exact: true }).click();
   await expect(first).toHaveCount(0);

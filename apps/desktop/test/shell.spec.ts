@@ -1,7 +1,6 @@
 import { selectFileView } from './editor-regressions.ts';
 import { test, expect, type Page } from '@playwright/test';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
 
 const shell = (page: Page) => page.getByRole('region', { name: 'First editor', exact: true });
 const tabs = (page: Page) =>
@@ -64,7 +63,7 @@ test('browser shell keeps dirty comparisons, cursor, scroll, Monaco undo and sco
   await shell(page).getByLabel('Message', { exact: true }).press('Meta+s');
   expect(await page.evaluate(() => window.demo.memory.stats.saves)).toBe(0);
   await tabs(page).getByRole('tab', { name: 'Agents', exact: true }).focus();
-  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter');
   await expect(project(page)).toBeFocused();
   await expect(project(page)).toHaveAttribute('aria-selected', 'true');
@@ -144,7 +143,7 @@ test('project-tab shortcuts use the editor handler after keyboard navigation fro
   );
   await tabs(page).getByRole('tab', { name: 'Agents', exact: true }).click();
   await tabs(page).getByRole('tab', { name: 'Agents', exact: true }).focus();
-  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter');
   await expect(project(page)).toBeFocused();
   await project(page).press('Meta+s');
@@ -211,6 +210,10 @@ test('reopened projects append to the tab strip and open projects keep their slo
   const projectTabs = projects.getByRole('tab');
   await expect(projectTabs).toHaveText(['moonbase · main', 'other · main', 'third · main']);
   await projects.getByRole('tab', { name: 'other · main', exact: true }).hover();
+  await projects
+    .getByRole('button', { name: 'Close checkout /demo/other', exact: true })
+    .locator('..')
+    .hover();
   await projects.getByRole('button', { name: 'Close checkout /demo/other', exact: true }).click();
   await expect(projectTabs).toHaveText(['moonbase · main', 'third · main']);
   await page.evaluate(() => {
@@ -316,7 +319,7 @@ for (const selected of ['other · main', 'moonbase · main', 'Agents']) {
           : [frame.selected === 'other · main' ? 'elsewhere.ts editor' : 'welcome.ts editor'],
       );
     }
-    expect([...new Set(frames.map((frame) => frame.top))]).toEqual([40]);
+    expect([...new Set(frames.map((frame) => frame.top))]).toEqual([0]);
     await expect(page.getByRole('tab', { name: next, exact: true })).toHaveAttribute(
       'aria-selected',
       'true',
@@ -403,6 +406,10 @@ test('failed Open without a project stays visible in Agents and can be dismissed
 }) => {
   await page.goto('/?chat&design');
   await page.getByRole('tab', { name: 'moonbase · main', exact: true }).click();
+  await page
+    .getByRole('button', { name: 'Close checkout /demo/moonbase', exact: true })
+    .locator('..')
+    .hover();
   await page.getByRole('button', { name: 'Close checkout /demo/moonbase', exact: true }).click();
   await expect(page.getByRole('tab', { name: 'Agents', exact: true })).toHaveAttribute(
     'aria-selected',
@@ -440,6 +447,10 @@ for (const fromChat of [false, true]) {
     if (fromChat) await page.getByRole('tab', { name: 'Agents', exact: true }).click();
     const other = page.getByRole('tab', { name: 'other · main', exact: true });
     await other.hover();
+    await page
+      .getByRole('button', { name: 'Close checkout /demo/other', exact: true })
+      .locator('..')
+      .hover();
     await page.getByRole('button', { name: 'Close checkout /demo/other', exact: true }).click();
     await page.getByRole('dialog').getByRole('button', { name: 'Save', exact: true }).click();
     await expect(other).toHaveAttribute('aria-selected', 'true');
@@ -482,7 +493,12 @@ test('failed project close from Chat reveals recovery errors and retains the pro
 
 test('closing every view leaves the editor empty state available', async ({ page }) => {
   await page.goto('/?chat');
+  await tabs(page)
+    .getByRole('button', { name: 'Close Chat panel', exact: true })
+    .locator('..')
+    .hover();
   await tabs(page).getByRole('button', { name: 'Close Chat panel', exact: true }).click();
+  await project(page).hover();
   await tabs(page)
     .getByRole('button', { name: 'Close checkout /demo/moonbase', exact: true })
     .click();
@@ -577,6 +593,10 @@ for (const fail of [false, true]) {
       window.demo.retryChat = () =>
         fail ? pending.reject(Error('Controlled observation cleanup failure')) : pending.resolve();
     }, fail);
+    await tabs(page)
+      .getByRole('button', { name: 'Close Chat panel', exact: true })
+      .locator('..')
+      .hover();
     await tabs(page).getByRole('button', { name: 'Close Chat panel', exact: true }).click();
     await expect(tabs(page).getByRole('tab', { name: 'Agents', exact: true })).toHaveCount(0);
     const reopen = shell(page).getByRole('button', { name: 'Open Chat panel', exact: true });
@@ -684,6 +704,7 @@ test('local model and effort defaults yield to preferences across new chats and 
   await page.getByRole('button', { name: 'New chat', exact: true }).click();
   await expect(model).toContainText('Demo coding model');
   await expect(effort).toContainText('Extra high');
+  await page.getByRole('button', { name: 'Close Chat panel', exact: true }).locator('..').hover();
   await page.getByRole('button', { name: 'Close Chat panel', exact: true }).click();
   await page.getByRole('button', { name: 'Open Chat panel', exact: true }).click();
   await expect(model).toContainText('Demo coding model');
@@ -840,16 +861,15 @@ test('compact Agents navigation uses a keyboard-dismissable drawer and keeps Sen
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
-test('main tabs dim inactive labels, reveal close on hover or focus and separate inactive neighbors', async ({
+test('the project rail shows coded tiles and peeks at a project on hover without moving', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/?local&design');
   await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
-  await expect(page.getByRole('tablist', { name: 'Workbench views', exact: true })).toHaveCSS(
-    'box-shadow',
-    'rgb(41, 41, 45) 0px -1px 0px 0px inset',
-  );
+  const rail = page.getByRole('tablist', { name: 'Workbench views', exact: true });
+  await expect(rail).toHaveCSS('box-shadow', 'rgb(35, 37, 46) -1px 0px 0px 0px inset');
+  await expect(rail).toHaveCSS('width', '72px');
   await page.evaluate(() => window.demo.first.openCheckout('/demo/other'));
   const agents = page.getByRole('tab', { name: 'Agents', exact: true });
   const project = page.getByRole('tab', { name: 'moonbase · main', exact: true });
@@ -858,145 +878,110 @@ test('main tabs dim inactive labels, reveal close on hover or focus and separate
     name: 'Close checkout /demo/moonbase',
     exact: true,
   });
-  const closeAgents = page.getByRole('button', { name: 'Close Chat panel', exact: true });
-  const groupBounds = async (tab: typeof project) =>
-    tab.evaluate((element) => {
-      const bounds = element.parentElement!.getBoundingClientRect();
-      return { left: bounds.left, right: bounds.right };
-    });
-  const [agentsBounds, projectBounds] = await Promise.all([
-    groupBounds(agents),
-    groupBounds(project),
-  ]);
-  expect(projectBounds.left - agentsBounds.right).toBe(6);
-  await expect
-    .poll(async () => (await groupBounds(other)).left - (await groupBounds(project)).right)
-    .toBe(6);
-  const divider = (tab: typeof project) =>
-    tab.evaluate((element) => {
-      const style = getComputedStyle(element.parentElement!, '::after');
-      return { content: style.content, width: style.width, height: style.height };
-    });
-  await expect(agents).toHaveAttribute('aria-selected', 'true');
-  expect(await divider(project)).toEqual({ content: '""', width: '1px', height: '16px' });
+  const peek = page
+    .locator('[data-side="right"] > [data-side="right"]')
+    .filter({ hasText: '/demo/moonbase' });
+  const tile = (tab: typeof project) => tab.locator('[data-initials]');
+  await expect(tile(project)).toHaveAttribute('data-initials', 'mo');
+  await expect(tile(other)).toHaveAttribute('data-initials', 'ot');
   await other.click();
   await page.mouse.move(900, 400);
-  await expect(project).toHaveCSS('color', 'rgb(151, 151, 159)');
-  await expect(agents).toHaveCSS('color', 'rgb(151, 151, 159)');
-  await expect(other).toHaveCSS('color', 'rgb(229, 229, 231)');
+  await expect(other).toHaveCSS('color', 'rgb(220, 223, 232)');
+  await expect(project).toHaveCSS('color', 'rgb(180, 184, 198)');
+  await expect(agents).toHaveCSS('color', 'rgb(180, 184, 198)');
   await expect(closeProject).toHaveCSS('opacity', '0');
-  await expect(closeAgents).toHaveCSS('opacity', '0');
-  await expect(
-    page.getByRole('button', { name: 'Close checkout /demo/other', exact: true }),
-  ).toHaveCSS('opacity', '1');
-  expect((await divider(agents)).height).toBe('16px');
-  expect((await divider(project)).content).toBe('none');
-  const originalBounds = await project.boundingBox();
-  await page
-    .getByRole('tablist', { name: 'Workbench views', exact: true })
-    .screenshot({ path: '../../test-results/redesign-review/tabs-idle.png' });
+  await expect(peek).toBeHidden();
+  const tileBounds = await tile(project).boundingBox();
+  await rail.screenshot({ path: '../../test-results/redesign-review/rail-idle.png' });
   await project.hover();
-  await expect(project).toHaveCSS('color', 'rgb(229, 229, 231)');
+  await expect(peek).toBeVisible();
+  await expect(peek).toContainText('moonbase');
+  await expect(peek).toContainText('main');
+  await expect(peek).toContainText('memory-demo · /demo/moonbase');
   await expect(closeProject).toHaveCSS('opacity', '1');
-  expect(
-    await project.evaluate((element) => getComputedStyle(element.parentElement!).backgroundColor),
-  ).toBe('rgb(34, 34, 36)');
-  await expect(closeAgents).toHaveCSS('opacity', '0');
-  expect(await project.boundingBox()).toEqual(originalBounds);
-  await page
-    .getByRole('tablist', { name: 'Workbench views', exact: true })
-    .screenshot({ path: '../../test-results/redesign-review/tabs-hover.png' });
+  await expect(rail).toHaveCSS('width', '72px');
+  expect(await tile(project).boundingBox()).toEqual(tileBounds);
+  expect((await peek.boundingBox())!.x).toBeGreaterThanOrEqual(72);
+  await page.screenshot({ path: '../../test-results/redesign-review/rail-peek.png' });
   await page.mouse.move(900, 400);
+  await expect(peek).toBeHidden();
   await expect(closeProject).toHaveCSS('opacity', '0');
   await closeProject.focus();
   await expect(closeProject).toBeFocused();
   await expect(closeProject).toHaveCSS('opacity', '1');
-  await expect(project).toHaveCSS('color', 'rgb(229, 229, 231)');
 });
 
-for (const scrolled of [false, true]) {
-  test(`removing a middle tab moves survivors smoothly ${scrolled ? 'inside a scrolled strip' : 'without vertical movement'}`, async ({
-    page,
-  }) => {
-    await page.emulateMedia({ reducedMotion: 'no-preference' });
-    await page.clock.install();
-    await page.setViewportSize({ width: scrolled ? 768 : 1440, height: 900 });
-    await page.goto('/?local&design');
-    await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
-    await page.evaluate(() => window.demo.first.openCheckout('/demo/other'));
-    const other = page.getByRole('tab', { name: 'other · main', exact: true });
-    await expect(other.locator('..')).toHaveCSS('transform', 'none');
-    if (scrolled) {
-      await page.evaluate(() => window.demo.first.openCheckout('/demo/third'));
-      await expect(
-        page.getByRole('tab', { name: 'third · main', exact: true }).locator('..'),
-      ).toHaveCSS('transform', 'none');
-      await page.getByRole('group', { name: 'Project tabs', exact: true }).evaluate((element) => {
-        element.scrollLeft = element.scrollWidth;
-      });
-    }
-    await page
-      .getByRole('tab', { name: scrolled ? 'other · main' : 'moonbase · main', exact: true })
+test('keyboard focus on a rail tile peeks at its project', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?local&design');
+  await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
+  const peek = page
+    .locator('[data-side="right"] > [data-side="right"]')
+    .filter({ hasText: '/demo/moonbase' });
+  await page.getByRole('tab', { name: 'Agents', exact: true }).focus();
+  await page.keyboard.press('ArrowDown');
+  await expect(page.getByRole('tab', { name: 'moonbase · main', exact: true })).toBeFocused();
+  await expect(peek).toBeVisible();
+  await expect(peek).toContainText('moonbase');
+});
+
+test('removing a middle project moves survivors smoothly up the rail', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.clock.install();
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?local&design');
+  await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
+  await page.evaluate(() => window.demo.first.openCheckout('/demo/other'));
+  const other = page.getByRole('tab', { name: 'other · main', exact: true });
+  await expect(other.locator('..')).toHaveCSS('transform', 'none');
+  await page.getByRole('tab', { name: 'moonbase · main', exact: true }).click();
+  await page.mouse.move(900, 400);
+  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 60_000));
+  const read = () =>
+    page.evaluate(() => {
+      const survivor = document.querySelector<HTMLElement>(
+        '[role="tab"][aria-label="other · main"]',
+      )!.parentElement!;
+      const plus = document.querySelector<HTMLElement>('button[aria-label="Open checkout"]')!;
+      const bounds = survivor.getBoundingClientRect();
+      return {
+        at: performance.now(),
+        x: bounds.x,
+        y: bounds.y,
+        plus: plus.getBoundingClientRect().y,
+      };
+    });
+  const frames = [await read()];
+  await page.evaluate(() => {
+    document
+      .querySelector<HTMLButtonElement>('button[aria-label="Close checkout /demo/moonbase"]')!
       .click();
-    await page.clock.pauseAt(await page.evaluate(() => Date.now() + 60_000));
-    const read = () =>
-      page.evaluate((scrolled) => {
-        const survivor = [...document.querySelectorAll<HTMLElement>('[role="tab"]')].find(
-          (tab) => tab.textContent === (scrolled ? 'third · main' : 'other · main'),
-        )!.parentElement!;
-        const plus = document.querySelector<HTMLElement>('button[aria-label="Open checkout"]')!;
-        const bounds = survivor.getBoundingClientRect();
-        return {
-          at: performance.now(),
-          x: bounds.x,
-          y: bounds.y,
-          plus: plus.getBoundingClientRect().x,
-          transform: getComputedStyle(survivor).transform,
-          plusTransform: getComputedStyle(plus).transform,
-        };
-      }, scrolled);
-    const frames = [await read()];
-    await page.evaluate((scrolled) => {
-      document
-        .querySelector<HTMLButtonElement>(
-          `button[aria-label="Close checkout /demo/${scrolled ? 'other' : 'moonbase'}"]`,
-        )!
-        .click();
-    }, scrolled);
-    for (let i = 0; i < 32; i++) {
-      await page.clock.runFor(16);
-      frames.push(await read());
-    }
-    await mkdir(test.info().outputDir, { recursive: true });
-    const framesPath = test.info().outputPath('middle-tab-motion-frames.json');
-    await writeFile(framesPath, JSON.stringify({ scrolled, frames }, null, 2));
-    await test
-      .info()
-      .attach('middle-tab-motion-frames', { path: framesPath, contentType: 'application/json' });
-    await mkdir(resolve('../../test-results/redesign-review'), { recursive: true });
-    await writeFile(
-      resolve(
-        `../../test-results/redesign-review/tab-motion-middle${scrolled ? '-scrolled' : ''}.json`,
-      ),
-      JSON.stringify(frames, null, 2),
-    );
-    const first = frames[0],
-      last = frames.at(-1)!;
-    if (!scrolled) expect(first.x - last.x).toBeCloseTo(222, 0);
-    expect(first.x - last.x).toBeGreaterThan(1);
-    expect(frames.some((frame) => frame.x > last.x + 1 && frame.x < first.x - 1)).toBe(true);
-    for (let i = 1; i < frames.length; i++) {
-      expect(frames[i].y).toBeCloseTo(first.y, 1);
-      expect(frames[i].x).toBeLessThanOrEqual(frames[i - 1].x + 1);
-      expect(frames[i].x).toBeGreaterThanOrEqual(last.x - 1);
-      expect(frames[i].plus).toBeLessThanOrEqual(frames[i - 1].plus + 1);
-    }
-    await page.clock.resume();
   });
-}
+  for (let i = 0; i < 32; i++) {
+    await page.clock.runFor(16);
+    frames.push(await read());
+  }
+  await mkdir(test.info().outputDir, { recursive: true });
+  const framesPath = test.info().outputPath('middle-project-motion-frames.json');
+  await writeFile(framesPath, JSON.stringify(frames, null, 2));
+  await test
+    .info()
+    .attach('middle-project-motion-frames', { path: framesPath, contentType: 'application/json' });
+  const first = frames[0],
+    last = frames.at(-1)!;
+  expect(first.y - last.y).toBeCloseTo(52, 0);
+  expect(frames.some((frame) => frame.y < first.y - 1 && frame.y > last.y + 1)).toBe(true);
+  for (let i = 1; i < frames.length; i++) {
+    expect(frames[i].x).toBeCloseTo(first.x, 1);
+    expect(frames[i].y).toBeLessThanOrEqual(frames[i - 1].y + 1);
+    expect(frames[i].y).toBeGreaterThanOrEqual(last.y - 1);
+    expect(frames[i].plus).toBeLessThanOrEqual(frames[i - 1].plus + 1);
+  }
+  await page.clock.resume();
+});
 
 for (const reducedMotion of [false, true]) {
-  test(`tab addition and removal ${reducedMotion ? 'respect reduced motion' : 'slide neighboring tabs'}`, async ({
+  test(`project addition and removal ${reducedMotion ? 'respect reduced motion' : 'slide neighboring rail rows'}`, async ({
     page,
   }) => {
     await page.emulateMedia({ reducedMotion: reducedMotion ? 'reduce' : 'no-preference' });
@@ -1016,7 +1001,7 @@ for (const reducedMotion of [false, true]) {
           )!;
           const frame = {
             at: performance.now(),
-            x: plus.getBoundingClientRect().x,
+            y: plus.getBoundingClientRect().y,
             inert: false,
             disabled: false,
           };
@@ -1041,7 +1026,7 @@ for (const reducedMotion of [false, true]) {
             );
             return {
               at: performance.now(),
-              x: plus.getBoundingClientRect().x,
+              y: plus.getBoundingClientRect().y,
               inert: Boolean(exiting?.closest('[inert]')),
               disabled: exiting?.disabled ?? false,
             };
@@ -1055,17 +1040,17 @@ for (const reducedMotion of [false, true]) {
     const closed = await capture('close');
     await expect(page.getByRole('tab', { name: 'other · main', exact: true })).toHaveCount(0);
     await mkdir(test.info().outputDir, { recursive: true });
-    const framesPath = test.info().outputPath('tab-motion-frames.json');
+    const framesPath = test.info().outputPath('rail-motion-frames.json');
     await writeFile(framesPath, JSON.stringify({ reducedMotion, opened, closed }, null, 2));
     await test
       .info()
-      .attach('tab-motion-frames', { path: framesPath, contentType: 'application/json' });
+      .attach('rail-motion-frames', { path: framesPath, contentType: 'application/json' });
     for (const frames of [opened, closed]) {
-      const start = frames[0].x,
-        end = frames.at(-1)!.x;
-      expect(Math.abs(end - start)).toBeCloseTo(222, 0);
+      const start = frames[0].y,
+        end = frames.at(-1)!.y;
+      expect(Math.abs(end - start)).toBeCloseTo(52, 0);
       const intermediate = frames.some(
-        (frame) => frame.x > Math.min(start, end) + 1 && frame.x < Math.max(start, end) - 1,
+        (frame) => frame.y > Math.min(start, end) + 1 && frame.y < Math.max(start, end) - 1,
       );
       expect(intermediate).toBe(!reducedMotion);
     }
@@ -1085,7 +1070,7 @@ for (const reducedMotion of [false, true]) {
             if (ready()) return;
             await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
           }
-          throw Error('Tab command did not settle');
+          throw Error('Rail command did not settle');
         };
         plus.click();
         await waitFor(() => Boolean(close() && !close()!.disabled && !close()!.closest('[inert]')));
@@ -1101,6 +1086,7 @@ for (const reducedMotion of [false, true]) {
       await expect(reopened).toHaveAttribute('aria-selected', 'true');
       await expect(reopened.locator('..')).toHaveCSS('transform', 'none');
       await expect(page.locator('button[aria-label="Close checkout /demo/other"]')).toHaveCount(1);
+      await reopened.hover();
       await expect(
         page.getByRole('button', { name: 'Close checkout /demo/other', exact: true }),
       ).toBeEnabled();
@@ -1126,20 +1112,20 @@ test('design fixture renders first-message composition, pinned navigation and co
     await page
       .getByRole('main', { name: 'Agent workspace' })
       .evaluate((element) => getComputedStyle(element).backgroundColor),
-  ).toBe('rgb(20, 20, 21)');
+  ).toBe('rgb(20, 21, 27)');
   expect(
     await page
       .getByRole('complementary', { name: 'Saved chats', exact: true })
       .evaluate((element) => getComputedStyle(element).backgroundColor),
-  ).toBe('rgb(22, 22, 24)');
+  ).toBe('rgb(11, 12, 16)');
   expect(
     await message.evaluate((element) => element.closest('form')!.getBoundingClientRect().width),
   ).toBe(640);
   expect(
     await page
       .getByRole('tablist', { name: 'Workbench views', exact: true })
-      .evaluate((element) => element.getBoundingClientRect().height),
-  ).toBe(40);
+      .evaluate((element) => element.getBoundingClientRect().width),
+  ).toBe(72);
   const border = await message.evaluate((element) => {
     const style = getComputedStyle(element.closest('form')!);
     return [style.borderTopWidth, style.borderTopStyle];
@@ -1147,34 +1133,33 @@ test('design fixture renders first-message composition, pinned navigation and co
   expect(border).toEqual(['1px', 'solid']);
   for (const name of ['Agents', 'moonbase · main']) {
     const geometry = await page.getByRole('tab', { name, exact: true }).evaluate((element) => {
-      const tab = element.parentElement!;
-      const strip = element.closest('[role="tablist"]')!.getBoundingClientRect();
-      const bounds = tab.getBoundingClientRect();
-      const icon = element.querySelector('svg')!.getBoundingClientRect();
-      const close = element.nextElementSibling!.querySelector('svg')!.getBoundingClientRect();
-      const label = element.querySelector('span')!.getBoundingClientRect();
-      const style = getComputedStyle(tab);
+      const rail = element.closest('[role="tablist"]')!.getBoundingClientRect();
+      const tile = element.querySelector('span')!;
+      const bounds = tile.getBoundingClientRect();
+      const close = element.nextElementSibling!.getBoundingClientRect();
       return {
-        top: bounds.top - strip.top,
-        bottom: strip.bottom - bounds.bottom,
-        left: icon.left - bounds.left,
-        right: bounds.right - close.right,
-        centers: icon.top + icon.height / 2 - (close.top + close.height / 2),
-        labelGap: label.left - icon.right,
-        textAlign: getComputedStyle(element).textAlign,
-        radius: style.borderRadius,
-        iconClass: element.querySelector('svg')!.getAttribute('class'),
+        size: [bounds.width, bounds.height],
+        left: bounds.left - rail.left,
+        right: rail.right - bounds.right,
+        // The close button is centred on the tile's top-right corner, nudged 4px down.
+        closeX: close.left + close.width / 2 - bounds.right,
+        closeY: close.top + close.height / 2 - bounds.top,
+        radius: getComputedStyle(tile).borderRadius,
       };
     });
-    expect(geometry.top).toBe(4);
-    expect(geometry.bottom).toBe(4);
-    expect(geometry.left).toBeCloseTo(geometry.right, 1);
-    expect(geometry.centers).toBeCloseTo(0, 1);
-    expect(geometry.labelGap).toBe(8);
-    expect(geometry.textAlign).toBe('left');
-    expect(geometry.radius).toBe('8px');
-    expect(geometry.iconClass).toContain('tabler-icon');
+    expect(geometry.size).toEqual([40, 40]);
+    expect(geometry.left).toBe(16);
+    expect(geometry.right).toBe(16);
+    expect(geometry.closeX).toBeCloseTo(0, 1);
+    expect(geometry.closeY).toBeCloseTo(4, 1);
+    expect(geometry.radius).toBe('9px');
   }
+  expect(
+    await page
+      .getByRole('tab', { name: 'Agents', exact: true })
+      .locator('svg')
+      .getAttribute('class'),
+  ).toContain('tabler-icon');
   await page.screenshot({ path: '../../test-results/redesign-review/desktop.png', fullPage: true });
   await message.fill('Review the desktop shell and editor');
   await message.press('Meta+Enter');

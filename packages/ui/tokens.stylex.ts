@@ -27,6 +27,16 @@ export const colors = stylex.defineConsts({
   backdrop: '#0009',
 });
 
+// Project rail tile hues, read with `colors.onAccent`; every checkout of a repository shares one.
+export const projectHues = stylex.defineConsts({
+  silver: '#c9ced9',
+  periwinkle: '#9fb7ff',
+  green: '#a7d98b',
+  pink: '#e8a0bf',
+  lavender: '#c3a6f0',
+  sand: '#d9c8a0',
+});
+
 // Code highlighting for read-only code and Monaco's theme rules alike.
 export const syntax = stylex.defineConsts({
   comment: '#878c9e',

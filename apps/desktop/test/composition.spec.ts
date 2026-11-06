@@ -239,7 +239,7 @@ test('dirty editor/live chat, two drafts, no-resend reconnect, view close and cl
     );
     await p.getByLabel('Message', { exact: true }).fill('first independent newer draft');
     await tab(p, 'Agents').focus();
-    await p.keyboard.press('ArrowRight');
+    await p.keyboard.press('ArrowDown');
     await expect(projectTab(p)).toBeFocused();
     await p.keyboard.press('Enter');
     await p.evaluate(
@@ -1138,6 +1138,7 @@ test('closing Chat removes its panel, preserves drafts and permits explicit reop
     await connect(p);
     await create(p, 'Close and recover');
     await p.getByLabel('Message', { exact: true }).fill('preserved before panel close');
+    await p.getByRole('button', { name: 'Close Chat panel', exact: true }).locator('..').hover();
     await p.getByRole('button', { name: 'Close Chat panel', exact: true }).click();
     await expect(tab(p, 'Agents')).toBeHidden();
     await expect(p.getByLabel('Message', { exact: true })).toHaveCount(0);
@@ -1172,6 +1173,7 @@ if (!packaged) {
         globalThis.desktopTest.holdChatCancel = true;
         globalThis.desktopTest.failChatCancel = true;
       });
+      await p.getByRole('button', { name: 'Close Chat panel', exact: true }).locator('..').hover();
       await p.getByRole('button', { name: 'Close Chat panel', exact: true }).click();
       await expect.poll(() => app.evaluate(() => globalThis.desktopTest.chatCancelHeld)).toBe(true);
       await expect(tab(p, 'Agents')).toBeHidden();
@@ -1214,6 +1216,7 @@ if (!packaged) {
       await app.evaluate(() => {
         globalThis.desktopTest.holdChatCancel = true;
       });
+      await p.getByRole('button', { name: 'Close Chat panel', exact: true }).locator('..').hover();
       await p.getByRole('button', { name: 'Close Chat panel', exact: true }).click();
       await expect.poll(() => app.evaluate(() => globalThis.desktopTest.chatCancelHeld)).toBe(true);
       const child = app.process();
