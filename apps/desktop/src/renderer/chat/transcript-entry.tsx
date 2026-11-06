@@ -625,7 +625,12 @@ const Part = memo(
         open={expanded}
         onOpenChange={disclosure.onOpenChange}
         disabled={disclosure.disabled}
-        render={<section data-transcript-part={part.partId} />}>
+        render={
+          <section
+            data-transcript-part={part.partId}
+            data-transcript-folded={expanded ? undefined : ''}
+          />
+        }>
         {disclosure.disclosureError && (
           <p role="alert" {...stylex.props(styles.small)}>
             Could not remember this disclosure. Its content is expanded.
