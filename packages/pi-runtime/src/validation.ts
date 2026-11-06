@@ -1,4 +1,5 @@
 import { ApplicationError } from '@moonbase/contracts/workspace';
+import { areJsonValuesEqual } from '@moonbase/contracts/common';
 import * as Schema from 'effect/Schema';
 import {
   ChatIdentifierSchema,
@@ -12,7 +13,6 @@ import {
 import {
   maximumChatReplyBytes,
   type ChatTranscript,
-  type ChatTranscriptSource,
   type ChatCommand,
   type ChatInput,
   type ChatOutput,
@@ -176,15 +176,13 @@ export function output<K extends ChatCommand>(
   if (operation === 'getChatTranscriptContent') {
     const data = result as ChatOutput<'getChatTranscriptContent'>;
     const input = request as ChatInput<'getChatTranscriptContent'>;
-    const sameSource = (a: ChatTranscriptSource, b: ChatTranscriptSource) =>
-      JSON.stringify(a) === JSON.stringify(b);
-    if (!sameSource(data.source, input.source) || data.cursor !== (input.cursor ?? null))
+    if (!areJsonValuesEqual(data.source, input.source) || data.cursor !== (input.cursor ?? null))
       fail('Incompatible', 'Content read identity changed.');
     if (data.kind === 'manifest') {
       if (input.selection) fail('Incompatible', 'Content selection was ignored.');
       validateTranscript(data, input.source.target);
     } else {
-      if (!input.selection || JSON.stringify(data.selection) !== JSON.stringify(input.selection))
+      if (!input.selection || !areJsonValuesEqual(data.selection, input.selection))
         fail('Incompatible', 'Content selection changed.');
     }
   }
@@ -198,7 +196,7 @@ export function output<K extends ChatCommand>(
   }
   if (q.requestId && r?.requestId !== undefined && q.requestId !== r.requestId)
     fail('Incompatible', 'Chat request identity changed.');
-  if (operation === 'stopChat' && JSON.stringify(r!.stop) !== JSON.stringify(q.stop))
+  if (operation === 'stopChat' && !areJsonValuesEqual(r!.stop, q.stop))
     fail('Incompatible', 'Stop authority changed.');
   return sized(result);
 }

@@ -23,6 +23,7 @@ import type {
   ChatTranscriptPart,
   ChatTranscriptSource,
 } from '@moonbase/contracts/chat';
+import { areJsonValuesEqual } from '@moonbase/contracts/common';
 import type { TranscriptNative } from '../../chat/wire.ts';
 import { Markdown } from './markdown.tsx';
 import type { MarkdownCache } from './markdown-model.ts';
@@ -149,12 +150,7 @@ export const Entry = memo(
       if (!manifest) {
         await controller.loadTranscriptManifest(source);
         const first = controller.getSnapshot().transcript.manifest;
-        if (
-          first?.error ||
-          !first?.nextCursor ||
-          JSON.stringify(first.source) !== JSON.stringify(source)
-        )
-          return;
+        if (first?.error || !first?.nextCursor || !areJsonValuesEqual(first.source, source)) return;
       }
       await controller.loadTranscriptManifest(source);
     };

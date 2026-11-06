@@ -3,7 +3,6 @@ import { test } from 'node:test';
 import type { TranscriptViewAnchor } from '@moonbase/application/chat';
 import {
   createTranscriptScroll,
-  isSameAnchor,
   transitionTranscriptScroll,
   type TranscriptScroll,
   type TranscriptScrollEvent,
@@ -78,17 +77,6 @@ test('pressing a control keeps following; a press that can select text or scroll
   // A control press while restoring still captures the reader's actual position.
   const restoring = createTranscriptScroll(saved);
   assert.deepEqual(play(restoring, press('control')).last, { cancelReveal: true, capture: true });
-});
-
-test('anchors compare by value whatever their key order', () => {
-  assert.ok(
-    isSameAnchor(
-      { entryId: 'a', partId: 'b', offset: 1 },
-      { offset: 1, partId: 'b', entryId: 'a' },
-    ),
-  );
-  assert.ok(!isSameAnchor({ entryId: 'a', offset: 1 }, { entryId: 'a', offset: 2 }));
-  assert.ok(!isSameAnchor({ entryId: 'a', offset: 1 }, null));
 });
 
 test('automatic earlier loading needs upward reader intent near a loadable top', () => {

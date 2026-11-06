@@ -1,4 +1,5 @@
 import { ApplicationError } from '@moonbase/contracts/errors';
+import { areJsonValuesEqual } from '@moonbase/contracts/common';
 import { decodeChatInput } from '@moonbase/contracts/chat-schema';
 import type {
   ChatClient,
@@ -33,26 +34,6 @@ export const getTranscriptKey = (value: unknown): string =>
         )
       : item,
   );
-export function areTranscriptValuesEqual(a: unknown, b: unknown): boolean {
-  if (a === b) return true;
-  if (
-    !a ||
-    !b ||
-    typeof a !== 'object' ||
-    typeof b !== 'object' ||
-    Array.isArray(a) !== Array.isArray(b)
-  )
-    return false;
-  const first = a as Record<string, unknown>,
-    second = b as Record<string, unknown>;
-  const keys = Object.keys(first);
-  return (
-    keys.length === Object.keys(second).length &&
-    keys.every(
-      (key) => Object.hasOwn(second, key) && areTranscriptValuesEqual(first[key], second[key]),
-    )
-  );
-}
 export const countTranscriptBytes = (value: unknown) =>
   new TextEncoder().encode(JSON.stringify(value)).length;
 export const makeTranscriptFailure = (
@@ -121,10 +102,10 @@ export function checkTranscriptReply(
   reply: ChatOutput<'getChatTranscriptContent'>,
 ) {
   if (
-    !areTranscriptValuesEqual(reply.source, input.source) ||
+    !areJsonValuesEqual(reply.source, input.source) ||
     reply.cursor !== (input.cursor ?? null) ||
     (input.selection
-      ? reply.kind !== 'content' || !areTranscriptValuesEqual(reply.selection, input.selection)
+      ? reply.kind !== 'content' || !areJsonValuesEqual(reply.selection, input.selection)
       : reply.kind !== 'manifest')
   )
     throw makeTranscriptFailure('Transcript reply does not match the captured selection.');

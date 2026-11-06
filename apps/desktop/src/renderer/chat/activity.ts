@@ -1,4 +1,5 @@
 import type { ChatEntry, ChatTranscript, ChatTranscriptPart } from '@moonbase/contracts/chat';
+import { areJsonValuesEqual } from '@moonbase/contracts/common';
 import { structuredSourceLimits } from './source-limits.ts';
 
 function isActivityPart(part: ChatTranscriptPart) {
@@ -124,8 +125,7 @@ export function getEntryTranscripts(
   return entries.flatMap((entry) =>
     entry.transcript
       ? [
-          manifest?.parts.length &&
-          JSON.stringify(manifest.source) === JSON.stringify(entry.transcript.source)
+          manifest?.parts.length && areJsonValuesEqual(manifest.source, entry.transcript.source)
             ? manifest
             : entry.transcript,
         ]

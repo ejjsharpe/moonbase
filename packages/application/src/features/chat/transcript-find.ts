@@ -1,8 +1,8 @@
 import type { ChatOutput, ChatTarget, ChatTranscriptMatch } from '@moonbase/contracts/chat';
 import { getChatFindExpression } from '@moonbase/contracts/chat';
+import { areJsonValuesEqual } from '@moonbase/contracts/common';
 import { sameTarget } from './saved.ts';
 import {
-  areTranscriptValuesEqual,
   getTranscriptKey,
   makeTranscriptFailure,
   trackTranscriptCursor,
@@ -54,7 +54,7 @@ export class TranscriptFindPass {
       if (
         seen.has(key) ||
         (last &&
-          areTranscriptValuesEqual(last.source, match.source) &&
+          areJsonValuesEqual(last.source, match.source) &&
           last.partId === match.partId &&
           match.start < last.end) ||
         (last &&

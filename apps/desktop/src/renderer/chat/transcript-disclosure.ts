@@ -1,6 +1,7 @@
 import { useContext, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import type { ChatController, TranscriptViewAnchor } from '@moonbase/application/chat';
 import type { ChatTranscriptMatch, ChatTranscriptSource } from '@moonbase/contracts/chat';
+import { areJsonValuesEqual } from '@moonbase/contracts/common';
 import { getTranscriptDisclosureId } from '../../chat/transcript-source.ts';
 import { TranscriptViewSaver } from './transcript-view-saving.ts';
 
@@ -79,9 +80,7 @@ export function useDisclosure({
     const { view, find } = controller.getSnapshot().transcript;
     const active = find.active;
     const inside =
-      active &&
-      JSON.stringify(active.source) === JSON.stringify(source) &&
-      partIds.includes(active.partId)
+      active && areJsonValuesEqual(active.source, source) && partIds.includes(active.partId)
         ? active
         : null;
     if (collapse && inside) setCollapsedReveal(JSON.stringify(inside));

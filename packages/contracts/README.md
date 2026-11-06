@@ -5,7 +5,7 @@
 | Subpath | Contents |
 | --- | --- |
 | `workspace`, `chat`, `connection`, `host`, `providers` | Browser-safe DTOs, command/client interfaces and protocol constants |
-| `errors`, `common` | `ApplicationError`, error codes, `CommandOptions` and `ObservationClose` |
+| `errors`, `common` | `ApplicationError`, error codes, `CommandOptions`, `ObservationClose` and `areJsonValuesEqual` (key-order-safe equality for JSON-shaped values) |
 | `*-schema`, `schema` | Request, saved-data and wire-reply decoders, and shared schema constructors |
 | `services` | Privileged Effect service ports and endpoint types |
 

@@ -1,4 +1,5 @@
 import type { ChatTranscriptSource } from '@moonbase/contracts/chat';
+import { areJsonValuesEqual } from '@moonbase/contracts/common';
 
 /**
  * Transcript rows memoize on their props. Snapshots arrive as fresh objects on every update, so
@@ -29,7 +30,7 @@ function isSameList(a: unknown, b: unknown) {
   );
 }
 
-/** Same fields; nested values (a part's small `call`) compare by JSON. */
+/** Same fields; nested values (a part's small `call`) compare as JSON values. */
 function isSameRecord(a: unknown, b: unknown) {
   if (a === b) return true;
   if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return false;
@@ -40,7 +41,7 @@ function isSameRecord(a: unknown, b: unknown) {
     left.every(
       ([key, value]) =>
         value === right[key] ||
-        (typeof value === 'object' && JSON.stringify(value) === JSON.stringify(right[key])),
+        (typeof value === 'object' && areJsonValuesEqual(value, right[key])),
     )
   );
 }

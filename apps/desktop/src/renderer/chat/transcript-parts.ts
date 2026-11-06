@@ -1,14 +1,12 @@
 import type { TranscriptManifestState } from '@moonbase/application/chat';
 import type { ChatTranscript } from '@moonbase/contracts/chat';
+import { areJsonValuesEqual } from '@moonbase/contracts/common';
 
 export function getTranscriptParts(
   transcript: Pick<ChatTranscript, 'source' | 'parts'>,
   manifest: Pick<TranscriptManifestState, 'source' | 'parts' | 'status'> | null,
 ) {
-  if (
-    !manifest?.parts.length ||
-    JSON.stringify(manifest.source) !== JSON.stringify(transcript.source)
-  )
+  if (!manifest?.parts.length || !areJsonValuesEqual(manifest.source, transcript.source))
     return transcript.parts;
   if (transcript.source.kind !== 'live' || manifest.status !== 'source-changed')
     return manifest.parts;
