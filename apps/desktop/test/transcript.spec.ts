@@ -1959,7 +1959,7 @@ for (const activation of ['Control+f', 'Meta+f', 'Find button'])
     });
     if (activation === 'Find button')
       await page
-        .getByRole('region', { name: 'Chat conversation', exact: true })
+        .getByRole('main', { name: 'Agent workspace', exact: true })
         .getByRole('button', { name: 'Find', exact: true })
         .click();
     else await page.keyboard.press(activation);
@@ -2125,7 +2125,10 @@ test('Copy keeps following live output', async ({ page }) => {
   await page.evaluate(() => window.demo.transcript!.live('Streaming output'));
   const jump = page.getByRole('button', { name: 'Jump to latest', exact: true });
   await expect(jump).toHaveCount(0);
-  await page.locator('[data-transcript-live]').getByRole('button', { name: 'Copy text' }).click();
+  await page
+    .locator('[data-transcript-live]')
+    .getByRole('button', { name: 'Copy message', exact: true })
+    .click();
   await page.evaluate(() => window.demo.transcript!.live('Streaming output, continued'));
   await expect(page.locator('[data-transcript-live]')).toContainText('continued');
   await expect(jump).toHaveCount(0);

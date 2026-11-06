@@ -35,7 +35,6 @@ import type {
 import { areJsonValuesEqual } from '@moonbase/contracts/common';
 import type { TranscriptNative } from '../../chat/wire.ts';
 import { MarkdownCache } from './markdown-model.ts';
-import { activateChatFind } from './find.tsx';
 import {
   collectActivityEvidence,
   getEntryTranscripts,
@@ -72,13 +71,11 @@ export function Transcript({
   controller,
   state: latestState,
   native,
-  findInput,
 }: {
   controller: ChatController;
   state: ChatState;
   native?: TranscriptNative;
   /** The open Find bar's field. */
-  findInput: RefObject<HTMLInputElement | null>;
 }) {
   const list = useRef<LegendListRef | null>(null);
   const scroller = useMemo<RefObject<HTMLElement | null>>(
@@ -183,13 +180,6 @@ export function Transcript({
     <section aria-label="Chat conversation" {...stylex.props(styles.transcript)}>
       <div {...stylex.props(styles.row)}>
         <div {...stylex.props(styles.measure)}>
-          <div {...stylex.props(controls.row, styles.navigation)}>
-            <Button
-              {...stylex.props(controls.button, controls.quietButton)}
-              onClick={(event) => activateChatFind(controller, event.currentTarget, findInput)}>
-              Find
-            </Button>
-          </div>
           {!snapshot && (
             <p>
               {state.ready
@@ -197,7 +187,8 @@ export function Transcript({
                 : 'This view is offline. Its draft and unresolved command identities are retained.'}
             </p>
           )}
-          {currentSnapshot && (
+          {/* Idle needs no line; running, stopped and failed say so. */}
+          {currentSnapshot && currentSnapshot.state !== 'idle' && (
             <p
               aria-label="Conversation status"
               role={failed ? 'alert' : 'status'}

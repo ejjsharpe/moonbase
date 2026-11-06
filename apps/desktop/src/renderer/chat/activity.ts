@@ -97,6 +97,59 @@ export function describeActivityPart(
   return details.join(' · ');
 }
 
+/** A tool call with the parts that answer it in the same group, shown as one step. */
+export type ActivityStep = { lead: ChatTranscriptPart; answers: ChatTranscriptPart[] };
+
+/** Pairs each part with the call it answers when that call is in the same group. */
+export function groupActivitySteps(parts: readonly ChatTranscriptPart[]) {
+  const steps: ActivityStep[] = [],
+    calls = new Map<string, ActivityStep>();
+  for (const part of parts) {
+    const call = part.call && calls.get(part.call.partId);
+    if (call) call.answers.push(part);
+    else {
+      const step = { lead: part, answers: [] };
+      steps.push(step);
+      if (part.kind === 'arguments') calls.set(part.partId, step);
+    }
+  }
+  return steps;
+}
+
+/** A step reads as its call; answered steps add the result's size and any failure progress. */
+export function describeActivityStep(
+  step: ActivityStep,
+  transcript: Pick<ChatTranscript, 'source'>,
+  evidence: ActivityEvidence,
+) {
+  const details = [describeActivityPart(step.lead, transcript, evidence)];
+  for (const answer of step.answers) {
+    if (answer.kind !== 'result') continue;
+    const status = getActivityState(answer, transcript, evidence);
+    details.push(`${answer.bytes.toLocaleString()} bytes`);
+    if (['running', 'failed', 'interrupted'].includes(status ?? '') && answer.text)
+      details.push(
+        answer.text.replace(/\s+/g, ' ').slice(0, progressExcerptUnits) +
+          (answer.truncated ? '…' : ''),
+      );
+  }
+  return details.join(' · ');
+}
+
+/** The state that marks a step: its call's, unless an answer in the step failed or still runs. */
+export function getActivityStepState(
+  step: ActivityStep,
+  transcript: Pick<ChatTranscript, 'source'>,
+  evidence: ActivityEvidence,
+) {
+  const states = [step.lead, ...step.answers].map((part) =>
+    getActivityState(part, transcript, evidence),
+  );
+  return ['failed', 'interrupted', 'missing-result', 'running', 'completed', 'requested'].find(
+    (state) => states.includes(state),
+  );
+}
+
 export function getToolSummary(part: ChatTranscriptPart, text = part.text) {
   const name = part.toolName ?? 'Tool';
   if (

@@ -28,9 +28,11 @@ import type { TranscriptNative } from '../../chat/wire.ts';
 import { Markdown } from './markdown.tsx';
 import type { MarkdownCache } from './markdown-model.ts';
 import {
-  describeActivityPart,
+  describeActivityStep,
   getActivityState,
+  getActivityStepState,
   getToolSummary,
+  groupActivitySteps,
   groupTranscriptParts,
   type ActivityEvidence,
 } from './activity.ts';
@@ -219,6 +221,14 @@ export const Entry = memo(
         {user ? <div {...stylex.props(styles.bubble)}>{body}</div> : body}
         {source && conversational && (
           <div {...stylex.props(styles.messageActions)}>
+            {entry.createdAt && (
+              <time
+                dateTime={entry.createdAt}
+                title={new Date(entry.createdAt).toLocaleString()}
+                {...stylex.props(styles.messageTime, styles.revealed)}>
+                {formatMessageTime(entry.createdAt)}
+              </time>
+            )}
             <Button
               aria-label="Copy message"
               title="Copy message"
@@ -317,11 +327,11 @@ function Activity({
     revealing,
     controller,
   });
-  // One step per distinct description, marked by its state like a task list.
+  // One step per call (with its answers), marked by its state like a task list.
   const steps = new Map<string, string | undefined>();
-  for (const part of parts) {
-    const summary = describeActivityPart(part, { source }, evidence);
-    if (!steps.has(summary)) steps.set(summary, getActivityState(part, { source }, evidence));
+  for (const step of groupActivitySteps(parts)) {
+    const summary = describeActivityStep(step, { source }, evidence);
+    if (!steps.has(summary)) steps.set(summary, getActivityStepState(step, { source }, evidence));
   }
   return (
     <Collapsible.Root
@@ -630,12 +640,11 @@ const Part = memo(
       </>
     );
     let copyLabel = 'part';
-    if (ordinary) copyLabel = 'text';
-    else if (part.kind === 'patch' || part.kind === 'diff') copyLabel = part.kind;
-    // Your bubble copies through Copy message; only the agent's text keeps a part copy.
-    const copyButton = readable && !(ordinary && part.role === 'user') && (
+    if (part.kind === 'patch' || part.kind === 'diff') copyLabel = part.kind;
+    // Messages copy through their row's Copy message; only folded output keeps a part copy.
+    const copyButton = readable && !ordinary && (
       <Button
-        {...stylex.props(controls.button, controls.quietButton, ordinary && styles.revealed)}
+        {...stylex.props(controls.button, controls.quietButton)}
         disabled={!native}
         {...(plain ? displayed.copyProps : {})}
         onClick={() => copy()}>
@@ -674,6 +683,14 @@ const Part = memo(
   },
   compareProps<PartProps>({ lists: ['contents', 'findMatches', 'expandedIds'], records: ['part'] }),
 );
+
+/** Today's messages show their time; older ones add the date. */
+function formatMessageTime(iso: string) {
+  const at = new Date(iso),
+    time = at.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  if (at.toDateString() === new Date().toDateString()) return time;
+  return `${at.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}, ${time}`;
+}
 
 const stepGlyphs: Record<string, string> = {
   completed: '✓',
