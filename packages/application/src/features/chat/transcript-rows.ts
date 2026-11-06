@@ -1,5 +1,4 @@
 import type { ChatEntry, ChatRun, ChatToolActivity } from '@moonbase/contracts/chat';
-import { areJsonValuesEqual } from '@moonbase/contracts/common';
 
 /**
  * One row of the published transcript, keyed for a virtualized list. Stored entries are
@@ -25,28 +24,13 @@ function makeEntryRow(entry: ChatEntry): TranscriptRow {
   return row;
 }
 
-/** Whether a rebuilt run row repeats `old`; the live row compares its fields, not its text's JSON. */
-function isSameRunRow(old: TranscriptRow, row: TranscriptRow) {
-  if (row.kind === 'tool') return areJsonValuesEqual(old, row);
-  return (
-    old.kind === 'live' &&
-    row.kind === 'live' &&
-    old.state === row.state &&
-    old.entry.text === row.entry.text &&
-    old.entry.truncated === row.entry.truncated &&
-    old.entry.transcript === row.entry.transcript
-  );
-}
-/**
- * A run's live row and legacy tool previews. A snapshot keeps an unchanged run's identity, so
- * publishing again reuses them; a changed run reuses the previous rows it repeats.
- */
+/** A run's live row and legacy tool previews; a snapshot keeps an unchanged run's identity. */
 const runRows = new WeakMap<ChatRun, TranscriptRow[]>();
-function makeRunRows(run: ChatRun, previous: readonly TranscriptRow[]) {
-  const cached = runRows.get(run);
-  if (cached) return cached;
+function makeRunRows(run: ChatRun) {
+  let rows = runRows.get(run);
+  if (rows) return rows;
   const key = `live:${run.stop.submissionId}`;
-  const rows: TranscriptRow[] = [
+  rows = [
     {
       kind: 'live',
       key,
@@ -62,20 +46,13 @@ function makeRunRows(run: ChatRun, previous: readonly TranscriptRow[]) {
   ];
   if (!run.transcript)
     for (const tool of run.tools) rows.push({ kind: 'tool', key: `tool:${tool.taskId}`, tool });
-  const before = new Map(
-    previous.filter((row) => row.kind !== 'entry').map((row) => [row.key, row]),
-  );
-  const reused = rows.map((row) => {
-    const old = before.get(row.key);
-    return old && isSameRunRow(old, row) ? old : row;
-  });
-  runRows.set(run, reused);
-  return reused;
+  runRows.set(run, rows);
+  return rows;
 }
 
 /**
- * Lists `entries` (oldest first), then the run's live row and its legacy tool previews. Rows that
- * equal one in `previous` are that row, so an unchanged list is `previous` itself.
+ * Lists `entries` (oldest first), then the run's live row and its legacy tool previews. An
+ * unchanged list is `previous` itself.
  */
 export function listTranscriptRows(
   entries: readonly ChatEntry[],
@@ -83,7 +60,7 @@ export function listTranscriptRows(
   previous: readonly TranscriptRow[],
 ): TranscriptRow[] {
   const rows = entries.map(makeEntryRow);
-  if (run) rows.push(...makeRunRows(run, previous));
+  if (run) rows.push(...makeRunRows(run));
   return rows.length === previous.length && rows.every((row, index) => row === previous[index])
     ? (previous as TranscriptRow[])
     : rows;

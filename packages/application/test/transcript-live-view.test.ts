@@ -49,10 +49,10 @@ async function cleanupSettled(app: MoonbaseApplication) {
   });
 }
 
-test('application restores the exact live part and expansions across panel and named-controller replacement, never restart', async () => {
+test('application restores the live row and expansions across panel and named-controller replacement, never restart', async () => {
   const a = transcriptFixture(64),
     b = transcriptFixture(64);
-  const live = publishLive(a);
+  publishLive(a);
   publishLive(b);
   const options = {
     chatTargets: [

@@ -47,17 +47,3 @@ test('a save never lands in another conversation', () => {
   assert.equal(state.view.anchor, null);
   assert.equal(state.writes.length, 1);
 });
-
-test('supplied anchors apply only when their value is new to this view', () => {
-  const { state, controller } = fakeController();
-  const views = createViewSaver(controller);
-  // View memory supplies an anchor; a disclosure toggle rewrites the same view.
-  assert.equal(views.receive({ offset: 16, key: 'entry:saved' }), true);
-  assert.equal(views.receive(at('saved', 16)), false);
-  // This view's own save echoes back without re-applying.
-  views.save(at('read', 2));
-  assert.equal(views.receive(structuredClone(state.view.anchor!)), false);
-  // The application moving the anchor (Find, around-entry navigation) applies.
-  assert.equal(views.receive(at('found')), true);
-  assert.equal(views.receive(at('saved', 16)), true);
-});

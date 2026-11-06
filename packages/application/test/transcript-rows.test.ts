@@ -96,15 +96,6 @@ test('the live response and legacy tool previews are rows after the stored entri
       .transcript.rows.slice(-2)
       .every((row, i) => row === tools[i]),
   );
-  // One preview changing replaces only its row; the live row and the other preview stay.
-  const legacy = f.controller.getSnapshot().transcript.rows.slice(-3);
-  const changed = running(f.snapshot, 'legacy', false);
-  changed.run!.tools[1] = { ...changed.run!.tools[1]!, text: 'second, more' };
-  f.publish(changed);
-  const next = f.controller.getSnapshot().transcript.rows.slice(-3);
-  assert.equal(next[0], legacy[0]);
-  assert.equal(next[1], legacy[1]);
-  assert.notEqual(next[2], legacy[2]);
   f.publish({ ...f.snapshot, run: null, state: 'idle' });
   assert.deepEqual(
     rowKeys(f),
@@ -127,7 +118,6 @@ test('reading history around an entry hides the live row until later history ret
     await f.controller.showLater();
   state = f.controller.getSnapshot().transcript;
   assert.equal(state.later, false);
-  assert.equal(state.atLatest, true, 'reaching the newest entry follows the live edge again');
   assert.equal(state.dataset, dataset + 1, 'later pages extend the rows');
   assert.equal(state.rows.at(-1)!.key, 'live:send');
   assert.equal(state.entries.at(-1)!.id, 'e639');
@@ -155,7 +145,7 @@ test('earlier pages past the record budget evict from the newer end but never th
   assert.equal(state.view.anchor?.key, 'entry:e2399');
 });
 
-test('a jump to a retained entry reads nothing and keeps the rows', async (t) => {
+test('a jump to a retained entry reads nothing and places the same rows afresh', async (t) => {
   const f = await transcriptController(t, 640);
   const before = f.controller.getSnapshot().transcript;
   const reads = f.calls.length;
@@ -163,7 +153,7 @@ test('a jump to a retained entry reads nothing and keeps the rows', async (t) =>
   const after = f.controller.getSnapshot().transcript;
   assert.equal(f.calls.length, reads);
   assert.equal(after.rows, before.rows);
-  assert.equal(after.dataset, before.dataset);
+  assert.equal(after.dataset, before.dataset + 1);
   assert.deepEqual(after.view.anchor, { key: 'entry:e620', offset: 0 });
   await f.controller.jumpToEntry('missing');
   assert(f.controller.getSnapshot().transcript.error);

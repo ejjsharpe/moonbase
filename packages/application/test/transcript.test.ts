@@ -725,7 +725,6 @@ test('history traverses every entry backward and forward across summary eviction
     assert.equal(seen.size, 2400, direction);
     const state = f.controller.getSnapshot().transcript;
     assert.equal(state[direction], false);
-    assert.equal(state.atLatest, direction === 'later');
     assert.equal(state[direction === 'earlier' ? 'later' : 'earlier'], true);
   }
   assert.equal(f.controller.getSnapshot().transcript.entries.at(-1)!.id, 'e2399');
@@ -808,27 +807,30 @@ test('disjoint latest updates preserve an around-entry anchor and bridge to late
     await f.controller.showLater();
   }
   assert.equal(seen.size, 640);
+  // Back at the newest entry, the reader following the end follows the live edge again.
+  f.controller.setTranscriptView({ anchor: null, expanded: ['thought'] });
   assert.equal(f.controller.getSnapshot().transcript.atLatest, true);
 });
 
-test('held older navigation keeps its captured window through a disjoint latest snapshot', async (t) => {
+test('a page read whose records a following snapshot replaced is dropped', async (t) => {
   const f = await transcriptController(t, 64);
   const entered = Promise.withResolvers<void>(),
     held = Promise.withResolvers<void>();
-  let upper: string | undefined;
+  let holding = true;
   f.handlers.set('getChatHistoryAround', async (_input, _signal, fallback) => {
-    const page = fallback() as { upperEntryId: string };
-    if (!upper) {
-      upper = page.upperEntryId;
+    const page = fallback();
+    if (holding) {
+      holding = false;
       entered.resolve();
       await held.promise;
     }
     return page;
   });
   try {
+    // A short conversation pages earlier while its reader still follows the live edge.
     const reading = f.controller.showEarlier();
     await entered.promise;
-    assert.equal(upper, 'e63');
+    const { dataset } = f.controller.getSnapshot().transcript;
     appendTranscriptEntries(f, 128);
     f.publish({
       ...f.fixture.snapshot,
@@ -838,71 +840,26 @@ test('held older navigation keeps its captured window through a disjoint latest 
     });
     held.resolve();
     await reading;
-    const seen = { earlier: new Set<string>(), later: new Set<string>() };
-    for (const direction of ['earlier', 'later'] as const) {
-      for (let step = 0; step < 80; step++) {
-        const state = f.controller.getSnapshot().transcript;
-        state.entries.forEach((entry) => seen[direction].add(entry.id));
-        const positions = state.entries.map((entry) =>
-          f.entries.findIndex((value) => value.id === entry.id),
-        );
-        assert.deepEqual(
-          positions,
-          [...positions].sort((a, b) => a - b),
-          'canonical window order',
-        );
-        assert.equal(state.error, null);
-        assertBounds(state);
-        if (!state[direction]) break;
-        await (direction === 'earlier' ? f.controller.showEarlier() : f.controller.showLater());
-      }
-      assert.equal(f.controller.getSnapshot().transcript[direction], false);
-    }
+    let state = f.controller.getSnapshot().transcript;
+    assert.equal(state.dataset, dataset + 1);
+    assert.equal(state.error, null);
+    assert.equal(state.atLatest, true);
     assert.deepEqual(
-      seen.earlier,
-      new Set(f.entries.slice(0, 64).map((entry) => entry.id)),
-      'old upper bound stays fixed',
+      state.entries.map((entry) => entry.id),
+      f.entries.slice(-32).map((entry) => entry.id),
+      'the old page does not extend the new records',
     );
-    assert.equal(seen.later.size, 128);
-    assert.equal(f.controller.getSnapshot().transcript.atLatest, true);
-    assert.equal(f.controller.getSnapshot().snapshot!.transcriptBoundary, f.entries.at(-1)!.id);
+    const seen = new Set<string>();
+    for (let step = 0; step < 80 && state.earlier; step++) {
+      await f.controller.showEarlier();
+      state = f.controller.getSnapshot().transcript;
+      state.entries.forEach((entry) => seen.add(entry.id));
+      assert.equal(state.error, null);
+      assertBounds(state);
+    }
+    assert.equal(seen.size, 128);
   } finally {
     held.resolve();
-  }
-});
-
-test('older navigation captures historical mode before a loading subscriber publishes a new boundary', async (t) => {
-  const f = await transcriptController(t, 64);
-  let published = false;
-  const off = f.controller.subscribe(() => {
-    if (published || !f.controller.getSnapshot().transcript.loading) return;
-    published = true;
-    appendTranscriptEntries(f, 128);
-    f.publish({
-      ...f.fixture.snapshot,
-      entries: f.entries.slice(-32).reverse(),
-      transcriptBoundary: f.entries.at(-1)!.id,
-      olderCursor: '96',
-    });
-  });
-  try {
-    await f.controller.showEarlier();
-    assert(published);
-    const request = f.calls.find((call) => call.operation === 'getChatHistoryAround')!.input as {
-      entryId: string;
-    };
-    assert.equal(request.entryId, 'e32');
-    assert.equal(f.controller.getSnapshot().transcript.atLatest, false);
-    assert(
-      f.controller
-        .getSnapshot()
-        .transcript.entries.every(
-          (entry) => f.entries.indexOf(f.entries.find((value) => value.id === entry.id)!) < 64,
-        ),
-    );
-    assert.equal(f.controller.getSnapshot().transcript.error, null);
-  } finally {
-    off();
   }
 });
 
@@ -936,6 +893,8 @@ for (const replacement of ['around', 'latest'] as const)
       try {
         const old = f.controller.showEarlier();
         await oldEntered.promise;
+        // The reader leaves the live edge, so the new snapshot leaves a gap to read.
+        f.controller.setTranscriptView({ anchor: { key: 'entry:e40', offset: 0 }, expanded: [] });
         appendTranscriptEntries(f, 128);
         f.publish({
           ...f.fixture.snapshot,
@@ -1019,7 +978,7 @@ test('held anchor restoration preserves its upper bound and relative offset thro
     assert(state.later);
     for (let step = 0; step < 30 && f.controller.getSnapshot().transcript.later; step++)
       await f.controller.showLater();
-    assert.equal(f.controller.getSnapshot().transcript.atLatest, true);
+    assert.equal(f.controller.getSnapshot().transcript.later, false);
     assert.equal(f.controller.getSnapshot().transcript.entries.at(-1)!.id, f.entries.at(-1)!.id);
     assert.equal(f.controller.getSnapshot().transcript.error, null);
   } finally {

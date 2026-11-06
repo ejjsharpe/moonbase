@@ -3,7 +3,6 @@ import type { ChatController } from '@moonbase/application/chat';
 import type { ChatTranscriptMatch, ChatTranscriptSource } from '@moonbase/contracts/chat';
 import { areJsonValuesEqual } from '@moonbase/contracts/common';
 import { getTranscriptDisclosureId } from '../../chat/transcript-source.ts';
-import { useRowState } from './transcript-row-state.ts';
 
 /**
  * The view-memory expansion ID of disclosure `id` in a row: null while it is being computed, and
@@ -103,13 +102,10 @@ export function useDisclosure({
 }) {
   const { expansion, failed: disclosureError } = useExpansionId(entryId, id);
   const revealKey = match ? JSON.stringify(match) : null;
-  /** The match the reader folded again; kept while the row is scrolled away. */
-  const [collapsedReveal, setCollapsedReveal] = useRowState<string | null>(
-    expansion && 'collapsed-reveal:' + expansion,
-    null,
-  );
+  /** The match the reader folded again. The active match's row stays mounted, so this does too. */
+  const [collapsedReveal, setCollapsedReveal] = useState<string | null>(null);
   // The fold lasts while its match is active. It ends once no match is here, and when Find reveals
-  // the match again: a row scrolled away may not have rendered the match moving on.
+  // the match again.
   if (collapsedReveal !== null && (revealKey === null || revealing)) setCollapsedReveal(null);
   const open =
     disclosureError ||

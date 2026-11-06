@@ -49,7 +49,6 @@ import { useTranscriptActions } from './transcript-actions.ts';
 import { groupBySource } from './stable-props.ts';
 import { TranscriptScroller, revealFindMatch } from './transcript-geometry.ts';
 import { createViewSaver, type ViewSaver } from './transcript-view-saving.ts';
-import { TranscriptRowState, TranscriptRowStore } from './transcript-row-state.ts';
 import { holdTranscriptSelection } from './transcript-selection.ts';
 import { transcriptStyles as styles } from './transcript-styles.ts';
 
@@ -68,7 +67,6 @@ const following = { animated: false } as const;
 /** Holds the reader's position through prepends, far-end evictions and disclosure toggles. */
 const keepPosition = { data: true, size: true } as const;
 type Paging = 'earlier' | 'later' | 'latest';
-type HistoryEdge = Exclude<Paging, 'latest'>;
 
 export function Transcript({
   controller,
@@ -103,15 +101,12 @@ export function Transcript({
     current.current = state;
   }, [state]);
   const [views] = useState(() => createViewSaver(controller));
-  const [rowStore] = useState(() => new TranscriptRowStore());
   const { notice, actions } = useTranscriptActions(native, latestState);
   const [cache] = useState(() => new MarkdownCache());
   useEffect(() => () => cache.clear(), [cache]);
   const [paging, setPaging] = useState<Paging | null>(null);
   /** The last history read, which Retry repeats. */
   const [lastPaging, setLastPaging] = useState<Paging>('earlier');
-  /** The edge whose own paging read published the history error, which it then shows inline. */
-  const [failedEdge, setFailedEdge] = useState<HistoryEdge | null>(null);
   const page = useCallback(
     (direction: Paging) => {
       const { transcript } = current.current;
@@ -125,8 +120,6 @@ export function Transcript({
       }[direction]();
       void read.finally(() => {
         setPaging(null);
-        const failed = direction !== 'latest' && !!controller.getSnapshot().transcript.error;
-        setFailedEdge(failed ? direction : null);
         if (direction === 'latest') void list.current?.scrollToEnd({ animated: false });
       });
     },
@@ -141,8 +134,6 @@ export function Transcript({
   };
 
   const status = latestState.transcript;
-  // A later read cleared the error, or replaced it with its own.
-  if (failedEdge && !status.error) setFailedEdge(null);
   const currentSnapshot = latestState.snapshot;
   const { transcript, snapshot } = state;
   const rows = transcript.rows;
@@ -177,30 +168,16 @@ export function Transcript({
   const mounted = useMountedRowKeys(rows, reading, imageSource, transcript.find.active);
   const failed = currentSnapshot && ['failed', 'uncertain'].includes(currentSnapshot.state);
   const [followingEnd, setFollowingEnd] = useState(true);
-  // An edge's paging read shows its failure at that edge, where the reader is; any other read
-  // (restoring the saved view, a jump, Jump to latest) shows its failure above the list, which
-  // may have opened at its end or virtualized that edge away.
-  let errorEdge: HistoryEdge | null = failedEdge;
-  if (!errorEdge && (paging === 'earlier' || paging === 'later')) errorEdge = paging;
+  /** Reads the saved view's missing anchor again, or repeats the last history read. */
   const retry = () => {
     // Retry is the reader's move, so it ends a held Find reveal; automatic paging leaves it.
     controller.cancelFindReveal();
     const anchor = transcript.view.anchor;
     const missing = anchor && findRowEntryId(anchor.key);
-    if (errorEdge) page(errorEdge);
-    else if (missing && !rows.some((row) => row.key === anchor!.key))
+    if (missing && !rows.some((row) => row.key === anchor!.key))
       void controller.jumpToEntry(missing);
     else page(lastPaging);
   };
-  const error = status.error && (
-    <p role="alert" {...stylex.props(styles.warning)}>
-      {status.error}{' '}
-      <Button {...stylex.props(controls.button)} onClick={retry}>
-        Retry history
-      </Button>
-    </p>
-  );
-  const renderEdgeError = (edge: HistoryEdge) => errorEdge === edge && error;
 
   const body = (
     <section aria-label="Chat conversation" {...stylex.props(styles.transcript)}>
@@ -239,7 +216,14 @@ export function Transcript({
               {notice.text}
             </p>
           )}
-          {!errorEdge && error}
+          {status.error && (
+            <p role="alert" {...stylex.props(styles.warning)}>
+              {status.error}{' '}
+              <Button {...stylex.props(controls.button)} onClick={retry}>
+                Retry history
+              </Button>
+            </p>
+          )}
           {status.observation === 'reconnecting' && (
             <p role="status" {...stylex.props(styles.small)}>
               Reconnecting. Showing the last received content; live reads and Copy wait for a fresh
@@ -288,7 +272,6 @@ export function Transcript({
                       Loading earlier…
                     </p>
                   )}
-                  {renderEdgeError('earlier')}
                   {!transcript.earlier && (
                     <p {...stylex.props(styles.small)}>Start of conversation</p>
                   )}
@@ -301,7 +284,6 @@ export function Transcript({
                       Loading later…
                     </p>
                   )}
-                  {renderEdgeError('later')}
                 </Edge>
               }
             />
@@ -320,25 +302,24 @@ export function Transcript({
   );
   return (
     <TranscriptScroller.Provider value={scroller}>
-      <TranscriptRowState.Provider value={rowStore}>
-        <StoredImages
-          native={native}
-          enabled={
-            latestState.ready &&
-            !['inactive', 'reconnecting', 'failed'].includes(latestState.transcript.observation)
-          }
-          fallback={scroller}
-          onReadingSourceChange={setImageSource}>
-          {body}
-        </StoredImages>
-      </TranscriptRowState.Provider>
+      <StoredImages
+        native={native}
+        enabled={
+          latestState.ready &&
+          !['inactive', 'reconnecting', 'failed'].includes(latestState.transcript.observation)
+        }
+        fallback={scroller}
+        onReadingSourceChange={setImageSource}>
+        {body}
+      </StoredImages>
     </TranscriptScroller.Provider>
   );
 }
 
 /**
- * The retained rows. When the application replaces them (`dataset`), the list keeps its DOM and
- * measured sizes but places the new dataset afresh (`dataKey`): at its saved anchor, or the end.
+ * The retained rows. When the application replaces them or jumps (`dataset`), the list keeps its
+ * DOM and measured sizes but places the dataset afresh (`dataKey`): at its saved anchor, or the
+ * end. Otherwise the anchor is only what the list reports back.
  */
 function TranscriptList({
   list,
@@ -403,17 +384,6 @@ function TranscriptList({
     onFollowingChange(ref.getState().isFollowingEnd);
     return ref.getState().listen('isFollowingEnd', onFollowingChange);
   }, [list, onFollowingChange]);
-  // Anchors the application supplies to a placed dataset (around-entry navigation) scroll to their
-  // row; a new dataset is placed at its anchor by the list. An active Find match is revealed below.
-  const anchor = transcript.view.anchor;
-  useLayoutEffect(() => {
-    const ref = list.current;
-    if (!anchor || !views.receive(anchor) || !ref || !isReady()) return;
-    const { find } = current.current;
-    if (find.revealing && find.active && getEntryRowKey(find.active.source.entryId) === anchor.key)
-      return;
-    void ref.scrollToKey({ key: anchor.key, animated: false, viewOffset: -anchor.offset });
-  }, [anchor, list, views, isReady]);
   // A newly revealed Find match: scrolling to its row releases following, then the match itself
   // is revealed inside it. A match rendered later is revealed by its part.
   const { active: findActive, revealing: findRevealing } = transcript.find;
@@ -444,20 +414,25 @@ function TranscriptList({
   );
   useEffect(() => () => cancelAnimationFrame(frame.current), []);
   // The list reports reaching an edge once; one reached while history was loading pages when
-  // loading settles. A failed read waits for Retry.
+  // loading settles. A failed read waits for Retry. Paging saves where the reader is first, so
+  // the application knows whether they still follow while the page reads.
   const { loading, earlier, later, error } = transcript;
   const pageEarlier = useCallback(() => {
-    if (!current.current.error) onPage('earlier');
-  }, [onPage]);
+    if (current.current.error) return;
+    save();
+    onPage('earlier');
+  }, [onPage, save]);
   const pageLater = useCallback(() => {
-    if (!current.current.error) onPage('later');
-  }, [onPage]);
+    if (current.current.error) return;
+    save();
+    onPage('later');
+  }, [onPage, save]);
   useEffect(() => {
     const state = list.current?.getState();
     if (loading || error || !state || !isReady()) return;
-    if (earlier && state.isNearStart) onPage('earlier');
-    else if (later && state.isNearEnd) onPage('later');
-  }, [loading, error, earlier, later, list, onPage, isReady]);
+    if (earlier && state.isNearStart) pageEarlier();
+    else if (later && state.isNearEnd) pageLater();
+  }, [loading, error, earlier, later, list, pageEarlier, pageLater, isReady]);
   const alwaysRender = useMemo(() => ({ keys: mounted }), [mounted]);
   return (
     <LegendList<TranscriptRow>

@@ -848,7 +848,7 @@ test('incomplete/unknown/oversized code remains readable and copyable; late refe
   await expect(live.locator('img')).toHaveCount(0);
 });
 
-test('Retry repeats a failed earlier read from the start of the list', async ({ page }) => {
+test('Retry repeats a failed earlier read', async ({ page }) => {
   await open(page);
   await page.evaluate(() => {
     const client = window.demo.chat.dependencies.chat,
@@ -865,7 +865,8 @@ test('Retry repeats a failed earlier read from the start of the list', async ({ 
       return original(operation, input, options) as never;
     };
   });
-  const retry = transcriptList(page).getByRole('button', { name: 'Retry history', exact: true });
+  const alert = page.getByRole('alert').filter({ hasText: 'Retry history' }),
+    retry = alert.getByRole('button', { name: 'Retry history', exact: true });
   await transcriptList(page).hover();
   await expect
     .poll(async () => {
@@ -873,7 +874,8 @@ test('Retry repeats a failed earlier read from the start of the list', async ({ 
       return retry.isVisible();
     })
     .toBe(true);
-  await expect(transcriptList(page).getByRole('alert')).toBeVisible();
+  // History errors show above the list, out of reach of scrolling and virtualization.
+  await expect(alert).toBeInViewport();
   await retry.click();
   await expect(retry).toHaveCount(0);
   const reads = await page.evaluate(() =>

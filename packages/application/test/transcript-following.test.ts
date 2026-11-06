@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import type { ChatSnapshot } from '@moonbase/contracts/chat';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { transcriptLimits } from '@moonbase/application/chat';
-import { digest, tick, transcriptController } from './transcript-fixture.ts';
+import { digest, transcriptController } from './transcript-fixture.ts';
 
 type Fixture = Awaited<ReturnType<typeof transcriptController>>;
 
@@ -89,61 +89,7 @@ test('a reading anchor saved during an earlier read keeps the reader in history'
   }
 });
 
-test('a page read keeps following off when the reader leaves no anchor during it', async (t) => {
-  const f = await transcriptController(t, 64);
-  const hold = holdAroundRead(f);
-  try {
-    const reading = f.controller.showEarlier();
-    await hold.entered;
-    f.controller.setTranscriptView({ anchor: null, expanded: [] });
-    assert.equal(f.controller.getSnapshot().transcript.atLatest, false);
-    const dataset = f.controller.getSnapshot().transcript.dataset;
-    // A latest snapshot during the read must not replace the records the page extends.
-    publishDisjointLatest(f, 128);
-    hold.release();
-    await reading;
-    const state = f.controller.getSnapshot().transcript;
-    assert.equal(state.error, null);
-    assert.equal(state.dataset, dataset);
-    // The page extended the original records rather than the snapshot's.
-    assert.deepEqual(
-      state.entries.map((entry) => entry.id),
-      f.entries.slice(64 - state.entries.length, 64).map((entry) => entry.id),
-    );
-    assert(state.entries.length > 32);
-    assert(state.entries.every(isOriginal(f, 64)));
-    // The requested follow waits for history to reach the newest entry.
-    assert.equal(state.atLatest, false);
-    assert(state.later);
-    for (let step = 0; step < 10 && f.controller.getSnapshot().transcript.later; step++)
-      await f.controller.showLater();
-    assert.equal(f.controller.getSnapshot().transcript.atLatest, true);
-  } finally {
-    hold.release();
-  }
-});
-
-test('a page read applies a follow requested during it once the read reaches the edge', async (t) => {
-  const f = await transcriptController(t, 640);
-  await f.controller.jumpToEntry('e600');
-  assert.equal(f.controller.getSnapshot().transcript.later, true);
-  const hold = holdAroundRead(f);
-  try {
-    const reading = f.controller.showLater();
-    await hold.entered;
-    f.controller.setTranscriptView({ anchor: null, expanded: [] });
-    assert.equal(f.controller.getSnapshot().transcript.atLatest, false);
-    hold.release();
-    await reading;
-    const state = f.controller.getSnapshot().transcript;
-    assert.equal(state.later, false);
-    assert.equal(state.atLatest, true);
-  } finally {
-    hold.release();
-  }
-});
-
-test('a failed page read releases its hold on following', async (t) => {
+test('a failed page read leaves following as it was', async (t) => {
   const f = await transcriptController(t, 640);
   f.handlers.set('getChatHistoryAround', async () => {
     throw new ApplicationError({ code: 'Unavailable', message: 'history unavailable' });
@@ -256,47 +202,5 @@ test('an earlier page that evicts the newest records stops following', async (t)
   assert.equal(state.dataset, dataset);
   assert.equal(state.entries[0]!.id, oldest);
   assert(state.later);
-  assert.equal(state.atLatest, false);
-});
-
-test('budget eviction during an earlier page read keeps the oldest rows the reader is at', async (t) => {
-  const f = await transcriptController(t, 2400);
-  while (
-    f.controller.getSnapshot().transcript.entries.length + 32 <=
-    transcriptLimits.summaryRecords
-  )
-    await f.controller.showEarlier();
-  let state = f.controller.getSnapshot().transcript;
-  assert.equal(state.view.anchor, null, 'no anchor saved yet');
-  const oldest = state.entries.slice(0, 10).map((entry) => entry.id);
-  let release!: () => void,
-    reading = false;
-  const held = new Promise<void>((resolve) => (release = resolve));
-  f.handlers.set('getChatHistoryAround', async (_input, _signal, fallback) => {
-    reading = true;
-    await held;
-    return fallback();
-  });
-  const paging = f.controller.showEarlier();
-  for (let step = 0; step < 100 && !reading; step++) await tick();
-  // New entries continue the records during the read and push them past the budget.
-  // Fewer than a snapshot's 32 entries, so it still continues the records.
-  const added = transcriptLimits.summaryRecords - state.entries.length + 4;
-  assert(added < 32);
-  publishDisjointLatest(f, 2400 + added);
-  state = f.controller.getSnapshot().transcript;
-  assert.equal(state.error, null);
-  assert(state.entries.length <= transcriptLimits.summaryRecords);
-  assert.deepEqual(
-    state.entries.slice(0, 10).map((entry) => entry.id),
-    oldest,
-    'the rows at the edge being read stay',
-  );
-  assert(state.later);
-  release();
-  await paging;
-  state = f.controller.getSnapshot().transcript;
-  assert(state.entries.some((entry) => entry.id === oldest[0]));
-  assert.notEqual(state.entries[0]!.id, oldest[0], 'the page read extended the older end');
   assert.equal(state.atLatest, false);
 });

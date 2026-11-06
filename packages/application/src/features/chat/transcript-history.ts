@@ -10,11 +10,6 @@ import { sameTarget } from './saved.ts';
 import { makeTranscriptFailure } from './transcript-read.ts';
 
 export type HistoryDirection = 'earlier' | 'later';
-/**
- * A page read's hold on following: the edge it reads at, where the reader is, whether the reader
- * followed before it, and any later request.
- */
-export type FollowHold = { direction: HistoryDirection; wasFollowing: boolean; follow?: boolean };
 type AroundPage = ChatOutput<'getChatHistoryAround'>;
 type Navigation = {
   entryId: string;
@@ -142,44 +137,20 @@ export function reuseSnapshot(
  */
 export class TranscriptHistory {
   records: ChatEntry[] = [];
+  /** Changes when the records are replaced, or a jump places them afresh. */
   dataset = 0;
-  private follows: boolean;
-  /** Set while a page read holds following off; see holdFollowing. */
-  private hold?: FollowHold;
+  /**
+   * The reader follows the live edge, so a snapshot that skips past the retained records replaces
+   * them. A reader of history keeps their records and the gap shows as later history.
+   */
+  following: boolean;
   private navigation?: Navigation;
   /** Legacy paging: each page or snapshot's oldest entry ID maps to its older-page cursor. */
   private olderCursors = new Map<string, string | null>();
   private olderEnd = true;
   private newerEnd = true;
   constructor(following: boolean) {
-    this.follows = following;
-  }
-  /**
-   * The reader follows the live edge, so a snapshot that skips past the retained records replaces
-   * them. A reader of history keeps their records and the gap shows as later history. Setting it
-   * supersedes a held page read's request.
-   */
-  get following() {
-    return this.follows;
-  }
-  set following(value: boolean) {
-    this.hold = undefined;
-    this.follows = value;
-  }
-  /**
-   * Holds following off for a page read, so no snapshot replaces the records it extends. The
-   * reader's requests during the read apply when it settles.
-   */
-  holdFollowing(direction: HistoryDirection): FollowHold {
-    const hold: FollowHold = { direction, wasFollowing: this.follows };
-    this.following = false;
-    this.hold = hold;
-    return hold;
-  }
-  /** The reader asks to follow or to read history; following waits for the newest entry. */
-  requestFollowing(follow: boolean) {
-    if (this.hold) this.hold.follow = follow;
-    else if (!follow || this.newerEnd) this.following = follow;
+    this.following = following;
   }
   /** Bytes the bounds count for navigation state beyond the records themselves. */
   get navigationState() {
@@ -304,17 +275,6 @@ export class TranscriptHistory {
     else this.replaceRecords(entries);
     this.newerEnd = true;
   }
-  /**
-   * Ends a page read's hold, unless something since set following. Records that reach the newest
-   * stored entry follow if the reader asked to during the read, or else if they were following or
-   * moved later to them.
-   */
-  settleMove(hold: FollowHold, direction: HistoryDirection) {
-    if (this.hold !== hold) return;
-    this.hold = undefined;
-    if (this.newerEnd && (hold.follow ?? (hold.wasFollowing || direction === 'later')))
-      this.follows = true;
-  }
   /** Drops records and navigation before an explicit read of the latest snapshot. */
   resetToLatest() {
     this.replaceRecords([]);
@@ -322,15 +282,13 @@ export class TranscriptHistory {
   }
   /**
    * Picks a record to evict for the summary budget, never the pinned anchor row. A page read in
-   * `direction` evicts from the end it moves away from. Any other growth evicts away from a page
-   * read still in flight (the reader is at its edge, maybe before saving an anchor there), else
-   * from the end farther from the anchor, or the oldest when the reader is at the live edge, so
-   * the rows the reader sees stay. Evicting the newest records stops following: the history no
-   * longer reaches the live edge. Returns undefined when nothing can be evicted.
+   * `direction` evicts from the end it moves away from. Any other growth evicts from the end
+   * farther from the anchor, or the oldest when the reader is at the live edge, so the rows the
+   * reader sees stay. Evicting the newest records stops following: the history no longer reaches
+   * the live edge. Returns undefined when nothing can be evicted.
    */
   evictRecord(direction: HistoryDirection | undefined, pinned: string | undefined) {
     const anchor = this.records.findIndex((entry) => entry.id === pinned);
-    direction ??= this.hold?.direction;
     direction ??= anchor > (this.records.length - 1) / 2 ? 'earlier' : 'later';
     const indices = this.records.map((_, index) => index);
     if (direction === 'later') indices.reverse();
@@ -339,7 +297,7 @@ export class TranscriptHistory {
     const [removed] = this.records.splice(index, 1);
     if (direction === 'earlier') {
       this.newerEnd = false;
-      this.follows = false;
+      this.following = false;
     } else this.olderEnd = false;
     return removed;
   }

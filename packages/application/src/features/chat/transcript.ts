@@ -35,7 +35,6 @@ import {
   checkSnapshotSources,
   reuseSnapshot,
   TranscriptHistory,
-  type FollowHold,
   type HistoryDirection,
 } from './transcript-history.ts';
 import {
@@ -674,24 +673,19 @@ export class TranscriptOwner {
     return this.move('later');
   }
   /**
-   * Pages history. The list pages on its own near an edge, so a page leaves a Find reveal alone
-   * (the reader's own input ends it) and waits for a reveal still reading around its match.
+   * Pages history. The list pages on its own near an edge, so a page leaves a Find reveal alone;
+   * the reader's own input ends it.
    */
   private move(direction: HistoryDirection): Promise<void> {
-    const revealing = FiberHandle.getUnsafe(this.reveal);
-    if (Option.isSome(revealing))
-      return joinFiber(revealing.value).then(() => this.move(direction));
     const pending = FiberMap.getUnsafe(this.jobs, historyJob);
     if (Option.isSome(pending) && !this.restoringView) return joinFiber(pending.value);
     if (!this.isCurrent() || !this.state[direction])
       return Option.isSome(pending) ? joinFiber(pending.value) : Promise.resolve();
     this.cancelViewRestore();
     this.restorePending = false;
-    // Keep the records the page extends before loading can notify a subscriber.
-    const hold = this.history.holdFollowing(direction);
-    return this.runJob(historyJob, this.readPage(direction, hold), { replace: true });
+    return this.runJob(historyJob, this.readPage(direction), { replace: true });
   }
-  private readPage(direction: HistoryDirection, hold: FollowHold): Work {
+  private readPage(direction: HistoryDirection): Work {
     return Effect.gen({ self: this }, function* () {
       const history = this.history,
         target = this.dependencies.target;
@@ -701,16 +695,13 @@ export class TranscriptOwner {
       } else if (direction === 'earlier') {
         const cursor = history.findOlderCursor(this.snapshot?.olderCursor);
         if (cursor) {
+          const dataset = history.dataset;
           const page = yield* this.call('getChatHistory', { target, cursor });
-          history.applyOlderPage(page, cursor, target);
+          if (history.dataset === dataset) history.applyOlderPage(page, cursor, target);
         }
       } else history.applyLatestEntries(this.snapshot?.entries ?? []);
-      history.settleMove(hold, direction);
       this.publish(direction);
-    }).pipe(
-      // A failed or interrupted read releases its hold too.
-      Effect.ensuring(Effect.sync(() => this.history.settleMove(hold, direction))),
-    );
+    });
   }
   private readAround(
     entryId: string,
@@ -719,17 +710,21 @@ export class TranscriptOwner {
     replace = false,
   ): Work {
     return Effect.gen({ self: this }, function* () {
-      const target = this.dependencies.target;
+      const target = this.dependencies.target,
+        dataset = this.history.dataset;
       const page = yield* this.call('getChatHistoryAround', {
         target,
         entryId,
         ...(cursor ? { cursor } : {}),
       });
+      // A snapshot that replaced the records during the read (the reader follows the live edge)
+      // leaves the page nothing to extend.
+      if (!replace && this.history.dataset !== dataset) return;
       this.history.checkAroundPage(page, target, { entryId, cursor, direction });
       this.history.applyAroundPage(page, direction, replace, this.snapshot?.entries[0]?.id);
     });
   }
-  /** Shows `entryId`, reading history around it unless it is retained. */
+  /** Shows `entryId`, reading history around it unless it is retained. The list places it afresh. */
   jumpToEntry(entryId: string, resetView = true) {
     if (resetView) {
       this.restorePending = false;
@@ -745,7 +740,7 @@ export class TranscriptOwner {
             'Unavailable',
           );
         yield* this.readAround(entryId, undefined, 'earlier', true);
-      }
+      } else if (resetView) this.history.dataset++;
       if (resetView)
         this.setView({
           anchor: { key: getEntryRowKey(entryId), offset: 0 },
@@ -791,9 +786,9 @@ export class TranscriptOwner {
     const captured = this.rememberView(view);
     this.cancelViewRestore();
     this.restorePending = false;
-    // A reading anchor stops following; no anchor or a live-edge row follows once history reaches
-    // the newest entry. During a page read the request waits for the read to settle.
-    this.history.requestFollowing(!captured.anchor || isLiveRowKey(captured.anchor.key));
+    // No anchor, or a live-edge row, follows once history reaches the newest entry.
+    this.history.following =
+      (!captured.anchor || isLiveRowKey(captured.anchor.key)) && !this.history.hasLater();
     this.publish();
   }
   private requireContentReads() {

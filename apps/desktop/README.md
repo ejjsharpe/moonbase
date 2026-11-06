@@ -54,7 +54,7 @@ An optional absolute `sshExecutable` overrides `/usr/bin/ssh`. Start the [Pi hos
 
 ## Transcript
 
-The transcript is a [Legend List](https://legendapp.com/open-source/list/), which owns scrolling: virtualization, following the end, holding position when history is prepended or rows resize, and scrolling to a row. The application publishes the rows, keyed `entry:<id>`, `live:<submissionId>` and `tool:<taskId>`, and the renderer passes those keys to the list. A saved reading position is what the list reports as its first visible row: the row key and its offset. Rows unmount while scrolled away, so state the reader can see lives outside them: in view memory (expanded disclosures and unfolded code) or the transcript's row store (a Find match the reader folded). The rows a selection spans, the focused row, the image viewer's row and the active Find match stay mounted.
+The transcript is a [Legend List](https://legendapp.com/open-source/list/), which owns scrolling: virtualization, following the end, holding position when history is prepended or rows resize, and scrolling to a row. The application publishes the rows, keyed `entry:<id>`, `live:<submissionId>` and `tool:<taskId>`, and the renderer passes those keys to the list. A saved reading position is what the list reports as its first visible row: the row key and its offset. The list reads it only when it places a new `dataset` (opening, or a jump). Rows unmount while scrolled away, so expanded disclosures and unfolded code live in view memory. The rows a selection spans, the focused row, the image viewer's row and the active Find match stay mounted.
 
 ## Transcript images
 
