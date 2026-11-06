@@ -192,11 +192,15 @@ function Demo() {
     </main>
   );
 }
+// `&long` or `&long=<count>` reads a long conversation (2,000 entries by default).
+const longTranscript = new URLSearchParams(location.search).get('long');
+if (transcriptDemo && longTranscript !== null)
+  await transcriptDemo.long(Number(longTranscript) || undefined);
 if (transcriptDemo && new URLSearchParams(location.search).has('reading')) {
   await firstApplication.chat!.start();
   await firstApplication.chat!.select(chat.target);
   firstApplication.chat!.setTranscriptView({
-    anchor: { entryId: 'reading-179', partId: 'm0.b0', offset: 0 },
+    anchor: { key: 'entry:reading-179', offset: 0 },
     expanded: [],
   });
 }

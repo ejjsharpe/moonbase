@@ -133,8 +133,12 @@ function locateFindRanges(root: Element, source: string, query: string, starts: 
 function isSameText(rendered: string, source: string | undefined) {
   return rendered === source || (rendered === '\n' && source === '\r');
 }
-/** Adds ranges to the named CSS custom highlight until the returned cleanup runs. */
-function paintFindRanges(name: 'find-match' | 'find-active', ranges: Range[]) {
+/**
+ * Adds ranges to the named CSS custom highlight until the returned cleanup runs. The ranges are
+ * static: the list moves rows' containers to keep them in DOM order, which would collapse live
+ * ranges, and the part repaints its own content changes.
+ */
+function paintFindRanges(name: 'find-match' | 'find-active', ranges: StaticRange[]) {
   if (!ranges.length) return () => {};
   const highlight = CSS.highlights.get(name) ?? new Highlight();
   highlight.priority = name === 'find-active' ? 1 : 0;
@@ -248,7 +252,7 @@ export function useFindHighlight({
       .filter((start) => start !== match?.start);
     return match ? [match.start, ...starts] : starts;
   }, [matches, partId, match]);
-  const activeRange = useRef<Range | null>(null),
+  const activeRange = useRef<StaticRange | null>(null),
     mark = useRef<HTMLElement>(null);
   const [unlocated, setUnlocated] = useState<typeof match>(null);
   /** The active match once highlighted in place. */
@@ -261,8 +265,9 @@ export function useFindHighlight({
     const paint = () => {
       clear();
       // Rendered text can be mapped only when it renders the original source from its start.
-      const ranges =
-        frozen || shown.retainedFrom ? null : locateFindRanges(root, shown.text, query, findStarts);
+      const ranges = (
+        frozen || shown.retainedFrom ? null : locateFindRanges(root, shown.text, query, findStarts)
+      )?.map((range) => range && new StaticRange(range));
       const active = (match && ranges?.[0]) || null;
       activeRange.current = active;
       const others = ranges?.slice(match ? 1 : 0).filter((range) => !!range) ?? [];

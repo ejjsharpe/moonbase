@@ -5,11 +5,9 @@ import type {
   ChatTarget,
   ChatTranscriptPart,
 } from '@moonbase/contracts/chat';
-import { chatPageSize } from '@moonbase/contracts/chat';
 import { areJsonValuesEqual } from '@moonbase/contracts/common';
 import { sameTarget } from './saved.ts';
 import { makeTranscriptFailure } from './transcript-read.ts';
-import { transcriptLimits } from './transcript-state.ts';
 
 export type HistoryDirection = 'earlier' | 'later';
 type AroundPage = ChatOutput<'getChatHistoryAround'>;
@@ -134,13 +132,18 @@ export function reuseSnapshot(
 }
 
 /**
- * The retained history records and the displayed window over them. Records are newest first; the
- * window shows `displayedRows` records from `start`, and is published oldest first.
+ * The retained history records, newest first and published oldest first. Earlier and later reads
+ * extend them by a page; a jump replaces them, which bumps `dataset`.
  */
 export class TranscriptHistory {
   records: ChatEntry[] = [];
+  /** Changes when the records are replaced, or a jump places them afresh. */
+  dataset = 0;
+  /**
+   * The reader follows the live edge, so a snapshot that skips past the retained records replaces
+   * them. A reader of history keeps their records and the gap shows as later history.
+   */
   following: boolean;
-  private start = 0;
   private navigation?: Navigation;
   /** Legacy paging: each page or snapshot's oldest entry ID maps to its older-page cursor. */
   private olderCursors = new Map<string, string | null>();
@@ -156,65 +159,53 @@ export class TranscriptHistory {
   findRecord(entryId: string | undefined) {
     return this.records.find((entry) => entry.id === entryId);
   }
-  listWindow() {
-    return this.records.slice(this.start, this.start + transcriptLimits.displayedRows).reverse();
+  listRecords() {
+    return this.records.slice().reverse();
   }
-  hasEarlier(shown: number) {
-    return this.start + shown < this.records.length || !this.olderEnd;
+  hasEarlier() {
+    return !this.olderEnd;
   }
+  /** Whether newer stored history exists past the retained records. */
   hasLater() {
-    return this.start > 0 || !this.newerEnd;
+    return !this.newerEnd;
   }
-  get windowStart() {
-    return this.start;
+  private replaceRecords(entries: ChatEntry[]) {
+    if (this.records.length) this.dataset++;
+    this.records = entries;
+    this.navigation = undefined;
   }
-  /** Applies an accepted snapshot: following replaces the live edge; reading keeps its window. */
+  /**
+   * Applies an accepted snapshot. Records that reach the live edge take its new entries; otherwise
+   * a following reader jumps to the snapshot and a history reader keeps their records.
+   */
   acceptSnapshot(entries: ChatEntry[], old: ChatSnapshot | undefined, input: ChatSnapshot) {
-    if (this.following) {
-      const continuous = entries.some(
-        (entry) =>
-          old?.entries.some((previous) => previous.id === entry.id) &&
-          this.records.some((cached) => cached.id === entry.id),
-      );
-      if (!continuous) {
-        this.records = entries;
-        this.navigation = undefined;
-      } else this.records = mergeEntries(this.records, entries, 'later');
-      // A coherent new boundary replaces the live edge; historical navigation stays independent.
-      this.start = 0;
+    const continuous = entries.some(
+      (entry) =>
+        old?.entries.some((previous) => previous.id === entry.id) &&
+        this.records.some((cached) => cached.id === entry.id),
+    );
+    if (this.following && !continuous) {
+      this.replaceRecords(entries);
+      this.olderEnd = input.olderCursor === null;
       this.newerEnd = true;
-      if (!this.navigation) this.olderEnd = input.olderCursor === null;
+    } else if (!old && !this.records.length) {
+      this.records = entries;
+      this.olderEnd = input.olderCursor === null;
+      this.newerEnd = true;
+    } else if (continuous && (this.following || this.newerEnd)) {
+      this.records = mergeEntries(this.records, entries, 'later');
+      this.newerEnd = true;
     } else {
-      this.records = (old ? this.records : entries).map((entry) =>
+      this.records = this.records.map((entry) =>
         reuseEntry(entry, entries.find((value) => value.id === entry.id) ?? entry),
       );
-      if (!old) {
-        this.olderEnd = input.olderCursor === null;
-        this.newerEnd = true;
-      } else if (old.transcriptBoundary !== input.transcriptBoundary) this.newerEnd = false;
+      if (old && old.transcriptBoundary !== input.transcriptBoundary) this.newerEnd = false;
     }
     this.rememberOlderCursor(entries, input.olderCursor);
   }
-  /** Moves the window within retained records; false when it must read the next page instead. */
-  shiftWindow(direction: HistoryDirection) {
-    if (
-      direction === 'earlier' &&
-      this.start + transcriptLimits.displayedRows < this.records.length
-    ) {
-      this.start = Math.min(
-        this.records.length - transcriptLimits.displayedRows,
-        this.start + chatPageSize,
-      );
-      return true;
-    }
-    if (direction === 'later' && this.start > 0) {
-      this.start = Math.max(0, this.start - chatPageSize);
-      return true;
-    }
-    return false;
-  }
-  /** The around-entry read that continues past the displayed edge in `direction`. */
-  findAroundRead(direction: HistoryDirection, edge: ChatEntry | undefined) {
+  /** The around-entry read that continues past the retained edge in `direction`. */
+  findAroundRead(direction: HistoryDirection) {
+    const edge = direction === 'earlier' ? this.records.at(-1) : this.records[0];
     const nav = this.navigation;
     const cursor = direction === 'earlier' ? nav?.olderCursor : nav?.newerCursor;
     const cursorEdge = direction === 'earlier' ? nav?.olderEdge : nav?.newerEdge;
@@ -240,13 +231,15 @@ export class TranscriptHistory {
       throw makeTranscriptFailure('Around-entry reply does not match its navigation boundary.');
     checkEntrySources(page.entries, target);
   }
+  /** Merges an around-entry page, or replaces the records with it for a jump. */
   applyAroundPage(
     page: AroundPage,
     direction: HistoryDirection,
     replace: boolean,
     newestLive: string | undefined,
   ) {
-    this.records = mergeEntries(replace ? [] : this.records, page.entries, direction);
+    if (replace) this.replaceRecords(mergeEntries([], page.entries, direction));
+    else this.records = mergeEntries(this.records, page.entries, direction);
     this.navigation = {
       entryId: page.entryId,
       upperEntryId: page.upperEntryId,
@@ -257,14 +250,12 @@ export class TranscriptHistory {
     };
     if (page.entries.at(-1)?.id === this.records.at(-1)?.id)
       this.olderEnd = page.olderCursor === null;
-    this.newerEnd =
-      page.newerCursor === null &&
-      page.entries[0]?.id === this.records[0]?.id &&
-      newestLive === this.records[0]?.id;
-    this.start =
-      direction === 'earlier'
-        ? Math.max(0, this.records.length - transcriptLimits.displayedRows)
-        : 0;
+    // An earlier page extends the older end only; the newer end is where it was.
+    if (replace || direction === 'later')
+      this.newerEnd =
+        page.newerCursor === null &&
+        page.entries[0]?.id === this.records[0]?.id &&
+        newestLive === this.records[0]?.id;
   }
   /** Merges a legacy older page read from `cursor`. */
   applyOlderPage(page: ChatOutput<'getChatHistory'>, cursor: string, target: ChatTarget) {
@@ -273,49 +264,42 @@ export class TranscriptHistory {
     this.records = mergeEntries(this.records, page.entries, 'earlier');
     this.rememberOlderCursor(page.entries, page.olderCursor);
     this.olderEnd = page.olderCursor === null;
-    this.start = Math.max(0, this.records.length - transcriptLimits.displayedRows);
   }
-  /** A move later that reached the newest retained record follows the live edge again. */
-  settleMove(direction: HistoryDirection) {
-    if (direction === 'later' && this.start === 0 && this.newerEnd) this.following = true;
+  /**
+   * Legacy hosts read no newer pages: later history continues with the latest snapshot's entries,
+   * or jumps to them when they don't overlap the retained records.
+   */
+  applyLatestEntries(entries: ChatEntry[]) {
+    if (entries.some((entry) => this.findRecord(entry.id)))
+      this.records = mergeEntries(this.records, entries, 'later');
+    else this.replaceRecords(entries);
+    this.newerEnd = true;
   }
   /** Drops records and navigation before an explicit read of the latest snapshot. */
   resetToLatest() {
-    this.records = [];
-    this.start = 0;
-    this.navigation = undefined;
+    this.replaceRecords([]);
     this.following = true;
   }
-  /** The displayed edge row in the direction moved: oldest shown, or newest shown. */
-  findWindowEdge(direction: HistoryDirection) {
-    const oldest = Math.min(this.records.length, this.start + transcriptLimits.displayedRows) - 1;
-    return this.records[direction === 'earlier' ? oldest : this.start];
-  }
   /**
-   * Picks a record to evict for the summary budget: outside the window first, from the end the
-   * move is leaving, never the pinned anchor. Returns undefined when nothing can be evicted.
+   * Picks a record to evict for the summary budget, never the pinned anchor row. A page read in
+   * `direction` evicts from the end it moves away from. Any other growth evicts from the end
+   * farther from the anchor, or the oldest when the reader is at the live edge, so the rows the
+   * reader sees stay. Evicting the newest records stops following: the history no longer reaches
+   * the live edge. Returns undefined when nothing can be evicted.
    */
-  evictRecord(direction: HistoryDirection, pinned: string | undefined) {
+  evictRecord(direction: HistoryDirection | undefined, pinned: string | undefined) {
+    const anchor = this.records.findIndex((entry) => entry.id === pinned);
+    direction ??= anchor > (this.records.length - 1) / 2 ? 'earlier' : 'later';
     const indices = this.records.map((_, index) => index);
     if (direction === 'later') indices.reverse();
-    const index =
-      indices.find(
-        (index) =>
-          pinned !== this.records[index].id &&
-          (index < this.start || index >= this.start + transcriptLimits.displayedRows),
-      ) ?? indices.find((index) => pinned !== this.records[index].id);
+    const index = indices.find((index) => pinned !== this.records[index].id);
     if (index === undefined) return undefined;
     const [removed] = this.records.splice(index, 1);
-    if (index < this.start) this.start--;
-    if (direction === 'earlier') this.newerEnd = false;
-    else this.olderEnd = false;
+    if (direction === 'earlier') {
+      this.newerEnd = false;
+      this.following = false;
+    } else this.olderEnd = false;
     return removed;
-  }
-  clampWindow() {
-    this.start = Math.max(
-      0,
-      Math.min(this.start, Math.max(0, this.records.length - transcriptLimits.displayedRows)),
-    );
   }
   /**
    * Resumes legacy paging from the oldest cached checkpoint, so records evicted from the older end
@@ -326,7 +310,7 @@ export class TranscriptHistory {
       const cursor = this.olderCursors.get(this.records[index].id);
       if (cursor !== undefined) return cursor;
     }
-    // An empty window pages from the snapshot's own older cursor.
+    // Empty records page from the snapshot's own older cursor.
     return this.records.length ? null : (snapshotCursor ?? null);
   }
   clear() {

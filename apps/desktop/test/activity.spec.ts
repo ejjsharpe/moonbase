@@ -1,3 +1,4 @@
+import { scrollToStart } from './transcript-list.ts';
 import { test, expect, type Page } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -96,131 +97,6 @@ for (const source of ['durable', 'live'] as const)
     await page.screenshot({ path: testInfo.outputPath('failed-first-manifest.png') });
     await expect(origin).toContainText('read · failed.txt · failed');
   });
-for (const input of ['pointer', 'Enter', 'Space'] as const)
-  for (const outcome of ['success', 'error'] as const)
-    test(`activity ${input} keeps pre-input toggle intent and new reading anchor through held manifest ${outcome}`, async ({
-      page,
-    }) => {
-      await open(page);
-      await page.evaluate(async () => {
-        await window.demo.transcript!.live(
-          'Live reading\n\n'.repeat(80),
-          Array.from({ length: 5 }, (_, index) => `Output ${index}\n` + 'line\n'.repeat(80)),
-        );
-        const controller = window.demo.application.chat!;
-        await controller.jumpToLatest();
-        const source = controller.getSnapshot().snapshot!.run!.transcript!.source;
-        await controller.loadTranscriptManifest(source);
-        await controller.loadTranscriptManifest(source);
-        const part = controller
-          .getSnapshot()
-          .transcript.manifest!.parts.find((part) => part.partId === 'm0.b5')!;
-        if (source.kind !== 'live') throw Error('Expected live source');
-        controller.setTranscriptView({
-          anchor: {
-            backendId: controller.backendId,
-            source,
-            partId: part.partId,
-            bytes: part.bytes,
-            revision: part.revision,
-            offset: 16,
-          },
-          expanded: ['keep-another-disclosure'],
-        });
-      });
-      await expect(live(page).locator('[data-transcript-part="m0.b5"] pre')).toBeVisible();
-      await page.getByRole('button', { name: 'Close Chat panel', exact: true }).click();
-      await page.evaluate((outcome) => {
-        const original = window.demo.chat.dependencies.chat.command;
-        const gate = Promise.withResolvers<void>();
-        Object.assign(window, {
-          releaseActivityManifest: () => gate.resolve(),
-          activityManifestHeld: false,
-        });
-        window.demo.chat.dependencies.chat.command = async (operation, input, options) => {
-          if (
-            operation === 'getChatTranscriptContent' &&
-            'source' in input &&
-            !('selection' in input)
-          ) {
-            Object.assign(window, { activityManifestHeld: true });
-            await gate.promise;
-            if (outcome === 'error') throw Error('Controlled manifest failure');
-          }
-          return original(operation, input, options) as never;
-        };
-      }, outcome);
-      await page.getByRole('button', { name: 'Open Chat panel', exact: true }).click();
-      await expect
-        .poll(() =>
-          page.evaluate(
-            () =>
-              (window as typeof window & { activityManifestHeld: boolean }).activityManifestHeld,
-          ),
-        )
-        .toBe(true);
-      const button = live(page).getByRole('button', { name: /^Activity/ });
-      await expect(button).toHaveAttribute('aria-expanded', 'false');
-      await button.evaluate((element) => {
-        const root = element.closest<HTMLElement>('[aria-label="Chat transcript"]')!;
-        root.scrollTop +=
-          element.getBoundingClientRect().top -
-          root.querySelector('[data-transcript-chrome]')!.getBoundingClientRect().bottom -
-          16;
-      });
-      if (input === 'pointer') await button.click();
-      else {
-        await button.focus();
-        // Settle focus-induced scrolling before testing the keyboard capture.
-        await page.evaluate(
-          () =>
-            new Promise<void>((resolve) =>
-              requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-            ),
-        );
-        await page.keyboard.press(input === 'Space' ? 'Space' : 'Enter');
-      }
-      await expect(button).toHaveAttribute('aria-expanded', 'true');
-      await expect
-        .poll(() =>
-          page.evaluate(() => {
-            const anchor = window.demo.application.chat!.getSnapshot().transcript.view.anchor;
-            return anchor?.source ? anchor.partId !== 'm0.b5' : !!anchor?.entryId;
-          }),
-        )
-        .toBe(true);
-      await button.click();
-      await expect(button).toHaveAttribute('aria-expanded', 'false');
-      const before = await page.evaluate(
-        () => window.demo.application.chat!.getSnapshot().transcript.view.anchor,
-      );
-      await page.evaluate(() =>
-        (window as typeof window & { releaseActivityManifest(): void }).releaseActivityManifest(),
-      );
-      await expect
-        .poll(() =>
-          page.evaluate(
-            () => window.demo.application.chat!.getSnapshot().transcript.manifest?.status,
-          ),
-        )
-        .toBe(outcome === 'success' ? 'partial' : 'error');
-      await page.evaluate(() =>
-        window.demo.chat.controls.receiveChat(structuredClone(window.demo.chat.snapshot)),
-      );
-      await expect(button).toHaveAttribute('aria-expanded', 'false');
-      expect(
-        await page.evaluate(
-          () => window.demo.application.chat!.getSnapshot().transcript.view.anchor,
-        ),
-      ).toEqual(before);
-      expect(
-        await page.evaluate(
-          () => window.demo.application.chat!.getSnapshot().transcript.view.expanded,
-        ),
-      ).toContain('keep-another-disclosure');
-      if (outcome === 'error')
-        await expect(page.getByRole('alert').filter({ hasText: 'Retry parts' })).toBeVisible();
-    });
 test('ordered activity stays between authored answers across manifest and history pages; exact call references alone supply failure', async ({
   page,
 }) => {
@@ -297,7 +173,11 @@ test('ordered activity stays between authored answers across manifest and histor
   const other = page.locator('[data-transcript-entry="other"]');
   await expect(other).toContainText('read · second.ts · requested · result not shown');
   await expect(other).not.toContainText('failed');
-  await page.getByRole('button', { name: 'Load earlier', exact: true }).click();
+  // Rows unmount while scrolled away, so the newest row is read before scrolling to the start.
+  await expect(page.locator('[data-transcript-entry="ambiguous"]')).toContainText(
+    'interrupted · ambiguous',
+  );
+  await scrollToStart(page);
   const origin = page.locator('[data-transcript-entry="origin"]');
   await expect(origin).toContainText('read · first.ts · failed');
   await expect(origin.getByText('Before the call', { exact: true })).toBeVisible();
@@ -307,9 +187,6 @@ test('ordered activity stays between authored answers across manifest and histor
       .locator('[data-transcript-part]')
       .evaluateAll((parts) => parts.map((part) => part.getAttribute('data-transcript-part'))),
   ).toEqual(['m0.b0', 'call', 'm0.b2']);
-  await expect(page.locator('[data-transcript-entry="ambiguous"]')).toContainText(
-    'interrupted · ambiguous',
-  );
   await expect(origin.getByRole('button', { name: /^Activity/ })).toHaveAttribute(
     'aria-expanded',
     'false',
@@ -660,7 +537,7 @@ for (const outcome of ['success', 'error'] as const)
     await update('and current appended 🌔, then another append');
     await expect(output.getByRole('alert')).toContainText('Retry content');
   });
-test('thinking/tool progress changes before completion with stable focus and expansion; group collapse survives a retained part anchor', async ({
+test('thinking/tool progress changes before completion with stable focus and expansion; group collapse survives updates', async ({
   page,
 }) => {
   await open(page);
@@ -699,24 +576,6 @@ test('thinking/tool progress changes before completion with stable focus and exp
   await expect(result.locator('pre')).toHaveText('Output first and next');
   await expect(result.locator('pre')).toBeFocused();
   expect(await page.evaluate(() => window.demo.chat.snapshot.state)).toBe('running');
-  await page.evaluate(() => {
-    const controller = window.demo.application.chat!,
-      summary = controller.getSnapshot().snapshot!.run!.transcript!,
-      part = summary.parts[1]!;
-    if (summary.source.kind !== 'live') throw Error();
-    controller.setTranscriptView({
-      anchor: {
-        backendId: controller.backendId,
-        source: summary.source,
-        partId: part.partId,
-        bytes: part.bytes,
-        revision: part.revision,
-        offset: 16,
-      },
-      expanded: [],
-    });
-  });
-  await expect(group).toHaveAttribute('aria-expanded', 'true');
   await group.click();
   await update('Thinking first and next again', 'Output first and next again');
   await expect(group).toHaveAttribute('aria-expanded', 'false');
@@ -724,36 +583,6 @@ test('thinking/tool progress changes before completion with stable focus and exp
   await row.getByRole('button', { name: 'Load more parts' }).click();
   await expect(row.getByText('Authored before', { exact: true })).toBeVisible();
   await expect(row.getByText('Authored after', { exact: true })).toBeVisible();
-});
-test('generic part navigation reveals the containing activity and preserves explicit durable group collapse', async ({
-  page,
-}) => {
-  await open(page);
-  const row = page.locator('[data-transcript-entry="reading-179"]');
-  await page.evaluate(() => {
-    const controller = window.demo.application.chat!;
-    controller.setTranscriptView({
-      anchor: { entryId: 'reading-179', partId: 'm0.b2', offset: 16 },
-      expanded: [],
-    });
-  });
-  const group = row.getByRole('button', { name: /^Activity/ });
-  await expect(group).toHaveAttribute('aria-expanded', 'true');
-  await expect(row.getByRole('region', { name: 'Recorded unified patch' })).toBeVisible();
-  await group.click();
-  await page.evaluate(() =>
-    window.demo.chat.controls.receiveChat(structuredClone(window.demo.chat.snapshot)),
-  );
-  await expect(group).toHaveAttribute('aria-expanded', 'false');
-  await page.evaluate(() => {
-    const controller = window.demo.application.chat!;
-    controller.setTranscriptView({
-      anchor: { entryId: 'reading-179', partId: 'm0.b3', offset: 16 },
-      expanded: controller.getSnapshot().transcript.view.expanded,
-    });
-  });
-  await expect(group).toHaveAttribute('aria-expanded', 'true');
-  await expect(row.getByText(/Recorded numbered diff fallback/)).toBeVisible();
 });
 test('a new exact live attempt inherits neither thought content nor the previous source expansion', async ({
   page,
@@ -821,7 +650,7 @@ test('reading a durable row in the latest window retains current live activity b
       },
     ]);
     window.demo.application.chat!.setTranscriptView({
-      anchor: { entryId: 'recent', offset: 0 },
+      anchor: { key: 'entry:recent', offset: 0 },
       expanded: [],
     });
   });
@@ -830,9 +659,6 @@ test('reading a durable row in the latest window retains current live activity b
   await row.getByRole('button', { name: /^Activity/ }).click();
   await row.getByRole('button', { name: /Output/ }).click();
   await expect(row.locator('pre')).toHaveText('Current held output');
-  expect(
-    await page.evaluate(() => window.demo.application.chat!.getSnapshot().transcript.atLatest),
-  ).toBe(false);
 });
 for (const valid of [false, true])
   test(`EOF patch source without terminal newline stays exact in Copy: ${valid ? 'valid replacement' : 'truncated replacement'}`, async ({
@@ -1022,7 +848,7 @@ for (const input of ['pointer', 'Enter', 'Space'] as const)
         view = controller.getSnapshot().transcript.view;
       controller.setTranscriptView({
         ...view,
-        anchor: { entryId: 'reading-1', partId: 'm0.b0', offset: 16 },
+        anchor: { key: 'entry:reading-1', offset: 16 },
       });
       window.demo.chat.controls.receiveChat(structuredClone(window.demo.chat.snapshot));
     });

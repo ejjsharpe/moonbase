@@ -1,22 +1,37 @@
 import {
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  type ReactElement,
+  type ReactNode,
   type RefObject,
 } from 'react';
 import { Button } from '@base-ui/react/button';
+import {
+  LegendList,
+  type LegendListRef,
+  type LegendListRenderItemProps,
+} from '@legendapp/list/react';
 import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
 import {
-  transcriptLimits,
+  findRowEntryId,
+  getEntryRowKey,
   type ChatController,
   type ChatState,
-  type TranscriptViewAnchor,
+  type TranscriptRow,
 } from '@moonbase/application/chat';
-import type { ChatEntry, ChatTranscriptSource } from '@moonbase/contracts/chat';
+import type {
+  ChatEntry,
+  ChatToolActivity,
+  ChatTranscriptMatch,
+  ChatTranscriptSource,
+} from '@moonbase/contracts/chat';
 import { areJsonValuesEqual } from '@moonbase/contracts/common';
 import type { TranscriptNative } from '../../chat/wire.ts';
 import { MarkdownCache } from './markdown-model.ts';
@@ -31,22 +46,27 @@ import { getTranscriptParts } from './transcript-parts.ts';
 import { isReadingNodePinned, subscribeReadingChanges } from './reading-pin.ts';
 import { Entry, type EntryProps } from './transcript-entry.tsx';
 import { useTranscriptActions } from './transcript-actions.ts';
-import { getAnchorKey } from './transcript-disclosure.ts';
 import { groupBySource } from './stable-props.ts';
-import { TranscriptScroller, getReadingTop } from './transcript-geometry.ts';
-import { TranscriptViewSaver, createViewSaver } from './transcript-view-saving.ts';
+import { TranscriptScroller, revealFindMatch } from './transcript-geometry.ts';
+import { createViewSaver, type ViewSaver } from './transcript-view-saving.ts';
+import { holdTranscriptSelection } from './transcript-selection.ts';
 import { transcriptStyles as styles } from './transcript-styles.ts';
-import {
-  createTranscriptScroll,
-  transitionTranscriptScroll,
-  type TranscriptScroll,
-  type TranscriptScrollEvent,
-  type TranscriptViewport,
-} from './transcript-scroll.ts';
 
-/** The application's newest window holds this many rows; live output can hide its oldest. */
-const windowRows = transcriptLimits.displayedRows;
-const controlSelector = 'button, a[href], summary, [role="button"], input, select, label';
+/** Pixels between rows (`space.xl`); the list needs a number to lay rows out. */
+const rowGap = 24;
+/**
+ * A first-render hint from the demo's measured rows (answers about 200–250px, questions about
+ * 100px); once rows render the list uses each row type's measured average.
+ */
+const estimatedRowSize = 200;
+/**
+ * Following keeps the end visible through every change: rows appending and growing, and the
+ * oldest rows evicted as new ones arrive at the record budget (not a pure append).
+ */
+const following = { animated: false } as const;
+/** Holds the reader's position through prepends, far-end evictions and disclosure toggles. */
+const keepPosition = { data: true, size: true } as const;
+type Paging = 'earlier' | 'later' | 'latest';
 
 export function Transcript({
   controller,
@@ -60,303 +80,123 @@ export function Transcript({
   /** The open Find bar's field. */
   findInput: RefObject<HTMLInputElement | null>;
 }) {
-  const root = useRef<HTMLElement>(null),
-    content = useRef<HTMLDivElement>(null);
-  const [scroll, setScroll] = useState(() =>
-      createTranscriptScroll(latestState.transcript.view.anchor),
-    ),
-    [imageSource, setImageSource] = useState<ChatTranscriptSource | null>(null),
-    [presented, setPresented] = useState(latestState);
-  const preserve = scroll.pins.live && getLiveIdentity(presented) !== getLiveIdentity(latestState);
+  const list = useRef<LegendListRef | null>(null);
+  const scroller = useMemo<RefObject<HTMLElement | null>>(
+    () => ({
+      get current() {
+        return list.current?.getScrollableNode() ?? null;
+      },
+    }),
+    [],
+  );
+  const reading = useReadingRows(scroller);
+  const [imageSource, setImageSource] = useState<ChatTranscriptSource | null>(null);
+  const [presented, setPresented] = useState(latestState);
+  // A selection in the live response holds it while the run that produced it is replaced.
+  const preserve = reading.live && getLiveIdentity(presented) !== getLiveIdentity(latestState);
   if (!preserve && presented !== latestState) setPresented(latestState);
   const state = preserve ? presented : latestState;
-  const scrollState = useRef(scroll),
-    current = useRef(state),
-    /** The scrollTop last written here, so the scroll event it causes records nothing. */
-    written = useRef<number | null>(null);
+  const current = useRef(state);
   useLayoutEffect(() => {
     current.current = state;
   }, [state]);
   const [views] = useState(() => createViewSaver(controller));
-  useEffect(() => views.flush, [views]);
-  const dispatch = useCallback(
-    function dispatch(event: TranscriptScrollEvent) {
-      const previous = scrollState.current;
-      const { state: next, instruction } = transitionTranscriptScroll(previous, event);
-      scrollState.current = next;
-      // Rendering reads only these; the anchor and intent change on every scroll.
-      if (
-        next.mode !== previous.mode ||
-        next.pins !== previous.pins ||
-        next.earlierRow !== previous.earlierRow ||
-        next.retry !== previous.retry
-      )
-        setScroll(next);
-      const element = root.current;
-      if (!element) return;
-      if (instruction.cancelReveal) controller.cancelFindReveal();
-      const write = (top: number) => {
-        const before = element.scrollTop;
-        element.scrollTop = top;
-        // Only a moved position dispatches a scroll event to fence.
-        if (element.scrollTop !== before) written.current = element.scrollTop;
-      };
-      if (instruction.scroll === 'end') write(element.scrollHeight);
-      const top =
-        instruction.scroll === 'anchor' && getAnchorTop(element, next, current.current, controller);
-      if (typeof top === 'number') {
-        write(top);
-        dispatch({ type: 'applied' });
-      }
-      if (instruction.capture)
-        dispatch({ type: 'captured', position: captureAnchor(element, controller) });
-      if (instruction.save !== undefined) views.save(instruction.save);
-      const navigation = instruction.navigate;
-      if (!navigation) return;
-      if (navigation === 'latest') {
-        views.cancel();
-        const selection = window.getSelection();
-        if (selection?.rangeCount && selection.getRangeAt(0).intersectsNode(element))
-          selection.removeAllRanges();
-      } else views.flush();
-      const pending = {
-        earlier: () => controller.showEarlier(),
-        later: () => controller.showLater(),
-        latest: () => controller.jumpToLatest(),
-        row: () => Promise.resolve(),
-      }[navigation]();
-      void pending.finally(() =>
-        requestAnimationFrame(() => {
-          if (!root.current) return;
-          views.flush();
-          dispatch({
-            type: 'navigated',
-            revision: next.revision,
-            saved: controller.getSnapshot().transcript.view.anchor,
-            viewport: getViewport(root.current, current.current),
-          });
-        }),
-      );
-    },
-    [controller, views],
-  );
-  useEffect(
-    () =>
-      subscribeReadingChanges(() => {
-        const live = root.current?.querySelector<HTMLElement>('[data-transcript-live]') ?? null;
-        const oldest = root.current?.querySelector<HTMLElement>('[data-transcript-entry]') ?? null;
-        dispatch({
-          type: 'pinned',
-          live: isReadingNodePinned(live),
-          oldest: isReadingNodePinned(oldest) ? oldest!.dataset.transcriptEntry! : null,
-        });
-      }),
-    [dispatch],
-  );
   const { notice, actions } = useTranscriptActions(native, latestState);
   const [cache] = useState(() => new MarkdownCache());
   useEffect(() => () => cache.clear(), [cache]);
-  useLayoutEffect(() => {
-    const anchor = state.transcript.view.anchor,
-      { find } = current.current.transcript;
-    // This view's own saves, and rewrites of an unchanged anchor, need no re-application.
-    if (!anchor || !views.receive(anchor)) return;
-    views.cancel();
-    const reveal =
-      find.revealing &&
-      !anchor.source &&
-      anchor.entryId === find.active?.source.entryId &&
-      anchor.partId === find.active.partId;
-    dispatch(reveal ? { type: 'reveal' } : { type: 'supplied', anchor });
-  }, [state.transcript.view.anchor, dispatch, views]);
-  const { active: findActive, revealing: findRevealing } = state.transcript.find;
-  // Declared before the resize re-anchor: a Part has already revealed a rendered match in this
-  // commit, and re-applying the previous anchor would scroll it away again.
-  useLayoutEffect(() => {
-    if (!findActive || !findRevealing) return;
-    views.cancel();
-    dispatch({ type: 'reveal' });
-  }, [findActive, findRevealing, dispatch, views]);
-  const resize = useCallback(() => {
-    if (root.current)
-      dispatch({ type: 'resized', viewport: getViewport(root.current, current.current) });
-  }, [dispatch]);
-  const hasRun = !!state.snapshot?.run;
-  // Content size changes reach the observer below; this re-anchors window changes, which can
-  // replace rows without changing the total height.
-  useLayoutEffect(resize, [
-    state.transcript.entries,
-    state.transcript.atLatest,
-    hasRun,
-    preserve,
-    resize,
-  ]);
-  useEffect(() => {
-    if (!content.current) return;
-    const observer = new ResizeObserver(resize);
-    observer.observe(content.current);
-    return () => observer.disconnect();
-  }, [resize]);
-  useEffect(() => {
-    const element = root.current;
-    if (!element) return;
-    element.addEventListener('scrollend', views.flush);
-    return () => element.removeEventListener('scrollend', views.flush);
-  }, [views]);
-  const navigate = (direction: 'earlier' | 'later', retry?: true) =>
-    dispatch({
-      type: 'navigate',
-      direction,
-      ...(retry && { retry }),
-      viewport: getViewport(root.current!, current.current),
-    });
-  const input = (device: 'wheel' | 'key' | 'pointer' | 'control', upward: boolean) =>
-    dispatch({
-      type: 'input',
-      device,
-      upward,
-      viewport: getViewport(root.current!, current.current),
-    });
-  const onScroll = () => {
-    const element = root.current!,
-      top = getAnchorTop(element, scrollState.current, current.current, controller),
-      at = (target: number | null) => target !== null && Math.abs(target - element.scrollTop) < 1;
-    const held = at(written.current) || at(top);
-    written.current = null;
-    views.deferring(() =>
-      dispatch({
-        type: 'scrolled',
-        held,
-        viewport: getViewport(element, current.current),
-      }),
-    );
+  const [paging, setPaging] = useState<Paging | null>(null);
+  /** The last history read, which Retry repeats. */
+  const [lastPaging, setLastPaging] = useState<Paging>('earlier');
+  const page = useCallback(
+    (direction: Paging) => {
+      const { transcript } = current.current;
+      if (direction !== 'latest' && (!transcript[direction] || transcript.loading)) return;
+      setLastPaging(direction);
+      setPaging(direction);
+      const read = {
+        earlier: () => controller.showEarlier(),
+        later: () => controller.showLater(),
+        latest: () => controller.jumpToLatest(),
+      }[direction]();
+      void read.finally(() => {
+        setPaging(null);
+        if (direction === 'latest') void list.current?.scrollToEnd({ animated: false });
+      });
+    },
+    [controller],
+  );
+  const jumpToLatest = () => {
+    const selection = window.getSelection(),
+      node = scroller.current;
+    if (node && selection?.rangeCount && selection.getRangeAt(0).intersectsNode(node))
+      selection.removeAllRanges();
+    page('latest');
   };
+
   const status = latestState.transcript;
   const currentSnapshot = latestState.snapshot;
-  const transcript = state.transcript,
-    snapshot = state.snapshot,
-    oldestPinned =
-      transcript.entries.length === windowRows &&
-      (transcript.view.anchor?.entryId === transcript.entries[0]?.id ||
-        scroll.pins.oldest === transcript.entries[0]?.id ||
-        (!!imageSource &&
-          !!transcript.entries[0]?.transcript &&
-          areJsonValuesEqual(transcript.entries[0].transcript.source, imageSource))),
-    live = !scroll.earlierRow && !oldestPinned && !transcript.later ? snapshot?.run : null;
-  const hiddenRow = !!live && transcript.entries.length === windowRows;
-  const entries = hiddenRow ? transcript.entries.slice(1) : transcript.entries;
+  const { transcript, snapshot } = state;
+  const rows = transcript.rows;
+  const liveTranscript = rows.findLast((row) => row.kind === 'live')?.entry.transcript;
+  const stored = useMemo(
+    () => getEntryTranscripts(transcript.entries, transcript.manifest),
+    [transcript.entries, transcript.manifest],
+  );
   const collected = useMemo(
     () =>
       collectActivityEvidence([
-        ...getEntryTranscripts(transcript.entries, transcript.manifest),
-        ...(live?.transcript
-          ? [
-              {
-                ...live.transcript,
-                parts: getTranscriptParts(live.transcript, transcript.manifest),
-              },
-            ]
+        ...stored,
+        ...(liveTranscript
+          ? [{ ...liveTranscript, parts: getTranscriptParts(liveTranscript, transcript.manifest) }]
           : []),
       ]),
-    [transcript.entries, transcript.manifest, live],
+    [stored, liveTranscript, transcript.manifest],
   );
   // Streaming rebuilds the evidence each frame; rows keep it while its states are unchanged.
   const [evidence, setEvidence] = useState(collected);
   if (evidence !== collected && !isSameActivityEvidence(evidence, collected))
     setEvidence(collected);
-  const liveEntry = useMemo<ChatEntry | null>(
-    () =>
-      live
-        ? {
-            id: 'live',
-            role: 'assistant',
-            text: live.text || 'Working…',
-            truncated: live.truncated,
-            transcript: live.transcript,
-          }
-        : null,
-    [live],
-  );
-  const getRowProps = useRowProps(transcript);
-  let liveLabel: string | undefined = live?.state;
+  let liveLabel: string | undefined;
   if (currentSnapshot && currentSnapshot.state !== 'running')
     liveLabel = snapshotLabels[currentSnapshot.state];
   if (preserve) liveLabel = 'Selected response';
-  const shared = { controller, cache, native, actions, evidence };
+  const getRowProps = useRowProps(transcript);
+  const rowContext = useMemo(
+    () => ({ shared: { controller, cache, native, actions, evidence }, getRowProps, liveLabel }),
+    [controller, cache, native, actions, evidence, getRowProps, liveLabel],
+  );
+  const mounted = useMountedRowKeys(rows, reading, imageSource, transcript.find.active);
   const failed = currentSnapshot && ['failed', 'uncertain'].includes(currentSnapshot.state);
+  const [followingEnd, setFollowingEnd] = useState(true);
+  /** Reads the saved view's missing anchor again, or repeats the last history read. */
+  const retry = () => {
+    // Retry is the reader's move, so it ends a held Find reveal; automatic paging leaves it.
+    controller.cancelFindReveal();
+    const anchor = transcript.view.anchor;
+    const missing = anchor && findRowEntryId(anchor.key);
+    if (missing && !rows.some((row) => row.key === anchor!.key))
+      void controller.jumpToEntry(missing);
+    else page(lastPaging);
+  };
+
   const body = (
-    <section
-      ref={root}
-      aria-label="Chat transcript"
-      tabIndex={0}
-      onScroll={onScroll}
-      onWheel={(event) => input('wheel', event.deltaY < 0)}
-      onKeyDown={(event) => {
-        const target = event.target;
-        if (
-          target instanceof HTMLElement &&
-          !target.closest(
-            'input, textarea, select, [contenteditable]:not([contenteditable="false"])',
-          ) &&
-          ['PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown', ' ', 'Enter'].includes(
-            event.key,
-          )
-        )
-          input(
-            'key',
-            ['PageUp', 'Home', 'ArrowUp'].includes(event.key) ||
-              (event.key === ' ' && event.shiftKey),
-          );
-      }}
-      onPointerDown={(event) => {
-        // A press on the scroller itself is on its scrollbar; touch can drag-scroll anywhere.
-        const away = event.target === event.currentTarget || event.pointerType === 'touch';
-        // Disclosure triggers change the content around the reader, so they hold its anchor.
-        const control =
-          !away && event.target instanceof Element ? event.target.closest(controlSelector) : null;
-        input(control && !control.hasAttribute('aria-expanded') ? 'control' : 'pointer', away);
-      }}
-      {...stylex.props(styles.transcript)}>
-      <div ref={content} {...stylex.props(styles.measure)}>
-        {!snapshot && (
-          <p>
-            {state.ready
-              ? 'Reading the saved chat…'
-              : 'This view is offline. Its draft and unresolved command identities are retained.'}
-          </p>
-        )}
-        <div data-transcript-chrome {...stylex.props(styles.chrome)}>
+    <section aria-label="Chat conversation" {...stylex.props(styles.transcript)}>
+      <div {...stylex.props(styles.row)}>
+        <div {...stylex.props(styles.measure)}>
           <div {...stylex.props(controls.row, styles.navigation)}>
-            <Button
-              {...stylex.props(controls.button, controls.quietButton)}
-              disabled={!state.ready || (!transcript.earlier && !hiddenRow) || transcript.loading}
-              onClick={() => navigate('earlier')}>
-              {transcript.loading ? 'Loading history…' : 'Load earlier'}
-            </Button>
             <Button
               {...stylex.props(controls.button, controls.quietButton)}
               onClick={(event) => activateChatFind(controller, event.currentTarget, findInput)}>
               Find
             </Button>
-            {transcript.later && (
-              <Button
-                {...stylex.props(controls.button, controls.quietButton)}
-                disabled={!state.ready || transcript.loading}
-                onClick={() => navigate('later')}>
-                Read later
-              </Button>
-            )}
-            {(status.view.anchor?.source ||
-              preserve ||
-              scroll.mode !== 'following' ||
-              !transcript.atLatest) && (
-              <Button
-                {...stylex.props(controls.button, controls.quietButton)}
-                onClick={() => dispatch({ type: 'latest' })}>
-                Jump to latest
-              </Button>
-            )}
           </div>
+          {!snapshot && (
+            <p>
+              {state.ready
+                ? 'Reading the saved chat…'
+                : 'This view is offline. Its draft and unresolved command identities are retained.'}
+            </p>
+          )}
           {currentSnapshot && (
             <p
               aria-label="Conversation status"
@@ -376,263 +216,440 @@ export function Transcript({
               {notice.text}
             </p>
           )}
+          {status.error && (
+            <p role="alert" {...stylex.props(styles.warning)}>
+              {status.error}{' '}
+              <Button {...stylex.props(controls.button)} onClick={retry}>
+                Retry history
+              </Button>
+            </p>
+          )}
+          {status.observation === 'reconnecting' && (
+            <p role="status" {...stylex.props(styles.small)}>
+              Reconnecting. Showing the last received content; live reads and Copy wait for a fresh
+              connection.
+            </p>
+          )}
+          {status.observation === 'failed' && (
+            <p role="alert" {...stylex.props(styles.warning)}>
+              Live updates stopped. Reopen the conversation to refresh.
+            </p>
+          )}
+          {status.observation === 'legacy' && (
+            <p {...stylex.props(styles.small)}>
+              This host updates periodically. Upgrade the host for streaming responses.
+            </p>
+          )}
+          {status.capabilities.transcript === 'legacy' && (
+            <p {...stylex.props(styles.small)}>
+              Upgrade this host for complete transcript reads and Copy. Previews remain readable.
+            </p>
+          )}
+          {preserve && (
+            <p role="status" {...stylex.props(styles.small)}>
+              The response changed. Your selection is retained; Jump to latest to read the current
+              output.
+            </p>
+          )}
         </div>
-        {status.error && (
-          <p role="alert" {...stylex.props(styles.warning)}>
-            {status.error}{' '}
-            <Button
-              {...stylex.props(controls.button)}
-              onClick={() => {
-                const missing = transcript.view.anchor;
-                if (
-                  missing &&
-                  !missing.source &&
-                  !transcript.entries.some((entry) => entry.id === missing.entryId)
-                )
-                  void controller.jumpToEntry(missing.entryId);
-                else if (scroll.retry === 'latest') dispatch({ type: 'latest' });
-                else navigate(scroll.retry, true);
-              }}>
-              Retry history
-            </Button>
-          </p>
+      </div>
+      <div {...stylex.props(styles.viewport)}>
+        {snapshot && (
+          <RowContext.Provider value={rowContext}>
+            <TranscriptList
+              list={list}
+              transcript={transcript}
+              views={views}
+              mounted={mounted}
+              selecting={reading.selecting}
+              onFollowingChange={setFollowingEnd}
+              onPage={page}
+              onReaderInput={controller.cancelFindReveal}
+              header={
+                <Edge>
+                  {paging === 'earlier' && (
+                    <p role="status" {...stylex.props(styles.small)}>
+                      Loading earlier…
+                    </p>
+                  )}
+                  {!transcript.earlier && (
+                    <p {...stylex.props(styles.small)}>Start of conversation</p>
+                  )}
+                </Edge>
+              }
+              footer={
+                <Edge>
+                  {(paging === 'later' || (transcript.later && transcript.loading)) && (
+                    <p role="status" {...stylex.props(styles.small)}>
+                      Loading later…
+                    </p>
+                  )}
+                </Edge>
+              }
+            />
+          </RowContext.Provider>
         )}
-        {status.observation === 'reconnecting' && (
-          <p role="status" {...stylex.props(styles.small)}>
-            Reconnecting. Showing the last received content; live reads and Copy wait for a fresh
-            connection.
-          </p>
+        {snapshot && (!followingEnd || transcript.later || preserve) && (
+          <Button
+            {...stylex.props(controls.button, styles.jump)}
+            disabled={paging === 'latest'}
+            onClick={jumpToLatest}>
+            Jump to latest
+          </Button>
         )}
-        {status.observation === 'failed' && (
-          <p role="alert" {...stylex.props(styles.warning)}>
-            Live updates stopped. Reopen the conversation to refresh.
-          </p>
-        )}
-        {status.observation === 'legacy' && (
-          <p {...stylex.props(styles.small)}>
-            This host updates periodically. Upgrade the host for streaming responses.
-          </p>
-        )}
-        {status.capabilities.transcript === 'legacy' && (
-          <p {...stylex.props(styles.small)}>
-            Upgrade this host for complete transcript reads and Copy. Previews remain readable.
-          </p>
-        )}
-
-        {preserve && (
-          <p role="status" {...stylex.props(styles.small)}>
-            The response changed. Your selection is retained; Jump to latest to read the current
-            output.
-          </p>
-        )}
-        {entries.map((entry) => (
-          <Entry key={'entry:' + entry.id} entry={entry} {...shared} {...getRowProps(entry)} />
-        ))}
-        {liveEntry && (
-          <Entry
-            key="live"
-            entry={liveEntry}
-            liveState={liveLabel}
-            {...shared}
-            {...getRowProps(liveEntry)}
-          />
-        )}
-        {live &&
-          !live.transcript &&
-          live.tools.map((tool) => (
-            <section key={tool.taskId} {...stylex.props(styles.message)}>
-              <strong>
-                {tool.name} · {tool.state}
-              </strong>
-              <pre tabIndex={0} {...stylex.props(styles.output)}>
-                {tool.text}
-              </pre>
-              {tool.truncated && (
-                <p {...stylex.props(styles.small)}>
-                  This host supplied a tool-output preview. Upgrade the host for complete reads.
-                </p>
-              )}
-            </section>
-          ))}
       </div>
     </section>
   );
   return (
-    <TranscriptScroller.Provider value={root}>
-      <TranscriptViewSaver.Provider value={views}>
-        <StoredImages
-          native={native}
-          enabled={
-            latestState.ready &&
-            !['inactive', 'reconnecting', 'failed'].includes(latestState.transcript.observation)
-          }
-          fallback={root}
-          onReadingSourceChange={setImageSource}>
-          {body}
-        </StoredImages>
-      </TranscriptViewSaver.Provider>
+    <TranscriptScroller.Provider value={scroller}>
+      <StoredImages
+        native={native}
+        enabled={
+          latestState.ready &&
+          !['inactive', 'reconnecting', 'failed'].includes(latestState.transcript.observation)
+        }
+        fallback={scroller}
+        onReadingSourceChange={setImageSource}>
+        {body}
+      </StoredImages>
     </TranscriptScroller.Provider>
   );
 }
 
+/**
+ * The retained rows. When the application replaces them or jumps (`dataset`), the list keeps its
+ * DOM and measured sizes but places the dataset afresh (`dataKey`): at its saved anchor, or the
+ * end. Otherwise the anchor is only what the list reports back.
+ */
+function TranscriptList({
+  list,
+  transcript,
+  views,
+  mounted,
+  selecting,
+  onFollowingChange,
+  onPage,
+  onReaderInput,
+  header,
+  footer,
+}: {
+  list: RefObject<LegendListRef | null>;
+  transcript: ChatState['transcript'];
+  views: ViewSaver;
+  mounted: string[];
+  selecting: boolean;
+  onFollowingChange(following: boolean): void;
+  onPage(direction: Paging): void;
+  /** The reader scrolled, pressed, typed or moved focus in the list. */
+  onReaderInput(): void;
+  header: ReactElement;
+  footer: ReactElement;
+}) {
+  const current = useRef(transcript);
+  useLayoutEffect(() => {
+    current.current = transcript;
+  }, [transcript]);
+  const { dataset } = transcript;
+  /** Where this dataset opens: its saved anchor's row when it has one. */
+  const [placement, setPlacement] = useState(() => findPlacement(transcript));
+  if (placement.dataset !== dataset) setPlacement(findPlacement(transcript));
+  /** The dataset the list last finished placing; until then this one isn't ready. */
+  const [readyDataset, setReadyDataset] = useState<number | null>(null);
+  const ready = readyDataset === dataset;
+  /** Saves where the reader is once scrolling ends: the first visible row, or null following. */
+  const save = useCallback(() => {
+    const ref = list.current;
+    const { view, rows, loading, later } = current.current;
+    if (!ref || !ready) return;
+    // A restoration still reading its anchor's history saves nothing over it.
+    if (view.anchor && loading && !rows.some((row) => row.key === view.anchor!.key)) return;
+    if (ref.getState().isFollowingEnd && !later) views.save(null);
+    else {
+      const anchor = ref.anchorVisibleContent({ hold: false });
+      if (anchor) views.save(anchor);
+    }
+  }, [list, views, ready]);
+  useEffect(() => {
+    const node = list.current?.getScrollableNode();
+    node?.addEventListener('scrollend', save);
+    return () => node?.removeEventListener('scrollend', save);
+  }, [list, save]);
+  useEffect(() => {
+    const node = list.current?.getScrollableNode();
+    return node ? holdTranscriptSelection(node) : undefined;
+  }, [list]);
+  useEffect(() => {
+    const ref = list.current;
+    if (!ref) return;
+    onFollowingChange(ref.getState().isFollowingEnd);
+    return ref.getState().listen('isFollowingEnd', onFollowingChange);
+  }, [list, onFollowingChange]);
+  // A newly revealed Find match, or one a jump just placed: scrolling to its row releases
+  // following, then the match itself is revealed inside it. A match rendered later is revealed by
+  // its part.
+  const { active: findActive, revealing: findRevealing } = transcript.find;
+  useLayoutEffect(() => {
+    const ref = list.current;
+    if (!findActive || !findRevealing || !ref || !ready) return;
+    void ref
+      .scrollToKey({ key: getEntryRowKey(findActive.source.entryId), animated: false })
+      .then(() => {
+        if (current.current.dataset === dataset) revealFindMatch(ref);
+      });
+  }, [findActive, findRevealing, dataset, list, ready]);
+  /**
+   * Holds a revealing Find match in view while its row grows (its part loading or unfolding): the
+   * list holds the row's top, not the match inside it. Reader input ends revealing.
+   */
+  const frame = useRef(0);
+  const holdFindReveal = useCallback(
+    ({ itemKey }: { itemKey: string }) => {
+      const { active, revealing } = current.current.find;
+      if (!revealing || !active || getEntryRowKey(active.source.entryId) !== itemKey) return;
+      cancelAnimationFrame(frame.current);
+      frame.current = requestAnimationFrame(() => {
+        if (list.current && current.current.find.revealing) revealFindMatch(list.current);
+      });
+    },
+    [list],
+  );
+  useEffect(() => () => cancelAnimationFrame(frame.current), []);
+  // The list reports reaching an edge once; one reached while history was loading pages when
+  // loading settles. A failed read waits for Retry. Paging saves where the reader is first, so
+  // the application knows whether they still follow while the page reads.
+  const { loading, earlier, later, error } = transcript;
+  const pageEarlier = useCallback(() => {
+    if (current.current.error) return;
+    save();
+    onPage('earlier');
+  }, [onPage, save]);
+  const pageLater = useCallback(() => {
+    if (current.current.error) return;
+    save();
+    onPage('later');
+  }, [onPage, save]);
+  useEffect(() => {
+    const state = list.current?.getState();
+    if (loading || error || !state || !ready) return;
+    if (earlier && state.isNearStart) pageEarlier();
+    else if (later && state.isNearEnd) pageLater();
+  }, [loading, error, earlier, later, list, pageEarlier, pageLater, ready]);
+  const alwaysRender = useMemo(() => ({ keys: mounted }), [mounted]);
+  return (
+    <LegendList<TranscriptRow>
+      ref={list}
+      role="region"
+      aria-label="Chat transcript"
+      data-transcript-list=""
+      tabIndex={0}
+      data={transcript.rows}
+      dataKey={dataset}
+      keyExtractor={getRowKey}
+      getItemType={getRowType}
+      renderItem={renderRow}
+      estimatedItemSize={estimatedRowSize}
+      {...(placement.anchor
+        ? {
+            initialScrollIndex: {
+              index: placement.index,
+              viewOffset: -placement.anchor.offset,
+            },
+          }
+        : { initialScrollAtEnd: true })}
+      maintainScrollAtEnd={!selecting && following}
+      maintainVisibleContentPosition={keepPosition}
+      alwaysRender={alwaysRender}
+      // An edge with no more history has no callback: the list gates its edge callbacks on the
+      // previous one, so an ignored call would hold back the other edge.
+      onStartReached={earlier ? pageEarlier : undefined}
+      onEndReached={later ? pageLater : undefined}
+      onUserScroll={onReaderInput}
+      onItemSizeChanged={holdFindReveal}
+      onPointerDownCapture={onReaderInput}
+      onKeyDownCapture={onReaderInput}
+      onFocusCapture={onReaderInput}
+      onReady={() => setReadyDataset(dataset)}
+      ListHeaderComponent={header}
+      ListFooterComponent={footer}
+      contentContainerStyle={{ gap: rowGap }}
+      {...stylex.props(styles.list)}
+    />
+  );
+}
+
+/** Where the saved anchor's row is in the dataset's rows; without an anchor it opens at the end. */
+function findPlacement({ dataset, view, rows }: ChatState['transcript']) {
+  const anchor = view.anchor;
+  const index = anchor ? rows.findIndex((row) => row.key === anchor.key) : -1;
+  return index >= 0 ? { dataset, anchor, index } : { dataset, anchor: null, index: -1 };
+}
+const getRowKey = (row: TranscriptRow) => row.key;
+const getRowType = (row: TranscriptRow) => (row.kind === 'entry' ? row.entry.role : row.kind);
+const renderRow = ({ item }: LegendListRenderItemProps<TranscriptRow>) => <Row row={item} />;
+
 type RowProps = Omit<EntryProps, 'entry' | 'liveState' | keyof SharedRowProps>;
 type SharedRowProps = Pick<EntryProps, 'controller' | 'cache' | 'native' | 'actions' | 'evidence'>;
+/** What every row reads from the transcript: shared props, and its own slice of state. */
+const RowContext = createContext<{
+  shared: SharedRowProps;
+  getRowProps(entry: ChatEntry): RowProps;
+  liveLabel: string | undefined;
+} | null>(null);
+
+function Row({ row }: { row: TranscriptRow }) {
+  const context = useContext(RowContext)!;
+  return (
+    <div data-transcript-row={row.key} {...stylex.props(styles.row)}>
+      <div {...stylex.props(styles.measure)}>
+        {row.kind === 'tool' ? (
+          <ToolPreview tool={row.tool} />
+        ) : (
+          <Entry
+            entry={row.entry}
+            liveState={row.kind === 'live' ? (context.liveLabel ?? row.state) : undefined}
+            {...context.shared}
+            {...context.getRowProps(row.entry)}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+function Edge({ children }: { children: ReactNode }) {
+  return (
+    <div {...stylex.props(styles.row, styles.edge)}>
+      <div {...stylex.props(styles.measure)}>{children}</div>
+    </div>
+  );
+}
+/** A legacy host's tool output preview, shown while its run is live. */
+function ToolPreview({ tool }: { tool: ChatToolActivity }) {
+  return (
+    <section {...stylex.props(styles.message)}>
+      <strong>
+        {tool.name} · {tool.state}
+      </strong>
+      <pre tabIndex={0} {...stylex.props(styles.output)}>
+        {tool.text}
+      </pre>
+      {tool.truncated && (
+        <p {...stylex.props(styles.small)}>
+          This host supplied a tool-output preview. Upgrade the host for complete reads.
+        </p>
+      )}
+    </section>
+  );
+}
+
 /** Slices transcript state per row, in values that keep their identity while unchanged. */
 function useRowProps(transcript: ChatState['transcript']) {
   const contents = useMemo(() => groupBySource(transcript.content), [transcript.content]);
   const matches = useMemo(() => groupBySource(transcript.find.matches), [transcript.find.matches]);
-  const { anchor, expanded } = transcript.view;
-  const anchorKey = useMemo(() => (anchor ? getAnchorKey(anchor) : null), [anchor]);
+  const { expanded } = transcript.view;
   const { active, revealing, query } = transcript.find;
   const { manifest, observation } = transcript;
   const offline = ['reconnecting', 'failed', 'inactive'].includes(observation);
-  return (entry: ChatEntry): RowProps => {
-    const source = entry.transcript?.source;
-    const anchored =
-      !!anchor &&
-      !!source &&
-      (anchor.source ? source.kind === 'live' : anchor.entryId === entry.id);
-    const findMatch = active && source && areJsonValuesEqual(active.source, source) ? active : null;
-    const findMatches = matches(source);
-    return {
-      manifest: manifest && source && areJsonValuesEqual(manifest.source, source) ? manifest : null,
-      anchorPart: anchored ? (anchor.partId ?? null) : null,
-      // An active Find match takes over revealing from the reading anchor.
-      anchorKey: anchored && !active ? anchorKey : null,
-      findMatch,
-      findRevealing: !!findMatch && revealing,
-      findQuery: findMatch || findMatches.length ? query : '',
-      findMatches,
-      contents: contents(source),
-      expandedIds: expanded,
-      offline,
-    };
-  };
+  return useCallback(
+    (entry: ChatEntry): RowProps => {
+      const source = entry.transcript?.source;
+      const findMatch =
+        active && source && areJsonValuesEqual(active.source, source) ? active : null;
+      const findMatches = matches(source);
+      return {
+        manifest:
+          manifest && source && areJsonValuesEqual(manifest.source, source) ? manifest : null,
+        findMatch,
+        findRevealing: !!findMatch && revealing,
+        findQuery: findMatch || findMatches.length ? query : '',
+        findMatches,
+        contents: contents(source),
+        expandedIds: expanded,
+        offline,
+      };
+    },
+    [active, revealing, query, manifest, matches, contents, expanded, offline],
+  );
+}
+
+type ReadingRows = {
+  /** The rows a noncollapsed selection in the transcript starts and ends in. */
+  selected: readonly [string, string] | null;
+  selecting: boolean;
+  focused: string | null;
+  /** The reader's focus or selection is in the live response. */
+  live: boolean;
+};
+const notReading: ReadingRows = { selected: null, selecting: false, focused: null, live: false };
+const findRowKeyOf = (node: Node | null | undefined) =>
+  (node instanceof Element ? node : node?.parentElement)?.closest<HTMLElement>(
+    '[data-transcript-row]',
+  )?.dataset.transcriptRow ?? null;
+/** Where the reader's selection and focus are in the transcript, updated on every change. */
+function useReadingRows(scroller: RefObject<HTMLElement | null>) {
+  const [reading, setReading] = useState(notReading);
+  useEffect(
+    () =>
+      subscribeReadingChanges(() => {
+        const node = scroller.current;
+        const selection = window.getSelection();
+        const range =
+          node && selection && !selection.isCollapsed && selection.rangeCount
+            ? selection.getRangeAt(0)
+            : null;
+        const selecting = !!node && !!range && range.intersectsNode(node);
+        const start = selecting ? findRowKeyOf(range!.startContainer) : null,
+          end = selecting ? findRowKeyOf(range!.endContainer) : null;
+        const next: ReadingRows = {
+          selected: start || end ? [start ?? end!, end ?? start!] : null,
+          selecting,
+          focused: node?.contains(document.activeElement)
+            ? findRowKeyOf(document.activeElement)
+            : null,
+          live: isReadingNodePinned(
+            node?.querySelector<HTMLElement>('[data-transcript-live]') ?? null,
+          ),
+        };
+        setReading((previous) => (areJsonValuesEqual(previous, next) ? previous : next));
+      }),
+    [scroller],
+  );
+  return reading;
+}
+
+/**
+ * The rows kept mounted while scrolled away: the rows a selection spans, the focused row, the
+ * image viewer's row and the active Find match's row. Unmounting them would lose the reader's
+ * selection or focus, the viewer's return target or the match being revealed.
+ */
+function useMountedRowKeys(
+  rows: readonly TranscriptRow[],
+  reading: ReadingRows,
+  imageSource: ChatTranscriptSource | null,
+  findActive: ChatTranscriptMatch | null,
+) {
+  const keys = new Set<string>();
+  if (reading.selected) {
+    const [first, last] = reading.selected
+      .map((key) => rows.findIndex((row) => row.key === key))
+      .sort((a, b) => a - b);
+    if (first! >= 0) for (let index = first!; index <= last!; index++) keys.add(rows[index]!.key);
+  }
+  if (reading.focused) keys.add(reading.focused);
+  if (imageSource) {
+    const row = rows.find(
+      (row) => row.kind !== 'tool' && areJsonValuesEqual(row.entry.transcript?.source, imageSource),
+    );
+    if (row) keys.add(row.key);
+  }
+  if (findActive) keys.add(getEntryRowKey(findActive.source.entryId));
+  const joined = [...keys].join('\n');
+  return useMemo(() => (joined ? joined.split('\n') : []), [joined]);
 }
 
 function getLiveIdentity(state: ChatState) {
   return JSON.stringify(
     state.snapshot?.run?.transcript?.source ?? state.snapshot?.run?.stop ?? null,
   );
-}
-function getViewport(
-  element: HTMLElement,
-  { transcript, snapshot }: ChatState,
-): TranscriptViewport {
-  return {
-    top: element.scrollTop,
-    bottom: element.scrollHeight - element.scrollTop - element.clientHeight,
-    atLatest: transcript.atLatest,
-    selected: window.getSelection()?.isCollapsed === false,
-    earlier:
-      transcript.earlier &&
-      !transcript.loading &&
-      !document.activeElement?.closest('[data-transcript-entry], [data-transcript-live]'),
-    boundary: transcript.atLatest && !!snapshot?.run && transcript.entries.length === windowRows,
-  };
-}
-/** Parts the anchor may name. A folded part is skipped: an anchor in a part reveals it. */
-const anchorPartSelector = '[data-transcript-part]:not([data-transcript-folded])';
-/** Records the first visible entry/part as a semantic, viewport-relative anchor. */
-function captureAnchor(
-  element: HTMLElement,
-  controller: ChatController,
-): TranscriptViewAnchor | undefined {
-  const observed = controller.getSnapshot();
-  const top = getReadingTop(element);
-  const nodes = [
-    ...element.querySelectorAll<HTMLElement>(
-      `${anchorPartSelector}, [data-transcript-entry], [data-transcript-live]`,
-    ),
-  ];
-  const node =
-    nodes.find(
-      (node) =>
-        node.getBoundingClientRect().bottom > top && node.getBoundingClientRect().top >= top,
-    ) ?? nodes.find((node) => node.getBoundingClientRect().bottom > top);
-  if (!node) return;
-  const row = node.closest<HTMLElement>('[data-transcript-entry], [data-transcript-live]')!;
-  if (!row.dataset.transcriptLive)
-    return {
-      entryId: row.dataset.transcriptEntry!,
-      ...(node.dataset.transcriptPart ? { partId: node.dataset.transcriptPart } : {}),
-      offset: node.getBoundingClientRect().top - top,
-    };
-  const summary = observed.snapshot?.run?.transcript;
-  if (
-    !observed.ready ||
-    !summary ||
-    row.dataset.transcriptLive !== JSON.stringify(summary.source) ||
-    summary.source.kind !== 'live' ||
-    ['inactive', 'reconnecting', 'failed'].includes(observed.transcript.observation)
-  )
-    return;
-  const partNode = node.dataset.transcriptPart
-    ? node
-    : row.querySelector<HTMLElement>(anchorPartSelector);
-  const part =
-    getTranscriptParts(summary, observed.transcript.manifest).find(
-      (part) => part.partId === partNode?.dataset.transcriptPart,
-    ) ?? summary.parts.find((part) => part.partId === partNode?.dataset.transcriptPart);
-  if (!part || part.availability !== 'available') return;
-  return {
-    backendId: controller.backendId,
-    source: summary.source,
-    partId: part.partId,
-    bytes: part.bytes,
-    revision: part.revision,
-    offset: partNode!.getBoundingClientRect().top - top,
-  };
-}
-/**
- * Finds the scroll position that places the anchor at its offset, or a missing row/part nearby. A
- * pending restoration waits for its window and parts.
- */
-function getAnchorTop(
-  element: HTMLElement,
-  { anchor: target, mode }: TranscriptScroll,
-  state: ChatState,
-  { backendId }: ChatController,
-) {
-  const restoring = mode === 'restoring';
-  if (!target || (target.source && target.backendId !== backendId)) return null;
-  if (restoring && (!state.snapshot || state.transcript.loading)) return null;
-  const nodes = [
-    ...element.querySelectorAll<HTMLElement>('[data-transcript-entry], [data-transcript-live]'),
-  ];
-  const entry = nodes.find((node) =>
-    target.source ? !!node.dataset.transcriptLive : node.dataset.transcriptEntry === target.entryId,
-  );
-  const part =
-    target.partId &&
-    [...(entry?.querySelectorAll<HTMLElement>('[data-transcript-part]') ?? [])].find(
-      (node) => node.dataset.transcriptPart === target.partId,
-    );
-  const manifest = state.transcript.manifest;
-  const summary = target.source
-    ? state.snapshot?.run?.transcript
-    : state.transcript.entries.find((entry) => entry.id === target.entryId)?.transcript;
-  if (
-    restoring &&
-    target.partId &&
-    !part &&
-    summary &&
-    (manifest && areJsonValuesEqual(summary.source, manifest.source)
-      ? !manifest.error && manifest.status !== 'complete'
-      : !!summary.nextCursor)
-  )
-    return null;
-  const node =
-    (part &&
-      (part.getClientRects().length
-        ? part
-        : part.closest<HTMLElement>('[data-transcript-activity]'))) ||
-    entry ||
-    (restoring ? nodes.at(-1) : undefined);
-  if (!node) return null;
-  const top =
-    element.scrollTop + node.getBoundingClientRect().top - getReadingTop(element) - target.offset;
-  return Math.max(0, Math.min(top, element.scrollHeight - element.clientHeight));
 }
 const snapshotLabels = {
   idle: 'Idle',

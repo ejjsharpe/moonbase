@@ -1,4 +1,4 @@
-import { useEffect, useRef, type KeyboardEvent, type RefObject } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
 import { Button } from '@base-ui/react/button';
 import { Input } from '@base-ui/react/input';
 import * as stylex from '@stylexjs/stylex';
@@ -77,14 +77,21 @@ export function FindBar({
   /** Holds the field, so a repeated Find request can focus it. */
   input: RefObject<HTMLInputElement | null>;
 }) {
-  const previousFocus = useRef(document.activeElement);
+  /** Focus returns here when Find closes, or to the transcript once a jump unmounted its row. */
+  const [focusReturn] = useState(() => document.activeElement);
   useEffect(() => {
     input.current?.focus({ preventScroll: true });
   }, [input]);
+  const bar = useRef<HTMLElement>(null);
   const close = () => {
     controller.closeFind();
-    if (previousFocus.current instanceof HTMLElement && previousFocus.current.isConnected)
-      previousFocus.current.focus({ preventScroll: true });
+    const target =
+      focusReturn instanceof HTMLElement && focusReturn.isConnected
+        ? focusReturn
+        : bar.current
+            ?.closest('[data-chat-find-owner]')
+            ?.querySelector<HTMLElement>('[data-transcript-list]');
+    target?.focus({ preventScroll: true });
   };
   let status = 'Find literal text in this saved conversation.';
   if (state.status === 'searching')
@@ -97,6 +104,7 @@ export function FindBar({
   if (state.error) status = state.error;
   return (
     <section
+      ref={bar}
       aria-label="Find in conversation"
       {...stylex.props(styles.bar)}
       onKeyDown={(event) => {

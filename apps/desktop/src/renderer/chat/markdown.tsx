@@ -28,6 +28,7 @@ import {
   type SyntaxTone,
 } from './markdown-model.ts';
 import { useReadingPin } from './reading-pin.ts';
+import { useRememberedExpansion } from './transcript-disclosure.ts';
 import { getFindSourceProps } from './part-find.tsx';
 
 /** Pixels a code block grows before scrolling. */
@@ -213,6 +214,7 @@ function ParsedBlock({ block, openLink, copyCode }: Actions & { block: MarkdownB
             language={language}
             closed={start === undefined || closed === true || closed === 'true'}
             copy={typeof start === 'number' && copyCode ? () => copyCode(start) : undefined}
+            foldId={typeof start === 'number' ? `code:${start}` : undefined}
             sourceStart={position?.start.offset}
             sourceEnd={position?.end.offset}
             foldStart={typeof fold === 'number' ? fold : undefined}
@@ -357,6 +359,7 @@ const Code = memo(function Code({
   sourceStart,
   sourceEnd,
   foldStart,
+  foldId,
 }: {
   text: string;
   language: string;
@@ -367,25 +370,40 @@ const Code = memo(function Code({
   sourceEnd?: number;
   /** Where the folded lines start in the source. */
   foldStart?: number;
+  /** Names the block's unfolding in its row's view memory. */
+  foldId?: string;
 }) {
   const pre = useRef<HTMLPreElement>(null);
-  /** Folded code shows its first lines; the rest render only while unfolded. */
-  const [unfolded, setUnfolded] = useState(false);
+  /**
+   * Folded code shows its first lines; the rest render only while unfolded. The reader's unfolding
+   * is remembered; Find's is not.
+   */
+  const remembered = useRememberedExpansion(foldId ?? null);
   const lines = text.split('\n');
   const foldable = lines.length > foldedCodeLines;
   const findMatch = useContext(ActiveFindMatch);
-  const [revealed, setRevealed] = useState<FindTarget | null>(null);
   /** Find maps the shown and folded lines as separate source spans. */
   const spans =
     foldable && sourceStart !== undefined && sourceEnd !== undefined && foldStart !== undefined
       ? { start: sourceStart, fold: foldStart, end: sourceEnd }
       : null;
+  /** The Find match last checked for unfolding, and whether Find unfolded the code while mounted. */
+  const [revealed, setRevealed] = useState({ match: null as FindTarget | null, open: false });
   // A newly active Find match in the folded lines unfolds them once; the reader can fold again.
-  if (findMatch !== revealed) {
-    setRevealed(findMatch);
-    if (findMatch && spans && findMatch.end > spans.fold && findMatch.start < spans.end)
-      setUnfolded(true);
-  }
+  // The unfolding is Find's, not the reader's, so it is not remembered, and nothing saves the view
+  // while the list is still moving to the match.
+  if (findMatch !== revealed.match)
+    setRevealed({
+      match: findMatch,
+      open:
+        revealed.open ||
+        (!!findMatch && !!spans && findMatch.end > spans.fold && findMatch.start < spans.end),
+    });
+  const unfolded = remembered.open || revealed.open;
+  const setUnfolded = (open: boolean) => {
+    if (!open && revealed.open) setRevealed({ ...revealed, open: false });
+    remembered.setOpen(open);
+  };
   const known = monaco.languages
     .getLanguages()
     .find(

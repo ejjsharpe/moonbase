@@ -31,7 +31,6 @@ async function collect(iterator: AsyncIterable<{ data: string }>) {
 const serialized = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
 /** Published summaries and content stay within their budgets. */
 function assertBounds(state: TranscriptState) {
-  assert(state.entries.length <= transcriptLimits.displayedRows);
   assert(
     state.entries.length + (state.manifest?.parts.length ?? 0) <= transcriptLimits.summaryRecords,
   );
@@ -78,9 +77,9 @@ function live(
 }
 
 test('canonical history traverses >2 overlapping pages, both continuations, eviction and around restoration without text deduplication', async (t) => {
-  const f = await transcriptController(t);
+  const f = await transcriptController(t, 2400);
   const seen = new Set<string>();
-  for (let page = 0; page < 25; page++) {
+  for (let page = 0; page < 100; page++) {
     const state = f.controller.getSnapshot().transcript;
     state.entries.forEach((entry) => seen.add(entry.id));
     assertBounds(state);
@@ -92,16 +91,22 @@ test('canonical history traverses >2 overlapping pages, both continuations, evic
     await f.controller.showEarlier();
     assert.equal(f.controller.getSnapshot().transcript.error, null);
   }
-  assert.equal(seen.size, 640);
+  assert.equal(seen.size, 2400);
   assert.equal(f.controller.getSnapshot().transcript.entries[0].id, 'e0');
+  // Retained history needs no read to show an entry; evicted history reads around it.
+  const arounds = () => f.calls.filter((call) => call.operation === 'getChatHistoryAround').length;
+  let reads = arounds();
   await f.controller.jumpToEntry('e320');
+  assert.equal(arounds(), reads);
+  await f.controller.jumpToEntry('e1600');
+  assert.equal(arounds(), reads + 1);
   let state = f.controller.getSnapshot().transcript;
-  assert(state.entries.some((entry) => entry.id === 'e320'));
+  assert(state.entries.some((entry) => entry.id === 'e1600'));
   assert(state.earlier && state.later);
   await f.controller.showEarlier();
   await f.controller.showLater();
   state = f.controller.getSnapshot().transcript;
-  assert(state.entries.some((entry) => entry.id === 'e320'));
+  assert(state.entries.some((entry) => entry.id === 'e1600'));
   f.publish({ ...f.snapshot, state: 'running', message: 'latest changed' });
   assert.equal(
     f.controller.getSnapshot().transcript.entries,
@@ -109,8 +114,9 @@ test('canonical history traverses >2 overlapping pages, both continuations, evic
     'live state does not replace historical window',
   );
   await f.controller.jumpToLatest();
-  assert.equal(f.controller.getSnapshot().transcript.entries.at(-1)?.id, 'e639');
-  assert(f.calls.filter((call) => call.operation === 'getChatHistoryAround').length > 2);
+  assert.equal(f.controller.getSnapshot().transcript.entries.at(-1)?.id, 'e2399');
+  reads = arounds();
+  assert(reads > 2);
 });
 
 test('cloned live-only DTOs preserve summary/part/cache identity and unrelated replacements publish nothing', async (t) => {
@@ -225,9 +231,9 @@ test('one oversized part stays incrementally readable within the LRU; complete-s
 test('summary byte and record budgets include hydrated descriptors and envelopes; complete iteration passes descriptor eviction', async (t) => {
   const f = await transcriptController(t, 1);
   const source = f.entries[0].transcript!.source,
-    data = Array.from({ length: 300 }, () => 'b'.repeat(256));
+    data = Array.from({ length: transcriptLimits.summaryRecords + 64 }, () => 'b'.repeat(256));
   f.fixture.sources.set(JSON.stringify(source), { source, data });
-  for (let i = 0; i < 10; i++) await f.controller.loadTranscriptManifest(source);
+  for (let i = 0; i < data.length / 32 + 1; i++) await f.controller.loadTranscriptManifest(source);
   const state = f.controller.getSnapshot().transcript;
   assertBounds(state);
   assert(state.manifest!.omittedParts > 0);
@@ -401,8 +407,8 @@ test('trusted ChatClient replies and snapshots are not decoded or size-bounded a
   );
 });
 
-test('escaped summary data evicts at two MiB before the row limit without losing earlier/later navigation', async (t) => {
-  const f = await transcriptController(t, 160);
+test('escaped summary data evicts at four MiB before the row limit without losing earlier/later navigation', async (t) => {
+  const f = await transcriptController(t, 400);
   for (const entry of f.entries) entry.text = '\u0001'.repeat(4096);
   f.publish({ ...f.snapshot, entries: f.entries.slice(-8).reverse() });
   f.handlers.set('getChatHistoryAround', async (raw) => {
@@ -416,13 +422,13 @@ test('escaped summary data evicts at two MiB before the row limit without losing
       target: f.target,
       entryId: input.entryId,
       cursor: input.cursor ?? null,
-      upperEntryId: 'e159',
+      upperEntryId: 'e399',
       entries: f.entries.slice(lo, hi).reverse(),
       olderCursor: lo ? JSON.stringify({ lo: Math.max(0, lo - 8), hi: lo }) : null,
-      newerCursor: hi < 160 ? JSON.stringify({ lo: hi, hi: Math.min(160, hi + 8) }) : null,
+      newerCursor: hi < 400 ? JSON.stringify({ lo: hi, hi: Math.min(400, hi + 8) }) : null,
     };
   });
-  for (let i = 0; i < 25 && f.controller.getSnapshot().transcript.earlier; i++) {
+  for (let i = 0; i < 60 && f.controller.getSnapshot().transcript.earlier; i++) {
     await f.controller.showEarlier();
     const state = f.controller.getSnapshot().transcript;
     assert.equal(state.error, null);
@@ -430,9 +436,11 @@ test('escaped summary data evicts at two MiB before the row limit without losing
   }
   const state = f.controller.getSnapshot().transcript;
   assert.equal(state.entries[0].id, 'e0');
-  assert(state.entries.length < 128, 'escaped bytes, not only row count, enforce retention');
-  await f.controller.jumpToEntry('e120');
-  assert(f.controller.getSnapshot().transcript.entries.some((entry) => entry.id === 'e120'));
+  // Each entry serializes to about 24 KiB, so bytes, not the row count, bound retention.
+  assert(state.entries.length < 200, 'escaped bytes, not only row count, enforce retention');
+  assert(state.later);
+  await f.controller.jumpToEntry('e320');
+  assert(f.controller.getSnapshot().transcript.entries.some((entry) => entry.id === 'e320'));
 });
 
 test('manifest and content LRU are bounded; view and expansion ID memory has finite retention', async (t) => {
@@ -445,25 +453,29 @@ test('manifest and content LRU are bounded; view and expansion ID memory has fin
   }
   assert(f.controller.getSnapshot().transcript.content.length <= 128);
   f.controller.setTranscriptView({
-    anchor: { entryId: 'e0', offset: -2 },
+    anchor: { key: 'entry:e0', offset: -2 },
     expanded: Array.from({ length: 400 }, (_, i) => 'expanded-' + i),
   });
-  assert.equal(f.controller.getSnapshot().transcript.view.expanded.length, 128);
+  // The latest opened are kept.
+  assert.deepEqual(
+    f.controller.getSnapshot().transcript.view.expanded,
+    Array.from({ length: 128 }, (_, i) => 'expanded-' + (272 + i)),
+  );
   const { TranscriptViewMemory } = await import('@moonbase/application/chat');
   const memory = new TranscriptViewMemory();
   for (let i = 0; i < 70; i++)
     memory.set(
       'backend',
       { ...f.target, conversationId: 'conversation-' + i },
-      { anchor: { entryId: 'e0', offset: 0 }, expanded: [] },
+      { anchor: { key: 'entry:e0', offset: 0 }, expanded: [] },
     );
   assert.equal(
     memory.get('backend', { ...f.target, conversationId: 'conversation-0' }).anchor,
     null,
   );
   assert.equal(
-    memory.get('backend', { ...f.target, conversationId: 'conversation-69' }).anchor!.entryId,
-    'e0',
+    memory.get('backend', { ...f.target, conversationId: 'conversation-69' }).anchor!.key,
+    'entry:e0',
   );
 });
 
@@ -627,7 +639,7 @@ test('an explicit around jump supersedes held navigation without late errors or 
     await f.controller.jumpToEntry('e100');
     await old;
     const current = f.controller.getSnapshot();
-    assert.equal(current.transcript.view.anchor!.entryId, 'e100');
+    assert.equal(current.transcript.view.anchor!.key, 'entry:e100');
     assert.equal(current.transcript.loading, false);
     held.resolve();
     await tick();
@@ -693,7 +705,7 @@ test('terminal onError invalidates completed live hydration even when a local wa
 });
 
 test('history traverses every entry backward and forward across summary eviction', async (t) => {
-  const f = await transcriptController(t, 640);
+  const f = await transcriptController(t, 2400);
   for (const direction of ['earlier', 'later'] as const) {
     const seen = new Set<string>();
     for (let step = 0; step < 100; step++) {
@@ -710,13 +722,12 @@ test('history traverses every entry backward and forward across summary eviction
       if (!state[direction]) break;
       await (direction === 'earlier' ? f.controller.showEarlier() : f.controller.showLater());
     }
-    assert.equal(seen.size, 640, direction);
+    assert.equal(seen.size, 2400, direction);
     const state = f.controller.getSnapshot().transcript;
     assert.equal(state[direction], false);
-    assert.equal(state.atLatest, direction === 'later');
     assert.equal(state[direction === 'earlier' ? 'later' : 'earlier'], true);
   }
-  assert.equal(f.controller.getSnapshot().transcript.entries.at(-1)!.id, 'e639');
+  assert.equal(f.controller.getSnapshot().transcript.entries.at(-1)!.id, 'e2399');
 });
 
 function appendTranscriptEntries(
@@ -770,7 +781,7 @@ test('disjoint latest updates preserve an around-entry anchor and bridge to late
   const f = await transcriptController(t, 64);
   await f.controller.jumpToEntry('e16');
   f.controller.setTranscriptView({
-    anchor: { entryId: 'e16', partId: 'm0.b0', offset: -13 },
+    anchor: { key: 'entry:e16', offset: -13 },
     expanded: ['thought'],
   });
   const before = f.controller.getSnapshot().transcript,
@@ -796,27 +807,30 @@ test('disjoint latest updates preserve an around-entry anchor and bridge to late
     await f.controller.showLater();
   }
   assert.equal(seen.size, 640);
+  // Back at the newest entry, the reader following the end follows the live edge again.
+  f.controller.setTranscriptView({ anchor: null, expanded: ['thought'] });
   assert.equal(f.controller.getSnapshot().transcript.atLatest, true);
 });
 
-test('held older navigation keeps its captured window through a disjoint latest snapshot', async (t) => {
+test('a page read whose records a following snapshot replaced is dropped', async (t) => {
   const f = await transcriptController(t, 64);
   const entered = Promise.withResolvers<void>(),
     held = Promise.withResolvers<void>();
-  let upper: string | undefined;
+  let holding = true;
   f.handlers.set('getChatHistoryAround', async (_input, _signal, fallback) => {
-    const page = fallback() as { upperEntryId: string };
-    if (!upper) {
-      upper = page.upperEntryId;
+    const page = fallback();
+    if (holding) {
+      holding = false;
       entered.resolve();
       await held.promise;
     }
     return page;
   });
   try {
+    // A short conversation pages earlier while its reader still follows the live edge.
     const reading = f.controller.showEarlier();
     await entered.promise;
-    assert.equal(upper, 'e63');
+    const { dataset } = f.controller.getSnapshot().transcript;
     appendTranscriptEntries(f, 128);
     f.publish({
       ...f.fixture.snapshot,
@@ -826,71 +840,26 @@ test('held older navigation keeps its captured window through a disjoint latest 
     });
     held.resolve();
     await reading;
-    const seen = { earlier: new Set<string>(), later: new Set<string>() };
-    for (const direction of ['earlier', 'later'] as const) {
-      for (let step = 0; step < 80; step++) {
-        const state = f.controller.getSnapshot().transcript;
-        state.entries.forEach((entry) => seen[direction].add(entry.id));
-        const positions = state.entries.map((entry) =>
-          f.entries.findIndex((value) => value.id === entry.id),
-        );
-        assert.deepEqual(
-          positions,
-          [...positions].sort((a, b) => a - b),
-          'canonical window order',
-        );
-        assert.equal(state.error, null);
-        assertBounds(state);
-        if (!state[direction]) break;
-        await (direction === 'earlier' ? f.controller.showEarlier() : f.controller.showLater());
-      }
-      assert.equal(f.controller.getSnapshot().transcript[direction], false);
-    }
+    let state = f.controller.getSnapshot().transcript;
+    assert.equal(state.dataset, dataset + 1);
+    assert.equal(state.error, null);
+    assert.equal(state.atLatest, true);
     assert.deepEqual(
-      seen.earlier,
-      new Set(f.entries.slice(0, 64).map((entry) => entry.id)),
-      'old upper bound stays fixed',
+      state.entries.map((entry) => entry.id),
+      f.entries.slice(-32).map((entry) => entry.id),
+      'the old page does not extend the new records',
     );
-    assert.equal(seen.later.size, 128);
-    assert.equal(f.controller.getSnapshot().transcript.atLatest, true);
-    assert.equal(f.controller.getSnapshot().snapshot!.transcriptBoundary, f.entries.at(-1)!.id);
+    const seen = new Set<string>();
+    for (let step = 0; step < 80 && state.earlier; step++) {
+      await f.controller.showEarlier();
+      state = f.controller.getSnapshot().transcript;
+      state.entries.forEach((entry) => seen.add(entry.id));
+      assert.equal(state.error, null);
+      assertBounds(state);
+    }
+    assert.equal(seen.size, 128);
   } finally {
     held.resolve();
-  }
-});
-
-test('older navigation captures historical mode before a loading subscriber publishes a new boundary', async (t) => {
-  const f = await transcriptController(t, 64);
-  let published = false;
-  const off = f.controller.subscribe(() => {
-    if (published || !f.controller.getSnapshot().transcript.loading) return;
-    published = true;
-    appendTranscriptEntries(f, 128);
-    f.publish({
-      ...f.fixture.snapshot,
-      entries: f.entries.slice(-32).reverse(),
-      transcriptBoundary: f.entries.at(-1)!.id,
-      olderCursor: '96',
-    });
-  });
-  try {
-    await f.controller.showEarlier();
-    assert(published);
-    const request = f.calls.find((call) => call.operation === 'getChatHistoryAround')!.input as {
-      entryId: string;
-    };
-    assert.equal(request.entryId, 'e32');
-    assert.equal(f.controller.getSnapshot().transcript.atLatest, false);
-    assert(
-      f.controller
-        .getSnapshot()
-        .transcript.entries.every(
-          (entry) => f.entries.indexOf(f.entries.find((value) => value.id === entry.id)!) < 64,
-        ),
-    );
-    assert.equal(f.controller.getSnapshot().transcript.error, null);
-  } finally {
-    off();
   }
 });
 
@@ -924,6 +893,8 @@ for (const replacement of ['around', 'latest'] as const)
       try {
         const old = f.controller.showEarlier();
         await oldEntered.promise;
+        // The reader leaves the live edge, so the new snapshot leaves a gap to read.
+        f.controller.setTranscriptView({ anchor: { key: 'entry:e40', offset: 0 }, expanded: [] });
         appendTranscriptEntries(f, 128);
         f.publish({
           ...f.fixture.snapshot,
@@ -965,7 +936,7 @@ for (const replacement of ['around', 'latest'] as const)
 test('held anchor restoration preserves its upper bound and relative offset through a disjoint snapshot', async (t) => {
   const f = await transcriptController(t, 64);
   f.controller.setTranscriptView({
-    anchor: { entryId: 'e16', partId: 'm0.b0', offset: -9 },
+    anchor: { key: 'entry:e16', offset: -9 },
     expanded: ['thought'],
   });
   await f.controller.detach();
@@ -996,7 +967,7 @@ test('held anchor restoration preserves its upper bound and relative offset thro
     const state = f.controller.getSnapshot().transcript;
     assert.equal(upper, 'e63');
     assert.deepEqual(state.view, {
-      anchor: { entryId: 'e16', partId: 'm0.b0', offset: -9 },
+      anchor: { key: 'entry:e16', offset: -9 },
       expanded: ['thought'],
     });
     assert(
@@ -1007,7 +978,7 @@ test('held anchor restoration preserves its upper bound and relative offset thro
     assert(state.later);
     for (let step = 0; step < 30 && f.controller.getSnapshot().transcript.later; step++)
       await f.controller.showLater();
-    assert.equal(f.controller.getSnapshot().transcript.atLatest, true);
+    assert.equal(f.controller.getSnapshot().transcript.later, false);
     assert.equal(f.controller.getSnapshot().transcript.entries.at(-1)!.id, f.entries.at(-1)!.id);
     assert.equal(f.controller.getSnapshot().transcript.error, null);
   } finally {
@@ -1071,21 +1042,16 @@ test('large part manifests release descriptors before evicting navigable history
 
 test('a delayed initial read must not supersede a newer explicit Latest navigation', async (t) => {
   const f = await transcriptController(t, 640);
-  f.controller.setTranscriptView({ anchor: { entryId: 'e100', offset: -4 }, expanded: [] });
+  f.controller.setTranscriptView({ anchor: { key: 'entry:e100', offset: -4 }, expanded: [] });
   await f.controller.detach();
   const firstEntered = Promise.withResolvers<void>();
-  const secondEntered = Promise.withResolvers<void>();
   const firstGate = Promise.withResolvers<void>();
-  const secondGate = Promise.withResolvers<void>();
   let requests = 0;
   f.handlers.set('getChat', async (_input, _signal, fallback) => {
     const reply = fallback();
     if (++requests === 1) {
       firstEntered.resolve();
       await firstGate.promise;
-    } else {
-      secondEntered.resolve();
-      await secondGate.promise;
     }
     return reply;
   });
@@ -1093,12 +1059,11 @@ test('a delayed initial read must not supersede a newer explicit Latest navigati
     const starting = f.controller.start();
     await firstEntered.promise;
     f.fixture.publish(f.fixture.snapshot);
-    const latest = f.controller.jumpToLatest();
-    await secondEntered.promise;
+    // The watched snapshot reaches the live edge, so Latest needs no read of its own.
+    await f.controller.jumpToLatest();
+    assert.equal(requests, 1);
     firstGate.resolve();
     await starting;
-    secondGate.resolve();
-    await latest;
     await tick();
     const state = f.controller.getSnapshot().transcript;
     assert.equal(state.atLatest, true);
@@ -1106,12 +1071,11 @@ test('a delayed initial read must not supersede a newer explicit Latest navigati
     assert.equal(state.entries.at(-1)?.id, 'e639');
   } finally {
     firstGate.resolve();
-    secondGate.resolve();
   }
 });
 
-test('later navigation at the cached newer edge should advance the visible window', async (t) => {
-  const f = await transcriptController(t, 640);
+test('later navigation at the newer edge always advances the retained history', async (t) => {
+  const f = await transcriptController(t, 2400);
   for (let i = 0; i < 100 && f.controller.getSnapshot().transcript.earlier; i++)
     await f.controller.showEarlier();
   for (let i = 0; i < 100 && f.controller.getSnapshot().transcript.later; i++) {
@@ -1119,7 +1083,7 @@ test('later navigation at the cached newer edge should advance the visible windo
     await f.controller.showLater();
     const after = f.controller.getSnapshot().transcript;
     if (JSON.stringify(before) === JSON.stringify(after.entries.map((e) => e.id))) {
-      assert.fail('Later returned the same visible window while later remained true');
+      assert.fail('Later returned the same history while later remained true');
     }
   }
 });
@@ -1127,7 +1091,7 @@ test('later navigation at the cached newer edge should advance the visible windo
 for (const outcome of ['success', 'error'] as const)
   test(`new view capture fences held startup restoration ${outcome}`, async (t) => {
     const f = await transcriptController(t, 640);
-    f.controller.setTranscriptView({ anchor: { entryId: 'e100', offset: -4 }, expanded: [] });
+    f.controller.setTranscriptView({ anchor: { key: 'entry:e100', offset: -4 }, expanded: [] });
     await f.controller.detach();
     const entered = Promise.withResolvers<void>(),
       held = Promise.withResolvers<void>();
@@ -1146,7 +1110,7 @@ for (const outcome of ['success', 'error'] as const)
       await entered.promise;
       const before = f.controller.getSnapshot().transcript.entries;
       assert(before.some((entry) => entry.id === 'e620'));
-      const view = { anchor: { entryId: 'e620', offset: -21 }, expanded: ['new'] };
+      const view = { anchor: { key: 'entry:e620', offset: -21 }, expanded: ['new'] };
       f.controller.setTranscriptView(view);
       assert.equal(signal?.aborted, true);
       held.resolve();
@@ -1164,7 +1128,7 @@ for (const outcome of ['success', 'error'] as const)
 
 test('capture before delayed initial read cancels restoration without losing older history', async (t) => {
   const f = await transcriptController(t, 640);
-  f.controller.setTranscriptView({ anchor: { entryId: 'e100', offset: -4 }, expanded: [] });
+  f.controller.setTranscriptView({ anchor: { key: 'entry:e100', offset: -4 }, expanded: [] });
   await f.controller.detach();
   const entered = Promise.withResolvers<void>(),
     held = Promise.withResolvers<void>();
@@ -1178,7 +1142,7 @@ test('capture before delayed initial read cancels restoration without losing old
     const starting = f.controller.start();
     await entered.promise;
     f.fixture.publish(f.fixture.snapshot);
-    f.controller.setTranscriptView({ anchor: { entryId: 'e620', offset: -21 }, expanded: [] });
+    f.controller.setTranscriptView({ anchor: { key: 'entry:e620', offset: -21 }, expanded: [] });
     held.resolve();
     await starting;
     await tick();

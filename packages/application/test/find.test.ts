@@ -247,6 +247,20 @@ test('deliberate navigation cancels a held Find reveal without dropping query or
   assert.deepEqual(state.entries, before);
 });
 
+test('paging near a revealed match leaves the reveal', async (t) => {
+  const f = await transcriptController(t, 100);
+  await f.controller.findTranscript('same');
+  await until(() => f.controller.getSnapshot().transcript.view.anchor?.key === 'entry:e0');
+  // The list pages on its own near an edge; only the reader's input ends the reveal.
+  await f.controller.showLater();
+  const state = f.controller.getSnapshot().transcript;
+  assert.equal(state.find.revealing, true);
+  assert.equal(state.view.anchor?.key, 'entry:e0');
+  // The reveal read e0–e16 around its match; the page continued after them.
+  assert(state.entries.some((entry) => entry.id === 'e17'));
+  assert.equal(state.error, null);
+});
+
 test('cancelled Find reveal cannot cancel or overwrite a newer manual history read', async (t) => {
   const f = await transcriptController(t, 100);
   let releaseOld!: () => void, releaseManual!: () => void;
@@ -280,7 +294,7 @@ test('cancelled Find reveal cannot cancel or overwrite a newer manual history re
   await navigation;
   const state = f.controller.getSnapshot().transcript;
   assert(state.entries.some((entry) => entry.id === 'e50'));
-  assert.equal(state.view.anchor?.entryId, 'e50');
+  assert.equal(state.view.anchor?.key, 'entry:e50');
   assert.deepEqual(state.find.active, active);
   assert.equal(state.find.query, 'same');
 });
@@ -305,7 +319,7 @@ test('reading before a delayed first result suppresses automatic reveal without 
   assert.equal(state.find.count, 100);
   assert.equal(state.find.active?.source.entryId, 'e0');
   assert.equal(state.find.revealing, false);
-  assert.equal(state.view.anchor?.entryId, 'e50');
+  assert.equal(state.view.anchor?.key, 'entry:e50');
   assert(
     !f.calls.some(
       (call) =>

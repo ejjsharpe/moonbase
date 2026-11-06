@@ -5,22 +5,31 @@ import { colors, layout, radius, space, type } from '@moonbase/ui/tokens.stylex'
 const outputMaxHeight = 320;
 
 export const transcriptStyles = stylex.create({
+  /** The toolbar, then the list filling the rest of the column. */
   transcript: {
-    overflowY: 'auto',
-    // Reading anchors sit below the sticky chrome, whose status/notice height changes; native
-    // anchoring would hold rows against the scroller top instead, hiding them under the chrome.
-    overflowAnchor: 'none',
+    display: 'flex',
+    flexDirection: 'column',
     flex: 1,
     minHeight: 60,
-    paddingBlock: space.sm,
-    paddingInline: space.xl,
     minWidth: 0,
   },
+  viewport: { position: 'relative', display: 'flex', flex: 1, minHeight: 0, minWidth: 0 },
+  list: { flex: 1, minHeight: 0, minWidth: 0, outline: 'none' },
+  /** A centred reading column; rows, the toolbar and the list edges share it. */
+  row: { paddingInline: space.xl, minWidth: 0 },
   measure: { maxWidth: layout.conversation, margin: '0 auto', minWidth: 0 },
-  chrome: { position: 'sticky', top: 0, zIndex: 1, backgroundColor: colors.canvas },
+  edge: { paddingBlock: space.sm },
   navigation: { flexWrap: 'wrap', minHeight: 28 },
+  jump: {
+    position: 'absolute',
+    bottom: space.lg,
+    left: '50%',
+    transform: 'translateX(-50%)',
+    boxShadow: '0 2px 8px rgb(0 0 0 / 0.25)',
+  },
   feedback: { padding: space.sm, margin: 0 },
-  message: { marginBlock: space.xl, marginInline: 0, minWidth: 0 },
+  /** Rows are spaced by the list's gap; a row has no outer margin. */
+  message: { margin: 0, minWidth: 0 },
   header: {
     display: 'flex',
     alignItems: 'center',

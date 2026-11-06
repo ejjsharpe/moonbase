@@ -273,7 +273,7 @@ test('fixed thumbnail geometry keeps the following Part in place while an image 
   await page.evaluate(() => {
     const controller = window.demo.application.chat!;
     controller.setTranscriptView({
-      anchor: { entryId: 'stored-image', partId: 'm0.b2', offset: 12 },
+      anchor: { key: 'entry:stored-image', offset: 12 },
       expanded: controller.getSnapshot().transcript.view.expanded,
     });
   });
@@ -288,85 +288,6 @@ test('fixed thumbnail geometry keeps the following Part in place while an image 
   await expect
     .poll(async () => Math.abs((await after.boundingBox())!.y - before))
     .toBeLessThanOrEqual(1);
-});
-
-test('pointer image and Activity disclosures retain pre-input intent and newer current view through a held manifest', async ({
-  page,
-}) => {
-  const row = await open(page);
-  const image = row.getByRole('button', { name: 'Stored image', exact: true });
-  const group = row.getByRole('button', { name: /^Activity/ });
-  await expect(row.getByRole('button', { name: 'View stored image' })).toBeEnabled();
-  await page.evaluate(() => {
-    const command = window.demo.chat.dependencies.chat.command,
-      gate = Promise.withResolvers<void>();
-    Object.assign(window, { imageManifestHeld: false, releaseImageManifest: () => gate.resolve() });
-    window.demo.chat.dependencies.chat.command = async (operation, input, options) => {
-      if (operation === 'getChatTranscriptContent' && !('selection' in input)) {
-        Object.assign(window, { imageManifestHeld: true });
-        await gate.promise;
-      }
-      return command(operation, input, options) as never;
-    };
-    const controller = window.demo.application.chat!;
-    controller.setTranscriptView({
-      anchor: { entryId: 'stored-image', partId: 'image', offset: 13 },
-      expanded: controller.getSnapshot().transcript.view.expanded,
-    });
-    void controller.loadTranscriptManifest(
-      controller.getSnapshot().transcript.entries[0]!.transcript!.source,
-    );
-  });
-  await expect
-    .poll(() =>
-      page.evaluate(() => (window as unknown as { imageManifestHeld: boolean }).imageManifestHeld),
-    )
-    .toBe(true);
-  try {
-    const box = (await image.boundingBox())!;
-    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-    await page.mouse.down();
-    const newer = await page.evaluate(() => {
-      const controller = window.demo.application.chat!;
-      const view = {
-        anchor: { entryId: 'stored-image', partId: 'image', offset: 27 },
-        expanded: [...controller.getSnapshot().transcript.view.expanded, 'newer-image-capture'],
-      };
-      controller.setTranscriptView(view);
-      return view;
-    });
-    await page.mouse.up();
-    await expect(image).toHaveAttribute('aria-expanded', 'false');
-    const observed = await page.evaluate(
-      () => window.demo.application.chat!.getSnapshot().transcript.view,
-    );
-    expect(observed.anchor).toEqual(newer.anchor);
-    expect(observed.expanded).toContain('newer-image-capture');
-    await page.evaluate(() =>
-      (window as unknown as { releaseImageManifest(): void }).releaseImageManifest(),
-    );
-    await expect
-      .poll(() =>
-        page.evaluate(
-          () => window.demo.application.chat!.getSnapshot().transcript.manifest?.status,
-        ),
-      )
-      .toBe('complete');
-    await expect(image).toHaveAttribute('aria-expanded', 'false');
-    await group.click();
-    await expect(group).toHaveAttribute('aria-expanded', 'false');
-    await group.click();
-    await expect(group).toHaveAttribute('aria-expanded', 'true');
-    await expect(image).toHaveAttribute('aria-expanded', 'false');
-    await image.click();
-    await expect(row.getByRole('button', { name: 'View stored image' })).toBeEnabled();
-    await image.click();
-    await expect(image).toHaveAttribute('aria-expanded', 'false');
-  } finally {
-    await page.evaluate(() =>
-      (window as unknown as { releaseImageManifest(): void }).releaseImageManifest(),
-    );
-  }
 });
 
 test('pointer image reading cancels held Find reveal before collapse; only a new exact range reopens its owning Activity', async ({
@@ -440,9 +361,9 @@ test('pointer image reading cancels held Find reveal before collapse; only a new
     }));
     expect(manual.find.revealing).toBe(false);
     expect(manual.find.active).toEqual(first);
-    expect(manual.view.anchor?.entryId).toBe('stored-image');
+    // The reader's press replaced the Find match's anchor with their own position.
     expect(manual.view.anchor).not.toEqual({
-      entryId: 'stored-image',
+      key: 'entry:stored-image',
       partId: 'result',
       offset: 0,
     });
@@ -510,92 +431,4 @@ test('pointer image reading cancels held Find reveal before collapse; only a new
       (window as unknown as { releaseImageFind(): void }).releaseImageFind(),
     );
   }
-});
-
-test('a partially visible oldest image viewer remains stable when first live output arrives at the 128-row budget', async ({
-  page,
-}) => {
-  await open(page);
-  await page.evaluate(async (data) => {
-    await window.demo.transcript!.record(
-      Array.from({ length: 180 }, (_, index) => ({
-        id: `image-row-${index}`,
-        role: index === 52 ? ('tool' as const) : ('assistant' as const),
-        parts:
-          index === 52
-            ? [
-                {
-                  kind: 'image' as const,
-                  text: '',
-                  data,
-                  mimeType: 'image/png',
-                  partId: 'image',
-                  role: 'tool' as const,
-                },
-              ]
-            : [
-                {
-                  kind: 'text' as const,
-                  text: `Saved row ${index}\n\nReadable retained paragraph.`,
-                },
-              ],
-      })),
-    );
-    const controller = window.demo.application.chat!;
-    await controller.jumpToLatest();
-    for (let index = 0; index < 4; index++) await controller.showEarlier();
-    for (let index = 0; index < 8 && !controller.getSnapshot().transcript.atLatest; index++)
-      await controller.showLater();
-  }, checker);
-  await expect(page.locator('[data-transcript-entry]')).toHaveCount(128);
-  const oldest = page.locator('[data-transcript-entry="image-row-52"]');
-  await expect(page.locator('[data-transcript-entry]').first()).toHaveAttribute(
-    'data-transcript-entry',
-    'image-row-52',
-  );
-  await oldest.getByRole('button', { name: /^Activity/ }).click();
-  await oldest.getByRole('button', { name: 'Stored image', exact: true }).click();
-  const trigger = oldest.getByRole('button', { name: 'View stored image' });
-  await oldest.locator('[data-stored-image]').scrollIntoViewIfNeeded();
-  await expect(trigger).toBeEnabled();
-  const region = page.getByRole('region', { name: 'Chat transcript', exact: true });
-  await region.dispatchEvent('wheel', { deltaY: 1 });
-  await region.evaluate((element) => {
-    const part = element.querySelector('[data-transcript-entry] [data-transcript-part]')!;
-    const top = element.querySelector('[data-transcript-chrome]')!.getBoundingClientRect().bottom;
-    element.scrollTop += part.getBoundingClientRect().top - top + 35;
-  });
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () => window.demo.application.chat!.getSnapshot().transcript.view.anchor?.entryId,
-      ),
-    )
-    .not.toBe('image-row-52');
-  await trigger.click();
-  const dialog = page.getByRole('dialog', { name: 'Stored image', exact: true });
-  await expect(dialog.getByRole('img', { name: 'Recorded image' })).toBeVisible();
-  await expect(dialog.getByRole('button', { name: 'Close image viewer' })).toBeFocused();
-  const anchor = await page.evaluate(
-    () => window.demo.application.chat!.getSnapshot().transcript.view.anchor,
-  );
-  expect(anchor?.entryId).not.toBe('image-row-52');
-  await page.evaluate(() =>
-    window.demo.transcript!.live('First live output with the image viewer open'),
-  );
-  await expect(dialog).toBeVisible();
-  await expect(oldest).toHaveCount(1);
-  await expect(dialog.getByRole('button', { name: 'Close image viewer' })).toBeFocused();
-  await expect(page.locator('[data-transcript-entry], [data-transcript-live]')).toHaveCount(128);
-  await expect(page.locator('[data-transcript-live]')).toHaveCount(0);
-  await mkdir(output, { recursive: true });
-  await page.screenshot({ path: resolve(output, 'oldest-image-viewer.png') });
-  await page.keyboard.press('Escape');
-  await expect(trigger).toBeFocused();
-  await page.getByRole('textbox', { name: 'Message', exact: true }).focus();
-  await expect(page.locator('[data-transcript-live]')).toContainText(
-    'First live output with the image viewer open',
-  );
-  await expect(page.locator('[data-transcript-entry], [data-transcript-live]')).toHaveCount(128);
-  await expect(oldest).toHaveCount(0);
 });

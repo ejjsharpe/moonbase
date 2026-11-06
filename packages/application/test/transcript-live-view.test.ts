@@ -2,11 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { createMoonbaseApplication, type MoonbaseApplication } from '@moonbase/application';
-import type {
-  TranscriptView,
-  TranscriptLiveAnchor,
-  ChatController,
-} from '@moonbase/application/chat';
+import type { TranscriptView } from '@moonbase/application/chat';
 import type { ChatSnapshot, ChatTranscriptSource } from '@moonbase/contracts/chat';
 import { transcriptFixture, transcriptController, digest, part } from './transcript-fixture.ts';
 
@@ -53,10 +49,10 @@ async function cleanupSettled(app: MoonbaseApplication) {
   });
 }
 
-test('application restores the exact live part and expansions across panel and named-controller replacement, never restart', async () => {
+test('application restores the live row and expansions across panel and named-controller replacement, never restart', async () => {
   const a = transcriptFixture(64),
     b = transcriptFixture(64);
-  const live = publishLive(a);
+  publishLive(a);
   publishLive(b);
   const options = {
     chatTargets: [
@@ -65,14 +61,7 @@ test('application restores the exact live part and expansions across panel and n
     ],
   };
   const view: TranscriptView = {
-    anchor: {
-      backendId: 'A',
-      source: live.source,
-      partId: live.descriptor.partId,
-      bytes: live.descriptor.bytes,
-      revision: live.descriptor.revision,
-      offset: -17.5,
-    },
+    anchor: { key: 'live:submission', offset: -17.5 },
     expanded: ['thought', 'tool'],
   };
   const app = await createMoonbaseApplication(options);
@@ -93,17 +82,13 @@ test('application restores the exact live part and expansions across panel and n
     await chat.start();
     await chat.select(b.target);
     assert.equal(chat.backendId, 'B');
-    assert.equal(chat.getSnapshot().transcript.view.anchor, null);
-    assert.throws(
-      () => chat.setTranscriptView(view),
-      (error) => ApplicationError.is(error),
-    );
-    assert.deepEqual(chat.getSnapshot().transcript.view.expanded, []);
+    assert.equal(chat.getSnapshot().transcript.view.anchor, null, 'each backend has its own view');
+    chat.setTranscriptView({ anchor: { key: 'entry:e40', offset: 0 }, expanded: [] });
     chat = (await app.selectChatTarget('A'))!;
     await chat.start();
     assert.deepEqual(chat.getSnapshot().transcript.view, view);
     assert.equal(a.storage.value, raw);
-    assert(!raw!.includes('anchor') && !raw!.includes('incarnation') && !raw!.includes('expanded'));
+    assert(!raw!.includes('anchor') && !raw!.includes('expanded'));
   } finally {
     await app.dispose();
   }
@@ -119,80 +104,70 @@ test('application restores the exact live part and expansions across panel and n
   }
 });
 
-function captureView(
-  controller: ChatController,
-  live: ReturnType<typeof publishLive>,
-  offset = -12,
-): TranscriptView & { anchor: TranscriptLiveAnchor } {
+function captureView(live: ReturnType<typeof publishLive>, offset = -12) {
   return {
-    anchor: {
-      backendId: controller.backendId,
-      source: live.source,
-      partId: live.descriptor.partId,
-      bytes: live.descriptor.bytes,
-      revision: live.descriptor.revision,
-      offset,
-    },
+    anchor: { key: `live:${live.source.submissionId}`, offset },
     expanded: ['live-thought', 'live-tool'],
-  };
+  } satisfies TranscriptView;
 }
-test('synthetic durable anchors are rejected and never dispatched as around-entry reads', async (t) => {
+test('view input rejects anchors that name no row', async (t) => {
   const f = await transcriptController(t, 64);
+  for (const key of ['live', 'entry:', 'message:e1', ' '])
+    assert.throws(
+      () => f.controller.setTranscriptView({ anchor: { key, offset: 0 }, expanded: [] }),
+      (error) => ApplicationError.is(error),
+      key,
+    );
   assert.throws(
-    () => f.controller.setTranscriptView({ anchor: { entryId: 'live', offset: 0 }, expanded: [] }),
-    (error) => ApplicationError.is(error),
+    () =>
+      f.controller.setTranscriptView({
+        anchor: { key: 'entry:e16', offset: Number.NaN },
+        expanded: [],
+      }),
+    ApplicationError.is,
   );
-  await f.controller.jumpToEntry('live');
-  assert.match(f.controller.getSnapshot().transcript.error!, /exact live-part/);
-  assert(!f.calls.some((call) => call.operation === 'getChatHistoryAround'));
+  assert.equal(f.controller.getSnapshot().transcript.view.anchor, null);
   await f.controller.jumpToEntry('e16');
   f.controller.setTranscriptView({
-    anchor: { entryId: 'e16', partId: 'm0.b0', offset: -3 },
+    anchor: { key: 'entry:e16', offset: -3 },
     expanded: ['durable'],
   });
   await f.controller.detach();
   await f.controller.start();
   assert.deepEqual(f.controller.getSnapshot().transcript.view, {
-    anchor: { entryId: 'e16', partId: 'm0.b0', offset: -3 },
+    anchor: { key: 'entry:e16', offset: -3 },
     expanded: ['durable'],
   });
-  await f.controller.jumpToEntry('invented-synthetic-row');
+  assert(f.controller.getSnapshot().transcript.entries.some((entry) => entry.id === 'e16'));
+  await f.controller.jumpToEntry('invented-row');
   assert(f.controller.getSnapshot().transcript.error, 'unrecognized durable IDs fail explicitly');
   assert.deepEqual(f.controller.getSnapshot().transcript.view, {
-    anchor: { entryId: 'e16', partId: 'm0.b0', offset: -3 },
+    anchor: { key: 'entry:e16', offset: -3 },
     expanded: ['durable'],
   });
 });
 
-test('live view memory remains bounded, isolated, and independent of caller mutation', async () => {
+test('view memory remains bounded, isolated, and independent of caller mutation', async () => {
   const { TranscriptViewMemory } = await import('@moonbase/application/chat');
-  const f = transcriptFixture(1),
-    live = publishLive(f);
+  const f = transcriptFixture(1);
   const memory = new TranscriptViewMemory();
-  const anchor: TranscriptLiveAnchor = {
-    backendId: 'A',
-    source: live.source,
-    partId: live.descriptor.partId,
-    bytes: live.descriptor.bytes,
-    revision: live.descriptor.revision,
-    offset: -1,
-  };
+  const anchor = { key: 'live:submission', offset: -1 };
   memory.set('A', f.target, { anchor, expanded: ['live'] });
-  anchor.source.incarnation = digest('mutated by caller');
-  assert.notEqual(memory.get('A', f.target).anchor!.source!.incarnation, anchor.source.incarnation);
+  anchor.offset = 99;
+  assert.equal(memory.get('A', f.target).anchor!.offset, -1);
+  assert(Object.isFrozen(memory.get('A', f.target).anchor));
   assert.equal(memory.get('B', f.target).anchor, null);
   for (let index = 0; index < 70; index++) {
     const target = { ...f.target, conversationId: 'conversation-' + index };
-    const source = { ...live.source, target };
     memory.set('A', target, {
-      anchor: { ...anchor, source },
+      anchor: { key: 'entry:e' + index, offset: 0 },
       expanded: Array.from({ length: 128 }, (_, id) => 'x'.repeat(240) + id),
     });
   }
   assert.equal(memory.get('A', { ...f.target, conversationId: 'conversation-0' }).anchor, null);
-  assert(memory.get('A', { ...f.target, conversationId: 'conversation-69' }).anchor!.source);
-  assert.throws(() =>
-    memory.set('A', f.target, { anchor: { entryId: 'live', offset: 0 }, expanded: [] }),
+  assert.equal(
+    memory.get('A', { ...f.target, conversationId: 'conversation-69' }).anchor!.key,
+    'entry:e69',
   );
   memory.clear();
   assert.equal(memory.get('A', { ...f.target, conversationId: 'conversation-69' }).anchor, null);
@@ -202,7 +177,7 @@ for (const change of ['append', 'replace', 'retire', 'reconnect'] as const)
   test(`view memory survives ${change} without content reads or source proofs`, async (t) => {
     const f = await transcriptController(t, 64);
     const live = publishLive(f.fixture);
-    const view = captureView(f.controller, live);
+    const view = captureView(live);
     f.controller.setTranscriptView(view);
     await f.controller.detach();
     if (change === 'retire') f.fixture.publish({ ...live.snapshot, run: null, state: 'idle' });
@@ -223,27 +198,12 @@ for (const change of ['append', 'replace', 'retire', 'reconnect'] as const)
     );
     await f.controller.jumpToEntry('e16');
     publishLive(f.fixture, 'another update');
-    assert.equal(f.controller.getSnapshot().transcript.view.anchor!.entryId, 'e16');
-  });
-
-for (const wrong of ['backend', 'host', 'store', 'actor', 'conversation'] as const)
-  test(`view input rejects another ${wrong} without changing memory`, async (t) => {
-    const f = await transcriptController(t, 64);
-    const view = captureView(f.controller, publishLive(f.fixture));
-    f.controller.setTranscriptView(view);
-    const invalid = structuredClone(view);
-    if (wrong === 'backend') invalid.anchor.backendId = 'another';
-    if (wrong === 'host') invalid.anchor.source.target.host.hostId = 'another';
-    if (wrong === 'store') invalid.anchor.source.target.host.storeId = 'another';
-    if (wrong === 'actor') invalid.anchor.source.target.actorId = 'another';
-    if (wrong === 'conversation') invalid.anchor.source.target.conversationId = 'another';
-    assert.throws(() => f.controller.setTranscriptView(invalid), ApplicationError.is);
-    assert.deepEqual(f.controller.getSnapshot().transcript.view, view);
+    assert.equal(f.controller.getSnapshot().transcript.view.anchor!.key, 'entry:e16');
   });
 
 test('failed navigation and observation remain visible independently of view memory', async (t) => {
   const f = await transcriptController(t, 64);
-  const view = captureView(f.controller, publishLive(f.fixture));
+  const view = captureView(publishLive(f.fixture));
   f.controller.setTranscriptView(view);
   f.fixture.handlers.set('getChatHistoryAround', async () => {
     throw new ApplicationError({ code: 'Unavailable', message: 'history unavailable' });
@@ -257,25 +217,15 @@ test('failed navigation and observation remain visible independently of view mem
   assert.match(f.controller.getSnapshot().transcript.error!, /authority lost/);
 });
 
-test('view input accepts optional anchor keys set to undefined and omits them', async (t) => {
+test('view input rejects anchor fields beyond the row key and offset', async (t) => {
   const f = await transcriptController(t, 64);
-  f.controller.setTranscriptView({
-    anchor: { entryId: 'e16', partId: undefined, offset: -2, source: undefined },
-    expanded: [],
-  });
-  assert.deepEqual(f.controller.getSnapshot().transcript.view, {
-    anchor: { entryId: 'e16', offset: -2 },
-    expanded: [],
-  });
-  const view = captureView(f.controller, publishLive(f.fixture));
-  f.controller.setTranscriptView({ ...view, anchor: { ...view.anchor, entryId: undefined } });
-  assert.deepEqual(f.controller.getSnapshot().transcript.view, view);
-  assert.throws(
-    () =>
-      f.controller.setTranscriptView({
-        anchor: { ...view.anchor, entryId: 'e16' } as never,
-        expanded: [],
-      }),
-    ApplicationError.is,
-  );
+  for (const extra of [{ entryId: 'e16' }, { partId: 'm0.b0' }])
+    assert.throws(
+      () =>
+        f.controller.setTranscriptView({
+          anchor: { key: 'entry:e16', offset: -2, ...extra } as never,
+          expanded: [],
+        }),
+      ApplicationError.is,
+    );
 });

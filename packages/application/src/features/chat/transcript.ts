@@ -44,6 +44,12 @@ import {
   makeManifest,
 } from './transcript-manifest.ts';
 import { appendFindPage, TranscriptFindPass, type FindBoundary } from './transcript-find.ts';
+import {
+  findRowEntryId,
+  getEntryRowKey,
+  isLiveRowKey,
+  listTranscriptRows,
+} from './transcript-rows.ts';
 
 type TranscriptDependencies = {
   chat: ChatClient;
@@ -72,17 +78,6 @@ const catchFailure =
       Effect.catchCause((cause) =>
         Effect.sync(() => handle(normalizeApplicationError(Cause.squash(cause)))),
       ),
-    );
-/** Observes a failure of `effect`, then fails with it; interruption skips it by construction. */
-const tapFailure =
-  (handle: (error: ApplicationError) => void) =>
-  <A>(effect: Effect.Effect<A, ApplicationError>) =>
-    effect.pipe(
-      Effect.catchCause((cause) => {
-        const error = normalizeApplicationError(Cause.squash(cause));
-        handle(error);
-        return Effect.fail(error);
-      }),
     );
 const interruptFiber = (fiber: Option.Option<Fiber.Fiber<unknown, unknown>>) => {
   if (Option.isSome(fiber)) fiber.value.interruptUnsafe();
@@ -138,9 +133,8 @@ export class TranscriptOwner {
   constructor(dependencies: TranscriptDependencies) {
     this.dependencies = dependencies;
     this.state.view = dependencies.memory.get(dependencies.backend, dependencies.target);
-    this.history = new TranscriptHistory(
-      !this.state.view.anchor || !!this.state.view.anchor.source,
-    );
+    const anchor = this.state.view.anchor;
+    this.history = new TranscriptHistory(!anchor || isLiveRowKey(anchor.key));
     this.state.capabilities = {
       transcript: dependencies.capable ? 'available' : 'legacy',
       find: dependencies.findCapable && dependencies.capable ? 'available' : 'unavailable',
@@ -232,23 +226,34 @@ export class TranscriptOwner {
   }
   /**
    * Runs a keyed read. An existing job for `key` is joined, or interrupted and replaced when
-   * `replace` is set. A failure is published as the transcript error.
+   * `replace` is set. A history read owns the transcript error: it clears it when it starts and
+   * publishes its failure there. Manifest and part reads pass `fail` to keep their failure on
+   * their own state, so they neither block nor clear history paging.
    */
   private runJob(
     key: string,
     work: Work,
-    options: { replace?: boolean; source?: ChatTranscriptSource; revealing?: boolean } = {},
+    options: {
+      replace?: boolean;
+      source?: ChatTranscriptSource;
+      revealing?: boolean;
+      fail?: (error: ApplicationError) => void;
+    } = {},
   ): Promise<void> {
     if (!this.isCurrent()) return Promise.resolve();
     const running = FiberMap.getUnsafe(this.jobs, key);
     if (Option.isSome(running) && !options.replace) return joinFiber(running.value);
+    const history = key === historyJob;
     const job = Effect.suspend(() => {
       this.assertCurrent();
       return work;
     }).pipe(
-      catchFailure((error) => {
-        this.state = { ...this.state, error: error.message };
-      }),
+      catchFailure(
+        options.fail ??
+          ((error) => {
+            this.state = { ...this.state, error: error.message };
+          }),
+      ),
       Effect.onExit((exit) =>
         Effect.withFiber((fiber) => Effect.sync(() => this.settleJob(key, fiber, exit))),
       ),
@@ -260,8 +265,8 @@ export class TranscriptOwner {
         this.jobReads.set(key, { source: options.source, revealing: !!options.revealing });
         this.state = {
           ...this.state,
-          error: null,
-          loading: key === historyJob || this.state.loading,
+          error: history ? null : this.state.error,
+          loading: history || this.state.loading,
         };
         this.publish();
       },
@@ -291,7 +296,7 @@ export class TranscriptOwner {
     interruptFiber(FiberMap.getUnsafe(this.jobs, key));
   }
   /** Summary budgets count each retained entry/part once, from cached per-value byte sizes. */
-  private enforceBounds(direction: HistoryDirection) {
+  private enforceBounds(direction: HistoryDirection | undefined) {
     const others = new Map((this.snapshot?.entries ?? []).map((entry) => [entry.id, entry]));
     if (this.selectedEntry) others.set(this.selectedEntry.id, this.selectedEntry);
     const sizes = new Map([...others].map(([id, entry]) => [id, measureTranscriptValue(entry)]));
@@ -319,7 +324,11 @@ export class TranscriptOwner {
           },
         };
       } else {
-        const removed = this.history.evictRecord(direction, this.state.view.anchor?.entryId);
+        const anchor = this.state.view.anchor;
+        const removed = this.history.evictRecord(
+          direction,
+          anchor ? findRowEntryId(anchor.key) : undefined,
+        );
         if (!removed) break;
         const other = others.get(removed.id);
         bytes -= sizes.get(removed.id)!;
@@ -328,23 +337,29 @@ export class TranscriptOwner {
         sizes.delete(removed.id);
       }
     }
-    this.history.clampWindow();
   }
-  /** Publishes whenever the window state or the accepted snapshot changed. */
-  private publish(direction: HistoryDirection = this.history.following ? 'later' : 'earlier') {
+  /**
+   * Publishes whenever the retained history or the accepted snapshot changed. `direction` is the
+   * page read that grew the records, which evicts from the end it moved away from.
+   */
+  private publish(direction?: HistoryDirection) {
     if (!this.alive) return;
     this.enforceBounds(direction);
-    const entries = this.history.listWindow();
+    const listed = this.history.listRecords();
     const previous = this.state.entries;
+    const entries =
+      listed.length === previous.length && listed.every((entry, index) => entry === previous[index])
+        ? previous
+        : listed;
+    const later = this.history.hasLater();
     this.state = {
       ...this.state,
-      entries:
-        entries.length === previous.length &&
-        entries.every((entry, index) => entry === previous[index])
-          ? previous
-          : entries,
-      earlier: this.history.hasEarlier(entries.length),
-      later: this.history.hasLater(),
+      entries,
+      // The live response follows the newest stored entry, so it shows once history reaches it.
+      rows: listTranscriptRows(entries, later ? null : this.snapshot?.run, this.state.rows),
+      dataset: this.history.dataset,
+      earlier: this.history.hasEarlier(),
+      later,
       atLatest: this.history.following,
       content: this.contents.listContents(),
     };
@@ -570,9 +585,11 @@ export class TranscriptOwner {
       this.restoringView = false;
       this.history.following = false;
       this.restorePending = false;
-      yield* this.readAround(match.source.entryId, undefined, 'earlier', true);
+      const { entryId } = match.source;
+      if (!this.history.findRecord(entryId))
+        yield* this.readAround(entryId, undefined, 'earlier', true);
       this.setView({
-        anchor: { entryId: match.source.entryId, partId: match.partId, offset: 0 },
+        anchor: { key: getEntryRowKey(entryId), offset: 0 },
         expanded: this.state.view.expanded,
       });
     }).pipe(catchFailure((error) => this.showFindError(error)));
@@ -635,10 +652,11 @@ export class TranscriptOwner {
     if (!this.restorePending) return Promise.resolve();
     this.restorePending = false;
     const anchor = this.state.view.anchor;
-    // View memory is a location hint; only content reads need source proofs.
-    if (!anchor || anchor.source) return Promise.resolve();
+    // View memory is a location hint; a live row is at the live edge the history follows.
+    const entryId = anchor && findRowEntryId(anchor.key);
+    if (!entryId) return Promise.resolve();
     this.restoringView = true;
-    return this.jumpToEntry(anchor.entryId, false).finally(() => {
+    return this.jumpToEntry(entryId, false).finally(() => {
       this.restoringView = false;
     });
   }
@@ -654,39 +672,34 @@ export class TranscriptOwner {
   showLater() {
     return this.move('later');
   }
-  private move(direction: HistoryDirection) {
-    this.cancelFindReveal();
+  /**
+   * Pages history. The list pages on its own near an edge, so a page leaves a Find reveal alone;
+   * the reader's own input ends it.
+   */
+  private move(direction: HistoryDirection): Promise<void> {
     const pending = FiberMap.getUnsafe(this.jobs, historyJob);
     if (Option.isSome(pending) && !this.restoringView) return joinFiber(pending.value);
     if (!this.isCurrent() || !this.state[direction])
       return Option.isSome(pending) ? joinFiber(pending.value) : Promise.resolve();
     this.cancelViewRestore();
     this.restorePending = false;
-    // Freeze the reading window before loading can notify a subscriber.
-    this.history.following = false;
-    return this.runJob(historyJob, this.moveWindow(direction), { replace: true });
+    return this.runJob(historyJob, this.readPage(direction), { replace: true });
   }
-  private moveWindow(direction: HistoryDirection): Work {
+  private readPage(direction: HistoryDirection): Work {
     return Effect.gen({ self: this }, function* () {
       const history = this.history,
         target = this.dependencies.target;
-      const previous = history.windowStart;
-      if (!history.shiftWindow(direction)) {
-        if (this.dependencies.capable && history.records.length) {
-          const edge = direction === 'earlier' ? this.state.entries[0] : this.state.entries.at(-1);
-          const read = history.findAroundRead(direction, edge);
-          if (read) yield* this.readAround(read.entryId, read.cursor, direction);
-        } else if (direction === 'earlier') {
-          const cursor = history.findOlderCursor(this.snapshot?.olderCursor);
-          if (cursor) {
-            const page = yield* this.call('getChatHistory', { target, cursor });
-            history.applyOlderPage(page, cursor, target);
-          }
+      if (this.dependencies.capable && history.records.length) {
+        const read = history.findAroundRead(direction);
+        if (read) yield* this.readAround(read.entryId, read.cursor, direction);
+      } else if (direction === 'earlier') {
+        const cursor = history.findOlderCursor(this.snapshot?.olderCursor);
+        if (cursor) {
+          const dataset = history.dataset;
+          const page = yield* this.call('getChatHistory', { target, cursor });
+          if (history.dataset === dataset) history.applyOlderPage(page, cursor, target);
         }
-      }
-      history.settleMove(direction);
-      if (history.windowStart !== previous || this.state.entries.length)
-        this.rememberWindow(direction);
+      } else history.applyLatestEntries(this.snapshot?.entries ?? []);
       this.publish(direction);
     });
   }
@@ -697,18 +710,21 @@ export class TranscriptOwner {
     replace = false,
   ): Work {
     return Effect.gen({ self: this }, function* () {
-      if (entryId === 'live')
-        throw makeTranscriptFailure('Use an exact live-part anchor instead of a synthetic entry.');
-      const target = this.dependencies.target;
+      const target = this.dependencies.target,
+        dataset = this.history.dataset;
       const page = yield* this.call('getChatHistoryAround', {
         target,
         entryId,
         ...(cursor ? { cursor } : {}),
       });
+      // A snapshot that replaced the records during the read (the reader follows the live edge)
+      // leaves the page nothing to extend.
+      if (!replace && this.history.dataset !== dataset) return;
       this.history.checkAroundPage(page, target, { entryId, cursor, direction });
       this.history.applyAroundPage(page, direction, replace, this.snapshot?.entries[0]?.id);
     });
   }
+  /** Shows `entryId`, reading history around it unless it is retained. The list places it afresh. */
   jumpToEntry(entryId: string, resetView = true) {
     if (resetView) {
       this.restorePending = false;
@@ -717,44 +733,43 @@ export class TranscriptOwner {
     }
     this.history.following = false;
     const work = Effect.gen({ self: this }, function* () {
-      if (!this.dependencies.capable)
-        throw makeTranscriptFailure(
-          'This host requires an upgrade for transcript navigation.',
-          'Unavailable',
-        );
-      yield* this.readAround(entryId, undefined, 'earlier', true);
+      if (!this.history.findRecord(entryId)) {
+        if (!this.dependencies.capable)
+          throw makeTranscriptFailure(
+            'This host requires an upgrade for transcript navigation.',
+            'Unavailable',
+          );
+        yield* this.readAround(entryId, undefined, 'earlier', true);
+      } else if (resetView) this.history.dataset++;
       if (resetView)
         this.setView({
-          anchor: { entryId, offset: 0 },
-          expanded: this.state.view.anchor?.source ? [] : this.state.view.expanded,
+          anchor: { key: getEntryRowKey(entryId), offset: 0 },
+          expanded: this.state.view.expanded,
         });
     });
     return this.runJob(historyJob, work, { replace: true });
   }
+  /** Follows the live edge again, reading the latest snapshot only when history has a gap. */
   jumpToLatest() {
     this.restoringView = false;
     this.cancelFindReveal();
     this.restorePending = false;
     const work = Effect.gen({ self: this }, function* () {
+      const expanded = this.state.view.expanded;
+      if (!this.history.hasLater()) {
+        this.history.following = true;
+        this.rememberView({ anchor: null, expanded });
+        this.publish('later');
+        return;
+      }
       const previous = this.snapshot;
       const snapshot = yield* this.call('getChat', { target: this.dependencies.target });
       this.history.resetToLatest();
-      this.rememberView({
-        anchor: null,
-        expanded: this.state.view.anchor?.source ? [] : this.state.view.expanded,
-      });
+      this.rememberView({ anchor: null, expanded });
       // A watch received during this explicit read wins its coherent live boundary.
       this.acceptSnapshot(this.snapshot !== previous && this.snapshot ? this.snapshot : snapshot);
     });
     return this.runJob(historyJob, work, { replace: true });
-  }
-  /** Remembers the displayed edge row in the direction moved: oldest shown, or newest shown. */
-  private rememberWindow(direction: HistoryDirection) {
-    const entry = this.history.findWindowEdge(direction);
-    this.rememberView({
-      expanded: this.state.view.anchor?.source ? [] : this.state.view.expanded,
-      anchor: this.history.following || !entry ? null : { entryId: entry.id, offset: 0 },
-    });
   }
   /** View memory decodes once and returns the frozen view it remembered; invalid views throw. */
   private rememberView(view: TranscriptView) {
@@ -771,7 +786,9 @@ export class TranscriptOwner {
     const captured = this.rememberView(view);
     this.cancelViewRestore();
     this.restorePending = false;
-    if (captured.anchor) this.history.following = !!captured.anchor.source;
+    // No anchor, or a live-edge row, follows once history reaches the newest entry.
+    this.history.following =
+      (!captured.anchor || isLiveRowKey(captured.anchor.key)) && !this.history.hasLater();
     this.publish();
   }
   private requireContentReads() {
@@ -800,18 +817,7 @@ export class TranscriptOwner {
       this.manifestAdvance(manifest.nextCursor, reply.nextCursor);
       const known = findKnownParts(captured, this.snapshot, this.history.records);
       this.state = { ...this.state, manifest: appendManifestPage(manifest, reply, known) };
-    }).pipe(
-      tapFailure((error) => {
-        this.state = {
-          ...this.state,
-          manifest: {
-            ...manifest,
-            status: error.code === 'Conflict' ? 'source-changed' : 'error',
-            error: error.message,
-          },
-        };
-      }),
-    );
+    });
     const work = Effect.gen({ self: this }, function* () {
       this.requireContentReads();
       this.state = { ...this.state, manifest: { ...manifest, status: 'loading', error: null } };
@@ -822,6 +828,16 @@ export class TranscriptOwner {
       replace,
       source: captured,
       revealing: this.isRevealing(captured),
+      fail: (error) => {
+        this.state = {
+          ...this.state,
+          manifest: {
+            ...manifest,
+            status: error.code === 'Conflict' ? 'source-changed' : 'error',
+            error: error.message,
+          },
+        };
+      },
     });
   }
   loadPart(source: ChatTranscriptSource, selection: ChatTranscriptSelection, restart = false) {
@@ -846,18 +862,7 @@ export class TranscriptOwner {
       if (reply.kind !== 'content')
         throw makeTranscriptFailure('Transcript content has a missing or overlapping chunk.');
       this.contents.append(key, before, reply);
-    }).pipe(
-      tapFailure((error) =>
-        this.contents.mark(
-          key,
-          {
-            status: error.code === 'Conflict' ? 'source-changed' : 'error',
-            error: error.message,
-          },
-          before,
-        ),
-      ),
-    );
+    });
     const work = Effect.gen({ self: this }, function* () {
       this.requireContentReads();
       this.contents.mark(key, { status: 'loading', error: null }, before);
@@ -868,6 +873,15 @@ export class TranscriptOwner {
       replace: restart,
       source: captured.source,
       revealing: this.isRevealing(captured.source),
+      fail: (error) =>
+        this.contents.mark(
+          key,
+          {
+            status: error.code === 'Conflict' ? 'source-changed' : 'error',
+            error: error.message,
+          },
+          before,
+        ),
     });
   }
   /**

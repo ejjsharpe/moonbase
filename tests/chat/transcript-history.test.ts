@@ -5,6 +5,7 @@ import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
 import { ManagedRuntime } from 'effect';
 import { createMoonbaseApplication } from '@moonbase/application';
+import { transcriptLimits } from '@moonbase/application/chat';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import { LocalPiRuntimeLive } from '@moonbase/pi-runtime';
 import { mkdtemp, realpath, rm, mkdir, writeFile } from 'node:fs/promises';
@@ -114,7 +115,7 @@ for (const mode of ['local', 'remote'] as const)
       assert.equal(state.error, null);
       assert(state.entries.some((entry) => entry.id === ids[index]));
       assert.equal(new Set(state.entries.map((entry) => entry.id)).size, state.entries.length);
-      assert(state.entries.length <= 128);
+      assert(state.entries.length <= transcriptLimits.summaryRecords);
       const after = await counters(),
         ranges = after.ranges!.slice(before.ranges!.length);
       assert(ranges.length <= 35, `distance-independent around read: ${ranges.length}`);
@@ -127,7 +128,7 @@ for (const mode of ['local', 'remote'] as const)
       await until(
         async () => controller.getSnapshot().transcript,
         (state) =>
-          state.view.anchor?.entryId === ids[index] &&
+          state.view.anchor?.key === `entry:${ids[index]}` &&
           state.entries.some((entry) => entry.id === ids[index]),
       );
       const state = controller.getSnapshot().transcript;
@@ -198,7 +199,7 @@ for (const mode of ['local', 'remote'] as const)
     await controller.nextFindMatch();
     await until(
       async () => controller.getSnapshot().transcript,
-      (state) => state.view.anchor?.entryId === long.entryId,
+      (state) => state.view.anchor?.key === `entry:${long.entryId}`,
     );
     const row = controller
       .getSnapshot()

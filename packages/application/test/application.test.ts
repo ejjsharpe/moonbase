@@ -618,7 +618,7 @@ test('prepared controllers block all IO and state admissions while teardown sett
     await current.showLater();
     await current.jumpToEntry('late');
     await current.jumpToLatest();
-    current.setTranscriptView({ anchor: { entryId: 'late', offset: 0 }, expanded: ['late'] });
+    current.setTranscriptView({ anchor: { key: 'entry:late', offset: 0 }, expanded: ['late'] });
     const source = { kind: 'entry' as const, target: chat.target, entryId: 'late' };
     await current.loadTranscriptManifest(source);
     await current.loadTranscriptPart(source, {
@@ -1091,7 +1091,7 @@ test('transcript anchors/expansions belong to application lifetime and exact bac
     await chat.select(a.target);
     await chat.jumpToEntry('e320');
     chat.setTranscriptView({
-      anchor: { entryId: 'e320', partId: 'm0.b0', offset: -37.5 },
+      anchor: { key: 'entry:e320', offset: -37.5 },
       expanded: ['tool-1', 'thought-2'],
     });
     const saved = a.storage.value!;
@@ -1101,8 +1101,7 @@ test('transcript anchors/expansions belong to application lifetime and exact bac
     await chat.detach();
     await chat.start();
     assert.deepEqual(chat.getSnapshot().transcript.view.anchor, {
-      entryId: 'e320',
-      partId: 'm0.b0',
+      key: 'entry:e320',
       offset: -37.5,
     });
     assert(chat.getSnapshot().transcript.entries.some((entry) => entry.id === 'e320'));
@@ -1118,14 +1117,14 @@ test('transcript anchors/expansions belong to application lifetime and exact bac
     chat = (await app.selectChatTarget('backend-A'))!;
     await chat.start();
     assert.deepEqual(chat.getSnapshot().transcript.view, {
-      anchor: { entryId: 'e320', partId: 'm0.b0', offset: -37.5 },
+      anchor: { key: 'entry:e320', offset: -37.5 },
       expanded: ['tool-1', 'thought-2'],
     });
     assert(app.closeChat());
     await cleanupSettled(app);
     chat = (await app.openChat())!;
     await chat.start();
-    assert.equal(chat.getSnapshot().transcript.view.anchor!.entryId, 'e320');
+    assert.equal(chat.getSnapshot().transcript.view.anchor!.key, 'entry:e320');
     assert.equal(a.storage.value, saved);
   } finally {
     await app.dispose();

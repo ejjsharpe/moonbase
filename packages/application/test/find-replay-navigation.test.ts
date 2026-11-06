@@ -12,7 +12,7 @@ for (const late of ['success', 'error'])
   test(`manual navigation wins an evicted-match replay with late ${late}`, async (t) => {
     const f = await transcriptController(t, 1100);
     await f.controller.findTranscript('same');
-    await until(() => f.controller.getSnapshot().transcript.view.anchor?.entryId === 'e0');
+    await until(() => f.controller.getSnapshot().transcript.view.anchor?.key === 'entry:e0');
     f.controller.cancelFindReveal();
     assert.equal(f.controller.getSnapshot().transcript.find.revealing, false);
     let releaseReplay!: () => void, releaseManual!: () => void;
@@ -32,7 +32,7 @@ for (const late of ['success', 'error'])
       }
       return fallback();
     });
-    let next: Promise<void> | undefined, manual: Promise<void> | undefined;
+    let next: Promise<void> | undefined, manual: Promise<unknown> | undefined;
     try {
       next = f.controller.nextFindMatch();
       await until(() => !!replaySignal);
@@ -49,7 +49,7 @@ for (const late of ['success', 'error'])
       assert.equal(manualSignal!.aborted, false, 'older replay must leave manual navigation alive');
       releaseManual();
       await manual;
-      assert.equal(f.controller.getSnapshot().transcript.view.anchor?.entryId, 'e50');
+      assert.equal(f.controller.getSnapshot().transcript.view.anchor?.key, 'entry:e50');
     } finally {
       releaseReplay();
       releaseManual();
@@ -57,7 +57,7 @@ for (const late of ['success', 'error'])
       await manual;
       console.log(
         'final anchor:',
-        f.controller.getSnapshot().transcript.view.anchor?.entryId,
+        f.controller.getSnapshot().transcript.view.anchor?.key,
         'manual aborted:',
         manualSignal?.aborted,
       );
