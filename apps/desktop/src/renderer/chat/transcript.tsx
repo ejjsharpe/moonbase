@@ -100,7 +100,7 @@ export function Transcript({
   useLayoutEffect(() => {
     current.current = state;
   }, [state]);
-  const [views] = useState(() => createViewSaver(controller));
+  const [views] = useState(() => createViewSaver(controller, readDevicePixel));
   const { notice, actions } = useTranscriptActions(native, latestState);
   const [cache] = useState(() => new MarkdownCache());
   useEffect(() => () => cache.clear(), [cache]);
@@ -483,6 +483,7 @@ function findPlacement({ dataset, view, rows }: ChatState['transcript']) {
   const index = anchor ? rows.findIndex((row) => row.key === anchor.key) : -1;
   return index >= 0 ? { dataset, anchor, index } : { dataset, anchor: null, index: -1 };
 }
+const readDevicePixel = () => 1 / window.devicePixelRatio;
 const getRowKey = (row: TranscriptRow) => row.key;
 const getRowType = (row: TranscriptRow) => (row.kind === 'entry' ? row.entry.role : row.kind);
 const renderRow = ({ item }: LegendListRenderItemProps<TranscriptRow>) => <Row row={item} />;
