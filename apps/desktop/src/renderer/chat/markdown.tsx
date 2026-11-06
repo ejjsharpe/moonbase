@@ -1,7 +1,6 @@
 import {
   memo,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -375,26 +374,36 @@ const Code = memo(function Code({
   foldId?: string;
 }) {
   const pre = useRef<HTMLPreElement>(null);
-  /** Folded code shows its first lines; the rest render only while unfolded, which is remembered. */
+  /**
+   * Folded code shows its first lines; the rest render only while unfolded. The reader's unfolding
+   * is remembered; Find's is not.
+   */
   const remembered = useRememberedExpansion(foldId ?? null);
   const lines = text.split('\n');
   const foldable = lines.length > foldedCodeLines;
   const findMatch = useContext(ActiveFindMatch);
-  /** The Find match last checked for unfolding. */
-  const revealed = useRef<FindTarget | null>(null);
   /** Find maps the shown and folded lines as separate source spans. */
   const spans =
     foldable && sourceStart !== undefined && sourceEnd !== undefined && foldStart !== undefined
       ? { start: sourceStart, fold: foldStart, end: sourceEnd }
       : null;
-  const { open: unfolded, setOpen: setUnfolded } = remembered;
+  /** The Find match last checked for unfolding, and whether Find unfolded the code while mounted. */
+  const [revealed, setRevealed] = useState({ match: null as FindTarget | null, open: false });
   // A newly active Find match in the folded lines unfolds them once; the reader can fold again.
-  useLayoutEffect(() => {
-    if (findMatch === revealed.current) return;
-    revealed.current = findMatch;
-    if (findMatch && spans && findMatch.end > spans.fold && findMatch.start < spans.end)
-      setUnfolded(true);
-  });
+  // The unfolding is Find's, not the reader's, so it is not remembered, and nothing saves the view
+  // while the list is still moving to the match.
+  if (findMatch !== revealed.match)
+    setRevealed({
+      match: findMatch,
+      open:
+        revealed.open ||
+        (!!findMatch && !!spans && findMatch.end > spans.fold && findMatch.start < spans.end),
+    });
+  const unfolded = remembered.open || revealed.open;
+  const setUnfolded = (open: boolean) => {
+    if (!open && revealed.open) setRevealed({ ...revealed, open: false });
+    remembered.setOpen(open);
+  };
   const known = monaco.languages
     .getLanguages()
     .find(

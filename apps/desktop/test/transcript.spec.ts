@@ -304,6 +304,117 @@ test.describe('the virtualized transcript', () => {
     expect(await page.evaluate(() => window.getSelection()!.toString())).toBe(selected);
   });
 
+  /** Records each reading anchor saved to view memory from now on. */
+  const recordAnchors = (page: Page) =>
+    page.evaluate(() => {
+      const chat = window.demo.application.chat!;
+      const saved: unknown[] = [];
+      (window as typeof window & { savedAnchors?: unknown[] }).savedAnchors = saved;
+      let last = chat.getSnapshot().transcript.view.anchor;
+      chat.subscribe(() => {
+        const { anchor } = chat.getSnapshot().transcript.view;
+        if (anchor !== last) saved.push((last = anchor));
+      });
+    });
+  const readSavedAnchors = (page: Page) =>
+    page.evaluate(
+      () => (window as typeof window & { savedAnchors?: ({ key: string } | null)[] }).savedAnchors!,
+    );
+  /** Whether the active Find match's text is inside the transcript's viewport. */
+  const isActiveMatchInView = (page: Page) =>
+    page.evaluate(() => {
+      const range = [...(CSS.highlights.get('find-active') ?? [])][0] as Range | undefined;
+      if (!range?.toString()) return false;
+      const box = range.getBoundingClientRect(),
+        view = document.querySelector('[aria-label="Chat transcript"]')!.getBoundingClientRect();
+      return box.height > 0 && box.top >= view.top && box.bottom <= view.bottom;
+    });
+  const expandedIds = (page: Page) =>
+    page.evaluate(() => window.demo.application.chat!.getSnapshot().transcript.view.expanded);
+
+  test("Find's unfold of folded code in a row scrolled away is transient", async ({ page }) => {
+    await openLong(page, 200);
+    // All history is retained; answer 101 is far above the viewport, so not mounted.
+    await scrollToStart(page);
+    await scrollToEnd(page);
+    await settle(page);
+    await wheelUp(page, 1500);
+    const row = page.locator('[data-transcript-row="entry:long-101"]');
+    await expect(row).toHaveCount(0);
+    const find = page.getByRole('textbox', { name: 'Find in conversation', exact: true });
+    await page.getByRole('button', { name: 'Find', exact: true }).click();
+    // Only answer 101's folded lines hold this.
+    await find.fill('line59 = 101;');
+    await expect(row.getByRole('button', { name: 'Fold code' })).toBeAttached();
+    await expect.poll(() => isActiveMatchInView(page)).toBe(true);
+    await settle(page);
+    expect(await expandedIds(page)).toEqual([]);
+    // Once Find is closed and the row unmounts, the code folds again.
+    await find.press('Escape');
+    await page.getByRole('textbox', { name: 'Message', exact: true }).focus();
+    await scrollToEnd(page);
+    await expect(row).toHaveCount(0);
+    await showRow(page, 'entry:long-101');
+    await expect(row.getByRole('button', { name: /^Show all/ })).toBeVisible();
+  });
+
+  test("Find's unfold of folded code in a mounted row off-screen keeps the match's anchor", async ({
+    page,
+  }) => {
+    await page.goto('/?local&design&transcript');
+    await page.getByRole('button', { name: /^Conversation/ }).click();
+    await expect(transcriptList(page)).toBeVisible();
+    await page.evaluate(async () => {
+      const code = Array.from({ length: 60 }, (_, index) =>
+        index === 2 || index === 49 ? `const needle = ${index};` : `line ${index}`,
+      ).join('\n');
+      await window.demo.transcript!.record([
+        {
+          id: 'code',
+          parts: [{ text: 'Intro.\n\n```\n' + code + '\n```\n', kind: 'text', role: 'assistant' }],
+        },
+        ...Array.from({ length: 30 }, (_, index) => ({
+          id: `filler-${index}`,
+          parts: [
+            {
+              text: 'A paragraph of steady explanation. '.repeat(40),
+              kind: 'text' as const,
+              role: 'assistant' as const,
+            },
+          ],
+        })),
+      ]);
+    });
+    const row = page.locator('[data-transcript-row="entry:code"]');
+    const find = await findText(page, 'needle');
+    // The first match is in the shown lines.
+    await expect.poll(() => isActiveMatchInView(page)).toBe(true);
+    await expect(row.getByRole('button', { name: /^Show all/ })).toBeVisible();
+    // The reader scrolls away (over prose, not the code's own scroller); the active match's row
+    // stays mounted.
+    const box = (await transcriptList(page).boundingBox())!;
+    await page.mouse.move(box.x + 8, box.y + box.height - 80);
+    for (let step = 0; step < 4; step++) await page.mouse.wheel(0, 600);
+    await settle(page);
+    await expect(row).toBeAttached();
+    expect(await row.evaluate((node) => node.getBoundingClientRect().bottom)).toBeLessThan(
+      await transcriptList(page).evaluate((node) => node.getBoundingClientRect().top),
+    );
+    await recordAnchors(page);
+    // The next match is in the folded lines.
+    await find.focus();
+    await find.press('Enter');
+    await expect(row.getByRole('button', { name: 'Fold code' })).toBeVisible();
+    await expect.poll(() => isActiveMatchInView(page)).toBe(true);
+    await settle(page);
+    // Only anchors in the match's row are saved: the unfold saves no position away from it.
+    const saved = await readSavedAnchors(page);
+    expect(saved.length).toBeGreaterThan(0);
+    for (const anchor of saved)
+      expect(anchor).toEqual(expect.objectContaining({ key: 'entry:code' }));
+    expect(await expandedIds(page)).toEqual([]);
+  });
+
   test('an unfolded code block stays unfolded after scrolling away and back', async ({ page }) => {
     await openLong(page, 200);
     const row = page.locator('[data-transcript-row="entry:long-191"]');
