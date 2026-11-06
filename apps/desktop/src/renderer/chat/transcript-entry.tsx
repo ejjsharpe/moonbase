@@ -143,8 +143,8 @@ export const Entry = memo(
       await controller.loadTranscriptManifest(source);
     };
     let label = entry.toolName ?? entry.role;
-    if (entry.role === 'user') label = 'You';
-    if (entry.role === 'assistant') label = 'Assistant';
+    if (entry.role === 'user') label = 'you';
+    if (entry.role === 'assistant') label = 'agent';
     let body = <p {...stylex.props(styles.literal)}>{entry.text}</p>;
     if (entry.role === 'assistant')
       body = (
@@ -201,7 +201,9 @@ export const Entry = memo(
         aria-label={liveState ? 'Live response' : undefined}
         {...stylex.props(styles.message)}>
         <div {...stylex.props(styles.header)}>
-          <strong>{label}</strong>
+          <span {...stylex.props(styles.role, entry.role === 'user' && styles.userRole)}>
+            {label}
+          </span>
           <span>{entry.isError ? 'Failed' : liveState}</span>
           {liveState && transcript?.thinking === 'none' && <span>No thinking supplied</span>}
           {liveState && transcript?.thinking === 'pending' && (
@@ -209,14 +211,14 @@ export const Entry = memo(
           )}
           {source && ['assistant', 'user'].includes(entry.role) && (
             <Button
-              {...stylex.props(controls.button, controls.quietButton)}
+              {...stylex.props(controls.button, controls.quietButton, styles.copyMessage)}
               disabled={!native || (source.kind === 'live' && offline)}
               onClick={copy}>
               Copy message
             </Button>
           )}
         </div>
-        {body}
+        {entry.role === 'user' ? <div {...stylex.props(styles.bubble)}>{body}</div> : body}
         {matchedPart &&
           manifest?.status === 'complete' &&
           (replay.done || !manifest.omittedParts) &&
@@ -305,9 +307,12 @@ function Activity({
     revealing,
     controller,
   });
-  const summaries = [
-    ...new Set(parts.map((part) => describeActivityPart(part, { source }, evidence))),
-  ];
+  // One step per distinct description, marked by its state like a task list.
+  const steps = new Map<string, string | undefined>();
+  for (const part of parts) {
+    const summary = describeActivityPart(part, { source }, evidence);
+    if (!steps.has(summary)) steps.set(summary, getActivityState(part, { source }, evidence));
+  }
   return (
     <Collapsible.Root
       open={disclosure.open}
@@ -319,7 +324,22 @@ function Activity({
         {...stylex.props(controls.button, controls.quietButton, styles.activityToggle)}>
         Activity · {parts.length} recorded {parts.length === 1 ? 'part' : 'parts'}
       </Collapsible.Trigger>
-      <p {...stylex.props(styles.small, styles.activitySummary)}>{summaries.join(' · ')}</p>
+      <ul {...stylex.props(styles.activitySteps)}>
+        {[...steps].map(([summary, state]) => {
+          const split = summary.indexOf(' · ');
+          return (
+            <li
+              key={summary}
+              data-glyph={(state && stepGlyphs[state]) ?? '·'}
+              {...stylex.props(styles.activityStep, stepStyles[state ?? 'unknown'])}>
+              <span {...stylex.props(styles.activityTool)}>
+                {split < 0 ? summary : summary.slice(0, split)}
+              </span>
+              {split < 0 ? '' : summary.slice(split)}
+            </li>
+          );
+        })}
+      </ul>
       {disclosure.disclosureError && (
         <p role="alert" {...stylex.props(styles.small)}>
           Could not remember this activity disclosure. Its content is expanded.
@@ -643,6 +663,23 @@ const Part = memo(
   },
   compareProps<PartProps>({ lists: ['contents', 'findMatches', 'expandedIds'], records: ['part'] }),
 );
+
+const stepGlyphs: Record<string, string> = {
+  completed: '✓',
+  running: '⠹',
+  requested: '○',
+  failed: '✕',
+  interrupted: '✕',
+  'missing-result': '?',
+};
+const stepStyles: Record<string, stylex.StyleXStyles> = {
+  running: styles.stepRunning,
+  failed: styles.stepFailed,
+  interrupted: styles.stepFailed,
+  'missing-result': styles.stepFailed,
+  requested: styles.stepPending,
+  unknown: styles.stepPending,
+};
 
 const partLabels = {
   text: 'Text',

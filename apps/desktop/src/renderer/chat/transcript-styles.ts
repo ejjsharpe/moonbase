@@ -1,5 +1,5 @@
 import * as stylex from '@stylexjs/stylex';
-import { colors, layout, radius, space, type } from '@moonbase/ui/tokens.stylex';
+import { colors, layout, radius, space, syntax, type } from '@moonbase/ui/tokens.stylex';
 
 /** Pixels a scrolling output grows before it scrolls. */
 const outputMaxHeight = 320;
@@ -34,9 +34,20 @@ export const transcriptStyles = stylex.create({
     display: 'flex',
     alignItems: 'center',
     gap: space.sm,
+    minHeight: 28,
     fontSize: type.small,
     color: colors.secondary,
     flexWrap: 'wrap',
+  },
+  /** Role names read like a terminal prompt: lowercase mono, the agent brighter than you. */
+  role: { fontFamily: type.mono, fontSize: type.small, fontWeight: 700, color: colors.text },
+  userRole: { color: colors.secondary },
+  copyMessage: { marginLeft: 'auto', color: colors.muted },
+  bubble: {
+    padding: '2px 14px',
+    marginTop: space.xs,
+    backgroundColor: colors.elevated,
+    borderRadius: 8,
   },
   literal: {
     fontFamily: type.ui,
@@ -66,9 +77,47 @@ export const transcriptStyles = stylex.create({
     '::highlight(find-active)': { backgroundColor: colors.accent, color: colors.onAccent },
   },
   disclosure: { minWidth: 0 },
-  activity: { minWidth: 0, marginBlock: space.sm, marginInline: 0 },
-  activityToggle: { textAlign: 'left', whiteSpace: 'normal' },
-  activitySummary: { marginTop: 0, marginBottom: space.sm, paddingInline: space.sm },
+  /** Folded tool work reads as one card of steps, each marked by its state. */
+  activity: {
+    minWidth: 0,
+    marginBlock: space.sm,
+    marginInline: 0,
+    paddingBlock: 6,
+    backgroundColor: colors.elevated,
+    borderWidth: 1,
+    borderStyle: 'solid',
+    borderColor: colors.border,
+    borderRadius: radius.panel,
+  },
+  activityToggle: {
+    textAlign: 'left',
+    whiteSpace: 'normal',
+    marginInline: 4,
+    color: colors.muted,
+  },
+  activitySteps: {
+    listStyle: 'none',
+    margin: 0,
+    padding: '2px 0 4px',
+    fontFamily: type.mono,
+    fontSize: type.small,
+    lineHeight: 1.75,
+    color: colors.secondary,
+  },
+  activityStep: {
+    paddingInline: 14,
+    overflowWrap: 'anywhere',
+    '::before': {
+      content: 'attr(data-glyph)',
+      display: 'inline-block',
+      width: '1.6em',
+      color: syntax.string,
+    },
+  },
+  activityTool: { color: syntax.keyword },
+  stepRunning: { '::before': { color: colors.accent } },
+  stepFailed: { '::before': { color: colors.danger } },
+  stepPending: { '::before': { color: colors.muted } },
   small: {
     color: colors.secondary,
     fontSize: type.small,

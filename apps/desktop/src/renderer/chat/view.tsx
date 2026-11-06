@@ -360,11 +360,9 @@ export function ChatView({
             );
           }}>
           <div {...stylex.props(styles.messageRow)}>
-            {!state.selected && (
-              <span aria-hidden="true" {...stylex.props(styles.prompt)}>
-                ❯
-              </span>
-            )}
+            <span aria-hidden="true" {...stylex.props(styles.prompt)}>
+              ❯
+            </span>
             <label htmlFor="message" {...stylex.props(controls.hidden)}>
               Message
             </label>
@@ -375,7 +373,7 @@ export function ChatView({
                 styles.textarea,
                 !state.selected && styles.starterTextarea,
               )}
-              placeholder={state.selected ? 'Reply…' : 'Describe a task…'}
+              placeholder={state.selected ? 'Message the agent…' : 'Describe a task…'}
               value={state.draft}
               onChange={(e) => controller.setDraft(e.target.value)}
               onKeyDown={(e) => {
