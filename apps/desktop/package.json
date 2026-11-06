@@ -6,6 +6,7 @@
   "main": "dist/main.mjs",
   "scripts": {
     "dev": "node scripts/dev.mjs",
+    "dev:mock": "MOONBASE_DEV_MOCK=1 node scripts/dev.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "oxlint .",
     "test": "node --experimental-strip-types --test test/*.test.ts",
@@ -48,6 +49,7 @@
     "unist-util-visit": "5.2.0"
   },
   "devDependencies": {
+    "@earendil-works/pi-ai": "1.4.0",
     "@moonbase/effect": "workspace:*",
     "@types/mdast": "4.0.4",
     "electron": "45.1.0",
