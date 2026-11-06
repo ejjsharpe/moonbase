@@ -925,6 +925,55 @@ test('keyboard focus on a rail tile peeks at its project', async ({ page }) => {
   await expect(peek).toContainText('moonbase');
 });
 
+test('the rail keeps one tile per project and the sidebar header switches its worktrees', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?local&design');
+  await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
+  await page.evaluate(async () => {
+    await window.demo.first.openCheckout('/demo/other');
+    await window.demo.first.openCheckout('/demo/legend-list');
+  });
+  const projects = page.getByRole('group', { name: 'Project tabs', exact: true });
+  // The worktree takes over its repository's tile instead of adding one.
+  await expect(projects.getByRole('tab')).toHaveText([
+    'legend-list · feat/legend-list',
+    'other · main',
+  ]);
+  const worktree = projects.getByRole('tab', {
+    name: 'legend-list · feat/legend-list',
+    exact: true,
+  });
+  await worktree.hover();
+  await expect(
+    page
+      .locator('[data-side="right"] > [data-side="right"]')
+      .filter({ hasText: '/demo/legend-list' }),
+  ).toContainText('2 worktrees open');
+  await worktree.click();
+  const header = page.getByRole('button', {
+    name: 'Switch worktree, legend-list · feat/legend-list',
+    exact: true,
+  });
+  await expect(header).toBeVisible();
+  await header.click();
+  const menu = page.getByRole('menu', { name: 'Worktrees', exact: true });
+  await expect(menu.getByRole('menuitem')).toHaveCount(2);
+  await expect(
+    menu.getByRole('menuitem', { name: 'legend-list · feat/legend-list, current', exact: true }),
+  ).toBeDisabled();
+  await page.screenshot({ path: '../../test-results/redesign-review/worktree-switcher.png' });
+  await menu.getByRole('menuitem', { name: 'moonbase · main', exact: true }).click();
+  const project = projects.getByRole('tab', { name: 'moonbase · main', exact: true });
+  await expect(project).toHaveAttribute('aria-selected', 'true');
+  await expect(projects.getByRole('tab')).toHaveCount(2);
+  await expect(
+    page.getByRole('button', { name: 'Switch worktree, moonbase · main', exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'welcome.ts editor', exact: true })).toBeVisible();
+});
+
 test('removing a middle project moves survivors smoothly up the rail', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await page.clock.install();

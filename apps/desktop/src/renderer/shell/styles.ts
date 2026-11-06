@@ -1,5 +1,5 @@
 import * as stylex from '@stylexjs/stylex';
-import { colors, projectHues, radius, space, type } from '@moonbase/ui/tokens.stylex';
+import { colors, radius, space, type } from '@moonbase/ui/tokens.stylex';
 
 const railWidth = 72;
 
@@ -99,8 +99,6 @@ export const styles = stylex.create({
     fontWeight: 700,
     color: colors.onAccent,
   },
-  // Initials are drawn, not text, so a tab's accessible name stays `name · branch`.
-  projectTile: { '::before': { content: 'attr(data-initials)' } },
   agentsTile: { backgroundColor: colors.accent },
   openTile: {
     color: colors.muted,
@@ -109,12 +107,6 @@ export const styles = stylex.create({
     borderStyle: 'dashed',
     borderColor: colors.controlBorder,
   },
-  silver: { backgroundColor: projectHues.silver },
-  periwinkle: { backgroundColor: projectHues.periwinkle },
-  green: { backgroundColor: projectHues.green },
-  pink: { backgroundColor: projectHues.pink },
-  lavender: { backgroundColor: projectHues.lavender },
-  sand: { backgroundColor: projectHues.sand },
   // Close sits on the tile's corner and appears while its row is hovered or focused.
   railClose: {
     position: 'absolute',

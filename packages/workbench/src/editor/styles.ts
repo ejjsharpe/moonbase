@@ -14,12 +14,6 @@ export const styles = stylex.create({
   panel: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 },
   toolbar: { display: 'flex', gap: space.sm, alignItems: 'center', flexWrap: 'wrap' },
   label: { display: 'flex', flexDirection: 'column', gap: space.xs, marginBottom: space.md },
-  directory: {
-    margin: '0 8px 12px',
-    overflow: 'hidden',
-    whiteSpace: 'nowrap',
-    textOverflow: 'ellipsis',
-  },
   empty: { margin: space.xl, maxWidth: 540, color: colors.secondary, fontSize: type.body },
   backdrop: { position: 'fixed', inset: 0, backgroundColor: colors.backdrop, zIndex: 50 },
   popup: {

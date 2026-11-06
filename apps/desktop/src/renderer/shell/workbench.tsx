@@ -193,6 +193,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
       }}>
       <MainTabs
         checkouts={openCheckouts}
+        selectedCheckoutId={state?.recovery.selectedCheckoutId}
         value={view}
         chatVisible={chatTab}
         chatOpen={!!chat}
