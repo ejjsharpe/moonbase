@@ -85,7 +85,7 @@ test('the editor uses a subtle scroll shadow below the breadcrumbs', async ({ pa
     .press('Meta+ArrowDown');
   const shadow = first(page).locator('.monaco-editor .scroll-decoration');
   await expect(shadow).toBeVisible();
-  await expect(shadow).toHaveCSS('box-shadow', 'rgba(0, 0, 0, 0.15) 0px 6px 6px -6px inset');
+  await expect(shadow).toHaveCSS('box-shadow', 'rgba(0, 0, 0, 0.2) 0px 6px 6px -6px inset');
 });
 
 test('a background tab context menu closes its captured file and keeps the current breadcrumbs', async ({

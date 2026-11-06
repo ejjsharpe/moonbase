@@ -848,7 +848,7 @@ test('main tabs dim inactive labels, reveal close on hover or focus and separate
   await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
   await expect(page.getByRole('tablist', { name: 'Workbench views', exact: true })).toHaveCSS(
     'box-shadow',
-    'rgb(41, 41, 45) 0px -1px 0px 0px inset',
+    'rgb(35, 37, 46) 0px -1px 0px 0px inset',
   );
   await page.evaluate(() => window.demo.first.openCheckout('/demo/other'));
   const agents = page.getByRole('tab', { name: 'Agents', exact: true });
@@ -881,9 +881,9 @@ test('main tabs dim inactive labels, reveal close on hover or focus and separate
   expect(await divider(project)).toEqual({ content: '""', width: '1px', height: '16px' });
   await other.click();
   await page.mouse.move(900, 400);
-  await expect(project).toHaveCSS('color', 'rgb(151, 151, 159)');
-  await expect(agents).toHaveCSS('color', 'rgb(151, 151, 159)');
-  await expect(other).toHaveCSS('color', 'rgb(229, 229, 231)');
+  await expect(project).toHaveCSS('color', 'rgb(139, 144, 160)');
+  await expect(agents).toHaveCSS('color', 'rgb(139, 144, 160)');
+  await expect(other).toHaveCSS('color', 'rgb(220, 223, 232)');
   await expect(closeProject).toHaveCSS('opacity', '0');
   await expect(closeAgents).toHaveCSS('opacity', '0');
   await expect(
@@ -896,11 +896,11 @@ test('main tabs dim inactive labels, reveal close on hover or focus and separate
     .getByRole('tablist', { name: 'Workbench views', exact: true })
     .screenshot({ path: '../../test-results/redesign-review/tabs-idle.png' });
   await project.hover();
-  await expect(project).toHaveCSS('color', 'rgb(229, 229, 231)');
+  await expect(project).toHaveCSS('color', 'rgb(220, 223, 232)');
   await expect(closeProject).toHaveCSS('opacity', '1');
   expect(
     await project.evaluate((element) => getComputedStyle(element.parentElement!).backgroundColor),
-  ).toBe('rgb(34, 34, 36)');
+  ).toBe('rgb(28, 30, 38)');
   await expect(closeAgents).toHaveCSS('opacity', '0');
   expect(await project.boundingBox()).toEqual(originalBounds);
   await page
@@ -911,7 +911,7 @@ test('main tabs dim inactive labels, reveal close on hover or focus and separate
   await closeProject.focus();
   await expect(closeProject).toBeFocused();
   await expect(closeProject).toHaveCSS('opacity', '1');
-  await expect(project).toHaveCSS('color', 'rgb(229, 229, 231)');
+  await expect(project).toHaveCSS('color', 'rgb(220, 223, 232)');
 });
 
 for (const scrolled of [false, true]) {
@@ -1126,12 +1126,12 @@ test('design fixture renders first-message composition, pinned navigation and co
     await page
       .getByRole('main', { name: 'Agent workspace' })
       .evaluate((element) => getComputedStyle(element).backgroundColor),
-  ).toBe('rgb(20, 20, 21)');
+  ).toBe('rgb(20, 21, 27)');
   expect(
     await page
       .getByRole('complementary', { name: 'Saved chats', exact: true })
       .evaluate((element) => getComputedStyle(element).backgroundColor),
-  ).toBe('rgb(22, 22, 24)');
+  ).toBe('rgb(11, 12, 16)');
   expect(
     await message.evaluate((element) => element.closest('form')!.getBoundingClientRect().width),
   ).toBe(640);
