@@ -221,25 +221,37 @@ test.describe('the virtualized transcript', () => {
     expect(Math.abs(after.offset - before.offset)).toBeLessThan(1);
   });
 
-  test('reopening restores the reading position within a pixel', async ({ page }) => {
-    await openLong(page, 400);
-    await wheelUp(page, 2300);
-    await expect.poll(() => savedAnchor(page)).not.toBeNull();
-    const saved = (await savedAnchor(page))!;
-    const before = await readFirstVisible(page);
-    await page.getByRole('button', { name: 'Close Chat panel', exact: true }).click();
-    await page.getByRole('button', { name: 'Open Chat panel', exact: true }).click();
-    await expect(page.locator(`[data-transcript-row="${saved.key}"]`)).toBeVisible();
-    await expect
-      .poll(async () => {
-        const after = await readFirstVisible(page);
-        return after.part === before.part && after.row === before.row
-          ? Math.abs(after.offset - before.offset)
-          : Infinity;
-      })
-      .toBeLessThan(1);
-    expect(await savedAnchor(page)).toEqual(saved);
-  });
+  // Rows sit at fractional positions while the list scrolls in whole pixels, so a restore lands a
+  // fraction off at some sizes; reopening must still keep the saved anchor.
+  for (const viewport of [
+    { width: 1600, height: 1000 },
+    { width: 1528, height: 1040 },
+    { width: 1672, height: 960 },
+  ])
+    test(`reopening restores the reading position within a pixel at ${viewport.width}×${viewport.height}`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(viewport);
+      await openLong(page, 400);
+      await wheelUp(page, 2300);
+      await expect.poll(() => savedAnchor(page)).not.toBeNull();
+      const saved = (await savedAnchor(page))!;
+      const before = await readFirstVisible(page);
+      await page.getByRole('button', { name: 'Close Chat panel', exact: true }).click();
+      await page.getByRole('button', { name: 'Open Chat panel', exact: true }).click();
+      await expect(page.locator(`[data-transcript-row="${saved.key}"]`)).toBeVisible();
+      await expect
+        .poll(async () => {
+          const after = await readFirstVisible(page);
+          return after.part === before.part && after.row === before.row
+            ? Math.abs(after.offset - before.offset)
+            : Infinity;
+        })
+        .toBeLessThan(1);
+      // The restore's own scroll end saves what the list reports; it must be the saved anchor.
+      await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 300)));
+      expect(await savedAnchor(page)).toEqual(saved);
+    });
 
   test('Jump to latest appears only while not following', async ({ page }) => {
     await openLong(page, 200);
