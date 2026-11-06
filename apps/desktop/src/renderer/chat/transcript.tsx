@@ -520,6 +520,8 @@ function getViewport(
     boundary: transcript.atLatest && !!snapshot?.run && transcript.entries.length === windowRows,
   };
 }
+/** Parts the anchor may name. A folded part is skipped: an anchor in a part reveals it. */
+const anchorPartSelector = '[data-transcript-part]:not([data-transcript-folded])';
 /** Records the first visible entry/part as a semantic, viewport-relative anchor. */
 function captureAnchor(
   element: HTMLElement,
@@ -529,7 +531,7 @@ function captureAnchor(
   const top = getReadingTop(element);
   const nodes = [
     ...element.querySelectorAll<HTMLElement>(
-      '[data-transcript-part], [data-transcript-entry], [data-transcript-live]',
+      `${anchorPartSelector}, [data-transcript-entry], [data-transcript-live]`,
     ),
   ];
   const node =
@@ -556,7 +558,7 @@ function captureAnchor(
     return;
   const partNode = node.dataset.transcriptPart
     ? node
-    : row.querySelector<HTMLElement>('[data-transcript-part]');
+    : row.querySelector<HTMLElement>(anchorPartSelector);
   const part =
     getTranscriptParts(summary, observed.transcript.manifest).find(
       (part) => part.partId === partNode?.dataset.transcriptPart,

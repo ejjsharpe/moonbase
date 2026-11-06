@@ -364,18 +364,7 @@ test('safe GFM, literal user content, progressive source, exact native callbacks
   await expect
     .poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1)))
     .toBe('  const moon = "🌔";\t\r\nconsole.log(moon);');
-  // A press toggles what the reader sees, and a reading anchor saved inside Output reveals it, so
-  // let a queued scroll save (150 ms) land before choosing whether to press.
-  const outputPart = row.getByRole('button', { name: 'Output', exact: true });
-  await outputPart.scrollIntoViewIfNeeded();
-  await page.evaluate(
-    () =>
-      new Promise((resolve) =>
-        setTimeout(() => requestAnimationFrame(() => requestAnimationFrame(resolve)), 200),
-      ),
-  );
-  if ((await outputPart.getAttribute('aria-expanded')) !== 'true') await outputPart.click();
-  await expect(outputPart).toHaveAttribute('aria-expanded', 'true');
+  await row.getByRole('button', { name: 'Output', exact: true }).click();
   await expect(row.getByText(/Read more/)).toBeVisible();
   await row.getByRole('button', { name: 'Copy part', exact: true }).first().click();
   await expect
@@ -2075,6 +2064,32 @@ test('a disclosure toggled before a scroll save lands keeps the scrolled reading
     () => window.demo.application.chat!.getSnapshot().transcript.view.anchor,
   );
   expect(anchor).not.toEqual(saved);
+});
+test('scrolling a folded part to the reading line saves an anchor that leaves it folded', async ({
+  page,
+}) => {
+  // Short enough that the parts below Output can scroll it to the reading line.
+  await page.setViewportSize({ width: 1600, height: 420 });
+  await open(page);
+  const output = answer(page).getByRole('button', { name: 'Output', exact: true });
+  await expect(output).toHaveAttribute('aria-expanded', 'false');
+  await transcript(page).dispatchEvent('wheel', { deltaY: -1 });
+  await transcript(page).evaluate((element) => {
+    const part = element.querySelector(
+      '[data-transcript-entry="reading-179"] [data-transcript-part="m0.b1"]',
+    )!;
+    const top = element.querySelector('[data-transcript-chrome]')!.getBoundingClientRect().bottom;
+    element.scrollTop += part.getBoundingClientRect().top - top - 2;
+    element.dispatchEvent(new Event('scroll'));
+  });
+  await settle(page);
+  const anchor = await page.evaluate(
+    () => window.demo.application.chat!.getSnapshot().transcript.view.anchor,
+  );
+  expect(anchor?.entryId).toBe('reading-179');
+  expect(anchor?.partId).not.toBe('m0.b1');
+  await settle(page);
+  await expect(output).toHaveAttribute('aria-expanded', 'false');
 });
 test('Copy keeps following live output; a disclosure press holds the reading position', async ({
   page,
