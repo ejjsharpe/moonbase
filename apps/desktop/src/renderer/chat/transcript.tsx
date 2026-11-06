@@ -130,7 +130,10 @@ export function Transcript({
     },
     [controller],
   );
+  /** The reader opened something while following; see TranscriptList's holdDisclosure. */
+  const [holding, setHolding] = useState(false);
   const jumpToLatest = () => {
+    setHolding(false);
     const selection = window.getSelection(),
       node = scroller.current;
     if (node && selection?.rangeCount && selection.getRangeAt(0).intersectsNode(node))
@@ -270,6 +273,8 @@ export function Transcript({
                 mounted={mounted}
                 selecting={reading.selecting}
                 onFollowingChange={setFollowingEnd}
+                holding={holding}
+                onHoldingChange={setHolding}
                 onPage={page}
                 onReaderInput={controller.cancelFindReveal}
                 header={
@@ -336,6 +341,8 @@ function TranscriptList({
   mounted,
   selecting,
   onFollowingChange,
+  holding,
+  onHoldingChange: setHolding,
   onPage,
   onReaderInput,
   header,
@@ -347,6 +354,9 @@ function TranscriptList({
   mounted: string[];
   selecting: boolean;
   onFollowingChange(following: boolean): void;
+  /** Growing rows don't pin the end, after the reader opened something while following. */
+  holding: boolean;
+  onHoldingChange(holding: boolean): void;
   onPage(direction: Paging): void;
   /** The reader scrolled, pressed, typed or moved focus in the list. */
   onReaderInput(): void;
@@ -389,9 +399,19 @@ function TranscriptList({
   useEffect(() => {
     const ref = list.current;
     if (!ref) return;
-    onFollowingChange(ref.getState().isFollowingEnd);
-    return ref.getState().listen('isFollowingEnd', onFollowingChange);
-  }, [list, onFollowingChange]);
+    // While holding, content below the screen counts as not following, so Jump to latest shows.
+    const report = () => {
+      const state = ref.getState();
+      onFollowingChange(state.isFollowingEnd && (!holding || state.isAtEnd));
+    };
+    report();
+    const following = ref.getState().listen('isFollowingEnd', report),
+      end = ref.getState().listen('isAtEnd', report);
+    return () => {
+      following();
+      end();
+    };
+  }, [list, onFollowingChange, holding]);
   // A newly revealed Find match, or one a jump just placed: scrolling to its row releases
   // following, then the match itself is revealed inside it. A match rendered later is revealed by
   // its part.
@@ -448,7 +468,6 @@ function TranscriptList({
    * above it up. Pressing one stops following rows that change size, so the change grows or
    * shrinks below; new rows still follow, and the reader's next scroll ends the hold.
    */
-  const [holding, setHolding] = useState(false);
   const holdDisclosure = (event: { target: EventTarget; key?: string }) => {
     if (event.key !== undefined && event.key !== 'Enter' && event.key !== ' ') return;
     const toggle = (event.target as Element).closest?.('button[aria-expanded]');
