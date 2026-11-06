@@ -1240,10 +1240,21 @@ test('design fixture renders first-message composition, pinned navigation and co
   const message = page.getByLabel('Message', { exact: true });
   await expect(message).toBeEnabled();
   await expect(page.getByRole('button', { name: 'Send message', exact: true })).toBeDisabled();
-  await page.getByRole('button', { name: 'Choose working folder', exact: true }).click();
   await expect(
-    page.getByRole('button', { name: 'Choose working folder', exact: true }),
-  ).toHaveAttribute('title', '/demo/moonbase');
+    page.getByRole('heading', { name: 'What should we work on?', exact: true }),
+  ).toBeVisible();
+  const folderChoice = page.getByRole('button', { name: 'Choose working folder', exact: true });
+  const send = page.getByRole('button', { name: 'Send message', exact: true });
+  // The folder, host and model sit in the composer's own toolbar, on the send button's row.
+  expect(await folderChoice.evaluate((element) => !!element.closest('form'))).toBe(true);
+  await folderChoice.click();
+  await expect(folderChoice).toHaveAttribute('title', '/demo/moonbase');
+  await expect(folderChoice.getByText('moonbase', { exact: true })).toBeVisible();
+  await expect(folderChoice.locator('[data-initials="mo"]')).toBeVisible();
+  const [folderBox, sendBox] = await Promise.all([folderChoice.boundingBox(), send.boundingBox()]);
+  expect(
+    Math.abs(folderBox!.y + folderBox!.height / 2 - (sendBox!.y + sendBox!.height / 2)),
+  ).toBeLessThan(2);
   expect(
     await page
       .getByRole('main', { name: 'Agent workspace' })
@@ -1256,7 +1267,7 @@ test('design fixture renders first-message composition, pinned navigation and co
   ).toBe('rgb(11, 12, 16)');
   expect(
     await message.evaluate((element) => element.closest('form')!.getBoundingClientRect().width),
-  ).toBe(640);
+  ).toBe(720);
   expect(
     await page
       .getByRole('tablist', { name: 'Workbench views', exact: true })

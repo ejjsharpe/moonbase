@@ -4,7 +4,7 @@ import { Button } from '@base-ui/react/button';
 import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
 import { workbench } from '@moonbase/ui/workbench';
-import { colors, layout, radius, space, type } from '@moonbase/ui/tokens.stylex';
+import { colors, layout, radius, shadow, space, syntax, type } from '@moonbase/ui/tokens.stylex';
 import type { ChatModelPreference } from '@moonbase/contracts/chat';
 import type { ChatController } from '@moonbase/application/chat';
 import { FindBar, handleChatFindKeyDown } from './find.tsx';
@@ -13,6 +13,7 @@ import type { TranscriptNative } from '../../chat/wire.ts';
 import { ProviderSetup } from './setup.tsx';
 import { Choice } from './choice.tsx';
 import { Icon } from '../icon.tsx';
+import { projectInitials, projectTiles } from '@moonbase/ui/projects';
 const compactLayout = window.matchMedia('(max-width: 640px)');
 const subscribeLayout = (listener: () => void) => {
   compactLayout.addEventListener('change', listener);
@@ -112,6 +113,7 @@ export function ChatView({
         : 'Choose a working folder to send. Local tools are not sandboxed.';
   if (local && !state.selected && !models.length)
     toolNotice = 'Set up a provider to send. Local tools are not sandboxed.';
+  const folderName = cwd ? cwd.split('/').filter(Boolean).at(-1) || '/' : '';
   const connected = state.ready,
     busy = (id: string) => state.active.includes(id);
   const snapshot = state.snapshot,
@@ -329,36 +331,10 @@ export function ChatView({
         />
       )}
       <div {...stylex.props(styles.composeArea, !state.selected && styles.starter)}>
-        {!state.selected && local && (
-          <div {...stylex.props(styles.composeContext)}>
-            <Button
-              aria-label="Choose working folder"
-              {...stylex.props(controls.button, controls.quietButton, styles.folderChoice)}
-              disabled={!chooseFolder || busy('send')}
-              title={cwd || 'Choose working folder'}
-              onClick={() => {
-                setFolderError(null);
-                void chooseFolder?.()
-                  .then((folder) => {
-                    if (folder) setCwd(folder);
-                  })
-                  .catch(() =>
-                    setFolderError(
-                      'The folder could not be approved. Choose an existing working folder again.',
-                    ),
-                  );
-              }}>
-              <Icon name="folder" />
-              <span {...stylex.props(controls.truncate)}>
-                {cwd ? cwd.split('/').filter(Boolean).at(-1) || '/' : 'Choose working folder'}
-              </span>
-              <Icon name="chevron" />
-            </Button>
-            <span {...stylex.props(styles.localLabel)}>
-              <Icon name="computer" />
-              This Mac
-            </span>
-          </div>
+        {!state.selected && (
+          <h2 {...stylex.props(styles.starterHeading)}>
+            {dock ? `What should we work on in ${dock.project}?` : 'What should we work on?'}
+          </h2>
         )}
         {folderError && (
           <p role="alert" {...stylex.props(styles.warning)}>
@@ -376,32 +352,82 @@ export function ChatView({
             </p>
           )}
         <form
-          {...stylex.props(styles.composer)}
+          {...stylex.props(styles.composer, !state.selected && styles.starterComposer)}
           onSubmit={(e) => {
             e.preventDefault();
             void controller.send(
               local && !state.selected && cwd && selection ? { cwd, ...selection } : undefined,
             );
           }}>
-          <label htmlFor="message" {...stylex.props(controls.hidden)}>
-            Message
-          </label>
-          <textarea
-            id="message"
-            {...stylex.props(controls.field, styles.textarea)}
-            placeholder={
-              state.selected ? 'Reply…' : 'Ask anything, or describe what you want to build…'
-            }
-            value={state.draft}
-            onChange={(e) => controller.setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                e.preventDefault();
-                e.currentTarget.form?.requestSubmit();
-              }
-            }}
-          />
+          <div {...stylex.props(styles.messageRow)}>
+            {!state.selected && (
+              <span aria-hidden="true" {...stylex.props(styles.prompt)}>
+                ❯
+              </span>
+            )}
+            <label htmlFor="message" {...stylex.props(controls.hidden)}>
+              Message
+            </label>
+            <textarea
+              id="message"
+              {...stylex.props(
+                controls.field,
+                styles.textarea,
+                !state.selected && styles.starterTextarea,
+              )}
+              placeholder={state.selected ? 'Reply…' : 'Describe a task…'}
+              value={state.draft}
+              onChange={(e) => controller.setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault();
+                  e.currentTarget.form?.requestSubmit();
+                }
+              }}
+            />
+          </div>
           <div {...stylex.props(controls.row, styles.composeActions)}>
+            {!state.selected && local && (
+              <div {...stylex.props(styles.composeContext)}>
+                <Button
+                  aria-label="Choose working folder"
+                  {...stylex.props(controls.button, controls.quietButton, styles.folderChoice)}
+                  disabled={!chooseFolder || busy('send')}
+                  title={cwd || 'Choose working folder'}
+                  onClick={() => {
+                    setFolderError(null);
+                    void chooseFolder?.()
+                      .then((folder) => {
+                        if (folder) setCwd(folder);
+                      })
+                      .catch(() =>
+                        setFolderError(
+                          'The folder could not be approved. Choose an existing working folder again.',
+                        ),
+                      );
+                  }}>
+                  {folderName ? (
+                    <span
+                      aria-hidden="true"
+                      data-initials={projectInitials(folderName)}
+                      {...stylex.props(projectTiles.tile, projectTiles.silver, styles.folderTile)}
+                    />
+                  ) : (
+                    <Icon name="folder" />
+                  )}
+                  <span {...stylex.props(controls.truncate)}>
+                    {folderName || 'Choose working folder'}
+                  </span>
+                  <span aria-hidden="true" {...stylex.props(styles.caret)}>
+                    ▾
+                  </span>
+                </Button>
+                <span {...stylex.props(styles.localLabel)}>
+                  <span aria-hidden="true" {...stylex.props(styles.localDot)} />
+                  local
+                </span>
+              </div>
+            )}
             <div {...stylex.props(controls.row, styles.modelActions)}>
               {local && !state.selected ? (
                 <>
@@ -598,7 +624,7 @@ export function ChatView({
             </nav>
           </section>
         ) : (
-          <main aria-label="Agent workspace" {...stylex.props(styles.content)}>
+          <main aria-label="Agent workspace" {...stylex.props(styles.content, styles.dockContent)}>
             {findBar}
             <header {...stylex.props(styles.dockHeader)}>
               <Button
@@ -695,6 +721,7 @@ const effortLabels = {
 };
 const styles = stylex.create({
   dockPage: { display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'hidden' },
+  dockContent: { flex: 1 },
   dockList: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflowY: 'auto' },
   dockHeader: {
     flexShrink: 0,
@@ -879,19 +906,50 @@ const styles = stylex.create({
     margin: '12px auto 8px',
     flexShrink: 0,
   },
-  starter: { margin: 'auto', paddingBottom: 40 },
+  starter: { margin: 'auto', paddingBottom: 80, maxWidth: 720 },
+  starterHeading: {
+    margin: '0 0 16px',
+    textAlign: 'center',
+    color: colors.secondary,
+    fontSize: type.heading,
+    fontWeight: 600,
+  },
+  messageRow: { display: 'flex', gap: 10 },
+  prompt: {
+    flexShrink: 0,
+    color: colors.accent,
+    fontFamily: type.mono,
+    fontSize: type.message,
+    fontWeight: 700,
+    lineHeight: 1.6,
+  },
+  starterTextarea: { minHeight: 90, fontSize: 14 },
+  starterComposer: { boxShadow: shadow.raised, padding: '16px 10px 10px 16px' },
+  folderTile: { width: 22, height: 22, borderRadius: 6, fontSize: 10 },
+  caret: { color: colors.muted },
+  localDot: { width: 7, height: 7, borderRadius: '50%', backgroundColor: syntax.string },
   composeContext: {
     display: 'flex',
     alignItems: 'center',
-    gap: space.md,
-    margin: '0 4px 8px',
-    flexWrap: 'wrap',
+    gap: space.sm,
+    minWidth: 0,
+    marginRight: 'auto',
   },
-  folderChoice: { maxWidth: '100%' },
+  folderChoice: {
+    maxWidth: 170,
+    minWidth: 0,
+    height: 30,
+    gap: space.sm,
+    padding: '0 10px 0 4px',
+    borderRadius: radius.row,
+  },
   localLabel: {
     display: 'inline-flex',
     alignItems: 'center',
+    flexShrink: 0,
     gap: 6,
+    height: 30,
+    padding: '0 10px',
     color: colors.secondary,
     fontSize: type.small,
   },
@@ -922,8 +980,8 @@ const styles = stylex.create({
   },
   composeActions: { minHeight: 32, justifyContent: 'flex-end', flexWrap: 'wrap', gap: space.sm },
   modelActions: { marginLeft: 'auto', minWidth: 0, maxWidth: '100%', flexWrap: 'nowrap' },
-  modelChoice: { maxWidth: 280, minWidth: 0 },
-  effortChoice: { flexShrink: 0, width: 116 },
+  modelChoice: { maxWidth: 220, minWidth: 0 },
+  effortChoice: { flexShrink: 0 },
   sendButton: {
     display: 'inline-flex',
     justifyContent: 'center',
@@ -933,7 +991,7 @@ const styles = stylex.create({
     height: 32,
     padding: 7,
     borderWidth: 0,
-    borderRadius: '50%',
+    borderRadius: radius.row,
     backgroundColor: { default: colors.accent, ':hover:not(:disabled)': colors.link },
     color: colors.onAccent,
   },
