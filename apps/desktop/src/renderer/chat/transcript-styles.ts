@@ -106,7 +106,7 @@ export const transcriptStyles = stylex.create({
     alignItems: 'center',
     gap: space.xs,
     minWidth: 0,
-    paddingInline: 6,
+    paddingInline: '14px 6px',
   },
   partToggle: {
     flex: 1,
@@ -116,6 +116,16 @@ export const transcriptStyles = stylex.create({
     color: colors.muted,
     fontSize: type.caption,
     textAlign: 'left',
+    overflow: 'hidden',
+    whiteSpace: 'nowrap',
+    textOverflow: 'ellipsis',
+  },
+  partLabel: {
+    flex: 1,
+    minWidth: 0,
+    paddingBlock: 4,
+    color: colors.muted,
+    fontSize: type.caption,
     overflow: 'hidden',
     whiteSpace: 'nowrap',
     textOverflow: 'ellipsis',
@@ -131,6 +141,8 @@ export const transcriptStyles = stylex.create({
   /** Folded tool work reads as one card of steps; consecutive activity rows join into one. */
   activity: {
     position: 'relative',
+    // Contains its content's margins, so a joined card has no seam when a step opens.
+    display: 'flow-root',
     minWidth: 0,
     marginBlock: space.sm,
     marginInline: 0,
@@ -155,6 +167,8 @@ export const transcriptStyles = stylex.create({
     borderBottomLeftRadius: 0,
     borderBottomRightRadius: 0,
   },
+  /** A call's output row draws no line while closed; open, it shows the output under the call. */
+  activityOutput: { paddingTop: 0 },
   activityToggle: {
     position: 'absolute',
     top: 2,

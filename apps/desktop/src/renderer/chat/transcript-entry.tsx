@@ -1,11 +1,13 @@
 import {
   memo,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from 'react';
 import { Button } from '@base-ui/react/button';
@@ -43,7 +45,7 @@ import { getTranscriptParts } from './transcript-parts.ts';
 import { usePartBody } from './part-body.ts';
 import { usePartContent } from './part-content.ts';
 import { FindExcerpt, useFindHighlight, useFindHydration } from './part-find.tsx';
-import { RowExpansionContext, useDisclosure } from './transcript-disclosure.ts';
+import { OpenCallsContext, RowExpansionContext, useDisclosure } from './transcript-disclosure.ts';
 import type { TranscriptActions } from './transcript-actions.ts';
 import { compareProps } from './stable-props.ts';
 import { transcriptStyles as styles } from './transcript-styles.ts';
@@ -181,19 +183,21 @@ export const Entry = memo(
       body = (
         <>
           {groupTranscriptParts(parts).map((group) => {
-            const children = group.parts.map((part) => (
-              <Part
-                key={part.partId}
-                source={source}
-                part={part}
-                entryId={entryId}
-                controller={controller}
-                cache={cache}
-                match={findMatch?.partId === part.partId ? findMatch : null}
-                findRevealing={findRevealing}
-                {...context}
-              />
-            ));
+            const renderParts = (activityOpen?: boolean) =>
+              group.parts.map((part) => (
+                <Part
+                  key={part.partId}
+                  source={source}
+                  part={part}
+                  entryId={entryId}
+                  controller={controller}
+                  cache={cache}
+                  match={findMatch?.partId === part.partId ? findMatch : null}
+                  findRevealing={findRevealing}
+                  activityOpen={activityOpen}
+                  {...context}
+                />
+              ));
             const partIds = group.parts.map((part) => part.partId);
             return group.activity ? (
               <Activity
@@ -208,10 +212,10 @@ export const Entry = memo(
                 expandedIds={context.expandedIds}
                 match={findMatch && partIds.includes(findMatch.partId) ? findMatch : null}
                 revealing={findRevealing}>
-                {children}
+                {renderParts}
               </Activity>
             ) : (
-              children
+              renderParts()
             );
           })}
         </>
@@ -347,7 +351,8 @@ function Activity({
   expandedIds: readonly string[];
   match: ChatTranscriptMatch | null;
   revealing: boolean;
-  children: ReactNode;
+  /** The card's parts, given whether the card is open. */
+  children: (open: boolean) => ReactNode;
 }) {
   const disclosure = useDisclosure({
     entryId,
@@ -359,28 +364,46 @@ function Activity({
     revealing,
     controller,
   });
-  // One step per call (with its answers), marked by its state like a task list.
-  // One step per call (with its answers), marked by its state like a task list. A step led by an
-  // answer to a call recorded in an earlier row reads as that call's output, under it.
-  const steps = new Map<string, { state: string | undefined; prefix: string }>();
+  // One headline per call, marked by its state like a task list. A call's output is recorded in
+  // a later row; that row shows no line of its own and opens with its call's card.
+  const steps = new Map<string, string | undefined>();
+  const follows: string[] = [];
   for (const step of groupActivitySteps(
     parts,
     source.kind === 'entry' ? source.entryId : undefined,
   )) {
-    const summary = describeActivityStep(step, { source }, evidence),
-      state = getActivityStepState(step, { source }, evidence),
-      lead = getActivityState(step.lead, { source }, evidence);
-    let prefix = '';
-    if (step.lead.call && step.lead.pairing === 'matched' && step.lead.kind !== 'arguments')
-      prefix = [getToolSummary(step.lead), lead && lead !== 'completed' ? lead : '']
-        .filter(Boolean)
-        .map((segment) => segment + ' · ')
-        .join('');
-    if (!steps.has(summary)) steps.set(summary, { state, prefix });
+    const lead = step.lead;
+    if (lead.call && lead.pairing === 'matched' && lead.kind !== 'arguments') {
+      follows.push(`${lead.call.entryId}\n${lead.call.partId}`);
+      continue;
+    }
+    const summary = describeActivityStep(step, { source }, evidence);
+    if (!steps.has(summary)) steps.set(summary, getActivityStepState(step, { source }, evidence));
   }
+  const publishes =
+    source.kind === 'entry'
+      ? parts
+          .filter((part) => part.kind === 'arguments')
+          .map((part) => `${source.entryId}\n${part.partId}`)
+      : [];
+  const openCalls = useContext(OpenCallsContext);
+  const followKey = follows.join('\t'),
+    publishKey = publishes.join('\t');
+  const following = useSyncExternalStore(
+    openCalls?.subscribe ?? noSubscription,
+    () => !!followKey && !!openCalls?.isOpen(followKey.split('\t')),
+  );
+  useEffect(() => {
+    if (!openCalls || !publishKey) return;
+    const keys = publishKey.split('\t');
+    openCalls.set(keys, disclosure.open);
+  }, [openCalls, publishKey, disclosure.open]);
+  const open = disclosure.open || following;
+  // An output row has no headline: it is part of the call's step above it.
+  const outputOnly = steps.size === 0 && follows.length > 0;
   return (
     <Collapsible.Root
-      open={disclosure.open}
+      open={open}
       onOpenChange={disclosure.onOpenChange}
       disabled={disclosure.disabled}
       render={<section data-transcript-activity />}
@@ -388,58 +411,51 @@ function Activity({
         styles.activity,
         joinPrevious && styles.activityJoinPrevious,
         joinNext && styles.activityJoinNext,
+        outputOnly && styles.activityOutput,
       )}>
-      {/* The steps say what happened; the chevron opens the recorded parts behind them. */}
+      {/* The headlines say what happened; the chevron opens the recorded parts behind them. */}
       <Collapsible.Trigger
         aria-label={`Activity · ${parts.length} recorded ${parts.length === 1 ? 'part' : 'parts'}`}
         title="Show recorded parts"
-        {...stylex.props(controls.button, controls.iconButton, styles.activityToggle)}>
+        {...stylex.props(
+          controls.button,
+          controls.iconButton,
+          styles.activityToggle,
+          outputOnly && controls.hidden,
+        )}>
         <Icon name="chevron" />
       </Collapsible.Trigger>
-      <ul {...stylex.props(styles.activitySteps)}>
-        {[...steps].map(([summary, { state, prefix }]) => {
-          // An output line drops its call's name and state from view; they stay for assistive
-          // technology and Find.
-          if (prefix && summary.startsWith(prefix))
+      {steps.size > 0 && (
+        <ul {...stylex.props(styles.activitySteps)}>
+          {[...steps].map(([summary, state]) => {
+            const split = summary.indexOf(' · ');
             return (
               <li
                 key={summary}
                 title={summary}
-                data-glyph="↳"
-                {...stylex.props(
-                  styles.activityStep,
-                  styles.stepOutput,
-                  !!state && state !== 'completed' && stepStyles[state],
-                )}>
-                <span {...stylex.props(controls.hidden)}>{prefix}</span>
-                {summary.slice(prefix.length)}
+                data-glyph={(state && stepGlyphs[state]) ?? '·'}
+                {...stylex.props(styles.activityStep, stepStyles[state ?? 'unknown'])}>
+                <span {...stylex.props(styles.activityTool)}>
+                  {split < 0 ? summary : summary.slice(0, split)}
+                </span>
+                {split < 0 ? '' : summary.slice(split)}
               </li>
             );
-          const split = summary.indexOf(' · ');
-          return (
-            <li
-              key={summary}
-              title={summary}
-              data-glyph={(state && stepGlyphs[state]) ?? '·'}
-              {...stylex.props(styles.activityStep, stepStyles[state ?? 'unknown'])}>
-              <span {...stylex.props(styles.activityTool)}>
-                {split < 0 ? summary : summary.slice(0, split)}
-              </span>
-              {split < 0 ? '' : summary.slice(split)}
-            </li>
-          );
-        })}
-      </ul>
+          })}
+        </ul>
+      )}
       {disclosure.disclosureError && (
         <p role="alert" {...stylex.props(styles.small)}>
           Could not remember this activity disclosure. Its content is expanded.
         </p>
       )}
       {/* Kept mounted so Find can hydrate folded parts. */}
-      <Collapsible.Panel keepMounted>{children}</Collapsible.Panel>
+      <Collapsible.Panel keepMounted>{children(open)}</Collapsible.Panel>
     </Collapsible.Root>
   );
 }
+
+const noSubscription = () => () => {};
 
 type PartProps = PartContext & {
   source: ChatTranscriptSource;
@@ -447,6 +463,8 @@ type PartProps = PartContext & {
   entryId: string;
   /** The active Find match, when it is in this part. */
   match: ChatTranscriptMatch | null;
+  /** Set inside an activity card: the part shows whenever the card is open, with no fold of its own. */
+  activityOpen?: boolean;
 };
 const Part = memo(
   function Part({
@@ -460,6 +478,7 @@ const Part = memo(
     actions,
     evidence,
     findRevealing: revealing,
+    activityOpen,
     findQuery: query,
     findMatches,
     contents,
@@ -476,7 +495,8 @@ const Part = memo(
       revealing,
       controller,
     });
-    const expanded = disclosure.open;
+    const grouped = activityOpen !== undefined;
+    const expanded = grouped ? activityOpen : disclosure.open;
     /** Code blocks remember their unfolding with this part's other disclosures. */
     const expansions = useMemo(
       () => ({ entryId, partId: part.partId, expandedIds, controller }),
@@ -635,12 +655,6 @@ const Part = memo(
             Showing previously read output. Copy uses this version; latest progress remains above.
           </p>
         )}
-        {part.kind === 'arguments' && (
-          <p {...stylex.props(styles.small)}>
-            Recorded request. Executed arguments are labelled separately when available; this
-            request alone does not prove execution.
-          </p>
-        )}
         {part.kind === 'arguments' && part.toolName === 'write' && (
           <p {...stylex.props(styles.small)}>
             Captured write content is in the arguments. No before/after diff was recorded here.
@@ -731,6 +745,22 @@ const Part = memo(
         </section>
       );
     const status = getActivityState(part, { source }, evidence);
+    const partLabel =
+      (part.toolName ? `${getToolSummary(part, text)} · ` : '') +
+      partLabels[part.kind] +
+      (status && status !== 'completed' ? ` · ${status}` : '') +
+      (part.availability !== 'available' ? ` · ${part.availability}` : '');
+    // Inside an open card a part simply shows: its label, copy, then content.
+    if (grouped)
+      return (
+        <section data-transcript-part={part.partId}>
+          <div {...stylex.props(styles.partHeader)}>
+            <span {...stylex.props(styles.partLabel)}>{partLabel}</span>
+            {copyButton}
+          </div>
+          {expanded && <div {...stylex.props(styles.disclosure)}>{body}</div>}
+        </section>
+      );
     return (
       <Collapsible.Root
         open={expanded}
@@ -754,10 +784,7 @@ const Part = memo(
             <span aria-hidden="true" {...stylex.props(styles.partChevron)}>
               <Icon name="chevron" />
             </span>
-            {part.toolName ? `${getToolSummary(part, text)} · ` : ''}
-            {partLabels[part.kind]}
-            {status && status !== 'completed' ? ` · ${status}` : ''}
-            {part.availability !== 'available' ? ` · ${part.availability}` : ''}
+            {partLabel}
           </Collapsible.Trigger>
           {copyButton}
         </div>

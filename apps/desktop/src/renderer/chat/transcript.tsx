@@ -46,6 +46,7 @@ import { StoredImages } from './stored-image.tsx';
 import { getTranscriptParts } from './transcript-parts.ts';
 import { isReadingNodePinned, subscribeReadingChanges } from './reading-pin.ts';
 import { Entry, type EntryProps } from './transcript-entry.tsx';
+import { createOpenCalls, OpenCallsContext } from './transcript-disclosure.ts';
 import { useTranscriptActions } from './transcript-actions.ts';
 import { groupBySource } from './stable-props.ts';
 import { TranscriptScroller, revealFindMatch } from './transcript-geometry.ts';
@@ -160,6 +161,7 @@ export function Transcript({
     liveLabel = snapshotLabels[currentSnapshot.state];
   if (preserve) liveLabel = 'Selected response';
   const getRowProps = useRowProps(transcript);
+  const [openCalls] = useState(createOpenCalls);
   const spacing = useMemo(() => getRowSpacing(rows, rowGap), [rows]);
   const rowContext = useMemo(
     () => ({
@@ -255,37 +257,39 @@ export function Transcript({
       <div {...stylex.props(styles.viewport)}>
         {snapshot && (
           <RowContext.Provider value={rowContext}>
-            <TranscriptList
-              list={list}
-              transcript={transcript}
-              views={views}
-              mounted={mounted}
-              selecting={reading.selecting}
-              onFollowingChange={setFollowingEnd}
-              onPage={page}
-              onReaderInput={controller.cancelFindReveal}
-              header={
-                <Edge>
-                  {paging === 'earlier' && (
-                    <p role="status" {...stylex.props(styles.small)}>
-                      Loading earlier…
-                    </p>
-                  )}
-                  {!transcript.earlier && (
-                    <p {...stylex.props(styles.small)}>Start of conversation</p>
-                  )}
-                </Edge>
-              }
-              footer={
-                <Edge>
-                  {(paging === 'later' || (transcript.later && transcript.loading)) && (
-                    <p role="status" {...stylex.props(styles.small)}>
-                      Loading later…
-                    </p>
-                  )}
-                </Edge>
-              }
-            />
+            <OpenCallsContext.Provider value={openCalls}>
+              <TranscriptList
+                list={list}
+                transcript={transcript}
+                views={views}
+                mounted={mounted}
+                selecting={reading.selecting}
+                onFollowingChange={setFollowingEnd}
+                onPage={page}
+                onReaderInput={controller.cancelFindReveal}
+                header={
+                  <Edge>
+                    {paging === 'earlier' && (
+                      <p role="status" {...stylex.props(styles.small)}>
+                        Loading earlier…
+                      </p>
+                    )}
+                    {!transcript.earlier && (
+                      <p {...stylex.props(styles.small)}>Start of conversation</p>
+                    )}
+                  </Edge>
+                }
+                footer={
+                  <Edge>
+                    {(paging === 'later' || (transcript.later && transcript.loading)) && (
+                      <p role="status" {...stylex.props(styles.small)}>
+                        Loading later…
+                      </p>
+                    )}
+                  </Edge>
+                }
+              />
+            </OpenCallsContext.Provider>
           </RowContext.Provider>
         )}
         {snapshot && (!followingEnd || transcript.later || preserve) && (
