@@ -6,8 +6,9 @@ import type {
   ChatTranscriptPart,
 } from '@moonbase/contracts/chat';
 import { chatPageSize } from '@moonbase/contracts/chat';
+import { areJsonValuesEqual } from '@moonbase/contracts/common';
 import { sameTarget } from './saved.ts';
-import { areTranscriptValuesEqual, makeTranscriptFailure } from './transcript-read.ts';
+import { makeTranscriptFailure } from './transcript-read.ts';
 import { transcriptLimits } from './transcript-state.ts';
 
 export type HistoryDirection = 'earlier' | 'later';
@@ -24,14 +25,14 @@ type Navigation = {
 export const reuseParts = (previous: ChatTranscriptPart[], next: ChatTranscriptPart[]) =>
   next.map((part) => {
     const old = previous.find((value) => value.partId === part.partId);
-    return old && areTranscriptValuesEqual(old, part) ? old : part;
+    return old && areJsonValuesEqual(old, part) ? old : part;
   });
 export function reuseEntry(old: ChatEntry | undefined, next: ChatEntry): ChatEntry {
-  if (old && areTranscriptValuesEqual(old, next)) return old;
+  if (old && areJsonValuesEqual(old, next)) return old;
   if (
     old?.transcript &&
     next.transcript &&
-    areTranscriptValuesEqual(old.transcript.source, next.transcript.source)
+    areJsonValuesEqual(old.transcript.source, next.transcript.source)
   )
     return {
       ...next,
@@ -111,7 +112,7 @@ export function reuseSnapshot(
   if (
     run?.transcript &&
     old?.run?.transcript &&
-    areTranscriptValuesEqual(run.transcript.source, old.run.transcript.source)
+    areJsonValuesEqual(run.transcript.source, old.run.transcript.source)
   )
     run = {
       ...run,
@@ -120,13 +121,13 @@ export function reuseSnapshot(
         parts: reuseParts(old.run.transcript.parts, run.transcript.parts),
       },
     };
-  if (old?.run && areTranscriptValuesEqual(old.run, run)) run = old.run;
+  if (old?.run && areJsonValuesEqual(old.run, run)) run = old.run;
   return {
     ...input,
     entries,
     run,
     conversation:
-      old && areTranscriptValuesEqual(old.conversation, input.conversation)
+      old && areJsonValuesEqual(old.conversation, input.conversation)
         ? old.conversation
         : input.conversation,
   };

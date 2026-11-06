@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState, type KeyboardEvent } from 'react';
 import type { ChatTranscriptPart, ChatTranscriptSource } from '@moonbase/contracts/chat';
+import { areJsonValuesEqual } from '@moonbase/contracts/common';
 import type { TranscriptContentState } from '@moonbase/application/chat';
 import { readingPin, useReadingPin } from './reading-pin.ts';
 
@@ -33,7 +34,7 @@ export function usePartBody(
     current.text.length < retained.body.text.length &&
     contents.some(
       (content) =>
-        JSON.stringify(content.source) === JSON.stringify(retained.body.source) &&
+        areJsonValuesEqual(content.source, retained.body.source) &&
         content.selection.partId === retained.body.part.partId &&
         content.selection.bytes === retained.body.part.bytes &&
         content.selection.revision === retained.body.part.revision &&

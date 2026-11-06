@@ -1,5 +1,6 @@
 import { decodeChatInput } from '@moonbase/contracts/chat-schema';
 import { ApplicationError } from '@moonbase/contracts/errors';
+import { areJsonValuesEqual } from '@moonbase/contracts/common';
 import type { ChatClient, ChatSnapshot, ChatTranscriptSelection } from '@moonbase/contracts/chat';
 import {
   iterateTranscriptSource,
@@ -16,9 +17,6 @@ import {
   type TranscriptImage,
 } from './wire.ts';
 import type { IpcRequest } from '../ipc-lifetime.ts';
-
-const areTranscriptValuesEqual = (a: unknown, b: unknown) =>
-  JSON.stringify(a) === JSON.stringify(b);
 
 export type NativeTranscriptActions = {
   writeText(text: string): Promise<void>;
@@ -171,7 +169,7 @@ async function readTranscript<T>(
       source.kind === 'live' &&
       (!snapshot ||
         snapshot.observationStatus === 'reconnecting' ||
-        !areTranscriptValuesEqual(snapshot.run?.transcript?.source, source))
+        !areJsonValuesEqual(snapshot.run?.transcript?.source, source))
     )
       throw makeSourceChangedError();
   };
@@ -258,8 +256,8 @@ async function readTranscript<T>(
           reply.kind !== 'content' ||
           reply.offset !== 0 ||
           reply.cursor !== null ||
-          !areTranscriptValuesEqual(reply.source, source) ||
-          !areTranscriptValuesEqual(reply.selection, selected)
+          !areJsonValuesEqual(reply.source, source) ||
+          !areJsonValuesEqual(reply.selection, selected)
         )
           throw makeSourceChangedError();
       }

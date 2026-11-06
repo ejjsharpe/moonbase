@@ -1,4 +1,5 @@
 import type { TranscriptViewAnchor } from '@moonbase/application/chat';
+import { areJsonValuesEqual } from '@moonbase/contracts/common';
 
 /**
  * Transcript scroll ownership. `following` keeps the end visible. `restoring` waits for a supplied
@@ -101,7 +102,8 @@ export function transitionTranscriptScroll(
     atLatest && !selected ? ({ scroll: 'end' } as const) : {};
   switch (event.type) {
     case 'supplied':
-      if (state.mode === 'navigating' || isSameAnchor(state.anchor, event.anchor)) return stay();
+      if (state.mode === 'navigating' || areJsonValuesEqual(state.anchor, event.anchor))
+        return stay();
       return next({ mode: 'restoring', anchor: event.anchor }, { scroll: 'anchor' });
     case 'reveal':
       return next({ mode: 'revealing', anchor: null, revision: state.revision + 1 });
@@ -207,17 +209,4 @@ function loadEarlier(result: ReturnType<typeof transitionTranscriptScroll>, view
     viewport,
   });
   return { ...navigation, instruction: { ...result.instruction, ...navigation.instruction } };
-}
-
-/** Compares anchors by value, whatever their key order after decoding. */
-export function isSameAnchor(
-  a: TranscriptViewAnchor | null | undefined,
-  b: TranscriptViewAnchor | null | undefined,
-) {
-  return JSON.stringify(a, sortKeys) === JSON.stringify(b, sortKeys);
-}
-function sortKeys(_key: string, value: unknown) {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => (a < b ? -1 : 1)))
-    : value;
 }

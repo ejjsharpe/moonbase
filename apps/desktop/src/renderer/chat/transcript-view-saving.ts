@@ -1,6 +1,6 @@
 import { createContext } from 'react';
 import type { ChatController, TranscriptViewAnchor } from '@moonbase/application/chat';
-import { isSameAnchor } from './transcript-scroll.ts';
+import { areJsonValuesEqual } from '@moonbase/contracts/common';
 
 /** A scroll-captured reading anchor is saved to view memory once scrolling rests this long. */
 export const viewSaveDelayMs = 150;
@@ -72,8 +72,8 @@ export function createViewSaver(
      */
     receive(anchor: TranscriptViewAnchor) {
       const fresh =
-        !(own !== undefined && isSameAnchor(anchor, own)) &&
-        !(seen !== undefined && isSameAnchor(anchor, seen));
+        !(own !== undefined && areJsonValuesEqual(anchor, own)) &&
+        !(seen !== undefined && areJsonValuesEqual(anchor, seen));
       seen = anchor;
       return fresh;
     },

@@ -5,7 +5,8 @@ import type {
   ChatTranscriptPart,
   ChatTranscriptSource,
 } from '@moonbase/contracts/chat';
-import { areTranscriptValuesEqual, makeTranscriptFailure } from './transcript-read.ts';
+import { areJsonValuesEqual } from '@moonbase/contracts/common';
+import { makeTranscriptFailure } from './transcript-read.ts';
 import type { TranscriptManifestState } from './transcript-state.ts';
 import { reuseParts } from './transcript-history.ts';
 
@@ -43,10 +44,10 @@ export function findKnownParts(
   snapshot: ChatSnapshot | undefined,
   records: ChatEntry[],
 ) {
-  if (snapshot?.run?.transcript && areTranscriptValuesEqual(snapshot.run.transcript.source, source))
+  if (snapshot?.run?.transcript && areJsonValuesEqual(snapshot.run.transcript.source, source))
     return snapshot.run.transcript.parts;
   return (
-    records.find((entry) => areTranscriptValuesEqual(entry.transcript?.source, source))?.transcript
+    records.find((entry) => areJsonValuesEqual(entry.transcript?.source, source))?.transcript
       ?.parts ?? []
   );
 }
@@ -58,11 +59,9 @@ export function isManifestChanged(
   next: { entries: ChatEntry[]; run: ChatSnapshot['run'] },
 ) {
   if (manifest.source.kind === 'live')
-    return (
-      !!old?.run?.transcript && !areTranscriptValuesEqual(old.run.transcript, next.run?.transcript)
-    );
+    return !!old?.run?.transcript && !areJsonValuesEqual(old.run.transcript, next.run?.transcript);
   const entryId = manifest.source.entryId;
   const previous = old?.entries.find((entry) => entry.id === entryId)?.transcript;
   const current = next.entries.find((entry) => entry.id === entryId)?.transcript;
-  return !!previous && !!current && !areTranscriptValuesEqual(previous, current);
+  return !!previous && !!current && !areJsonValuesEqual(previous, current);
 }

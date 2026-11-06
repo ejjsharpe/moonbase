@@ -9,6 +9,7 @@ import {
   type TranscriptViewAnchor,
 } from '@moonbase/application/chat';
 import type { ChatEntry, ChatTranscriptSource } from '@moonbase/contracts/chat';
+import { areJsonValuesEqual } from '@moonbase/contracts/common';
 import type { TranscriptNative } from '../../chat/wire.ts';
 import { MarkdownCache } from './markdown-model.ts';
 import { activateChatFind } from './find.tsx';
@@ -229,7 +230,7 @@ export function Transcript({
         scroll.pins.oldest === transcript.entries[0]?.id ||
         (!!imageSource &&
           !!transcript.entries[0]?.transcript &&
-          JSON.stringify(transcript.entries[0].transcript.source) === JSON.stringify(imageSource))),
+          areJsonValuesEqual(transcript.entries[0].transcript.source, imageSource))),
     live = !scroll.earlierRow && !oldestPinned && !transcript.later ? snapshot?.run : null;
   const hiddenRow = !!live && transcript.entries.length === windowRows;
   const entries = hiddenRow ? transcript.entries.slice(1) : transcript.entries;
@@ -476,15 +477,14 @@ function useRowProps(transcript: ChatState['transcript']) {
   const offline = ['reconnecting', 'failed', 'inactive'].includes(observation);
   return (entry: ChatEntry): RowProps => {
     const source = entry.transcript?.source;
-    const key = source && JSON.stringify(source);
     const anchored =
       !!anchor &&
       !!source &&
       (anchor.source ? source.kind === 'live' : anchor.entryId === entry.id);
-    const findMatch = active && key && JSON.stringify(active.source) === key ? active : null;
+    const findMatch = active && source && areJsonValuesEqual(active.source, source) ? active : null;
     const findMatches = matches(source);
     return {
-      manifest: manifest && key && JSON.stringify(manifest.source) === key ? manifest : null,
+      manifest: manifest && source && areJsonValuesEqual(manifest.source, source) ? manifest : null,
       anchorPart: anchored ? (anchor.partId ?? null) : null,
       // An active Find match takes over revealing from the reading anchor.
       anchorKey: anchored && !active ? anchorKey : null,
@@ -606,7 +606,7 @@ function getAnchorTop(
     target.partId &&
     !part &&
     summary &&
-    (manifest && sameSource(summary, manifest)
+    (manifest && areJsonValuesEqual(summary.source, manifest.source)
       ? !manifest.error && manifest.status !== 'complete'
       : !!summary.nextCursor)
   )
@@ -630,5 +630,3 @@ const snapshotLabels = {
   failed: 'Failed',
   uncertain: 'Uncertain',
 };
-const sameSource = (a: { source: unknown }, b: { source: unknown }) =>
-  JSON.stringify(a.source) === JSON.stringify(b.source);

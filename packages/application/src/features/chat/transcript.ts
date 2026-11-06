@@ -13,14 +13,13 @@ import type {
   ChatTranscriptSelection,
 } from '@moonbase/contracts/chat';
 import { decodeChatInput } from '@moonbase/contracts/chat-schema';
+import { areJsonValuesEqual, getJsonKey } from '@moonbase/contracts/common';
 import { normalizeApplicationError } from '../../runtime/effect-client.ts';
 import { sameTarget } from './saved.ts';
 import type { TranscriptViewMemory, TranscriptView } from './view-memory.ts';
 import {
-  areTranscriptValuesEqual,
   checkTranscriptReply,
   countTranscriptBytes,
-  getTranscriptKey,
   makeTranscriptFailure,
   trackTranscriptCursor,
 } from './transcript-read.ts';
@@ -168,7 +167,7 @@ export class TranscriptOwner {
         (sameTarget(source.target, this.dependencies.target) &&
           (source.kind === 'entry' ||
             (this.snapshot?.observationStatus !== 'reconnecting' &&
-              areTranscriptValuesEqual(this.snapshot?.run?.transcript?.source, source)))))
+              areJsonValuesEqual(this.snapshot?.run?.transcript?.source, source)))))
     );
   }
   private assertCurrent(source?: ChatTranscriptSource) {
@@ -349,7 +348,7 @@ export class TranscriptOwner {
       atLatest: this.history.following,
       content: this.contents.listContents(),
     };
-    const changed = !areTranscriptValuesEqual(this.published, this.state);
+    const changed = !areJsonValuesEqual(this.published, this.state);
     if (changed) this.published = this.state;
     else this.state = this.published;
     if (!changed && this.snapshot === this.publishedSnapshot) return;
@@ -362,7 +361,7 @@ export class TranscriptOwner {
     const old = this.snapshot;
     const next = reuseSnapshot(input, old, this.history);
     const { entries, run } = next;
-    this.snapshot = old && areTranscriptValuesEqual(old, next) ? old : next;
+    this.snapshot = old && areJsonValuesEqual(old, next) ? old : next;
     this.failed = false;
     let observation: TranscriptState['observation'] = this.dependencies.streaming
       ? 'streaming'
@@ -463,9 +462,7 @@ export class TranscriptOwner {
   }
   /** Whether content for `source` is being read to reveal the active Find match. */
   private isRevealing(source: ChatTranscriptSource) {
-    return (
-      this.state.find.revealing && areTranscriptValuesEqual(this.state.find.active?.source, source)
-    );
+    return this.state.find.revealing && areJsonValuesEqual(this.state.find.active?.source, source);
   }
   openFind() {
     this.state = { ...this.state, find: { ...this.state.find, open: true } };
@@ -568,8 +565,7 @@ export class TranscriptOwner {
   }
   private showMatch(match: ChatTranscriptMatch): Effect.Effect<void> {
     return Effect.gen({ self: this }, function* () {
-      if (!this.state.find.revealing || !areTranscriptValuesEqual(this.state.find.active, match))
-        return;
+      if (!this.state.find.revealing || !areJsonValuesEqual(this.state.find.active, match)) return;
       this.interruptJob(historyJob);
       this.restoringView = false;
       this.history.following = false;
@@ -787,7 +783,7 @@ export class TranscriptOwner {
   }
   loadManifest(source: ChatTranscriptSource, restart = false) {
     const captured = decodeChatInput('getChatTranscriptContent', { source }).source;
-    const replace = restart || !areTranscriptValuesEqual(this.state.manifest?.source, captured);
+    const replace = restart || !areJsonValuesEqual(this.state.manifest?.source, captured);
     if (replace) {
       this.manifestAdvance = trackTranscriptCursor();
       this.state = { ...this.state, manifest: makeManifest(captured) };
@@ -835,7 +831,7 @@ export class TranscriptOwner {
     this.selectedEntry =
       this.history.findRecord(entryId) ??
       this.snapshot?.entries.find((entry) => entry.id === entryId);
-    const key = getTranscriptKey([captured.source, selected]);
+    const key = getJsonKey([captured.source, selected]);
     const content = this.contents.open(key, captured.source, selected, restart);
     if (content.status === 'complete' || content.status === 'source-changed') {
       this.publish();

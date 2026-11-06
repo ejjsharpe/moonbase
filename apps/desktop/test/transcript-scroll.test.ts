@@ -3,7 +3,6 @@ import { test } from 'node:test';
 import type { TranscriptViewAnchor } from '@moonbase/application/chat';
 import {
   createTranscriptScroll,
-  isSameAnchor,
   transitionTranscriptScroll,
   type TranscriptScroll,
   type TranscriptScrollEvent,
@@ -80,17 +79,6 @@ test('pressing a control keeps following; a press that can select text or scroll
   assert.deepEqual(play(restoring, press('control')).last, { cancelReveal: true, capture: true });
 });
 
-test('anchors compare by value whatever their key order', () => {
-  assert.ok(
-    isSameAnchor(
-      { entryId: 'a', partId: 'b', offset: 1 },
-      { offset: 1, partId: 'b', entryId: 'a' },
-    ),
-  );
-  assert.ok(!isSameAnchor({ entryId: 'a', offset: 1 }, { entryId: 'a', offset: 2 }));
-  assert.ok(!isSameAnchor({ entryId: 'a', offset: 1 }, null));
-});
-
 test('automatic earlier loading needs upward reader intent near a loadable top', () => {
   const near = { top: 10 };
   assert.equal(play(reading(), scrolled(near)).last.navigate, undefined);
@@ -153,7 +141,10 @@ test('supplied anchors restore unless navigation owns the position or nothing ch
   assert.equal(supplied.state.mode, 'restoring');
   assert.deepEqual(supplied.last, { scroll: 'anchor' });
   assert.equal(
-    play(supplied.state, { type: 'supplied', anchor: { ...saved } }).state,
+    play(supplied.state, {
+      type: 'supplied',
+      anchor: { offset: saved.offset, partId: saved.partId, entryId: saved.entryId },
+    }).state,
     supplied.state,
   );
   const navigating = play(reading(), navigate('later'));

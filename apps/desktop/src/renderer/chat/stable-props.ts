@@ -1,4 +1,5 @@
 import type { ChatTranscriptSource } from '@moonbase/contracts/chat';
+import { areJsonValuesEqual, getJsonKey } from '@moonbase/contracts/common';
 
 /**
  * Transcript rows memoize on their props. Snapshots arrive as fresh objects on every update, so
@@ -6,17 +7,17 @@ import type { ChatTranscriptSource } from '@moonbase/contracts/chat';
  */
 const empty: readonly never[] = [];
 
-/** Groups items by exact source; rows receive their own group. */
+/** Groups items by source value, whatever its key order; rows receive their own group. */
 export function groupBySource<T extends { source: ChatTranscriptSource }>(items: readonly T[]) {
   const grouped = new Map<string, T[]>();
   for (const item of items) {
-    const key = JSON.stringify(item.source);
+    const key = getJsonKey(item.source);
     const group = grouped.get(key);
     if (group) group.push(item);
     else grouped.set(key, [item]);
   }
   return (source: ChatTranscriptSource | undefined): readonly T[] =>
-    (source && grouped.get(JSON.stringify(source))) || empty;
+    (source && grouped.get(getJsonKey(source))) || empty;
 }
 
 function isSameList(a: unknown, b: unknown) {
@@ -29,7 +30,7 @@ function isSameList(a: unknown, b: unknown) {
   );
 }
 
-/** Same fields; nested values (a part's small `call`) compare by JSON. */
+/** Same fields; nested values (a part's small `call`) compare as JSON values. */
 function isSameRecord(a: unknown, b: unknown) {
   if (a === b) return true;
   if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return false;
@@ -40,7 +41,7 @@ function isSameRecord(a: unknown, b: unknown) {
     left.every(
       ([key, value]) =>
         value === right[key] ||
-        (typeof value === 'object' && JSON.stringify(value) === JSON.stringify(right[key])),
+        (typeof value === 'object' && areJsonValuesEqual(value, right[key])),
     )
   );
 }
