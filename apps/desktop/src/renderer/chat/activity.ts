@@ -2,13 +2,60 @@ import type { ChatEntry, ChatTranscript, ChatTranscriptPart } from '@moonbase/co
 import { areJsonValuesEqual } from '@moonbase/contracts/common';
 import { structuredSourceLimits } from './source-limits.ts';
 
-function isActivityPart(part: ChatTranscriptPart) {
+export function isActivityPart(part: ChatTranscriptPart) {
   return (
     part.kind === 'thinking' ||
     part.role === 'tool' ||
     ['arguments', 'executed-arguments', 'patch', 'diff', 'details', 'result'].includes(part.kind) ||
     (part.kind === 'notice' && !!part.toolName)
   );
+}
+
+/**
+ * How an entry reads in the transcript. Pi records each tool call, result and turn marker as its
+ * own entry: an empty marker takes no space, and calls and results read as activity, which
+ * consecutive rows join into one card.
+ */
+export function classifyEntry(entry: ChatEntry): 'empty' | 'activity' | 'message' {
+  const parts = entry.transcript?.parts ?? [];
+  if (
+    entry.role === 'system' &&
+    !entry.text.trim() &&
+    parts.every((part) => part.kind === 'text' && part.bytes === 0)
+  )
+    return 'empty';
+  if (entry.role === 'tool') return 'activity';
+  if (
+    entry.role === 'assistant' &&
+    !entry.text.trim() &&
+    parts.length &&
+    parts.every(isActivityPart)
+  )
+    return 'activity';
+  return 'message';
+}
+
+/** Space above each row, and whether an activity row joins the activity card beside it. */
+export type RowSpacing = { gap: number; joinPrevious: boolean; joinNext: boolean };
+export function getRowSpacing(
+  rows: readonly ({ key: string } & ({ entry: ChatEntry } | { tool: unknown }))[],
+  gap: number,
+) {
+  const spacing = new Map<string, RowSpacing>();
+  let previous: { key: string; activity: boolean } | null = null;
+  for (const row of rows) {
+    const kind = 'entry' in row ? classifyEntry(row.entry) : 'message';
+    if (kind === 'empty') {
+      spacing.set(row.key, { gap: 0, joinPrevious: false, joinNext: false });
+      continue;
+    }
+    const activity = kind === 'activity',
+      join = activity && !!previous?.activity;
+    if (join) spacing.get(previous!.key)!.joinNext = true;
+    spacing.set(row.key, { gap: previous && !join ? gap : 0, joinPrevious: join, joinNext: false });
+    previous = { key: row.key, activity };
+  }
+  return spacing;
 }
 
 /** Only consecutive activity folds; authored answers keep their recorded position. */
@@ -84,8 +131,10 @@ export function describeActivityPart(
     if (part.availability === 'available') details.push(`${part.bytes.toLocaleString()} bytes`);
     return details.join(' · ');
   }
+  // A completed step's ✓ already says so.
   const details = [getToolSummary(part)];
-  if (status) details.push(status === 'requested' ? 'requested · result not shown' : status);
+  if (status && status !== 'completed')
+    details.push(status === 'requested' ? 'requested · result not shown' : status);
   if (part.pairing && part.pairing !== 'matched') details.push(part.pairing);
   if (part.kind === 'result') {
     details.push(`${part.bytes.toLocaleString()} bytes`);

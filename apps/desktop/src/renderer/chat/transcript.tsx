@@ -38,7 +38,9 @@ import { MarkdownCache } from './markdown-model.ts';
 import {
   collectActivityEvidence,
   getEntryTranscripts,
+  getRowSpacing,
   isSameActivityEvidence,
+  type RowSpacing,
 } from './activity.ts';
 import { StoredImages } from './stored-image.tsx';
 import { getTranscriptParts } from './transcript-parts.ts';
@@ -158,9 +160,15 @@ export function Transcript({
     liveLabel = snapshotLabels[currentSnapshot.state];
   if (preserve) liveLabel = 'Selected response';
   const getRowProps = useRowProps(transcript);
+  const spacing = useMemo(() => getRowSpacing(rows, rowGap), [rows]);
   const rowContext = useMemo(
-    () => ({ shared: { controller, cache, native, actions, evidence }, getRowProps, liveLabel }),
-    [controller, cache, native, actions, evidence, getRowProps, liveLabel],
+    () => ({
+      shared: { controller, cache, native, actions, evidence },
+      getRowProps,
+      liveLabel,
+      spacing,
+    }),
+    [controller, cache, native, actions, evidence, getRowProps, liveLabel, spacing],
   );
   const mounted = useMountedRowKeys(rows, reading, imageSource, transcript.find.active);
   const failed = currentSnapshot && ['failed', 'uncertain'].includes(currentSnapshot.state);
@@ -462,7 +470,6 @@ function TranscriptList({
       onReady={() => setReadyDataset(dataset)}
       ListHeaderComponent={header}
       ListFooterComponent={footer}
-      contentContainerStyle={{ gap: rowGap }}
       {...stylex.props(styles.list)}
     />
   );
@@ -479,19 +486,27 @@ const getRowKey = (row: TranscriptRow) => row.key;
 const getRowType = (row: TranscriptRow) => (row.kind === 'entry' ? row.entry.role : row.kind);
 const renderRow = ({ item }: LegendListRenderItemProps<TranscriptRow>) => <Row row={item} />;
 
-type RowProps = Omit<EntryProps, 'entry' | 'liveState' | keyof SharedRowProps>;
+type RowProps = Omit<
+  EntryProps,
+  'entry' | 'liveState' | 'joinPrevious' | 'joinNext' | keyof SharedRowProps
+>;
 type SharedRowProps = Pick<EntryProps, 'controller' | 'cache' | 'native' | 'actions' | 'evidence'>;
 /** What every row reads from the transcript: shared props, and its own slice of state. */
 const RowContext = createContext<{
   shared: SharedRowProps;
   getRowProps(entry: ChatEntry): RowProps;
   liveLabel: string | undefined;
+  spacing: ReadonlyMap<string, RowSpacing>;
 } | null>(null);
 
 function Row({ row }: { row: TranscriptRow }) {
   const context = useContext(RowContext)!;
+  // Rows space themselves so an empty marker takes no room and joined activity has no gap.
+  const spacing = context.spacing.get(row.key);
   return (
-    <div data-transcript-row={row.key} {...stylex.props(styles.row)}>
+    <div
+      data-transcript-row={row.key}
+      {...stylex.props(styles.row, styles.rowGap(spacing?.gap ?? 0))}>
       <div {...stylex.props(styles.measure)}>
         {row.kind === 'tool' ? (
           <ToolPreview tool={row.tool} />
@@ -499,6 +514,8 @@ function Row({ row }: { row: TranscriptRow }) {
           <Entry
             entry={row.entry}
             liveState={row.kind === 'live' ? (context.liveLabel ?? row.state) : undefined}
+            joinPrevious={!!spacing?.joinPrevious}
+            joinNext={!!spacing?.joinNext}
             {...context.shared}
             {...context.getRowProps(row.entry)}
           />

@@ -28,6 +28,7 @@ import type { TranscriptNative } from '../../chat/wire.ts';
 import { Markdown } from './markdown.tsx';
 import type { MarkdownCache } from './markdown-model.ts';
 import {
+  classifyEntry,
   describeActivityStep,
   getActivityState,
   getActivityStepState,
@@ -56,6 +57,9 @@ export type EntryProps = {
   entry: ChatEntry;
   /** Set for the live row: its status label. */
   liveState?: string;
+  /** An activity row continues the activity card above or below it. */
+  joinPrevious?: boolean;
+  joinNext?: boolean;
   controller: ChatController;
   cache: MarkdownCache;
   native?: TranscriptNative;
@@ -93,6 +97,8 @@ export const Entry = memo(
   function Entry({
     entry,
     liveState,
+    joinPrevious = false,
+    joinNext = false,
     controller,
     cache,
     manifest,
@@ -145,9 +151,10 @@ export const Entry = memo(
       }
       await controller.loadTranscriptManifest(source);
     };
-    // Your bubbles and the agent's plain replies need no names; other roles keep theirs.
-    const conversational = ['assistant', 'user'].includes(entry.role);
-    const label = conversational ? '' : (entry.toolName ?? entry.role);
+    // Messages and tool steps need no names; only a system record with content keeps its own.
+    const kind = classifyEntry(entry);
+    const conversational = kind === 'message' && ['assistant', 'user'].includes(entry.role);
+    const label = entry.role === 'system' && kind !== 'empty' ? 'system' : '';
     const notes = [
       label,
       entry.isError ? 'Failed' : liveState,
@@ -188,6 +195,8 @@ export const Entry = memo(
             return group.activity ? (
               <Activity
                 key={group.parts[0]!.partId}
+                joinPrevious={joinPrevious}
+                joinNext={joinNext}
                 source={source}
                 parts={group.parts}
                 entryId={entryId}
@@ -204,6 +213,9 @@ export const Entry = memo(
           })}
         </>
       );
+    // An empty turn marker keeps its row (Find and reading positions key on it) but shows nothing.
+    if (kind === 'empty' && !liveState && !findMatch)
+      return <article data-transcript-entry={entry.id} {...stylex.props(styles.message)} />;
     return (
       <article
         data-transcript-entry={liveState ? undefined : entry.id}
@@ -218,27 +230,40 @@ export const Entry = memo(
             ))}
           </div>
         )}
-        {user ? <div {...stylex.props(styles.bubble)}>{body}</div> : body}
-        {source && conversational && (
-          <div {...stylex.props(styles.messageActions)}>
-            {entry.createdAt && (
-              <time
-                dateTime={entry.createdAt}
-                title={new Date(entry.createdAt).toLocaleString()}
-                {...stylex.props(styles.messageTime, styles.revealed)}>
-                {formatMessageTime(entry.createdAt)}
-              </time>
-            )}
-            <Button
-              aria-label="Copy message"
-              title="Copy message"
-              {...stylex.props(controls.button, controls.iconButton, styles.revealed)}
-              disabled={!native || (source.kind === 'live' && offline)}
-              onClick={copy}>
-              <Icon name="copy" />
-            </Button>
-          </div>
-        )}
+        {(() => {
+          const actions = source && conversational && (
+            <div {...stylex.props(styles.messageActions)}>
+              {entry.createdAt && (
+                <time
+                  dateTime={entry.createdAt}
+                  title={new Date(entry.createdAt).toLocaleString()}
+                  {...stylex.props(styles.messageTime, styles.revealed)}>
+                  {formatMessageTime(entry.createdAt)}
+                </time>
+              )}
+              <Button
+                aria-label="Copy message"
+                title="Copy message"
+                {...stylex.props(controls.button, controls.iconButton, styles.revealed)}
+                disabled={!native || (source.kind === 'live' && offline)}
+                onClick={copy}>
+                <Icon name="copy" />
+              </Button>
+            </div>
+          );
+          // Your time and Copy sit beside the bubble; the agent's sit under its reply.
+          return user ? (
+            <div {...stylex.props(styles.userLine)}>
+              {actions}
+              <div {...stylex.props(styles.bubble)}>{body}</div>
+            </div>
+          ) : (
+            <>
+              {body}
+              {actions}
+            </>
+          );
+        })()}
         {matchedPart &&
           manifest?.status === 'complete' &&
           (replay.done || !manifest.omittedParts) &&
@@ -297,6 +322,8 @@ export const Entry = memo(
 
 /** Consecutive activity parts fold together; each part's state stays visible while folded. */
 function Activity({
+  joinPrevious,
+  joinNext,
   source,
   parts,
   entryId,
@@ -307,6 +334,8 @@ function Activity({
   revealing,
   children,
 }: {
+  joinPrevious: boolean;
+  joinNext: boolean;
   source: ChatTranscriptSource;
   parts: readonly ChatTranscriptPart[];
   entryId: string;
@@ -328,10 +357,14 @@ function Activity({
     controller,
   });
   // One step per call (with its answers), marked by its state like a task list.
-  const steps = new Map<string, string | undefined>();
+  const steps = new Map<string, { state: string | undefined; output: boolean }>();
   for (const step of groupActivitySteps(parts)) {
     const summary = describeActivityStep(step, { source }, evidence);
-    if (!steps.has(summary)) steps.set(summary, getActivityStepState(step, { source }, evidence));
+    // A completed result answering a call recorded elsewhere reads as that call's output.
+    const state = getActivityStepState(step, { source }, evidence),
+      output =
+        step.lead.kind === 'result' && step.lead.pairing === 'matched' && state === 'completed';
+    if (!steps.has(summary)) steps.set(summary, { state, output });
   }
   return (
     <Collapsible.Root
@@ -339,19 +372,39 @@ function Activity({
       onOpenChange={disclosure.onOpenChange}
       disabled={disclosure.disabled}
       render={<section data-transcript-activity />}
-      {...stylex.props(styles.activity)}>
+      {...stylex.props(
+        styles.activity,
+        joinPrevious && styles.activityJoinPrevious,
+        joinNext && styles.activityJoinNext,
+      )}>
+      {/* The steps say what happened; the chevron opens the recorded parts behind them. */}
       <Collapsible.Trigger
-        {...stylex.props(controls.button, controls.quietButton, styles.activityToggle)}>
-        Activity · {parts.length} recorded {parts.length === 1 ? 'part' : 'parts'}
+        aria-label={`Activity · ${parts.length} recorded ${parts.length === 1 ? 'part' : 'parts'}`}
+        title="Show recorded parts"
+        {...stylex.props(controls.button, controls.iconButton, styles.activityToggle)}>
+        <Icon name="chevron" />
       </Collapsible.Trigger>
       <ul {...stylex.props(styles.activitySteps)}>
-        {[...steps].map(([summary, state]) => {
+        {[...steps].map(([summary, { state, output }]) => {
           const split = summary.indexOf(' · ');
+          // An output line sits under its call, so it drops the repeated tool name.
+          if (output && split >= 0)
+            return (
+              <li
+                key={summary}
+                data-glyph="↳"
+                {...stylex.props(styles.activityStep, styles.stepOutput)}>
+                {summary.slice(split + 3)}
+              </li>
+            );
           return (
             <li
               key={summary}
-              data-glyph={(state && stepGlyphs[state]) ?? '·'}
-              {...stylex.props(styles.activityStep, stepStyles[state ?? 'unknown'])}>
+              data-glyph={output ? '↳' : ((state && stepGlyphs[state]) ?? '·')}
+              {...stylex.props(
+                styles.activityStep,
+                output ? styles.stepOutput : stepStyles[state ?? 'unknown'],
+              )}>
               <span {...stylex.props(styles.activityTool)}>
                 {split < 0 ? summary : summary.slice(0, split)}
               </span>

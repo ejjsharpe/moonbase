@@ -17,6 +17,7 @@ export const transcriptStyles = stylex.create({
   list: { flex: 1, minHeight: 0, minWidth: 0, outline: 'none' },
   /** A centred reading column; rows, the toolbar and the list edges share it. */
   row: { paddingInline: space.xl, minWidth: 0 },
+  rowGap: (gap: number) => ({ paddingTop: gap }),
   measure: { maxWidth: layout.conversation, margin: '0 auto', minWidth: 0 },
   edge: { paddingBlock: space.sm },
   navigation: { flexWrap: 'wrap', minHeight: 28 },
@@ -53,7 +54,15 @@ export const transcriptStyles = stylex.create({
     borderColor: colors.border,
     borderRadius: '14px 14px 4px 14px',
   },
-  messageActions: { display: 'flex', alignItems: 'center', gap: 2, minHeight: 28 },
+  messageActions: { display: 'flex', alignItems: 'center', gap: 2, height: 28, flexShrink: 0 },
+  userLine: {
+    alignSelf: 'stretch',
+    display: 'flex',
+    justifyContent: 'flex-end',
+    alignItems: 'flex-end',
+    gap: space.xs,
+    minWidth: 0,
+  },
   messageTime: { paddingInline: 6, color: colors.muted, fontSize: type.caption },
   /** Row actions stay quiet until the row is hovered or holds focus. */
   revealed: {
@@ -91,8 +100,9 @@ export const transcriptStyles = stylex.create({
     '::highlight(find-active)': { backgroundColor: colors.accent, color: colors.onAccent },
   },
   disclosure: { minWidth: 0 },
-  /** Folded tool work reads as one card of steps, each marked by its state. */
+  /** Folded tool work reads as one card of steps; consecutive activity rows join into one. */
   activity: {
+    position: 'relative',
     minWidth: 0,
     marginBlock: space.sm,
     marginInline: 0,
@@ -103,23 +113,46 @@ export const transcriptStyles = stylex.create({
     borderColor: colors.border,
     borderRadius: radius.panel,
   },
+  activityJoinPrevious: {
+    marginTop: 0,
+    paddingTop: 0,
+    borderTopWidth: 0,
+    borderTopLeftRadius: 0,
+    borderTopRightRadius: 0,
+  },
+  activityJoinNext: {
+    marginBottom: 0,
+    paddingBottom: 0,
+    borderBottomWidth: 0,
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
+  },
   activityToggle: {
-    textAlign: 'left',
-    whiteSpace: 'normal',
-    marginInline: 4,
+    position: 'absolute',
+    top: 2,
+    right: 4,
+    width: 24,
+    height: 24,
+    padding: 4,
     color: colors.muted,
+    transform: { default: null, ':is([data-panel-open])': 'rotate(180deg)' },
+    opacity: {
+      default: 0,
+      ':focus-visible': 1,
+      [stylex.when.ancestor(':hover')]: 1,
+    },
   },
   activitySteps: {
     listStyle: 'none',
     margin: 0,
-    padding: '2px 0 4px',
+    padding: '1px 0',
     fontFamily: type.mono,
     fontSize: type.small,
     lineHeight: 1.75,
     color: colors.secondary,
   },
   activityStep: {
-    paddingInline: 14,
+    paddingInline: '14px 36px',
     overflowWrap: 'anywhere',
     '::before': {
       content: 'attr(data-glyph)',
@@ -132,6 +165,8 @@ export const transcriptStyles = stylex.create({
   stepRunning: { '::before': { color: colors.accent } },
   stepFailed: { '::before': { color: colors.danger } },
   stepPending: { '::before': { color: colors.muted } },
+  /** A call's output, indented under it. */
+  stepOutput: { paddingLeft: 30, color: colors.muted, '::before': { color: colors.muted } },
   small: {
     color: colors.secondary,
     fontSize: type.small,
