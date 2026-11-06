@@ -1,4 +1,4 @@
-import { useEffect, useRef, type KeyboardEvent, type RefObject } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
 import { Button } from '@base-ui/react/button';
 import { Input } from '@base-ui/react/input';
 import * as stylex from '@stylexjs/stylex';
@@ -67,6 +67,69 @@ export function handleChatFindKeyDown(
   event.stopPropagation();
   activateChatFind(controller, event.currentTarget, input);
 }
+/**
+ * Where focus was when Find opened. A jump to a match can replace that element (the transcript list
+ * remounts around the match), so it is also described by its row, part and accessible name.
+ */
+type FocusReturn = {
+  element: HTMLElement;
+  /** The transcript row and part holding it; null outside them. */
+  row: string | null;
+  part: string | null;
+  /** Inside the transcript list but outside a row (its edges). */
+  listed: boolean;
+  name: string;
+  /** Its position among same-named elements in its row or part. */
+  index: number;
+};
+const getFocusName = (element: Element) =>
+  [
+    element.tagName,
+    element.getAttribute('role'),
+    element.getAttribute('aria-label') ?? element.textContent,
+  ].join('\n');
+function findSameNamed(scope: ParentNode, element: Element, name: string) {
+  return [...scope.querySelectorAll<HTMLElement>(element.tagName)].filter(
+    (candidate) => getFocusName(candidate) === name,
+  );
+}
+function captureFocusReturn(element: Element | null): FocusReturn | null {
+  if (!(element instanceof HTMLElement)) return null;
+  const row = element.closest<HTMLElement>('[data-transcript-row]');
+  const part = row && element.closest<HTMLElement>('[data-transcript-part]');
+  const name = getFocusName(element);
+  return {
+    element,
+    row: row?.dataset.transcriptRow ?? null,
+    part: part?.dataset.transcriptPart ?? null,
+    listed: !row && !!element.closest('[data-transcript-list]'),
+    name,
+    index: row ? findSameNamed(part ?? row, element, name).indexOf(element) : 0,
+  };
+}
+/**
+ * The element to focus when Find closes: the one focused when it opened, or its replacement in the
+ * same row and part. A row that is gone, or an element it no longer has, leaves focus on the
+ * transcript rather than on a same-named element in another row.
+ */
+function findFocusReturn(owner: HTMLElement, origin: FocusReturn): HTMLElement | null {
+  const { element, row, part, listed, name, index } = origin;
+  if (element.isConnected) return element;
+  const list = owner.querySelector<HTMLElement>('[data-transcript-list]');
+  if (listed) return list;
+  if (row) {
+    let scope: HTMLElement | null = owner.querySelector(
+      `[data-transcript-row="${CSS.escape(row)}"]`,
+    );
+    if (scope && part) scope = scope.querySelector(`[data-transcript-part="${CSS.escape(part)}"]`);
+    return (scope && findSameNamed(scope, element, name)[index]) || list;
+  }
+  // Outside the transcript (the composer, the conversation's own controls), by its name.
+  const same = findSameNamed(owner, element, name).filter(
+    (candidate) => !list?.contains(candidate),
+  );
+  return same[0] ?? list;
+}
 export function FindBar({
   controller,
   state,
@@ -77,26 +140,15 @@ export function FindBar({
   /** Holds the field, so a repeated Find request can focus it. */
   input: RefObject<HTMLInputElement | null>;
 }) {
-  const previousFocus = useRef(document.activeElement);
+  const [focusReturn] = useState(() => captureFocusReturn(document.activeElement));
   useEffect(() => {
     input.current?.focus({ preventScroll: true });
   }, [input]);
   const bar = useRef<HTMLElement>(null);
   const close = () => {
     controller.closeFind();
-    const previous = previousFocus.current;
-    if (!(previous instanceof HTMLElement)) return;
-    // A jump to a match can replace the element (the transcript list remounts around it): focus
-    // the element now carrying its label.
-    let target: HTMLElement | null | undefined = previous;
-    const label = previous.getAttribute('aria-label');
-    if (!previous.isConnected)
-      target = label
-        ? bar.current
-            ?.closest('[data-chat-find-owner]')
-            ?.querySelector<HTMLElement>(`[aria-label="${CSS.escape(label)}"]`)
-        : null;
-    target?.focus({ preventScroll: true });
+    const owner = bar.current?.closest<HTMLElement>('[data-chat-find-owner]');
+    if (owner && focusReturn) findFocusReturn(owner, focusReturn)?.focus({ preventScroll: true });
   };
   let status = 'Find literal text in this saved conversation.';
   if (state.status === 'searching')

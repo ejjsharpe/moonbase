@@ -533,6 +533,7 @@ function TranscriptList({
         ref={list}
         role="region"
         aria-label="Chat transcript"
+        data-transcript-list=""
         tabIndex={0}
         data={transcript.rows}
         keyExtractor={getRowKey}

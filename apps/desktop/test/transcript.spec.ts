@@ -430,6 +430,69 @@ test.describe('the virtualized transcript', () => {
     await expect(row.getByRole('button', { name: 'Fold code' })).toBeVisible();
     await expect(row.getByText('const line59 = 191;')).toBeAttached();
   });
+
+  test('closing Find returns focus to the same row, or the transcript once that row is gone', async ({
+    page,
+  }) => {
+    // Every answer has a table, so the tables share one label; two far-apart answers match.
+    await page.goto('/?local&design&transcript');
+    await page.evaluate(async () => {
+      await window.demo.transcript!.record(
+        Array.from({ length: 400 }, (_, index) => ({
+          id: `table-${index}`,
+          parts: [
+            {
+              kind: 'text' as const,
+              text:
+                `Answer ${index}${[5, 398].includes(index) ? ' with a needle' : ''}.\n\n` +
+                `| Column | Value |\n| --- | --- |\n| row | ${index} |\n`,
+            },
+          ],
+        })),
+      );
+    });
+    await page.getByRole('button', { name: /^Conversation/ }).click();
+    const table = (index: number) =>
+      page.locator(`[data-transcript-row="entry:table-${index}"]`).getByRole('region', {
+        name: 'Table',
+        exact: true,
+      });
+    const focusedRow = () =>
+      page.evaluate(
+        () =>
+          document.activeElement?.closest<HTMLElement>('[data-transcript-row]')?.dataset
+            .transcriptRow ?? document.activeElement?.getAttribute('aria-label'),
+      );
+    const field = page.getByRole('textbox', { name: 'Find in conversation', exact: true });
+    const highlighted = (entry: string) =>
+      expect
+        .poll(() => readFindHighlight(page))
+        .toEqual([expect.objectContaining({ entry, visible: true })]);
+
+    // The match far back replaces the list, and Next returns to the focused row: its table is
+    // a new element, found again in that row rather than by its label.
+    await table(398).focus();
+    await page.keyboard.press('ControlOrMeta+f');
+    await field.fill('needle');
+    await highlighted('table-5');
+    await expect(findStatus(page, /1 of 2 matches/)).toBeVisible();
+    await field.press('Enter');
+    await highlighted('table-398');
+    await field.press('Escape');
+    await expect(table(398)).toBeFocused();
+
+    // A focused row that is no longer retained leaves focus on the transcript.
+    await table(399).focus();
+    await page.keyboard.press('ControlOrMeta+f');
+    await field.fill('needle');
+    await expect(findStatus(page, /2 matches/)).toBeVisible();
+    await field.press('Shift+Enter');
+    await highlighted('table-5');
+    await expect(page.locator('[data-transcript-row="entry:table-399"]')).toHaveCount(0);
+    await field.press('Escape');
+    await expect(transcriptList(page)).toBeFocused();
+    expect(await focusedRow()).toBe('Chat transcript');
+  });
 });
 
 test("the image viewer's row stays mounted while the transcript scrolls", async ({ page }) => {
