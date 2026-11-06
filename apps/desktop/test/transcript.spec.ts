@@ -318,8 +318,12 @@ test.describe('the virtualized transcript', () => {
   /** Whether the active Find match's text is inside the transcript's viewport. */
   const isActiveMatchInView = (page: Page) =>
     page.evaluate(() => {
-      const range = [...(CSS.highlights.get('find-active') ?? [])][0] as Range | undefined;
-      if (!range?.toString()) return false;
+      const painted = [...(CSS.highlights.get('find-active') ?? [])][0];
+      if (!painted) return false;
+      const range = document.createRange();
+      range.setStart(painted.startContainer, painted.startOffset);
+      range.setEnd(painted.endContainer, painted.endOffset);
+      if (!range.toString()) return false;
       const box = range.getBoundingClientRect(),
         view = document.querySelector('[aria-label="Chat transcript"]')!.getBoundingClientRect();
       return box.height > 0 && box.top >= view.top && box.bottom <= view.bottom;
@@ -1066,7 +1070,7 @@ test('Find paints prose matches in the rendered message and clears them on close
   const row = page.locator('[data-transcript-entry="reading-0"]');
   await expect(row.getByRole('region', { name: 'Matched original source' })).toHaveCount(0);
   await expect(row.locator('[data-transcript-part] strong')).toHaveText('Needle');
-  // Replacing the painted text node collapses its range; the part's observer repaints it.
+  // Replacing the painted text node detaches its range; the part's observer repaints it.
   await page.evaluate(() => {
     const node = [...(CSS.highlights.get('find-active') ?? [])][0]!.startContainer as Text;
     node.replaceWith(node.data);

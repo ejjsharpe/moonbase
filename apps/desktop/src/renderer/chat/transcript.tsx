@@ -354,13 +354,13 @@ function TranscriptList({
   const [placement, setPlacement] = useState(() => findPlacement(transcript));
   if (placement.dataset !== dataset) setPlacement(findPlacement(transcript));
   /** The dataset the list last finished placing; until then this one isn't ready. */
-  const readyDataset = useRef<number | null>(null);
-  const isReady = useCallback(() => readyDataset.current === current.current.dataset, []);
+  const [readyDataset, setReadyDataset] = useState<number | null>(null);
+  const ready = readyDataset === dataset;
   /** Saves where the reader is once scrolling ends: the first visible row, or null following. */
   const save = useCallback(() => {
     const ref = list.current;
     const { view, rows, loading, later } = current.current;
-    if (!ref || !isReady()) return;
+    if (!ref || !ready) return;
     // A restoration still reading its anchor's history saves nothing over it.
     if (view.anchor && loading && !rows.some((row) => row.key === view.anchor!.key)) return;
     if (ref.getState().isFollowingEnd && !later) views.save(null);
@@ -368,7 +368,7 @@ function TranscriptList({
       const anchor = ref.anchorVisibleContent({ hold: false });
       if (anchor) views.save(anchor);
     }
-  }, [list, views, isReady]);
+  }, [list, views, ready]);
   useEffect(() => {
     const node = list.current?.getScrollableNode();
     node?.addEventListener('scrollend', save);
@@ -384,18 +384,19 @@ function TranscriptList({
     onFollowingChange(ref.getState().isFollowingEnd);
     return ref.getState().listen('isFollowingEnd', onFollowingChange);
   }, [list, onFollowingChange]);
-  // A newly revealed Find match: scrolling to its row releases following, then the match itself
-  // is revealed inside it. A match rendered later is revealed by its part.
+  // A newly revealed Find match, or one a jump just placed: scrolling to its row releases
+  // following, then the match itself is revealed inside it. A match rendered later is revealed by
+  // its part.
   const { active: findActive, revealing: findRevealing } = transcript.find;
   useLayoutEffect(() => {
     const ref = list.current;
-    if (!findActive || !findRevealing || !ref || !isReady()) return;
+    if (!findActive || !findRevealing || !ref || !ready) return;
     void ref
       .scrollToKey({ key: getEntryRowKey(findActive.source.entryId), animated: false })
       .then(() => {
         if (current.current.dataset === dataset) revealFindMatch(ref);
       });
-  }, [findActive, findRevealing, dataset, list, isReady]);
+  }, [findActive, findRevealing, dataset, list, ready]);
   /**
    * Holds a revealing Find match in view while its row grows (its part loading or unfolding): the
    * list holds the row's top, not the match inside it. Reader input ends revealing.
@@ -429,10 +430,10 @@ function TranscriptList({
   }, [onPage, save]);
   useEffect(() => {
     const state = list.current?.getState();
-    if (loading || error || !state || !isReady()) return;
+    if (loading || error || !state || !ready) return;
     if (earlier && state.isNearStart) pageEarlier();
     else if (later && state.isNearEnd) pageLater();
-  }, [loading, error, earlier, later, list, pageEarlier, pageLater, isReady]);
+  }, [loading, error, earlier, later, list, pageEarlier, pageLater, ready]);
   const alwaysRender = useMemo(() => ({ keys: mounted }), [mounted]);
   return (
     <LegendList<TranscriptRow>
@@ -467,18 +468,7 @@ function TranscriptList({
       onPointerDownCapture={onReaderInput}
       onKeyDownCapture={onReaderInput}
       onFocusCapture={onReaderInput}
-      onReady={() => {
-        readyDataset.current = dataset;
-        // A Find match placed by a jump is revealed once the list has placed its row.
-        const { find } = current.current;
-        if (
-          find.revealing &&
-          find.active &&
-          list.current &&
-          getEntryRowKey(find.active.source.entryId) === placement.anchor?.key
-        )
-          revealFindMatch(list.current);
-      }}
+      onReady={() => setReadyDataset(dataset)}
       ListHeaderComponent={header}
       ListFooterComponent={footer}
       contentContainerStyle={{ gap: rowGap }}

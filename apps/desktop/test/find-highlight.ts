@@ -5,8 +5,10 @@ export const readFindHighlight = (page: Page, name: 'find-active' | 'find-match'
   page.evaluate(
     (name) =>
       [...(CSS.highlights.get(name) ?? [])].map((item) => {
-        const range = item as Range,
-          start = range.startContainer.parentElement!;
+        const range = document.createRange();
+        range.setStart(item.startContainer, item.startOffset);
+        range.setEnd(item.endContainer, item.endOffset);
+        const start = range.startContainer.parentElement!;
         const box = range.getBoundingClientRect();
         // The topmost element at the range's center is its text's element only when it is in view.
         const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);

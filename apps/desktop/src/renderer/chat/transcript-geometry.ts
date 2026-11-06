@@ -9,7 +9,9 @@ const revealMargin = 24;
  * Moves only the transcript and scrolling output inside it to `target`, keeping the Find field
  * and the reader's selection/focus intact.
  */
-export function scrollToReading(target: Range | HTMLElement, scroller: HTMLElement | null) {
+export function scrollToReading(found: AbstractRange | HTMLElement, scroller: HTMLElement | null) {
+  // A painted highlight's range is static; a live copy measures it.
+  const target = found instanceof HTMLElement ? found : toLiveRange(found);
   const start = target instanceof Range ? target.startContainer.parentElement : target;
   if (!scroller || !start || !scroller.contains(start)) return;
   for (
@@ -31,9 +33,16 @@ export function scrollToReading(target: Range | HTMLElement, scroller: HTMLEleme
 export function revealFindMatch(list: LegendListRef) {
   const scroller = list.getScrollableNode();
   if (!scroller) return;
-  let target: Range | HTMLElement | null = null;
+  let target: AbstractRange | HTMLElement | null = null;
   for (const range of CSS.highlights.get('find-active') ?? [])
-    if (range instanceof Range && scroller.contains(range.startContainer)) target ??= range;
+    if (scroller.contains(range.startContainer)) target ??= range;
   target ??= scroller.querySelector<HTMLElement>('[data-transcript-find-match]');
   if (target) scrollToReading(target, scroller);
+}
+
+function toLiveRange(range: AbstractRange) {
+  const live = document.createRange();
+  live.setStart(range.startContainer, range.startOffset);
+  live.setEnd(range.endContainer, range.endOffset);
+  return live;
 }

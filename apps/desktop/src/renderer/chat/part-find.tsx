@@ -133,8 +133,12 @@ function locateFindRanges(root: Element, source: string, query: string, starts: 
 function isSameText(rendered: string, source: string | undefined) {
   return rendered === source || (rendered === '\n' && source === '\r');
 }
-/** Adds ranges to the named CSS custom highlight until the returned cleanup runs. */
-function paintFindRanges(name: 'find-match' | 'find-active', ranges: Range[]) {
+/**
+ * Adds ranges to the named CSS custom highlight until the returned cleanup runs. The ranges are
+ * static: the list moves rows' containers to keep them in DOM order, which would collapse live
+ * ranges, and the part repaints its own content changes.
+ */
+function paintFindRanges(name: 'find-match' | 'find-active', ranges: StaticRange[]) {
   if (!ranges.length) return () => {};
   const highlight = CSS.highlights.get(name) ?? new Highlight();
   highlight.priority = name === 'find-active' ? 1 : 0;
@@ -248,7 +252,7 @@ export function useFindHighlight({
       .filter((start) => start !== match?.start);
     return match ? [match.start, ...starts] : starts;
   }, [matches, partId, match]);
-  const activeRange = useRef<Range | null>(null),
+  const activeRange = useRef<StaticRange | null>(null),
     mark = useRef<HTMLElement>(null);
   const [unlocated, setUnlocated] = useState<typeof match>(null);
   /** The active match once highlighted in place. */
@@ -258,16 +262,15 @@ export function useFindHighlight({
     const root = rendered.current;
     if (!root || !findStarts.length) return;
     let clear = () => {};
-    let painted: Range[] = [];
     const paint = () => {
       clear();
       // Rendered text can be mapped only when it renders the original source from its start.
-      const ranges =
-        frozen || shown.retainedFrom ? null : locateFindRanges(root, shown.text, query, findStarts);
+      const ranges = (
+        frozen || shown.retainedFrom ? null : locateFindRanges(root, shown.text, query, findStarts)
+      )?.map((range) => range && new StaticRange(range));
       const active = (match && ranges?.[0]) || null;
       activeRange.current = active;
       const others = ranges?.slice(match ? 1 : 0).filter((range) => !!range) ?? [];
-      painted = active ? [active, ...others] : others;
       const clearMatches = paintFindRanges('find-match', others),
         clearActive = paintFindRanges('find-active', active ? [active] : []);
       clear = () => {
@@ -280,30 +283,12 @@ export function useFindHighlight({
     paint();
     const observer = new MutationObserver(paint);
     observer.observe(root, { childList: true, subtree: true, characterData: true });
-    // The list moves rows' containers to keep them in DOM order, and moving a node collapses the
-    // ranges in it; this part's own observer can't see itself moved.
-    const list = scroller.current;
-    const moves = new MutationObserver(() => {
-      if (painted.some((range) => !root.contains(range.startContainer))) paint();
-    });
-    if (list) moves.observe(list, { childList: true, subtree: true });
     return () => {
-      moves.disconnect();
       observer.disconnect();
       clear();
       activeRange.current = null;
     };
-  }, [
-    rendered,
-    scroller,
-    findStarts,
-    frozen,
-    shown.text,
-    shown.retainedFrom,
-    query,
-    match,
-    expanded,
-  ]);
+  }, [rendered, findStarts, frozen, shown.text, shown.retainedFrom, query, match, expanded]);
   // A match the reader hid after it was highlighted, by folding it or turning the page, shows no
   // excerpt: it would grow the transcript around them.
   const excerpt = !!match && matchVisible && unlocated === match && placed !== match;
