@@ -3,7 +3,13 @@ import { test } from 'node:test';
 import type { ChatInput } from '@moonbase/contracts/chat';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { modelRoot } from './chat-model-fixture.ts';
-import { part, tick, transcriptController, transcriptFixture } from './transcript-fixture.ts';
+import {
+  digest,
+  part,
+  tick,
+  transcriptController,
+  transcriptFixture,
+} from './transcript-fixture.ts';
 
 test('legacy older paging keeps its furthest-back cursor through later snapshots', async (t) => {
   const f = transcriptFixture(200),
@@ -205,3 +211,45 @@ for (const close of ['closeView', 'detach', 'dispose'] as const)
     assert(signal?.aborted);
     assert(performance.now() - started >= closeGraceMs - 5);
   });
+
+test('part and manifest failures stay on their own state, apart from the history error', async (t) => {
+  const f = await transcriptController(t, 640);
+  const source = f.entries[630].transcript!.source;
+  const selection = { partId: 'm0.b0', bytes: 9, revision: digest('same text') };
+  let contentFails = true;
+  f.handlers.set('getChatTranscriptContent', async (_input, _signal, fallback) => {
+    if (contentFails)
+      throw new ApplicationError({ code: 'Unavailable', message: 'content unavailable' });
+    return fallback();
+  });
+  await f.controller.loadTranscriptPart(source, selection);
+  await f.controller.loadTranscriptManifest(source);
+  let state = f.controller.getSnapshot().transcript;
+  assert.equal(state.error, null, 'a content failure does not block history paging');
+  assert.deepEqual(
+    state.content.map(({ status, error }) => ({ status, error })),
+    [{ status: 'error', error: 'content unavailable' }],
+  );
+  assert.equal(state.manifest?.status, 'error');
+  assert.equal(state.manifest?.error, 'content unavailable');
+
+  // A failed page read keeps its error while content reads start and settle, so nothing
+  // retries it until the reader does.
+  let historyFails = true;
+  f.handlers.set('getChatHistoryAround', async (_input, _signal, fallback) => {
+    if (historyFails)
+      throw new ApplicationError({ code: 'Unavailable', message: 'history unavailable' });
+    return fallback();
+  });
+  await f.controller.showEarlier();
+  assert.match(f.controller.getSnapshot().transcript.error!, /history unavailable/);
+  contentFails = false;
+  await f.controller.loadTranscriptPart(source, selection, true);
+  await f.controller.loadTranscriptManifest(source, true);
+  state = f.controller.getSnapshot().transcript;
+  assert.match(state.error!, /history unavailable/);
+  assert.equal(state.content[0]?.status, 'complete');
+  historyFails = false;
+  await f.controller.showEarlier();
+  assert.equal(f.controller.getSnapshot().transcript.error, null);
+});

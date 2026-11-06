@@ -80,17 +80,6 @@ const catchFailure =
         Effect.sync(() => handle(normalizeApplicationError(Cause.squash(cause)))),
       ),
     );
-/** Observes a failure of `effect`, then fails with it; interruption skips it by construction. */
-const tapFailure =
-  (handle: (error: ApplicationError) => void) =>
-  <A>(effect: Effect.Effect<A, ApplicationError>) =>
-    effect.pipe(
-      Effect.catchCause((cause) => {
-        const error = normalizeApplicationError(Cause.squash(cause));
-        handle(error);
-        return Effect.fail(error);
-      }),
-    );
 const interruptFiber = (fiber: Option.Option<Fiber.Fiber<unknown, unknown>>) => {
   if (Option.isSome(fiber)) fiber.value.interruptUnsafe();
 };
@@ -238,23 +227,34 @@ export class TranscriptOwner {
   }
   /**
    * Runs a keyed read. An existing job for `key` is joined, or interrupted and replaced when
-   * `replace` is set. A failure is published as the transcript error.
+   * `replace` is set. A history read owns the transcript error: it clears it when it starts and
+   * publishes its failure there. Manifest and part reads pass `fail` to keep their failure on
+   * their own state, so they neither block nor clear history paging.
    */
   private runJob(
     key: string,
     work: Work,
-    options: { replace?: boolean; source?: ChatTranscriptSource; revealing?: boolean } = {},
+    options: {
+      replace?: boolean;
+      source?: ChatTranscriptSource;
+      revealing?: boolean;
+      fail?: (error: ApplicationError) => void;
+    } = {},
   ): Promise<void> {
     if (!this.isCurrent()) return Promise.resolve();
     const running = FiberMap.getUnsafe(this.jobs, key);
     if (Option.isSome(running) && !options.replace) return joinFiber(running.value);
+    const history = key === historyJob;
     const job = Effect.suspend(() => {
       this.assertCurrent();
       return work;
     }).pipe(
-      catchFailure((error) => {
-        this.state = { ...this.state, error: error.message };
-      }),
+      catchFailure(
+        options.fail ??
+          ((error) => {
+            this.state = { ...this.state, error: error.message };
+          }),
+      ),
       Effect.onExit((exit) =>
         Effect.withFiber((fiber) => Effect.sync(() => this.settleJob(key, fiber, exit))),
       ),
@@ -266,8 +266,8 @@ export class TranscriptOwner {
         this.jobReads.set(key, { source: options.source, revealing: !!options.revealing });
         this.state = {
           ...this.state,
-          error: null,
-          loading: key === historyJob || this.state.loading,
+          error: history ? null : this.state.error,
+          loading: history || this.state.loading,
         };
         this.publish();
       },
@@ -673,8 +673,14 @@ export class TranscriptOwner {
   showLater() {
     return this.move('later');
   }
-  private move(direction: HistoryDirection) {
-    this.cancelFindReveal();
+  /**
+   * Pages history. The list pages on its own near an edge, so a page leaves a Find reveal alone
+   * (the reader's own input ends it) and waits for a reveal still reading around its match.
+   */
+  private move(direction: HistoryDirection): Promise<void> {
+    const revealing = FiberHandle.getUnsafe(this.reveal);
+    if (Option.isSome(revealing))
+      return joinFiber(revealing.value).then(() => this.move(direction));
     const pending = FiberMap.getUnsafe(this.jobs, historyJob);
     if (Option.isSome(pending) && !this.restoringView) return joinFiber(pending.value);
     if (!this.isCurrent() || !this.state[direction])
@@ -682,7 +688,7 @@ export class TranscriptOwner {
     this.cancelViewRestore();
     this.restorePending = false;
     // Keep the records the page extends before loading can notify a subscriber.
-    const hold = this.history.holdFollowing();
+    const hold = this.history.holdFollowing(direction);
     return this.runJob(historyJob, this.readPage(direction, hold), { replace: true });
   }
   private readPage(direction: HistoryDirection, hold: FollowHold): Work {
@@ -816,18 +822,7 @@ export class TranscriptOwner {
       this.manifestAdvance(manifest.nextCursor, reply.nextCursor);
       const known = findKnownParts(captured, this.snapshot, this.history.records);
       this.state = { ...this.state, manifest: appendManifestPage(manifest, reply, known) };
-    }).pipe(
-      tapFailure((error) => {
-        this.state = {
-          ...this.state,
-          manifest: {
-            ...manifest,
-            status: error.code === 'Conflict' ? 'source-changed' : 'error',
-            error: error.message,
-          },
-        };
-      }),
-    );
+    });
     const work = Effect.gen({ self: this }, function* () {
       this.requireContentReads();
       this.state = { ...this.state, manifest: { ...manifest, status: 'loading', error: null } };
@@ -838,6 +833,16 @@ export class TranscriptOwner {
       replace,
       source: captured,
       revealing: this.isRevealing(captured),
+      fail: (error) => {
+        this.state = {
+          ...this.state,
+          manifest: {
+            ...manifest,
+            status: error.code === 'Conflict' ? 'source-changed' : 'error',
+            error: error.message,
+          },
+        };
+      },
     });
   }
   loadPart(source: ChatTranscriptSource, selection: ChatTranscriptSelection, restart = false) {
@@ -862,18 +867,7 @@ export class TranscriptOwner {
       if (reply.kind !== 'content')
         throw makeTranscriptFailure('Transcript content has a missing or overlapping chunk.');
       this.contents.append(key, before, reply);
-    }).pipe(
-      tapFailure((error) =>
-        this.contents.mark(
-          key,
-          {
-            status: error.code === 'Conflict' ? 'source-changed' : 'error',
-            error: error.message,
-          },
-          before,
-        ),
-      ),
-    );
+    });
     const work = Effect.gen({ self: this }, function* () {
       this.requireContentReads();
       this.contents.mark(key, { status: 'loading', error: null }, before);
@@ -884,6 +878,15 @@ export class TranscriptOwner {
       replace: restart,
       source: captured.source,
       revealing: this.isRevealing(captured.source),
+      fail: (error) =>
+        this.contents.mark(
+          key,
+          {
+            status: error.code === 'Conflict' ? 'source-changed' : 'error',
+            error: error.message,
+          },
+          before,
+        ),
     });
   }
   /**

@@ -10,8 +10,11 @@ import { sameTarget } from './saved.ts';
 import { makeTranscriptFailure } from './transcript-read.ts';
 
 export type HistoryDirection = 'earlier' | 'later';
-/** A page read's hold on following: whether the reader followed before it, and any later request. */
-export type FollowHold = { wasFollowing: boolean; follow?: boolean };
+/**
+ * A page read's hold on following: the edge it reads at, where the reader is, whether the reader
+ * followed before it, and any later request.
+ */
+export type FollowHold = { direction: HistoryDirection; wasFollowing: boolean; follow?: boolean };
 type AroundPage = ChatOutput<'getChatHistoryAround'>;
 type Navigation = {
   entryId: string;
@@ -167,8 +170,8 @@ export class TranscriptHistory {
    * Holds following off for a page read, so no snapshot replaces the records it extends. The
    * reader's requests during the read apply when it settles.
    */
-  holdFollowing(): FollowHold {
-    const hold: FollowHold = { wasFollowing: this.follows };
+  holdFollowing(direction: HistoryDirection): FollowHold {
+    const hold: FollowHold = { direction, wasFollowing: this.follows };
     this.following = false;
     this.hold = hold;
     return hold;
@@ -319,20 +322,25 @@ export class TranscriptHistory {
   }
   /**
    * Picks a record to evict for the summary budget, never the pinned anchor row. A page read in
-   * `direction` evicts from the end it moves away from. Any other growth evicts from the end
-   * farther from the anchor, or the oldest when the reader is at the live edge, so the rows the
-   * reader sees stay. Returns undefined when nothing can be evicted.
+   * `direction` evicts from the end it moves away from. Any other growth evicts away from a page
+   * read still in flight (the reader is at its edge, maybe before saving an anchor there), else
+   * from the end farther from the anchor, or the oldest when the reader is at the live edge, so
+   * the rows the reader sees stay. Evicting the newest records stops following: the history no
+   * longer reaches the live edge. Returns undefined when nothing can be evicted.
    */
   evictRecord(direction: HistoryDirection | undefined, pinned: string | undefined) {
     const anchor = this.records.findIndex((entry) => entry.id === pinned);
+    direction ??= this.hold?.direction;
     direction ??= anchor > (this.records.length - 1) / 2 ? 'earlier' : 'later';
     const indices = this.records.map((_, index) => index);
     if (direction === 'later') indices.reverse();
     const index = indices.find((index) => pinned !== this.records[index].id);
     if (index === undefined) return undefined;
     const [removed] = this.records.splice(index, 1);
-    if (direction === 'earlier') this.newerEnd = false;
-    else this.olderEnd = false;
+    if (direction === 'earlier') {
+      this.newerEnd = false;
+      this.follows = false;
+    } else this.olderEnd = false;
     return removed;
   }
   /**

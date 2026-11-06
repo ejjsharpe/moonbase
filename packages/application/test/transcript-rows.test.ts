@@ -96,6 +96,15 @@ test('the live response and legacy tool previews are rows after the stored entri
       .transcript.rows.slice(-2)
       .every((row, i) => row === tools[i]),
   );
+  // One preview changing replaces only its row; the live row and the other preview stay.
+  const legacy = f.controller.getSnapshot().transcript.rows.slice(-3);
+  const changed = running(f.snapshot, 'legacy', false);
+  changed.run!.tools[1] = { ...changed.run!.tools[1]!, text: 'second, more' };
+  f.publish(changed);
+  const next = f.controller.getSnapshot().transcript.rows.slice(-3);
+  assert.equal(next[0], legacy[0]);
+  assert.equal(next[1], legacy[1]);
+  assert.notEqual(next[2], legacy[2]);
   f.publish({ ...f.snapshot, run: null, state: 'idle' });
   assert.deepEqual(
     rowKeys(f),
