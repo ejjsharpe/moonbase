@@ -974,6 +974,21 @@ test('the rail keeps one tile per project and the sidebar header switches its wo
   await expect(page.getByRole('textbox', { name: 'welcome.ts editor', exact: true })).toBeVisible();
 });
 
+test('⇧⌘G and ⇧⌘E switch the project sidebar between Changes and Files', async ({ page }) => {
+  await page.goto('/?local&design');
+  await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
+  await page.getByRole('tab', { name: 'moonbase · main', exact: true }).click();
+  const editor = page.getByRole('textbox', { name: 'welcome.ts editor', exact: true });
+  await expect(editor).toBeVisible();
+  const files = page.getByRole('button', { name: 'Files', exact: true });
+  const changes = page.getByRole('button', { name: 'Changes', exact: true });
+  await editor.press('Shift+Meta+g');
+  await expect(changes).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('region', { name: 'Staged', exact: true })).toBeVisible();
+  await editor.press('Shift+Meta+e');
+  await expect(files).toHaveAttribute('aria-pressed', 'true');
+});
+
 test('removing a middle project moves survivors smoothly up the rail', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await page.clock.install();
@@ -1241,7 +1256,7 @@ test('design fixture renders first-message composition, pinned navigation and co
   await folder.click();
   await expect(folder).toHaveAttribute('aria-expanded', 'true');
   await expect(folder.locator('svg.tabler-icon-folder-open')).toBeVisible();
-  await page.getByRole('button', { name: 'Diff', exact: true }).click();
+  await page.getByRole('button', { name: 'Changes', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Refresh', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Files', exact: true }).click();
   await page.screenshot({ path: '../../test-results/redesign-review/editor.png', fullPage: true });

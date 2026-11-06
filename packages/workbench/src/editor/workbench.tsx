@@ -58,6 +58,12 @@ export type WorkbenchProps = {
   selectNativeImports?: (checkout: CheckoutTarget) => Promise<string[]>;
   selectClipboardImports?: (checkout: CheckoutTarget) => Promise<string[]>;
 };
+const changeAreas = [
+  { area: 'staged', label: 'Staged' },
+  { area: 'unstaged', label: 'Changes' },
+  { area: 'untracked', label: 'Untracked' },
+] as const;
+
 export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Workbench(
   {
     controller,
@@ -84,6 +90,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   const buffer =
     target && state.buffers.find((buffer) => fileKey(buffer.target) === fileKey(target));
   const mode = (target && readOwn(selected?.fileViews, target.path)) || 'file';
+  const changes = (checkout && state.git[checkoutKey(checkout)]?.changes) || [];
   const breadcrumbs =
     checkout && selected?.active
       ? [
@@ -311,6 +318,10 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
         event.preventDefault();
         event.stopPropagation();
         setLookup(true);
+      } else if (event.metaKey && event.shiftKey && (key === 'e' || key === 'g')) {
+        event.preventDefault();
+        event.stopPropagation();
+        setPanel(key === 'e' ? 'files' : 'git');
       } else if (event.metaKey && key === 'w' && !event.shiftKey) {
         event.preventDefault();
         event.stopPropagation();
@@ -404,26 +415,35 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
         }}>
         <WorktreeSwitcher controller={controller} checkout={checkout} run={run} />
         <div {...stylex.props(workbench.viewNav)}>
-          <Button
-            {...stylex.props(
-              controls.button,
-              workbench.viewButton,
-              panel === 'files' && workbench.activeView,
-            )}
-            aria-pressed={panel === 'files'}
-            onClick={() => setPanel('files')}>
-            Files
-          </Button>
-          <Button
-            {...stylex.props(
-              controls.button,
-              workbench.viewButton,
-              panel === 'git' && workbench.activeView,
-            )}
-            aria-pressed={panel === 'git'}
-            onClick={() => setPanel('git')}>
-            Diff
-          </Button>
+          <div role="group" aria-label="Sidebar view" {...stylex.props(workbench.viewSwitch)}>
+            <Button
+              title="Files · ⇧⌘E"
+              {...stylex.props(
+                controls.button,
+                workbench.viewButton,
+                panel === 'files' && workbench.activeView,
+              )}
+              aria-pressed={panel === 'files'}
+              onClick={() => setPanel('files')}>
+              Files
+            </Button>
+            <Button
+              title={`${changes.length} changed · ⇧⌘G`}
+              {...stylex.props(
+                controls.button,
+                workbench.viewButton,
+                panel === 'git' && workbench.activeView,
+              )}
+              aria-pressed={panel === 'git'}
+              onClick={() => setPanel('git')}>
+              Changes
+              {changes.length > 0 && (
+                <span aria-hidden="true" {...stylex.props(workbench.changeCount)}>
+                  {changes.length}
+                </span>
+              )}
+            </Button>
+          </div>
           <Button
             ref={findFile}
             aria-label="Find file"
@@ -515,31 +535,58 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                 {state.git[checkoutKey(checkout)].error}
               </p>
             )}
-            {(['staged', 'unstaged', 'untracked'] as const).map((area) => (
-              <section key={area}>
-                <h2 {...stylex.props(controls.heading)}>{area}</h2>
-                <ul {...stylex.props(controls.list)}>
-                  {state.git[checkoutKey(checkout)]?.changes
-                    .filter((change) => change.area === area)
-                    .map((change) => (
-                      <li key={change.path}>
-                        <Button
-                          {...stylex.props(controls.button, controls.listButton)}
-                          onClick={() =>
-                            run(
-                              controller.open(
-                                { checkout, path: change.path },
-                                { view: area, intent: 'preview' },
-                              ),
-                            )
-                          }>
-                          {change.path}
-                        </Button>
-                      </li>
-                    ))}
-                </ul>
-              </section>
-            ))}
+            {state.git[checkoutKey(checkout)] && !changes.length && (
+              <p role="status" {...stylex.props(workbench.noChanges)}>
+                No changes
+              </p>
+            )}
+            {changeAreas.map(({ area, label }) => {
+              const listed = changes.filter((change) => change.area === area);
+              if (!listed.length) return null;
+              return (
+                <section key={area} aria-label={label}>
+                  <h2 {...stylex.props(workbench.changeHeading)}>
+                    {label}
+                    <span {...stylex.props(workbench.changeHeadingCount)}>{listed.length}</span>
+                  </h2>
+                  <ul {...stylex.props(controls.list)}>
+                    {listed.map((change) => {
+                      const active = target?.path === change.path && mode === area;
+                      const folder = change.path.slice(0, change.path.lastIndexOf('/') + 1);
+                      return (
+                        <li key={change.path}>
+                          <Button
+                            aria-label={change.path}
+                            aria-current={active || undefined}
+                            title={change.path}
+                            {...stylex.props(
+                              controls.button,
+                              controls.listButton,
+                              workbench.changeRow,
+                              active && workbench.activeChange,
+                            )}
+                            onClick={() =>
+                              run(
+                                controller.open(
+                                  { checkout, path: change.path },
+                                  { view: area, intent: 'preview' },
+                                ),
+                              )
+                            }>
+                            <span {...stylex.props(workbench.changeName)}>
+                              {change.path.slice(folder.length)}
+                            </span>
+                            {folder && (
+                              <span {...stylex.props(workbench.changeFolder)}>{folder}</span>
+                            )}
+                          </Button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </section>
+              );
+            })}
           </>
         )}
       </div>
