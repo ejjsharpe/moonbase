@@ -10,6 +10,8 @@ import { sameTarget } from './saved.ts';
 import { makeTranscriptFailure } from './transcript-read.ts';
 
 export type HistoryDirection = 'earlier' | 'later';
+/** A page read's hold on following: whether the reader followed before it, and any later request. */
+export type FollowHold = { wasFollowing: boolean; follow?: boolean };
 type AroundPage = ChatOutput<'getChatHistoryAround'>;
 type Navigation = {
   entryId: string;
@@ -137,19 +139,44 @@ export function reuseSnapshot(
  */
 export class TranscriptHistory {
   records: ChatEntry[] = [];
-  /**
-   * The reader follows the live edge, so a snapshot that skips past the retained records replaces
-   * them. A reader of history keeps their records and the gap shows as later history.
-   */
-  following: boolean;
   dataset = 0;
+  private follows: boolean;
+  /** Set while a page read holds following off; see holdFollowing. */
+  private hold?: FollowHold;
   private navigation?: Navigation;
   /** Legacy paging: each page or snapshot's oldest entry ID maps to its older-page cursor. */
   private olderCursors = new Map<string, string | null>();
   private olderEnd = true;
   private newerEnd = true;
   constructor(following: boolean) {
-    this.following = following;
+    this.follows = following;
+  }
+  /**
+   * The reader follows the live edge, so a snapshot that skips past the retained records replaces
+   * them. A reader of history keeps their records and the gap shows as later history. Setting it
+   * supersedes a held page read's request.
+   */
+  get following() {
+    return this.follows;
+  }
+  set following(value: boolean) {
+    this.hold = undefined;
+    this.follows = value;
+  }
+  /**
+   * Holds following off for a page read, so no snapshot replaces the records it extends. The
+   * reader's requests during the read apply when it settles.
+   */
+  holdFollowing(): FollowHold {
+    const hold: FollowHold = { wasFollowing: this.follows };
+    this.following = false;
+    this.hold = hold;
+    return hold;
+  }
+  /** The reader asks to follow or to read history; following waits for the newest entry. */
+  requestFollowing(follow: boolean) {
+    if (this.hold) this.hold.follow = follow;
+    else if (!follow || this.newerEnd) this.following = follow;
   }
   /** Bytes the bounds count for navigation state beyond the records themselves. */
   get navigationState() {
@@ -275,12 +302,15 @@ export class TranscriptHistory {
     this.newerEnd = true;
   }
   /**
-   * Ends a page read, which held following off so no snapshot replaced the records it extends.
-   * Records that reach the newest stored entry follow again if the reader was following or moved
-   * later to them.
+   * Ends a page read's hold, unless something since set following. Records that reach the newest
+   * stored entry follow if the reader asked to during the read, or else if they were following or
+   * moved later to them.
    */
-  settleMove(direction: HistoryDirection, wasFollowing: boolean) {
-    if (this.newerEnd && (wasFollowing || direction === 'later')) this.following = true;
+  settleMove(hold: FollowHold, direction: HistoryDirection) {
+    if (this.hold !== hold) return;
+    this.hold = undefined;
+    if (this.newerEnd && (hold.follow ?? (hold.wasFollowing || direction === 'later')))
+      this.follows = true;
   }
   /** Drops records and navigation before an explicit read of the latest snapshot. */
   resetToLatest() {
@@ -288,10 +318,14 @@ export class TranscriptHistory {
     this.following = true;
   }
   /**
-   * Picks a record to evict for the summary budget, from the end the reader is moving away from
-   * and never the pinned anchor row. Returns undefined when nothing can be evicted.
+   * Picks a record to evict for the summary budget, never the pinned anchor row. A page read in
+   * `direction` evicts from the end it moves away from. Any other growth evicts from the end
+   * farther from the anchor, or the oldest when the reader is at the live edge, so the rows the
+   * reader sees stay. Returns undefined when nothing can be evicted.
    */
-  evictRecord(direction: HistoryDirection, pinned: string | undefined) {
+  evictRecord(direction: HistoryDirection | undefined, pinned: string | undefined) {
+    const anchor = this.records.findIndex((entry) => entry.id === pinned);
+    direction ??= anchor > (this.records.length - 1) / 2 ? 'earlier' : 'later';
     const indices = this.records.map((_, index) => index);
     if (direction === 'later') indices.reverse();
     const index = indices.find((index) => pinned !== this.records[index].id);

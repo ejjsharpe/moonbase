@@ -15,7 +15,8 @@ export const getEntryRowKey = (entryId: string) => `entry:${entryId}`;
 /** The stored entry a row key names, or undefined for live and tool rows. */
 export const findRowEntryId = (key: string) =>
   key.startsWith('entry:') ? key.slice('entry:'.length) : undefined;
-export const isLiveRowKey = (key: string) => key.startsWith('live:');
+/** Whether a row key names a live-edge row: the running response or a legacy tool preview. */
+export const isLiveRowKey = (key: string) => key.startsWith('live:') || key.startsWith('tool:');
 
 const entryRows = new WeakMap<ChatEntry, TranscriptRow>();
 function makeEntryRow(entry: ChatEntry): TranscriptRow {

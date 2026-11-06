@@ -35,6 +35,7 @@ import {
   checkSnapshotSources,
   reuseSnapshot,
   TranscriptHistory,
+  type FollowHold,
   type HistoryDirection,
 } from './transcript-history.ts';
 import {
@@ -296,7 +297,7 @@ export class TranscriptOwner {
     interruptFiber(FiberMap.getUnsafe(this.jobs, key));
   }
   /** Summary budgets count each retained entry/part once, from cached per-value byte sizes. */
-  private enforceBounds(direction: HistoryDirection) {
+  private enforceBounds(direction: HistoryDirection | undefined) {
     const others = new Map((this.snapshot?.entries ?? []).map((entry) => [entry.id, entry]));
     if (this.selectedEntry) others.set(this.selectedEntry.id, this.selectedEntry);
     const sizes = new Map([...others].map(([id, entry]) => [id, measureTranscriptValue(entry)]));
@@ -338,8 +339,11 @@ export class TranscriptOwner {
       }
     }
   }
-  /** Publishes whenever the retained history or the accepted snapshot changed. */
-  private publish(direction: HistoryDirection = this.history.following ? 'later' : 'earlier') {
+  /**
+   * Publishes whenever the retained history or the accepted snapshot changed. `direction` is the
+   * page read that grew the records, which evicts from the end it moved away from.
+   */
+  private publish(direction?: HistoryDirection) {
     if (!this.alive) return;
     this.enforceBounds(direction);
     const listed = this.history.listRecords();
@@ -678,11 +682,10 @@ export class TranscriptOwner {
     this.cancelViewRestore();
     this.restorePending = false;
     // Keep the records the page extends before loading can notify a subscriber.
-    const wasFollowing = this.history.following;
-    this.history.following = false;
-    return this.runJob(historyJob, this.readPage(direction, wasFollowing), { replace: true });
+    const hold = this.history.holdFollowing();
+    return this.runJob(historyJob, this.readPage(direction, hold), { replace: true });
   }
-  private readPage(direction: HistoryDirection, wasFollowing: boolean): Work {
+  private readPage(direction: HistoryDirection, hold: FollowHold): Work {
     return Effect.gen({ self: this }, function* () {
       const history = this.history,
         target = this.dependencies.target;
@@ -696,9 +699,12 @@ export class TranscriptOwner {
           history.applyOlderPage(page, cursor, target);
         }
       } else history.applyLatestEntries(this.snapshot?.entries ?? []);
-      history.settleMove(direction, wasFollowing);
+      history.settleMove(hold, direction);
       this.publish(direction);
-    });
+    }).pipe(
+      // A failed or interrupted read releases its hold too.
+      Effect.ensuring(Effect.sync(() => this.history.settleMove(hold, direction))),
+    );
   }
   private readAround(
     entryId: string,
@@ -779,9 +785,9 @@ export class TranscriptOwner {
     const captured = this.rememberView(view);
     this.cancelViewRestore();
     this.restorePending = false;
-    // A reading anchor stops following; leaving no anchor follows once history reaches the edge.
-    if (captured.anchor) this.history.following = isLiveRowKey(captured.anchor.key);
-    else if (!this.history.hasLater()) this.history.following = true;
+    // A reading anchor stops following; no anchor or a live-edge row follows once history reaches
+    // the newest entry. During a page read the request waits for the read to settle.
+    this.history.requestFollowing(!captured.anchor || isLiveRowKey(captured.anchor.key));
     this.publish();
   }
   private requireContentReads() {
