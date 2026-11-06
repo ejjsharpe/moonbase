@@ -17,6 +17,7 @@ const checkout: CheckoutTarget = {
   projectId: 'project',
   root: '/checkout',
   branch: 'main',
+  worktree: 'main' as 'main' | 'linked',
 };
 function fixture(
   failures: {
@@ -73,6 +74,8 @@ function fixture(
     listDirectory: unavailable,
     getIgnoredPaths: unavailable,
     gitStatus: unavailable,
+    listWorktrees: unavailable,
+    createWorktree: unavailable,
     readComparison: unavailable,
     lookupFiles: unavailable,
     inspectEntries: unavailable,

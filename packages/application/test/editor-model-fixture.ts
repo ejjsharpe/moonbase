@@ -5,6 +5,7 @@ import type {
   FileView,
   EditorPosition,
   DirectoryListing,
+  CommandInput,
   CommandOutput,
   OperationResult,
   WorkspaceOperation,
@@ -73,6 +74,8 @@ type ExpectedEditorController = {
   clearErrors(): void;
   load(): Promise<void>;
   openCheckout(root: string): Promise<CheckoutTarget>;
+  listWorktrees(checkout: CheckoutTarget): Promise<CommandOutput<'listWorktrees'>>;
+  createWorktree(input: CommandInput<'createWorktree'>): Promise<CheckoutTarget>;
   selectCheckout(target: CheckoutTarget): Promise<boolean>;
   resolveRecoveryPublication(): Promise<boolean>;
   flush(): Promise<void>;

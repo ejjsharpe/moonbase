@@ -22,6 +22,7 @@ const checkout = {
   projectId: 'demo',
   root: '/demo/moonbase',
   branch: 'main',
+  worktree: 'main' as 'main' | 'linked',
 };
 const remoteCheckout = { ...checkout, hostId: 'remote-memory', root: '/demo/remote' };
 const secondCheckout = new URLSearchParams(location.search).has('remote')

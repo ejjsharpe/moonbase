@@ -18,6 +18,7 @@ export type DirectoryEntry = typeof Contracts.DirectoryEntrySchema.Type;
 export type DirectoryListing = typeof Contracts.DirectoryListingSchema.Type;
 export type GitChange = typeof Contracts.GitChangeSchema.Type;
 export type GitStatus = typeof Contracts.GitStatusSchema.Type;
+export type Worktree = typeof Contracts.WorktreeSchema.Type;
 export type Comparison = typeof Contracts.ComparisonSchema.Type;
 export type LookupMatch = typeof Contracts.LookupMatchSchema.Type;
 export type RecoveryChange = typeof Contracts.RecoveryChangeSchema.Type;

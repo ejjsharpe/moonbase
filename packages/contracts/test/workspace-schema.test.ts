@@ -33,6 +33,7 @@ const checkout = {
   projectId: 'project',
   root: '/checkout',
   branch: 'main',
+  worktree: 'main' as 'main' | 'linked',
 };
 const target = { checkout, path: 'file.txt' };
 const disk = { text: '', version: 'version' };
@@ -82,6 +83,8 @@ const inputs = {
   listDirectory: { checkout, path: '', hideIgnored: false },
   getIgnoredPaths: { checkout, path: '', paths: [target.path] },
   gitStatus: { checkout },
+  listWorktrees: { checkout },
+  createWorktree: { checkout, base: 'main', branch: 'feature/one', location: '/feature-one' },
   readComparison: { target, area: 'staged' },
   lookupFiles: { checkout, query: '', limit: 100, history: [target.path] },
   inspectEntries: { checkout, paths: [target.path] },
@@ -108,6 +111,12 @@ const outputs = {
   },
   getIgnoredPaths: { paths: [target.path] },
   gitStatus: { branch: '', changes: [{ path: target.path, area: 'staged' }] },
+  listWorktrees: {
+    worktrees: [
+      { root: checkout.root, branch: 'main', main: true, locked: false, prunable: false },
+    ],
+  },
+  createWorktree: { ...checkout, checkoutId: 'feature', root: '/feature-one', worktree: 'linked' },
   readComparison: { original: '', title: '', working: null },
   lookupFiles: {
     matches: [{ path: target.path, score: 0, positions: [] }],
@@ -221,6 +230,12 @@ test('file bytes, finite values, identity grammars and collection bounds retain 
     profileId: 'chat:identity',
   });
   assert.throws(() => decodeWorkspaceInput('lookupFiles', { checkout, query: '', limit: 101 }));
+  for (const name of ['-b', '--force', 'has space', '', 'a\nb'])
+    for (const field of ['base', 'branch'])
+      assert.throws(() =>
+        decodeWorkspaceInput('createWorktree', { ...inputs.createWorktree, [field]: name }),
+      );
+  assert.throws(() => decodeWorkspaceOutput('openCheckout', { ...checkout, worktree: 'bare' }));
   assert.throws(() =>
     decodeEditorRecovery({ ...state, drafts: Array.from({ length: 513 }, () => state.drafts[0]) }),
   );

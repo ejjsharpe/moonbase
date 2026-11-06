@@ -19,6 +19,7 @@ const checkout: CheckoutTarget = {
   projectId: 'project',
   root: '/receipt-fixture',
   branch: 'main',
+  worktree: 'main' as 'main' | 'linked',
 };
 const target = (path: string) => ({ checkout, path });
 const gate = () => {

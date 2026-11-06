@@ -49,6 +49,7 @@ export function checkout(value: unknown): asserts value is CheckoutTarget {
       typeof value[key] === 'string' && value[key].length > 0 && value[key].length <= 4096,
       'Invalid checkout identity.',
     );
+  ensure(value.worktree === 'main' || value.worktree === 'linked', 'Invalid checkout worktree.');
 }
 export const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
 export function document(bytes: Buffer): FileDocument {

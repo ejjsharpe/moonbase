@@ -2,6 +2,8 @@
 
 The macOS Electron app. It composes the workbench, headless application, workspace, local Pi and optional SSH/remote Pi modules. `src/main.ts` is the privileged composition root and owns native capabilities; the sandboxed renderer receives browser-safe clients only.
 
+The renderer opens only roots chosen in the native picker, already known, or listed by `listWorktrees` for an approved checkout. It cannot yet call `createWorktree`: a worktree location needs a native grant first.
+
 ## Run
 
 From the repository root, on macOS with Xcode command-line tools:

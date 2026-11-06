@@ -8,7 +8,14 @@ import type {
 import { readOwn } from './record.ts';
 
 export const checkoutKey = (target: CheckoutTarget) =>
-  JSON.stringify([target.hostId, target.checkoutId, target.projectId, target.root, target.branch]);
+  JSON.stringify([
+    target.hostId,
+    target.checkoutId,
+    target.projectId,
+    target.root,
+    target.branch,
+    target.worktree,
+  ]);
 export const fileKey = (target: FileTarget) =>
   JSON.stringify([checkoutKey(target.checkout), target.path]);
 

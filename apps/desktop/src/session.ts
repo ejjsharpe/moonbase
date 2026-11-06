@@ -25,7 +25,7 @@ import {
 } from './wire.ts';
 
 const exact = (a: CheckoutTarget, b: CheckoutTarget) =>
-  ['hostId', 'checkoutId', 'projectId', 'root', 'branch'].every(
+  ['hostId', 'checkoutId', 'projectId', 'root', 'branch', 'worktree'].every(
     (k) => a[k as keyof CheckoutTarget] === b[k as keyof CheckoutTarget],
   );
 export type NativeActions = {
@@ -47,6 +47,8 @@ export class EditorSession {
   readonly clientId = 'desktop-primary';
   private known = new Map<string, CheckoutTarget>();
   private rootGrants = new Set<string>();
+  /** Worktree roots Git listed for an approved checkout; each may be opened like a picked root. */
+  private worktreeRoots = new Set<string>();
   private operations = new Set<string>();
   private lifetime: IpcLifetime;
   private client: EditorClient;
@@ -135,6 +137,7 @@ export class EditorSession {
       string(v.root);
       if (
         !this.rootGrants.delete(v.root) &&
+        !this.worktreeRoots.has(v.root) &&
         ![...this.known.values()].some((t) => t.root === v.root)
       )
         throw new ApplicationError({
@@ -142,6 +145,12 @@ export class EditorSession {
           message: 'A renderer path is not native root approval.',
         });
     }
+    if (operation === 'createWorktree')
+      // A renderer location would create directories anywhere; it needs a native location grant first.
+      throw new ApplicationError({
+        code: 'Unauthorized',
+        message: 'A renderer path is not native worktree location approval.',
+      });
     return v;
   }
   async call(method: unknown, input: unknown, id: unknown): Promise<Reply> {
@@ -175,6 +184,9 @@ export class EditorSession {
           checkout(value);
           this.known.set(value.checkoutId, value);
         }
+        if (operation === 'listWorktrees' && live())
+          for (const worktree of (value as { worktrees: { root: string }[] }).worktrees)
+            this.worktreeRoots.add(worktree.root);
         if (operation === 'loadRecovery' && live()) {
           const load = value as Awaited<ReturnType<EditorClient['command']>> & {
             state: { checkouts: CheckoutTarget[] };
@@ -257,10 +269,12 @@ export class EditorSession {
   }
   releaseDocument() {
     this.rootGrants.clear();
+    this.worktreeRoots.clear();
     return this.lifetime.releaseDocument();
   }
   dispose() {
     this.rootGrants.clear();
+    this.worktreeRoots.clear();
     return this.lifetime.dispose();
   }
 }

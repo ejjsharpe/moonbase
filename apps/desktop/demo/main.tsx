@@ -24,6 +24,7 @@ const checkout = {
   projectId: 'demo',
   root: '/demo/moonbase',
   branch: 'main',
+  worktree: 'main' as 'main' | 'linked',
 };
 const memory = memoryWorkspace([
   {

@@ -21,6 +21,7 @@ const target: CheckoutTarget = {
   projectId: 'project',
   root: '/approved',
   branch: 'main',
+  worktree: 'main' as 'main' | 'linked',
 };
 function fixture() {
   let dispatches = 0,
@@ -32,6 +33,19 @@ function fixture() {
       dispatches++;
       signal = options?.signal;
       if (name === 'openCheckout') return target as never;
+      if (name === 'listWorktrees')
+        return {
+          worktrees: [
+            { root: '/approved', branch: 'main', main: true, locked: false, prunable: false },
+            {
+              root: '/approved-topic',
+              branch: 'topic',
+              main: false,
+              locked: false,
+              prunable: false,
+            },
+          ],
+        } as never;
       if (name === 'loadRecovery')
         return {
           revision: 0,
@@ -121,6 +135,30 @@ test('native approval, exact identity and caller validation reject before comman
     false,
   );
   assert.equal(f.dispatches, 1);
+  await f.session.dispose();
+});
+test('listed worktrees of an approved checkout may open; renderer worktree locations may not', async () => {
+  const f = fixture();
+  assert((await f.session.call('choose-checkout', null, 'native')).ok);
+  assert((await f.call('openCheckout', { root: '/approved' })).ok);
+  assert.equal((await f.call('openCheckout', { root: '/approved-topic' })).ok, false);
+  assert.equal(
+    (await f.call('listWorktrees', { checkout: { ...target, checkoutId: 'unknown' } })).ok,
+    false,
+  );
+  assert.equal(f.dispatches, 1);
+  assert((await f.call('listWorktrees', { checkout: target })).ok);
+  assert((await f.call('openCheckout', { root: '/approved-topic' })).ok);
+  assert.equal((await f.call('openCheckout', { root: '/elsewhere' })).ok, false);
+  const created = await f.call('createWorktree', {
+    checkout: target,
+    base: 'main',
+    branch: 'feature',
+    location: '/anywhere/feature',
+  });
+  assert(!created.ok);
+  assert.equal(created.error.code, 'Unauthorized');
+  assert.equal(f.dispatches, 3);
   await f.session.dispose();
 });
 test('restored exact approvals, owned cancellation, failed-watch cleanup and disposal', async () => {

@@ -10,6 +10,7 @@ export const checkout: CheckoutTarget = {
   projectId: 'project',
   root: '/memory/first',
   branch: 'main',
+  worktree: 'main' as 'main' | 'linked',
 };
 export const second: CheckoutTarget = {
   hostId: 'other-host',
@@ -17,6 +18,7 @@ export const second: CheckoutTarget = {
   projectId: 'project',
   root: '/memory/second',
   branch: 'main',
+  worktree: 'main' as 'main' | 'linked',
 };
 export const target = (path: string, c = checkout) => ({ checkout: c, path });
 export async function fixture(clientId = 'editor-one', observe = true) {

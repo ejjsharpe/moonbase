@@ -11,6 +11,7 @@ const checkout = {
   projectId: 'project',
   root: '/memory/filenames',
   branch: 'main',
+  worktree: 'main' as 'main' | 'linked',
 };
 const names = ['__proto__', 'constructor', 'toString', 'hasOwnProperty'];
 const target = (path: string) => ({ checkout, path });

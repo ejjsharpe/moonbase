@@ -20,6 +20,7 @@ function editorCapabilities() {
     projectId: 'example',
     root: '/memory/headless',
     branch: 'main',
+    worktree: 'main' as 'main' | 'linked',
   };
   const target = { checkout, path: 'example.txt' };
   let disk = { text: 'original', version: '0' };

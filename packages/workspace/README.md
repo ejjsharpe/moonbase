@@ -6,6 +6,10 @@
 
 `WorkspaceLive(config)` provides `WorkspaceService` and the privileged `WorkspaceNative` service for approved native imports. Compose it once in a process root's runtime; see [`examples/local.ts`](examples/local.ts). Configure a stable `hostId` and a `dataDirectory` outside approved checkouts. Packaged apps must supply absolute `filesystemHelper` and `ripgrepExecutable` paths. System Git defaults to `/usr/bin/git`.
 
+## Worktrees
+
+A `CheckoutTarget` says whether its root is the repository's `main` working tree or a `linked` worktree; every worktree of one repository shares its `projectId`. `listWorktrees` returns a project's worktrees from `git worktree list` (main first; bare repositories have none). `createWorktree` adds a new branch at a base commit in a new linked worktree at an absolute location whose parent exists, then approves and returns it like `openCheckout`. Taken branches and locations are refused before Git runs; if Git fails or the request is cancelled, only a clean worktree and unchanged branch it added are removed, otherwise the error is `Uncertain` and names what to inspect. Each Git step shares the helper's 30-second limit.
+
 ## Safety
 
 - Only native, user-approved checkout identities grant filesystem access; path strings from clients grant nothing.

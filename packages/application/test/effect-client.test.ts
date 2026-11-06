@@ -183,6 +183,7 @@ const target = {
     projectId: 'project',
     root: '/checkout',
     branch: 'main',
+    worktree: 'main' as 'main' | 'linked',
   },
   path: 'file.txt',
 };
