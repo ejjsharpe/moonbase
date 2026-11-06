@@ -39,7 +39,7 @@ export const transcriptStyles = stylex.create({
     flexWrap: 'wrap',
   },
   literal: {
-    fontFamily: type.sans,
+    fontFamily: type.ui,
     fontSize: type.message,
     lineHeight: 1.7,
     whiteSpace: 'pre-wrap',

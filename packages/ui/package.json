@@ -4,6 +4,7 @@
   "type": "module",
   "exports": {
     "./*": "./*.ts",
+    "./fonts.css": "./fonts.css",
     "./reset.css": "./reset.css",
     "./tokens.stylex": "./tokens.stylex.ts"
   },

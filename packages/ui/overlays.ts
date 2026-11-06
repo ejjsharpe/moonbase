@@ -22,7 +22,7 @@ export const overlays = stylex.create({
   positioner: { zIndex: 100 },
   menuBackdrop: { position: 'fixed', inset: 0, zIndex: 99 },
   popup: {
-    fontFamily: type.sans,
+    fontFamily: type.ui,
     fontSize: type.body,
     lineHeight: 1.5,
     width: 'min(360px, calc(100vw - 32px))',

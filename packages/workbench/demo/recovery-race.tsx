@@ -14,6 +14,7 @@ import { Workbench } from '../src/index.ts';
 import { configureMonacoWorkers } from '../src/workers.ts';
 import { memoryWorkspace } from '@moonbase/application/testing/memory-workspace';
 import '@moonbase/ui/reset.css';
+import '@moonbase/ui/fonts.css';
 import 'virtual:stylex:runtime';
 
 configureMonacoWorkers();

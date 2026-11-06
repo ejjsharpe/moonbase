@@ -61,3 +61,16 @@ test('release notice failures preserve output, reject unpinned versions and pref
   );
   assert.equal(downloads, before);
 });
+
+test('bundled first-party assets carry their own upstream notice', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'moonbase-notices-')),
+    output = join(directory, 'notices.txt');
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await notices([join(directory, 'packages/ui/tokens.stylex.ts')], output);
+  assert.equal(await readFile(output, 'utf8'), '');
+  await notices([join(directory, 'packages/ui/fonts.css?used')], output);
+  const text = await readFile(output, 'utf8');
+  assert.match(text, /^BlexMono Nerd Font Mono 3\.5\.1 .*\("OFL-1\.1"\)\n\nLICENSE\.txt\n/);
+  assert.match(text, /Copyright © 2017 IBM Corp\. with Reserved Font Name "Plex"/);
+  assert.match(text, /SIL OPEN FONT LICENSE Version 1\.1/);
+});

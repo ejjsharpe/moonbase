@@ -173,7 +173,7 @@ test('native local setup, approved folders/models, streaming/tools, hidden work 
     });
     expect(chrome.frame.height - chrome.content.height).toBeLessThanOrEqual(2);
     expect(chrome.content.y - chrome.frame.y).toBeLessThanOrEqual(2);
-    expect(chrome.background).toBe('#141415');
+    expect(chrome.background.toLowerCase()).toBe('#14151b');
     await captureNative(app, page, resolve('../../test-results/redesign-review/native.png'));
     await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
     await expect(
