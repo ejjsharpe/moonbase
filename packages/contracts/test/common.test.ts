@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { areJsonValuesEqual } from '@moonbase/contracts/common';
+import { areJsonValuesEqual, getJsonKey } from '@moonbase/contracts/common';
 
 test('JSON values compare whatever their key order', () => {
   assert.ok(
@@ -46,4 +46,19 @@ test('primitives compare by value and never equal objects or arrays', () => {
   assert.ok(!areJsonValuesEqual({ 0: 'a', length: 1 }, ['a']));
   assert.ok(areJsonValuesEqual({}, {}));
   assert.ok(areJsonValuesEqual([], []));
+});
+
+test('values outside plain decoded data are not JSON-normalized', () => {
+  assert.ok(!areJsonValuesEqual([undefined], [null]));
+  assert.ok(!areJsonValuesEqual(NaN, NaN));
+});
+
+test('JSON keys match whatever the key order', () => {
+  assert.equal(
+    getJsonKey([{ kind: 'live', target: { b: 1, a: [{ y: 2, x: 1 }] } }, 'p']),
+    getJsonKey([{ target: { a: [{ x: 1, y: 2 }], b: 1 }, kind: 'live' }, 'p']),
+  );
+  assert.equal(getJsonKey({ a: 1, b: undefined }), getJsonKey({ a: 1 }));
+  assert.notEqual(getJsonKey({ a: 1 }), getJsonKey({ a: 2 }));
+  assert.notEqual(getJsonKey([1, 2]), getJsonKey([2, 1]));
 });

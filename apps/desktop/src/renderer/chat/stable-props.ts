@@ -1,5 +1,5 @@
 import type { ChatTranscriptSource } from '@moonbase/contracts/chat';
-import { areJsonValuesEqual } from '@moonbase/contracts/common';
+import { areJsonValuesEqual, getJsonKey } from '@moonbase/contracts/common';
 
 /**
  * Transcript rows memoize on their props. Snapshots arrive as fresh objects on every update, so
@@ -7,17 +7,17 @@ import { areJsonValuesEqual } from '@moonbase/contracts/common';
  */
 const empty: readonly never[] = [];
 
-/** Groups items by exact source; rows receive their own group. */
+/** Groups items by source value, whatever its key order; rows receive their own group. */
 export function groupBySource<T extends { source: ChatTranscriptSource }>(items: readonly T[]) {
   const grouped = new Map<string, T[]>();
   for (const item of items) {
-    const key = JSON.stringify(item.source);
+    const key = getJsonKey(item.source);
     const group = grouped.get(key);
     if (group) group.push(item);
     else grouped.set(key, [item]);
   }
   return (source: ChatTranscriptSource | undefined): readonly T[] =>
-    (source && grouped.get(JSON.stringify(source))) || empty;
+    (source && grouped.get(getJsonKey(source))) || empty;
 }
 
 function isSameList(a: unknown, b: unknown) {

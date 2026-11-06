@@ -141,7 +141,10 @@ test('supplied anchors restore unless navigation owns the position or nothing ch
   assert.equal(supplied.state.mode, 'restoring');
   assert.deepEqual(supplied.last, { scroll: 'anchor' });
   assert.equal(
-    play(supplied.state, { type: 'supplied', anchor: { ...saved } }).state,
+    play(supplied.state, {
+      type: 'supplied',
+      anchor: { offset: saved.offset, partId: saved.partId, entryId: saved.entryId },
+    }).state,
     supplied.state,
   );
   const navigating = play(reading(), navigate('later'));

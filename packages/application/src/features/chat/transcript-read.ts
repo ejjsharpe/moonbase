@@ -24,16 +24,6 @@ export type TranscriptChunk = {
   data: string;
 };
 export type TranscriptReadProgress = { parts: number; bytes: number };
-export const getTranscriptKey = (value: unknown): string =>
-  JSON.stringify(value, (_key, item) =>
-    item && typeof item === 'object' && !Array.isArray(item)
-      ? Object.fromEntries(
-          Object.keys(item)
-            .sort()
-            .map((key) => [key, item[key]]),
-        )
-      : item,
-  );
 export const countTranscriptBytes = (value: unknown) =>
   new TextEncoder().encode(JSON.stringify(value)).length;
 export const makeTranscriptFailure = (

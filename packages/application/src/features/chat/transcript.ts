@@ -13,14 +13,13 @@ import type {
   ChatTranscriptSelection,
 } from '@moonbase/contracts/chat';
 import { decodeChatInput } from '@moonbase/contracts/chat-schema';
-import { areJsonValuesEqual } from '@moonbase/contracts/common';
+import { areJsonValuesEqual, getJsonKey } from '@moonbase/contracts/common';
 import { normalizeApplicationError } from '../../runtime/effect-client.ts';
 import { sameTarget } from './saved.ts';
 import type { TranscriptViewMemory, TranscriptView } from './view-memory.ts';
 import {
   checkTranscriptReply,
   countTranscriptBytes,
-  getTranscriptKey,
   makeTranscriptFailure,
   trackTranscriptCursor,
 } from './transcript-read.ts';
@@ -832,7 +831,7 @@ export class TranscriptOwner {
     this.selectedEntry =
       this.history.findRecord(entryId) ??
       this.snapshot?.entries.find((entry) => entry.id === entryId);
-    const key = getTranscriptKey([captured.source, selected]);
+    const key = getJsonKey([captured.source, selected]);
     const content = this.contents.open(key, captured.source, selected, restart);
     if (content.status === 'complete' || content.status === 'source-changed') {
       this.publish();

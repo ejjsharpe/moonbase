@@ -1,12 +1,8 @@
 import type { ChatOutput, ChatTarget, ChatTranscriptMatch } from '@moonbase/contracts/chat';
 import { getChatFindExpression } from '@moonbase/contracts/chat';
-import { areJsonValuesEqual } from '@moonbase/contracts/common';
+import { areJsonValuesEqual, getJsonKey } from '@moonbase/contracts/common';
 import { sameTarget } from './saved.ts';
-import {
-  getTranscriptKey,
-  makeTranscriptFailure,
-  trackTranscriptCursor,
-} from './transcript-read.ts';
+import { makeTranscriptFailure, trackTranscriptCursor } from './transcript-read.ts';
 import { transcriptLimits, type TranscriptFindState } from './transcript-state.ts';
 
 export type FindPage = ChatOutput<'findChatTranscript'>;
@@ -50,7 +46,7 @@ export class TranscriptFindPass {
     let last = this.last;
     const seen = new Set<string>();
     for (const match of page.matches) {
-      const key = getTranscriptKey([match.source, match.partId, match.start, match.end]);
+      const key = getJsonKey([match.source, match.partId, match.start, match.end]);
       if (
         seen.has(key) ||
         (last &&
