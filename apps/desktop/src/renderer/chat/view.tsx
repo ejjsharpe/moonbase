@@ -566,7 +566,7 @@ const styles = stylex.create({
   },
   drawerClose: { position: 'absolute', right: space.sm, top: space.sm, zIndex: 1 },
   drawerSidebar: { paddingTop: 48 },
-  page: { fontFamily: type.sans, flex: 1, height: 'auto', minHeight: 0, overflowY: 'auto' },
+  page: { fontFamily: type.ui, flex: 1, height: 'auto', minHeight: 0, overflowY: 'auto' },
   connection: {
     textTransform: 'capitalize',
     color: colors.secondary,

@@ -3,7 +3,7 @@ import { colors, radius, sidebar, space, type } from './tokens.stylex';
 
 export const workbench = stylex.create({
   document: {
-    fontFamily: type.sans,
+    fontFamily: type.ui,
     fontSize: type.body,
     lineHeight: 1.5,
     fontSynthesis: 'none',

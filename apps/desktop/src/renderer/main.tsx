@@ -17,6 +17,7 @@ import {
 import * as stylex from '@stylexjs/stylex';
 import { workbench } from '@moonbase/ui/workbench';
 import '@moonbase/ui/reset.css';
+import '@moonbase/ui/fonts.css';
 
 declare global {
   interface Window {

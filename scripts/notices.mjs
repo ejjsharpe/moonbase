@@ -23,6 +23,15 @@ const releaseNotices = [
     sha256: 'c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4',
   },
 ];
+// First-party modules that bundle upstream assets, whose own release notice is kept beside them.
+const assetNotices = [
+  {
+    inputs: /(?:^|\/)packages\/ui\/fonts\.css$/,
+    label: 'BlexMono Nerd Font Mono 3.5.1 (IBM Plex Mono patched by Nerd Fonts)',
+    license: 'OFL-1.1',
+    file: new URL('../packages/ui/fonts/LICENSE.txt', import.meta.url),
+  },
+];
 async function downloadNotice({ label, url, sha256 }) {
   const response = await fetch(url, { signal: AbortSignal.timeout(15000) });
   if (!response.ok) throw Error(label + ' release notice unavailable');
@@ -82,6 +91,15 @@ export async function notices(inputs, output) {
         texts.join('\n'),
     );
   }
+  for (const asset of assetNotices)
+    if (inputs.some((input) => asset.inputs.test(input.replace(/\?.*$/, ''))))
+      sections.push(
+        asset.label +
+          ' (' +
+          JSON.stringify(asset.license) +
+          ')\n\nLICENSE.txt\n' +
+          (await readFile(asset.file, 'utf8')),
+      );
   await writeFile(output, sections.join('\n\n========================================\n\n'));
   return [...packages.keys()].sort();
 }

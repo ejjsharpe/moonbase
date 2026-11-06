@@ -13,6 +13,7 @@ import { controls } from '@moonbase/ui/controls';
 import { workbench } from '@moonbase/ui/workbench';
 import { colors, space } from '@moonbase/ui/tokens.stylex';
 import '@moonbase/ui/reset.css';
+import '@moonbase/ui/fonts.css';
 import 'virtual:stylex:runtime';
 
 configureMonacoWorkers();

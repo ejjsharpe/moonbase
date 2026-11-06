@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef } from 'react';
 import * as monaco from 'monaco-editor';
 import * as stylex from '@stylexjs/stylex';
 import { workbench } from '@moonbase/ui/workbench';
-import { colors, type } from '@moonbase/ui/tokens.stylex';
+import { colors, syntax, type } from '@moonbase/ui/tokens.stylex';
 import {
   checkoutKey,
   fileKey,
@@ -46,7 +46,17 @@ export function MonacoView({
     monaco.editor.defineTheme('moonbase', {
       base: 'vs-dark',
       inherit: true,
-      rules: [],
+      rules: [
+        { token: 'comment', foreground: syntax.comment.slice(1), fontStyle: 'italic' },
+        { token: 'keyword', foreground: syntax.keyword.slice(1) },
+        { token: 'string', foreground: syntax.string.slice(1) },
+        { token: 'number', foreground: syntax.number.slice(1) },
+        { token: 'regexp', foreground: syntax.regexp.slice(1) },
+        { token: 'type', foreground: syntax.type.slice(1) },
+        { token: 'identifier', foreground: syntax.variable.slice(1) },
+        { token: 'delimiter', foreground: syntax.operator.slice(1) },
+        { token: 'operator', foreground: syntax.operator.slice(1) },
+      ],
       colors: {
         'editor.background': colors.canvas,
         'editor.foreground': colors.text,
@@ -60,6 +70,8 @@ export function MonacoView({
         'scrollbar.shadow': colors.scrollShadow,
       },
     });
+    // Monaco measures glyphs once; measure again after the bundled font finishes loading.
+    void document.fonts.ready.then(() => monaco.editor.remeasureFonts());
     const ownedModels = models.current;
     return () => {
       releaseView.current?.();

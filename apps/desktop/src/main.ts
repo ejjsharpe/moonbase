@@ -115,7 +115,7 @@ async function main() {
     title: 'Moonbase',
     titleBarStyle: 'hiddenInset',
     trafficLightPosition: { x: 14, y: 14 },
-    backgroundColor: '#141415',
+    backgroundColor: '#14151b',
     width: 1280,
     height: 850,
     minWidth: 600,

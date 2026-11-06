@@ -1,43 +1,44 @@
 import * as stylex from '@stylexjs/stylex';
 
+// Tranquility: moonlight silver and greys; color is reserved for meaning.
 // Static values also feed Monaco's theme API, which requires literal colors.
 export const colors = stylex.defineConsts({
-  canvas: '#141415',
-  chrome: '#161618',
-  surface: '#161618',
-  elevated: '#222224',
-  hover: '#2b2b2e',
-  selected: '#28282b',
-  selectedHover: '#303034',
-  text: '#e5e5e7',
-  secondary: '#b2b2b8',
-  muted: '#97979f',
-  border: '#29292d',
-  controlBorder: '#343438',
-  scrollShadow: '#00000026',
-  accent: '#ededf0',
-  onAccent: '#19191b',
+  canvas: '#14151b',
+  chrome: '#0b0c10',
+  surface: '#0f1015',
+  elevated: '#1c1e26',
+  hover: '#20222b',
+  selected: '#252833',
+  selectedHover: '#2c2f3b',
+  text: '#dcdfe8',
+  secondary: '#b4b8c6',
+  muted: '#8b90a0',
+  border: '#23252e',
+  controlBorder: '#343744',
+  scrollShadow: '#00000033',
+  accent: '#dcdfe8',
+  onAccent: '#0b0c10',
   link: '#ffffff',
-  selection: '#3a3a42',
-  warningSurface: '#393222',
-  warningBorder: '#77613b',
-  warningText: '#ffd49b',
-  danger: '#ffb4ab',
-  backdrop: '#0008',
+  selection: '#2f3443',
+  warningSurface: '#2b2418',
+  warningBorder: '#7a5a2a',
+  warningText: '#f2b35b',
+  danger: '#f28b82',
+  backdrop: '#0009',
 });
 
-// Read-only code highlighting on `colors.surface`; matches the editor's inherited vs-dark tokens.
+// Code highlighting for read-only code and Monaco's theme rules alike.
 export const syntax = stylex.defineConsts({
-  comment: '#6a9955',
-  keyword: '#569cd6',
-  string: '#ce9178',
-  number: '#b5cea8',
-  type: '#4ec9b0',
-  function: '#dcdcaa',
-  variable: '#9cdcfe',
-  constant: '#4fc1ff',
-  operator: '#d4d4d4',
-  regexp: '#d16969',
+  comment: '#878c9e',
+  keyword: '#9fb7ff',
+  string: '#a7d98b',
+  number: '#d9c8a0',
+  type: '#c3a6f0',
+  function: '#e6e9f0',
+  variable: '#c9ced9',
+  constant: '#d9c8a0',
+  operator: '#b4b8c6',
+  regexp: '#e8a0bf',
 });
 
 export const space = stylex.defineConsts({
@@ -49,9 +50,10 @@ export const space = stylex.defineConsts({
   xxl: 32,
 });
 
+// BlexMono Nerd Font Mono is bundled by `@moonbase/ui/fonts.css`; the interface is monospaced too.
 export const type = stylex.defineConsts({
-  sans: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-  mono: 'SFMono-Regular, Menlo, Consolas, monospace',
+  ui: '"BlexMono Nerd Font Mono", "IBM Plex Mono", ui-monospace, Menlo, monospace',
+  mono: '"BlexMono Nerd Font Mono", "IBM Plex Mono", ui-monospace, Menlo, monospace',
   caption: 11,
   small: 12,
   body: 13,
@@ -59,6 +61,6 @@ export const type = stylex.defineConsts({
   heading: 16,
 });
 
-export const radius = stylex.defineConsts({ control: 6, row: 7, panel: 12, composer: 18 });
+export const radius = stylex.defineConsts({ control: 7, row: 7, panel: 10, composer: 10 });
 export const layout = stylex.defineConsts({ conversation: 640, treeRow: 28 });
 export const sidebar = stylex.defineVars({ width: '270px' });
