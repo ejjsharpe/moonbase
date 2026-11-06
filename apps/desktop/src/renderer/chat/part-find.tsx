@@ -25,21 +25,23 @@ const excerptContextUnits = 120;
  * span only: `data-find-source="start:end"` (UTF-16 offsets into the part's source). Text inside
  * `data-find-ignore` (labels and other chrome) or a button is not source and is skipped.
  */
-export const findSourceAttribute = 'data-find-source';
+const findSourceAttribute = 'data-find-source';
 export const getFindSourceProps = (start: number, end: number) => ({
   [findSourceAttribute]: `${start}:${end}`,
 });
-type FindSegment = { start: number; end: number; parent: FindSegment | null; inner: FindSegment[] };
+type FindSegment = { start: number; end: number; inner: FindSegment[] };
+type RenderedMatch = { range: Range; before?: string; after?: string };
 
 /**
  * Maps original-source match starts to rendered ranges. Each match is mapped within the innermost
  * declared span containing it, to the same occurrence among that span's rendered matches. A span
- * whose rendered and source occurrence counts differ maps none of its matches (null), so a match is
- * never highlighted on the wrong text, for example when footnotes render out of source order.
+ * maps none of its matches (null), so the excerpt shows instead of the wrong text, when its counts
+ * differ or when a pair's neighbouring characters differ, for example when an unrendered link URL
+ * and decoded entity text both match. A rendered match crossing spans is not source text.
  */
-export function locateFindRanges(root: Element, source: string, query: string, starts: number[]) {
+function locateFindRanges(root: Element, source: string, query: string, starts: number[]) {
   if (!query) return starts.map(() => null);
-  const top: FindSegment = { start: 0, end: source.length, parent: null, inner: [] };
+  const top: FindSegment = { start: 0, end: source.length, inner: [] };
   const declared = new Map<Element, FindSegment>();
   const segmentOf = (element: Element | null) => {
     const owner = element?.closest(`[${findSourceAttribute}]`);
@@ -48,30 +50,45 @@ export function locateFindRanges(root: Element, source: string, query: string, s
   for (const element of root.querySelectorAll(`[${findSourceAttribute}]`)) {
     const [start, end] = element.getAttribute(findSourceAttribute)!.split(':').map(Number);
     if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start! > end!) continue;
-    const parent = segmentOf(element.parentElement);
-    const segment = { start: start!, end: end!, parent, inner: [] };
-    parent.inner.push(segment);
+    const segment = { start: start!, end: end!, inner: [] };
+    segmentOf(element.parentElement).inner.push(segment);
     declared.set(element, segment);
   }
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
     acceptNode: (node) =>
-      node.parentElement?.closest('button, [data-find-ignore]')
+      !node.nodeValue || node.parentElement?.closest('button, [data-find-ignore]')
         ? NodeFilter.FILTER_REJECT
         : NodeFilter.FILTER_ACCEPT,
   });
-  const nodes: { node: Node; start: number; segment: FindSegment }[] = [];
+  const nodes: { node: Node; start: number; end: number; segment: FindSegment }[] = [];
   let text = '';
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    nodes.push({ node, start: text.length, segment: segmentOf(node.parentElement) });
+    const start = text.length;
     text += node.nodeValue;
+    nodes.push({ node, start, end: text.length, segment: segmentOf(node.parentElement) });
   }
-  const groups = new Map<FindSegment, { expected: number[]; rendered: Range[] }>();
+  /** The text node holding `offset`. */
+  const nodeAt = (offset: number) => {
+    let low = 0,
+      high = nodes.length - 1;
+    while (low < high) {
+      const middle = (low + high + 1) >> 1;
+      if (nodes[middle]!.start <= offset) low = middle;
+      else high = middle - 1;
+    }
+    return nodes[low]!;
+  };
+  const groups = new Map<
+    FindSegment,
+    { expected: { start: number; end: number }[]; rendered: RenderedMatch[] }
+  >();
   const groupOf = (segment: FindSegment) => {
     let group = groups.get(segment);
     if (!group) groups.set(segment, (group = { expected: [], rendered: [] }));
     return group;
   };
-  for (const hit of source.matchAll(getChatFindExpression(query))) {
+  const expression = getChatFindExpression(query);
+  for (const hit of source.matchAll(expression)) {
     const end = hit.index + hit[0].length;
     let segment = top;
     for (
@@ -80,33 +97,44 @@ export function locateFindRanges(root: Element, source: string, query: string, s
       inner = segment.inner.find((item) => item.start <= hit.index && end <= item.end)
     )
       segment = inner;
-    groupOf(segment).expected.push(hit.index);
+    groupOf(segment).expected.push({ start: hit.index, end });
   }
-  for (const hit of text.matchAll(getChatFindExpression(query))) {
+  for (const hit of text.matchAll(expression)) {
     const end = hit.index + hit[0].length;
-    const first = nodes.findLast((item) => item.start <= hit.index)!,
-      last = nodes.findLast((item) => item.start < end)!;
-    // A match crossing spans belongs to the innermost span containing both ends.
-    let segment = first.segment;
-    while (segment.parent && !isWithin(last.segment, segment)) segment = segment.parent;
+    const first = nodeAt(hit.index),
+      last = nodeAt(end - 1);
+    if (first.segment !== last.segment) continue;
     const range = document.createRange();
     range.setStart(first.node, hit.index - first.start);
     range.setEnd(last.node, end - last.start);
-    groupOf(segment).rendered.push(range);
+    // Neighbours in another text node may be separated by markup, so only these are compared.
+    groupOf(first.segment).rendered.push({
+      range,
+      ...(hit.index > first.start && { before: text[hit.index - 1] }),
+      ...(end < last.end && { after: text[end] }),
+    });
   }
   const located = new Map<number, Range>();
-  for (const { expected, rendered } of groups.values())
-    if (expected.length === rendered.length)
-      expected.forEach((start, index) => located.set(start, rendered[index]!));
+  for (const { expected, rendered } of groups.values()) {
+    const paired =
+      expected.length === rendered.length &&
+      expected.every(({ start, end }, index) => {
+        const { before, after } = rendered[index]!;
+        return (
+          (before === undefined || isSameText(before, source[start - 1])) &&
+          (after === undefined || isSameText(after, source[end]))
+        );
+      });
+    if (paired) expected.forEach(({ start }, index) => located.set(start, rendered[index]!.range));
+  }
   return starts.map((start) => located.get(start) ?? null);
 }
-function isWithin(segment: FindSegment, ancestor: FindSegment) {
-  for (let current: FindSegment | null = segment; current; current = current.parent)
-    if (current === ancestor) return true;
-  return false;
+/** Compares one rendered and one source character; code blocks render CR as LF. */
+function isSameText(rendered: string, source: string | undefined) {
+  return rendered === source || (rendered === '\n' && source === '\r');
 }
 /** Adds ranges to the named CSS custom highlight until the returned cleanup runs. */
-export function paintFindRanges(name: 'find-match' | 'find-active', ranges: Range[]) {
+function paintFindRanges(name: 'find-match' | 'find-active', ranges: Range[]) {
   if (!ranges.length) return () => {};
   const highlight = CSS.highlights.get(name) ?? new Highlight();
   highlight.priority = name === 'find-active' ? 1 : 0;
@@ -223,6 +251,9 @@ export function useFindHighlight({
   const activeRange = useRef<Range | null>(null),
     mark = useRef<HTMLElement>(null);
   const [unlocated, setUnlocated] = useState<typeof match>(null);
+  /** The active match once highlighted in place. */
+  const [placed, setPlaced] = useState<typeof match>(null);
+  if (!match && placed) setPlaced(null);
   useLayoutEffect(() => {
     const root = rendered.current;
     if (!root || !findStarts.length) return;
@@ -242,6 +273,7 @@ export function useFindHighlight({
         clearActive();
       };
       setUnlocated(match && !active ? match : null);
+      if (active) setPlaced(match);
     };
     paint();
     const observer = new MutationObserver(paint);
@@ -252,10 +284,20 @@ export function useFindHighlight({
       activeRange.current = null;
     };
   }, [rendered, findStarts, frozen, shown.text, shown.retainedFrom, query, match, expanded]);
-  const excerpt = !!match && matchVisible && unlocated === match;
+  // A match the reader hid after it was highlighted, by folding it or turning the page, shows no
+  // excerpt: it would grow the transcript around them.
+  const excerpt = !!match && matchVisible && unlocated === match && placed !== match;
+  /** The match last scrolled to, and whether it was highlighted in place. */
+  const revealed = useRef<{ match: ChatTranscriptMatch; inPlace: boolean } | null>(null);
   useLayoutEffect(() => {
     const target = excerpt ? mark.current : activeRange.current;
-    if (revealing && target) scrollToReading(target, scroller.current);
+    if (!match || !revealing) revealed.current = null;
+    if (!match || !revealing || !target) return;
+    // Scroll for a newly revealed match, or once its excerpt is replaced in place.
+    const previous = revealed.current;
+    if (previous?.match === match && (previous.inPlace || excerpt)) return;
+    revealed.current = { match, inPlace: !excerpt };
+    scrollToReading(target, scroller.current);
   }, [match, revealing, frozen, excerpt, expanded, scroller]);
   return { excerpt, mark };
 }

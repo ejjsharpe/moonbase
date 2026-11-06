@@ -239,7 +239,7 @@ export const Entry = memo(
           (replay.done || !manifest.omittedParts) &&
           !parts.some((part) => part.partId === matchedPart) && (
             <p role="alert" {...stylex.props(styles.warning)}>
-              The saved Find part is unavailable. Refresh Find.
+              The saved Find part is unavailable. Refresh results.
             </p>
           )}
         {!transcript && entry.truncated && (
@@ -564,7 +564,7 @@ const Part = memo(
             role={content?.status === 'complete' ? 'alert' : 'status'}
             {...stylex.props(styles.small)}>
             {content?.status === 'complete'
-              ? 'The saved match differs from this source. Refresh Find.'
+              ? 'The saved match differs from this source. Refresh results.'
               : 'Loading original source through this match…'}
           </p>
         )}

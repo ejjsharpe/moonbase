@@ -386,7 +386,7 @@ export class TranscriptOwner {
         find: {
           ...this.state.find,
           status: 'error',
-          error: 'Connection changed. Refresh Find after reconnecting.',
+          error: 'Connection changed. Refresh results after reconnecting.',
         },
       };
     }

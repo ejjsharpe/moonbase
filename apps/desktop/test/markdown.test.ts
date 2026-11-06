@@ -312,3 +312,23 @@ test('Monaco token types map to highlight tones; identifiers and delimiters stay
     '': undefined,
   });
 });
+test('long code blocks record where their folded lines start in the source', () => {
+  const lines = Array.from({ length: 45 }, (_, index) => `line ${index}`);
+  const fenced = 'Intro.\r\n\r\n- item\n\n  ```ts\n  ' + lines.join('\n  ') + '\n  ```\n';
+  const indented = 'Intro.\n\n    ' + lines.join('\n    ') + '\n';
+  const short = '```\n' + lines.slice(0, 40).join('\n') + '\n```\n';
+  const folds = (source: string) => {
+    const found: unknown[] = [];
+    for (const block of new MarkdownCache().parse('fold', '', source))
+      visit(block.tree, 'code', (node: Code) => {
+        found.push(node.data?.hProperties?.['data-code-fold']);
+      });
+    return found;
+  };
+  for (const source of [fenced, indented]) {
+    const [fold] = folds(source);
+    assert.equal(typeof fold, 'number');
+    assert.match(source.slice(fold as number), /^ *line 40\n/);
+  }
+  assert.deepEqual(folds(short), [undefined]);
+});

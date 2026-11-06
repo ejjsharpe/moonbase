@@ -33,8 +33,8 @@ function isFindShortcut(event: KeyboardEvent) {
 }
 /**
  * Chat's own Find keys: Cmd/Ctrl+F opens Find unless a text field has focus, and Escape closes it.
- * Keys something else already handled, and keys from portalled overlays such as the image viewer
- * (React bubbles them through Chat, but they are not in its DOM), are left alone.
+ * Keys something else already handled, keys composing text, and keys from portalled overlays such
+ * as the image viewer (React bubbles them through Chat, but they are not in its DOM) are left alone.
  */
 export function handleChatFindKeyDown(
   event: KeyboardEvent<HTMLElement>,
@@ -44,9 +44,9 @@ export function handleChatFindKeyDown(
   const target = event.target;
   if (
     event.defaultPrevented ||
+    event.nativeEvent.isComposing ||
     !(target instanceof Element) ||
-    !event.currentTarget.contains(target) ||
-    target.closest('[role="dialog"]')
+    !event.currentTarget.contains(target)
   )
     return;
   if (event.key === 'Escape') {
@@ -100,17 +100,14 @@ export function FindBar({
       aria-label="Find in conversation"
       {...stylex.props(styles.bar)}
       onKeyDown={(event) => {
+        if (event.nativeEvent.isComposing) return;
         if (event.key === 'Escape') {
           event.preventDefault();
           event.stopPropagation();
           close();
         }
         // Enter on a button presses that button.
-        if (
-          event.key === 'Enter' &&
-          event.target === input.current &&
-          !event.nativeEvent.isComposing
-        ) {
+        if (event.key === 'Enter' && event.target === input.current) {
           event.preventDefault();
           event.stopPropagation();
           void (event.shiftKey ? controller.previousFindMatch() : controller.nextFindMatch());
@@ -149,7 +146,7 @@ export function FindBar({
           <Button
             {...stylex.props(controls.button)}
             onClick={() => void controller.findTranscript(state.query)}>
-            {state.error ? 'Retry Find' : 'Refresh Find'}
+            {state.error ? 'Retry Find' : 'Refresh results'}
           </Button>
         )}
       </div>

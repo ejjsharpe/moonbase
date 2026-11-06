@@ -639,8 +639,9 @@ test('incomplete/unknown/oversized code remains readable and copyable; late refe
   expect(
     await live.locator('pre').evaluate((element) => element.scrollHeight > element.clientHeight),
   ).toBe(true);
-  // Unhighlighted: the unfolded lines' panel holds plain text, with no line or token spans.
-  await expect(live.locator('pre code span span, pre code > span:not([id])')).toHaveCount(0);
+  // Unhighlighted: the shown lines and the unfolded lines' panel (Find source spans) hold plain
+  // text, with no line or token spans.
+  await expect(live.locator('pre code span:not([id], [data-find-source])')).toHaveCount(0);
   await page.evaluate(() =>
     window.demo.transcript!.live(
       'Replacement with &amp; and &#x1f314; <img src="https://example.com/no-fetch" onerror="alert(1)">',
@@ -1330,7 +1331,7 @@ test('Enter on a Find bar button presses that button; only the field steps throu
       { id: 'refreshed', parts: [{ kind: 'text', role: 'assistant', text: 'needle and needle' }] },
     ]),
   );
-  const refresh = bar.getByRole('button', { name: 'Refresh Find', exact: true });
+  const refresh = bar.getByRole('button', { name: 'Refresh results', exact: true });
   await expect(findStatus(page, /2 of 3 matches/)).toBeVisible();
   await refresh.press('Enter');
   await expect(findStatus(page, /1 of 2 matches/)).toBeVisible();
@@ -1366,34 +1367,46 @@ test('Find shortcut skips every editable host and uses the physical F key on non
   ).toBeFocused();
 });
 
-test('Find unfolds a folded code block to highlight a match in its hidden lines', async ({
+test('Find highlights shown code lines in place and unfolds only for a match in folded lines', async ({
   page,
 }) => {
   await open(page);
   const lines = Array.from({ length: 60 }, (_, index) =>
-    index === 49 ? 'const needle = 49;' : `line ${index}`,
+    index === 2 || index === 49 ? `const needle = ${index};` : `line ${index}`,
   );
   await page.evaluate(async (code) => {
     await window.demo.transcript!.setEntry(0, ['Intro.\n\n```\n' + code + '\n```\n']);
   }, lines.join('\n'));
-  await findText(page, 'needle');
-  await expect
-    .poll(() => readFindHighlight(page))
-    .toEqual([
-      {
-        text: 'needle',
-        entry: 'reading-0',
-        part: 'm0.b0',
-        before: expect.stringMatching(/line 48\nconst $/),
-        visible: true,
-      },
-    ]);
+  const find = await findText(page, 'needle');
+  const active = (before: RegExp) => [
+    {
+      text: 'needle',
+      entry: 'reading-0',
+      part: 'm0.b0',
+      before: expect.stringMatching(before),
+      visible: true,
+    },
+  ];
   const row = page.locator('[data-transcript-entry="reading-0"]');
-  await expect(row.getByRole('button', { name: 'Fold code', exact: true })).toBeVisible();
-  await expect(originalExcerpt(page)).toHaveCount(0);
-  // The reader can fold it again while the match stays active.
-  await row.getByRole('button', { name: 'Fold code', exact: true }).click();
+  // A match in the shown lines maps although the folded lines are not rendered.
+  await expect.poll(() => readFindHighlight(page)).toEqual(active(/line 1\nconst $/));
   await expect(row.getByRole('button', { name: 'Show all 60 lines', exact: true })).toBeVisible();
+  await expect(originalExcerpt(page)).toHaveCount(0);
+  await find.press('Enter');
+  await expect.poll(() => readFindHighlight(page)).toEqual(active(/line 48\nconst $/));
+  const fold = row.getByRole('button', { name: 'Fold code', exact: true });
+  await expect(fold).toBeVisible();
+  await expect(originalExcerpt(page)).toHaveCount(0);
+  // The reader can fold it again without the view moving: no excerpt replaces what they hid.
+  await fold.scrollIntoViewIfNeeded();
+  await settle(page);
+  const top = await transcript(page).evaluate((element) => element.scrollTop);
+  await fold.click();
+  await expect(row.getByRole('button', { name: 'Show all 60 lines', exact: true })).toBeVisible();
+  await settle(page);
+  await expect(originalExcerpt(page)).toHaveCount(0);
+  const after = await transcript(page).evaluate((element) => element.scrollTop);
+  expect(Math.abs(after - top)).toBeLessThan(4);
 });
 
 test('Find turns a paged patch fallback to the page holding the active match', async ({ page }) => {
@@ -1465,6 +1478,29 @@ test('Find skips rendered chrome: image labels, code language labels and patch h
   await expect(findStatus(page, /3 of 3 matches/)).toBeVisible();
   await expect.poll(active).toEqual([{ text: 'gone', part: 'm0.b1', before: '-', visible: true }]);
   await expect(originalExcerpt(page)).toHaveCount(0);
+});
+
+test('Find never pairs an unrendered source match with other rendered text', async ({ page }) => {
+  await open(page);
+  // The bold split and the relative link's shown URL both read "zqx.ts"; only the URL is source.
+  await page.evaluate(async () => {
+    await window.demo.transcript!.setEntry(0, ['Edit **zq**x.ts, see [file](./src/zqx.ts)']);
+  });
+  const find = await findText(page, 'zqx.ts');
+  await expect
+    .poll(() => readFindHighlight(page))
+    .toEqual([
+      { text: 'zqx.ts', entry: 'reading-0', part: 'm0.b0', before: './src/', visible: true },
+    ]);
+  await expect(originalExcerpt(page)).toHaveCount(0);
+  await find.press('Escape');
+  // The match is inside an entity; the decoded "quot" is other text, so the excerpt shows.
+  await page.evaluate(async () => {
+    await window.demo.transcript!.setEntry(0, ['A &quot; and quo&#116; end']);
+  });
+  await findText(page, 'quot');
+  await expect(originalExcerpt(page)).toContainText('A &quot; and quo&#116; end');
+  expect(await readFindHighlight(page)).toEqual([]);
 });
 
 test('Find maps footnote matches to their own text although footnotes render last', async ({
