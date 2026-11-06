@@ -54,6 +54,8 @@ export type WorkbenchProps = {
   checkout: CheckoutTarget | undefined;
   visible?: boolean;
   renderLayout?: (views: { explorer: ReactNode; editor: ReactNode }) => ReactNode;
+  /** App content placed after the editor in the default layout, such as a docked panel. */
+  trailing?: ReactNode;
   /** Native/user-authorized selection belongs to the shell. A renderer path alone grants no access. */
   selectNativeImports?: (checkout: CheckoutTarget) => Promise<string[]>;
   selectClipboardImports?: (checkout: CheckoutTarget) => Promise<string[]>;
@@ -70,6 +72,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     checkout: project,
     visible = true,
     renderLayout,
+    trailing,
     selectNativeImports,
     selectClipboardImports,
   },
@@ -964,7 +967,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
           (renderLayout ? (
             renderLayout({ explorer, editor })
           ) : (
-            <div {...stylex.props(styles.tabPanel)}>
+            <div {...stylex.props(styles.tabPanel, !!trailing && workbench.withTrailing)}>
               <div {...stylex.props(workbench.sidebarLayout(state.recovery.sidebarWidth))}>
                 <div {...stylex.props(workbench.workspace)}>
                   <div
@@ -1008,6 +1011,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                   {editor}
                 </div>
               </div>
+              {trailing}
             </div>
           ))}
       </div>

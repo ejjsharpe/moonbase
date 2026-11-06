@@ -18,21 +18,38 @@ const subscribeLayout = (listener: () => void) => {
   compactLayout.addEventListener('change', listener);
   return () => compactLayout.removeEventListener('change', listener);
 };
+export type ChatDock = {
+  /** The project's name, for the dock's headings. */
+  project: string;
+  /** A chat belongs to the project when its working folder is one of these roots or inside one. */
+  roots: readonly string[];
+  /** The working folder a chat started from the dock uses. */
+  cwd: string;
+  /** Whether the dock fills most of the project view. */
+  expanded: boolean;
+  toggleExpanded(): void;
+  collapse(): void;
+};
+
 /** The consumer owns the clients/runtime and controller lifetime; this view installs no capabilities. */
 export function ChatView({
   controller,
   chooseFolder,
   transcriptNative,
+  dock,
 }: {
   controller: ChatController;
   chooseFolder?: () => Promise<string | null>;
   transcriptNative?: TranscriptNative;
+  /** Shows only one project's chats, beside its editor, with a back arrow to their list. */
+  dock?: ChatDock;
 }) {
   const compact = useSyncExternalStore(subscribeLayout, () => compactLayout.matches);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const findInput = useRef<HTMLInputElement>(null);
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot),
-    [cwd, setCwd] = useState(''),
+    [cwd, setCwd] = useState(dock?.cwd ?? ''),
+    [dockList, setDockList] = useState(false),
     [folderError, setFolderError] = useState<string | null>(null);
   const providerState = useSyncExternalStore(
     controller.providers?.subscribe ?? noSubscription,
@@ -218,6 +235,393 @@ export function ChatView({
       </div>
     </aside>
   );
+  const findBar = state.transcript.find.open && (
+    <FindBar controller={controller} state={state.transcript.find} input={findInput} />
+  );
+  const body = (
+    <>
+      <div {...stylex.props(styles.notices)}>
+        {state.notice &&
+          !['Disconnected.', 'Verified host.', 'Local chat.', 'Local tools use'].some((prefix) =>
+            state.notice.startsWith(prefix),
+          ) && (
+            <p role="status" {...stylex.props(styles.small)}>
+              {state.notice}
+            </p>
+          )}
+        {state.storageError && (
+          <p role="alert" {...stylex.props(styles.warning)}>
+            {state.storageError} Preserve this window and data. Sending and Quit are blocked.
+          </p>
+        )}
+        {state.error && (
+          <p role="alert" {...stylex.props(styles.warning)}>
+            {state.error}
+          </p>
+        )}
+      </div>
+      {state.pending.length > 0 && (
+        <section aria-label="Retained commands" {...stylex.props(styles.pending)}>
+          <h3 {...stylex.props(styles.label)}>Retained command identities</h3>
+          {state.pending.map((p) => {
+            let identity = '';
+            if (p.operation === 'sendChat') identity = ` · chat ${p.input.target.conversationId}`;
+            else if (p.operation === 'stopChat')
+              identity = ` · submission ${p.input.stop.submissionId} · task ${p.input.stop.taskId ?? 'queued'}`;
+            return (
+              <details key={p.input.requestId} {...stylex.props(styles.pendingItem)}>
+                <summary {...stylex.props(controls.summary)}>
+                  {p.operation} · {p.message}
+                </summary>
+                <p {...stylex.props(styles.identity)}>
+                  {p.input.requestId}
+                  {identity}
+                </p>
+                {p.operation === 'createChat' && (
+                  <p {...stylex.props(styles.small)}>
+                    {p.input.title}
+                    {p.input.settings
+                      ? ` · ${p.input.settings.cwd} · ${p.input.settings.model.provider}/${p.input.settings.model.modelId}${p.input.settings.reasoningEffort ? ` · ${effortLabels[p.input.settings.reasoningEffort]}` : ''}`
+                      : ''}
+                  </p>
+                )}
+                {p.operation === 'createChat' && p.firstMessage && (
+                  <>
+                    <p {...stylex.props(styles.small)}>
+                      Retry creates the conversation and sends this original message.
+                    </p>
+                    <p {...stylex.props(styles.identity)}>Send · {p.firstMessage.requestId}</p>
+                    <pre {...stylex.props(controls.pre, styles.pendingText)}>
+                      {p.firstMessage.text}
+                    </pre>
+                  </>
+                )}
+                {p.operation === 'sendChat' && (
+                  <pre {...stylex.props(controls.pre, styles.pendingText)}>{p.input.text}</pre>
+                )}
+                <div {...stylex.props(controls.row)}>
+                  <Button
+                    {...stylex.props(controls.button)}
+                    disabled={!connected || busy('query:' + p.input.requestId)}
+                    onClick={() => void controller.query(p.input.requestId)}>
+                    Query outcome
+                  </Button>
+                  <Button
+                    {...stylex.props(controls.button)}
+                    disabled={!connected || busy(p.input.requestId) || !!state.storageError}
+                    onClick={() => void controller.retry(p.input.requestId)}>
+                    Retry original{' '}
+                    {{ stopChat: 'Stop', sendChat: 'Send', createChat: 'Create' }[p.operation]}
+                  </Button>
+                </div>
+              </details>
+            );
+          })}
+        </section>
+      )}
+      {state.selected && (
+        <Transcript
+          key={controller.backendId + JSON.stringify(state.selected)}
+          controller={controller}
+          state={state}
+          native={transcriptNative}
+          findInput={findInput}
+        />
+      )}
+      <div {...stylex.props(styles.composeArea, !state.selected && styles.starter)}>
+        {!state.selected && local && (
+          <div {...stylex.props(styles.composeContext)}>
+            <Button
+              aria-label="Choose working folder"
+              {...stylex.props(controls.button, controls.quietButton, styles.folderChoice)}
+              disabled={!chooseFolder || busy('send')}
+              title={cwd || 'Choose working folder'}
+              onClick={() => {
+                setFolderError(null);
+                void chooseFolder?.()
+                  .then((folder) => {
+                    if (folder) setCwd(folder);
+                  })
+                  .catch(() =>
+                    setFolderError(
+                      'The folder could not be approved. Choose an existing working folder again.',
+                    ),
+                  );
+              }}>
+              <Icon name="folder" />
+              <span {...stylex.props(controls.truncate)}>
+                {cwd ? cwd.split('/').filter(Boolean).at(-1) || '/' : 'Choose working folder'}
+              </span>
+              <Icon name="chevron" />
+            </Button>
+            <span {...stylex.props(styles.localLabel)}>
+              <Icon name="computer" />
+              This Mac
+            </span>
+          </div>
+        )}
+        {folderError && (
+          <p role="alert" {...stylex.props(styles.warning)}>
+            {folderError}
+          </p>
+        )}
+        {!state.selected &&
+          state.modelPreference &&
+          providerState?.status &&
+          (!selectedEntry || effortUnavailable) && (
+            <p role="status" {...stylex.props(styles.warning)}>
+              {!selectedEntry
+                ? `Your saved model (${state.modelPreference.model.modelId}) is unavailable. Choose another model to send.`
+                : 'Your saved reasoning effort is unavailable for this model. Choose another effort to send.'}
+            </p>
+          )}
+        <form
+          {...stylex.props(styles.composer)}
+          onSubmit={(e) => {
+            e.preventDefault();
+            void controller.send(
+              local && !state.selected && cwd && selection ? { cwd, ...selection } : undefined,
+            );
+          }}>
+          <label htmlFor="message" {...stylex.props(controls.hidden)}>
+            Message
+          </label>
+          <textarea
+            id="message"
+            {...stylex.props(controls.field, styles.textarea)}
+            placeholder={
+              state.selected ? 'Reply…' : 'Ask anything, or describe what you want to build…'
+            }
+            value={state.draft}
+            onChange={(e) => controller.setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                e.currentTarget.form?.requestSubmit();
+              }
+            }}
+          />
+          <div {...stylex.props(controls.row, styles.composeActions)}>
+            <div {...stylex.props(controls.row, styles.modelActions)}>
+              {local && !state.selected ? (
+                <>
+                  <div {...stylex.props(styles.modelChoice)}>
+                    <Choice
+                      compact
+                      label="Conversation model"
+                      value={selectedModel}
+                      options={models}
+                      onChange={(value) => {
+                        const entry = models.find((model) => model.value === value);
+                        if (entry)
+                          controller.setModelPreference({
+                            model: entry.model,
+                            ...(entry.defaultReasoningEffort
+                              ? { reasoningEffort: entry.defaultReasoningEffort }
+                              : {}),
+                          });
+                      }}
+                      disabled={!models.length || busy('send')}
+                    />
+                  </div>
+                  {!!selectedEntry?.reasoningEfforts?.length && (
+                    <div {...stylex.props(styles.effortChoice)}>
+                      <Choice
+                        compact
+                        label="Reasoning effort"
+                        value={effortUnavailable ? '' : (selectedEffort ?? '')}
+                        options={selectedEntry.reasoningEfforts.map((value) => ({
+                          value,
+                          label: effortLabels[value],
+                        }))}
+                        onChange={(value) => {
+                          const effort = selectedEntry.reasoningEfforts?.find(
+                            (effort) => effort === value,
+                          );
+                          if (effort)
+                            controller.setModelPreference({
+                              model: selectedEntry.model,
+                              reasoningEffort: effort,
+                            });
+                        }}
+                        disabled={busy('send')}
+                      />
+                    </div>
+                  )}
+                </>
+              ) : (
+                <span {...stylex.props(styles.small, controls.truncate)}>
+                  {snapshot?.conversation.model ??
+                    (state.host && 'model' in state.host ? state.host.model : 'Remote model')}
+                  {snapshot?.conversation.reasoningEffort
+                    ? ` · ${effortLabels[snapshot.conversation.reasoningEffort]}`
+                    : ''}
+                </span>
+              )}
+              {run && (
+                <Button
+                  aria-label="Stop"
+                  title="Stop"
+                  {...stylex.props(controls.button, controls.iconButton)}
+                  disabled={!connected || busy('stop') || !!state.storageError}
+                  onClick={() => void controller.stop()}>
+                  <Icon name="stop" />
+                </Button>
+              )}
+              <Button
+                type="submit"
+                aria-label="Send message"
+                title="Send message · ⌘ Enter"
+                {...stylex.props(controls.button, styles.sendButton)}
+                disabled={
+                  !connected ||
+                  !state.draft.trim() ||
+                  busy('send') ||
+                  busy('create') ||
+                  !!state.storageError ||
+                  (!state.selected && local && (!cwd || !selection)) ||
+                  state.pending.some(
+                    (p) =>
+                      (p.operation === 'sendChat' &&
+                        p.input.target.conversationId === state.selected?.conversationId) ||
+                      (!state.selected && p.operation === 'createChat' && !!p.firstMessage),
+                  )
+                }>
+                <Icon name="send" />
+              </Button>
+            </div>
+          </div>
+        </form>
+        <div {...stylex.props(styles.composerHelp)}>
+          <span>{toolNotice}</span>
+          <span
+            title={`${new TextEncoder().encode(state.draft).length.toLocaleString()} / 32,768 bytes`}>
+            ⌘ / Ctrl Enter
+          </span>
+        </div>
+      </div>
+    </>
+  );
+  if (dock) {
+    const inProject = (folder: string) =>
+      dock.roots.some(
+        (root) => folder === root || folder.startsWith(root.replace(/\/$/, '') + '/'),
+      );
+    const projectChats = state.chats.filter((c) => inProject(c.cwd));
+    const selectedCwd =
+      snapshot?.conversation.cwd ??
+      state.chats.find((c) => c.target.conversationId === state.selected?.conversationId)?.cwd;
+    // A chat from another project is never shown here; the dock opens on this project's list.
+    const listing = dockList || (!!state.selected && !!selectedCwd && !inProject(selectedCwd));
+    const collapse = (
+      <>
+        <Button
+          aria-label={dock.expanded ? 'Restore project chats width' : 'Expand project chats'}
+          title={dock.expanded ? 'Restore width' : 'Expand'}
+          {...stylex.props(controls.button, controls.iconButton)}
+          onClick={dock.toggleExpanded}>
+          <Icon name={dock.expanded ? 'restore' : 'expand'} />
+        </Button>
+        <Button
+          aria-label="Hide project chats"
+          title="Hide project chats · ⌘J"
+          {...stylex.props(controls.button, controls.iconButton)}
+          onClick={dock.collapse}>
+          <Icon name="close" />
+        </Button>
+      </>
+    );
+    return (
+      <div
+        data-chat-find-owner={JSON.stringify([controller.backendId, state.selected])}
+        onKeyDown={(event) => handleChatFindKeyDown(event, controller, findInput)}
+        {...stylex.props(workbench.page, styles.page, styles.dockPage)}>
+        {listing ? (
+          <section aria-label={`${dock.project} chats`} {...stylex.props(styles.dockList)}>
+            <header {...stylex.props(styles.dockHeader)}>
+              <div {...stylex.props(styles.dockHeading)}>
+                <h2 {...stylex.props(styles.dockTitle)}>{dock.project} chats</h2>
+                <p {...stylex.props(styles.small, controls.truncate)}>
+                  This project only · every project&apos;s chats are in Agents
+                </p>
+              </div>
+              <Button
+                {...stylex.props(controls.button, styles.dockNew)}
+                disabled={busy('send') || busy('create')}
+                onClick={() => {
+                  setDockList(false);
+                  void controller
+                    .closeView()
+                    .then(() => document.getElementById('message')?.focus());
+                }}>
+                <Icon name="compose" /> New chat
+              </Button>
+              {collapse}
+            </header>
+            <nav aria-label={`${dock.project} conversations`} {...stylex.props(styles.chatList)}>
+              {!projectChats.length ? (
+                <p {...stylex.props(styles.small, styles.dockEmpty)}>
+                  {connected ? `No chats in ${dock.project} yet.` : 'Connect to read saved chats.'}
+                </p>
+              ) : (
+                projectChats.map((c) => (
+                  <Button
+                    key={c.target.conversationId}
+                    aria-pressed={state.selected?.conversationId === c.target.conversationId}
+                    {...stylex.props(
+                      controls.button,
+                      controls.listButton,
+                      styles.chat,
+                      state.selected?.conversationId === c.target.conversationId && styles.selected,
+                    )}
+                    disabled={!connected || busy('open')}
+                    onClick={() => {
+                      setDockList(false);
+                      void controller.select(c.target);
+                    }}>
+                    <span aria-hidden="true" {...stylex.props(styles.chatDot)} />
+                    <span {...stylex.props(styles.chatSummary)}>
+                      <span {...stylex.props(controls.truncate)}>{c.title}</span>
+                      <span {...stylex.props(styles.chatFolder, controls.truncate)}>
+                        {c.cwd.split('/').filter(Boolean).at(-1) || '/'}
+                      </span>
+                    </span>
+                    <time dateTime={c.createdAt} {...stylex.props(styles.chatDate)}>
+                      {new Date(c.createdAt).toLocaleDateString(undefined, {
+                        month: 'short',
+                        day: 'numeric',
+                      })}
+                    </time>
+                  </Button>
+                ))
+              )}
+            </nav>
+          </section>
+        ) : (
+          <main aria-label="Agent workspace" {...stylex.props(styles.content)}>
+            {findBar}
+            <header {...stylex.props(styles.dockHeader)}>
+              <Button
+                aria-label={`All ${dock.project} chats`}
+                title={`All ${dock.project} chats`}
+                {...stylex.props(controls.button, controls.iconButton)}
+                onClick={() => setDockList(true)}>
+                <Icon name="back" />
+              </Button>
+              <div {...stylex.props(styles.dockHeading)}>
+                <h1 {...stylex.props(styles.dockTitle, controls.truncate)}>{conversationTitle}</h1>
+                <p title={contextLabel} {...stylex.props(styles.small, controls.truncate)}>
+                  {state.selected ? contextLabel : `In ${dock.project}`}
+                </p>
+              </div>
+              {collapse}
+            </header>
+            {body}
+          </main>
+        )}
+      </div>
+    );
+  }
   return (
     <div
       data-chat-find-owner={JSON.stringify([controller.backendId, state.selected])}
@@ -226,9 +630,7 @@ export function ChatView({
       <div {...stylex.props(styles.workspace, !compact && styles.expandedWorkspace)}>
         {!compact && sidebar}
         <main aria-label="Agent workspace" {...stylex.props(styles.content)}>
-          {state.transcript.find.open && (
-            <FindBar controller={controller} state={state.transcript.find} input={findInput} />
-          )}
+          {findBar}
           <header
             {...stylex.props(styles.context, !state.selected && !compact && styles.newChatContext)}>
             {compact && (
@@ -274,267 +676,7 @@ export function ChatView({
               )}
             </div>
           </header>
-          <div {...stylex.props(styles.notices)}>
-            {state.notice &&
-              !['Disconnected.', 'Verified host.', 'Local chat.', 'Local tools use'].some(
-                (prefix) => state.notice.startsWith(prefix),
-              ) && (
-                <p role="status" {...stylex.props(styles.small)}>
-                  {state.notice}
-                </p>
-              )}
-            {state.storageError && (
-              <p role="alert" {...stylex.props(styles.warning)}>
-                {state.storageError} Preserve this window and data. Sending and Quit are blocked.
-              </p>
-            )}
-            {state.error && (
-              <p role="alert" {...stylex.props(styles.warning)}>
-                {state.error}
-              </p>
-            )}
-          </div>
-          {state.pending.length > 0 && (
-            <section aria-label="Retained commands" {...stylex.props(styles.pending)}>
-              <h3 {...stylex.props(styles.label)}>Retained command identities</h3>
-              {state.pending.map((p) => {
-                let identity = '';
-                if (p.operation === 'sendChat')
-                  identity = ` · chat ${p.input.target.conversationId}`;
-                else if (p.operation === 'stopChat')
-                  identity = ` · submission ${p.input.stop.submissionId} · task ${p.input.stop.taskId ?? 'queued'}`;
-                return (
-                  <details key={p.input.requestId} {...stylex.props(styles.pendingItem)}>
-                    <summary {...stylex.props(controls.summary)}>
-                      {p.operation} · {p.message}
-                    </summary>
-                    <p {...stylex.props(styles.identity)}>
-                      {p.input.requestId}
-                      {identity}
-                    </p>
-                    {p.operation === 'createChat' && (
-                      <p {...stylex.props(styles.small)}>
-                        {p.input.title}
-                        {p.input.settings
-                          ? ` · ${p.input.settings.cwd} · ${p.input.settings.model.provider}/${p.input.settings.model.modelId}${p.input.settings.reasoningEffort ? ` · ${effortLabels[p.input.settings.reasoningEffort]}` : ''}`
-                          : ''}
-                      </p>
-                    )}
-                    {p.operation === 'createChat' && p.firstMessage && (
-                      <>
-                        <p {...stylex.props(styles.small)}>
-                          Retry creates the conversation and sends this original message.
-                        </p>
-                        <p {...stylex.props(styles.identity)}>Send · {p.firstMessage.requestId}</p>
-                        <pre {...stylex.props(controls.pre, styles.pendingText)}>
-                          {p.firstMessage.text}
-                        </pre>
-                      </>
-                    )}
-                    {p.operation === 'sendChat' && (
-                      <pre {...stylex.props(controls.pre, styles.pendingText)}>{p.input.text}</pre>
-                    )}
-                    <div {...stylex.props(controls.row)}>
-                      <Button
-                        {...stylex.props(controls.button)}
-                        disabled={!connected || busy('query:' + p.input.requestId)}
-                        onClick={() => void controller.query(p.input.requestId)}>
-                        Query outcome
-                      </Button>
-                      <Button
-                        {...stylex.props(controls.button)}
-                        disabled={!connected || busy(p.input.requestId) || !!state.storageError}
-                        onClick={() => void controller.retry(p.input.requestId)}>
-                        Retry original{' '}
-                        {{ stopChat: 'Stop', sendChat: 'Send', createChat: 'Create' }[p.operation]}
-                      </Button>
-                    </div>
-                  </details>
-                );
-              })}
-            </section>
-          )}
-          {state.selected && (
-            <Transcript
-              key={controller.backendId + JSON.stringify(state.selected)}
-              controller={controller}
-              state={state}
-              native={transcriptNative}
-              findInput={findInput}
-            />
-          )}
-          <div {...stylex.props(styles.composeArea, !state.selected && styles.starter)}>
-            {!state.selected && local && (
-              <div {...stylex.props(styles.composeContext)}>
-                <Button
-                  aria-label="Choose working folder"
-                  {...stylex.props(controls.button, controls.quietButton, styles.folderChoice)}
-                  disabled={!chooseFolder || busy('send')}
-                  title={cwd || 'Choose working folder'}
-                  onClick={() => {
-                    setFolderError(null);
-                    void chooseFolder?.()
-                      .then((folder) => {
-                        if (folder) setCwd(folder);
-                      })
-                      .catch(() =>
-                        setFolderError(
-                          'The folder could not be approved. Choose an existing working folder again.',
-                        ),
-                      );
-                  }}>
-                  <Icon name="folder" />
-                  <span {...stylex.props(controls.truncate)}>
-                    {cwd ? cwd.split('/').filter(Boolean).at(-1) || '/' : 'Choose working folder'}
-                  </span>
-                  <Icon name="chevron" />
-                </Button>
-                <span {...stylex.props(styles.localLabel)}>
-                  <Icon name="computer" />
-                  This Mac
-                </span>
-              </div>
-            )}
-            {folderError && (
-              <p role="alert" {...stylex.props(styles.warning)}>
-                {folderError}
-              </p>
-            )}
-            {!state.selected &&
-              state.modelPreference &&
-              providerState?.status &&
-              (!selectedEntry || effortUnavailable) && (
-                <p role="status" {...stylex.props(styles.warning)}>
-                  {!selectedEntry
-                    ? `Your saved model (${state.modelPreference.model.modelId}) is unavailable. Choose another model to send.`
-                    : 'Your saved reasoning effort is unavailable for this model. Choose another effort to send.'}
-                </p>
-              )}
-            <form
-              {...stylex.props(styles.composer)}
-              onSubmit={(e) => {
-                e.preventDefault();
-                void controller.send(
-                  local && !state.selected && cwd && selection ? { cwd, ...selection } : undefined,
-                );
-              }}>
-              <label htmlFor="message" {...stylex.props(controls.hidden)}>
-                Message
-              </label>
-              <textarea
-                id="message"
-                {...stylex.props(controls.field, styles.textarea)}
-                placeholder={
-                  state.selected ? 'Reply…' : 'Ask anything, or describe what you want to build…'
-                }
-                value={state.draft}
-                onChange={(e) => controller.setDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                    e.preventDefault();
-                    e.currentTarget.form?.requestSubmit();
-                  }
-                }}
-              />
-              <div {...stylex.props(controls.row, styles.composeActions)}>
-                <div {...stylex.props(controls.row, styles.modelActions)}>
-                  {local && !state.selected ? (
-                    <>
-                      <div {...stylex.props(styles.modelChoice)}>
-                        <Choice
-                          compact
-                          label="Conversation model"
-                          value={selectedModel}
-                          options={models}
-                          onChange={(value) => {
-                            const entry = models.find((model) => model.value === value);
-                            if (entry)
-                              controller.setModelPreference({
-                                model: entry.model,
-                                ...(entry.defaultReasoningEffort
-                                  ? { reasoningEffort: entry.defaultReasoningEffort }
-                                  : {}),
-                              });
-                          }}
-                          disabled={!models.length || busy('send')}
-                        />
-                      </div>
-                      {!!selectedEntry?.reasoningEfforts?.length && (
-                        <div {...stylex.props(styles.effortChoice)}>
-                          <Choice
-                            compact
-                            label="Reasoning effort"
-                            value={effortUnavailable ? '' : (selectedEffort ?? '')}
-                            options={selectedEntry.reasoningEfforts.map((value) => ({
-                              value,
-                              label: effortLabels[value],
-                            }))}
-                            onChange={(value) => {
-                              const effort = selectedEntry.reasoningEfforts?.find(
-                                (effort) => effort === value,
-                              );
-                              if (effort)
-                                controller.setModelPreference({
-                                  model: selectedEntry.model,
-                                  reasoningEffort: effort,
-                                });
-                            }}
-                            disabled={busy('send')}
-                          />
-                        </div>
-                      )}
-                    </>
-                  ) : (
-                    <span {...stylex.props(styles.small, controls.truncate)}>
-                      {snapshot?.conversation.model ??
-                        (state.host && 'model' in state.host ? state.host.model : 'Remote model')}
-                      {snapshot?.conversation.reasoningEffort
-                        ? ` · ${effortLabels[snapshot.conversation.reasoningEffort]}`
-                        : ''}
-                    </span>
-                  )}
-                  {run && (
-                    <Button
-                      aria-label="Stop"
-                      title="Stop"
-                      {...stylex.props(controls.button, controls.iconButton)}
-                      disabled={!connected || busy('stop') || !!state.storageError}
-                      onClick={() => void controller.stop()}>
-                      <Icon name="stop" />
-                    </Button>
-                  )}
-                  <Button
-                    type="submit"
-                    aria-label="Send message"
-                    title="Send message · ⌘ Enter"
-                    {...stylex.props(controls.button, styles.sendButton)}
-                    disabled={
-                      !connected ||
-                      !state.draft.trim() ||
-                      busy('send') ||
-                      busy('create') ||
-                      !!state.storageError ||
-                      (!state.selected && local && (!cwd || !selection)) ||
-                      state.pending.some(
-                        (p) =>
-                          (p.operation === 'sendChat' &&
-                            p.input.target.conversationId === state.selected?.conversationId) ||
-                          (!state.selected && p.operation === 'createChat' && !!p.firstMessage),
-                      )
-                    }>
-                    <Icon name="send" />
-                  </Button>
-                </div>
-              </div>
-            </form>
-            <div {...stylex.props(styles.composerHelp)}>
-              <span>{toolNotice}</span>
-              <span
-                title={`${new TextEncoder().encode(state.draft).length.toLocaleString()} / 32,768 bytes`}>
-                ⌘ / Ctrl Enter
-              </span>
-            </div>
-          </div>
+          {body}
         </main>
       </div>
     </div>
@@ -552,6 +694,22 @@ const effortLabels = {
   max: 'Max',
 };
 const styles = stylex.create({
+  dockPage: { display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'hidden' },
+  dockList: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflowY: 'auto' },
+  dockHeader: {
+    flexShrink: 0,
+    display: 'flex',
+    alignItems: 'center',
+    gap: space.sm,
+    padding: '10px 12px',
+    borderBottomWidth: 1,
+    borderBottomStyle: 'solid',
+    borderBottomColor: colors.border,
+  },
+  dockHeading: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 },
+  dockTitle: { margin: 0, fontSize: type.body, fontWeight: 600 },
+  dockNew: { display: 'inline-flex', alignItems: 'center', gap: space.xs, flexShrink: 0 },
+  dockEmpty: { padding: space.md },
   drawerBackdrop: { position: 'fixed', inset: 0, zIndex: 50, backgroundColor: colors.backdrop },
   drawer: {
     position: 'fixed',

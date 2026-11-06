@@ -989,6 +989,78 @@ test('⇧⌘G and ⇧⌘E switch the project sidebar between Changes and Files',
   await expect(files).toHaveAttribute('aria-pressed', 'true');
 });
 
+test('the project dock shows only that project’s chats, with a back arrow to their list', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?local&design');
+  await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
+  await page.getByRole('tab', { name: 'moonbase · main', exact: true }).click();
+  const dock = page.getByRole('complementary', { name: 'Project chats', exact: true });
+  await expect(dock.getByRole('heading', { name: 'New chat', exact: true })).toBeVisible();
+  await expect(
+    dock.getByRole('button', { name: 'Choose working folder', exact: true }),
+  ).toHaveAttribute('title', '/demo/moonbase');
+  // One chat view at a time: the dock's, while Agents is hidden.
+  await expect(page.locator('#message')).toHaveCount(1);
+  await dock.getByLabel('Message', { exact: true }).fill('Tidy the rail peek spacing');
+  await dock.getByRole('button', { name: 'Send message', exact: true }).click();
+  const title = dock.getByRole('heading', { name: 'Tidy the rail peek spacing', exact: true });
+  await expect(title).toBeVisible();
+  await dock.getByRole('button', { name: 'All moonbase chats', exact: true }).click();
+  const list = dock.getByRole('navigation', { name: 'moonbase conversations', exact: true });
+  const chat = list.getByRole('button', { name: /Tidy the rail peek spacing/ });
+  await expect(list.getByRole('button')).toHaveCount(1);
+  await expect(chat).toHaveAttribute('aria-pressed', 'true');
+  await page.screenshot({ path: '../../test-results/redesign-review/project-dock-list.png' });
+  await chat.click();
+  await expect(title).toBeVisible();
+  await page.evaluate(() => window.demo.first.openCheckout('/demo/other'));
+  await expect(
+    dock.getByRole('navigation', { name: 'other conversations', exact: true }),
+  ).toContainText('No chats in other yet.');
+  await dock.getByRole('button', { name: 'Hide project chats', exact: true }).click();
+  await expect(dock.getByRole('button', { name: 'Show project chats', exact: true })).toBeVisible();
+  await page.getByRole('tab', { name: 'Agents', exact: true }).click();
+  await expect(
+    page
+      .getByRole('navigation', { name: 'Conversations', exact: true })
+      .getByRole('button', { name: /Tidy the rail peek spacing/ }),
+  ).toBeVisible();
+});
+
+test('the project dock resizes by dragging or keys, expands and closes', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?local&design');
+  await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
+  await page.getByRole('tab', { name: 'moonbase · main', exact: true }).click();
+  const dock = page.getByRole('complementary', { name: 'Project chats', exact: true });
+  const edge = page.getByRole('separator', { name: 'Resize project chats', exact: true });
+  const width = async () => (await dock.boundingBox())!.width;
+  await expect.poll(width).toBe(400);
+  const box = (await edge.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + 200);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 - 150, box.y + 200, { steps: 5 });
+  await page.mouse.up();
+  await expect.poll(async () => Math.abs((await width()) - 550)).toBeLessThanOrEqual(2);
+  await edge.press('Home');
+  await expect.poll(width).toBe(320);
+  // The edge sits on the dock's left, so ArrowLeft widens it.
+  await edge.press('ArrowLeft');
+  await expect.poll(width).toBe(340);
+  const widest = Number(await edge.getAttribute('aria-valuemax'));
+  await dock.getByRole('button', { name: 'Expand project chats', exact: true }).click();
+  await expect.poll(width).toBe(widest);
+  await page.screenshot({ path: '../../test-results/redesign-review/project-dock-expanded.png' });
+  await dock.getByRole('button', { name: 'Restore project chats width', exact: true }).click();
+  await expect.poll(width).toBe(340);
+  await dock.getByRole('button', { name: 'Hide project chats', exact: true }).click();
+  await expect.poll(width).toBe(44);
+  await page.getByRole('textbox', { name: 'welcome.ts editor', exact: true }).press('Meta+j');
+  await expect.poll(width).toBe(340);
+});
+
 test('removing a middle project moves survivors smoothly up the rail', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await page.clock.install();
