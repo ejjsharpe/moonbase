@@ -198,7 +198,8 @@ export const Entry = memo(
                 evidence={context.evidence}
                 expandedIds={context.expandedIds}
                 anchorKey={anchorPart && partIds.includes(anchorPart) ? anchorKey : null}
-                match={findMatch && partIds.includes(findMatch.partId) ? findMatch : null}>
+                match={findMatch && partIds.includes(findMatch.partId) ? findMatch : null}
+                revealing={findRevealing}>
                 {children}
               </Activity>
             ) : (
@@ -296,6 +297,7 @@ function Activity({
   expandedIds,
   anchorKey,
   match,
+  revealing,
   children,
 }: {
   source: ChatTranscriptSource;
@@ -306,6 +308,7 @@ function Activity({
   expandedIds: readonly string[];
   anchorKey: string | null;
   match: ChatTranscriptMatch | null;
+  revealing: boolean;
   children: ReactNode;
 }) {
   const disclosure = useDisclosure({
@@ -316,6 +319,7 @@ function Activity({
     expandedIds,
     anchorKey,
     match,
+    revealing,
     controller,
   });
   const summaries = [
@@ -381,6 +385,7 @@ const Part = memo(
       expandedIds,
       anchorKey,
       match,
+      revealing,
       controller,
     });
     const expanded = disclosure.open;

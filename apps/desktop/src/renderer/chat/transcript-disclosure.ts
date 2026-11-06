@@ -97,7 +97,8 @@ export function useRememberedExpansion(id: string | null) {
 /**
  * A remembered disclosure: expanded when its view memory says so, and while the reading anchor or
  * active Find match is inside it unless the reader explicitly collapsed it for that anchor/match.
- * The result controls a Base UI Collapsible.
+ * Find revealing a match inside it again (returning to the match) expands it again. The result
+ * controls a Base UI Collapsible.
  */
 export function useDisclosure({
   entryId,
@@ -107,6 +108,7 @@ export function useDisclosure({
   expandedIds,
   anchorKey,
   match,
+  revealing,
   controller,
 }: {
   entryId: string;
@@ -119,6 +121,8 @@ export function useDisclosure({
   anchorKey: string | null;
   /** The active Find match, when it is inside this disclosure. */
   match: ChatTranscriptMatch | null;
+  /** Find is revealing the active match: it was just moved to, and no reader input ended that. */
+  revealing: boolean;
   controller: ChatController;
 }) {
   const saver = useContext(TranscriptViewSaver);
@@ -129,6 +133,10 @@ export function useDisclosure({
     expansion && 'collapsed-reveal:' + expansion,
     null,
   );
+  // The fold lasts while its reveal does. It ends once nothing here is revealed, and when Find
+  // reveals a match here again: a row scrolled away may not have rendered the reveal moving on.
+  if (collapsedReveal !== null && (revealKey === null || (match && revealing)))
+    setCollapsedReveal(null);
   /** The state the reader saw when pressing, before reading capture can reveal this disclosure. */
   const pressedOpen = useRef<boolean | null>(null);
   const open =
@@ -148,8 +156,11 @@ export function useDisclosure({
       active && areJsonValuesEqual(active.source, source) && partIds.includes(active.partId)
         ? active
         : null;
-    if (collapse && inside) setCollapsedReveal(JSON.stringify(inside));
-    else if (collapse && !active && view.anchor?.partId && partIds.includes(view.anchor.partId))
+    if (collapse && inside) {
+      // Folding the match is reader input: it ends the reveal, which would expand it again.
+      controller.cancelFindReveal();
+      setCollapsedReveal(JSON.stringify(inside));
+    } else if (collapse && !active && view.anchor?.partId && partIds.includes(view.anchor.partId))
       setCollapsedReveal(getAnchorKey(view.anchor));
     setExpansion(controller, expansion, !collapse);
   };

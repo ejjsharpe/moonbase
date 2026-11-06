@@ -1539,6 +1539,71 @@ test('Find respects explicit collapse until the active range changes in the same
   await expect(find).toBeFocused();
 });
 
+for (const distance of ['nearby', 'far away'])
+  test(`Find reveals a match the reader folded again after returning from a match ${distance}`, async ({
+    page,
+  }) => {
+    await page.goto('/?local&design&transcript');
+    await page.getByRole('button', { name: /^Conversation/ }).click();
+    await expect(transcriptList(page)).toBeVisible();
+    const filler = distance === 'nearby' ? 0 : 40;
+    await page.evaluate(async (filler) => {
+      await window.demo.transcript!.record([
+        {
+          id: 'folded',
+          thinking: 'available',
+          parts: [
+            { text: 'Thinking about the NEEDLE', kind: 'thinking' },
+            { text: 'Answer with the thought folded.', kind: 'text', role: 'assistant' },
+          ],
+        },
+        ...Array.from({ length: filler }, (_, index) => ({
+          id: `filler-${index}`,
+          parts: [
+            {
+              text: 'A paragraph of steady explanation. '.repeat(40),
+              kind: 'text' as const,
+              role: 'assistant' as const,
+            },
+          ],
+        })),
+        {
+          id: 'plain',
+          parts: [{ text: 'The plain NEEDLE.', kind: 'text', role: 'assistant' }],
+        },
+      ]);
+    }, filler);
+    const find = await findText(page, 'needle');
+    const activeEntry = () =>
+      page.evaluate(
+        () =>
+          window.demo.application.chat!.getSnapshot().transcript.find.active?.source.entryId ??
+          null,
+      );
+    const step = async (key: 'Enter' | 'Shift+Enter', entry: string) => {
+      await find.focus();
+      await find.press(key);
+      await expect.poll(activeEntry).toBe(entry);
+    };
+    if ((await expect.poll(activeEntry).not.toBeNull(), await activeEntry()) !== 'folded')
+      await step('Enter', 'folded');
+    const thinking = page
+      .locator('[data-transcript-entry="folded"]')
+      .getByRole('button', { name: /^Thinking/ });
+    await expect(thinking).toHaveAttribute('aria-expanded', 'true');
+    await thinking.click();
+    await expect(thinking).toHaveAttribute('aria-expanded', 'false');
+    await step('Enter', 'plain');
+    await expect
+      .poll(() => readFindHighlight(page))
+      .toEqual([expect.objectContaining({ entry: 'plain', visible: true })]);
+    await step('Shift+Enter', 'folded');
+    await expect(thinking).toHaveAttribute('aria-expanded', 'true');
+    await expect
+      .poll(() => readFindHighlight(page))
+      .toEqual([expect.objectContaining({ text: 'NEEDLE', entry: 'folded', visible: true })]);
+  });
+
 test('Find Previous replays an evicted part manifest without changing its query cutoff', async ({
   page,
 }) => {
