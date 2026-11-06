@@ -155,9 +155,12 @@ export const Entry = memo(
     const kind = classifyEntry(entry);
     const conversational = kind === 'message' && ['assistant', 'user'].includes(entry.role);
     const label = entry.role === 'system' && kind !== 'empty' ? 'system' : '';
+    // A failed tool step shows its failure on the step, not as a line between steps.
+    let status = entry.isError ? 'Failed' : liveState;
+    if (kind === 'activity' && !liveState) status = undefined;
     const notes = [
       label,
-      entry.isError ? 'Failed' : liveState,
+      status,
       liveState && transcript?.thinking === 'none' && 'No thinking supplied',
       liveState && transcript?.thinking === 'pending' && 'Working · thinking not yet supplied',
     ].filter(Boolean);
@@ -357,14 +360,23 @@ function Activity({
     controller,
   });
   // One step per call (with its answers), marked by its state like a task list.
-  const steps = new Map<string, { state: string | undefined; output: boolean }>();
-  for (const step of groupActivitySteps(parts)) {
-    const summary = describeActivityStep(step, { source }, evidence);
-    // A completed result answering a call recorded elsewhere reads as that call's output.
-    const state = getActivityStepState(step, { source }, evidence),
-      output =
-        step.lead.kind === 'result' && step.lead.pairing === 'matched' && state === 'completed';
-    if (!steps.has(summary)) steps.set(summary, { state, output });
+  // One step per call (with its answers), marked by its state like a task list. A step led by an
+  // answer to a call recorded in an earlier row reads as that call's output, under it.
+  const steps = new Map<string, { state: string | undefined; prefix: string }>();
+  for (const step of groupActivitySteps(
+    parts,
+    source.kind === 'entry' ? source.entryId : undefined,
+  )) {
+    const summary = describeActivityStep(step, { source }, evidence),
+      state = getActivityStepState(step, { source }, evidence),
+      lead = getActivityState(step.lead, { source }, evidence);
+    let prefix = '';
+    if (step.lead.call && step.lead.pairing === 'matched' && step.lead.kind !== 'arguments')
+      prefix = [getToolSummary(step.lead), lead && lead !== 'completed' ? lead : '']
+        .filter(Boolean)
+        .map((segment) => segment + ' · ')
+        .join('');
+    if (!steps.has(summary)) steps.set(summary, { state, prefix });
   }
   return (
     <Collapsible.Root
@@ -385,26 +397,29 @@ function Activity({
         <Icon name="chevron" />
       </Collapsible.Trigger>
       <ul {...stylex.props(styles.activitySteps)}>
-        {[...steps].map(([summary, { state, output }]) => {
-          const split = summary.indexOf(' · ');
-          // An output line sits under its call, so it drops the repeated tool name.
-          if (output && split >= 0)
+        {[...steps].map(([summary, { state, prefix }]) => {
+          // An output line drops its call's name and state from view; they stay for assistive
+          // technology and Find.
+          if (prefix && summary.startsWith(prefix))
             return (
               <li
                 key={summary}
                 data-glyph="↳"
-                {...stylex.props(styles.activityStep, styles.stepOutput)}>
-                {summary.slice(split + 3)}
+                {...stylex.props(
+                  styles.activityStep,
+                  styles.stepOutput,
+                  !!state && state !== 'completed' && stepStyles[state],
+                )}>
+                <span {...stylex.props(controls.hidden)}>{prefix}</span>
+                {summary.slice(prefix.length)}
               </li>
             );
+          const split = summary.indexOf(' · ');
           return (
             <li
               key={summary}
-              data-glyph={output ? '↳' : ((state && stepGlyphs[state]) ?? '·')}
-              {...stylex.props(
-                styles.activityStep,
-                output ? styles.stepOutput : stepStyles[state ?? 'unknown'],
-              )}>
+              data-glyph={(state && stepGlyphs[state]) ?? '·'}
+              {...stylex.props(styles.activityStep, stepStyles[state ?? 'unknown'])}>
               <span {...stylex.props(styles.activityTool)}>
                 {split < 0 ? summary : summary.slice(0, split)}
               </span>

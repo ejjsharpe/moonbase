@@ -1,6 +1,7 @@
 import type { ChatEntry, ChatTranscript, ChatTranscriptPart } from '@moonbase/contracts/chat';
 import { areJsonValuesEqual } from '@moonbase/contracts/common';
 import { structuredSourceLimits } from './source-limits.ts';
+import { parseRecordedPatch } from './recorded-patch.ts';
 
 export function isActivityPart(part: ChatTranscriptPart) {
   return (
@@ -126,7 +127,9 @@ export function describeActivityPart(
 ) {
   const status = getActivityState(part, transcript, evidence);
   if (part.kind === 'thinking') {
-    const details = ['Thinking', part.availability];
+    // Only an unusual availability (redacted, withheld) is worth saying.
+    const details = ['Thinking'];
+    if (part.availability !== 'available') details.push(part.availability);
     if (status && status !== 'completed') details.push(status);
     if (part.availability === 'available') details.push(`${part.bytes.toLocaleString()} bytes`);
     return details.join(' · ');
@@ -149,34 +152,66 @@ export function describeActivityPart(
 /** A tool call with the parts that answer it in the same group, shown as one step. */
 export type ActivityStep = { lead: ChatTranscriptPart; answers: ChatTranscriptPart[] };
 
-/** Pairs each part with the call it answers when that call is in the same group. */
-export function groupActivitySteps(parts: readonly ChatTranscriptPart[]) {
+/**
+ * Pairs each part with the call it answers: the call itself when it is in this group (from the
+ * row's own entry), else the first answer to the same call here, so an edit's output, details,
+ * patch and diff read as one step.
+ */
+export function groupActivitySteps(parts: readonly ChatTranscriptPart[], entryId?: string) {
   const steps: ActivityStep[] = [],
-    calls = new Map<string, ActivityStep>();
+    calls = new Map<string, ActivityStep>(),
+    answered = new Map<string, ActivityStep>();
   for (const part of parts) {
-    const call = part.call && calls.get(part.call.partId);
-    if (call) call.answers.push(part);
+    const key = part.call && `${part.call.entryId}\n${part.call.partId}`;
+    const owner =
+      part.call &&
+      ((part.call.entryId === entryId ? calls.get(part.call.partId) : undefined) ??
+        answered.get(key!));
+    if (owner) owner.answers.push(part);
     else {
-      const step = { lead: part, answers: [] };
+      const step: ActivityStep = { lead: part, answers: [] };
       steps.push(step);
       if (part.kind === 'arguments') calls.set(part.partId, step);
+      if (key) answered.set(key, step);
     }
   }
   return steps;
 }
 
-/** A step reads as its call; answered steps add the result's size and any failure progress. */
+/** Added and removed lines in a complete recorded patch or diff. */
+function countPatchLines(part: ChatTranscriptPart) {
+  if (part.truncated || !part.text) return '';
+  const parsed = parseRecordedPatch(part.text);
+  if (!('files' in parsed)) return '';
+  let added = 0,
+    removed = 0;
+  for (const file of parsed.files)
+    for (const hunk of file.hunks)
+      for (const line of hunk.lines) {
+        if (line.kind === 'added') added++;
+        if (line.kind === 'removed') removed++;
+      }
+  return added || removed ? `+${added} −${removed}` : '';
+}
+
+/**
+ * A step reads as its lead part. Answers add a recorded patch's line counts, and a later output's
+ * failure or running progress; their sizes stay in the expanded parts.
+ */
 export function describeActivityStep(
   step: ActivityStep,
   transcript: Pick<ChatTranscript, 'source'>,
   evidence: ActivityEvidence,
 ) {
   const details = [describeActivityPart(step.lead, transcript, evidence)];
+  const changes = [step.lead, ...step.answers]
+    .filter((part) => part.kind === 'patch' || part.kind === 'diff')
+    .map(countPatchLines)
+    .find(Boolean);
+  if (changes) details.push(changes);
   for (const answer of step.answers) {
-    if (answer.kind !== 'result') continue;
     const status = getActivityState(answer, transcript, evidence);
-    details.push(`${answer.bytes.toLocaleString()} bytes`);
-    if (['running', 'failed', 'interrupted'].includes(status ?? '') && answer.text)
+    if (answer.kind === 'result' && ['running', 'failed', 'interrupted'].includes(status ?? ''))
       details.push(
         answer.text.replace(/\s+/g, ' ').slice(0, progressExcerptUnits) +
           (answer.truncated ? '…' : ''),
@@ -206,18 +241,31 @@ export function getToolSummary(part: ChatTranscriptPart, text = part.text) {
     text.length > structuredSourceLimits.units
   )
     return name;
+  let keys: string[] = [];
+  if (['read', 'write', 'edit'].includes(name)) keys = ['path', 'file_path'];
+  else if (name === 'bash') keys = ['command'];
+  let value: unknown;
   try {
     const args: unknown = JSON.parse(text);
     if (!args || typeof args !== 'object' || Array.isArray(args)) return name;
     const values = args as Record<string, unknown>;
-    let value: unknown;
-    if (['read', 'write', 'edit'].includes(name)) value = values.path ?? values.file_path;
-    else if (name === 'bash') value = values.command;
-    if (typeof value !== 'string') return name;
-    return `${name} · ${value.replace(/\s+/g, ' ').slice(0, 160)}`;
+    value = keys.map((key) => values[key]).find((item) => item !== undefined);
   } catch {
-    return name;
+    // A preview cut short of its JSON still names a leading path or command.
+    for (const key of keys) {
+      const found = new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`).exec(text);
+      if (found) {
+        try {
+          value = JSON.parse(`"${found[1]}"`);
+        } catch {
+          value = found[1];
+        }
+        break;
+      }
+    }
   }
+  if (typeof value !== 'string') return name;
+  return `${name} · ${value.replace(/\s+/g, ' ').slice(0, 160)}`;
 }
 
 export function getEntryTranscripts(
