@@ -393,7 +393,40 @@ export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabili
       'none',
     );
   }
+  /**
+   * Replaces the conversation with `count` alternating questions and answers of varied length.
+   * Every tenth answer has a code block long enough to fold; `lighthouse` appears only in the
+   * third answer, far back in history.
+   */
+  async function long(count = 2000) {
+    await record(
+      Array.from({ length: count }, (_, index) => {
+        const user = index % 2 === 0;
+        let text = user
+          ? `Question ${index}: how does part ${index} fit together?`
+          : `Answer ${index}.\n\n` + 'A paragraph of steady explanation. '.repeat(1 + (index % 7));
+        if (!user && index % 10 === 1)
+          text +=
+            '\n\n```typescript\n' +
+            Array.from({ length: 60 }, (_, line) => `const line${line} = ${index};`).join('\n') +
+            '\n```\n';
+        if (index === 5) text += '\n\nThe old lighthouse note.';
+        return {
+          id: `long-${index}`,
+          role: user ? ('user' as const) : ('assistant' as const),
+          parts: [
+            {
+              text,
+              kind: 'text' as const,
+              role: user ? ('user' as const) : ('assistant' as const),
+            },
+          ],
+        };
+      }),
+    );
+  }
   return {
+    long,
     async setEntry(index: number, texts: string[], kinds: ChatTranscriptPart['kind'][] = []) {
       const entry = entries[index]!;
       const parts = await Promise.all(

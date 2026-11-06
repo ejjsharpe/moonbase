@@ -629,12 +629,15 @@ test('transcript local rendering precedes held completion; native Copy/link fail
     expect(layout.mainWidth).toBeGreaterThan(layout.innerWidth - 2);
     const reading = live.getByText('First local chunk 🌔 and second chunk', { exact: true });
     await reading.scrollIntoViewIfNeeded();
-    await page.getByRole('region', { name: 'Chat transcript', exact: true }).hover();
+    // Away from the floating Jump to latest button, which covers the centre of a short list.
+    await page
+      .getByRole('region', { name: 'Chat transcript', exact: true })
+      .hover({ position: { x: 24, y: 24 } });
     for (let attempt = 0; attempt < 8; attempt++) {
       const gap = await reading.evaluate(
         (element) =>
           element.getBoundingClientRect().top -
-          document.querySelector('[data-transcript-chrome]')!.getBoundingClientRect().bottom,
+          element.closest('[aria-label="Chat transcript"]')!.getBoundingClientRect().top,
       );
       if (Math.abs(gap) < 0.25) break;
       await page.mouse.wheel(0, gap);
@@ -650,7 +653,6 @@ test('transcript local rendering precedes held completion; native Copy/link fail
     });
     const geometry = await reading.evaluate((element) => ({
       reading: element.getBoundingClientRect().toJSON(),
-      chrome: document.querySelector('[data-transcript-chrome]')!.getBoundingClientRect().toJSON(),
       transcript: element
         .closest('[aria-label="Chat transcript"]')!
         .getBoundingClientRect()
@@ -661,7 +663,7 @@ test('transcript local rendering precedes held completion; native Copy/link fail
       JSON.stringify(geometry, null, 2),
     );
     // Native scrolling at 200% rounds fractional CSS coordinates to device pixels.
-    expect(geometry.reading.top).toBeGreaterThanOrEqual(geometry.chrome.bottom - 1);
+    expect(geometry.reading.top).toBeGreaterThanOrEqual(geometry.transcript.top - 1);
     expect(geometry.reading.bottom).toBeLessThanOrEqual(geometry.transcript.bottom + 1);
     await captureNative(
       app,

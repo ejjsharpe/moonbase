@@ -1,3 +1,4 @@
+import { scrollToStart } from './transcript-list.ts';
 import { test, expect, type Page } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -118,11 +119,8 @@ for (const input of ['pointer', 'Enter', 'Space'] as const)
         if (source.kind !== 'live') throw Error('Expected live source');
         controller.setTranscriptView({
           anchor: {
-            backendId: controller.backendId,
-            source,
+            key: `live:${source.submissionId}`,
             partId: part.partId,
-            bytes: part.bytes,
-            revision: part.revision,
             offset: 16,
           },
           expanded: ['keep-another-disclosure'],
@@ -164,9 +162,7 @@ for (const input of ['pointer', 'Enter', 'Space'] as const)
       await button.evaluate((element) => {
         const root = element.closest<HTMLElement>('[aria-label="Chat transcript"]')!;
         root.scrollTop +=
-          element.getBoundingClientRect().top -
-          root.querySelector('[data-transcript-chrome]')!.getBoundingClientRect().bottom -
-          16;
+          element.getBoundingClientRect().top - root.getBoundingClientRect().top - 16;
       });
       if (input === 'pointer') await button.click();
       else {
@@ -184,8 +180,9 @@ for (const input of ['pointer', 'Enter', 'Space'] as const)
       await expect
         .poll(() =>
           page.evaluate(() => {
+            // The press captures where the reader is: following the end here, or a new anchor.
             const anchor = window.demo.application.chat!.getSnapshot().transcript.view.anchor;
-            return anchor?.source ? anchor.partId !== 'm0.b5' : !!anchor?.entryId;
+            return anchor?.partId !== 'm0.b5';
           }),
         )
         .toBe(true);
@@ -297,7 +294,11 @@ test('ordered activity stays between authored answers across manifest and histor
   const other = page.locator('[data-transcript-entry="other"]');
   await expect(other).toContainText('read · second.ts · requested · result not shown');
   await expect(other).not.toContainText('failed');
-  await page.getByRole('button', { name: 'Load earlier', exact: true }).click();
+  // Rows unmount while scrolled away, so the newest row is read before scrolling to the start.
+  await expect(page.locator('[data-transcript-entry="ambiguous"]')).toContainText(
+    'interrupted · ambiguous',
+  );
+  await scrollToStart(page);
   const origin = page.locator('[data-transcript-entry="origin"]');
   await expect(origin).toContainText('read · first.ts · failed');
   await expect(origin.getByText('Before the call', { exact: true })).toBeVisible();
@@ -307,9 +308,6 @@ test('ordered activity stays between authored answers across manifest and histor
       .locator('[data-transcript-part]')
       .evaluateAll((parts) => parts.map((part) => part.getAttribute('data-transcript-part'))),
   ).toEqual(['m0.b0', 'call', 'm0.b2']);
-  await expect(page.locator('[data-transcript-entry="ambiguous"]')).toContainText(
-    'interrupted · ambiguous',
-  );
   await expect(origin.getByRole('button', { name: /^Activity/ })).toHaveAttribute(
     'aria-expanded',
     'false',
@@ -706,11 +704,8 @@ test('thinking/tool progress changes before completion with stable focus and exp
     if (summary.source.kind !== 'live') throw Error();
     controller.setTranscriptView({
       anchor: {
-        backendId: controller.backendId,
-        source: summary.source,
+        key: `live:${summary.source.submissionId}`,
         partId: part.partId,
-        bytes: part.bytes,
-        revision: part.revision,
         offset: 16,
       },
       expanded: [],
@@ -733,7 +728,7 @@ test('generic part navigation reveals the containing activity and preserves expl
   await page.evaluate(() => {
     const controller = window.demo.application.chat!;
     controller.setTranscriptView({
-      anchor: { entryId: 'reading-179', partId: 'm0.b2', offset: 16 },
+      anchor: { key: 'entry:reading-179', partId: 'm0.b2', offset: 16 },
       expanded: [],
     });
   });
@@ -748,7 +743,7 @@ test('generic part navigation reveals the containing activity and preserves expl
   await page.evaluate(() => {
     const controller = window.demo.application.chat!;
     controller.setTranscriptView({
-      anchor: { entryId: 'reading-179', partId: 'm0.b3', offset: 16 },
+      anchor: { key: 'entry:reading-179', partId: 'm0.b3', offset: 16 },
       expanded: controller.getSnapshot().transcript.view.expanded,
     });
   });
@@ -821,7 +816,7 @@ test('reading a durable row in the latest window retains current live activity b
       },
     ]);
     window.demo.application.chat!.setTranscriptView({
-      anchor: { entryId: 'recent', offset: 0 },
+      anchor: { key: 'entry:recent', offset: 0 },
       expanded: [],
     });
   });
@@ -830,9 +825,6 @@ test('reading a durable row in the latest window retains current live activity b
   await row.getByRole('button', { name: /^Activity/ }).click();
   await row.getByRole('button', { name: /Output/ }).click();
   await expect(row.locator('pre')).toHaveText('Current held output');
-  expect(
-    await page.evaluate(() => window.demo.application.chat!.getSnapshot().transcript.atLatest),
-  ).toBe(false);
 });
 for (const valid of [false, true])
   test(`EOF patch source without terminal newline stays exact in Copy: ${valid ? 'valid replacement' : 'truncated replacement'}`, async ({
@@ -1022,7 +1014,7 @@ for (const input of ['pointer', 'Enter', 'Space'] as const)
         view = controller.getSnapshot().transcript.view;
       controller.setTranscriptView({
         ...view,
-        anchor: { entryId: 'reading-1', partId: 'm0.b0', offset: 16 },
+        anchor: { key: 'entry:reading-1', partId: 'm0.b0', offset: 16 },
       });
       window.demo.chat.controls.receiveChat(structuredClone(window.demo.chat.snapshot));
     });

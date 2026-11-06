@@ -52,6 +52,10 @@ Set `MOONBASE_CHAT_CONFIG` to an absolute private JSON file outside source contr
 
 An optional absolute `sshExecutable` overrides `/usr/bin/ssh`. Start the [Pi host](../../packages/pi-runtime/README.md) on the remote machine and configure SSH as described in the [SSH package](../../packages/ssh/README.md), then Connect in the app. The renderer never receives the endpoint or key, and a remote host's paths never grant access to local files.
 
+## Transcript
+
+The transcript is a [Legend List](https://legendapp.com/open-source/list/), which owns scrolling: virtualization, following the end, holding position when history is prepended or rows resize, and scrolling to a row. The application publishes the rows, keyed `entry:<id>`, `live:<submissionId>` and `tool:<taskId>`, and the renderer passes those keys to the list. A saved reading position is a row key, the first visible part in it and its offset. Rows unmount while scrolled away, so state the reader can see lives outside them: in view memory (expanded disclosures and unfolded code) or the transcript's row store. The rows a selection spans, the focused row, the image viewer's row and the active Find match stay mounted.
+
 ## Transcript images
 
 Main serves stored PNG/JPEG transcript images from `moonbase://editor/transcript-image/<token>`, so the CSP is unchanged and the renderer uses a plain `<img>`. The renderer gets a token over chat IPC for one exact source and `{partId, bytes, revision}`. The token is random, holds no path or identity, expires after 10 minutes without a request, and is revoked when the chat document is released or the remote connects or disconnects (then 404). Up to six reads run at once per backend and up to 64 more queue; revocation fails queued reads and cancels running ones. Each request re-reads the bytes through the same validated path Copy uses, refuses sources over 4 MiB (413) and bytes whose signature doesn't match the declared type (415), and responds with `nosniff`, the document CSP and `no-store`. Chromium's decoder enforces pixel and dimension limits. Markdown images stay links. The browser demo serves fixture bytes as Blob URLs instead.

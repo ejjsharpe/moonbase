@@ -310,7 +310,7 @@ for (const change of ['prefix replacement', 'attempt retirement'] as const)
       await expect(pre).toHaveText(initial);
       await button.click();
       await expect(
-        page.getByRole('region', { name: 'Chat transcript', exact: true }).getByRole('alert'),
+        page.getByRole('region', { name: 'Chat conversation', exact: true }).getByRole('alert'),
       ).toBeVisible();
       expect(native.writes).toEqual([]);
       expect(native.inputs[0]?.source).toEqual(JSON.parse(originalSource!));
@@ -391,11 +391,8 @@ test('held Copy intent does not migrate to a new source after navigation', async
       const part = transcript.parts[1]!;
       controller.setTranscriptView({
         anchor: {
-          backendId: controller.backendId,
-          source: transcript.source,
+          key: `live:${transcript.source.submissionId}`,
           partId: part.partId,
-          bytes: part.bytes,
-          revision: part.revision,
           offset: 16,
         },
         expanded: [],
@@ -406,7 +403,7 @@ test('held Copy intent does not migrate to a new source after navigation', async
     await page.mouse.move(after!.x + after!.width / 2, after!.y + after!.height / 2);
     await page.mouse.up();
     await expect(
-      page.getByRole('region', { name: 'Chat transcript', exact: true }).getByRole('alert'),
+      page.getByRole('region', { name: 'Chat conversation', exact: true }).getByRole('alert'),
     ).toContainText('displayed output changed');
     expect(native.inputs).toEqual([]);
     expect(native.writes).toEqual([]);

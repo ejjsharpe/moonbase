@@ -1,13 +1,98 @@
-import { useContext, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from 'react';
 import type { ChatController, TranscriptViewAnchor } from '@moonbase/application/chat';
 import type { ChatTranscriptMatch, ChatTranscriptSource } from '@moonbase/contracts/chat';
 import { areJsonValuesEqual } from '@moonbase/contracts/common';
 import { getTranscriptDisclosureId } from '../../chat/transcript-source.ts';
 import { TranscriptViewSaver } from './transcript-view-saving.ts';
+import { useRowState } from './transcript-row-state.ts';
 
 /** An anchor's identity without its viewport offset. */
 export function getAnchorKey(anchor: TranscriptViewAnchor) {
   return JSON.stringify({ ...anchor, offset: 0 });
+}
+
+/**
+ * The view-memory expansion ID of disclosure `id` in a row: null while it is being computed, and
+ * `failed` when it can't be, so the disclosure shows expanded.
+ */
+function useExpansionId(entryId: string, id: string) {
+  const disclosure = useMemo(() => getTranscriptDisclosureId(entryId, id), [entryId, id]);
+  const [resolved, setResolved] = useState<{ disclosure: typeof disclosure; value: string } | null>(
+    null,
+  );
+  const [failed, setFailed] = useState<typeof disclosure | null>(null);
+  useEffect(() => {
+    if (typeof disclosure === 'string') return;
+    let active = true;
+    void disclosure.then(
+      (value) => {
+        if (active) setResolved({ disclosure, value });
+      },
+      () => {
+        if (active) setFailed(disclosure);
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [disclosure]);
+  let expansion: string | null = null;
+  if (typeof disclosure === 'string') expansion = disclosure;
+  else if (resolved?.disclosure === disclosure) expansion = resolved.value;
+  return { expansion, failed: failed === disclosure };
+}
+
+/** Writes one expansion into view memory, keeping a reading anchor still queued from scrolling. */
+function setExpansion(
+  controller: ChatController,
+  saver: { flush(): void },
+  expansion: string,
+  open: boolean,
+) {
+  saver.flush();
+  const { view } = controller.getSnapshot().transcript;
+  if (view.expanded.includes(expansion) === open) return;
+  controller.setTranscriptView({
+    ...view,
+    expanded: open ? [...view.expanded, expansion] : view.expanded.filter((id) => id !== expansion),
+  });
+}
+
+/** Rows' view memory, for disclosures inside rendered content such as a long code block. */
+export type RowExpansions = {
+  entryId: string;
+  partId: string;
+  expandedIds: readonly string[];
+  controller: ChatController;
+};
+export const RowExpansionContext = createContext<RowExpansions | null>(null);
+/**
+ * A disclosure remembered in view memory, so it stays as the reader left it while its row is
+ * scrolled away and unmounted. Outside a transcript row it is local state.
+ */
+export function useRememberedExpansion(id: string | null) {
+  const row = useContext(RowExpansionContext);
+  const saver = useContext(TranscriptViewSaver);
+  const { expansion, failed } = useExpansionId(
+    row?.entryId ?? '',
+    `${row?.partId ?? ''}:${id ?? ''}`,
+  );
+  const [local, setLocal] = useState(false);
+  if (!row || id === null) return { open: local, setOpen: setLocal };
+  return {
+    open: failed || (expansion !== null && row.expandedIds.includes(expansion)),
+    setOpen: (open: boolean) => {
+      if (expansion) setExpansion(row.controller, saver, expansion, open);
+    },
+  };
 }
 
 /**
@@ -38,35 +123,15 @@ export function useDisclosure({
   controller: ChatController;
 }) {
   const saver = useContext(TranscriptViewSaver);
-  const disclosure = useMemo(() => getTranscriptDisclosureId(entryId, id), [entryId, id]);
-  const [resolved, setResolved] = useState<{ disclosure: typeof disclosure; value: string } | null>(
+  const { expansion, failed: disclosureError } = useExpansionId(entryId, id);
+  const revealKey = match ? JSON.stringify(match) : anchorKey;
+  /** The reveal the reader folded again; kept while the row is scrolled away. */
+  const [collapsedReveal, setCollapsedReveal] = useRowState<string | null>(
+    expansion && 'collapsed-reveal:' + expansion,
     null,
   );
-  const [failed, setFailed] = useState<typeof disclosure | null>(null);
-  useEffect(() => {
-    if (typeof disclosure === 'string') return;
-    let active = true;
-    void disclosure.then(
-      (value) => {
-        if (active) setResolved({ disclosure, value });
-      },
-      () => {
-        if (active) setFailed(disclosure);
-      },
-    );
-    return () => {
-      active = false;
-    };
-  }, [disclosure]);
-  let expansion: string | null = null;
-  if (typeof disclosure === 'string') expansion = disclosure;
-  else if (resolved?.disclosure === disclosure) expansion = resolved.value;
-  const disclosureError = failed === disclosure;
-  const revealKey = match ? JSON.stringify(match) : anchorKey;
-  const [collapsedReveal, setCollapsedReveal] = useState<string | null>(null);
   /** The state the reader saw when pressing, before reading capture can reveal this disclosure. */
   const pressedOpen = useRef<boolean | null>(null);
-  if (revealKey === null && collapsedReveal !== null) setCollapsedReveal(null);
   const open =
     disclosureError ||
     (expansion !== null && expandedIds.includes(expansion)) ||
@@ -86,12 +151,7 @@ export function useDisclosure({
     if (collapse && inside) setCollapsedReveal(JSON.stringify(inside));
     else if (collapse && !active && view.anchor?.partId && partIds.includes(view.anchor.partId))
       setCollapsedReveal(getAnchorKey(view.anchor));
-    controller.setTranscriptView({
-      ...view,
-      expanded: collapse
-        ? view.expanded.filter((id) => id !== expansion)
-        : [...view.expanded, expansion],
-    });
+    setExpansion(controller, saver, expansion, !collapse);
   };
   return {
     open,

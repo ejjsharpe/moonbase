@@ -40,7 +40,7 @@ import { getTranscriptParts } from './transcript-parts.ts';
 import { usePartBody } from './part-body.ts';
 import { usePartContent } from './part-content.ts';
 import { FindExcerpt, useFindHighlight, useFindHydration } from './part-find.tsx';
-import { useDisclosure } from './transcript-disclosure.ts';
+import { RowExpansionContext, useDisclosure } from './transcript-disclosure.ts';
 import type { TranscriptActions } from './transcript-actions.ts';
 import { compareProps } from './stable-props.ts';
 import { transcriptStyles as styles } from './transcript-styles.ts';
@@ -161,7 +161,7 @@ export const Entry = memo(
     if (entry.role === 'assistant')
       body = (
         <Markdown
-          source={entry.text}
+          source={entry.text || (liveState ? 'Working…' : '')}
           identity={entry.id}
           revision=""
           cache={cache}
@@ -384,6 +384,11 @@ const Part = memo(
       controller,
     });
     const expanded = disclosure.open;
+    /** Code blocks remember their unfolding with this part's other disclosures. */
+    const expansions = useMemo(
+      () => ({ entryId, partId: part.partId, expandedIds, controller }),
+      [entryId, part.partId, expandedIds, controller],
+    );
     const ordinary = part.kind === 'text' && ['user', 'assistant'].includes(part.role);
     const readable =
       part.kind !== 'image' && part.availability === 'available' && part.encoding === 'utf8';
@@ -502,17 +507,19 @@ const Part = memo(
       );
       if (ordinary && part.role === 'assistant')
         presentation = (
-          <Markdown
-            source={text}
-            identity={identity}
-            revision={part.revision}
-            cache={cache}
-            openLink={actions.openLink}
-            copyCode={
-              content?.retainedFrom === 0 || (!content && !part.truncated) ? copy : undefined
-            }
-            findTarget={findTarget}
-          />
+          <RowExpansionContext.Provider value={expansions}>
+            <Markdown
+              source={text}
+              identity={identity}
+              revision={part.revision}
+              cache={cache}
+              openLink={actions.openLink}
+              copyCode={
+                content?.retainedFrom === 0 || (!content && !part.truncated) ? copy : undefined
+              }
+              findTarget={findTarget}
+            />
+          </RowExpansionContext.Provider>
         );
       if (part.kind === 'patch' || part.kind === 'diff')
         presentation = (

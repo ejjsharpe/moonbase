@@ -81,10 +81,22 @@ export function FindBar({
   useEffect(() => {
     input.current?.focus({ preventScroll: true });
   }, [input]);
+  const bar = useRef<HTMLElement>(null);
   const close = () => {
     controller.closeFind();
-    if (previousFocus.current instanceof HTMLElement && previousFocus.current.isConnected)
-      previousFocus.current.focus({ preventScroll: true });
+    const previous = previousFocus.current;
+    if (!(previous instanceof HTMLElement)) return;
+    // A jump to a match can replace the element (the transcript list remounts around it): focus
+    // the element now carrying its label.
+    let target: HTMLElement | null | undefined = previous;
+    const label = previous.getAttribute('aria-label');
+    if (!previous.isConnected)
+      target = label
+        ? bar.current
+            ?.closest('[data-chat-find-owner]')
+            ?.querySelector<HTMLElement>(`[aria-label="${CSS.escape(label)}"]`)
+        : null;
+    target?.focus({ preventScroll: true });
   };
   let status = 'Find literal text in this saved conversation.';
   if (state.status === 'searching')
@@ -97,6 +109,7 @@ export function FindBar({
   if (state.error) status = state.error;
   return (
     <section
+      ref={bar}
       aria-label="Find in conversation"
       {...stylex.props(styles.bar)}
       onKeyDown={(event) => {
