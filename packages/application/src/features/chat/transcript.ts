@@ -44,6 +44,12 @@ import {
   makeManifest,
 } from './transcript-manifest.ts';
 import { appendFindPage, TranscriptFindPass, type FindBoundary } from './transcript-find.ts';
+import {
+  findRowEntryId,
+  getEntryRowKey,
+  isLiveRowKey,
+  listTranscriptRows,
+} from './transcript-rows.ts';
 
 type TranscriptDependencies = {
   chat: ChatClient;
@@ -138,9 +144,8 @@ export class TranscriptOwner {
   constructor(dependencies: TranscriptDependencies) {
     this.dependencies = dependencies;
     this.state.view = dependencies.memory.get(dependencies.backend, dependencies.target);
-    this.history = new TranscriptHistory(
-      !this.state.view.anchor || !!this.state.view.anchor.source,
-    );
+    const anchor = this.state.view.anchor;
+    this.history = new TranscriptHistory(!anchor || isLiveRowKey(anchor.key));
     this.state.capabilities = {
       transcript: dependencies.capable ? 'available' : 'legacy',
       find: dependencies.findCapable && dependencies.capable ? 'available' : 'unavailable',
@@ -319,7 +324,11 @@ export class TranscriptOwner {
           },
         };
       } else {
-        const removed = this.history.evictRecord(direction, this.state.view.anchor?.entryId);
+        const anchor = this.state.view.anchor;
+        const removed = this.history.evictRecord(
+          direction,
+          anchor ? findRowEntryId(anchor.key) : undefined,
+        );
         if (!removed) break;
         const other = others.get(removed.id);
         bytes -= sizes.get(removed.id)!;
@@ -328,23 +337,26 @@ export class TranscriptOwner {
         sizes.delete(removed.id);
       }
     }
-    this.history.clampWindow();
   }
-  /** Publishes whenever the window state or the accepted snapshot changed. */
+  /** Publishes whenever the retained history or the accepted snapshot changed. */
   private publish(direction: HistoryDirection = this.history.following ? 'later' : 'earlier') {
     if (!this.alive) return;
     this.enforceBounds(direction);
-    const entries = this.history.listWindow();
+    const listed = this.history.listRecords();
     const previous = this.state.entries;
+    const entries =
+      listed.length === previous.length && listed.every((entry, index) => entry === previous[index])
+        ? previous
+        : listed;
+    const later = this.history.hasLater();
     this.state = {
       ...this.state,
-      entries:
-        entries.length === previous.length &&
-        entries.every((entry, index) => entry === previous[index])
-          ? previous
-          : entries,
-      earlier: this.history.hasEarlier(entries.length),
-      later: this.history.hasLater(),
+      entries,
+      // The live response follows the newest stored entry, so it shows once history reaches it.
+      rows: listTranscriptRows(entries, later ? null : this.snapshot?.run, this.state.rows),
+      dataset: this.history.dataset,
+      earlier: this.history.hasEarlier(),
+      later,
       atLatest: this.history.following,
       content: this.contents.listContents(),
     };
@@ -570,9 +582,11 @@ export class TranscriptOwner {
       this.restoringView = false;
       this.history.following = false;
       this.restorePending = false;
-      yield* this.readAround(match.source.entryId, undefined, 'earlier', true);
+      const { entryId } = match.source;
+      if (!this.history.findRecord(entryId))
+        yield* this.readAround(entryId, undefined, 'earlier', true);
       this.setView({
-        anchor: { entryId: match.source.entryId, partId: match.partId, offset: 0 },
+        anchor: { key: getEntryRowKey(entryId), partId: match.partId, offset: 0 },
         expanded: this.state.view.expanded,
       });
     }).pipe(catchFailure((error) => this.showFindError(error)));
@@ -632,13 +646,14 @@ export class TranscriptOwner {
     });
   }
   restoreView() {
-    if (!this.restorePending) return Promise.resolve();
+    if (!this.restorePending) return Promise.resolve(null);
     this.restorePending = false;
     const anchor = this.state.view.anchor;
-    // View memory is a location hint; only content reads need source proofs.
-    if (!anchor || anchor.source) return Promise.resolve();
+    // View memory is a location hint; a live row is at the live edge the history follows.
+    const entryId = anchor && findRowEntryId(anchor.key);
+    if (!entryId) return Promise.resolve(null);
     this.restoringView = true;
-    return this.jumpToEntry(anchor.entryId, false).finally(() => {
+    return this.jumpToEntry(entryId, false).finally(() => {
       this.restoringView = false;
     });
   }
@@ -662,31 +677,26 @@ export class TranscriptOwner {
       return Option.isSome(pending) ? joinFiber(pending.value) : Promise.resolve();
     this.cancelViewRestore();
     this.restorePending = false;
-    // Freeze the reading window before loading can notify a subscriber.
+    // Keep the records the page extends before loading can notify a subscriber.
+    const wasFollowing = this.history.following;
     this.history.following = false;
-    return this.runJob(historyJob, this.moveWindow(direction), { replace: true });
+    return this.runJob(historyJob, this.readPage(direction, wasFollowing), { replace: true });
   }
-  private moveWindow(direction: HistoryDirection): Work {
+  private readPage(direction: HistoryDirection, wasFollowing: boolean): Work {
     return Effect.gen({ self: this }, function* () {
       const history = this.history,
         target = this.dependencies.target;
-      const previous = history.windowStart;
-      if (!history.shiftWindow(direction)) {
-        if (this.dependencies.capable && history.records.length) {
-          const edge = direction === 'earlier' ? this.state.entries[0] : this.state.entries.at(-1);
-          const read = history.findAroundRead(direction, edge);
-          if (read) yield* this.readAround(read.entryId, read.cursor, direction);
-        } else if (direction === 'earlier') {
-          const cursor = history.findOlderCursor(this.snapshot?.olderCursor);
-          if (cursor) {
-            const page = yield* this.call('getChatHistory', { target, cursor });
-            history.applyOlderPage(page, cursor, target);
-          }
+      if (this.dependencies.capable && history.records.length) {
+        const read = history.findAroundRead(direction);
+        if (read) yield* this.readAround(read.entryId, read.cursor, direction);
+      } else if (direction === 'earlier') {
+        const cursor = history.findOlderCursor(this.snapshot?.olderCursor);
+        if (cursor) {
+          const page = yield* this.call('getChatHistory', { target, cursor });
+          history.applyOlderPage(page, cursor, target);
         }
-      }
-      history.settleMove(direction);
-      if (history.windowStart !== previous || this.state.entries.length)
-        this.rememberWindow(direction);
+      } else history.applyLatestEntries(this.snapshot?.entries ?? []);
+      history.settleMove(direction, wasFollowing);
       this.publish(direction);
     });
   }
@@ -697,8 +707,6 @@ export class TranscriptOwner {
     replace = false,
   ): Work {
     return Effect.gen({ self: this }, function* () {
-      if (entryId === 'live')
-        throw makeTranscriptFailure('Use an exact live-part anchor instead of a synthetic entry.');
       const target = this.dependencies.target;
       const page = yield* this.call('getChatHistoryAround', {
         target,
@@ -709,52 +717,52 @@ export class TranscriptOwner {
       this.history.applyAroundPage(page, direction, replace, this.snapshot?.entries[0]?.id);
     });
   }
-  jumpToEntry(entryId: string, resetView = true) {
+  /** Shows `entryId`, reading history around it unless it is retained; resolves its row key. */
+  jumpToEntry(entryId: string, resetView = true): Promise<string | null> {
     if (resetView) {
       this.restorePending = false;
       this.restoringView = false;
       this.cancelFindReveal();
     }
     this.history.following = false;
+    const key = getEntryRowKey(entryId);
     const work = Effect.gen({ self: this }, function* () {
-      if (!this.dependencies.capable)
-        throw makeTranscriptFailure(
-          'This host requires an upgrade for transcript navigation.',
-          'Unavailable',
-        );
-      yield* this.readAround(entryId, undefined, 'earlier', true);
+      if (!this.history.findRecord(entryId)) {
+        if (!this.dependencies.capable)
+          throw makeTranscriptFailure(
+            'This host requires an upgrade for transcript navigation.',
+            'Unavailable',
+          );
+        yield* this.readAround(entryId, undefined, 'earlier', true);
+      }
       if (resetView)
-        this.setView({
-          anchor: { entryId, offset: 0 },
-          expanded: this.state.view.anchor?.source ? [] : this.state.view.expanded,
-        });
+        this.setView({ anchor: { key, offset: 0 }, expanded: this.state.view.expanded });
     });
-    return this.runJob(historyJob, work, { replace: true });
+    return this.runJob(historyJob, work, { replace: true }).then(() =>
+      this.history.findRecord(entryId) ? key : null,
+    );
   }
+  /** Follows the live edge again, reading the latest snapshot only when history has a gap. */
   jumpToLatest() {
     this.restoringView = false;
     this.cancelFindReveal();
     this.restorePending = false;
     const work = Effect.gen({ self: this }, function* () {
+      const expanded = this.state.view.expanded;
+      if (!this.history.hasLater()) {
+        this.history.following = true;
+        this.rememberView({ anchor: null, expanded });
+        this.publish('later');
+        return;
+      }
       const previous = this.snapshot;
       const snapshot = yield* this.call('getChat', { target: this.dependencies.target });
       this.history.resetToLatest();
-      this.rememberView({
-        anchor: null,
-        expanded: this.state.view.anchor?.source ? [] : this.state.view.expanded,
-      });
+      this.rememberView({ anchor: null, expanded });
       // A watch received during this explicit read wins its coherent live boundary.
       this.acceptSnapshot(this.snapshot !== previous && this.snapshot ? this.snapshot : snapshot);
     });
     return this.runJob(historyJob, work, { replace: true });
-  }
-  /** Remembers the displayed edge row in the direction moved: oldest shown, or newest shown. */
-  private rememberWindow(direction: HistoryDirection) {
-    const entry = this.history.findWindowEdge(direction);
-    this.rememberView({
-      expanded: this.state.view.anchor?.source ? [] : this.state.view.expanded,
-      anchor: this.history.following || !entry ? null : { entryId: entry.id, offset: 0 },
-    });
   }
   /** View memory decodes once and returns the frozen view it remembered; invalid views throw. */
   private rememberView(view: TranscriptView) {
@@ -771,7 +779,9 @@ export class TranscriptOwner {
     const captured = this.rememberView(view);
     this.cancelViewRestore();
     this.restorePending = false;
-    if (captured.anchor) this.history.following = !!captured.anchor.source;
+    // A reading anchor stops following; leaving no anchor follows once history reaches the edge.
+    if (captured.anchor) this.history.following = isLiveRowKey(captured.anchor.key);
+    else if (!this.history.hasLater()) this.history.following = true;
     this.publish();
   }
   private requireContentReads() {

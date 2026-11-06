@@ -6,12 +6,13 @@ import type {
   ChatTranscriptSource,
 } from '@moonbase/contracts/chat';
 import type { TranscriptView } from './view-memory.ts';
+import type { TranscriptRow } from './transcript-rows.ts';
 import { countTranscriptBytes, type TranscriptChunk } from './transcript-read.ts';
 
 export const transcriptLimits = {
-  displayedRows: 128,
-  summaryRecords: 256,
-  summaryBytes: 2 * 1024 * 1024,
+  /** Retained history: entry summaries (each a 4 KiB text preview) and part descriptors. */
+  summaryRecords: 1024,
+  summaryBytes: 4 * 1024 * 1024,
   contentBytes: 8 * 1024 * 1024,
   findMatches: 256,
   /** How long closing waits for cancelled ChatClient reads to settle before releasing anyway. */
@@ -48,7 +49,15 @@ export type TranscriptState = {
   };
   find: TranscriptFindState;
   observation: 'inactive' | 'local' | 'streaming' | 'legacy' | 'reconnecting' | 'failed';
+  /** Every retained history record, oldest first. */
   entries: ChatEntry[];
+  /** The retained entries, then the running response and its legacy tool previews. */
+  rows: TranscriptRow[];
+  /**
+   * Changes whenever the retained rows are replaced rather than extended (a jump to an entry or to
+   * the latest), so a list re-places its reading position instead of holding the old one.
+   */
+  dataset: number;
   earlier: boolean;
   later: boolean;
   atLatest: boolean;
@@ -92,6 +101,8 @@ export function makeEmptyTranscriptState(): TranscriptState {
     find: makeEmptyFindState(),
     observation: 'inactive',
     entries: [],
+    rows: [],
+    dataset: 0,
     earlier: false,
     later: false,
     atLatest: true,

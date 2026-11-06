@@ -280,7 +280,7 @@ test('cancelled Find reveal cannot cancel or overwrite a newer manual history re
   await navigation;
   const state = f.controller.getSnapshot().transcript;
   assert(state.entries.some((entry) => entry.id === 'e50'));
-  assert.equal(state.view.anchor?.entryId, 'e50');
+  assert.equal(state.view.anchor?.key, 'entry:e50');
   assert.deepEqual(state.find.active, active);
   assert.equal(state.find.query, 'same');
 });
@@ -305,7 +305,7 @@ test('reading before a delayed first result suppresses automatic reveal without 
   assert.equal(state.find.count, 100);
   assert.equal(state.find.active?.source.entryId, 'e0');
   assert.equal(state.find.revealing, false);
-  assert.equal(state.view.anchor?.entryId, 'e50');
+  assert.equal(state.view.anchor?.key, 'entry:e50');
   assert(
     !f.calls.some(
       (call) =>

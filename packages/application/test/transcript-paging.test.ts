@@ -42,7 +42,7 @@ test('legacy older paging keeps its furthest-back cursor through later snapshots
 });
 
 test('legacy older paging rereads history evicted while following instead of skipping it', async (t) => {
-  const f = transcriptFixture(600),
+  const f = transcriptFixture(2200),
     root = modelRoot();
   t.after(() => root.close());
   const cursors: string[] = [];
@@ -66,16 +66,17 @@ test('legacy older paging rereads history evicted while following instead of ski
     olderCursor: String(end - 32),
     transcriptBoundary: f.entries[end - 1].id,
   });
-  f.publish(head(400));
+  f.publish(head(1200));
   const controller = await root.make(f.dependencies);
   await controller.start();
   await controller.select(f.target);
   for (let page = 0; page < 4; page++) await controller.showEarlier();
-  assert.deepEqual(cursors, ['368', '336', '304', '272']);
+  assert.deepEqual(cursors, ['1168', '1136', '1104', '1072']);
   while (controller.getSnapshot().transcript.later) await controller.showLater();
   assert.equal(controller.getSnapshot().transcript.atLatest, true);
-  // Following continuous snapshots evicts the oldest cached pages (e240 to e303).
-  for (let end = 420; end <= 560; end += 20) f.publish(head(end));
+  // Following continuous snapshots past the record budget evicts the oldest records (e1040 on).
+  for (let end = 1220; end <= 2120; end += 20) f.publish(head(end));
+  assert.equal(controller.getSnapshot().transcript.entries[0].id, 'e1096');
   const seen = new Set<string>();
   for (let step = 0; step < 80; step++) {
     const state = controller.getSnapshot().transcript;
@@ -84,27 +85,12 @@ test('legacy older paging rereads history evicted while following instead of ski
     if (!state.earlier) break;
     await controller.showEarlier();
   }
-  assert.equal(cursors[4], '304', 'resume from the oldest cached checkpoint');
+  assert.equal(cursors[4], '1104', 'resume from the oldest cached checkpoint');
   assert.deepEqual(
-    f.entries.slice(0, 560).filter((entry) => !seen.has(entry.id)),
+    f.entries.slice(0, 2120).filter((entry) => !seen.has(entry.id)),
     [],
     'no evicted history is skipped',
   );
-});
-
-test('cached paging remembers the displayed edge row, not an off-screen cached row', async (t) => {
-  const f = await transcriptController(t, 640);
-  for (let i = 0; i < 100 && f.controller.getSnapshot().transcript.earlier; i++)
-    await f.controller.showEarlier();
-  for (let i = 0; i < 3; i++) {
-    await f.controller.showLater();
-    const state = f.controller.getSnapshot().transcript;
-    assert.equal(state.view.anchor?.entryId, state.entries.at(-1)!.id);
-  }
-  await f.controller.showEarlier();
-  const state = f.controller.getSnapshot().transcript;
-  assert.notEqual(state.entries[0].id, 'e0', 'the window is inside the cached history');
-  assert.equal(state.view.anchor?.entryId, state.entries[0].id);
 });
 
 test('a chat opened before the host features are verified opens with those features', async (t) => {
