@@ -66,6 +66,11 @@ const estimatedRowSize = 200;
  * oldest rows evicted as new ones arrive at the record budget (not a pure append).
  */
 const following = { animated: false } as const;
+/** Following while the reader opens something: new rows still follow, growing rows don't. */
+const followingNewRows = {
+  animated: false,
+  on: { dataAppend: true, dataChange: true, footerLayout: true, layout: true },
+} as const;
 /** Holds the reader's position through prepends, far-end evictions and disclosure toggles. */
 const keepPosition = { data: true, size: true } as const;
 type Paging = 'earlier' | 'later' | 'latest';
@@ -438,6 +443,18 @@ function TranscriptList({
     else if (later && state.isNearEnd) pageLater();
   }, [loading, error, earlier, later, list, pageEarlier, pageLater, ready]);
   const alwaysRender = useMemo(() => ({ keys: mounted }), [mounted]);
+  /**
+   * Opening or closing a disclosure while following the end would pin the end and push the rows
+   * above it up. Pressing one stops following rows that change size, so the change grows or
+   * shrinks below; new rows still follow, and the reader's next scroll ends the hold.
+   */
+  const [holding, setHolding] = useState(false);
+  const holdDisclosure = (event: { target: EventTarget; key?: string }) => {
+    if (event.key !== undefined && event.key !== 'Enter' && event.key !== ' ') return;
+    const toggle = (event.target as Element).closest?.('button[aria-expanded]');
+    if (toggle?.closest('[data-transcript-row]') && list.current?.getState().isFollowingEnd)
+      setHolding(true);
+  };
   return (
     <LegendList<TranscriptRow>
       ref={list}
@@ -459,17 +476,26 @@ function TranscriptList({
             },
           }
         : { initialScrollAtEnd: true })}
-      maintainScrollAtEnd={!selecting && following}
+      maintainScrollAtEnd={!selecting && (holding ? followingNewRows : following)}
       maintainVisibleContentPosition={keepPosition}
       alwaysRender={alwaysRender}
       // An edge with no more history has no callback: the list gates its edge callbacks on the
       // previous one, so an ignored call would hold back the other edge.
       onStartReached={earlier ? pageEarlier : undefined}
       onEndReached={later ? pageLater : undefined}
-      onUserScroll={onReaderInput}
+      onUserScroll={() => {
+        setHolding(false);
+        onReaderInput();
+      }}
       onItemSizeChanged={holdFindReveal}
-      onPointerDownCapture={onReaderInput}
-      onKeyDownCapture={onReaderInput}
+      onPointerDownCapture={(event) => {
+        holdDisclosure(event);
+        onReaderInput();
+      }}
+      onKeyDownCapture={(event) => {
+        holdDisclosure(event);
+        onReaderInput();
+      }}
       onFocusCapture={onReaderInput}
       onReady={() => setReadyDataset(dataset)}
       ListHeaderComponent={header}
