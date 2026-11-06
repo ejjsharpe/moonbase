@@ -387,7 +387,7 @@ for (const manifest of [false, true])
           .toHaveText(`Thought ${suffix}`, { timeout: 1500 });
         await expect.soft(output.locator('pre')).toHaveText(`Output ${suffix}`, { timeout: 1500 });
         await expect
-          .soft(row.locator('[data-transcript-activity] > p'))
+          .soft(row.locator('[data-transcript-activity] > ul'))
           .toContainText(`${new TextEncoder().encode(`Thought ${suffix}`).length} bytes`, {
             timeout: 1500,
           });

@@ -676,7 +676,8 @@ test('safe GFM, literal user content, progressive source, exact native callbacks
     'right',
   );
   await expect(row.locator('blockquote')).toHaveCount(1);
-  await expect(row.locator('ul')).toHaveCount(2);
+  // Authored lists only; the activity card's step list is not part of the answer.
+  await expect(row.locator('ul:not([data-transcript-activity] > ul)')).toHaveCount(2);
   await expect(row.locator('script, svg, img, style, iframe, button[onclick]')).toHaveCount(0);
   await expect(
     row.getByText('<button onclick="alert(1)">inert model control</button>', { exact: false }),
