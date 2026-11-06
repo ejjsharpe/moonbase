@@ -456,7 +456,11 @@ test('manifest and content LRU are bounded; view and expansion ID memory has fin
     anchor: { key: 'entry:e0', offset: -2 },
     expanded: Array.from({ length: 400 }, (_, i) => 'expanded-' + i),
   });
-  assert.equal(f.controller.getSnapshot().transcript.view.expanded.length, 128);
+  // The latest opened are kept.
+  assert.deepEqual(
+    f.controller.getSnapshot().transcript.view.expanded,
+    Array.from({ length: 128 }, (_, i) => 'expanded-' + (272 + i)),
+  );
   const { TranscriptViewMemory } = await import('@moonbase/application/chat');
   const memory = new TranscriptViewMemory();
   for (let i = 0; i < 70; i++)

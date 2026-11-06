@@ -22,6 +22,13 @@ const opaqueKey = Schema.String.check(
       new TextEncoder().encode(value).length <= 256,
   ),
 );
+/**
+ * Expanded disclosures kept per view; beyond this the earliest opened fold again. Only the reader's
+ * presses add one (Find's reveals are not remembered) and folding removes it, so this bounds what
+ * a reader holds open at once, not the retained history. At 256 bytes per ID a full list is about
+ * 32 KiB of the memory's 256 KiB, which must still hold several conversations.
+ */
+const expandedLimit = 128;
 const rowKey = opaqueKey.check(Schema.makeFilter((value) => /^(entry|live|tool):./.test(value)));
 const TranscriptViewSchema = struct({
   anchor: Schema.NullOr(
@@ -56,7 +63,7 @@ export function decodeTranscriptView(view: TranscriptView): TranscriptView {
   }
   return freeze({
     anchor: decoded.anchor,
-    expanded: [...new Set(decoded.expanded)].slice(-128),
+    expanded: [...new Set(decoded.expanded)].slice(-expandedLimit),
   });
 }
 
