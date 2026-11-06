@@ -1139,9 +1139,17 @@ test('exact checkout tabs preserve independent dirty paths, views and closed met
   await expect(
     page.locator('.view-line').filter({ hasText: 'alpha dirty a' }).first(),
   ).toBeVisible();
+  await page
+    .getByRole('button', { name: `Close checkout ${checkout}`, exact: true })
+    .locator('..')
+    .hover();
   await page.getByRole('button', { name: `Close checkout ${checkout}`, exact: true }).click();
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(first).toBeVisible();
+  await page
+    .getByRole('button', { name: `Close checkout ${checkout}`, exact: true })
+    .locator('..')
+    .hover();
   await page.getByRole('button', { name: `Close checkout ${checkout}`, exact: true }).click();
   await page.getByRole('button', { name: 'Discard', exact: true }).click();
   await expect(first).toHaveCount(0);

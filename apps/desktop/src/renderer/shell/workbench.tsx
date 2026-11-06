@@ -152,6 +152,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
   return (
     <Tabs.Root
       aria-label="Moonbase workbench"
+      orientation="vertical"
       value={view}
       onValueChange={(value, details) => {
         const next = String(value);
