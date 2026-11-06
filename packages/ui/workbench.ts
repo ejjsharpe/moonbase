@@ -43,6 +43,8 @@ export const workbench = stylex.create({
     backgroundColor: colors.surface,
   },
   sidebarItem: { flexShrink: 0 },
+  // Lays a trailing app panel beside the explorer and editor.
+  withTrailing: { flexDirection: 'row' },
   sidebarLayout: (width: number) => ({ display: 'contents', [sidebar.width]: `${width}px` }),
   sidebarResize: {
     position: 'absolute',

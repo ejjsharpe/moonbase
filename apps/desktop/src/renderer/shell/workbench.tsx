@@ -17,6 +17,8 @@ import { controls } from '@moonbase/ui/controls';
 import { workbench } from '@moonbase/ui/workbench';
 import { Choice } from '../chat/choice.tsx';
 import { ChatView } from '../chat/view.tsx';
+import { checkoutName } from '@moonbase/ui/projects';
+import { Icon } from '../icon.tsx';
 import { Workbench, type WorkbenchHandle } from '@moonbase/workbench';
 import { styles } from './styles.ts';
 import { MainTabs, tabValue } from './main-tabs.tsx';
@@ -36,6 +38,8 @@ export type DesktopShellProps = {
   selectDroppedImports?: (checkout: CheckoutTarget, files: File[]) => Promise<string[]>;
 };
 const noSubscription = () => () => {};
+const dockDefaultWidth = 400,
+  dockMinWidth = 320;
 const noEditor = () => undefined;
 
 export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(function DesktopShell(
@@ -58,6 +62,9 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
     ),
     chat = application.chat;
   const [destination, setDestination] = useState<'project' | 'chat'>('chat');
+  const [dockOpen, setDockOpen] = useState(true);
+  const [dockWidth, setDockWidth] = useState(dockDefaultWidth),
+    [dockRestoreWidth, setDockRestoreWidth] = useState(dockDefaultWidth);
   const handle = useRef<WorkbenchHandle>(null),
     requestedFocus = useRef<string | null>(null),
     panels = useRef<Record<string, HTMLElement | null>>({}),
@@ -72,6 +79,22 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
   const chatTab = !!chat || !['closed', 'cleanup-blocked'].includes(lifecycle.chat.state);
   const projectValue = selected ? tabValue({ kind: 'project', checkout: selected }) : 'empty';
   const view = (destination === 'chat' || !selected) && chatTab ? 'chat' : projectValue;
+  // One ChatView at a time: in the project dock while it shows, otherwise in Agents.
+  const dockVisible = view !== 'chat' && !!selected && !!chat && dockOpen;
+  const projectCheckouts = selected
+    ? openCheckouts.filter(
+        (checkout) =>
+          checkout.hostId === selected.hostId && checkout.projectId === selected.projectId,
+      )
+    : [];
+  // The dock leaves the explorer and a usable editor beside it.
+  const dockMaxWidth = Math.max(dockMinWidth, window.innerWidth - 72 - 560);
+  const resizeDock = (width: number) =>
+    setDockWidth(Math.round(Math.min(Math.max(width, dockMinWidth), dockMaxWidth)));
+  const dockExpanded = dockWidth >= dockMaxWidth;
+  const projectName = checkoutName(
+    projectCheckouts.find((checkout) => checkout.worktree === 'main') ?? selected ?? { root: '' },
+  );
   const report = controller?.report ?? application.reportCleanup;
   const run = (task: Promise<unknown>) => {
     void task.catch(report);
@@ -115,12 +138,14 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
   useEffect(() => {
     const attach = () => {
       if (!chat) return;
-      void (view === 'chat' && !document.hidden ? chat.start() : chat.detach()).catch(report);
+      void (
+        (view === 'chat' || dockVisible) && !document.hidden ? chat.start() : chat.detach()
+      ).catch(report);
     };
     attach();
     document.addEventListener('visibilitychange', attach);
     return () => document.removeEventListener('visibilitychange', attach);
-  }, [view, chat, report]);
+  }, [view, dockVisible, chat, report]);
   async function openCheckout() {
     const root = await selectCheckout?.();
     if (root && controller && application.getSnapshot().phase === 'live') {
@@ -172,6 +197,18 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
       inert={closing || ['prepared', 'disposing', 'disposed', 'failed'].includes(lifecycle.phase)}
       {...stylex.props(workbench.document, styles.shell)}
       onKeyDown={(event) => {
+        if (
+          view !== 'chat' &&
+          chat &&
+          event.metaKey &&
+          !event.shiftKey &&
+          !event.altKey &&
+          event.key.toLowerCase() === 'j'
+        ) {
+          event.preventDefault();
+          setDockOpen((open) => !open);
+          return;
+        }
         if (view !== 'chat' && !event.defaultPrevented) handle.current?.keyDown(event);
       }}
       onKeyUp={(event) => {
@@ -278,6 +315,87 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
               controller={controller}
               checkout={selected}
               visible={view !== 'chat'}
+              trailing={
+                chat && selected ? (
+                  <aside
+                    aria-label="Project chats"
+                    {...stylex.props(
+                      styles.dock,
+                      dockVisible
+                        ? styles.dockWidth(Math.min(dockWidth, dockMaxWidth))
+                        : styles.dockCollapsed,
+                    )}>
+                    {dockVisible && (
+                      <div
+                        role="separator"
+                        tabIndex={0}
+                        aria-label="Resize project chats"
+                        aria-orientation="vertical"
+                        aria-valuemin={dockMinWidth}
+                        aria-valuemax={dockMaxWidth}
+                        aria-valuenow={Math.min(dockWidth, dockMaxWidth)}
+                        {...stylex.props(styles.dockResize)}
+                        onKeyDown={(event) => {
+                          if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key))
+                            return;
+                          event.preventDefault();
+                          event.stopPropagation();
+                          // The edge is on the dock's left, so ArrowLeft widens it.
+                          let width = dockWidth + (event.key === 'ArrowLeft' ? 20 : -20);
+                          if (event.key === 'Home') width = dockMinWidth;
+                          else if (event.key === 'End') width = dockMaxWidth;
+                          resizeDock(width);
+                        }}
+                        onPointerDown={(event) => {
+                          if (event.button === 0)
+                            event.currentTarget.setPointerCapture(event.pointerId);
+                        }}
+                        onPointerMove={(event) => {
+                          if (event.currentTarget.hasPointerCapture(event.pointerId))
+                            resizeDock(
+                              event.currentTarget.parentElement!.getBoundingClientRect().right -
+                                event.clientX,
+                            );
+                        }}
+                        onPointerUp={(event) => {
+                          if (event.currentTarget.hasPointerCapture(event.pointerId))
+                            event.currentTarget.releasePointerCapture(event.pointerId);
+                        }}
+                      />
+                    )}
+                    {dockVisible ? (
+                      <ChatView
+                        key={`${lifecycle.chatTargetId}:${selected.checkoutId}`}
+                        controller={chat}
+                        chooseFolder={chooseChatFolder}
+                        transcriptNative={transcriptNative?.(lifecycle.chatTargetId ?? 'remote')}
+                        dock={{
+                          project: projectName,
+                          roots: projectCheckouts.map((checkout) => checkout.root),
+                          cwd: selected.root,
+                          expanded: dockExpanded,
+                          toggleExpanded: () => {
+                            if (dockExpanded) setDockWidth(dockRestoreWidth);
+                            else {
+                              setDockRestoreWidth(dockWidth);
+                              setDockWidth(dockMaxWidth);
+                            }
+                          },
+                          collapse: () => setDockOpen(false),
+                        }}
+                      />
+                    ) : (
+                      <Button
+                        aria-label="Show project chats"
+                        title="Show project chats · ⌘J"
+                        {...stylex.props(controls.button, controls.iconButton)}
+                        onClick={() => setDockOpen(true)}>
+                        <Icon name="agents" />
+                      </Button>
+                    )}
+                  </aside>
+                ) : undefined
+              }
               selectClipboardImports={
                 selectClipboardImports &&
                 ((checkout) =>
@@ -318,12 +436,14 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
           </div>
         )}
         {chat ? (
-          <ChatView
-            key={lifecycle.chatTargetId}
-            controller={chat}
-            chooseFolder={chooseChatFolder}
-            transcriptNative={transcriptNative?.(lifecycle.chatTargetId ?? 'remote')}
-          />
+          !dockVisible && (
+            <ChatView
+              key={lifecycle.chatTargetId}
+              controller={chat}
+              chooseFolder={chooseChatFolder}
+              transcriptNative={transcriptNative?.(lifecycle.chatTargetId ?? 'remote')}
+            />
+          )
         ) : (
           <section {...stylex.props(styles.empty)} aria-label="Chat configuration">
             <h1>{chatHeading}</h1>
