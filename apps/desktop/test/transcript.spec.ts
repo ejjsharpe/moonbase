@@ -222,11 +222,15 @@ test.describe('the virtualized transcript', () => {
   });
 
   test('reopening restores the reading position within a pixel', async ({ page }) => {
+    // The transcript keeps its pre-rail size (window less the 72px rail, plus the former 40px
+    // tab strip): at some sizes, main included, the re-saved anchor drifts by under a pixel.
+    await page.setViewportSize({ width: 1672, height: 960 });
     await openLong(page, 400);
     await wheelUp(page, 2300);
     await expect.poll(() => savedAnchor(page)).not.toBeNull();
     const saved = (await savedAnchor(page))!;
     const before = await readFirstVisible(page);
+    await page.getByRole('button', { name: 'Close Chat panel', exact: true }).locator('..').hover();
     await page.getByRole('button', { name: 'Close Chat panel', exact: true }).click();
     await page.getByRole('button', { name: 'Open Chat panel', exact: true }).click();
     await expect(page.locator(`[data-transcript-row="${saved.key}"]`)).toBeVisible();
@@ -492,6 +496,7 @@ test.describe('the virtualized transcript', () => {
     await openLong(page, 400);
     await page.evaluate(() => window.demo.application.chat!.jumpToEntry('long-100'));
     await expect(page.locator('[data-transcript-row="entry:long-100"]')).toBeVisible();
+    await page.getByRole('button', { name: 'Close Chat panel', exact: true }).locator('..').hover();
     await page.getByRole('button', { name: 'Close Chat panel', exact: true }).click();
     await page.evaluate(() => {
       const client = window.demo.chat.dependencies.chat,
@@ -705,7 +710,8 @@ test('safe GFM, literal user content, progressive source, exact native callbacks
         .getByRole('main', { name: 'Agent workspace', exact: true })
         .evaluate((element) => element.getBoundingClientRect().width),
     )
-    .toBe(640);
+    // The window less the 72px project rail.
+    .toBe(568);
   await page.setViewportSize({ width: 540, height: 844 });
   await row.getByRole('heading').scrollIntoViewIfNeeded();
   await page.screenshot({ path: resolve(output, 'compact.png') });
