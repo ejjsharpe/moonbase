@@ -99,7 +99,35 @@ export const transcriptStyles = stylex.create({
     '::highlight(find-match)': { backgroundColor: colors.selection, color: colors.text },
     '::highlight(find-active)': { backgroundColor: colors.accent, color: colors.onAccent },
   },
-  disclosure: { minWidth: 0 },
+  disclosure: { minWidth: 0, paddingInline: 10 },
+  /** An opened step's recorded parts: a quiet label that folds, with copy on the right. */
+  partHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: space.xs,
+    minWidth: 0,
+    paddingInline: 6,
+  },
+  partToggle: {
+    flex: 1,
+    minWidth: 0,
+    justifyContent: 'flex-start',
+    gap: 6,
+    color: colors.muted,
+    fontSize: type.caption,
+    textAlign: 'left',
+    overflow: 'hidden',
+    whiteSpace: 'nowrap',
+    textOverflow: 'ellipsis',
+  },
+  partChevron: {
+    display: 'inline-flex',
+    flexShrink: 0,
+    transform: {
+      default: 'rotate(-90deg)',
+      [stylex.when.ancestor('[data-panel-open]')]: 'none',
+    },
+  },
   /** Folded tool work reads as one card of steps; consecutive activity rows join into one. */
   activity: {
     position: 'relative',

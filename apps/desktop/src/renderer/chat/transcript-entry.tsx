@@ -714,11 +714,13 @@ const Part = memo(
     // Messages copy through their row's Copy message; only folded output keeps a part copy.
     const copyButton = readable && !ordinary && (
       <Button
-        {...stylex.props(controls.button, controls.quietButton)}
+        aria-label={`Copy ${copyLabel}`}
+        title={`Copy ${copyLabel}`}
+        {...stylex.props(controls.button, controls.iconButton)}
         disabled={!native}
         {...(plain ? displayed.copyProps : {})}
         onClick={() => copy()}>
-        Copy {copyLabel}
+        <Icon name="copy" />
       </Button>
     );
     if (ordinary)
@@ -740,14 +742,26 @@ const Part = memo(
             Could not remember this disclosure. Its content is expanded.
           </p>
         )}
-        <Collapsible.Trigger {...stylex.props(controls.button, controls.quietButton)}>
-          {part.toolName ? `${getToolSummary(part, text)} · ` : ''}
-          {partLabels[part.kind]}
-          {status ? ` · ${status}` : ''}
-          {part.availability !== 'available' ? ` · ${part.availability}` : ''}
-        </Collapsible.Trigger>
+        {/* A recorded part: what it is, then its content and copy. A completed state goes unsaid. */}
+        <div {...stylex.props(styles.partHeader)}>
+          <Collapsible.Trigger
+            {...stylex.props(
+              stylex.defaultMarker(),
+              controls.button,
+              controls.quietButton,
+              styles.partToggle,
+            )}>
+            <span aria-hidden="true" {...stylex.props(styles.partChevron)}>
+              <Icon name="chevron" />
+            </span>
+            {part.toolName ? `${getToolSummary(part, text)} · ` : ''}
+            {partLabels[part.kind]}
+            {status && status !== 'completed' ? ` · ${status}` : ''}
+            {part.availability !== 'available' ? ` · ${part.availability}` : ''}
+          </Collapsible.Trigger>
+          {copyButton}
+        </div>
         <Collapsible.Panel {...stylex.props(styles.disclosure)}>{body}</Collapsible.Panel>
-        {copyButton}
       </Collapsible.Root>
     );
   },
