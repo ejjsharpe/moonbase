@@ -9,6 +9,8 @@ type ParsedMessage = { source: string; blocks: MarkdownBlock[] };
 const cacheLimits = { messages: 128, bytes: 2 * 1024 * 1024 } as const;
 /** UTF-16 source/key (2 bytes per unit) plus the parsed tree, estimated from source length. */
 const retainedBytesPerUnit = 3;
+/** Lines a code block shows before "Show all". */
+export const foldedCodeLines = 40;
 /** Work counted across every cache, so a fixture can prove reading does not redo it. */
 export const markdownWork = { lex: 0, tokenize: 0 };
 /** A private, per-view bounded cache keyed by exact identity/revision and checked against exact source, never DTO object identity. */
@@ -33,6 +35,7 @@ export class MarkdownCache {
     this.lexed++;
     markdownWork.lex++;
     const { tree } = parseTranscriptMarkdown(source);
+    markCodeFolds(tree, source);
     // Definitions apply document-wide, so only messages without them split into blocks.
     let definitions = false;
     visit(tree, ['definition', 'footnoteDefinition'], () => {
@@ -53,6 +56,28 @@ export class MarkdownCache {
   clear() {
     this.messages.clear();
   }
+}
+/**
+ * Records where a long code block's folded lines start in the source (`data-code-fold`), so Find
+ * can map the shown and folded lines separately and unfold for a match in the folded ones.
+ */
+function markCodeFolds(tree: Root, source: string) {
+  visit(tree, 'code', (node) => {
+    const start = node.position?.start.offset;
+    if (start === undefined || node.value.split('\n').length <= foldedCodeLines) return;
+    // A fenced block's content starts on the line after its fence.
+    const fenced = /^ {0,3}(`{3,}|~{3,})/.test(source.slice(start, start + 8));
+    let fold = start;
+    for (let line = 0; line < foldedCodeLines + (fenced ? 1 : 0); line++) {
+      const next = source.indexOf('\n', fold);
+      if (next < 0) return;
+      fold = next + 1;
+    }
+    node.data = {
+      ...node.data,
+      hProperties: { ...node.data?.hProperties, 'data-code-fold': fold },
+    };
+  });
 }
 /**
  * A split block's tree is determined by its own source slice, and its code actions by the slice's

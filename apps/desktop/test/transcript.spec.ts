@@ -628,8 +628,9 @@ test('incomplete/unknown/oversized code remains readable and copyable; late refe
   expect(
     await live.locator('pre').evaluate((element) => element.scrollHeight > element.clientHeight),
   ).toBe(true);
-  // Unhighlighted: the unfolded lines' panel holds plain text, with no line or token spans.
-  await expect(live.locator('pre code span span, pre code > span:not([id])')).toHaveCount(0);
+  // Unhighlighted: the shown lines and the unfolded lines' panel (Find source spans) hold plain
+  // text, with no line or token spans.
+  await expect(live.locator('pre code span:not([id], [data-find-source])')).toHaveCount(0);
   await page.evaluate(() =>
     window.demo.transcript!.live(
       'Replacement with &amp; and &#x1f314; <img src="https://example.com/no-fetch" onerror="alert(1)">',
@@ -1279,6 +1280,238 @@ test('Find shows the original-source excerpt for a match inside a link URL', asy
   await expect(find).toBeFocused();
   await find.press('Escape');
   await expect(excerpt).toHaveCount(0);
+});
+
+/** Opens Find from the transcript and searches for `query`. */
+async function findText(page: Page, query: string) {
+  await transcript(page).focus();
+  await page.keyboard.press('Control+f');
+  const find = page.getByRole('textbox', { name: 'Find in conversation', exact: true });
+  await find.fill(query);
+  return find;
+}
+const findOpen = (page: Page) =>
+  page.evaluate(() => window.demo.application.chat!.getSnapshot().transcript.find.open);
+const findStatus = (page: Page, text: RegExp) => page.getByRole('status').filter({ hasText: text });
+const originalExcerpt = (page: Page) =>
+  page
+    .locator('[data-transcript-entry="reading-0"]')
+    .getByRole('region', { name: 'Matched original source' });
+
+test('Enter on a Find bar button presses that button; only the field steps through matches', async ({
+  page,
+}) => {
+  await open(page);
+  await page.evaluate(async () => {
+    await window.demo.transcript!.setEntry(0, ['needle one, needle two, needle three.']);
+  });
+  const find = await findText(page, 'needle');
+  const bar = page.getByRole('region', { name: 'Find in conversation', exact: true });
+  await expect(findStatus(page, /1 of 3 matches/)).toBeVisible();
+  await find.press('Enter');
+  await expect(findStatus(page, /2 of 3 matches/)).toBeVisible();
+  await bar.getByRole('button', { name: 'Previous', exact: true }).press('Enter');
+  await expect(findStatus(page, /1 of 3 matches/)).toBeVisible();
+  await bar.getByRole('button', { name: 'Next', exact: true }).press('Enter');
+  await expect(findStatus(page, /2 of 3 matches/)).toBeVisible();
+  // New history while results are open offers a refresh rather than reshuffling them.
+  await page.evaluate(() =>
+    window.demo.transcript!.record([
+      { id: 'refreshed', parts: [{ kind: 'text', role: 'assistant', text: 'needle and needle' }] },
+    ]),
+  );
+  const refresh = bar.getByRole('button', { name: 'Refresh results', exact: true });
+  await expect(findStatus(page, /2 of 3 matches/)).toBeVisible();
+  await refresh.press('Enter');
+  await expect(findStatus(page, /1 of 2 matches/)).toBeVisible();
+  await expect(refresh).toHaveCount(0);
+  await bar.getByRole('button', { name: 'Close Find', exact: true }).press('Enter');
+  await expect(bar).toHaveCount(0);
+});
+
+test('Find shortcut skips every editable host and uses the physical F key on non-Latin layouts', async ({
+  page,
+}) => {
+  await open(page);
+  for (const value of ['', 'true', 'plaintext-only']) {
+    await page.locator('[data-chat-find-owner]').evaluate((owner, value) => {
+      const editable = document.createElement('div');
+      editable.setAttribute('contenteditable', value);
+      editable.setAttribute('data-test-editable', '');
+      editable.textContent = 'Editable';
+      owner.append(editable);
+      editable.focus();
+    }, value);
+    await page.keyboard.press('Control+f');
+    expect(await findOpen(page), `contenteditable="${value}"`).toBe(false);
+    await page.locator('[data-test-editable]').evaluate((node) => node.remove());
+  }
+  await transcript(page).focus();
+  // On a Latin layout the physical F key typed another letter, so it is not Find.
+  await transcript(page).dispatchEvent('keydown', { key: 'u', code: 'KeyF', ctrlKey: true });
+  expect(await findOpen(page)).toBe(false);
+  await transcript(page).dispatchEvent('keydown', { key: 'а', code: 'KeyF', metaKey: true });
+  await expect(
+    page.getByRole('textbox', { name: 'Find in conversation', exact: true }),
+  ).toBeFocused();
+});
+
+test('Find highlights shown code lines in place and unfolds only for a match in folded lines', async ({
+  page,
+}) => {
+  await open(page);
+  const lines = Array.from({ length: 60 }, (_, index) =>
+    index === 2 || index === 49 ? `const needle = ${index};` : `line ${index}`,
+  );
+  await page.evaluate(async (code) => {
+    await window.demo.transcript!.setEntry(0, ['Intro.\n\n```\n' + code + '\n```\n']);
+  }, lines.join('\n'));
+  const find = await findText(page, 'needle');
+  const active = (before: RegExp) => [
+    {
+      text: 'needle',
+      entry: 'reading-0',
+      part: 'm0.b0',
+      before: expect.stringMatching(before),
+      visible: true,
+    },
+  ];
+  const row = page.locator('[data-transcript-entry="reading-0"]');
+  // A match in the shown lines maps although the folded lines are not rendered.
+  await expect.poll(() => readFindHighlight(page)).toEqual(active(/line 1\nconst $/));
+  await expect(row.getByRole('button', { name: 'Show all 60 lines', exact: true })).toBeVisible();
+  await expect(originalExcerpt(page)).toHaveCount(0);
+  await find.press('Enter');
+  await expect.poll(() => readFindHighlight(page)).toEqual(active(/line 48\nconst $/));
+  const fold = row.getByRole('button', { name: 'Fold code', exact: true });
+  await expect(fold).toBeVisible();
+  await expect(originalExcerpt(page)).toHaveCount(0);
+  // The reader can fold it again without the view moving: no excerpt replaces what they hid.
+  await fold.scrollIntoViewIfNeeded();
+  await settle(page);
+  const top = await transcript(page).evaluate((element) => element.scrollTop);
+  await fold.click();
+  await expect(row.getByRole('button', { name: 'Show all 60 lines', exact: true })).toBeVisible();
+  await settle(page);
+  await expect(originalExcerpt(page)).toHaveCount(0);
+  const after = await transcript(page).evaluate((element) => element.scrollTop);
+  expect(Math.abs(after - top)).toBeLessThan(4);
+});
+
+test('Find turns a paged patch fallback to the page holding the active match', async ({ page }) => {
+  await open(page);
+  await page.evaluate(async () => {
+    await window.demo.transcript!.setEntry(
+      0,
+      ['Patch below.', 'x'.repeat(20000) + ' needle ' + 'y'.repeat(100)],
+      ['text', 'patch'],
+    );
+  });
+  await findText(page, 'needle');
+  await expect
+    .poll(() => readFindHighlight(page))
+    .toEqual([
+      {
+        text: 'needle',
+        entry: 'reading-0',
+        part: 'm0.b1',
+        before: 'xxxxxxxxxxxxxxx ',
+        visible: true,
+      },
+    ]);
+  const row = page.locator('[data-transcript-entry="reading-0"]');
+  await expect(row.getByText(/^Source 16,000–20,108 of 20,108 characters/)).toBeVisible();
+  await expect(originalExcerpt(page)).toHaveCount(0);
+});
+
+test('Find skips rendered chrome: image labels, code language labels and patch headings', async ({
+  page,
+}) => {
+  await open(page);
+  await page.evaluate(async () => {
+    await window.demo.transcript!.setEntry(
+      0,
+      [
+        'See image: here ![pic](https://example.com/p.png)\n\n```\nplain words\n```\n',
+        '--- a/gone.ts\n+++ b/gone.ts\n@@ -1 +1 @@\n-gone source\n+kept source\n',
+      ],
+      ['text', 'patch'],
+    );
+  });
+  const find = await findText(page, 'image:');
+  const active = async () =>
+    (await readFindHighlight(page)).map(({ text, part, before, visible }) => ({
+      text,
+      part,
+      before,
+      visible,
+    }));
+  await expect
+    .poll(active)
+    .toEqual([{ text: 'image:', part: 'm0.b0', before: 'See ', visible: true }]);
+  await find.fill('plain');
+  await expect.poll(active).toEqual([{ text: 'plain', part: 'm0.b0', before: '', visible: true }]);
+  await expect(originalExcerpt(page)).toHaveCount(0);
+  await find.fill('source');
+  await expect
+    .poll(active)
+    .toEqual([{ text: 'source', part: 'm0.b1', before: '-gone ', visible: true }]);
+  await expect(originalExcerpt(page)).toHaveCount(0);
+  // A file name match is not rendered as source, so it shows the excerpt; the matching patch line
+  // is highlighted in place.
+  await find.fill('gone');
+  await expect(findStatus(page, /1 of 3 matches/)).toBeVisible();
+  await expect(originalExcerpt(page)).toContainText('--- a/gone.ts');
+  await find.press('Enter');
+  await find.press('Enter');
+  await expect(findStatus(page, /3 of 3 matches/)).toBeVisible();
+  await expect.poll(active).toEqual([{ text: 'gone', part: 'm0.b1', before: '-', visible: true }]);
+  await expect(originalExcerpt(page)).toHaveCount(0);
+});
+
+test('Find never pairs an unrendered source match with other rendered text', async ({ page }) => {
+  await open(page);
+  // The bold split and the relative link's shown URL both read "zqx.ts"; only the URL is source.
+  await page.evaluate(async () => {
+    await window.demo.transcript!.setEntry(0, ['Edit **zq**x.ts, see [file](./src/zqx.ts)']);
+  });
+  const find = await findText(page, 'zqx.ts');
+  await expect
+    .poll(() => readFindHighlight(page))
+    .toEqual([
+      { text: 'zqx.ts', entry: 'reading-0', part: 'm0.b0', before: './src/', visible: true },
+    ]);
+  await expect(originalExcerpt(page)).toHaveCount(0);
+  await find.press('Escape');
+  // The match is inside an entity; the decoded "quot" is other text, so the excerpt shows.
+  await page.evaluate(async () => {
+    await window.demo.transcript!.setEntry(0, ['A &quot; and quo&#116; end']);
+  });
+  await findText(page, 'quot');
+  await expect(originalExcerpt(page)).toContainText('A &quot; and quo&#116; end');
+  expect(await readFindHighlight(page)).toEqual([]);
+});
+
+test('Find maps footnote matches to their own text although footnotes render last', async ({
+  page,
+}) => {
+  await open(page);
+  await page.evaluate(async () => {
+    await window.demo.transcript!.setEntry(0, [
+      'Body needle[^n].\n\n[^n]: Footnote needle.\n\nTail needle.',
+    ]);
+  });
+  const find = await findText(page, 'needle');
+  const painted = async () => ({
+    active: (await readFindHighlight(page)).map((range) => range.before),
+    matches: (await readFindHighlight(page, 'find-match')).map((range) => range.before).sort(),
+  });
+  await expect.poll(painted).toEqual({ active: ['Body '], matches: ['Footnote ', 'Tail '] });
+  await find.press('Enter');
+  await expect.poll(painted).toEqual({ active: ['Footnote '], matches: ['Body ', 'Tail '] });
+  await find.press('Enter');
+  await expect.poll(painted).toEqual({ active: ['Tail '], matches: ['Body ', 'Footnote '] });
+  await expect(originalExcerpt(page)).toHaveCount(0);
 });
 
 test('Find highlights original text beyond the 8MiB cache and rereads evicted prefixes without changing query authority', async ({

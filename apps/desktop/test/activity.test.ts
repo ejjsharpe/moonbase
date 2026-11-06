@@ -8,7 +8,7 @@ import {
   getToolSummary,
   groupTranscriptParts,
 } from '../src/renderer/chat/activity.ts';
-import { parseRecordedPatch } from '../src/renderer/chat/recorded-patch.ts';
+import { parseRecordedPatch, type PatchLine } from '../src/renderer/chat/recorded-patch.ts';
 import { getTranscriptParts } from '../src/renderer/chat/transcript-parts.ts';
 const part = (
   id: string,
@@ -220,21 +220,33 @@ test('reused IDs, names and ambiguous results never provide another originating 
     'unknown',
   );
 });
+/** Checks each line's source offset is a whole source line equal to it, then drops the offsets. */
+function checkLineStarts(source: string, lines: readonly PatchLine[]) {
+  return lines.map(({ start, ...line }) => {
+    assert.ok(start !== undefined);
+    assert.equal(source.slice(start, start + line.text.length), line.text);
+    assert.ok(start === 0 || source[start - 1] === '\n');
+    return line;
+  });
+}
 test('recorded unified hunks expose actual old/new coordinates, additions, removals and EOF notices', () => {
-  const result = parseRecordedPatch(
-    '--- a/gone.ts\n+++ b/gone.ts\n@@ -41,3 +80,4 @@\n same\n-old\n+new\n+more\n last\n\\ No newline at end of file\n@@ -90,0 +130,1 @@\n+added\n',
-  );
+  // A removed empty line ('-') must not be located inside the '--- a/…' header.
+  const source =
+    '--- a/gone.ts\n+++ b/gone.ts\n@@ -41,4 +80,4 @@\n same\n-\n-old\n+new\n+more\n last\n\\ No newline at end of file\n@@ -90,0 +130,1 @@\n+added\n';
+  const result = parseRecordedPatch(source);
   assert.ok('files' in result);
   assert.equal(result.files[0]!.old, 'a/gone.ts');
-  assert.deepEqual(result.files[0]!.hunks[0]!.lines, [
+  assert.equal(result.files[0]!.hunks[0]!.lines[1]!.start, source.indexOf('\n-\n') + 1);
+  assert.deepEqual(checkLineStarts(source, result.files[0]!.hunks[0]!.lines), [
     { old: 41, next: 80, kind: 'context', text: ' same' },
-    { old: 42, kind: 'removed', text: '-old' },
+    { old: 42, kind: 'removed', text: '-' },
+    { old: 43, kind: 'removed', text: '-old' },
     { next: 81, kind: 'added', text: '+new' },
     { next: 82, kind: 'added', text: '+more' },
-    { old: 43, next: 83, kind: 'context', text: ' last' },
+    { old: 44, next: 83, kind: 'context', text: ' last' },
     { kind: 'notice', text: '\\ No newline at end of file' },
   ]);
-  assert.deepEqual(result.files[0]!.hunks[1]!.lines, [
+  assert.deepEqual(checkLineStarts(source, result.files[0]!.hunks[1]!.lines), [
     { next: 130, kind: 'added', text: '+added' },
   ]);
 });
@@ -289,9 +301,10 @@ for (const [name, hunk, lines] of [
   ],
 ] as const)
   test(`valid patch without terminal newline retains recorded line coordinates: ${name}`, () => {
-    const result = parseRecordedPatch('--- a/x\n+++ b/x\n' + hunk);
+    const source = '--- a/x\n+++ b/x\n' + hunk;
+    const result = parseRecordedPatch(source);
     assert.ok('files' in result);
     assert.equal(result.files.length, 1);
     assert.equal(result.files[0]!.hunks.length, 1);
-    assert.deepEqual(result.files[0]!.hunks[0]!.lines, lines);
+    assert.deepEqual(checkLineStarts(source, result.files[0]!.hunks[0]!.lines), lines);
   });

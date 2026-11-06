@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+} from 'react';
 import { Button } from '@base-ui/react/button';
 import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
@@ -44,10 +52,13 @@ export function Transcript({
   controller,
   state: latestState,
   native,
+  findInput,
 }: {
   controller: ChatController;
   state: ChatState;
   native?: TranscriptNative;
+  /** The open Find bar's field. */
+  findInput: RefObject<HTMLInputElement | null>;
 }) {
   const root = useRef<HTMLElement>(null),
     content = useRef<HTMLDivElement>(null);
@@ -324,7 +335,7 @@ export function Transcript({
             </Button>
             <Button
               {...stylex.props(controls.button, controls.quietButton)}
-              onClick={(event) => activateChatFind(controller, event.currentTarget)}>
+              onClick={(event) => activateChatFind(controller, event.currentTarget, findInput)}>
               Find
             </Button>
             {transcript.later && (

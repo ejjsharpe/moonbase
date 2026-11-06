@@ -235,7 +235,7 @@ export const Entry = memo(
           (replay.done || !manifest.omittedParts) &&
           !parts.some((part) => part.partId === matchedPart) && (
             <p role="alert" {...stylex.props(styles.warning)}>
-              The saved Find part is unavailable. Refresh Find.
+              The saved Find part is unavailable. Refresh results.
             </p>
           )}
         {!transcript && entry.truncated && (
@@ -407,6 +407,13 @@ const Part = memo(
     });
     const plain =
       !match && readable && !ordinary && !['patch', 'diff', 'image'].includes(part.kind);
+    // Folded code and other patch pages reveal the active match once its source is shown.
+    const findStart = match && matchVisible && !frozen ? match.start : null,
+      findEnd = match?.end ?? 0;
+    const findTarget = useMemo(
+      () => (findStart === null ? null : { start: findStart, end: findEnd }),
+      [findStart, findEnd],
+    );
     const currentBody = useMemo(
       () => ({
         source,
@@ -504,11 +511,17 @@ const Part = memo(
             copyCode={
               content?.retainedFrom === 0 || (!content && !part.truncated) ? copy : undefined
             }
+            findTarget={findTarget}
           />
         );
       if (part.kind === 'patch' || part.kind === 'diff')
         presentation = (
-          <RecordedPatch text={text} complete={complete} numbered={part.kind === 'diff'} />
+          <RecordedPatch
+            text={text}
+            complete={complete}
+            numbered={part.kind === 'diff'}
+            findStart={findStart}
+          />
         );
     }
     const retainedFrom = plain ? displayed.body.retainedFrom : (content?.retainedFrom ?? 0);
@@ -547,7 +560,7 @@ const Part = memo(
             role={content?.status === 'complete' ? 'alert' : 'status'}
             {...stylex.props(styles.small)}>
             {content?.status === 'complete'
-              ? 'The saved match differs from this source. Refresh Find.'
+              ? 'The saved match differs from this source. Refresh results.'
               : 'Loading original source through this match…'}
           </p>
         )}

@@ -13,11 +13,12 @@ import { Collapsible } from '@base-ui/react/collapsible';
 import * as stylex from '@stylexjs/stylex';
 import * as monaco from 'monaco-editor';
 import ReactMarkdown, { type Components, type ExtraProps } from 'react-markdown';
-import type { Plugin } from 'unified';
+import type { Plugin, Transformer } from 'unified';
 import { visit } from 'unist-util-visit';
 import { controls } from '@moonbase/ui/controls';
 import { colors, radius, space, syntax, type } from '@moonbase/ui/tokens.stylex';
 import {
+  foldedCodeLines,
   markdownWork,
   type MarkdownCache,
   canHighlight,
@@ -27,9 +28,8 @@ import {
   type SyntaxTone,
 } from './markdown-model.ts';
 import { useReadingPin } from './reading-pin.ts';
+import { getFindSourceProps } from './part-find.tsx';
 
-/** Lines a code block shows before "Show all". */
-const foldedCodeLines = 40;
 /** Pixels a code block grows before scrolling. */
 const codeMaxHeight = 400;
 type Actions = {
@@ -37,23 +37,37 @@ type Actions = {
   /** Must keep its identity while the message streams, or every block re-renders. */
   copyCode?(start: number): void;
 };
+/** Source offsets of the active Find match. */
+type FindTarget = { start: number; end: number };
+/** The active Find match. Keeps its identity while the match is unchanged. */
+const ActiveFindMatch = createContext<FindTarget | null>(null);
 export const Markdown = memo(function Markdown({
   source,
   identity,
   revision,
   cache,
+  findTarget = null,
   ...actions
-}: Actions & { source: string; identity: string; revision: string; cache: MarkdownCache }) {
+}: Actions & {
+  source: string;
+  identity: string;
+  revision: string;
+  cache: MarkdownCache;
+  /** Must keep its identity while unchanged. */
+  findTarget?: FindTarget | null;
+}) {
   const blocks = useMemo(
     () => cache.parse(identity, revision, source),
     [cache, identity, revision, source],
   );
   return (
-    <div {...stylex.props(styles.prose)}>
-      {blocks.map((block) => (
-        <Block key={block.key} block={block} {...actions} />
-      ))}
-    </div>
+    <ActiveFindMatch.Provider value={findTarget}>
+      <div {...stylex.props(styles.prose)}>
+        {blocks.map((block) => (
+          <Block key={block.key} block={block} {...actions} />
+        ))}
+      </div>
+    </ActiveFindMatch.Provider>
   );
 });
 const Block = memo(
@@ -68,8 +82,14 @@ const Block = memo(
     const pinned = useReadingPin(root) !== 0;
     if (!pinned && retained !== current) setRetained(current);
     const selected = pinned ? retained : current;
+    // A split block renders exactly its node's source; Find maps its matches within it.
+    const only = selected.block.tree.children.length === 1 ? selected.block.tree.children[0] : null;
+    const start = only?.position?.start.offset,
+      end = only?.position?.end.offset;
     return (
-      <div ref={root}>
+      <div
+        ref={root}
+        {...(start !== undefined && end !== undefined ? getFindSourceProps(start, end) : {})}>
         <ParsedBlock
           block={selected.block}
           openLink={selected.openLink}
@@ -88,10 +108,13 @@ function ExternalLink({
   href = '',
   children,
   openLink,
+  autolink = false,
 }: {
   href?: string;
   children: ReactNode;
   openLink(url: string): void;
+  /** The visible text already shows the href, so the shown href is not source for Find. */
+  autolink?: boolean;
 }) {
   const url = getExternalLink(href);
   return url ? (
@@ -111,7 +134,12 @@ function ExternalLink({
     </a>
   ) : (
     <span>
-      {children} {href && <code {...stylex.props(styles.inlineCode)}>{href}</code>}
+      {children}{' '}
+      {href && (
+        <code data-find-ignore={autolink || undefined} {...stylex.props(styles.inlineCode)}>
+          {href}
+        </code>
+      )}
     </span>
   );
 }
@@ -128,8 +156,9 @@ function ImageLink({
   return nested ? (
     alt || src
   ) : (
-    <ExternalLink href={src} openLink={openLink}>
-      Image: {alt || src}
+    <ExternalLink href={src} openLink={openLink} autolink={!alt}>
+      <span data-find-ignore>Image: </span>
+      {alt || src}
     </ExternalLink>
   );
 }
@@ -141,16 +170,20 @@ function ParsedBlock({ block, openLink, copyCode }: Actions & { block: MarkdownB
     };
     return [useTree];
   }, [block]);
+  const rehypePlugins = useMemo(() => [markFindSources], []);
   const components = useMemo<Components>(
     () => ({
       p: ({ children }) => <p {...stylex.props(styles.paragraph)}>{children}</p>,
       h1: ({ children }) => <h1 {...stylex.props(styles.heading)}>{children}</h1>,
       // GFM labels its footnotes with a visually hidden heading.
-      h2: ({ children, node }) => (
-        <h2 {...stylex.props(isFootnoteLabel(node) ? styles.visuallyHidden : styles.heading)}>
-          {children}
-        </h2>
-      ),
+      h2: ({ children, node }) =>
+        isFootnoteLabel(node) ? (
+          <h2 data-find-ignore {...stylex.props(styles.visuallyHidden)}>
+            {children}
+          </h2>
+        ) : (
+          <h2 {...stylex.props(styles.heading)}>{children}</h2>
+        ),
       h3: ({ children }) => <h3 {...stylex.props(styles.heading)}>{children}</h3>,
       h4: ({ children }) => <h4 {...stylex.props(styles.heading)}>{children}</h4>,
       h5: ({ children }) => <h5 {...stylex.props(styles.heading)}>{children}</h5>,
@@ -172,19 +205,26 @@ function ParsedBlock({ block, openLink, copyCode }: Actions & { block: MarkdownB
           : '';
         const start = code.properties['data-code-start'];
         const closed = code.properties['data-code-closed'];
+        const fold = code.properties['data-code-fold'];
+        const position = node?.position;
         return (
           <Code
             text={text}
             language={language}
             closed={start === undefined || closed === true || closed === 'true'}
             copy={typeof start === 'number' && copyCode ? () => copyCode(start) : undefined}
+            sourceStart={position?.start.offset}
+            sourceEnd={position?.end.offset}
+            foldStart={typeof fold === 'number' ? fold : undefined}
           />
         );
       },
       a: ({ href, children, node }) => {
         // Footnote links jump within this message; with no safe target they render as plain text.
         if (node?.properties.dataFootnoteBackref !== undefined) return null;
-        if (node?.properties.dataFootnoteRef !== undefined) return <>{children}</>;
+        // The reference renders its number, not its source label.
+        if (node?.properties.dataFootnoteRef !== undefined)
+          return <span data-find-ignore>{children}</span>;
         const images: { src: string; alt: string }[] = [];
         if (node)
           visit(node, 'element', (child) => {
@@ -196,7 +236,7 @@ function ParsedBlock({ block, openLink, copyCode }: Actions & { block: MarkdownB
           });
         return (
           <>
-            <ExternalLink href={href} openLink={openLink}>
+            <ExternalLink href={href} openLink={openLink} autolink={isAutolink(node, href)}>
               <insideLink.Provider value={true}>{children}</insideLink.Provider>
             </ExternalLink>
             {images.map((image, index) => (
@@ -259,10 +299,38 @@ function ParsedBlock({ block, openLink, copyCode }: Actions & { block: MarkdownB
     [openLink, copyCode],
   );
   return (
-    <ReactMarkdown remarkPlugins={plugins} components={components} urlTransform={(url) => url}>
+    <ReactMarkdown
+      remarkPlugins={plugins}
+      rehypePlugins={rehypePlugins}
+      components={components}
+      urlTransform={(url) => url}>
       {''}
     </ReactMarkdown>
   );
+}
+type HastElement = NonNullable<ExtraProps['node']>;
+/**
+ * Marks each element with the source it renders, so Find maps matches within it. Footnote
+ * definitions render at the end, out of source order, and keep their own span this way. Elements
+ * rendered by our components drop the mark; Code and split blocks mark themselves.
+ */
+const markFindSources: Plugin<[], Parameters<Transformer>[0]> = () => (tree) => {
+  visit(tree, 'element', (node) => {
+    const element = node as HastElement,
+      start = element.position?.start.offset,
+      end = element.position?.end.offset;
+    if (start !== undefined && end !== undefined)
+      Object.assign(element.properties, getFindSourceProps(start, end));
+  });
+};
+/** A link whose visible text is its href, or an email autolink. */
+function isAutolink(node: ExtraProps['node'], href = '') {
+  let label = '';
+  if (node)
+    visit(node, 'text', (text) => {
+      label += text.value;
+    });
+  return label === href || href === 'mailto:' + label;
 }
 function isFootnoteLabel(node: ExtraProps['node']) {
   const classes = node?.properties.className;
@@ -286,15 +354,38 @@ const Code = memo(function Code({
   language,
   closed,
   copy,
+  sourceStart,
+  sourceEnd,
+  foldStart,
 }: {
   text: string;
   language: string;
   closed: boolean;
   copy?: () => void;
+  /** The block's source offsets, fences included. */
+  sourceStart?: number;
+  sourceEnd?: number;
+  /** Where the folded lines start in the source. */
+  foldStart?: number;
 }) {
   const pre = useRef<HTMLPreElement>(null);
   /** Folded code shows its first lines; the rest render only while unfolded. */
   const [unfolded, setUnfolded] = useState(false);
+  const lines = text.split('\n');
+  const foldable = lines.length > foldedCodeLines;
+  const findMatch = useContext(ActiveFindMatch);
+  const [revealed, setRevealed] = useState<FindTarget | null>(null);
+  /** Find maps the shown and folded lines as separate source spans. */
+  const spans =
+    foldable && sourceStart !== undefined && sourceEnd !== undefined && foldStart !== undefined
+      ? { start: sourceStart, fold: foldStart, end: sourceEnd }
+      : null;
+  // A newly active Find match in the folded lines unfolds them once; the reader can fold again.
+  if (findMatch !== revealed) {
+    setRevealed(findMatch);
+    if (findMatch && spans && findMatch.end > spans.fold && findMatch.start < spans.end)
+      setUnfolded(true);
+  }
   const known = monaco.languages
     .getLanguages()
     .find(
@@ -332,8 +423,6 @@ const Code = memo(function Code({
         : undefined,
     [text, languageId, closed, ready],
   );
-  const lines = text.split('\n');
-  const foldable = lines.length > foldedCodeLines;
   const renderLines = (from: number, to: number) => {
     const shown = lines.slice(from, to);
     if (!tokens) return shown.join('\n');
@@ -358,9 +447,15 @@ const Code = memo(function Code({
     });
   };
   return (
-    <Collapsible.Root open={unfolded} onOpenChange={setUnfolded} {...stylex.props(styles.code)}>
+    <Collapsible.Root
+      open={unfolded}
+      onOpenChange={setUnfolded}
+      {...(sourceStart !== undefined && sourceEnd !== undefined
+        ? getFindSourceProps(sourceStart, sourceEnd)
+        : {})}
+      {...stylex.props(styles.code)}>
       <div {...stylex.props(controls.row, styles.codeHeader)}>
-        <span>
+        <span data-find-ignore>
           {language || 'Plain text'}
           {!closed && ' · Incomplete'}
         </span>
@@ -372,9 +467,17 @@ const Code = memo(function Code({
       </div>
       <pre ref={pre} tabIndex={0} {...stylex.props(controls.pre, styles.codeText)}>
         <code>
-          {renderLines(0, foldable ? foldedCodeLines : lines.length)}
+          {spans ? (
+            <span {...getFindSourceProps(spans.start, spans.fold)}>
+              {renderLines(0, foldedCodeLines)}
+            </span>
+          ) : (
+            renderLines(0, foldable ? foldedCodeLines : lines.length)
+          )}
           {foldable && (
-            <Collapsible.Panel render={<span />}>
+            <Collapsible.Panel
+              render={<span />}
+              {...(spans && getFindSourceProps(spans.fold, spans.end))}>
               {'\n'}
               {renderLines(foldedCodeLines, lines.length)}
             </Collapsible.Panel>
