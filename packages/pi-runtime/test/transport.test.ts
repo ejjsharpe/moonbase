@@ -4,6 +4,7 @@ import type { ChatInput, ChatStopTarget } from '@moonbase/contracts/chat';
 import { maximumChatInputBytes } from '@moonbase/contracts/chat';
 import assert from 'node:assert/strict';
 import { test, mock } from 'node:test';
+import { execFileSync } from 'node:child_process';
 import { createHmac, createHash, randomBytes } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -1412,6 +1413,8 @@ test('authenticated file search reaches the host and refuses another folder', as
   const host = await f.remote.command('getChatHost', { host: session.host });
   assert(host.features?.includes('chat-files-v1'));
   assert('cwd' in host);
+  // Git lists the folder whether or not this machine has ripgrep.
+  execFileSync('git', ['init', '-q'], { cwd: host.cwd });
   const found = await f.remote.command('findChatFiles', {
     session,
     cwd: host.cwd,
