@@ -555,8 +555,8 @@ test("the image viewer's row stays mounted while the transcript scrolls", async 
   }, imagePng);
   await scrollToStart(page);
   const row = page.locator('[data-transcript-row="entry:image-row"]');
+  // The image shows once its card is open; it has no fold of its own.
   await row.getByRole('button', { name: /^Activity/ }).click();
-  await row.getByRole('button', { name: /^Stored image/ }).click();
   const trigger = row.getByRole('button', { name: 'View stored image' });
   await expect(trigger).toBeEnabled();
   await trigger.click();
@@ -669,16 +669,21 @@ test('safe GFM, literal user content, progressive source, exact native callbacks
   await expect(page.locator('[data-transcript-entry="reading-178"] pre')).toContainText(
     '```typescript',
   );
-  await expect(row.locator('table')).toHaveCount(1);
-  await expect(row.locator('th').last()).toHaveCSS('text-align', 'right');
-  await expect(row.locator('tbody tr').first().locator('td').last()).toHaveCSS(
+  // The authored table; the open card's recorded patch draws its own.
+  const authored = row.locator('table:not([data-transcript-activity] table)');
+  await expect(authored).toHaveCount(1);
+  await expect(authored.locator('th').last()).toHaveCSS('text-align', 'right');
+  await expect(authored.locator('tbody tr').first().locator('td').last()).toHaveCSS(
     'text-align',
     'right',
   );
   await expect(row.locator('blockquote')).toHaveCount(1);
   // Authored lists only; the activity card's step list is not part of the answer.
   await expect(row.locator('ul:not([data-transcript-activity] > ul)')).toHaveCount(2);
-  await expect(row.locator('script, svg, img, style, iframe, button[onclick]')).toHaveCount(0);
+  // No markup from the source runs or renders; the row's own controls draw icons.
+  await expect(
+    row.locator('script, svg:not(button svg), img, style, iframe, button[onclick]'),
+  ).toHaveCount(0);
   await expect(
     row.getByText('<button onclick="alert(1)">inert model control</button>', { exact: false }),
   ).toBeAttached();
@@ -699,14 +704,15 @@ test('safe GFM, literal user content, progressive source, exact native callbacks
   await expect
     .poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1)))
     .toBe('  const moon = "🌔";\t\r\nconsole.log(moon);');
-  await row.getByRole('button', { name: 'Output', exact: true }).click();
+  // open() opened this row's card, so its output shows with no fold of its own.
   await expect(row.getByText(/Read more/)).toBeVisible();
   await row.getByRole('button', { name: 'Copy part', exact: true }).first().click();
   await expect
     .poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1)?.length))
     .toBeGreaterThan(90000);
   await row.getByRole('button', { name: 'Load more parts' }).click();
-  await expect(row.getByRole('button', { name: /Thinking.*redacted/ })).toBeVisible();
+  // Redacted thinking is a step in a card: it says so without a fold of its own.
+  await expect(row.getByText(/Thinking · redacted/).first()).toBeVisible();
   await expect(row.getByRole('button', { name: 'Load more parts' })).toHaveCount(0);
   await row.getByRole('button', { name: /Notice.*unsupported/ }).click();
   await expect(
@@ -1003,7 +1009,8 @@ test('Find reveals unloaded folded manifest parts and exact Unicode source while
   await expect(find).toBeFocused();
   const row = page.locator('[data-transcript-entry="reading-0"]');
   await expect(row.getByRole('region', { name: 'Matched original source' })).toHaveCount(0);
-  await expect(row.getByRole('button', { name: /^Thinking/ })).toHaveAttribute(
+  // The thinking's card is open; parts inside a card have no fold of their own.
+  await expect(row.getByRole('button', { name: /^Activity/ })).toHaveAttribute(
     'aria-expanded',
     'true',
   );
@@ -1537,9 +1544,10 @@ test('Find respects explicit collapse until the active range changes in the same
   await page.keyboard.press('Control+f');
   const find = page.getByRole('textbox', { name: 'Find in conversation', exact: true });
   await find.fill('needle');
+  // The thought's card folds; parts inside a card have no fold of their own.
   const thinking = page
     .locator('[data-transcript-entry="reading-0"]')
-    .getByRole('button', { name: /^Thinking/ });
+    .getByRole('button', { name: /^Activity/ });
   await expect(thinking).toHaveAttribute('aria-expanded', 'true');
   await thinking.click();
   await expect(thinking).toHaveAttribute('aria-expanded', 'false');
@@ -1605,9 +1613,10 @@ for (const distance of ['nearby', 'far away'])
     };
     if ((await expect.poll(activeEntry).not.toBeNull(), await activeEntry()) !== 'folded')
       await step('Enter', 'folded');
+    // The thought's card folds; parts inside a card have no fold of their own.
     const thinking = page
       .locator('[data-transcript-entry="folded"]')
-      .getByRole('button', { name: /^Thinking/ });
+      .getByRole('button', { name: /^Activity/ });
     await expect(thinking).toHaveAttribute('aria-expanded', 'true');
     await thinking.click();
     await expect(thinking).toHaveAttribute('aria-expanded', 'false');
@@ -1746,7 +1755,8 @@ for (const late of ['reply', 'error'] as const)
         () => window.demo.application.chat!.getSnapshot().transcript.find.active,
       );
       const row = page.locator('[data-transcript-entry="reading-0"]');
-      const thinking = row.getByRole('button', { name: /^Thinking/ });
+      // The thought's card folds; parts inside a card have no fold of their own.
+      const thinking = row.getByRole('button', { name: /^Activity/ });
       await expect(thinking).toHaveAttribute('aria-expanded', 'true');
       await thinking.click();
       await expect(thinking).toBeFocused();
@@ -2105,8 +2115,14 @@ test('a row re-renders when its own disclosure, content or Find state changes', 
   await open(page);
   await settle(page);
   await rows.take();
-  // Expanding Output changes the row's expanded state and loads its content.
-  await answer(page).getByRole('button', { name: 'Output', exact: true }).click();
+  // Folding the card, opened by open(), changes the row's expanded state.
+  const card = answer(page).getByRole('button', { name: /^Activity/ });
+  await card.click();
+  await expect(card).toHaveAttribute('aria-expanded', 'false');
+  await settle(page);
+  expect(await rows.take()).toContain('reading-179');
+  // Opening it again shows its output, with its content loaded.
+  await card.click();
   await expect(answer(page).getByText(/Read more/)).toBeVisible();
   await settle(page);
   expect(await rows.take()).toContain('reading-179');

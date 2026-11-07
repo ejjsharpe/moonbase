@@ -85,17 +85,23 @@ for (const source of ['durable', 'live'] as const)
         }),
       )
       .toEqual(['loading', 0]);
-    await expect(result).toContainText('read · failed');
-    await expect(result.getByText(/read · failed ·.*Partial failed output retained/)).toBeVisible();
+    // The output row draws no step of its own; its call's headline carries the failure.
+    await expect(
+      result.locator('[data-transcript-activity] li').filter({ hasText: 'Partial failed' }),
+    ).toHaveCount(0);
     await expect.soft(origin).toContainText('read · failed.txt · failed');
     await page.evaluate(() =>
       (window as typeof window & { releaseEvidenceManifest(): void }).releaseEvidenceManifest(),
     );
     await expect(result.getByRole('alert')).toContainText('Retry parts');
-    await expect(result).toContainText('read · failed');
-    await expect(result.getByText(/read · failed ·.*Partial failed output retained/)).toBeVisible();
+    await expect(
+      result.locator('[data-transcript-activity] li').filter({ hasText: 'Partial failed' }),
+    ).toHaveCount(0);
     await page.screenshot({ path: testInfo.outputPath('failed-first-manifest.png') });
     await expect(origin).toContainText('read · failed.txt · failed');
+    // Opening the call's card opens its output beneath it, retained failure and all.
+    await origin.getByRole('button', { name: /^Activity/ }).click();
+    await expect(result.getByText('Partial failed output retained')).toBeVisible();
   });
 test('ordered activity stays between authored answers across manifest and history pages; exact call references alone supply failure', async ({
   page,
@@ -250,17 +256,18 @@ test('requested and executed arguments, unknown JSON and interrupted partial res
   await expect(row.getByText('Answer before activity', { exact: true })).toBeVisible();
   await expect(row.getByText('Answer after activity', { exact: true })).toBeVisible();
   await expect(row).toContainText('interrupted');
-  await row.getByRole('button', { name: /^Activity/ }).click();
+  // Folded, the card shows only its steps; opening it shows every recorded part, labelled.
   await expect(row.getByText('Available thought', { exact: true })).toHaveCount(0);
+  await row.getByRole('button', { name: /^Activity/ }).click();
   for (const name of [
-    /Thinking/,
+    /^Thinking$/,
     /write.*Requested arguments/,
     /write.*Executed arguments/,
     /unknown.*Requested arguments/,
     /unknown.*Output/,
     /unknown.*Details/,
   ])
-    await row.getByRole('button', { name }).click();
+    await expect(row.locator('[data-transcript-part]').getByText(name)).toBeVisible();
   await expect(row.getByText('Available thought', { exact: true })).toBeVisible();
   await expect(row.locator('pre')).toContainText([
     'Available thought',
@@ -359,10 +366,8 @@ for (const manifest of [false, true])
       await group.click();
       const thought = row.locator('[data-transcript-part="m0.b1"]');
       const output = row.locator('[data-transcript-part="m0.b2"]');
-      await thought.getByRole('button', { name: /Thinking/ }).click();
-      await output.getByRole('button', { name: /Output/ }).click();
+      // Opening the card shows its parts; none folds on its own.
       const tail = row.locator('[data-transcript-part="m0.b4"]');
-      if (manifest) await tail.getByRole('button', { name: /Details/ }).click();
       await expect(thought.locator('pre')).toHaveText('Thought first');
       await expect(output.locator('pre')).toHaveText('Output first');
       if (focus) await output.locator('pre').focus();
@@ -388,7 +393,7 @@ for (const manifest of [false, true])
         await expect.soft(output.locator('pre')).toHaveText(`Output ${suffix}`, { timeout: 1500 });
         await expect
           .soft(row.locator('[data-transcript-activity] > ul'))
-          .toContainText(`Thinking · Thought ${suffix}`, { timeout: 1500 });
+          .toContainText(`Thinking · running · Thought ${suffix}`, { timeout: 1500 });
         if (focus) await expect(output.locator('pre')).toBeFocused();
         await expect(group).toHaveAttribute('aria-expanded', 'true');
       }
@@ -492,8 +497,6 @@ for (const outcome of ['success', 'error'] as const)
     await row.getByRole('button', { name: /^Activity/ }).click();
     const thought = row.locator('[data-transcript-part="m0.b1"]');
     const output = row.locator('[data-transcript-part="m0.b2"]');
-    await thought.getByRole('button', { name: /Thinking/ }).click();
-    await output.getByRole('button', { name: /Output/ }).click();
     await expect
       .poll(() =>
         page.evaluate(() => (window as typeof window & { oldContentHeld: boolean }).oldContentHeld),
@@ -565,9 +568,7 @@ test('thinking/tool progress changes before completion with stable focus and exp
   await expect(row).toContainText('running');
   await group.click();
   const thought = row.locator('[data-transcript-part="m0.b1"]');
-  await thought.getByRole('button', { name: /Thinking/ }).click();
   const result = row.locator('[data-transcript-part="m0.b3"]');
-  await result.getByRole('button', { name: /Output/ }).click();
   await result.locator('pre').focus();
   await update('Thinking first and next', 'Output first and next');
   await expect(thought.locator('pre')).toHaveText('Thinking first and next');
@@ -596,9 +597,6 @@ test('a new exact live attempt inherits neither thought content nor the previous
   await live(page)
     .getByRole('button', { name: /^Activity/ })
     .click();
-  await live(page)
-    .getByRole('button', { name: /^Thinking/ })
-    .click();
   await expect(live(page).locator('pre')).toHaveText('Earlier attempt thought');
   await page.getByRole('textbox', { name: 'Message', exact: true }).focus();
   await page.evaluate(() => {
@@ -622,9 +620,6 @@ test('a new exact live attempt inherits neither thought content nor the previous
   await expect(live(page).locator('pre')).toHaveCount(0);
   await live(page)
     .getByRole('button', { name: /^Activity/ })
-    .click();
-  await live(page)
-    .getByRole('button', { name: /^Thinking/ })
     .click();
   await expect(live(page).locator('pre')).toHaveText('New attempt thought');
   await expect(live(page)).not.toContainText('Earlier attempt thought');
@@ -655,7 +650,6 @@ test('reading a durable row in the latest window retains current live activity b
   const row = live(page);
   await expect(row).toContainText('Current held output');
   await row.getByRole('button', { name: /^Activity/ }).click();
-  await row.getByRole('button', { name: /Output/ }).click();
   await expect(row.locator('pre')).toHaveText('Current held output');
 });
 for (const valid of [false, true])
@@ -678,7 +672,6 @@ for (const valid of [false, true])
     }, source);
     const row = page.locator('[data-transcript-entry="eof-patch"]');
     await row.getByRole('button', { name: /^Activity/ }).click();
-    await row.getByRole('button', { name: /Recorded patch/ }).click();
     await row.getByRole('button', { name: 'Copy patch', exact: true }).click();
     await expect
       .poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1)))
@@ -731,7 +724,6 @@ test('historical patches retain real coordinates, malformed/numbered/large fallb
   await expect(row).toContainText('edit · failed');
   await row.getByRole('button', { name: /^Activity/ }).click();
   const first = row.locator('[data-transcript-part="m0.b0"]');
-  await first.getByRole('button', { name: /Recorded patch/ }).click();
   const table = first.getByRole('table');
   await expect(table.getByRole('row').filter({ hasText: '-old 🌔' })).toHaveText('42-old 🌔');
   await expect(table.getByRole('row').filter({ hasText: '+new 🌔' })).toHaveText('81+new 🌔');
@@ -741,13 +733,10 @@ test('historical patches retain real coordinates, malformed/numbered/large fallb
   await first.getByRole('button', { name: 'Copy patch', exact: true }).click();
   expect(await page.evaluate(() => window.demo.transcript!.copied.at(-1))).toBe(patch);
   const malformed = row.locator('[data-transcript-part="m0.b1"]');
-  await malformed.getByRole('button', { name: /Recorded patch/ }).click();
   await expect(malformed).toContainText('Malformed or unsupported');
   const numbered = row.locator('[data-transcript-part="m0.b2"]');
-  await numbered.getByRole('button', { name: /Recorded diff/ }).click();
   await expect(numbered.locator('pre')).toHaveText('41 -old\n80 +new\n');
   const large = row.locator('[data-transcript-part="m0.b3"]');
-  await large.getByRole('button', { name: /Recorded patch/ }).click();
   await expect(large).toContainText('Incomplete patch source');
   while (await large.getByRole('button', { name: /Read more/ }).count())
     await large.getByRole('button', { name: /Read more/ }).click();
@@ -802,9 +791,9 @@ test('no thinking and redaction are honest; stopped partial activity survives wi
   await expect(row).toContainText('missing-result');
   await expect(row).not.toContainText('No thinking supplied');
   await row.getByRole('button', { name: /^Activity/ }).click();
-  await row.getByRole('button', { name: /bash.*Output/ }).click();
   await expect(row.locator('pre')).toHaveText('published partial');
-  await expect(row.locator('[data-transcript-part="m0.b0"] button')).toHaveCount(1);
+  // Redacted thinking has no content to copy, and parts in a card have no fold of their own.
+  await expect(row.locator('[data-transcript-part="m0.b0"] button')).toHaveCount(0);
 });
 
 for (const input of ['pointer', 'Enter', 'Space'] as const)
@@ -826,9 +815,10 @@ for (const input of ['pointer', 'Enter', 'Space'] as const)
     await find.fill('needle');
     const row = page.locator('[data-transcript-entry="reading-0"]');
     const activity = row.getByRole('button', { name: /^Activity/ });
-    const thought = row.getByRole('button', { name: /^Thinking/ });
+    // The thought shows whenever its card is open; it has no fold of its own.
+    const thought = row.locator('[data-transcript-part] pre').first();
     await expect(activity).toHaveAttribute('aria-expanded', 'true');
-    await expect(thought).toHaveAttribute('aria-expanded', 'true');
+    await expect(thought).toBeVisible();
     await expect
       .poll(() => readFindHighlight(page))
       .toEqual([expect.objectContaining({ text: 'NEEDLE', entry: 'reading-0' })]);
@@ -861,7 +851,7 @@ for (const input of ['pointer', 'Enter', 'Space'] as const)
     await find.focus();
     await find.press('Enter');
     await expect(activity).toHaveAttribute('aria-expanded', 'true');
-    await expect(thought).toHaveAttribute('aria-expanded', 'true');
+    await expect(thought).toBeVisible();
     await expect
       .poll(() => readFindHighlight(page))
       .toEqual([expect.objectContaining({ text: 'NEEDLE', before: 'xxxxxxxx\nsecond ' })]);
