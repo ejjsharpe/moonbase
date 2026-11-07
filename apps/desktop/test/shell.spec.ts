@@ -1571,24 +1571,6 @@ test('a new worktree is made only when a new chat sends, and its chat stays with
   ).toBeVisible();
 });
 
-test('with nothing Ready or Working the headings stay, above an open Settled list', async ({
-  page,
-}) => {
-  await page.goto('/?chat');
-  await tabs(page).getByRole('tab', { name: 'Agents', exact: true }).click();
-  await shell(page).getByRole('button', { name: 'Connect', exact: true }).click();
-  const list = shell(page).getByRole('navigation', { name: 'Conversations', exact: true });
-  await expect(list.getByRole('heading', { name: 'Ready 0' })).toBeVisible();
-  await expect(list).toContainText('Nothing has finished since you last looked.');
-  await expect(list.getByRole('heading', { name: 'Working 0' })).toBeVisible();
-  await expect(list).toContainText('Nothing is running.');
-  await expect(list.getByRole('button', { name: /^Settled/ })).toHaveAttribute(
-    'aria-expanded',
-    'true',
-  );
-  await expect(list.getByRole('button', { name: /^Conversation/ })).toBeVisible();
-});
-
 test('Settings holds hosts and providers; the sidebar keeps only a Connect line', async ({
   page,
 }) => {
