@@ -847,11 +847,9 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
         const activity = page
           .getByRole('article', { name: 'Live response' })
           .getByRole('button', { name: /^Activity/ });
-        await activity.click();
-        await page
-          .getByRole('article', { name: 'Live response' })
-          .getByRole('button', { name: /inspect_remote_context · Output/ })
-          .click();
+        // The live row holds only the call's output, so its toggle is visually hidden: the call's
+        // headline is in the row above. It still opens from the keyboard.
+        await activity.press('Enter');
         await expect(page.getByRole('article', { name: 'Live response' })).toContainText(
           'Controlled remote tool activity',
         );
@@ -902,7 +900,8 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
       await connect(page);
       await expect(page.getByRole('button', { name: 'Disconnect', exact: true })).toBeEnabled();
       if (operation !== 'createChat')
-        await expect(page.getByRole('main').getByText(f.cwd, { exact: false })).toBeVisible();
+        // The chat header's breadcrumb carries the working folder in its title.
+        await expect(page.getByRole('main').getByTitle(f.cwd, { exact: false })).toBeVisible();
       if (operation === 'sendChat') {
         await expect(page.getByRole('region', { name: 'Retained commands' })).toHaveCount(0);
         await expect(page.getByLabel('Message', { exact: true })).toHaveValue(
@@ -1031,11 +1030,8 @@ for (const failsWrite of [false, true])
       const activity = page
         .getByRole('article', { name: 'Live response' })
         .getByRole('button', { name: /^Activity/ });
-      await activity.click();
-      await page
-        .getByRole('article', { name: 'Live response' })
-        .getByRole('button', { name: /inspect_remote_context · Output/ })
-        .click();
+      // The live row holds only the call's output; its visually hidden toggle opens from the keyboard.
+      await activity.press('Enter');
       await expect(page.getByRole('article', { name: 'Live response' })).toContainText(
         'Controlled remote tool activity',
       );

@@ -1134,8 +1134,14 @@ test('exact checkout tabs preserve independent dirty paths, views and closed met
   await open();
   await edit('beta dirty a');
   await expect.poll(async () => (await recovery()).state.drafts.length).toBe(2);
+  // Worktrees of one repository share a rail tile; the sidebar header switches between them.
   const first = page.getByRole('tab', { name: 'checkout · main', exact: true });
-  await first.click();
+  await expect(first).toHaveCount(0);
+  await page
+    .getByRole('button', { name: 'Switch worktree, second-checkout · beta', exact: true })
+    .click();
+  await page.getByRole('menuitem', { name: 'checkout · main', exact: true }).click();
+  await expect(first).toHaveAttribute('aria-selected', 'true');
   await expect(
     page.locator('.view-line').filter({ hasText: 'alpha dirty a' }).first(),
   ).toBeVisible();
@@ -1410,5 +1416,7 @@ test('app R1 Tab actions first/last selection and Close click work at native siz
   await page.getByRole('tab', { name: 'b.ts', exact: true }).hover();
   await page.getByRole('button', { name: 'Close b.ts', exact: true }).click();
   await expect(page.getByRole('tab', { name: 'b.ts', exact: true })).toHaveCount(0);
+  // At the small zoomed size the project chats dock would leave the editor no width for its tabs.
+  await page.getByRole('button', { name: 'Hide project chats', exact: true }).click();
   await checkTabMenu(app, page, (name) => capture('desktop-' + name));
 });

@@ -536,10 +536,14 @@ test('transcript local rendering precedes held completion; native Copy/link fail
     const live = page.getByRole('article', { name: 'Live response' });
     await expect(live.getByRole('heading', { name: 'Held local response' })).toBeVisible();
     await expect(live.getByText('First local chunk 🌔', { exact: true })).toBeVisible();
-    await live.getByRole('button', { name: /^Activity/ }).click();
-    const thought = live.getByRole('button', { name: /Thinking · running/ });
-    await thought.click();
-    await expect(live.getByText('Local thinking first', { exact: true })).toBeVisible();
+    // Opening the Activity card shows its recorded parts, the running thought among them.
+    const activity = live.getByRole('button', { name: /^Activity/ });
+    await activity.click();
+    const thought = live
+      .locator('[data-transcript-part]')
+      .filter({ hasText: /^Thinking/ })
+      .locator('pre');
+    await expect(thought).toHaveText('Local thinking first');
     await thought.focus();
     const reads = await app.evaluate(
       () => (globalThis as unknown as { activityReads: string[] }).activityReads.length,
@@ -603,7 +607,7 @@ test('transcript local rendering precedes held completion; native Copy/link fail
     });
     await live.getByRole('button', { name: 'Copy message', exact: true }).click();
     await expect(page.getByRole('alert')).toBeVisible();
-    if ((await thought.getAttribute('aria-expanded')) === 'true') await thought.click();
+    if ((await activity.getAttribute('aria-expanded')) === 'true') await activity.click();
     await app.evaluate(({ BrowserWindow }) => {
       const window = BrowserWindow.getAllWindows()[0];
       window.setSize(1280, 850);
@@ -618,6 +622,8 @@ test('transcript local rendering precedes held completion; native Copy/link fail
         compact: matchMedia('(max-width: 640px)').matches,
         rootWidth: document.getElementById('root')!.getBoundingClientRect().width,
         mainWidth: main.getBoundingClientRect().width,
+        railWidth: document.querySelector('[aria-label="Workbench views"]')!.getBoundingClientRect()
+          .width,
         gridWidth: grid.getBoundingClientRect().width,
         columns: getComputedStyle(grid).gridTemplateColumns,
       };
@@ -626,7 +632,9 @@ test('transcript local rendering precedes held completion; native Copy/link fail
       resolve('../../test-results/transcript-111/native-zoom-layout.json'),
       JSON.stringify(layout, null, 2),
     );
-    expect(layout.mainWidth).toBeGreaterThan(layout.innerWidth - 2);
+    // Compact, the chat is one column filling the window beside the project rail.
+    expect(layout.columns.split(' ')).toHaveLength(1);
+    expect(layout.mainWidth).toBeGreaterThan(layout.innerWidth - layout.railWidth - 2);
     const reading = live.getByText('First local chunk 🌔 and second chunk', { exact: true });
     await reading.scrollIntoViewIfNeeded();
     // Away from the floating Jump to latest button, which covers the centre of a short list.
@@ -746,17 +754,14 @@ for (const mode of ['local', 'remote'] as const)
       await page.getByLabel('Message', { exact: true }).fill('Observe held tool progress');
       await page.getByRole('button', { name: 'Send message', exact: true }).click();
       const live = page.getByRole('article', { name: 'Live response' });
-      await expect(live).toContainText(
-        host ? 'Controlled remote tool activity' : 'First local tool chunk',
-      );
+      // Folded, the card shows the running call's state; opened, the output recorded so far.
+      const part = live.locator('[data-transcript-part]').filter({ hasText: /· Output · running/ });
+      await expect(part).toHaveCount(1);
       const group = live.getByRole('button', { name: /^Activity/ });
       await expect(group).toHaveAttribute('aria-expanded', 'false');
       await expect(live).toContainText('running');
-      await group.click();
-      const part = live
-        .locator('[data-transcript-part]')
-        .filter({ has: page.getByRole('button', { name: /· Output · running/ }) });
-      await part.getByRole('button', { name: /· Output · running/ }).click();
+      // A live row holding only the call's output has a visually hidden toggle; Enter opens it.
+      await group.press('Enter');
       await expect(part.locator('pre')).toContainText(
         host ? 'Controlled remote tool activity' : 'First local tool chunk',
       );
@@ -854,9 +859,11 @@ test('transcript remote first/next chunks render through authenticated stream an
     const live = page.getByRole('article', { name: 'Live response' });
     await expect(live.getByText('first remote text 0', { exact: true })).toBeVisible();
     await live.getByRole('button', { name: /^Activity/ }).click();
-    const thought = live.getByRole('button', { name: /Thinking · running/ });
-    await thought.click();
-    await expect(live.getByText('remote thinking 0', { exact: true })).toBeVisible();
+    const thought = live
+      .locator('[data-transcript-part]')
+      .filter({ hasText: /^Thinking/ })
+      .locator('pre');
+    await expect(thought).toHaveText('remote thinking 0');
     await thought.focus();
     await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
     const before = await host.stats();
@@ -952,23 +959,25 @@ for (const mode of ['local', 'remote'] as const)
       await page.getByLabel('Message', { exact: true }).fill('Inspect retained images');
       await page.getByRole('button', { name: 'Send message', exact: true }).click();
       if (!host) {
-        await expect(page.getByRole('article', { name: 'Live response' })).toContainText(
-          'First local tool chunk',
-        );
+        // The tool is running once its output part is recorded; the output itself stays folded.
+        await expect(
+          page
+            .getByRole('article', { name: 'Live response' })
+            .locator('[data-transcript-part]')
+            .filter({ hasText: /· Output · running/ }),
+        ).toHaveCount(1);
         await app.evaluate(() =>
           (globalThis as unknown as { localActivity: { release(): void } }).localActivity.release(),
         );
       }
       const group = page
         .locator('[data-transcript-activity]')
-        .filter({ has: page.getByRole('button', { name: /Stored image/, includeHidden: true }) })
+        .filter({ has: page.locator('[data-transcript-part]').filter({ hasText: 'Stored image' }) })
         .first();
       await expect(group).toBeAttached();
+      // An output row's toggle is visually hidden; it still opens from the keyboard.
       const activity = group.getByRole('button', { name: /^Activity/ });
       if ((await activity.getAttribute('aria-expanded')) !== 'true') await activity.press('Enter');
-      const disclosure = group.getByRole('button', { name: /Stored image/ }).first();
-      if ((await disclosure.getAttribute('aria-expanded')) !== 'true')
-        await disclosure.press('Enter');
       const trigger = group.getByRole('button', { name: 'View stored image', exact: true }).first();
       await trigger.scrollIntoViewIfNeeded();
       await expect(trigger).toBeEnabled();
