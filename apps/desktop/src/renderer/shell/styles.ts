@@ -4,16 +4,6 @@ import { colors, radius, space, type } from '@moonbase/ui/tokens.stylex';
 const railWidth = 72;
 
 export const styles = stylex.create({
-  chatTargetBar: {
-    flexShrink: 0,
-    display: 'flex',
-    alignItems: 'center',
-    gap: space.sm,
-    padding: '4px 24px',
-    backgroundColor: colors.canvas,
-    justifyContent: 'flex-end',
-  },
-  chatTargetChoice: { width: 200, maxWidth: '100%' },
   // The rail is laid over this padding, so panels stay direct children of the tabs root.
   shell: {
     position: 'relative',
@@ -134,6 +124,8 @@ export const styles = stylex.create({
     color: colors.onAccent,
   },
   agentsTile: { backgroundColor: colors.accent },
+  railFoot: { marginTop: 'auto' },
+  settingsTile: { color: colors.muted, backgroundColor: 'transparent' },
   openTile: {
     color: colors.muted,
     backgroundColor: 'transparent',

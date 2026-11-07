@@ -10,7 +10,6 @@ import type { ChatController } from '@moonbase/application/chat';
 import { activateChatFind, FindBar, handleChatFindKeyDown } from './find.tsx';
 import { Transcript } from './transcript.tsx';
 import type { TranscriptNative } from '../../chat/wire.ts';
-import { ProviderSetup } from './setup.tsx';
 import { Choice } from './choice.tsx';
 import { Icon } from '../icon.tsx';
 import { MessageInput } from './message-input.tsx';
@@ -41,6 +40,13 @@ export type ChatDock = {
   collapse(): void;
 };
 
+export type ChatHosts = {
+  targets: readonly { id: string; label: string }[];
+  current: string | null;
+  select(id: string): void;
+  disabled?: boolean;
+};
+
 /** The consumer owns the clients/runtime and controller lifetime; this view installs no capabilities. */
 export function ChatView({
   controller,
@@ -48,6 +54,8 @@ export function ChatView({
   createWorktree,
   transcriptNative,
   dock,
+  hosts,
+  setUpProviders,
 }: {
   controller: ChatController;
   chooseFolder?: () => Promise<string | null>;
@@ -56,6 +64,10 @@ export function ChatView({
   transcriptNative?: TranscriptNative;
   /** Shows only one project's chats, beside its editor, with a back arrow to their list. */
   dock?: ChatDock;
+  /** Where a new chat can run; choosing one switches this view to that host's chats. */
+  hosts?: ChatHosts;
+  /** Opens provider setup, offered from the model menu. */
+  setUpProviders?: () => void;
 }) {
   const compact = useSyncExternalStore(subscribeLayout, () => compactLayout.matches);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -110,8 +122,6 @@ export function ChatView({
           ...(selectedEffort ? { reasoningEffort: selectedEffort } : {}),
         }
       : undefined;
-  let connectionLabel = state.connection?.state ?? 'Loading configuration';
-  if (local) connectionLabel = state.ready ? 'Local ready' : 'Loading local chats';
   let contextLabel = local
     ? 'Each conversation retains its working folder and model.'
     : 'Fixed working folder and model are read from the verified remote host.';
@@ -140,6 +150,16 @@ export function ChatView({
     .at(-1);
   const connected = state.ready,
     busy = (id: string) => state.active.includes(id);
+  const hostDot = (
+    <span
+      aria-hidden="true"
+      {...stylex.props(
+        styles.localDot,
+        !local && !connected && styles.offlineDot,
+        !local && state.connection?.state === 'connecting' && styles.pendingDot,
+      )}
+    />
+  );
   const snapshot = state.snapshot,
     run = snapshot?.run;
   const chooseModel = (value: string) => {
@@ -222,6 +242,9 @@ export function ChatView({
     command.run(option);
   };
   const typedCommand = resolveCommandLine(state.draft, commands);
+  let emptyList = '';
+  if (connected) emptyList = 'Your conversations will appear here.';
+  else if (local) emptyList = 'Loading chats…';
   const sidebar = (
     <aside
       aria-label="Saved chats"
@@ -245,43 +268,57 @@ export function ChatView({
           <Icon name="refresh" />
         </Button>
       </div>
+      {!local && !connected && (
+        <div {...stylex.props(controls.row, styles.offline)}>
+          <span role="status" {...stylex.props(styles.offlineText)}>
+            {state.connection?.state === 'connecting' ? 'Connecting…' : 'Not connected'}
+          </span>
+          <Button
+            {...stylex.props(controls.button)}
+            disabled={
+              !state.connection ||
+              busy('connect') ||
+              ['connecting', 'disconnecting'].includes(state.connection.state)
+            }
+            onClick={() => void controller.connect()}>
+            {busy('connect') ? 'Connecting…' : 'Connect'}
+          </Button>
+        </div>
+      )}
       <nav aria-label="Conversations" {...stylex.props(styles.chatList)}>
-        {!state.chats.length ? (
-          <p {...stylex.props(styles.small)}>
-            {connected ? 'Your conversations will appear here.' : 'Connect to read saved chats.'}
-          </p>
-        ) : (
-          state.chats.map((c) => (
-            <Button
-              key={c.target.conversationId}
-              aria-pressed={state.selected?.conversationId === c.target.conversationId}
-              {...stylex.props(
-                controls.button,
-                controls.listButton,
-                styles.chat,
-                state.selected?.conversationId === c.target.conversationId && styles.selected,
-              )}
-              disabled={!connected || busy('open')}
-              onClick={() => {
-                void controller.select(c.target);
-                setSidebarOpen(false);
-              }}>
-              <span aria-hidden="true" {...stylex.props(styles.chatDot)} />
-              <span {...stylex.props(styles.chatSummary)}>
-                <span {...stylex.props(controls.truncate)}>{c.title}</span>
-                <span {...stylex.props(styles.chatFolder, controls.truncate)}>
-                  {c.cwd.split('/').filter(Boolean).at(-1) || '/'}
+        {!state.chats.length
+          ? // Offline, the Connect line above says why the list is empty.
+            emptyList && <p {...stylex.props(styles.small)}>{emptyList}</p>
+          : state.chats.map((c) => (
+              <Button
+                key={c.target.conversationId}
+                aria-pressed={state.selected?.conversationId === c.target.conversationId}
+                {...stylex.props(
+                  controls.button,
+                  controls.listButton,
+                  styles.chat,
+                  state.selected?.conversationId === c.target.conversationId && styles.selected,
+                )}
+                disabled={!connected || busy('open')}
+                onClick={() => {
+                  void controller.select(c.target);
+                  setSidebarOpen(false);
+                }}>
+                <span aria-hidden="true" {...stylex.props(styles.chatDot)} />
+                <span {...stylex.props(styles.chatSummary)}>
+                  <span {...stylex.props(controls.truncate)}>{c.title}</span>
+                  <span {...stylex.props(styles.chatFolder, controls.truncate)}>
+                    {c.cwd.split('/').filter(Boolean).at(-1) || '/'}
+                  </span>
                 </span>
-              </span>
-              <time dateTime={c.createdAt} {...stylex.props(styles.chatDate)}>
-                {new Date(c.createdAt).toLocaleDateString(undefined, {
-                  month: 'short',
-                  day: 'numeric',
-                })}
-              </time>
-            </Button>
-          ))
-        )}
+                <time dateTime={c.createdAt} {...stylex.props(styles.chatDate)}>
+                  {new Date(c.createdAt).toLocaleDateString(undefined, {
+                    month: 'short',
+                    day: 'numeric',
+                  })}
+                </time>
+              </Button>
+            ))}
       </nav>
       {state.nextChats && (
         <Button
@@ -291,54 +328,6 @@ export function ChatView({
           Next saved chats
         </Button>
       )}
-      <div {...stylex.props(styles.sidebarFoot)}>
-        {controller.providers && <ProviderSetup controller={controller.providers} />}
-        <div {...stylex.props(controls.row, styles.connectionRow)}>
-          <Icon name="computer" />
-          <span role="status" {...stylex.props(styles.connection)}>
-            {connectionLabel}
-          </span>
-          {!local &&
-            (connected || state.connection?.state === 'connecting' ? (
-              <Button
-                {...stylex.props(controls.button, controls.quietButton)}
-                disabled={busy('disconnect')}
-                onClick={() => void controller.disconnect()}>
-                Disconnect
-              </Button>
-            ) : (
-              <Button
-                {...stylex.props(controls.button)}
-                disabled={
-                  !state.connection || busy('connect') || state.connection.state === 'disconnecting'
-                }
-                onClick={() => void controller.connect()}>
-                {busy('connect') ? 'Connecting…' : 'Connect'}
-              </Button>
-            ))}
-        </div>
-        <details {...stylex.props(styles.small)}>
-          <summary {...stylex.props(controls.summary)}>Connection details</summary>
-          <p>
-            {local
-              ? 'Read, write, edit and shell tools use your OS permissions. The working folder is not a sandbox.'
-              : state.connection?.profile.destination}
-          </p>
-          <p>
-            Host {controller.context.host.hostId}
-            <br />
-            Store {controller.context.host.storeId}
-            <br />
-            Actor {controller.context.actorId}
-          </p>
-          <p role="status">{state.notice}</p>
-          <p>
-            {local
-              ? 'Hiding Moonbase or switching views keeps local agents running.'
-              : 'Disconnect ends connectivity. Remote work continues until you Stop it.'}
-          </p>
-        </details>
-      </div>
     </aside>
   );
   const findBar = state.transcript.find.open && (
@@ -507,44 +496,46 @@ export function ChatView({
             />
           </div>
           <div {...stylex.props(controls.row, styles.composeActions)}>
-            {!state.selected && local && (
+            {!state.selected && (local || hosts) && (
               <div {...stylex.props(styles.composeContext)}>
-                <Button
-                  aria-label="Choose working folder"
-                  {...stylex.props(controls.button, controls.quietButton, styles.folderChoice)}
-                  disabled={!chooseFolder || busy('send') || creatingWorktree}
-                  title={cwd || 'Choose working folder'}
-                  onClick={() => {
-                    setFolderError(null);
-                    void chooseFolder?.()
-                      .then((folder) => {
-                        if (folder) {
-                          setCwd(folder);
-                          setNewWorktree(false);
-                        }
-                      })
-                      .catch(() =>
-                        setFolderError(
-                          'The folder could not be approved. Choose an existing working folder again.',
-                        ),
-                      );
-                  }}>
-                  {folderName ? (
-                    <span
-                      aria-hidden="true"
-                      data-initials={projectInitials(folderName)}
-                      {...stylex.props(projectTiles.tile, projectTiles.silver, styles.folderTile)}
-                    />
-                  ) : (
-                    <Icon name="folder" />
-                  )}
-                  <span {...stylex.props(controls.truncate)}>
-                    {folderName || 'Choose working folder'}
-                  </span>
-                  <span aria-hidden="true" {...stylex.props(styles.caret)}>
-                    ▾
-                  </span>
-                </Button>
+                {local && (
+                  <Button
+                    aria-label="Choose working folder"
+                    {...stylex.props(controls.button, controls.quietButton, styles.folderChoice)}
+                    disabled={!chooseFolder || busy('send') || creatingWorktree}
+                    title={cwd || 'Choose working folder'}
+                    onClick={() => {
+                      setFolderError(null);
+                      void chooseFolder?.()
+                        .then((folder) => {
+                          if (folder) {
+                            setCwd(folder);
+                            setNewWorktree(false);
+                          }
+                        })
+                        .catch(() =>
+                          setFolderError(
+                            'The folder could not be approved. Choose an existing working folder again.',
+                          ),
+                        );
+                    }}>
+                    {folderName ? (
+                      <span
+                        aria-hidden="true"
+                        data-initials={projectInitials(folderName)}
+                        {...stylex.props(projectTiles.tile, projectTiles.silver, styles.folderTile)}
+                      />
+                    ) : (
+                      <Icon name="folder" />
+                    )}
+                    <span {...stylex.props(controls.truncate)}>
+                      {folderName || 'Choose working folder'}
+                    </span>
+                    <span aria-hidden="true" {...stylex.props(styles.caret)}>
+                      ▾
+                    </span>
+                  </Button>
+                )}
                 {worktreeChoice && (
                   <div {...stylex.props(styles.worktreeChoice)}>
                     <Choice
@@ -560,10 +551,25 @@ export function ChatView({
                     />
                   </div>
                 )}
-                <span {...stylex.props(styles.localLabel)}>
-                  <span aria-hidden="true" {...stylex.props(styles.localDot)} />
-                  local
-                </span>
+                {hosts && hosts.targets.length > 1 ? (
+                  <div {...stylex.props(styles.hostChoice)}>
+                    <Choice
+                      compact
+                      label="Chat target"
+                      value={hosts.current ?? ''}
+                      options={hosts.targets.map(({ id, label }) => ({ value: id, label }))}
+                      onChange={(id) => id !== hosts.current && hosts.select(id)}
+                      disabled={hosts.disabled || busy('send') || creatingWorktree}
+                      leading={hostDot}
+                    />
+                  </div>
+                ) : (
+                  <span {...stylex.props(styles.localLabel)}>
+                    {hostDot}
+                    {hosts?.targets.find((target) => target.id === hosts.current)?.label ??
+                      (local ? 'local' : 'remote')}
+                  </span>
+                )}
               </div>
             )}
             <div {...stylex.props(controls.row, styles.modelActions)}>
@@ -576,7 +582,8 @@ export function ChatView({
                       value={selectedModel}
                       options={models}
                       onChange={chooseModel}
-                      disabled={!models.length || busy('send')}
+                      disabled={(!models.length && !setUpProviders) || busy('send')}
+                      action={setUpProviders && { label: 'Set up providers…', run: setUpProviders }}
                     />
                   </div>
                   {!!selectedEntry?.reasoningEfforts?.length && (
@@ -909,12 +916,6 @@ const styles = stylex.create({
   drawerClose: { position: 'absolute', right: space.sm, top: space.sm, zIndex: 1 },
   drawerSidebar: { paddingTop: 48 },
   page: { fontFamily: type.ui, flex: 1, height: 'auto', minHeight: 0, overflowY: 'auto' },
-  connection: {
-    textTransform: 'capitalize',
-    color: colors.secondary,
-    fontSize: type.small,
-    flex: 1,
-  },
   workspace: {
     display: 'grid',
     gridTemplateColumns: 'minmax(0, 1fr)',
@@ -992,15 +993,11 @@ const styles = stylex.create({
     whiteSpace: 'nowrap',
     flexShrink: 0,
   },
-  sidebarFoot: {
-    marginTop: 'auto',
-    padding: '16px 8px 0',
-    borderTopWidth: 1,
-    borderTopStyle: 'solid',
-    borderTopColor: colors.border,
-    fontSize: type.small,
-  },
-  connectionRow: { margin: '12px 0 8px', gap: 6, color: colors.secondary },
+  offline: { gap: space.sm, padding: '6px 8px', fontSize: type.small },
+  offlineText: { flex: 1, color: colors.secondary },
+  hostChoice: { flexShrink: 0, maxWidth: 200 },
+  offlineDot: { backgroundColor: colors.muted },
+  pendingDot: { backgroundColor: colors.warningText },
   content: {
     backgroundColor: colors.canvas,
     display: 'flex',

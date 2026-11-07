@@ -6,7 +6,13 @@ import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { controlledHostFixture } from '../../../tests/chat/fixture.ts';
-import { selectRemoteChat, createRemoteChat } from './chat-target.ts';
+import {
+  closeSettings,
+  createRemoteChat,
+  disconnectChat,
+  openSettings,
+  selectRemoteChat,
+} from './chat-target.ts';
 import { captureNative } from './editor-regressions.ts';
 import { retainedImage } from './stored-image-fixture.ts';
 
@@ -200,6 +206,7 @@ test('native local setup, approved folders/models, streaming/tools, hidden work 
       context,
     );
     expect(unauthorized).toMatchObject({ ok: false, error: { code: 'Unauthorized' } });
+    await openSettings(page, 'Providers');
     await page.getByRole('combobox', { name: 'Provider', exact: true }).click();
     await page.getByRole('option', { name: 'OpenAI API key', exact: true }).click();
     await page.getByRole('button', { name: 'Set API key', exact: true }).click();
@@ -207,6 +214,7 @@ test('native local setup, approved folders/models, streaming/tools, hidden work 
       .getByLabel('Enter OpenAI API key', { exact: true })
       .fill('sk-controlled-private-key');
     await page.getByRole('button', { name: 'Continue setup', exact: true }).click();
+    await closeSettings(page);
     await expect(
       page.getByRole('combobox', { name: 'Conversation model', exact: true }),
     ).toBeEnabled();
@@ -513,6 +521,7 @@ test('transcript local rendering precedes held completion; native Copy/link fail
     links?: string[];
   };
   try {
+    await openSettings(page, 'Providers');
     await page.getByRole('combobox', { name: 'Provider', exact: true }).click();
     await page.getByRole('option', { name: 'OpenAI API key', exact: true }).click();
     await page.getByRole('button', { name: 'Set API key', exact: true }).click();
@@ -520,6 +529,7 @@ test('transcript local rendering precedes held completion; native Copy/link fail
       .getByLabel('Enter OpenAI API key', { exact: true })
       .fill('sk-controlled-transcript-fixture');
     await page.getByRole('button', { name: 'Continue setup', exact: true }).click();
+    await closeSettings(page);
     await app.evaluate(({ dialog }, cwd) => {
       dialog.showOpenDialog = (async () => ({
         canceled: false,
@@ -728,6 +738,7 @@ for (const mode of ['local', 'remote'] as const)
         await page.getByRole('button', { name: 'Connect', exact: true }).click();
         await createRemoteChat(page, 'Remote held activity');
       } else {
+        await openSettings(page, 'Providers');
         await page.getByRole('combobox', { name: 'Provider', exact: true }).click();
         await page.getByRole('option', { name: 'OpenAI API key', exact: true }).click();
         await page.getByRole('button', { name: 'Set API key', exact: true }).click();
@@ -735,6 +746,7 @@ for (const mode of ['local', 'remote'] as const)
           .getByLabel('Enter OpenAI API key', { exact: true })
           .fill('sk-controlled-activity-fixture');
         await page.getByRole('button', { name: 'Continue setup', exact: true }).click();
+        await closeSettings(page);
         await app.evaluate(({ dialog }, cwd) => {
           dialog.showOpenDialog = (async () => ({
             canceled: false,
@@ -810,11 +822,9 @@ for (const mode of ['local', 'remote'] as const)
       host?.release();
       if (child.exitCode === null) {
         if (host) {
-          const disconnect = page.getByRole('button', { name: 'Disconnect', exact: true });
-          if (await disconnect.isVisible()) {
-            await disconnect.click();
-            await expect(page.getByRole('button', { name: 'Connect', exact: true })).toBeEnabled();
-          }
+          // Still connected when the sidebar has no Connect line.
+          if (!(await page.getByRole('button', { name: 'Connect', exact: true }).count()))
+            await disconnectChat(page);
         }
         await app.evaluate(({ app }) => app.exit(0));
       }
@@ -878,11 +888,9 @@ test('transcript remote first/next chunks render through authenticated stream an
   } finally {
     host.release();
     if (child.exitCode === null) {
-      const disconnect = page.getByRole('button', { name: 'Disconnect', exact: true });
-      if (await disconnect.isVisible()) {
-        await disconnect.click();
-        await expect(page.getByRole('button', { name: 'Connect', exact: true })).toBeEnabled();
-      }
+      // Still connected when the sidebar has no Connect line.
+      if (!(await page.getByRole('button', { name: 'Connect', exact: true }).count()))
+        await disconnectChat(page);
       await app.evaluate(({ app }) => app.exit(0));
     }
     await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
@@ -934,6 +942,7 @@ for (const mode of ['local', 'remote'] as const)
         await page.getByRole('button', { name: 'Connect', exact: true }).click();
         await createRemoteChat(page, 'Retained remote images');
       } else {
+        await openSettings(page, 'Providers');
         await page.getByRole('combobox', { name: 'Provider', exact: true }).click();
         await page.getByRole('option', { name: 'OpenAI API key', exact: true }).click();
         await page.getByRole('button', { name: 'Set API key', exact: true }).click();
@@ -941,6 +950,7 @@ for (const mode of ['local', 'remote'] as const)
           .getByLabel('Enter OpenAI API key', { exact: true })
           .fill('sk-controlled-image-fixture');
         await page.getByRole('button', { name: 'Continue setup', exact: true }).click();
+        await closeSettings(page);
         await app.evaluate(({ dialog }, cwd) => {
           dialog.showOpenDialog = (async () => ({
             canceled: false,
@@ -1054,10 +1064,7 @@ for (const mode of ['local', 'remote'] as const)
             window.setSize(1280, 850);
             window.webContents.setZoomFactor(1);
           });
-          const disconnect = page.getByRole('button', { name: 'Disconnect', exact: true });
-          await expect(disconnect).toBeVisible();
-          await disconnect.click();
-          await expect(page.getByRole('button', { name: 'Connect', exact: true })).toBeEnabled();
+          await disconnectChat(page);
         }
       } finally {
         try {

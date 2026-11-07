@@ -1,3 +1,4 @@
+import { openSettings } from './chat-target.ts';
 import { saveFile, selectFileView, captureNative, pasteNativeFile } from './editor-regressions.ts';
 import {
   filenameCases,
@@ -124,8 +125,14 @@ test('unsigned macOS package runs with only system PATH, SQLite, native/rg resou
     expect(resource.notices).toContain('MIT License');
     await expect(page.getByRole('button', { name: 'Open checkout', exact: true })).toBeVisible();
     await page.getByRole('tab', { name: 'Agents', exact: true }).click();
-    await expect(page.getByText('Local ready', { exact: true })).toBeVisible();
-    await page.getByRole('button', { name: 'Sign in with ChatGPT', exact: true }).click();
+    await expect(
+      (await openSettings(page)).getByText('Local ready', { exact: true }),
+    ).toBeVisible();
+    await (
+      await openSettings(page, 'Providers')
+    )
+      .getByRole('button', { name: 'Sign in with ChatGPT', exact: true })
+      .click();
     await expect(
       page.getByRole('button', { name: 'Open sign-in page', exact: true }),
     ).toBeVisible();

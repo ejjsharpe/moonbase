@@ -1,3 +1,4 @@
+import { closeSettings, openSettings } from './chat-target.ts';
 import {
   openTabMenu,
   saveFile,
@@ -324,7 +325,8 @@ test('actual sandboxed custom-scheme editor reads, edits and saves through SQLit
     .getByRole('tablist', { name: 'Workbench views', exact: true })
     .getByRole('tab', { name: 'Agents', exact: true })
     .click();
-  await expect(page.getByText('Local ready', { exact: true })).toBeVisible();
+  await expect((await openSettings(page)).getByText('Local ready', { exact: true })).toBeVisible();
+  await closeSettings(page);
   expect(
     await page.evaluate(() =>
       window.moonbaseChat.call('connection', 'getConnection', {}, crypto.randomUUID()),

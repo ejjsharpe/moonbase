@@ -1,4 +1,4 @@
-import { selectRemoteChat } from './chat-target.ts';
+import { closeSettings, openSettings, selectRemoteChat } from './chat-target.ts';
 import { test, expect, _electron as electron } from '@playwright/test';
 import { fixture } from '../../../tests/chat/tool-fixture.ts';
 import { mkdtempSync, realpathSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
@@ -113,7 +113,10 @@ for (const configured of [false, true])
         .getByRole('tablist', { name: 'Workbench views', exact: true })
         .getByRole('tab', { name: 'Agents', exact: true })
         .click();
-      await expect(page.getByText('Local ready', { exact: true })).toBeVisible();
+      await expect(
+        (await openSettings(page)).getByText('Local ready', { exact: true }),
+      ).toBeVisible();
+      await closeSettings(page);
       if (configured) {
         await selectRemoteChat(page);
         await expect(page.getByRole('button', { name: 'Connect', exact: true })).toBeEnabled();
@@ -133,8 +136,12 @@ for (const configured of [false, true])
         );
       } else {
         await expect(
-          page.getByRole('button', { name: 'Sign in with ChatGPT', exact: true }),
+          (await openSettings(page, 'Providers')).getByRole('button', {
+            name: 'Sign in with ChatGPT',
+            exact: true,
+          }),
         ).toBeVisible();
+        await closeSettings(page);
         await expect(
           page.getByRole('button', { name: 'Choose working folder', exact: true }),
         ).toBeVisible();

@@ -1,3 +1,4 @@
+import { useState, type ReactNode } from 'react';
 import { Select } from '@base-ui/react/select';
 import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
@@ -12,6 +13,8 @@ export function Choice({
   onChange,
   disabled = false,
   compact = false,
+  leading,
+  action,
 }: {
   label: string;
   value: string;
@@ -19,9 +22,16 @@ export function Choice({
   onChange(value: string): void;
   disabled?: boolean;
   compact?: boolean;
+  /** Drawn before the value, such as a host's status dot. */
+  leading?: ReactNode;
+  /** A command below the options, such as setting up what the list is missing. */
+  action?: { label: string; run(): void };
 }) {
+  const [open, setOpen] = useState(false);
   return (
     <Select.Root
+      open={open}
+      onOpenChange={setOpen}
       value={value || null}
       onValueChange={(value) => {
         if (value) onChange(value);
@@ -36,6 +46,7 @@ export function Choice({
           compact && controls.quietButton,
           compact && styles.chip,
         )}>
+        {leading}
         <span {...stylex.props(controls.truncate, controls.grow)}>
           <Select.Value placeholder={label} />
         </span>
@@ -60,6 +71,17 @@ export function Choice({
                 </Select.Item>
               ))}
             </Select.List>
+            {action && (
+              <button
+                type="button"
+                {...stylex.props(overlays.option, styles.action)}
+                onClick={() => {
+                  setOpen(false);
+                  action.run();
+                }}>
+                {action.label}
+              </button>
+            )}
           </Select.Popup>
         </Select.Positioner>
       </Select.Portal>
@@ -70,4 +92,16 @@ export function Choice({
 const styles = stylex.create({
   chip: { height: 30, padding: '0 10px', gap: 6, borderRadius: radius.row },
   caret: { color: colors.muted },
+  action: {
+    width: '100%',
+    borderWidth: 0,
+    borderTopWidth: 1,
+    borderTopStyle: 'solid',
+    borderTopColor: colors.border,
+    backgroundColor: 'transparent',
+    color: colors.secondary,
+    font: 'inherit',
+    textAlign: 'left',
+    cursor: 'pointer',
+  },
 });

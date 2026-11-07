@@ -1570,3 +1570,48 @@ test('a new worktree is made only when a new chat sends, and its chat stays with
     page.getByRole('menuitem', { name: /chat-fix-the-rail-peek · chat\/fix-the-rail-peek/ }),
   ).toBeVisible();
 });
+
+test('Settings holds hosts and providers; the sidebar keeps only a Connect line', async ({
+  page,
+}) => {
+  await page.goto('/?chat');
+  await tabs(page).getByRole('tab', { name: 'Agents', exact: true }).click();
+  const sidebar = shell(page).getByRole('complementary', { name: 'Saved chats', exact: true });
+  await expect(sidebar.getByRole('status')).toHaveText('Not connected');
+  await expect(sidebar.getByText('Connection details', { exact: true })).toHaveCount(0);
+  await shell(page).getByLabel('Message', { exact: true }).press('Meta+,');
+  const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+  const hosts = settings.getByRole('list', { name: 'Chat hosts', exact: true });
+  await expect(hosts.getByRole('status')).toHaveText('Disconnected');
+  await hosts.getByRole('button', { name: 'Connect', exact: true }).click();
+  await expect(hosts.getByRole('button', { name: 'Disconnect', exact: true })).toBeEnabled();
+  await expect(settings).toContainText('Remote work continues until you Stop it.');
+  await settings.getByRole('tab', { name: 'Providers', exact: true }).click();
+  await expect(settings).toContainText('A remote host signs in to model providers itself.');
+  await page.keyboard.press('Escape');
+  await expect(settings).toHaveCount(0);
+  // Connected, the Connect line goes and the chats are listed.
+  await expect(sidebar.getByRole('status')).toHaveCount(0);
+  await expect(sidebar.getByRole('button', { name: /^Conversation/ })).toBeVisible();
+});
+
+test('the local model menu opens provider setup in Settings', async ({ page }) => {
+  await page.goto('/?local');
+  await tabs(page).getByRole('tab', { name: 'Agents', exact: true }).click();
+  await shell(page).getByRole('combobox', { name: 'Conversation model', exact: true }).click();
+  await page.getByRole('button', { name: 'Set up providers…', exact: true }).click();
+  const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+  await expect(settings.getByRole('tab', { name: 'Providers', exact: true })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  await expect(
+    settings.getByRole('button', { name: 'Refresh providers', exact: true }),
+  ).toBeVisible();
+  await settings.getByRole('tab', { name: 'Hosts', exact: true }).click();
+  await expect(settings.getByRole('status').first()).toHaveText('Local ready');
+  await settings.getByRole('button', { name: 'Close settings', exact: true }).click();
+  await expect(settings).toHaveCount(0);
+  await shell(page).getByRole('button', { name: 'Settings', exact: true }).click();
+  await expect(settings).toBeVisible();
+});
