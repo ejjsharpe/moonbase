@@ -25,7 +25,8 @@ import {
   chatFindFeature,
   chatStreamFeature,
   chatTranscriptFeature,
-  formatChatMention,
+  findChatMentionStarts,
+  maximumChatMentions,
 } from '@moonbase/contracts/chat';
 import type { ConnectionClient, ConnectionSnapshot } from '@moonbase/contracts/connection';
 import { makeProviderSetupController, type ProviderSetupController } from './providers.ts';
@@ -641,10 +642,14 @@ class ChatModelState {
     const kept = [
       ...new Map(
         (mentions ?? this.state.mentions)
-          .filter((mention) => value.includes(formatChatMention(mention.path)))
+          .filter((mention) => findChatMentionStarts(value, mention.path).length)
           .map((mention) => [mention.path, { path: mention.path }]),
       ).values(),
-    ].slice(0, 32);
+    ];
+    if (kept.length > maximumChatMentions) {
+      this.update({ error: `A message can mention at most ${maximumChatMentions} files.` });
+      return;
+    }
     const target = this.saved.selected;
     this.update({ draft: value, mentions: kept });
     try {

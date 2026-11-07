@@ -15,7 +15,8 @@ import {
   maximumChatMentions,
   maximumChatFileQueryBytes,
   chatFileMatchLimit,
-  formatChatMention,
+  findChatMentionStarts,
+  isChatMentionPath,
   type ChatCommand,
   type ChatInput,
   type ChatOutput,
@@ -57,25 +58,16 @@ export const ChatModelPreferenceSchema = struct({
   model: struct({ provider: ChatIdentifierSchema, modelId: text(256) }),
   reasoningEffort: optional(ChatReasoningEffortSchema),
 });
-/** A path relative to the chat's working folder, without `.`/`..` segments, quotes or control characters. */
-const relativePath = unicode.check(
-  Schema.makeFilter(
-    (value) =>
-      new TextEncoder().encode(value).length <= 1024 &&
-      // oxlint-disable-next-line no-control-regex -- Mention paths reject control characters.
-      !/[\0-\x1f\x7f"\\]/.test(value) &&
-      value.split('/').every((segment) => !!segment && segment !== '.' && segment !== '..'),
-  ),
-);
+const relativePath = Schema.String.check(Schema.makeFilter(isChatMentionPath));
 export const ChatMentionSchema = struct({ path: relativePath });
 const mentions = Schema.mutable(Schema.Array(ChatMentionSchema)).check(
   Schema.isMaxLength(maximumChatMentions),
 );
-/** Each mention is distinct and spelled in the text, so the text alone still names every file. */
+/** Each mention is distinct and spelled in the text as a whole token, so the text alone still names every file. */
 export const areChatMentionsInText = (value: { text: string; mentions?: readonly ChatMention[] }) =>
   !value.mentions ||
   (new Set(value.mentions.map((mention) => mention.path)).size === value.mentions.length &&
-    value.mentions.every((mention) => value.text.includes(formatChatMention(mention.path))));
+    value.mentions.every((mention) => findChatMentionStarts(value.text, mention.path).length > 0));
 export const ChatMessageSchema = struct({
   text: text(maximumChatInputBytes),
   mentions: optional(mentions),

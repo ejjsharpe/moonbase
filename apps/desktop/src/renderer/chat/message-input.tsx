@@ -3,7 +3,7 @@ import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
 import { overlays } from '@moonbase/ui/overlays';
 import { colors, radius, space, syntax, type } from '@moonbase/ui/tokens.stylex';
-import type { ChatMention } from '@moonbase/contracts/chat';
+import { maximumChatMentions, type ChatMention } from '@moonbase/contracts/chat';
 import type {
   ChatController,
   ChatFileSearch,
@@ -43,8 +43,10 @@ export function MessageInput({
 }) {
   const textarea = useRef<HTMLTextAreaElement>(null),
     mirror = useRef<HTMLDivElement>(null),
-    caretAfter = useRef<number | null>(null);
-  const [caret, setCaret] = useState(0),
+    caretAfter = useRef<{ text: string; caret: number } | null>(null);
+  // The caret belongs to the text it was read from; a draft replaced from outside (another chat's,
+  // a sent message's) has no caret until the user places one.
+  const [selection, setSelection] = useState({ text: draft, caret: 0 }),
     [active, setActive] = useState(0),
     [dismissed, setDismissed] = useState<number | null>(null),
     [search, setSearch] = useState<ChatFileSearch | null>(null);
@@ -59,7 +61,10 @@ export function MessageInput({
     search?.subscribe ?? noSubscription,
     search?.getSnapshot ?? noResults,
   );
-  const typed = searchable ? findMentionQuery(draft, caret, mentions) : null;
+  const typed =
+    searchable && selection.text === draft
+      ? findMentionQuery(draft, selection.caret, mentions)
+      : null;
   const query: MentionQuery | null = typed && typed.start !== dismissed ? typed : null;
   const queryKey = query && JSON.stringify([query.start, query.query, cwd]);
   useEffect(() => {
@@ -72,28 +77,35 @@ export function MessageInput({
     setActive(0);
   }, [search, queryKey]);
   useEffect(() => {
-    // Restores the caret after a programmatic edit, once React has rendered the new text.
-    if (caretAfter.current === null || !textarea.current) return;
-    textarea.current.setSelectionRange(caretAfter.current, caretAfter.current);
+    // Restores the caret after a programmatic edit, once React has rendered the edited text.
+    const restored = caretAfter.current;
     caretAfter.current = null;
+    if (restored?.text === draft)
+      textarea.current?.setSelectionRange(restored.caret, restored.caret);
   }, [draft]);
   const open = !!query && (results.matches.length > 0 || !!results.error || results.busy);
   const matches = query ? results.matches : [];
+  const full = mentions.length >= maximumChatMentions;
   const optionId = (index: number) => `${id}-file-${index}`;
   function edit(text: string, next: ChatMention[] | undefined, at: number) {
-    caretAfter.current = at;
-    setCaret(at);
+    caretAfter.current = { text, caret: at };
+    setSelection({ text, caret: at });
     controller.setDraft(text, next);
   }
   function pick(path: string) {
-    if (!query) return;
-    const inserted = insertMention(draft, query, caret, path);
+    if (!query || (full && !mentions.some((mention) => mention.path === path))) return;
+    const inserted = insertMention(draft, query, selection.caret, path);
     edit(
       inserted.text,
       [...mentions.filter((mention) => mention.path !== path), { path }],
       inserted.caret,
     );
   }
+  let status = results.error;
+  if (!status && full) status = `A message can mention at most ${maximumChatMentions} files.`;
+  else if (!status && !matches.length && results.busy) status = 'Searching files…';
+  else if (!status && !results.busy && results.partial)
+    status = 'More files match; keep typing to narrow.';
   const ranges = findMentionRanges(draft, mentions);
   const segments: { text: string; mention: boolean }[] = [];
   let at = 0;
@@ -138,11 +150,17 @@ export function MessageInput({
         placeholder={placeholder}
         value={draft}
         onChange={(event) => {
-          setCaret(event.currentTarget.selectionStart);
+          const element = event.currentTarget;
+          setSelection({ text: element.value, caret: element.selectionStart });
           setDismissed(null);
-          controller.setDraft(event.currentTarget.value);
+          controller.setDraft(element.value);
         }}
-        onSelect={(event) => setCaret(event.currentTarget.selectionStart)}
+        onSelect={(event) =>
+          setSelection({
+            text: event.currentTarget.value,
+            caret: event.currentTarget.selectionStart,
+          })
+        }
         onScroll={(event) => {
           if (mirror.current) mirror.current.scrollTop = event.currentTarget.scrollTop;
         }}
@@ -225,12 +243,9 @@ export function MessageInput({
               );
             })}
           </div>
-          {(results.error ||
-            (!results.busy && results.partial) ||
-            (!matches.length && results.busy)) && (
+          {status && (
             <p role="status" {...stylex.props(styles.status)}>
-              {results.error ??
-                (results.busy ? 'Searching files…' : 'More files match; keep typing to narrow.')}
+              {status}
             </p>
           )}
         </div>

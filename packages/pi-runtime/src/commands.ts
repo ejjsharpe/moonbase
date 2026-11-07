@@ -351,10 +351,10 @@ export class Host {
       if ('target' in d) cwd = getSettings(await this.metadata(d.target), this.fixedSettings).cwd;
       else {
         this.session(d.session);
-        const fixed = this.fixedSettings;
-        if (fixed && d.cwd !== fixed.cwd)
+        const config = this.config;
+        if ('mode' in config) await config.approveFolder?.(d.cwd);
+        else if (d.cwd !== config.cwd)
           V.fail('Unauthorized', 'This host searches only its configured working folder.');
-        if (!fixed && 'mode' in this.config) await this.config.approveFolder?.(d.cwd);
         cwd = d.cwd;
       }
       signal.throwIfAborted();

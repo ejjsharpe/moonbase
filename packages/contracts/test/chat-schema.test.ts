@@ -429,6 +429,17 @@ test('a mention is a relative path spelled in the message text', () => {
       mentions: [{ path: 'docs/My notes.md' }],
     }),
   );
+  // A mention is a whole token, not the start of a longer path or a word's tail.
+  for (const text of ['Open @README.md', 'Open x@README', 'Open @README/a'])
+    assert.throws(
+      () => decodeChatInput('sendChat', { ...send, text, mentions: [{ path: 'README' }] }),
+      text,
+    );
+  for (const text of ['@README', 'Open @README.', 'Open @README\nnext'])
+    assert.doesNotThrow(
+      () => decodeChatInput('sendChat', { ...send, text, mentions: [{ path: 'README' }] }),
+      text,
+    );
   const many = Array.from({ length: 33 }, (_, n) => ({ path: `f${n}` }));
   assert.throws(() =>
     decodeChatInput('sendChat', {

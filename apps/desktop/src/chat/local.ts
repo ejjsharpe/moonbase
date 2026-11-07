@@ -84,7 +84,7 @@ export async function acquireLocalChat(
     return cwd;
   };
   // A folder chosen in the native picker, still the same directory, may be searched and chatted in.
-  const requireApprovedFolder = async (path: string) => {
+  const requireApprovedFolder = async (path: string, purpose: string) => {
     const approved = approvals.get(path);
     const cwd = await realpath(path),
       info = await stat(cwd);
@@ -97,11 +97,12 @@ export async function acquireLocalChat(
     )
       throw new ApplicationError({
         code: 'Unauthorized',
-        message:
-          'Choose this working folder with the native picker before creating or retrying a local chat.',
+        message: `Choose this working folder with the native picker before ${purpose}.`,
       });
   };
-  const approveSettings = (settings: ChatCreationSettings) => requireApprovedFolder(settings.cwd);
+  const approveSettings = (settings: ChatCreationSettings) =>
+    requireApprovedFolder(settings.cwd, 'creating or retrying a local chat');
+  const approveSearch = (cwd: string) => requireApprovedFolder(cwd, 'searching its files');
   const scope = Scope.forkUnsafe(runtime.scope, 'parallel');
   try {
     const services = await runApplicationEffect(
@@ -113,7 +114,7 @@ export async function acquireLocalChat(
             databasePath: join(directory, 'chat.sqlite'),
             models,
             approveCreation: approveSettings,
-            approveFolder: requireApprovedFolder,
+            approveFolder: approveSearch,
             ...(ripgrepExecutable ? { ripgrepExecutable } : {}),
           }),
           ProviderSetupLive({ models, openUrl, deviceId: session.host.hostId }),

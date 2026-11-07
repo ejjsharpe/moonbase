@@ -2289,9 +2289,20 @@ test('draft mentions persist with their text, drop when their text is deleted, a
     { path: 'src/a.ts' },
     { path: 'docs/My notes.md' },
   ]);
-  // Ordinary typing keeps the mentions its text still spells.
+  // Ordinary typing keeps the mentions its text still spells, as whole tokens.
+  f.controller.setDraft('Compare @src/a.tsx and @"docs/My notes.md" ');
+  assert.deepEqual(f.controller.getSnapshot().mentions, [{ path: 'docs/My notes.md' }]);
+  f.controller.setDraft('Compare @src/a.ts and @"docs/My notes.md" ', [
+    { path: 'src/a.ts' },
+    { path: 'docs/My notes.md' },
+  ]);
   f.controller.setDraft('Compare @src/a.ts and ');
   assert.deepEqual(f.controller.getSnapshot().mentions, [{ path: 'src/a.ts' }]);
+  // Mentioning more files than a message carries leaves the draft as it was.
+  const many = Array.from({ length: 33 }, (_, n) => ({ path: `f${n}` }));
+  f.controller.setDraft(many.map((m) => `@${m.path}`).join(' '), many);
+  assert.equal(f.controller.getSnapshot().draft, 'Compare @src/a.ts and ');
+  assert.match(f.controller.getSnapshot().error ?? '', /at most 32 files/);
   const reopened = await f.root.make({
     chat: f.chat,
     connection: f.connection,

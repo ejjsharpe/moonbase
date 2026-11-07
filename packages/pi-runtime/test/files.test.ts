@@ -111,6 +111,20 @@ test('one listing serves a burst of queries; it is refreshed later and a failure
   assert.equal(runs, 3);
 });
 
+test('a listing cut short by its size or time budget is searched partially', async () => {
+  for (const failure of [{ code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' }, { killed: true }]) {
+    const index = new ChatFileIndex({
+      run: async () => {
+        // The budget stopped the listing partway through an entry.
+        throw Object.assign(Error('stopped'), failure, { stdout: Buffer.from('a.ts\0b.ts\0c.t') });
+      },
+    });
+    const result = await index.find('/work', '');
+    assert.deepEqual(paths(result), ['a.ts', 'b.ts']);
+    assert.equal(result.partial, true);
+  }
+});
+
 test('results stop at 50 and say they are partial', async () => {
   const files = Array.from({ length: 80 }, (_, n) => `file${String(n).padStart(2, '0')}.ts`);
   const index = new ChatFileIndex({ run: async () => Buffer.from(files.join('\0')) });

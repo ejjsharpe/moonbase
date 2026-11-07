@@ -20,6 +20,25 @@ export const maximumChatFileQueryBytes = 256;
 export const chatFileMatchLimit = 50;
 /** A mention's spelling in message text: `@path`, quoted when the path contains whitespace. */
 export const formatChatMention = (path: string) => (/\s/.test(path) ? `@"${path}"` : `@${path}`);
+/** Whether a mention spelled up to `at` ends there: at whitespace or trailing punctuation, not inside a longer path such as `a.tsx`. */
+export const isChatMentionEnd = (text: string, at: number) =>
+  at >= text.length || /^(?:\s|[,;:!?)\]}]|\.(?:\s|$))/.test(text.slice(at, at + 2));
+/** Where `path`'s mention is spelled in `text` as a whole token, after whitespace or the start. */
+export function findChatMentionStarts(text: string, path: string) {
+  const token = formatChatMention(path),
+    starts: number[] = [];
+  for (let at = text.indexOf(token); at >= 0; at = text.indexOf(token, at + 1))
+    if ((at === 0 || /\s/.test(text[at - 1]!)) && isChatMentionEnd(text, at + token.length))
+      starts.push(at);
+  return starts;
+}
+/** A path relative to the chat's working folder, without `.`/`..` segments, quotes or control characters. */
+export const isChatMentionPath = (path: string) =>
+  !/[\ud800-\udfff]/u.test(path) &&
+  new TextEncoder().encode(path).length <= 1024 &&
+  // oxlint-disable-next-line no-control-regex -- Mention paths reject control characters.
+  !/[\0-\x1f\x7f"\\]/.test(path) &&
+  path.split('/').every((segment) => !!segment && segment !== '.' && segment !== '..');
 /** Find's literal matching rule over original text; Unicode behaviour is in the README. */
 export const getChatFindExpression = (query: string) =>
   new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu');

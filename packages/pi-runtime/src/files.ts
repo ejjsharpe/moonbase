@@ -1,7 +1,6 @@
 import { execFile } from 'node:child_process';
 import { ApplicationError } from '@moonbase/contracts/workspace';
-import { chatFileMatchLimit, type ChatOutput } from '@moonbase/contracts/chat';
-import { decodeChatOutput } from '@moonbase/contracts/chat-schema';
+import { chatFileMatchLimit, isChatMentionPath, type ChatOutput } from '@moonbase/contracts/chat';
 import { matchPath, compareMatches } from '@moonbase/contracts/lookup';
 
 /** The most files one listing ranks; a larger folder is searched partially. */
@@ -25,14 +24,18 @@ const excluded = [
 ];
 
 type Listing = { files: string[]; partial: boolean };
-/** Runs a listing command in the folder; tests inject one. */
+/**
+ * Runs a listing command in the folder; tests inject one. A failure carries the output so far as
+ * `stdout`, with `killed` set when the timeout stopped it.
+ */
 export type ChatFileListingRun = (
   executable: string,
   args: string[],
   cwd: string,
 ) => Promise<Buffer>;
+type ListingFailure = { code?: unknown; killed?: boolean; stdout?: Buffer };
 
-const run: ChatFileListingRun = (executable, args, cwd) =>
+const runListing: ChatFileListingRun = (executable, args, cwd) =>
   new Promise((resolve, reject) => {
     execFile(
       executable,
@@ -41,13 +44,27 @@ const run: ChatFileListingRun = (executable, args, cwd) =>
       (error, stdout) => (error ? reject(Object.assign(error, { stdout })) : resolve(stdout)),
     );
   });
-const missing = (error: unknown) => (error as { code?: unknown }).code === 'ENOENT';
-const split = (bytes: Buffer) =>
-  bytes
+const isNotFound = (error: unknown) => (error as ListingFailure).code === 'ENOENT';
+/** A listing cut short by its size or time budget: what it printed is a partial listing. */
+const isTruncated = (error: unknown) =>
+  (error as ListingFailure).code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ||
+  !!(error as ListingFailure).killed;
+/** The complete NUL-terminated entries of a listing; a truncated one may end mid-entry. */
+const splitListing = (bytes: Buffer, truncated: boolean) => {
+  const end = truncated ? bytes.lastIndexOf(0) + 1 : bytes.length;
+  return bytes
+    .subarray(0, end)
     .toString()
     .split('\0')
     .filter(Boolean)
     .map((path) => path.replace(/^\.\//, ''));
+};
+const countSegments = (path: string) => path.split('/').length;
+const makeUnavailableError = () =>
+  new ApplicationError({
+    code: 'Unavailable',
+    message: 'File search needs ripgrep or Git on the chat host, and a readable working folder.',
+  });
 
 /**
  * Lists a working folder's files the way coding agents do: ripgrep's ignore rules when ripgrep is
@@ -70,7 +87,7 @@ export class ChatFileIndex {
   ) {
     this.ripgrep = options.ripgrepExecutable ?? 'rg';
     this.git = options.gitExecutable ?? 'git';
-    this.run = options.run ?? run;
+    this.run = options.run ?? runListing;
     this.now = options.now ?? Date.now;
   }
   private list(cwd: string): Promise<Listing> {
@@ -87,36 +104,49 @@ export class ChatFileIndex {
     });
     return listing;
   }
+  /** Runs one listing command; output cut short by its budget is kept as a partial listing. */
+  private async runPartial(executable: string, args: string[], cwd: string) {
+    try {
+      return { bytes: await this.run(executable, args, cwd), truncated: false };
+    } catch (error) {
+      const stdout = (error as ListingFailure).stdout;
+      if (isTruncated(error) && stdout) return { bytes: stdout, truncated: true };
+      throw error;
+    }
+  }
   private async enumerate(cwd: string): Promise<Listing> {
     const args = ['--files', '--hidden', '--null', '--no-config', '--threads', '1'];
     for (const name of excluded) args.push('--glob', '!**/' + name);
-    let bytes: Buffer;
+    let output: { bytes: Buffer; truncated: boolean };
     try {
-      bytes = await this.run(this.ripgrep, args, cwd);
+      output = await this.runPartial(this.ripgrep, args, cwd);
     } catch (error) {
       // ripgrep exits 1 when nothing matched, or 2 with partial output after unreadable entries.
-      const stdout = (error as { stdout?: Buffer }).stdout;
-      const status = (error as { code?: unknown }).code;
-      if (status === 1 || (status === 2 && stdout?.length)) bytes = stdout ?? Buffer.alloc(0);
-      else if (!missing(error)) throw unavailable();
+      const stdout = (error as ListingFailure).stdout;
+      const status = (error as ListingFailure).code;
+      if (status === 1) output = { bytes: Buffer.alloc(0), truncated: false };
+      else if (status === 2 && stdout?.length) output = { bytes: stdout, truncated: true };
+      else if (!isNotFound(error)) throw makeUnavailableError();
       else
         try {
-          bytes = await this.run(
+          output = await this.runPartial(
             this.git,
             ['ls-files', '-z', '--cached', '--others', '--exclude-standard'],
             cwd,
           );
         } catch {
-          throw unavailable();
+          throw makeUnavailableError();
         }
     }
-    const files = [...new Set(split(bytes))].filter(
-      (path) => !path.split('/').some((segment) => excluded.includes(segment)),
+    // A file whose path cannot be a mention (quotes, control characters) is never offered.
+    const files = [...new Set(splitListing(output.bytes, output.truncated))].filter(
+      (path) =>
+        isChatMentionPath(path) && !path.split('/').some((segment) => excluded.includes(segment)),
     );
-    files.sort((a, b) => depth(a) - depth(b) || a.localeCompare(b));
+    files.sort((a, b) => countSegments(a) - countSegments(b) || a.localeCompare(b));
     return {
       files: files.slice(0, chatFileCandidateLimit),
-      partial: files.length > chatFileCandidateLimit,
+      partial: output.truncated || files.length > chatFileCandidateLimit,
     };
   }
   /** Ranks files with the editor's fuzzy matcher; an empty query lists the shallowest files. */
@@ -127,41 +157,35 @@ export class ChatFileIndex {
   ): Promise<ChatOutput<'findChatFiles'>> {
     const listing = await this.list(cwd);
     signal?.throwIfAborted();
+    if (!query.trim())
+      return {
+        query,
+        matches: listing.files
+          .slice(0, chatFileMatchLimit)
+          .map((path) => ({ path, positions: [] })),
+        partial: listing.partial || listing.files.length > chatFileMatchLimit,
+      };
     let partial = listing.partial;
     const matches = [];
     let cells = 0;
     for (const path of listing.files) {
       // The same ranking budget as the editor's lookup.
-      cells += path.length * Math.max(query.length, 1);
+      cells += path.length * query.length;
       if (cells > rankingCells) {
         partial = true;
         break;
       }
-      const match = query.trim() ? matchPath(path, query) : { path, score: 0, positions: [] };
+      const match = matchPath(path, query);
       if (match) matches.push(match);
     }
-    if (query.trim()) matches.sort(compareMatches);
-    const mentionable = [];
-    for (const match of matches) {
-      if (mentionable.length === chatFileMatchLimit) {
-        partial = true;
-        break;
-      }
-      const result = { path: match.path, positions: match.positions };
-      // A file whose path cannot be a mention (quotes, control characters) is not offered.
-      try {
-        decodeChatOutput('findChatFiles', { query, matches: [result], partial: false });
-        mentionable.push(result);
-      } catch {
-        /* Skipped. */
-      }
-    }
-    return { query, matches: mentionable, partial };
+    matches.sort(compareMatches);
+    if (matches.length > chatFileMatchLimit) partial = true;
+    return {
+      query,
+      matches: matches
+        .slice(0, chatFileMatchLimit)
+        .map((match) => ({ path: match.path, positions: match.positions })),
+      partial,
+    };
   }
 }
-const depth = (path: string) => path.split('/').length;
-const unavailable = () =>
-  new ApplicationError({
-    code: 'Unavailable',
-    message: 'File search needs ripgrep or Git on the chat host, and a readable working folder.',
-  });

@@ -9,7 +9,7 @@ import {
   areChatMentionsInText,
   chatInputSchemas,
 } from '@moonbase/contracts/chat-schema';
-import type { ChatSession, ChatTarget } from '@moonbase/contracts/chat';
+import { maximumChatMentions, type ChatSession, type ChatTarget } from '@moonbase/contracts/chat';
 
 const struct = <const F extends Schema.Struct.Fields>(fields: F) =>
   Schema.Struct(fields).mapFields(Struct.map(Schema.mutableKey));
@@ -23,7 +23,9 @@ const text = (limit: number) =>
         new TextEncoder().encode(value).length <= limit,
     ),
   );
-const mentions = Schema.optionalKey(array(ChatMentionSchema).check(Schema.isMaxLength(32)));
+const mentions = Schema.optionalKey(
+  array(ChatMentionSchema).check(Schema.isMaxLength(maximumChatMentions)),
+);
 const pending = Schema.Union([
   struct({
     operation: Schema.Literal('createChat'),
