@@ -1,6 +1,6 @@
-import type { LookupMatch } from '@moonbase/contracts/workspace';
+import type { LookupMatch } from './workspace.ts';
 
-/** Independent matcher. Positions are UTF-16 offsets, as consumed by React/Monaco. */
+/** Fuzzy path matcher shared by editor file lookup and chat file search. Positions are UTF-16 offsets, as consumed by React/Monaco. */
 export function matchPath(path: string, query: string): LookupMatch | null {
   const pieces = [...query.matchAll(/"([^"]*)"|([^\s"]+)/g)]
     .map((m) => ({ text: m[1] ?? m[2], contiguous: m[1] !== undefined }))

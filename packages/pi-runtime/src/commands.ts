@@ -27,7 +27,8 @@ import type {
   ChatHistoryPage,
   ChatSendReceipt,
 } from '@moonbase/contracts/chat';
-import { chatFindFeature, chatTranscriptFeature } from '@moonbase/contracts/chat';
+import { chatFilesFeature, chatFindFeature, chatTranscriptFeature } from '@moonbase/contracts/chat';
+import { ChatFileIndex } from './files.ts';
 import {
   Request,
   Store,
@@ -175,6 +176,7 @@ export class Host {
   readonly waiters: RetainedWork;
   readonly observations: Scope.Closeable;
   readonly statusListeners = new Set<(conversationId: ConversationId) => void>();
+  readonly files: ChatFileIndex;
   constructor(
     config: RuntimeConfiguration,
     harness: Harness,
@@ -185,6 +187,7 @@ export class Host {
     observations: Scope.Closeable,
   ) {
     this.config = config;
+    this.files = new ChatFileIndex({ ripgrepExecutable: config.ripgrepExecutable });
     this.harness = harness;
     this.identity = identity;
     this.work = work;
@@ -341,6 +344,23 @@ export class Host {
       return findTranscript(this.harness, d, signal);
     });
   }
+  /** Searches only a chat's own working folder, or one a new chat could be created in. */
+  findFiles(d: ChatInput<'findChatFiles'>) {
+    return this.read(async (signal) => {
+      let cwd: string;
+      if ('target' in d) cwd = getSettings(await this.metadata(d.target), this.fixedSettings).cwd;
+      else {
+        this.session(d.session);
+        const fixed = this.fixedSettings;
+        if (fixed && d.cwd !== fixed.cwd)
+          V.fail('Unauthorized', 'This host searches only its configured working folder.');
+        if (!fixed && 'mode' in this.config) await this.config.approveFolder?.(d.cwd);
+        cwd = d.cwd;
+      }
+      signal.throwIfAborted();
+      return this.files.find(cwd, d.query, signal);
+    });
+  }
   getHistoryAround(d: ChatInput<'getChatHistoryAround'>) {
     return this.read(async (signal) => {
       await this.metadata(d.target);
@@ -357,12 +377,12 @@ export class Host {
         host: { ...this.config.host },
         actorId: this.config.actorId,
         mode: 'local',
-        features: [chatTranscriptFeature, chatFindFeature],
+        features: [chatTranscriptFeature, chatFindFeature, chatFilesFeature],
       };
     return {
       host: { ...this.config.host },
       actorId: this.config.actorId,
-      features: [chatTranscriptFeature, chatFindFeature],
+      features: [chatTranscriptFeature, chatFindFeature, chatFilesFeature],
       cwd: this.config.cwd,
       model: `${this.config.model.provider}/${this.config.model.modelId}`,
     };

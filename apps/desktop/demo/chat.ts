@@ -7,6 +7,21 @@ import type {
   ChatCreationSettings,
 } from '@moonbase/contracts/chat';
 import type { ConnectionClient, ConnectionSnapshot } from '@moonbase/contracts/connection';
+import { chatFilesFeature, chatFileMatchLimit, type ChatInput } from '@moonbase/contracts/chat';
+import { compareMatches, matchPath } from '@moonbase/contracts/lookup';
+
+/** The demo working folder's files, for @ mentions. */
+export const demoFiles = [
+  'README.md',
+  'package.json',
+  'apps/desktop/README.md',
+  'apps/desktop/src/renderer/chat/view.tsx',
+  'apps/desktop/src/renderer/chat/composer.tsx',
+  'apps/desktop/src/main.ts',
+  'packages/workbench/src/editor/workbench.tsx',
+  'packages/workbench/src/editor/file-lookup.tsx',
+  'docs/Release notes.md',
+];
 
 /** Volatile, trusted browser demo capabilities; no host, transport or provider is installed. */
 export function chatCapabilities(local = false) {
@@ -36,6 +51,7 @@ export function chatCapabilities(local = false) {
   let connectionState: ConnectionSnapshot = { state: 'disconnected', connectionId: null, profile };
   let receiveConnection: (state: ConnectionSnapshot) => void = () => {};
   const calls: string[] = [];
+  const sent: ChatInput<'sendChat'>[] = [];
   const storage = { value: null as string | null, writes: 0, write: (_value: string) => {} };
   const controls = {
     release: async () => {},
@@ -57,8 +73,13 @@ export function chatCapabilities(local = false) {
         case 'getChatHost':
           return (
             local
-              ? { ...context, mode: 'local' }
-              : { ...context, cwd: conversation.cwd, model: conversation.model }
+              ? { ...context, mode: 'local', features: [chatFilesFeature] }
+              : {
+                  ...context,
+                  cwd: conversation.cwd,
+                  model: conversation.model,
+                  features: [chatFilesFeature],
+                }
           ) as never;
         case 'listChats':
           return { conversations: [conversation], nextCursor: null } as never;
@@ -77,6 +98,7 @@ export function chatCapabilities(local = false) {
           }
           return { requestId: (input as { requestId: string }).requestId, conversation } as never;
         case 'sendChat':
+          sent.push(structuredClone(input as ChatInput<'sendChat'>));
           if (local) {
             const message = input as { requestId: string; text: string };
             snapshot.entries.unshift(
@@ -103,6 +125,18 @@ export function chatCapabilities(local = false) {
             code: 'Incompatible',
             message: 'This legacy demo does not advertise transcript reads.',
           });
+        case 'findChatFiles': {
+          const { query } = input as ChatInput<'findChatFiles'>;
+          const matches = demoFiles
+            .map((path) =>
+              query.trim() ? matchPath(path, query) : { path, score: 0, positions: [] },
+            )
+            .filter((match) => match !== null)
+            .sort(query.trim() ? compareMatches : () => 0)
+            .slice(0, chatFileMatchLimit)
+            .map(({ path, positions }) => ({ path, positions }));
+          return { query, matches, partial: false } as never;
+        }
         case 'getChatSend':
           return null as never;
         case 'stopChat':
@@ -189,5 +223,5 @@ export function chatCapabilities(local = false) {
       },
     },
   };
-  return { dependencies, target, snapshot, storage, controls, calls };
+  return { dependencies, target, snapshot, storage, controls, calls, sent };
 }

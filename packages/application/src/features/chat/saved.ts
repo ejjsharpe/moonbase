@@ -5,6 +5,8 @@ import {
   ChatTargetSchema,
   ChatIdentifierSchema,
   ChatModelPreferenceSchema,
+  ChatMentionSchema,
+  areChatMentionsInText,
   chatInputSchemas,
 } from '@moonbase/contracts/chat-schema';
 import type { ChatSession, ChatTarget } from '@moonbase/contracts/chat';
@@ -21,12 +23,15 @@ const text = (limit: number) =>
         new TextEncoder().encode(value).length <= limit,
     ),
   );
+const mentions = Schema.optionalKey(array(ChatMentionSchema).check(Schema.isMaxLength(32)));
 const pending = Schema.Union([
   struct({
     operation: Schema.Literal('createChat'),
     input: chatInputSchemas.createChat,
     firstMessage: Schema.optionalKey(
-      struct({ requestId: ChatIdentifierSchema, text: text(32768) }),
+      struct({ requestId: ChatIdentifierSchema, text: text(32768), mentions }).check(
+        Schema.makeFilter(areChatMentionsInText),
+      ),
     ),
     message: text(1024),
   }),
@@ -46,10 +51,13 @@ const SavedSchema = struct({
   session: ChatSessionSchema,
   selected: Schema.NullOr(ChatTargetSchema),
   newDraft: Schema.optionalKey(text(32768)),
+  newDraftMentions: mentions,
   modelPreference: Schema.optionalKey(ChatModelPreferenceSchema),
-  drafts: array(struct({ target: ChatTargetSchema, text: text(32768) })).check(
-    Schema.isMaxLength(32),
-  ),
+  drafts: array(
+    struct({ target: ChatTargetSchema, text: text(32768), mentions }).check(
+      Schema.makeFilter(areChatMentionsInText),
+    ),
+  ).check(Schema.isMaxLength(32)),
   pending: array(pending).check(Schema.isMaxLength(16)),
 });
 export type Saved = typeof SavedSchema.Type;
@@ -81,6 +89,11 @@ export function decodeSaved(
         throw Error();
       drafts.add(draft.target.conversationId);
     }
+    if (
+      saved.newDraftMentions &&
+      !areChatMentionsInText({ text: saved.newDraft ?? '', mentions: saved.newDraftMentions })
+    )
+      throw Error();
     for (const item of saved.pending) {
       let session: ChatSession;
       if (item.operation === 'createChat') {

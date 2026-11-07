@@ -13,6 +13,7 @@ import type { TranscriptNative } from '../../chat/wire.ts';
 import { ProviderSetup } from './setup.tsx';
 import { Choice } from './choice.tsx';
 import { Icon } from '../icon.tsx';
+import { MessageInput } from './message-input.tsx';
 import { projectInitials, projectTiles } from '@moonbase/ui/projects';
 const compactLayout = window.matchMedia('(max-width: 640px)');
 const subscribeLayout = (listener: () => void) => {
@@ -365,25 +366,16 @@ export function ChatView({
                 ❯
               </span>
             )}
-            <label htmlFor="message" {...stylex.props(controls.hidden)}>
-              Message
-            </label>
-            <textarea
-              id="message"
-              {...stylex.props(
-                controls.field,
-                styles.textarea,
-                !state.selected && styles.starterTextarea,
-              )}
+            <MessageInput
+              controller={controller}
+              draft={state.draft}
+              mentions={state.mentions}
+              searchable={
+                controller.canFindFiles && connected && (!!state.selected || !local || !!cwd)
+              }
+              cwd={!state.selected && local && cwd ? cwd : undefined}
               placeholder={state.selected ? 'Reply…' : 'Describe a task…'}
-              value={state.draft}
-              onChange={(e) => controller.setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                  e.preventDefault();
-                  e.currentTarget.form?.requestSubmit();
-                }
-              }}
+              starter={!state.selected}
             />
           </div>
           <div {...stylex.props(controls.row, styles.composeActions)}>
@@ -923,7 +915,6 @@ const styles = stylex.create({
     fontWeight: 700,
     lineHeight: 1.6,
   },
-  starterTextarea: { minHeight: 90, fontSize: 14 },
   starterComposer: { boxShadow: shadow.raised, padding: '16px 10px 10px 16px' },
   folderTile: { width: 22, height: 22, borderRadius: 6, fontSize: 10 },
   caret: { color: colors.muted },
@@ -964,19 +955,6 @@ const styles = stylex.create({
     borderColor: colors.controlBorder,
     borderRadius: radius.composer,
     ':focus-within': { borderColor: colors.muted },
-  },
-  textarea: {
-    width: '100%',
-    resize: 'none',
-    minHeight: 48,
-    maxHeight: '25vh',
-    fontSize: type.message,
-    lineHeight: 1.6,
-    backgroundColor: 'transparent',
-    borderWidth: 0,
-    borderRadius: 0,
-    padding: 0,
-    ':focus-visible': { outline: 'none' },
   },
   composeActions: { minHeight: 32, justifyContent: 'flex-end', flexWrap: 'wrap', gap: space.sm },
   modelActions: { marginLeft: 'auto', minWidth: 0, maxWidth: '100%', flexWrap: 'nowrap' },

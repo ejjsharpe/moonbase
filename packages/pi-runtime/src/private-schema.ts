@@ -51,6 +51,7 @@ const programmatic = Schema.Struct({
     (value): value is Models => !!value && typeof (value as Models).getModel === 'function',
   ),
   registry: Schema.optional(Schema.declare<Registry>((value): value is Registry => !!value)),
+  ripgrepExecutable: Schema.optional(path),
 });
 const server = Schema.Struct({ host: ChatHostTargetSchema, token, port });
 const storedTarget = Schema.Struct({ ...ChatTargetSchema.fields, conversationId: recordId });
@@ -91,6 +92,12 @@ const localProgrammatic = Schema.Struct({
         typeof value === 'function',
     ),
   ),
+  approveFolder: Schema.optional(
+    Schema.declare<(cwd: string) => Promise<void>>(
+      (value): value is (cwd: string) => Promise<void> => typeof value === 'function',
+    ),
+  ),
+  ripgrepExecutable: Schema.optional(path),
 });
 const store = Schema.Struct({ identity: Schema.String });
 const metadata = Schema.Struct({

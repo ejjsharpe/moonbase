@@ -36,6 +36,7 @@ The listener binds only `127.0.0.1`; reach it through the [SSH package](../ssh/R
 ## Behavior worth knowing
 
 - Mutations carry request IDs bound to their full input. A lost or unproved reply is `Uncertain`; callers retry with the original request rather than resending, and reconnects never resend.
+- `findChatFiles` lists the chat's working folder on the host with ripgrep (`ripgrepExecutable`, else `rg` on PATH) or, without it, `git ls-files`, honouring ignore files and skipping dependencies. A new chat may search only the remote host's fixed folder, or a local folder `approveFolder` accepts. Mentions reach the agent as the `@path` text; the agent reads the files itself.
 - Stop targets only the captured submission/task. Cancelling or disconnecting a client never stops remote work.
 - Remote hosts stream snapshots over an authenticated `chat-stream-v1` channel; messages are HMAC-authenticated, and OpenSSH provides transport encryption.
 - A dropped or stalled stream reconnects up to three times per outage; an authenticated frame arriving at least half a heartbeat interval after a connection's snapshot renews that budget.

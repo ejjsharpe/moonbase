@@ -9,7 +9,16 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 assert.deepEqual(checkBoundaries(readRepository(root)), []);
 console.log('Verified final source ownership, public exports and cycles; no migration exceptions.');
 
-for (const entry of ['workspace', 'host', 'connection', 'chat', 'providers', 'errors', 'common']) {
+for (const entry of [
+  'workspace',
+  'host',
+  'connection',
+  'chat',
+  'providers',
+  'errors',
+  'common',
+  'lookup',
+]) {
   const path = `@moonbase/contracts/${entry}`;
   const result = await build({
     entryPoints: [path],

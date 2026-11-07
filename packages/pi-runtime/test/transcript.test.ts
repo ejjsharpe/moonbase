@@ -94,6 +94,7 @@ test('all retained blocks, large escaped Unicode/JSON/patch/image content and 1,
   assert.deepEqual((await f.client.command('getChatHost', { host: session.host })).features, [
     'transcript-v1',
     'transcript-find-v1',
+    'chat-files-v1',
   ]);
   const text = '😀\\"\n\u0000\u0001'.repeat(70000);
   const args = { content: text },

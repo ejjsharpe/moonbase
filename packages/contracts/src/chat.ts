@@ -13,10 +13,20 @@ export const maximumChatFindQueryBytes = 1024;
 export const chatFindPageSize = 32;
 export const chatTranscriptFeature = 'transcript-v1';
 export const chatFindFeature = 'transcript-find-v1';
+/** The host searches a chat's working folder for files to mention (`findChatFiles`). */
+export const chatFilesFeature = 'chat-files-v1';
+export const maximumChatMentions = 32;
+export const maximumChatFileQueryBytes = 256;
+export const chatFileMatchLimit = 50;
+/** A mention's spelling in message text: `@path`, quoted when the path contains whitespace. */
+export const formatChatMention = (path: string) => (/\s/.test(path) ? `@"${path}"` : `@${path}`);
 /** Find's literal matching rule over original text; Unicode behaviour is in the README. */
 export const getChatFindExpression = (query: string) =>
   new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu');
 export type ChatTranscriptMatch = typeof Contracts.ChatTranscriptMatchSchema.Type;
+/** A file in the chat's working folder that a message refers to, by relative path. */
+export type ChatMention = typeof Contracts.ChatMentionSchema.Type;
+export type ChatFileMatch = typeof Contracts.ChatFileMatchSchema.Type;
 export const chatStreamFeature = 'chat-stream-v1';
 export type ChatStreamRequest = typeof Contracts.ChatStreamRequestSchema.Type;
 export type ChatStreamFrame = typeof Contracts.ChatStreamFrameSchema.Type;

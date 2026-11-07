@@ -2274,3 +2274,141 @@ for (const typed of [true, false])
       !f.calls.some((call) => ['createChat', 'sendChat', 'stopChat'].includes(call.operation)),
     );
   });
+
+test('draft mentions persist with their text, drop when their text is deleted, and go out with Send', async (t) => {
+  const storage = new Storage();
+  const f = await fixture(t, storage);
+  await ready(f);
+  await f.controller.closeView();
+  f.controller.setDraft('Compare @src/a.ts and @"docs/My notes.md" ', [
+    { path: 'src/a.ts' },
+    { path: 'docs/My notes.md' },
+    { path: 'not/spelled.ts' },
+  ]);
+  assert.deepEqual(f.controller.getSnapshot().mentions, [
+    { path: 'src/a.ts' },
+    { path: 'docs/My notes.md' },
+  ]);
+  // Ordinary typing keeps the mentions its text still spells.
+  f.controller.setDraft('Compare @src/a.ts and ');
+  assert.deepEqual(f.controller.getSnapshot().mentions, [{ path: 'src/a.ts' }]);
+  const reopened = await f.root.make({
+    chat: f.chat,
+    connection: f.connection,
+    context,
+    storage,
+  });
+  assert.deepEqual(reopened.getSnapshot().mentions, [{ path: 'src/a.ts' }]);
+  await f.controller.send();
+  const send = f.calls.find((call) => call.operation === 'sendChat')!.input as {
+    text: string;
+    mentions?: unknown;
+  };
+  assert.equal(send.text, 'Compare @src/a.ts and ');
+  assert.deepEqual(send.mentions, [{ path: 'src/a.ts' }]);
+  assert.deepEqual(f.controller.getSnapshot().mentions, []);
+  // A reply in the open chat carries its own mentions.
+  f.controller.setDraft('Now @b.ts', [{ path: 'b.ts' }]);
+  await f.controller.send();
+  const reply = f.calls.filter((call) => call.operation === 'sendChat')[1]!.input as {
+    mentions?: unknown;
+  };
+  assert.deepEqual(reply.mentions, [{ path: 'b.ts' }]);
+  f.controller.setDraft('No mentions');
+  await f.controller.send();
+  const plain = f.calls.filter((call) => call.operation === 'sendChat')[2]!.input as object;
+  assert(!('mentions' in plain));
+});
+
+test('file search asks the host for the open chat, a new chat folder, or the host folder', async (t) => {
+  const f = await fixture(t);
+  await f.controller.start();
+  await f.controller.connect();
+  await turn();
+  await assert.rejects(f.controller.findFiles('a'), { code: 'Unavailable' });
+  f.answers.set('getChatHost', async () => ({
+    ...context,
+    cwd: summary.cwd,
+    model: summary.model,
+    features: ['chat-files-v1'],
+  }));
+  await f.controller.refresh();
+  assert.equal(f.controller.canFindFiles, true);
+  const reply = { query: 'a', matches: [{ path: 'a.ts', positions: [0] }], partial: false };
+  f.answers.set('findChatFiles', async () => reply);
+  assert.deepEqual(await f.controller.findFiles('a'), reply);
+  assert.deepEqual(f.calls.at(-1)!.input, { session: context, cwd: summary.cwd, query: 'a' });
+  await f.controller.findFiles('a', { cwd: '/chosen' });
+  assert.deepEqual(f.calls.at(-1)!.input, { session: context, cwd: '/chosen', query: 'a' });
+  await f.controller.select(target);
+  await f.controller.findFiles('a', { cwd: '/ignored' });
+  assert.deepEqual(f.calls.at(-1)!.input, { target, query: 'a' });
+  const abort = new AbortController();
+  f.answers.set(
+    'findChatFiles',
+    (input: unknown) =>
+      new Promise((_, reject) =>
+        f.signals
+          .get('findChatFiles')!
+          .at(-1)!
+          .addEventListener('abort', () => reject(input)),
+      ),
+  );
+  const cancelled = f.controller.findFiles('b', { signal: abort.signal });
+  await turn();
+  abort.abort();
+  await assert.rejects(cancelled);
+});
+
+test('a file picker shows only the latest answer and cancels the searches before it', async () => {
+  const { ChatFileSearch } = await import('@moonbase/application/chat');
+  const calls: {
+    query: string;
+    cwd?: string;
+    signal: AbortSignal;
+    settle: (v: unknown) => void;
+    fail: (e: unknown) => void;
+  }[] = [];
+  const search = new ChatFileSearch(
+    (query, options) =>
+      new Promise((settle, fail) =>
+        calls.push({
+          query,
+          cwd: options.cwd,
+          signal: options.signal,
+          settle: settle as never,
+          fail,
+        }),
+      ),
+  );
+  let notified = 0;
+  search.subscribe(() => notified++);
+  search.search('a', '/work');
+  search.search('ab', '/work');
+  assert.equal(calls[0]!.signal.aborted, true);
+  assert.equal(calls[1]!.cwd, '/work');
+  assert.equal(search.getSnapshot().busy, true);
+  calls[0]!.settle({ query: 'a', matches: [{ path: 'stale.ts', positions: [] }], partial: false });
+  calls[1]!.settle({ query: 'ab', matches: [{ path: 'ab.ts', positions: [0, 1] }], partial: true });
+  await turn();
+  assert.deepEqual(search.getSnapshot(), {
+    query: 'ab',
+    matches: [{ path: 'ab.ts', positions: [0, 1] }],
+    partial: true,
+    busy: false,
+    error: null,
+  });
+  search.search('abc');
+  calls[2]!.fail(new ApplicationError({ code: 'Unavailable', message: 'No ripgrep or Git.' }));
+  await turn();
+  assert.equal(search.getSnapshot().error, 'No ripgrep or Git.');
+  assert.deepEqual(search.getSnapshot().matches, []);
+  search.search('x');
+  search.dispose();
+  assert.equal(calls[3]!.signal.aborted, true);
+  assert.equal(search.getSnapshot().query, null);
+  const before = notified;
+  search.search('y');
+  assert.equal(calls.length, 4);
+  assert.equal(notified, before);
+});

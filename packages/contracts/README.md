@@ -6,10 +6,13 @@
 | --- | --- |
 | `workspace`, `chat`, `connection`, `host`, `providers` | Browser-safe DTOs, command/client interfaces and protocol constants |
 | `errors`, `common` | `ApplicationError`, error codes, `CommandOptions`, `ObservationClose`, and `areJsonValuesEqual` / `getJsonKey` (key-order-safe equality and keys for plain decoded data) |
+| `lookup` | `matchPath` / `compareMatches`: the fuzzy path ranking shared by editor lookup and chat file search |
 | `*-schema`, `schema` | Request, saved-data and wire-reply decoders, and shared schema constructors |
 | `services` | Privileged Effect service ports and endpoint types |
 
 Chat Find (`getChatFindExpression`) matches the literal query in original text with simple Unicode case folding and no normalization: ẞ matches ß and Σ matches ς, but ß never matches SS and NFC/NFD spellings differ.
+
+A message's file mentions are relative paths in its working folder, each spelled in the text by `formatChatMention` (`@path`, or `@"path"` with whitespace), so the text alone still names every file. `findChatFiles` searches an existing chat's folder, or a folder a new chat may use.
 
 `CheckoutTarget.worktree` is `main` or `linked`; worktrees of one repository share `projectId`.
 

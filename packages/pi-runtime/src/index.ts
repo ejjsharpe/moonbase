@@ -33,6 +33,7 @@ function makeChatService(host: Host): ChatServiceShape {
     sendChat: (d) => host.run('sendChat', d, (input) => host.send(input)),
     getChatSend: (d) => host.run('getChatSend', d, (input) => host.getSend(input)),
     stopChat: (d) => host.run('stopChat', d, (input) => host.stop(input)),
+    findChatFiles: (d) => host.run('findChatFiles', d, (input) => host.findFiles(input)),
     watch: ({ target }) => host.watch(target),
   };
 }
