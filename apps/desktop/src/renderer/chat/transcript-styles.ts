@@ -54,14 +54,7 @@ export const transcriptStyles = stylex.create({
     borderRadius: '14px 14px 4px 14px',
   },
   messageActions: { display: 'flex', alignItems: 'center', gap: 2, height: 28, flexShrink: 0 },
-  userLine: {
-    alignSelf: 'stretch',
-    display: 'flex',
-    justifyContent: 'flex-end',
-    alignItems: 'flex-end',
-    gap: space.xs,
-    minWidth: 0,
-  },
+  userActions: { justifyContent: 'flex-end' },
   messageTime: { paddingInline: 6, color: colors.muted, fontSize: type.caption },
   /** Row actions stay quiet until the row is hovered or holds focus. */
   revealed: {

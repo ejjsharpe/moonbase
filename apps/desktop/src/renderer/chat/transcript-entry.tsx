@@ -239,7 +239,7 @@ export const Entry = memo(
         )}
         {(() => {
           const actions = source && conversational && (
-            <div {...stylex.props(styles.messageActions)}>
+            <div {...stylex.props(styles.messageActions, user && styles.userActions)}>
               {entry.createdAt && (
                 <time
                   dateTime={entry.createdAt}
@@ -259,11 +259,12 @@ export const Entry = memo(
             </div>
           );
           // Your time and Copy sit beside the bubble; the agent's sit under its reply.
+          // Time and Copy sit under the message: right-aligned under your bubble, as in T1.
           return user ? (
-            <div {...stylex.props(styles.userLine)}>
-              {actions}
+            <>
               <div {...stylex.props(styles.bubble)}>{body}</div>
-            </div>
+              {actions}
+            </>
           ) : (
             <>
               {body}

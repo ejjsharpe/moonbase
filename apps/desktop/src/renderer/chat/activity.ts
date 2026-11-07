@@ -39,7 +39,7 @@ export function classifyEntry(entry: ChatEntry): 'empty' | 'activity' | 'message
 /**
  * The list's items: each row on its own, except that empty turn markers are left out and a run of
  * consecutive activity rows is one item, so the list's gap never splits a turn's card. An item's
- * key is its first row's. Items whose rows are unchanged keep their identity.
+ * key is its last row's. Items whose rows are unchanged keep their identity.
  */
 export type TranscriptItem<Row> = { key: string; rows: readonly Row[] };
 export function groupTranscriptRows<Row extends { key: string }>(
@@ -57,11 +57,14 @@ export function groupTranscriptRows<Row extends { key: string }>(
     open = kind === 'activity';
   }
   return runs.map((run) => {
-    const old = previous.get(run[0]!);
+    // Keyed by its last row: history loading above can join rows to a run's start, and its key
+    // must not change under the reader.
+    const last = run.at(-1)!;
+    const old = previous.get(last);
     if (old && old.rows.length === run.length && old.rows.every((row, i) => row === run[i]))
       return old;
-    const item = { key: run[0]!.key, rows: run };
-    previous.set(run[0]!, item);
+    const item = { key: last.key, rows: run };
+    previous.set(last, item);
     return item;
   });
 }
