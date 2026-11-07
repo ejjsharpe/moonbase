@@ -17,6 +17,7 @@ import { controls } from '@moonbase/ui/controls';
 import { workbench } from '@moonbase/ui/workbench';
 import { Settings, type SettingsSection } from './settings.tsx';
 import { formatChatAge } from '../chat/age.ts';
+import { getChatPlace } from '../chat/folder.ts';
 import { ChatView } from '../chat/view.tsx';
 import { checkoutName } from '@moonbase/ui/projects';
 import { Icon } from '../icon.tsx';
@@ -155,7 +156,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
       id: summary.target.conversationId,
       kind: 'chat' as const,
       label: summary.title,
-      detail: `${summary.cwd.split('/').filter(Boolean).at(-1) || '/'} · ${formatChatAge(summary.activity?.at ?? summary.createdAt)}`,
+      detail: `${getChatPlace(summary)} · ${formatChatAge(summary.activity?.at ?? summary.createdAt)}`,
       recent: index < 3,
       run: () => {
         if (!chat) return;

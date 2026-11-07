@@ -84,8 +84,9 @@ export const ChatFileMatchSchema = struct({
     Schema.Array(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 1024 }))),
   ).check(Schema.isMaxLength(1024)),
 });
+/** Without `cwd`, a local chat has no project: the host makes it a new, empty folder of its own. */
 export const ChatCreationSettingsSchema = struct({
-  cwd: text(4096),
+  cwd: optional(text(4096)),
   ...ChatModelPreferenceSchema.fields,
 });
 const features = optional(Schema.mutable(Schema.Array(text(64))).check(Schema.isMaxLength(16)));
@@ -110,6 +111,8 @@ export const ChatSummarySchema = struct({
   title: text(200),
   createdAt: timestamp,
   cwd: text(4096),
+  /** The working folder is one the host made for this chat alone, not a project. */
+  ownFolder: optional(Schema.Literal(true)),
   model: text(512),
   reasoningEffort: optional(ChatReasoningEffortSchema),
   /** Present in chat listings; a snapshot reports the open chat's state itself. */

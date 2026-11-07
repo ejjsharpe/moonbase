@@ -1,4 +1,5 @@
-import { realpath, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rmdir, stat } from 'node:fs/promises';
+import { join } from 'node:path';
 import { BACKGROUND_CONTEXT as context, withCancel } from '@earendil-works/chord/context';
 import {
   LiveDoc,
@@ -16,7 +17,6 @@ import { normalizeApplicationError, releaseResource } from '@moonbase/effect';
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai/models';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import type {
-  ChatCreationSettings,
   ChatCommand,
   ChatInput,
   ChatOutput,
@@ -39,6 +39,7 @@ import {
   tid,
   readOwnedMetadata,
   getSettings,
+  type ChatSettings,
 } from './documents.ts';
 import {
   listConversations,
@@ -54,6 +55,15 @@ import { NestedSourceRetired, readTranscriptContent } from './transcript.ts';
 import * as V from './validation.ts';
 import * as S from './private-schema.ts';
 
+/** A new, empty, private folder under `parent` for a chat without a project. */
+async function makeChatFolder(parent: string) {
+  try {
+    await mkdir(parent, { recursive: true, mode: 0o700 });
+    return await realpath(await mkdtemp(join(parent, 'chat-')));
+  } catch {
+    return V.fail('Unavailable', 'A folder for the new chat could not be made.');
+  }
+}
 const unknownOutcome = () =>
   new ApplicationError({
     code: 'Uncertain',
@@ -201,7 +211,7 @@ export class Host {
     if (value.actorId !== this.config.actorId)
       V.fail('Unauthorized', 'This personal chat belongs to another actor.');
   }
-  get fixedSettings(): ChatCreationSettings | undefined {
+  get fixedSettings(): ChatSettings | undefined {
     return 'mode' in this.config ? undefined : { cwd: this.config.cwd, model: this.config.model };
   }
   async metadata(target: ChatTarget) {
@@ -210,7 +220,7 @@ export class Host {
   }
   summary(
     conversationId: string,
-    meta: { title: string; createdAt: string; settings?: ChatCreationSettings },
+    meta: { title: string; createdAt: string; settings?: ChatSettings },
   ): ChatSummary {
     return summarizeConversation(
       { host: this.config.host, actorId: this.config.actorId },
@@ -413,23 +423,31 @@ export class Host {
           ),
         };
     }
-    let settings: ChatCreationSettings;
+    let settings: ChatSettings, ownFolder: string | undefined;
     if ('mode' in this.config) {
-      const cwd = await realpath(d.settings!.cwd).catch(() =>
-        V.fail('InvalidInput', 'Choose an existing local working folder.'),
-      );
-      if (cwd !== d.settings!.cwd || !(await stat(cwd)).isDirectory())
-        V.fail('InvalidInput', 'Choose a canonical local working folder.');
+      const requested = d.settings!;
+      if (requested.cwd !== undefined) {
+        const cwd = await realpath(requested.cwd).catch(() =>
+          V.fail('InvalidInput', 'Choose an existing local working folder.'),
+        );
+        if (cwd !== requested.cwd || !(await stat(cwd)).isDirectory())
+          V.fail('InvalidInput', 'Choose a canonical local working folder.');
+      } else if (!this.config.chatFolders)
+        V.fail('InvalidInput', 'Choose a local working folder for this chat.');
       const model =
-        this.config.models.getModel(d.settings!.model.provider, d.settings!.model.modelId) ??
+        this.config.models.getModel(requested.model.provider, requested.model.modelId) ??
         V.fail('InvalidInput', 'Choose an installed model from the local catalog.');
       if (
-        d.settings!.reasoningEffort &&
-        !getSupportedThinkingLevels(model).includes(d.settings!.reasoningEffort)
+        requested.reasoningEffort &&
+        !getSupportedThinkingLevels(model).includes(requested.reasoningEffort)
       )
         V.fail('InvalidInput', 'Choose a reasoning effort supported by this model.');
-      settings = d.settings!;
-      await this.config.approveCreation?.(settings);
+      await this.config.approveCreation?.(requested);
+      if (requested.cwd !== undefined) settings = { ...requested, cwd: requested.cwd };
+      else {
+        ownFolder = await makeChatFolder(this.config.chatFolders!);
+        settings = { ...requested, cwd: ownFolder, ownFolder: true };
+      }
     } else settings = { cwd: this.config.cwd, model: this.config.model };
     let conversationId: string, definiteRejection: ApplicationError | undefined;
     try {
@@ -465,7 +483,11 @@ export class Host {
         return String(conversation.id);
       }, context);
     } catch (error) {
-      if (definiteRejection && error === definiteRejection) throw error;
+      if (definiteRejection && error === definiteRejection) {
+        // No chat was made, so its folder is still empty; a non-empty folder is left alone.
+        if (ownFolder) await rmdir(ownFolder).catch(() => {});
+        throw error;
+      }
       throw unknownOutcome();
     }
     try {

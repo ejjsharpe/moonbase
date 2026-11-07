@@ -119,8 +119,11 @@ export async function acquireLocalChat(
         message: `Choose this working folder with the native picker before ${purpose}.`,
       });
   };
-  const approveSettings = (settings: ChatCreationSettings) =>
-    requireApprovedFolder(settings.cwd, 'creating or retrying a local chat');
+  // A chat without a project runs in a new folder the runtime makes for it under `chats`.
+  const approveSettings = async (settings: ChatCreationSettings) => {
+    if (settings.cwd !== undefined)
+      await requireApprovedFolder(settings.cwd, 'creating or retrying a local chat');
+  };
   const approveSearch = (cwd: string) => requireApprovedFolder(cwd, 'searching its files');
   const scope = Scope.forkUnsafe(runtime.scope, 'parallel');
   try {
@@ -131,6 +134,7 @@ export async function acquireLocalChat(
           LocalPiRuntimeLive({
             ...session,
             databasePath: join(directory, 'chat.sqlite'),
+            chatFolders: join(directory, 'chats'),
             models,
             approveCreation: approveSettings,
             approveFolder: approveSearch,

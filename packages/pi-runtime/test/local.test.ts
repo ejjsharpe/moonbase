@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Harness } from '@earendil-works/pi-durable';
-import { mkdtemp, mkdir, readFile, rm, realpath } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdtemp, mkdir, readFile, readdir, rm, realpath } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Effect, ManagedRuntime } from 'effect';
 import { createModels } from '@earendil-works/pi-ai/models';
@@ -170,6 +170,77 @@ test('local conversations retain distinct folders/models, coding tools, immutabl
   await remote.dispose();
 });
 
+test('a local chat without a project runs in a new, empty folder of its own', async (t) => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-own-folder-')));
+  const chatFolders = join(root, 'chats');
+  const models = createModels(),
+    faux = fauxProvider({ models: [{ id: 'model' }], tokensPerSecond: 100000 });
+  models.setProvider(faux.provider);
+  const approvals: unknown[] = [];
+  let refuse = false;
+  const config = {
+    ...session,
+    databasePath: join(root, 'local.sqlite'),
+    models,
+    approveCreation: async (settings: unknown) => {
+      approvals.push(settings);
+      if (refuse) throw new Error('refused');
+    },
+  };
+  let runtime = ManagedRuntime.make(LocalPiRuntimeLive(config));
+  t.after(async () => {
+    await runtime.dispose();
+    await rm(root, { recursive: true, force: true });
+  });
+  let client = makeChatClient(runtime);
+  const settings = { model: { provider: faux.provider.id, modelId: 'model' } };
+  const input = (requestId: string) => ({ session, requestId, title: requestId, settings });
+  // A host with nowhere to make chat folders still requires one.
+  await assert.rejects(client.command('createChat', input('nowhere')), { code: 'InvalidInput' });
+  await runtime.dispose();
+  runtime = ManagedRuntime.make(LocalPiRuntimeLive({ ...config, chatFolders }));
+  client = makeChatClient(runtime);
+  refuse = true;
+  await assert.rejects(client.command('createChat', input('refused')));
+  assert.deepEqual(approvals.at(-1), settings);
+  // A refused chat leaves no folder behind.
+  await assert.rejects(readdir(chatFolders), { code: 'ENOENT' });
+  refuse = false;
+  const first = await client.command('createChat', input('first'));
+  const second = await client.command('createChat', input('second'));
+  const folders = [first, second].map((chat) => chat.conversation.cwd);
+  assert.equal(new Set(folders).size, 2);
+  for (const folder of folders) {
+    assert.equal(dirname(folder), chatFolders);
+    assert.deepEqual(await readdir(folder), []);
+  }
+  assert.equal(first.conversation.ownFolder, true);
+  // Retrying the same request returns the same chat and makes no other folder.
+  assert.deepEqual(await client.command('createChat', input('first')), first);
+  assert.equal((await readdir(chatFolders)).length, 2);
+  faux.setResponses([
+    fauxAssistantMessage(fauxToolCall('write', { path: 'notes.txt', content: 'own folder' }), {
+      stopReason: 'toolUse',
+    }),
+    fauxAssistantMessage('Written'),
+  ]);
+  const target = first.conversation.target;
+  await client.command('sendChat', { target, requestId: 'send', text: 'Take notes' });
+  await until(
+    () => client.command('getChat', { target }),
+    (snapshot) => !snapshot.run && snapshot.entries.some((entry) => entry.text === 'Written'),
+  );
+  assert.equal(await readFile(join(folders[0]!, 'notes.txt'), 'utf8'), 'own folder');
+  await runtime.dispose();
+  runtime = ManagedRuntime.make(LocalPiRuntimeLive({ ...config, chatFolders }));
+  client = makeChatClient(runtime);
+  const listed = (await client.command('listChats', { session })).conversations;
+  assert.deepEqual(
+    listed.map((chat) => [chat.cwd, chat.ownFolder]).sort(),
+    folders.map((folder) => [folder, true]).sort(),
+  );
+  assert.equal((await client.command('getChat', { target })).conversation.ownFolder, true);
+});
 test('Quit control sees hidden work and gates unfinished local mutations without Stop', async (t) => {
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-local-active-')));
   const models = createModels(),

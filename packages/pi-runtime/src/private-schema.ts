@@ -97,6 +97,7 @@ const localProgrammatic = Schema.Struct({
       (value): value is (cwd: string) => Promise<void> => typeof value === 'function',
     ),
   ),
+  chatFolders: Schema.optional(path),
   ripgrepExecutable: Schema.optional(path),
 });
 const store = Schema.Struct({ identity: Schema.String });
@@ -107,6 +108,7 @@ const metadata = Schema.Struct({
   settings: Schema.optional(
     Schema.Struct({
       cwd: path,
+      ownFolder: Schema.optional(Schema.Literal(true)),
       model,
       reasoningEffort: Schema.optional(ChatReasoningEffortSchema),
     }),

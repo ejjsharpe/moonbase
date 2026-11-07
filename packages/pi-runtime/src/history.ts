@@ -12,7 +12,6 @@ import {
 } from '@earendil-works/pi-durable';
 import type {
   ChatActivity,
-  ChatCreationSettings,
   ChatInput,
   ChatOutput,
   ChatSession,
@@ -22,7 +21,7 @@ import type {
   ChatSnapshot,
   ChatRun,
 } from '@moonbase/contracts/chat';
-import { Metadata, cid, eid, getSettings } from './documents.ts';
+import { Metadata, cid, eid, getSettings, type ChatSettings } from './documents.ts';
 import * as V from './validation.ts';
 import * as S from './private-schema.ts';
 import {
@@ -88,14 +87,15 @@ const writeCursor = (scan: Cursor | undefined, kind: string, conversationId?: st
 export function summarizeConversation(
   session: ChatSession,
   conversationId: string,
-  meta: { title: string; createdAt: string; settings?: ChatCreationSettings },
-  settings: ChatCreationSettings,
+  meta: { title: string; createdAt: string; settings?: ChatSettings },
+  settings: ChatSettings,
 ): ChatSummary {
   return {
     target: { host: { ...session.host }, actorId: session.actorId, conversationId },
     title: meta.title,
     createdAt: meta.createdAt,
     cwd: settings.cwd,
+    ...(settings.ownFolder ? { ownFolder: true as const } : {}),
     model: `${settings.model.provider}/${settings.model.modelId}`,
     ...(settings.reasoningEffort ? { reasoningEffort: settings.reasoningEffort } : {}),
   };
@@ -128,7 +128,7 @@ export async function listConversations(
   harness: Harness,
   session: ChatSession,
   identity: string,
-  fixedSettings: ChatCreationSettings | undefined,
+  fixedSettings: ChatSettings | undefined,
   encoded?: string,
 ): Promise<ChatOutput<'listChats'>> {
   let scan = readCursor(encoded, 'list', getCursorIdentity(identity)),

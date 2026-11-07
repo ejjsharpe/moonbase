@@ -18,6 +18,8 @@ export type LocalPiRuntimeConfiguration = ChatSession & {
   models: Models;
   registry?: Registry;
   approveCreation?: (settings: ChatCreationSettings) => Promise<void>;
+  /** Where each chat without a project gets a new folder of its own; absent refuses such chats. */
+  chatFolders?: string;
   /** Refuses a working folder a new chat may not search before it exists; absent allows any. */
   approveFolder?: (cwd: string) => Promise<void>;
   ripgrepExecutable?: string;

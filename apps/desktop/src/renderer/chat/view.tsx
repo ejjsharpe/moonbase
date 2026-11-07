@@ -30,6 +30,7 @@ import {
   type ChatCommandOption,
 } from './commands.ts';
 import { chatWorktreeBranch } from './worktree.ts';
+import { getChatPlace, getFolderName } from './folder.ts';
 import { projectInitials, projectTiles } from '@moonbase/ui/projects';
 const compactLayout = window.matchMedia('(max-width: 640px)');
 const subscribeLayout = (listener: () => void) => {
@@ -183,18 +184,16 @@ export function ChatView({
     toolNotice =
       state.selected || cwd
         ? 'Local tools can access files outside the working folder.'
-        : 'Choose a working folder to send. Local tools are not sandboxed.';
+        : 'Runs in a new empty folder. Local tools are not sandboxed.';
   if (local && !state.selected && !models.length)
     toolNotice = 'Set up a provider to send. Local tools are not sandboxed.';
-  const folderName = cwd ? cwd.split('/').filter(Boolean).at(-1) || '/' : '';
-  const selectedFolder = (
-    state.snapshot?.conversation.cwd ??
-    state.chats.find((c) => c.target.conversationId === state.selected?.conversationId)?.cwd ??
-    ''
-  )
-    .split('/')
-    .filter(Boolean)
-    .at(-1);
+  const folderName = cwd ? getFolderName(cwd) : '';
+  const selectedChat =
+    state.snapshot?.conversation ??
+    state.chats.find((c) => c.target.conversationId === state.selected?.conversationId);
+  // A chat without a project has no project crumb.
+  const selectedFolder =
+    selectedChat && !selectedChat.ownFolder ? getFolderName(selectedChat.cwd) : undefined;
   const connected = state.ready,
     busy = (id: string) => state.active.includes(id);
   const hostDot = (
@@ -342,7 +341,7 @@ export function ChatView({
       <span {...stylex.props(styles.chatSummary)}>
         <span {...stylex.props(controls.truncate)}>{c.title}</span>
         <span {...stylex.props(styles.chatFolder, controls.truncate)}>
-          {c.cwd.split('/').filter(Boolean).at(-1) || '/'}
+          {getChatPlace(c)}
           {reasonLabels[reason] && ` · ${reasonLabels[reason]}`}
         </span>
       </span>
@@ -507,7 +506,7 @@ export function ChatView({
                   <p {...stylex.props(styles.small)}>
                     {p.input.title}
                     {p.input.settings
-                      ? ` · ${p.input.settings.cwd} · ${p.input.settings.model.provider}/${p.input.settings.model.modelId}${p.input.settings.reasoningEffort ? ` · ${effortLabels[p.input.settings.reasoningEffort]}` : ''}`
+                      ? ` · ${p.input.settings.cwd ?? 'No project'} · ${p.input.settings.model.provider}/${p.input.settings.model.modelId}${p.input.settings.reasoningEffort ? ` · ${effortLabels[p.input.settings.reasoningEffort]}` : ''}`
                       : ''}
                   </p>
                 )}
@@ -601,7 +600,9 @@ export function ChatView({
               return;
             }
             void controller.send(
-              local && !state.selected && cwd && selection ? { cwd, ...selection } : undefined,
+              local && !state.selected && selection
+                ? { ...(cwd ? { cwd } : {}), ...selection }
+                : undefined,
             );
           }}>
           <div {...stylex.props(styles.messageRow)}>
@@ -634,7 +635,7 @@ export function ChatView({
                     aria-label="Choose working folder"
                     {...stylex.props(controls.button, controls.quietButton, styles.folderChoice)}
                     disabled={!chooseFolder || busy('send') || creatingWorktree}
-                    title={cwd || 'Choose working folder'}
+                    title={cwd || 'No project · choose a working folder'}
                     onClick={() => {
                       setFolderError(null);
                       void chooseFolder?.()
@@ -659,12 +660,25 @@ export function ChatView({
                     ) : (
                       <Icon name="folder" />
                     )}
-                    <span {...stylex.props(controls.truncate)}>
-                      {folderName || 'Choose working folder'}
-                    </span>
+                    <span {...stylex.props(controls.truncate)}>{folderName || 'No project'}</span>
                     <span aria-hidden="true" {...stylex.props(styles.caret)}>
                       ▾
                     </span>
+                  </Button>
+                )}
+                {/* A project's dock keeps its chats in the project, so only Agents offers this. */}
+                {local && cwd && !dock && (
+                  <Button
+                    aria-label="Chat without a project"
+                    title="Chat without a project"
+                    {...stylex.props(controls.button, controls.iconButton, controls.quietButton)}
+                    disabled={busy('send') || creatingWorktree}
+                    onClick={() => {
+                      setFolderError(null);
+                      setCwd('');
+                      setNewWorktree(false);
+                    }}>
+                    <Icon name="close" />
                   </Button>
                 )}
                 {worktreeChoice && (
@@ -757,7 +771,7 @@ export function ChatView({
                       busy('send') ||
                       busy('create') ||
                       !!state.storageError ||
-                      (!state.selected && local && (!cwd || !selection)) ||
+                      (!state.selected && local && !selection) ||
                       state.pending.some(
                         (p) =>
                           (p.operation === 'sendChat' &&
@@ -861,7 +875,7 @@ export function ChatView({
                     <span {...stylex.props(styles.chatSummary)}>
                       <span {...stylex.props(controls.truncate)}>{c.title}</span>
                       <span {...stylex.props(styles.chatFolder, controls.truncate)}>
-                        {c.cwd.split('/').filter(Boolean).at(-1) || '/'}
+                        {getChatPlace(c)}
                       </span>
                     </span>
                     <time dateTime={c.createdAt} {...stylex.props(styles.chatDate)}>
