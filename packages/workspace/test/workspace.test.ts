@@ -337,6 +337,76 @@ test('watch notifies external changes, coalesces and disposes independently of f
   }
 });
 
+test('watch skips activity that belongs to other worktrees of the repository', async () => {
+  const f = fixture();
+  const stops: (() => Promise<void>)[] = [];
+  const git = (cwd: string, ...args: string[]) =>
+    execFileSync('/usr/bin/git', ['-C', cwd, '-c', 'user.name=T', '-c', 'user.email=t@t', ...args]);
+  const settle = () => new Promise((r) => setTimeout(r, 400));
+  try {
+    writeFileSync(join(f.root, 'file.txt'), 'main');
+    writeFileSync(join(f.root, '.gitignore'), '.agents/\n');
+    git(f.root, 'add', '.');
+    git(f.root, 'commit', '-qm', 'initial');
+    // An agent's worktree inside an ignored folder of the main checkout, plus one beside it.
+    const nested = join(f.root, '.agents', 'nested'),
+      beside = join(f.base, 'beside');
+    git(f.root, 'worktree', 'add', '-q', '-b', 'nested', nested);
+    git(f.root, 'worktree', 'add', '-q', '-b', 'beside', beside);
+    const watchEvents = async (root: string) => {
+      const checkout = await f.client.command('openCheckout', { root });
+      const events: string[] = [];
+      let ready!: () => void;
+      const isReady = new Promise<void>((r) => (ready = r));
+      stops.push(
+        f.client.watch(
+          { checkout, paths: [''] },
+          (event) => (event.ready ? ready() : events.push(event.error ?? 'changed')),
+          (error) => {
+            throw error;
+          },
+        ),
+      );
+      await isReady;
+      return events;
+    };
+    const main = await watchEvents(f.root),
+      linked = await watchEvents(beside);
+    await settle();
+    main.length = linked.length = 0;
+
+    // Files and Git activity in the nested worktree reach neither of the other checkouts.
+    writeFileSync(join(nested, 'file.txt'), 'agent edit');
+    writeFileSync(join(nested, 'new.txt'), 'agent file');
+    git(nested, 'add', '.');
+    git(nested, 'status', '--short');
+    await settle();
+    assert.deepEqual(main, [], 'A nested worktree must not refresh the main checkout');
+    // Staging in the main checkout refreshes it, but not the linked worktree.
+    writeFileSync(join(f.root, 'staged.txt'), 'staged');
+    git(f.root, 'add', 'staged.txt');
+    await settle();
+    assert(main.length > 0);
+    assert.deepEqual(linked, [], "Other worktrees' files and indexes must not refresh it");
+
+    // Their own files still refresh them.
+    main.length = 0;
+    writeFileSync(join(beside, 'file.txt'), 'own edit');
+    writeFileSync(join(f.root, 'file.txt'), 'own edit');
+    await settle();
+    assert.equal(linked.length, 1);
+    assert.equal(main.length, 1);
+    // Another worktree's commit moves a shared branch ref, which both still see.
+    main.length = linked.length = 0;
+    git(nested, 'commit', '-qm', 'agent commit');
+    await settle();
+    assert(main.length > 0 && linked.length > 0, 'A new commit moves a shared ref');
+  } finally {
+    for (const stop of stops) await stop();
+    await f.close();
+  }
+});
+
 test('text search honours ignore policies, options, context lines and UTF-16 ranges', async () => {
   const f = fixture();
   try {
