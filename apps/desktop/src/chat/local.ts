@@ -1,18 +1,38 @@
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { lstat, mkdir, open, realpath, stat } from 'node:fs/promises';
+import { access, lstat, mkdir, open, realpath, stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { safeStorage } from 'electron';
-import { Context, Exit, Layer, Scope, type ManagedRuntime } from 'effect';
+import { Context, Effect, Exit, Layer, Scope, type ManagedRuntime } from 'effect';
 import { LocalPiRuntimeLive, LocalPiControl } from '@moonbase/pi-runtime';
 import { createCredentialStore } from '@moonbase/pi-runtime/credentials';
 import { ProviderSetupLive } from '@moonbase/pi-runtime/providers';
 import { createLocalModels } from '@moonbase/pi-runtime/local-models';
+import {
+  closeClaudeCodeProcesses,
+  createClaudeCodeSubscription,
+} from '@moonbase/pi-runtime/claude-code';
 import { ChatService, ProviderSetupService } from '@moonbase/contracts/services';
 import { decodeChatInput } from '@moonbase/contracts/chat-schema';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type { ChatCreationSettings, ChatSession } from '@moonbase/contracts/chat';
 import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
+
+/** Apps opened from Finder get launchd's PATH, which omits Claude Code's usual install locations. */
+async function findClaudeCode() {
+  for (const candidate of [
+    join(homedir(), '.local/bin/claude'),
+    join(homedir(), '.claude/local/claude'),
+    '/opt/homebrew/bin/claude',
+    '/usr/local/bin/claude',
+  ])
+    try {
+      await access(candidate, constants.X_OK);
+      return candidate;
+    } catch {}
+  return undefined;
+}
 
 async function readLocalIdentity(directory: string): Promise<ChatSession> {
   const path = join(directory, 'identity.json');
@@ -73,6 +93,13 @@ export async function acquireLocalChat(
       (await safeStorage.decryptStringAsync(Buffer.from(encrypted))).result,
   });
   const models = createLocalModels(credentials);
+  models.setProvider(
+    createClaudeCodeSubscription({
+      findCommand: findClaudeCode,
+      // Claude Code starts the tool-inventory helper with this executable.
+      helperEnv: { ELECTRON_RUN_AS_NODE: '1' },
+    }),
+  );
   const approvals = new Map<string, { dev: number; ino: number }>();
   const approveFolder = async (path: string) => {
     const cwd = await realpath(path),
@@ -104,7 +131,7 @@ export async function acquireLocalChat(
     const services = await runApplicationEffect(
       runtime,
       Layer.buildWithScope(
-        Layer.merge(
+        Layer.mergeAll(
           LocalPiRuntimeLive({
             ...session,
             databasePath: join(directory, 'chat.sqlite'),
@@ -112,6 +139,7 @@ export async function acquireLocalChat(
             approveCreation: approveSettings,
           }),
           ProviderSetupLive({ models, openUrl, deviceId: session.host.hostId }),
+          Layer.effectDiscard(Effect.addFinalizer(() => Effect.promise(closeClaudeCodeProcesses))),
         ),
         scope,
       ),

@@ -149,8 +149,10 @@ test('unsigned macOS package runs with only system PATH, SQLite, native/rg resou
     await page.getByRole('button', { name: 'Open checkout', exact: true }).click();
     await page.getByRole('button', { name: 'Find file', exact: true }).click();
     await page.getByRole('combobox').fill('lookup-native');
-    await expect(page.getByRole('option')).toContainText('lookup-native-resource.txt');
-    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(page.getByRole('option').first()).toHaveAccessibleName(
+      'lookup-native-resource.txt',
+    );
+    await page.keyboard.press('Escape');
     await page.getByRole('treeitem', { name: 'package.ts', exact: true }).dblclick();
     const input = page.getByRole('textbox', { name: 'package.ts editor', exact: true });
     await input.focus();

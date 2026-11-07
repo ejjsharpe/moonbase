@@ -57,13 +57,22 @@ export function ProviderSetup({ controller }: { controller: ProviderSetupControl
         ) : (
           <>
             {flow && <p role="status">{flow.message}</p>}
-            <Button
-              {...stylex.props(controls.button)}
-              disabled={state.busy || !selected}
-              onClick={() => void controller.login(providerId)}>
-              {selected?.auth === 'oauth' ? 'Sign in with ChatGPT' : 'Set API key'}
-            </Button>
-            {selected?.configured && (
+            {selected?.auth === 'claude_code' ? (
+              !selected.configured && (
+                <p>
+                  Install Claude Code and run <code>claude auth login</code> in a terminal, then
+                  refresh providers. Usage counts against your Claude plan.
+                </p>
+              )
+            ) : (
+              <Button
+                {...stylex.props(controls.button)}
+                disabled={state.busy || !selected}
+                onClick={() => void controller.login(providerId)}>
+                {selected?.auth === 'oauth' ? 'Sign in with ChatGPT' : 'Set API key'}
+              </Button>
+            )}
+            {selected?.configured && selected.auth !== 'claude_code' && (
               <Button
                 {...stylex.props(controls.button)}
                 disabled={state.busy}

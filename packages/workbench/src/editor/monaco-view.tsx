@@ -12,6 +12,33 @@ import {
 } from '@moonbase/application/editor';
 import type { FileTarget, FileView } from '@moonbase/contracts/workspace';
 
+/** A one-shot request to put the cursor on a match, made after opening its file. */
+export type EditorReveal = {
+  id: number;
+  key: string;
+  line: number;
+  column: number;
+  length: number;
+};
+
+/** The single-line text selected in an editor under `root`, to seed a search. */
+export function readSelection(root: HTMLElement | null) {
+  for (const editor of monaco.editor.getEditors()) {
+    const selection = editor.getSelection(),
+      model = editor.getModel();
+    if (
+      !root?.contains(editor.getContainerDomNode()) ||
+      !selection ||
+      !model ||
+      selection.isEmpty() ||
+      selection.startLineNumber !== selection.endLineNumber
+    )
+      continue;
+    return model.getValueInRange(selection).slice(0, 256);
+  }
+  return '';
+}
+
 /** The composition root supplies Monaco's worker environment before mounting. */
 export function MonacoView({
   controller,
@@ -19,12 +46,17 @@ export function MonacoView({
   target,
   mode,
   visible,
+  reveal,
+  onRevealed,
 }: {
   controller: EditorController;
   state: EditorSnapshot;
   target?: FileTarget;
   mode: FileView;
   visible: boolean;
+  reveal?: EditorReveal;
+  /** Called once a reveal is applied, so a remounted editor does not apply it again. */
+  onRevealed?: () => void;
 }) {
   const container = useRef<HTMLDivElement>(null),
     visibility = useRef(visible);
@@ -37,7 +69,8 @@ export function MonacoView({
   const mounted = useRef<
     monaco.editor.IStandaloneCodeEditor | monaco.editor.IStandaloneDiffEditor | null
   >(null);
-  const releaseView = useRef<(() => void) | null>(null);
+  const releaseView = useRef<(() => void) | null>(null),
+    revealed = useRef(0);
   const key = target ? fileKey(target) : '',
     buffer = state.buffers.find((buffer) => fileKey(buffer.target) === key);
   const comparison = state.comparisons[key];
@@ -296,6 +329,21 @@ export function MonacoView({
       } else editor.updateOptions({ readOnly });
     }
   }, [visible, state.preserving, hasBuffer, comparison?.title, target?.path]);
+  // After the visibility restore above, so a reveal made while hidden wins over the saved scroll.
+  useLayoutEffect(() => {
+    const editor = mounted.current;
+    if (!reveal || reveal.id === revealed.current || reveal.key !== key || !visible) return;
+    if (!editor || 'getModifiedEditor' in editor) return;
+    revealed.current = reveal.id;
+    editor.setSelection({
+      startLineNumber: reveal.line,
+      startColumn: reveal.column,
+      endLineNumber: reveal.line,
+      endColumn: reveal.column + reveal.length,
+    });
+    editor.revealLineInCenter(reveal.line);
+    onRevealed?.();
+  });
   return (
     <div
       ref={container}

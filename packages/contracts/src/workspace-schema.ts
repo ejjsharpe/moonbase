@@ -192,6 +192,19 @@ export const ComparisonSchema = struct({
   error: optional(Schema.String),
 });
 export const LookupMatchSchema = struct({ path, score: Schema.Finite, positions: array(natural) });
+const searchLine = Schema.String.check(Schema.isMaxLength(512));
+/** A text match: `ranges` are UTF-16 offsets into `text`; `before`/`after` are nearby lines. */
+export const TextMatchSchema = struct({
+  line: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
+  text: searchLine,
+  ranges: array(struct({ start: natural, end: natural })).check(Schema.isMaxLength(64)),
+  before: array(searchLine).check(Schema.isMaxLength(8)),
+  after: array(searchLine).check(Schema.isMaxLength(8)),
+});
+export const TextSearchFileSchema = struct({
+  path,
+  matches: array(TextMatchSchema).check(Schema.isMinLength(1), Schema.isMaxLength(50)),
+});
 export const WorkspaceEventSchema = struct({
   checkout: CheckoutTargetSchema,
   paths: array(path),
@@ -249,6 +262,17 @@ export const workspaceInputSchemas = {
       ),
     ),
   }),
+  searchText: struct({
+    checkout: CheckoutTargetSchema,
+    query: Schema.String.check(
+      Schema.isMinLength(1),
+      Schema.isMaxLength(256),
+      Schema.makeFilter((value) => !/[\0\n\r]/.test(value)),
+    ),
+    matchCase: Schema.Boolean,
+    wholeWord: Schema.Boolean,
+    regex: Schema.Boolean,
+  }),
   inspectEntries: struct({
     checkout: CheckoutTargetSchema,
     paths: array(path).check(Schema.isMinLength(1), Schema.isMaxLength(256)),
@@ -285,6 +309,11 @@ export const workspaceOutputSchemas = {
   lookupFiles: struct({
     matches: array(LookupMatchSchema).check(Schema.isMaxLength(100)),
     history: array(LookupMatchSchema).check(Schema.isMaxLength(100)),
+    partial: Schema.Boolean,
+    error: optional(Schema.String),
+  }),
+  searchText: struct({
+    files: array(TextSearchFileSchema).check(Schema.isMaxLength(200)),
     partial: Schema.Boolean,
     error: optional(Schema.String),
   }),

@@ -6,6 +6,7 @@
 | --- | --- |
 | `.` | Remote fixed-settings `PiRuntimeLive(config)`, per-conversation `LocalPiRuntimeLive(config)` and privileged `LocalPiControl` |
 | `./local-models`, `./providers`, `./credentials` | Local provider catalog, provider sign-in and injected encrypted credential storage |
+| `./claude-code` | Claude Pro/Max subscription through the user's Claude Code login ([pi-claude-code](https://github.com/earendil-works/pi-claude-code)) |
 | `./server` | `serveChat(config, client)`: authenticated loopback listener for a remote host |
 | `./remote` | `RemoteChatLive`: client-side service over an injected `ConnectionService` |
 
@@ -38,6 +39,7 @@ The listener binds only `127.0.0.1`; reach it through the [SSH package](../ssh/R
 - Mutations carry request IDs bound to their full input. A lost or unproved reply is `Uncertain`; callers retry with the original request rather than resending, and reconnects never resend.
 - Stop targets only the captured submission/task. Cancelling or disconnecting a client never stops remote work.
 - Remote hosts stream snapshots over an authenticated `chat-stream-v1` channel; messages are HMAC-authenticated, and OpenSSH provides transport encryption.
+- `./claude-code` runs the local `claude` CLI, which owns sign-in; Moonbase stores no Claude credentials, and Pi still executes every tool. The library ships TypeScript source, so only bundled hosts (the desktop app) can load it, and bundles must ship its `inert-mcp.mjs` beside them. It uses the built-in model list, not Claude Code's account catalog. Hosts close its warm workers with `closeClaudeCodeProcesses()`.
 - A dropped or stalled stream reconnects up to three times per outage; an authenticated frame arriving at least half a heartbeat interval after a connection's snapshot renews that budget.
 
 ## Checks

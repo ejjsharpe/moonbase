@@ -1,4 +1,11 @@
-import { FileLookup } from './file-lookup.tsx';
+import {
+  Picker,
+  pickerMode,
+  type PickerEntry,
+  type PickerMode,
+  type PickerOpenFile,
+  type PickerRequest,
+} from './picker.tsx';
 import { FilesTree } from './files-tree.tsx';
 import { Mutation, type Action } from './mutation.tsx';
 import { Popup } from './popup.tsx';
@@ -32,7 +39,7 @@ import {
   type EditorController,
   type EditorSnapshot,
 } from '@moonbase/application/editor';
-import { MonacoView } from './monaco-view.tsx';
+import { MonacoView, readSelection, type EditorReveal } from './monaco-view.tsx';
 import { WorktreeSwitcher } from './worktree-switcher.tsx';
 import { styles } from './styles.ts';
 import { Icon } from './icon.tsx';
@@ -46,6 +53,8 @@ const focusOrigin = (element: HTMLElement): FocusOrigin => {
 
 export type WorkbenchHandle = {
   importFiles(checkout: CheckoutTarget, references: string[]): void;
+  /** Opens ⌘P's picker; `find` starts from the editor's selected text. */
+  openPicker(mode: PickerMode): void;
   keyDown(event: KeyboardEvent): void;
   keyUp(event: KeyboardEvent): void;
 };
@@ -56,6 +65,10 @@ export type WorkbenchProps = {
   renderLayout?: (views: { explorer: ReactNode; editor: ReactNode }) => ReactNode;
   /** App content placed after the editor in the default layout, such as a docked panel. */
   trailing?: ReactNode;
+  /** Chats, projects and app commands the picker offers beside this checkout's files, read while it is open. */
+  pickerEntries?: () => PickerEntry[];
+  /** Called when the picker opens a file or runs an editor command, to bring the editor into view. */
+  onShowEditor?: () => void;
   /** Native/user-authorized selection belongs to the shell. A renderer path alone grants no access. */
   selectNativeImports?: (checkout: CheckoutTarget) => Promise<string[]>;
   selectClipboardImports?: (checkout: CheckoutTarget) => Promise<string[]>;
@@ -73,6 +86,8 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     visible = true,
     renderLayout,
     trailing,
+    pickerEntries,
+    onShowEditor,
     selectNativeImports,
     selectClipboardImports,
   },
@@ -102,9 +117,11 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
         ]
       : [];
   const [anchorReset, setAnchorReset] = useState(0);
-  const [lookup, setLookup] = useState(false),
+  const [picker, setPicker] = useState<PickerRequest | null>(null),
+    [reveal, setReveal] = useState<EditorReveal>(),
     [panel, setPanel] = useState('files'),
     [action, updateAction] = useState<Action | null>(null);
+  const lookup = !!picker;
   const actionRef = useRef<Action | null>(null),
     lookupRef = useRef(lookup),
     projectRef = useRef(project);
@@ -299,8 +316,61 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       await controller.open({ checkout, path }, { current });
     return closed;
   };
+  const reveals = useRef(0);
+  function openPicker(mode: PickerMode) {
+    if (state.preserving || actionRef.current) return;
+    setPicker({ mode, text: mode === 'find' ? readSelection(root.current) : '' });
+  }
+  const openPickedFile: PickerOpenFile = async (target, at, current) => {
+    const opened = await controller.open(target, {
+      view: 'file',
+      intent: 'keep',
+      current: () =>
+        current() &&
+        controller.getSnapshot().recovery.openCheckoutIds.includes(target.checkout.checkoutId) &&
+        controller
+          .getSnapshot()
+          .recovery.checkouts.some((item) => checkoutKey(item) === checkoutKey(target.checkout)),
+    });
+    if (opened) {
+      if (at) setReveal({ id: ++reveals.current, key: fileKey(target), ...at });
+      onShowEditor?.();
+    }
+    return opened;
+  };
+  const editorCommand = (
+    id: string,
+    label: string,
+    shortcut: string | undefined,
+    run: () => void,
+  ) => ({
+    id,
+    kind: 'command' as const,
+    label,
+    shortcut,
+    run: () => {
+      onShowEditor?.();
+      run();
+    },
+  });
+  const entries = (): PickerEntry[] => [
+    ...(pickerEntries?.() ?? []),
+    ...(checkout
+      ? [
+          editorCommand('show-files', 'Show Files', '⌘⇧E', () => setPanel('files')),
+          editorCommand('show-changes', 'Show Changes', '⌘⇧G', () => setPanel('git')),
+          editorCommand('reopen-file', 'Reopen closed file', '⌘⇧T', () =>
+            run(controller.reopen(checkout)),
+          ),
+          editorCommand('refresh-files', 'Refresh files', undefined, () =>
+            run(controller.refresh(checkout)),
+          ),
+        ]
+      : []),
+  ];
   const actions: WorkbenchHandle = {
     importFiles,
+    openPicker,
     keyDown(event: KeyboardEvent) {
       captureFocusInteraction();
       const element = event.target as HTMLElement;
@@ -317,10 +387,10 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
         event.preventDefault();
         event.stopPropagation();
         if (target) run(controller.save(target));
-      } else if (command && key === 'p' && !event.shiftKey && !event.altKey) {
+      } else if (pickerMode(event, command)) {
         event.preventDefault();
         event.stopPropagation();
-        setLookup(true);
+        openPicker(pickerMode(event, command)!);
       } else if (event.metaKey && event.shiftKey && (key === 'e' || key === 'g')) {
         event.preventDefault();
         event.stopPropagation();
@@ -450,9 +520,9 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
           <Button
             ref={findFile}
             aria-label="Find file"
-            title="Find file · ⌘P"
+            title="Go to file · ⌘P"
             {...stylex.props(controls.button, filesUI.iconButton)}
-            onClick={() => setLookup(true)}>
+            onClick={() => openPicker('goto')}>
             <Icon name="search" />
           </Button>
           <Button
@@ -922,6 +992,8 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
             target={target}
             mode={mode}
             visible={visible}
+            reveal={reveal}
+            onRevealed={() => setReveal(undefined)}
           />
         </Tabs.Root>
       </section>
@@ -1055,12 +1127,15 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
           </Button>
         </p>
       ))}
-      {lookup && checkout && (
-        <FileLookup
+      {picker && (
+        <Picker
           controller={controller}
-          state={state}
           checkout={checkout}
-          close={() => setLookup(false)}
+          discoveryRevision={state.discoveryRevision}
+          entries={entries}
+          request={picker}
+          openFile={openPickedFile}
+          close={() => setPicker(null)}
           editorFocus={() =>
             root.current?.querySelector<HTMLElement>('.monaco-editor textarea[role="textbox"]') ??
             null

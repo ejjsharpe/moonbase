@@ -506,6 +506,51 @@ export function memoryWorkspace(seeds: Seed[]) {
           partial: matches.length > limit || recent.length > 100,
         };
       }),
+    searchText: ({ checkout, query, matchCase, wholeWord, regex }) =>
+      call('searchText', () => {
+        const seed = exact(checkout);
+        let pattern: RegExp;
+        try {
+          const source = regex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          pattern = new RegExp(wholeWord ? `\\b(?:${source})\\b` : source, matchCase ? 'g' : 'gi');
+        } catch {
+          return fail('Invalid regular expression.', 'InvalidInput');
+        }
+        let capped = false;
+        const files = [...entries(checkout)]
+          .filter(
+            ([path, entry]) =>
+              !entry.directory && !seed.ignored?.some((item) => affected(path, item)),
+          )
+          .map(([path]) => {
+            // The same limits as the workspace: 512-character lines, 64 ranges, 50 matches a file.
+            const lines = read({ checkout, path })
+              .text.split('\n')
+              .map((line) => line.slice(0, 512));
+            const matches = lines.flatMap((text, index) => {
+              const ranges = [...text.matchAll(pattern)]
+                .map((found) => ({ start: found.index, end: found.index + found[0].length }))
+                .filter((range) => range.end > range.start)
+                .slice(0, 64);
+              return ranges.length
+                ? [
+                    {
+                      line: index + 1,
+                      text,
+                      ranges,
+                      before: lines.slice(Math.max(0, index - 3), index),
+                      after: lines.slice(index + 1, index + 4),
+                    },
+                  ]
+                : [];
+            });
+            if (matches.length > 50) capped = true;
+            return { path, matches: matches.slice(0, 50) };
+          })
+          .filter((file) => file.matches.length)
+          .sort((a, b) => a.path.localeCompare(b.path));
+        return { files: files.slice(0, 200), partial: capped || files.length > 200 };
+      }),
     inspectEntries: ({ checkout, paths }) =>
       call('inspectEntries', () => {
         if (!Array.isArray(paths) || paths.length < 1 || paths.length > 256)

@@ -25,7 +25,7 @@ export const ProviderStateSchema = struct({
       struct({
         id: ChatIdentifierSchema,
         name: text(128),
-        auth: Schema.Literals(['oauth', 'api_key']),
+        auth: Schema.Literals(['oauth', 'api_key', 'claude_code']),
         configured: Schema.Boolean,
         defaultModel: optional(ChatModelPreferenceSchema),
         models: Schema.mutable(
@@ -44,7 +44,7 @@ export const ProviderStateSchema = struct({
         ).check(Schema.isMaxLength(4096)),
       }),
     ),
-  ).check(Schema.isMaxLength(5)),
+  ).check(Schema.isMaxLength(6)),
   flow: Schema.NullOr(
     struct({
       id: ChatIdentifierSchema,

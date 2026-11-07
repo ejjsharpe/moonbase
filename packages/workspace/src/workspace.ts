@@ -215,6 +215,9 @@ export class LocalWorkspace {
       lookupFiles: call<'lookupFiles'>('lookupFiles', (input, signal) =>
         this.discovery.lookupFiles(input, signal),
       ),
+      searchText: call<'searchText'>('searchText', (input, signal) =>
+        this.discovery.searchText(input, signal),
+      ),
       inspectEntries: call<'inspectEntries'>('inspectEntries', async (input, signal) => {
         ensure(
           Array.isArray(input.paths) && input.paths.length > 0 && input.paths.length <= 256,

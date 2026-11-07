@@ -34,7 +34,7 @@ The app bundles Electron, the workspace native helper and ripgrep; system Git an
 
 ## Local chat
 
-Local chat needs no configuration: choose a provider under **Provider setup**, then a working folder and model. Credentials are encrypted with Electron safeStorage (there is no plaintext fallback) and never reach renderer storage or snapshots. Local tools run with your OS permissions: **the working folder is context, not a sandbox**.
+Local chat needs no configuration: choose a provider under **Provider setup**, then a working folder and model. **Claude subscription** uses an installed Claude Code CLI signed in with `claude auth login`, and counts against that Claude plan. Credentials are encrypted with Electron safeStorage (there is no plaintext fallback) and never reach renderer storage or snapshots. Local tools run with your OS permissions: **the working folder is context, not a sandbox**.
 
 ## Remote chat
 
