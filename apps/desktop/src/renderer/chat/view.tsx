@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Dialog } from '@base-ui/react/dialog';
 import { Button } from '@base-ui/react/button';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
 import { spinner } from '@moonbase/ui/spinner';
@@ -314,6 +315,8 @@ export function ChatView({
     open: state.snapshot,
   });
   const settledShown = settledOpen;
+  const reducedMotion = useReducedMotion();
+  const settledMotion = { duration: reducedMotion ? 0 : 0.22, ease: [0.2, 0.8, 0.2, 1] as const };
   const chatRow = ({ chat: c, reason, at }: ActiveChat) => (
     <Button
       key={c.target.conversationId}
@@ -410,30 +413,46 @@ export function ChatView({
         )}
         {groups.working.map(chatRow)}
         {groups.settled.length > 0 && (
-          <Button
-            aria-expanded={settledShown}
-            {...stylex.props(
-              controls.button,
-              styles.settledToggle,
-              (groups.ready.length > 0 || groups.working.length > 0) && styles.settledSeparated,
-              // Closed, it waits at the foot of the list; open, its chats follow it.
-              !settledShown && styles.settledFoot,
-            )}
-            onClick={() => showSettled(!settledOpen)}>
-            <span
-              aria-hidden="true"
-              {...stylex.props(styles.settledChevron, settledShown && styles.settledChevronOpen)}>
-              <Icon name="chevronRight" />
-            </span>
-            Settled <span {...stylex.props(styles.groupCount)}>{groups.settled.length}</span>
-          </Button>
+          // Closed, the toggle waits at the foot of the list; it glides up as its chats open.
+          <motion.div
+            layout={reducedMotion ? false : 'position'}
+            transition={settledMotion}
+            {...stylex.props(styles.settledToggleRow, !settledShown && styles.settledFoot)}>
+            <Button
+              aria-expanded={settledShown}
+              {...stylex.props(
+                controls.button,
+                styles.settledToggle,
+                (groups.ready.length > 0 || groups.working.length > 0) && styles.settledSeparated,
+              )}
+              onClick={() => showSettled(!settledOpen)}>
+              <span
+                aria-hidden="true"
+                {...stylex.props(styles.settledChevron, settledShown && styles.settledChevronOpen)}>
+                <Icon name="chevronRight" />
+              </span>
+              Settled <span {...stylex.props(styles.groupCount)}>{groups.settled.length}</span>
+            </Button>
+          </motion.div>
         )}
-        {settledShown
-          ? groups.settled.map(chatRow)
-          : // The open chat stays in view after it settles, until another is chosen.
-            groups.settled
-              .filter((row) => row.chat.target.conversationId === state.selected?.conversationId)
-              .map(chatRow)}
+        <AnimatePresence initial={false}>
+          {settledShown && (
+            <motion.div
+              key="settled"
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={settledMotion}
+              {...stylex.props(styles.settledRows)}>
+              {groups.settled.map(chatRow)}
+            </motion.div>
+          )}
+        </AnimatePresence>
+        {!settledShown &&
+          // The open chat stays in view after it settles, until another is chosen.
+          groups.settled
+            .filter((row) => row.chat.target.conversationId === state.selected?.conversationId)
+            .map(chatRow)}
         {settledShown && state.nextChats && (
           <Button
             {...stylex.props(controls.button, controls.quietButton, styles.older)}
@@ -1098,6 +1117,14 @@ const styles = stylex.create({
     paddingTop: 10,
   },
   settledFoot: { marginTop: 'auto' },
+  settledToggleRow: { display: 'flex', flexDirection: 'column', flexShrink: 0 },
+  settledRows: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 2,
+    flexShrink: 0,
+    overflow: 'hidden',
+  },
   settledChevron: { display: 'inline-flex', color: colors.muted, transition: 'transform 120ms' },
   settledChevronOpen: { transform: 'rotate(90deg)' },
   settledChat: { color: colors.secondary },
