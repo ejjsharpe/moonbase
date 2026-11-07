@@ -1641,11 +1641,14 @@ test('the chats sidebar orders by activity: Ready, Working, then a Settled toggl
   await expect(settled).toHaveAttribute('aria-expanded', 'false');
   // The chat seen before anything else listed is settled and hidden behind the toggle.
   await expect(list.getByRole('button', { name: /^Conversation/ })).toHaveCount(0);
-  // Opening a Ready chat settles it, out of sight while Settled is closed.
+  // Opening a Ready chat settles it; it stays in view under the closed toggle while it is open.
   await list.getByRole('button', { name: /^Summarise this repository/ }).click();
   await expect(list.getByRole('heading', { name: 'Ready 3' })).toBeVisible();
   await expect(settled).toHaveText(/Settled\s*2/);
-  await expect(list.getByRole('button', { name: /^Summarise this repository/ })).toHaveCount(0);
+  await expect(list.getByRole('button', { name: /^Summarise this repository/ })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
   // Closed, the toggle sits at the foot of the list.
   const bottom = async (locator: typeof list) => {
     const box = (await locator.boundingBox())!;

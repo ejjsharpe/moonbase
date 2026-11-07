@@ -436,6 +436,11 @@ export function ChatView({
               </span>
               Settled <span {...stylex.props(styles.groupCount)}>{groups.settled.length}</span>
             </Button>
+            {!settledShown &&
+              // The open chat stays in view after it settles, until another is chosen.
+              groups.settled
+                .filter((row) => row.chat.target.conversationId === state.selected?.conversationId)
+                .map(chatRow)}
             <div
               inert={!settledShown}
               aria-hidden={settledShown ? undefined : true}
