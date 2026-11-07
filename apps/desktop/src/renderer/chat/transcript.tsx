@@ -38,9 +38,10 @@ import { MarkdownCache } from './markdown-model.ts';
 import {
   collectActivityEvidence,
   getEntryTranscripts,
-  getRowSpacing,
+  classifyEntry,
+  groupTranscriptRows,
   isSameActivityEvidence,
-  type RowSpacing,
+  type TranscriptItem,
 } from './activity.ts';
 import { StoredImages } from './stored-image.tsx';
 import { getTranscriptParts } from './transcript-parts.ts';
@@ -170,15 +171,13 @@ export function Transcript({
   if (preserve) liveLabel = 'Selected response';
   const getRowProps = useRowProps(transcript);
   const [openCalls] = useState(createOpenCalls);
-  const spacing = useMemo(() => getRowSpacing(rows, rowGap), [rows]);
   const rowContext = useMemo(
     () => ({
       shared: { controller, cache, native, actions, evidence },
       getRowProps,
       liveLabel,
-      spacing,
     }),
-    [controller, cache, native, actions, evidence, getRowProps, liveLabel, spacing],
+    [controller, cache, native, actions, evidence, getRowProps, liveLabel],
   );
   const mounted = useMountedRowKeys(rows, reading, imageSource, transcript.find.active);
   const failed = currentSnapshot && ['failed', 'uncertain'].includes(currentSnapshot.state);
@@ -368,9 +367,22 @@ function TranscriptList({
     current.current = transcript;
   }, [transcript]);
   const { dataset } = transcript;
+  const items = useMemo(
+    () => groupTranscriptRows(transcript.rows, kindOfRow, itemCache),
+    [transcript.rows],
+  );
+  /** The list item holding each row: a row in an activity run is drawn by the run's item. */
+  const itemKeys = useMemo(
+    () => new Map(items.flatMap((item) => item.rows.map((row) => [row.key, item.key] as const))),
+    [items],
+  );
+  const currentItemKeys = useRef(itemKeys);
+  useLayoutEffect(() => {
+    currentItemKeys.current = itemKeys;
+  }, [itemKeys]);
   /** Where this dataset opens: its saved anchor's row when it has one. */
-  const [placement, setPlacement] = useState(() => findPlacement(transcript));
-  if (placement.dataset !== dataset) setPlacement(findPlacement(transcript));
+  const [placement, setPlacement] = useState(() => findPlacement(transcript, items));
+  if (placement.dataset !== dataset) setPlacement(findPlacement(transcript, items));
   /** The dataset the list last finished placing; until then this one isn't ready. */
   const [readyDataset, setReadyDataset] = useState<number | null>(null);
   const ready = readyDataset === dataset;
@@ -420,7 +432,12 @@ function TranscriptList({
     const ref = list.current;
     if (!findActive || !findRevealing || !ref || !ready) return;
     void ref
-      .scrollToKey({ key: getEntryRowKey(findActive.source.entryId), animated: false })
+      .scrollToKey({
+        key:
+          currentItemKeys.current.get(getEntryRowKey(findActive.source.entryId)) ??
+          getEntryRowKey(findActive.source.entryId),
+        animated: false,
+      })
       .then(() => {
         if (current.current.dataset === dataset) revealFindMatch(ref);
       });
@@ -433,7 +450,12 @@ function TranscriptList({
   const holdFindReveal = useCallback(
     ({ itemKey }: { itemKey: string }) => {
       const { active, revealing } = current.current.find;
-      if (!revealing || !active || getEntryRowKey(active.source.entryId) !== itemKey) return;
+      if (
+        !revealing ||
+        !active ||
+        currentItemKeys.current.get(getEntryRowKey(active.source.entryId)) !== itemKey
+      )
+        return;
       cancelAnimationFrame(frame.current);
       frame.current = requestAnimationFrame(() => {
         if (list.current && current.current.find.revealing) revealFindMatch(list.current);
@@ -462,7 +484,10 @@ function TranscriptList({
     if (earlier && state.isNearStart) pageEarlier();
     else if (later && state.isNearEnd) pageLater();
   }, [loading, error, earlier, later, list, pageEarlier, pageLater, ready]);
-  const alwaysRender = useMemo(() => ({ keys: mounted }), [mounted]);
+  const alwaysRender = useMemo(
+    () => ({ keys: [...new Set(mounted.map((key) => itemKeys.get(key) ?? key))] }),
+    [mounted, itemKeys],
+  );
   /**
    * Opening or closing a disclosure while following the end would pin the end and push the rows
    * above it up. Pressing one stops following rows that change size, so the change grows or
@@ -475,17 +500,17 @@ function TranscriptList({
       setHolding(true);
   };
   return (
-    <LegendList<TranscriptRow>
+    <LegendList<TranscriptItem<TranscriptRow>>
       ref={list}
       role="region"
       aria-label="Chat transcript"
       data-transcript-list=""
       tabIndex={0}
-      data={transcript.rows}
+      data={items}
       dataKey={dataset}
-      keyExtractor={getRowKey}
-      getItemType={getRowType}
-      renderItem={renderRow}
+      keyExtractor={getItemKey}
+      getItemType={getItemType}
+      renderItem={renderItem}
       estimatedItemSize={estimatedRowSize}
       {...(placement.anchor
         ? {
@@ -519,21 +544,36 @@ function TranscriptList({
       onReady={() => setReadyDataset(dataset)}
       ListHeaderComponent={header}
       ListFooterComponent={footer}
+      contentContainerStyle={{ gap: rowGap }}
       {...stylex.props(styles.list)}
     />
   );
 }
 
-/** Where the saved anchor's row is in the dataset's rows; without an anchor it opens at the end. */
-function findPlacement({ dataset, view, rows }: ChatState['transcript']) {
+/** Where the saved anchor's item is in the dataset; without an anchor it opens at the end. */
+function findPlacement(
+  { dataset, view }: ChatState['transcript'],
+  items: readonly TranscriptItem<TranscriptRow>[],
+) {
   const anchor = view.anchor;
-  const index = anchor ? rows.findIndex((row) => row.key === anchor.key) : -1;
+  const index = anchor
+    ? items.findIndex((item) => item.rows.some((row) => row.key === anchor.key))
+    : -1;
   return index >= 0 ? { dataset, anchor, index } : { dataset, anchor: null, index: -1 };
 }
 const readDevicePixel = () => 1 / window.devicePixelRatio;
-const getRowKey = (row: TranscriptRow) => row.key;
-const getRowType = (row: TranscriptRow) => (row.kind === 'entry' ? row.entry.role : row.kind);
-const renderRow = ({ item }: LegendListRenderItemProps<TranscriptRow>) => <Row row={item} />;
+const getItemKey = (item: TranscriptItem<TranscriptRow>) => item.key;
+const getItemType = (item: TranscriptItem<TranscriptRow>) => {
+  if (item.rows.length > 1) return 'activity';
+  const row = item.rows[0]!;
+  return row.kind === 'entry' ? row.entry.role : row.kind;
+};
+const renderItem = ({ item }: LegendListRenderItemProps<TranscriptItem<TranscriptRow>>) => (
+  <Item item={item} />
+);
+const itemCache = new WeakMap<TranscriptRow, TranscriptItem<TranscriptRow>>();
+const kindOfRow = (row: TranscriptRow) =>
+  row.kind === 'tool' ? 'message' : classifyEntry(row.entry);
 
 type RowProps = Omit<
   EntryProps,
@@ -545,17 +585,26 @@ const RowContext = createContext<{
   shared: SharedRowProps;
   getRowProps(entry: ChatEntry): RowProps;
   liveLabel: string | undefined;
-  spacing: ReadonlyMap<string, RowSpacing>;
 } | null>(null);
 
-function Row({ row }: { row: TranscriptRow }) {
+/** A list item: one row, or a run of activity rows drawn as one card. */
+function Item({ item }: { item: TranscriptItem<TranscriptRow> }) {
+  return item.rows.map((row, index) => (
+    <Row key={row.key} row={row} joinPrevious={index > 0} joinNext={index < item.rows.length - 1} />
+  ));
+}
+function Row({
+  row,
+  joinPrevious,
+  joinNext,
+}: {
+  row: TranscriptRow;
+  joinPrevious: boolean;
+  joinNext: boolean;
+}) {
   const context = useContext(RowContext)!;
-  // Rows space themselves so an empty marker takes no room and joined activity has no gap.
-  const spacing = context.spacing.get(row.key);
   return (
-    <div
-      data-transcript-row={row.key}
-      {...stylex.props(styles.row, styles.rowGap(spacing?.gap ?? 0))}>
+    <div data-transcript-row={row.key} {...stylex.props(styles.row)}>
       <div {...stylex.props(styles.measure)}>
         {row.kind === 'tool' ? (
           <ToolPreview tool={row.tool} />
@@ -563,8 +612,8 @@ function Row({ row }: { row: TranscriptRow }) {
           <Entry
             entry={row.entry}
             liveState={row.kind === 'live' ? (context.liveLabel ?? row.state) : undefined}
-            joinPrevious={!!spacing?.joinPrevious}
-            joinNext={!!spacing?.joinNext}
+            joinPrevious={joinPrevious}
+            joinNext={joinNext}
             {...context.shared}
             {...context.getRowProps(row.entry)}
           />

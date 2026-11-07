@@ -17,7 +17,6 @@ export const transcriptStyles = stylex.create({
   list: { flex: 1, minHeight: 0, minWidth: 0, outline: 'none' },
   /** A centred reading column; rows, the toolbar and the list edges share it. */
   row: { paddingInline: space.xl, minWidth: 0 },
-  rowGap: (gap: number) => ({ paddingTop: gap }),
   measure: { maxWidth: layout.conversation, margin: '0 auto', minWidth: 0 },
   edge: { paddingBlock: space.sm },
   navigation: { flexWrap: 'wrap', minHeight: 28 },

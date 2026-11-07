@@ -36,27 +36,34 @@ export function classifyEntry(entry: ChatEntry): 'empty' | 'activity' | 'message
   return 'message';
 }
 
-/** Space above each row, and whether an activity row joins the activity card beside it. */
-export type RowSpacing = { gap: number; joinPrevious: boolean; joinNext: boolean };
-export function getRowSpacing(
-  rows: readonly ({ key: string } & ({ entry: ChatEntry } | { tool: unknown }))[],
-  gap: number,
+/**
+ * The list's items: each row on its own, except that empty turn markers are left out and a run of
+ * consecutive activity rows is one item, so the list's gap never splits a turn's card. An item's
+ * key is its first row's. Items whose rows are unchanged keep their identity.
+ */
+export type TranscriptItem<Row> = { key: string; rows: readonly Row[] };
+export function groupTranscriptRows<Row extends { key: string }>(
+  rows: readonly Row[],
+  kindOf: (row: Row) => 'empty' | 'activity' | 'message',
+  previous: WeakMap<Row, TranscriptItem<Row>>,
 ) {
-  const spacing = new Map<string, RowSpacing>();
-  let previous: { key: string; activity: boolean } | null = null;
+  const runs: Row[][] = [];
+  let open = false;
   for (const row of rows) {
-    const kind = 'entry' in row ? classifyEntry(row.entry) : 'message';
-    if (kind === 'empty') {
-      spacing.set(row.key, { gap: 0, joinPrevious: false, joinNext: false });
-      continue;
-    }
-    const activity = kind === 'activity',
-      join = activity && !!previous?.activity;
-    if (join) spacing.get(previous!.key)!.joinNext = true;
-    spacing.set(row.key, { gap: previous && !join ? gap : 0, joinPrevious: join, joinNext: false });
-    previous = { key: row.key, activity };
+    const kind = kindOf(row);
+    if (kind === 'empty') continue;
+    if (kind === 'activity' && open) runs.at(-1)!.push(row);
+    else runs.push([row]);
+    open = kind === 'activity';
   }
-  return spacing;
+  return runs.map((run) => {
+    const old = previous.get(run[0]!);
+    if (old && old.rows.length === run.length && old.rows.every((row, i) => row === run[i]))
+      return old;
+    const item = { key: run[0]!.key, rows: run };
+    previous.set(run[0]!, item);
+    return item;
+  });
 }
 
 /** Only consecutive activity folds; authored answers keep their recorded position. */
