@@ -77,6 +77,7 @@ const rowIcons = { file: 'file', chat: 'agents', command: 'chevronRight' } as co
 const emptyLookup: LookupSnapshot = { rows: [], message: '', busy: false };
 const emptySearch: TextSearchSnapshot = { files: [], message: '', busy: false };
 const noSubscription = () => () => {};
+const matchKey = (path: string, match: TextMatch) => path + ':' + match.line;
 
 /** Case-insensitive: a contiguous run scores above letters scattered through the label. */
 export function matchLabel(label: string, query: string): Matched | null {
@@ -199,7 +200,7 @@ export function Picker({
     wholeWord: false,
     regex: false,
   });
-  const [index, setIndex] = useState(0);
+  const [selection, setSelection] = useState<{ at: number; key?: string }>({ at: 0 });
   const lookup = useQuery(() => controller.createLookup(), controller.report);
   const search = useQuery(() => controller.createTextSearch(), controller.report);
   const files = useSyncExternalStore(
@@ -224,8 +225,9 @@ export function Picker({
     search.query(query, options, checkout);
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- the checkout is keyed by `scope`.
   }, [search, scope, mode, query, options, discoveryRevision]);
-  // A new query or mode starts at the top.
-  useEffect(() => setIndex(0), [mode, query, options, files, found]);
+  // A new query or mode starts at the top. Results that refresh because the checkout changed on
+  // disk keep the row the reader moved to (by key), so the selection follows it if it moves.
+  useEffect(() => setSelection({ at: 0 }), [mode, query, options]);
   // Scroll methods may return a promise in current Chromium; an effect must return nothing.
   useLayoutEffect(() => {
     selectedRow.current?.scrollIntoView({ block: 'nearest' });
@@ -317,8 +319,14 @@ export function Picker({
         : [],
     [mode, found, scope],
   );
-  const count = mode === 'goto' ? goTo.length : matches.length;
-  const selected = Math.min(index, Math.max(0, count - 1));
+  const rowKeys =
+    mode === 'goto'
+      ? goTo.map((row) => row.key)
+      : matches.map((hit) => matchKey(hit.path, hit.match));
+  const count = rowKeys.length;
+  const kept = selection.key === undefined ? -1 : rowKeys.indexOf(selection.key);
+  const selected = kept >= 0 ? kept : Math.min(selection.at, Math.max(0, count - 1));
+  const select = (at: number) => setSelection({ at, key: rowKeys[at] });
   const preview = mode === 'find' ? matches[selected] : undefined;
 
   // Results stay on screen while the next query runs, so Enter waits for that query to settle.
@@ -399,7 +407,7 @@ export function Picker({
       ref={at === selected ? selectedRow : undefined}
       {...stylex.props(styles.row, extra, at === selected && styles.selected)}
       onMouseDown={(event) => event.preventDefault()}
-      onMouseMove={() => at !== selected && setIndex(at)}
+      onMouseMove={() => at !== selected && select(at)}
       onClick={() => activate(at)}>
       {children}
     </div>
@@ -478,7 +486,7 @@ export function Picker({
         </div>
         {file.matches.map((match) =>
           option(
-            file.path + ':' + match.line,
+            matchKey(file.path, match),
             at++,
             `Line ${match.line}: ${match.text.trim()}`,
             <>
@@ -561,7 +569,7 @@ export function Picker({
                 } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
                   event.preventDefault();
                   if (count)
-                    setIndex((selected + (event.key === 'ArrowDown' ? 1 : count - 1)) % count);
+                    select((selected + (event.key === 'ArrowDown' ? 1 : count - 1)) % count);
                 } else if (mode === 'find' && event.altKey) {
                   const option = { KeyC: 'matchCase', KeyW: 'wholeWord', KeyR: 'regex' }[
                     event.code

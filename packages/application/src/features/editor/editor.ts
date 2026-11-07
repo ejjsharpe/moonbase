@@ -1018,7 +1018,19 @@ class EditorModelState {
       .then((listing) => {
         if (!isCurrent()) return listing;
         this.listingReads.get(key)!.listed = true;
-        this.listings[key] = listing;
+        // Entries keep their last Git classification until the new one arrives, so a refresh
+        // does not flash ignored files as unignored.
+        const previous = new Map(
+          this.listings[key]?.entries.map((entry) => [entry.path, entry.ignored]),
+        );
+        this.listings[key] = {
+          ...listing,
+          entries: listing.entries.map((entry) =>
+            entry.ignored === undefined && previous.get(entry.path) !== undefined
+              ? { ...entry, ignored: previous.get(entry.path) }
+              : entry,
+          ),
+        };
         this.emit();
         return listing;
       });

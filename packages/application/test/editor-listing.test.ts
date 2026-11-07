@@ -265,3 +265,30 @@ test('ignore failures keep files visible, retries can classify, and disposal can
     await f.dispose();
   }
 });
+
+test('a refreshed listing keeps its ignored classification until Git classifies it again', async () => {
+  const f = await fixture('listing-ignored-refresh', false);
+  const classification = () =>
+    f.editor
+      .getSnapshot()
+      .listings[fileKey(target(''))]?.entries.find((entry) => entry.path === 'c.ts')?.ignored;
+  const seen: (boolean | undefined)[] = [];
+  try {
+    await f.editor.list(checkout);
+    await f.runtime.runPromise(Effect.yieldNow);
+    while (classification() === undefined) await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(classification(), true);
+    const off = f.editor.subscribe(() => seen.push(classification()));
+    try {
+      // An unrelated change on disk relists the folder, as a watcher refresh does.
+      f.memory.externalWrite(target('a.ts'), 'changed elsewhere');
+      await f.editor.refresh(checkout);
+    } finally {
+      off();
+    }
+    assert(seen.length > 0, 'The refresh must publish its listing');
+    assert.deepEqual([...new Set(seen)], [true], 'c.ts must not flash as unignored');
+  } finally {
+    await f.dispose();
+  }
+});
