@@ -34,6 +34,8 @@ export type DesktopShellProps = {
   /** These callbacks return user-approved roots or opaque native references, never source paths. */
   transcriptNative?: (backendId: string) => TranscriptNative;
   chooseChatFolder?: () => Promise<string | null>;
+  /** Folders the native picker approved for local chat before, newest first. */
+  recentChatFolders?: () => Promise<readonly string[]>;
   /** Creates a new local chat's linked worktree beside the repository, returning its root. */
   createChatWorktree?: (root: string, branch: string) => Promise<string>;
   selectCheckout?: () => Promise<string | null>;
@@ -50,6 +52,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
     application,
     closing = false,
     chooseChatFolder,
+    recentChatFolders,
     createChatWorktree,
     transcriptNative,
     selectCheckout,
@@ -82,6 +85,26 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
     state?.recovery.openCheckoutIds
       .map((id) => state.recovery.checkouts.find((checkout) => checkout.checkoutId === id))
       .filter((checkout) => checkout !== undefined) ?? [];
+  // Every checkout the editor has opened is approved, so a new local chat may start in it.
+  const folderProjects = (state?.recovery.checkouts ?? []).map((checkout) => ({
+    root: checkout.root,
+    projectId: checkout.projectId,
+    branch: checkout.branch,
+    worktree: checkout.worktree,
+    open: !!state?.recovery.openCheckoutIds.includes(checkout.checkoutId),
+  }));
+  // Closed projects, newest first: one per repository whose projects are all closed, its main
+  // worktree when the editor knows it. The editor approved each, so it reopens without a picker.
+  const recentCheckouts: CheckoutTarget[] = [];
+  for (const checkout of [...(state?.recovery.checkouts ?? [])].reverse()) {
+    const sameProject = (other: CheckoutTarget) =>
+      other.hostId === checkout.hostId && other.projectId === checkout.projectId;
+    if (openCheckouts.some(sameProject)) continue;
+    const listed = recentCheckouts.findIndex(sameProject);
+    if (listed < 0) recentCheckouts.push(checkout);
+    else if (checkout.worktree === 'main' && recentCheckouts[listed].worktree !== 'main')
+      recentCheckouts[listed] = checkout;
+  }
   const selected = openCheckouts.find(
     (checkout) => checkout.checkoutId === state?.recovery.selectedCheckoutId,
   );
@@ -376,6 +399,15 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
         disabled={lifecycle.phase !== 'live'}
         preserving={!!state?.preserving}
         openCheckout={selectCheckout && controller ? () => run(openCheckout()) : undefined}
+        recentCheckouts={recentCheckouts}
+        reopenCheckout={
+          controller
+            ? (checkout) => {
+                setDestination('project');
+                run(controller.openCheckout(checkout.root));
+              }
+            : undefined
+        }
         openSettings={() => setSettings('hosts')}
         openChat={
           !chat && lifecycle.chat.state !== 'unavailable'
@@ -514,6 +546,8 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
                         key={`${lifecycle.chatTargetId}:${selected.checkoutId}`}
                         controller={chat}
                         chooseFolder={chooseChatFolder}
+                        recentFolders={recentChatFolders}
+                        folderProjects={folderProjects}
                         createWorktree={
                           createChatWorktree &&
                           (async (root, branch) => {
@@ -586,6 +620,8 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
               key={lifecycle.chatTargetId}
               controller={chat}
               chooseFolder={chooseChatFolder}
+              recentFolders={recentChatFolders}
+              folderProjects={folderProjects}
               createWorktree={createChatWorktree}
               transcriptNative={transcriptNative?.(lifecycle.chatTargetId ?? 'remote')}
               hosts={

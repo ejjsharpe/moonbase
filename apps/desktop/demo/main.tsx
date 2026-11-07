@@ -151,6 +151,22 @@ function Demo() {
           application={firstApplication}
           transcriptNative={transcriptDemo ? () => transcriptDemo.native : undefined}
           chooseChatFolder={async () => '/demo/moonbase'}
+          recentChatFolders={async () =>
+            // `?folders` lists enough recent folders for the menu to offer its filter.
+            new URLSearchParams(location.search).has('folders')
+              ? [
+                  'notes',
+                  'game-engine',
+                  'dotfiles',
+                  'blog',
+                  'scratch',
+                  'api',
+                  'infra',
+                  'design',
+                  'tools',
+                ].map((name) => `/Users/demo/${name}`)
+              : ['/Users/demo/notes', '/demo/moonbase']
+          }
           createChatWorktree={createChatWorktree}
           selectCheckout={() => window.demo.selectCheckout()}
           selectClipboardImports={(checkout) => window.demo.selectClipboardImports(checkout)}
