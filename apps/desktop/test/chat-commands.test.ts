@@ -93,3 +93,17 @@ test('a submitted command line runs its command or explains why it cannot', () =
   assert.equal(removeCommandLine('/model cod\nand then this'), 'and then this');
   assert.equal(removeCommandLine('/clear'), '');
 });
+
+test('commands open only at the end of the first line, so picking one never drops text after it', () => {
+  const { context } = makeContext({ selected: true });
+  const commands = listChatCommands(context);
+  assert.equal(findCommandQuery('/fix the login bug\nsecond line', 1, commands), null);
+  assert.equal(findCommandQuery('/model fast', 3, commands), null);
+  assert.equal(findCommandQuery('/mo fast', 3, commands), null);
+  assert.deepEqual(findCommandQuery('/ne\nsecond line', 3, commands), {
+    kind: 'command',
+    query: 'ne',
+  });
+  assert.equal(findCommandQuery('/effort hi', 10, commands)?.kind, 'option');
+  assert.equal(findCommandQuery('/effort hi', 9, commands), null);
+});

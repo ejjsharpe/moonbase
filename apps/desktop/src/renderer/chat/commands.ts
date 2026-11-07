@@ -65,6 +65,10 @@ export type CommandQuery =
   | { kind: 'command'; query: string }
   | { kind: 'option'; command: ChatCommand; query: string };
 
+/**
+ * Only at the end of the first line: picking a command replaces that line, so text after the caret
+ * would be lost.
+ */
 export function findCommandQuery(
   text: string,
   caret: number,
@@ -72,6 +76,7 @@ export function findCommandQuery(
 ): CommandQuery | null {
   const head = text.slice(0, caret);
   if (!head.startsWith('/') || head.includes('\n')) return null;
+  if (!/^(?:\n|$)/.test(text.slice(caret))) return null;
   const name = /^\/(\S*)$/.exec(head);
   if (name) return { kind: 'command', query: name[1]! };
   const argument = /^\/(\S+) +(.*)$/.exec(head);

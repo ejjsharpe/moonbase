@@ -116,8 +116,10 @@ export function MessageInput({
   const pickerKey = commandKey ?? (query ? `@${query.start}` : null);
   const optionId = (index: number) => `${id}-option-${index}`;
   function edit(text: string, next: ChatMention[] | undefined, at: number) {
-    caretAfter.current = { text, caret: at };
     setSelection({ text, caret: at });
+    // Unchanged text renders nothing new, so its caret moves now rather than after the render.
+    if (text === draft) textarea.current?.setSelectionRange(at, at);
+    else caretAfter.current = { text, caret: at };
     controller.setDraft(text, next);
   }
   function pickActive() {

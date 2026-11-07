@@ -1455,6 +1455,14 @@ test('/ at the start of a message lists commands that switch model and effort, c
     "/stop isn't available here.",
   );
   await expect(message).toHaveValue('/stop');
+  // The error belongs to that line; editing it hides the error.
+  await message.fill('Fix the login bug');
+  await expect(page.getByRole('alert').filter({ hasText: '/stop' })).toBeHidden();
+  // A / typed before existing text lists nothing, so picking cannot replace that text.
+  await message.press('Home');
+  await message.pressSequentially('/');
+  await expect(commands).toBeHidden();
+  await expect(message).toHaveValue('/Fix the login bug');
   await message.fill('/cl');
   await message.press('Enter');
   await expect(message).toHaveValue('');

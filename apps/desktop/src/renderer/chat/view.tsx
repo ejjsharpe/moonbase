@@ -60,7 +60,8 @@ export function ChatView({
     [cwd, setCwd] = useState(dock?.cwd ?? ''),
     [dockList, setDockList] = useState(false),
     [folderError, setFolderError] = useState<string | null>(null),
-    [commandError, setCommandError] = useState<string | null>(null);
+    // An error belongs to the command line it was about; editing it or changing chat hides it.
+    [commandError, setCommandError] = useState<{ text: string; message: string } | null>(null);
   const providerState = useSyncExternalStore(
     controller.providers?.subscribe ?? noSubscription,
     controller.providers?.getSnapshot ?? noProviders,
@@ -403,9 +404,9 @@ export function ChatView({
             {folderError}
           </p>
         )}
-        {commandError && (
+        {commandError?.text === `${state.selected?.conversationId ?? ''}\n${state.draft}` && (
           <p role="alert" {...stylex.props(styles.warning)}>
-            {commandError}
+            {commandError.message}
           </p>
         )}
         {!state.selected &&
@@ -423,7 +424,11 @@ export function ChatView({
           onSubmit={(e) => {
             e.preventDefault();
             if (typedCommand) {
-              if ('error' in typedCommand) setCommandError(typedCommand.error);
+              if ('error' in typedCommand)
+                setCommandError({
+                  text: `${state.selected?.conversationId ?? ''}\n${state.draft}`,
+                  message: typedCommand.error,
+                });
               else runCommand(typedCommand.command, typedCommand.option);
               return;
             }
