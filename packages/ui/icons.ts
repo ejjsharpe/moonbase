@@ -17,6 +17,7 @@ import {
   IconFolder,
   IconFolderOpen,
   IconFolderPlus,
+  IconKey,
   IconMessageCircle,
   IconMoon,
   IconPlus,
@@ -27,6 +28,7 @@ import {
   IconSquare,
   IconTrash,
   IconUpload,
+  IconUser,
   IconX,
 } from '@tabler/icons-react';
 
@@ -57,6 +59,8 @@ export const icons = {
   computer: IconDeviceLaptop,
   server: IconServer,
   settings: IconSettings,
+  key: IconKey,
+  user: IconUser,
   send: IconArrowUp,
   stop: IconSquare,
   more: IconDots,

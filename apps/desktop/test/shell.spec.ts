@@ -1612,13 +1612,16 @@ test('the local model menu opens provider setup in Settings', async ({ page }) =
   await expect(
     settings.getByRole('button', { name: 'Refresh providers', exact: true }),
   ).toBeVisible();
-  // Each provider is a row with its state and one action.
-  const provider = settings
+  // Each vendor is a card listing its ways to connect, each with its state and one action.
+  const vendor = settings
     .getByRole('list', { name: 'Model providers', exact: true })
-    .getByRole('listitem', { name: 'Demo provider', exact: true });
-  await expect(provider).toContainText('Ready · 2 models');
+    .getByRole('listitem', { name: 'OpenAI', exact: true });
+  await expect(vendor).toContainText('1 connected');
+  const key = vendor.getByRole('listitem', { name: 'Demo provider', exact: true });
+  await expect(key).toContainText('API key');
+  await expect(key).toContainText('2 models');
   await expect(
-    provider.getByRole('button', { name: 'Sign out of Demo provider', exact: true }),
+    key.getByRole('button', { name: 'Remove key for Demo provider', exact: true }),
   ).toBeVisible();
   await settings.getByRole('tab', { name: 'Hosts', exact: true }).click();
   await expect(settings.getByRole('status').first()).toHaveText('Local ready');

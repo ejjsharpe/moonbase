@@ -207,7 +207,7 @@ test('native local setup, approved folders/models, streaming/tools, hidden work 
     );
     expect(unauthorized).toMatchObject({ ok: false, error: { code: 'Unauthorized' } });
     await openSettings(page, 'Providers');
-    await page.getByRole('button', { name: 'Set API key for OpenAI API key', exact: true }).click();
+    await page.getByRole('button', { name: 'Add key for OpenAI API key', exact: true }).click();
     await page
       .getByLabel('Enter OpenAI API key', { exact: true })
       .fill('sk-controlled-private-key');
@@ -520,7 +520,7 @@ test('transcript local rendering precedes held completion; native Copy/link fail
   };
   try {
     await openSettings(page, 'Providers');
-    await page.getByRole('button', { name: 'Set API key for OpenAI API key', exact: true }).click();
+    await page.getByRole('button', { name: 'Add key for OpenAI API key', exact: true }).click();
     await page
       .getByLabel('Enter OpenAI API key', { exact: true })
       .fill('sk-controlled-transcript-fixture');
@@ -743,9 +743,7 @@ for (const mode of ['local', 'remote'] as const)
         await createRemoteChat(page, 'Remote held activity');
       } else {
         await openSettings(page, 'Providers');
-        await page
-          .getByRole('button', { name: 'Set API key for OpenAI API key', exact: true })
-          .click();
+        await page.getByRole('button', { name: 'Add key for OpenAI API key', exact: true }).click();
         await page
           .getByLabel('Enter OpenAI API key', { exact: true })
           .fill('sk-controlled-activity-fixture');
@@ -946,9 +944,7 @@ for (const mode of ['local', 'remote'] as const)
         await createRemoteChat(page, 'Retained remote images');
       } else {
         await openSettings(page, 'Providers');
-        await page
-          .getByRole('button', { name: 'Set API key for OpenAI API key', exact: true })
-          .click();
+        await page.getByRole('button', { name: 'Add key for OpenAI API key', exact: true }).click();
         await page
           .getByLabel('Enter OpenAI API key', { exact: true })
           .fill('sk-controlled-image-fixture');
