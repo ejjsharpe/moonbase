@@ -3,6 +3,7 @@ import { EditorPreservation, type ConfirmedClose } from './preservation.ts';
 import { RecoveryPublications, type PublicationOptions } from './recovery-publications.ts';
 import {
   EditorLookup,
+  EditorTextSearch,
   EditorMutation,
   getMutationDestinations,
   type MutationAction,
@@ -1190,6 +1191,26 @@ class EditorModelState {
     };
     return lookup;
   }
+  createTextSearch() {
+    this.assertAdmission();
+    this.assertReady();
+    const search = new EditorTextSearch(
+      () => this.admissionsOpen && !this.closing,
+      this.scope,
+      (effect) => this.runEffect(effect),
+      (input, signal) => {
+        this.checkout(input.checkout);
+        return this.client.command('searchText', input, { signal });
+      },
+    );
+    this.workflows.add(search);
+    const stop = search.stop.bind(search);
+    search.stop = () => {
+      this.workflows.delete(search);
+      stop();
+    };
+    return search;
+  }
   createMutation(action: MutationAction) {
     this.assertAdmission();
     this.checkout(action.checkout);
@@ -1703,6 +1724,8 @@ export interface EditorController {
   lookup(checkout: CheckoutTarget, query: string): Promise<CommandOutput<'lookupFiles'>>;
   refresh(checkout: CheckoutTarget): Promise<void>;
   createLookup(): EditorLookup;
+  /** Searches file contents in one open checkout; dispose it with the popup that owns it. */
+  createTextSearch(): EditorTextSearch;
   createMutation(action: MutationAction): EditorMutation;
   inspect(checkout: CheckoutTarget, paths: string[]): Promise<CommandOutput<'inspectEntries'>>;
   mutate(

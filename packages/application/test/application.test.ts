@@ -424,6 +424,46 @@ test('document loss cancels a pending prompt without awaiting quit and drains la
   assert.deepEqual(chat.calls, []);
 });
 
+test('text search reports matches, replaces stale queries and explains invalid patterns', async () => {
+  const editor = editorCapabilities();
+  const app = await createMoonbaseApplication({
+    editors: [{ client: editor.client, clientId: 'one' }],
+  });
+  try {
+    const model = app.editors[0];
+    await model.openCheckout(checkout.root);
+    const search = model.createTextSearch();
+    const settled = (message: string) =>
+      new Promise<void>((resolve) => {
+        const check = () => {
+          if (search.getSnapshot().message === message) {
+            off();
+            resolve();
+          }
+        };
+        const off = search.subscribe(check);
+        check();
+      });
+    const options = { matchCase: false, wholeWord: false, regex: false };
+    search.query('orig', options, checkout);
+    search.query('SEC', options, checkout);
+    await settled('1 match in 1 file');
+    const [file] = search.getSnapshot().files;
+    assert.equal(file.path, 'b.ts');
+    assert.deepEqual(file.matches[0].ranges, [{ start: 0, end: 3 }]);
+    search.query('SEC', { ...options, matchCase: true }, checkout);
+    await settled('No matches.');
+    search.query('(', { ...options, regex: true }, checkout);
+    await settled('Invalid regular expression.');
+    search.query('', options, checkout);
+    assert.deepEqual(search.getSnapshot().files, []);
+    await search.dispose();
+  } finally {
+    await app.dispose();
+    await editor.runtime.dispose();
+  }
+});
+
 test('retained workflow handles cannot admit queries or mutations after quit consent', async () => {
   const editor = editorCapabilities();
   const app = await createMoonbaseApplication({

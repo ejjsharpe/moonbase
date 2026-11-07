@@ -14,8 +14,11 @@ export {
 export type {
   EditorLookup,
   EditorMutation,
+  EditorTextSearch,
   LookupRow,
   LookupSnapshot,
+  TextSearchOptions,
+  TextSearchSnapshot,
   MutationAction,
   MutationSnapshot,
 } from './workflows.ts';

@@ -10,7 +10,9 @@ configureMonacoWorkers(); // once per browser root
 <Workbench controller={editor} checkout={checkout} ref={handle} />;
 ```
 
-Pass the exact open checkout, or `undefined` for the empty view. `renderLayout({ explorer, editor })` lets the consuming app place or omit the explorer. Optional `selectNativeImports` and `selectClipboardImports` supply approved file references for imports; the workbench never receives raw OS paths. Unmounting releases presentation resources without disposing the controller.
+Pass the exact open checkout, or `undefined` for the empty view. `renderLayout({ explorer, editor })` lets the consuming app place or omit the explorer.
+
+⌘P opens the picker: Go to finds files, and `>` lists commands (⌘⇧P opens it there); ⇥ switches to Find, which searches file contents and previews each match (⌘⇧F opens it with the editor's selected text). An app adds chats, projects and its own commands with `pickerEntries`, opens the picker from anywhere with the handle's `openPicker(mode)`, and brings the editor into view in `onShowEditor`. Optional `selectNativeImports` and `selectClipboardImports` supply approved file references for imports; the workbench never receives raw OS paths. Unmounting releases presentation resources without disposing the controller.
 
 | Export | Purpose |
 | --- | --- |

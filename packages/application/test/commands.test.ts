@@ -78,6 +78,7 @@ function fixture(
     createWorktree: unavailable,
     readComparison: unavailable,
     lookupFiles: unavailable,
+    searchText: unavailable,
     inspectEntries: unavailable,
     mutate: unavailable,
     operationStatus: unavailable,

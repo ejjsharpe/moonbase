@@ -13,6 +13,7 @@ import type {
 import type {
   EditorSnapshot,
   EditorLookup,
+  EditorTextSearch,
   EditorMutation,
   MutationAction,
 } from '@moonbase/application/editor';
@@ -108,6 +109,7 @@ type ExpectedEditorController = {
   lookup(checkout: CheckoutTarget, query: string): Promise<CommandOutput<'lookupFiles'>>;
   refresh(checkout: CheckoutTarget): Promise<void>;
   createLookup(): EditorLookup;
+  createTextSearch(): EditorTextSearch;
   createMutation(action: MutationAction): EditorMutation;
   inspect(checkout: CheckoutTarget, paths: string[]): Promise<CommandOutput<'inspectEntries'>>;
   mutate(
