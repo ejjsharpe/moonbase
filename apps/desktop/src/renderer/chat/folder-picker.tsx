@@ -1,11 +1,12 @@
-import { useId, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { Popover } from '@base-ui/react/popover';
 import { controls } from '@moonbase/ui/controls';
 import { overlays } from '@moonbase/ui/overlays';
 import { projectHue, projectInitials, projectTiles } from '@moonbase/ui/projects';
-import { colors, radius, shadow, space, type } from '@moonbase/ui/tokens.stylex';
+import { colors, radius } from '@moonbase/ui/tokens.stylex';
 import { Icon } from '../icon.tsx';
+import { FolderMenu, folderMenuStyles, folderName, parentPath } from '../folder-menu.tsx';
 
 /** A checkout the editor has opened, which local chat may use as its working folder. */
 export type ChatFolderProject = {
@@ -28,10 +29,6 @@ export type FolderPickerProps = {
   disabled?: boolean;
 };
 
-const folderName = (path: string) => path.split('/').filter(Boolean).at(-1) || '/';
-const parentPath = (path: string) =>
-  (path.replace(/\/[^/]+\/?$/, '') || '/').replace(/^\/(Users|home)\/[^/]+/, '~');
-
 /**
  * The new local chat's working folder: one chip that names it, and a menu of the editor's
  * projects and recently chosen folders, with the native picker for any other.
@@ -46,8 +43,7 @@ export function FolderPicker({
 }: FolderPickerProps) {
   const [open, setOpen] = useState(false);
   const [recent, setRecent] = useState<readonly string[]>([]);
-  const chosenButton = useRef<HTMLButtonElement>(null);
-  const id = useId();
+  const focusTarget = useRef<HTMLElement>(null);
   // Open projects first, then the rest; a linked worktree only while it is open.
   const listed = projects
     .filter((project) => project.open || project.worktree === 'main')
@@ -56,37 +52,6 @@ export function FolderPicker({
   const others = recent.filter((folder) => !roots.has(folder));
   const current = projects.find((project) => project.root === cwd);
   const name = cwd ? folderName(cwd) : '';
-  const pick = (folder: string) => {
-    choose(folder);
-    setOpen(false);
-  };
-  const row = (folder: string, detail: string, tile: stylex.StyleXStyles, live = false) => {
-    const chosen = folder === cwd;
-    return (
-      <button
-        key={folder}
-        type="button"
-        aria-pressed={chosen}
-        title={folder}
-        ref={chosen ? chosenButton : undefined}
-        {...stylex.props(styles.item, chosen && styles.chosen)}
-        onClick={() => pick(folder)}>
-        <span
-          aria-hidden="true"
-          data-initials={projectInitials(folderName(folder))}
-          {...stylex.props(projectTiles.tile, tile, styles.itemTile)}
-        />
-        <span {...stylex.props(styles.itemText)}>
-          <span {...stylex.props(controls.truncate)}>{folderName(folder)}</span>
-          <span {...stylex.props(controls.truncate, styles.detail)}>{detail}</span>
-        </span>
-        {live && <span {...stylex.props(styles.badge)}>open</span>}
-        <span aria-hidden="true" {...stylex.props(styles.check)}>
-          {chosen ? '✓' : ''}
-        </span>
-      </button>
-    );
-  };
   return (
     <Popover.Root
       open={open}
@@ -129,55 +94,49 @@ export function FolderPicker({
           {...stylex.props(overlays.positioner)}>
           <Popover.Popup
             aria-label="Working folder"
-            initialFocus={() => chosenButton.current ?? true}
-            {...stylex.props(styles.popup)}>
-            <div {...stylex.props(styles.list)}>
-              {listed.length > 0 && (
-                <div
-                  role="group"
-                  aria-labelledby={`${id}-projects`}
-                  {...stylex.props(styles.group)}>
-                  <span id={`${id}-projects`} {...stylex.props(styles.heading)}>
-                    Projects
-                  </span>
-                  {listed.map((project) =>
-                    row(
-                      project.root,
+            initialFocus={() => focusTarget.current ?? true}
+            {...stylex.props(folderMenuStyles.popup)}>
+            <FolderMenu
+              focusRef={(element) => {
+                focusTarget.current = element;
+              }}
+              groups={[
+                {
+                  label: 'Projects',
+                  items: listed.map((project) => ({
+                    path: project.root,
+                    projectId: project.projectId,
+                    detail:
                       project.worktree === 'linked'
                         ? `${project.branch} · worktree`
                         : project.branch,
-                      projectHue(project.projectId),
-                      project.open,
-                    ),
-                  )}
-                </div>
-              )}
-              {others.length > 0 && (
-                <div role="group" aria-labelledby={`${id}-recent`} {...stylex.props(styles.group)}>
-                  <span id={`${id}-recent`} {...stylex.props(styles.heading)}>
-                    Recent folders
-                  </span>
-                  {others.map((folder) => row(folder, parentPath(folder), projectTiles.silver))}
-                </div>
-              )}
-              {!listed.length && !others.length && (
-                <p {...stylex.props(styles.empty)}>
-                  Folders you open or choose for a chat appear here.
-                </p>
-              )}
-            </div>
-            {browse && (
-              <button
-                type="button"
-                {...stylex.props(styles.footer)}
-                onClick={() => {
+                    badge: project.open ? 'open' : undefined,
+                    chosen: project.root === cwd,
+                  })),
+                },
+                {
+                  label: 'Recent folders',
+                  items: others.map((folder) => ({
+                    path: folder,
+                    detail: parentPath(folder),
+                    chosen: folder === cwd,
+                  })),
+                },
+              ]}
+              choose={(folder) => {
+                choose(folder);
+                setOpen(false);
+              }}
+              browse={
+                browse &&
+                (() => {
                   setOpen(false);
                   browse();
-                }}>
-                <Icon name="folder" />
-                Choose folder…
-              </button>
-            )}
+                })
+              }
+              browseLabel="Choose folder…"
+              empty="Folders you open or choose for a chat appear here."
+            />
           </Popover.Popup>
         </Popover.Positioner>
       </Popover.Portal>
@@ -198,76 +157,4 @@ const styles = stylex.create({
   },
   chipTile: { width: 18, height: 18, borderRadius: 5, fontSize: 9 },
   caret: { color: colors.muted },
-  popup: {
-    width: 'min(320px, calc(100vw - 24px))',
-    display: 'flex',
-    flexDirection: 'column',
-    overflow: 'hidden',
-    fontFamily: type.ui,
-    fontSize: type.body,
-    color: colors.text,
-    backgroundColor: colors.elevated,
-    borderWidth: 1,
-    borderStyle: 'solid',
-    borderColor: colors.controlBorder,
-    borderRadius: radius.panel,
-    boxShadow: shadow.raised,
-    outline: 'none',
-  },
-  list: {
-    maxHeight: 'min(340px, 50vh)',
-    overflowY: 'auto',
-    padding: 6,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: space.sm,
-  },
-  group: { display: 'flex', flexDirection: 'column', gap: 1 },
-  heading: {
-    padding: '4px 8px 2px',
-    color: colors.muted,
-    fontSize: 10.5,
-    fontWeight: 600,
-    letterSpacing: '0.08em',
-    textTransform: 'uppercase',
-  },
-  item: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: space.sm,
-    minWidth: 0,
-    flexShrink: 0,
-    padding: '5px 8px',
-    borderWidth: 0,
-    borderRadius: radius.row,
-    backgroundColor: { default: 'transparent', ':hover': colors.hover },
-    color: colors.text,
-    font: 'inherit',
-    fontSize: type.small,
-    textAlign: 'left',
-    cursor: 'pointer',
-  },
-  chosen: { backgroundColor: { default: colors.selected, ':hover': colors.selectedHover } },
-  itemTile: { width: 22, height: 22, borderRadius: 6, fontSize: 10 },
-  itemText: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', lineHeight: 1.3 },
-  detail: { color: colors.muted, fontSize: type.caption },
-  badge: { flexShrink: 0, color: colors.muted, fontSize: type.caption },
-  check: { flexShrink: 0, width: 12, color: colors.text },
-  empty: { margin: 0, padding: space.md, color: colors.muted, fontSize: type.small },
-  footer: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: space.sm,
-    padding: '8px 12px',
-    borderWidth: 0,
-    borderTopWidth: 1,
-    borderTopStyle: 'solid',
-    borderTopColor: colors.border,
-    backgroundColor: { default: 'transparent', ':hover': colors.hover },
-    color: colors.secondary,
-    font: 'inherit',
-    fontSize: type.small,
-    textAlign: 'left',
-    cursor: 'pointer',
-  },
 });

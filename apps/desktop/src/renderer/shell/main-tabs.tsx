@@ -11,6 +11,7 @@ import { checkoutName, projectHue, projectInitials, projectTiles } from '@moonba
 import { styles } from './styles.ts';
 import { Icon } from '../icon.tsx';
 import { AnimatedTab } from './animated-tab.tsx';
+import { ProjectOpener } from './project-opener.tsx';
 
 type MainTab = { kind: 'project'; checkout: CheckoutTarget } | { kind: 'chat' };
 export const tabValue = (tab: MainTab) =>
@@ -67,6 +68,8 @@ export function MainTabs({
   closeCheckout,
   closeChat,
   openCheckout,
+  recentCheckouts = [],
+  reopenCheckout,
   openChat,
   chatDisabled,
   openSettings,
@@ -82,6 +85,9 @@ export function MainTabs({
   closeCheckout(checkout: CheckoutTarget): void;
   closeChat(): void;
   openCheckout?: () => void;
+  /** Closed checkouts, newest first; with them, + opens a menu that reopens one. */
+  recentCheckouts?: readonly CheckoutTarget[];
+  reopenCheckout?: (checkout: CheckoutTarget) => void;
   openChat?: () => void;
   chatDisabled?: boolean;
   /** Hosts and providers; pinned to the foot of the rail. */
@@ -232,20 +238,29 @@ export function MainTabs({
                   layout={reducedMotion ? false : 'position'}
                   transition={transition}
                   {...stylex.props(styles.railRow)}>
-                  <Peek
-                    trigger={
-                      <Button
-                        aria-label="Open checkout"
-                        {...stylex.props(controls.button, styles.railTab)}
-                        disabled={disabled || preserving}
-                        onClick={openCheckout}>
-                        <span aria-hidden="true" {...stylex.props(styles.tile, styles.openTile)}>
-                          <Icon name="plus" />
-                        </span>
-                      </Button>
-                    }>
-                    <span {...stylex.props(styles.peekName)}>Open project</span>
-                  </Peek>
+                  {recentCheckouts.length && reopenCheckout ? (
+                    <ProjectOpener
+                      recent={recentCheckouts}
+                      reopen={reopenCheckout}
+                      browse={openCheckout}
+                      disabled={disabled || preserving}
+                    />
+                  ) : (
+                    <Peek
+                      trigger={
+                        <Button
+                          aria-label="Open checkout"
+                          {...stylex.props(controls.button, styles.railTab)}
+                          disabled={disabled || preserving}
+                          onClick={openCheckout}>
+                          <span aria-hidden="true" {...stylex.props(styles.tile, styles.openTile)}>
+                            <Icon name="plus" />
+                          </span>
+                        </Button>
+                      }>
+                      <span {...stylex.props(styles.peekName)}>Open project</span>
+                    </Peek>
+                  )}
                 </motion.div>
               )}
             </div>

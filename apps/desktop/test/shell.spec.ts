@@ -233,10 +233,12 @@ test('reopened projects append to the tab strip and open projects keep their slo
     .hover();
   await projects.getByRole('button', { name: 'Close checkout /demo/other', exact: true }).click();
   await expect(projectTabs).toHaveText(['moonbase · main', 'third · main']);
-  await page.evaluate(() => {
-    window.demo.selectCheckout = async () => '/demo/other';
-  });
+  // A closed project reopens from +'s menu, without the native picker.
   await projects.getByRole('button', { name: 'Open checkout', exact: true }).click();
+  await page
+    .getByRole('dialog', { name: 'Open project', exact: true })
+    .getByRole('button', { name: /^other/ })
+    .click();
   await expect(projectTabs).toHaveText(['moonbase · main', 'third · main', 'other · main']);
   expect(
     await page.evaluate(() => window.demo.first.getSnapshot().recovery.openCheckoutIds),
@@ -436,12 +438,17 @@ test('failed Open without a project stays visible in Agents and can be dismissed
     window.demo.selectCheckout = async () => '/demo/other';
     window.demo.memory.failNext('openCheckout', 'Controlled empty Open failure');
   });
-  await page.getByRole('button', { name: 'Open checkout', exact: true }).click();
+  // moonbase is closed, so + offers it in a menu; Open folder… is the native picker.
+  const openFolder = async () => {
+    await page.getByRole('button', { name: 'Open checkout', exact: true }).click();
+    await page.getByRole('button', { name: 'Open folder…', exact: true }).click();
+  };
+  await openFolder();
   const error = page.getByRole('alert').filter({ hasText: 'Controlled empty Open failure' });
   await expect(error).toBeVisible();
   await error.getByRole('button', { name: 'Dismiss error', exact: true }).click();
   await expect(error).toHaveCount(0);
-  await page.getByRole('button', { name: 'Open checkout', exact: true }).click();
+  await openFolder();
   await expect(page.getByRole('tab', { name: 'other · main', exact: true })).toHaveAttribute(
     'aria-selected',
     'true',
@@ -1219,9 +1226,6 @@ for (const reducedMotion of [false, true]) {
     await page.clock.resume();
     if (!reducedMotion) {
       await page.evaluate(async () => {
-        const plus = document.querySelector<HTMLButtonElement>(
-          'button[aria-label="Open checkout"]',
-        )!;
         const close = () =>
           document.querySelector<HTMLButtonElement>(
             'button[aria-label="Close checkout /demo/other"]',
@@ -1233,15 +1237,27 @@ for (const reducedMotion of [false, true]) {
           }
           throw Error('Rail command did not settle');
         };
-        plus.click();
+        // Closed, the project is offered again in +'s menu; + is a new button once it has one.
+        const open = () =>
+          document.querySelector<HTMLButtonElement>('button[aria-label="Open checkout"]')!;
+        const recent = () =>
+          [
+            ...document.querySelectorAll<HTMLButtonElement>('[aria-label="Open project"] button'),
+          ].find((button) => button.textContent?.startsWith('other'));
+        const reopen = async () => {
+          open().click();
+          await waitFor(() => Boolean(recent()));
+          recent()!.click();
+        };
+        await reopen();
         await waitFor(() => Boolean(close() && !close()!.disabled && !close()!.closest('[inert]')));
         close()!.click();
         await waitFor(
           () =>
             !window.demo.first.getSnapshot().recovery.openCheckoutIds.includes('other') &&
-            !plus.disabled,
+            !open().disabled,
         );
-        plus.click();
+        await reopen();
       });
       const reopened = page.getByRole('tab', { name: 'other · main', exact: true });
       await expect(reopened).toHaveAttribute('aria-selected', 'true');
@@ -1764,4 +1780,52 @@ test("the model picker lists providers that are set up, beside the chosen one's 
   await model.click();
   await picker.getByRole('button', { name: 'Demo Haiku', exact: true }).click();
   await expect(model).toHaveText(/Demo Haiku\s*▾/);
+});
+
+test("the rail's + reopens a closed project without the native picker", async ({ page }) => {
+  await page.goto('/?local&design');
+  const open = page.getByRole('button', { name: 'Open checkout', exact: true });
+  // Nothing is closed yet, so + goes straight to the native picker.
+  await expect(open).not.toHaveAttribute('aria-haspopup');
+  const close = page.getByRole('button', { name: 'Close checkout /demo/moonbase', exact: true });
+  await page.getByRole('tab', { name: 'moonbase · main', exact: true }).hover();
+  await close.locator('..').hover();
+  await close.click();
+  await expect(page.getByRole('tab', { name: 'moonbase · main', exact: true })).toHaveCount(0);
+  await open.click();
+  const menu = page.getByRole('dialog', { name: 'Open project', exact: true });
+  await expect(menu.getByRole('group', { name: 'Recent projects' }).getByRole('button')).toHaveText(
+    [/^moonbase\s*main · \/demo\/moonbase/],
+  );
+  await expect(menu.getByRole('button', { name: 'Open folder…', exact: true })).toBeVisible();
+  await menu.getByRole('button', { name: /^moonbase/ }).click();
+  await expect(menu).toBeHidden();
+  await expect(page.getByRole('tab', { name: 'moonbase · main', exact: true })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  await expect(open).not.toHaveAttribute('aria-haspopup');
+});
+
+test('a long folder menu offers a filter: type, then Enter picks the first match', async ({
+  page,
+}) => {
+  await page.goto('/?local&design&folders');
+  const folderChoice = page.getByRole('button', { name: 'Choose working folder', exact: true });
+  await folderChoice.click();
+  const menu = page.getByRole('dialog', { name: 'Working folder', exact: true });
+  const filter = menu.getByRole('textbox', { name: 'Filter folders', exact: true });
+  await expect(filter).toBeFocused();
+  await filter.fill('in');
+  await expect(menu.getByRole('group', { name: 'Recent folders' }).getByRole('button')).toHaveText([
+    /^game-engine/,
+    /^infra/,
+  ]);
+  await filter.press('ArrowDown');
+  await filter.press('Enter');
+  await expect(menu).toBeHidden();
+  await expect(folderChoice).toHaveAttribute('title', '/Users/demo/infra');
+  await folderChoice.click();
+  await filter.fill('zzz');
+  await expect(menu.getByText('Nothing matches.', { exact: true })).toBeVisible();
 });

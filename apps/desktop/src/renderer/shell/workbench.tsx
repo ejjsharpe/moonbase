@@ -93,6 +93,18 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
     worktree: checkout.worktree,
     open: !!state?.recovery.openCheckoutIds.includes(checkout.checkoutId),
   }));
+  // Closed projects, newest first: one per repository whose projects are all closed, its main
+  // worktree when the editor knows it. The editor approved each, so it reopens without a picker.
+  const recentCheckouts: CheckoutTarget[] = [];
+  for (const checkout of [...(state?.recovery.checkouts ?? [])].reverse()) {
+    const sameProject = (other: CheckoutTarget) =>
+      other.hostId === checkout.hostId && other.projectId === checkout.projectId;
+    if (openCheckouts.some(sameProject)) continue;
+    const listed = recentCheckouts.findIndex(sameProject);
+    if (listed < 0) recentCheckouts.push(checkout);
+    else if (checkout.worktree === 'main' && recentCheckouts[listed].worktree !== 'main')
+      recentCheckouts[listed] = checkout;
+  }
   const selected = openCheckouts.find(
     (checkout) => checkout.checkoutId === state?.recovery.selectedCheckoutId,
   );
@@ -387,6 +399,15 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
         disabled={lifecycle.phase !== 'live'}
         preserving={!!state?.preserving}
         openCheckout={selectCheckout && controller ? () => run(openCheckout()) : undefined}
+        recentCheckouts={recentCheckouts}
+        reopenCheckout={
+          controller
+            ? (checkout) => {
+                setDestination('project');
+                run(controller.openCheckout(checkout.root));
+              }
+            : undefined
+        }
         openSettings={() => setSettings('hosts')}
         openChat={
           !chat && lifecycle.chat.state !== 'unavailable'
