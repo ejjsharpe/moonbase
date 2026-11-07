@@ -2,6 +2,12 @@ import { selectFileView } from './editor-regressions.ts';
 import { test, expect, type Page } from '@playwright/test';
 import { mkdir, writeFile } from 'node:fs/promises';
 
+/** Opens the composer's folder menu and chooses a folder with the native picker. */
+async function chooseFolderNatively(page: Page) {
+  await page.getByRole('button', { name: 'Choose working folder', exact: true }).click();
+  await page.getByRole('button', { name: 'Choose folder…', exact: true }).click();
+}
+
 const shell = (page: Page) => page.getByRole('region', { name: 'First editor', exact: true });
 const tabs = (page: Page) =>
   shell(page).getByRole('tablist', { name: 'Workbench views', exact: true });
@@ -718,7 +724,7 @@ test('local model and effort defaults yield to preferences across new chats and 
     'true',
   );
   await page.keyboard.press('Escape');
-  await page.getByRole('button', { name: 'Choose working folder', exact: true }).click();
+  await chooseFolderNatively(page);
   await page.getByLabel('Message', { exact: true }).fill('Remember my coding model');
   await page.getByRole('button', { name: 'Send message', exact: true }).click();
   await expect(page.getByText('demo-coding · Extra high', { exact: true })).toBeVisible();
@@ -787,7 +793,7 @@ test('first-message recovery shows the captured text, Send identity and effort a
       chat.command = original;
     };
   });
-  await page.getByRole('button', { name: 'Choose working folder', exact: true }).click();
+  await chooseFolderNatively(page);
   const original = 'A short title\nThe original complete first message';
   const message = page.getByLabel('Message', { exact: true });
   await message.fill(original);
@@ -1266,7 +1272,25 @@ test('design fixture renders first-message composition, pinned navigation and co
   const send = page.getByRole('button', { name: 'Send message', exact: true });
   // The folder, host and model sit in the composer's own toolbar, on the send button's row.
   expect(await folderChoice.evaluate((element) => !!element.closest('form'))).toBe(true);
+  await expect(folderChoice).toHaveText(/^Folder/);
+  // The menu offers the editor's projects and folders chosen before, without the native picker.
   await folderChoice.click();
+  const folders = page.getByRole('dialog', { name: 'Working folder', exact: true });
+  await expect(folders.getByRole('group', { name: 'Projects' }).getByRole('button')).toHaveText([
+    /^moonbase\s*main\s*open/,
+  ]);
+  await expect(
+    folders.getByRole('group', { name: 'Recent folders' }).getByRole('button'),
+  ).toHaveText([/^notes\s*~/]);
+  await folders.getByRole('button', { name: /^notes/ }).click();
+  await expect(folders).toBeHidden();
+  await expect(folderChoice).toHaveAttribute('title', '/Users/demo/notes');
+  await folderChoice.click();
+  await expect(folders.getByRole('button', { name: /^notes/ })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await folders.getByRole('button', { name: /^moonbase/ }).click();
   await expect(folderChoice).toHaveAttribute('title', '/demo/moonbase');
   await expect(folderChoice.getByText('moonbase', { exact: true })).toBeVisible();
   await expect(folderChoice.locator('[data-initials="mo"]')).toBeVisible();
@@ -1526,7 +1550,7 @@ test('/ at the start of a message lists commands that switch model and effort, c
   await message.fill('/cl');
   await message.press('Enter');
   await expect(message).toHaveValue('');
-  await page.getByRole('button', { name: 'Choose working folder', exact: true }).click();
+  await chooseFolderNatively(page);
   await message.fill('Start a chat');
   await page.getByRole('button', { name: 'Send message', exact: true }).click();
   await expect(page.getByText('demo-coding · Medium', { exact: true })).toBeVisible();
@@ -1549,7 +1573,7 @@ test('a new worktree is made only when a new chat sends, and its chat stays with
   );
   // A local folder chosen in Agents.
   await expect(worktree).toBeHidden();
-  await page.getByRole('button', { name: 'Choose working folder', exact: true }).click();
+  await chooseFolderNatively(page);
   await worktree.click();
   await page.getByRole('option', { name: 'New worktree', exact: true }).click();
   await message.fill("Tidy the composer's spacing");

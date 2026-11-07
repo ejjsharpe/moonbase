@@ -20,6 +20,7 @@ import { Transcript } from './transcript.tsx';
 import type { TranscriptNative } from '../../chat/wire.ts';
 import { Choice } from './choice.tsx';
 import { ModelPicker } from './model-picker.tsx';
+import { FolderPicker, type ChatFolderProject } from './folder-picker.tsx';
 import { Icon } from '../icon.tsx';
 import { MessageInput } from './message-input.tsx';
 import {
@@ -86,6 +87,8 @@ export type ChatHosts = {
 export function ChatView({
   controller,
   chooseFolder,
+  recentFolders,
+  folderProjects = [],
   createWorktree,
   transcriptNative,
   dock,
@@ -95,6 +98,10 @@ export function ChatView({
 }: {
   controller: ChatController;
   chooseFolder?: () => Promise<string | null>;
+  /** Folders the native picker approved before, offered again without it. */
+  recentFolders?: () => Promise<readonly string[]>;
+  /** The editor's checkouts, which local chat may use without the picker. */
+  folderProjects?: readonly ChatFolderProject[];
   /** Creates a linked worktree of a local folder, named for the branch, and returns its root. */
   createWorktree?: (root: string, branch: string) => Promise<string>;
   transcriptNative?: TranscriptNative;
@@ -186,7 +193,6 @@ export function ChatView({
         : 'Choose a working folder to send. Local tools are not sandboxed.';
   if (local && !state.selected && !models.length)
     toolNotice = 'Set up a provider to send. Local tools are not sandboxed.';
-  const folderName = cwd ? cwd.split('/').filter(Boolean).at(-1) || '/' : '';
   const selectedFolder = (
     state.snapshot?.conversation.cwd ??
     state.chats.find((c) => c.target.conversationId === state.selected?.conversationId)?.cwd ??
@@ -630,42 +636,36 @@ export function ChatView({
             {!state.selected && (local || hosts) && (
               <div {...stylex.props(styles.composeContext)}>
                 {local && (
-                  <Button
-                    aria-label="Choose working folder"
-                    {...stylex.props(controls.button, controls.quietButton, styles.folderChoice)}
-                    disabled={!chooseFolder || busy('send') || creatingWorktree}
-                    title={cwd || 'Choose working folder'}
-                    onClick={() => {
+                  <FolderPicker
+                    cwd={cwd}
+                    projects={folderProjects}
+                    recentFolders={recentFolders}
+                    disabled={busy('send') || creatingWorktree}
+                    choose={(folder) => {
                       setFolderError(null);
-                      void chooseFolder?.()
-                        .then((folder) => {
-                          if (folder) {
-                            setCwd(folder);
-                            setNewWorktree(false);
-                          }
-                        })
-                        .catch(() =>
-                          setFolderError(
-                            'The folder could not be approved. Choose an existing working folder again.',
-                          ),
-                        );
-                    }}>
-                    {folderName ? (
-                      <span
-                        aria-hidden="true"
-                        data-initials={projectInitials(folderName)}
-                        {...stylex.props(projectTiles.tile, projectTiles.silver, styles.folderTile)}
-                      />
-                    ) : (
-                      <Icon name="folder" />
-                    )}
-                    <span {...stylex.props(controls.truncate)}>
-                      {folderName || 'Choose working folder'}
-                    </span>
-                    <span aria-hidden="true" {...stylex.props(styles.caret)}>
-                      ▾
-                    </span>
-                  </Button>
+                      if (folder === cwd) return;
+                      setCwd(folder);
+                      setNewWorktree(false);
+                    }}
+                    browse={
+                      chooseFolder &&
+                      (() => {
+                        setFolderError(null);
+                        void chooseFolder()
+                          .then((folder) => {
+                            if (folder) {
+                              setCwd(folder);
+                              setNewWorktree(false);
+                            }
+                          })
+                          .catch(() =>
+                            setFolderError(
+                              'The folder could not be approved. Choose an existing working folder again.',
+                            ),
+                          );
+                      })
+                    }
+                  />
                 )}
                 {worktreeChoice && (
                   <div {...stylex.props(styles.worktreeChoice)}>
@@ -1255,23 +1255,15 @@ const styles = stylex.create({
     lineHeight: 1.6,
   },
   starterComposer: { boxShadow: shadow.raised, padding: '16px 10px 10px 16px' },
-  folderTile: { width: 22, height: 22, borderRadius: 6, fontSize: 10 },
-  caret: { color: colors.muted },
   localDot: { width: 7, height: 7, borderRadius: '50%', backgroundColor: syntax.string },
   composeContext: {
     display: 'flex',
+    flexWrap: 'wrap',
     alignItems: 'center',
     gap: space.sm,
+    rowGap: 4,
     minWidth: 0,
     marginRight: 'auto',
-  },
-  folderChoice: {
-    maxWidth: 170,
-    minWidth: 0,
-    height: 30,
-    gap: space.sm,
-    padding: '0 10px 0 4px',
-    borderRadius: radius.row,
   },
   localLabel: {
     display: 'inline-flex',

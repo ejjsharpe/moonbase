@@ -151,6 +151,7 @@ function Demo() {
           application={firstApplication}
           transcriptNative={transcriptDemo ? () => transcriptDemo.native : undefined}
           chooseChatFolder={async () => '/demo/moonbase'}
+          recentChatFolders={async () => ['/Users/demo/notes', '/demo/moonbase']}
           createChatWorktree={createChatWorktree}
           selectCheckout={() => window.demo.selectCheckout()}
           selectClipboardImports={(checkout) => window.demo.selectClipboardImports(checkout)}

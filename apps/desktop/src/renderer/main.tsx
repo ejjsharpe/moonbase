@@ -83,6 +83,7 @@ function Desktop({ application }: { application: MoonbaseApplication }) {
       closing={closing}
       transcriptNative={getTranscriptActions}
       chooseChatFolder={() => window.moonbaseChat.chooseFolder!()}
+      recentChatFolders={() => window.moonbaseChat.recentFolders!()}
       createChatWorktree={(root, branch) => window.moonbaseChat.createWorktree!(root, branch)}
       selectCheckout={async () =>
         application.getSnapshot().phase === 'live'
