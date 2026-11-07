@@ -1,3 +1,4 @@
+import { disconnectChat } from './chat-target.ts';
 import { test, expect, type Page } from '@playwright/test';
 import { mkdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -762,7 +763,7 @@ test('disconnect cancels a held native action visibly and a late settlement cann
   });
   await answer(page).getByRole('button', { name: 'Copy message', exact: true }).click();
   await expect(page.getByText('Copying complete source…', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Disconnect', exact: true }).click();
+  await disconnectChat(page);
   await expect(
     page.getByRole('alert').filter({ hasText: 'Native action cancelled' }),
   ).toBeVisible();

@@ -15,7 +15,7 @@ import type { MoonbaseApplication } from '@moonbase/application';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { controls } from '@moonbase/ui/controls';
 import { workbench } from '@moonbase/ui/workbench';
-import { Choice } from '../chat/choice.tsx';
+import { Settings, type SettingsSection } from './settings.tsx';
 import { ChatView } from '../chat/view.tsx';
 import { checkoutName } from '@moonbase/ui/projects';
 import { Icon } from '../icon.tsx';
@@ -79,6 +79,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
     chat = application.chat;
   const [destination, setDestination] = useState<'project' | 'chat'>('chat');
   const [dockOpen, setDockOpen] = useState(true);
+  const [settings, setSettings] = useState<SettingsSection | null>(null);
   const [projectWorktrees, setProjectWorktrees] = useState<{
     checkoutId: string;
     roots: readonly string[];
@@ -314,6 +315,11 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
       inert={closing || ['prepared', 'disposing', 'disposed', 'failed'].includes(lifecycle.phase)}
       {...stylex.props(workbench.document, styles.shell)}
       onKeyDown={(event) => {
+        if (event.metaKey && !event.altKey && !event.shiftKey && event.key === ',') {
+          event.preventDefault();
+          setSettings((open) => open ?? 'hosts');
+          return;
+        }
         // ⌘ only: Control+P is "previous line" in macOS text fields.
         const mode = pickerMode(event, event.metaKey);
         if (
@@ -367,6 +373,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
         disabled={lifecycle.phase !== 'live'}
         preserving={!!state?.preserving}
         openCheckout={selectCheckout && controller ? () => run(openCheckout()) : undefined}
+        openSettings={() => setSettings('hosts')}
         openChat={
           !chat && lifecycle.chat.state !== 'unavailable'
             ? () => run(application.openChat().then(() => setDestination('chat')))
@@ -570,23 +577,6 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
           focus.current.chat = event.target as HTMLElement;
         }}
         {...stylex.props(styles.panel)}>
-        {lifecycle.chatTargets.length > 1 && (
-          <div {...stylex.props(styles.chatTargetBar)}>
-            <div {...stylex.props(styles.chatTargetChoice)}>
-              <Choice
-                label="Chat target"
-                compact
-                value={lifecycle.chatTargetId ?? ''}
-                options={lifecycle.chatTargets.map((target) => ({
-                  value: target.id,
-                  label: target.label,
-                }))}
-                disabled={lifecycle.phase !== 'live' || lifecycle.chat.state === 'opening'}
-                onChange={(id) => run(application.selectChatTarget(id))}
-              />
-            </div>
-          </div>
-        )}
         {chat ? (
           !dockVisible && (
             <ChatView
@@ -595,6 +585,17 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
               chooseFolder={chooseChatFolder}
               createWorktree={createChatWorktree}
               transcriptNative={transcriptNative?.(lifecycle.chatTargetId ?? 'remote')}
+              hosts={
+                lifecycle.chatTargets.length
+                  ? {
+                      targets: lifecycle.chatTargets,
+                      current: lifecycle.chatTargetId,
+                      select: (id) => run(application.selectChatTarget(id)),
+                      disabled: lifecycle.phase !== 'live' || lifecycle.chat.state === 'opening',
+                    }
+                  : undefined
+              }
+              setUpProviders={chat.providers ? () => setSettings('providers') : undefined}
             />
           )
         ) : (
@@ -605,11 +606,25 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
             </p>
             <p>
               Local editing remains available. Open Chat panel to retry initialization, or choose
-              another chat target.
+              another host in Settings.
             </p>
+            {lifecycle.chatTargets.length > 1 && (
+              <Button {...stylex.props(controls.button)} onClick={() => setSettings('hosts')}>
+                Choose a host
+              </Button>
+            )}
           </section>
         )}
       </Tabs.Panel>
+      {settings && (
+        <Settings
+          application={application}
+          chat={chat}
+          section={settings}
+          onSectionChange={setSettings}
+          close={() => setSettings(null)}
+        />
+      )}
     </Tabs.Root>
   );
 });

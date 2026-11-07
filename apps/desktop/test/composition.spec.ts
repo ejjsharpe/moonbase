@@ -1,5 +1,11 @@
 import { expectSaveEnabled, saveFile, captureNative } from './editor-regressions.ts';
-import { createRemoteChat, selectRemoteChat } from './chat-target.ts';
+import {
+  closeSettings,
+  createRemoteChat,
+  disconnectChat,
+  openSettings,
+  selectRemoteChat,
+} from './chat-target.ts';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import {
   test,
@@ -112,10 +118,12 @@ async function connect(p: Page) {
   await tab(p, 'Agents').click();
   await selectRemoteChat(p);
   await p.getByRole('button', { name: 'Connect', exact: true }).click();
-  await expect(p.getByRole('button', { name: 'Disconnect', exact: true })).toBeEnabled();
-  const details = p.getByText('Connection details', { exact: true });
-  if (!(await details.evaluate((element) => element.parentElement!.hasAttribute('open'))))
-    await details.click();
+  // Connected, the sidebar's Connect line goes; Disconnect lives in Settings › Hosts.
+  await expect(p.getByRole('button', { name: 'Connect', exact: true })).toHaveCount(0);
+  await expect(
+    (await openSettings(p)).getByRole('button', { name: 'Disconnect', exact: true }),
+  ).toBeEnabled();
+  await closeSettings(p);
 }
 async function create(p: Page, title: string) {
   await createRemoteChat(p, title);
@@ -351,7 +359,7 @@ test('dirty editor/live chat, two drafts, no-resend reconnect, view close and cl
       'first independent newer draft',
     );
     expect((await f.stats()).commands.filter((v) => v === 'sendChat')).toHaveLength(1);
-    await p.getByRole('button', { name: 'Disconnect', exact: true }).click();
+    await disconnectChat(p);
     await p.getByRole('button', { name: 'Connect', exact: true }).click();
     await expect(p.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
     expect((await f.stats()).commands.filter((v) => v === 'sendChat')).toHaveLength(1);
@@ -832,7 +840,11 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
       const { app, page } = await launch(f, 'generation-data');
       current = app;
       await connect(page);
-      await expect(page.getByText('Verified host.', { exact: false })).toBeVisible();
+      // The connection notice is shown with the host in Settings › Hosts.
+      await expect(
+        (await openSettings(page)).getByText('Verified host.', { exact: false }),
+      ).toBeVisible();
+      await closeSettings(page);
       if (operation !== 'createChat') {
         await createRemoteChat(page, 'Exact generation');
         await expect(
@@ -879,7 +891,7 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
         async () =>
           await window.moonbaseChat.call('connection', 'getConnection', {}, crypto.randomUUID()),
       );
-      await page.getByRole('button', { name: 'Disconnect', exact: true }).click();
+      await disconnectChat(page);
       await selectRemoteChat(page);
       await expect(page.getByRole('button', { name: 'Connect', exact: true })).toBeEnabled();
       await expect(page.getByRole('region', { name: 'Retained commands' })).toContainText(
@@ -900,7 +912,6 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
       await f.releaseReply();
       await expect.poll(() => reloadOutcome(app)).toBe('reload');
       await connect(page);
-      await expect(page.getByRole('button', { name: 'Disconnect', exact: true })).toBeEnabled();
       if (operation !== 'createChat')
         await expect(page.getByRole('main').getByText(f.cwd, { exact: false })).toBeVisible();
       if (operation === 'sendChat') {
@@ -1019,7 +1030,11 @@ for (const failsWrite of [false, true])
       const { app, page } = await launch(f, 'retry-preservation');
       current = app;
       await connect(page);
-      await expect(page.getByText('Verified host.', { exact: false })).toBeVisible();
+      // The connection notice is shown with the host in Settings › Hosts.
+      await expect(
+        (await openSettings(page)).getByText('Verified host.', { exact: false }),
+      ).toBeVisible();
+      await closeSettings(page);
       await createRemoteChat(page, 'Retry preservation');
       await expect(
         page.getByRole('heading', { name: 'Retry preservation', exact: true }),

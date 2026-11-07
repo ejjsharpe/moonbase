@@ -34,7 +34,7 @@ The app bundles Electron, the workspace native helper and ripgrep; system Git an
 
 ## Local chat
 
-Local chat needs no configuration: choose a provider under **Provider setup**, then a working folder and model. A local chat may use a folder chosen in the native picker or a checkout the editor approved, such as the project root in its docked chat. Credentials are encrypted with Electron safeStorage (there is no plaintext fallback) and never reach renderer storage or snapshots. Local tools run with your OS permissions: **the working folder is context, not a sandbox**.
+Local chat needs no configuration: choose a provider in **Settings › Providers** (⌘, or the gear at the foot of the rail; the model menu links there too), then a working folder and model. A local chat may use a folder chosen in the native picker or a checkout the editor approved, such as the project root in its docked chat. Credentials are encrypted with Electron safeStorage (there is no plaintext fallback) and never reach renderer storage or snapshots. Local tools run with your OS permissions: **the working folder is context, not a sandbox**.
 
 Typing `@` in the composer searches the chat's working folder on its host (the bundled ripgrep for local chats) and inserts the picked file as a mention.
 
@@ -60,7 +60,7 @@ Set `MOONBASE_CHAT_CONFIG` to an absolute private JSON file outside source contr
 }
 ```
 
-An optional absolute `sshExecutable` overrides `/usr/bin/ssh`. Start the [Pi host](../../packages/pi-runtime/README.md) on the remote machine and configure SSH as described in the [SSH package](../../packages/ssh/README.md), then Connect in the app. The renderer never receives the endpoint or key, and a remote host's paths never grant access to local files.
+An optional absolute `sshExecutable` overrides `/usr/bin/ssh`. Start the [Pi host](../../packages/pi-runtime/README.md) on the remote machine and configure SSH as described in the [SSH package](../../packages/ssh/README.md), then Connect in the app: from the chats sidebar, or in **Settings › Hosts**, which also switches hosts and shows connection details. A new chat's composer picks the host it runs on. The renderer never receives the endpoint or key, and a remote host's paths never grant access to local files.
 
 ## Transcript
 

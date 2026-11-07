@@ -14,8 +14,7 @@ export function ProviderSetup({ controller }: { controller: ProviderSetupControl
     prompt = flow?.prompt;
   const selected = state.status?.providers.find((provider) => provider.id === providerId);
   return (
-    <details open={!state.status?.providers.some((provider) => provider.configured)}>
-      <summary {...stylex.props(controls.summary)}>Provider setup</summary>
+    <section aria-label="Provider setup">
       <div {...stylex.props(styles.stack)}>
         <Choice
           label="Provider"
@@ -80,12 +79,12 @@ export function ProviderSetup({ controller }: { controller: ProviderSetupControl
           </>
         )}
       </div>
-    </details>
+    </section>
   );
 }
 
 const styles = stylex.create({
-  stack: { display: 'flex', flexDirection: 'column', gap: space.sm },
+  stack: { display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: space.sm },
 });
 
 function PromptForm({

@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { controlledHostFixture, until } from '../../../tests/chat/fixture.ts';
-import { selectRemoteChat, createRemoteChat } from './chat-target.ts';
+import { closeSettings, createRemoteChat, openSettings, selectRemoteChat } from './chat-target.ts';
 import { captureNative } from './editor-regressions.ts';
 import { readFindHighlight } from './find-highlight.ts';
 
@@ -186,6 +186,7 @@ test('integrated local archive/runtime streams held text and thinking, finds ret
     const launched = await launch(directory);
     app = launched.app;
     const { page } = launched;
+    await openSettings(page, 'Providers');
     await page.getByRole('combobox', { name: 'Provider', exact: true }).click();
     await page.getByRole('option', { name: 'OpenAI API key', exact: true }).click();
     await page.getByRole('button', { name: 'Set API key', exact: true }).click();
@@ -193,6 +194,7 @@ test('integrated local archive/runtime streams held text and thinking, finds ret
       .getByLabel('Enter OpenAI API key', { exact: true })
       .fill('sk-controlled-qualification-only');
     await page.getByRole('button', { name: 'Continue setup', exact: true }).click();
+    await closeSettings(page);
     await app.evaluate(({ dialog }, cwd) => {
       dialog.showOpenDialog = (async () => ({
         canceled: false,

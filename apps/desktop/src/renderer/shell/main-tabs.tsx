@@ -69,6 +69,7 @@ export function MainTabs({
   openCheckout,
   openChat,
   chatDisabled,
+  openSettings,
 }: {
   checkouts: readonly CheckoutTarget[];
   /** The editor's selected checkout, whose project tile shows it even while Agents is in view. */
@@ -83,6 +84,8 @@ export function MainTabs({
   openCheckout?: () => void;
   openChat?: () => void;
   chatDisabled?: boolean;
+  /** Hosts and providers; pinned to the foot of the rail. */
+  openSettings?: () => void;
 }) {
   const reducedMotion = useReducedMotion();
   const transition = { duration: reducedMotion ? 0 : 0.2, ease: [0.2, 0.8, 0.2, 1] as const };
@@ -247,6 +250,24 @@ export function MainTabs({
               )}
             </div>
           </LayoutGroup>
+          {openSettings && (
+            <div {...stylex.props(styles.railRow, styles.railFoot)}>
+              <Peek
+                trigger={
+                  <Button
+                    aria-label="Settings"
+                    {...stylex.props(controls.button, styles.railTab)}
+                    onClick={openSettings}>
+                    <span aria-hidden="true" {...stylex.props(styles.tile, styles.settingsTile)}>
+                      <Icon name="settings" />
+                    </span>
+                  </Button>
+                }>
+                <span {...stylex.props(styles.peekName)}>Settings</span>
+                <span {...stylex.props(styles.peekDetail)}>Hosts and providers · ⌘,</span>
+              </Peek>
+            </div>
+          )}
         </Tabs.List>
       </div>
     </Tooltip.Provider>
