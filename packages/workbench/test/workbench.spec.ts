@@ -783,6 +783,40 @@ test('Tab switches to Find, which previews matches and opens the file at the mat
   await expect(page.getByRole('dialog', { name: 'Go to', exact: true })).toBeVisible();
 });
 
+test('a change on disk refreshes picker results without moving the selected row', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true }).focus();
+  await page.keyboard.press('Meta+Shift+f');
+  const find = page.getByRole('dialog', { name: 'Find in files', exact: true });
+  await find.getByRole('combobox').fill('value');
+  const matches = find.getByRole('option');
+  await expect(matches).toHaveCount(2);
+  await page.keyboard.press('ArrowDown');
+  await expect(matches.nth(1)).toHaveAttribute('aria-selected', 'true');
+  // Another writer (an agent, a build) changes the checkout while the picker is open.
+  await page.evaluate(() =>
+    window.demo.memory.externalWrite(
+      { checkout: window.demo.checkout, path: 'src/example.ts' },
+      'export function double(value: number) {\n  return value * 2;\n}\n// value\n',
+    ),
+  );
+  await expect(matches).toHaveCount(3);
+  // Let React settle any selection effects the new results trigger.
+  await page.evaluate(
+    () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+  );
+  expect(
+    await matches.evaluateAll((rows) =>
+      rows.findIndex((row) => row.getAttribute('aria-selected') === 'true'),
+    ),
+  ).toBe(1);
+  // A new query still starts at the top.
+  await find.getByRole('combobox').fill('valu');
+  await expect(matches.first()).toHaveAttribute('aria-selected', 'true');
+});
+
 test('shortcuts switch an open picker, and a failed open stays on screen', async ({ page }) => {
   await page.goto('/');
   await first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true }).focus();
