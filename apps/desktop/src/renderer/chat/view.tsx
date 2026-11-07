@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Dialog } from '@base-ui/react/dialog';
 import { Button } from '@base-ui/react/button';
 import * as stylex from '@stylexjs/stylex';
@@ -398,26 +398,28 @@ export function ChatView({
         {!state.chats.length &&
           // Offline, the Connect line above says why the list is empty.
           emptyList && <p {...stylex.props(styles.small)}>{emptyList}</p>}
-        {groups.ready.length > 0 && (
-          <h3 {...stylex.props(styles.groupHeading)}>
-            Ready <span {...stylex.props(styles.groupCount)}>{groups.ready.length}</span>
-          </h3>
-        )}
-        {groups.ready.map(chatRow)}
-        {groups.working.length > 0 && (
-          <h3 {...stylex.props(styles.groupHeading)}>
-            Working <span {...stylex.props(styles.groupCount)}>{groups.working.length}</span>
-          </h3>
-        )}
-        {groups.working.map(chatRow)}
+        {state.chats.length > 0 &&
+          (
+            [
+              ['Ready', groups.ready, 'Nothing has finished since you last looked.'],
+              ['Working', groups.working, 'Nothing is running.'],
+            ] as const
+          ).map(([name, rows, empty]) => (
+            <Fragment key={name}>
+              <h3 {...stylex.props(styles.groupHeading)}>
+                {name} <span {...stylex.props(styles.groupCount)}>{rows.length}</span>
+              </h3>
+              {rows.length ? (
+                rows.map(chatRow)
+              ) : (
+                <p {...stylex.props(styles.groupEmpty)}>{empty}</p>
+              )}
+            </Fragment>
+          ))}
         {groups.settled.length > 0 && (
           <Button
             aria-expanded={settledShown}
-            {...stylex.props(
-              controls.button,
-              styles.settledToggle,
-              (groups.ready.length > 0 || groups.working.length > 0) && styles.settledSeparated,
-            )}
+            {...stylex.props(controls.button, styles.settledToggle, styles.settledSeparated)}
             onClick={() => showSettled(!settledOpen)}>
             <span
               aria-hidden="true"
@@ -1076,6 +1078,7 @@ const styles = stylex.create({
     textTransform: 'uppercase',
   },
   groupCount: { color: colors.secondary },
+  groupEmpty: { margin: '2px 8px 4px', color: colors.muted, fontSize: type.small },
   settledToggle: {
     display: 'flex',
     alignItems: 'center',
