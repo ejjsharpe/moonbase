@@ -1,4 +1,4 @@
-import { useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Dialog } from '@base-ui/react/dialog';
 import { Button } from '@base-ui/react/button';
 import * as stylex from '@stylexjs/stylex';
@@ -21,6 +21,7 @@ import {
   type ChatCommand,
   type ChatCommandOption,
 } from './commands.ts';
+import { chatWorktreeBranch } from './worktree.ts';
 import { projectInitials, projectTiles } from '@moonbase/ui/projects';
 const compactLayout = window.matchMedia('(max-width: 640px)');
 const subscribeLayout = (listener: () => void) => {
@@ -44,11 +45,14 @@ export type ChatDock = {
 export function ChatView({
   controller,
   chooseFolder,
+  createWorktree,
   transcriptNative,
   dock,
 }: {
   controller: ChatController;
   chooseFolder?: () => Promise<string | null>;
+  /** Creates a linked worktree of a local folder, named for the branch, and returns its root. */
+  createWorktree?: (root: string, branch: string) => Promise<string>;
   transcriptNative?: TranscriptNative;
   /** Shows only one project's chats, beside its editor, with a back arrow to their list. */
   dock?: ChatDock;
@@ -61,7 +65,9 @@ export function ChatView({
     [dockList, setDockList] = useState(false),
     [folderError, setFolderError] = useState<string | null>(null),
     // An error belongs to the command line it was about; editing it or changing chat hides it.
-    [commandError, setCommandError] = useState<{ text: string; message: string } | null>(null);
+    [commandError, setCommandError] = useState<{ text: string; message: string } | null>(null),
+    [newWorktree, setNewWorktree] = useState(false),
+    [creatingWorktree, setCreatingWorktree] = useState(false);
   const providerState = useSyncExternalStore(
     controller.providers?.subscribe ?? noSubscription,
     controller.providers?.getSnapshot ?? noProviders,
@@ -151,7 +157,41 @@ export function ChatView({
   };
   const startNewChat = () =>
     void controller.closeView().then(() => document.getElementById('message')?.focus());
-  const choosing = local && !state.selected && !busy('send');
+  const choosing = local && !state.selected && !busy('send') && !creatingWorktree;
+  // A new worktree is made only when the first message is sent, so an unsent chat leaves no trace.
+  const worktreeChoice = !state.selected && local && !!createWorktree && !!cwd;
+  const mounted = useRef(true);
+  useEffect(
+    () => () => {
+      mounted.current = false;
+    },
+    [],
+  );
+  const sendInWorktree = (settings: ChatModelPreference) => {
+    setCreatingWorktree(true);
+    void createWorktree!(cwd, chatWorktreeBranch(state.draft)).then(
+      (root) => {
+        // Git may take a while: send only if this view still shows the new chat it was made for.
+        if (!mounted.current) return;
+        setCreatingWorktree(false);
+        // The chat keeps this worktree, so a retried send never makes a second one.
+        setCwd(root);
+        setNewWorktree(false);
+        if (controller.getSnapshot().selected)
+          setFolderError(
+            `The worktree is ready at ${root}. Send from a new chat there to start it.`,
+          );
+        else void controller.send({ cwd: root, ...settings });
+      },
+      (error: unknown) => {
+        if (!mounted.current) return;
+        setCreatingWorktree(false);
+        setFolderError(
+          `The worktree could not be created. ${error instanceof Error ? error.message : ''}`.trim(),
+        );
+      },
+    );
+  };
   const commands = listChatCommands({
     selected: !!state.selected,
     running: !!run && connected && !busy('stop') && !state.storageError,
@@ -433,6 +473,13 @@ export function ChatView({
               return;
             }
             setCommandError(null);
+            // ⌘ Enter submits even while Send is disabled; one worktree per first message.
+            if (creatingWorktree) return;
+            if (worktreeChoice && newWorktree && selection) {
+              setFolderError(null);
+              sendInWorktree(selection);
+              return;
+            }
             void controller.send(
               local && !state.selected && cwd && selection ? { cwd, ...selection } : undefined,
             );
@@ -449,7 +496,11 @@ export function ChatView({
                 controller.canFindFiles && connected && (!!state.selected || !local || !!cwd)
               }
               cwd={!state.selected && local && cwd ? cwd : undefined}
-              placeholder={state.selected ? 'Message the agent…' : 'Describe a task…'}
+              placeholder={
+                state.selected
+                  ? 'Message the agent…'
+                  : 'Describe a task — @ to mention files, / for commands'
+              }
               starter={!state.selected}
               commands={commands}
               onCommand={runCommand}
@@ -461,13 +512,16 @@ export function ChatView({
                 <Button
                   aria-label="Choose working folder"
                   {...stylex.props(controls.button, controls.quietButton, styles.folderChoice)}
-                  disabled={!chooseFolder || busy('send')}
+                  disabled={!chooseFolder || busy('send') || creatingWorktree}
                   title={cwd || 'Choose working folder'}
                   onClick={() => {
                     setFolderError(null);
                     void chooseFolder?.()
                       .then((folder) => {
-                        if (folder) setCwd(folder);
+                        if (folder) {
+                          setCwd(folder);
+                          setNewWorktree(false);
+                        }
                       })
                       .catch(() =>
                         setFolderError(
@@ -491,6 +545,21 @@ export function ChatView({
                     ▾
                   </span>
                 </Button>
+                {worktreeChoice && (
+                  <div {...stylex.props(styles.worktreeChoice)}>
+                    <Choice
+                      compact
+                      label="Worktree"
+                      value={newWorktree ? 'new' : 'folder'}
+                      options={[
+                        { value: 'folder', label: 'This folder' },
+                        { value: 'new', label: 'New worktree' },
+                      ]}
+                      onChange={(value) => setNewWorktree(value === 'new')}
+                      disabled={busy('send') || creatingWorktree}
+                    />
+                  </div>
+                )}
                 <span {...stylex.props(styles.localLabel)}>
                   <span aria-hidden="true" {...stylex.props(styles.localDot)} />
                   local
@@ -555,6 +624,7 @@ export function ChatView({
                     ? false
                     : !connected ||
                       !state.draft.trim() ||
+                      creatingWorktree ||
                       busy('send') ||
                       busy('create') ||
                       !!state.storageError ||
@@ -1059,6 +1129,7 @@ const styles = stylex.create({
   modelActions: { marginLeft: 'auto', minWidth: 0, maxWidth: '100%', flexWrap: 'nowrap' },
   modelChoice: { maxWidth: 220, minWidth: 0 },
   effortChoice: { flexShrink: 0 },
+  worktreeChoice: { flexShrink: 0 },
   sendButton: {
     display: 'inline-flex',
     justifyContent: 'center',

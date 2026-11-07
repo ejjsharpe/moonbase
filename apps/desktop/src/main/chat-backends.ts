@@ -25,6 +25,7 @@ export function createChatBackends({
   connection,
   emit,
   pickFolder,
+  createWorktree,
   transcript,
 }: {
   runtime: ManagedRuntime.ManagedRuntime<never, ApplicationError>;
@@ -35,11 +36,15 @@ export function createChatBackends({
   connection: ConnectionClient | null;
   emit(backendId: string, id: string, result: Reply): void;
   pickFolder(): Promise<string | null>;
+  /** Creates a linked worktree of the checkout at `root`, returning its root. */
+  createWorktree?(root: string, branch: string, signal: AbortSignal): Promise<string>;
   transcript?: NativeTranscriptActions;
 }) {
   let local = localResult.backend;
   let localRetry: Promise<void> | undefined;
   const sessions = new Map<string, ChatIpcSession>();
+  /** Worktree creations for the current document; replacing the document cancels them. */
+  const worktreeCreations = new Set<AbortController>();
   let documentId = randomUUID();
   const emitChat = (backendId: string) => (id: string, result: Reply) => {
     emit(backendId, id, result);
@@ -97,6 +102,8 @@ export function createChatBackends({
   ];
   const releaseChatDocument = async () => {
     const owner = documentId;
+    for (const creation of worktreeCreations) creation.abort();
+    worktreeCreations.clear();
     const closing = [...sessions.values()].map((session) => session.dispose());
     sessions.clear();
     documentId = randomUUID();
@@ -144,6 +151,33 @@ export function createChatBackends({
       const selection = await pickFolder();
       if (owner !== documentId || !selection) return null;
       return local.approveFolder(selection);
+    },
+    /**
+     * Starts a new local chat's worktree from a folder local chat may use, and approves the new
+     * worktree as that chat's working folder.
+     */
+    async createWorktree(root: string, branch: string) {
+      if (!local || !createWorktree)
+        throw new ApplicationError({
+          code: 'Unavailable',
+          message: 'New worktrees are unavailable.',
+        });
+      const owner = documentId,
+        creation = new AbortController();
+      worktreeCreations.add(creation);
+      try {
+        await local.requireApprovedFolder(root);
+        const created = await createWorktree(root, branch, creation.signal);
+        // A replaced document's worktree is left on disk but not approved for the new document.
+        if (owner !== documentId)
+          throw new ApplicationError({
+            code: 'Cancelled',
+            message: 'The window reloaded while the worktree was created.',
+          });
+        return await local.approveFolder(created);
+      } finally {
+        worktreeCreations.delete(creation);
+      }
     },
     requireLocal(backendId: string) {
       if (backendId === 'local' && !local) throw localResult.error;

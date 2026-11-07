@@ -83,6 +83,7 @@ function Desktop({ application }: { application: MoonbaseApplication }) {
       closing={closing}
       transcriptNative={getTranscriptActions}
       chooseChatFolder={() => window.moonbaseChat.chooseFolder!()}
+      createChatWorktree={(root, branch) => window.moonbaseChat.createWorktree!(root, branch)}
       selectCheckout={async () =>
         application.getSnapshot().phase === 'live'
           ? (unwrap(await bridge.call('choose-checkout', null, crypto.randomUUID())) as

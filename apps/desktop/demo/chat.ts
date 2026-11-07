@@ -52,6 +52,12 @@ export function chatCapabilities(local = false) {
   let receiveConnection: (state: ConnectionSnapshot) => void = () => {};
   const calls: string[] = [];
   const sent: ChatInput<'sendChat'>[] = [];
+  /** Worktrees a new local chat asked for, as `root branch`; main makes them in the app. */
+  const worktrees: string[] = [];
+  const createWorktree = async (root: string, branch: string) => {
+    worktrees.push(`${root} ${branch}`);
+    return `${root}-worktrees/${branch.replaceAll('/', '-')}`;
+  };
   const storage = { value: null as string | null, writes: 0, write: (_value: string) => {} };
   const controls = {
     release: async () => {},
@@ -223,5 +229,15 @@ export function chatCapabilities(local = false) {
       },
     },
   };
-  return { dependencies, target, snapshot, storage, controls, calls, sent };
+  return {
+    dependencies,
+    target,
+    snapshot,
+    storage,
+    controls,
+    calls,
+    sent,
+    worktrees,
+    createWorktree,
+  };
 }

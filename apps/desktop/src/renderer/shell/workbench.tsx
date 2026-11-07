@@ -33,6 +33,8 @@ export type DesktopShellProps = {
   /** These callbacks return user-approved roots or opaque native references, never source paths. */
   transcriptNative?: (backendId: string) => TranscriptNative;
   chooseChatFolder?: () => Promise<string | null>;
+  /** Creates a new local chat's linked worktree beside the repository, returning its root. */
+  createChatWorktree?: (root: string, branch: string) => Promise<string>;
   selectCheckout?: () => Promise<string | null>;
   selectClipboardImports?: (checkout: CheckoutTarget) => Promise<string[]>;
   selectDroppedImports?: (checkout: CheckoutTarget, files: File[]) => Promise<string[]>;
@@ -60,6 +62,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
     application,
     closing = false,
     chooseChatFolder,
+    createChatWorktree,
     transcriptNative,
     selectCheckout,
     selectClipboardImports,
@@ -76,6 +79,10 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
     chat = application.chat;
   const [destination, setDestination] = useState<'project' | 'chat'>('chat');
   const [dockOpen, setDockOpen] = useState(true);
+  const [projectWorktrees, setProjectWorktrees] = useState<{
+    checkoutId: string;
+    roots: readonly string[];
+  } | null>(null);
   const [dockWidth, setDockWidth] = useState(dockDefaultWidth),
     [dockRestoreWidth, setDockRestoreWidth] = useState(dockDefaultWidth);
   const handle = useRef<WorkbenchHandle>(null),
@@ -100,6 +107,34 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
           checkout.hostId === selected.hostId && checkout.projectId === selected.projectId,
       )
     : [];
+  // A chat in any of the project's worktrees, including one a chat created, belongs to its dock.
+  // Only the latest listing applies, and a failed one keeps the last good roots.
+  const worktreeListing = useRef(0);
+  const listProjectWorktrees = (checkout: CheckoutTarget) => {
+    if (!controller) return Promise.resolve();
+    const listing = ++worktreeListing.current;
+    return controller.listWorktrees(checkout).then(
+      (result) => {
+        if (listing === worktreeListing.current)
+          setProjectWorktrees({
+            checkoutId: checkout.checkoutId,
+            roots: result.worktrees.map((worktree) => worktree.root),
+          });
+      },
+      () => {},
+    );
+  };
+  const dockCheckout = dockVisible ? selected : undefined;
+  useEffect(() => {
+    if (dockCheckout) void listProjectWorktrees(dockCheckout);
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- Listed again only for another checkout.
+  }, [dockCheckout?.checkoutId]);
+  const dockRoots = [
+    ...projectCheckouts.map((checkout) => checkout.root),
+    ...(projectWorktrees && projectWorktrees.checkoutId === selected?.checkoutId
+      ? projectWorktrees.roots
+      : []),
+  ];
   // The dock leaves the explorer and a usable editor beside it.
   const dockMaxWidth = Math.max(dockMinWidth, window.innerWidth - 72 - 560);
   const resizeDock = (width: number) =>
@@ -469,10 +504,26 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
                         key={`${lifecycle.chatTargetId}:${selected.checkoutId}`}
                         controller={chat}
                         chooseFolder={chooseChatFolder}
+                        createWorktree={
+                          createChatWorktree &&
+                          (async (root, branch) => {
+                            const created = await createChatWorktree(root, branch);
+                            await listProjectWorktrees(selected);
+                            // Kept even if listing failed, so the new chat stays in this dock.
+                            setProjectWorktrees((listed) => {
+                              const roots =
+                                listed?.checkoutId === selected.checkoutId ? listed.roots : [];
+                              return roots.includes(created)
+                                ? listed
+                                : { checkoutId: selected.checkoutId, roots: [...roots, created] };
+                            });
+                            return created;
+                          })
+                        }
                         transcriptNative={transcriptNative?.(lifecycle.chatTargetId ?? 'remote')}
                         dock={{
                           project: projectName,
-                          roots: projectCheckouts.map((checkout) => checkout.root),
+                          roots: dockRoots,
                           cwd: selected.root,
                           expanded: dockExpanded,
                           toggleExpanded: () => {
@@ -542,6 +593,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
               key={lifecycle.chatTargetId}
               controller={chat}
               chooseFolder={chooseChatFolder}
+              createWorktree={createChatWorktree}
               transcriptNative={transcriptNative?.(lifecycle.chatTargetId ?? 'remote')}
             />
           )

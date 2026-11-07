@@ -2,7 +2,7 @@
 
 The macOS Electron app. It composes the workbench, headless application, workspace, local Pi and optional SSH/remote Pi modules. `src/main.ts` is the privileged composition root and owns native capabilities; the sandboxed renderer receives browser-safe clients only.
 
-The renderer opens only roots chosen in the native picker, already known, or listed by `listWorktrees` for an approved checkout. It cannot yet call `createWorktree`: a worktree location needs a native grant first.
+The renderer opens only roots chosen in the native picker, already known, or listed by `listWorktrees` for an approved checkout. It cannot call `createWorktree` with a location of its own; a new chat's worktree is made by main instead (below).
 
 ## Run
 
@@ -34,11 +34,13 @@ The app bundles Electron, the workspace native helper and ripgrep; system Git an
 
 ## Local chat
 
-Local chat needs no configuration: choose a provider under **Provider setup**, then a working folder and model. Credentials are encrypted with Electron safeStorage (there is no plaintext fallback) and never reach renderer storage or snapshots. Local tools run with your OS permissions: **the working folder is context, not a sandbox**.
+Local chat needs no configuration: choose a provider under **Provider setup**, then a working folder and model. A local chat may use a folder chosen in the native picker or a checkout the editor approved, such as the project root in its docked chat. Credentials are encrypted with Electron safeStorage (there is no plaintext fallback) and never reach renderer storage or snapshots. Local tools run with your OS permissions: **the working folder is context, not a sandbox**.
 
 Typing `@` in the composer searches the chat's working folder on its host (the bundled ripgrep for local chats) and inserts the picked file as a mention.
 
 Typing `/` at the start of a message lists the composer's commands (`src/renderer/chat/commands.ts`): `/new`, `/model`, `/effort`, `/stop` and `/clear`, each shown only when it can run. The renderer runs them; a command line sent with ⌘ Enter runs instead of reaching the agent.
+
+Choosing **New worktree** for a new local chat creates a linked worktree when its first message is sent. The renderer sends only a branch named from the message (`chat/tidy-the-composer`); main makes it from the folder's current commit at `<main worktree>-worktrees/<branch>`, numbering a taken name, and approves it as the chat's working folder. It then lists in the project's worktree switcher, and the project's docked chat keeps chats in any of its worktrees.
 
 ## Remote chat
 

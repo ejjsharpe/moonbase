@@ -84,13 +84,13 @@ async function main() {
   const client = makeEditorClient(runtime);
   await runtime.runPromise(Effect.asVoid(WorkspaceNative));
   // Local and remote backends are acquired once in separate scopes of this root.
+  // Local chat is acquired before the window's editor session, which approves checkouts, exists.
+  let isEditorFolder = (_path: string) => false;
   const acquireLocal = () =>
-    acquireLocalChat(
-      runtime,
-      userData,
-      (url) => shell.openExternal(url),
-      join(assets, 'ripgrep/rg'),
-    ).then(
+    acquireLocalChat(runtime, userData, (url) => shell.openExternal(url), {
+      ripgrepExecutable: join(assets, 'ripgrep/rg'),
+      isEditorFolder: (path) => isEditorFolder(path),
+    }).then(
       (backend) => ({ backend, error: null }),
       () => ({
         backend: null,
@@ -164,6 +164,7 @@ async function main() {
   const editorSession = new EditorSession(runtime, client, native, (id, value) => {
     if (!window.isDestroyed()) window.webContents.send(channels.event, id, value);
   });
+  isEditorFolder = (path) => editorSession.hasFolder(path);
   const chatBackends = createChatBackends({
     transcript: {
       writeText: async (text) => {
@@ -180,6 +181,8 @@ async function main() {
     emit: (backendId, id, result) => {
       if (!window.isDestroyed()) window.webContents.send(chatChannels.event, id, result, backendId);
     },
+    createWorktree: (root, branch, signal) =>
+      editorSession.createChatWorktree(root, branch, signal),
     pickFolder: async () => {
       const selection = await dialog.showOpenDialog(window, {
         title: 'Choose a local chat working folder',

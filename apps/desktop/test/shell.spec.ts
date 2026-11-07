@@ -1524,3 +1524,49 @@ test('/ at the start of a message lists commands that switch model and effort, c
   await expect(page.getByText('What should we work on?')).toBeVisible();
   await expect(model).toContainText('Demo coding model');
 });
+
+test('a new worktree is made only when a new chat sends, and its chat stays with the project', async ({
+  page,
+}) => {
+  await page.goto('/?local&design');
+  const message = page.getByRole('textbox', { name: 'Message', exact: true });
+  const worktree = page.getByRole('combobox', { name: 'Worktree', exact: true });
+  await expect(message).toHaveAttribute(
+    'placeholder',
+    'Describe a task — @ to mention files, / for commands',
+  );
+  // A local folder chosen in Agents.
+  await expect(worktree).toBeHidden();
+  await page.getByRole('button', { name: 'Choose working folder', exact: true }).click();
+  await worktree.click();
+  await page.getByRole('option', { name: 'New worktree', exact: true }).click();
+  await message.fill("Tidy the composer's spacing");
+  expect(await page.evaluate(() => window.demo.chat.worktrees)).toEqual([]);
+  await message.press('ControlOrMeta+Enter');
+  await expect(
+    page.getByRole('heading', { name: "Tidy the composer's spacing", exact: true }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => window.demo.application.chat!.getSnapshot().snapshot?.conversation.cwd,
+    ),
+  ).toBe('/demo/moonbase-worktrees/chat-tidy-the-composers-spacing');
+  expect(await page.evaluate(() => window.demo.chat.worktrees)).toEqual([
+    '/demo/moonbase chat/tidy-the-composers-spacing',
+  ]);
+  // A project's docked chat: the worktree joins the switcher and the chat stays in the dock.
+  await page.getByRole('button', { name: 'New chat', exact: true }).click();
+  await page.getByRole('tab', { name: 'moonbase · main', exact: true }).click();
+  const dock = page.getByRole('main', { name: 'Agent workspace', exact: true });
+  await expect(dock.getByText('In moonbase', { exact: true })).toBeVisible();
+  await dock.getByRole('combobox', { name: 'Worktree', exact: true }).click();
+  await page.getByRole('option', { name: 'New worktree', exact: true }).click();
+  await dock.getByRole('textbox', { name: 'Message', exact: true }).fill('Fix the rail peek');
+  await dock.getByRole('button', { name: 'Send message', exact: true }).click();
+  await expect(dock.getByRole('heading', { name: 'Fix the rail peek', exact: true })).toBeVisible();
+  await expect(dock.getByTitle(/moonbase-worktrees\/chat-fix-the-rail-peek/)).toBeVisible();
+  await page.getByRole('button', { name: /^Switch worktree, moonbase/ }).click();
+  await expect(
+    page.getByRole('menuitem', { name: /chat-fix-the-rail-peek · chat\/fix-the-rail-peek/ }),
+  ).toBeVisible();
+});

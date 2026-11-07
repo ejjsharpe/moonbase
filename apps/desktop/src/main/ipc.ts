@@ -38,7 +38,7 @@ export function installCommandIpc({
   editorSession: Pick<EditorSession, 'call' | 'cancel'>;
   chatBackends: Pick<
     DesktopChatBackends,
-    'getTargets' | 'getContext' | 'chooseFolder' | 'requireLocal' | 'getSession'
+    'getTargets' | 'getContext' | 'chooseFolder' | 'createWorktree' | 'requireLocal' | 'getSession'
   >;
   lifecycle: Pick<
     WindowLifecycle,
@@ -109,6 +109,20 @@ export function installCommandIpc({
             message: 'Folder selection is unavailable.',
           });
         return { ok: true, value: await chatBackends.chooseFolder() };
+      }
+      if (v.kind === 'create-worktree') {
+        fields(v, ['kind', 'backendId', 'root', 'branch']);
+        if (backendId !== 'local' || lifecycle.isQuitting())
+          throw new ApplicationError({
+            code: 'Unavailable',
+            message: 'New worktrees are unavailable.',
+          });
+        if (typeof v.root !== 'string' || typeof v.branch !== 'string')
+          throw new ApplicationError({
+            code: 'InvalidInput',
+            message: 'Choose a folder and branch for the worktree.',
+          });
+        return { ok: true, value: await chatBackends.createWorktree(v.root, v.branch) };
       }
       if (v.kind === 'confirm-quit') {
         fields(v, ['kind', 'backendId']);

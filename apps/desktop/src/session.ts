@@ -1,3 +1,5 @@
+import { mkdir, rmdir } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { ManagedRuntime } from 'effect';
 import {
   decodeWorkspaceInput,
@@ -152,6 +154,93 @@ export class EditorSession {
         message: 'A renderer path is not native worktree location approval.',
       });
     return v;
+  }
+  /** Whether a root is a natively approved checkout, or a worktree Git listed for one. */
+  hasFolder(root: string) {
+    return this.worktreeRoots.has(root) || [...this.known.values()].some((t) => t.root === root);
+  }
+  /**
+   * Creates `branch` from the current commit of the checkout at `root`, in a new linked worktree
+   * beside the repository at `<main worktree>-worktrees/<branch>`. Main derives the location, so a
+   * renderer never names where directories are made. A taken branch or location gets a numbered
+   * suffix. The caller authorizes `root`. Creations run one at a time, so two can't race for a name.
+   */
+  createChatWorktree(root: string, branch: string, signal?: AbortSignal) {
+    const created = this.worktreeCreation.then(() => this.createWorktreeNow(root, branch, signal));
+    this.worktreeCreation = created.catch(() => {});
+    return created;
+  }
+  private worktreeCreation: Promise<unknown> = Promise.resolve();
+  private async createWorktreeNow(root: string, branch: string, signal?: AbortSignal) {
+    string(root);
+    if (
+      typeof branch !== 'string' ||
+      !/^[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*)*$/i.test(branch) ||
+      branch.length > 100 ||
+      branch.includes('..') ||
+      branch.endsWith('.lock')
+    )
+      invalid('Choose a simple branch name for the worktree.');
+    signal?.throwIfAborted();
+    const options = signal ? { signal } : undefined;
+    const target =
+      [...this.known.values()].find((t) => t.root === root) ??
+      decodeWorkspaceOutput(
+        'openCheckout',
+        await this.client.command('openCheckout', { root }, options),
+      );
+    const { worktrees } = decodeWorkspaceOutput(
+      'listWorktrees',
+      await this.client.command('listWorktrees', { checkout: target }, options),
+    );
+    const parent = `${worktrees.find((worktree) => worktree.main)?.root ?? target.root}-worktrees`;
+    signal?.throwIfAborted();
+    const madeParent = await mkdir(parent).then(
+      () => true,
+      (error: NodeJS.ErrnoException) => {
+        if (error.code !== 'EEXIST') throw error;
+        return false;
+      },
+    );
+    let prefix = branch;
+    try {
+      for (let attempt = 1; ; attempt++) {
+        const name = attempt === 1 ? prefix : `${prefix}-${attempt}`;
+        try {
+          const created = decodeWorkspaceOutput(
+            'createWorktree',
+            await this.client.command(
+              'createWorktree',
+              {
+                checkout: target,
+                base: 'HEAD',
+                branch: name,
+                location: join(parent, name.replaceAll('/', '-')),
+              },
+              options,
+            ),
+          );
+          // A released document's worktree stays on disk but grants nothing to the next document.
+          if (!signal?.aborted) {
+            this.known.set(created.checkoutId, created);
+            this.worktreeRoots.add(created.root);
+          }
+          return created.root;
+        } catch (error) {
+          if (!ApplicationError.is(error) || ['Cancelled', 'Uncertain'].includes(error.code))
+            throw error;
+          if (error.code === 'Conflict' && attempt < 20) continue;
+          // A branch named like the prefix (`chat`) blocks every `chat/…` branch: use `chat-…`.
+          if (error.code === 'Conflict' || !prefix.includes('/')) throw error;
+          prefix = prefix.replaceAll('/', '-');
+          attempt = 0;
+        }
+      }
+    } catch (error) {
+      // An empty folder this attempt made is removed; one holding other worktrees is kept.
+      if (madeParent) await rmdir(parent).catch(() => {});
+      throw error;
+    }
   }
   async call(method: unknown, input: unknown, id: unknown): Promise<Reply> {
     let reserved: IpcRequest | undefined;

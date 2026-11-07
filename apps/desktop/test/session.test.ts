@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import { test, after } from 'node:test';
+import { mkdtemp, realpath, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Layer, ManagedRuntime } from 'effect';
 import { createMoonbaseApplication } from '@moonbase/application';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
@@ -700,3 +703,134 @@ for (const failure of ['none', 'release', 'acquisition'] as const) {
     }
   });
 }
+test('a chat worktree is made beside the main worktree, never where a renderer says', async () => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-chat-worktree-')));
+  try {
+    const repository = join(directory, 'repo'),
+      linked = join(directory, 'repo-worktrees', 'topic');
+    const checkout = { ...target, root: linked, worktree: 'linked' as const };
+    const created: unknown[] = [];
+    const client: EditorClient = {
+      command: async (name, input) => {
+        if (name === 'openCheckout') return checkout as never;
+        if (name === 'listWorktrees')
+          return {
+            worktrees: [
+              { root: repository, branch: 'main', main: true, locked: false, prunable: false },
+              { root: linked, branch: 'topic', main: false, locked: false, prunable: false },
+            ],
+          } as never;
+        if (name === 'createWorktree') {
+          created.push(input);
+          // The first name is taken, as when a chat with the same opening already has one.
+          if (created.length === 1)
+            throw new ApplicationError({ code: 'Conflict', message: 'Branch exists.' });
+          const location = (input as { location: string }).location;
+          return { ...target, checkoutId: 'new', root: location, worktree: 'linked' } as never;
+        }
+        throw Error(`Unexpected ${name}`);
+      },
+      watch: () => async () => {},
+    };
+    const session = new EditorSession(
+      runtime,
+      client,
+      { chooseCheckout: async () => null, imports: async () => [], release: async () => {} },
+      () => {},
+    );
+    assert.equal(session.hasFolder(linked), false);
+    for (const branch of ['../escape', '-flag', 'a..b', 'chat/', 'with space'])
+      await assert.rejects(session.createChatWorktree(linked, branch), {
+        code: 'InvalidInput',
+      });
+    const root = await session.createChatWorktree(linked, 'chat/tidy-the-composer');
+    const parent = join(directory, 'repo-worktrees');
+    assert.equal(root, join(parent, 'chat-tidy-the-composer-2'));
+    assert.deepEqual(created, [
+      {
+        checkout,
+        base: 'HEAD',
+        branch: 'chat/tidy-the-composer',
+        location: join(parent, 'chat-tidy-the-composer'),
+      },
+      {
+        checkout,
+        base: 'HEAD',
+        branch: 'chat/tidy-the-composer-2',
+        location: join(parent, 'chat-tidy-the-composer-2'),
+      },
+    ]);
+    assert(session.hasFolder(root));
+    assert((await stat(parent)).isDirectory());
+    await session.dispose();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+test('chat worktrees are made one at a time, fall back from a blocked prefix and leave no empty folder', async () => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-chat-worktree-')));
+  try {
+    const repository = join(directory, 'repo');
+    const checkout = { ...target, root: repository };
+    const branches = new Set(['chat']);
+    let failNext = false;
+    const client: EditorClient = {
+      command: async (name, input, options) => {
+        if (name === 'openCheckout') return checkout as never;
+        if (name === 'listWorktrees')
+          return {
+            worktrees: [
+              { root: repository, branch: 'main', main: true, locked: false, prunable: false },
+            ],
+          } as never;
+        if (name === 'createWorktree') {
+          const { branch, location } = input as { branch: string; location: string };
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          options?.signal?.throwIfAborted();
+          if (failNext) {
+            failNext = false;
+            throw new ApplicationError({ code: 'Unavailable', message: 'HEAD is unborn.' });
+          }
+          if (branches.has(branch))
+            throw new ApplicationError({ code: 'Conflict', message: 'Branch exists.' });
+          // Git refuses `chat/…` while a branch named `chat` exists.
+          if (branches.has(branch.split('/')[0]!) && branch.includes('/'))
+            throw new ApplicationError({ code: 'Unavailable', message: 'Cannot lock ref.' });
+          branches.add(branch);
+          return { ...target, checkoutId: location, root: location, worktree: 'linked' } as never;
+        }
+        throw Error(`Unexpected ${name}`);
+      },
+      watch: () => async () => {},
+    };
+    const session = new EditorSession(
+      runtime,
+      client,
+      { chooseCheckout: async () => null, imports: async () => [], release: async () => {} },
+      () => {},
+    );
+    const parent = join(directory, 'repo-worktrees');
+    // An unborn HEAD fails without the prefix fallback hiding it, and removes the folder it made.
+    failNext = true;
+    await assert.rejects(session.createChatWorktree(repository, 'task'), { code: 'Unavailable' });
+    await assert.rejects(stat(parent), { code: 'ENOENT' });
+    // Two at once with the same name each get their own worktree.
+    const [first, second] = await Promise.all([
+      session.createChatWorktree(repository, 'chat/fix'),
+      session.createChatWorktree(repository, 'chat/fix'),
+    ]);
+    assert.equal(first, join(parent, 'chat-fix'));
+    assert.equal(second, join(parent, 'chat-fix-2'));
+    assert(branches.has('chat-fix') && branches.has('chat-fix-2'));
+    // A released document's creation grants nothing.
+    const released = new AbortController();
+    const late = session.createChatWorktree(repository, 'late', released.signal);
+    released.abort();
+    await assert.rejects(late);
+    assert.equal(session.hasFolder(join(parent, 'late')), false);
+    assert(session.hasFolder(first));
+    await session.dispose();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
