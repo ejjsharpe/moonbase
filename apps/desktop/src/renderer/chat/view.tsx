@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Dialog } from '@base-ui/react/dialog';
 import { Button } from '@base-ui/react/button';
-import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
+import { motion, useReducedMotion } from 'motion/react';
 import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
 import { spinner } from '@moonbase/ui/spinner';
@@ -396,7 +396,9 @@ export function ChatView({
           </Button>
         </div>
       )}
-      <nav aria-label="Conversations" {...stylex.props(styles.chatList, styles.fillList)}>
+      <nav
+        aria-label="Conversations"
+        {...stylex.props(styles.chatList, styles.fillList, !settledShown && styles.clipList)}>
         {!state.chats.length &&
           // Offline, the Connect line above says why the list is empty.
           emptyList && <p {...stylex.props(styles.small)}>{emptyList}</p>}
@@ -413,11 +415,12 @@ export function ChatView({
         )}
         {groups.working.map(chatRow)}
         {groups.settled.length > 0 && (
-          // Closed, the toggle waits at the foot of the list; it glides up as its chats open.
+          // One block, like a drawer: closed, the heading waits at the foot of the list with its
+          // chats clipped below it; opening slides the whole block up, and closing slides it back.
           <motion.div
             layout={reducedMotion ? false : 'position'}
             transition={settledMotion}
-            {...stylex.props(styles.settledToggleRow, !settledShown && styles.settledFoot)}>
+            {...stylex.props(styles.settled, !settledShown && styles.settledClosed)}>
             <Button
               aria-expanded={settledShown}
               {...stylex.props(
@@ -433,28 +436,21 @@ export function ChatView({
               </span>
               Settled <span {...stylex.props(styles.groupCount)}>{groups.settled.length}</span>
             </Button>
-          </motion.div>
-        )}
-        <AnimatePresence initial={false}>
-          {settledShown && (
-            <motion.div
-              key="settled"
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: 'auto', opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              transition={settledMotion}
-              {...stylex.props(styles.settledRows)}>
+            <div
+              inert={!settledShown}
+              aria-hidden={settledShown ? undefined : true}
+              {...stylex.props(styles.settledRows, !settledShown && styles.settledRowsClosed)}>
               {groups.settled.map(chatRow)}
-            </motion.div>
-          )}
-        </AnimatePresence>
-        {settledShown && state.nextChats && (
-          <Button
-            {...stylex.props(controls.button, controls.quietButton, styles.older)}
-            disabled={!connected || busy('chats')}
-            onClick={() => void controller.moreChats()}>
-            Show older
-          </Button>
+              {state.nextChats && (
+                <Button
+                  {...stylex.props(controls.button, controls.quietButton, styles.older)}
+                  disabled={!connected || busy('chats')}
+                  onClick={() => void controller.moreChats()}>
+                  Show older
+                </Button>
+              )}
+            </div>
+          </motion.div>
         )}
       </nav>
     </aside>
@@ -1111,15 +1107,11 @@ const styles = stylex.create({
     borderRadius: 0,
     paddingTop: 10,
   },
-  settledFoot: { marginTop: 'auto' },
-  settledToggleRow: { display: 'flex', flexDirection: 'column', flexShrink: 0 },
-  settledRows: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 2,
-    flexShrink: 0,
-    overflow: 'hidden',
-  },
+  settled: { position: 'relative', display: 'flex', flexDirection: 'column', flexShrink: 0 },
+  settledClosed: { marginTop: 'auto' },
+  settledRows: { display: 'flex', flexDirection: 'column', gap: 2 },
+  // Closed, the chats hang below the heading, past the foot of the list, where it clips them.
+  settledRowsClosed: { position: 'absolute', top: '100%', left: 0, right: 0 },
   settledChevron: { display: 'inline-flex', color: colors.muted, transition: 'transform 120ms' },
   settledChevronOpen: { transform: 'rotate(90deg)' },
   settledChat: { color: colors.secondary },
@@ -1144,6 +1136,8 @@ const styles = stylex.create({
   chatList: { display: 'flex', flexDirection: 'column', gap: 2, minHeight: 80 },
   /** The sidebar list fills its column, so a closed Settled toggle can sit at its foot. */
   fillList: { flex: 1 },
+  // `clip` keeps a long Ready or Working list scrolling with the sidebar; `hidden` would cut it short.
+  clipList: { overflow: 'clip' },
   chat: {
     display: 'flex',
     alignItems: 'start',
