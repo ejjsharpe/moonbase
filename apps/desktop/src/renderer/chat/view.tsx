@@ -448,11 +448,6 @@ export function ChatView({
             </motion.div>
           )}
         </AnimatePresence>
-        {!settledShown &&
-          // The open chat stays in view after it settles, until another is chosen.
-          groups.settled
-            .filter((row) => row.chat.target.conversationId === state.selected?.conversationId)
-            .map(chatRow)}
         {settledShown && state.nextChats && (
           <Button
             {...stylex.props(controls.button, controls.quietButton, styles.older)}

@@ -1428,10 +1428,10 @@ test('⌘P jumps between chats, projects and files, and > runs app commands', as
   await expect(goTo.getByRole('option').first()).toHaveAccessibleName('Conversation');
   await page.keyboard.press('Enter');
   await expect(goTo).toHaveCount(0);
-  await expect(shell(page).getByRole('button', { name: /^Conversation/ })).toHaveAttribute(
-    'aria-pressed',
-    'true',
-  );
+  // The chat opens; it is Settled, so the sidebar keeps it behind the closed toggle.
+  await expect(
+    shell(page).getByRole('heading', { level: 1, name: 'Conversation', exact: true }),
+  ).toBeVisible();
 });
 
 test('@ in the composer searches the chat folder and sends picked files as mentions', async ({
@@ -1641,14 +1641,11 @@ test('the chats sidebar orders by activity: Ready, Working, then a Settled toggl
   await expect(settled).toHaveAttribute('aria-expanded', 'false');
   // The chat seen before anything else listed is settled and hidden behind the toggle.
   await expect(list.getByRole('button', { name: /^Conversation/ })).toHaveCount(0);
-  // Opening a Ready chat settles it; it stays in view while it is open.
+  // Opening a Ready chat settles it, out of sight while Settled is closed.
   await list.getByRole('button', { name: /^Summarise this repository/ }).click();
   await expect(list.getByRole('heading', { name: 'Ready 3' })).toBeVisible();
   await expect(settled).toHaveText(/Settled\s*2/);
-  await expect(list.getByRole('button', { name: /^Summarise this repository/ })).toHaveAttribute(
-    'aria-pressed',
-    'true',
-  );
+  await expect(list.getByRole('button', { name: /^Summarise this repository/ })).toHaveCount(0);
   // Closed, the toggle sits at the foot of the list.
   const bottom = async (locator: typeof list) => {
     const box = (await locator.boundingBox())!;
