@@ -7,18 +7,8 @@ import { controls } from '@moonbase/ui/controls';
 import type { ProviderSetupController } from '@moonbase/application/chat';
 import { Choice } from './choice.tsx';
 import { Icon } from '../icon.tsx';
+import { vendorOf, type Provider } from './vendors.ts';
 import { projectTiles } from '@moonbase/ui/projects';
-
-type Provider = ProviderState['providers'][number];
-
-/** The company behind a provider, so its subscription and API key share one card. */
-function vendorOf(provider: Provider) {
-  if (provider.id.startsWith('openai')) return 'OpenAI';
-  if (provider.id === 'anthropic' || provider.id.startsWith('claude')) return 'Anthropic';
-  if (provider.id === 'google') return 'Google';
-  if (provider.id === 'openrouter') return 'OpenRouter';
-  return provider.name;
-}
 
 /** One card per vendor, listing its ways to connect; a running sign-in opens under its way. */
 export function ProviderSetup({ controller }: { controller: ProviderSetupController }) {

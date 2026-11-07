@@ -698,16 +698,26 @@ test('local model and effort defaults yield to preferences across new chats and 
   page,
 }) => {
   await page.goto('/?local&design');
-  const model = page.getByRole('combobox', { name: 'Conversation model', exact: true });
-  const effort = page.getByRole('combobox', { name: 'Reasoning effort', exact: true });
+  // One chip shows the model and its effort; its popover chooses both.
+  const model = page.getByRole('button', { name: 'Conversation model', exact: true });
+  const effort = model;
+  const picker = page.getByRole('dialog', { name: 'Choose model', exact: true });
   await expect(model).toContainText('Demo model');
   await expect(effort).toContainText('Medium');
   await model.click();
-  await page
-    .getByRole('option', { name: 'Demo coding model · Demo provider', exact: true })
-    .click();
-  await effort.click();
-  await page.getByRole('option', { name: 'Extra high', exact: true }).click();
+  await expect(picker.getByRole('button', { name: 'OpenAI', exact: false })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await picker.getByRole('button', { name: 'Demo coding model', exact: true }).click();
+  await expect(picker).toHaveCount(0);
+  await model.click();
+  await picker.getByRole('radio', { name: 'Extra high', exact: true }).click();
+  await expect(picker.getByRole('radio', { name: 'Extra high', exact: true })).toHaveAttribute(
+    'aria-checked',
+    'true',
+  );
+  await page.keyboard.press('Escape');
   await page.getByRole('button', { name: 'Choose working folder', exact: true }).click();
   await page.getByLabel('Message', { exact: true }).fill('Remember my coding model');
   await page.getByRole('button', { name: 'Send message', exact: true }).click();
@@ -761,9 +771,7 @@ test('first-message recovery shows the captured text, Send identity and effort a
   page,
 }) => {
   await page.goto('/?local&design');
-  await expect(
-    page.getByRole('combobox', { name: 'Conversation model', exact: true }),
-  ).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Conversation model', exact: true })).toBeEnabled();
   await page.evaluate(() => {
     window.demo.application.chat!.setModelPreference({
       model: { provider: 'openai', modelId: 'demo-coding' },
@@ -1479,8 +1487,8 @@ test('/ at the start of a message lists commands that switch model and effort, c
   page,
 }) => {
   await page.goto('/?local&design');
-  const model = page.getByRole('combobox', { name: 'Conversation model', exact: true });
-  const effort = page.getByRole('combobox', { name: 'Reasoning effort', exact: true });
+  const model = page.getByRole('button', { name: 'Conversation model', exact: true });
+  const effort = model;
   const message = page.getByRole('textbox', { name: 'Message', exact: true });
   const commands = page.getByRole('listbox', { name: 'Commands', exact: true });
   await expect(effort).toContainText('Medium');
@@ -1602,7 +1610,7 @@ test('Settings holds hosts and providers; the sidebar keeps only a Connect line'
 test('the local model menu opens provider setup in Settings', async ({ page }) => {
   await page.goto('/?local');
   await tabs(page).getByRole('tab', { name: 'Agents', exact: true }).click();
-  await shell(page).getByRole('combobox', { name: 'Conversation model', exact: true }).click();
+  await shell(page).getByRole('button', { name: 'Conversation model', exact: true }).click();
   await page.getByRole('button', { name: 'Set up providers…', exact: true }).click();
   const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
   await expect(settings.getByRole('tab', { name: 'Providers', exact: true })).toHaveAttribute(
@@ -1697,4 +1705,39 @@ test('the chats sidebar orders by activity: Ready, Working, then a Settled toggl
     'aria-selected',
     'true',
   );
+});
+
+test("the model picker lists providers that are set up, beside the chosen one's models", async ({
+  page,
+}) => {
+  await page.goto('/?local&design&providers');
+  const model = page.getByRole('button', { name: 'Conversation model', exact: true });
+  const picker = page.getByRole('dialog', { name: 'Choose model', exact: true });
+  await expect(model).toContainText('Demo model');
+  await model.click();
+  const providers = picker.getByRole('group', { name: 'Providers', exact: true });
+  // Google is not set up, so it is not listed.
+  await expect(providers.getByRole('button')).toHaveText([/^OpenAI/, /^Anthropic/]);
+  await expect(picker.getByRole('group', { name: 'OpenAI models', exact: true })).toBeVisible();
+  await providers.getByRole('button', { name: /^Anthropic/ }).click();
+  const anthropic = picker.getByRole('group', { name: 'Anthropic models', exact: true });
+  await expect(anthropic.getByRole('button')).toHaveText([/Demo Opus/, /Demo Haiku/]);
+  await anthropic.getByRole('button', { name: 'Demo Opus', exact: true }).click();
+  await expect(picker).toHaveCount(0);
+  await expect(model).toContainText('Demo Opus');
+  await expect(model).toContainText('High');
+  // Reopened, the chosen model's provider is shown, with that model's efforts.
+  await model.click();
+  await expect(providers.getByRole('button', { name: /^Anthropic/ })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await expect(picker.getByRole('radio')).toHaveText(['Low', 'Medium', 'High', 'Max']);
+  await picker.getByRole('radio', { name: 'Max', exact: true }).click();
+  await page.keyboard.press('Escape');
+  await expect(model).toContainText('Max');
+  // A model without efforts shows none.
+  await model.click();
+  await picker.getByRole('button', { name: 'Demo Haiku', exact: true }).click();
+  await expect(model).toHaveText(/Demo Haiku\s*▾/);
 });

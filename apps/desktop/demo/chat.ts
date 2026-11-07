@@ -252,6 +252,33 @@ export function chatCapabilities(local = false, activity = false) {
                     configured: false,
                     models: [],
                   },
+                  // `?providers` adds a second provider that is set up and one that is not.
+                  ...(new URLSearchParams(location.search).has('providers')
+                    ? [
+                        {
+                          id: 'anthropic',
+                          name: 'Anthropic',
+                          auth: 'api_key' as const,
+                          configured: true,
+                          models: [
+                            {
+                              modelId: 'demo-opus',
+                              name: 'Demo Opus',
+                              reasoningEfforts: [...(['low', 'medium', 'high', 'max'] as const)],
+                              defaultReasoningEffort: 'high' as const,
+                            },
+                            { modelId: 'demo-haiku', name: 'Demo Haiku' },
+                          ],
+                        },
+                        {
+                          id: 'google',
+                          name: 'Google Gemini',
+                          auth: 'api_key' as const,
+                          configured: false,
+                          models: [{ modelId: 'demo-flash', name: 'Demo Flash' }],
+                        },
+                      ]
+                    : []),
                 ],
                 flow: null,
               };
