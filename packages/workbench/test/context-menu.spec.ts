@@ -97,6 +97,8 @@ test('row secondary and Control-click target without opening, listing or togglin
     await expect(row(page, path)).toHaveAttribute('aria-selected', 'true');
     await page.keyboard.press('Escape');
     await expect(tree(page)).toBeFocused();
+    // Only macOS Chromium turns Control-click into a context menu.
+    if (process.platform !== 'darwin') continue;
     await row(page, path).click({ modifiers: ['Control'] });
     await expect(menu(page)).toBeVisible();
     await page.keyboard.press('Escape');
