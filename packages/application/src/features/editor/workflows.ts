@@ -5,6 +5,7 @@ import {
   type CheckoutTarget,
   type EntryReference,
   type LookupMatch,
+  type TextSearchFile,
   type CommandOutput,
   type WorkspaceOperation,
   type OperationResult,
@@ -16,31 +17,21 @@ export type LookupRow = LookupMatch & { checkout: CheckoutTarget; recent: boolea
 export type LookupSnapshot = { rows: LookupRow[]; message: string; busy: boolean };
 
 /** A popup owns queries; replacing it cannot replace a captured editor mutation. */
-export class EditorLookup {
-  private scope: Scope.Closeable;
-  private queryScope?: Scope.Closeable;
-  private generation = 0;
-  private closed = false;
+abstract class EditorQuery<Snapshot extends { message: string; busy: boolean }> {
+  protected scope: Scope.Closeable;
+  protected queryScope?: Scope.Closeable;
+  protected generation = 0;
+  protected closed = false;
   private completion?: Promise<void>;
   private listeners = new Set<() => void>();
-  private snapshot: LookupSnapshot = { rows: [], message: 'Type a filename or path.', busy: false };
-  private execute: Run;
-  private search: (
-    checkout: CheckoutTarget,
-    query: string,
-    signal: AbortSignal,
-  ) => Promise<CommandOutput<'lookupFiles'>>;
-  private admits: () => boolean;
-  constructor(
-    admits: () => boolean,
-    scope: Scope.Scope,
-    execute: Run,
-    search: EditorLookup['search'],
-  ) {
+  protected snapshot: Snapshot;
+  protected execute: Run;
+  protected admits: () => boolean;
+  constructor(admits: () => boolean, scope: Scope.Scope, execute: Run, initial: Snapshot) {
     this.admits = admits;
     this.scope = Scope.forkUnsafe(scope);
     this.execute = execute;
-    this.search = search;
+    this.snapshot = initial;
   }
   getSnapshot = () => this.snapshot;
   subscribe = (listener: () => void) => {
@@ -49,72 +40,29 @@ export class EditorLookup {
       this.listeners.delete(listener);
     };
   };
-  private update(patch: Partial<LookupSnapshot>) {
+  protected update(patch: Partial<Snapshot>) {
     if (this.closed) return;
     this.snapshot = { ...this.snapshot, ...patch };
     for (const listener of this.listeners) listener();
   }
-  query(query: string, checkouts: CheckoutTarget[]) {
-    if (!this.admits() || this.closed) return;
+  /** Replaces the running query: the previous one's scope closes before the next debounced run. */
+  protected replaceQuery(work: (current: () => boolean) => Effect.Effect<void, ApplicationError>) {
     const generation = ++this.generation;
     const previous = this.queryScope;
     const scope = (this.queryScope = Scope.forkUnsafe(this.scope));
-    this.update({ rows: [], message: 'Searching…' });
-    const captured = structuredClone(checkouts);
-    const search = this.search;
-    const work = Effect.gen({ self: this }, function* () {
+    const run = Effect.gen({ self: this }, function* () {
       if (previous) yield* Scope.close(previous, Exit.void);
       yield* Effect.sleep('120 millis');
-      const results = yield* Effect.all(
-        captured.slice(0, 8).map((checkout) =>
-          Effect.tryPromise({
-            try: (signal) => search(checkout, query, signal),
-            catch: normalizeApplicationError,
-          }).pipe(
-            Effect.map((result) => ({ checkout, result })),
-            Effect.exit,
-          ),
-        ),
-        { concurrency: 8 },
-      );
-      if (this.closed || generation !== this.generation) return;
-      const rows: LookupRow[] = [],
-        errors: string[] = [];
-      let partial = captured.length > 8;
-      for (const result of results) {
-        if (Exit.isFailure(result)) {
-          // IO errors have already been normalized; no schema/Cause internals reach the view.
-          for (const reason of result.cause.reasons)
-            if (reason._tag === 'Fail') errors.push(reason.error.message);
-          continue;
-        }
-        const { checkout, result: value } = result.value;
-        partial ||= value.partial;
-        if (value.error) errors.push(value.error);
-        for (const recent of value.history) rows.push({ ...recent, checkout, recent: true });
-        for (const match of value.matches) rows.push({ ...match, checkout, recent: false });
-      }
-      const unique = [
-        ...new Map(
-          rows.map((row) => [fileKey({ checkout: row.checkout, path: row.path }), row]),
-        ).values(),
-      ];
-      unique.sort(
-        (a, b) => Number(b.recent) - Number(a.recent) || (a.recent ? 0 : b.score - a.score),
-      );
-      this.update({
-        rows: unique.slice(0, 100),
-        message: `${Math.min(unique.length, 100)} results${partial || unique.length > 100 ? '; partial coverage. Refine the query or Refresh.' : ''}${errors.length ? '; ' + errors.join('; ') : ''}`,
-      });
+      yield* work(() => !this.closed && generation === this.generation);
     });
-    void this.execute(Effect.forkIn(work, scope)).catch((error) =>
-      this.update({ message: normalizeApplicationError(error).message }),
+    void this.execute(Effect.forkIn(run, scope)).catch((error) =>
+      this.update({ message: normalizeApplicationError(error).message } as Partial<Snapshot>),
     );
   }
   async open(open: (current: () => boolean) => Promise<boolean>): Promise<boolean> {
     if (!this.admits() || this.closed || this.snapshot.busy) return false;
     const generation = ++this.generation;
-    this.update({ busy: true });
+    this.update({ busy: true } as Partial<Snapshot>);
     try {
       const current = () => !this.closed && generation === this.generation;
       const result = await this.execute(
@@ -130,18 +78,18 @@ export class EditorLookup {
         this.update({
           message:
             'File unavailable. Your current selection and edits are retained. Edit the path or retry.',
-        });
+        } as Partial<Snapshot>);
       return result && current();
     } catch (error) {
-      this.update({ message: normalizeApplicationError(error).message });
+      this.update({ message: normalizeApplicationError(error).message } as Partial<Snapshot>);
       return false;
     } finally {
-      this.update({ busy: false });
+      this.update({ busy: false } as Partial<Snapshot>);
     }
   }
   message(message: string) {
     if (!this.admits()) return;
-    this.update({ message });
+    this.update({ message } as Partial<Snapshot>);
   }
   stop() {
     this.closed = true;
@@ -154,6 +102,137 @@ export class EditorLookup {
     this.generation++;
     this.listeners.clear();
     return (this.completion ??= this.execute(Scope.close(this.scope, Exit.void)));
+  }
+}
+
+export class EditorLookup extends EditorQuery<LookupSnapshot> {
+  private search: (
+    checkout: CheckoutTarget,
+    query: string,
+    signal: AbortSignal,
+  ) => Promise<CommandOutput<'lookupFiles'>>;
+  constructor(
+    admits: () => boolean,
+    scope: Scope.Scope,
+    execute: Run,
+    search: EditorLookup['search'],
+  ) {
+    super(admits, scope, execute, { rows: [], message: 'Type a filename or path.', busy: false });
+    this.search = search;
+  }
+  query(query: string, checkouts: CheckoutTarget[]) {
+    if (!this.admits() || this.closed) return;
+    // Earlier rows stay until the new ones arrive, so the list does not flicker while typing.
+    this.update({ message: 'Searching…' });
+    const captured = structuredClone(checkouts);
+    const search = this.search;
+    this.replaceQuery((current) =>
+      Effect.gen({ self: this }, function* () {
+        const results = yield* Effect.all(
+          captured.slice(0, 8).map((checkout) =>
+            Effect.tryPromise({
+              try: (signal) => search(checkout, query, signal),
+              catch: normalizeApplicationError,
+            }).pipe(
+              Effect.map((result) => ({ checkout, result })),
+              Effect.exit,
+            ),
+          ),
+          { concurrency: 8 },
+        );
+        if (!current()) return;
+        const rows: LookupRow[] = [],
+          errors: string[] = [];
+        let partial = captured.length > 8;
+        for (const result of results) {
+          if (Exit.isFailure(result)) {
+            // IO errors have already been normalized; no schema/Cause internals reach the view.
+            for (const reason of result.cause.reasons)
+              if (reason._tag === 'Fail') errors.push(reason.error.message);
+            continue;
+          }
+          const { checkout, result: value } = result.value;
+          partial ||= value.partial;
+          if (value.error) errors.push(value.error);
+          for (const recent of value.history) rows.push({ ...recent, checkout, recent: true });
+          for (const match of value.matches) rows.push({ ...match, checkout, recent: false });
+        }
+        const unique = [
+          ...new Map(
+            rows.map((row) => [fileKey({ checkout: row.checkout, path: row.path }), row]),
+          ).values(),
+        ];
+        unique.sort(
+          (a, b) => Number(b.recent) - Number(a.recent) || (a.recent ? 0 : b.score - a.score),
+        );
+        this.update({
+          rows: unique.slice(0, 100),
+          message: `${Math.min(unique.length, 100)} results${partial || unique.length > 100 ? '; partial coverage. Refine the query or Refresh.' : ''}${errors.length ? '; ' + errors.join('; ') : ''}`,
+        });
+      }),
+    );
+  }
+}
+
+export type TextSearchOptions = { matchCase: boolean; wholeWord: boolean; regex: boolean };
+export type TextSearchSnapshot = {
+  files: TextSearchFile[];
+  checkout?: CheckoutTarget;
+  message: string;
+  busy: boolean;
+};
+
+/** Searches one checkout's file contents; a newer query cancels the running one. */
+export class EditorTextSearch extends EditorQuery<TextSearchSnapshot> {
+  private search: (
+    input: { checkout: CheckoutTarget; query: string } & TextSearchOptions,
+    signal: AbortSignal,
+  ) => Promise<CommandOutput<'searchText'>>;
+  constructor(
+    admits: () => boolean,
+    scope: Scope.Scope,
+    execute: Run,
+    search: EditorTextSearch['search'],
+  ) {
+    super(admits, scope, execute, { files: [], message: 'Type text to search for.', busy: false });
+    this.search = search;
+  }
+  query(query: string, options: TextSearchOptions, checkout: CheckoutTarget) {
+    if (!this.admits() || this.closed) return;
+    if (!query) {
+      this.replaceQuery(() => Effect.void);
+      this.update({ files: [], checkout, message: 'Type text to search for.' });
+      return;
+    }
+    this.update({ message: 'Searching…' });
+    const input = { ...structuredClone(options), checkout: structuredClone(checkout), query };
+    const search = this.search;
+    this.replaceQuery((current) =>
+      Effect.gen({ self: this }, function* () {
+        const result = yield* Effect.tryPromise({
+          try: (signal) => search(input, signal),
+          catch: normalizeApplicationError,
+        }).pipe(Effect.exit);
+        if (!current()) return;
+        if (Exit.isFailure(result)) {
+          const reason = result.cause.reasons.find((item) => item._tag === 'Fail');
+          this.update({
+            files: [],
+            checkout: input.checkout,
+            message: reason?._tag === 'Fail' ? reason.error.message : 'Search failed.',
+          });
+          return;
+        }
+        const { files, partial, error } = result.value;
+        const count = files.reduce((n, file) => n + file.matches.length, 0);
+        let message = count
+          ? `${count} ${count === 1 ? 'match' : 'matches'} in ${files.length} ${files.length === 1 ? 'file' : 'files'}`
+          : 'No matches.';
+        if (partial) message += '; capped. Refine the query.';
+        if (error) message += '; ' + error;
+        this.update({ files, checkout: input.checkout, message });
+      }),
+    );
   }
 }
 

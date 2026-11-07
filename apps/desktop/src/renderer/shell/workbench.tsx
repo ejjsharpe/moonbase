@@ -19,7 +19,7 @@ import { Choice } from '../chat/choice.tsx';
 import { ChatView } from '../chat/view.tsx';
 import { checkoutName } from '@moonbase/ui/projects';
 import { Icon } from '../icon.tsx';
-import { Workbench, type WorkbenchHandle } from '@moonbase/workbench';
+import { Workbench, type PickerEntry, pickerMode, type WorkbenchHandle } from '@moonbase/workbench';
 import { styles } from './styles.ts';
 import { MainTabs, tabValue } from './main-tabs.tsx';
 
@@ -41,6 +41,19 @@ const noSubscription = () => () => {};
 const dockDefaultWidth = 400,
   dockMinWidth = 320;
 const noEditor = () => undefined;
+
+/** A chat's age for the picker: minutes and hours, then days, then a date. */
+export function formatChatAge(createdAt: string, now = Date.now()) {
+  const minutes = Math.floor((now - Date.parse(createdAt)) / 60000);
+  if (minutes < 1) return 'now';
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  if (days === 1) return 'yesterday';
+  if (days < 7) return `${days}d`;
+  return new Date(createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
 
 export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(function DesktopShell(
   {
@@ -102,6 +115,75 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
   const restoreFocus = (value: string) => {
     requestedFocus.current = value;
   };
+  const showChat = () => {
+    setDestination('chat');
+    if (view !== 'chat') restoreFocus('chat');
+  };
+  // The picker's chats, projects and app commands, read only while it is open; the workbench
+  // adds files and editor commands.
+  const pickerEntries = (): PickerEntry[] => [
+    ...(chat?.getSnapshot().chats ?? []).map((summary, index) => ({
+      id: summary.target.conversationId,
+      kind: 'chat' as const,
+      label: summary.title,
+      detail: `${summary.cwd.split('/').filter(Boolean).at(-1) || '/'} · ${formatChatAge(summary.createdAt)}`,
+      recent: index < 3,
+      run: () => {
+        if (!chat) return;
+        run(chat.select(summary.target));
+        showChat();
+      },
+    })),
+    ...openCheckouts.map((checkout) => ({
+      id: checkout.checkoutId,
+      kind: 'project' as const,
+      label: checkoutName(checkout),
+      detail: '⎇ ' + checkout.branch,
+      projectId: checkout.projectId,
+      run: () => {
+        if (controller) run(controller.selectCheckout(checkout));
+        setDestination('project');
+        restoreFocus(tabValue({ kind: 'project', checkout }));
+      },
+    })),
+    ...(chat
+      ? [
+          {
+            id: 'new-chat',
+            kind: 'command' as const,
+            label: 'New chat',
+            run: () => {
+              run(chat.closeView().then(() => document.getElementById('message')?.focus()));
+              setDestination('chat');
+            },
+          },
+        ]
+      : []),
+    ...(view !== 'chat' && chat && selected
+      ? [
+          {
+            id: 'toggle-dock',
+            kind: 'command' as const,
+            label: dockOpen ? 'Hide project chats' : 'Show project chats',
+            shortcut: '⌘J',
+            run: () => setDockOpen((open) => !open),
+          },
+        ]
+      : []),
+    ...(view !== 'chat' && chatTab
+      ? [{ id: 'show-agents', kind: 'command' as const, label: 'Go to Agents', run: showChat }]
+      : []),
+    ...(selectCheckout && controller
+      ? [
+          {
+            id: 'open-project',
+            kind: 'command' as const,
+            label: 'Open project…',
+            run: () => run(openCheckout()),
+          },
+        ]
+      : []),
+  ];
   useLayoutEffect(() => {
     const value = requestedFocus.current;
     requestedFocus.current = null;
@@ -197,6 +279,19 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
       inert={closing || ['prepared', 'disposing', 'disposed', 'failed'].includes(lifecycle.phase)}
       {...stylex.props(workbench.document, styles.shell)}
       onKeyDown={(event) => {
+        // ⌘ only: Control+P is "previous line" in macOS text fields.
+        const mode = pickerMode(event, event.metaKey);
+        if (
+          controller &&
+          mode &&
+          !(event.target as HTMLElement).closest(
+            '[role="dialog"]:not([data-picker]), [role="alertdialog"], [role="menu"]',
+          )
+        ) {
+          event.preventDefault();
+          handle.current?.openPicker(mode);
+          return;
+        }
         if (
           view !== 'chat' &&
           chat &&
@@ -315,6 +410,12 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
               controller={controller}
               checkout={selected}
               visible={view !== 'chat'}
+              pickerEntries={pickerEntries}
+              onShowEditor={() => {
+                if (view !== 'chat') return;
+                setDestination('project');
+                restoreFocus(projectValue);
+              }}
               trailing={
                 chat && selected ? (
                   <aside

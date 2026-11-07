@@ -14,7 +14,7 @@
 | `runtime/clients` | Editor, chat and connection clients bound to an existing runtime |
 | `runtime/effect-client` | Invocation and observation helpers bound to a supplied runtime |
 
-The editor controller lists a checkout's project worktrees (`listWorktrees`) and creates one (`createWorktree`), opening and selecting the new checkout.
+The editor controller lists a checkout's project worktrees (`listWorktrees`) and creates one (`createWorktree`), opening and selecting the new checkout. `createLookup` and `createTextSearch` give a popup its own debounced file-name and file-content queries; a newer query cancels the running one, and earlier results stay until the new ones arrive.
 
 Renderers receive browser-safe clients. Native and transport adapters validate and authorize input before calling the shared handlers; schema validation alone grants no authority. A `ChatClient` that receives untrusted data decodes and size-bounds every reply and snapshot (the Pi runtime's local and remote services; desktop forwards them to the renderer unchanged); shared chat code trusts `ChatClient` outputs and checks only their meaning: echoed sources and selections, cursors, offsets, authority and liveness.
 

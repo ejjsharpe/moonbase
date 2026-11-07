@@ -87,6 +87,7 @@ const inputs = {
   createWorktree: { checkout, base: 'main', branch: 'feature/one', location: '/feature-one' },
   readComparison: { target, area: 'staged' },
   lookupFiles: { checkout, query: '', limit: 100, history: [target.path] },
+  searchText: { checkout, query: 'needle', matchCase: false, wholeWord: true, regex: false },
   inspectEntries: { checkout, paths: [target.path] },
   mutate: operation,
   operationStatus: { clientId: 'client', id: operation.id },
@@ -121,6 +122,17 @@ const outputs = {
   lookupFiles: {
     matches: [{ path: target.path, score: 0, positions: [] }],
     history: [],
+    partial: false,
+  },
+  searchText: {
+    files: [
+      {
+        path: target.path,
+        matches: [
+          { line: 2, text: 'a needle', ranges: [{ start: 2, end: 8 }], before: ['x'], after: [] },
+        ],
+      },
+    ],
     partial: false,
   },
   inspectEntries: [entry],

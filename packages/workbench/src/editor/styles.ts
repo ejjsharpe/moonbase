@@ -27,13 +27,6 @@ export const styles = stylex.create({
   dialogActions: { display: 'flex', flexWrap: 'wrap', gap: space.sm, marginTop: space.lg },
   treeLabel: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   path: { overflowWrap: 'anywhere', fontSize: type.small, color: colors.secondary },
-  lookupList: {
-    maxHeight: '40vh',
-    overflowY: 'auto',
-    margin: '12px 0',
-    padding: 0,
-    listStyle: 'none',
-  },
   treeExtent: (height: number) => ({ height, position: 'relative', minWidth: '100%' }),
   treeRow: (top: number) => ({ position: 'absolute', top, width: '100%' }),
 });

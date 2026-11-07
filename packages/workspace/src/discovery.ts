@@ -6,6 +6,38 @@ import type { Directory } from './filesystem.ts';
 import { matchPath, compareMatches } from './lookup.ts';
 import { document, ensure, fail, path } from './validation.ts';
 
+/** Names discovery and text search never descend into, matching the native lookup preflight. */
+const excludedNames = [
+  '.git',
+  '.svn',
+  '.hg',
+  '.jj',
+  '.DS_Store',
+  'Thumbs.db',
+  'node_modules',
+  'bower_components',
+];
+const ripgrepPolicy = [
+  '--hidden',
+  '--no-config',
+  '--no-ignore-parent',
+  '--no-ignore-global',
+  ...[...excludedNames, '*.code-search'].flatMap((name) => ['--glob', '!**/' + name]),
+];
+const searchLimits = { files: 200, perFile: 50, total: 500, context: 3, ranges: 64, line: 512 };
+type RipgrepText = { text?: string; bytes?: string };
+type RipgrepEvent =
+  | {
+      type: 'match' | 'context';
+      data: {
+        path: RipgrepText;
+        lines: RipgrepText;
+        line_number?: number;
+        submatches?: { start: number; end: number }[];
+      };
+    }
+  | { type: 'begin' | 'end' | 'summary'; data: unknown };
+
 export class WorkspaceDiscovery {
   private readonly directory: (target: CheckoutTarget) => Promise<Directory>;
   private readonly policy: (target: CheckoutTarget) => void;
@@ -251,17 +283,7 @@ export class WorkspaceDiscovery {
       'Lookup history exceeds its limit.',
     );
     supplied.forEach((p) => path(p));
-    const excluded = (p: string) =>
-      [
-        '.git',
-        '.svn',
-        '.hg',
-        '.jj',
-        '.DS_Store',
-        'Thumbs.db',
-        'node_modules',
-        'bower_components',
-      ].includes(p) || p.endsWith('.code-search');
+    const excluded = (p: string) => excludedNames.includes(p) || p.endsWith('.code-search');
     let cells = 0,
       partial = false;
     const rank = (paths: string[], history: boolean) => {
@@ -284,36 +306,10 @@ export class WorkspaceDiscovery {
     if (!input.query.trim()) return { matches: [], history, partial };
     try {
       this.policy(input.checkout);
-      if (!this.ripgrep)
-        fail(
-          'Unavailable',
-          'Standalone ripgrep is unavailable. Supply the packaged ripgrepExecutable asset.',
-        );
-      const args = [
-        '--files',
-        '--hidden',
-        '--null',
-        '--no-config',
-        '--no-ignore-parent',
-        '--no-ignore-global',
-        '--threads',
-        '1',
-      ];
-      for (const name of [
-        '.git',
-        '.svn',
-        '.hg',
-        '.jj',
-        '.DS_Store',
-        'Thumbs.db',
-        'node_modules',
-        'bower_components',
-        '*.code-search',
-      ])
-        args.push('--glob', '!**/' + name);
+      const args = ['--files', '--null', '--threads', '1', ...ripgrepPolicy];
       let enumerationError: string | undefined;
       const bytes = await directory
-        .io(['lookup', this.ripgrep!, ...args, '.'], undefined, signal)
+        .io(['lookup', this.requireRipgrep(), ...args, '.'], undefined, signal)
         .catch((error) => {
           const output = (error as { output?: Buffer }).output;
           if (output?.length && output.lastIndexOf(0) >= 0) {
@@ -387,5 +383,162 @@ export class WorkspaceDiscovery {
           'Discovery or ignore policy unavailable. ' + normalizeApplicationError(error).message,
       };
     }
+  }
+  private requireRipgrep() {
+    if (!this.ripgrep)
+      fail(
+        'Unavailable',
+        'Standalone ripgrep is unavailable. Supply the packaged ripgrepExecutable asset.',
+      );
+    return this.ripgrep!;
+  }
+  /** Searches file contents with ripgrep, honouring ignore files like `lookupFiles`. */
+  async searchText(
+    input: CommandInput<'searchText'>,
+    signal: AbortSignal,
+  ): Promise<CommandOutput<'searchText'>> {
+    ensure(
+      typeof input.query === 'string' &&
+        input.query.length > 0 &&
+        input.query.length <= 256 &&
+        !/[\0\n\r]/.test(input.query),
+      'Invalid search query.',
+    );
+    const directory = await this.directory(input.checkout);
+    this.policy(input.checkout);
+    const args = [
+      '--json',
+      // Sorted (and so single-threaded) output keeps a capped result the same on every run.
+      '--sort',
+      'path',
+      '--max-filesize',
+      '2M',
+      // One past the cap, so a file that reaches it is reported as partial.
+      '--max-count',
+      String(searchLimits.perFile + 1),
+      '--context',
+      String(searchLimits.context),
+      ...ripgrepPolicy,
+      input.matchCase ? '--case-sensitive' : '--ignore-case',
+      ...(input.regex ? [] : ['--fixed-strings']),
+      ...(input.wholeWord ? ['--word-regexp'] : []),
+      '--regexp',
+      input.query,
+      '--',
+      '.',
+    ];
+    let partial = false,
+      error: string | undefined;
+    const bytes = await directory
+      .io(['lookup', this.requireRipgrep(), ...args], undefined, signal)
+      .catch((failure) => {
+        // Exit 1 is "no matches"; other exits may still carry complete JSON lines.
+        if (failure.status === 1 && !failure.stderr) return Buffer.alloc(0);
+        const output = (failure as { output?: Buffer }).output;
+        const end = output?.lastIndexOf(10) ?? -1;
+        const stderr = String(failure.stderr ?? '').trim();
+        if (!output || end < 0) {
+          // A bad pattern fails before any file is searched, so it leaves no JSON behind.
+          if (failure.status === 2 && /^(rg: )?regex parse error/.test(stderr))
+            fail(
+              'InvalidInput',
+              'Invalid regular expression: ' +
+                stderr
+                  .split('\n')
+                  .at(-1)!
+                  .replace(/^error: /, ''),
+            );
+          throw failure;
+        }
+        // Exit 2 after searching means some files could not be read; the rest are complete.
+        if (failure.status === 2)
+          error = 'Some files could not be searched. ' + stderr.split('\n')[0];
+        else {
+          partial = true;
+          error = normalizeApplicationError(failure).message;
+        }
+        return output.subarray(0, end + 1);
+      });
+    const clip = (line: string) => line.replace(/\r?\n$/, '').slice(0, searchLimits.line);
+    const files = new Map<
+      string,
+      {
+        lines: Map<number, string>;
+        matches: { line: number; text: string; ranges: { start: number; end: number }[] }[];
+      }
+    >();
+    let total = 0;
+    for (const row of bytes.toString().split('\n')) {
+      if (!row) continue;
+      let event: RipgrepEvent;
+      try {
+        event = JSON.parse(row);
+      } catch {
+        partial = true;
+        continue;
+      }
+      if (event.type !== 'match' && event.type !== 'context') continue;
+      const { data } = event;
+      // Paths or lines that are not UTF-8 arrive as bytes; they cannot be shown faithfully.
+      if (data.path.text === undefined || data.lines.text === undefined || !data.line_number)
+        continue;
+      const p = data.path.text.replace(/^\.\//, '');
+      try {
+        path(p);
+      } catch {
+        continue;
+      }
+      let file = files.get(p);
+      if (!file) {
+        if (files.size >= searchLimits.files) {
+          partial = true;
+          continue;
+        }
+        file = { lines: new Map(), matches: [] };
+        files.set(p, file);
+      }
+      const text = clip(data.lines.text);
+      file.lines.set(data.line_number, text);
+      if (event.type === 'context') continue;
+      // `--max-count` still reports matching lines inside the trailing context, so cap here too.
+      if (total >= searchLimits.total || file.matches.length >= searchLimits.perFile) {
+        partial = true;
+        continue;
+      }
+      total++;
+      // ripgrep reports byte offsets; the renderer highlights UTF-16 offsets.
+      const raw = Buffer.from(data.lines.text);
+      const offset = (bytes: number) =>
+        Math.min(raw.subarray(0, bytes).toString().length, text.length);
+      file.matches.push({
+        line: data.line_number,
+        text,
+        ranges: (data.submatches ?? [])
+          .slice(0, searchLimits.ranges)
+          .map((range) => ({ start: offset(range.start), end: offset(range.end) }))
+          .filter((range) => range.end > range.start),
+      });
+    }
+    const nearby = (lines: Map<number, string>, line: number, step: 1 | -1) => {
+      const found: string[] = [];
+      for (let n = line + step; Math.abs(n - line) <= searchLimits.context; n += step) {
+        const text = lines.get(n);
+        if (text === undefined) break;
+        found.push(text);
+      }
+      return step < 0 ? found.reverse() : found;
+    };
+    const results = [...files]
+      .filter(([, file]) => file.matches.length)
+      .map(([p, file]) => ({
+        path: p,
+        matches: file.matches.map((match) => ({
+          ...match,
+          before: nearby(file.lines, match.line, -1),
+          after: nearby(file.lines, match.line, 1),
+        })),
+      }))
+      .sort((a, b) => a.path.localeCompare(b.path));
+    return { files: results, partial, ...(error ? { error } : {}) };
   }
 }

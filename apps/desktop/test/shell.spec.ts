@@ -59,7 +59,14 @@ test('browser shell keeps dirty comparisons, cursor, scroll, Monaco undo and sco
   await chat(page);
   await shell(page).getByLabel('Message', { exact: true }).fill('separate chat draft');
   await shell(page).getByLabel('Message', { exact: true }).press('Meta+p');
+  // Go to opens from the composer too; dismissing it keeps the draft and its focus.
+  await expect(page.getByRole('dialog', { name: 'Go to', exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(shell(page).getByLabel('Message', { exact: true })).toBeFocused();
+  await expect(shell(page).getByLabel('Message', { exact: true })).toHaveValue(
+    'separate chat draft',
+  );
   await shell(page).getByLabel('Message', { exact: true }).press('Meta+s');
   expect(await page.evaluate(() => window.demo.memory.stats.saves)).toBe(0);
   await tabs(page).getByRole('tab', { name: 'Agents', exact: true }).focus();
@@ -150,8 +157,8 @@ test('project-tab shortcuts use the editor handler after keyboard navigation fro
   await expect.poll(() => page.evaluate(() => window.demo.memory.stats.saves)).toBe(1);
   await expect(project(page)).toBeFocused();
   await project(page).press('Meta+p');
-  await expect(page.getByRole('dialog', { name: 'Find file', exact: true })).toBeVisible();
-  await page.getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: 'Go to', exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
   await project(page).focus();
   await project(page).press('Meta+w');
   await expect(shell(page).getByRole('tab', { name: 'welcome.ts', exact: true })).toHaveCount(0);
@@ -1380,4 +1387,45 @@ test('design fixture renders first-message composition, pinned navigation and co
   await page.screenshot({ path: '../../test-results/redesign-review/drawer.png', fullPage: true });
   await page.keyboard.press('Escape');
   expect(errors).toEqual([]);
+});
+
+test('⌘P jumps between chats, projects and files, and > runs app commands', async ({ page }) => {
+  await page.goto('/?chat');
+  await chat(page);
+  const message = shell(page).getByLabel('Message', { exact: true });
+  await message.press('Meta+p');
+  const goTo = page.getByRole('dialog', { name: 'Go to', exact: true });
+  await expect(goTo.getByRole('option', { name: 'welcome.ts', exact: true })).toBeVisible();
+  await expect(goTo.getByRole('option', { name: 'Conversation', exact: true })).toBeVisible();
+  await expect(goTo.getByRole('option', { name: 'moonbase', exact: true })).toContainText('main');
+  await goTo.getByRole('combobox').fill('welc');
+  await page.keyboard.press('Enter');
+  await expect(goTo).toHaveCount(0);
+  // A file opened from Agents brings its project into view with the editor focused.
+  await expect(project(page)).toHaveAttribute('aria-selected', 'true');
+  await expect(input(page)).toBeFocused();
+  await page.keyboard.press('Meta+Shift+p');
+  await expect(goTo.getByRole('option', { name: 'Hide project chats', exact: true })).toContainText(
+    '⌘J',
+  );
+  await goTo.getByRole('combobox').fill('>agents');
+  await page.keyboard.press('Enter');
+  await expect(tabs(page).getByRole('tab', { name: 'Agents', exact: true })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  await message.press('Meta+p');
+  await goTo.getByRole('combobox').fill('>new chat');
+  await page.keyboard.press('Enter');
+  await expect(message).toBeFocused();
+  await expect(message).toHaveValue('');
+  await message.press('Meta+p');
+  await goTo.getByRole('combobox').fill('conv');
+  await expect(goTo.getByRole('option').first()).toHaveAccessibleName('Conversation');
+  await page.keyboard.press('Enter');
+  await expect(goTo).toHaveCount(0);
+  await expect(shell(page).getByRole('button', { name: /^Conversation/ })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
 });

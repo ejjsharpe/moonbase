@@ -337,6 +337,93 @@ test('watch notifies external changes, coalesces and disposes independently of f
   }
 });
 
+test('text search honours ignore policies, options, context lines and UTF-16 ranges', async () => {
+  const f = fixture();
+  try {
+    for (const p of ['src', 'node_modules']) mkdirSync(join(f.root, p));
+    writeFileSync(
+      join(f.root, 'src/view.ts'),
+      'one\ntwo\nconst é = followEnd(); // followEnd\nfour\nfive\nsix\nFollowEnd\n',
+    );
+    writeFileSync(join(f.root, 'src/followEnder.ts'), 'followEnder\n');
+    writeFileSync(join(f.root, 'node_modules/dep.ts'), 'followEnd\n');
+    writeFileSync(join(f.root, 'ignored.ts'), 'followEnd\n');
+    writeFileSync(join(f.root, '.gitignore'), 'ignored.ts\n');
+    const checkout = await f.client.command('openCheckout', { root: f.root });
+    const search = (
+      query: string,
+      options: Partial<Record<'matchCase' | 'wholeWord' | 'regex', boolean>> = {},
+    ) =>
+      f.client.command('searchText', {
+        checkout,
+        query,
+        matchCase: false,
+        wholeWord: false,
+        regex: false,
+        ...options,
+      });
+    const all = await search('followEnd');
+    assert(!all.partial, all.error ?? 'Unexpected partial search');
+    assert.deepEqual(
+      all.files.map((file) => [file.path, file.matches.map((match) => match.line)]),
+      [
+        ['src/followEnder.ts', [1]],
+        ['src/view.ts', [3, 7]],
+      ],
+    );
+    const [line] = all.files[1].matches;
+    assert.equal(line.text, 'const é = followEnd(); // followEnd');
+    assert.deepEqual(
+      line.ranges.map((range) => line.text.slice(range.start, range.end)),
+      ['followEnd', 'followEnd'],
+    );
+    assert.deepEqual(line.before, ['one', 'two']);
+    assert.deepEqual(line.after, ['four', 'five', 'six']);
+    assert.deepEqual(
+      (await search('followEnd', { matchCase: true })).files[1].matches.map((m) => m.line),
+      [3],
+    );
+    assert.deepEqual(
+      (await search('followEnd', { wholeWord: true })).files.map((file) => file.path),
+      ['src/view.ts'],
+    );
+    assert.equal((await search('follow.nd(')).files.length, 0);
+    assert.equal((await search('follow.nd\\(', { regex: true })).files[0].path, 'src/view.ts');
+    await assert.rejects(search('(', { regex: true }), rejects('InvalidInput'));
+    // Past 50 matches a file is capped and reported partial, whether its matches are adjacent
+    // (ripgrep keeps reporting matches inside trailing context) or spread out.
+    writeFileSync(join(f.root, 'src/many.ts'), 'manyMatch\n'.repeat(60));
+    writeFileSync(join(f.root, 'src/spread.ts'), 'spreadMatch\nx\nx\nx\nx\n'.repeat(60));
+    for (const query of ['manyMatch', 'spreadMatch']) {
+      const many = await search(query);
+      assert.equal(many.partial, true, query);
+      assert.equal(many.files[0].matches.length, 50, query);
+    }
+    // A query that looks like a flag is still the pattern.
+    writeFileSync(join(f.root, 'src/flags.ts'), 'run --files here\n');
+    assert.deepEqual(
+      (await search('--files')).files.map((file) => file.path),
+      ['src/flags.ts'],
+    );
+    // An unreadable file is reported without marking the other results partial.
+    writeFileSync(join(f.root, 'src/locked.ts'), 'followEnd\n');
+    chmodSync(join(f.root, 'src/locked.ts'), 0);
+    try {
+      const locked = await search('followEnd');
+      assert.equal(locked.partial, false);
+      assert.match(locked.error ?? '', /Some files could not be searched/);
+      assert.deepEqual(
+        locked.files.map((file) => file.path),
+        ['src/followEnder.ts', 'src/view.ts'],
+      );
+    } finally {
+      chmodSync(join(f.root, 'src/locked.ts'), 0o644);
+    }
+  } finally {
+    await f.close();
+  }
+});
+
 test('lookup honors nested ignore policies, ranks and highlights all pieces, quotes contiguous text, and keeps history separate', async () => {
   const f = fixture();
   try {

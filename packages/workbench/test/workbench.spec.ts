@@ -655,7 +655,7 @@ test('close dialog Cancel then Discard; Reopen reads disk and disposal releases 
 });
 
 for (const origin of ['editor', 'file tab', 'Find file button'] as const)
-  test(`file search restores ${origin} focus and reopens after dismissal`, async ({ page }) => {
+  test(`Go to restores ${origin} focus and reopens after dismissal`, async ({ page }) => {
     await page.goto('/');
     let focused = first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true });
     if (origin === 'file tab')
@@ -665,13 +665,13 @@ for (const origin of ['editor', 'file tab', 'Find file button'] as const)
     else if (origin === 'Find file button')
       focused = first(page).getByRole('button', { name: 'Find file', exact: true });
     await focused.focus();
-    const dialog = page.getByRole('dialog', { name: 'Find file', exact: true });
-    for (const dismiss of ['Escape', 'Cancel'] as const) {
+    const dialog = page.getByRole('dialog', { name: 'Go to', exact: true });
+    for (const dismiss of ['Escape', 'outside click'] as const) {
       if (origin === 'Find file button') await focused.click();
       else await page.keyboard.press('Meta+p');
       await expect(dialog.getByRole('combobox')).toBeFocused();
       if (dismiss === 'Escape') await page.keyboard.press('Escape');
-      else await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+      else await page.mouse.click(4, 4);
       await expect(dialog).toHaveCount(0);
       await expect(focused).toBeFocused();
     }
@@ -686,22 +686,28 @@ for (const origin of ['editor', 'file tab', 'Find file button'] as const)
     ).toBeFocused();
   });
 
-test('lookup groups/highlights, previews, tree actions and constrained layout', async ({
+test('Go to lists recent files first, highlights matches and opens an exact path at once', async ({
   page,
 }) => {
   await page.goto('/');
   await page.setViewportSize({ width: 760, height: 720 });
   await first(page).getByRole('button', { name: 'Find file', exact: true }).click();
-  await expect(
-    page.getByRole('group', { name: 'Recent files', exact: true }).getByRole('option'),
-  ).toContainText('welcome.ts');
-  await page.getByRole('combobox').fill('exmp');
-  await expect(page.getByRole('option')).toContainText('src/example.ts');
-  await expect(page.locator('[role="option"] mark')).toHaveCount(4);
-  await page.getByRole('combobox').press('Enter');
+  const dialog = page.getByRole('dialog', { name: 'Go to', exact: true });
+  await expect(dialog.getByRole('option').first()).toHaveAccessibleName('welcome.ts');
+  await dialog.getByRole('combobox').fill('exmp');
+  await expect(dialog.getByRole('option').first()).toHaveAccessibleName('src/example.ts');
+  await expect(dialog.locator('[role="option"]').first().locator('mark')).toHaveCount(4);
+  await dialog.getByRole('combobox').press('Enter');
   await expect(first(page).getByRole('tab', { name: 'src/example.ts', exact: true })).toBeVisible();
   await expect(
     first(page).getByRole('textbox', { name: 'src/example.ts editor', exact: true }),
+  ).toBeFocused();
+  // Enter right after typing waits for that query instead of opening the previous top row.
+  await page.keyboard.press('Meta+p');
+  await dialog.getByRole('combobox').fill('README.md');
+  await dialog.getByRole('combobox').press('Enter');
+  await expect(
+    first(page).getByRole('textbox', { name: 'README.md editor', exact: true }),
   ).toBeFocused();
   await first(page).getByRole('button', { name: 'New File', exact: true }).click();
   await page.getByLabel('Destination relative path').fill('created.txt');
@@ -715,6 +721,112 @@ test('lookup groups/highlights, previews, tree actions and constrained layout', 
   await expect(sidebar).toHaveAttribute('aria-valuenow', '190');
   await first(page).getByRole('treeitem', { name: 'README.md', exact: true }).click();
   await expect(first(page).getByRole('tree', { name: 'Files', exact: true })).toBeFocused();
+});
+
+test('Tab switches to Find, which previews matches and opens the file at the match', async ({
+  page,
+}) => {
+  await page.goto('/');
+  const editor = first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true });
+  await editor.focus();
+  await page.keyboard.press('Meta+p');
+  await page
+    .getByRole('dialog', { name: 'Go to', exact: true })
+    .getByRole('combobox')
+    .fill('value');
+  await page.keyboard.press('Tab');
+  const find = page.getByRole('dialog', { name: 'Find in files', exact: true });
+  await expect(find.getByRole('tab', { name: 'Find', exact: true })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  // What was typed in Go to carries over.
+  await expect(find.getByRole('combobox')).toHaveValue('value');
+  await expect(find.getByRole('group', { name: 'src/example.ts', exact: true })).toBeVisible();
+  const matches = find.getByRole('option');
+  await expect(matches).toHaveCount(2);
+  await expect(matches.first()).toHaveAccessibleName(
+    'Line 1: export function double(value: number) {',
+  );
+  await expect(find.getByRole('region', { name: 'Preview', exact: true })).toContainText(
+    'return value * 2;',
+  );
+  await page.keyboard.press('ArrowDown');
+  await expect(matches.nth(1)).toHaveAttribute('aria-selected', 'true');
+  await find.getByRole('button', { name: 'Match case', exact: true }).click();
+  await expect(find.getByRole('button', { name: 'Match case', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await find.getByRole('combobox').fill('VALUE');
+  await expect(find.getByRole('status')).toHaveText('No matches.');
+  await find.getByRole('combobox').press('Alt+c');
+  await expect(matches).toHaveCount(2);
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  await expect(find).toHaveCount(0);
+  const opened = first(page).getByRole('textbox', { name: 'src/example.ts editor', exact: true });
+  await expect(opened).toBeFocused();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          window.demo.first.getSnapshot().recovery.views.sample.positions['src/example.ts']?.file
+            ?.line,
+      ),
+    )
+    .toBe(2);
+  // ⌘⇧F starts from the selected text; ⇥ goes back to Go to.
+  await page.keyboard.press('Meta+Shift+f');
+  await expect(find.getByRole('combobox')).toHaveValue('value');
+  await page.keyboard.press('Tab');
+  await expect(page.getByRole('dialog', { name: 'Go to', exact: true })).toBeVisible();
+});
+
+test('shortcuts switch an open picker, and a failed open stays on screen', async ({ page }) => {
+  await page.goto('/');
+  await first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true }).focus();
+  await page.keyboard.press('Meta+p');
+  await page.keyboard.press('Tab');
+  const find = page.getByRole('dialog', { name: 'Find in files', exact: true });
+  await expect(find).toBeVisible();
+  // ⌘P after ⇥ returns to Go to; ⌘⇧P from there lists commands.
+  await page.keyboard.press('Meta+p');
+  const goTo = page.getByRole('dialog', { name: 'Go to', exact: true });
+  await expect(goTo).toBeVisible();
+  await page.keyboard.press('Meta+Shift+p');
+  await expect(goTo.getByRole('combobox')).toHaveValue('>');
+  await page.keyboard.press('Meta+Shift+f');
+  await expect(find).toBeVisible();
+  await page.keyboard.press('Tab');
+  await goTo.getByRole('combobox').fill('README');
+  await expect(goTo.getByRole('option', { name: 'README.md', exact: true })).toBeVisible();
+  await page.evaluate(() => window.demo.memory.failNext('readFile', 'Injected IO failure'));
+  await page.keyboard.press('Enter');
+  await expect(goTo.getByRole('status')).toContainText(/Injected IO failure|File unavailable/);
+  await expect(goTo).toBeVisible();
+});
+
+test('Go to with > lists editor commands with their shortcuts and runs them', async ({ page }) => {
+  await page.goto('/');
+  await first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true }).focus();
+  await page.keyboard.press('Meta+Shift+p');
+  const dialog = page.getByRole('dialog', { name: 'Go to', exact: true });
+  await expect(dialog.getByRole('combobox')).toHaveValue('>');
+  await expect(dialog.getByRole('option', { name: 'Show Changes', exact: true })).toContainText(
+    '⌘⇧G',
+  );
+  await dialog.getByRole('combobox').fill('>chang');
+  await expect(dialog.getByRole('option')).toHaveCount(1);
+  await page.keyboard.press('Enter');
+  await expect(dialog).toHaveCount(0);
+  await expect(first(page).getByRole('button', { name: /^Changes/ })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await page.keyboard.press('Meta+Shift+p');
+  await dialog.getByRole('combobox').fill('>nothing like this');
+  await expect(dialog.getByRole('status')).toHaveText('No commands match.');
 });
 
 test('real close-checkout removes its Monaco models without a teardown exception', async ({
@@ -1715,7 +1827,7 @@ test('workbench renders its supplied checkout independently of application navig
   await expect(first(page).getByRole('tab', { name: 'Chat', exact: true })).toHaveCount(0);
   await first(page).getByRole('button', { name: 'Find file', exact: true }).click();
   await page.getByRole('combobox').fill('elsewhere');
-  await expect(page.getByRole('dialog').getByRole('status')).toContainText('0 results');
+  await expect(page.getByRole('dialog').getByRole('status')).toHaveText('No results.');
   await expect(page.getByRole('option')).toHaveCount(0);
   await expect(page.getByLabel('All open checkouts', { exact: true })).toHaveCount(0);
 });
