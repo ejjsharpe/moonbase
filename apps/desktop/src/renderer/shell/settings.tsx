@@ -46,12 +46,19 @@ export function Settings({
             <nav {...stylex.props(styles.nav)}>
               <Dialog.Title {...stylex.props(styles.title)}>Settings</Dialog.Title>
               <Tabs.List aria-label="Settings sections" {...stylex.props(styles.tabs)}>
-                <Tabs.Tab value="hosts" {...stylex.props(styles.tab)}>
-                  Hosts
-                </Tabs.Tab>
-                <Tabs.Tab value="providers" {...stylex.props(styles.tab)}>
-                  Providers
-                </Tabs.Tab>
+                {(
+                  [
+                    ['hosts', 'Hosts'],
+                    ['providers', 'Providers'],
+                  ] as const
+                ).map(([value, label]) => (
+                  <Tabs.Tab
+                    key={value}
+                    value={value}
+                    {...stylex.props(styles.tab, section === value && styles.activeTab)}>
+                    {label}
+                  </Tabs.Tab>
+                ))}
               </Tabs.List>
             </nav>
             <Tabs.Panel value="hosts" {...stylex.props(styles.panel)}>
@@ -221,6 +228,22 @@ const styles = stylex.create({
     flexDirection: 'column',
     gap: space.sm,
   },
+  // The open section: filled like a selected row, with a bar on its leading edge.
+  activeTab: {
+    color: colors.text,
+    backgroundColor: { default: colors.selected, ':hover': colors.selectedHover },
+    fontWeight: 600,
+    '::before': {
+      content: '""',
+      position: 'absolute',
+      left: 0,
+      top: 7,
+      bottom: 7,
+      width: 2,
+      borderRadius: 1,
+      backgroundColor: colors.accent,
+    },
+  },
   title: { margin: 0, padding: '2px 8px 4px', fontSize: type.body, fontWeight: 700 },
   tabs: { display: 'flex', flexDirection: 'column', gap: 2 },
   tab: {
@@ -230,8 +253,9 @@ const styles = stylex.create({
     borderRadius: radius.row,
     textAlign: 'left',
     font: 'inherit',
-    color: { default: colors.secondary, ':hover': colors.text, '[data-selected]': colors.text },
-    backgroundColor: { default: 'transparent', '[data-selected]': colors.selected },
+    position: 'relative',
+    color: { default: colors.secondary, ':hover': colors.text },
+    backgroundColor: { default: 'transparent', ':hover': colors.hover },
     cursor: 'pointer',
   },
   panel: {
