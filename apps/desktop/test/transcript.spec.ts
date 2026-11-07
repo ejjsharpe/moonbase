@@ -315,6 +315,28 @@ test.describe('the virtualized transcript', () => {
     expect(await page.evaluate(() => window.getSelection()!.toString())).toBe(selected);
   });
 
+  test('the list moving the focused row scrolled away keeps the reader in place', async ({
+    page,
+  }) => {
+    await openLong(page, 200);
+    const button = page
+      .locator('[data-transcript-row="entry:long-199"]')
+      .getByRole('button', { name: 'Copy message', exact: true });
+    await button.focus();
+    await wheelUp(page, 1200);
+    const before = await readList(page);
+    // The list sorts its containers into index order once scrolling settles, moving them as here;
+    // Chromium scrolls a moved focused element back into view.
+    await page.evaluate(() => {
+      const container = document.activeElement!.closest('[data-transcript-row]')!.parentElement!;
+      container.parentElement!.moveBefore(container, container.parentElement!.firstElementChild);
+    });
+    await page.evaluate(() => new Promise(requestAnimationFrame));
+    const after = await readList(page);
+    expect(Math.abs(after.top - before.top)).toBeLessThan(1);
+    await expect(button).toBeFocused();
+  });
+
   /** Records each reading anchor saved to view memory from now on. */
   const recordAnchors = (page: Page) =>
     page.evaluate(() => {
