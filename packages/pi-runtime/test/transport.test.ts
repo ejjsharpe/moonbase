@@ -228,7 +228,7 @@ test('production remote/server route shared commands and immutable retries witho
   const f = await setup(t);
   assert.deepEqual(await f.remote.command('getChatHost', { host }), {
     ...(await f.client.command('getChatHost', { host })),
-    features: ['transcript-v1', 'transcript-find-v1', 'chat-stream-v1'],
+    features: ['transcript-v1', 'transcript-find-v1', 'chat-files-v1', 'chat-stream-v1'],
   });
   const created = await f.remote.command('createChat', {
       session,
@@ -1405,6 +1405,22 @@ test('transcript output validation rejects authenticated source/selection/cursor
     f.remote.command('getChatHistoryAround', { target, entryId: source.entryId }),
     { code: 'Incompatible' },
   );
+});
+
+test('authenticated file search reaches the host and refuses another folder', async (t) => {
+  const f = await setup(t);
+  const host = await f.remote.command('getChatHost', { host: session.host });
+  assert(host.features?.includes('chat-files-v1'));
+  assert('cwd' in host);
+  const found = await f.remote.command('findChatFiles', {
+    session,
+    cwd: host.cwd,
+    query: 'chatsqlite',
+  });
+  assert.equal(found.matches[0]?.path, 'chat.sqlite');
+  await assert.rejects(f.remote.command('findChatFiles', { session, cwd: '/', query: '' }), {
+    code: 'Unauthorized',
+  });
 });
 
 test('authenticated Find transports saved matches, rejects foreign continuations and cancels peer waits', async (t) => {

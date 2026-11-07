@@ -8,6 +8,7 @@ export type {
   DraftStorage,
 } from './controller.ts';
 
+export { ChatFileSearch, type ChatFileSearchSnapshot } from './file-search.ts';
 export { type ProviderSetupController, type ProviderSetupSnapshot } from './providers.ts';
 
 export { iterateTranscriptSource, makeTranscriptReader } from './transcript-read.ts';

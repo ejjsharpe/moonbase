@@ -3,7 +3,7 @@ import { accessSync, constants } from 'node:fs';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import type { CheckoutTarget, CommandInput, CommandOutput } from '@moonbase/contracts/workspace';
 import type { Directory } from './filesystem.ts';
-import { matchPath, compareMatches } from './lookup.ts';
+import { matchPath, compareMatches } from '@moonbase/contracts/lookup';
 import { document, ensure, fail, path } from './validation.ts';
 
 export class WorkspaceDiscovery {

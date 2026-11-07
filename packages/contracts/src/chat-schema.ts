@@ -12,9 +12,15 @@ import {
   chatManifestPageSize,
   maximumChatInputBytes,
   maximumChatReplyBytes,
+  maximumChatMentions,
+  maximumChatFileQueryBytes,
+  chatFileMatchLimit,
+  findChatMentionStarts,
+  isChatMentionPath,
   type ChatCommand,
   type ChatInput,
   type ChatOutput,
+  type ChatMention,
 } from './chat.ts';
 
 // Unicode mode matches unpaired surrogates without rejecting valid pairs.
@@ -51,6 +57,32 @@ export const ChatReasoningEffortSchema = Schema.Literals([
 export const ChatModelPreferenceSchema = struct({
   model: struct({ provider: ChatIdentifierSchema, modelId: text(256) }),
   reasoningEffort: optional(ChatReasoningEffortSchema),
+});
+const relativePath = Schema.String.check(Schema.makeFilter(isChatMentionPath));
+export const ChatMentionSchema = struct({ path: relativePath });
+const mentions = Schema.mutable(Schema.Array(ChatMentionSchema)).check(
+  Schema.isMaxLength(maximumChatMentions),
+);
+/** Each mention is distinct and spelled in the text as a whole token, so the text alone still names every file. */
+export const areChatMentionsInText = (value: { text: string; mentions?: readonly ChatMention[] }) =>
+  !value.mentions ||
+  (new Set(value.mentions.map((mention) => mention.path)).size === value.mentions.length &&
+    value.mentions.every((mention) => findChatMentionStarts(value.text, mention.path).length > 0));
+export const ChatMessageSchema = struct({
+  text: text(maximumChatInputBytes),
+  mentions: optional(mentions),
+}).check(Schema.makeFilter(areChatMentionsInText));
+const fileQuery = unicode.check(
+  Schema.makeFilter(
+    (value) =>
+      !value.includes('\0') && new TextEncoder().encode(value).length <= maximumChatFileQueryBytes,
+  ),
+);
+export const ChatFileMatchSchema = struct({
+  path: relativePath,
+  positions: Schema.mutable(
+    Schema.Array(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 1024 }))),
+  ).check(Schema.isMaxLength(1024)),
 });
 export const ChatCreationSettingsSchema = struct({
   cwd: text(4096),
@@ -312,10 +344,15 @@ export const chatInputSchemas = {
   sendChat: struct({
     target: ChatTargetSchema,
     requestId: ChatIdentifierSchema,
-    text: text(maximumChatInputBytes),
-  }),
+    ...ChatMessageSchema.fields,
+  }).check(Schema.makeFilter(areChatMentionsInText)),
   getChatSend: struct(receipt),
   stopChat: struct({ stop: ChatStopTargetSchema, requestId: ChatIdentifierSchema }),
+  /** Files in a chat's working folder: an existing chat's, or an approved folder for a new one. */
+  findChatFiles: Schema.Union([
+    struct({ target: ChatTargetSchema, query: fileQuery }),
+    struct({ session: ChatSessionSchema, cwd: text(4096), query: fileQuery }),
+  ]),
 };
 export const chatOutputSchemas = {
   getChatHost: ChatHostConfigurationSchema,
@@ -402,6 +439,13 @@ export const chatOutputSchemas = {
     stop: ChatStopTargetSchema,
     requestId: ChatIdentifierSchema,
     outcome: Schema.Literals(['stopped', 'terminal', 'superseded', 'pending']),
+  }),
+  findChatFiles: struct({
+    query: fileQuery,
+    matches: Schema.mutable(Schema.Array(ChatFileMatchSchema)).check(
+      Schema.isMaxLength(chatFileMatchLimit),
+    ),
+    partial: Schema.Boolean,
   }),
 } satisfies Record<keyof typeof chatInputSchemas, Schema.Constraint>;
 

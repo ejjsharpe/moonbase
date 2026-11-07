@@ -85,7 +85,12 @@ async function main() {
   await runtime.runPromise(Effect.asVoid(WorkspaceNative));
   // Local and remote backends are acquired once in separate scopes of this root.
   const acquireLocal = () =>
-    acquireLocalChat(runtime, userData, (url) => shell.openExternal(url)).then(
+    acquireLocalChat(
+      runtime,
+      userData,
+      (url) => shell.openExternal(url),
+      join(assets, 'ripgrep/rg'),
+    ).then(
       (backend) => ({ backend, error: null }),
       () => ({
         backend: null,

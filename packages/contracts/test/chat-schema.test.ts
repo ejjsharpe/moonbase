@@ -3,7 +3,12 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { decodeChatInput, decodeChatOutput, isChatCommand } from '@moonbase/contracts/chat-schema';
-import type { ChatCommand, ChatInput, ChatOutput } from '@moonbase/contracts/chat';
+import {
+  formatChatMention,
+  type ChatCommand,
+  type ChatInput,
+  type ChatOutput,
+} from '@moonbase/contracts/chat';
 
 const host = { hostId: 'host', storeId: 'store' };
 const session = { host, actorId: 'owner' };
@@ -35,6 +40,7 @@ const inputs = {
   sendChat: { target, requestId: 'send', text: '  Keep original text  ' },
   getChatSend: { target, requestId: 'send' },
   stopChat: { stop, requestId: 'stop' },
+  findChatFiles: { target, query: 'src' },
 } satisfies { [K in ChatCommand]: ChatInput<K> };
 const outputs = {
   getChatHost: { ...session, cwd: conversation.cwd, model: conversation.model },
@@ -77,6 +83,11 @@ const outputs = {
   },
   getChatSend: null,
   stopChat: { stop, requestId: 'stop', outcome: 'pending' as const },
+  findChatFiles: {
+    query: 'src',
+    matches: [{ path: 'src/a.ts', positions: [0, 1, 2] }],
+    partial: false,
+  },
 } satisfies { [K in ChatCommand]: ChatOutput<K> };
 
 function reverseFields(value: unknown): unknown {
@@ -371,4 +382,95 @@ test('Find preserves literal whitespace and independently bounds queries and ori
         matches: [{ ...page.matches[0], ...changed }],
       }),
     );
+});
+
+test('a mention is a relative path spelled in the message text', () => {
+  const send = { target, requestId: 'send' };
+  assert.equal(formatChatMention('src/a.ts'), '@src/a.ts');
+  assert.equal(formatChatMention('docs/My notes.md'), '@"docs/My notes.md"');
+  const text = 'Compare @src/a.ts with @"docs/My notes.md"';
+  const mentions = [{ path: 'src/a.ts' }, { path: 'docs/My notes.md' }];
+  assert.deepEqual(decodeChatInput('sendChat', { ...send, text, mentions }), {
+    ...send,
+    text,
+    mentions,
+  });
+  for (const path of [
+    '',
+    '/etc/passwd',
+    '../outside',
+    'src/../a.ts',
+    './a.ts',
+    'a//b',
+    'a"b',
+    'a\\b',
+    'a\nb',
+  ])
+    assert.throws(
+      () =>
+        decodeChatInput('sendChat', { ...send, text: `@${path} @"${path}"`, mentions: [{ path }] }),
+      path,
+    );
+  // The text alone must still name every mentioned file, and each file is mentioned once.
+  assert.throws(() =>
+    decodeChatInput('sendChat', { ...send, text: 'No mention', mentions: [{ path: 'src/a.ts' }] }),
+  );
+  assert.throws(() =>
+    decodeChatInput('sendChat', {
+      ...send,
+      text: '@src/a.ts',
+      mentions: [{ path: 'src/a.ts' }, { path: 'src/a.ts' }],
+    }),
+  );
+  assert.throws(() =>
+    decodeChatInput('sendChat', {
+      ...send,
+      text: 'docs/My notes.md',
+      mentions: [{ path: 'docs/My notes.md' }],
+    }),
+  );
+  // A mention is a whole token, not the start of a longer path or a word's tail.
+  for (const text of ['Open @README.md', 'Open x@README', 'Open @README/a'])
+    assert.throws(
+      () => decodeChatInput('sendChat', { ...send, text, mentions: [{ path: 'README' }] }),
+      text,
+    );
+  for (const text of ['@README', 'Open @README.', 'Open @README\nnext'])
+    assert.doesNotThrow(
+      () => decodeChatInput('sendChat', { ...send, text, mentions: [{ path: 'README' }] }),
+      text,
+    );
+  const many = Array.from({ length: 33 }, (_, n) => ({ path: `f${n}` }));
+  assert.throws(() =>
+    decodeChatInput('sendChat', {
+      ...send,
+      text: many.map((m) => formatChatMention(m.path)).join(' '),
+      mentions: many,
+    }),
+  );
+});
+
+test('file search takes an existing chat or a folder for a new one, and returns mentionable paths', () => {
+  assert.deepEqual(decodeChatInput('findChatFiles', { session, cwd: '/work', query: '' }), {
+    session,
+    cwd: '/work',
+    query: '',
+  });
+  assert.throws(() => decodeChatInput('findChatFiles', { target, cwd: '/work', query: 'a' }));
+  assert.throws(() => decodeChatInput('findChatFiles', { target, query: 'x'.repeat(257) }));
+  assert.throws(() => decodeChatInput('findChatFiles', { target, query: 'a\0' }));
+  assert.throws(() =>
+    decodeChatOutput('findChatFiles', {
+      query: 'a',
+      matches: [{ path: '../a', positions: [] }],
+      partial: false,
+    }),
+  );
+  assert.throws(() =>
+    decodeChatOutput('findChatFiles', {
+      query: 'a',
+      matches: Array.from({ length: 51 }, (_, n) => ({ path: `f${n}`, positions: [] })),
+      partial: true,
+    }),
+  );
 });
