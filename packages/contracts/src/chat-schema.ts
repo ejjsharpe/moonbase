@@ -99,13 +99,21 @@ export const ChatHostConfigurationSchema = Schema.Union([
   remoteHostConfiguration,
   struct({ ...ChatSessionSchema.fields, mode: Schema.Literal('local'), features }),
 ]);
+const timestamp = text(64).check(Schema.makeFilter((value) => Number.isFinite(Date.parse(value))));
+/** A listed chat's latest run: whether it is running or how it last ended, and when. */
+export const ChatActivitySchema = struct({
+  state: Schema.Literals(['idle', 'running', 'stopped', 'failed']),
+  at: timestamp,
+});
 export const ChatSummarySchema = struct({
   target: ChatTargetSchema,
   title: text(200),
-  createdAt: text(64).check(Schema.makeFilter((value) => Number.isFinite(Date.parse(value)))),
+  createdAt: timestamp,
   cwd: text(4096),
   model: text(512),
   reasoningEffort: optional(ChatReasoningEffortSchema),
+  /** Present in chat listings; a snapshot reports the open chat's state itself. */
+  activity: optional(ChatActivitySchema),
 });
 const preview = unicode.check(
   Schema.makeFilter((value) => new TextEncoder().encode(value).length <= chatPreviewBytes),

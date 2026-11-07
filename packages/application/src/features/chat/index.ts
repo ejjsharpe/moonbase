@@ -8,6 +8,8 @@ export type {
   DraftStorage,
 } from './controller.ts';
 
+export { groupChatsByActivity } from './activity.ts';
+export type { ActiveChat, ChatActivityGroups, ChatActivityReason } from './activity.ts';
 export { ChatFileSearch, type ChatFileSearchSnapshot } from './file-search.ts';
 export { type ProviderSetupController, type ProviderSetupSnapshot } from './providers.ts';
 

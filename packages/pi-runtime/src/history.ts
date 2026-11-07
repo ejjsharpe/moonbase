@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import { realpath, stat } from 'node:fs/promises';
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
 import {
+  LiveDoc,
+  type LiveState,
   type Harness,
   type Cursor,
   type EntryRecord,
@@ -9,6 +11,7 @@ import {
   type TaskInspection,
 } from '@earendil-works/pi-durable';
 import type {
+  ChatActivity,
   ChatCreationSettings,
   ChatInput,
   ChatOutput,
@@ -97,6 +100,30 @@ export function summarizeConversation(
     ...(settings.reasoningEffort ? { reasoningEffort: settings.reasoningEffort } : {}),
   };
 }
+/** Running while a submission owns the chat; otherwise how its latest generation ended, and when. */
+export async function readActivity(
+  harness: Harness,
+  conversationId: string,
+  createdAt: string,
+): Promise<ChatActivity> {
+  return harness.commit(async (tx) => {
+    const live = (await tx.doc(LiveDoc, cid(conversationId))) as LiveState | undefined;
+    const latest = (
+      await tx.scanTasks(
+        { conversationId: cid(conversationId), kind: 'pi.generation', order: 'descending' },
+        1,
+      )
+    ).items[0];
+    let state: ChatActivity['state'] = 'idle';
+    if (live?.run) state = 'running';
+    else if (latest?.state.status === 'terminal' && latest.state.outcome.status === 'aborted')
+      state = 'stopped';
+    else if (latest?.state.status === 'terminal' && latest.state.outcome.status !== 'completed')
+      state = 'failed';
+    const ms = latest?.endedAt ?? latest?.startedAt;
+    return { state, at: ms === undefined ? createdAt : new Date(ms).toISOString() };
+  }, context);
+}
 export async function listConversations(
   harness: Harness,
   session: ChatSession,
@@ -120,12 +147,10 @@ export async function listConversations(
     const meta = await harness.snapshot(Metadata, row.id, 'metadata', context);
     if (meta?.identity === identity) {
       const saved = S.savedMetadata(meta);
-      const summary = summarizeConversation(
-        session,
-        String(row.id),
-        saved,
-        getSettings(saved, fixedSettings),
-      );
+      const summary = {
+        ...summarizeConversation(session, String(row.id), saved, getSettings(saved, fixedSettings)),
+        activity: await readActivity(harness, String(row.id), saved.createdAt),
+      };
       if (
         Buffer.byteLength(JSON.stringify({ conversations: [...conversations, summary] })) >
         entryListBytes

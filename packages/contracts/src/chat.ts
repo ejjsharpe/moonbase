@@ -60,6 +60,7 @@ export type ChatSession = typeof Contracts.ChatSessionSchema.Type;
 export type ChatTarget = typeof Contracts.ChatTargetSchema.Type;
 export type ChatHostConfiguration = typeof Contracts.ChatHostConfigurationSchema.Type;
 export type ChatSummary = typeof Contracts.ChatSummarySchema.Type;
+export type ChatActivity = typeof Contracts.ChatActivitySchema.Type;
 export type ChatEntry = typeof Contracts.ChatEntrySchema.Type;
 /** Newest first, with an opaque cursor for the next older page. */
 export type ChatHistoryPage = typeof Contracts.ChatHistoryPageSchema.Type;

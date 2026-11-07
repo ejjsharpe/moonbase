@@ -1615,3 +1615,53 @@ test('the local model menu opens provider setup in Settings', async ({ page }) =
   await shell(page).getByRole('button', { name: 'Settings', exact: true }).click();
   await expect(settings).toBeVisible();
 });
+
+test('the chats sidebar orders by activity: Ready, Working, then a Settled toggle', async ({
+  page,
+}) => {
+  await page.goto('/?chat&activity');
+  await tabs(page).getByRole('tab', { name: 'Agents', exact: true }).click();
+  await shell(page).getByRole('button', { name: 'Connect', exact: true }).click();
+  const list = shell(page).getByRole('navigation', { name: 'Conversations', exact: true });
+  await expect(list.getByRole('heading', { name: 'Ready 4' })).toBeVisible();
+  await expect(list.getByRole('heading', { name: 'Working 2' })).toBeVisible();
+  const rows = list.getByRole('button', { pressed: false });
+  await expect(rows.nth(0)).toContainText('Fix the dock resize handle');
+  await expect(rows.nth(0)).toContainText('moonbase · failed');
+  await expect(rows.nth(1)).toContainText('Summarise this repository');
+  await expect(rows.nth(1)).toContainText('finished');
+  await expect(rows.nth(2)).toContainText('stopped');
+  await expect(rows.nth(4)).toContainText('Move the transcript to Legend List');
+  await expect(rows.nth(4)).toContainText('running');
+  const settled = list.getByRole('button', { name: /^Settled/ });
+  await expect(settled).toHaveAttribute('aria-expanded', 'false');
+  // The chat seen before anything else listed is settled and hidden behind the toggle.
+  await expect(list.getByRole('button', { name: /^Conversation/ })).toHaveCount(0);
+  // Opening a Ready chat settles it; it stays in view while it is open.
+  await list.getByRole('button', { name: /^Summarise this repository/ }).click();
+  await expect(list.getByRole('heading', { name: 'Ready 3' })).toBeVisible();
+  await expect(settled).toHaveText(/Settled\s*2/);
+  await expect(list.getByRole('button', { name: /^Summarise this repository/ })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await settled.click();
+  await expect(settled).toHaveAttribute('aria-expanded', 'true');
+  await expect(list.getByRole('button', { name: /^Conversation/ })).toBeVisible();
+  // The toggle is remembered.
+  await page.reload();
+  await tabs(page).getByRole('tab', { name: 'Agents', exact: true }).click();
+  await shell(page).getByRole('button', { name: 'Connect', exact: true }).click();
+  await expect(list.getByRole('button', { name: /^Settled/ })).toHaveAttribute(
+    'aria-expanded',
+    'true',
+  );
+  // ⌘N starts a new chat from anywhere in the shell.
+  await project(page).click();
+  await project(page).press('Meta+n');
+  await expect(shell(page).getByLabel('Message', { exact: true })).toBeFocused();
+  await expect(tabs(page).getByRole('tab', { name: 'Agents', exact: true })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+});

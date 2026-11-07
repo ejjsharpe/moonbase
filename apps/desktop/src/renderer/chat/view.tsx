@@ -3,10 +3,17 @@ import { Dialog } from '@base-ui/react/dialog';
 import { Button } from '@base-ui/react/button';
 import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
+import { spinner } from '@moonbase/ui/spinner';
 import { workbench } from '@moonbase/ui/workbench';
 import { colors, layout, radius, shadow, space, syntax, type } from '@moonbase/ui/tokens.stylex';
 import type { ChatModelPreference } from '@moonbase/contracts/chat';
-import type { ChatController } from '@moonbase/application/chat';
+import {
+  groupChatsByActivity,
+  type ActiveChat,
+  type ChatActivityReason,
+  type ChatController,
+} from '@moonbase/application/chat';
+import { formatChatAge } from './age.ts';
 import { activateChatFind, FindBar, handleChatFindKeyDown } from './find.tsx';
 import { Transcript } from './transcript.tsx';
 import type { TranscriptNative } from '../../chat/wire.ts';
@@ -40,6 +47,32 @@ export type ChatDock = {
   collapse(): void;
 };
 
+const settledKey = 'moonbase.chats.settled';
+const chatReloadMs = 10_000;
+function readSettledOpen() {
+  try {
+    return localStorage.getItem(settledKey) === 'open';
+  } catch {
+    return false;
+  }
+}
+const glyphs: Record<ChatActivityReason, string> = {
+  unconfirmed: '?',
+  failed: '✕',
+  stopped: '■',
+  finished: '●',
+  running: '',
+  settled: '',
+};
+const reasonLabels: Record<ChatActivityReason, string> = {
+  unconfirmed: 'send unconfirmed',
+  failed: 'failed',
+  stopped: 'stopped',
+  finished: 'finished',
+  running: 'running',
+  settled: '',
+};
+
 export type ChatHosts = {
   targets: readonly { id: string; label: string }[];
   current: string | null;
@@ -56,6 +89,7 @@ export function ChatView({
   dock,
   hosts,
   setUpProviders,
+  visible = true,
 }: {
   controller: ChatController;
   chooseFolder?: () => Promise<string | null>;
@@ -68,9 +102,20 @@ export function ChatView({
   hosts?: ChatHosts;
   /** Opens provider setup, offered from the model menu. */
   setUpProviders?: () => void;
+  /** Whether this view is on screen, so the open chat counts as looked at. */
+  visible?: boolean;
 }) {
   const compact = useSyncExternalStore(subscribeLayout, () => compactLayout.matches);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [settledOpen, setSettledOpen] = useState(readSettledOpen);
+  const showSettled = (open: boolean) => {
+    setSettledOpen(open);
+    try {
+      localStorage.setItem(settledKey, open ? 'open' : 'closed');
+    } catch {
+      /* The toggle still works for this window. */
+    }
+  };
   const findInput = useRef<HTMLInputElement>(null);
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot),
     [cwd, setCwd] = useState(dock?.cwd ?? ''),
@@ -175,6 +220,26 @@ export function ChatView({
     if (selectedEntry && effort)
       controller.setModelPreference({ model: selectedEntry.model, reasoningEffort: effort });
   };
+  // The open chat counts as looked at while it is on screen, up to its latest listed activity.
+  const openListing = state.chats.find(
+    (c) => c.target.conversationId === state.selected?.conversationId,
+  );
+  const openSeenAt = openListing && (openListing.activity?.at ?? openListing.createdAt);
+  useEffect(() => {
+    if (!visible || !openListing || !openSeenAt || document.visibilityState !== 'visible') return;
+    controller.markSeen(openListing.target.conversationId, openSeenAt);
+  }, [controller, visible, openListing, openSeenAt]);
+  // Other chats change on the host without a stream here, so the list is read again on a timer
+  // and as soon as the open chat starts or stops running.
+  const openRunning = !!state.snapshot?.run;
+  useEffect(() => {
+    if (!connected) return;
+    void controller.reloadChats();
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible') void controller.reloadChats();
+    }, chatReloadMs);
+    return () => clearInterval(timer);
+  }, [controller, connected, openRunning]);
   const startNewChat = () =>
     void controller.closeView().then(() => document.getElementById('message')?.focus());
   const choosing = local && !state.selected && !busy('send') && !creatingWorktree;
@@ -242,6 +307,47 @@ export function ChatView({
     command.run(option);
   };
   const typedCommand = resolveCommandLine(state.draft, commands);
+  const groups = groupChatsByActivity({
+    chats: state.chats,
+    seen: state.seen,
+    pending: state.pending,
+    open: state.snapshot,
+  });
+  // With nothing Ready or Working, Settled is all there is, so it shows whatever the toggle says.
+  const settledShown = settledOpen || (!groups.ready.length && !groups.working.length);
+  const chatRow = ({ chat: c, reason, at }: ActiveChat) => (
+    <Button
+      key={c.target.conversationId}
+      aria-pressed={state.selected?.conversationId === c.target.conversationId}
+      {...stylex.props(
+        controls.button,
+        controls.listButton,
+        styles.chat,
+        reason === 'settled' && styles.settledChat,
+        state.selected?.conversationId === c.target.conversationId && styles.selected,
+      )}
+      disabled={!connected || busy('open')}
+      onClick={() => {
+        void controller.select(c.target);
+        setSidebarOpen(false);
+      }}>
+      <span
+        aria-hidden="true"
+        {...stylex.props(styles.glyph, glyphStyles[reason], reason === 'running' && spinner.glyph)}>
+        {glyphs[reason]}
+      </span>
+      <span {...stylex.props(styles.chatSummary)}>
+        <span {...stylex.props(controls.truncate)}>{c.title}</span>
+        <span {...stylex.props(styles.chatFolder, controls.truncate)}>
+          {c.cwd.split('/').filter(Boolean).at(-1) || '/'}
+          {reasonLabels[reason] && ` · ${reasonLabels[reason]}`}
+        </span>
+      </span>
+      <time dateTime={at} {...stylex.props(styles.chatDate)}>
+        {formatChatAge(at)}
+      </time>
+    </Button>
+  );
   let emptyList = '';
   if (connected) emptyList = 'Your conversations will appear here.';
   else if (local) emptyList = 'Loading chats…';
@@ -249,16 +355,8 @@ export function ChatView({
     <aside
       aria-label="Saved chats"
       {...stylex.props(styles.sidebar, compact && styles.drawerSidebar)}>
-      <Button
-        {...stylex.props(controls.button, styles.newChat)}
-        onClick={() => {
-          setSidebarOpen(false);
-          startNewChat();
-        }}>
-        <Icon name="compose" /> New chat
-      </Button>
       <div {...stylex.props(controls.row, styles.listHeader)}>
-        <h2 {...stylex.props(styles.label)}>Conversations</h2>
+        <h2 {...stylex.props(styles.sidebarTitle)}>Agents</h2>
         <Button
           aria-label="Refresh saved chats"
           title="Refresh saved chats"
@@ -266,6 +364,17 @@ export function ChatView({
           disabled={!connected || busy('refresh')}
           onClick={() => void controller.firstChats()}>
           <Icon name="refresh" />
+        </Button>
+        <Button
+          aria-label="New chat"
+          title="New chat · ⌘N"
+          {...stylex.props(controls.button, styles.newChat)}
+          onClick={() => {
+            setSidebarOpen(false);
+            startNewChat();
+          }}>
+          <Icon name="compose" />
+          New <kbd {...stylex.props(styles.newKey)}>⌘N</kbd>
         </Button>
       </div>
       {!local && !connected && (
@@ -286,48 +395,53 @@ export function ChatView({
         </div>
       )}
       <nav aria-label="Conversations" {...stylex.props(styles.chatList)}>
-        {!state.chats.length
-          ? // Offline, the Connect line above says why the list is empty.
-            emptyList && <p {...stylex.props(styles.small)}>{emptyList}</p>
-          : state.chats.map((c) => (
-              <Button
-                key={c.target.conversationId}
-                aria-pressed={state.selected?.conversationId === c.target.conversationId}
-                {...stylex.props(
-                  controls.button,
-                  controls.listButton,
-                  styles.chat,
-                  state.selected?.conversationId === c.target.conversationId && styles.selected,
-                )}
-                disabled={!connected || busy('open')}
-                onClick={() => {
-                  void controller.select(c.target);
-                  setSidebarOpen(false);
-                }}>
-                <span aria-hidden="true" {...stylex.props(styles.chatDot)} />
-                <span {...stylex.props(styles.chatSummary)}>
-                  <span {...stylex.props(controls.truncate)}>{c.title}</span>
-                  <span {...stylex.props(styles.chatFolder, controls.truncate)}>
-                    {c.cwd.split('/').filter(Boolean).at(-1) || '/'}
-                  </span>
-                </span>
-                <time dateTime={c.createdAt} {...stylex.props(styles.chatDate)}>
-                  {new Date(c.createdAt).toLocaleDateString(undefined, {
-                    month: 'short',
-                    day: 'numeric',
-                  })}
-                </time>
-              </Button>
-            ))}
+        {!state.chats.length &&
+          // Offline, the Connect line above says why the list is empty.
+          emptyList && <p {...stylex.props(styles.small)}>{emptyList}</p>}
+        {groups.ready.length > 0 && (
+          <h3 {...stylex.props(styles.groupHeading)}>
+            Ready <span {...stylex.props(styles.groupCount)}>{groups.ready.length}</span>
+          </h3>
+        )}
+        {groups.ready.map(chatRow)}
+        {groups.working.length > 0 && (
+          <h3 {...stylex.props(styles.groupHeading)}>
+            Working <span {...stylex.props(styles.groupCount)}>{groups.working.length}</span>
+          </h3>
+        )}
+        {groups.working.map(chatRow)}
+        {groups.settled.length > 0 && (
+          <Button
+            aria-expanded={settledShown}
+            {...stylex.props(
+              controls.button,
+              styles.settledToggle,
+              (groups.ready.length > 0 || groups.working.length > 0) && styles.settledSeparated,
+            )}
+            onClick={() => showSettled(!settledOpen)}>
+            <span
+              aria-hidden="true"
+              {...stylex.props(styles.settledChevron, settledShown && styles.settledChevronOpen)}>
+              <Icon name="chevronRight" />
+            </span>
+            Settled <span {...stylex.props(styles.groupCount)}>{groups.settled.length}</span>
+          </Button>
+        )}
+        {settledShown
+          ? groups.settled.map(chatRow)
+          : // The open chat stays in view after it settles, until another is chosen.
+            groups.settled
+              .filter((row) => row.chat.target.conversationId === state.selected?.conversationId)
+              .map(chatRow)}
+        {settledShown && state.nextChats && (
+          <Button
+            {...stylex.props(controls.button, controls.quietButton, styles.older)}
+            disabled={!connected || busy('chats')}
+            onClick={() => void controller.moreChats()}>
+            Show older
+          </Button>
+        )}
       </nav>
-      {state.nextChats && (
-        <Button
-          {...stylex.props(controls.button, controls.quietButton)}
-          disabled={!connected || busy('chats')}
-          onClick={() => void controller.moreChats()}>
-          Next saved chats
-        </Button>
-      )}
     </aside>
   );
   const findBar = state.transcript.find.open && (
@@ -942,15 +1056,57 @@ const styles = stylex.create({
     gap: space.sm,
   },
   newChat: {
-    fontSize: type.body,
+    fontSize: type.small,
     display: 'flex',
     alignItems: 'center',
-    gap: 10,
-    textAlign: 'left',
-    padding: '9px 12px',
-    borderWidth: 0,
+    gap: 6,
+    height: 28,
+    padding: '0 9px',
     borderRadius: radius.row,
     backgroundColor: { default: colors.elevated, ':hover:not(:disabled)': colors.hover },
+  },
+  newKey: { font: 'inherit', color: colors.muted },
+  sidebarTitle: { flex: 1, margin: 0, fontSize: type.heading, fontWeight: 700 },
+  groupHeading: {
+    margin: '12px 8px 2px',
+    color: colors.muted,
+    fontSize: 10.5,
+    fontWeight: 600,
+    letterSpacing: '0.08em',
+    textTransform: 'uppercase',
+  },
+  groupCount: { color: colors.secondary },
+  settledToggle: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 8,
+    padding: '7px 8px',
+    borderWidth: 0,
+    borderRadius: radius.row,
+    backgroundColor: { default: 'transparent', ':hover:not(:disabled)': colors.hover },
+    color: colors.secondary,
+    fontSize: type.small,
+    textAlign: 'left',
+  },
+  settledSeparated: {
+    borderTopWidth: 1,
+    borderTopStyle: 'solid',
+    borderTopColor: colors.border,
+    borderRadius: 0,
+    paddingTop: 10,
+  },
+  settledChevron: { display: 'inline-flex', color: colors.muted, transition: 'transform 120ms' },
+  settledChevronOpen: { transform: 'rotate(90deg)' },
+  settledChat: { color: colors.secondary },
+  older: { alignSelf: 'flex-start', fontSize: type.small },
+  glyph: {
+    flexShrink: 0,
+    width: 12,
+    marginTop: 3,
+    textAlign: 'center',
+    fontSize: type.caption,
+    lineHeight: 1.4,
   },
   small: {
     color: colors.secondary,
@@ -960,7 +1116,7 @@ const styles = stylex.create({
     overflowWrap: 'anywhere',
   },
   label: { fontSize: type.small, fontWeight: 400, margin: 0, color: colors.muted },
-  listHeader: { justifyContent: 'space-between', margin: '24px 8px 4px' },
+  listHeader: { gap: space.xs, flexWrap: 'nowrap', margin: '4px 4px 4px 8px' },
   chatList: { display: 'flex', flexDirection: 'column', gap: 2, minHeight: 80 },
   chat: {
     display: 'flex',
@@ -973,7 +1129,6 @@ const styles = stylex.create({
     minWidth: 0,
   },
   chatSummary: { display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 },
-  chatFolder: { color: colors.muted, fontSize: type.small, fontWeight: 400 },
   chatDot: {
     marginTop: 7,
     width: 5,
@@ -982,6 +1137,7 @@ const styles = stylex.create({
     backgroundColor: colors.muted,
     flexShrink: 0,
   },
+  chatFolder: { color: colors.muted, fontSize: type.small, fontWeight: 400 },
   selected: {
     backgroundColor: { default: colors.selected, ':hover:not(:disabled)': colors.selectedHover },
     color: colors.text,
@@ -1149,4 +1305,13 @@ const styles = stylex.create({
     color: colors.muted,
     fontSize: type.caption,
   },
+});
+
+const glyphStyles = stylex.create({
+  unconfirmed: { color: colors.warningText, fontWeight: 700 },
+  failed: { color: colors.danger, fontWeight: 700 },
+  stopped: { color: colors.warningText },
+  finished: { color: syntax.keyword, fontSize: 9, marginTop: 4 },
+  running: { color: syntax.keyword },
+  settled: {},
 });

@@ -53,5 +53,9 @@ export async function createRemoteChat(page: Page, title: string) {
   }, title);
   if (!result.ok) throw Error(result.error.message);
   await page.getByRole('button', { name: 'Refresh saved chats', exact: true }).click();
+  // A chat that never ran is Settled, which is collapsed while other chats are Ready or Working.
+  const settled = page.getByRole('button', { name: /^Settled/ });
+  if ((await settled.count()) && (await settled.getAttribute('aria-expanded')) === 'false')
+    await settled.click();
   await page.getByRole('button', { name: title, exact: false }).click();
 }
