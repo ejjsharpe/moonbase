@@ -53,11 +53,19 @@ export async function createRemoteChat(page: Page, title: string) {
   }, title);
   if (!result.ok) throw Error(result.error.message);
   await page.getByRole('button', { name: 'Refresh saved chats', exact: true }).click();
-  // A chat that never ran is Settled, which starts closed: wait for the listing, then open it.
-  const chat = page.getByRole('button', { name: title, exact: false });
+  await (await showChat(page, title)).click();
+}
+
+/**
+ * A listed chat's sidebar button, made visible: a Settled chat waits behind a toggle that starts
+ * closed, so once the chat is listed this opens Settled if the chat is behind it.
+ */
+export async function showChat(page: Page, name: string | RegExp) {
+  const chat = page.getByRole('button', { name, exact: false });
   await expect(
-    page.getByRole('button', { name: title, exact: false, includeHidden: true }).first(),
+    page.getByRole('button', { name, exact: false, includeHidden: true }).first(),
   ).toBeAttached();
   if (!(await chat.isVisible())) await page.getByRole('button', { name: /^Settled/ }).click();
-  await chat.click();
+  await expect(chat).toBeVisible();
+  return chat;
 }

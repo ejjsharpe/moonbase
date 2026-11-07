@@ -12,6 +12,7 @@ import {
   disconnectChat,
   openSettings,
   selectRemoteChat,
+  showChat,
 } from './chat-target.ts';
 import { captureNative } from './editor-regressions.ts';
 import { retainedImage } from './stored-image-fixture.ts';
@@ -296,8 +297,9 @@ test('native local setup, approved folders/models, streaming/tools, hidden work 
     child = app.process();
     page = await app.firstWindow();
     await openChat();
-    await expect(page.getByRole('button', { name: /Local conversation 0/ })).toBeVisible();
-    await expect(page.getByRole('button', { name: /Local conversation 1/ })).toBeVisible();
+    // Both chats survive the restart; finished and seen, they may be Settled.
+    await showChat(page, /Local conversation 0/);
+    await showChat(page, /Local conversation 1/);
     const after = await page.evaluate(() => window.moonbaseChat.context('local'));
     expect(after).toEqual(context);
     const saved = await page.evaluate(() => localStorage.getItem('moonbase.chat.local.v1'));
