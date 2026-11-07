@@ -1612,6 +1612,14 @@ test('the local model menu opens provider setup in Settings', async ({ page }) =
   await expect(
     settings.getByRole('button', { name: 'Refresh providers', exact: true }),
   ).toBeVisible();
+  // Each provider is a row with its state and one action.
+  const provider = settings
+    .getByRole('list', { name: 'Model providers', exact: true })
+    .getByRole('listitem', { name: 'Demo provider', exact: true });
+  await expect(provider).toContainText('Ready · 2 models');
+  await expect(
+    provider.getByRole('button', { name: 'Sign out of Demo provider', exact: true }),
+  ).toBeVisible();
   await settings.getByRole('tab', { name: 'Hosts', exact: true }).click();
   await expect(settings.getByRole('status').first()).toHaveText('Local ready');
   await settings.getByRole('button', { name: 'Close settings', exact: true }).click();

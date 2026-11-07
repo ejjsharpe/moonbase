@@ -131,7 +131,7 @@ test('unsigned macOS package runs with only system PATH, SQLite, native/rg resou
     await (
       await openSettings(page, 'Providers')
     )
-      .getByRole('button', { name: 'Sign in with ChatGPT', exact: true })
+      .getByRole('button', { name: 'Sign in to ChatGPT subscription', exact: true })
       .click();
     await expect(
       page.getByRole('button', { name: 'Open sign-in page', exact: true }),
