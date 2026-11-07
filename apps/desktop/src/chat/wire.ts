@@ -58,6 +58,8 @@ export type TranscriptNative = {
 export interface ChatBridge {
   targets?(): Promise<DesktopChatTarget[]>;
   chooseFolder?(): Promise<string | null>;
+  /** Creates a new local chat's linked worktree beside the repository, returning its root. */
+  createWorktree?(root: string, branch: string): Promise<string>;
   confirmQuit?(): Promise<boolean>;
   context(backendId?: string): Promise<ChatSession>;
   call(

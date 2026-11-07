@@ -50,7 +50,14 @@ export async function acquireLocalChat(
   runtime: ManagedRuntime.ManagedRuntime<never, ApplicationError>,
   userData: string,
   openUrl: (url: string) => Promise<void>,
-  ripgrepExecutable?: string,
+  {
+    ripgrepExecutable,
+    isEditorFolder = () => false,
+  }: {
+    ripgrepExecutable?: string;
+    /** Whether a folder is a checkout or worktree the editor approved natively. */
+    isEditorFolder?: (path: string) => boolean;
+  } = {},
 ) {
   const directory = join(userData, 'local-pi-v1');
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -83,11 +90,13 @@ export async function acquireLocalChat(
     approvals.set(cwd, { dev: info.dev, ino: info.ino });
     return cwd;
   };
-  // A folder chosen in the native picker, still the same directory, may be searched and chatted in.
+  // A folder chosen in the native picker, still the same directory, may be searched and chatted in,
+  // as may a checkout the editor approved, such as a project's root in its docked chat.
   const requireApprovedFolder = async (path: string, purpose: string) => {
     const approved = approvals.get(path);
     const cwd = await realpath(path),
       info = await stat(cwd);
+    if (cwd === path && info.isDirectory() && !approved && isEditorFolder(cwd)) return;
     if (
       !approved ||
       cwd !== path ||
@@ -125,6 +134,8 @@ export async function acquireLocalChat(
     return {
       session,
       approveFolder,
+      requireApprovedFolder: (path: string) =>
+        requireApprovedFolder(path, 'starting a worktree from it'),
       chat: Context.get(services, ChatService),
       providers: Context.get(services, ProviderSetupService),
       control: Context.get(services, LocalPiControl),

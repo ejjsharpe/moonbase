@@ -25,6 +25,7 @@ export function createChatBackends({
   connection,
   emit,
   pickFolder,
+  createWorktree,
   transcript,
 }: {
   runtime: ManagedRuntime.ManagedRuntime<never, ApplicationError>;
@@ -35,6 +36,8 @@ export function createChatBackends({
   connection: ConnectionClient | null;
   emit(backendId: string, id: string, result: Reply): void;
   pickFolder(): Promise<string | null>;
+  /** Creates a linked worktree of the checkout at `root`, returning its root. */
+  createWorktree?(root: string, branch: string): Promise<string>;
   transcript?: NativeTranscriptActions;
 }) {
   let local = localResult.backend;
@@ -144,6 +147,19 @@ export function createChatBackends({
       const selection = await pickFolder();
       if (owner !== documentId || !selection) return null;
       return local.approveFolder(selection);
+    },
+    /**
+     * Starts a new local chat's worktree from a folder local chat may use, and approves the new
+     * worktree as that chat's working folder.
+     */
+    async createWorktree(root: string, branch: string) {
+      if (!local || !createWorktree)
+        throw new ApplicationError({
+          code: 'Unavailable',
+          message: 'New worktrees are unavailable.',
+        });
+      await local.requireApprovedFolder(root);
+      return local.approveFolder(await createWorktree(root, branch));
     },
     requireLocal(backendId: string) {
       if (backendId === 'local' && !local) throw localResult.error;

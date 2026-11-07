@@ -1,3 +1,5 @@
+import { mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { ManagedRuntime } from 'effect';
 import {
   decodeWorkspaceInput,
@@ -152,6 +154,65 @@ export class EditorSession {
         message: 'A renderer path is not native worktree location approval.',
       });
     return v;
+  }
+  /** Whether a root is a natively approved checkout, or a worktree Git listed for one. */
+  hasFolder(root: string) {
+    return this.worktreeRoots.has(root) || [...this.known.values()].some((t) => t.root === root);
+  }
+  /**
+   * Creates `branch` from the current commit of the checkout at `root`, in a new linked worktree
+   * beside the repository at `<main worktree>-worktrees/<branch>`. Main derives the location, so a
+   * renderer never names where directories are made. A taken branch or location gets a numbered
+   * suffix. The caller authorizes `root`.
+   */
+  async createChatWorktree(root: string, branch: string, signal?: AbortSignal) {
+    string(root);
+    if (
+      typeof branch !== 'string' ||
+      !/^[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*)*$/i.test(branch) ||
+      branch.length > 100 ||
+      branch.includes('..') ||
+      branch.endsWith('.lock')
+    )
+      invalid('Choose a simple branch name for the worktree.');
+    const options = signal ? { signal } : undefined;
+    const target =
+      [...this.known.values()].find((t) => t.root === root) ??
+      decodeWorkspaceOutput(
+        'openCheckout',
+        await this.client.command('openCheckout', { root }, options),
+      );
+    const { worktrees } = decodeWorkspaceOutput(
+      'listWorktrees',
+      await this.client.command('listWorktrees', { checkout: target }, options),
+    );
+    const parent = `${worktrees.find((worktree) => worktree.main)?.root ?? target.root}-worktrees`;
+    await mkdir(parent).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'EEXIST') throw error;
+    });
+    for (let attempt = 1; ; attempt++) {
+      const name = attempt === 1 ? branch : `${branch}-${attempt}`;
+      try {
+        const created = decodeWorkspaceOutput(
+          'createWorktree',
+          await this.client.command(
+            'createWorktree',
+            {
+              checkout: target,
+              base: 'HEAD',
+              branch: name,
+              location: join(parent, name.replaceAll('/', '-')),
+            },
+            options,
+          ),
+        );
+        this.known.set(created.checkoutId, created);
+        this.worktreeRoots.add(created.root);
+        return created.root;
+      } catch (error) {
+        if (attempt >= 20 || !ApplicationError.is(error) || error.code !== 'Conflict') throw error;
+      }
+    }
   }
   async call(method: unknown, input: unknown, id: unknown): Promise<Reply> {
     let reserved: IpcRequest | undefined;

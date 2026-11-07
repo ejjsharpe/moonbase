@@ -121,6 +121,22 @@ const styles = stylex.create({
   },
   second: { '@media (max-width: 1100px)': { display: 'none' } },
 });
+// Like main, a project checkout's chat worktree is a new linked worktree beside it, which then
+// lists in the project's worktree switcher; other demo folders only record the request.
+async function createChatWorktree(root: string, branch: string) {
+  const checkout = firstApplication.editors[0]
+    ?.getSnapshot()
+    ?.recovery.checkouts.find((target) => target.root === root);
+  if (!checkout) return chat.createWorktree(root, branch);
+  chat.worktrees.push(`${root} ${branch}`);
+  const created = await client.command('createWorktree', {
+    checkout,
+    base: checkout.branch,
+    branch,
+    location: `${root}-worktrees/${branch.replaceAll('/', '-')}`,
+  });
+  return created.root;
+}
 function Demo() {
   const [visible, setVisible] = useState(true),
     [disposed, setDisposed] = useState(false),
@@ -132,6 +148,7 @@ function Demo() {
           application={firstApplication}
           transcriptNative={transcriptDemo ? () => transcriptDemo.native : undefined}
           chooseChatFolder={async () => '/demo/moonbase'}
+          createChatWorktree={createChatWorktree}
           selectCheckout={() => window.demo.selectCheckout()}
           selectClipboardImports={(checkout) => window.demo.selectClipboardImports(checkout)}
           selectDroppedImports={(checkout, files) =>
