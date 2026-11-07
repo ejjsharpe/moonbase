@@ -53,6 +53,7 @@ import { groupBySource } from './stable-props.ts';
 import { TranscriptScroller, revealFindMatch } from './transcript-geometry.ts';
 import { createViewSaver, type ViewSaver } from './transcript-view-saving.ts';
 import { holdTranscriptSelection } from './transcript-selection.ts';
+import { holdPlaceWhileFocusMoves } from './transcript-focus.ts';
 import { transcriptStyles as styles } from './transcript-styles.ts';
 
 /** Pixels between rows (`space.xl`); the list needs a number to lay rows out. */
@@ -411,6 +412,10 @@ function TranscriptList({
           current.current.rows.findIndex((row) => row.key === key),
         )
       : undefined;
+  }, [list]);
+  useEffect(() => {
+    const node = list.current?.getScrollableNode();
+    return node ? holdPlaceWhileFocusMoves(node) : undefined;
   }, [list]);
   useEffect(() => {
     const ref = list.current;
