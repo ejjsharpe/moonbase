@@ -5,10 +5,71 @@ import {
   decodeWorkspaceWatchInput,
 } from '@moonbase/contracts/workspace-schema';
 import { Cause, Deferred, Effect, Exit, Fiber, Queue, Scope, Stream } from 'effect';
-import { watch as fsWatch } from 'node:fs';
-import { resolve } from 'node:path';
+import { readdirSync, readFileSync, realpathSync, watch as fsWatch } from 'node:fs';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import type { Directory } from './filesystem.ts';
 import { ensure, path, same } from './validation.ts';
+
+const isInside = (path: string, parent: string) => {
+  const rel = relative(parent, path);
+  return rel !== '' && !rel.startsWith('..' + sep) && rel !== '..';
+};
+
+/** Every linked worktree of the repository, by its private Git folder name and its root. */
+function readWorktrees(common: string) {
+  let names: string[];
+  try {
+    names = readdirSync(join(common, 'worktrees'));
+  } catch {
+    return [];
+  }
+  return names.flatMap((name) => {
+    try {
+      const marker = readFileSync(join(common, 'worktrees', name, 'gitdir'), 'utf8').trim();
+      const root = dirname(resolve(common, 'worktrees', name, marker));
+      let real = root;
+      try {
+        real = realpathSync(root);
+      } catch {
+        /* A removed worktree keeps its private folder until Git prunes it. */
+      }
+      return [{ name, root: real }];
+    } catch {
+      return [];
+    }
+  });
+}
+
+/**
+ * Whether a changed path belongs to another worktree of the same repository, so it can change
+ * neither this checkout's files nor its Git status: files under a worktree nested in this root
+ * (agent worktrees often live in an ignored folder of the main checkout), another worktree's
+ * private Git folder or index, the shared object store, or a Git lock file. Shared refs still
+ * count, and so does a worktree being added or removed.
+ */
+function isOtherWorktreeChange(
+  path: string,
+  root: string,
+  common: string,
+  worktrees: { name: string; root: string }[],
+) {
+  if (path === common || isInside(path, common)) {
+    const parts = relative(common, path).split(sep);
+    // New objects matter only once a ref or an index names them, and those changes still count.
+    if (parts[0] === 'objects' || parts.at(-1)?.endsWith('.lock')) return true;
+    const own = worktrees.find((worktree) => worktree.root === root)?.name;
+    // The common folder's own index belongs to the main worktree.
+    if (own !== undefined && parts.length === 1 && parts[0] === 'index') return true;
+    if (parts[0] !== 'worktrees' || parts.length < 3) return false;
+    return parts[1] !== own;
+  }
+  return worktrees.some(
+    (worktree) =>
+      worktree.root !== root &&
+      isInside(worktree.root, root) &&
+      (path === worktree.root || isInside(path, worktree.root)),
+  );
+}
 
 export class WorkspaceObservations {
   private readonly subscriptions = new Set<Scope.Closeable>();
@@ -96,9 +157,14 @@ export class WorkspaceObservations {
           catch: normalizeApplicationError,
         });
         const directory = yield* self.runCommand(() => self.directory(captured.checkout));
-        const changed = (failure?: string) => {
+        const common = self.getCommonGitPath(captured.checkout);
+        // Changed paths since the last event; `undefined` when a watcher could not name one.
+        let changedPaths: Set<string> | undefined = new Set();
+        const changed = (failure?: string, changedPath?: string) => {
           if (disposed || self.isClosed()) return;
           error = failure ?? error;
+          if (changedPath === undefined) changedPaths = undefined;
+          else changedPaths?.add(changedPath);
           Queue.offerUnsafe(changes, true);
         };
         const acquire = (path: string) =>
@@ -106,8 +172,10 @@ export class WorkspaceObservations {
             Effect.try({
               try: () => {
                 const closed = Deferred.makeUnsafe<void>();
-                const watcher = fsWatch(path, { persistent: false, recursive: true }, () =>
-                  changed(),
+                const watcher = fsWatch(
+                  path,
+                  { persistent: false, recursive: true },
+                  (_kind, name) => changed(undefined, name ? resolve(path, name) : undefined),
                 ).on('error', (error) => {
                   changed(normalizeApplicationError(error).message);
                   // Node stops a failed watcher without guaranteeing a later close event.
@@ -154,7 +222,6 @@ export class WorkspaceObservations {
             catch: normalizeApplicationError,
           });
         }
-        const common = self.getCommonGitPath(captured.checkout);
         if (!common.startsWith(directory.root + '/')) yield* acquire(common);
         const events = Stream.fromQueue(changes).pipe(
           Stream.mapEffect(() =>
@@ -163,6 +230,19 @@ export class WorkspaceObservations {
               yield* Fiber.join(timer);
               yield* Queue.clear(changes);
               return yield* Effect.sync(() => {
+                const paths = changedPaths;
+                changedPaths = new Set();
+                // Agents in other worktrees run Git and write files constantly; only changes
+                // that can affect this checkout reach its clients.
+                if (!error && paths) {
+                  const worktrees = readWorktrees(common);
+                  if (
+                    [...paths].every((changedPath) =>
+                      isOtherWorktreeChange(changedPath, directory.root, common, worktrees),
+                    )
+                  )
+                    return undefined;
+                }
                 try {
                   directory.check();
                 } catch (failure) {
@@ -177,7 +257,7 @@ export class WorkspaceObservations {
         );
         return Stream.concat(
           Stream.succeed(decodeWorkspaceEvent({ ...captured, ready: true })),
-          events,
+          events.pipe(Stream.filter((event) => event !== undefined)),
         );
       }),
     );
