@@ -19,6 +19,7 @@ import { activateChatFind, FindBar, handleChatFindKeyDown } from './find.tsx';
 import { Transcript } from './transcript.tsx';
 import type { TranscriptNative } from '../../chat/wire.ts';
 import { Choice } from './choice.tsx';
+import { ModelPicker } from './model-picker.tsx';
 import { Icon } from '../icon.tsx';
 import { MessageInput } from './message-input.tsx';
 import {
@@ -706,31 +707,22 @@ export function ChatView({
               {local && !state.selected ? (
                 <>
                   <div {...stylex.props(styles.modelChoice)}>
-                    <Choice
-                      compact
-                      label="Conversation model"
-                      value={selectedModel}
-                      options={models}
-                      onChange={chooseModel}
+                    <ModelPicker
+                      providers={
+                        providerState?.status?.providers.filter(
+                          (provider) => provider.configured,
+                        ) ?? []
+                      }
+                      model={selectedEntry?.model ?? preference?.model}
+                      effort={selectedEffort}
+                      effortAvailable={!effortUnavailable}
+                      effortLabels={effortLabels}
+                      chooseModel={(model) => chooseModel(JSON.stringify(model))}
+                      chooseEffort={chooseEffort}
+                      setUpProviders={setUpProviders}
                       disabled={(!models.length && !setUpProviders) || busy('send')}
-                      action={setUpProviders && { label: 'Set up providers…', run: setUpProviders }}
                     />
                   </div>
-                  {!!selectedEntry?.reasoningEfforts?.length && (
-                    <div {...stylex.props(styles.effortChoice)}>
-                      <Choice
-                        compact
-                        label="Reasoning effort"
-                        value={effortUnavailable ? '' : (selectedEffort ?? '')}
-                        options={selectedEntry.reasoningEfforts.map((value) => ({
-                          value,
-                          label: effortLabels[value],
-                        }))}
-                        onChange={chooseEffort}
-                        disabled={busy('send')}
-                      />
-                    </div>
-                  )}
                 </>
               ) : (
                 <span {...stylex.props(styles.small, controls.truncate)}>
@@ -1305,8 +1297,7 @@ const styles = stylex.create({
   },
   composeActions: { minHeight: 32, justifyContent: 'flex-end', flexWrap: 'wrap', gap: space.sm },
   modelActions: { marginLeft: 'auto', minWidth: 0, maxWidth: '100%', flexWrap: 'nowrap' },
-  modelChoice: { maxWidth: 220, minWidth: 0 },
-  effortChoice: { flexShrink: 0 },
+  modelChoice: { minWidth: 0 },
   worktreeChoice: { flexShrink: 0 },
   sendButton: {
     display: 'inline-flex',

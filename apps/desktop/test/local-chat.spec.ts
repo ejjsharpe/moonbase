@@ -214,17 +214,20 @@ test('native local setup, approved folders/models, streaming/tools, hidden work 
       .fill('sk-controlled-private-key');
     await page.getByRole('button', { name: 'Continue setup', exact: true }).click();
     await closeSettings(page);
-    await expect(
-      page.getByRole('combobox', { name: 'Conversation model', exact: true }),
-    ).toBeEnabled();
-    await expect(
-      page.getByRole('combobox', { name: 'Conversation model', exact: true }),
-    ).toContainText('GPT-6.1 Sol');
-    await expect(
-      page.getByRole('combobox', { name: 'Reasoning effort', exact: true }),
-    ).toContainText('Medium');
-    await page.getByRole('combobox', { name: 'Reasoning effort', exact: true }).click();
-    await page.getByRole('option', { name: 'Extra high', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Chat model', exact: true })).toBeEnabled();
+    await expect(page.getByRole('button', { name: 'Chat model', exact: true })).toContainText(
+      'GPT-6.1 Sol',
+    );
+    await expect(page.getByRole('button', { name: 'Chat model', exact: true })).toContainText(
+      'Medium',
+    );
+    // One chip holds the model and its effort; the effort is chosen in its popover.
+    await page.getByRole('button', { name: 'Chat model', exact: true }).click();
+    await page
+      .getByRole('dialog', { name: 'Choose model', exact: true })
+      .getByRole('radio', { name: 'Extra high', exact: true })
+      .click();
+    await page.keyboard.press('Escape');
     for (const [index, folder] of [first, second].entries()) {
       await app.evaluate(({ dialog }, path) => {
         dialog.showOpenDialog = (async () => ({
@@ -236,12 +239,12 @@ test('native local setup, approved folders/models, streaming/tools, hidden work 
       await expect(
         page.getByRole('button', { name: 'Choose working folder', exact: true }),
       ).toHaveAttribute('title', folder);
-      await expect(
-        page.getByRole('combobox', { name: 'Conversation model', exact: true }),
-      ).toContainText('GPT-6.1 Sol');
-      await expect(
-        page.getByRole('combobox', { name: 'Reasoning effort', exact: true }),
-      ).toContainText('Extra high');
+      await expect(page.getByRole('button', { name: 'Chat model', exact: true })).toContainText(
+        'GPT-6.1 Sol',
+      );
+      await expect(page.getByRole('button', { name: 'Chat model', exact: true })).toContainText(
+        'Extra high',
+      );
       await page.getByLabel('Message', { exact: true }).fill('Local conversation ' + index);
       await page.getByRole('button', { name: 'Send message', exact: true }).click();
       await expect(
@@ -305,12 +308,12 @@ test('native local setup, approved folders/models, streaming/tools, hidden work 
     const saved = await page.evaluate(() => localStorage.getItem('moonbase.chat.local.v1'));
     expect(saved).not.toContain('controlled-private-key');
     await page.getByRole('button', { name: 'New chat', exact: true }).click();
-    await expect(
-      page.getByRole('combobox', { name: 'Conversation model', exact: true }),
-    ).toContainText('GPT-6.1 Sol');
-    await expect(
-      page.getByRole('combobox', { name: 'Reasoning effort', exact: true }),
-    ).toContainText('Extra high');
+    await expect(page.getByRole('button', { name: 'Chat model', exact: true })).toContainText(
+      'GPT-6.1 Sol',
+    );
+    await expect(page.getByRole('button', { name: 'Chat model', exact: true })).toContainText(
+      'Extra high',
+    );
     expect(errors).toEqual([]);
   } finally {
     if (child.exitCode === null) await app.evaluate(({ app }) => app.exit(0));
