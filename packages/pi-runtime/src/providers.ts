@@ -17,6 +17,7 @@ const defaultModels: Record<string, { modelId: string; reasoningEffort: ChatReas
   anthropic: { modelId: 'claude-opus-5-5', reasoningEffort: 'high' },
   google: { modelId: 'gemini-3.8-flash', reasoningEffort: 'medium' },
   openrouter: { modelId: 'openai/gpt-6.1-sol', reasoningEffort: 'medium' },
+  'claude-code': { modelId: 'claude-opus-5-5', reasoningEffort: 'high' },
 };
 
 export const localProviderIds = [
@@ -25,7 +26,19 @@ export const localProviderIds = [
   'anthropic',
   'google',
   'openrouter',
+  'claude-code',
 ] as const;
+const authKinds: Partial<Record<string, 'oauth' | 'claude_code'>> = {
+  openai: 'oauth',
+  'claude-code': 'claude_code',
+};
+const names: Partial<Record<string, string>> = {
+  openai: 'ChatGPT subscription',
+  google: 'Google Gemini',
+  'claude-code': 'Claude subscription',
+};
+const claudeCodeLogin =
+  'Claude Code manages this sign-in. Run `claude auth login` or `claude auth logout` in a terminal, then refresh providers.';
 function fail(message: string): never {
   throw new ApplicationError({ code: 'InvalidInput', message });
 }
@@ -99,9 +112,6 @@ export const ProviderSetupLive = (
           localProviderIds.map(async (id) => {
             const provider = config.models.getProvider(id);
             if (!provider) throw unavailable();
-            let name = provider.name;
-            if (id === 'openai') name = 'ChatGPT subscription';
-            if (id === 'google') name = 'Google Gemini';
             const models = provider.getModels().map((model) => {
               const reasoningEfforts = getSupportedThinkingLevels(model);
               const preferredEffort = defaultModels[id]!.reasoningEffort;
@@ -121,8 +131,8 @@ export const ProviderSetupLive = (
             );
             return {
               id,
-              name,
-              auth: id === 'openai' ? ('oauth' as const) : ('api_key' as const),
+              name: names[id] ?? provider.name,
+              auth: authKinds[id] ?? ('api_key' as const),
               configured: !!(await config.models.checkAuth(id)),
               models,
               ...(defaultModel
@@ -156,6 +166,7 @@ export const ProviderSetupLive = (
           const { providerId } = value as ProviderInput<'startProviderLogin'>;
           if (!localProviderIds.includes(providerId as (typeof localProviderIds)[number]))
             fail('Choose an installed provider.');
+          if (authKinds[providerId] === 'claude_code') fail(claudeCodeLogin);
           const revision = (revisions.get(owner) ?? 0) + 1;
           revisions.set(owner, revision);
           await cancel(owner);
@@ -289,6 +300,7 @@ export const ProviderSetupLive = (
           const { providerId } = value as ProviderInput<'logoutProvider'>;
           if (!localProviderIds.includes(providerId as (typeof localProviderIds)[number]))
             fail('Choose an installed provider.');
+          if (authKinds[providerId] === 'claude_code') fail(claudeCodeLogin);
           await cancel(owner);
           await config.models.logout(providerId);
         }

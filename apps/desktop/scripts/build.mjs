@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import { cp, mkdir, rm, writeFile, readFile, stat } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { notices } from '../../../scripts/notices.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url)),
   require = createRequire(import.meta.url);
@@ -89,6 +89,7 @@ for (const inputs of [preloadInputs, rendererInputs]) {
 for (const entry of [
   'pi-runtime/src/index.ts',
   'pi-runtime/src/local-models.ts',
+  'pi-runtime/src/claude-code.ts',
   'pi-runtime/src/credentials.ts',
   'pi-ai/dist/bun-oauth.js',
 ])
@@ -109,6 +110,18 @@ const packages = await notices(
   join(root, 'dist/dependency-notices.txt'),
 );
 await writeFile(join(root, 'dist/main-inputs.json'), JSON.stringify(main.metafile.inputs));
+// Claude Code's tool-inventory helper resolves beside the bundle that imported it.
+await cp(
+  join(
+    dirname(
+      require.resolve('@earendil-works/pi-claude-code/package.json', {
+        paths: [join(root, '../../packages/pi-runtime')],
+      }),
+    ),
+    'src/inert-mcp.mjs',
+  ),
+  join(root, 'dist/inert-mcp.mjs'),
+);
 const resources = join(root, 'dist/workspace');
 await mkdir(resources, { recursive: true });
 await cp(require.resolve('@moonbase/workspace/filesystem'), join(resources, 'filesystem'));

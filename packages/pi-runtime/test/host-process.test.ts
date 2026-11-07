@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
+import { rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
@@ -18,6 +19,13 @@ import { ApplicationError } from '@moonbase/contracts/workspace';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import { RemoteChatLive } from '../src/remote.ts';
 import { createRequire } from 'node:module';
+import { buildHost } from '../scripts/build-host.ts';
+import { writeFakeClaude } from './fake-claude.ts';
+
+// The production host runs from its bundle, built outside the repository to prove it is self-contained.
+const bundleDirectory = await mkdtemp(join(tmpdir(), 'moonbase-host-bundle-'));
+const hostEntry = await buildHost(bundleDirectory);
+process.once('exit', () => rmSync(bundleDirectory, { recursive: true, force: true }));
 
 async function bounded<T>(promise: Promise<T>, ms = 5000): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -39,19 +47,19 @@ async function port() {
   await new Promise<void>((r) => server.close(() => r()));
   return value;
 }
-function start(path: string, fixture = false) {
+function start(path: string, fixture = false, env: NodeJS.ProcessEnv = process.env) {
   const child = spawn(
     process.execPath,
     [
       '--import',
       new URL('./no-provider.mjs', import.meta.url).pathname,
       '--experimental-strip-types',
-      new URL(fixture ? './faux-host.mjs' : '../src/host.ts', import.meta.url).pathname,
+      fixture ? new URL('./faux-host.mjs', import.meta.url).pathname : hostEntry,
       path,
     ],
     {
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, OPENAI_API_KEY: 'synthetic-no-provider-requests' },
+      env: { ...env, OPENAI_API_KEY: 'synthetic-no-provider-requests' },
     },
   );
   let output = '',
@@ -475,6 +483,97 @@ test('CLI rejects strict private configuration before opening or rewriting its s
       }
     }
   } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('bundled host serves a Claude subscription through the host-side Claude Code login', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'moonbase-host-claude-')),
+    listen = await port(),
+    host = { hostId: 'claude-host', storeId: 'store' },
+    token = randomBytes(32).toString('base64url'),
+    file = join(directory, 'private.json');
+  const command = await writeFakeClaude(directory);
+  await writeFile(
+    file,
+    JSON.stringify({
+      host,
+      actorId: 'personal',
+      cwd: directory,
+      databasePath: join(directory, 'chat.sqlite'),
+      model: { provider: 'claude-code', modelId: 'claude-opus-5-5' },
+      port: listen,
+      token,
+    }),
+    { mode: 0o600 },
+  );
+  const env = { PATH: '/usr/bin:/bin', HOME: directory, PI_CLAUDE_CODE_COMMAND: command };
+  const unavailable = () =>
+    Effect.fail(
+      new ApplicationError({ code: 'Unavailable', message: 'Not a connection command.' }),
+    );
+  const runtime = ManagedRuntime.make(
+    RemoteChatLive.pipe(
+      Layer.provide(
+        Layer.succeed(ConnectionService, {
+          getConnection: unavailable,
+          connect: unavailable,
+          disconnect: unavailable,
+          watch: () => Stream.empty,
+          endpoint: () =>
+            Effect.succeed({
+              origin: `http://127.0.0.1:${listen}`,
+              token,
+              expected: host,
+              connectionId: 'controlled',
+              health: { ...host, protocol: 1, version: '0.1.0', capabilities: ['chat-v0'] },
+            }),
+        }),
+      ),
+    ),
+  );
+  const client = makeChatClient(runtime),
+    children: ReturnType<typeof start>[] = [];
+  try {
+    const signedOut = start(file, false, { ...env, FAKE_CLAUDE_LOGGED_OUT: '1' });
+    children.push(signedOut);
+    assert.equal((await bounded(signedOut.exited))[0], 1);
+    assert(!signedOut.output.includes('ready'));
+    const served = start(file, false, env);
+    children.push(served);
+    await bounded(served.ready, 15000);
+    const target = (
+      await client.command('createChat', {
+        session: { host, actorId: 'personal' },
+        requestId: 'create',
+        title: 'Remote Claude subscription',
+      })
+    ).conversation.target;
+    await client.command('sendChat', { target, requestId: 'send', text: 'Write a file' });
+    let entries: { text?: string }[] = [];
+    for (let i = 0; i < 500; i++) {
+      const snapshot = await client.command('getChat', { target });
+      entries = snapshot.entries;
+      if (!snapshot.run && entries.some((entry) => entry.text === 'Done')) break;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    assert(
+      entries.some((entry) => entry.text === 'Done'),
+      JSON.stringify(entries) + served.errors,
+    );
+    assert.equal(
+      await readFile(join(directory, 'claude.txt'), 'utf8'),
+      'Written through Claude Code',
+    );
+    served.child.kill('SIGTERM');
+    assert.equal(
+      (await bounded(served.exited))[0],
+      0,
+      'Warm Claude Code workers kept the host alive',
+    );
+  } finally {
+    await runtime.dispose();
+    await Promise.all(children.map((c) => cleanup(c.child, c.exited)));
     await rm(directory, { recursive: true, force: true });
   }
 });

@@ -3,11 +3,15 @@ import { constants } from 'node:fs';
 import { lstat, mkdir, open, realpath, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { safeStorage } from 'electron';
-import { Context, Exit, Layer, Scope, type ManagedRuntime } from 'effect';
+import { Context, Effect, Exit, Layer, Scope, type ManagedRuntime } from 'effect';
 import { LocalPiRuntimeLive, LocalPiControl } from '@moonbase/pi-runtime';
 import { createCredentialStore } from '@moonbase/pi-runtime/credentials';
 import { ProviderSetupLive } from '@moonbase/pi-runtime/providers';
 import { createLocalModels } from '@moonbase/pi-runtime/local-models';
+import {
+  closeClaudeCodeProcesses,
+  createClaudeCodeSubscription,
+} from '@moonbase/pi-runtime/claude-code';
 import { ChatService, ProviderSetupService } from '@moonbase/contracts/services';
 import { decodeChatInput } from '@moonbase/contracts/chat-schema';
 import { ApplicationError } from '@moonbase/contracts/errors';
@@ -81,6 +85,12 @@ export async function acquireLocalChat(
       (await safeStorage.decryptStringAsync(Buffer.from(encrypted))).result,
   });
   const models = createLocalModels(credentials);
+  models.setProvider(
+    createClaudeCodeSubscription({
+      // Claude Code starts the tool-inventory helper with this executable.
+      helperEnv: { ELECTRON_RUN_AS_NODE: '1' },
+    }),
+  );
   const approvals = new Map<string, { dev: number; ino: number }>();
   const approveFolder = async (path: string) => {
     const cwd = await realpath(path),
@@ -117,7 +127,7 @@ export async function acquireLocalChat(
     const services = await runApplicationEffect(
       runtime,
       Layer.buildWithScope(
-        Layer.merge(
+        Layer.mergeAll(
           LocalPiRuntimeLive({
             ...session,
             databasePath: join(directory, 'chat.sqlite'),
@@ -127,6 +137,7 @@ export async function acquireLocalChat(
             ...(ripgrepExecutable ? { ripgrepExecutable } : {}),
           }),
           ProviderSetupLive({ models, openUrl, deviceId: session.host.hostId }),
+          Layer.effectDiscard(Effect.addFinalizer(() => Effect.promise(closeClaudeCodeProcesses))),
         ),
         scope,
       ),

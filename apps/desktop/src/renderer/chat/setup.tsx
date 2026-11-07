@@ -31,9 +31,11 @@ export function ProviderSetup({ controller }: { controller: ProviderSetupControl
   const way = (provider: Provider) => {
     const own = flow?.providerId === provider.id ? flow : null,
       running = own?.state === 'running',
-      key = provider.auth === 'api_key';
+      key = provider.auth === 'api_key',
+      // Claude Code owns this login, so the CLI signs in and out rather than a button here.
+      external = provider.auth === 'claude_code';
     let action = null;
-    if (running) action = null;
+    if (running || external) action = null;
     else if (provider.configured)
       action = (
         <Button
@@ -57,6 +59,7 @@ export function ProviderSetup({ controller }: { controller: ProviderSetupControl
     let detail = 'Not set up';
     if (provider.configured)
       detail = `${provider.models.length} ${provider.models.length === 1 ? 'model' : 'models'}`;
+    if (provider.configured && external) detail += ' · signed in with Claude Code';
     return (
       <li
         key={provider.id}
@@ -79,9 +82,14 @@ export function ProviderSetup({ controller }: { controller: ProviderSetupControl
           {action}
         </div>
         {/* A provider that signs in with its own tool says how, in place of a button. */}
-        {!provider.configured && !key && provider.auth !== 'oauth' && (
+        {external && !provider.configured && (
           <p {...stylex.props(styles.note, styles.panel)}>
-            Sign in with the provider&apos;s own tool, then refresh providers.
+            {/* One span keeps the command inline in the panel's flex column. */}
+            <span>
+              Install Claude Code and run{' '}
+              <code {...stylex.props(styles.command)}>claude auth login</code> in a terminal, then
+              refresh providers. Usage counts against your Claude plan.
+            </span>
           </p>
         )}
         {own && (
@@ -218,6 +226,12 @@ const styles = stylex.create({
   },
   readyDot: { backgroundColor: syntax.string },
   detail: { color: colors.muted, fontSize: type.small },
+  command: {
+    color: colors.text,
+    backgroundColor: colors.elevated,
+    borderRadius: radius.control,
+    paddingInline: space.xs,
+  },
   panel: {
     display: 'flex',
     flexDirection: 'column',

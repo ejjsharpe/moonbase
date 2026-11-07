@@ -40,6 +40,7 @@ test('native Reload retains text painted before ordinary recovery debounce', asy
     args: packaged ? [] : [process.env.MOONBASE_RELOAD_MAIN ?? resolve('dist/main.mjs')],
     env: {
       PATH: '/usr/bin:/bin',
+      PI_CLAUDE_CODE_COMMAND: '/nonexistent/claude',
       HOME: process.env.HOME!,
       TMPDIR: process.env.TMPDIR!,
       MOONBASE_USER_DATA: join(base, 'user-data'),

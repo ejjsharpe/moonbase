@@ -8,10 +8,12 @@
     "./server": "./src/server.ts",
     "./providers": "./src/providers.ts",
     "./credentials": "./src/credentials.ts",
-    "./local-models": "./src/local-models.ts"
+    "./local-models": "./src/local-models.ts",
+    "./claude-code": "./src/claude-code.ts"
   },
   "scripts": {
     "build": "tsc --noEmit -p tsconfig.json",
+    "build:host": "node --experimental-strip-types scripts/build-host.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "oxlint .",
     "test": "node --experimental-strip-types --test test/*.test.ts"
@@ -20,6 +22,7 @@
     "effect": "4.1.0",
     "@earendil-works/pi-durable": "1.4.0",
     "@earendil-works/pi-ai": "1.4.0",
+    "@earendil-works/pi-claude-code": "github:earendil-works/pi-claude-code#d5b5e04c314d3452d357174d16d10dda34daa2d2",
     "@earendil-works/chord": "1.4.0",
     "@moonbase/contracts": "workspace:*",
     "@moonbase/effect": "workspace:*",
