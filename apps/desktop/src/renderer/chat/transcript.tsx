@@ -406,7 +406,11 @@ function TranscriptList({
   }, [list, save]);
   useEffect(() => {
     const node = list.current?.getScrollableNode();
-    return node ? holdTranscriptSelection(node) : undefined;
+    return node
+      ? holdTranscriptSelection(node, (key) =>
+          current.current.rows.findIndex((row) => row.key === key),
+        )
+      : undefined;
   }, [list]);
   useEffect(() => {
     const ref = list.current;
