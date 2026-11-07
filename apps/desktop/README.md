@@ -14,7 +14,9 @@ node scripts/prepare-ripgrep.mjs
 NX_DAEMON=false bunx nx run @moonbase/desktop:dev
 ```
 
-`bun dev` in `apps/desktop` does the same build-then-launch. Each development launch uses a fresh temporary user-data directory; set `MOONBASE_USER_DATA` to an absolute directory to reuse state. Never point it at real application data you care about. Rebuild and relaunch after changes.
+`bun dev` in `apps/desktop` does the same build-then-launch. Development keeps its state between launches in a `Moonbase Dev` profile beside the packaged app's (on macOS, `~/Library/Application Support/Moonbase Dev`); set `MOONBASE_USER_DATA` to an absolute directory to use another. Never point it at real application data you care about. Rebuild and relaunch after changes.
+
+`bun run dev:mock` launches with a separate `Moonbase Dev Mock` profile. Its first launch seeds scripted local chats played by a faux model, covering thinking, completed and failed tool steps, an edit and Markdown answers. Their edits touch only a `mock-project` folder inside that profile, and the chat in this repository only reads. Delete the profile to seed again.
 
 `bun run --cwd apps/desktop demo:browser` serves the shell in a browser with in-memory and faux capabilities, calling no real provider or host. Open `/?local&design` for local chat, `/?chat&design` for the remote fixture, or add `&transcript` for transcript reading fixtures.
 

@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import test from 'node:test';
 
-test('dev builds dependencies before launching with fresh or explicit user data', async () => {
+test('dev builds dependencies before launching with a persistent or explicit profile', async () => {
   const fixture = await mkdtemp(join(tmpdir(), 'moonbase-dev-test-'));
   try {
     for (const directory of ['scripts', 'dist', 'node_modules/electron', 'node_modules/nx/bin'])
@@ -39,8 +39,16 @@ test('dev builds dependencies before launching with fresh or explicit user data'
     );
     const launch = async (userData?: string) => {
       await rm(join(fixture, 'dist/filesystem'), { force: true });
-      const env: NodeJS.ProcessEnv = { ...process.env, ELECTRON_RUN_AS_NODE: '1', TMPDIR: fixture };
+      // The default profile resolves under this fixture's home, never the real one.
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: '1',
+        HOME: fixture,
+        XDG_CONFIG_HOME: join(fixture, '.config'),
+        APPDATA: join(fixture, 'AppData'),
+      };
       delete env.MOONBASE_USER_DATA;
+      delete env.MOONBASE_DEV_MOCK;
       if (userData !== undefined) env.MOONBASE_USER_DATA = userData;
       const result = spawnSync(process.execPath, [join(fixture, 'scripts/dev.mjs')], {
         env,
@@ -52,8 +60,10 @@ test('dev builds dependencies before launching with fresh or explicit user data'
     const first = await launch();
     const second = await launch();
     assert.ok(isAbsolute(first.userData));
-    assert.notEqual(first.userData, second.userData);
-    assert.deepEqual(await readdir(first.userData), []);
+    assert.ok(first.userData.startsWith(fixture + '/'));
+    assert.match(first.userData, /Moonbase Dev$/);
+    // Relaunching keeps the same profile, so state persists.
+    assert.equal(second.userData, first.userData);
     assert.equal(first.runAsNode, undefined);
     const explicit = join(fixture, 'explicit-data');
     assert.equal((await launch(explicit)).userData, explicit);

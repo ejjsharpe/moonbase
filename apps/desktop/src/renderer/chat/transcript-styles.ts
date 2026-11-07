@@ -1,5 +1,5 @@
 import * as stylex from '@stylexjs/stylex';
-import { colors, layout, radius, space, type } from '@moonbase/ui/tokens.stylex';
+import { colors, layout, radius, space, syntax, type } from '@moonbase/ui/tokens.stylex';
 
 /** Pixels a scrolling output grows before it scrolls. */
 const outputMaxHeight = 320;
@@ -34,9 +34,35 @@ export const transcriptStyles = stylex.create({
     display: 'flex',
     alignItems: 'center',
     gap: space.sm,
+    minHeight: 28,
     fontSize: type.small,
     color: colors.secondary,
     flexWrap: 'wrap',
+  },
+  /** Only roles other than you and the agent are named, such as a standalone tool entry. */
+  role: { fontFamily: type.mono, fontWeight: 700, color: colors.text },
+  /** Your messages sit on the right in bubbles; the agent's replies keep the full width. */
+  userMessage: { display: 'flex', flexDirection: 'column', alignItems: 'flex-end' },
+  bubble: {
+    maxWidth: '82%',
+    minWidth: 0,
+    padding: '2px 14px',
+    backgroundColor: colors.elevated,
+    borderWidth: 1,
+    borderStyle: 'solid',
+    borderColor: colors.border,
+    borderRadius: '14px 14px 4px 14px',
+  },
+  messageActions: { display: 'flex', alignItems: 'center', gap: 2, height: 28, flexShrink: 0 },
+  userActions: { justifyContent: 'flex-end' },
+  messageTime: { paddingInline: 6, color: colors.muted, fontSize: type.caption },
+  /** Row actions stay quiet until the row is hovered or holds focus. */
+  revealed: {
+    opacity: {
+      default: 0,
+      [stylex.when.ancestor(':hover')]: 1,
+      [stylex.when.ancestor(':focus-within')]: 1,
+    },
   },
   literal: {
     fontFamily: type.ui,
@@ -65,10 +91,119 @@ export const transcriptStyles = stylex.create({
     '::highlight(find-match)': { backgroundColor: colors.selection, color: colors.text },
     '::highlight(find-active)': { backgroundColor: colors.accent, color: colors.onAccent },
   },
-  disclosure: { minWidth: 0 },
-  activity: { minWidth: 0, marginBlock: space.sm, marginInline: 0 },
-  activityToggle: { textAlign: 'left', whiteSpace: 'normal' },
-  activitySummary: { marginTop: 0, marginBottom: space.sm, paddingInline: space.sm },
+  disclosure: { minWidth: 0, paddingInline: 10 },
+  /** An opened step's recorded parts: a quiet label that folds, with copy on the right. */
+  partHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: space.xs,
+    minWidth: 0,
+    paddingInline: '14px 6px',
+  },
+  partToggle: {
+    flex: 1,
+    minWidth: 0,
+    justifyContent: 'flex-start',
+    gap: 6,
+    color: colors.muted,
+    fontSize: type.caption,
+    textAlign: 'left',
+    overflow: 'hidden',
+    whiteSpace: 'nowrap',
+    textOverflow: 'ellipsis',
+  },
+  partLabel: {
+    flex: 1,
+    minWidth: 0,
+    paddingBlock: 4,
+    color: colors.muted,
+    fontSize: type.caption,
+    overflow: 'hidden',
+    whiteSpace: 'nowrap',
+    textOverflow: 'ellipsis',
+  },
+  partChevron: {
+    display: 'inline-flex',
+    flexShrink: 0,
+    transform: {
+      default: 'rotate(-90deg)',
+      [stylex.when.ancestor('[data-panel-open]')]: 'none',
+    },
+  },
+  /** Folded tool work reads as one card of steps; consecutive activity rows join into one. */
+  activity: {
+    position: 'relative',
+    // Contains its content's margins, so a joined card has no seam when a step opens.
+    display: 'flow-root',
+    minWidth: 0,
+    marginBlock: space.sm,
+    marginInline: 0,
+    paddingBlock: 6,
+    backgroundColor: colors.elevated,
+    borderWidth: 1,
+    borderStyle: 'solid',
+    borderColor: colors.border,
+    borderRadius: radius.panel,
+  },
+  activityJoinPrevious: {
+    marginTop: 0,
+    paddingTop: 0,
+    borderTopWidth: 0,
+    borderTopLeftRadius: 0,
+    borderTopRightRadius: 0,
+  },
+  activityJoinNext: {
+    marginBottom: 0,
+    paddingBottom: 0,
+    borderBottomWidth: 0,
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
+  },
+  /** A call's output row draws no line while closed; open, it shows the output under the call. */
+  activityOutput: { paddingTop: 0 },
+  activityToggle: {
+    position: 'absolute',
+    top: 2,
+    right: 4,
+    width: 24,
+    height: 24,
+    padding: 4,
+    color: colors.muted,
+    transform: { default: null, ':is([data-panel-open])': 'rotate(180deg)' },
+    opacity: {
+      default: 0,
+      ':focus-visible': 1,
+      [stylex.when.ancestor(':hover')]: 1,
+    },
+  },
+  activitySteps: {
+    listStyle: 'none',
+    margin: 0,
+    padding: '1px 0',
+    fontFamily: type.mono,
+    fontSize: type.small,
+    lineHeight: 1.75,
+    color: colors.secondary,
+  },
+  activityStep: {
+    paddingInline: '14px 36px',
+    // One line per step; the full text is in its title.
+    overflow: 'hidden',
+    whiteSpace: 'nowrap',
+    textOverflow: 'ellipsis',
+    '::before': {
+      content: 'attr(data-glyph)',
+      display: 'inline-block',
+      width: '1.6em',
+      color: syntax.string,
+    },
+  },
+  activityTool: { color: syntax.keyword },
+  stepRunning: { '::before': { color: colors.accent } },
+  stepFailed: { '::before': { color: colors.danger } },
+  stepPending: { '::before': { color: colors.muted } },
+  /** A call's output, indented under it. */
+  stepOutput: { paddingLeft: 30, color: colors.muted, '::before': { color: colors.muted } },
   small: {
     color: colors.secondary,
     fontSize: type.small,

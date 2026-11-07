@@ -35,16 +35,19 @@ import type {
 import { areJsonValuesEqual } from '@moonbase/contracts/common';
 import type { TranscriptNative } from '../../chat/wire.ts';
 import { MarkdownCache } from './markdown-model.ts';
-import { activateChatFind } from './find.tsx';
 import {
   collectActivityEvidence,
   getEntryTranscripts,
+  classifyEntry,
+  groupTranscriptRows,
   isSameActivityEvidence,
+  type TranscriptItem,
 } from './activity.ts';
 import { StoredImages } from './stored-image.tsx';
 import { getTranscriptParts } from './transcript-parts.ts';
 import { isReadingNodePinned, subscribeReadingChanges } from './reading-pin.ts';
 import { Entry, type EntryProps } from './transcript-entry.tsx';
+import { createOpenCalls, OpenCallsContext } from './transcript-disclosure.ts';
 import { useTranscriptActions } from './transcript-actions.ts';
 import { groupBySource } from './stable-props.ts';
 import { TranscriptScroller, revealFindMatch } from './transcript-geometry.ts';
@@ -64,6 +67,11 @@ const estimatedRowSize = 200;
  * oldest rows evicted as new ones arrive at the record budget (not a pure append).
  */
 const following = { animated: false } as const;
+/** Following while the reader opens something: new rows still follow, growing rows don't. */
+const followingNewRows = {
+  animated: false,
+  on: { dataAppend: true, dataChange: true, footerLayout: true, layout: true },
+} as const;
 /** Holds the reader's position through prepends, far-end evictions and disclosure toggles. */
 const keepPosition = { data: true, size: true } as const;
 type Paging = 'earlier' | 'later' | 'latest';
@@ -72,13 +80,11 @@ export function Transcript({
   controller,
   state: latestState,
   native,
-  findInput,
 }: {
   controller: ChatController;
   state: ChatState;
   native?: TranscriptNative;
   /** The open Find bar's field. */
-  findInput: RefObject<HTMLInputElement | null>;
 }) {
   const list = useRef<LegendListRef | null>(null);
   const scroller = useMemo<RefObject<HTMLElement | null>>(
@@ -125,7 +131,10 @@ export function Transcript({
     },
     [controller],
   );
+  /** The reader opened something while following; see TranscriptList's holdDisclosure. */
+  const [holding, setHolding] = useState(false);
   const jumpToLatest = () => {
+    setHolding(false);
     const selection = window.getSelection(),
       node = scroller.current;
     if (node && selection?.rangeCount && selection.getRangeAt(0).intersectsNode(node))
@@ -161,8 +170,13 @@ export function Transcript({
     liveLabel = snapshotLabels[currentSnapshot.state];
   if (preserve) liveLabel = 'Selected response';
   const getRowProps = useRowProps(transcript);
+  const [openCalls] = useState(createOpenCalls);
   const rowContext = useMemo(
-    () => ({ shared: { controller, cache, native, actions, evidence }, getRowProps, liveLabel }),
+    () => ({
+      shared: { controller, cache, native, actions, evidence },
+      getRowProps,
+      liveLabel,
+    }),
     [controller, cache, native, actions, evidence, getRowProps, liveLabel],
   );
   const mounted = useMountedRowKeys(rows, reading, imageSource, transcript.find.active);
@@ -183,13 +197,6 @@ export function Transcript({
     <section aria-label="Chat conversation" {...stylex.props(styles.transcript)}>
       <div {...stylex.props(styles.row)}>
         <div {...stylex.props(styles.measure)}>
-          <div {...stylex.props(controls.row, styles.navigation)}>
-            <Button
-              {...stylex.props(controls.button, controls.quietButton)}
-              onClick={(event) => activateChatFind(controller, event.currentTarget, findInput)}>
-              Find
-            </Button>
-          </div>
           {!snapshot && (
             <p>
               {state.ready
@@ -197,7 +204,8 @@ export function Transcript({
                 : 'This view is offline. Its draft and unresolved command identities are retained.'}
             </p>
           )}
-          {currentSnapshot && (
+          {/* Idle needs no line; running, stopped and failed say so. */}
+          {currentSnapshot && currentSnapshot.state !== 'idle' && (
             <p
               aria-label="Conversation status"
               role={failed ? 'alert' : 'status'}
@@ -256,37 +264,41 @@ export function Transcript({
       <div {...stylex.props(styles.viewport)}>
         {snapshot && (
           <RowContext.Provider value={rowContext}>
-            <TranscriptList
-              list={list}
-              transcript={transcript}
-              views={views}
-              mounted={mounted}
-              selecting={reading.selecting}
-              onFollowingChange={setFollowingEnd}
-              onPage={page}
-              onReaderInput={controller.cancelFindReveal}
-              header={
-                <Edge>
-                  {paging === 'earlier' && (
-                    <p role="status" {...stylex.props(styles.small)}>
-                      Loading earlier…
-                    </p>
-                  )}
-                  {!transcript.earlier && (
-                    <p {...stylex.props(styles.small)}>Start of conversation</p>
-                  )}
-                </Edge>
-              }
-              footer={
-                <Edge>
-                  {(paging === 'later' || (transcript.later && transcript.loading)) && (
-                    <p role="status" {...stylex.props(styles.small)}>
-                      Loading later…
-                    </p>
-                  )}
-                </Edge>
-              }
-            />
+            <OpenCallsContext.Provider value={openCalls}>
+              <TranscriptList
+                list={list}
+                transcript={transcript}
+                views={views}
+                mounted={mounted}
+                selecting={reading.selecting}
+                onFollowingChange={setFollowingEnd}
+                holding={holding}
+                onHoldingChange={setHolding}
+                onPage={page}
+                onReaderInput={controller.cancelFindReveal}
+                header={
+                  <Edge>
+                    {paging === 'earlier' && (
+                      <p role="status" {...stylex.props(styles.small)}>
+                        Loading earlier…
+                      </p>
+                    )}
+                    {!transcript.earlier && (
+                      <p {...stylex.props(styles.small)}>Start of conversation</p>
+                    )}
+                  </Edge>
+                }
+                footer={
+                  <Edge>
+                    {(paging === 'later' || (transcript.later && transcript.loading)) && (
+                      <p role="status" {...stylex.props(styles.small)}>
+                        Loading later…
+                      </p>
+                    )}
+                  </Edge>
+                }
+              />
+            </OpenCallsContext.Provider>
           </RowContext.Provider>
         )}
         {snapshot && (!followingEnd || transcript.later || preserve) && (
@@ -328,6 +340,8 @@ function TranscriptList({
   mounted,
   selecting,
   onFollowingChange,
+  holding,
+  onHoldingChange: setHolding,
   onPage,
   onReaderInput,
   header,
@@ -339,6 +353,9 @@ function TranscriptList({
   mounted: string[];
   selecting: boolean;
   onFollowingChange(following: boolean): void;
+  /** Growing rows don't pin the end, after the reader opened something while following. */
+  holding: boolean;
+  onHoldingChange(holding: boolean): void;
   onPage(direction: Paging): void;
   /** The reader scrolled, pressed, typed or moved focus in the list. */
   onReaderInput(): void;
@@ -350,9 +367,22 @@ function TranscriptList({
     current.current = transcript;
   }, [transcript]);
   const { dataset } = transcript;
+  const items = useMemo(
+    () => groupTranscriptRows(transcript.rows, kindOfRow, itemCache),
+    [transcript.rows],
+  );
+  /** The list item holding each row: a row in an activity run is drawn by the run's item. */
+  const itemKeys = useMemo(
+    () => new Map(items.flatMap((item) => item.rows.map((row) => [row.key, item.key] as const))),
+    [items],
+  );
+  const currentItemKeys = useRef(itemKeys);
+  useLayoutEffect(() => {
+    currentItemKeys.current = itemKeys;
+  }, [itemKeys]);
   /** Where this dataset opens: its saved anchor's row when it has one. */
-  const [placement, setPlacement] = useState(() => findPlacement(transcript));
-  if (placement.dataset !== dataset) setPlacement(findPlacement(transcript));
+  const [placement, setPlacement] = useState(() => findPlacement(transcript, items));
+  if (placement.dataset !== dataset) setPlacement(findPlacement(transcript, items));
   /** The dataset the list last finished placing; until then this one isn't ready. */
   const [readyDataset, setReadyDataset] = useState<number | null>(null);
   const ready = readyDataset === dataset;
@@ -381,9 +411,19 @@ function TranscriptList({
   useEffect(() => {
     const ref = list.current;
     if (!ref) return;
-    onFollowingChange(ref.getState().isFollowingEnd);
-    return ref.getState().listen('isFollowingEnd', onFollowingChange);
-  }, [list, onFollowingChange]);
+    // While holding, content below the screen counts as not following, so Jump to latest shows.
+    const report = () => {
+      const state = ref.getState();
+      onFollowingChange(state.isFollowingEnd && (!holding || state.isAtEnd));
+    };
+    report();
+    const following = ref.getState().listen('isFollowingEnd', report),
+      end = ref.getState().listen('isAtEnd', report);
+    return () => {
+      following();
+      end();
+    };
+  }, [list, onFollowingChange, holding]);
   // A newly revealed Find match, or one a jump just placed: scrolling to its row releases
   // following, then the match itself is revealed inside it. A match rendered later is revealed by
   // its part.
@@ -392,7 +432,12 @@ function TranscriptList({
     const ref = list.current;
     if (!findActive || !findRevealing || !ref || !ready) return;
     void ref
-      .scrollToKey({ key: getEntryRowKey(findActive.source.entryId), animated: false })
+      .scrollToKey({
+        key:
+          currentItemKeys.current.get(getEntryRowKey(findActive.source.entryId)) ??
+          getEntryRowKey(findActive.source.entryId),
+        animated: false,
+      })
       .then(() => {
         if (current.current.dataset === dataset) revealFindMatch(ref);
       });
@@ -405,7 +450,12 @@ function TranscriptList({
   const holdFindReveal = useCallback(
     ({ itemKey }: { itemKey: string }) => {
       const { active, revealing } = current.current.find;
-      if (!revealing || !active || getEntryRowKey(active.source.entryId) !== itemKey) return;
+      if (
+        !revealing ||
+        !active ||
+        currentItemKeys.current.get(getEntryRowKey(active.source.entryId)) !== itemKey
+      )
+        return;
       cancelAnimationFrame(frame.current);
       frame.current = requestAnimationFrame(() => {
         if (list.current && current.current.find.revealing) revealFindMatch(list.current);
@@ -434,19 +484,33 @@ function TranscriptList({
     if (earlier && state.isNearStart) pageEarlier();
     else if (later && state.isNearEnd) pageLater();
   }, [loading, error, earlier, later, list, pageEarlier, pageLater, ready]);
-  const alwaysRender = useMemo(() => ({ keys: mounted }), [mounted]);
+  const alwaysRender = useMemo(
+    () => ({ keys: [...new Set(mounted.map((key) => itemKeys.get(key) ?? key))] }),
+    [mounted, itemKeys],
+  );
+  /**
+   * Opening or closing a disclosure while following the end would pin the end and push the rows
+   * above it up. Pressing one stops following rows that change size, so the change grows or
+   * shrinks below; new rows still follow, and the reader's next scroll ends the hold.
+   */
+  const holdDisclosure = (event: { target: EventTarget; key?: string }) => {
+    if (event.key !== undefined && event.key !== 'Enter' && event.key !== ' ') return;
+    const toggle = (event.target as Element).closest?.('button[aria-expanded]');
+    if (toggle?.closest('[data-transcript-row]') && list.current?.getState().isFollowingEnd)
+      setHolding(true);
+  };
   return (
-    <LegendList<TranscriptRow>
+    <LegendList<TranscriptItem<TranscriptRow>>
       ref={list}
       role="region"
       aria-label="Chat transcript"
       data-transcript-list=""
       tabIndex={0}
-      data={transcript.rows}
+      data={items}
       dataKey={dataset}
-      keyExtractor={getRowKey}
-      getItemType={getRowType}
-      renderItem={renderRow}
+      keyExtractor={getItemKey}
+      getItemType={getItemType}
+      renderItem={renderItem}
       estimatedItemSize={estimatedRowSize}
       {...(placement.anchor
         ? {
@@ -456,17 +520,26 @@ function TranscriptList({
             },
           }
         : { initialScrollAtEnd: true })}
-      maintainScrollAtEnd={!selecting && following}
+      maintainScrollAtEnd={!selecting && (holding ? followingNewRows : following)}
       maintainVisibleContentPosition={keepPosition}
       alwaysRender={alwaysRender}
       // An edge with no more history has no callback: the list gates its edge callbacks on the
       // previous one, so an ignored call would hold back the other edge.
       onStartReached={earlier ? pageEarlier : undefined}
       onEndReached={later ? pageLater : undefined}
-      onUserScroll={onReaderInput}
+      onUserScroll={() => {
+        setHolding(false);
+        onReaderInput();
+      }}
       onItemSizeChanged={holdFindReveal}
-      onPointerDownCapture={onReaderInput}
-      onKeyDownCapture={onReaderInput}
+      onPointerDownCapture={(event) => {
+        holdDisclosure(event);
+        onReaderInput();
+      }}
+      onKeyDownCapture={(event) => {
+        holdDisclosure(event);
+        onReaderInput();
+      }}
       onFocusCapture={onReaderInput}
       onReady={() => setReadyDataset(dataset)}
       ListHeaderComponent={header}
@@ -477,18 +550,35 @@ function TranscriptList({
   );
 }
 
-/** Where the saved anchor's row is in the dataset's rows; without an anchor it opens at the end. */
-function findPlacement({ dataset, view, rows }: ChatState['transcript']) {
+/** Where the saved anchor's item is in the dataset; without an anchor it opens at the end. */
+function findPlacement(
+  { dataset, view }: ChatState['transcript'],
+  items: readonly TranscriptItem<TranscriptRow>[],
+) {
   const anchor = view.anchor;
-  const index = anchor ? rows.findIndex((row) => row.key === anchor.key) : -1;
+  const index = anchor
+    ? items.findIndex((item) => item.rows.some((row) => row.key === anchor.key))
+    : -1;
   return index >= 0 ? { dataset, anchor, index } : { dataset, anchor: null, index: -1 };
 }
 const readDevicePixel = () => 1 / window.devicePixelRatio;
-const getRowKey = (row: TranscriptRow) => row.key;
-const getRowType = (row: TranscriptRow) => (row.kind === 'entry' ? row.entry.role : row.kind);
-const renderRow = ({ item }: LegendListRenderItemProps<TranscriptRow>) => <Row row={item} />;
+const getItemKey = (item: TranscriptItem<TranscriptRow>) => item.key;
+const getItemType = (item: TranscriptItem<TranscriptRow>) => {
+  if (item.rows.length > 1) return 'activity';
+  const row = item.rows[0]!;
+  return row.kind === 'entry' ? row.entry.role : row.kind;
+};
+const renderItem = ({ item }: LegendListRenderItemProps<TranscriptItem<TranscriptRow>>) => (
+  <Item item={item} />
+);
+const itemCache = new WeakMap<TranscriptRow, TranscriptItem<TranscriptRow>>();
+const kindOfRow = (row: TranscriptRow) =>
+  row.kind === 'tool' ? 'message' : classifyEntry(row.entry);
 
-type RowProps = Omit<EntryProps, 'entry' | 'liveState' | keyof SharedRowProps>;
+type RowProps = Omit<
+  EntryProps,
+  'entry' | 'liveState' | 'joinPrevious' | 'joinNext' | keyof SharedRowProps
+>;
 type SharedRowProps = Pick<EntryProps, 'controller' | 'cache' | 'native' | 'actions' | 'evidence'>;
 /** What every row reads from the transcript: shared props, and its own slice of state. */
 const RowContext = createContext<{
@@ -497,7 +587,21 @@ const RowContext = createContext<{
   liveLabel: string | undefined;
 } | null>(null);
 
-function Row({ row }: { row: TranscriptRow }) {
+/** A list item: one row, or a run of activity rows drawn as one card. */
+function Item({ item }: { item: TranscriptItem<TranscriptRow> }) {
+  return item.rows.map((row, index) => (
+    <Row key={row.key} row={row} joinPrevious={index > 0} joinNext={index < item.rows.length - 1} />
+  ));
+}
+function Row({
+  row,
+  joinPrevious,
+  joinNext,
+}: {
+  row: TranscriptRow;
+  joinPrevious: boolean;
+  joinNext: boolean;
+}) {
   const context = useContext(RowContext)!;
   return (
     <div data-transcript-row={row.key} {...stylex.props(styles.row)}>
@@ -508,6 +612,8 @@ function Row({ row }: { row: TranscriptRow }) {
           <Entry
             entry={row.entry}
             liveState={row.kind === 'live' ? (context.liveLabel ?? row.state) : undefined}
+            joinPrevious={joinPrevious}
+            joinNext={joinNext}
             {...context.shared}
             {...context.getRowProps(row.entry)}
           />
