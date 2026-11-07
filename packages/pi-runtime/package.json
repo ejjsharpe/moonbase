@@ -16,7 +16,7 @@
     "build:host": "node --experimental-strip-types scripts/build-host.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "oxlint .",
-    "test": "node --experimental-strip-types --test test/*.test.ts"
+    "test": "node scripts/ensure-electron.mjs && node --experimental-strip-types --test test/*.test.ts"
   },
   "dependencies": {
     "effect": "4.1.0",
