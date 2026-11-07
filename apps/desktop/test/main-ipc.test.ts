@@ -54,6 +54,10 @@ test('command IPC authenticates every channel, validates envelopes and tears dow
         calls++;
         return '/chosen';
       },
+      recentFolders: async () => {
+        calls++;
+        return ['/chosen'];
+      },
       createWorktree: async (root, branch) => {
         calls++;
         return `${root}-worktrees/${branch.replaceAll('/', '-')}`;

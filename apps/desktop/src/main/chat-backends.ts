@@ -152,6 +152,10 @@ export function createChatBackends({
       if (owner !== documentId || !selection) return null;
       return local.approveFolder(selection);
     },
+    /** Folders the native picker approved before, still the same directories, newest first. */
+    async recentFolders() {
+      return local ? local.listRecentFolders() : [];
+    },
     /**
      * Starts a new local chat's worktree from a folder local chat may use, and approves the new
      * worktree as that chat's working folder.
@@ -174,7 +178,7 @@ export function createChatBackends({
             code: 'Cancelled',
             message: 'The window reloaded while the worktree was created.',
           });
-        return await local.approveFolder(created);
+        return await local.approveFolder(created, { recent: false });
       } finally {
         worktreeCreations.delete(creation);
       }

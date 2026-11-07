@@ -34,7 +34,8 @@ export function chatCapabilities(local = false, activity = false) {
     model: 'fake',
     createdAt: '2026-01-01T00:00:00Z',
   };
-  let listings = 0;
+  let listings = 0,
+    ownFolders = 0;
   const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
   const activityChats = (): ChatSummary[] =>
     (
@@ -131,7 +132,10 @@ export function chatCapabilities(local = false, activity = false) {
               settings: ChatCreationSettings;
             };
             conversation.title = creation.title;
-            conversation.cwd = creation.settings.cwd;
+            // Like the host, a chat without a project gets a new folder of its own.
+            conversation.cwd = creation.settings.cwd ?? `/demo/chats/chat-${++ownFolders}`;
+            if (creation.settings.cwd) delete conversation.ownFolder;
+            else conversation.ownFolder = true;
             conversation.model = creation.settings.model.modelId;
             conversation.reasoningEffort = creation.settings.reasoningEffort;
           }

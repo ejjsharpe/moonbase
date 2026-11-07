@@ -38,7 +38,13 @@ export function installCommandIpc({
   editorSession: Pick<EditorSession, 'call' | 'cancel'>;
   chatBackends: Pick<
     DesktopChatBackends,
-    'getTargets' | 'getContext' | 'chooseFolder' | 'createWorktree' | 'requireLocal' | 'getSession'
+    | 'getTargets'
+    | 'getContext'
+    | 'chooseFolder'
+    | 'recentFolders'
+    | 'createWorktree'
+    | 'requireLocal'
+    | 'getSession'
   >;
   lifecycle: Pick<
     WindowLifecycle,
@@ -109,6 +115,15 @@ export function installCommandIpc({
             message: 'Folder selection is unavailable.',
           });
         return { ok: true, value: await chatBackends.chooseFolder() };
+      }
+      if (v.kind === 'recent-folders') {
+        fields(v, ['kind', 'backendId']);
+        if (backendId !== 'local')
+          throw new ApplicationError({
+            code: 'Unavailable',
+            message: 'Recent folders are unavailable.',
+          });
+        return { ok: true, value: await chatBackends.recentFolders() };
       }
       if (v.kind === 'create-worktree') {
         fields(v, ['kind', 'backendId', 'root', 'branch']);

@@ -17,6 +17,7 @@ import { decodeChatInput } from '@moonbase/contracts/chat-schema';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type { ChatCreationSettings, ChatSession } from '@moonbase/contracts/chat';
 import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
+import { createFolderApprovals } from './folders.ts';
 
 async function readLocalIdentity(directory: string): Promise<ChatSession> {
   const path = join(directory, 'identity.json');
@@ -91,38 +92,24 @@ export async function acquireLocalChat(
       helperEnv: { ELECTRON_RUN_AS_NODE: '1' },
     }),
   );
-  const approvals = new Map<string, { dev: number; ino: number }>();
-  const approveFolder = async (path: string) => {
-    const cwd = await realpath(path),
-      info = await stat(cwd);
-    if (!info.isDirectory())
-      throw new ApplicationError({ code: 'InvalidInput', message: 'Choose an existing folder.' });
-    approvals.set(cwd, { dev: info.dev, ino: info.ino });
-    return cwd;
-  };
+  const folders = createFolderApprovals(join(directory, 'approved-folders.json'));
   // A folder chosen in the native picker, still the same directory, may be searched and chatted in,
   // as may a checkout the editor approved, such as a project's root in its docked chat.
   const requireApprovedFolder = async (path: string, purpose: string) => {
-    const approved = approvals.get(path);
-    const cwd = await realpath(path),
-      info = await stat(cwd);
-    if (cwd === path && info.isDirectory() && !approved && isEditorFolder(cwd)) return;
-    if (
-      !approved ||
-      cwd !== path ||
-      !info.isDirectory() ||
-      info.dev !== approved.dev ||
-      info.ino !== approved.ino
-    )
-      throw new ApplicationError({
-        code: 'Unauthorized',
-        message: `Choose this working folder with the native picker before ${purpose}.`,
-      });
+    if (await folders.has(path)) return;
+    const cwd = await realpath(path).catch(() => ''),
+      info = cwd ? await stat(cwd) : null;
+    if (cwd === path && info?.isDirectory() && isEditorFolder(cwd)) return;
+    throw new ApplicationError({
+      code: 'Unauthorized',
+      message: `Choose this working folder with the native picker before ${purpose}.`,
+    });
   };
   // A chat without a project runs in a new folder the runtime makes for it under `chats`.
   const approveSettings = async (settings: ChatCreationSettings) => {
-    if (settings.cwd !== undefined)
-      await requireApprovedFolder(settings.cwd, 'creating or retrying a local chat');
+    if (settings.cwd === undefined) return;
+    await requireApprovedFolder(settings.cwd, 'creating or retrying a local chat');
+    await folders.touch(settings.cwd);
   };
   const approveSearch = (cwd: string) => requireApprovedFolder(cwd, 'searching its files');
   const scope = Scope.forkUnsafe(runtime.scope, 'parallel');
@@ -148,7 +135,8 @@ export async function acquireLocalChat(
     );
     return {
       session,
-      approveFolder,
+      approveFolder: folders.approve,
+      listRecentFolders: folders.listRecent,
       requireApprovedFolder: (path: string) =>
         requireApprovedFolder(path, 'starting a worktree from it'),
       chat: Context.get(services, ChatService),

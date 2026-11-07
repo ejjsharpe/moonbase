@@ -14,6 +14,12 @@ import { closeSettings, createRemoteChat, openSettings, selectRemoteChat } from 
 import { captureNative } from './editor-regressions.ts';
 import { readFindHighlight } from './find-highlight.ts';
 
+/** Opens the composer's folder menu and chooses a folder with the native picker. */
+async function chooseFolderNatively(page: Page) {
+  await page.getByRole('button', { name: 'Choose working folder', exact: true }).click();
+  await page.getByRole('button', { name: 'Choose folder…', exact: true }).click();
+}
+
 type Control = {
   calls: { kind: string; operation: string }[];
   copied: string[];
@@ -199,7 +205,7 @@ test('integrated local archive/runtime streams held text and thinking, finds ret
         filePaths: [cwd],
       })) as typeof dialog.showOpenDialog;
     }, directory);
-    await page.getByRole('button', { name: 'Choose working folder', exact: true }).click();
+    await chooseFolderNatively(page);
     await page.getByLabel('Message', { exact: true }).fill('Read the retained controlled image');
     await page.getByRole('button', { name: 'Send message', exact: true }).click();
     await expect.poll(() => app!.evaluate(() => globalThis.integratedTranscript.requests)).toBe(1);

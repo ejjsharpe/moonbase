@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { test, expect, _electron as electron } from '@playwright/test';
+import { test, expect, _electron as electron, type Page } from '@playwright/test';
 import { build } from 'esbuild';
 import { readFile, writeFile, mkdir, mkdtemp, realpath, rm, symlink } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -16,6 +16,12 @@ import {
 } from './chat-target.ts';
 import { captureNative } from './editor-regressions.ts';
 import { retainedImage } from './stored-image-fixture.ts';
+
+/** Opens the composer's folder menu and chooses a folder with the native picker. */
+async function chooseFolderNatively(page: Page) {
+  await page.getByRole('button', { name: 'Choose working folder', exact: true }).click();
+  await page.getByRole('button', { name: 'Choose folder…', exact: true }).click();
+}
 
 let fixtureDirectory: string;
 test.afterAll(async () => {
@@ -235,7 +241,16 @@ test('native local setup, approved folders/models, streaming/tools, hidden work 
           filePaths: [path],
         })) as typeof dialog.showOpenDialog;
       }, folder);
-      await page.getByRole('button', { name: 'Choose working folder', exact: true }).click();
+      if (index) {
+        // Main offers the folder the picker approved for the first chat again, by name only.
+        await page.getByRole('button', { name: 'Choose working folder', exact: true }).click();
+        const folders = page.getByRole('dialog', { name: 'Working folder', exact: true });
+        await expect(
+          folders.getByRole('group', { name: 'Recent folders' }).getByRole('button'),
+        ).toHaveText([/^first/]);
+        await page.keyboard.press('Escape');
+      }
+      await chooseFolderNatively(page);
       await expect(
         page.getByRole('button', { name: 'Choose working folder', exact: true }),
       ).toHaveAttribute('title', folder);
@@ -314,6 +329,22 @@ test('native local setup, approved folders/models, streaming/tools, hidden work 
     await expect(page.getByRole('button', { name: 'Chat model', exact: true })).toContainText(
       'Extra high',
     );
+    // Picker approvals survive the restart: the last-used folder leads, and choosing one needs no
+    // native picker.
+    await page.getByRole('button', { name: 'Choose working folder', exact: true }).click();
+    const folders = page.getByRole('dialog', { name: 'Working folder', exact: true });
+    await expect(
+      folders.getByRole('group', { name: 'Recent folders' }).getByRole('button'),
+    ).toHaveText([/^second/, /^first/]);
+    await app.evaluate(({ dialog }) => {
+      dialog.showOpenDialog = (async () => {
+        throw new Error('The native picker should not open.');
+      }) as typeof dialog.showOpenDialog;
+    });
+    await folders.getByRole('button', { name: /^first/ }).click();
+    await expect(
+      page.getByRole('button', { name: 'Choose working folder', exact: true }),
+    ).toHaveAttribute('title', first);
     expect(errors).toEqual([]);
   } finally {
     if (child.exitCode === null) await app.evaluate(({ app }) => app.exit(0));
@@ -537,7 +568,7 @@ test('transcript local rendering precedes held completion; native Copy/link fail
         filePaths: [cwd],
       })) as typeof dialog.showOpenDialog;
     }, directory);
-    await page.getByRole('button', { name: 'Choose working folder', exact: true }).click();
+    await chooseFolderNatively(page);
     await page.getByLabel('Message', { exact: true }).fill('Read the held local response');
     await page.getByRole('button', { name: 'Send message', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
@@ -760,7 +791,7 @@ for (const mode of ['local', 'remote'] as const)
             filePaths: [cwd],
           })) as typeof dialog.showOpenDialog;
         }, directory);
-        await page.getByRole('button', { name: 'Choose working folder', exact: true }).click();
+        await chooseFolderNatively(page);
       }
       await page.getByLabel('Message', { exact: true }).fill('Observe held tool progress');
       await page.getByRole('button', { name: 'Send message', exact: true }).click();
@@ -961,7 +992,7 @@ for (const mode of ['local', 'remote'] as const)
             filePaths: [cwd],
           })) as typeof dialog.showOpenDialog;
         }, directory);
-        await page.getByRole('button', { name: 'Choose working folder', exact: true }).click();
+        await chooseFolderNatively(page);
       }
       await page.getByLabel('Message', { exact: true }).fill('Inspect retained images');
       await page.getByRole('button', { name: 'Send message', exact: true }).click();
