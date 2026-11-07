@@ -38,6 +38,8 @@ Local chat needs no configuration: choose a provider under **Provider setup**, t
 
 Typing `@` in the composer searches the chat's working folder on its host (the bundled ripgrep for local chats) and inserts the picked file as a mention.
 
+Typing `/` at the start of a message lists the composer's commands (`src/renderer/chat/commands.ts`): `/new`, `/model`, `/effort`, `/stop` and `/clear`, each shown only when it can run. The renderer runs them; a command line sent with ⌘ Enter runs instead of reaching the agent.
+
 ## Remote chat
 
 Set `MOONBASE_CHAT_CONFIG` to an absolute private JSON file outside source control (mode `0600`, owned by you, not a symlink):

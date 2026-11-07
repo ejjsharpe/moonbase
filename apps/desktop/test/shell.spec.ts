@@ -1439,7 +1439,7 @@ test('@ in the composer searches the chat folder and sends picked files as menti
   const files = shell(page).getByRole('listbox', { name: 'Files', exact: true });
   await message.fill('Compare @vie');
   await expect(files.getByRole('option').first()).toHaveAccessibleName(/view\.tsx/);
-  await expect(message).toHaveAttribute('aria-activedescendant', /file-0$/);
+  await expect(message).toHaveAttribute('aria-activedescendant', /option-0$/);
   await message.press('Enter');
   await expect(message).toHaveValue('Compare @apps/desktop/src/renderer/chat/view.tsx ');
   await expect(files).toBeHidden();
@@ -1469,4 +1469,58 @@ test('@ in the composer searches the chat folder and sends picked files as menti
     text: 'Compare @apps/desktop/src/renderer/chat/view.tsx with care',
     mentions: [{ path: 'apps/desktop/src/renderer/chat/view.tsx' }],
   });
+});
+
+test('/ at the start of a message lists commands that switch model and effort, clear or start a chat', async ({
+  page,
+}) => {
+  await page.goto('/?local&design');
+  const model = page.getByRole('combobox', { name: 'Conversation model', exact: true });
+  const effort = page.getByRole('combobox', { name: 'Reasoning effort', exact: true });
+  const message = page.getByRole('textbox', { name: 'Message', exact: true });
+  const commands = page.getByRole('listbox', { name: 'Commands', exact: true });
+  await expect(effort).toContainText('Medium');
+  await message.fill('/');
+  await expect(commands.getByRole('option')).toHaveText([/^\/model/, /^\/effort/, /^\/clear/]);
+  await message.press('ArrowDown');
+  await message.press('Enter');
+  await expect(message).toHaveValue('/effort ');
+  const efforts = page.getByRole('listbox', { name: 'Reasoning efforts', exact: true });
+  await expect(efforts.getByRole('option', { name: 'Medium Current' })).toBeVisible();
+  await message.pressSequentially('hi');
+  await expect(efforts.getByRole('option')).toHaveText(['High']);
+  await message.press('Enter');
+  await expect(message).toHaveValue('');
+  await expect(effort).toContainText('High');
+  // A typed command runs on Send instead of reaching the agent; the lines after it stay.
+  await message.fill('/model coding\nKeep this');
+  await message.press('ControlOrMeta+Enter');
+  await expect(model).toContainText('Demo coding model');
+  await expect(message).toHaveValue('Keep this');
+  await message.fill('/stop');
+  await message.press('ControlOrMeta+Enter');
+  await expect(page.getByRole('alert').filter({ hasText: '/stop' })).toHaveText(
+    "/stop isn't available here.",
+  );
+  await expect(message).toHaveValue('/stop');
+  // The error belongs to that line; editing it hides the error.
+  await message.fill('Fix the login bug');
+  await expect(page.getByRole('alert').filter({ hasText: '/stop' })).toBeHidden();
+  // A / typed before existing text lists nothing, so picking cannot replace that text.
+  await message.press('Home');
+  await message.pressSequentially('/');
+  await expect(commands).toBeHidden();
+  await expect(message).toHaveValue('/Fix the login bug');
+  await message.fill('/cl');
+  await message.press('Enter');
+  await expect(message).toHaveValue('');
+  await page.getByRole('button', { name: 'Choose working folder', exact: true }).click();
+  await message.fill('Start a chat');
+  await page.getByRole('button', { name: 'Send message', exact: true }).click();
+  await expect(page.getByText('demo-coding · Medium', { exact: true })).toBeVisible();
+  await message.fill('/ne');
+  await expect(commands.getByRole('option')).toHaveText([/^\/new/]);
+  await message.press('Tab');
+  await expect(page.getByText('What should we work on?')).toBeVisible();
+  await expect(model).toContainText('Demo coding model');
 });

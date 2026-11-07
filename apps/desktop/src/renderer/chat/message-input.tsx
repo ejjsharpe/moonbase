@@ -16,11 +16,20 @@ import {
   removeMentionBefore,
   type MentionQuery,
 } from './mention-text.ts';
+import {
+  filterCommands,
+  filterOptions,
+  findCommandQuery,
+  removeCommandLine,
+  type ChatCommand,
+  type ChatCommandOption,
+} from './commands.ts';
 import { Icon } from '../icon.tsx';
 
 /**
  * The message textarea. Typing `@` searches the chat's working folder on its host; a picked file is
- * inserted as a mention, highlighted like a chip and carried with the draft.
+ * inserted as a mention, highlighted like a chip and carried with the draft. Typing `/` at the start
+ * lists the composer's commands, and a command's choices once its name is typed.
  */
 export function MessageInput({
   controller,
@@ -30,6 +39,8 @@ export function MessageInput({
   cwd,
   placeholder,
   starter,
+  commands,
+  onCommand,
 }: {
   controller: ChatController;
   draft: string;
@@ -40,6 +51,8 @@ export function MessageInput({
   cwd?: string;
   placeholder: string;
   starter: boolean;
+  commands: readonly ChatCommand[];
+  onCommand(command: ChatCommand, option?: ChatCommandOption): void;
 }) {
   const textarea = useRef<HTMLTextAreaElement>(null),
     mirror = useRef<HTMLDivElement>(null),
@@ -48,7 +61,7 @@ export function MessageInput({
   // a sent message's) has no caret until the user places one.
   const [selection, setSelection] = useState({ text: draft, caret: 0 }),
     [active, setActive] = useState(0),
-    [dismissed, setDismissed] = useState<number | null>(null),
+    [dismissed, setDismissed] = useState<string | null>(null),
     [search, setSearch] = useState<ChatFileSearch | null>(null);
   const id = useId();
   useEffect(() => {
@@ -61,12 +74,22 @@ export function MessageInput({
     search?.subscribe ?? noSubscription,
     search?.getSnapshot ?? noResults,
   );
+  const caret = selection.text === draft ? selection.caret : null;
+  const typedCommand = caret === null ? null : findCommandQuery(draft, caret, commands);
+  const commandKey =
+    typedCommand && (typedCommand.kind === 'command' ? '/' : `/${typedCommand.command.name} `);
+  const commandQuery = commandKey !== dismissed ? typedCommand : null;
   const typed =
-    searchable && selection.text === draft
-      ? findMentionQuery(draft, selection.caret, mentions)
-      : null;
-  const query: MentionQuery | null = typed && typed.start !== dismissed ? typed : null;
+    !typedCommand && searchable && caret !== null ? findMentionQuery(draft, caret, mentions) : null;
+  const query: MentionQuery | null = typed && `@${typed.start}` !== dismissed ? typed : null;
   const queryKey = query && JSON.stringify([query.start, query.query, cwd]);
+  const commandRows =
+    commandQuery?.kind === 'command' ? filterCommands(commands, commandQuery.query) : [];
+  const optionRows =
+    commandQuery?.kind === 'option'
+      ? filterOptions(commandQuery.command.options ?? [], commandQuery.query)
+      : [];
+  const commandText = commandQuery && JSON.stringify([commandKey, commandQuery.query]);
   useEffect(() => {
     if (!search) return;
     if (queryKey) {
@@ -75,7 +98,7 @@ export function MessageInput({
     } else search.clear();
     // oxlint-disable-next-line react/set-state-in-effect -- A new query starts at its first match.
     setActive(0);
-  }, [search, queryKey]);
+  }, [search, queryKey, commandText]);
   useEffect(() => {
     // Restores the caret after a programmatic edit, once React has rendered the edited text.
     const restored = caretAfter.current;
@@ -83,14 +106,35 @@ export function MessageInput({
     if (restored?.text === draft)
       textarea.current?.setSelectionRange(restored.caret, restored.caret);
   }, [draft]);
-  const open = !!query && (results.matches.length > 0 || !!results.error || results.busy);
+  const fileOpen = !!query && (results.matches.length > 0 || !!results.error || results.busy);
   const matches = query ? results.matches : [];
   const full = mentions.length >= maximumChatMentions;
-  const optionId = (index: number) => `${id}-file-${index}`;
+  const commandOpen =
+    commandQuery?.kind === 'option' || (commandQuery?.kind === 'command' && !!commandRows.length);
+  const open = fileOpen || commandOpen;
+  const count = commandQuery ? commandRows.length || optionRows.length : matches.length;
+  const pickerKey = commandKey ?? (query ? `@${query.start}` : null);
+  const optionId = (index: number) => `${id}-option-${index}`;
   function edit(text: string, next: ChatMention[] | undefined, at: number) {
-    caretAfter.current = { text, caret: at };
     setSelection({ text, caret: at });
+    // Unchanged text renders nothing new, so its caret moves now rather than after the render.
+    if (text === draft) textarea.current?.setSelectionRange(at, at);
+    else caretAfter.current = { text, caret: at };
     controller.setDraft(text, next);
+  }
+  function pickActive() {
+    const index = Math.min(active, count - 1);
+    if (commandRows.length) pickCommand(commandRows[index]!);
+    else if (optionRows.length && commandQuery?.kind === 'option')
+      onCommand(commandQuery.command, optionRows[index]!);
+    else pick(matches[index]!.path);
+  }
+  function pickCommand(command: ChatCommand) {
+    if (!command.options) return onCommand(command);
+    // A command with choices lists them next, as its argument.
+    const rest = removeCommandLine(draft),
+      head = `/${command.name} `;
+    edit(draft.includes('\n') ? `${head}\n${rest}` : head, undefined, head.length);
   }
   function pick(path: string) {
     if (!query || (full && !mentions.some((mention) => mention.path === path))) return;
@@ -137,9 +181,9 @@ export function MessageInput({
       <textarea
         ref={textarea}
         id="message"
-        aria-autocomplete={searchable ? 'list' : undefined}
-        aria-controls={open ? `${id}-files` : undefined}
-        aria-activedescendant={open && matches.length ? optionId(active) : undefined}
+        aria-autocomplete="list"
+        aria-controls={open ? `${id}-picker` : undefined}
+        aria-activedescendant={open && count ? optionId(active) : undefined}
         {...stylex.props(
           controls.field,
           styles.text,
@@ -164,7 +208,7 @@ export function MessageInput({
         onScroll={(event) => {
           if (mirror.current) mirror.current.scrollTop = event.currentTarget.scrollTop;
         }}
-        onBlur={() => setDismissed(query?.start ?? null)}
+        onBlur={() => setDismissed(pickerKey)}
         onFocus={() => setDismissed(null)}
         onKeyDown={(event) => {
           const element = event.currentTarget;
@@ -176,19 +220,19 @@ export function MessageInput({
           if (open && event.key === 'Escape') {
             event.preventDefault();
             event.stopPropagation();
-            setDismissed(query.start);
+            setDismissed(pickerKey);
             return;
           }
-          if (open && matches.length) {
+          if (open && count) {
             if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
               event.preventDefault();
               const step = event.key === 'ArrowDown' ? 1 : -1;
-              setActive((active + step + matches.length) % matches.length);
+              setActive((active + step + count) % count);
               return;
             }
             if ((event.key === 'Enter' || event.key === 'Tab') && !event.shiftKey) {
               event.preventDefault();
-              pick(matches[Math.min(active, matches.length - 1)]!.path);
+              pickActive();
               return;
             }
           }
@@ -206,9 +250,65 @@ export function MessageInput({
           }
         }}
       />
-      {open && (
+      {commandOpen && commandQuery && (
         <div {...stylex.props(overlays.popup, styles.picker, starter && styles.pickerBelow)}>
-          <div id={`${id}-files`} role="listbox" aria-label="Files" {...stylex.props(styles.files)}>
+          <div
+            id={`${id}-picker`}
+            role="listbox"
+            aria-label={
+              commandQuery.kind === 'option'
+                ? (commandQuery.command.optionsLabel ?? 'Options')
+                : 'Commands'
+            }
+            {...stylex.props(styles.files)}>
+            {commandRows.map((command, index) => (
+              <div
+                key={command.name}
+                id={optionId(index)}
+                role="option"
+                aria-selected={index === active}
+                {...stylex.props(styles.file, index === active && styles.activeFile)}
+                onMouseDown={(event) => event.preventDefault()}
+                onMouseEnter={() => setActive(index)}
+                onClick={() => pickCommand(command)}>
+                <span {...stylex.props(styles.fileName, styles.commandName)}>/{command.name}</span>
+                <span {...stylex.props(styles.fileFolder, controls.truncate)}>
+                  {command.description}
+                </span>
+              </div>
+            ))}
+            {commandQuery.kind === 'option' &&
+              optionRows.map((option, index) => (
+                <div
+                  key={option.value}
+                  id={optionId(index)}
+                  role="option"
+                  aria-selected={index === active}
+                  {...stylex.props(styles.file, index === active && styles.activeFile)}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onMouseEnter={() => setActive(index)}
+                  onClick={() => onCommand(commandQuery.command, option)}>
+                  <span {...stylex.props(styles.fileName, controls.truncate)}>{option.label}</span>
+                  {option.current && (
+                    <span {...stylex.props(styles.fileFolder, styles.current)}>Current</span>
+                  )}
+                </div>
+              ))}
+          </div>
+          {commandQuery.kind === 'option' && !optionRows.length && (
+            <p role="status" {...stylex.props(styles.status)}>
+              Nothing matches “{commandQuery.query.trim()}”.
+            </p>
+          )}
+        </div>
+      )}
+      {fileOpen && (
+        <div {...stylex.props(overlays.popup, styles.picker, starter && styles.pickerBelow)}>
+          <div
+            id={`${id}-picker`}
+            role="listbox"
+            aria-label="Files"
+            {...stylex.props(styles.files)}>
             {matches.map((match, index) => {
               const slash = match.path.lastIndexOf('/');
               return (
@@ -356,6 +456,8 @@ const styles = stylex.create({
   fileName: { flexShrink: 0, maxWidth: '60%', color: colors.text },
   fileFolder: { minWidth: 0, color: colors.muted },
   matched: { fontWeight: 700, color: colors.link },
+  commandName: { fontFamily: type.mono, minWidth: 72 },
+  current: { marginLeft: 'auto', flexShrink: 0 },
   status: {
     margin: 0,
     padding: '6px 12px 8px',

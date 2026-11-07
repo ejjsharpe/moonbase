@@ -14,6 +14,13 @@ import { ProviderSetup } from './setup.tsx';
 import { Choice } from './choice.tsx';
 import { Icon } from '../icon.tsx';
 import { MessageInput } from './message-input.tsx';
+import {
+  listChatCommands,
+  removeCommandLine,
+  resolveCommandLine,
+  type ChatCommand,
+  type ChatCommandOption,
+} from './commands.ts';
 import { projectInitials, projectTiles } from '@moonbase/ui/projects';
 const compactLayout = window.matchMedia('(max-width: 640px)');
 const subscribeLayout = (listener: () => void) => {
@@ -52,7 +59,9 @@ export function ChatView({
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot),
     [cwd, setCwd] = useState(dock?.cwd ?? ''),
     [dockList, setDockList] = useState(false),
-    [folderError, setFolderError] = useState<string | null>(null);
+    [folderError, setFolderError] = useState<string | null>(null),
+    // An error belongs to the command line it was about; editing it or changing chat hides it.
+    [commandError, setCommandError] = useState<{ text: string; message: string } | null>(null);
   const providerState = useSyncExternalStore(
     controller.providers?.subscribe ?? noSubscription,
     controller.providers?.getSnapshot ?? noProviders,
@@ -127,6 +136,52 @@ export function ChatView({
     busy = (id: string) => state.active.includes(id);
   const snapshot = state.snapshot,
     run = snapshot?.run;
+  const chooseModel = (value: string) => {
+    const entry = models.find((model) => model.value === value);
+    if (entry)
+      controller.setModelPreference({
+        model: entry.model,
+        ...(entry.defaultReasoningEffort ? { reasoningEffort: entry.defaultReasoningEffort } : {}),
+      });
+  };
+  const chooseEffort = (value: string) => {
+    const effort = selectedEntry?.reasoningEfforts?.find((effort) => effort === value);
+    if (selectedEntry && effort)
+      controller.setModelPreference({ model: selectedEntry.model, reasoningEffort: effort });
+  };
+  const startNewChat = () =>
+    void controller.closeView().then(() => document.getElementById('message')?.focus());
+  const choosing = local && !state.selected && !busy('send');
+  const commands = listChatCommands({
+    selected: !!state.selected,
+    running: !!run && connected && !busy('stop') && !state.storageError,
+    models: choosing
+      ? models.map((entry) => ({
+          value: entry.value,
+          label: entry.label,
+          current: entry.value === selectedModel,
+        }))
+      : [],
+    efforts: choosing
+      ? (selectedEntry?.reasoningEfforts ?? []).map((value) => ({
+          value,
+          label: effortLabels[value],
+          current: !effortUnavailable && value === selectedEffort,
+        }))
+      : [],
+    newChat: startNewChat,
+    stop: () => void controller.stop(),
+    clearDraft: () => controller.setDraft(''),
+    chooseModel,
+    chooseEffort,
+  });
+  // A command consumes its line before it runs, so `/clear` and `/new` start from the rest.
+  const runCommand = (command: ChatCommand, option?: ChatCommandOption) => {
+    setCommandError(null);
+    controller.setDraft(removeCommandLine(state.draft), state.mentions);
+    command.run(option);
+  };
+  const typedCommand = resolveCommandLine(state.draft, commands);
   const sidebar = (
     <aside
       aria-label="Saved chats"
@@ -135,7 +190,7 @@ export function ChatView({
         {...stylex.props(controls.button, styles.newChat)}
         onClick={() => {
           setSidebarOpen(false);
-          void controller.closeView().then(() => document.getElementById('message')?.focus());
+          startNewChat();
         }}>
         <Icon name="compose" /> New chat
       </Button>
@@ -349,6 +404,11 @@ export function ChatView({
             {folderError}
           </p>
         )}
+        {commandError?.text === `${state.selected?.conversationId ?? ''}\n${state.draft}` && (
+          <p role="alert" {...stylex.props(styles.warning)}>
+            {commandError.message}
+          </p>
+        )}
         {!state.selected &&
           state.modelPreference &&
           providerState?.status &&
@@ -363,6 +423,16 @@ export function ChatView({
           {...stylex.props(styles.composer, !state.selected && styles.starterComposer)}
           onSubmit={(e) => {
             e.preventDefault();
+            if (typedCommand) {
+              if ('error' in typedCommand)
+                setCommandError({
+                  text: `${state.selected?.conversationId ?? ''}\n${state.draft}`,
+                  message: typedCommand.error,
+                });
+              else runCommand(typedCommand.command, typedCommand.option);
+              return;
+            }
+            setCommandError(null);
             void controller.send(
               local && !state.selected && cwd && selection ? { cwd, ...selection } : undefined,
             );
@@ -381,6 +451,8 @@ export function ChatView({
               cwd={!state.selected && local && cwd ? cwd : undefined}
               placeholder={state.selected ? 'Message the agent…' : 'Describe a task…'}
               starter={!state.selected}
+              commands={commands}
+              onCommand={runCommand}
             />
           </div>
           <div {...stylex.props(controls.row, styles.composeActions)}>
@@ -434,16 +506,7 @@ export function ChatView({
                       label="Conversation model"
                       value={selectedModel}
                       options={models}
-                      onChange={(value) => {
-                        const entry = models.find((model) => model.value === value);
-                        if (entry)
-                          controller.setModelPreference({
-                            model: entry.model,
-                            ...(entry.defaultReasoningEffort
-                              ? { reasoningEffort: entry.defaultReasoningEffort }
-                              : {}),
-                          });
-                      }}
+                      onChange={chooseModel}
                       disabled={!models.length || busy('send')}
                     />
                   </div>
@@ -457,16 +520,7 @@ export function ChatView({
                           value,
                           label: effortLabels[value],
                         }))}
-                        onChange={(value) => {
-                          const effort = selectedEntry.reasoningEfforts?.find(
-                            (effort) => effort === value,
-                          );
-                          if (effort)
-                            controller.setModelPreference({
-                              model: selectedEntry.model,
-                              reasoningEffort: effort,
-                            });
-                        }}
+                        onChange={chooseEffort}
                         disabled={busy('send')}
                       />
                     </div>
@@ -497,18 +551,20 @@ export function ChatView({
                 title="Send message · ⌘ Enter"
                 {...stylex.props(controls.button, styles.sendButton)}
                 disabled={
-                  !connected ||
-                  !state.draft.trim() ||
-                  busy('send') ||
-                  busy('create') ||
-                  !!state.storageError ||
-                  (!state.selected && local && (!cwd || !selection)) ||
-                  state.pending.some(
-                    (p) =>
-                      (p.operation === 'sendChat' &&
-                        p.input.target.conversationId === state.selected?.conversationId) ||
-                      (!state.selected && p.operation === 'createChat' && !!p.firstMessage),
-                  )
+                  typedCommand
+                    ? false
+                    : !connected ||
+                      !state.draft.trim() ||
+                      busy('send') ||
+                      busy('create') ||
+                      !!state.storageError ||
+                      (!state.selected && local && (!cwd || !selection)) ||
+                      state.pending.some(
+                        (p) =>
+                          (p.operation === 'sendChat' &&
+                            p.input.target.conversationId === state.selected?.conversationId) ||
+                          (!state.selected && p.operation === 'createChat' && !!p.firstMessage),
+                      )
                 }>
                 <Icon name="send" />
               </Button>
