@@ -135,6 +135,8 @@ test('results stop at 50 and say they are partial', async () => {
 
 test('a fixed host searches only its working folder, for new and existing chats', async (t) => {
   const f = await fixture(t);
+  // Git lists the folder whether or not this machine has ripgrep.
+  execFileSync('git', ['init', '-q'], { cwd: f.config.cwd });
   const client = f.client;
   const host = await client.command('getChatHost', { host: session.host });
   assert(host.features?.includes(chatFilesFeature));
