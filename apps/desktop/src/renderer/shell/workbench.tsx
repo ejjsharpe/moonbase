@@ -16,6 +16,7 @@ import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { controls } from '@moonbase/ui/controls';
 import { workbench } from '@moonbase/ui/workbench';
 import { Settings, type SettingsSection } from './settings.tsx';
+import { formatChatAge } from '../chat/age.ts';
 import { ChatView } from '../chat/view.tsx';
 import { checkoutName } from '@moonbase/ui/projects';
 import { Icon } from '../icon.tsx';
@@ -43,19 +44,6 @@ const noSubscription = () => () => {};
 const dockDefaultWidth = 400,
   dockMinWidth = 320;
 const noEditor = () => undefined;
-
-/** A chat's age for the picker: minutes and hours, then days, then a date. */
-export function formatChatAge(createdAt: string, now = Date.now()) {
-  const minutes = Math.floor((now - Date.parse(createdAt)) / 60000);
-  if (minutes < 1) return 'now';
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-  const days = Math.floor(hours / 24);
-  if (days === 1) return 'yesterday';
-  if (days < 7) return `${days}d`;
-  return new Date(createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-}
 
 export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(function DesktopShell(
   {
@@ -151,6 +139,11 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
   const restoreFocus = (value: string) => {
     requestedFocus.current = value;
   };
+  const startNewChat = () => {
+    if (!chat) return;
+    setDestination('chat');
+    run(chat.closeView().then(() => document.getElementById('message')?.focus()));
+  };
   const showChat = () => {
     setDestination('chat');
     if (view !== 'chat') restoreFocus('chat');
@@ -162,7 +155,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
       id: summary.target.conversationId,
       kind: 'chat' as const,
       label: summary.title,
-      detail: `${summary.cwd.split('/').filter(Boolean).at(-1) || '/'} · ${formatChatAge(summary.createdAt)}`,
+      detail: `${summary.cwd.split('/').filter(Boolean).at(-1) || '/'} · ${formatChatAge(summary.activity?.at ?? summary.createdAt)}`,
       recent: index < 3,
       run: () => {
         if (!chat) return;
@@ -188,10 +181,8 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
             id: 'new-chat',
             kind: 'command' as const,
             label: 'New chat',
-            run: () => {
-              run(chat.closeView().then(() => document.getElementById('message')?.focus()));
-              setDestination('chat');
-            },
+            shortcut: '⌘N',
+            run: startNewChat,
           },
         ]
       : []),
@@ -318,6 +309,18 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
         if (event.metaKey && !event.altKey && !event.shiftKey && event.key === ',') {
           event.preventDefault();
           setSettings((open) => open ?? 'hosts');
+          return;
+        }
+        if (
+          chat &&
+          event.metaKey &&
+          !event.altKey &&
+          !event.shiftKey &&
+          event.key.toLowerCase() === 'n' &&
+          !(event.target as HTMLElement).closest('[role="dialog"], [role="alertdialog"]')
+        ) {
+          event.preventDefault();
+          startNewChat();
           return;
         }
         // ⌘ only: Control+P is "previous line" in macOS text fields.
@@ -596,6 +599,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
                   : undefined
               }
               setUpProviders={chat.providers ? () => setSettings('providers') : undefined}
+              visible={view === 'chat'}
             />
           )
         ) : (

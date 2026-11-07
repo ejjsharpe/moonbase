@@ -12,6 +12,10 @@ const input = (page: Page) =>
 async function chat(page: Page) {
   await tabs(page).getByRole('tab', { name: 'Agents', exact: true }).click();
   await shell(page).getByRole('button', { name: 'Connect', exact: true }).click();
+  // The demo chat is Settled, behind a toggle that starts closed.
+  await shell(page)
+    .getByRole('button', { name: /^Settled/ })
+    .click();
   await shell(page)
     .getByRole('button', { name: /^Conversation/ })
     .click();
@@ -1424,10 +1428,10 @@ test('⌘P jumps between chats, projects and files, and > runs app commands', as
   await expect(goTo.getByRole('option').first()).toHaveAccessibleName('Conversation');
   await page.keyboard.press('Enter');
   await expect(goTo).toHaveCount(0);
-  await expect(shell(page).getByRole('button', { name: /^Conversation/ })).toHaveAttribute(
-    'aria-pressed',
-    'true',
-  );
+  // The chat opens; it is Settled, so the sidebar keeps it behind the closed toggle.
+  await expect(
+    shell(page).getByRole('heading', { level: 1, name: 'Conversation', exact: true }),
+  ).toBeVisible();
 });
 
 test('@ in the composer searches the chat folder and sends picked files as mentions', async ({
@@ -1592,7 +1596,7 @@ test('Settings holds hosts and providers; the sidebar keeps only a Connect line'
   await expect(settings).toHaveCount(0);
   // Connected, the Connect line goes and the chats are listed.
   await expect(sidebar.getByRole('status')).toHaveCount(0);
-  await expect(sidebar.getByRole('button', { name: /^Conversation/ })).toBeVisible();
+  await expect(sidebar.getByRole('button', { name: /^Settled/ })).toHaveText(/Settled\s*1/);
 });
 
 test('the local model menu opens provider setup in Settings', async ({ page }) => {
@@ -1608,10 +1612,81 @@ test('the local model menu opens provider setup in Settings', async ({ page }) =
   await expect(
     settings.getByRole('button', { name: 'Refresh providers', exact: true }),
   ).toBeVisible();
+  // Each vendor is a card listing its ways to connect, each with its state and one action.
+  const vendor = settings
+    .getByRole('list', { name: 'Model providers', exact: true })
+    .getByRole('listitem', { name: 'OpenAI', exact: true });
+  await expect(vendor).toContainText('1 connected');
+  const key = vendor.getByRole('listitem', { name: 'Demo provider', exact: true });
+  await expect(key).toContainText('API key');
+  await expect(key).toContainText('2 models');
+  await expect(
+    key.getByRole('button', { name: 'Remove key for Demo provider', exact: true }),
+  ).toBeVisible();
   await settings.getByRole('tab', { name: 'Hosts', exact: true }).click();
   await expect(settings.getByRole('status').first()).toHaveText('Local ready');
   await settings.getByRole('button', { name: 'Close settings', exact: true }).click();
   await expect(settings).toHaveCount(0);
   await shell(page).getByRole('button', { name: 'Settings', exact: true }).click();
   await expect(settings).toBeVisible();
+});
+
+test('the chats sidebar orders by activity: Ready, Working, then a Settled toggle', async ({
+  page,
+}) => {
+  await page.goto('/?chat&activity');
+  await tabs(page).getByRole('tab', { name: 'Agents', exact: true }).click();
+  await shell(page).getByRole('button', { name: 'Connect', exact: true }).click();
+  const list = shell(page).getByRole('navigation', { name: 'Conversations', exact: true });
+  await expect(list.getByRole('heading', { name: 'Ready 4' })).toBeVisible();
+  await expect(list.getByRole('heading', { name: 'Working 2' })).toBeVisible();
+  const rows = list.getByRole('button', { pressed: false });
+  await expect(rows.nth(0)).toContainText('Fix the dock resize handle');
+  await expect(rows.nth(0)).toContainText('moonbase · failed');
+  await expect(rows.nth(1)).toContainText('Summarise this repository');
+  await expect(rows.nth(1)).toContainText('finished');
+  await expect(rows.nth(2)).toContainText('stopped');
+  await expect(rows.nth(4)).toContainText('Move the transcript to Legend List');
+  await expect(rows.nth(4)).toContainText('running');
+  const settled = list.getByRole('button', { name: /^Settled/ });
+  await expect(settled).toHaveAttribute('aria-expanded', 'false');
+  // The chat seen before anything else listed is settled and hidden behind the toggle.
+  await expect(list.getByRole('button', { name: /^Conversation/ })).toHaveCount(0);
+  // Opening a Ready chat settles it; it stays in view under the closed toggle while it is open.
+  await list.getByRole('button', { name: /^Summarise this repository/ }).click();
+  await expect(list.getByRole('heading', { name: 'Ready 3' })).toBeVisible();
+  await expect(settled).toHaveText(/Settled\s*2/);
+  await expect(list.getByRole('button', { name: /^Summarise this repository/ })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  // Closed, the toggle sits at the foot of the list.
+  const bottom = async (locator: typeof list) => {
+    const box = (await locator.boundingBox())!;
+    return box.y + box.height;
+  };
+  expect((await bottom(list)) - (await bottom(settled))).toBeLessThan(80);
+  await settled.click();
+  await expect(settled).toHaveAttribute('aria-expanded', 'true');
+  await expect(list.getByRole('button', { name: /^Conversation/ })).toBeVisible();
+  await settled.click();
+  await expect(settled).toHaveAttribute('aria-expanded', 'false');
+  await expect(list.getByRole('button', { name: /^Conversation/ })).toHaveCount(0);
+  await settled.click();
+  // The toggle is remembered.
+  await page.reload();
+  await tabs(page).getByRole('tab', { name: 'Agents', exact: true }).click();
+  await shell(page).getByRole('button', { name: 'Connect', exact: true }).click();
+  await expect(list.getByRole('button', { name: /^Settled/ })).toHaveAttribute(
+    'aria-expanded',
+    'true',
+  );
+  // ⌘N starts a new chat from anywhere in the shell.
+  await project(page).click();
+  await project(page).press('Meta+n');
+  await expect(shell(page).getByLabel('Message', { exact: true })).toBeFocused();
+  await expect(tabs(page).getByRole('tab', { name: 'Agents', exact: true })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
 });

@@ -48,6 +48,16 @@ const pending = Schema.Union([
     message: text(1024),
   }),
 ]);
+/** Chats you have looked at, newest look first, with the activity time you saw. */
+export const seenLimit = 1000;
+const seen = Schema.optionalKey(
+  array(
+    struct({
+      conversationId: ChatIdentifierSchema,
+      at: text(64).check(Schema.makeFilter((value) => Number.isFinite(Date.parse(value)))),
+    }),
+  ).check(Schema.isMaxLength(seenLimit)),
+);
 const SavedSchema = struct({
   version: Schema.Literal(1),
   session: ChatSessionSchema,
@@ -61,6 +71,7 @@ const SavedSchema = struct({
     ),
   ).check(Schema.isMaxLength(32)),
   pending: array(pending).check(Schema.isMaxLength(16)),
+  seen,
 });
 export type Saved = typeof SavedSchema.Type;
 export type Pending = typeof pending.Type;

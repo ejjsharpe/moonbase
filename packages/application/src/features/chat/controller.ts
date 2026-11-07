@@ -31,7 +31,14 @@ import {
 import type { ConnectionClient, ConnectionSnapshot } from '@moonbase/contracts/connection';
 import { makeProviderSetupController, type ProviderSetupController } from './providers.ts';
 import type { ProviderSetupClient } from '@moonbase/contracts/providers';
-import { decodeSaved, sameSession, sameTarget, type Saved, type Pending } from './saved.ts';
+import {
+  decodeSaved,
+  sameSession,
+  sameTarget,
+  seenLimit,
+  type Saved,
+  type Pending,
+} from './saved.ts';
 export type { Pending } from './saved.ts';
 import { TranscriptOwner } from './transcript.ts';
 import {
@@ -53,6 +60,8 @@ export type ChatState = {
   host: ChatHostConfiguration | null;
   chats: ChatSummary[];
   nextChats: string | null;
+  /** Chats you have looked at and the activity time you saw; absent before the first listing. */
+  seen: readonly { conversationId: string; at: string }[] | undefined;
   snapshot: ChatSnapshot | null;
   transcript: TranscriptState;
   selected: ChatTarget | null;
@@ -110,6 +119,8 @@ type WatchAttempt = {
   observation?: Observation;
 };
 const maximumSavedBytes = 2 * 1024 * 1024;
+/** Pages a listing reads, so a chat that is active again is listed however long ago it started. */
+const chatListPages = 16;
 const bytes = (value: string) => new TextEncoder().encode(value).length;
 const text = (value: string, limit: number) =>
   value.isWellFormed() && !value.includes('\0') && bytes(value) <= limit;
@@ -202,6 +213,7 @@ class ChatModelState {
       host: null,
       chats: [],
       nextChats: null,
+      seen: this.saved.seen,
       snapshot: null,
       transcript: makeEmptyTranscriptState(),
       selected: this.saved.selected,
@@ -286,6 +298,7 @@ class ChatModelState {
         mentions: this.draftMentions(),
         pending: next.pending,
         modelPreference: next.modelPreference ?? null,
+        seen: next.seen,
       });
     } catch {
       this.update({
@@ -581,10 +594,9 @@ class ChatModelState {
               ? 'Local tools use this computer’s permissions. The selected folder is context, not a sandbox.'
               : 'Verified host. Reconnection reads saved state; it does not send.',
         });
-        const listed = yield* Effect.exit(this.call('listChats', { session: this.session }));
+        const listed = yield* Effect.exit(this.listChats());
         if (!owner.alive || epoch !== this.epoch) return;
-        if (Exit.isSuccess(listed))
-          this.update({ chats: listed.value.conversations, nextChats: listed.value.nextCursor });
+        if (Exit.isSuccess(listed)) this.listed(listed.value);
         if (this.state.transcript.observation === 'failed') {
           void this.closeOwner(this.selection);
           this.selection = undefined;
@@ -609,11 +621,101 @@ class ChatModelState {
         if (!cursor) return;
         const page = yield* this.call('listChats', { session: this.session, cursor });
         if (owner?.alive && epoch === this.epoch)
-          this.update({ chats: page.conversations, nextChats: page.nextCursor });
+          this.listed({
+            chats: [...this.state.chats, ...page.conversations],
+            next: page.nextCursor,
+          });
       }),
       owner,
     );
   };
+  /** The first pages of chats, deduplicated; `next` continues past them. */
+  private listChats(): Effect.Effect<
+    { chats: ChatSummary[]; next: string | null },
+    ApplicationError
+  > {
+    return Effect.gen({ self: this }, function* () {
+      const chats: ChatSummary[] = [];
+      let cursor: string | null = null;
+      for (let page = 0; page < chatListPages; page++) {
+        const listed: ChatOutput<'listChats'> = yield* this.call('listChats', {
+          session: this.session,
+          ...(cursor ? { cursor } : {}),
+        });
+        chats.push(...listed.conversations);
+        cursor = listed.nextCursor;
+        if (!cursor) break;
+      }
+      return { chats, next: cursor };
+    });
+  }
+  private listed({ chats, next }: { chats: ChatSummary[]; next: string | null }) {
+    const unique = [...new Map(chats.map((chat) => [chat.target.conversationId, chat])).values()];
+    this.update({ chats: unique, nextChats: next });
+    // Before anything was marked, every listed chat counts as seen, so old work is not all Ready.
+    if (this.saved.seen === undefined && !this.state.storageError)
+      try {
+        this.commit({
+          ...this.saved,
+          seen: unique
+            .map((chat) => ({
+              conversationId: chat.target.conversationId,
+              at: chat.activity?.at ?? chat.createdAt,
+            }))
+            .slice(0, seenLimit),
+        });
+      } catch {
+        /* commit reports storage failures in state. */
+      }
+  }
+  private reloading = false;
+  /**
+   * Lists chats again in the background, keeping the last list if it fails. Unlike Refresh it
+   * neither re-verifies the host nor clears an error on screen.
+   */
+  reloadChats = (): Promise<void> => {
+    const owner = this.generation;
+    if (!this.admissionsOpen || this.closed || this.reloading || !owner?.alive || !this.state.ready)
+      return Promise.resolve();
+    let epoch: number;
+    try {
+      epoch = this.connected();
+    } catch {
+      return Promise.resolve();
+    }
+    this.reloading = true;
+    return this.runEffect(
+      Effect.flatMap(
+        Effect.forkIn(this.listChats(), owner.scope, { startImmediately: true }),
+        Fiber.join,
+      ),
+    )
+      .then((listed) => {
+        if (owner.alive && epoch === this.epoch && !this.closed) this.listed(listed);
+      })
+      .catch(() => {})
+      .finally(() => {
+        this.reloading = false;
+      });
+  };
+  /** Records that you saw a chat as of its activity time; an older look never replaces a newer one. */
+  markSeen(conversationId: string, at: string) {
+    if (!this.admissionsOpen || this.closed || this.state.storageError) return;
+    const seen = this.saved.seen ?? [];
+    const current = seen.find((item) => item.conversationId === conversationId);
+    if (current && Date.parse(current.at) >= Date.parse(at)) return;
+    try {
+      this.commit({
+        ...this.saved,
+        seen: [
+          { conversationId, at },
+          ...seen.filter((item) => item.conversationId !== conversationId),
+        ].slice(0, seenLimit),
+      });
+    } catch {
+      /* commit reports storage failures in state. */
+    }
+  }
   firstChats = () => this.refresh();
   setModelPreference(value: ChatModelPreference) {
     if (!this.admissionsOpen || this.closed) return;
@@ -1313,6 +1415,8 @@ export type ChatController = Pick<
   | 'refresh'
   | 'moreChats'
   | 'firstChats'
+  | 'reloadChats'
+  | 'markSeen'
   | 'setDraft'
   | 'canFindFiles'
   | 'findFiles'

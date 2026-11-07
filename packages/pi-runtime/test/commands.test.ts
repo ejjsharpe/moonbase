@@ -681,7 +681,11 @@ test('escaped identity components open and reopen without an extra serialized id
   );
   assert.deepEqual(
     (await makeChatClient(runtime).command('listChats', { session })).conversations[0],
-    created.conversation,
+    // A listing adds the chat's activity: never run, so idle since it was created.
+    {
+      ...created.conversation,
+      activity: { state: 'idle', at: created.conversation.createdAt },
+    },
   );
   assert.equal(faux.state.callCount, 0);
 });

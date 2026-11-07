@@ -137,7 +137,7 @@ for (const configured of [false, true])
       } else {
         await expect(
           (await openSettings(page, 'Providers')).getByRole('button', {
-            name: 'Sign in with ChatGPT',
+            name: 'Sign in to ChatGPT subscription',
             exact: true,
           }),
         ).toBeVisible();

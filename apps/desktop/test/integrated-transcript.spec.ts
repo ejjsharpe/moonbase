@@ -186,9 +186,7 @@ test('integrated local archive/runtime streams held text and thinking, finds ret
     app = launched.app;
     const { page } = launched;
     await openSettings(page, 'Providers');
-    await page.getByRole('combobox', { name: 'Provider', exact: true }).click();
-    await page.getByRole('option', { name: 'OpenAI API key', exact: true }).click();
-    await page.getByRole('button', { name: 'Set API key', exact: true }).click();
+    await page.getByRole('button', { name: 'Add key for OpenAI API key', exact: true }).click();
     await page
       .getByLabel('Enter OpenAI API key', { exact: true })
       .fill('sk-controlled-qualification-only');

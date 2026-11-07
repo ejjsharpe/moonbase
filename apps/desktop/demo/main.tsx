@@ -63,7 +63,10 @@ const memory = memoryWorkspace([
 // One demo composition root. Feature packages do not construct runtimes.
 const runtime = ManagedRuntime.make(memory.layer),
   client = makeEditorClient(runtime);
-const chat = chatCapabilities(new URLSearchParams(location.search).has('local'));
+const chat = chatCapabilities(
+  new URLSearchParams(location.search).has('local'),
+  new URLSearchParams(location.search).has('activity'),
+);
 const transcriptDemo = new URLSearchParams(location.search).has('transcript')
   ? await installTranscriptDemo(chat)
   : null;

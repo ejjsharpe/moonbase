@@ -14,6 +14,7 @@ import { Button } from '@base-ui/react/button';
 import { Collapsible } from '@base-ui/react/collapsible';
 import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
+import { spinner } from '@moonbase/ui/spinner';
 import type {
   ChatController,
   TranscriptContentState,
@@ -435,7 +436,11 @@ function Activity({
                 key={summary}
                 title={summary}
                 data-glyph={(state && stepGlyphs[state]) ?? '·'}
-                {...stylex.props(styles.activityStep, stepStyles[state ?? 'unknown'])}>
+                {...stylex.props(
+                  styles.activityStep,
+                  stepStyles[state ?? 'unknown'],
+                  state === 'running' && spinner.glyph,
+                )}>
                 <span {...stylex.props(styles.activityTool)}>
                   {split < 0 ? summary : summary.slice(0, split)}
                 </span>

@@ -3,6 +3,11 @@ import { Layer, ManagedRuntime } from 'effect';
 import type { ChatClient } from '@moonbase/contracts/chat';
 import { ChatIpcSession } from '../src/chat/session.ts';
 import { browserTranscriptActions, type TranscriptCopy } from '../src/chat/wire.ts';
+
+// These tests open the demo chat, which is Settled; the sidebar's own test covers the toggle.
+test.beforeEach(({ page }) =>
+  page.addInitScript(() => localStorage.setItem('moonbase.chats.settled', 'open')),
+);
 async function open(page: Page) {
   await page.goto('/?local&design&transcript');
   await page.getByRole('button', { name: /^Conversation/ }).click();

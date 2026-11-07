@@ -12,6 +12,7 @@ import {
   disconnectChat,
   openSettings,
   selectRemoteChat,
+  showChat,
 } from './chat-target.ts';
 import { captureNative } from './editor-regressions.ts';
 import { retainedImage } from './stored-image-fixture.ts';
@@ -207,9 +208,7 @@ test('native local setup, approved folders/models, streaming/tools, hidden work 
     );
     expect(unauthorized).toMatchObject({ ok: false, error: { code: 'Unauthorized' } });
     await openSettings(page, 'Providers');
-    await page.getByRole('combobox', { name: 'Provider', exact: true }).click();
-    await page.getByRole('option', { name: 'OpenAI API key', exact: true }).click();
-    await page.getByRole('button', { name: 'Set API key', exact: true }).click();
+    await page.getByRole('button', { name: 'Add key for OpenAI API key', exact: true }).click();
     await page
       .getByLabel('Enter OpenAI API key', { exact: true })
       .fill('sk-controlled-private-key');
@@ -298,8 +297,9 @@ test('native local setup, approved folders/models, streaming/tools, hidden work 
     child = app.process();
     page = await app.firstWindow();
     await openChat();
-    await expect(page.getByRole('button', { name: /Local conversation 0/ })).toBeVisible();
-    await expect(page.getByRole('button', { name: /Local conversation 1/ })).toBeVisible();
+    // Both chats survive the restart; finished and seen, they may be Settled.
+    await showChat(page, /Local conversation 0/);
+    await showChat(page, /Local conversation 1/);
     const after = await page.evaluate(() => window.moonbaseChat.context('local'));
     expect(after).toEqual(context);
     const saved = await page.evaluate(() => localStorage.getItem('moonbase.chat.local.v1'));
@@ -522,9 +522,7 @@ test('transcript local rendering precedes held completion; native Copy/link fail
   };
   try {
     await openSettings(page, 'Providers');
-    await page.getByRole('combobox', { name: 'Provider', exact: true }).click();
-    await page.getByRole('option', { name: 'OpenAI API key', exact: true }).click();
-    await page.getByRole('button', { name: 'Set API key', exact: true }).click();
+    await page.getByRole('button', { name: 'Add key for OpenAI API key', exact: true }).click();
     await page
       .getByLabel('Enter OpenAI API key', { exact: true })
       .fill('sk-controlled-transcript-fixture');
@@ -747,9 +745,7 @@ for (const mode of ['local', 'remote'] as const)
         await createRemoteChat(page, 'Remote held activity');
       } else {
         await openSettings(page, 'Providers');
-        await page.getByRole('combobox', { name: 'Provider', exact: true }).click();
-        await page.getByRole('option', { name: 'OpenAI API key', exact: true }).click();
-        await page.getByRole('button', { name: 'Set API key', exact: true }).click();
+        await page.getByRole('button', { name: 'Add key for OpenAI API key', exact: true }).click();
         await page
           .getByLabel('Enter OpenAI API key', { exact: true })
           .fill('sk-controlled-activity-fixture');
@@ -950,9 +946,7 @@ for (const mode of ['local', 'remote'] as const)
         await createRemoteChat(page, 'Retained remote images');
       } else {
         await openSettings(page, 'Providers');
-        await page.getByRole('combobox', { name: 'Provider', exact: true }).click();
-        await page.getByRole('option', { name: 'OpenAI API key', exact: true }).click();
-        await page.getByRole('button', { name: 'Set API key', exact: true }).click();
+        await page.getByRole('button', { name: 'Add key for OpenAI API key', exact: true }).click();
         await page
           .getByLabel('Enter OpenAI API key', { exact: true })
           .fill('sk-controlled-image-fixture');

@@ -2423,3 +2423,62 @@ test('a file picker shows only the latest answer and cancels the searches before
   assert.equal(calls.length, 4);
   assert.equal(notified, before);
 });
+
+test('listing reads every page, and a first listing marks what is already there as seen', async (t) => {
+  const f = await fixture(t);
+  const chat = (id: string, at: string) => ({
+    ...summary,
+    target: { ...context, conversationId: id },
+    activity: { state: 'idle' as const, at },
+  });
+  f.answers.set('listChats', async (input: { cursor?: string }) =>
+    input.cursor === 'page-2'
+      ? { conversations: [chat('old', '2026-11-07T09:00:00Z')], nextCursor: null }
+      : { conversations: [chat('new', '2026-11-07T10:00:00Z')], nextCursor: 'page-2' },
+  );
+  await f.controller.start();
+  await f.controller.connect();
+  const state = f.controller.getSnapshot();
+  assert.deepEqual(
+    state.chats.map((item) => item.target.conversationId),
+    ['new', 'old'],
+  );
+  assert.equal(state.nextChats, null);
+  assert.deepEqual(state.seen, [
+    { conversationId: 'new', at: '2026-11-07T10:00:00Z' },
+    { conversationId: 'old', at: '2026-11-07T09:00:00Z' },
+  ]);
+  // A later look replaces the earlier one; an older one never does.
+  f.controller.markSeen('old', '2026-11-07T11:00:00Z');
+  f.controller.markSeen('old', '2026-11-07T08:00:00Z');
+  assert.deepEqual(f.controller.getSnapshot().seen?.[0], {
+    conversationId: 'old',
+    at: '2026-11-07T11:00:00Z',
+  });
+  assert.deepEqual(JSON.parse(f.storage.value!).seen[0], {
+    conversationId: 'old',
+    at: '2026-11-07T11:00:00Z',
+  });
+});
+
+test('a background reload lists again without clearing an error or Refresh state', async (t) => {
+  const f = await fixture(t);
+  await f.controller.start();
+  await f.controller.reloadChats();
+  assert.equal(f.calls.filter((c) => c.operation === 'listChats').length, 0);
+  await f.controller.connect();
+  f.answers.set('listChats', async () => {
+    throw failure();
+  });
+  await f.controller.reloadChats();
+  // A failed background reload keeps the last list and reports nothing.
+  assert.equal(f.controller.getSnapshot().chats.length, 1);
+  assert.equal(f.controller.getSnapshot().error, null);
+  f.answers.set('listChats', async () => ({
+    conversations: [{ ...summary, title: 'Renamed' }],
+    nextCursor: null,
+  }));
+  await f.controller.reloadChats();
+  assert.equal(f.controller.getSnapshot().chats[0].title, 'Renamed');
+  assert.deepEqual(f.controller.getSnapshot().active, []);
+});

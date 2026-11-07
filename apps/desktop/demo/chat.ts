@@ -24,7 +24,7 @@ export const demoFiles = [
 ];
 
 /** Volatile, trusted browser demo capabilities; no host, transport or provider is installed. */
-export function chatCapabilities(local = false) {
+export function chatCapabilities(local = false, activity = false) {
   const context = { host: { hostId: 'host', storeId: 'store' }, actorId: 'actor' };
   const target = { ...context, conversationId: 'conversation' };
   const conversation: ChatSummary = {
@@ -34,6 +34,26 @@ export function chatCapabilities(local = false) {
     model: 'fake',
     createdAt: '2026-01-01T00:00:00Z',
   };
+  let listings = 0;
+  const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+  const activityChats = (): ChatSummary[] =>
+    (
+      [
+        ['dock', 'Fix the dock resize handle', '/work/moonbase', 'failed', 4],
+        ['tour', 'Summarise this repository', '/work/moonbase', 'idle', 12],
+        ['watcher', 'Audit file-watcher flakes', '/work/moonbase', 'stopped', 60],
+        ['legend', 'Move the transcript to Legend List', '/work/moonbase', 'running', 0],
+        ['docs', 'Translate the docs site', '/work/pi-docs', 'running', 2],
+        ['palette', 'Pick a palette', '/work/moonbase', 'idle', 60 * 30],
+      ] as const
+    ).map(([id, title, cwd, state, minutes]) => ({
+      target: { ...context, conversationId: id },
+      title,
+      cwd,
+      model: 'fake',
+      createdAt: ago(minutes + 30),
+      activity: { state, at: ago(minutes) },
+    }));
   const snapshot: ChatSnapshot = {
     conversation,
     state: 'idle',
@@ -88,9 +108,22 @@ export function chatCapabilities(local = false) {
                 }
           ) as never;
         case 'listChats':
-          return { conversations: [conversation], nextCursor: null } as never;
-        case 'getChat':
-          return structuredClone(snapshot) as never;
+          // `?activity` adds chats after the first listing, which marks only that one as seen.
+          return {
+            conversations:
+              activity && ++listings > 1 ? [conversation, ...activityChats()] : [conversation],
+            nextCursor: null,
+          } as never;
+        case 'getChat': {
+          const id = (input as ChatInput<'getChat'>).target.conversationId;
+          const listed =
+            activity && activityChats().find((chat) => chat.target.conversationId === id);
+          return (
+            listed
+              ? { ...structuredClone(snapshot), conversation: listed, entries: [] }
+              : structuredClone(snapshot)
+          ) as never;
+        }
         case 'createChat':
           if (local) {
             const creation = input as {
