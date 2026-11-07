@@ -5,6 +5,7 @@ import { normalizeApplicationError, runApplicationEffect } from '../../runtime/e
 import { decodeChatInput, ChatModelPreferenceSchema } from '@moonbase/contracts/chat-schema';
 import type {
   ChatCreationSettings,
+  ChatMention,
   ChatModelPreference,
   ChatClient,
   ChatCommand,
@@ -20,9 +21,12 @@ import type {
   ChatTranscriptSelection,
 } from '@moonbase/contracts/chat';
 import {
+  chatFilesFeature,
   chatFindFeature,
   chatStreamFeature,
   chatTranscriptFeature,
+  findChatMentionStarts,
+  maximumChatMentions,
 } from '@moonbase/contracts/chat';
 import type { ConnectionClient, ConnectionSnapshot } from '@moonbase/contracts/connection';
 import { makeProviderSetupController, type ProviderSetupController } from './providers.ts';
@@ -36,6 +40,7 @@ import {
   type TranscriptState,
 } from './transcript-state.ts';
 import { TranscriptViewMemory, type TranscriptView } from './view-memory.ts';
+import { ChatFileSearch } from './file-search.ts';
 
 export interface DraftStorage {
   read(): string | null;
@@ -52,6 +57,8 @@ export type ChatState = {
   transcript: TranscriptState;
   selected: ChatTarget | null;
   draft: string;
+  /** Files the draft mentions; each is spelled in `draft` (`formatChatMention`). */
+  mentions: ChatMention[];
   modelPreference: ChatModelPreference | null;
   pending: Pending[];
   active: string[];
@@ -199,6 +206,7 @@ class ChatModelState {
       transcript: makeEmptyTranscriptState(),
       selected: this.saved.selected,
       draft: this.draft(),
+      mentions: this.draftMentions(),
       modelPreference: this.saved.modelPreference ?? null,
       pending: this.saved.pending,
       active: [],
@@ -254,6 +262,13 @@ class ChatModelState {
       this.saved.drafts.find((draft) => sameTarget(draft.target, this.saved.selected))?.text ?? ''
     );
   }
+  private draftMentions(): ChatMention[] {
+    if (!this.saved.selected) return this.saved.newDraftMentions ?? [];
+    return (
+      this.saved.drafts.find((draft) => sameTarget(draft.target, this.saved.selected))?.mentions ??
+      []
+    );
+  }
   private commit(next: Saved) {
     if (this.closed) throw invalid('Chat model disposed.');
     if (this.state.storageError)
@@ -268,6 +283,7 @@ class ChatModelState {
       this.update({
         selected: next.selected,
         draft: this.draft(),
+        mentions: this.draftMentions(),
         pending: next.pending,
         modelPreference: next.modelPreference ?? null,
       });
@@ -613,25 +629,43 @@ class ChatModelState {
       );
     }
   }
-  setDraft(value: string) {
+  /**
+   * Replaces the draft. `mentions` replaces its mentioned files; otherwise the draft keeps the ones
+   * its text still spells, so deleting a mention's text drops the mention.
+   */
+  setDraft(value: string, mentions?: readonly ChatMention[]) {
     if (!this.admissionsOpen || this.closed) return;
     if (!text(value, 32768)) {
       this.update({ error: 'Message must contain valid Unicode and at most 32 KiB.' });
       return;
     }
+    const kept = [
+      ...new Map(
+        (mentions ?? this.state.mentions)
+          .filter((mention) => findChatMentionStarts(value, mention.path).length)
+          .map((mention) => [mention.path, { path: mention.path }]),
+      ).values(),
+    ];
+    if (kept.length > maximumChatMentions) {
+      this.update({ error: `A message can mention at most ${maximumChatMentions} files.` });
+      return;
+    }
     const target = this.saved.selected;
-    this.update({ draft: value });
+    this.update({ draft: value, mentions: kept });
     try {
       const next = structuredClone(this.saved);
       if (!target) {
         if (value) next.newDraft = value;
         else delete next.newDraft;
+        if (kept.length) next.newDraftMentions = kept;
+        else delete next.newDraftMentions;
       } else if (!value)
         next.drafts = next.drafts.filter((draft) => !sameTarget(draft.target, target));
       else {
-        const entry = next.drafts.find((draft) => sameTarget(draft.target, target));
-        if (entry) entry.text = value;
-        else next.drafts.push({ target, text: value });
+        const index = next.drafts.findIndex((draft) => sameTarget(draft.target, target));
+        const draft = { target, text: value, ...(kept.length ? { mentions: kept } : {}) };
+        if (index >= 0) next.drafts[index] = draft;
+        else next.drafts.push(draft);
       }
       this.commit(next);
     } catch (error) {
@@ -642,6 +676,49 @@ class ChatModelState {
       });
       this.error(error);
     }
+  }
+  /** Whether the host can search a chat's working folder for files to mention. */
+  get canFindFiles() {
+    return !!this.state.host?.features?.includes(chatFilesFeature);
+  }
+  /**
+   * Searches the selected chat's working folder on its host, or, for a new chat, `cwd` (a local
+   * chat's chosen folder) or the remote host's fixed folder. Results are not retained.
+   */
+  findFiles(
+    query: string,
+    options: { cwd?: string; signal?: AbortSignal } = {},
+  ): Promise<ChatOutput<'findChatFiles'>> {
+    return this.runEffect(
+      Effect.gen({ self: this }, function* () {
+        this.connected();
+        if (!this.canFindFiles)
+          throw new ApplicationError({
+            code: 'Unavailable',
+            message: 'This chat host cannot search files.',
+          });
+        const target = this.saved.selected,
+          host = this.state.host;
+        const cwd = options.cwd ?? (host && 'cwd' in host ? host.cwd : undefined);
+        if (!target && !cwd) throw invalid('Choose a working folder to search its files.');
+        const input = decodeChatInput(
+          'findChatFiles',
+          target ? { target, query } : { session: this.session, cwd, query },
+        );
+        return yield* Effect.tryPromise({
+          try: (signal) => {
+            return this.chat.command('findChatFiles', input, {
+              signal: options.signal ? AbortSignal.any([signal, options.signal]) : signal,
+            });
+          },
+          catch: normalizeApplicationError,
+        });
+      }),
+    );
+  }
+  /** A composer's file picker over `findFiles`; the caller disposes it. */
+  createFileSearch() {
+    return new ChatFileSearch((query, options) => this.findFiles(query, options));
   }
   select = (target: ChatTarget): Promise<void> => {
     if (!this.admissionsOpen || this.closed) return Promise.resolve();
@@ -893,7 +970,13 @@ class ChatModelState {
       Effect.gen({ self: this }, function* () {
         this.connected();
         const target = this.saved.selected,
-          value = this.state.draft;
+          value = this.state.draft,
+          message = {
+            text: value,
+            ...(this.state.mentions.length
+              ? { mentions: structuredClone(this.state.mentions) }
+              : {}),
+          };
         if (!text(value, 32768) || !value.trim()) throw invalid('Write a message before sending.');
         if (!target) {
           if (this.saved.drafts.length >= 32)
@@ -921,7 +1004,7 @@ class ChatModelState {
               title: title || 'New conversation',
               ...(settings ? { settings } : {}),
             }),
-            firstMessage: { requestId: this.newId(), text: value },
+            firstMessage: { requestId: this.newId(), ...message },
             message: 'Outcome pending. Original creation and first message retained.',
           };
           this.reserve(pending);
@@ -937,7 +1020,11 @@ class ChatModelState {
           throw invalid('Resolve the retained Send before starting another in this chat.');
         const pending: Pending = {
           operation: 'sendChat',
-          input: { target: structuredClone(target), requestId: this.newId(), text: value },
+          input: decodeChatInput('sendChat', {
+            target: structuredClone(target),
+            requestId: this.newId(),
+            ...message,
+          }),
           message: 'Outcome pending. Original Send identity and text retained.',
         };
         this.reserve(pending);
@@ -1031,13 +1118,23 @@ class ChatModelState {
         const existing = next.drafts.find((draft) => sameTarget(draft.target, conversation.target));
         if (!existing) {
           const draft = next.newDraft ?? pending.firstMessage.text;
+          const mentions = next.newDraft ? next.newDraftMentions : pending.firstMessage.mentions;
           if (draft && next.drafts.length >= 32)
             throw invalid(
               'The conversation was created, but the draft limit was reached. Send or clear an existing draft, then retry the original Create.',
             );
-          if (draft) next.drafts.push({ target: conversation.target, text: draft });
+          if (draft)
+            next.drafts.push({
+              target: conversation.target,
+              text: draft,
+              ...(mentions?.length ? { mentions } : {}),
+            });
           delete next.newDraft;
-        } else if (next.newDraft === pending.firstMessage.text) delete next.newDraft;
+          delete next.newDraftMentions;
+        } else if (next.newDraft === pending.firstMessage.text) {
+          delete next.newDraft;
+          delete next.newDraftMentions;
+        }
         if (!next.selected) next.selected = conversation.target;
       } else next.selected = conversation.target;
     }
@@ -1217,6 +1314,9 @@ export type ChatController = Pick<
   | 'moreChats'
   | 'firstChats'
   | 'setDraft'
+  | 'canFindFiles'
+  | 'findFiles'
+  | 'createFileSearch'
   | 'setModelPreference'
   | 'select'
   | 'closeView'

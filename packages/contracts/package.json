@@ -15,6 +15,7 @@
     "./schema": "./src/schema.ts",
     "./errors": "./src/errors.ts",
     "./common": "./src/common.ts",
+    "./lookup": "./src/lookup.ts",
     "./services": "./src/services.ts",
     "./providers": "./src/providers.ts",
     "./providers-schema": "./src/providers-schema.ts"

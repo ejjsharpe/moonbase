@@ -36,6 +36,8 @@ The app bundles Electron, the workspace native helper and ripgrep; system Git an
 
 Local chat needs no configuration: choose a provider under **Provider setup**, then a working folder and model. Credentials are encrypted with Electron safeStorage (there is no plaintext fallback) and never reach renderer storage or snapshots. Local tools run with your OS permissions: **the working folder is context, not a sandbox**.
 
+Typing `@` in the composer searches the chat's working folder on its host (the bundled ripgrep for local chats) and inserts the picked file as a mention.
+
 ## Remote chat
 
 Set `MOONBASE_CHAT_CONFIG` to an absolute private JSON file outside source control (mode `0600`, owned by you, not a symlink):

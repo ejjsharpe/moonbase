@@ -337,6 +337,7 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
       sendChat: (d) => call('sendChat', d),
       getChatSend: (d) => call('getChatSend', d),
       stopChat: (d) => call('stopChat', d),
+      findChatFiles: (d) => call('findChatFiles', d),
       watch: ({ target }) => watch(target),
     } satisfies ChatServiceShape;
   }),

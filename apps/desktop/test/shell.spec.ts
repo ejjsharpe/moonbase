@@ -1429,3 +1429,44 @@ test('⌘P jumps between chats, projects and files, and > runs app commands', as
     'true',
   );
 });
+
+test('@ in the composer searches the chat folder and sends picked files as mentions', async ({
+  page,
+}) => {
+  await page.goto('/?chat');
+  await chat(page);
+  const message = shell(page).getByRole('textbox', { name: 'Message', exact: true });
+  const files = shell(page).getByRole('listbox', { name: 'Files', exact: true });
+  await message.fill('Compare @vie');
+  await expect(files.getByRole('option').first()).toHaveAccessibleName(/view\.tsx/);
+  await expect(message).toHaveAttribute('aria-activedescendant', /file-0$/);
+  await message.press('Enter');
+  await expect(message).toHaveValue('Compare @apps/desktop/src/renderer/chat/view.tsx ');
+  await expect(files).toBeHidden();
+  await message.pressSequentially('with @rel');
+  await expect(files.getByRole('option').first()).toHaveAccessibleName(/Release notes\.md/);
+  // Escape closes only the picker; the @ text stays as typed.
+  await message.press('Escape');
+  await expect(files).toBeHidden();
+  await expect(message).toHaveValue(/with @rel$/);
+  await message.pressSequentially('e');
+  await message.press('ArrowDown');
+  await message.press('ArrowUp');
+  await message.press('Tab');
+  await expect(message).toHaveValue(
+    'Compare @apps/desktop/src/renderer/chat/view.tsx with @"docs/Release notes.md" ',
+  );
+  await expect(shell(page).locator('mark')).toHaveCount(2);
+  // Backspace at a mention's end removes the whole mention.
+  await message.press('Backspace');
+  await message.press('Backspace');
+  await expect(message).toHaveValue('Compare @apps/desktop/src/renderer/chat/view.tsx with ');
+  await expect(shell(page).locator('mark')).toHaveCount(1);
+  await message.pressSequentially('care');
+  await message.press('ControlOrMeta+Enter');
+  await expect(message).toHaveValue('');
+  expect(await page.evaluate(() => window.demo.chat.sent.at(-1))).toMatchObject({
+    text: 'Compare @apps/desktop/src/renderer/chat/view.tsx with care',
+    mentions: [{ path: 'apps/desktop/src/renderer/chat/view.tsx' }],
+  });
+});

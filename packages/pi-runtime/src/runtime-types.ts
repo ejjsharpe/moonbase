@@ -10,12 +10,17 @@ export type PiRuntimeConfiguration = ChatSession & {
   model: ModelRef;
   models: Models;
   registry?: Registry;
+  /** Absolute ripgrep for chat file search; otherwise `rg` on PATH, then Git. */
+  ripgrepExecutable?: string;
 };
 export type LocalPiRuntimeConfiguration = ChatSession & {
   databasePath: string;
   models: Models;
   registry?: Registry;
   approveCreation?: (settings: ChatCreationSettings) => Promise<void>;
+  /** Refuses a working folder a new chat may not search before it exists; absent allows any. */
+  approveFolder?: (cwd: string) => Promise<void>;
+  ripgrepExecutable?: string;
 };
 export type RuntimeConfiguration =
   | PiRuntimeConfiguration

@@ -50,6 +50,7 @@ export async function acquireLocalChat(
   runtime: ManagedRuntime.ManagedRuntime<never, ApplicationError>,
   userData: string,
   openUrl: (url: string) => Promise<void>,
+  ripgrepExecutable?: string,
 ) {
   const directory = join(userData, 'local-pi-v1');
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -82,23 +83,26 @@ export async function acquireLocalChat(
     approvals.set(cwd, { dev: info.dev, ino: info.ino });
     return cwd;
   };
-  const approveSettings = async (settings: ChatCreationSettings) => {
-    const approved = approvals.get(settings.cwd);
-    const cwd = await realpath(settings.cwd),
+  // A folder chosen in the native picker, still the same directory, may be searched and chatted in.
+  const requireApprovedFolder = async (path: string, purpose: string) => {
+    const approved = approvals.get(path);
+    const cwd = await realpath(path),
       info = await stat(cwd);
     if (
       !approved ||
-      cwd !== settings.cwd ||
+      cwd !== path ||
       !info.isDirectory() ||
       info.dev !== approved.dev ||
       info.ino !== approved.ino
     )
       throw new ApplicationError({
         code: 'Unauthorized',
-        message:
-          'Choose this working folder with the native picker before creating or retrying a local chat.',
+        message: `Choose this working folder with the native picker before ${purpose}.`,
       });
   };
+  const approveSettings = (settings: ChatCreationSettings) =>
+    requireApprovedFolder(settings.cwd, 'creating or retrying a local chat');
+  const approveSearch = (cwd: string) => requireApprovedFolder(cwd, 'searching its files');
   const scope = Scope.forkUnsafe(runtime.scope, 'parallel');
   try {
     const services = await runApplicationEffect(
@@ -110,6 +114,8 @@ export async function acquireLocalChat(
             databasePath: join(directory, 'chat.sqlite'),
             models,
             approveCreation: approveSettings,
+            approveFolder: approveSearch,
+            ...(ripgrepExecutable ? { ripgrepExecutable } : {}),
           }),
           ProviderSetupLive({ models, openUrl, deviceId: session.host.hostId }),
         ),

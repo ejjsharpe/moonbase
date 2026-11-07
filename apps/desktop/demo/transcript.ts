@@ -94,7 +94,7 @@ export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabili
     if (operation === 'getChatHost')
       return {
         ...chat.dependencies.context,
-        features: ['transcript-v1', 'chat-stream-v1', 'transcript-find-v1'],
+        features: ['transcript-v1', 'chat-stream-v1', 'transcript-find-v1', 'chat-files-v1'],
         ...(chat.dependencies.mode === 'local'
           ? { mode: 'local' }
           : { cwd: '/controlled', model: 'controlled' }),

@@ -75,7 +75,8 @@ export function cursor(value: unknown): string {
 export const isCancellableRead = (operation: ChatCommand) =>
   operation === 'getChatTranscriptContent' ||
   operation === 'getChatHistoryAround' ||
-  operation === 'findChatTranscript';
+  operation === 'findChatTranscript' ||
+  operation === 'findChatFiles';
 export function command(value: unknown): ChatCommand {
   if (!isChatCommand(value)) return fail('InvalidInput', 'Unknown chat operation.');
   return value;
@@ -112,7 +113,9 @@ export function output<K extends ChatCommand>(
   const r = result as Record<string, unknown> | null,
     q = request as Record<string, unknown>;
   const requestedSession = q.session as ChatSession | undefined;
-  if (requestedSession) {
+  if (operation === 'findChatFiles') {
+    if (r!.query !== q.query) fail('Incompatible', 'File search identity changed.');
+  } else if (requestedSession) {
     const summaries =
       operation === 'listChats'
         ? (r!.conversations as ChatSummary[])
