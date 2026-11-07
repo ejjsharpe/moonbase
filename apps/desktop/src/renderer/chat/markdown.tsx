@@ -10,6 +10,7 @@ import {
 } from 'react';
 import { Button } from '@base-ui/react/button';
 import { Collapsible } from '@base-ui/react/collapsible';
+import { Icon } from '../icon.tsx';
 import * as stylex from '@stylexjs/stylex';
 import * as monaco from 'monaco-editor';
 import ReactMarkdown, { type Components, type ExtraProps } from 'react-markdown';
@@ -478,8 +479,12 @@ const Code = memo(function Code({
           {!closed && ' · Incomplete'}
         </span>
         {copy && (
-          <Button {...stylex.props(controls.button, controls.quietButton)} onClick={copy}>
-            Copy code
+          <Button
+            aria-label="Copy code"
+            title="Copy code"
+            {...stylex.props(controls.button, controls.iconButton)}
+            onClick={copy}>
+            <Icon name="copy" />
           </Button>
         )}
       </div>

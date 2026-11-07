@@ -7,7 +7,7 @@ import { workbench } from '@moonbase/ui/workbench';
 import { colors, layout, radius, shadow, space, syntax, type } from '@moonbase/ui/tokens.stylex';
 import type { ChatModelPreference } from '@moonbase/contracts/chat';
 import type { ChatController } from '@moonbase/application/chat';
-import { FindBar, handleChatFindKeyDown } from './find.tsx';
+import { activateChatFind, FindBar, handleChatFindKeyDown } from './find.tsx';
 import { Transcript } from './transcript.tsx';
 import type { TranscriptNative } from '../../chat/wire.ts';
 import { ProviderSetup } from './setup.tsx';
@@ -115,6 +115,14 @@ export function ChatView({
   if (local && !state.selected && !models.length)
     toolNotice = 'Set up a provider to send. Local tools are not sandboxed.';
   const folderName = cwd ? cwd.split('/').filter(Boolean).at(-1) || '/' : '';
+  const selectedFolder = (
+    state.snapshot?.conversation.cwd ??
+    state.chats.find((c) => c.target.conversationId === state.selected?.conversationId)?.cwd ??
+    ''
+  )
+    .split('/')
+    .filter(Boolean)
+    .at(-1);
   const connected = state.ready,
     busy = (id: string) => state.active.includes(id);
   const snapshot = state.snapshot,
@@ -328,7 +336,6 @@ export function ChatView({
           controller={controller}
           state={state}
           native={transcriptNative}
-          findInput={findInput}
         />
       )}
       <div {...stylex.props(styles.composeArea, !state.selected && styles.starter)}>
@@ -361,11 +368,9 @@ export function ChatView({
             );
           }}>
           <div {...stylex.props(styles.messageRow)}>
-            {!state.selected && (
-              <span aria-hidden="true" {...stylex.props(styles.prompt)}>
-                ❯
-              </span>
-            )}
+            <span aria-hidden="true" {...stylex.props(styles.prompt)}>
+              ❯
+            </span>
             <MessageInput
               controller={controller}
               draft={state.draft}
@@ -374,7 +379,7 @@ export function ChatView({
                 controller.canFindFiles && connected && (!!state.selected || !local || !!cwd)
               }
               cwd={!state.selected && local && cwd ? cwd : undefined}
-              placeholder={state.selected ? 'Reply…' : 'Describe a task…'}
+              placeholder={state.selected ? 'Message the agent…' : 'Describe a task…'}
               starter={!state.selected}
             />
           </div>
@@ -632,6 +637,15 @@ export function ChatView({
                   {state.selected ? contextLabel : `In ${dock.project}`}
                 </p>
               </div>
+              {state.selected && (
+                <Button
+                  aria-label="Find"
+                  title="Find · ⌘F"
+                  {...stylex.props(controls.button, controls.iconButton)}
+                  onClick={(event) => activateChatFind(controller, event.currentTarget, findInput)}>
+                  <Icon name="search" />
+                </Button>
+              )}
               {collapse}
             </header>
             {body}
@@ -672,17 +686,42 @@ export function ChatView({
                 </Dialog.Portal>
               </Dialog.Root>
             )}
-            <div {...stylex.props(controls.truncate)}>
-              <h1 {...stylex.props(styles.title, !state.selected && !compact && controls.hidden)}>
+            {/* Breadcrumb: the chat's project, then the chat. Folder and model are in its title. */}
+            <div title={state.selected ? contextLabel : undefined} {...stylex.props(styles.crumbs)}>
+              {state.selected && selectedFolder && (
+                <>
+                  <span
+                    aria-hidden="true"
+                    data-initials={projectInitials(selectedFolder)}
+                    {...stylex.props(projectTiles.tile, projectTiles.silver, styles.crumbTile)}
+                  />
+                  <span {...stylex.props(styles.crumbProject, controls.truncate)}>
+                    {selectedFolder}
+                  </span>
+                  <span aria-hidden="true" {...stylex.props(styles.crumbSeparator)}>
+                    /
+                  </span>
+                </>
+              )}
+              <h1
+                {...stylex.props(
+                  styles.title,
+                  controls.truncate,
+                  !state.selected && !compact && controls.hidden,
+                )}>
                 {conversationTitle}
               </h1>
-              {state.selected && (
-                <p title={contextLabel} {...stylex.props(styles.small, controls.truncate)}>
-                  {contextLabel}
-                </p>
-              )}
             </div>
             <div {...stylex.props(controls.row)}>
+              {state.selected && (
+                <Button
+                  aria-label="Find"
+                  title="Find · ⌘F"
+                  {...stylex.props(controls.button, controls.iconButton)}
+                  onClick={(event) => activateChatFind(controller, event.currentTarget, findInput)}>
+                  <Icon name="search" />
+                </Button>
+              )}
               {state.selected && (
                 <Button
                   aria-label="Close view"
@@ -854,6 +893,10 @@ const styles = stylex.create({
     minHeight: 56,
     flexShrink: 0,
   },
+  crumbs: { display: 'flex', alignItems: 'center', gap: space.sm, minWidth: 0 },
+  crumbTile: { width: 20, height: 20, borderRadius: 5, fontSize: 9 },
+  crumbProject: { flexShrink: 1, maxWidth: 200, color: colors.secondary, fontSize: type.body },
+  crumbSeparator: { color: colors.muted },
   title: {
     fontSize: type.body,
     fontWeight: 500,

@@ -424,10 +424,12 @@ export async function projectEntry(
   const failed = message.role === 'assistant' && message.stopReason === 'error';
   // An empty interrupted or failed message shows the transcript's label instead of blank text.
   const empty = transcript.parts.find((part) => part.partId === 'm0.empty')?.text;
+  const recorded = new Date(message.timestamp);
   return {
     id: String(entry.id),
     transcript,
     role,
+    ...(Number.isFinite(recorded.getTime()) ? { createdAt: recorded.toISOString() } : {}),
     ...V.preview(failed ? 'Model response failed.' : text || empty || ''),
     ...(message.role === 'toolResult'
       ? { toolName: V.preview(message.toolName, 128).text, isError: message.isError }

@@ -61,13 +61,7 @@ async function open(
   const group = row.getByRole('button', { name: /^Activity/ });
   await group.scrollIntoViewIfNeeded();
   if ((await group.getAttribute('aria-expanded')) !== 'true') await group.click();
-  const disclosure = row.getByRole('button', { name: /^Stored image/ });
-  await disclosure.scrollIntoViewIfNeeded();
-  // Let compact-window scroll capture settle before choosing a pointer toggle intent.
-  await page.evaluate(
-    () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
-  );
-  if ((await disclosure.getAttribute('aria-expanded')) !== 'true') await disclosure.click();
+  // The image shows once its card is open; it has no fold of its own.
   await row.locator('[data-stored-image]').scrollIntoViewIfNeeded();
   return row;
 }
@@ -195,7 +189,6 @@ test('unsupported, missing and oversized images stay explicit without a request;
     await window.demo.application.chat!.jumpToLatest();
   });
   await page.getByRole('button', { name: /^Activity/ }).press('Enter');
-  await page.getByRole('button', { name: 'Stored image', exact: true }).press('Enter');
   await expect(page.locator('[data-stored-image] [role="alert"]')).toContainText('corrupt');
   expect(await imageUrls(page)).toBe(0);
   for (const data of [btoa('<html><script>alert(1)</script></html>'), png.slice(0, 40)]) {
@@ -341,7 +334,10 @@ test('pointer image reading cancels held Find reveal before collapse; only a new
   }, checker);
   const row = page.locator('[data-transcript-entry="stored-image"]');
   const group = row.getByRole('button', { name: /^Activity/ });
-  const image = row.getByRole('button', { name: 'Stored image', exact: true });
+  // The image part shows inside its open card; a press on it is the reader reading the image.
+  const image = row.locator('[data-transcript-part="image"]').getByText('Stored image', {
+    exact: true,
+  });
   await page.getByRole('textbox', { name: 'Find in conversation', exact: true }).fill('needle');
   await expect
     .poll(() =>
@@ -353,8 +349,8 @@ test('pointer image reading cancels held Find reveal before collapse; only a new
       () => window.demo.application.chat!.getSnapshot().transcript.find.active,
     );
     expect(first?.partId).toBe('result');
+    await expect(group).toHaveAttribute('aria-expanded', 'true');
     await image.click();
-    await expect(image).toHaveAttribute('aria-expanded', 'false');
     const manual = await page.evaluate(() => ({
       view: window.demo.application.chat!.getSnapshot().transcript.view,
       find: window.demo.application.chat!.getSnapshot().transcript.find,
@@ -398,7 +394,7 @@ test('pointer image reading cancels held Find reveal before collapse; only a new
     ).toEqual(manual.view.anchor);
     await page.getByRole('textbox', { name: 'Find in conversation', exact: true }).press('Enter');
     await expect(group).toHaveAttribute('aria-expanded', 'true');
-    await expect(image).toHaveAttribute('aria-expanded', 'false');
+    await expect(image).toBeVisible();
     await expect
       .poll(() =>
         page.evaluate(() => ({

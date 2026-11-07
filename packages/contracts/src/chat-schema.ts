@@ -219,6 +219,10 @@ export const ChatEntrySchema = struct({
   truncated: Schema.Boolean,
   toolName: optional(text(128)),
   isError: optional(Schema.Boolean),
+  /** When the message was recorded; hosts that predate it omit it. */
+  createdAt: optional(
+    text(64).check(Schema.makeFilter((value) => Number.isFinite(Date.parse(value)))),
+  ),
   transcript: optional(ChatTranscriptSchema),
 });
 export const ChatHistoryPageSchema = struct({

@@ -1,11 +1,13 @@
 import {
   memo,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from 'react';
 import { Button } from '@base-ui/react/button';
@@ -28,9 +30,12 @@ import type { TranscriptNative } from '../../chat/wire.ts';
 import { Markdown } from './markdown.tsx';
 import type { MarkdownCache } from './markdown-model.ts';
 import {
-  describeActivityPart,
+  classifyEntry,
+  describeActivityStep,
   getActivityState,
+  getActivityStepState,
   getToolSummary,
+  groupActivitySteps,
   groupTranscriptParts,
   type ActivityEvidence,
 } from './activity.ts';
@@ -40,10 +45,11 @@ import { getTranscriptParts } from './transcript-parts.ts';
 import { usePartBody } from './part-body.ts';
 import { usePartContent } from './part-content.ts';
 import { FindExcerpt, useFindHighlight, useFindHydration } from './part-find.tsx';
-import { RowExpansionContext, useDisclosure } from './transcript-disclosure.ts';
+import { OpenCallsContext, RowExpansionContext, useDisclosure } from './transcript-disclosure.ts';
 import type { TranscriptActions } from './transcript-actions.ts';
 import { compareProps } from './stable-props.ts';
 import { transcriptStyles as styles } from './transcript-styles.ts';
+import { Icon } from '../icon.tsx';
 
 /**
  * A row's slice of transcript state. The transcript passes each row only what concerns it, in
@@ -53,6 +59,9 @@ export type EntryProps = {
   entry: ChatEntry;
   /** Set for the live row: its status label. */
   liveState?: string;
+  /** An activity row continues the activity card above or below it. */
+  joinPrevious?: boolean;
+  joinNext?: boolean;
   controller: ChatController;
   cache: MarkdownCache;
   native?: TranscriptNative;
@@ -90,6 +99,8 @@ export const Entry = memo(
   function Entry({
     entry,
     liveState,
+    joinPrevious = false,
+    joinNext = false,
     controller,
     cache,
     manifest,
@@ -142,9 +153,20 @@ export const Entry = memo(
       }
       await controller.loadTranscriptManifest(source);
     };
-    let label = entry.toolName ?? entry.role;
-    if (entry.role === 'user') label = 'You';
-    if (entry.role === 'assistant') label = 'Assistant';
+    // Messages and tool steps need no names; only a system record with content keeps its own.
+    const kind = classifyEntry(entry);
+    const conversational = kind === 'message' && ['assistant', 'user'].includes(entry.role);
+    const label = entry.role === 'system' && kind !== 'empty' ? 'system' : '';
+    // A failed tool step shows its failure on the step, not as a line between steps.
+    let status = entry.isError ? 'Failed' : liveState;
+    if (kind === 'activity' && !liveState) status = undefined;
+    const notes = [
+      label,
+      status,
+      liveState && transcript?.thinking === 'none' && 'No thinking supplied',
+      liveState && transcript?.thinking === 'pending' && 'Working · thinking not yet supplied',
+    ].filter(Boolean);
+    const user = entry.role === 'user';
     let body = <p {...stylex.props(styles.literal)}>{entry.text}</p>;
     if (entry.role === 'assistant')
       body = (
@@ -161,23 +183,27 @@ export const Entry = memo(
       body = (
         <>
           {groupTranscriptParts(parts).map((group) => {
-            const children = group.parts.map((part) => (
-              <Part
-                key={part.partId}
-                source={source}
-                part={part}
-                entryId={entryId}
-                controller={controller}
-                cache={cache}
-                match={findMatch?.partId === part.partId ? findMatch : null}
-                findRevealing={findRevealing}
-                {...context}
-              />
-            ));
+            const renderParts = (activityOpen?: boolean) =>
+              group.parts.map((part) => (
+                <Part
+                  key={part.partId}
+                  source={source}
+                  part={part}
+                  entryId={entryId}
+                  controller={controller}
+                  cache={cache}
+                  match={findMatch?.partId === part.partId ? findMatch : null}
+                  findRevealing={findRevealing}
+                  activityOpen={activityOpen}
+                  {...context}
+                />
+              ));
             const partIds = group.parts.map((part) => part.partId);
             return group.activity ? (
               <Activity
                 key={group.parts[0]!.partId}
+                joinPrevious={joinPrevious}
+                joinNext={joinNext}
                 source={source}
                 parts={group.parts}
                 entryId={entryId}
@@ -186,37 +212,66 @@ export const Entry = memo(
                 expandedIds={context.expandedIds}
                 match={findMatch && partIds.includes(findMatch.partId) ? findMatch : null}
                 revealing={findRevealing}>
-                {children}
+                {renderParts}
               </Activity>
             ) : (
-              children
+              renderParts()
             );
           })}
         </>
       );
+    // An empty turn marker keeps its row (Find and reading positions key on it) but shows nothing.
+    if (kind === 'empty' && !liveState && !findMatch)
+      return <article data-transcript-entry={entry.id} {...stylex.props(styles.message)} />;
     return (
       <article
         data-transcript-entry={liveState ? undefined : entry.id}
         data-transcript-live={liveState ? JSON.stringify(source ?? 'legacy') : undefined}
         aria-label={liveState ? 'Live response' : undefined}
-        {...stylex.props(styles.message)}>
-        <div {...stylex.props(styles.header)}>
-          <strong>{label}</strong>
-          <span>{entry.isError ? 'Failed' : liveState}</span>
-          {liveState && transcript?.thinking === 'none' && <span>No thinking supplied</span>}
-          {liveState && transcript?.thinking === 'pending' && (
-            <span>Working · thinking not yet supplied</span>
-          )}
-          {source && ['assistant', 'user'].includes(entry.role) && (
-            <Button
-              {...stylex.props(controls.button, controls.quietButton)}
-              disabled={!native || (source.kind === 'live' && offline)}
-              onClick={copy}>
-              Copy message
-            </Button>
-          )}
-        </div>
-        {body}
+        {...stylex.props(stylex.defaultMarker(), styles.message, user && styles.userMessage)}>
+        {notes.length > 0 && (
+          <div {...stylex.props(styles.header)}>
+            {label && <span {...stylex.props(styles.role)}>{label}</span>}
+            {notes.slice(label ? 1 : 0).map((note) => (
+              <span key={String(note)}>{note}</span>
+            ))}
+          </div>
+        )}
+        {(() => {
+          const actions = source && conversational && (
+            <div {...stylex.props(styles.messageActions, user && styles.userActions)}>
+              {entry.createdAt && (
+                <time
+                  dateTime={entry.createdAt}
+                  title={new Date(entry.createdAt).toLocaleString()}
+                  {...stylex.props(styles.messageTime, styles.revealed)}>
+                  {formatMessageTime(entry.createdAt)}
+                </time>
+              )}
+              <Button
+                aria-label="Copy message"
+                title="Copy message"
+                {...stylex.props(controls.button, controls.iconButton, styles.revealed)}
+                disabled={!native || (source.kind === 'live' && offline)}
+                onClick={copy}>
+                <Icon name="copy" />
+              </Button>
+            </div>
+          );
+          // Your time and Copy sit beside the bubble; the agent's sit under its reply.
+          // Time and Copy sit under the message: right-aligned under your bubble, as in T1.
+          return user ? (
+            <>
+              <div {...stylex.props(styles.bubble)}>{body}</div>
+              {actions}
+            </>
+          ) : (
+            <>
+              {body}
+              {actions}
+            </>
+          );
+        })()}
         {matchedPart &&
           manifest?.status === 'complete' &&
           (replay.done || !manifest.omittedParts) &&
@@ -275,6 +330,8 @@ export const Entry = memo(
 
 /** Consecutive activity parts fold together; each part's state stays visible while folded. */
 function Activity({
+  joinPrevious,
+  joinNext,
   source,
   parts,
   entryId,
@@ -285,6 +342,8 @@ function Activity({
   revealing,
   children,
 }: {
+  joinPrevious: boolean;
+  joinNext: boolean;
   source: ChatTranscriptSource;
   parts: readonly ChatTranscriptPart[];
   entryId: string;
@@ -293,7 +352,8 @@ function Activity({
   expandedIds: readonly string[];
   match: ChatTranscriptMatch | null;
   revealing: boolean;
-  children: ReactNode;
+  /** The card's parts, given whether the card is open. */
+  children: (open: boolean) => ReactNode;
 }) {
   const disclosure = useDisclosure({
     entryId,
@@ -305,31 +365,98 @@ function Activity({
     revealing,
     controller,
   });
-  const summaries = [
-    ...new Set(parts.map((part) => describeActivityPart(part, { source }, evidence))),
-  ];
+  // One headline per call, marked by its state like a task list. A call's output is recorded in
+  // a later row; that row shows no line of its own and opens with its call's card.
+  const steps = new Map<string, string | undefined>();
+  const follows: string[] = [];
+  for (const step of groupActivitySteps(
+    parts,
+    source.kind === 'entry' ? source.entryId : undefined,
+  )) {
+    const lead = step.lead;
+    if (lead.call && lead.pairing === 'matched' && lead.kind !== 'arguments') {
+      follows.push(`${lead.call.entryId}\n${lead.call.partId}`);
+      continue;
+    }
+    const summary = describeActivityStep(step, { source }, evidence);
+    if (!steps.has(summary)) steps.set(summary, getActivityStepState(step, { source }, evidence));
+  }
+  const publishes =
+    source.kind === 'entry'
+      ? parts
+          .filter((part) => part.kind === 'arguments')
+          .map((part) => `${source.entryId}\n${part.partId}`)
+      : [];
+  const openCalls = useContext(OpenCallsContext);
+  const followKey = follows.join('\t'),
+    publishKey = publishes.join('\t');
+  const following = useSyncExternalStore(
+    openCalls?.subscribe ?? noSubscription,
+    () => !!followKey && !!openCalls?.isOpen(followKey.split('\t')),
+  );
+  useEffect(() => {
+    if (!openCalls || !publishKey) return;
+    const keys = publishKey.split('\t');
+    openCalls.set(keys, disclosure.open);
+  }, [openCalls, publishKey, disclosure.open]);
+  const open = disclosure.open || following;
+  // An output row has no headline: it is part of the call's step above it.
+  const outputOnly = steps.size === 0 && follows.length > 0;
   return (
     <Collapsible.Root
-      open={disclosure.open}
+      open={open}
       onOpenChange={disclosure.onOpenChange}
       disabled={disclosure.disabled}
       render={<section data-transcript-activity />}
-      {...stylex.props(styles.activity)}>
+      {...stylex.props(
+        styles.activity,
+        joinPrevious && styles.activityJoinPrevious,
+        joinNext && styles.activityJoinNext,
+        outputOnly && styles.activityOutput,
+      )}>
+      {/* The headlines say what happened; the chevron opens the recorded parts behind them. */}
       <Collapsible.Trigger
-        {...stylex.props(controls.button, controls.quietButton, styles.activityToggle)}>
-        Activity · {parts.length} recorded {parts.length === 1 ? 'part' : 'parts'}
+        aria-label={`Activity · ${parts.length} recorded ${parts.length === 1 ? 'part' : 'parts'}`}
+        title="Show recorded parts"
+        {...stylex.props(
+          controls.button,
+          controls.iconButton,
+          styles.activityToggle,
+          outputOnly && controls.hidden,
+        )}>
+        <Icon name="chevron" />
       </Collapsible.Trigger>
-      <p {...stylex.props(styles.small, styles.activitySummary)}>{summaries.join(' · ')}</p>
+      {steps.size > 0 && (
+        <ul {...stylex.props(styles.activitySteps)}>
+          {[...steps].map(([summary, state]) => {
+            const split = summary.indexOf(' · ');
+            return (
+              <li
+                key={summary}
+                title={summary}
+                data-glyph={(state && stepGlyphs[state]) ?? '·'}
+                {...stylex.props(styles.activityStep, stepStyles[state ?? 'unknown'])}>
+                <span {...stylex.props(styles.activityTool)}>
+                  {split < 0 ? summary : summary.slice(0, split)}
+                </span>
+                {split < 0 ? '' : summary.slice(split)}
+              </li>
+            );
+          })}
+        </ul>
+      )}
       {disclosure.disclosureError && (
         <p role="alert" {...stylex.props(styles.small)}>
           Could not remember this activity disclosure. Its content is expanded.
         </p>
       )}
       {/* Kept mounted so Find can hydrate folded parts. */}
-      <Collapsible.Panel keepMounted>{children}</Collapsible.Panel>
+      <Collapsible.Panel keepMounted>{children(open)}</Collapsible.Panel>
     </Collapsible.Root>
   );
 }
+
+const noSubscription = () => () => {};
 
 type PartProps = PartContext & {
   source: ChatTranscriptSource;
@@ -337,6 +464,8 @@ type PartProps = PartContext & {
   entryId: string;
   /** The active Find match, when it is in this part. */
   match: ChatTranscriptMatch | null;
+  /** Set inside an activity card: the part shows whenever the card is open, with no fold of its own. */
+  activityOpen?: boolean;
 };
 const Part = memo(
   function Part({
@@ -350,6 +479,7 @@ const Part = memo(
     actions,
     evidence,
     findRevealing: revealing,
+    activityOpen,
     findQuery: query,
     findMatches,
     contents,
@@ -366,7 +496,8 @@ const Part = memo(
       revealing,
       controller,
     });
-    const expanded = disclosure.open;
+    const grouped = activityOpen !== undefined;
+    const expanded = grouped ? activityOpen : disclosure.open;
     /** Code blocks remember their unfolding with this part's other disclosures. */
     const expansions = useMemo(
       () => ({ entryId, partId: part.partId, expandedIds, controller }),
@@ -525,12 +656,6 @@ const Part = memo(
             Showing previously read output. Copy uses this version; latest progress remains above.
           </p>
         )}
-        {part.kind === 'arguments' && (
-          <p {...stylex.props(styles.small)}>
-            Recorded request. Executed arguments are labelled separately when available; this
-            request alone does not prove execution.
-          </p>
-        )}
         {part.kind === 'arguments' && part.toolName === 'write' && (
           <p {...stylex.props(styles.small)}>
             Captured write content is in the arguments. No before/after diff was recorded here.
@@ -600,15 +725,17 @@ const Part = memo(
       </>
     );
     let copyLabel = 'part';
-    if (ordinary) copyLabel = 'text';
-    else if (part.kind === 'patch' || part.kind === 'diff') copyLabel = part.kind;
-    const copyButton = readable && (
+    if (part.kind === 'patch' || part.kind === 'diff') copyLabel = part.kind;
+    // Messages copy through their row's Copy message; only folded output keeps a part copy.
+    const copyButton = readable && !ordinary && (
       <Button
-        {...stylex.props(controls.button, controls.quietButton)}
+        aria-label={`Copy ${copyLabel}`}
+        title={`Copy ${copyLabel}`}
+        {...stylex.props(controls.button, controls.iconButton)}
         disabled={!native}
         {...(plain ? displayed.copyProps : {})}
         onClick={() => copy()}>
-        Copy {copyLabel}
+        <Icon name="copy" />
       </Button>
     );
     if (ordinary)
@@ -619,6 +746,22 @@ const Part = memo(
         </section>
       );
     const status = getActivityState(part, { source }, evidence);
+    const partLabel =
+      (part.toolName ? `${getToolSummary(part, text)} · ` : '') +
+      partLabels[part.kind] +
+      (status && status !== 'completed' ? ` · ${status}` : '') +
+      (part.availability !== 'available' ? ` · ${part.availability}` : '');
+    // Inside an open card a part simply shows: its label, copy, then content.
+    if (grouped)
+      return (
+        <section data-transcript-part={part.partId}>
+          <div {...stylex.props(styles.partHeader)}>
+            <span {...stylex.props(styles.partLabel)}>{partLabel}</span>
+            {copyButton}
+          </div>
+          {expanded && <div {...stylex.props(styles.disclosure)}>{body}</div>}
+        </section>
+      );
     return (
       <Collapsible.Root
         open={expanded}
@@ -630,19 +773,53 @@ const Part = memo(
             Could not remember this disclosure. Its content is expanded.
           </p>
         )}
-        <Collapsible.Trigger {...stylex.props(controls.button, controls.quietButton)}>
-          {part.toolName ? `${getToolSummary(part, text)} · ` : ''}
-          {partLabels[part.kind]}
-          {status ? ` · ${status}` : ''}
-          {part.availability !== 'available' ? ` · ${part.availability}` : ''}
-        </Collapsible.Trigger>
+        {/* A recorded part: what it is, then its content and copy. A completed state goes unsaid. */}
+        <div {...stylex.props(styles.partHeader)}>
+          <Collapsible.Trigger
+            {...stylex.props(
+              stylex.defaultMarker(),
+              controls.button,
+              controls.quietButton,
+              styles.partToggle,
+            )}>
+            <span aria-hidden="true" {...stylex.props(styles.partChevron)}>
+              <Icon name="chevron" />
+            </span>
+            {partLabel}
+          </Collapsible.Trigger>
+          {copyButton}
+        </div>
         <Collapsible.Panel {...stylex.props(styles.disclosure)}>{body}</Collapsible.Panel>
-        {copyButton}
       </Collapsible.Root>
     );
   },
   compareProps<PartProps>({ lists: ['contents', 'findMatches', 'expandedIds'], records: ['part'] }),
 );
+
+/** Today's messages show their time; older ones add the date. */
+function formatMessageTime(iso: string) {
+  const at = new Date(iso),
+    time = at.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  if (at.toDateString() === new Date().toDateString()) return time;
+  return `${at.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}, ${time}`;
+}
+
+const stepGlyphs: Record<string, string> = {
+  completed: '✓',
+  running: '⠹',
+  requested: '○',
+  failed: '✕',
+  interrupted: '✕',
+  'missing-result': '?',
+};
+const stepStyles: Record<string, stylex.StyleXStyles> = {
+  running: styles.stepRunning,
+  failed: styles.stepFailed,
+  interrupted: styles.stepFailed,
+  'missing-result': styles.stepFailed,
+  requested: styles.stepPending,
+  unknown: styles.stepPending,
+};
 
 const partLabels = {
   text: 'Text',

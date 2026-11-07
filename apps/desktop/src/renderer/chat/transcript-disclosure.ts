@@ -133,3 +133,36 @@ export function useDisclosure({
     onOpenChange: toggle,
   };
 }
+
+/**
+ * Which tool calls have their card open. A call and its output are separate rows: the call's row
+ * publishes whether it is open, and the output's row, which shows no line of its own, opens with
+ * it. Keys are `entryId\npartId` of the call.
+ */
+export type OpenCalls = {
+  isOpen(keys: readonly string[]): boolean;
+  set(keys: readonly string[], open: boolean): void;
+  subscribe(listener: () => void): () => void;
+};
+export function createOpenCalls(): OpenCalls {
+  const open = new Set<string>(),
+    listeners = new Set<() => void>();
+  return {
+    isOpen: (keys) => keys.some((key) => open.has(key)),
+    set(keys, value) {
+      let changed = false;
+      for (const key of keys)
+        if (open.has(key) !== value) {
+          if (value) open.add(key);
+          else open.delete(key);
+          changed = true;
+        }
+      if (changed) for (const listener of listeners) listener();
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+}
+export const OpenCallsContext = createContext<OpenCalls | null>(null);
