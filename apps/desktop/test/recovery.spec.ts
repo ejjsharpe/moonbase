@@ -15,6 +15,7 @@ for (const action of ['Recover workbench', 'Quit Moonbase', 'cleanup failure'])
       args: [resolve('dist/main.mjs')],
       env: {
         PATH: '/usr/bin:/bin',
+        PI_CLAUDE_CODE_COMMAND: '/nonexistent/claude',
         HOME: process.env.HOME!,
         TMPDIR: process.env.TMPDIR!,
         MOONBASE_USER_DATA: data,

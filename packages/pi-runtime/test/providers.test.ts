@@ -23,6 +23,13 @@ test('maintained defaults and reasoning options match the pinned provider catalo
     id: 'openai-api-key',
     getModels: () => openai.getModels().map((model) => ({ ...model, provider: 'openai-api-key' })),
   });
+  // Claude Code's catalog reuses the pinned Anthropic metadata; claude-code.test.ts covers the real one.
+  const anthropic = anthropicProvider();
+  models.setProvider({
+    ...anthropic,
+    id: 'claude-code',
+    getModels: () => anthropic.getModels().map((model) => ({ ...model, provider: 'claude-code' })),
+  });
   const runtime = ManagedRuntime.make(
     ProviderSetupLive({
       models,
@@ -185,6 +192,15 @@ test('provider-owned setup binds prompts and URLs to the live document, supports
     (await foreign.command('cancelProviderLogin', { flowId: second.flow!.id })).flow?.state,
     'cancelled',
   );
+  assert.equal(
+    state.providers.find((provider) => provider.id === 'claude-code')?.auth,
+    'claude_code',
+  );
+  for (const operation of ['startProviderLogin', 'logoutProvider'] as const)
+    await assert.rejects(foreign.command(operation, { providerId: 'claude-code' }), {
+      code: 'InvalidInput',
+      message: /claude auth login/,
+    });
   await foreign.command('logoutProvider', { providerId: 'openai' });
   assert.equal(
     (await foreign.command('getProviders', {})).providers.find(

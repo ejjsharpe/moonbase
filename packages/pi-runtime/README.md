@@ -6,16 +6,20 @@
 | --- | --- |
 | `.` | Remote fixed-settings `PiRuntimeLive(config)`, per-conversation `LocalPiRuntimeLive(config)` and privileged `LocalPiControl` |
 | `./local-models`, `./providers`, `./credentials` | Local provider catalog, provider sign-in and injected encrypted credential storage |
+| `./claude-code` | Claude Pro/Max subscription through the user's Claude Code login ([pi-claude-code](https://github.com/earendil-works/pi-claude-code)) |
 | `./server` | `serveChat(config, client)`: authenticated loopback listener for a remote host |
 | `./remote` | `RemoteChatLive`: client-side service over an injected `ConnectionService` |
 
 ## Host setup
 
-Start a remote host on its own machine:
+Build the host, then start it on its own machine:
 
 ```sh
-node --experimental-strip-types packages/pi-runtime/src/host.ts /absolute/private/moonbase-host.json
+bun run --cwd packages/pi-runtime build:host
+node packages/pi-runtime/dist/host.mjs /absolute/private/moonbase-host.json
 ```
+
+`build:host` writes a self-contained `host.mjs` and the `inert-mcp.mjs` it needs to `dist/`, which can be built elsewhere and copied over as a pair.
 
 The private JSON file contains:
 
@@ -31,7 +35,7 @@ The private JSON file contains:
 }
 ```
 
-The listener binds only `127.0.0.1`; reach it through the [SSH package](../ssh/README.md). The token must be 16–4096 printable non-space ASCII characters, kept out of source control, arguments and logs. The host installs Pi's `read`, `write`, `edit` and `bash` tools and uses host-side `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`. **The cwd is tool context, not a filesystem sandbox.**
+The listener binds only `127.0.0.1`; reach it through the [SSH package](../ssh/README.md). The token must be 16–4096 printable non-space ASCII characters, kept out of source control, arguments and logs. The host installs Pi's `read`, `write`, `edit` and `bash` tools and uses host-side `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`, or a Claude subscription with `"model": { "provider": "claude-code", "modelId": "claude-opus-5-5" }` after `claude auth login` on the host. Set `PI_CLAUDE_CODE_COMMAND` if `claude` is not on the host's `PATH` or in `~/.local/bin`; the host exits unavailable when Claude Code is missing or signed out. **The cwd is tool context, not a filesystem sandbox.**
 
 ## Behavior worth knowing
 
@@ -40,6 +44,7 @@ The listener binds only `127.0.0.1`; reach it through the [SSH package](../ssh/R
 - `findChatFiles` lists the chat's working folder on the host with ripgrep (`ripgrepExecutable`, else `rg` on PATH) or, without it, `git ls-files`, honouring ignore files and skipping dependencies. A new chat may search only the remote host's fixed folder, or a local folder `approveFolder` accepts. Mentions reach the agent as the `@path` text; the agent reads the files itself.
 - Stop targets only the captured submission/task. Cancelling or disconnecting a client never stops remote work.
 - Remote hosts stream snapshots over an authenticated `chat-stream-v1` channel; messages are HMAC-authenticated, and OpenSSH provides transport encryption.
+- `./claude-code` runs the local `claude` CLI, which owns sign-in; Moonbase stores no Claude credentials, and Pi still executes every tool. The library ships TypeScript source, so only bundles (the desktop app and `dist/host.mjs`) can load it, and they ship its `inert-mcp.mjs` beside them. It uses the built-in model list, not Claude Code's account catalog. Hosts close its warm workers with `closeClaudeCodeProcesses()`.
 - A dropped or stalled stream reconnects up to three times per outage; an authenticated frame arriving at least half a heartbeat interval after a connection's snapshot renews that budget.
 
 ## Checks

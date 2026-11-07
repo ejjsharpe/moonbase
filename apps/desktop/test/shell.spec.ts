@@ -1623,6 +1623,14 @@ test('the local model menu opens provider setup in Settings', async ({ page }) =
   await expect(
     key.getByRole('button', { name: 'Remove key for Demo provider', exact: true }),
   ).toBeVisible();
+  // Claude Code owns the subscription's login, so its way explains the CLI instead of a button.
+  const claude = settings
+    .getByRole('list', { name: 'Model providers', exact: true })
+    .getByRole('listitem', { name: 'Anthropic', exact: true });
+  await expect(claude).toContainText('Not set up');
+  const subscription = claude.getByRole('listitem', { name: 'Claude subscription', exact: true });
+  await expect(subscription).toContainText('claude auth login');
+  await expect(subscription.getByRole('button')).toHaveCount(0);
   await settings.getByRole('tab', { name: 'Hosts', exact: true }).click();
   await expect(settings.getByRole('status').first()).toHaveText('Local ready');
   await settings.getByRole('button', { name: 'Close settings', exact: true }).click();

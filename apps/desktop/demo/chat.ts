@@ -245,6 +245,13 @@ export function chatCapabilities(local = false, activity = false) {
                       },
                     ].map((model) => ({ ...model, reasoningEfforts: [...model.reasoningEfforts] })),
                   },
+                  {
+                    id: 'claude-code',
+                    name: 'Claude subscription',
+                    auth: 'claude_code' as const,
+                    configured: false,
+                    models: [],
+                  },
                 ],
                 flow: null,
               };

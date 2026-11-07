@@ -10,6 +10,7 @@ import { makeChatClient } from '@moonbase/application/runtime/clients';
 import { releaseResource } from '@moonbase/effect';
 
 import { PiRuntimeLive } from './index.ts';
+import { closeClaudeCodeProcesses, createClaudeCodeSubscription } from './claude-code.ts';
 import { serveChat } from './server.ts';
 import * as V from './validation.ts';
 import * as P from './protocol.ts';
@@ -26,9 +27,15 @@ async function main() {
   const models = createModels();
   models.setProvider(openaiProvider());
   models.setProvider(anthropicProvider());
+  models.setProvider(createClaudeCodeSubscription());
   const selected = data.model,
     configured = models.getModel(selected.provider, selected.modelId);
-  if (!configured || !(await models.getAuth(configured)))
+  // Claude Code resolves without a stored key, so its check is what proves a host-side login.
+  if (
+    !configured ||
+    !(await models.getAuth(configured)) ||
+    !(await models.checkAuth(selected.provider))
+  )
     V.fail(
       'Unavailable',
       'Configure an installed model and existing host-side provider credentials.',
@@ -72,6 +79,7 @@ async function main() {
     );
   } finally {
     await runtime.dispose();
+    await closeClaudeCodeProcesses();
   }
 }
 await main().catch((error) => {

@@ -41,6 +41,7 @@ async function launch(
     args: packaged ? [] : [resolve('test/harness.mjs')],
     env: {
       PATH: '/usr/bin:/bin',
+      PI_CLAUDE_CODE_COMMAND: '/nonexistent/claude',
       HOME: process.env.HOME!,
       TMPDIR: process.env.TMPDIR!,
       MOONBASE_USER_DATA: join(f.directory, data),

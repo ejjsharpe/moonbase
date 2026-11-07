@@ -43,6 +43,7 @@ test('unsigned macOS package runs with only system PATH, SQLite, native/rg resou
       args: [],
       env: {
         PATH: '/usr/bin:/bin',
+        PI_CLAUDE_CODE_COMMAND: '/nonexistent/claude',
         HOME: process.env.HOME!,
         TMPDIR: process.env.TMPDIR ?? tmpdir(),
         MOONBASE_USER_DATA: join(base, 'fresh-user-data'),

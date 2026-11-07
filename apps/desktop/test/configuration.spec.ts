@@ -13,7 +13,13 @@ const executable = packaged
     resolve('release/mac-arm64/Moonbase.app/Contents/MacOS/Moonbase'))
   : require('electron');
 const args = packaged ? [] : [process.env.MOONBASE_RELOAD_MAIN ?? resolve('dist/main.mjs')];
-const platform = { PATH: '/usr/bin:/bin', HOME: process.env.HOME!, TMPDIR: process.env.TMPDIR! };
+const platform = {
+  PATH: '/usr/bin:/bin',
+  HOME: process.env.HOME!,
+  TMPDIR: process.env.TMPDIR!,
+  // Never probe or use the developer's own Claude Code login.
+  PI_CLAUDE_CODE_COMMAND: '/nonexistent/claude',
+};
 
 test('every present invalid configuration including empty fails startup', async () => {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-config-repair-'))),
