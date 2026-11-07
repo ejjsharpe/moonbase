@@ -57,7 +57,7 @@ export function ModelPicker({
         if (next) setBrowsing(null);
       }}>
       <Popover.Trigger
-        aria-label="Conversation model"
+        aria-label="Chat model"
         disabled={disabled}
         {...stylex.props(controls.button, controls.quietButton, styles.chip)}>
         <span {...stylex.props(controls.truncate)}>{label}</span>

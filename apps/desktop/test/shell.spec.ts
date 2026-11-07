@@ -699,7 +699,7 @@ test('local model and effort defaults yield to preferences across new chats and 
 }) => {
   await page.goto('/?local&design');
   // One chip shows the model and its effort; its popover chooses both.
-  const model = page.getByRole('button', { name: 'Conversation model', exact: true });
+  const model = page.getByRole('button', { name: 'Chat model', exact: true });
   const effort = model;
   const picker = page.getByRole('dialog', { name: 'Choose model', exact: true });
   await expect(model).toContainText('Demo model');
@@ -771,7 +771,7 @@ test('first-message recovery shows the captured text, Send identity and effort a
   page,
 }) => {
   await page.goto('/?local&design');
-  await expect(page.getByRole('button', { name: 'Conversation model', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Chat model', exact: true })).toBeEnabled();
   await page.evaluate(() => {
     window.demo.application.chat!.setModelPreference({
       model: { provider: 'openai', modelId: 'demo-coding' },
@@ -1487,7 +1487,7 @@ test('/ at the start of a message lists commands that switch model and effort, c
   page,
 }) => {
   await page.goto('/?local&design');
-  const model = page.getByRole('button', { name: 'Conversation model', exact: true });
+  const model = page.getByRole('button', { name: 'Chat model', exact: true });
   const effort = model;
   const message = page.getByRole('textbox', { name: 'Message', exact: true });
   const commands = page.getByRole('listbox', { name: 'Commands', exact: true });
@@ -1610,7 +1610,7 @@ test('Settings holds hosts and providers; the sidebar keeps only a Connect line'
 test('the local model menu opens provider setup in Settings', async ({ page }) => {
   await page.goto('/?local');
   await tabs(page).getByRole('tab', { name: 'Agents', exact: true }).click();
-  await shell(page).getByRole('button', { name: 'Conversation model', exact: true }).click();
+  await shell(page).getByRole('button', { name: 'Chat model', exact: true }).click();
   await page.getByRole('button', { name: 'Set up providers…', exact: true }).click();
   const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
   await expect(settings.getByRole('tab', { name: 'Providers', exact: true })).toHaveAttribute(
@@ -1711,7 +1711,7 @@ test("the model picker lists providers that are set up, beside the chosen one's 
   page,
 }) => {
   await page.goto('/?local&design&providers');
-  const model = page.getByRole('button', { name: 'Conversation model', exact: true });
+  const model = page.getByRole('button', { name: 'Chat model', exact: true });
   const picker = page.getByRole('dialog', { name: 'Choose model', exact: true });
   await expect(model).toContainText('Demo model');
   await model.click();
