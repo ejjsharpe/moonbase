@@ -12,6 +12,10 @@ const input = (page: Page) =>
 async function chat(page: Page) {
   await tabs(page).getByRole('tab', { name: 'Agents', exact: true }).click();
   await shell(page).getByRole('button', { name: 'Connect', exact: true }).click();
+  // The demo chat is Settled, behind a toggle that starts closed.
+  await shell(page)
+    .getByRole('button', { name: /^Settled/ })
+    .click();
   await shell(page)
     .getByRole('button', { name: /^Conversation/ })
     .click();
@@ -1592,7 +1596,7 @@ test('Settings holds hosts and providers; the sidebar keeps only a Connect line'
   await expect(settings).toHaveCount(0);
   // Connected, the Connect line goes and the chats are listed.
   await expect(sidebar.getByRole('status')).toHaveCount(0);
-  await expect(sidebar.getByRole('button', { name: /^Conversation/ })).toBeVisible();
+  await expect(sidebar.getByRole('button', { name: /^Settled/ })).toHaveText(/Settled\s*1/);
 });
 
 test('the local model menu opens provider setup in Settings', async ({ page }) => {
@@ -1645,9 +1649,19 @@ test('the chats sidebar orders by activity: Ready, Working, then a Settled toggl
     'aria-pressed',
     'true',
   );
+  // Closed, the toggle sits at the foot of the list.
+  const bottom = async (locator: typeof list) => {
+    const box = (await locator.boundingBox())!;
+    return box.y + box.height;
+  };
+  expect((await bottom(list)) - (await bottom(settled))).toBeLessThan(80);
   await settled.click();
   await expect(settled).toHaveAttribute('aria-expanded', 'true');
   await expect(list.getByRole('button', { name: /^Conversation/ })).toBeVisible();
+  await settled.click();
+  await expect(settled).toHaveAttribute('aria-expanded', 'false');
+  await expect(list.getByRole('button', { name: /^Conversation/ })).toHaveCount(0);
+  await settled.click();
   // The toggle is remembered.
   await page.reload();
   await tabs(page).getByRole('tab', { name: 'Agents', exact: true }).click();

@@ -313,8 +313,7 @@ export function ChatView({
     pending: state.pending,
     open: state.snapshot,
   });
-  // With nothing Ready or Working, Settled is all there is, so it shows whatever the toggle says.
-  const settledShown = settledOpen || (!groups.ready.length && !groups.working.length);
+  const settledShown = settledOpen;
   const chatRow = ({ chat: c, reason, at }: ActiveChat) => (
     <Button
       key={c.target.conversationId}
@@ -394,7 +393,7 @@ export function ChatView({
           </Button>
         </div>
       )}
-      <nav aria-label="Conversations" {...stylex.props(styles.chatList)}>
+      <nav aria-label="Conversations" {...stylex.props(styles.chatList, styles.fillList)}>
         {!state.chats.length &&
           // Offline, the Connect line above says why the list is empty.
           emptyList && <p {...stylex.props(styles.small)}>{emptyList}</p>}
@@ -417,6 +416,8 @@ export function ChatView({
               controls.button,
               styles.settledToggle,
               (groups.ready.length > 0 || groups.working.length > 0) && styles.settledSeparated,
+              // Closed, it waits at the foot of the list; open, its chats follow it.
+              !settledShown && styles.settledFoot,
             )}
             onClick={() => showSettled(!settledOpen)}>
             <span
@@ -1096,6 +1097,7 @@ const styles = stylex.create({
     borderRadius: 0,
     paddingTop: 10,
   },
+  settledFoot: { marginTop: 'auto' },
   settledChevron: { display: 'inline-flex', color: colors.muted, transition: 'transform 120ms' },
   settledChevronOpen: { transform: 'rotate(90deg)' },
   settledChat: { color: colors.secondary },
@@ -1118,6 +1120,8 @@ const styles = stylex.create({
   label: { fontSize: type.small, fontWeight: 400, margin: 0, color: colors.muted },
   listHeader: { gap: space.xs, flexWrap: 'nowrap', margin: '4px 4px 4px 8px' },
   chatList: { display: 'flex', flexDirection: 'column', gap: 2, minHeight: 80 },
+  /** The sidebar list fills its column, so a closed Settled toggle can sit at its foot. */
+  fillList: { flex: 1 },
   chat: {
     display: 'flex',
     alignItems: 'start',

@@ -5,6 +5,11 @@ import { resolve } from 'node:path';
 import { readFindHighlight } from './find-highlight.ts';
 import { scrollToEnd, scrollToStart, showRow, transcriptList } from './transcript-list.ts';
 import type * as readingPins from '../src/renderer/chat/reading-pin.ts';
+
+// These tests open the demo chat, which is Settled; the sidebar's own test covers the toggle.
+test.beforeEach(({ page }) =>
+  page.addInitScript(() => localStorage.setItem('moonbase.chats.settled', 'open')),
+);
 type ReadingPins = typeof readingPins;
 const output = resolve('../../test-results/transcript-111');
 const imagePng = (
