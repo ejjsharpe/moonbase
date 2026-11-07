@@ -150,12 +150,11 @@ async function find(page: Page, query: string) {
 async function image(app: ElectronApplication, page: Page) {
   const group = page
     .locator('[data-transcript-activity]')
-    .filter({ has: page.getByRole('button', { name: /Stored image/, includeHidden: true }) })
+    .filter({ has: page.locator('[data-transcript-part]').filter({ hasText: 'Stored image' }) })
     .first();
+  // An output row's toggle is visually hidden; it still opens from the keyboard.
   const activity = group.getByRole('button', { name: /^Activity/ });
-  if ((await activity.getAttribute('aria-expanded')) !== 'true') await activity.click();
-  const disclosure = group.getByRole('button', { name: /Stored image/ }).first();
-  if ((await disclosure.getAttribute('aria-expanded')) !== 'true') await disclosure.click();
+  if ((await activity.getAttribute('aria-expanded')) !== 'true') await activity.press('Enter');
   const trigger = group.getByRole('button', { name: 'View stored image', exact: true }).first();
   await expect(trigger).toBeEnabled();
   await trigger.click();
@@ -211,9 +210,11 @@ test('integrated local archive/runtime streams held text and thinking, finds ret
     await expect(live.getByText('First local chunk 🌔', { exact: true })).toBeVisible();
     const firstVisibleMs = Date.now() - sentAt;
     await live.getByRole('button', { name: /^Activity/ }).click();
-    const thought = live.getByRole('button', { name: /Thinking · running/ });
-    await thought.click();
-    await expect(live.getByText('Local held thought first', { exact: true })).toBeVisible();
+    const thought = live
+      .locator('[data-transcript-part]')
+      .filter({ hasText: /^Thinking/ })
+      .locator('pre');
+    await expect(thought).toHaveText('Local held thought first');
     const before = await app.evaluate(
       () =>
         globalThis.integratedTranscript.calls.filter((call) => call.operation === 'getChat').length,
@@ -222,9 +223,7 @@ test('integrated local archive/runtime streams held text and thinking, finds ret
     await expect(
       live.getByText('First local chunk 🌔 and next local chunk', { exact: true }),
     ).toBeVisible();
-    await expect(
-      live.getByText('Local held thought first and next', { exact: true }),
-    ).toBeVisible();
+    await expect(thought).toHaveText('Local held thought first and next');
     expect(
       await app.evaluate(
         () =>
@@ -278,7 +277,9 @@ test('integrated remote archive/runtime reveals early/middle/end Find in real hi
     );
     const ids = await host.seedHistory(target);
     for (const index of [1, 561, 1119]) await find(page, `record ${index} 🌔`);
-    await page.getByRole('button', { name: 'Jump to latest', exact: true }).click();
+    // Jump to latest shows only off the end; the last Find may already have reached it.
+    const jump = page.getByRole('button', { name: 'Jump to latest', exact: true });
+    if (await jump.isVisible()) await jump.click();
     await page.getByLabel('Message', { exact: true }).fill('Held remote source');
     const sentAt = Date.now();
     await page.getByRole('button', { name: 'Send message', exact: true }).click();
