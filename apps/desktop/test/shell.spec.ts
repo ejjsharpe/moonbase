@@ -1496,10 +1496,13 @@ test('a new worktree is made only when a new chat sends, and its chat stays with
   expect(await page.evaluate(() => window.demo.chat.worktrees)).toEqual([]);
   await message.press('ControlOrMeta+Enter');
   await expect(
-    page.getByText('/demo/moonbase-worktrees/chat-tidy-the-composers-spacing · demo-model', {
-      exact: true,
-    }),
+    page.getByRole('heading', { name: "Tidy the composer's spacing", exact: true }),
   ).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => window.demo.application.chat!.getSnapshot().snapshot?.conversation.cwd,
+    ),
+  ).toBe('/demo/moonbase-worktrees/chat-tidy-the-composers-spacing');
   expect(await page.evaluate(() => window.demo.chat.worktrees)).toEqual([
     '/demo/moonbase chat/tidy-the-composers-spacing',
   ]);

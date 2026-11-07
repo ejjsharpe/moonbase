@@ -37,12 +37,14 @@ export function createChatBackends({
   emit(backendId: string, id: string, result: Reply): void;
   pickFolder(): Promise<string | null>;
   /** Creates a linked worktree of the checkout at `root`, returning its root. */
-  createWorktree?(root: string, branch: string): Promise<string>;
+  createWorktree?(root: string, branch: string, signal: AbortSignal): Promise<string>;
   transcript?: NativeTranscriptActions;
 }) {
   let local = localResult.backend;
   let localRetry: Promise<void> | undefined;
   const sessions = new Map<string, ChatIpcSession>();
+  /** Worktree creations for the current document; replacing the document cancels them. */
+  const worktreeCreations = new Set<AbortController>();
   let documentId = randomUUID();
   const emitChat = (backendId: string) => (id: string, result: Reply) => {
     emit(backendId, id, result);
@@ -100,6 +102,8 @@ export function createChatBackends({
   ];
   const releaseChatDocument = async () => {
     const owner = documentId;
+    for (const creation of worktreeCreations) creation.abort();
+    worktreeCreations.clear();
     const closing = [...sessions.values()].map((session) => session.dispose());
     sessions.clear();
     documentId = randomUUID();
@@ -158,8 +162,22 @@ export function createChatBackends({
           code: 'Unavailable',
           message: 'New worktrees are unavailable.',
         });
-      await local.requireApprovedFolder(root);
-      return local.approveFolder(await createWorktree(root, branch));
+      const owner = documentId,
+        creation = new AbortController();
+      worktreeCreations.add(creation);
+      try {
+        await local.requireApprovedFolder(root);
+        const created = await createWorktree(root, branch, creation.signal);
+        // A replaced document's worktree is left on disk but not approved for the new document.
+        if (owner !== documentId)
+          throw new ApplicationError({
+            code: 'Cancelled',
+            message: 'The window reloaded while the worktree was created.',
+          });
+        return await local.approveFolder(created);
+      } finally {
+        worktreeCreations.delete(creation);
+      }
     },
     requireLocal(backendId: string) {
       if (backendId === 'local' && !local) throw localResult.error;

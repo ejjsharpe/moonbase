@@ -95,17 +95,22 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
       )
     : [];
   // A chat in any of the project's worktrees, including one a chat created, belongs to its dock.
-  const listProjectWorktrees = (checkout: CheckoutTarget) =>
-    controller
-      ? controller.listWorktrees(checkout).then(
-          (result) =>
-            setProjectWorktrees({
-              checkoutId: checkout.checkoutId,
-              roots: result.worktrees.map((worktree) => worktree.root),
-            }),
-          () => setProjectWorktrees({ checkoutId: checkout.checkoutId, roots: [] }),
-        )
-      : Promise.resolve();
+  // Only the latest listing applies, and a failed one keeps the last good roots.
+  const worktreeListing = useRef(0);
+  const listProjectWorktrees = (checkout: CheckoutTarget) => {
+    if (!controller) return Promise.resolve();
+    const listing = ++worktreeListing.current;
+    return controller.listWorktrees(checkout).then(
+      (result) => {
+        if (listing === worktreeListing.current)
+          setProjectWorktrees({
+            checkoutId: checkout.checkoutId,
+            roots: result.worktrees.map((worktree) => worktree.root),
+          });
+      },
+      () => {},
+    );
+  };
   const dockCheckout = dockVisible ? selected : undefined;
   useEffect(() => {
     if (dockCheckout) void listProjectWorktrees(dockCheckout);
@@ -403,6 +408,14 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
                           (async (root, branch) => {
                             const created = await createChatWorktree(root, branch);
                             await listProjectWorktrees(selected);
+                            // Kept even if listing failed, so the new chat stays in this dock.
+                            setProjectWorktrees((listed) => {
+                              const roots =
+                                listed?.checkoutId === selected.checkoutId ? listed.roots : [];
+                              return roots.includes(created)
+                                ? listed
+                                : { checkoutId: selected.checkoutId, roots: [...roots, created] };
+                            });
                             return created;
                           })
                         }

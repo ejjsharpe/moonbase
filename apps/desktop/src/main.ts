@@ -181,7 +181,8 @@ async function main() {
     emit: (backendId, id, result) => {
       if (!window.isDestroyed()) window.webContents.send(chatChannels.event, id, result, backendId);
     },
-    createWorktree: (root, branch) => editorSession.createChatWorktree(root, branch),
+    createWorktree: (root, branch, signal) =>
+      editorSession.createChatWorktree(root, branch, signal),
     pickFolder: async () => {
       const selection = await dialog.showOpenDialog(window, {
         title: 'Choose a local chat working folder',

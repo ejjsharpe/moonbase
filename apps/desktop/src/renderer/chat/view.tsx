@@ -1,4 +1,4 @@
-import { useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Dialog } from '@base-ui/react/dialog';
 import { Button } from '@base-ui/react/button';
 import * as stylex from '@stylexjs/stylex';
@@ -160,22 +160,37 @@ export function ChatView({
   const choosing = local && !state.selected && !busy('send') && !creatingWorktree;
   // A new worktree is made only when the first message is sent, so an unsent chat leaves no trace.
   const worktreeChoice = !state.selected && local && !!createWorktree && !!cwd;
+  const mounted = useRef(true);
+  useEffect(
+    () => () => {
+      mounted.current = false;
+    },
+    [],
+  );
   const sendInWorktree = (settings: ChatModelPreference) => {
     setCreatingWorktree(true);
-    void createWorktree!(cwd, chatWorktreeBranch(state.draft))
-      .then(
-        (root) => {
-          // The chat keeps this worktree, so a retried send never makes a second one.
-          setCwd(root);
-          setNewWorktree(false);
-          void controller.send({ cwd: root, ...settings });
-        },
-        (error: unknown) =>
+    void createWorktree!(cwd, chatWorktreeBranch(state.draft)).then(
+      (root) => {
+        // Git may take a while: send only if this view still shows the new chat it was made for.
+        if (!mounted.current) return;
+        setCreatingWorktree(false);
+        // The chat keeps this worktree, so a retried send never makes a second one.
+        setCwd(root);
+        setNewWorktree(false);
+        if (controller.getSnapshot().selected)
           setFolderError(
-            `The worktree could not be created. ${error instanceof Error ? error.message : ''}`.trim(),
-          ),
-      )
-      .finally(() => setCreatingWorktree(false));
+            `The worktree is ready at ${root}. Send from a new chat there to start it.`,
+          );
+        else void controller.send({ cwd: root, ...settings });
+      },
+      (error: unknown) => {
+        if (!mounted.current) return;
+        setCreatingWorktree(false);
+        setFolderError(
+          `The worktree could not be created. ${error instanceof Error ? error.message : ''}`.trim(),
+        );
+      },
+    );
   };
   const commands = listChatCommands({
     selected: !!state.selected,

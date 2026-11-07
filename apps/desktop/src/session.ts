@@ -1,4 +1,4 @@
-import { mkdir } from 'node:fs/promises';
+import { mkdir, rmdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ManagedRuntime } from 'effect';
 import {
@@ -163,9 +163,15 @@ export class EditorSession {
    * Creates `branch` from the current commit of the checkout at `root`, in a new linked worktree
    * beside the repository at `<main worktree>-worktrees/<branch>`. Main derives the location, so a
    * renderer never names where directories are made. A taken branch or location gets a numbered
-   * suffix. The caller authorizes `root`.
+   * suffix. The caller authorizes `root`. Creations run one at a time, so two can't race for a name.
    */
-  async createChatWorktree(root: string, branch: string, signal?: AbortSignal) {
+  createChatWorktree(root: string, branch: string, signal?: AbortSignal) {
+    const created = this.worktreeCreation.then(() => this.createWorktreeNow(root, branch, signal));
+    this.worktreeCreation = created.catch(() => {});
+    return created;
+  }
+  private worktreeCreation: Promise<unknown> = Promise.resolve();
+  private async createWorktreeNow(root: string, branch: string, signal?: AbortSignal) {
     string(root);
     if (
       typeof branch !== 'string' ||
@@ -175,6 +181,7 @@ export class EditorSession {
       branch.endsWith('.lock')
     )
       invalid('Choose a simple branch name for the worktree.');
+    signal?.throwIfAborted();
     const options = signal ? { signal } : undefined;
     const target =
       [...this.known.values()].find((t) => t.root === root) ??
@@ -187,31 +194,52 @@ export class EditorSession {
       await this.client.command('listWorktrees', { checkout: target }, options),
     );
     const parent = `${worktrees.find((worktree) => worktree.main)?.root ?? target.root}-worktrees`;
-    await mkdir(parent).catch((error: NodeJS.ErrnoException) => {
-      if (error.code !== 'EEXIST') throw error;
-    });
-    for (let attempt = 1; ; attempt++) {
-      const name = attempt === 1 ? branch : `${branch}-${attempt}`;
-      try {
-        const created = decodeWorkspaceOutput(
-          'createWorktree',
-          await this.client.command(
+    signal?.throwIfAborted();
+    const madeParent = await mkdir(parent).then(
+      () => true,
+      (error: NodeJS.ErrnoException) => {
+        if (error.code !== 'EEXIST') throw error;
+        return false;
+      },
+    );
+    let prefix = branch;
+    try {
+      for (let attempt = 1; ; attempt++) {
+        const name = attempt === 1 ? prefix : `${prefix}-${attempt}`;
+        try {
+          const created = decodeWorkspaceOutput(
             'createWorktree',
-            {
-              checkout: target,
-              base: 'HEAD',
-              branch: name,
-              location: join(parent, name.replaceAll('/', '-')),
-            },
-            options,
-          ),
-        );
-        this.known.set(created.checkoutId, created);
-        this.worktreeRoots.add(created.root);
-        return created.root;
-      } catch (error) {
-        if (attempt >= 20 || !ApplicationError.is(error) || error.code !== 'Conflict') throw error;
+            await this.client.command(
+              'createWorktree',
+              {
+                checkout: target,
+                base: 'HEAD',
+                branch: name,
+                location: join(parent, name.replaceAll('/', '-')),
+              },
+              options,
+            ),
+          );
+          // A released document's worktree stays on disk but grants nothing to the next document.
+          if (!signal?.aborted) {
+            this.known.set(created.checkoutId, created);
+            this.worktreeRoots.add(created.root);
+          }
+          return created.root;
+        } catch (error) {
+          if (!ApplicationError.is(error) || ['Cancelled', 'Uncertain'].includes(error.code))
+            throw error;
+          if (error.code === 'Conflict' && attempt < 20) continue;
+          // A branch named like the prefix (`chat`) blocks every `chat/…` branch: use `chat-…`.
+          if (error.code === 'Conflict' || !prefix.includes('/')) throw error;
+          prefix = prefix.replaceAll('/', '-');
+          attempt = 0;
+        }
       }
+    } catch (error) {
+      // An empty folder this attempt made is removed; one holding other worktrees is kept.
+      if (madeParent) await rmdir(parent).catch(() => {});
+      throw error;
     }
   }
   async call(method: unknown, input: unknown, id: unknown): Promise<Reply> {

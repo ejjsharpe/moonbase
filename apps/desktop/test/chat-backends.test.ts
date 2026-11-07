@@ -208,6 +208,32 @@ test('a new worktree starts only from a folder local chat may use, and is approv
     assert.equal(await owner.createWorktree('/repo', 'chat/a'), '/repo-worktrees/chat-a');
     assert.deepEqual(created, ['/repo chat/a']);
     assert.deepEqual(approved, ['/repo-worktrees/chat-a']);
+    // Replacing the document cancels a creation in flight; its worktree is not approved.
+    let finish!: () => void;
+    let signal!: AbortSignal;
+    const slow = createChatBackends({
+      runtime,
+      localResult: { backend, error: null },
+      acquireLocal: async () => ({ backend, error: null }),
+      chatConfiguration: null,
+      remoteChat: null,
+      connection: null,
+      emit: () => {},
+      pickFolder: async () => null,
+      createWorktree: (root, branch, creation) => {
+        signal = creation;
+        return new Promise((resolve) => {
+          finish = () => resolve(`${root}-worktrees/${branch}`);
+        });
+      },
+    });
+    const pending = slow.createWorktree('/repo', 'late');
+    await new Promise((resolve) => setImmediate(resolve));
+    await slow.releaseDocument();
+    assert(signal.aborted);
+    finish();
+    await assert.rejects(pending, { code: 'Cancelled' });
+    assert.deepEqual(approved, ['/repo-worktrees/chat-a']);
   } finally {
     await owner.releaseDocument();
     await runtime.dispose();
