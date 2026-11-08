@@ -1,7 +1,15 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { ManagedRuntime } from 'effect';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
@@ -357,10 +365,9 @@ test('cancelling during checkout stops Git and its children and removes the lock
   }
 });
 
-test('cleanup removes a worktree Git left locked mid-creation, and its branch', async () => {
-  const f = repository();
-  // A Git that leaves the new worktree locked, as an interrupted checkout does.
-  const git = join(f.base, 'interrupted-git');
+/** A workspace whose Git runs `afterAdd` (sh, with `$location`) after a real `worktree add`. */
+function withGit(f: ReturnType<typeof repository>, afterAdd: string) {
+  const git = join(f.base, 'wrapped-git');
   writeFileSync(
     git,
     [
@@ -369,9 +376,7 @@ test('cleanup removes a worktree Git left locked mid-creation, and its branch', 
       'for arg; do location=$last; last=$arg; done',
       '/usr/bin/git "$@" || exit $?',
       'case " $* " in',
-      '  *" worktree add "*)',
-      '    /usr/bin/git worktree lock --reason initializing "$location"',
-      '    echo checkout interrupted >&2; exit 1 ;;',
+      `  *" worktree add "*) ${afterAdd} ;;`,
       'esac',
       '',
     ].join('\n'),
@@ -379,13 +384,24 @@ test('cleanup removes a worktree Git left locked mid-creation, and its branch', 
   chmodSync(git, 0o755);
   const runtime = ManagedRuntime.make(
     WorkspaceLive({
-      dataDirectory: join(f.base, 'interrupted-state'),
+      dataDirectory: join(f.base, 'wrapped-state'),
       hostId: 'local-test',
       gitExecutable: git,
     }),
   );
+  return { runtime, client: makeEditorClient(runtime) };
+}
+const registered = (f: ReturnType<typeof repository>) =>
+  f.git(['worktree', 'list', '--porcelain']).split('\n\n').length;
+
+test('cleanup removes a worktree Git left locked mid-creation, and its branch', async () => {
+  const f = repository();
+  // Git leaves the new worktree locked, as an interrupted checkout does.
+  const { runtime, client } = withGit(
+    f,
+    '/usr/bin/git worktree lock --reason initializing "$location"; echo checkout interrupted >&2; exit 1',
+  );
   try {
-    const client = makeEditorClient(runtime);
     const checkout = await client.command('openCheckout', { root: f.root });
     const before = branches(f.git);
     const location = join(f.base, 'interrupted');
@@ -396,9 +412,110 @@ test('cleanup removes a worktree Git left locked mid-creation, and its branch', 
     );
     assert.equal(existsSync(location), false);
     assert.deepEqual(branches(f.git), before);
-    assert.equal(f.git(['worktree', 'list', '--porcelain']).split('\n\n').length, 1);
+    assert.equal(registered(f), 1);
   } finally {
     await runtime.dispose();
+    await f.close();
+  }
+});
+
+test('cleanup never forces a worktree locked for any other reason', async () => {
+  const f = repository();
+  const { runtime, client } = withGit(
+    f,
+    '/usr/bin/git worktree lock --reason "on a portable drive" "$location"; echo failed >&2; exit 1',
+  );
+  try {
+    const checkout = await client.command('openCheckout', { root: f.root });
+    const location = join(f.base, 'user-locked');
+    await assert.rejects(
+      client.command('createWorktree', { checkout, base: 'main', branch: 'user-locked', location }),
+      (error) => rejects('Uncertain')(error) && (error as Error).message.includes(location),
+    );
+    assert.equal(readFileSync(join(location, 'file.txt'), 'utf8'), 'main');
+    assert.equal(registered(f), 2);
+    assert.ok(branches(f.git).includes('user-locked'), 'a branch still checked out is kept');
+  } finally {
+    await runtime.dispose();
+    await f.close();
+  }
+});
+
+test('a new worktree is approved only at the location it was made, else kept for inspection', async () => {
+  const f = repository();
+  // The location is swapped for a link to another folder between creation and approval.
+  const { runtime, client } = withGit(
+    f,
+    'mv "$location" "$location-moved"; ln -s "$location-moved" "$location"',
+  );
+  try {
+    const checkout = await client.command('openCheckout', { root: f.root });
+    const location = join(f.base, 'swapped');
+    await assert.rejects(
+      client.command('createWorktree', { checkout, base: 'main', branch: 'swapped', location }),
+      (error) => rejects('Uncertain')(error) && /location changed/.test((error as Error).message),
+    );
+    assert.ok(branches(f.git).includes('swapped'), 'a branch still checked out is kept');
+    assert.equal(readFileSync(join(location + '-moved', 'file.txt'), 'utf8'), 'main');
+  } finally {
+    await runtime.dispose();
+    await f.close();
+  }
+});
+
+test("a location registered to a missing worktree is refused and the user's registration kept", async () => {
+  const f = repository();
+  try {
+    const checkout = await f.client.command('openCheckout', { root: f.root });
+    for (const locked of [true, false]) {
+      const name = locked ? 'portable' : 'moved';
+      const location = join(f.base, name);
+      f.git(['worktree', 'add', '-q', '-b', name, location, 'main']);
+      if (locked) f.git(['worktree', 'lock', '--reason', 'on a portable drive', location]);
+      // Its folder is gone for now (moved, or on an unmounted drive); Git still registers it.
+      renameSync(location, location + '-away');
+      const admin = join(f.root, '.git/worktrees', name);
+      const before = branches(f.git);
+      await assert.rejects(
+        f.client.command('createWorktree', {
+          checkout,
+          base: 'main',
+          branch: `chat/${name}`,
+          location,
+        }),
+        rejects('Conflict'),
+      );
+      assert.deepEqual(branches(f.git), before, 'no branch was created');
+      assert.equal(existsSync(join(admin, 'HEAD')), true);
+      assert.equal(existsSync(join(admin, 'locked')), locked);
+    }
+  } finally {
+    await f.close();
+  }
+});
+
+test('concurrent creations at one location never remove each other', async () => {
+  const f = repository();
+  try {
+    const checkout = await f.client.command('openCheckout', { root: f.root });
+    const location = join(f.base, 'shared');
+    const results = await Promise.allSettled(
+      ['first', 'second'].map((branch) =>
+        f.client.command('createWorktree', { checkout, base: 'main', branch, location }),
+      ),
+    );
+    const created = results.flatMap((result) =>
+      result.status === 'fulfilled' ? [result.value] : [],
+    );
+    const refused = results.flatMap((result) =>
+      result.status === 'rejected' ? [result.reason] : [],
+    );
+    assert.equal(created.length, 1);
+    assert.ok(rejects('Conflict')(refused[0]));
+    const file = await f.client.command('readFile', { checkout: created[0]!, path: 'file.txt' });
+    assert.equal(file.text, 'main');
+    assert.equal(registered(f), 2);
+  } finally {
     await f.close();
   }
 });
