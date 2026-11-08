@@ -161,28 +161,23 @@ test('selected rows retain the range anchor; unselected rows replace it', async 
   expect(await selected(page)).toEqual(['README.md', 'welcome.ts']);
 });
 
-for (const [name, title] of [
-  ['Rename…', 'Rename'],
-  ['Duplicate…', 'Duplicate'],
-  ['Move to Trash', 'Move to Trash'],
-])
-  test(`${name} hands focus to its existing dialog and Cancel returns to this tree`, async ({
-    page,
-  }) => {
-    await page.goto('/');
-    await row(page, 'README.md').click({ button: 'right' });
-    await item(page, name).click();
-    const dialog = page.getByRole('dialog', { name: title, exact: true });
-    await expect(dialog).toBeVisible();
-    await expect(dialog).toContainText('memory-demo · /demo/moonbase');
-    await expect(dialog).toContainText('README.md');
-    await expect
-      .poll(() => dialog.evaluate((element) => element.contains(document.activeElement)))
-      .toBe(true);
-    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
-    await expect(tree(page)).toBeFocused();
-    expect(await page.evaluate(() => window.demo.memory.stats.mutations)).toBe(0);
-  });
+test('Move to Trash hands focus to its dialog and Cancel returns to this tree', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await row(page, 'README.md').click({ button: 'right' });
+  await item(page, 'Move to Trash').click();
+  const dialog = page.getByRole('dialog', { name: 'Move to Trash', exact: true });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText('memory-demo · /demo/moonbase');
+  await expect(dialog).toContainText('README.md');
+  await expect
+    .poll(() => dialog.evaluate((element) => element.contains(document.activeElement)))
+    .toBe(true);
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(tree(page)).toBeFocused();
+  expect(await page.evaluate(() => window.demo.memory.stats.mutations)).toBe(0);
+});
 
 for (const key of ['Tab', 'Shift+Tab'])
   test(`${key} dismisses and traverses from the invoking tree without activation`, async ({
@@ -323,8 +318,8 @@ test('a captured dialog survives navigation and refuses a closed checkout withou
   await page.goto('/recovery-race.html');
   const currentTree = page.getByRole('tree', { name: 'Files', exact: true });
   await currentTree.getByRole('treeitem', { name: 'a.ts', exact: true }).click({ button: 'right' });
-  await item(page, 'Duplicate…').click();
-  const dialog = page.getByRole('dialog', { name: 'Duplicate', exact: true });
+  await item(page, 'Move to Trash').click();
+  const dialog = page.getByRole('dialog', { name: 'Move to Trash', exact: true });
   await page.evaluate(async () => {
     const editor = window.recoveryRace.editor;
     const alpha = editor
@@ -338,8 +333,7 @@ test('a captured dialog survives navigation and refuses a closed checkout withou
   });
   await expect(dialog).toContainText('memory · /race/alpha');
   await expect(dialog.getByRole('alert')).toContainText('captured checkout is unavailable');
-  await dialog.getByLabel('Destination relative path', { exact: true }).fill('copy.ts');
-  await expect(dialog.getByRole('button', { name: 'Duplicate', exact: true })).toBeDisabled();
+  await expect(dialog.getByRole('button', { name: 'Move to Trash', exact: true })).toBeDisabled();
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(currentTree).not.toBeFocused();
 });
@@ -351,8 +345,8 @@ test('two workbenches keep menu selection, dialogs and return focus independent'
   const second = page.getByRole('region', { name: 'Second editor', exact: true });
   const otherTree = second.getByRole('tree', { name: 'Files', exact: true });
   await row(page, 'README.md').click({ button: 'right' });
-  await item(page, 'Duplicate…').click();
-  await expect(page.getByRole('dialog', { name: 'Duplicate', exact: true })).toContainText(
+  await item(page, 'Move to Trash').click();
+  await expect(page.getByRole('dialog', { name: 'Move to Trash', exact: true })).toContainText(
     'README.md',
   );
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
@@ -376,11 +370,10 @@ test('controlled remote host and local checkout with matching IDs and paths stay
     .getByRole('treeitem', { name: 'README.md', exact: true })
     .click({ button: 'right' });
   await item(page, 'Duplicate…').click();
-  const dialog = page.getByRole('dialog', { name: 'Duplicate', exact: true });
-  await expect(dialog).toContainText('remote-memory · /demo/remote');
-  await dialog.getByLabel('Destination relative path', { exact: true }).fill('remote-copy.md');
-  await dialog.getByRole('button', { name: 'Duplicate', exact: true }).click();
-  await expect(dialog).toHaveCount(0);
+  const input = otherTree.getByRole('textbox', { name: 'Duplicate as', exact: true });
+  await input.fill('remote-copy.md');
+  await input.press('Enter');
+  await expect(input).toHaveCount(0);
   await expect(
     otherTree.getByRole('treeitem', { name: 'remote-copy.md, untracked', exact: true }),
   ).toBeVisible();
@@ -442,7 +435,7 @@ test('eligibility updates during preservation and disabled actions cannot execut
   });
   await expect(item(page, 'Duplicate…')).toHaveAttribute('aria-disabled', 'true');
   await item(page, 'Duplicate…').dispatchEvent('click');
-  await expect(page.getByRole('dialog', { name: 'Duplicate', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('textbox', { name: 'Duplicate as', exact: true })).toHaveCount(0);
   await page.keyboard.press('Escape');
   await page.evaluate(() => window.recoveryRace.release());
   await expect
@@ -473,7 +466,9 @@ test('another file saving does not disable an unrelated row mutation', async ({ 
   await row(page, 'README.md').click({ button: 'right' });
   await expect(item(page, 'Duplicate…')).not.toHaveAttribute('aria-disabled', 'true');
   await item(page, 'Duplicate…').click();
-  await expect(page.getByRole('dialog', { name: 'Duplicate', exact: true })).toBeVisible();
+  await expect(
+    tree(page).getByRole('textbox', { name: 'Duplicate as', exact: true }),
+  ).toBeFocused();
 });
 
 test('a competing preservation dialog dismisses the menu and owns focus and the first click', async ({
@@ -580,11 +575,11 @@ for (const timing of ['normal', 'before completion', 'late completion'])
     }
     await page.keyboard.press('Space');
     if (timing === 'before completion') await page.evaluate(() => window.finishMenuOpening());
-    const dialog = page.getByRole('dialog', { name: 'Duplicate', exact: true });
-    await expect(dialog).toContainText('README.md');
-    await dialog.getByLabel('Destination relative path', { exact: true }).fill('copied.md');
-    await dialog.getByRole('button', { name: 'Duplicate', exact: true }).click();
-    await expect(dialog).toHaveCount(0);
+    const input = tree(page).getByRole('textbox', { name: 'Duplicate as', exact: true });
+    await expect(input).toHaveValue('README copy.md');
+    await input.fill('copied.md');
+    await input.press('Enter');
+    await expect(input).toHaveCount(0);
     expect(
       await page.evaluate(
         async () =>
@@ -650,9 +645,12 @@ test('nested folder invocation preserves expansion and full relative paths', asy
   await expect(row(page, 'src/nested')).toHaveAttribute('aria-expanded', 'false');
   await expect(row(page, 'src/nested')).toHaveAttribute('aria-level', '2');
   await item(page, 'Rename…').click();
-  await expect(page.getByLabel('Destination relative path', { exact: true })).toHaveValue(
-    'src/nested',
-  );
+  const input = tree(page).getByRole('textbox', { name: 'Rename', exact: true });
+  await expect(input).toHaveValue('nested');
+  await input.fill('renamed');
+  await input.press('Enter');
+  await expect(row(page, 'src/renamed')).toHaveAttribute('aria-level', '2');
+  await expect(row(page, 'src')).toHaveAttribute('aria-expanded', 'true');
 });
 
 for (const width of [1440, 768, 390])
@@ -808,11 +806,9 @@ test('tree shortcuts run the selection’s menu commands', async ({ page }) => {
   await page.goto('/');
   await row(page, 'README.md').click();
   await tree(page).press('F2');
-  const rename = page.getByRole('dialog', { name: 'Rename', exact: true });
-  await expect(rename.getByLabel('Destination relative path', { exact: true })).toHaveValue(
-    'README.md',
-  );
-  await rename.getByRole('button', { name: 'Cancel', exact: true }).click();
+  const rename = tree(page).getByRole('textbox', { name: 'Rename', exact: true });
+  await expect(rename).toHaveValue('README.md');
+  await rename.press('Escape');
   await expect(tree(page)).toBeFocused();
   await tree(page).press('ControlOrMeta+Alt+KeyC');
   await tree(page).press('ControlOrMeta+Alt+Shift+KeyC');
@@ -826,22 +822,6 @@ test('tree shortcuts run the selection’s menu commands', async ({ page }) => {
   await expect(trash).toContainText('README.md');
   await trash.getByRole('button', { name: 'Cancel', exact: true }).click();
   expect(await page.evaluate(() => window.demo.memory.stats.mutations)).toBe(0);
-});
-
-test('New File… and New Folder… on a folder start inside it', async ({ page }) => {
-  await page.goto('/');
-  for (const [name, title] of [
-    ['New File…', 'New File'],
-    ['New Folder…', 'New Folder'],
-  ]) {
-    await row(page, 'src').click({ button: 'right' });
-    await item(page, name).click();
-    const dialog = page.getByRole('dialog', { name: title, exact: true });
-    await expect(dialog.getByLabel('Destination relative path', { exact: true })).toHaveValue(
-      'src/',
-    );
-    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
-  }
 });
 
 test('Open keeps focus in the tree, like Enter', async ({ page }) => {

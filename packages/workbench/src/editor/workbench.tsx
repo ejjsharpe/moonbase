@@ -7,9 +7,11 @@ import {
   type PickerOpenFile,
   type PickerRequest,
 } from './picker.tsx';
-import { FilesTree } from './files-tree.tsx';
+import { FilesTree, type TreeCreateRequest } from './files-tree.tsx';
+import { findCreateFolder } from './files-tree-rows.ts';
 import { gitStatusMarks } from './files-tree-status.ts';
 import { Mutation, type Action } from './mutation.tsx';
+import { useMutationRunner } from './mutation-runner.tsx';
 import { Popup } from './popup.tsx';
 import {
   forwardRef,
@@ -159,28 +161,26 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   const [mutationFinalFocus, setMutationFinalFocus] = useState<
     (() => boolean | HTMLElement | null) | undefined
   >(undefined);
-  // Where New File/Folder starts, such as the folder its menu was opened on.
-  const [mutationDestination, setMutationDestination] = useState('');
+  // The explorer's "…" New File/Folder, started by the files tree.
+  const [createRequest, setCreateRequest] = useState<TreeCreateRequest | null>(null),
+    createRequests = useRef(0);
   useLayoutEffect(() => {
     lookupRef.current = lookup;
     projectRef.current = project;
   }, [lookup, project]);
-  function setAction(
-    value: Action | null,
-    finalFocus?: () => boolean | HTMLElement | null,
-    destination = '',
-  ) {
-    if (value) {
-      setMutationFinalFocus(() => finalFocus);
-      setMutationDestination(destination);
-    }
+  function setAction(value: Action | null, finalFocus?: () => boolean | HTMLElement | null) {
+    if (value) setMutationFinalFocus(() => finalFocus);
     actionRef.current = value;
     updateAction(value);
   }
+  // Rename, Duplicate and New File/Folder run directly from the tree, asking only to replace.
+  const mutations = useMutationRunner(controller, (value) =>
+    canRequestMutation(value, controller.getSnapshot(), !!(actionRef.current || lookupRef.current)),
+  );
   function canRequestMutation(
     value: Action,
     snapshot: EditorSnapshot = state,
-    blocked = !!(action || lookup),
+    blocked = !!(action || lookup || mutations.running),
   ) {
     return (
       snapshot.ready &&
@@ -196,16 +196,12 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       (value.kind !== 'trash' || value.paths.length > 0)
     );
   }
-  function requestMutation(
-    value: Action,
-    finalFocus?: () => boolean | HTMLElement | null,
-    destination?: string,
-  ) {
+  function requestMutation(value: Action, finalFocus?: () => boolean | HTMLElement | null) {
     if (
       !canRequestMutation(
         value,
         controller.getSnapshot(),
-        !!(actionRef.current || lookupRef.current),
+        !!(actionRef.current || lookupRef.current || mutations.isRunning()),
       )
     ) {
       controller.report(
@@ -215,11 +211,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       );
       return;
     }
-    setAction(
-      { ...value, checkout: { ...value.checkout }, paths: [...value.paths] },
-      finalFocus,
-      destination,
-    );
+    setAction({ ...value, checkout: { ...value.checkout }, paths: [...value.paths] }, finalFocus);
   }
   const choice = state.closePrompt;
   const [recent, setRecent] = useState<{
@@ -571,19 +563,32 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     setPanel(next);
     if (sidebarHidden) onShowSidebar?.();
   }
+  /** Types a new entry's name in the focused folder, the focused file's folder, or the root. */
+  const requestCreate = (kind: TreeCreateRequest['kind']) => {
+    if (!checkout || !selected) return;
+    showPanel('files');
+    setCreateRequest({
+      checkout: { ...checkout },
+      kind,
+      parent: findCreateFolder(state.listings, checkoutKey(checkout), selected.tree.focus),
+      id: ++createRequests.current,
+    });
+  };
   const explorerActions: ExplorerAction[] = checkout
     ? [
         {
           label: 'New File…',
           icon: 'newFile',
           disabled: !canRequestMutation({ checkout, kind: 'create-file', paths: [] }),
-          run: () => requestMutation({ checkout, kind: 'create-file', paths: [] }),
+          movesFocus: true,
+          run: () => requestCreate('create-file'),
         },
         {
           label: 'New Folder…',
           icon: 'newFolder',
           disabled: !canRequestMutation({ checkout, kind: 'create-directory', paths: [] }),
-          run: () => requestMutation({ checkout, kind: 'create-directory', paths: [] }),
+          movesFocus: true,
+          run: () => requestCreate('create-directory'),
         },
         ...(selectNativeImports
           ? [
@@ -668,9 +673,12 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                 active={selected.active}
                 anchorReset={anchorReset}
                 visible={visible}
-                dialogOpen={!!(action || choice || lookup)}
+                dialogOpen={!!(action || choice || lookup || mutations.running)}
                 canRequestMutation={canRequestMutation}
                 requestMutation={requestMutation}
+                runMutation={mutations.runMutation}
+                createRequest={createRequest}
+                onCreateRequestTaken={() => setCreateRequest(null)}
                 copyPaths={copyPaths}
                 revealPath={revealPath}
                 mentionInChat={mentionInChat}
@@ -1303,9 +1311,9 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
           action={action}
           close={() => setAction(null)}
           finalFocus={mutationFinalFocus}
-          initialDestination={mutationDestination}
         />
       )}
+      {mutations.confirmation}
       {choice && (
         <Popup title="Save changes before closing?" onClose={() => answer('cancel')}>
           <Dialog.Description>{choice.buffer.target.path} has unsaved changes.</Dialog.Description>
