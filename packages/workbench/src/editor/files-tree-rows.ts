@@ -6,17 +6,45 @@ export const rowHeight = 28;
 const overscan = 10;
 
 /** A listed entry the tree shows, with its place among its siblings. */
-export type VisibleRow = DirectoryEntry & { level: number; position: number; size: number };
+export type VisibleRow = DirectoryEntry & {
+  level: number;
+  position: number;
+  size: number;
+  /** Set on the row where a new entry's name is typed; it has no entry on disk. */
+  placeholder?: true;
+};
 
-/** A checkout's tree in display order: listed entries, descending into expanded folders. */
+/** Where a new entry's name is typed: first in `parent`, or right after its entry `after`. */
+export type RowPlaceholder = { parent: string; directory: boolean; after?: string };
+
+/** The placeholder row's path in `parent`; no listed entry can have it. */
+export const placeholderPath = (parent: string) => (parent ? `${parent}/` : '') + '\0';
+
+/**
+ * A checkout's tree in display order: listed entries, descending into expanded folders, with an
+ * optional `placeholder` row among its parent's children when that parent is shown.
+ */
 export function listVisibleRows(
   listings: Readonly<Record<string, DirectoryListing>>,
   checkoutIdentity: string,
   expanded: ReadonlySet<string>,
+  placeholder?: RowPlaceholder,
 ) {
   const rows: VisibleRow[] = [];
   function visit(parent: string, level: number) {
-    const entries = listings[JSON.stringify([checkoutIdentity, parent])]?.entries ?? [];
+    let entries: (DirectoryEntry & { placeholder?: true })[] =
+      listings[JSON.stringify([checkoutIdentity, parent])]?.entries ?? [];
+    if (placeholder?.parent === parent) {
+      const index =
+        placeholder.after === undefined
+          ? 0
+          : entries.findIndex((entry) => entry.path === placeholder.after) + 1;
+      entries = [
+        ...entries.slice(0, index),
+        { path: placeholderPath(parent), directory: placeholder.directory, placeholder: true },
+        ...entries.slice(index),
+      ];
+    }
     entries.forEach((entry, index) => {
       rows.push({ ...entry, level, position: index + 1, size: entries.length });
       if (entry.directory && expanded.has(entry.path)) visit(entry.path, level + 1);
@@ -24,6 +52,23 @@ export function listVisibleRows(
   }
   visit('', 1);
   return rows;
+}
+
+/**
+ * The folder New File/Folder starts in from the tree's focused path: that folder, a file's
+ * folder, or the checkout root when nothing listed is focused.
+ */
+export function findCreateFolder(
+  listings: Readonly<Record<string, DirectoryListing>>,
+  checkoutIdentity: string,
+  focus: string,
+) {
+  const parent = focus.split('/').slice(0, -1).join('/');
+  const entry = listings[JSON.stringify([checkoutIdentity, parent])]?.entries.find(
+    (entry) => entry.path === focus,
+  );
+  if (!entry) return '';
+  return entry.directory ? entry.path : parent;
 }
 
 /**
@@ -56,4 +101,10 @@ export function selectMountedIndexes({
       if (pinned.has(row.path)) indexes.add(index);
     });
   return [...indexes].filter((index) => index < rows.length).sort((a, b) => a - b);
+}
+
+/** The length of a name's stem, which is selected first: all of a folder's or dotfile's name. */
+export function measureStem(name: string, directory: boolean) {
+  const dot = name.lastIndexOf('.');
+  return directory || dot <= 0 ? name.length : dot;
 }

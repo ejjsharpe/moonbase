@@ -140,17 +140,16 @@ test('cancelled/empty/closed-checkout imports dispatch nothing; create file/fold
   await dialog(page).getByRole('button', { name: 'Cancel', exact: true }).click();
   expect(await page.evaluate(() => window.importCalls)).toEqual([]);
   await page.reload();
-  for (const [title, destination] of [
-    ['New File', 'created.ts'],
-    ['New Folder', 'created-folder'],
+  for (const [action, label, destination] of [
+    ['New File…', 'New file name', 'created.ts'],
+    ['New Folder…', 'New folder name', 'created-folder'],
   ]) {
-    await explorerAction(
-      page.getByRole('region', { name: 'First editor', exact: true }),
-      `${title}…`,
-    );
-    await page.getByLabel('Destination relative path', { exact: true }).fill(destination);
-    await dialog(page).getByRole('button', { name: title, exact: true }).click();
-    await expect(dialog(page)).toHaveCount(0);
+    const editor = page.getByRole('region', { name: 'First editor', exact: true });
+    await explorerAction(editor, action);
+    const name = editor.getByRole('textbox', { name: label, exact: true });
+    await name.fill(destination);
+    await name.press('Enter');
+    await expect(name).toHaveCount(0);
   }
   await expect(
     page

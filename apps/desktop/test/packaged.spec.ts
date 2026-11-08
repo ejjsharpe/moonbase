@@ -179,8 +179,9 @@ test('unsigned macOS package runs with only system PATH, SQLite, native/rg resou
     await selectFileView(page, 'staged');
     await expect(page.getByRole('textbox', { name: / original$/ })).toHaveCount(1);
     await explorerAction(page, 'New File…');
-    await page.getByLabel('Destination relative path').fill('packaged-created.txt');
-    await page.getByRole('dialog').getByRole('button', { name: 'New File', exact: true }).click();
+    const created = page.getByRole('textbox', { name: 'New file name', exact: true });
+    await created.fill('packaged-created.txt');
+    await created.press('Enter');
     await expect(
       page.getByRole('tab', { name: 'packaged-created.txt', exact: true }),
     ).toBeVisible();

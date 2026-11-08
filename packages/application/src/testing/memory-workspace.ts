@@ -621,10 +621,12 @@ export function memoryWorkspace(seeds: Seed[]) {
         )
           fail('The memory adapter transfers one captured source at a time.');
         if (operation.destination) pathCheck(operation.destination);
-        const replace = (destination: string) => {
+        const replace = (destination: string, source?: string) => {
           const collision = [...map.keys()].find(
             (path) =>
-              path.normalize('NFC').toLowerCase() === destination.normalize('NFC').toLowerCase(),
+              path.normalize('NFC').toLowerCase() === destination.normalize('NFC').toLowerCase() &&
+              // Like a case-insensitive disk, a move may change only its name's case.
+              !(operation.kind === 'move' && path === source),
           );
           if (collision && !operation.replacements?.some((ref) => ref.target.path === collision))
             fail('Destination exists. Explicit replacement consent required.', 'Conflict');
@@ -648,7 +650,7 @@ export function memoryWorkspace(seeds: Seed[]) {
             if (operation.kind !== 'trash' && !destination) fail('Destination required.');
             if (destination && affected(destination, source.target.path))
               fail('Cannot transfer an entry into itself.');
-            if (destination) replace(destination);
+            if (destination) replace(destination, source.target.path);
             const selected = [...map].filter(([path]) => affected(path, source.target.path));
             for (const [path, entry] of selected) {
               if (destination)
@@ -800,9 +802,14 @@ export function memoryWorkspace(seeds: Seed[]) {
       entries(target.checkout).set(target.path, { ...document(text), directory: false });
       notify(target.checkout, [target.path]);
     },
-    failNext(name: WorkspaceCommand, message = 'Injected IO failure', after = false) {
+    failNext(
+      name: WorkspaceCommand,
+      message = 'Injected IO failure',
+      after = false,
+      code: ApplicationError['code'] = after ? 'Uncertain' : 'Persistence',
+    ) {
       faults.set(name, {
-        error: new ApplicationError({ code: after ? 'Uncertain' : 'Persistence', message }),
+        error: new ApplicationError({ code, message }),
         after,
       });
     },

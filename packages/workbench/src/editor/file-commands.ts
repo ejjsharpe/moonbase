@@ -6,6 +6,17 @@ import {
 } from '@moonbase/application/editor';
 import type { Icon } from './icon.tsx';
 
+/** What a name typed in the tree does. */
+export type TreeEditKind = 'rename' | 'duplicate' | 'create-file' | 'create-directory';
+
+/** The file operation each tree edit commits. */
+export const editMutations = {
+  rename: 'move',
+  duplicate: 'copy',
+  'create-file': 'create-file',
+  'create-directory': 'create-directory',
+} as const satisfies Record<TreeEditKind, MutationAction['kind']>;
+
 export type FileCommand = {
   id: string;
   icon: Parameters<typeof Icon>[0]['name'];
@@ -78,11 +89,10 @@ export type FileCommandContext = {
   checkout: CheckoutTarget;
   listings: Readonly<Record<string, DirectoryListing>>;
   canRequestMutation: (action: MutationAction) => boolean;
-  requestMutation: (
-    action: MutationAction,
-    finalFocus: () => HTMLElement | false,
-    destination?: string,
-  ) => void;
+  /** Opens a mutation's dialog: Move to Trash. */
+  requestMutation: (action: MutationAction, finalFocus: () => HTMLElement | false) => void;
+  /** Types a name in the tree: renaming or duplicating `path`, or creating in folder `path`. */
+  startEdit: (kind: TreeEditKind, path: string) => void;
   /** Where focus goes after a mutation dialog closes. */
   returnTreeFocus: () => HTMLElement | false;
   copyPaths?: (checkout: CheckoutTarget, paths: string[], relative: boolean) => Promise<void>;
@@ -98,6 +108,7 @@ export function listFileCommands(
     listings,
     canRequestMutation,
     requestMutation,
+    startEdit,
     returnTreeFocus,
     copyPaths,
     revealPath,
@@ -119,10 +130,17 @@ export function listFileCommands(
     files = paths.filter((path) => !directories.has(path)),
     count = paths.length,
     plural = count > 1 ? ` ${count} Items` : '',
-    mutation = (kind: MutationAction['kind'], sources: string[], destination?: string) => ({
+    mutation = (kind: MutationAction['kind'], sources: string[]) => ({
       disabled: !canRequestMutation({ checkout, paths: sources, kind }),
-      run: () => requestMutation({ checkout, paths: sources, kind }, returnTreeFocus, destination),
-    });
+      run: () => requestMutation({ checkout, paths: sources, kind }, returnTreeFocus),
+    }),
+    typeName = (kind: TreeEditKind, path: string) => {
+      const sources = kind === 'rename' || kind === 'duplicate' ? [path] : [];
+      return {
+        disabled: !canRequestMutation({ checkout, paths: sources, kind: editMutations[kind] }),
+        run: () => startEdit(kind, path),
+      };
+    };
   const open: FileCommand[] = [];
   if (one !== null && !folder)
     open.push({
@@ -142,13 +160,13 @@ export function listFileCommands(
         id: 'new-file',
         icon: 'newFile',
         label: 'New File…',
-        ...mutation('create-file', [], `${one}/`),
+        ...typeName('create-file', one),
       },
       {
         id: 'new-folder',
         icon: 'newFolder',
         label: 'New Folder…',
-        ...mutation('create-directory', [], `${one}/`),
+        ...typeName('create-directory', one),
       },
     );
   const chat: FileCommand[] =
@@ -169,14 +187,14 @@ export function listFileCommands(
       icon: 'rename',
       label: 'Rename…',
       keys: 'F2',
-      ...mutation('move', [one]),
+      ...typeName('rename', one),
     });
     if (!folder)
       edit.push({
         id: 'duplicate',
         icon: 'copy',
         label: 'Duplicate…',
-        ...mutation('copy', [one]),
+        ...typeName('duplicate', one),
       });
   }
   if (copyPaths)

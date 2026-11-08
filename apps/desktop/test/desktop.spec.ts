@@ -850,23 +850,27 @@ test("controlled clipboard fixtures require native consent and capture real file
 test('real create, dirty move and copy use native operations; lost move reply resolves status without replay', async () => {
   await open();
   await explorerAction(page, 'New File…');
-  await page.getByLabel('Destination relative path').fill('created.ts');
-  await page.getByRole('dialog').getByRole('button', { name: 'New File', exact: true }).click();
+  const created = page.getByRole('textbox', { name: 'New file name', exact: true });
+  await created.fill('created.ts');
+  await created.press('Enter');
   await expect(page.getByRole('tab', { name: 'created.ts', exact: true })).toBeVisible();
   await edit('dirty created buffer', 'created.ts');
   await page.getByRole('treeitem', { name: 'created.ts, unsaved, untracked', exact: true }).click();
   await page.getByRole('tree', { name: 'Files', exact: true }).press('ContextMenu');
   await page.getByRole('menuitem', { name: 'Rename…', exact: true }).click();
-  await page.getByLabel('Destination relative path').fill('renamed.ts');
+  const renamed = page.getByRole('textbox', { name: 'Rename', exact: true });
+  await renamed.fill('renamed.ts');
   // Keep live observation from resolving the fact before the explicit status gesture.
   await app.evaluate(() => {
     globalThis.desktopTest.fault = 'mutate';
     globalThis.desktopTest.outage = 'loadRecovery';
     globalThis.desktopTest.restoreOn = 'operationStatus';
   });
-  await page.getByRole('dialog').getByRole('button', { name: 'Rename', exact: true }).click();
+  await renamed.press('Enter');
   await expect.poll(() => existsSync(join(checkout, 'renamed.ts'))).toBe(true);
-  await page.getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true }).click();
+  // The lost reply leaves the name open with its error, unless the moved row has gone.
+  await page.keyboard.press('Escape');
+  await expect(renamed).toHaveCount(0);
   await page.getByRole('button', { name: 'Resolve operation status', exact: true }).click();
   await expect(page.getByRole('tab', { name: 'renamed.ts', exact: true })).toBeVisible();
   await expect(
@@ -875,8 +879,10 @@ test('real create, dirty move and copy use native operations; lost move reply re
   await page.getByRole('treeitem', { name: 'renamed.ts, unsaved, untracked', exact: true }).click();
   await page.getByRole('tree', { name: 'Files', exact: true }).press('ContextMenu');
   await page.getByRole('menuitem', { name: 'Duplicate…', exact: true }).click();
-  await page.getByLabel('Destination relative path').fill('copied.ts');
-  await page.getByRole('dialog').getByRole('button', { name: 'Duplicate', exact: true }).click();
+  const copied = page.getByRole('textbox', { name: 'Duplicate as', exact: true });
+  await copied.fill('copied.ts');
+  await copied.press('Enter');
+  await expect(copied).toHaveCount(0);
   await open('copied.ts');
   await expect(
     page.locator('.view-line').filter({ hasText: 'dirty created buffer' }).first(),
@@ -1233,11 +1239,12 @@ test('unacknowledged real move evidence restores dirty text on process restart w
   await page.getByRole('treeitem', { name: 'a.ts, unsaved, modified', exact: true }).click();
   await page.getByRole('tree', { name: 'Files', exact: true }).press('ContextMenu');
   await page.getByRole('menuitem', { name: 'Rename…', exact: true }).click();
-  await page.getByLabel('Destination relative path').fill('moved.ts');
+  const moved = page.getByRole('textbox', { name: 'Rename', exact: true });
+  await moved.fill('moved.ts');
   await app.evaluate(() => {
     globalThis.desktopTest.fault = 'mutate';
   });
-  await page.getByRole('dialog').getByRole('button', { name: 'Rename', exact: true }).click();
+  await moved.press('Enter');
   await expect.poll(() => existsSync(join(checkout, 'moved.ts'))).toBe(true);
   await forceStop();
   await launch();
@@ -1269,11 +1276,17 @@ test('replacement consent cannot overwrite another open dirty draft or admit a n
   await page.getByRole('treeitem', { name: 'a.ts, unsaved, modified', exact: true }).click();
   await page.getByRole('tree', { name: 'Files', exact: true }).press('ContextMenu');
   await page.getByRole('menuitem', { name: 'Rename…', exact: true }).click();
-  await page.getByLabel('Destination relative path').fill('b.ts');
-  await page.getByRole('dialog').getByRole('button', { name: 'Rename', exact: true }).click();
-  await page.getByRole('button', { name: 'Replace captured destination', exact: true }).click();
-  await expect(page.getByRole('dialog').getByRole('alert').last()).toContainText('open buffers');
-  await page.getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true }).click();
+  const name = page.getByRole('textbox', { name: 'Rename', exact: true });
+  await name.fill('b.ts');
+  await name.press('Enter');
+  await page
+    .getByRole('dialog', { name: 'Replace b.ts?', exact: true })
+    .getByRole('button', { name: 'Replace', exact: true })
+    .click();
+  await expect(
+    page.getByRole('tree', { name: 'Files', exact: true }).getByRole('alert'),
+  ).toContainText('open buffers');
+  await name.press('Escape');
   expect(
     await app.evaluate(
       () =>

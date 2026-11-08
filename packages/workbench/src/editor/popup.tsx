@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { ReactNode, RefObject } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { Dialog } from '@base-ui/react/dialog';
 import { overlays } from '@moonbase/ui/overlays';
@@ -9,11 +9,13 @@ export function Popup({
   title,
   children,
   onClose,
+  initialFocus,
   finalFocus,
 }: {
   title: string;
   children: ReactNode;
   onClose: () => void;
+  initialFocus?: RefObject<HTMLElement | null>;
   finalFocus?: () => boolean | HTMLElement | null;
 }) {
   return (
@@ -25,6 +27,7 @@ export function Popup({
       <Dialog.Portal>
         <Dialog.Backdrop {...stylex.props(styles.backdrop)} />
         <Dialog.Popup
+          initialFocus={initialFocus}
           finalFocus={finalFocus}
           {...stylex.props(workbench.document, overlays.dialog, styles.popup)}>
           <Dialog.Title {...stylex.props(overlays.dialogTitle)}>{title}</Dialog.Title>

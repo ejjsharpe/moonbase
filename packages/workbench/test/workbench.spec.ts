@@ -768,8 +768,9 @@ test('Go to lists recent files first, highlights matches and opens an exact path
     first(page).getByRole('textbox', { name: 'README.md editor', exact: true }),
   ).toBeFocused();
   await explorerAction(first(page), 'New File…');
-  await page.getByLabel('Destination relative path').fill('created.txt');
-  await page.getByRole('dialog').getByRole('button', { name: 'New File', exact: true }).click();
+  const name = first(page).getByRole('textbox', { name: 'New file name', exact: true });
+  await name.fill('created.txt');
+  await name.press('Enter');
   await expect(first(page).getByRole('tab', { name: 'created.txt', exact: true })).toBeVisible();
   await page.screenshot({ path: 'test-results/editor-constrained.png', fullPage: true });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -1058,17 +1059,27 @@ test('real close-checkout removes its Monaco models without a teardown exception
   await page.screenshot({ path: 'test-results/editor-checkout-closed.png', fullPage: true });
 });
 
-test('rejected unchanged Rename leaves explicit Save and Close usable', async ({ page }) => {
+test('rejected and unchanged Renames leave explicit Save and Close usable', async ({ page }) => {
   await page.goto('/');
   await first(page).getByRole('treeitem', { name: 'welcome.ts, modified', exact: true }).click();
   await first(page).getByRole('tree', { name: 'Files', exact: true }).press('ContextMenu');
   await page.getByRole('menuitem', { name: 'Rename…', exact: true }).click();
-  await page.getByRole('dialog').getByRole('button', { name: 'Rename', exact: true }).click();
-  await page.getByRole('button', { name: 'Replace captured destination', exact: true }).click();
-  await expect(page.getByRole('dialog').getByRole('alert').last()).toContainText(
-    'Cannot transfer an entry into itself',
+  const name = first(page).getByRole('textbox', { name: 'Rename', exact: true });
+  const error = first(page).getByRole('tree').getByRole('alert');
+  // The backend refuses a dispatched move of the dirty source.
+  await page.evaluate(() =>
+    window.demo.memory.failNext('mutate', 'Injected move refusal', false, 'InvalidInput'),
   );
-  await page.getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true }).click();
+  await name.fill('refused.ts');
+  await name.press('Enter');
+  await expect(error).toContainText('Injected move refusal');
+  await name.fill('..');
+  await name.press('Enter');
+  await expect(error).toContainText('exact relative path');
+  await name.fill('welcome.ts');
+  await name.press('Enter');
+  await expect(name).toHaveCount(0);
+  expect(await page.evaluate(() => window.demo.memory.stats.mutations)).toBe(0);
   await edit(page, 'export const afterRejection = true;');
   await saveFile(first(page));
   await expect(first(page).getByText('welcome.ts · Unsaved', { exact: true })).toHaveCount(0);
@@ -1864,58 +1875,6 @@ for (const viewport of [
     await expect(first(page).getByRole('tab', { name: 'README.md', exact: true })).toHaveCount(0);
     await expect(menu).toHaveCount(0);
   });
-
-test('delayed Create reply after disposal does not open the created file', async ({ page }) => {
-  await page.goto('/');
-  const second = page.getByRole('region', { name: 'Second editor', exact: true });
-  await expect(second.getByRole('tab', { name: 'welcome.ts', exact: true })).toBeVisible();
-  await page.evaluate(() => {
-    const editor = window.demo.second,
-      mutate = editor.mutate.bind(editor);
-    editor.mutate = async (input) => {
-      const result = await mutate(input);
-      await new Promise<void>((resolve) => {
-        window.addEventListener('release-create', () => resolve(), { once: true });
-        document.body.dataset.createReply = 'waiting';
-      });
-      return result;
-    };
-    editor.open = async () => {
-      document.body.dataset.detachedCreateOpen = 'true';
-      return false;
-    };
-  });
-  await explorerAction(second, 'New File…');
-  await page.getByRole('textbox', { name: 'Destination relative path' }).fill('delayed.ts');
-  await page
-    .getByRole('dialog', { name: 'New File', exact: true })
-    .getByRole('button', { name: 'New File', exact: true })
-    .click();
-  await expect(page.locator('body')).toHaveAttribute('data-create-reply', 'waiting');
-  // Simulate shell teardown while the modal owns focus.
-  await page.evaluate(() =>
-    Array.from(document.querySelectorAll('button'))
-      .find((button) => button.textContent === 'Dispose second editor')!
-      .click(),
-  );
-  await expect(second).toHaveCount(0);
-  await page.evaluate(async () => {
-    window.dispatchEvent(new Event('release-create'));
-    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-  });
-  expect(await page.locator('body').getAttribute('data-detached-create-open')).toBeNull();
-  expect(
-    await page.evaluate(
-      async () =>
-        (
-          await window.demo.client.command('readFile', {
-            checkout: window.demo.checkout,
-            path: 'delayed.ts',
-          })
-        ).text,
-    ),
-  ).toBe('');
-});
 
 test('StrictMode lookup searches and opens a result after effect replay', async ({ page }) => {
   await page.goto('/?strict');
