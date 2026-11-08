@@ -876,13 +876,14 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                         if (dragged.current) event.preventDefault();
                       }}
                       onDrop={(event) => {
+                        // Only a tab drag is the tabs'; files from the OS pass through to the app.
+                        if (!dragged.current) return;
                         event.preventDefault();
-                        if (dragged.current)
-                          controller.reorder(
-                            checkout,
-                            dragged.current,
-                            selected.openFiles.indexOf(path),
-                          );
+                        controller.reorder(
+                          checkout,
+                          dragged.current,
+                          selected.openFiles.indexOf(path),
+                        );
                         dragged.current = null;
                       }}>
                       <Tabs.Tab

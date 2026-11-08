@@ -939,6 +939,35 @@ test('files dropped on the tree import into its folder once; elsewhere they impo
   expect((await calls()).imported).toHaveLength(1);
 });
 
+test('files dropped on an open file’s tab import at the root', async ({ page }) => {
+  await page.goto('/?chat');
+  await project(page).click();
+  await page.evaluate(() => {
+    const approved: string[][] = [];
+    Object.assign(window, { approved });
+    window.demo.selectDroppedImports = async (_checkout, files) => {
+      approved.push(files.map((file) => file.name));
+      return files.map((file) => `ref:${file.name}`);
+    };
+  });
+  const tab = shell(page).getByRole('tab', { name: 'welcome.ts', exact: true });
+  await expect(tab).toBeVisible();
+  // Tabs reorder only tab drags; a Finder drop on one is still the window's.
+  await page.evaluate(() => {
+    const target = document.querySelector('[role="tab"][aria-label="welcome.ts"]')!,
+      dataTransfer = new DataTransfer();
+    dataTransfer.items.add(new File(['x'], 'a.txt'));
+    for (const type of ['dragenter', 'dragover', 'drop'])
+      target.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer }));
+  });
+  await expect(page.getByRole('dialog', { name: 'Import files', exact: true })).toBeVisible();
+  expect(
+    await page.evaluate(() => (window as unknown as { approved: string[][] }).approved),
+  ).toEqual([['a.txt']]);
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: 'Import files', exact: true })).toHaveCount(0);
+});
+
 test('compact Agents navigation uses a keyboard-dismissable drawer and keeps Send reachable', async ({
   page,
 }) => {

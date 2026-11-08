@@ -6,8 +6,10 @@ declare global {
     approved: string[][];
     /** Each import the editor dispatched. */
     imported: Parameters<typeof window.demo.first.mutate>[0][];
-    /** Whether each drop reaching the window had already been taken. */
+    /** Whether each drop reaching the window had already been taken by the tree. */
     windowDrops: boolean[];
+    /** Each `dropEffect` the page set on a drag's DataTransfer. */
+    dropEffects: string[];
   }
 }
 
@@ -59,7 +61,10 @@ async function setup(page: Page) {
     window.approved = [];
     window.imported = [];
     window.windowDrops = [];
-    window.addEventListener('drop', (event) => window.windowDrops.push(event.defaultPrevented));
+    window.dropEffects = [];
+    window.addEventListener('drop', (event) =>
+      window.windowDrops.push(window.demo.isFileDropTaken(event)),
+    );
     window.demo.selectDroppedImports = async (_checkout, files) => {
       window.approved.push(files.map((file) => file.name));
       return files.map((file) => `ref:${file.name}`);
@@ -103,12 +108,21 @@ async function setup(page: Page) {
 
 /**
  * Drags OS files named `names` over `target`, as Finder does. Chromium ignores a script's
- * `dropEffect` outside a real drag, so the highlight shows whether the tree takes it.
+ * `dropEffect` outside a real drag, so `dropEffects` records what the tree set, and the highlight
+ * shows whether it takes the drop. A synthetic drop is dispatched whatever the effect was.
  */
 async function dragFiles(page: Page, target: Locator, names: string[], position = { x: 20, y: 6 }) {
   const dataTransfer = await page.evaluateHandle((names) => {
     const data = new DataTransfer();
     for (const name of names) data.items.add(new File(['x'], name));
+    const effect = Object.getOwnPropertyDescriptor(DataTransfer.prototype, 'dropEffect')!;
+    Object.defineProperty(data, 'dropEffect', {
+      get: () => effect.get!.call(data),
+      set: (value: string) => {
+        window.dropEffects.push(value);
+        effect.set!.call(data, value);
+      },
+    });
     return data;
   }, names);
   const box = (await target.boundingBox())!;
@@ -146,6 +160,7 @@ test('files dropped from Finder on a folder import there without a dialog, and a
   await expect(row(page, 'NOTES.md')).toBeVisible();
   const drag = await dragFiles(page, row(page, 'dest'), ['a.txt']);
   await expect.poll(() => dropTargets(page)).toEqual(['dest']);
+  expect(await page.evaluate(() => window.dropEffects)).toEqual(['copy']);
   // Hovering a collapsed folder for a moment expands it.
   await expect(row(page, 'dest/inner.ts')).toBeVisible();
   await expect.poll(() => dropTargets(page)).toEqual(['dest', 'dest/inner.ts']);
@@ -245,6 +260,9 @@ test('Finder drops are refused while a name is typed or a dialog is open', async
   await expect(name).toBeFocused();
   const drag = await dragFiles(page, row(page, 'src'), ['a.txt']);
   expect(await dropTargets(page)).toEqual([]);
+  // What a user sees: the tree refuses the drag, so Chromium fires no drop at all.
+  expect(await page.evaluate(() => window.dropEffects)).toEqual(['none']);
+  // A drop that comes anyway, as this synthetic one does, is refused and still the tree's.
   await drag.drop();
   await expect(region(page).getByRole('alert')).toContainText(
     'Finish naming the entry before importing files.',
@@ -262,12 +280,86 @@ test('Finder drops are refused while a name is typed or a dialog is open', async
     ['b.txt'],
     area,
   );
+  expect(await page.evaluate(() => window.dropEffects)).toEqual(['none', 'none']);
   await trash.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(trash).toHaveCount(0);
   expect(await page.evaluate(() => window.approved)).toEqual([]);
   expect(await page.evaluate(() => window.imported)).toEqual([]);
   // Both drops were the tree's, so the app doesn't import them at the root instead.
   expect(await page.evaluate(() => window.windowDrops)).toEqual([true, true]);
+});
+
+test('a Finder drop of two items with one name is refused before anything is asked', async ({
+  page,
+}) => {
+  await setup(page);
+  // As from a Finder search window: the same name from different folders, here differing in case.
+  await dropFiles(page, tree(page), ['notes.txt', 'other.txt', 'Notes.txt'], await emptyArea(page));
+  await expect(region(page).getByRole('alert')).toContainText(
+    'More than one dropped item is named “Notes.txt”. Drop them into different folders.',
+  );
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  expect(await page.evaluate(() => window.approved)).toEqual([]);
+  expect(await page.evaluate(() => window.imported)).toEqual([]);
+  expect(await page.evaluate(() => window.windowDrops)).toEqual([true]);
+});
+
+/** Holds the next approvals of dropped files until `finishApproval` is called. */
+const holdApproval = (page: Page) =>
+  page.evaluate(() => {
+    const pending: (() => void)[] = [];
+    window.demo.selectDroppedImports = (_checkout, files) => {
+      window.approved.push(files.map((file) => file.name));
+      return new Promise<string[]>((resolve) =>
+        pending.push(() => resolve(files.map((file) => `ref:${file.name}`))),
+      );
+    };
+    Object.assign(window, { finishApproval: () => pending.shift()?.() });
+  });
+const finishApproval = (page: Page) =>
+  page.evaluate(() => (window as unknown as { finishApproval(): void }).finishApproval());
+
+test('a Finder drop waiting for approval refuses another, then imports', async ({ page }) => {
+  await setup(page);
+  await holdApproval(page);
+  await dropFiles(page, row(page, 'src'), ['first.txt']);
+  const second = await dragFiles(page, tree(page), ['second.txt'], await emptyArea(page));
+  expect(await page.evaluate(() => window.dropEffects)).toEqual(['copy', 'none']);
+  await second.drop();
+  await expect(region(page).getByRole('alert')).toContainText(
+    'Wait for the dropped files to import before dropping more.',
+  );
+  await finishApproval(page);
+  await expect(row(page, 'src/first.txt')).toBeVisible();
+  // Only the first drop was ever approved, so no references wait unused.
+  expect(await page.evaluate(() => window.approved)).toEqual([['first.txt']]);
+  expect(await page.evaluate(() => window.imported)).toMatchObject([
+    { destination: 'src/first.txt' },
+  ]);
+  expect(await page.evaluate(() => window.windowDrops)).toEqual([true, true]);
+  // Once it's done, the tree takes drops again.
+  await dropFiles(page, tree(page), ['third.txt'], await emptyArea(page));
+  await finishApproval(page);
+  await expect(row(page, 'third.txt')).toBeVisible();
+});
+
+test('a name typed while a Finder drop waits for approval keeps its field', async ({ page }) => {
+  await setup(page);
+  await holdApproval(page);
+  await row(page, 'README.md').click();
+  await dropFiles(page, row(page, 'src'), ['late.txt']);
+  await tree(page).press('F2');
+  const name = tree(page).getByRole('textbox', { name: 'Rename', exact: true });
+  await name.fill('NOTE');
+  await finishApproval(page);
+  await expect(region(page).getByRole('alert')).toContainText(
+    'Finish naming the entry before importing files.',
+  );
+  await expect(name).toBeFocused();
+  await expect(name).toHaveValue('NOTE');
+  expect(await page.evaluate(() => window.imported)).toEqual([]);
+  await name.press('Escape');
+  await expect(row(page, 'README.md')).toBeVisible();
 });
 
 test('a checkout closed while a Finder drop is approved imports nothing', async ({ page }) => {
