@@ -19,8 +19,22 @@ export type Run = (
     extra?: number[];
     signal?: AbortSignal;
     onLine?: LineReader;
+    /** Overrides for the helper's environment; `undefined` removes a variable. */
+    env?: Record<string, string | undefined>;
   },
 ) => Promise<Buffer>;
+/** Git's messages, and so lock reasons and errors read back, stay untranslated. */
+const gitLocale = { LC_ALL: 'C', LANGUAGE: undefined };
+const helperEnvironment = (overrides: Record<string, string | undefined> = {}) => {
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    GIT_OPTIONAL_LOCKS: '0',
+    GIT_CONFIG_NOSYSTEM: '1',
+    ...overrides,
+  };
+  for (const [name, value] of Object.entries(env)) if (value === undefined) delete env[name];
+  return env;
+};
 const outputLimit = 16 * 1024 * 1024;
 /** How long a stopped process group has to clean up after SIGTERM before SIGKILL. */
 export const stopGrace = 2000;
@@ -63,7 +77,7 @@ export function makeRunner(
   runEffect: <A>(effect: Effect.Effect<A, unknown>) => Promise<A>,
   reportCleanup: (cause: Cause.Cause<never>) => void,
 ): Run {
-  return (args, { fd, input, extra = [], signal, onLine }) =>
+  return (args, { fd, input, extra = [], signal, onLine, env }) =>
     runEffect(
       Effect.scoped(
         Effect.gen(function* () {
@@ -75,7 +89,7 @@ export function makeRunner(
               // filters) as Ctrl-C would, and Git can remove what it half-created.
               const child = spawn(helper, args, {
                 stdio: ['pipe', 'pipe', 'pipe', fd, ...extra],
-                env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_CONFIG_NOSYSTEM: '1' },
+                env: helperEnvironment(env),
                 detached: true,
               });
               const state = {
@@ -271,7 +285,8 @@ export class Directory {
     await this.run(args, { fd: this.fd, signal, onLine });
   }
   git(args: string[], input?: string, signal?: AbortSignal) {
-    return this.io(
+    this.check();
+    return this.run(
       [
         'git',
         this.gitExecutable,
@@ -283,8 +298,7 @@ export class Directory {
         '--work-tree=.',
         ...args,
       ],
-      input,
-      signal,
+      { fd: this.fd, input, signal, env: gitLocale },
     );
   }
   async entry(p: string, signal?: AbortSignal, spellings?: Map<string, Set<string>>) {
