@@ -212,9 +212,15 @@ export function MessageInput({
         onFocus={() => setDismissed(null)}
         onKeyDown={(event) => {
           const element = event.currentTarget;
-          if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+          // Enter sends and Shift+Enter adds a line; an open picker takes plain Enter.
+          if (
+            event.key === 'Enter' &&
+            !event.shiftKey &&
+            !event.nativeEvent.isComposing &&
+            (event.metaKey || event.ctrlKey || !(open && count))
+          ) {
             event.preventDefault();
-            element.form?.requestSubmit();
+            if (draft.trim()) element.form?.requestSubmit();
             return;
           }
           if (open && event.key === 'Escape') {
