@@ -218,7 +218,7 @@ export const ChatTranscriptSchema = struct({
     Schema.isMaxLength(chatManifestPageSize),
   ),
   nextCursor: Schema.NullOr(cursor),
-  thinking: Schema.Literals(['available', 'redacted', 'none', 'pending']),
+  thinking: Schema.Literals(['available', 'redacted', 'none']),
 });
 export const ChatEntrySchema = struct({
   id: ChatIdentifierSchema,

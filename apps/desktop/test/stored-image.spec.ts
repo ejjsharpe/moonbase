@@ -298,13 +298,26 @@ test('pointer image reading cancels held Find reveal before collapse; only a new
       {
         id: 'stored-image',
         role: 'tool',
+        // One call's image and output, as a tool result records them. The call's own row isn't
+        // retained, so they read as one step with its own chevron.
         parts: [
-          { kind: 'image', text: '', data, mimeType: 'image/png', partId: 'image', role: 'tool' },
+          {
+            kind: 'image',
+            text: '',
+            data,
+            mimeType: 'image/png',
+            partId: 'image',
+            role: 'tool',
+            pairing: 'matched',
+            call: { entryId: 'unloaded-call', partId: 'call' },
+          },
           {
             kind: 'result',
             text: 'prefix '.repeat(8000) + 'first NEEDLE and second NEEDLE',
             partId: 'result',
             role: 'tool',
+            pairing: 'matched',
+            call: { entryId: 'unloaded-call', partId: 'call' },
           },
         ],
       },
@@ -368,7 +381,7 @@ test('pointer image reading cancels held Find reveal before collapse; only a new
       partId: 'result',
       offset: 0,
     });
-    await group.click();
+    await group.press('Enter');
     await expect(group).toHaveAttribute('aria-expanded', 'false');
     await page.evaluate(() =>
       (window as unknown as { releaseImageFind(): void }).releaseImageFind(),

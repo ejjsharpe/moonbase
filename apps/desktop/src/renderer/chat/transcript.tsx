@@ -3,10 +3,12 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactElement,
   type ReactNode,
   type RefObject,
@@ -29,6 +31,7 @@ import {
 } from '@moonbase/application/chat';
 import type {
   ChatEntry,
+  ChatRun,
   ChatToolActivity,
   ChatTranscriptMatch,
   ChatTranscriptSource,
@@ -40,16 +43,28 @@ import {
   collectActivityEvidence,
   getEntryTranscripts,
   classifyEntry,
+  describeActivityHeadline,
+  getActivityStepState,
+  groupActivitySteps,
   findReadingAnchor,
+  getAnsweredCall,
   groupTranscriptRows,
   isSameActivityEvidence,
+  type ActivityEvidence,
+  type ActivityHeadline,
   type TranscriptItem,
 } from './activity.ts';
 import { StoredImages } from './stored-image.tsx';
 import { getTranscriptParts } from './transcript-parts.ts';
 import { isReadingNodePinned, subscribeReadingChanges } from './reading-pin.ts';
-import { Entry, type EntryProps } from './transcript-entry.tsx';
-import { createOpenCalls, OpenCallsContext } from './transcript-disclosure.ts';
+import { ActivityGroupLine, Entry, type EntryProps } from './transcript-entry.tsx';
+import {
+  createOpenCalls,
+  OpenCallsContext,
+  useFoldedFindMatch,
+  useRememberedFold,
+  useRetainedCalls,
+} from './transcript-disclosure.ts';
 import { useTranscriptActions } from './transcript-actions.ts';
 import { groupBySource } from './stable-props.ts';
 import { TranscriptScroller, revealFindMatch } from './transcript-geometry.ts';
@@ -212,8 +227,8 @@ export function Transcript({
                 : 'This view is offline. Its draft and unresolved command identities are retained.'}
             </p>
           )}
-          {/* Idle needs no line; running, stopped and failed say so. */}
-          {currentSnapshot && currentSnapshot.state !== 'idle' && (
+          {/* Idle and running need no line; stopped and failed say so. */}
+          {currentSnapshot && !['idle', 'running'].includes(currentSnapshot.state) && (
             <p
               aria-label="Conversation status"
               role={failed ? 'alert' : 'status'}
@@ -393,6 +408,7 @@ function TranscriptList({
     );
     setGrouped({ rows: transcript.rows, items });
   }
+  const groupStarts = useMemo(() => findGroupStarts(items), [items]);
   /** The list item holding each row: a row in an activity run is drawn by the run's item. */
   const itemKeys = useMemo(
     () => new Map(items.flatMap((item) => item.rows.map((row) => [row.key, item.key] as const))),
@@ -440,7 +456,8 @@ function TranscriptList({
                 ? undefined
                 : ref.anchorVisibleContent({ key: item, hold: false })?.offset;
             const row = node?.querySelector(`[data-transcript-row="${CSS.escape(key)}"]`);
-            return offset === undefined || !row
+            // A row in a folded run isn't shown, so it has no place on screen.
+            return offset === undefined || !row || !row.getClientRects().length
               ? undefined
               : offset - (node!.getBoundingClientRect().top - row.getBoundingClientRect().top);
           },
@@ -497,7 +514,8 @@ function TranscriptList({
         target = held.current;
       if (!ref || !node || !target || current.current.dataset !== target.dataset) return;
       const row = node.querySelector(`[data-transcript-row="${CSS.escape(target.anchor.key)}"]`);
-      if (!row) return;
+      // A row a folded run hides has no place to hold.
+      if (!row || !row.getClientRects().length) return;
       const moved =
         row.getBoundingClientRect().top - node.getBoundingClientRect().top + target.anchor.offset;
       if (Math.abs(moved) >= 1)
@@ -607,61 +625,66 @@ function TranscriptList({
   const holdDisclosure = (event: { target: EventTarget; key?: string }) => {
     if (event.key !== undefined && event.key !== 'Enter' && event.key !== ' ') return;
     const toggle = (event.target as Element).closest?.('button[aria-expanded]');
-    if (toggle?.closest('[data-transcript-row]') && list.current?.getState().isFollowingEnd)
+    if (
+      toggle?.closest('[data-transcript-row], [data-transcript-run]') &&
+      list.current?.getState().isFollowingEnd
+    )
       setHolding(true);
   };
   return (
-    <LegendList<TranscriptItem<TranscriptRow>>
-      ref={list}
-      role="region"
-      aria-label="Chat transcript"
-      data-transcript-list=""
-      tabIndex={0}
-      data={items}
-      dataKey={dataset}
-      keyExtractor={getItemKey}
-      getItemType={getItemType}
-      renderItem={renderItem}
-      estimatedItemSize={estimatedRowSize}
-      {...(placement.anchor
-        ? {
-            initialScrollIndex: {
-              index: placement.index,
-              viewOffset: -placement.anchor.offset,
-            },
-          }
-        : { initialScrollAtEnd: true })}
-      maintainScrollAtEnd={!selecting && (holding ? followingNewRows : following)}
-      maintainVisibleContentPosition={keepPosition}
-      alwaysRender={alwaysRender}
-      // An edge with no more history has no callback: the list gates its edge callbacks on the
-      // previous one, so an ignored call would hold back the other edge.
-      onStartReached={earlier ? pageEarlier : undefined}
-      onEndReached={later ? pageLater : undefined}
-      onUserScroll={() => {
-        releasePlace();
-        setHolding(false);
-        onReaderInput();
-      }}
-      onWheelCapture={releasePlace}
-      onItemSizeChanged={holdFindReveal}
-      onPointerDownCapture={(event) => {
-        releasePlace();
-        holdDisclosure(event);
-        onReaderInput();
-      }}
-      onKeyDownCapture={(event) => {
-        releasePlace();
-        holdDisclosure(event);
-        onReaderInput();
-      }}
-      onFocusCapture={onReaderInput}
-      onReady={() => setReadyDataset(dataset)}
-      ListHeaderComponent={header}
-      ListFooterComponent={footer}
-      contentContainerStyle={{ gap: rowGap }}
-      {...stylex.props(styles.list)}
-    />
+    <GroupStartsContext.Provider value={groupStarts}>
+      <LegendList<TranscriptItem<TranscriptRow>>
+        ref={list}
+        role="region"
+        aria-label="Chat transcript"
+        data-transcript-list=""
+        tabIndex={0}
+        data={items}
+        dataKey={dataset}
+        keyExtractor={getItemKey}
+        getItemType={getItemType}
+        renderItem={renderItem}
+        estimatedItemSize={estimatedRowSize}
+        {...(placement.anchor
+          ? {
+              initialScrollIndex: {
+                index: placement.index,
+                viewOffset: -placement.anchor.offset,
+              },
+            }
+          : { initialScrollAtEnd: true })}
+        maintainScrollAtEnd={!selecting && (holding ? followingNewRows : following)}
+        maintainVisibleContentPosition={keepPosition}
+        alwaysRender={alwaysRender}
+        // An edge with no more history has no callback: the list gates its edge callbacks on the
+        // previous one, so an ignored call would hold back the other edge.
+        onStartReached={earlier ? pageEarlier : undefined}
+        onEndReached={later ? pageLater : undefined}
+        onUserScroll={() => {
+          releasePlace();
+          setHolding(false);
+          onReaderInput();
+        }}
+        onWheelCapture={releasePlace}
+        onItemSizeChanged={holdFindReveal}
+        onPointerDownCapture={(event) => {
+          releasePlace();
+          holdDisclosure(event);
+          onReaderInput();
+        }}
+        onKeyDownCapture={(event) => {
+          releasePlace();
+          holdDisclosure(event);
+          onReaderInput();
+        }}
+        onFocusCapture={onReaderInput}
+        onReady={() => setReadyDataset(dataset)}
+        ListHeaderComponent={header}
+        ListFooterComponent={footer}
+        contentContainerStyle={{ gap: rowGap }}
+        {...stylex.props(styles.list)}
+      />
+    </GroupStartsContext.Provider>
   );
 }
 
@@ -677,13 +700,13 @@ function findPlacement(
   return index >= 0 ? { dataset, anchor, index } : { dataset, anchor: null, index: -1 };
 }
 /**
- * A mounted row's top within its list item, the first of the item's rows (the item's rows are
- * siblings); undefined when it isn't mounted.
+ * A shown row's top below the first of its item's rows; undefined when it isn't mounted, or is in
+ * a folded run.
  */
 function readRowTop(scroller: HTMLElement | null | undefined, key: string) {
   const row = scroller?.querySelector(`[data-transcript-row="${CSS.escape(key)}"]`);
   const first = row?.parentElement?.firstElementChild;
-  return row && first
+  return row && first && row.getClientRects().length
     ? row.getBoundingClientRect().top - first.getBoundingClientRect().top
     : undefined;
 }
@@ -702,7 +725,7 @@ const kindOfRow = (row: TranscriptRow) =>
 
 type RowProps = Omit<
   EntryProps,
-  'entry' | 'liveState' | 'joinPrevious' | 'joinNext' | keyof SharedRowProps
+  'entry' | 'live' | 'liveLabel' | 'joinPrevious' | 'joinNext' | keyof SharedRowProps
 >;
 type SharedRowProps = Pick<EntryProps, 'controller' | 'cache' | 'native' | 'actions' | 'evidence'>;
 /** What every row reads from the transcript: shared props, and its own slice of state. */
@@ -712,11 +735,191 @@ const RowContext = createContext<{
   liveLabel: string | undefined;
 } | null>(null);
 
-/** A list item: one row, or a run of activity rows drawn as one card. */
+/**
+ * A list item: one row, or a run of consecutive activity rows. A run with more than one step folds
+ * behind one line; its rows stay mounted underneath so Find can reach them.
+ */
 function Item({ item }: { item: TranscriptItem<TranscriptRow> }) {
-  return item.rows.map((row, index) => (
-    <Row key={row.key} row={row} joinPrevious={index > 0} joinNext={index < item.rows.length - 1} />
-  ));
+  const context = useContext(RowContext)!;
+  const startedAt = useContext(GroupStartsContext).get(item.key);
+  const entryRows = item.rows.filter((row) => row.kind !== 'tool');
+  const firstEntry = entryRows[0];
+  const { controller } = context.shared;
+  // Remembered under both the item's key, which holds as earlier rows join the run's start, and
+  // its first row's, which holds as the live response leaves the run or starts a new attempt.
+  const expandedIds = firstEntry ? context.getRowProps(firstEntry.entry).expandedIds : [];
+  const byItem = useRememberedFold(item.key, 'activity-run', expandedIds, controller);
+  const byFirstRow = useRememberedFold(
+    firstEntry?.entry.id ?? item.key,
+    'activity-run',
+    expandedIds,
+    controller,
+  );
+  const fold = {
+    open: byItem.open || byFirstRow.open,
+    setOpen: (open: boolean) => {
+      byItem.setOpen(open);
+      byFirstRow.setOpen(open);
+    },
+  };
+  // The reader's place moving into a folded run (a jump, a restored position) opens it, so the
+  // place is on a shown row. A folded run's own place is its first stored row, at the run's line;
+  // a live row is never a place the reader scrolls to, so a place there is a jump.
+  const ownPlace = firstEntry?.kind === 'entry' ? firstEntry.key : undefined;
+  const placeInside = useSyncExternalStore(controller.subscribe, () => {
+    const key = controller.getSnapshot().transcript.view.anchor?.key;
+    return key !== undefined && key !== ownPlace && item.rows.some((row) => row.key === key)
+      ? key
+      : null;
+  });
+  const [landed, setLanded] = useState<{ place: string | null; open: boolean }>({
+    place: null,
+    open: false,
+  });
+  if (landed.place !== placeInside)
+    setLanded({ place: placeInside, open: placeInside !== null || landed.open });
+  // The active Find match in the run opens it, unless the reader folded it for that match.
+  const match = entryRows
+    .map((row) => context.getRowProps(row.entry))
+    .find((props) => props.findMatch);
+  const found = useFoldedFindMatch(match?.findMatch ?? null, !!match?.findRevealing, controller);
+  // A response that is only working so far is a run of one, and gets the working line too.
+  const first = item.rows[0]!;
+  const working =
+    item.rows.length === 1 && first.kind === 'live' && kindOfRow(first) === 'activity';
+  // Whether a call's row is retained decides whether its output is a step of its own.
+  const isRetained = useRetainedCalls(
+    entryRows.flatMap((row) =>
+      (row.entry.transcript?.parts ?? []).flatMap((part) => part.call?.entryId ?? []),
+    ),
+  );
+  const { evidence } = context.shared;
+  const group = useMemo(
+    () =>
+      item.rows.length > 1 || working ? collectGroupSteps(item.rows, evidence, isRetained) : null,
+    [item.rows, working, evidence, isRetained],
+  );
+  const stepsId = useId();
+  const rows = (fold: boolean) =>
+    item.rows.map((row, index) => (
+      <Row
+        key={row.key}
+        row={row}
+        joinPrevious={fold || index > 0}
+        joinNext={index < item.rows.length - 1}
+      />
+    ));
+  const folds = !!group && group.headlines.length >= (group.active ? 1 : 2);
+  const expanded = !folds || fold.open || landed.open || found.holdsOpen;
+  const toggle = () => {
+    if (expanded) {
+      if (found.holdsOpen) found.fold();
+      // A place left inside the run would name a row it no longer shows; the run's line holds it.
+      const { view } = controller.getSnapshot().transcript;
+      if (firstEntry && view.anchor && view.anchor.key === placeInside)
+        controller.setTranscriptView({ ...view, anchor: { key: firstEntry.key, offset: 0 } });
+    }
+    setLanded({ place: placeInside, open: false });
+    fold.setOpen(!expanded);
+  };
+  // One shape whether or not the run folds, so its rows stay mounted as it starts or stops
+  // folding (the live response leaving a run as its answer starts, say).
+  return (
+    <>
+      {folds && (
+        <div
+          // Marks the run's line as part of its first row: the list holds the reader's place as
+          // it opens, and keeps it mounted while it has focus.
+          data-transcript-run={firstEntry?.key ?? item.key}
+          {...stylex.props(styles.row)}>
+          <div {...stylex.props(styles.measure)}>
+            <section
+              {...stylex.props(
+                styles.activity,
+                expanded ? styles.activityGroupOpen : styles.activityGroup,
+              )}>
+              <ActivityGroupLine
+                {...group}
+                {...(startedAt ? { startedAt } : {})}
+                open={expanded}
+                stepsId={stepsId}
+                onToggle={toggle}
+              />
+            </section>
+          </div>
+        </div>
+      )}
+      <div id={stepsId} hidden={!expanded} {...stylex.props(folds && styles.activityGroupSteps)}>
+        {rows(folds)}
+      </div>
+    </>
+  );
+}
+
+/** Every step a run of rows shows, in order; a call's output row adds none of its own. */
+function collectGroupSteps(
+  rows: readonly TranscriptRow[],
+  evidence: ActivityEvidence,
+  /** Whether a call's row is retained; its output then belongs to the call's step. */
+  isRetained: (entryId: string) => boolean,
+) {
+  const headlines: ActivityHeadline[] = [];
+  let failed = 0,
+    active = false,
+    endedAt: string | undefined,
+    // The last row's steps: the model message the work is on now.
+    latestRow: ActivityHeadline[] = [];
+  for (const row of rows) {
+    if (row.kind === 'tool') continue;
+    endedAt = getLaterTime(endedAt, row.entry.createdAt);
+    if (!row.entry.transcript) continue;
+    if (row.kind === 'live' && row.state === 'running') active = true;
+    const transcript = row.entry.transcript;
+    const entryId = transcript.source.kind === 'entry' ? transcript.source.entryId : undefined;
+    const rowHeadlines: ActivityHeadline[] = [];
+    for (const step of groupActivitySteps(transcript.parts, entryId)) {
+      const call = getAnsweredCall(step);
+      if (call && isRetained(call.entryId)) continue;
+      const state = getActivityStepState(step, transcript, evidence);
+      if (['failed', 'interrupted', 'missing-result'].includes(state ?? '')) failed++;
+      // A running step keeps the clock going only in the live response (stopping or deferred
+      // included); a saved step can't still be running.
+      if (state === 'running' && row.kind === 'live') active = true;
+      const headline = describeActivityHeadline(step, transcript, evidence);
+      headlines.push(headline);
+      rowHeadlines.push(headline);
+    }
+    if (rowHeadlines.length) latestRow = rowHeadlines;
+  }
+  // Now: the thought the latest message opened with, which says why; else the step itself. A
+  // thought from an earlier message may be about other work, so it is never paired with this one.
+  const current =
+    latestRow.at(-1)?.category === 'thinking'
+      ? latestRow.at(-1)
+      : (latestRow.findLast((headline) => headline.category === 'thinking') ?? latestRow.at(-1));
+  return {
+    headlines,
+    failed,
+    active,
+    ...(current ? { current } : {}),
+    ...(endedAt ? { endedAt } : {}),
+  };
+}
+
+const getLaterTime = (a: string | undefined, b: string | undefined) =>
+  !a || (b && Date.parse(b) > Date.parse(a)) ? b : a;
+
+/** Each item's start: the latest time recorded before it, where the work it shows began. */
+const GroupStartsContext = createContext<ReadonlyMap<string, string>>(new Map());
+function findGroupStarts(items: readonly TranscriptItem<TranscriptRow>[]) {
+  const starts = new Map<string, string>();
+  let last: string | undefined;
+  for (const item of items) {
+    if (last) starts.set(item.key, last);
+    for (const row of item.rows)
+      if (row.kind !== 'tool') last = getLaterTime(last, row.entry.createdAt);
+  }
+  return starts;
 }
 function Row({
   row,
@@ -736,7 +939,10 @@ function Row({
         ) : (
           <Entry
             entry={row.entry}
-            liveState={row.kind === 'live' ? (context.liveLabel ?? row.state) : undefined}
+            live={row.kind === 'live'}
+            liveLabel={
+              row.kind === 'live' ? (context.liveLabel ?? getRunLabel(row.state)) : undefined
+            }
             joinPrevious={joinPrevious}
             joinNext={joinNext}
             {...context.shared}
@@ -812,10 +1018,13 @@ type ReadingRows = {
   live: boolean;
 };
 const notReading: ReadingRows = { selected: null, selecting: false, focused: null, live: false };
-const findRowKeyOf = (node: Node | null | undefined) =>
-  (node instanceof Element ? node : node?.parentElement)?.closest<HTMLElement>(
-    '[data-transcript-row]',
-  )?.dataset.transcriptRow ?? null;
+/** The row a node is in; a run's line counts as its first row. */
+const findRowKeyOf = (node: Node | null | undefined) => {
+  const found = (node instanceof Element ? node : node?.parentElement)?.closest<HTMLElement>(
+    '[data-transcript-row], [data-transcript-run]',
+  );
+  return found?.dataset.transcriptRow ?? found?.dataset.transcriptRun ?? null;
+};
 /** Where the reader's selection and focus are in the transcript, updated on every change. */
 function useReadingRows(scroller: RefObject<HTMLElement | null>) {
   const [reading, setReading] = useState(notReading);
@@ -883,6 +1092,8 @@ function getLiveIdentity(state: ChatState) {
     state.snapshot?.run?.transcript?.source ?? state.snapshot?.run?.stop ?? null,
   );
 }
+/** A run that is simply running needs no label; its activity already shows it. */
+const getRunLabel = (state: ChatRun['state']) => (state === 'running' ? undefined : state);
 const snapshotLabels = {
   idle: 'Idle',
   running: 'Running',

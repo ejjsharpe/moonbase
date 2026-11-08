@@ -3,11 +3,17 @@ import { test } from 'node:test';
 import type { ChatEntry, ChatTranscript, ChatTranscriptPart } from '@moonbase/contracts/chat';
 import {
   collectActivityEvidence,
+  describeActivityHeadline,
   findReadingAnchor,
   getActivityState,
   getEntryTranscripts,
+  getThoughtLine,
   getToolSummary,
+  groupActivitySteps,
   groupTranscriptParts,
+  splitCommand,
+  summarizeActivityHeadlines,
+  type ActivityHeadline,
   groupTranscriptRows,
   type TranscriptItem,
 } from '../src/renderer/chat/activity.ts';
@@ -312,6 +318,146 @@ for (const [name, hunk, lines] of [
     assert.deepEqual(checkLineStarts(source, result.files[0]!.hunks[0]!.lines), lines);
   });
 
+test('a thought reads as its opening heading, else its first sentence, without Markdown marks', () => {
+  assert.equal(getThoughtLine('**Finding the logger**\n\nLet me search.'), 'Finding the logger');
+  assert.equal(
+    getThoughtLine('Let me check `app.ts` first. Then run tests.'),
+    'Let me check app.ts first.',
+  );
+  assert.equal(getThoughtLine('- [the docs](https://example.com) say so'), 'the docs say so');
+  assert.equal(getThoughtLine('   '), '');
+});
+
+test('a shell line names the program it runs past cd hops, assignments and wrappers', () => {
+  assert.deepEqual(splitCommand('cd /work/app && rg -n "logger" src'), {
+    program: 'rg',
+    rest: '-n "logger" src',
+  });
+  assert.deepEqual(splitCommand('FOO=1 sudo npm test -- logger'), {
+    program: 'npm',
+    rest: 'test -- logger',
+  });
+  assert.deepEqual(splitCommand('/usr/bin/python3 -m http.server'), {
+    program: 'python3',
+    rest: '-m http.server',
+  });
+  assert.equal(splitCommand('cd /work/app'), undefined);
+  // A word that also appears in an assignment, and wrapper options with values.
+  assert.deepEqual(splitCommand('FOO=npm npm test'), { program: 'npm', rest: 'test' });
+  assert.deepEqual(splitCommand('sudo -u root ls -la'), { program: 'ls', rest: '-la' });
+  assert.deepEqual(splitCommand('env -u HOME FOO=1 nice -n 5 node app.js'), {
+    program: 'node',
+    rest: 'app.js',
+  });
+});
+
+test('a step headline takes the tense of its state and its output from another row', () => {
+  const headline = (parts: ChatTranscriptPart[], answers: ChatTranscript[] = []) => {
+    const origin = transcript('origin', parts);
+    const evidence = collectActivityEvidence([origin, ...answers]);
+    return groupActivitySteps(origin.parts, 'origin').map((step) =>
+      describeActivityHeadline(step, origin, evidence),
+    );
+  };
+  const answer = (state: ChatTranscriptPart['state'], extra: ChatTranscriptPart[] = []) =>
+    transcript('result', [
+      part('result', 'result', {
+        role: 'tool',
+        state,
+        pairing: 'matched',
+        call: { entryId: 'origin', partId: 'call' },
+        text: 'output',
+      }),
+      ...extra,
+    ]);
+  const call = (toolName: string, args: object) =>
+    part('call', 'arguments', { toolName, state: 'requested', text: JSON.stringify(args) });
+
+  assert.deepEqual(
+    headline([call('bash', { command: 'cd app && npm test' })], [answer('running')]),
+    [{ category: 'command', action: 'Running npm', detail: 'test' }],
+  );
+  assert.deepEqual(headline([call('bash', { command: 'npm test' })], [answer('failed')]), [
+    { category: 'command', action: 'Ran npm', detail: 'test', problem: 'failed' },
+  ]);
+  assert.deepEqual(
+    headline([call('read', { path: 'src/server/logger.ts' })], [answer('completed')]),
+    [{ category: 'read', action: 'Read logger.ts', detail: 'src/server' }],
+  );
+  const patch = part('patch', 'patch', {
+    role: 'tool',
+    pairing: 'matched',
+    call: { entryId: 'origin', partId: 'call' },
+    text: '--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old\n+new\n',
+  });
+  assert.deepEqual(headline([call('edit', { path: 'src/a.ts' })], [answer('completed', [patch])]), [
+    { category: 'edit', action: 'Edited a.ts', detail: '+1 −1 · src', path: 'src/a.ts' },
+  ]);
+  assert.deepEqual(headline([call('unknown', { opaque: true })], [answer('missing-result')]), [
+    { category: 'tool', action: 'Used unknown', detail: '', problem: 'no result' },
+  ]);
+  assert.deepEqual(
+    headline([part('thought', 'thinking', { text: '**Checking the tests**\n\nRun them.' })]),
+    [{ category: 'thinking', action: 'Checking the tests', detail: '' }],
+  );
+  assert.deepEqual(headline([part('hidden', 'thinking', { availability: 'redacted' })]), [
+    { category: 'thinking', action: 'Thought', detail: 'redacted' },
+  ]);
+  // Consecutive thinking blocks are one thought, read from its first block.
+  assert.deepEqual(
+    headline([
+      part('thought', 'thinking', { text: 'First block.' }),
+      part('more', 'thinking', { text: 'Second block.' }),
+      call('read', { path: 'a.ts' }),
+    ]).map((step) => step.action),
+    ['First block.', 'Read a.ts'],
+  );
+  // A saved call whose result isn't among the rows read isn't still running.
+  assert.deepEqual(headline([call('read', { path: 'a.ts' })]), [
+    { category: 'read', action: 'Read a.ts', detail: '', problem: 'no result shown' },
+  ]);
+  // Thoughts apart from each other stay apart, even with another step's output between them.
+  assert.equal(
+    groupActivitySteps(
+      [
+        call('bash', { command: 'ls' }),
+        part('one', 'thinking', { text: 'One.' }),
+        part('out', 'result', {
+          role: 'tool',
+          pairing: 'matched',
+          call: { entryId: 'origin', partId: 'call' },
+        }),
+        part('two', 'thinking', { text: 'Two.' }),
+      ],
+      'origin',
+    ).length,
+    3,
+  );
+});
+
+test('a folded summary counts steps by kind, each edited file once, and leaves thinking out', () => {
+  const step = (category: ActivityHeadline['category'], path?: string): ActivityHeadline => ({
+    category,
+    action: '',
+    detail: '',
+    ...(path ? { path } : {}),
+  });
+  assert.equal(
+    summarizeActivityHeadlines([
+      step('thinking'),
+      step('command'),
+      step('read'),
+      step('command'),
+      step('edit', 'a.ts'),
+      step('edit', 'a.ts'),
+      step('edit', 'b.ts'),
+      step('tool'),
+    ]),
+    'Ran 2 commands, read 1 file, edited 2 files, used 1 tool',
+  );
+  assert.equal(summarizeActivityHeadlines([step('thinking')]), 'Thought');
+});
+
 type GroupedRow = { key: string; kind: 'entry' | 'live'; read: 'activity' | 'message' | 'empty' };
 const row = (key: string, read: GroupedRow['read'] = 'activity'): GroupedRow => ({
   key,
@@ -444,6 +590,26 @@ test("a reading anchor names a stored row and the offset from that row's own top
     { key: 'entry:a', offset: 70 },
   );
   assert.deepEqual(measured, []);
+  // An open run's rows all sit below the run's line (35px), so offsets are from where they are.
+  const below: Record<string, number> = {
+    'entry:a': 35,
+    'entry:b': 55,
+    'entry:c': 75,
+    'live:s': 95,
+  };
+  assert.deepEqual(
+    findReadingAnchor(
+      items,
+      { key: card, offset: 50 },
+      { ...geometry, rowTop: (key) => below[key] },
+    ),
+    { key: 'entry:a', offset: 15 },
+  );
+  // A folded run shows none of its rows: its first row names it, from the run's top.
+  assert.deepEqual(
+    findReadingAnchor(items, { key: card, offset: 10 }, { ...geometry, rowTop: () => undefined }),
+    { key: 'entry:a', offset: 10 },
+  );
   // A live row alone anchors to the last stored row before it, from that row's top.
   const alone = group([row('entry:q', 'message'), row('entry:r'), row('live:s', 'message')]);
   assert.deepEqual(findReadingAnchor(alone, { key: alone[2]!.key, offset: 12 }, geometry), {

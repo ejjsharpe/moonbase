@@ -1,4 +1,4 @@
-import { expect, type Page } from '@playwright/test';
+import { expect, type Locator, type Page } from '@playwright/test';
 
 export const transcriptList = (page: Page) =>
   page.getByRole('region', { name: 'Chat transcript', exact: true });
@@ -59,17 +59,55 @@ export async function showRow(page: Page, key: string) {
     .toBe(true);
 }
 
+/** Clicks the first of `closed` until none are left, and fails if any stay. */
+async function clickUntilNone(closed: Locator) {
+  for (let i = 0; i < 1000 && (await closed.count()); i++) await closed.first().click();
+  await expect(closed).toHaveCount(0);
+}
+
+/** Opens every folded run of tool rows ("Worked for …"), so the steps inside are shown. */
+export async function openActivityGroups(page: Page) {
+  await clickUntilNone(page.locator('[data-transcript-activity-group][aria-expanded="false"]'));
+}
+
+/** Opens folded runs, then every closed step in the scope, so all their recorded parts show. */
+export async function openActivity(scope: Locator) {
+  await openActivityGroups(scope.page());
+  // A call's output in a later row has no opener of its own; it opens with its call.
+  await clickUntilNone(scope.getByRole('button', { name: /^Activity/, expanded: false }));
+}
+
+/** The opener of the step that holds a recorded part. */
+export const stepToggle = (scope: Locator, partId: string) =>
+  scope
+    .locator('[data-transcript-step]')
+    .filter({ has: scope.page().locator(`[data-transcript-part="${partId}"]`) })
+    .getByRole('button', { name: /^Activity/ });
+
+/**
+ * Waits until the running response records `ready` or folds its work under "Working…", and opens
+ * that fold. A response that is only tool work so far folds; one with an answer shows its parts.
+ */
+export async function openWorkingFold(page: Page, ready: Locator) {
+  const fold = page.locator('[data-transcript-activity-group]', { hasText: /^Working/ });
+  await expect.poll(async () => (await fold.isVisible()) || (await ready.count()) > 0).toBe(true);
+  if ((await fold.count()) && (await fold.getAttribute('aria-expanded')) !== 'true')
+    await fold.click();
+}
+
 /**
  * Opens the latest stored call whose headline names `tool`, with a pointer on its chevron as a
  * reader does, once the call is stored. A call's output in a later row (the live response, say)
  * has no chevron and opens with it.
  */
 export async function openCallCard(page: Page, tool: string) {
-  const toggle = page
-    .locator('[data-transcript-row^="entry:"]')
-    .filter({ has: page.getByRole('listitem').filter({ hasText: tool }) })
-    .last()
-    .getByRole('button', { name: /^Activity/ });
+  const line = page
+    .locator('[data-transcript-row^="entry:"] [data-transcript-step] > [data-glyph]')
+    .filter({ hasText: tool })
+    .last();
+  await expect(line).toBeAttached();
+  await openActivityGroups(page);
+  const toggle = line.getByRole('button', { name: /^Activity/ });
   await expect(toggle).toBeVisible();
   await toggle.click();
   return toggle;

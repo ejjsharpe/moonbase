@@ -15,7 +15,7 @@ import {
   showChat,
 } from './chat-target.ts';
 import { captureNative } from './editor-regressions.ts';
-import { openCallCard } from './transcript-list.ts';
+import { openCallCard, openWorkingFold } from './transcript-list.ts';
 import { retainedImage } from './stored-image-fixture.ts';
 
 /** Opens the composer's folder menu and chooses a folder with the native picker. */
@@ -604,7 +604,9 @@ test('transcript local rendering precedes held completion; native Copy/link fail
     await expect(
       live.getByText('First local chunk 🌔 and second chunk', { exact: true }),
     ).toBeVisible();
-    await expect(live.getByText('Local thinking first and next', { exact: true })).toBeVisible();
+    await expect(
+      live.locator('pre').getByText('Local thinking first and next', { exact: true }),
+    ).toBeVisible();
     await expect(thought).toBeFocused();
     expect(
       await app.evaluate(
@@ -804,8 +806,9 @@ for (const mode of ['local', 'remote'] as const)
       await page.getByLabel('Message', { exact: true }).fill('Observe held tool progress');
       await page.getByRole('button', { name: 'Send message', exact: true }).click();
       const live = page.getByRole('article', { name: 'Live response' });
-      // Folded, the card shows the running call's state; opened, the output recorded so far.
-      const part = live.locator('[data-transcript-part]').filter({ hasText: /· Output · running/ });
+      // The running call's output sits in the run's "Working…" fold; opened, it shows so far.
+      const part = live.locator('[data-transcript-part]').filter({ hasText: /Output · running/ });
+      await openWorkingFold(page, part);
       await expect(part).toHaveCount(1);
       // The live row holds only the call's output: it has no toggle of its own, and opens with
       // its call's card above it.
@@ -921,7 +924,7 @@ test('transcript remote first/next chunks render through authenticated stream an
     const before = await host.stats();
     host.nextChunk();
     await expect(live.getByText('first remote text 4', { exact: true })).toBeVisible();
-    await expect(live.getByText('remote thinking 4', { exact: true })).toBeVisible();
+    await expect(live.locator('pre').getByText('remote thinking 4', { exact: true })).toBeVisible();
     await expect(thought).toBeFocused();
     const after = await host.stats();
     expect(after.reads!.scans).toBe(before.reads!.scans);
@@ -1010,12 +1013,12 @@ for (const mode of ['local', 'remote'] as const)
       await page.getByRole('button', { name: 'Send message', exact: true }).click();
       if (!host) {
         // The tool is running once its output part is recorded; the output itself stays folded.
-        await expect(
-          page
-            .getByRole('article', { name: 'Live response' })
-            .locator('[data-transcript-part]')
-            .filter({ hasText: /· Output · running/ }),
-        ).toHaveCount(1);
+        const output = page
+          .getByRole('article', { name: 'Live response' })
+          .locator('[data-transcript-part]')
+          .filter({ hasText: /Output · running/ });
+        await openWorkingFold(page, output);
+        await expect(output).toHaveCount(1);
         await app.evaluate(() =>
           (globalThis as unknown as { localActivity: { release(): void } }).localActivity.release(),
         );
