@@ -1,4 +1,4 @@
-import { useState, useSyncExternalStore } from 'react';
+import { useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { Button } from '@base-ui/react/button';
 import { Dialog } from '@base-ui/react/dialog';
@@ -115,14 +115,26 @@ function Hosts({
   const switching = lifecycle.phase !== 'live' || lifecycle.chat.state === 'opening';
   // Why the last Use failed, such as a chat that could not be preserved; the next Use clears it.
   const [switchError, setSwitchError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
   const switchTarget = (id: string) => {
     setSwitchError(null);
-    void application.selectChatTarget(id).catch((error) => setSwitchError(errorDTO(error).message));
+    setPending(true);
+    void application
+      .selectChatTarget(id)
+      .catch((error) => setSwitchError(errorDTO(error).message))
+      .finally(() => setPending(false));
   };
+  // Buttons stay focusable while disabled, but one that goes, such as Use once its host is in use,
+  // drops focus to the page behind this modal; it returns to the dialog.
+  const list = useRef<HTMLUListElement>(null);
+  useLayoutEffect(() => {
+    if (document.activeElement === document.body)
+      list.current?.closest<HTMLElement>('[role="dialog"]')?.focus();
+  });
   return (
     <>
       <h2 {...stylex.props(styles.heading)}>Hosts</h2>
-      <ul aria-label="Chat hosts" {...stylex.props(styles.hosts)}>
+      <ul ref={list} aria-label="Chat hosts" {...stylex.props(styles.hosts)}>
         {targets.map((target) => {
           const current = !lifecycle.chatTargets.length || target.id === lifecycle.chatTargetId;
           let action = null;
@@ -131,7 +143,8 @@ function Hosts({
               <Button
                 aria-label={`Use ${target.label}`}
                 {...stylex.props(controls.button)}
-                disabled={switching}
+                disabled={switching || pending}
+                focusableWhenDisabled
                 onClick={() => switchTarget(target.id)}>
                 Use
               </Button>
@@ -142,6 +155,7 @@ function Hosts({
                 <Button
                   {...stylex.props(controls.button)}
                   disabled={busy('disconnect')}
+                  focusableWhenDisabled
                   onClick={() => void chat?.disconnect()}>
                   Disconnect
                 </Button>
@@ -153,6 +167,7 @@ function Hosts({
                     busy('connect') ||
                     state.connection.state === 'disconnecting'
                   }
+                  focusableWhenDisabled
                   onClick={() => void chat?.connect()}>
                   {busy('connect') ? 'Connecting…' : 'Connect'}
                 </Button>
