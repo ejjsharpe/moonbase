@@ -1098,7 +1098,7 @@ test('the file menu mentions files in the dock’s chat and copies and reveals t
   await tree.getByRole('treeitem', { name: 'README.md', exact: true }).click({ button: 'right' });
   await fileMenu.getByRole('menuitem', { name: 'Copy Path', exact: true }).click();
   await expect(tree).toBeFocused();
-  await tree.press('Alt+Meta+r');
+  await tree.press('ControlOrMeta+Alt+r');
   expect(await page.evaluate(() => [window.demo.copied, window.demo.revealed])).toEqual([
     ['/demo/moonbase/README.md'],
     ['/demo/moonbase/README.md'],
@@ -1887,7 +1887,7 @@ test('⌘B and the sidebar button hide the main sidebar in projects and Agents, 
   await page.getByRole('tab', { name: 'moonbase · main', exact: true }).click();
   const explorer = page.locator('aside[aria-label="Editor sidebar"]');
   await expect.poll(widthOf(explorer)).toBeGreaterThan(100);
-  await page.getByRole('textbox', { name: 'welcome.ts editor', exact: true }).press('Meta+b');
+  await page.getByRole('textbox', { name: 'welcome.ts editor', exact: true }).press('ControlOrMeta+b');
   await expect.poll(widthOf(explorer)).toBe(0);
   expect(await explorer.evaluate((element) => (element as HTMLElement).inert)).toBe(true);
   await page.getByRole('button', { name: 'Show sidebar', exact: true }).click();
@@ -1901,7 +1901,7 @@ test('⌘B and the sidebar button hide the main sidebar in projects and Agents, 
   await expect.poll(widthOf(list)).toBe(0);
   // The key works with nothing focused, too.
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-  await page.keyboard.press('Meta+b');
+  await page.keyboard.press('ControlOrMeta+b');
   await expect.poll(widthOf(list)).toBeGreaterThan(100);
 });
 
@@ -1916,16 +1916,18 @@ test('⌃⌘S toggles the sidebar and never saves', async ({ page }) => {
   const saves = () => page.evaluate(() => window.demo.memory.stats.saves);
   const before = await saves();
   const explorer = page.locator('aside[aria-label="Editor sidebar"]');
-  await editor.press('Control+Meta+s');
+  // Off a Mac the sidebar's second key is Ctrl+Alt+S.
+  const toggleKeys = process.platform === 'darwin' ? 'Control+Meta+s' : 'Control+Alt+s';
+  await editor.press(toggleKeys);
   await expect.poll(widthOf(explorer)).toBe(0);
   // Focus stays in the editor, so the next keys still work.
   await expect(editor).toBeFocused();
-  await editor.press('Control+Meta+s');
+  await editor.press(toggleKeys);
   await expect.poll(widthOf(explorer)).toBeGreaterThan(100);
   expect(await saves()).toBe(before);
   // Hiding the sidebar from inside it hands focus to the editor.
   await page.getByRole('tree', { name: 'Files', exact: true }).focus();
-  await page.keyboard.press('Meta+b');
+  await page.keyboard.press('ControlOrMeta+b');
   await expect(editor).toBeFocused();
 });
 

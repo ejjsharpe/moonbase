@@ -1974,7 +1974,11 @@ test('with no file open, the editor lists its main shortcuts', async ({ page }) 
   }
   const sheet = first(page).getByRole('region', { name: 'Keyboard shortcuts', exact: true });
   await expect(sheet.getByRole('term')).toHaveText(['Go to file', 'Commands', 'Find in files']);
-  await expect(sheet.getByRole('definition')).toHaveText(['⌘P', '⇧⌘P', '⇧⌘F']);
+  await expect(sheet.getByRole('definition')).toHaveText(
+    process.platform === 'darwin'
+      ? ['⌘P', '⇧⌘P', '⇧⌘F']
+      : ['Ctrl+P', 'Shift+Ctrl+P', 'Shift+Ctrl+F'],
+  );
   await page.keyboard.press('Meta+Shift+t');
   await expect(sheet).toHaveCount(0);
 });
