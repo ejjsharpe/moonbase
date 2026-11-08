@@ -305,6 +305,8 @@ export async function pasteNativeFile(app: ElectronApplication, page: Page, path
     })) as typeof dialog.showMessageBox;
     const escaped = path.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
     const xml = `<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><array><string>${escaped}</string></array></plist>`;
+    clipboard.has = async (format: string) =>
+      format === 'electron application/osclipboard;format="NSFilenamesPboardType"';
     clipboard.read = async () => [
       new ClipboardItem({
         'electron application/osclipboard;format="NSFilenamesPboardType"': new Blob([xml]),
