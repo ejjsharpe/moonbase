@@ -64,7 +64,20 @@ export type ProviderSetupConfiguration = {
   models: Models;
   openUrl(url: string): Promise<void>;
   deviceId: string;
+  /** Why a provider's latest auth check couldn't tell whether it is configured, if it says. */
+  getCheckProblem?(providerId: string): string | undefined;
 };
+/** Fits provider-supplied text to the status contract: no NULs or lone surrogates, at most 512 bytes. */
+function boundText(value: string) {
+  let text = '',
+    bytes = 0;
+  for (const character of value.replace(/[\0\ud800-\udfff]/gu, '')) {
+    bytes += new TextEncoder().encode(character).length;
+    if (bytes > 512) break;
+    text += character;
+  }
+  return text;
+}
 
 /** Provider callbacks remain privileged; only status and live prompt identities leave this layer. */
 export const ProviderSetupLive = (
@@ -133,7 +146,12 @@ export const ProviderSetupLive = (
               id,
               name: names[id] ?? provider.name,
               auth: authKinds[id] ?? ('api_key' as const),
-              configured: !!(await config.models.checkAuth(id)),
+              ...(await config.models.checkAuth(id).then((auth) => {
+                const problem = !auth && config.getCheckProblem?.(id);
+                return problem
+                  ? { configured: false, problem: boundText(problem) }
+                  : { configured: !!auth };
+              })),
               models,
               ...(defaultModel
                 ? {

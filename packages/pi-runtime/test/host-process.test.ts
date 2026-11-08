@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, realpath, rm } from 'node:fs/promises';
 import { rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -565,6 +565,10 @@ test('bundled host serves a Claude subscription through the host-side Claude Cod
       await readFile(join(directory, 'claude.txt'), 'utf8'),
       'Written through Claude Code',
     );
+    // Claude Code runs in, and so reports, the host's chat folder rather than where it started.
+    const cwd = await realpath(directory);
+    for (const line of (await readFile(join(directory, 'workers.log'), 'utf8')).trim().split('\n'))
+      assert.equal(JSON.parse(line).cwd, cwd);
     served.child.kill('SIGTERM');
     assert.equal(
       (await bounded(served.exited))[0],
