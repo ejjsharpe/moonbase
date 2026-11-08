@@ -74,6 +74,8 @@ function shortcutLetter(event: KeyboardEvent) {
   if (/^[a-z]$/i.test(event.key)) return event.key.toLowerCase();
   return /^Key[A-Z]$/.test(event.code) ? event.code.slice(3).toLowerCase() : undefined;
 }
+/** The shell last focused, which takes keys pressed on the page itself when several share it. */
+let pageKeysOwner: HTMLElement | null = null;
 /** The window's shortcut on the editor's cheat sheet. */
 const windowShortcuts = [{ label: 'Project chats', keys: 'Meta+J' }];
 /** A remembered on/off choice, kept in this renderer's local storage. */
@@ -173,15 +175,38 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
     return () => window.removeEventListener('keydown', keyDown, true);
   }, [toggleSidebar]);
   // Focus falls to the page itself when a focused control unmounts or turns inert; the shell's keys
-  // still work there. The live handler is read on each key.
-  const shellKeys = useRef<(event: KeyboardEvent) => void>(() => {});
+  // still work there, in one shell: the one last focused, else the first one showing. A modal
+  // dialog marks the shell aria-hidden while it is open, and then owns the keys. The live handlers
+  // are read on each key.
+  const root = useRef<HTMLDivElement>(null);
+  const shellKeys = useRef<{ down(event: KeyboardEvent): void; up(event: KeyboardEvent): void }>({
+    down() {},
+    up() {},
+  });
   useEffect(() => {
-    const keyDown = (event: KeyboardEvent) => {
-      if (event.target === document.body || event.target === document.documentElement)
-        shellKeys.current(event);
+    const ownsPageKeys = () => {
+      const element = root.current;
+      if (!element?.checkVisibility() || element.closest('[aria-hidden="true"]')) return false;
+      const owner =
+        pageKeysOwner?.isConnected && pageKeysOwner.checkVisibility()
+          ? pageKeysOwner
+          : [...document.querySelectorAll<HTMLElement>('[data-moonbase-shell]')].find((shell) =>
+              shell.checkVisibility(),
+            );
+      return owner === element;
     };
-    window.addEventListener('keydown', keyDown);
-    return () => window.removeEventListener('keydown', keyDown);
+    const forward = (event: KeyboardEvent) => {
+      if (event.target !== document.body && event.target !== document.documentElement) return;
+      if (!ownsPageKeys()) return;
+      if (event.type === 'keydown') shellKeys.current.down(event);
+      else shellKeys.current.up(event);
+    };
+    window.addEventListener('keydown', forward);
+    window.addEventListener('keyup', forward);
+    return () => {
+      window.removeEventListener('keydown', forward);
+      window.removeEventListener('keyup', forward);
+    };
   }, []);
   const [dockWidth, setDockWidth] = useState(dockDefaultWidth),
     [dockRestoreWidth, setDockRestoreWidth] = useState(dockDefaultWidth);
@@ -392,6 +417,15 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
       const previous = projectFocus.current;
       if (previous?.isConnected && !element.contains(previous)) previous.focus();
       if (element.contains(document.activeElement)) focusView(projectValue, element);
+    } else if (
+      !open &&
+      element?.contains(focus.current[projectValue]) &&
+      document.activeElement?.closest('[role="dialog"]')
+    ) {
+      // From a dialog such as the picker, which would return focus to the dock as it goes: focus
+      // goes back to the project once both have.
+      focus.current[projectValue] = projectFocus.current;
+      restoreFocus(projectValue);
     }
     setDockOpen(open);
   };
@@ -497,8 +531,13 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
     if (view !== 'chat' && !event.defaultPrevented)
       handle.current?.keyDown(event as ReactKeyboardEvent);
   };
-  shellKeys.current = (event) => {
-    if (!shellInert) keyDown(event);
+  const keyUp = (event: ReactKeyboardEvent | KeyboardEvent) => {
+    if (view !== 'chat' && !event.defaultPrevented)
+      handle.current?.keyUp(event as ReactKeyboardEvent);
+  };
+  shellKeys.current = {
+    down: (event) => !shellInert && keyDown(event),
+    up: (event) => !shellInert && keyUp(event),
   };
   let status = view === 'chat' ? 'Agents · Explicit Send' : 'Explicit Save · Local workspace';
   if (closing || lifecycle.phase === 'prepared') status = 'Closing workbench…';
@@ -528,10 +567,13 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
       }}
       inert={shellInert}
       {...stylex.props(workbench.document, styles.shell, railCollapsed && styles.shellCollapsed)}
-      onKeyDown={keyDown}
-      onKeyUp={(event) => {
-        if (view !== 'chat' && !event.defaultPrevented) handle.current?.keyUp(event);
+      ref={root}
+      data-moonbase-shell=""
+      onFocusCapture={(event) => {
+        pageKeysOwner = event.currentTarget;
       }}
+      onKeyDown={keyDown}
+      onKeyUp={keyUp}
       onDragOver={(event) => {
         if (event.dataTransfer.types.includes('Files')) event.preventDefault();
       }}
@@ -695,6 +737,8 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
           }}
           onFocusCapture={(event) => {
             const target = event.target as HTMLElement;
+            // Not a dialog the panel's tree portals elsewhere, such as the picker.
+            if (!event.currentTarget.contains(target)) return;
             focus.current[projectValue] = target;
             if (!dock.current?.contains(target)) projectFocus.current = target;
           }}
@@ -846,7 +890,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
           panels.current.chat = element;
         }}
         onFocusCapture={(event) => {
-          focus.current.chat = event.target as HTMLElement;
+          if (event.currentTarget.contains(event.target)) focus.current.chat = event.target;
         }}
         {...stylex.props(styles.panel, styles.framed, railCollapsed && styles.framedFlush)}>
         {chat ? (

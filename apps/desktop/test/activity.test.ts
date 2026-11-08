@@ -3,10 +3,13 @@ import { test } from 'node:test';
 import type { ChatEntry, ChatTranscript, ChatTranscriptPart } from '@moonbase/contracts/chat';
 import {
   collectActivityEvidence,
+  findReadingAnchor,
   getActivityState,
   getEntryTranscripts,
   getToolSummary,
   groupTranscriptParts,
+  groupTranscriptRows,
+  type TranscriptItem,
 } from '../src/renderer/chat/activity.ts';
 import { parseRecordedPatch, type PatchLine } from '../src/renderer/chat/recorded-patch.ts';
 import { getTranscriptParts } from '../src/renderer/chat/transcript-parts.ts';
@@ -308,3 +311,101 @@ for (const [name, hunk, lines] of [
     assert.equal(result.files[0]!.hunks.length, 1);
     assert.deepEqual(checkLineStarts(source, result.files[0]!.hunks[0]!.lines), lines);
   });
+
+type GroupedRow = { key: string; kind: 'entry' | 'live'; read: 'activity' | 'message' | 'empty' };
+const row = (key: string, read: GroupedRow['read'] = 'activity'): GroupedRow => ({
+  key,
+  kind: key.startsWith('live:') ? 'live' : 'entry',
+  read,
+});
+const group = (rows: GroupedRow[], previous: readonly TranscriptItem<GroupedRow>[] = []) =>
+  groupTranscriptRows(rows, (value) => value.read, previous);
+const keysOf = (items: readonly TranscriptItem<GroupedRow>[]) =>
+  items.map((item) => [item.key, item.rows.map((value) => value.key)]);
+
+test('an activity card keeps its list key as rows join its start or end and as the live row leaves', () => {
+  const question = row('entry:q', 'message'),
+    call = row('entry:call'),
+    output = row('entry:output'),
+    earlier = row('entry:earlier'),
+    marker = row('entry:marker', 'empty');
+  let items = group([question, call]);
+  assert.deepEqual(keysOf(items), [
+    ['entry:q', ['entry:q']],
+    ['entry:call', ['entry:call']],
+  ]);
+  // The live response joins the card's end.
+  const live = row('live:submission');
+  items = group([question, call, marker, live], items);
+  assert.deepEqual(keysOf(items), [
+    ['entry:q', ['entry:q']],
+    ['entry:call', ['entry:call', 'live:submission']],
+  ]);
+  // A stored output joins before the live row, and history loading above joins the start.
+  items = group([earlier, call, output, live], items);
+  assert.deepEqual(keysOf(items), [
+    ['entry:call', ['entry:earlier', 'entry:call', 'entry:output', 'live:submission']],
+  ]);
+  // The live row leaves as the answer starts: the card keeps its key, the answer has its own.
+  const answering = row('live:submission', 'message');
+  const split = group([earlier, call, output, answering], items);
+  assert.deepEqual(keysOf(split), [
+    ['entry:call', ['entry:earlier', 'entry:call', 'entry:output']],
+    ['live:submission', ['live:submission']],
+  ]);
+  // Unchanged rows keep the item itself.
+  const again = group([earlier, call, output, answering], split);
+  assert.equal(again[0], split[0]);
+  assert.equal(again[1], split[1]);
+  // Rows replaced with equal keys (an updated entry) keep the key too.
+  assert.deepEqual(
+    keysOf(group([row('entry:earlier'), row('entry:call'), row('entry:output'), answering], split)),
+    keysOf(split),
+  );
+});
+
+test('a split card never gives two items one key', () => {
+  const question = row('entry:q', 'message'),
+    tool = row('entry:tool');
+  // The live row's thinking starts a card, so the card is keyed by the live row.
+  let items = group([question, row('live:s')]);
+  items = group([question, tool, row('live:s')], items);
+  assert.deepEqual(keysOf(items), [
+    ['entry:q', ['entry:q']],
+    ['live:s', ['entry:tool', 'live:s']],
+  ]);
+  items = group([question, tool, row('live:s', 'message')], items);
+  const keys = items.map((item) => item.key);
+  assert.equal(new Set(keys).size, keys.length);
+  assert.equal(items[1]!.key, 'live:s', 'the card keeps its key');
+  assert.deepEqual(
+    items[2]!.rows.map((value) => value.key),
+    ['live:s'],
+  );
+});
+
+test("a reading anchor names a stored row of the first visible item, never a card's live row", () => {
+  const items = group([row('entry:q', 'message'), row('entry:call'), row('live:s')]);
+  const measured: string[] = [];
+  const measure = (key: string) => (measured.push(key), 640);
+  // The card's last row is the live response; its last stored row anchors it.
+  assert.deepEqual(findReadingAnchor(items, { key: items[1]!.key, offset: 12 }, measure), {
+    key: 'entry:call',
+    offset: 12,
+  });
+  assert.deepEqual(measured, []);
+  // A live row alone anchors to the stored row before it, at its offset from that row's top.
+  const alone = group([row('entry:q', 'message'), row('live:s')]);
+  assert.deepEqual(findReadingAnchor(alone, { key: alone[1]!.key, offset: 12 }, measure), {
+    key: 'entry:q',
+    offset: 640,
+  });
+  assert.deepEqual(measured, ['entry:q']);
+  // With no stored row before it, it names itself; an unknown item names nothing.
+  const first = group([row('live:s')]);
+  assert.deepEqual(findReadingAnchor(first, { key: 'live:s', offset: 3 }, measure), {
+    key: 'live:s',
+    offset: 3,
+  });
+  assert.equal(findReadingAnchor(first, { key: 'gone', offset: 3 }, measure), undefined);
+});

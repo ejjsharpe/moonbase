@@ -39,6 +39,7 @@ import {
   collectActivityEvidence,
   getEntryTranscripts,
   classifyEntry,
+  findReadingAnchor,
   groupTranscriptRows,
   isSameActivityEvidence,
   type TranscriptItem,
@@ -368,19 +369,27 @@ function TranscriptList({
     current.current = transcript;
   }, [transcript]);
   const { dataset } = transcript;
-  const items = useMemo(
-    () => groupTranscriptRows(transcript.rows, kindOfRow, itemCache),
-    [transcript.rows],
-  );
+  // Each grouping keeps the previous items' keys.
+  const [grouped, setGrouped] = useState(() => ({
+    rows: transcript.rows,
+    items: groupTranscriptRows(transcript.rows, kindOfRow, []),
+  }));
+  let items = grouped.items;
+  if (grouped.rows !== transcript.rows) {
+    items = groupTranscriptRows(transcript.rows, kindOfRow, grouped.items);
+    setGrouped({ rows: transcript.rows, items });
+  }
   /** The list item holding each row: a row in an activity run is drawn by the run's item. */
   const itemKeys = useMemo(
     () => new Map(items.flatMap((item) => item.rows.map((row) => [row.key, item.key] as const))),
     [items],
   );
-  const currentItemKeys = useRef(itemKeys);
+  const currentItemKeys = useRef(itemKeys),
+    currentItems = useRef(items);
   useLayoutEffect(() => {
     currentItemKeys.current = itemKeys;
-  }, [itemKeys]);
+    currentItems.current = items;
+  }, [itemKeys, items]);
   /** Where this dataset opens: its saved anchor's row when it has one. */
   const [placement, setPlacement] = useState(() => findPlacement(transcript, items));
   if (placement.dataset !== dataset) setPlacement(findPlacement(transcript, items));
@@ -396,7 +405,15 @@ function TranscriptList({
     if (view.anchor && loading && !rows.some((row) => row.key === view.anchor!.key)) return;
     if (ref.getState().isFollowingEnd && !later) views.save(null);
     else {
-      const anchor = ref.anchorVisibleContent({ hold: false });
+      // The list reports its first visible item; the anchor names one of its stored rows.
+      const visible = ref.anchorVisibleContent({ hold: false });
+      const anchor =
+        visible &&
+        findReadingAnchor(
+          currentItems.current,
+          visible,
+          (key) => ref.anchorVisibleContent({ key, hold: false })?.offset,
+        );
       if (anchor) views.save(anchor);
     }
   }, [list, views, ready]);
@@ -580,7 +597,6 @@ const getItemType = (item: TranscriptItem<TranscriptRow>) => {
 const renderItem = ({ item }: LegendListRenderItemProps<TranscriptItem<TranscriptRow>>) => (
   <Item item={item} />
 );
-const itemCache = new WeakMap<TranscriptRow, TranscriptItem<TranscriptRow>>();
 const kindOfRow = (row: TranscriptRow) =>
   row.kind === 'tool' ? 'message' : classifyEntry(row.entry);
 

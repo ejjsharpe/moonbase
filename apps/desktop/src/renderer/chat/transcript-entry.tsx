@@ -415,18 +415,16 @@ function Activity({
         joinNext && styles.activityJoinNext,
         outputOnly && styles.activityOutput,
       )}>
-      {/* The headlines say what happened; the chevron opens the recorded parts behind them. */}
-      <Collapsible.Trigger
-        aria-label={`Activity · ${parts.length} recorded ${parts.length === 1 ? 'part' : 'parts'}`}
-        title="Show recorded parts"
-        {...stylex.props(
-          controls.button,
-          controls.iconButton,
-          styles.activityToggle,
-          outputOnly && controls.hidden,
-        )}>
-        <Icon name="chevron" />
-      </Collapsible.Trigger>
+      {/* The headlines say what happened; the chevron opens the recorded parts behind them. An
+          output row has no chevron: its call's opens it. */}
+      {!outputOnly && (
+        <Collapsible.Trigger
+          aria-label={`Activity · ${parts.length} recorded ${parts.length === 1 ? 'part' : 'parts'}`}
+          title="Show recorded parts"
+          {...stylex.props(controls.button, controls.iconButton, styles.activityToggle)}>
+          <Icon name="chevron" />
+        </Collapsible.Trigger>
+      )}
       {steps.size > 0 && (
         <ul {...stylex.props(styles.activitySteps)}>
           {[...steps].map(([summary, state]) => {

@@ -41,6 +41,7 @@ export function MessageInput({
   starter,
   commands,
   onCommand,
+  onMention,
 }: {
   controller: ChatController;
   draft: string;
@@ -53,6 +54,8 @@ export function MessageInput({
   starter: boolean;
   commands: readonly ChatCommand[];
   onCommand(command: ChatCommand, option?: ChatCommandOption): void;
+  /** Told of each file picked, once the draft mentions it. */
+  onMention?(path: string): void;
 }) {
   const textarea = useRef<HTMLTextAreaElement>(null),
     mirror = useRef<HTMLDivElement>(null),
@@ -149,6 +152,7 @@ export function MessageInput({
       [...mentions.filter((mention) => mention.path !== path), { path }],
       inserted.caret,
     );
+    onMention?.(path);
   }
   let status = results.error;
   if (!status && full) status = `A message can mention at most ${maximumChatMentions} files.`;

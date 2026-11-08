@@ -132,8 +132,8 @@ export async function acquireLocalChat(
               models,
               openUrl,
               deviceId: session.host.hostId,
-              getCheckProblem: (id) =>
-                id === claudeCode.id ? claudeCode.getCheckProblem() : undefined,
+              getCheckProblem: (id, signal) =>
+                id === claudeCode.id ? claudeCode.getCheckProblem(signal) : undefined,
             }),
           ),
           Scope.forkUnsafe(scope, 'parallel'),
