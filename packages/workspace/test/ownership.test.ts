@@ -443,8 +443,10 @@ test('admitted cancellation retains its overlap lease and root resources until t
   const f = fixture(),
     ready = join(f.base, 'admitted'),
     release = join(f.base, 'release-descendant');
+  // Job control gives the descendant its own process group, so it outlives stopping the helper's
+  // group and holds the helper's pipes open.
   const helper = f.wrapper(
-    `if [ "$1" = copy ]; then\n (while [ ! -e ${quote(release)} ]; do /bin/sleep 0.01; done) &\n /usr/bin/touch ${quote(ready)}\n while :; do /bin/sleep 0.01; done\nfi`,
+    `if [ "$1" = copy ]; then\n set -m\n (while [ ! -e ${quote(release)} ]; do /bin/sleep 0.01; done) &\n /usr/bin/touch ${quote(ready)}\n while :; do /bin/sleep 0.01; done\nfi`,
   );
   const { runtime, client } = f.start(helper),
     abort = new AbortController();
@@ -527,8 +529,9 @@ test('root disposal retains claimed native descriptors and journal ownership unt
   const f = fixture(),
     ready = join(f.base, 'import-admitted'),
     release = join(f.base, 'release-import');
+  // The descendant has its own process group, as above.
   const helper = f.wrapper(
-    `if [ "$1" = import ]; then\n (while [ ! -e ${quote(release)} ]; do /bin/sleep 0.01; done) &\n /usr/bin/touch ${quote(ready)}\n while :; do /bin/sleep 0.01; done\nfi`,
+    `if [ "$1" = import ]; then\n set -m\n (while [ ! -e ${quote(release)} ]; do /bin/sleep 0.01; done) &\n /usr/bin/touch ${quote(ready)}\n while :; do /bin/sleep 0.01; done\nfi`,
   );
   const { runtime, client } = f.start(helper);
   let mutation: Promise<unknown> | undefined, closing: Promise<void> | undefined;

@@ -35,7 +35,7 @@ The private JSON file contains:
 }
 ```
 
-The listener binds only `127.0.0.1`; reach it through the [SSH package](../ssh/README.md). The token must be 16–4096 printable non-space ASCII characters, kept out of source control, arguments and logs. The host installs Pi's `read`, `write`, `edit` and `bash` tools and uses host-side `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`, or a Claude subscription with `"model": { "provider": "claude-code", "modelId": "claude-opus-5-5" }` after `claude auth login` on the host. Set `PI_CLAUDE_CODE_COMMAND` if `claude` is not on the host's `PATH` or in `~/.local/bin`; the host exits unavailable when Claude Code is missing or signed out. **The cwd is tool context, not a filesystem sandbox.**
+The listener binds only `127.0.0.1`; reach it through the [SSH package](../ssh/README.md). The token must be 16–4096 printable non-space ASCII characters, kept out of source control, arguments and logs. The host installs Pi's `read`, `write`, `edit` and `bash` tools and uses host-side `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`, or a Claude subscription with `"model": { "provider": "claude-code", "modelId": "claude-opus-5-5" }` after `claude auth login` on the host. Set `PI_CLAUDE_CODE_COMMAND` if `claude` is not on the host's `PATH`, in `~/.local/bin`, `/opt/homebrew/bin` or `/usr/local/bin`; the host exits unavailable when Claude Code is missing or signed out. **The cwd is tool context, not a filesystem sandbox.**
 
 ## Behavior worth knowing
 
@@ -47,6 +47,8 @@ The listener binds only `127.0.0.1`; reach it through the [SSH package](../ssh/R
 - Stop targets only the captured submission/task. Cancelling or disconnecting a client never stops remote work.
 - Remote hosts stream snapshots over an authenticated `chat-stream-v1` channel; messages are HMAC-authenticated, and OpenSSH provides transport encryption.
 - `./claude-code` runs the local `claude` CLI, which owns sign-in; Moonbase stores no Claude credentials, and Pi still executes every tool. The library ships TypeScript source, so only bundles (the desktop app and `dist/host.mjs`) can load it, and they ship its `inert-mcp.mjs` beside them. It uses the built-in model list, not Claude Code's account catalog. Hosts close its warm workers with `closeClaudeCodeProcesses()`.
+- `claude` is looked up on `PATH`, then in its install locations, and runs with its own directory and those locations on `PATH`, so an npm install's `env node` starts from Finder or a non-login shell. A status check that fails outright reaches provider setup as the provider's `problem` rather than reading as signed out.
+- Claude Code runs in, and tells the model, its process's working directory: the library has no per-request cwd. The host changes to its configured `cwd` at startup; local chats, which each have their own folder, state it in a `working-directory` prompt section instead. The library also fixes its tool-inventory helper's env, so Electron's `ELECTRON_RUN_AS_NODE` reaches the helper only because Claude Code passes its own env to MCP servers.
 - A dropped or stalled stream reconnects up to three times per outage; an authenticated frame arriving at least half a heartbeat interval after a connection's snapshot renews that budget.
 
 ## Checks

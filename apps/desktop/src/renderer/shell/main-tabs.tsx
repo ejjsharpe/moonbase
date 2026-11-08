@@ -81,6 +81,7 @@ export function MainTabs({
   openSettings,
   collapsed,
   toggleCollapsed,
+  focusView,
   mac,
 }: {
   checkouts: readonly CheckoutTarget[];
@@ -104,6 +105,8 @@ export function MainTabs({
   /** Whether the rail is hidden; it then slides out at the window's left edge. */
   collapsed: boolean;
   toggleCollapsed(): void;
+  /** Focuses the view, for focus on a rail that slides away, which would otherwise fall to the page. */
+  focusView(): void;
   /** Shows the rail's shortcut the platform's way. */
   mac: boolean;
 }) {
@@ -115,16 +118,24 @@ export function MainTabs({
   // where the rail must stay.
   const [peeking, setPeeking] = useState(false);
   const slot = useRef<HTMLDivElement>(null);
+  const viewFocus = useRef(focusView);
+  useEffect(() => {
+    viewFocus.current = focusView;
+  });
   if (!collapsed && peeking) setPeeking(false);
   useEffect(() => {
     if (!peeking) return;
+    // The sliding rail turns inert, so focus on it goes to the view first.
+    const hide = () => {
+      if (slot.current?.contains(document.activeElement)) viewFocus.current();
+      setPeeking(false);
+    };
     const move = (event: PointerEvent) => {
       if (event.clientX <= (slot.current?.offsetWidth ?? 0) + peekMargin) return;
       // The rail's own menus, such as +, keep it out while they are open.
       if ((event.target as Element | null)?.closest?.('[role="menu"], [role="dialog"]')) return;
-      setPeeking(false);
+      hide();
     };
-    const hide = () => setPeeking(false);
     window.addEventListener('pointermove', move);
     window.addEventListener('blur', hide);
     return () => {

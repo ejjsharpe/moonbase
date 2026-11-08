@@ -264,6 +264,15 @@ test('a local chat without a project runs in a new, empty folder of its own', as
       [folders[1], true],
     ].sort(),
   );
+  // An original and its retry racing make one chat, and leave no unused folder behind.
+  const raced = await Promise.all(
+    [0, 1].map(() => client.command('createChat', input('raced', 'Raced'))),
+  );
+  assert.equal(raced[0].conversation.cwd, raced[1].conversation.cwd);
+  assert.deepEqual(
+    (await readdir(chatFolders)).sort(),
+    [...folders, raced[0].conversation.cwd].map((folder) => basename(folder)).sort(),
+  );
   // A foreign chat is refused.
   await assert.rejects(
     runtime.runPromise(control.markFolderAsProject({ ...target, actorId: 'someone-else' })),

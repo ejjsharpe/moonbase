@@ -102,6 +102,8 @@ export type EditorSnapshot = {
   disposed: boolean;
   closePrompt: ClosePrompt | null;
   preserving: boolean;
+  /** Checkouts whose `initializeRepository` is running; they refuse saves and file operations. */
+  initializing: readonly string[];
   discoveryRevision: number;
   recovery: EditorRecovery;
   buffers: readonly EditorBuffer[];
@@ -150,6 +152,11 @@ class EditorModelState {
   private bound = false;
   private runEffect!: <A>(effect: Effect.Effect<A, ApplicationError>) => Promise<A>;
   private factsLock = Semaphore.makeUnsafe(1);
+  /**
+   * The one running `initializeRepository`. Until it rebinds, every recovery capture would name
+   * the folder target that `git init` retires, so publications wait for it to finish.
+   */
+  private initialization?: { checkoutId: string; done: Promise<void> };
   private preservation: EditorPreservation;
   private buffers = new Map<string, EditorBuffer>();
   private saveResults = new Map<string, Extract<SaveResult, { kind: 'saved' }>>();
@@ -163,9 +170,14 @@ class EditorModelState {
       classificationScope: Scope.Closeable;
       revision: number;
       listed: boolean;
+      classifying: boolean;
       promise: Promise<DirectoryListing>;
     }
   >();
+  /** Per folder: a superseded Git classification left to finish, and the newest one shown. */
+  private keptClassifications = new Map<string, Scope.Closeable>();
+  private classifiedListings = new Map<string, number>();
+  private listingSequence = 0;
   private git: Record<string, GitStatus> = {};
   private errors: string[] = [];
   private operations = new Map<
@@ -283,12 +295,14 @@ class EditorModelState {
         !this.loading &&
         !this.closing &&
         !this.preservation.active &&
+        !this.initialization &&
         this.publications.confirmed &&
         ![...this.buffers.values()].some((buffer) => buffer.saving || buffer.pendingSave) &&
         ![...this.operations.values()].some((value) => !value.acknowledged),
       disposed: this.disposed,
       closePrompt: this.preservation.prompt,
       preserving: this.preservation.active,
+      initializing: this.initialization ? [this.initialization.checkoutId] : [],
       discoveryRevision: this.discovery.discoveryRevision,
       recovery: this.recovery,
       buffers: [...this.buffers.values()],
@@ -338,6 +352,8 @@ class EditorModelState {
     name: K,
     input: CommandInput<K>,
     scope: Scope.Scope = this.scope,
+    /** Leaves a failure for the caller to report, if it turns out to be one. */
+    quiet = false,
   ): Promise<CommandOutput<K>> {
     if (this.closing)
       throw new ApplicationError({ code: 'Unavailable', message: 'Editor disposed.' });
@@ -350,7 +366,7 @@ class EditorModelState {
         scope,
       );
     } catch (error) {
-      this.report(error);
+      if (!quiet) this.report(error);
       throw error;
     }
   }
@@ -438,7 +454,8 @@ class EditorModelState {
   }
   /**
    * Runs `git init` in an open plain-folder checkout, then rebinds it, with its tabs and drafts,
-   * to the Git checkout that results and selects it.
+   * to the Git checkout that results and selects it. Until then the checkout refuses saves and
+   * file operations, and recovery publication waits; edits continue and move with the rebind.
    */
   async initializeRepository(checkout: CheckoutTarget) {
     this.assertAdmission();
@@ -449,21 +466,99 @@ class EditorModelState {
         code: 'InvalidInput',
         message: 'This project is already a Git repository.',
       });
+    if (this.initialization)
+      throw new ApplicationError({
+        code: 'Conflict',
+        message: 'Git is already being initialized. Wait for it to finish.',
+      });
     this.assertRebindable(checkout);
-    // The folder's approval ends with `git init`: publish while it holds, and end its reads.
-    await this.flushRecovery();
-    await this.discovery.releaseObservation(checkout);
-    let initialized: CheckoutTarget;
+    let finish!: () => void;
+    this.initialization = {
+      checkoutId: checkout.checkoutId,
+      done: new Promise<void>((resolve) => (finish = resolve)),
+    };
+    this.publications.cancelScheduled();
+    this.emit();
+    let target: CheckoutTarget | undefined, failure: ApplicationError | undefined;
     try {
-      initialized = await this.command('initializeRepository', { checkout });
-    } catch (error) {
-      if (!this.closing && this.recovery.openCheckoutIds.includes(checkout.checkoutId))
-        await this.observe(checkout).catch(this.report);
-      throw error;
+      // The folder's approval ends with `git init`: publish while it holds, and end its reads.
+      await this.publish(this.capture());
+      await this.discovery.releaseObservation(checkout);
+      let initialized: CheckoutTarget;
+      try {
+        initialized = await this.command('initializeRepository', { checkout }, this.scope, true);
+        if (!isInitialized(checkout, initialized))
+          throw editorError('Git initialized a different checkout. Reopen the folder.');
+      } catch (error) {
+        // A failed or lost reply may follow a `git init` that ran: the folder then opens as its
+        // repository, and moves there as if the reply had arrived.
+        const reopened = this.closing ? undefined : await this.findInitialized(checkout);
+        if (!reopened) {
+          this.report(error);
+          if (!this.closing && this.recovery.openCheckoutIds.includes(checkout.checkoutId))
+            await this.observe(checkout).catch(this.report);
+          throw error;
+        }
+        initialized = reopened;
+      }
+      try {
+        target = await this.addCheckout(initialized, true);
+      } catch (error) {
+        if (this.closing) throw error;
+        await this.settleInitialization(checkout, initialized);
+        failure = editorError(
+          'Git was initialized, but the project did not finish moving to it: ' +
+            ApplicationError.fromUnknown(error).message +
+            ' Your tabs and drafts are kept on the repository.',
+        );
+      }
+    } finally {
+      this.initialization = undefined;
+      finish();
+      if (!this.closing) {
+        this.emit();
+        this.resumeFacts();
+      }
     }
-    const target = await this.addCheckout(initialized);
-    if (!this.closing && !this.preservation.active) await this.flushRecovery();
+    // Drafts edited meanwhile publish now, under the Git target.
+    if (!this.closing && !this.preservation.active) {
+      const flushed = this.flushRecovery();
+      await (failure ? flushed.catch(this.report) : flushed);
+    }
+    if (failure || !target) throw failure ?? editorError('Editor disposed.');
     return target;
+  }
+  /**
+   * After `git init`, the folder target is no longer approved: whatever stopped the rebind, move
+   * the checkout's work to the repository and watch it there rather than strand it.
+   */
+  private async settleInitialization(previous: CheckoutTarget, next: CheckoutTarget) {
+    if (this.recovery.checkouts.some((item) => sameCheckout(item, previous)))
+      this.moveCheckout(previous, next);
+    if (this.recovery.openCheckoutIds.includes(next.checkoutId)) {
+      // A watch that failed to start repeats that failure, already reported, when released.
+      await this.discovery.releaseObservation(next).catch(() => undefined);
+      await this.observe(next).catch(this.report);
+    }
+  }
+  /** The repository a plain folder became, when `git init` ran but its reply was lost. */
+  private async findInitialized(checkout: CheckoutTarget) {
+    try {
+      const reopened = await this.command(
+        'openCheckout',
+        { root: checkout.root },
+        this.scope,
+        true,
+      );
+      return isInitialized(checkout, reopened) ? reopened : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  /** Refuses work on a checkout while Git is initializing in it. */
+  private assertNotInitializing(checkout: CheckoutTarget) {
+    if (this.initialization?.checkoutId === checkout.checkoutId)
+      throw editorError('Git is initializing in this project. Try again when it finishes.');
   }
   private assertRebindable(checkout: CheckoutTarget) {
     if (
@@ -478,11 +573,23 @@ class EditorModelState {
     )
       throw editorError('Wait for saves and file operations in this project to finish.');
   }
-  /** Moves a checkout's views, buffers, drafts and recents to the target it became. */
-  private async rebindCheckout(previous: CheckoutTarget, next: CheckoutTarget) {
-    this.assertRebindable(previous);
+  /**
+   * Moves a checkout's views, buffers, drafts and recents to the target it became. `initialized`
+   * skips the check that nothing is saving: `initializeRepository` made it before `git init` and
+   * refused saves and file operations since.
+   */
+  private async rebindCheckout(
+    previous: CheckoutTarget,
+    next: CheckoutTarget,
+    initialized = false,
+  ) {
+    if (!initialized) this.assertRebindable(previous);
     const open = this.recovery.openCheckoutIds.includes(previous.checkoutId);
     await this.discovery.releaseObservation(previous);
+    this.moveCheckout(previous, next);
+    if (open) await this.observe(next);
+  }
+  private moveCheckout(previous: CheckoutTarget, next: CheckoutTarget) {
     this.referenceRevision++;
     const previousKey = checkoutKey(previous);
     const ofPrevious = (key: string) => JSON.parse(key)[0] === previousKey;
@@ -511,15 +618,16 @@ class EditorModelState {
     for (const key of Object.keys(this.listings)) if (ofPrevious(key)) delete this.listings[key];
     delete this.git[previousKey];
     this.preservation.rebindClosedReferences(previous, next);
-    if (open) await this.observe(next);
   }
-  private async addCheckout(target: CheckoutTarget) {
+  private async addCheckout(target: CheckoutTarget, initializing = false) {
     if (this.closing) return target;
+    if (!initializing) this.assertNotInitializing(target);
     const collision = this.recovery.checkouts.find(
       (item) => item.checkoutId === target.checkoutId && !sameCheckout(item, target),
     );
     // A plain folder that became a repository keeps its tabs and drafts as the Git checkout.
-    if (collision && isInitialized(collision, target)) await this.rebindCheckout(collision, target);
+    if (collision && isInitialized(collision, target))
+      await this.rebindCheckout(collision, target, initializing);
     else if (collision)
       throw editorError('Checkout identity changed; retained work has not been rebound.');
     if (!this.recovery.checkouts.some((item) => sameCheckout(item, target))) {
@@ -580,7 +688,13 @@ class EditorModelState {
     );
   }
   private resumeFacts() {
-    if (this.closing || this.preservation.active || this.publications.pending) return;
+    if (
+      this.closing ||
+      this.preservation.active ||
+      this.initialization ||
+      this.publications.pending
+    )
+      return;
     // A pre-capture recovery snapshot may predate a committed Discard; fetch fresh state.
     for (const request of this.deferredFacts.splice(0))
       void this.publishFacts(
@@ -603,6 +717,8 @@ class EditorModelState {
       this.loading ||
       this.closing ||
       this.preservation.active ||
+      // `initializeRepository` publishes once it has rebound.
+      this.initialization ||
       this.publications.pending
     )
       return;
@@ -648,6 +764,9 @@ class EditorModelState {
   }
   private async flushRecovery() {
     this.assertReady();
+    // A capture now would name the folder target that `git init` retires.
+    while (this.initialization) await this.initialization.done;
+    this.assertReady();
     if (this.preservation.active)
       throw editorError('Finish the captured preservation action before flushing.');
     this.publications.cancelScheduled();
@@ -683,6 +802,16 @@ class EditorModelState {
     options: { view?: FileView; intent?: 'preview' | 'keep'; current?: () => boolean } = {},
   ) {
     this.assertAdmission();
+    // The folder's reads end during `git init`: open the file once it is the repository instead.
+    const initializing = this.initialization;
+    if (initializing?.checkoutId === target.checkout.checkoutId) {
+      await initializing.done;
+      const checkout = this.recovery.checkouts.find(
+        (item) => item.checkoutId === target.checkout.checkoutId,
+      );
+      if (!checkout || this.closing) return false;
+      return this.openFile({ ...target, checkout }, options);
+    }
     return this.openFile(target, options);
   }
   private async openFile(
@@ -789,6 +918,10 @@ class EditorModelState {
     preservation?: number,
   ): Promise<boolean> {
     this.checkout(target.checkout);
+    if (this.initialization?.checkoutId === target.checkout.checkoutId) {
+      this.report('Git is initializing in this project. Save again when it finishes.');
+      return false;
+    }
     if (this.publicationBlocked()) return false;
     if (this.uncertainAffects(target)) {
       this.report('Resolve the pending file operation before saving this file.');
@@ -848,7 +981,13 @@ class EditorModelState {
       key = fileKey(captured);
     this.checkout(captured.checkout);
     const buffer = this.buffers.get(key);
-    if (!buffer || buffer.pendingSave || this.preservation.active || this.publicationBlocked())
+    if (
+      !buffer ||
+      buffer.pendingSave ||
+      this.preservation.active ||
+      this.initialization ||
+      this.publicationBlocked()
+    )
       return false;
     const reference = this.referenceRevision,
       revision = this.publications.currentRevision;
@@ -955,6 +1094,7 @@ class EditorModelState {
       this.loading ||
       this.closing ||
       this.preservation.active ||
+      this.initialization ||
       this.publications.pending ||
       this.publications.inFlight !== 0 ||
       [...this.buffers.values()].some(
@@ -978,6 +1118,10 @@ class EditorModelState {
     checkout?: CheckoutTarget,
   ) {
     this.assertReady();
+    if (this.initialization) {
+      this.report('Git is initializing. Close again when it finishes.');
+      return false;
+    }
     if (
       this.publicationBlocked() ||
       this.preservation.active ||
@@ -1087,11 +1231,19 @@ class EditorModelState {
       pending = this.listingReads.get(key);
     if (pending?.scope === scope && !pending.listed && pending.revision === revision)
       return pending.promise;
-    if (pending)
+    // A newer read cancels the Git classification it replaces, except for one kept running per
+    // folder: refreshes that come faster than Git answers would otherwise keep every entry on its
+    // last classification, so a file un-ignored by a .gitignore edit would stay dimmed.
+    if (pending?.scope === scope && pending.classifying && !this.keptClassifications.has(key))
+      this.keptClassifications.set(key, pending.classificationScope);
+    else if (pending)
       void this.run(Scope.close(pending.classificationScope, Exit.void), pending.scope).catch(
         this.report,
       );
-    const classificationScope = Scope.forkUnsafe(scope);
+    const classificationScope = Scope.forkUnsafe(scope),
+      sequence = ++this.listingSequence;
+    // The newest classification shown when this listing replaced the last one.
+    let shownClassification: number | undefined;
     const promise = this.discovery
       .listDirectory(
         {
@@ -1104,6 +1256,7 @@ class EditorModelState {
       .then((listing) => {
         if (!isCurrent()) return listing;
         this.listingReads.get(key)!.listed = true;
+        shownClassification = this.classifiedListings.get(key);
         // Entries keep their last Git classification until the new one arrives, so a refresh
         // does not flash ignored files as unignored.
         const previous = new Map(
@@ -1120,35 +1273,68 @@ class EditorModelState {
         this.emit();
         return listing;
       });
-    const isCurrent = () =>
+    const isOpen = () =>
       !this.closing &&
       scope.state._tag !== 'Closed' &&
-      this.recovery.openCheckoutIds.includes(checkout.checkoutId) &&
-      this.listingReads.get(key)?.promise === promise;
-    this.listingReads.set(key, { scope, classificationScope, revision, listed: false, promise });
+      this.recovery.openCheckoutIds.includes(checkout.checkoutId);
+    const isCurrent = () => isOpen() && this.listingReads.get(key)?.promise === promise;
+    this.listingReads.set(key, {
+      scope,
+      classificationScope,
+      revision,
+      listed: false,
+      classifying: false,
+      promise,
+    });
     void promise
       .then(async (listing) => {
         if (!isCurrent() || !listing.entries.some((entry) => entry.ignored === undefined)) return;
-        const ignored = await this.command(
-          'getIgnoredPaths',
-          {
-            checkout,
-            path,
-            paths: listing.entries.map((entry) => entry.path),
-          },
-          classificationScope,
-        );
-        if (!isCurrent()) return;
+        this.listingReads.get(key)!.classifying = true;
+        let ignored: CommandOutput<'getIgnoredPaths'>;
+        try {
+          ignored = await this.command(
+            'getIgnoredPaths',
+            {
+              checkout,
+              path,
+              paths: listing.entries.map((entry) => entry.path),
+            },
+            classificationScope,
+          );
+        } catch (error) {
+          // Without an answer, entries show as unclassified rather than as a stale classification.
+          if (isCurrent() && this.classifiedListings.get(key) === shownClassification) {
+            this.listings[key] = { ...this.listings[key], entries: listing.entries };
+            this.emit();
+          }
+          throw error;
+        }
+        if (!isOpen() || (this.classifiedListings.get(key) ?? 0) > sequence) return;
         const paths = new Set(ignored.paths);
-        this.listings[key] = {
-          ...listing,
-          entries: listing.entries.map((entry) => ({
-            ...entry,
-            ignored: ignored.error ? undefined : paths.has(entry.path),
-          })),
-          partial: listing.partial || !!ignored.error,
-          error: ignored.error ?? listing.error,
-        };
+        // Only an answer that replaces the shown flags counts as the newest classification.
+        if (isCurrent() || (!ignored.error && this.listings[key]))
+          this.classifiedListings.set(key, sequence);
+        if (isCurrent())
+          this.listings[key] = {
+            ...listing,
+            entries: listing.entries.map((entry) => ({
+              ...entry,
+              ignored: ignored.error ? undefined : paths.has(entry.path),
+            })),
+            partial: listing.partial || !!ignored.error,
+            error: ignored.error ?? listing.error,
+          };
+        else if (!ignored.error && this.listings[key]) {
+          // A kept classification answers after a newer listing replaced its own; it is still
+          // newer than the classification that listing carried over.
+          const classified = new Set(listing.entries.map((entry) => entry.path));
+          this.listings[key] = {
+            ...this.listings[key],
+            entries: this.listings[key].entries.map((entry) =>
+              classified.has(entry.path) ? { ...entry, ignored: paths.has(entry.path) } : entry,
+            ),
+          };
+        } else return;
         this.emit();
       })
       .catch(() => {
@@ -1156,6 +1342,8 @@ class EditorModelState {
       })
       .finally(() => {
         if (this.listingReads.get(key)?.promise === promise) this.listingReads.delete(key);
+        if (this.keptClassifications.get(key) === classificationScope)
+          this.keptClassifications.delete(key);
         return this.run(Scope.close(classificationScope, Exit.void), scope).catch(this.report);
       });
     return promise;
@@ -1345,6 +1533,7 @@ class EditorModelState {
   async mutate(input: Omit<WorkspaceOperation, 'clientId' | 'id'> & { id?: string }) {
     this.assertAdmission();
     this.checkout(input.checkout);
+    this.assertNotInitializing(input.checkout);
     if (this.preservation.active || this.publicationBlocked())
       throw editorError('Finish the captured preservation/publication action first.');
     const operation: WorkspaceOperation = {
@@ -1592,6 +1781,7 @@ class EditorModelState {
             const check = () => {
               if (
                 this.closing ||
+                this.initialization ||
                 this.publications.pending ||
                 boundary !== this.preservation.generation ||
                 (this.preservation.active && preservation !== boundary)

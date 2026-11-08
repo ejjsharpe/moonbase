@@ -164,6 +164,21 @@ export class WorkspaceRecovery {
       [target.checkoutId, clientId],
     );
   }
+  /**
+   * A checkout's operation records that are not settled for every purpose: uncertain, with a
+   * recovery publication still failing, or not yet acknowledged by the client that made them.
+   */
+  getUnsettledCheckoutOperations(target: CheckoutTarget) {
+    return this.getOperations("json_extract(body, '$.input.checkout.checkoutId') = ?", [
+      target.checkoutId,
+    ]).filter(
+      (r) =>
+        r.input.checkout.checkoutId === target.checkoutId &&
+        (r.result.outcome === 'uncertain' ||
+          r.publicationError !== undefined ||
+          !r.acknowledgedBy.includes(r.input.clientId)),
+    );
+  }
   getPendingSaves(target: CheckoutTarget) {
     return this.store.all<SaveRecord>(
       'saves',

@@ -6,16 +6,78 @@ import type { FileDocument } from '@moonbase/contracts/workspace';
 import { document, ensure, fail, path } from './validation.ts';
 const flags = constants.O_RDONLY | constants.O_DIRECTORY | 0x20000000;
 export const identity = (stat: { dev: number; ino: number }) => `${stat.dev}:${stat.ino}`;
+/**
+ * Reads one stdout line (without its newline) as it arrives; `'stop'` ends the process early and
+ * the run then succeeds. A run that reads lines resolves with no buffered output.
+ */
+export type LineReader = (line: Buffer) => 'stop' | void;
 export type Run = (
   args: string[],
-  options: { fd: number; input?: string; extra?: number[]; signal?: AbortSignal },
+  options: {
+    fd: number;
+    input?: string;
+    extra?: number[];
+    signal?: AbortSignal;
+    onLine?: LineReader;
+    /** Overrides for the helper's environment; `undefined` removes a variable. */
+    env?: Record<string, string | undefined>;
+  },
 ) => Promise<Buffer>;
+/** Untranslated Git output, for commands whose text is read back. */
+const gitLocale = { LC_ALL: 'C', LANGUAGE: undefined };
+const helperEnvironment = (overrides: Record<string, string | undefined> = {}) => {
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    GIT_OPTIONAL_LOCKS: '0',
+    GIT_CONFIG_NOSYSTEM: '1',
+    ...overrides,
+  };
+  for (const [name, value] of Object.entries(env)) if (value === undefined) delete env[name];
+  return env;
+};
+const outputLimit = 16 * 1024 * 1024;
+/** How long a stopped process group has to clean up after SIGTERM before SIGKILL. */
+export const stopGrace = 2000;
+const groupAlive = (group: number) => {
+  try {
+    process.kill(-group, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+};
+const signalGroup = (group: number | undefined, signal: NodeJS.Signals) => {
+  if (group === undefined) return;
+  try {
+    process.kill(-group, signal);
+  } catch {
+    // The group already exited.
+  }
+};
+/**
+ * Waits until every process in a stopped group has exited, so callers clean up only after
+ * children such as a checkout's `git reset` stop writing. SIGKILL follows the grace period.
+ */
+const awaitGroupExit = (group: number, stoppedAt: number) =>
+  Effect.promise(async () => {
+    let killed = false;
+    for (;;) {
+      if (!groupAlive(group)) return;
+      const elapsed = Date.now() - stoppedAt;
+      if (!killed && elapsed >= stopGrace) {
+        killed = true;
+        signalGroup(group, 'SIGKILL');
+      }
+      if (elapsed >= stopGrace * 2) return;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  });
 export function makeRunner(
   helper: string,
   runEffect: <A>(effect: Effect.Effect<A, unknown>) => Promise<A>,
   reportCleanup: (cause: Cause.Cause<never>) => void,
 ): Run {
-  return (args, { fd, input, extra = [], signal }) =>
+  return (args, { fd, input, extra = [], signal, onLine, env }) =>
     runEffect(
       Effect.scoped(
         Effect.gen(function* () {
@@ -23,28 +85,65 @@ export function makeRunner(
             Effect.sync(() => {
               if (signal?.aborted) throw Error('Cancelled');
               const completion = Deferred.makeUnsafe<Buffer, unknown>();
+              // Its own process group, so stopping reaches Git's children (checkout, hooks,
+              // filters) as Ctrl-C would, and Git can remove what it half-created.
               const child = spawn(helper, args, {
                 stdio: ['pipe', 'pipe', 'pipe', fd, ...extra],
-                env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_CONFIG_NOSYSTEM: '1' },
+                env: helperEnvironment(env),
+                detached: true,
               });
               const state = {
                 child,
                 completion,
                 settled: false,
                 capped: false,
+                // The reader asked for no more output: a clean early end, not a failure.
+                finished: false,
+                stoppedAt: undefined as number | undefined,
+                escalation: undefined as NodeJS.Timeout | undefined,
                 stop: () => {
-                  child.kill('SIGKILL');
+                  if (state.stoppedAt !== undefined) return;
+                  state.stoppedAt = Date.now();
+                  signalGroup(child.pid, 'SIGTERM');
+                  state.escalation = setTimeout(() => signalGroup(child.pid, 'SIGKILL'), stopGrace);
                 },
               };
-              let output = Buffer.alloc(0),
+              const chunks: Buffer[] = [];
+              let length = 0,
                 errors = '',
                 spawnError: unknown;
-              child.stdout!.on('data', (chunk: Buffer) => {
-                if (output.length + chunk.length > 16 * 1024 * 1024) {
+              const deliver = (line: Buffer) => {
+                try {
+                  if (onLine!(line) !== 'stop') return false;
+                  state.finished = true;
+                } catch (error) {
+                  spawnError ??= error;
+                }
+                state.stop();
+                return true;
+              };
+              const take = (chunk: Buffer) => {
+                if (state.finished || state.capped) return;
+                if (length + chunk.length > outputLimit) {
                   state.capped = true;
-                  state.stop();
-                } else output = Buffer.concat([output, chunk]);
-              });
+                  return state.stop();
+                }
+                chunks.push(chunk);
+                length += chunk.length;
+              };
+              const read = (chunk: Buffer) => {
+                if (state.stoppedAt !== undefined) return;
+                let start = 0;
+                for (let end = chunk.indexOf(10); end >= 0; end = chunk.indexOf(10, start)) {
+                  const piece = chunk.subarray(start, end);
+                  const line = chunks.length ? Buffer.concat([...chunks, piece]) : piece;
+                  chunks.length = length = 0;
+                  start = end + 1;
+                  if (deliver(line)) return;
+                }
+                if (start < chunk.length) take(chunk.subarray(start));
+              };
+              child.stdout!.on('data', onLine ? read : take);
               child.stderr!.on('data', (chunk: Buffer) => {
                 errors = (errors + chunk.toString()).slice(0, 4096);
               });
@@ -54,7 +153,16 @@ export function makeRunner(
               });
               child.once('close', (code, killed) => {
                 state.settled = true;
-                if (code === 0 && !state.capped && !signal?.aborted && !spawnError)
+                // A final line without a newline.
+                if (onLine && code === 0 && length && !state.finished && !state.capped)
+                  deliver(Buffer.concat(chunks));
+                const output = onLine ? Buffer.alloc(0) : Buffer.concat(chunks, length);
+                if (
+                  (code === 0 || state.finished) &&
+                  !state.capped &&
+                  !signal?.aborted &&
+                  !spawnError
+                )
                   Deferred.doneUnsafe(completion, Effect.succeed(output));
                 else {
                   let message = 'Filesystem helper unavailable.';
@@ -89,6 +197,9 @@ export function makeRunner(
                 );
                 // Child error/abort is not exit: descriptors remain owned until close.
                 yield* Effect.exit(Deferred.await(state.completion));
+                if (state.stoppedAt !== undefined && state.child.pid !== undefined)
+                  yield* awaitGroupExit(state.child.pid, state.stoppedAt);
+                clearTimeout(state.escalation);
                 yield* Effect.sync(() => {
                   signal?.removeEventListener('abort', state.stop);
                   state.child.removeAllListeners();
@@ -168,8 +279,18 @@ export class Directory {
     this.check();
     return this.run(args, { fd: this.fd, input, signal, extra });
   }
-  git(args: string[], input?: string, signal?: AbortSignal) {
-    return this.io(
+  /** Runs like `io` but hands stdout to `onLine` line by line instead of buffering it. */
+  async lines(args: string[], onLine: LineReader, signal?: AbortSignal) {
+    this.check();
+    await this.run(args, { fd: this.fd, signal, onLine });
+  }
+  /**
+   * Runs Git in the checkout. `untranslated` runs it in the C locale, for output read back; other
+   * commands keep the user's locale, which hooks and filters they run inherit.
+   */
+  git(args: string[], input?: string, signal?: AbortSignal, { untranslated = false } = {}) {
+    this.check();
+    return this.run(
       [
         'git',
         this.gitExecutable,
@@ -181,8 +302,7 @@ export class Directory {
         '--work-tree=.',
         ...args,
       ],
-      input,
-      signal,
+      { fd: this.fd, input, signal, ...(untranslated ? { env: gitLocale } : {}) },
     );
   }
   /** Makes the root a new repository; `git` above names a work tree, which needs one already. */

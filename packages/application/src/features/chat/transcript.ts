@@ -731,7 +731,11 @@ export class TranscriptOwner {
       this.history.applyAroundPage(page, direction, replace, this.snapshot?.entries[0]?.id);
     });
   }
-  /** Shows `entryId`, reading history around it unless it is retained. The list places it afresh. */
+  /**
+   * Shows `entryId`, reading history around it unless it is retained. The list places it afresh, at
+   * its top; a jump to the saved anchor's entry while it isn't retained (Retry after a restore
+   * failed) keeps the saved offset.
+   */
   jumpToEntry(entryId: string, resetView = true) {
     if (resetView) {
       this.restorePending = false;
@@ -739,6 +743,9 @@ export class TranscriptOwner {
       this.cancelFindReveal();
     }
     this.history.following = false;
+    const key = getEntryRowKey(entryId),
+      saved = this.state.view.anchor;
+    const offset = saved?.key === key && !this.history.findRecord(entryId) ? saved.offset : 0;
     const work = Effect.gen({ self: this }, function* () {
       if (!this.history.findRecord(entryId)) {
         if (!this.dependencies.capable)
@@ -748,11 +755,7 @@ export class TranscriptOwner {
           );
         yield* this.readAround(entryId, undefined, 'earlier', true);
       } else if (resetView) this.history.dataset++;
-      if (resetView)
-        this.setView({
-          anchor: { key: getEntryRowKey(entryId), offset: 0 },
-          expanded: this.state.view.expanded,
-        });
+      if (resetView) this.setView({ anchor: { key, offset }, expanded: this.state.view.expanded });
     });
     return this.runJob(historyJob, work, { replace: true });
   }

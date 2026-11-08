@@ -14,75 +14,10 @@ import {
   type EditorSnapshot,
   type MutationAction,
 } from '@moonbase/application/editor';
-
-const isContextClick = (event: { button: number; ctrlKey: boolean }) =>
-  event.button === 2 || (event.button === 0 && event.ctrlKey && navigator.platform.includes('Mac'));
-
-type FileCommand = {
-  id: string;
-  icon: Parameters<typeof Icon>[0]['name'];
-  label: string;
-  /** The shortcut with `Meta` for the platform's command key (⌘, or Ctrl off a Mac). */
-  keys?: string;
-  danger?: boolean;
-  disabled?: boolean;
-  /** Whether focus returns to the tree after it runs. */
-  staysInTree?: boolean;
-  run(): void;
-};
-const mac = typeof navigator !== 'undefined' && navigator.platform.includes('Mac');
-const revealLabel = mac ? 'Reveal in Finder' : 'Show in Folder';
-const keyGlyphs: Record<string, string> = mac
-  ? {
-      Meta: '⌘',
-      Control: '⌃',
-      Alt: '⌥',
-      Shift: '⇧',
-      Backspace: '⌫',
-      Enter: '⏎',
-      ArrowLeft: '←',
-      ArrowRight: '→',
-    }
-  : {
-      Meta: 'Ctrl+',
-      Control: 'Ctrl+',
-      Alt: 'Alt+',
-      Shift: 'Shift+',
-      Backspace: 'Backspace',
-      Enter: 'Enter',
-      ArrowLeft: 'Left',
-      ArrowRight: 'Right',
-    };
-/** A command's keys as `aria-keyshortcuts` names them on this platform. */
-const ariaKeys = (keys: string) => (mac ? keys : keys.replace('Meta', 'Control'));
-/** Shows a command's keys the platform's way: ⇧⌥⌘C on a Mac, Shift+Alt+Ctrl+C elsewhere. */
-export function formatKeys(keys: string) {
-  return keys
-    .split('+')
-    .map((key) => keyGlyphs[key] ?? key)
-    .join('');
-}
-/** The command keys (see `FileCommand.keys`) a press in the tree matches, or null. */
-function shortcutCommand(event: {
-  key: string;
-  code: string;
-  metaKey: boolean;
-  ctrlKey: boolean;
-  altKey: boolean;
-  shiftKey: boolean;
-  getModifierState(key: string): boolean;
-}) {
-  // Off a Mac, Ctrl+Alt is also AltGr, which types characters such as ć.
-  if (event.getModifierState('AltGraph')) return null;
-  const command = mac ? event.metaKey : event.ctrlKey;
-  if (event.key === 'F2' && !command && !event.altKey && !event.shiftKey) return 'F2';
-  if (command && !event.altKey && !event.shiftKey && event.key === 'Backspace')
-    return 'Meta+Backspace';
-  if (command && event.altKey && event.code === 'KeyC')
-    return event.shiftKey ? 'Shift+Alt+Meta+C' : 'Alt+Meta+C';
-  if (command && event.altKey && !event.shiftKey && event.code === 'KeyR') return 'Alt+Meta+R';
-  return null;
-}
+import { ariaKeys, formatKeys, listFileCommands } from './file-commands.ts';
+import { handleRowClick, handleTreeKeyDown, type TreeNavigation } from './files-tree-keyboard.ts';
+import { FilesTreeRow } from './files-tree-row.tsx';
+import { listVisibleRows, rowHeight, selectMountedIndexes } from './files-tree-rows.ts';
 
 export function FilesTree({
   controller,
@@ -151,22 +86,8 @@ export function FilesTree({
     anchor.current = null;
   }, [anchorReset]);
   const [geometry, setGeometry] = useState({ top: tree.scroll, height: 500 });
-  const rows: {
-    path: string;
-    directory: boolean;
-    level: number;
-    ignored?: boolean;
-    position: number;
-    size: number;
-  }[] = [];
-  function visit(parent: string, level: number) {
-    const entries = state.listings[JSON.stringify([checkoutIdentity, parent])]?.entries ?? [];
-    entries.forEach((entry, index) => {
-      rows.push({ ...entry, level, position: index + 1, size: entries.length });
-      if (entry.directory && expanded.has(entry.path)) visit(entry.path, level + 1);
-    });
-  }
-  visit('', 1);
+  const rows = listVisibleRows(state.listings, checkoutIdentity, expanded);
+  const rowId = (path: string) => `${id}-${encodeURIComponent(path)}`;
   const menuAvailable =
     !!menu &&
     visible &&
@@ -216,123 +137,17 @@ export function FilesTree({
     });
     controller.tree(checkout, { focus: path, selected: paths });
   }
-  /** What the menu and its shortcuts offer for `paths`: a file, a folder, or several items. */
-  function commandsFor(paths: string[]): (FileCommand | 'separator')[] {
-    // Every listed folder of this checkout, including selected ones a collapse has since hidden.
-    const listingKey = JSON.stringify([checkoutIdentity, '']).slice(0, -3);
-    const directories = new Set(
-      Object.entries(state.listings).flatMap(([key, listing]) =>
-        key.startsWith(listingKey)
-          ? (listing?.entries ?? []).filter((entry) => entry.directory).map((entry) => entry.path)
-          : [],
-      ),
-    );
-    const one = paths.length === 1 ? paths[0] : null,
-      folder = one !== null && directories.has(one),
-      files = paths.filter((path) => !directories.has(path)),
-      count = paths.length,
-      plural = count > 1 ? ` ${count} Items` : '',
-      mutation = (kind: MutationAction['kind'], sources: string[], destination?: string) => ({
-        disabled: !canRequestMutation({ checkout, paths: sources, kind }),
-        run: () =>
-          requestMutation({ checkout, paths: sources, kind }, returnTreeFocus, destination),
-      });
-    const open: FileCommand[] = [];
-    if (one !== null && !folder)
-      open.push({
-        id: 'open',
-        icon: 'file',
-        label: 'Open',
-        keys: 'Enter',
-        // Like Enter in the tree, so the keyboard stays where it was.
-        staysInTree: true,
-        run: () => {
-          void controller.open({ checkout, path: one }, { view: 'file', intent: 'keep' });
-        },
-      });
-    if (folder)
-      open.push(
-        {
-          id: 'new-file',
-          icon: 'newFile',
-          label: 'New File…',
-          ...mutation('create-file', [], `${one}/`),
-        },
-        {
-          id: 'new-folder',
-          icon: 'newFolder',
-          label: 'New Folder…',
-          ...mutation('create-directory', [], `${one}/`),
-        },
-      );
-    const chat: FileCommand[] =
-      mentionInChat && files.length
-        ? [
-            {
-              id: 'mention',
-              icon: 'mention',
-              label: files.length > 1 ? `Mention ${files.length} Files in Chat` : 'Mention in Chat',
-              run: () => mentionInChat(checkout, files),
-            },
-          ]
-        : [];
-    const edit: FileCommand[] = [];
-    if (one !== null) {
-      edit.push({
-        id: 'rename',
-        icon: 'rename',
-        label: 'Rename…',
-        keys: 'F2',
-        ...mutation('move', [one]),
-      });
-      if (!folder)
-        edit.push({
-          id: 'duplicate',
-          icon: 'copy',
-          label: 'Duplicate…',
-          ...mutation('copy', [one]),
-        });
-    }
-    if (copyPaths)
-      edit.push(
-        {
-          id: 'copy-path',
-          icon: 'link',
-          label: count > 1 ? 'Copy Paths' : 'Copy Path',
-          keys: 'Alt+Meta+C',
-          staysInTree: true,
-          run: () => void copyPaths(checkout, paths, false).catch(controller.report),
-        },
-        {
-          id: 'copy-relative-path',
-          icon: 'link',
-          label: count > 1 ? 'Copy Relative Paths' : 'Copy Relative Path',
-          keys: 'Shift+Alt+Meta+C',
-          staysInTree: true,
-          run: () => void copyPaths(checkout, paths, true).catch(controller.report),
-        },
-      );
-    if (revealPath && one !== null)
-      edit.push({
-        id: 'reveal',
-        icon: 'finder',
-        label: revealLabel,
-        keys: 'Alt+Meta+R',
-        staysInTree: true,
-        run: () => void revealPath(checkout, one).catch(controller.report),
-      });
-    const trash: FileCommand = {
-      id: 'trash',
-      icon: 'trash',
-      label: `Move${plural} to Trash`,
-      keys: 'Meta+Backspace',
-      danger: true,
-      ...mutation('trash', paths),
-    };
-    return [open, chat, edit, [trash]]
-      .filter((group) => group.length)
-      .flatMap((group, index) => (index ? ['separator' as const, ...group] : group));
-  }
+  const commandContext = {
+    controller,
+    checkout,
+    listings: state.listings,
+    canRequestMutation,
+    requestMutation,
+    returnTreeFocus,
+    copyPaths,
+    revealPath,
+    mentionInChat,
+  };
   useEffect(() => {
     const element = treeElement.current;
     if (!element) return;
@@ -351,10 +166,10 @@ export function FilesTree({
   useEffect(() => {
     const element = treeElement.current;
     if (!element || !rows.length) return;
-    const top = focusIndex * 28;
+    const top = focusIndex * rowHeight;
     if (top < element.scrollTop) element.scrollTop = top;
-    else if (top + 28 > element.scrollTop + element.clientHeight)
-      element.scrollTop = top + 28 - element.clientHeight;
+    else if (top + rowHeight > element.scrollTop + element.clientHeight)
+      element.scrollTop = top + rowHeight - element.clientHeight;
   }, [tree.focus, focusIndex, rows.length]);
   function toggle(path: string, select = false) {
     const wasExpanded = expanded.has(path);
@@ -366,14 +181,28 @@ export function FilesTree({
     });
     if (!wasExpanded) void controller.list(checkout, path).catch(controller.report);
   }
+  const navigation: TreeNavigation = {
+    controller,
+    checkout,
+    rows,
+    focusIndex,
+    selection: tree.selected,
+    expanded,
+    anchor,
+    toggle,
+    openMenuBelow(path) {
+      const rect = document.getElementById(rowId(path))!.getBoundingClientRect();
+      openMenu(path, rect.left, rect.bottom);
+    },
+    commandsFor: (paths) => listFileCommands(commandContext, paths),
+  };
   const root = state.listings[JSON.stringify([checkoutIdentity, ''])];
-  const indexes = new Set<number>([focusIndex]);
-  for (
-    let index = Math.max(0, Math.floor(geometry.top / 28) - 10);
-    index < Math.min(rows.length, Math.ceil((geometry.top + geometry.height) / 28) + 10);
-    index++
-  )
-    indexes.add(index);
+  const mountedIndexes = selectMountedIndexes({
+    rows,
+    top: geometry.top,
+    height: geometry.height,
+    focusIndex,
+  });
   return (
     <>
       {Object.entries(state.listings)
@@ -392,9 +221,7 @@ export function FilesTree({
         aria-multiselectable="true"
         tabIndex={0}
         aria-busy={!root}
-        aria-activedescendant={
-          rows[focusIndex] ? `${id}-${encodeURIComponent(rows[focusIndex].path)}` : undefined
-        }
+        aria-activedescendant={rows[focusIndex] ? rowId(rows[focusIndex].path) : undefined}
         {...stylex.props(filesUI.tree, stylex.defaultMarker())}
         onFocus={(event) => {
           if (event.currentTarget.contains(event.target)) event.currentTarget.focus();
@@ -406,162 +233,32 @@ export function FilesTree({
           setGeometry((old) => ({ ...old, top }));
           controller.tree(checkout, { scroll: top });
         }}
-        onKeyDown={(event) => {
-          if (!event.currentTarget.contains(event.target as Node)) return;
-          const row = rows[focusIndex];
-          if (!row) return;
-          let next = focusIndex;
-          if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
-            event.preventDefault();
-            event.stopPropagation();
-            const element = document.getElementById(`${id}-${encodeURIComponent(row.path)}`)!;
-            const rect = element.getBoundingClientRect();
-            openMenu(row.path, rect.left, rect.bottom);
-          } else if (['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) {
-            event.preventDefault();
-            if (event.key === 'Home') {
-              next = 0;
-            } else {
-              if (event.key === 'End') {
-                next = rows.length - 1;
-              } else {
-                next = Math.max(
-                  0,
-                  Math.min(rows.length - 1, focusIndex + (event.key === 'ArrowDown' ? 1 : -1)),
-                );
-              }
-            }
-            if (!event.shiftKey || anchor.current === null) anchor.current = row.path;
-            const anchorIndex = rows.findIndex((row) => row.path === anchor.current);
-            const start = anchorIndex < 0 ? focusIndex : anchorIndex;
-            const selection = event.shiftKey
-              ? rows.slice(Math.min(start, next), Math.max(start, next) + 1).map((row) => row.path)
-              : [rows[next].path];
-            if (!event.shiftKey) anchor.current = rows[next].path;
-            controller.tree(checkout, { focus: rows[next].path, selected: selection });
-          } else if (event.key === 'ArrowRight' && row.directory) {
-            anchor.current = null;
-            event.preventDefault();
-            if (!expanded.has(row.path)) toggle(row.path);
-          } else if (event.key === 'ArrowLeft') {
-            anchor.current = null;
-            event.preventDefault();
-            if (row.directory && expanded.has(row.path)) toggle(row.path);
-            else controller.tree(checkout, { focus: row.path.split('/').slice(0, -1).join('/') });
-          } else if (shortcutCommand(event)) {
-            event.preventDefault();
-            const paths = selected.has(row.path) ? [...tree.selected] : [row.path];
-            const command = commandsFor(paths).find(
-              (item) => item !== 'separator' && item.keys === shortcutCommand(event),
+        onKeyDown={(event) => handleTreeKeyDown(event, navigation)}>
+        <div {...stylex.props(styles.treeExtent(rows.length * rowHeight))}>
+          {mountedIndexes.map((index) => {
+            const row = rows[index];
+            return (
+              <FilesTreeRow
+                key={row.path}
+                id={rowId(row.path)}
+                row={row}
+                index={index}
+                expanded={expanded.has(row.path)}
+                selected={selected.has(row.path)}
+                focused={tree.focus === row.path}
+                active={row.path === active}
+                dirty={dirtyPaths.has(row.path)}
+                onOpenMenu={openMenu}
+                onSelect={(row, additive) => {
+                  treeElement.current?.focus();
+                  handleRowClick(navigation, row, additive);
+                }}
+                onOpen={(path) => {
+                  void controller.open({ checkout, path }, { view: 'file', intent: 'keep' });
+                }}
+              />
             );
-            if (command && command !== 'separator' && !command.disabled) command.run();
-          } else if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault();
-            if (row.directory) toggle(row.path);
-            else
-              void controller.open(
-                { checkout, path: row.path },
-                { view: 'file', intent: event.key === ' ' ? 'preview' : 'keep' },
-              );
-          } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'a') {
-            event.preventDefault();
-            controller.tree(checkout, { selected: rows.map((row) => row.path) });
-          }
-        }}>
-        <div {...stylex.props(styles.treeExtent(rows.length * 28))}>
-          {[...indexes]
-            .sort((a, b) => a - b)
-            .map((index) => {
-              const row = rows[index];
-              if (!row) return null;
-              const dirty = dirtyPaths.has(row.path);
-              const folderIcon = expanded.has(row.path) ? 'folderOpen' : 'folder';
-              return (
-                <div
-                  key={row.path}
-                  id={`${id}-${encodeURIComponent(row.path)}`}
-                  role="treeitem"
-                  tabIndex={-1}
-                  aria-level={row.level}
-                  aria-posinset={row.position}
-                  aria-setsize={row.size}
-                  aria-expanded={row.directory ? expanded.has(row.path) : undefined}
-                  aria-selected={selected.has(row.path)}
-                  aria-current={row.path === active ? 'true' : undefined}
-                  aria-label={row.path + (dirty ? ', unsaved' : '')}
-                  aria-description={row.ignored ? 'Git-ignored' : undefined}
-                  {...stylex.props(
-                    styles.treeRow(index * 28),
-                    filesUI.row(row.level),
-                    row.ignored && filesUI.ignored,
-                    selected.has(row.path) && filesUI.selected,
-                    tree.focus === row.path && filesUI.focused,
-                  )}
-                  onContextMenu={(event) => {
-                    if (!event.currentTarget.contains(event.target as Node)) return;
-                    event.preventDefault();
-                    event.stopPropagation();
-                    openMenu(row.path, event.clientX, event.clientY);
-                  }}
-                  onPointerDown={(event) => {
-                    if (isContextClick(event)) event.preventDefault();
-                  }}
-                  onClick={(event) => {
-                    if (
-                      !event.currentTarget.contains(event.target as Node) ||
-                      event.button !== 0 ||
-                      isContextClick(event)
-                    )
-                      return;
-                    treeElement.current?.focus();
-                    anchor.current = row.path;
-                    const additive = event.metaKey || event.ctrlKey;
-                    let selected = [row.path];
-                    if (additive)
-                      selected = tree.selected.includes(row.path)
-                        ? tree.selected.filter((path) => path !== row.path)
-                        : [...tree.selected, row.path];
-                    if (!additive && row.directory) {
-                      toggle(row.path, true);
-                      return;
-                    }
-                    controller.tree(checkout, { focus: row.path, selected });
-                    if (!additive) {
-                      void controller.open(
-                        { checkout, path: row.path },
-                        { view: 'file', intent: 'preview' },
-                      );
-                    }
-                  }}
-                  onDoubleClick={(event) => {
-                    if (event.button !== 0 || isContextClick(event)) return;
-                    if (!row.directory)
-                      void controller.open(
-                        { checkout, path: row.path },
-                        { view: 'file', intent: 'keep' },
-                      );
-                  }}>
-                  <span
-                    aria-hidden="true"
-                    {...stylex.props(
-                      filesUI.disclosure,
-                      row.directory && expanded.has(row.path) && filesUI.rotated,
-                    )}>
-                    {row.directory && <Icon name="chevronRight" />}
-                  </span>
-                  <Icon name={row.directory ? folderIcon : 'file'} />
-                  <span
-                    {...stylex.props(
-                      styles.treeLabel,
-                      row.path === active && filesUI.activeLabel,
-                      row.ignored && filesUI.ignored,
-                    )}>
-                    {row.path.split('/').at(-1)}
-                  </span>
-                  {dirty && <span aria-hidden="true"> •</span>}
-                </div>
-              );
-            })}
+          })}
         </div>
         {root && !rows.length && (
           <p {...stylex.props(controls.status)}>
@@ -601,7 +298,7 @@ export function FilesTree({
               }}
               {...stylex.props(overlays.popup, overlays.menuPopup, overlays.wideMenu)}>
               {menu &&
-                commandsFor(menu.paths).map((item, index) =>
+                listFileCommands(commandContext, menu.paths).map((item, index) =>
                   item === 'separator' ? (
                     <ContextMenu.Separator key={index} {...stylex.props(overlays.separator)} />
                   ) : (

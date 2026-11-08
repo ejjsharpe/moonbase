@@ -98,13 +98,24 @@ const transcriptDemo = new URLSearchParams(location.search).has('transcript')
 let failChat = new URLSearchParams(location.search).has('fail-chat');
 const firstApplication = await createMoonbaseApplication({
     editors: [{ client, clientId: 'demo-first' }],
-    chat: async () => {
-      if (failChat) throw Error('Controlled Chat initialization failure');
-      return new URLSearchParams(location.search).has('chat') ||
-        new URLSearchParams(location.search).has('local')
-        ? chat.dependencies
-        : null;
-    },
+    // `&hosts` names two hosts for the same demo chat, so Settings offers Use.
+    ...(new URLSearchParams(location.search).has('hosts')
+      ? {
+          chatTargets: ['This Mac', 'Studio'].map((label) => ({
+            id: label.toLowerCase().replace(' ', '-'),
+            label,
+            acquire: async () => chat.dependencies,
+          })),
+        }
+      : {
+          chat: async () => {
+            if (failChat) throw Error('Controlled Chat initialization failure');
+            return new URLSearchParams(location.search).has('chat') ||
+              new URLSearchParams(location.search).has('local')
+              ? chat.dependencies
+              : null;
+          },
+        }),
   }),
   secondApplication = await createMoonbaseApplication({
     editors: [{ client, clientId: 'demo-second' }],

@@ -93,9 +93,16 @@ test('the Changes view groups changed files by area, counts them and opens their
   const staged = editor.getByRole('region', { name: 'Staged', exact: true });
   const unstaged = editor.getByRole('region', { name: 'Changes', exact: true });
   await expect(staged.getByRole('heading')).toHaveText(/^Staged\s*1$/);
-  await expect(
-    editor.getByRole('region', { name: /^(Staged|Changes|Untracked)$/ }).getByRole('listitem'),
-  ).toHaveCount(count);
+  // welcome.ts is both staged and changed again since; the badge counts it once.
+  const rows = editor
+    .getByRole('region', { name: /^(Staged|Changes|Untracked)$/ })
+    .getByRole('listitem');
+  const paths = await rows.evaluateAll((items) =>
+    items.map((item) => item.querySelector('button')?.getAttribute('aria-label')),
+  );
+  expect(paths.filter((path) => path === 'welcome.ts')).toHaveLength(2);
+  expect(new Set(paths).size).toBe(count);
+  expect(paths.length).toBe(count + 1);
   const stagedWelcome = staged.getByRole('button', { name: 'welcome.ts', exact: true });
   const unstagedWelcome = unstaged.getByRole('button', { name: 'welcome.ts', exact: true });
   await stagedWelcome.click();
@@ -709,14 +716,14 @@ for (const origin of ['editor', 'file tab', 'Explorer actions button'] as const)
     await focused.focus();
     const dialog = page.getByRole('dialog', { name: 'Go to', exact: true });
     for (const dismiss of ['Escape', 'outside click'] as const) {
-      await page.keyboard.press('Meta+p');
+      await page.keyboard.press('ControlOrMeta+p');
       await expect(dialog.getByRole('combobox')).toBeFocused();
       if (dismiss === 'Escape') await page.keyboard.press('Escape');
       else await page.mouse.click(4, 4);
       await expect(dialog).toHaveCount(0);
       await expect(focused).toBeFocused();
     }
-    await page.keyboard.press('Meta+p');
+    await page.keyboard.press('ControlOrMeta+p');
     await expect(dialog.getByRole('combobox')).toBeFocused();
     await dialog.getByRole('combobox').fill('README');
     await expect(dialog.getByRole('option', { name: 'README.md', exact: true })).toBeVisible();
@@ -744,7 +751,7 @@ test('Go to lists recent files first, highlights matches and opens an exact path
     first(page).getByRole('textbox', { name: 'src/example.ts editor', exact: true }),
   ).toBeFocused();
   // Enter right after typing waits for that query instead of opening the previous top row.
-  await page.keyboard.press('Meta+p');
+  await page.keyboard.press('ControlOrMeta+p');
   await dialog.getByRole('combobox').fill('README.md');
   await dialog.getByRole('combobox').press('Enter');
   await expect(
@@ -770,7 +777,7 @@ test('Tab switches to Find, which previews matches and opens the file at the mat
   await page.goto('/');
   const editor = first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true });
   await editor.focus();
-  await page.keyboard.press('Meta+p');
+  await page.keyboard.press('ControlOrMeta+p');
   await page
     .getByRole('dialog', { name: 'Go to', exact: true })
     .getByRole('combobox')
@@ -818,7 +825,7 @@ test('Tab switches to Find, which previews matches and opens the file at the mat
     )
     .toBe(2);
   // ⌘⇧F starts from the selected text; ⇥ goes back to Go to.
-  await page.keyboard.press('Meta+Shift+f');
+  await page.keyboard.press('ControlOrMeta+Shift+f');
   await expect(find.getByRole('combobox')).toHaveValue('value');
   await page.keyboard.press('Tab');
   await expect(page.getByRole('dialog', { name: 'Go to', exact: true })).toBeVisible();
@@ -829,7 +836,7 @@ test('a change on disk refreshes picker results without moving the selected row'
 }) => {
   await page.goto('/');
   await first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true }).focus();
-  await page.keyboard.press('Meta+Shift+f');
+  await page.keyboard.press('ControlOrMeta+Shift+f');
   const find = page.getByRole('dialog', { name: 'Find in files', exact: true });
   await find.getByRole('combobox').fill('value');
   const matches = find.getByRole('option');
@@ -858,20 +865,93 @@ test('a change on disk refreshes picker results without moving the selected row'
   await expect(matches.first()).toHaveAttribute('aria-selected', 'true');
 });
 
+test('Enter opens the highlighted row while changes on disk keep refreshing Go to', async ({
+  page,
+}) => {
+  await page.goto('/');
+  const editor = first(page);
+  await editor.getByRole('textbox', { name: 'welcome.ts editor', exact: true }).focus();
+  await page.keyboard.press('ControlOrMeta+p');
+  const goTo = page.getByRole('dialog', { name: 'Go to', exact: true });
+  await goTo.getByRole('combobox').fill('.ts');
+  const rows = goTo.getByRole('option');
+  await expect(rows.nth(1)).toBeVisible();
+  // An agent or a build writes to the checkout faster than a search answers, as it can while
+  // an agent works in a worktree of the project.
+  await page.evaluate(() => {
+    const write = () =>
+      window.demo.memory.externalWrite(
+        { checkout: window.demo.checkout, path: 'README.md' },
+        `# Written at ${performance.now()}\n`,
+      );
+    Object.assign(window, { storm: setInterval(write, 30) });
+  });
+  try {
+    await page.waitForTimeout(300);
+    await page.keyboard.press('ArrowDown');
+    await expect(rows.nth(1)).toHaveAttribute('aria-selected', 'true');
+    const highlighted = (await rows.nth(1).getAttribute('aria-label'))!;
+    expect(highlighted).not.toBe(await rows.first().getAttribute('aria-label'));
+    await page.keyboard.press('Enter');
+    await expect(goTo).toHaveCount(0);
+    await expect(
+      editor.getByRole('textbox', { name: `${highlighted} editor`, exact: true }),
+    ).toBeFocused();
+    // Enter right after typing still waits for that query, which the refreshes cannot hold off.
+    await page.keyboard.press('ControlOrMeta+p');
+    await goTo.getByRole('combobox').fill('example');
+    await goTo.getByRole('combobox').press('Enter');
+    await expect(goTo).toHaveCount(0);
+    await expect(
+      editor.getByRole('textbox', { name: 'src/example.ts editor', exact: true }),
+    ).toBeFocused();
+  } finally {
+    await page.evaluate(() => clearInterval((window as unknown as { storm: number }).storm));
+  }
+});
+
+test('a deferred Enter never opens a row in place of one the new results dropped', async ({
+  page,
+}) => {
+  await page.goto('/');
+  const editor = first(page);
+  const files = editor.getByRole('button', { name: 'Files', exact: true });
+  await editor.getByRole('button', { name: 'Changes', exact: true }).click();
+  await editor.getByRole('textbox', { name: 'welcome.ts editor', exact: true }).focus();
+  await page.keyboard.press('ControlOrMeta+p');
+  const goTo = page.getByRole('dialog', { name: 'Go to', exact: true });
+  const field = goTo.getByRole('combobox');
+  const rows = goTo.getByRole('option');
+  // 'file' names no file, only commands: Show Files first, then Refresh files.
+  await field.fill('file');
+  await expect(rows.first()).toHaveAccessibleName('Show Files');
+  await expect(rows.nth(1)).toHaveAccessibleName('Refresh files');
+  await field.fill('.ts');
+  await expect(rows.nth(1)).toHaveAccessibleName('src/example.ts');
+  // Until 'file' answers, the old file rows stay listed above its commands. The reader moves onto
+  // one, src/example.ts, which the new results drop, and presses Enter.
+  await field.fill('file');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  await expect(goTo).toHaveCount(0);
+  // The top row ran (Show Files), not whatever took the second place (Refresh files).
+  await expect(files).toHaveAttribute('aria-pressed', 'true');
+});
+
 test('shortcuts switch an open picker, and a failed open stays on screen', async ({ page }) => {
   await page.goto('/');
   await first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true }).focus();
-  await page.keyboard.press('Meta+p');
+  await page.keyboard.press('ControlOrMeta+p');
   await page.keyboard.press('Tab');
   const find = page.getByRole('dialog', { name: 'Find in files', exact: true });
   await expect(find).toBeVisible();
   // ⌘P after ⇥ returns to Go to; ⌘⇧P from there lists commands.
-  await page.keyboard.press('Meta+p');
+  await page.keyboard.press('ControlOrMeta+p');
   const goTo = page.getByRole('dialog', { name: 'Go to', exact: true });
   await expect(goTo).toBeVisible();
-  await page.keyboard.press('Meta+Shift+p');
+  await page.keyboard.press('ControlOrMeta+Shift+p');
   await expect(goTo.getByRole('combobox')).toHaveValue('>');
-  await page.keyboard.press('Meta+Shift+f');
+  await page.keyboard.press('ControlOrMeta+Shift+f');
   await expect(find).toBeVisible();
   await page.keyboard.press('Tab');
   await goTo.getByRole('combobox').fill('README');
@@ -885,7 +965,7 @@ test('shortcuts switch an open picker, and a failed open stays on screen', async
 test('Go to with > lists editor commands with their shortcuts and runs them', async ({ page }) => {
   await page.goto('/');
   await first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true }).focus();
-  await page.keyboard.press('Meta+Shift+p');
+  await page.keyboard.press('ControlOrMeta+Shift+p');
   const dialog = page.getByRole('dialog', { name: 'Go to', exact: true });
   await expect(dialog.getByRole('combobox')).toHaveValue('>');
   await expect(dialog.getByRole('option', { name: 'Show Changes', exact: true })).toContainText(
@@ -899,9 +979,52 @@ test('Go to with > lists editor commands with their shortcuts and runs them', as
     'aria-pressed',
     'true',
   );
-  await page.keyboard.press('Meta+Shift+p');
+  await page.keyboard.press('ControlOrMeta+Shift+p');
   await dialog.getByRole('combobox').fill('>nothing like this');
   await expect(dialog.getByRole('status')).toHaveText('No commands match.');
+});
+
+test("⇧⌘G stays the editor's Find Previous and switches to Changes from elsewhere", async ({
+  page,
+}) => {
+  await page.goto('/');
+  const editor = first(page);
+  const files = editor.getByRole('button', { name: 'Files', exact: true });
+  const changes = editor.getByRole('button', { name: 'Changes', exact: true });
+  const input = editor.getByRole('textbox', { name: 'welcome.ts editor', exact: true });
+  await input.focus();
+  // Monaco takes the Mac keymap from the user agent, so its find keys use ⌘ on every platform.
+  await input.press('Meta+f');
+  const find = editor.getByRole('textbox', { name: 'Find', exact: true });
+  await expect(find).toBeFocused();
+  await find.fill('Moonbase');
+  const count = editor.locator('.find-widget .matchesCount');
+  await expect(count).toHaveText(/^1 of 2$/);
+  await find.press('Meta+Shift+g');
+  await expect(count).toHaveText(/^2 of 2$/);
+  await expect(files).toHaveAttribute('aria-pressed', 'true');
+  await find.press('Escape');
+  // ⇧⌘E, which the editor leaves alone, works from inside it.
+  await changes.click();
+  await input.focus();
+  await input.press('Meta+Shift+e');
+  await expect(files).toHaveAttribute('aria-pressed', 'true');
+  await editor.getByRole('tree', { name: 'Files', exact: true }).press('Meta+Shift+g');
+  await expect(changes).toHaveAttribute('aria-pressed', 'true');
+});
+
+test("only the platform's command key opens the picker from the editor", async ({ page }) => {
+  await page.goto('/');
+  const input = first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true });
+  await input.focus();
+  // ⌃P is the previous line in macOS text; off a Mac, ⊞/Super is not the command key.
+  const other = process.platform === 'darwin' ? 'Control' : 'Meta';
+  for (const keys of [`${other}+p`, `${other}+Shift+p`, `${other}+Shift+f`]) {
+    await input.press(keys);
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+  }
+  await input.press('ControlOrMeta+p');
+  await expect(page.getByRole('dialog', { name: 'Go to', exact: true })).toBeVisible();
 });
 
 test('real close-checkout removes its Monaco models without a teardown exception', async ({
@@ -1922,7 +2045,7 @@ test('editor remains usable when the app omits the explorer from its layout', as
   await input.pressSequentially('editor without explorer');
   await input.press('Meta+s');
   await expect.poll(() => page.evaluate(() => window.demo.memory.stats.saves)).toBe(1);
-  await input.press('Meta+p');
+  await input.press('ControlOrMeta+p');
   await page.getByRole('combobox').fill('README');
   await page.getByRole('option', { name: 'README.md', exact: true }).click();
   await expect(
@@ -1974,7 +2097,11 @@ test('with no file open, the editor lists its main shortcuts', async ({ page }) 
   }
   const sheet = first(page).getByRole('region', { name: 'Keyboard shortcuts', exact: true });
   await expect(sheet.getByRole('term')).toHaveText(['Go to file', 'Commands', 'Find in files']);
-  await expect(sheet.getByRole('definition')).toHaveText(['⌘P', '⇧⌘P', '⇧⌘F']);
+  await expect(sheet.getByRole('definition')).toHaveText(
+    process.platform === 'darwin'
+      ? ['⌘P', '⇧⌘P', '⇧⌘F']
+      : ['Ctrl+P', 'Shift+Ctrl+P', 'Shift+Ctrl+F'],
+  );
   await page.keyboard.press('Meta+Shift+t');
   await expect(sheet).toHaveCount(0);
 });
@@ -1991,4 +2118,48 @@ test('a hidden sidebar slides the explorer away and leaves the editor usable', a
   await input.pressSequentially('with the sidebar hidden ');
   await input.press('Meta+s');
   await expect.poll(() => page.evaluate(() => window.demo.memory.stats.saves)).toBe(1);
+});
+
+test('commands that need the hidden explorer ask the app to show it', async ({ page }) => {
+  // Three fresh pages, each with the explorer hidden.
+  test.slow();
+  const sidebar = first(page).locator('aside[aria-label="Editor sidebar"]');
+  const shown = async () => {
+    await expect
+      .poll(() => sidebar.evaluate((element) => Math.round(element.getBoundingClientRect().width)))
+      .toBeGreaterThan(100);
+    expect(await sidebar.evaluate((element) => (element as HTMLElement).inert)).toBe(false);
+  };
+  const input = first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true });
+  const command = async (name: string) => {
+    await input.focus();
+    await page.keyboard.press('ControlOrMeta+Shift+p');
+    const goTo = page.getByRole('dialog', { name: 'Go to', exact: true });
+    await goTo.getByRole('combobox').fill('>' + name);
+    await goTo.getByRole('option', { name, exact: true }).click();
+    await expect(goTo).toHaveCount(0);
+  };
+  await page.goto('/?sidebar-hidden');
+  await input.focus();
+  await input.press('Meta+Shift+e');
+  await shown();
+  await page.goto('/?sidebar-hidden');
+  await command('Show Changes');
+  await shown();
+  await expect(first(page).getByRole('button', { name: 'Changes', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  // Reveal Active File shows the file tree, from Changes too.
+  await command('Reveal Active File');
+  await expect(first(page).getByRole('button', { name: 'Files', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  const active = first(page).getByRole('treeitem', { name: 'welcome.ts', exact: true });
+  await expect(active).toHaveAttribute('aria-selected', 'true');
+  await page.goto('/?sidebar-hidden');
+  await command('Reveal Active File');
+  await shown();
+  await expect(active).toHaveAttribute('aria-selected', 'true');
 });

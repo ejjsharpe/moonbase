@@ -22,6 +22,7 @@ import { Choice } from './choice.tsx';
 import { ModelPicker } from './model-picker.tsx';
 import { FolderPicker, type ChatFolderProject } from './folder-picker.tsx';
 import { appendMentions } from './mention-text.ts';
+import { getChatComposer, type ChatComposerPlace } from './composer.ts';
 import { Icon } from '../icon.tsx';
 import { MessageInput } from './message-input.tsx';
 import {
@@ -31,7 +32,6 @@ import {
   type ChatCommand,
   type ChatCommandOption,
 } from './commands.ts';
-import { chatWorktreeBranch } from './worktree.ts';
 import { getChatPlace } from './folder.ts';
 import { folderName } from '../folder-menu.tsx';
 import { projectInitials, projectTiles } from '@moonbase/ui/projects';
@@ -159,14 +159,23 @@ export function ChatView({
   };
   const findInput = useRef<HTMLInputElement>(null);
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot),
-    [cwd, setCwd] = useState(dock?.cwd ?? ''),
     [dockList, setDockList] = useState(false),
-    [folderError, setFolderError] = useState<string | null>(null),
     // An error belongs to the command line it was about; editing it or changing chat hides it.
     [commandError, setCommandError] = useState<{ text: string; message: string } | null>(null),
-    [newWorktree, setNewWorktree] = useState(false),
-    [creatingWorktree, setCreatingWorktree] = useState(false),
-    [turning, setTurning] = useState(false);
+    [turning, setTurning] = useState(false),
+    // Why files from the file tree weren't mentioned, in the chat (or new chat, '') they were for.
+    [mentionError, setMentionError] = useState<{ chat: string; message: string } | null>(null);
+  // A new chat's folder choices outlive this view, which unmounts while another view shows the chat.
+  const composer = getChatComposer(controller),
+    composerState = useSyncExternalStore(composer.subscribe, composer.getSnapshot);
+  const placeKey = dock ? `dock:${dock.cwd}` : 'agents',
+    initialCwd = dock?.cwd ?? '';
+  const { cwd, newWorktree, folderError } = composer.readPlace(placeKey, initialCwd),
+    creatingWorktree = composerState.creatingWorktree;
+  const updatePlace = (change: Partial<ChatComposerPlace>) =>
+    composer.updatePlace(placeKey, initialCwd, change);
+  const setFolderError = (folderError: string | null) => updatePlace({ folderError });
+  const setCwd = (folder: string) => updatePlace({ cwd: folder, newWorktree: false });
   const providerState = useSyncExternalStore(
     controller.providers?.subscribe ?? noSubscription,
     controller.providers?.getSnapshot ?? noProviders,
@@ -319,7 +328,7 @@ export function ChatView({
   const openRunning = !!state.snapshot?.run;
   useEffect(() => {
     if (!connected) return;
-    void controller.reloadChats();
+    void controller.reloadChats({ latest: true });
     const timer = setInterval(() => {
       if (document.visibilityState === 'visible') void controller.reloadChats();
     }, chatReloadMs);
@@ -332,32 +341,73 @@ export function ChatView({
     if (!mentionRequest) return;
     mentionHandled?.(mentionRequest.id);
     const current = controller.getSnapshot();
-    const folder = chatFolder(current, local ? cwd : '');
-    const next = folder
-      ? appendMentions(current.draft, current.mentions, mentionRequest.files, folder)
-      : null;
-    if (next && next.text !== current.draft) controller.setDraft(next.text, next.mentions);
-    requestAnimationFrame(() => {
-      if (!next)
-        setFolderError(
-          local && !current.selected
-            ? "Choose this chat's working folder first, so the files can be mentioned in it."
-            : "This chat's working folder isn't known yet, so the files weren't mentioned.",
+    const newLocal = local && !current.selected;
+    // The draft being sent in a new worktree keeps the mentions it has.
+    const making = newLocal && composer.getSnapshot().creatingWorktree;
+    const folder = making ? null : chatFolder(current, local ? cwd : '');
+    // A path the new chat draft already mentions in another folder would name two files at once.
+    const prefix = (folder ?? '').replace(/\/+$/, '') + '/';
+    const clashes = new Map<string, string>();
+    if (newLocal && folder)
+      for (const file of mentionRequest.files) {
+        const clash = file.startsWith(prefix)
+          ? composer.findMentionClash(file.slice(prefix.length), folder)
+          : null;
+        if (clash) clashes.set(file, clash);
+      }
+    const files = mentionRequest.files.filter((file) => !clashes.has(file));
+    const next = folder ? appendMentions(current.draft, current.mentions, files, folder) : null;
+    if (next && next.text !== current.draft) {
+      controller.setDraft(next.text, next.mentions);
+      if (newLocal && controller.getSnapshot().draft === next.text)
+        composer.noteMentions(
+          next.mentions.slice(current.mentions.length).map((mention) => mention.path),
+          folder!,
         );
-      else if (next.outside)
-        setFolderError(
-          next.outside === mentionRequest.files.length
+    }
+    const count = mentionRequest.files.length;
+    let error: string | null = null;
+    if (making) error = 'A worktree is being made for this chat, so the files weren’t mentioned.';
+    else if (!next)
+      error = newLocal
+        ? "Choose this chat's working folder first, so the files can be mentioned in it."
+        : "This chat's working folder isn't known yet, so the files weren't mentioned.";
+    else {
+      const skipped: string[] = [];
+      if (clashes.size)
+        skipped.push(
+          clashes.size === 1
+            ? [...clashes.values()][0]!
+            : `${clashes.size} of the files have paths the draft already mentions in another folder, so they weren't mentioned.`,
+        );
+      if (next.outside)
+        skipped.push(
+          next.outside === count
             ? "Those files are outside this chat's working folder, so they weren't mentioned."
             : `${next.outside} of the files are outside this chat's working folder and weren't mentioned.`,
         );
+      // A mention can't hold every path a file can have; the controller would refuse the draft.
+      if (next.unmentionable) {
+        let paths = `${next.unmentionable} of the files' paths`;
+        if (next.unmentionable === count)
+          paths = count === 1 ? "That file's path" : "Those files' paths";
+        skipped.push(
+          `${paths} can't be mentioned: a mention can't hold quotes, backslashes or control characters, or exceed 1,024 bytes.`,
+        );
+      }
+      if (skipped.length) error = skipped.join(' ');
+    }
+    const chat = current.selected?.conversationId ?? '';
+    requestAnimationFrame(() => {
+      setMentionError(error ? { chat, message: error } : null);
       const input = document.getElementById('message');
       if (!(input instanceof HTMLTextAreaElement)) return;
       input.focus();
       input.setSelectionRange(input.value.length, input.value.length);
     });
-  }, [controller, mentionRequest, mentionHandled, local, cwd]);
-  const startNewChat = () =>
-    void controller.closeView().then(() => document.getElementById('message')?.focus());
+  }, [controller, composer, mentionRequest, mentionHandled, local, cwd]);
+  const focusMessage = () => document.getElementById('message')?.focus();
+  const startNewChat = () => void controller.closeView().then(focusMessage);
   const choosing = local && !state.selected && !busy('send') && !creatingWorktree;
   // A new worktree is made only when the first message is sent, so an unsent chat leaves no trace.
   // A project without Git has no worktrees to make.
@@ -374,31 +424,6 @@ export function ChatView({
     },
     [],
   );
-  const sendInWorktree = (settings: ChatModelPreference) => {
-    setCreatingWorktree(true);
-    void createWorktree!(cwd, chatWorktreeBranch(state.draft)).then(
-      (root) => {
-        // Git may take a while: send only if this view still shows the new chat it was made for.
-        if (!mounted.current) return;
-        setCreatingWorktree(false);
-        // The chat keeps this worktree, so a retried send never makes a second one.
-        setCwd(root);
-        setNewWorktree(false);
-        if (controller.getSnapshot().selected)
-          setFolderError(
-            `The worktree is ready at ${root}. Send from a new chat there to start it.`,
-          );
-        else void controller.send({ cwd: root, ...settings });
-      },
-      (error: unknown) => {
-        if (!mounted.current) return;
-        setCreatingWorktree(false);
-        setFolderError(
-          `The worktree could not be created. ${error instanceof Error ? error.message : ''}`.trim(),
-        );
-      },
-    );
-  };
   const commands = listChatCommands({
     selected: !!state.selected,
     running: !!run && connected && !busy('stop') && !state.storageError,
@@ -417,7 +442,16 @@ export function ChatView({
           current: !effortUnavailable && value === selectedEffort,
         }))
       : [],
-    newChat: startNewChat,
+    // The lines after `/new` start the new chat's draft; the open chat's is left empty.
+    newChat: () => {
+      const rest = removeCommandLine(state.draft),
+        target = state.selected?.conversationId ?? '';
+      void composer
+        .startNewChat(rest, state.mentions, selectedChatFolder(state))
+        .then((message) =>
+          message ? setCommandError({ text: `${target}\n${rest}`, message }) : focusMessage(),
+        );
+    },
     stop: () => void controller.stop(),
     settle: () => settleOpen(true),
     unsettle: () => settleOpen(false),
@@ -425,10 +459,11 @@ export function ChatView({
     chooseModel,
     chooseEffort,
   });
-  // A command consumes its line before it runs, so `/clear` and `/new` start from the rest.
+  // A command consumes its line before it runs, so `/clear` starts from the rest; `/new` takes the
+  // rest to the new chat itself.
   const runCommand = (command: ChatCommand, option?: ChatCommandOption) => {
     setCommandError(null);
-    controller.setDraft(removeCommandLine(state.draft), state.mentions);
+    if (command.name !== 'new') controller.setDraft(removeCommandLine(state.draft), state.mentions);
     command.run(option);
   };
   const typedCommand = resolveCommandLine(state.draft, commands);
@@ -436,6 +471,7 @@ export function ChatView({
     chats: state.chats,
     seen: state.seen,
     pending: state.pending,
+    dispatching: state.dispatching,
     open: state.snapshot,
   });
   const settledShown = settledOpen;
@@ -717,9 +753,20 @@ export function ChatView({
             {dock ? `What should we work on in ${dock.project}?` : 'What should we work on?'}
           </h2>
         )}
-        {folderError && (
+        {/* The new chat's folder and worktree messages belong to its composer, not an open chat. */}
+        {!state.selected && composerState.notice && (
+          <p role="alert" {...stylex.props(styles.warning)}>
+            {composerState.notice}
+          </p>
+        )}
+        {!state.selected && folderError && (
           <p role="alert" {...stylex.props(styles.warning)}>
             {folderError}
+          </p>
+        )}
+        {mentionError?.chat === (state.selected?.conversationId ?? '') && (
+          <p role="alert" {...stylex.props(styles.warning)}>
+            {mentionError.message}
           </p>
         )}
         {commandError?.text === `${state.selected?.conversationId ?? ''}\n${state.draft}` && (
@@ -751,18 +798,27 @@ export function ChatView({
               return;
             }
             setCommandError(null);
-            // ⌘ Enter submits even while Send is disabled; one worktree per first message.
+            // Enter submits even while Send is disabled; one worktree per first message.
             if (creatingWorktree) return;
-            if (worktreeChoice && newWorktree && selection) {
-              setFolderError(null);
-              sendInWorktree(selection);
-              return;
-            }
-            void controller.send(
+            setMentionError(null);
+            // The new chat's messages are about its own sends, which an open chat's leave alone.
+            if (!state.selected) composer.clearMessages(placeKey);
+            // Without a folder, a new local chat runs in one the host makes for it.
+            const settings =
               local && !state.selected && selection
                 ? { ...(cwd ? { cwd } : {}), ...selection }
-                : undefined,
-            );
+                : undefined;
+            // Mentions picked in another view's folder are checked against this one before sending.
+            const problem = settings && composer.checkMentions(cwd);
+            if (problem) {
+              setFolderError(problem);
+              return;
+            }
+            if (worktreeChoice && newWorktree && selection) {
+              composer.sendInWorktree(placeKey, initialCwd, createWorktree!, selection);
+              return;
+            }
+            void controller.send(settings);
           }}>
           <div {...stylex.props(styles.messageRow)}>
             <span aria-hidden="true" {...stylex.props(styles.prompt)}>
@@ -773,9 +829,21 @@ export function ChatView({
               draft={state.draft}
               mentions={state.mentions}
               searchable={
-                controller.canFindFiles && connected && (!!state.selected || !local || !!cwd)
+                controller.canFindFiles &&
+                connected &&
+                (!!state.selected || !local || (!!cwd && !creatingWorktree))
               }
               cwd={!state.selected && local && cwd ? cwd : undefined}
+              onMention={
+                !state.selected && local && cwd
+                  ? (path) => composer.noteMentions([path], cwd)
+                  : undefined
+              }
+              refuseMention={
+                !state.selected && local && cwd
+                  ? (path) => composer.findMentionClash(path, cwd)
+                  : undefined
+              }
               placeholder={
                 state.selected
                   ? 'Message the agent…'
@@ -799,17 +867,11 @@ export function ChatView({
                       // A project's dock keeps its chats in the project.
                       dock
                         ? undefined
-                        : () => {
-                            setFolderError(null);
-                            setCwd('');
-                            setNewWorktree(false);
-                          }
+                        : () => updatePlace({ cwd: '', newWorktree: false, folderError: null })
                     }
                     choose={(folder) => {
                       setFolderError(null);
-                      if (folder === cwd) return;
-                      setCwd(folder);
-                      setNewWorktree(false);
+                      if (folder !== cwd) setCwd(folder);
                     }}
                     browse={
                       chooseFolder &&
@@ -817,10 +879,7 @@ export function ChatView({
                         setFolderError(null);
                         void chooseFolder()
                           .then((folder) => {
-                            if (folder) {
-                              setCwd(folder);
-                              setNewWorktree(false);
-                            }
+                            if (folder) setCwd(folder);
                           })
                           .catch(() =>
                             setFolderError(
@@ -841,7 +900,7 @@ export function ChatView({
                         { value: 'folder', label: 'This folder' },
                         { value: 'new', label: 'New worktree' },
                       ]}
-                      onChange={(value) => setNewWorktree(value === 'new')}
+                      onChange={(value) => updatePlace({ newWorktree: value === 'new' })}
                       disabled={busy('send') || creatingWorktree}
                     />
                   </div>
@@ -910,7 +969,7 @@ export function ChatView({
               <Button
                 type="submit"
                 aria-label="Send message"
-                title="Send message · ⌘ Enter"
+                title="Send message · Enter"
                 {...stylex.props(controls.button, styles.sendButton)}
                 disabled={
                   typedCommand
@@ -938,7 +997,7 @@ export function ChatView({
           <span>{toolNotice}</span>
           <span
             title={`${new TextEncoder().encode(state.draft).length.toLocaleString()} / 32,768 bytes`}>
-            ⌘ / Ctrl Enter
+            ⇧ Enter for a new line
           </span>
         </div>
       </div>

@@ -25,6 +25,7 @@ import {
   type ChatController,
   type ChatState,
   type TranscriptRow,
+  type TranscriptViewAnchor,
 } from '@moonbase/application/chat';
 import type {
   ChatEntry,
@@ -39,6 +40,7 @@ import {
   collectActivityEvidence,
   getEntryTranscripts,
   classifyEntry,
+  findReadingAnchor,
   groupTranscriptRows,
   isSameActivityEvidence,
   type TranscriptItem,
@@ -171,7 +173,12 @@ export function Transcript({
     liveLabel = snapshotLabels[currentSnapshot.state];
   if (preserve) liveLabel = 'Selected response';
   const getRowProps = useRowProps(transcript);
-  const [openCalls] = useState(createOpenCalls);
+  // Seeded with the retained entries, so output rows render as such from the first frame.
+  const [openCalls] = useState(() => createOpenCalls(transcript.entries.map((entry) => entry.id)));
+  useLayoutEffect(
+    () => openCalls.setRetained(transcript.entries.map((entry) => entry.id)),
+    [openCalls, transcript.entries],
+  );
   const rowContext = useMemo(
     () => ({
       shared: { controller, cache, native, actions, evidence },
@@ -368,35 +375,76 @@ function TranscriptList({
     current.current = transcript;
   }, [transcript]);
   const { dataset } = transcript;
-  const items = useMemo(
-    () => groupTranscriptRows(transcript.rows, kindOfRow, itemCache),
-    [transcript.rows],
-  );
+  /** Whether the list last reported following the live edge, read when the rows regroup. */
+  const followingEdge = useRef(true);
+  // Each grouping keeps the previous items' keys.
+  const [grouped, setGrouped] = useState(() => ({
+    rows: transcript.rows,
+    items: groupTranscriptRows(transcript.rows, kindOfRow, []),
+  }));
+  let items = grouped.items;
+  if (grouped.rows !== transcript.rows) {
+    items = groupTranscriptRows(
+      transcript.rows,
+      kindOfRow,
+      grouped.items,
+      // oxlint-disable-next-line react-hooks/refs -- the reader's place when the rows change
+      followingEdge.current,
+    );
+    setGrouped({ rows: transcript.rows, items });
+  }
   /** The list item holding each row: a row in an activity run is drawn by the run's item. */
   const itemKeys = useMemo(
     () => new Map(items.flatMap((item) => item.rows.map((row) => [row.key, item.key] as const))),
     [items],
   );
-  const currentItemKeys = useRef(itemKeys);
+  const currentItemKeys = useRef(itemKeys),
+    currentItems = useRef(items);
   useLayoutEffect(() => {
     currentItemKeys.current = itemKeys;
-  }, [itemKeys]);
+    currentItems.current = items;
+  }, [itemKeys, items]);
   /** Where this dataset opens: its saved anchor's row when it has one. */
   const [placement, setPlacement] = useState(() => findPlacement(transcript, items));
   if (placement.dataset !== dataset) setPlacement(findPlacement(transcript, items));
   /** The dataset the list last finished placing; until then this one isn't ready. */
   const [readyDataset, setReadyDataset] = useState<number | null>(null);
   const ready = readyDataset === dataset;
+  /** The dataset last placed, and the restored anchor held in place until the reader moves. */
+  const placed = useRef<number | null>(null),
+    held = useRef<{ dataset: number; anchor: TranscriptViewAnchor } | null>(null),
+    holdFrame = useRef(0);
   /** Saves where the reader is once scrolling ends: the first visible row, or null following. */
   const save = useCallback(() => {
     const ref = list.current;
     const { view, rows, loading, later } = current.current;
     if (!ref || !ready) return;
+    // While the list holds a restored anchor in place, that anchor is where the reader is.
+    if (held.current) return;
     // A restoration still reading its anchor's history saves nothing over it.
     if (view.anchor && loading && !rows.some((row) => row.key === view.anchor!.key)) return;
     if (ref.getState().isFollowingEnd && !later) views.save(null);
     else {
-      const anchor = ref.anchorVisibleContent({ hold: false });
+      // The list reports its first visible item; the anchor names one of its stored rows.
+      const visible = ref.anchorVisibleContent({ hold: false });
+      const node = ref.getScrollableNode();
+      const anchor =
+        visible &&
+        findReadingAnchor(currentItems.current, visible, {
+          measure: (key) => ref.anchorVisibleContent({ key, hold: false })?.offset,
+          // From where the row is on screen, so the offset reads as the restore places it.
+          rowTop: (key) => {
+            const item = currentItemKeys.current.get(key);
+            const offset =
+              item === undefined
+                ? undefined
+                : ref.anchorVisibleContent({ key: item, hold: false })?.offset;
+            const row = node?.querySelector(`[data-transcript-row="${CSS.escape(key)}"]`);
+            return offset === undefined || !row
+              ? undefined
+              : offset - (node!.getBoundingClientRect().top - row.getBoundingClientRect().top);
+          },
+        });
       if (anchor) views.save(anchor);
     }
   }, [list, views, ready]);
@@ -423,6 +471,7 @@ function TranscriptList({
     // While holding, content below the screen counts as not following, so Jump to latest shows.
     const report = () => {
       const state = ref.getState();
+      followingEdge.current = state.isFollowingEnd;
       onFollowingChange(state.isFollowingEnd && (!holding || state.isAtEnd));
     };
     report();
@@ -433,10 +482,63 @@ function TranscriptList({
       end();
     };
   }, [list, onFollowingChange, holding]);
+  // The list placed the anchor's item at the anchor's offset; the anchor's offset is from its row,
+  // which may sit lower in the item (a card), so once placed the row moves to its own offset. Rows
+  // above it in the card can still grow as they render, and an earlier page can join rows to the
+  // card's start (the list holds the card's top, not the row), so the row is held there until the
+  // reader's first input or a Find reveal.
+  const { active: findActive, revealing: findRevealing } = transcript.find;
+  const holdAnchor = useCallback(() => {
+    cancelAnimationFrame(holdFrame.current);
+    let frames = 0;
+    const hold = () => {
+      const ref = list.current,
+        node = ref?.getScrollableNode(),
+        target = held.current;
+      if (!ref || !node || !target || current.current.dataset !== target.dataset) return;
+      const row = node.querySelector(`[data-transcript-row="${CSS.escape(target.anchor.key)}"]`);
+      if (!row) return;
+      const moved =
+        row.getBoundingClientRect().top - node.getBoundingClientRect().top + target.anchor.offset;
+      if (Math.abs(moved) >= 1)
+        void ref.scrollToOffset({ offset: node.scrollTop + moved, animated: false });
+      if (++frames < 12) holdFrame.current = requestAnimationFrame(hold);
+    };
+    hold();
+  }, [list]);
+  /** The reader's own scroll, press or key ends the hold. */
+  const releasePlace = useCallback(() => {
+    held.current = null;
+    cancelAnimationFrame(holdFrame.current);
+  }, []);
+  useLayoutEffect(() => {
+    const ref = list.current,
+      { anchor } = placement;
+    if (!ref || !ready || placed.current === dataset) return;
+    placed.current = dataset;
+    releasePlace();
+    // At the end the list follows it; a row that isn't mounted can't be measured.
+    if (
+      !anchor ||
+      findRevealing ||
+      ref.getState().isAtEnd ||
+      readRowTop(ref.getScrollableNode(), anchor.key) === undefined
+    )
+      return;
+    held.current = { dataset, anchor };
+    holdAnchor();
+  }, [list, ready, dataset, placement, findRevealing, holdAnchor, releasePlace]);
+  // Rows joining the anchor's card (an earlier page) move the row; hold it again.
+  useLayoutEffect(() => {
+    if (held.current) holdAnchor();
+  }, [items, holdAnchor]);
+  useLayoutEffect(() => {
+    if (findRevealing) releasePlace();
+  }, [findRevealing, releasePlace]);
+  useEffect(() => () => cancelAnimationFrame(holdFrame.current), []);
   // A newly revealed Find match, or one a jump just placed: scrolling to its row releases
   // following, then the match itself is revealed inside it. A match rendered later is revealed by
   // its part.
-  const { active: findActive, revealing: findRevealing } = transcript.find;
   useLayoutEffect(() => {
     const ref = list.current;
     if (!findActive || !findRevealing || !ref || !ready) return;
@@ -537,15 +639,19 @@ function TranscriptList({
       onStartReached={earlier ? pageEarlier : undefined}
       onEndReached={later ? pageLater : undefined}
       onUserScroll={() => {
+        releasePlace();
         setHolding(false);
         onReaderInput();
       }}
+      onWheelCapture={releasePlace}
       onItemSizeChanged={holdFindReveal}
       onPointerDownCapture={(event) => {
+        releasePlace();
         holdDisclosure(event);
         onReaderInput();
       }}
       onKeyDownCapture={(event) => {
+        releasePlace();
         holdDisclosure(event);
         onReaderInput();
       }}
@@ -570,6 +676,17 @@ function findPlacement(
     : -1;
   return index >= 0 ? { dataset, anchor, index } : { dataset, anchor: null, index: -1 };
 }
+/**
+ * A mounted row's top within its list item, the first of the item's rows (the item's rows are
+ * siblings); undefined when it isn't mounted.
+ */
+function readRowTop(scroller: HTMLElement | null | undefined, key: string) {
+  const row = scroller?.querySelector(`[data-transcript-row="${CSS.escape(key)}"]`);
+  const first = row?.parentElement?.firstElementChild;
+  return row && first
+    ? row.getBoundingClientRect().top - first.getBoundingClientRect().top
+    : undefined;
+}
 const readDevicePixel = () => 1 / window.devicePixelRatio;
 const getItemKey = (item: TranscriptItem<TranscriptRow>) => item.key;
 const getItemType = (item: TranscriptItem<TranscriptRow>) => {
@@ -580,7 +697,6 @@ const getItemType = (item: TranscriptItem<TranscriptRow>) => {
 const renderItem = ({ item }: LegendListRenderItemProps<TranscriptItem<TranscriptRow>>) => (
   <Item item={item} />
 );
-const itemCache = new WeakMap<TranscriptRow, TranscriptItem<TranscriptRow>>();
 const kindOfRow = (row: TranscriptRow) =>
   row.kind === 'tool' ? 'message' : classifyEntry(row.entry);
 

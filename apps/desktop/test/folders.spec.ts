@@ -60,6 +60,40 @@ test('a plain-folder project offers Initialize Git, which makes it a Git project
   await page.screenshot({ path: test.info().outputPath('initialized-folder.png') });
 });
 
+test('Initialize Git is disabled and shows its progress while git init runs', async ({ page }) => {
+  await page.goto('/?chat&design');
+  await page.evaluate(async () => {
+    const { first, client } = window.demo;
+    // Holds the reply until the test releases it, as a slow `git init` would.
+    const command = client.command;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    (window as unknown as { releaseInitialization(): void }).releaseInitialization = release;
+    client.command = (async (operation, input, options) => {
+      const output = await command(operation, input, options);
+      if (operation === 'initializeRepository') await held;
+      return output;
+    }) as typeof command;
+    const notes = await first.openCheckout('/demo/notes');
+    await first.open({ checkout: notes, path: 'notes.md' }, { intent: 'keep' });
+  });
+  const projects = page.getByRole('group', { name: 'Project tabs', exact: true });
+  await projects.getByRole('tab', { name: 'notes', exact: true }).click();
+  await page.getByRole('button', { name: 'Initialize Git', exact: true }).click();
+  const initializing = page.getByRole('button', { name: 'Initializing…', exact: true });
+  await expect(initializing).toBeDisabled();
+  expect(await page.evaluate(() => window.demo.first.getSnapshot().initializing.length)).toBe(1);
+
+  await page.evaluate(() =>
+    (window as unknown as { releaseInitialization(): void }).releaseInitialization(),
+  );
+  await expect(projects.getByRole('tab', { name: 'notes · main', exact: true })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  await expect(initializing).toHaveCount(0);
+});
+
 test('the project opener and chat folder menu describe a plain folder by its place', async ({
   page,
 }) => {

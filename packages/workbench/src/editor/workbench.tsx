@@ -1,5 +1,6 @@
 import {
   Picker,
+  pickerCommand,
   pickerMode,
   type PickerEntry,
   type PickerMode,
@@ -85,6 +86,8 @@ export type WorkbenchProps = {
   showBreadcrumbs?: boolean;
   /** Hides the explorer, leaving the editor the full width. */
   sidebarHidden?: boolean;
+  /** Called while `sidebarHidden` when a command needs the explorer, such as Show Files (⇧⌘E). */
+  onShowSidebar?: () => void;
   /** The app's own shortcuts, listed after the editor's when no file is open. */
   shortcuts?: readonly Shortcut[];
 };
@@ -110,6 +113,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     mentionInChat,
     showBreadcrumbs = true,
     sidebarHidden = false,
+    onShowSidebar,
     shortcuts = [],
   },
   ref,
@@ -132,6 +136,8 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   const changes = (checkout && state.git[checkoutKey(checkout)]?.changes) || [];
   // A plain folder has no Git changes, comparisons or Changes view.
   const git = checkout?.vcs === 'git';
+  // Git lists a file once per area it changed in (staged and unstaged, say); count it once.
+  const changedFiles = new Set(changes.map((change) => change.path)).size;
   const breadcrumbs =
     checkout && selected?.active
       ? [
@@ -415,9 +421,12 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     ...(pickerEntries?.() ?? []),
     ...(checkout
       ? [
-          editorCommand('show-files', 'Show Files', '⌘⇧E', () => setPanel('files')),
+          editorCommand('show-files', 'Show Files', '⌘⇧E', () => showPanel('files')),
           ...(git
-            ? [editorCommand('show-changes', 'Show Changes', '⌘⇧G', () => setPanel('git'))]
+            ? [editorCommand('show-changes', 'Show Changes', '⌘⇧G', () => showPanel('git'))]
+            : []),
+          ...(target
+            ? [editorCommand('reveal-active-file', 'Reveal Active File', undefined, revealActive)]
             : []),
           editorCommand('reopen-file', 'Reopen closed file', '⌘⇧T', () =>
             run(controller.reopen(checkout)),
@@ -442,19 +451,26 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
         return;
       if (!checkout || !selected || state.preserving) return;
       const key = event.key.toLowerCase(),
-        command = event.metaKey || event.ctrlKey;
+        command = event.metaKey || event.ctrlKey,
+        picking = pickerMode(event, pickerCommand(event));
       if (command && key === 's' && !event.altKey && !(event.ctrlKey && event.metaKey)) {
         event.preventDefault();
         event.stopPropagation();
         if (target) run(controller.save(target));
-      } else if (pickerMode(event, command)) {
+      } else if (picking) {
         event.preventDefault();
         event.stopPropagation();
-        openPicker(pickerMode(event, command)!);
-      } else if (event.metaKey && event.shiftKey && (key === 'e' || key === 'g')) {
+        openPicker(picking);
+      } else if (
+        event.metaKey &&
+        event.shiftKey &&
+        (key === 'e' || (key === 'g' && !element.closest('.monaco-editor')))
+      ) {
+        // ⇧⌘G is Find Previous in the editor and its find widget, so it switches views only from
+        // elsewhere; the editor has no ⇧⌘E of its own.
         event.preventDefault();
         event.stopPropagation();
-        setPanel(key === 'e' ? 'files' : 'git');
+        showPanel(key === 'e' ? 'files' : 'git');
       } else if (event.metaKey && key === 'w' && !event.shiftKey) {
         event.preventDefault();
         event.stopPropagation();
@@ -537,8 +553,9 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     const captured = { ...checkout };
     run(selectClipboardImports(captured).then((references) => importFiles(captured, references)));
   }
-  const revealActive = () => {
+  function revealActive() {
     if (!checkout || !target) return;
+    showPanel('files');
     run(
       controller.reveal(target).then(() => {
         const current = controller.getSnapshot().recovery;
@@ -549,7 +566,12 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
           setAnchorReset((value) => value + 1);
       }),
     );
-  };
+  }
+  /** Switches the explorer's view, asking the app to show the explorer when it is hidden. */
+  function showPanel(next: 'files' | 'git') {
+    setPanel(next);
+    if (sidebarHidden) onShowSidebar?.();
+  }
   const explorerActions: ExplorerAction[] = checkout
     ? [
         {
@@ -621,7 +643,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                   Files
                 </Button>
                 <Button
-                  title={`${changes.length} changed · ⇧⌘G`}
+                  title={`${changedFiles} changed · ⇧⌘G`}
                   {...stylex.props(
                     controls.button,
                     workbench.viewButton,
@@ -630,9 +652,9 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                   aria-pressed={panel === 'git'}
                   onClick={() => setPanel('git')}>
                   Changes
-                  {changes.length > 0 && (
+                  {changedFiles > 0 && (
                     <span aria-hidden="true" {...stylex.props(workbench.changeCount)}>
-                      {changes.length}
+                      {changedFiles}
                     </span>
                   )}
                 </Button>

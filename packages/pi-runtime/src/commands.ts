@@ -443,7 +443,9 @@ export class Host {
         settings = { ...requested, cwd: ownFolder, ownFolder: true };
       }
     } else settings = { cwd: this.config.cwd, model: this.config.model };
-    let conversationId: string, definiteRejection: ApplicationError | undefined;
+    let conversationId: string,
+      definiteRejection: ApplicationError | undefined,
+      reused = false;
     try {
       conversationId = await this.harness.commit(async (tx) => {
         const request = await tx.doc(Request, key(d.session.actorId, d.requestId), binding);
@@ -460,7 +462,10 @@ export class Host {
           });
           throw definiteRejection;
         }
-        if (request.conversationId) return request.conversationId;
+        if (request.conversationId) {
+          reused = true;
+          return request.conversationId;
+        }
         const conversation = await tx.createConversation({ ownership: { kind: 'ownerless' } });
         await configure(tx, conversation.id, {
           cwd: settings.cwd,
@@ -484,6 +489,8 @@ export class Host {
       }
       throw unknownOutcome();
     }
+    // A racing original or retry made this chat first, in a folder of its own: this one is unused.
+    if (reused && ownFolder) await rmdir(ownFolder).catch(() => {});
     try {
       return {
         requestId: d.requestId,
@@ -573,9 +580,12 @@ export class Host {
   async markFolderAsProject(target: ChatTarget): Promise<void> {
     if (!('mode' in this.config))
       V.fail('InvalidInput', 'Only a local chat has a folder of its own.');
-    if (!this.admissionsOpen) V.fail('Unavailable', 'Local chat is preparing to quit.');
-    if (!(await this.metadata(target)).settings?.ownFolder) return;
+    if (this.closed || !this.admissionsOpen)
+      V.fail('Unavailable', 'Local chat is preparing to quit.');
+    // Counted as active work, so Quit waits for it.
+    this.mutations++;
     try {
+      if (!(await this.metadata(target)).settings?.ownFolder) return;
       await this.harness.commit(async (tx) => {
         const meta = await tx.doc(Metadata, cid(target.conversationId), 'metadata', {
           identity: this.identity,
@@ -589,6 +599,8 @@ export class Host {
       }, context);
     } catch (error) {
       throw safeError(error, true);
+    } finally {
+      this.mutations--;
     }
   }
   async lookup(target: ChatTarget, requestId: string): Promise<ChatSendReceipt | null> {

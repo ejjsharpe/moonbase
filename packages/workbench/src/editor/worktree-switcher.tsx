@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { Button } from '@base-ui/react/button';
 import { Menu } from '@base-ui/react/menu';
@@ -13,7 +13,7 @@ import { Icon } from './icon.tsx';
 /**
  * The project sidebar's header: the checkout's name and branch. It opens a menu of the
  * repository's worktrees; choosing one opens it as the selected checkout. A plain folder has no
- * branch or worktrees, so its header offers Initialize Git instead.
+ * branch or worktrees, so its header offers Initialize Git instead, disabled while it runs.
  */
 export function WorktreeSwitcher({
   controller,
@@ -25,6 +25,9 @@ export function WorktreeSwitcher({
   run(work: Promise<unknown>): void;
 }) {
   const [worktrees, setWorktrees] = useState<readonly Worktree[] | null>(null);
+  const initializing = useSyncExternalStore(controller.subscribe, () =>
+    controller.getSnapshot().initializing.includes(checkout.checkoutId),
+  );
   const name = checkoutName(checkout);
   if (checkout.vcs === 'none')
     return (
@@ -35,9 +38,10 @@ export function WorktreeSwitcher({
         </span>
         <Button
           title="Run git init in this folder"
+          disabled={initializing}
           {...stylex.props(controls.button, styles.initialize)}
           onClick={() => run(controller.initializeRepository(checkout))}>
-          Initialize Git
+          {initializing ? 'Initializing…' : 'Initialize Git'}
         </Button>
       </div>
     );

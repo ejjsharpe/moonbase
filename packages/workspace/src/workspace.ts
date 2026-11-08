@@ -119,8 +119,15 @@ export class LocalWorkspace {
     );
     this.worktrees = new WorkspaceWorktrees(
       (target) => this.directory(target),
-      (root, signal) => this.open(root, signal),
+      (root, source, signal) => {
+        // Worktrees are made only from a Git checkout, whose approval names its repository.
+        const common = this.approval(source).common;
+        ensure(common !== null, 'This project is not a Git repository. Initialize Git first.');
+        return this.open(root, signal, { root, common });
+      },
       (root) => this.protected(root),
+      (message) =>
+        this.cleanupFailures.push(Cause.die(new ApplicationError({ code: 'Uncertain', message }))),
     );
     this.store = new Store(config.dataDirectory, config.hostId);
     this.run = makeRunner(helper, ownership.runHelper, (cause) => this.cleanupFailures.push(cause));
@@ -539,12 +546,22 @@ export class LocalWorkspace {
       }
     }
   }
-  async open(root: string, signal: AbortSignal): Promise<CheckoutTarget> {
+  /**
+   * Approves a checkout root: a Git checkout's root, or a plain folder in no repository. `created`
+   * names a worktree this workspace just made at exactly `root`, in the repository whose common
+   * directory is `common`.
+   */
+  async open(
+    root: string,
+    signal: AbortSignal,
+    created?: { root: string; common: { path: string; identity: string } },
+  ): Promise<CheckoutTarget> {
     ensure(
       typeof root === 'string' && isAbsolute(root) && !root.includes('\0'),
       'Choose an absolute checkout root through the native picker.',
     );
     root = realpathSync(root);
+    if (created) ensure(root === created.root, 'The new worktree location changed. Inspect it.');
     this.protected(root);
     const fd = openSync(root, constants.O_RDONLY | constants.O_DIRECTORY | 0x20000000);
     const id = identity(fstatSync(fd));
@@ -557,17 +574,27 @@ export class LocalWorkspace {
       this.config.gitExecutable ?? '/usr/bin/git',
     );
     try {
-      const repository = gitEntry ? await this.inspectRepository(directory, signal) : null;
+      const repository =
+        gitEntry || created ? await this.inspectRepository(directory, signal) : null;
+      if (created)
+        ensure(
+          repository?.common.path === created.common.path &&
+            repository.common.identity === created.common.identity,
+          'The new worktree belongs to another repository. Inspect it.',
+        );
       if (!repository) {
         // No `.git` here: a folder inside a repository is not its checkout root.
-        const inside = await directory.git(['rev-parse', '--git-dir'], undefined, signal).then(
-          () => true,
-          (error: { status?: number; stderr?: string }) => {
-            if (error.status === 128 && /not a git repository/i.test(error.stderr ?? ''))
-              return false;
-            throw error;
-          },
-        );
+        // Untranslated, so the refusal below reads the same in every locale.
+        const inside = await directory
+          .git(['rev-parse', '--git-dir'], undefined, signal, { untranslated: true })
+          .then(
+            () => true,
+            (error: { status?: number; stderr?: string }) => {
+              if (error.status === 128 && /not a git repository/i.test(error.stderr ?? ''))
+                return false;
+              throw error;
+            },
+          );
         ensure(!inside, 'Choose the repository checkout root.');
       }
       const projectId = hash(
@@ -577,16 +604,21 @@ export class LocalWorkspace {
             : [this.config.hostId, id],
         ),
       );
-      const previous = this.store.all<Approval>('approvals').find((a) => a.target.root === root);
-      if (previous) {
-        // A plain folder that has since become a repository is approved again as Git.
-        const initialized = previous.target.vcs === 'none' && repository;
-        ensure(
-          previous.identity === id && (previous.target.projectId === projectId || initialized),
-          'Checkout or repository identity changed. Restore the original directory.',
-        );
-        if (!initialized) return previous.target;
-      }
+      const previous = this.store.all<Approval>('approvals').filter((a) => a.target.root === root);
+      const current = previous.find((a) => a.identity === id && a.target.projectId === projectId);
+      if (current) return current.target;
+      // A plain folder that has since become a repository of its own (its main working tree, with
+      // its own `.git` folder) is approved again as Git; a `.git` pointing elsewhere is not.
+      const initialized =
+        repository?.worktree === 'main' &&
+        repository.common.path === join(root, '.git') &&
+        previous.some((a) => a.identity === id && a.target.vcs === 'none');
+      // A worktree this workspace just made at a removed one's location is approved afresh; the
+      // stale approval stays but matches nothing. Anywhere else a replaced directory is refused.
+      ensure(
+        !previous.length || created !== undefined || initialized,
+        'Checkout or repository identity changed. Restore the original directory.',
+      );
       const base = {
         hostId: this.config.hostId,
         checkoutId: hash(canonical([this.config.hostId, root, id])),
@@ -636,17 +668,31 @@ export class LocalWorkspace {
       closeSync(commonFd);
     }
   }
-  /** Runs `git init` in a plain folder, then approves and returns it as a Git checkout. */
+  /**
+   * Runs `git init` in a plain folder with no `.git` entry and no unsettled saves or file
+   * operations, then approves and returns it as the main worktree of its own new repository.
+   */
   async initializeRepository(target: CheckoutTarget, signal: AbortSignal) {
     ensure(target.vcs === 'none', 'This project is already a Git repository.');
     const directory = await this.directory(target);
+    if (this.gitEntry(target.root))
+      fail('Conflict', 'This folder already has a .git entry. Reopen it to use its repository.');
     ensure(
       !this.recovery.getPendingSaves(target).length,
       'A save awaits recovery. Resolve it before initializing Git.',
     );
+    ensure(
+      !this.recovery.getUnsettledCheckoutOperations(target).length,
+      'A file operation awaits recovery publication or inspection. Resolve it before initializing Git.',
+    );
     await directory.initializeGit(signal);
     const initialized = await this.open(target.root, signal);
-    ensure(initialized.vcs === 'git', 'Git did not initialize this folder.');
+    ensure(
+      initialized.vcs === 'git' &&
+        initialized.worktree === 'main' &&
+        this.approval(initialized).common?.path === join(initialized.root, '.git'),
+      'Git did not initialize this folder as its own repository. Inspect it.',
+    );
     return initialized;
   }
   assertSettled(target: CheckoutTarget, paths: string[], clientId: string) {

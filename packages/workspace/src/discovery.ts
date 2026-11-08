@@ -38,6 +38,18 @@ type RipgrepEvent =
     }
   | { type: 'begin' | 'end' | 'summary'; data: unknown };
 
+/**
+ * The reason in ripgrep's report of a pattern it cannot compile, or undefined for other failures.
+ * A parse error gives its reason on an `error:` line, followed by a hint paragraph.
+ */
+export function regexFailure(stderr: string) {
+  const lines = stderr.split('\n').map((line) => line.trim());
+  const first = (lines[0] ?? '').replace(/^rg: /, '');
+  if (!/\bregex\b/.test(first)) return undefined;
+  const reason = lines.find((line) => line.startsWith('error: '))?.slice('error: '.length);
+  return reason || first.replace(/:$/, '') || undefined;
+}
+
 export class WorkspaceDiscovery {
   private readonly directory: (target: CheckoutTarget) => Promise<Directory>;
   private readonly policy: (target: CheckoutTarget) => void;
@@ -433,37 +445,10 @@ export class WorkspaceDiscovery {
       '.',
     ];
     let partial = false,
-      error: string | undefined;
-    const bytes = await directory
-      .io(['lookup', this.requireRipgrep(), ...args], undefined, signal)
-      .catch((failure) => {
-        // Exit 1 is "no matches"; other exits may still carry complete JSON lines.
-        if (failure.status === 1 && !failure.stderr) return Buffer.alloc(0);
-        const output = (failure as { output?: Buffer }).output;
-        const end = output?.lastIndexOf(10) ?? -1;
-        const stderr = String(failure.stderr ?? '').trim();
-        if (!output || end < 0) {
-          // A bad pattern fails before any file is searched, so it leaves no JSON behind.
-          if (failure.status === 2 && /^(rg: )?regex parse error/.test(stderr))
-            fail(
-              'InvalidInput',
-              'Invalid regular expression: ' +
-                stderr
-                  .split('\n')
-                  .at(-1)!
-                  .replace(/^error: /, ''),
-            );
-          throw failure;
-        }
-        // Exit 2 after searching means some files could not be read; the rest are complete.
-        if (failure.status === 2)
-          error = 'Some files could not be searched. ' + stderr.split('\n')[0];
-        else {
-          partial = true;
-          error = normalizeApplicationError(failure).message;
-        }
-        return output.subarray(0, end + 1);
-      });
+      error: string | undefined,
+      received = false,
+      // The file whose match passed the total cap: its trailing context still arrives.
+      overflow: string | undefined;
     const clip = (line: string) => line.replace(/\r?\n$/, '').slice(0, searchLimits.line);
     const files = new Map<
       string,
@@ -473,42 +458,51 @@ export class WorkspaceDiscovery {
       }
     >();
     let total = 0;
-    for (const row of bytes.toString().split('\n')) {
-      if (!row) continue;
+    // Parsed as ripgrep writes, so a broad query stops it once the result is full.
+    const accept = (row: Buffer): 'stop' | void => {
+      received = true;
+      if (!row.length) return;
       let event: RipgrepEvent;
       try {
-        event = JSON.parse(row);
+        event = JSON.parse(row.toString());
       } catch {
         partial = true;
-        continue;
+        return;
       }
-      if (event.type !== 'match' && event.type !== 'context') continue;
+      if (event.type === 'end' && overflow !== undefined) return 'stop';
+      if (event.type !== 'match' && event.type !== 'context') return;
       const { data } = event;
       // Paths or lines that are not UTF-8 arrive as bytes; they cannot be shown faithfully.
       if (data.path.text === undefined || data.lines.text === undefined || !data.line_number)
-        continue;
+        return;
       const p = data.path.text.replace(/^\.\//, '');
       try {
         path(p);
       } catch {
-        continue;
+        return;
       }
       let file = files.get(p);
       if (!file) {
-        if (files.size >= searchLimits.files) {
+        // Output is sorted by path, so every later file is past the cap too.
+        if (files.size >= searchLimits.files || overflow !== undefined) {
           partial = true;
-          continue;
+          return 'stop';
         }
         file = { lines: new Map(), matches: [] };
         files.set(p, file);
       }
       const text = clip(data.lines.text);
       file.lines.set(data.line_number, text);
-      if (event.type === 'context') continue;
-      // `--max-count` still reports matching lines inside the trailing context, so cap here too.
-      if (total >= searchLimits.total || file.matches.length >= searchLimits.perFile) {
+      if (event.type === 'context') return;
+      if (total >= searchLimits.total) {
         partial = true;
-        continue;
+        overflow ??= p;
+        return;
+      }
+      // `--max-count` still reports matching lines inside the trailing context, so cap here too.
+      if (file.matches.length >= searchLimits.perFile) {
+        partial = true;
+        return;
       }
       total++;
       // ripgrep reports byte offsets; the renderer highlights UTF-16 offsets.
@@ -523,7 +517,30 @@ export class WorkspaceDiscovery {
           .map((range) => ({ start: offset(range.start), end: offset(range.end) }))
           .filter((range) => range.end > range.start),
       });
-    }
+    };
+    await directory
+      .lines(['lookup', this.requireRipgrep(), ...args], accept, signal)
+      .catch((failure) => {
+        // Exit 1 is "no matches".
+        if (failure.status === 1 && !failure.stderr) return;
+        if (signal.aborted) throw failure;
+        const stderr = String(failure.stderr ?? '').trim();
+        if (!received) {
+          // A bad pattern fails before any file is searched, so it leaves no JSON behind.
+          const reason = failure.status === 2 ? regexFailure(stderr) : undefined;
+          if (reason) fail('InvalidInput', 'Invalid regular expression: ' + reason);
+          throw failure;
+        }
+        // Exit 2 after searching means some files could not be read; the rest are complete.
+        if (failure.status === 2)
+          error = 'Some files could not be searched. ' + stderr.split('\n')[0];
+        else {
+          partial = true;
+          error = failure.uncertain
+            ? 'Search stopped at its time or output limit; refine the query to see every match.'
+            : 'Search ended early. ' + (stderr.split('\n')[0] || 'ripgrep failed.');
+        }
+      });
     const nearby = (lines: Map<number, string>, line: number, step: 1 | -1) => {
       const found: string[] = [];
       for (let n = line + step; Math.abs(n - line) <= searchLimits.context; n += step) {

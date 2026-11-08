@@ -26,24 +26,30 @@ export type ChatActivityGroups = {
 
 /**
  * Orders chats by what they need from you. The open chat's snapshot overrides its listing, which
- * may be a reload old. Each group is newest first: by activity, or for Settled by when you settled
- * it, which is then each row's time.
+ * may be a reload old. A pending Send is unconfirmed unless `dispatching` names it as still being
+ * sent (`ChatState.dispatching`). Each group is newest first: by activity, or for Settled by when
+ * you settled it, which is then each row's time.
  */
 export function groupChatsByActivity({
   chats,
   seen = [],
   pending = [],
+  dispatching = [],
   open,
 }: {
   chats: readonly ChatSummary[];
   seen?: readonly { conversationId: string; at: string }[];
   pending?: readonly Pending[];
+  dispatching?: readonly string[];
   open?: Pick<ChatSnapshot, 'conversation' | 'state' | 'run'> | null;
 }): ChatActivityGroups {
   const looked = new Map(seen.map((item) => [item.conversationId, Date.parse(item.at)]));
+  const sending = new Set(dispatching);
   const unconfirmed = new Set(
     pending.flatMap((item) =>
-      item.operation === 'sendChat' ? [item.input.target.conversationId] : [],
+      item.operation === 'sendChat' && !sending.has(item.input.requestId)
+        ? [item.input.target.conversationId]
+        : [],
     ),
   );
   const groups: ChatActivityGroups = { ready: [], working: [], idle: [], settled: [] };

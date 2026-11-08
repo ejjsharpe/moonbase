@@ -1,4 +1,4 @@
-import { createRegistry } from '@earendil-works/pi-durable';
+import { createRegistry, defineExtension, section } from '@earendil-works/pi-durable';
 import { CodingTools } from '@earendil-works/pi-durable/tools';
 import { Context, Effect, Layer } from 'effect';
 import type { ApplicationError } from '@moonbase/contracts/workspace';
@@ -52,13 +52,31 @@ export const PiRuntimeLive = (
     }),
   );
 
+/**
+ * Claude Code runs in this process's working directory and tells the model so, but its library
+ * offers no way to give it a chat's own; until it does, state the chat's to the model.
+ */
+const ClaudeCodeWorkingDirectory = defineExtension({
+  name: 'moonbase-claude-code-cwd',
+  sections: [
+    section('working-directory', ({ agent }) =>
+      agent.model?.provider === 'claude-code' && agent.cwd
+        ? `The working directory is ${agent.cwd}, and tools resolve relative paths against it. Use it instead of any other working directory you are told.`
+        : undefined,
+    ),
+  ],
+});
+
 export const LocalPiRuntimeLive = (
   config: LocalPiRuntimeConfiguration,
 ): Layer.Layer<ChatService | LocalPiControl, ApplicationError> =>
   Layer.effectContext(
     Effect.gen(function* () {
       const registry = config.registry ?? createRegistry();
-      if (!config.registry) registry.install(CodingTools);
+      if (!config.registry) {
+        registry.install(CodingTools);
+        registry.install(ClaudeCodeWorkingDirectory);
+      }
       const host = yield* openHost({ ...config, registry, mode: 'local' });
       return Context.make(ChatService, makeChatService(host)).pipe(
         Context.add(LocalPiControl, {

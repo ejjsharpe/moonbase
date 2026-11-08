@@ -15,6 +15,7 @@ import {
   type Page,
 } from '@playwright/test';
 import { fixture, until } from '../../../tests/chat/tool-fixture.ts';
+import { openCallCard } from './transcript-list.ts';
 import { mkdir, writeFile, readFile, appendFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
@@ -277,7 +278,7 @@ test('dirty editor/live chat, two drafts, no-resend reconnect, view close and cl
     for (let step = 0; step < 24 && !(await editorHasFocus()); step++)
       await p.keyboard.press('Tab');
     expect(await editorHasFocus()).toBe(true);
-    await p.keyboard.press('Meta+p');
+    await p.keyboard.press('ControlOrMeta+p');
     const lookup = p.getByRole('dialog').getByRole('combobox');
     await lookup.fill('a.ts');
     await lookup.press('Enter');
@@ -566,7 +567,7 @@ test('native 200% normal/constrained live chat keeps wheel/Tab Stop and Send rea
     await expect(p.getByLabel('Message', { exact: true })).toHaveValue(
       'newer independent zoom draft',
     );
-    await p.getByLabel('Message', { exact: true }).press('Control+Enter');
+    await p.getByLabel('Message', { exact: true }).press('Enter');
     await expect
       .poll(async () => (await f.stats()).commands.filter((v) => v === 'sendChat').length)
       .toBe(2);
@@ -857,12 +858,8 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
           .getByLabel('Message', { exact: true })
           .fill('One admitted task before exact Stop');
         await page.getByRole('button', { name: 'Send message', exact: true }).click();
-        const activity = page
-          .getByRole('article', { name: 'Live response' })
-          .getByRole('button', { name: /^Activity/ });
-        // The live row holds only the call's output, so its toggle is visually hidden: the call's
-        // headline is in the row above. It still opens from the keyboard.
-        await activity.press('Enter');
+        // Once the call is stored above it, the live row holds only its output and opens with its card.
+        await openCallCard(page, 'inspect_remote_context');
         await expect(page.getByRole('article', { name: 'Live response' })).toContainText(
           'Controlled remote tool activity',
         );
@@ -1043,11 +1040,8 @@ for (const failsWrite of [false, true])
         .getByLabel('Message', { exact: true })
         .fill('First admitted input keeps chat busy');
       await page.getByRole('button', { name: 'Send message', exact: true }).click();
-      const activity = page
-        .getByRole('article', { name: 'Live response' })
-        .getByRole('button', { name: /^Activity/ });
-      // The live row holds only the call's output; its visually hidden toggle opens from the keyboard.
-      await activity.press('Enter');
+      // Once the call is stored above it, the live row holds only its output and opens with its card.
+      await openCallCard(page, 'inspect_remote_context');
       await expect(page.getByRole('article', { name: 'Live response' })).toContainText(
         'Controlled remote tool activity',
       );

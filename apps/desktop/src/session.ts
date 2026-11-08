@@ -195,6 +195,12 @@ export class EditorSession {
       'openCheckout',
       await this.client.command('openCheckout', { root }),
     );
+    // The workspace resolves links: a folder replaced by one since main checked it opens elsewhere.
+    if (target.root !== root)
+      throw new ApplicationError({
+        code: 'Unauthorized',
+        message: 'The folder changed before it opened as a project. Inspect it.',
+      });
     this.known.set(target.checkoutId, target);
     return target;
   }
@@ -273,8 +279,10 @@ export class EditorSession {
           if (!ApplicationError.is(error) || ['Cancelled', 'Uncertain'].includes(error.code))
             throw error;
           if (error.code === 'Conflict' && attempt < 20) continue;
-          // A branch named like the prefix (`chat`) blocks every `chat/…` branch: use `chat-…`.
-          if (error.code === 'Conflict' || !prefix.includes('/')) throw error;
+          // A branch named like the prefix (`chat`) blocks every `chat/…` branch, which Git
+          // refuses (Unavailable): use `chat-…`. That maps to the same location, so any other
+          // refusal of it would only repeat.
+          if (error.code !== 'Unavailable' || !prefix.includes('/')) throw error;
           prefix = prefix.replaceAll('/', '-');
           attempt = 0;
         }
