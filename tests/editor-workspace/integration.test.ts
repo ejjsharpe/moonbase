@@ -27,6 +27,7 @@ import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import {
   makeEditorModel,
   makeEditorController,
+  checkoutKey,
   fileKey,
   type EditorController,
   type EditorBuffer,
@@ -1065,3 +1066,58 @@ for (const failure of [
       }
     },
   );
+
+test('the editor publishes each Git change with its kind and an unmerged path once, as a conflict', async () => {
+  const f = fixture();
+  try {
+    const root = f.roots[0];
+    const git = (...args: string[]) =>
+      execFileSync(
+        '/usr/bin/git',
+        [
+          '-C',
+          root,
+          '-c',
+          'user.name=Moonbase integration',
+          '-c',
+          'user.email=integration@example.invalid',
+          ...args,
+        ],
+        { stdio: 'pipe' },
+      );
+    // Unstage a.ts so the merge may run; its edit does not touch the merged file.
+    git('reset', '-q');
+    git('checkout', '-q', '-b', 'side');
+    writeFileSync(join(root, 'folder/nested.ts'), 'SIDE\n');
+    git('add', 'folder/nested.ts');
+    git('commit', '-qm', 'Side');
+    git('checkout', '-q', 'main');
+    writeFileSync(join(root, 'folder/nested.ts'), 'MAIN\n');
+    git('add', 'folder/nested.ts');
+    git('commit', '-qm', 'Main');
+    assert.throws(() => git('merge', '-q', 'side'));
+    git('add', 'a.ts');
+    writeFileSync(join(root, 'a.ts'), 'WORKING AGAIN\n');
+    rmSync(join(root, 'b.ts'));
+    writeFileSync(join(root, 'new file.ts'), 'NEW\n');
+    const editor = await f.editor('git-kinds'),
+      checkout = await editor.openCheckout(root);
+    await editor.refresh(checkout);
+    const status = editor.getSnapshot().git[checkoutKey(checkout)];
+    assert.equal(status.error, undefined);
+    assert.deepEqual(
+      [...status.changes].sort(
+        (a, b) => a.path.localeCompare(b.path) || a.area.localeCompare(b.area),
+      ),
+      [
+        { path: 'a.ts', area: 'staged', kind: 'modified' },
+        { path: 'a.ts', area: 'unstaged', kind: 'modified' },
+        { path: 'b.ts', area: 'unstaged', kind: 'deleted' },
+        { path: 'folder/nested.ts', area: 'conflicted', kind: 'conflicted' },
+        { path: 'new file.ts', area: 'untracked', kind: 'untracked' },
+      ],
+    );
+  } finally {
+    await f.close();
+  }
+});

@@ -5,6 +5,7 @@ import type { CheckoutTarget, CommandInput, CommandOutput } from '@moonbase/cont
 import type { Directory } from './filesystem.ts';
 import { matchPath, compareMatches } from '@moonbase/contracts/lookup';
 import { document, ensure, fail, path, requireGit } from './validation.ts';
+import { parseGitStatus } from './git-status.ts';
 
 /** Names discovery and text search never descend into, matching the native lookup preflight. */
 const excludedNames = [
@@ -184,26 +185,16 @@ export class WorkspaceDiscovery {
     const directory = await this.directory(target);
     if (target.vcs === 'none') return { branch: '', changes: [] };
     try {
-      const records = (
-        await directory.git(
-          ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--no-renames'],
-          undefined,
-          signal,
-        )
-      )
-        .toString()
-        .split('\0')
-        .filter(Boolean);
-      const changes: CommandOutput<'gitStatus'>['changes'] = [];
-      for (const row of records) {
-        const p = row.slice(3);
-        path(p);
-        if (row.startsWith('??')) changes.push({ path: p, area: 'untracked' });
-        else {
-          if (row[0] !== ' ') changes.push({ path: p, area: 'staged' });
-          if (row[1] !== ' ') changes.push({ path: p, area: 'unstaged' });
-        }
-      }
+      const changes = parseGitStatus(
+        (
+          await directory.git(
+            ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--no-renames'],
+            undefined,
+            signal,
+          )
+        ).toString(),
+      );
+      for (const change of changes) path(change.path);
       return { branch: await this.getBranch(directory, signal), changes };
     } catch (error) {
       return {

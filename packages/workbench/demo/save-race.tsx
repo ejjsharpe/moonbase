@@ -21,7 +21,8 @@ const checkout = {
   branch: 'main',
   worktree: 'main' as 'main' | 'linked',
 };
-const memory = memoryWorkspace([{ checkout, files: { 'a.ts': 'A', 'b.ts': 'B' } }]);
+const files = { 'a.ts': 'A', 'b.ts': 'B' };
+const memory = memoryWorkspace([{ checkout, files, head: { ...files } }]);
 const runtime = ManagedRuntime.make(memory.layer),
   raw = makeEditorClient(runtime);
 let entered!: () => void, release!: () => void;

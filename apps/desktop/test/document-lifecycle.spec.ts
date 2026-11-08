@@ -68,7 +68,7 @@ for (const mode of ['reload', 'veto', 'crash'])
         })) as typeof dialog.showOpenDialog;
       }, checkout);
       await page.getByRole('button', { name: 'Open checkout', exact: true }).click();
-      await page.getByRole('treeitem', { name: 'a.ts', exact: true }).dblclick();
+      await page.getByRole('treeitem', { name: 'a.ts, untracked', exact: true }).dblclick();
       const editor = page.getByRole('textbox', { name: 'a.ts editor', exact: true });
       await editor.focus();
       await editor.press('Meta+a');

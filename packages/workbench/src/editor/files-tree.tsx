@@ -2,7 +2,7 @@ import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
 import { styles } from './styles.ts';
 import { Icon } from './icon.tsx';
-import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { filesUI } from '@moonbase/ui/files';
 import { overlays } from '@moonbase/ui/overlays';
 import { ContextMenu } from '@base-ui/react/context-menu';
@@ -14,10 +14,73 @@ import {
   type EditorSnapshot,
   type MutationAction,
 } from '@moonbase/application/editor';
-import { ariaKeys, formatKeys, listFileCommands } from './file-commands.ts';
+import {
+  ariaKeys,
+  formatKeys,
+  editMutations,
+  listFileCommands,
+  type TreeEditKind,
+} from './file-commands.ts';
 import { handleRowClick, handleTreeKeyDown, type TreeNavigation } from './files-tree-keyboard.ts';
+import { FilesTreeName, type NameCommit } from './files-tree-name.tsx';
 import { FilesTreeRow } from './files-tree-row.tsx';
-import { listVisibleRows, rowHeight, selectMountedIndexes } from './files-tree-rows.ts';
+import {
+  listVisibleRows,
+  measureStem,
+  placeholderPath,
+  rowHeight,
+  selectMountedIndexes,
+  type RowPlaceholder,
+} from './files-tree-rows.ts';
+import { rollUpGitStatus } from './files-tree-status.ts';
+import type { RunMutation } from './mutation-runner.tsx';
+
+/**
+ * A name being typed in the tree: renaming or duplicating `path`, or creating in folder `path`.
+ * `focus` and `selected` are the tree's as the edit started.
+ */
+type TreeEdit = {
+  kind: TreeEditKind;
+  path: string;
+  id: number;
+  focus: string;
+  selected: string[];
+};
+/** A request from outside the tree, such as the explorer's "…" menu, to create in `parent`. */
+export type TreeCreateRequest = {
+  checkout: CheckoutTarget;
+  kind: 'create-file' | 'create-directory';
+  parent: string;
+  id: number;
+};
+
+const isNameField = (target: EventTarget) =>
+  target instanceof HTMLElement && target.tagName === 'INPUT';
+const parentOf = (path: string) => path.split('/').slice(0, -1).join('/');
+const nameOf = (path: string) => path.split('/').at(-1)!;
+/** Whether an element that took focus can take it again. */
+const canRefocus = (element: Element | null): element is HTMLElement =>
+  element instanceof HTMLElement &&
+  element.isConnected &&
+  element.getClientRects().length > 0 &&
+  !element.matches(':disabled') &&
+  !element.closest('[inert]');
+/** `name copy.ext`, the name a duplicate starts with. */
+function copyName(name: string) {
+  const stem = measureStem(name, false);
+  return `${name.slice(0, stem)} copy${name.slice(stem)}`;
+}
+/** The name a field starts with: an entry's own, its copy's, or none for a new one. */
+function startingName(edit: TreeEdit) {
+  if (edit.kind === 'rename') return nameOf(edit.path);
+  return edit.kind === 'duplicate' ? copyName(nameOf(edit.path)) : '';
+}
+const editLabels: Record<TreeEditKind, string> = {
+  rename: 'Rename',
+  duplicate: 'Duplicate as',
+  'create-file': 'New file name',
+  'create-directory': 'New folder name',
+};
 
 export function FilesTree({
   controller,
@@ -29,6 +92,9 @@ export function FilesTree({
   dialogOpen,
   canRequestMutation,
   requestMutation,
+  runMutation,
+  createRequest,
+  onCreateRequestTaken,
   copyPaths,
   revealPath,
   mentionInChat,
@@ -41,11 +107,11 @@ export function FilesTree({
   visible: boolean;
   dialogOpen: boolean;
   canRequestMutation: (action: MutationAction) => boolean;
-  requestMutation: (
-    action: MutationAction,
-    finalFocus: () => HTMLElement | false,
-    destination?: string,
-  ) => void;
+  requestMutation: (action: MutationAction, finalFocus: () => HTMLElement | false) => void;
+  runMutation: RunMutation;
+  createRequest: TreeCreateRequest | null;
+  /** Called once the tree has started `createRequest`'s edit. */
+  onCreateRequestTaken: () => void;
   /** Copies a checkout's paths to the clipboard, joined by newlines: absolute, or as `relative`. */
   copyPaths?: (checkout: CheckoutTarget, paths: string[], relative: boolean) => Promise<void>;
   /** Shows a checkout's file or folder in the OS file manager. */
@@ -86,7 +152,31 @@ export function FilesTree({
     anchor.current = null;
   }, [anchorReset]);
   const [geometry, setGeometry] = useState({ top: tree.scroll, height: 500 });
-  const rows = listVisibleRows(state.listings, checkoutIdentity, expanded);
+  const [edit, setEdit] = useState<TreeEdit | null>(null),
+    editIds = useRef(0),
+    committing = useRef(false),
+    mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const creating = edit?.kind === 'create-file' || edit?.kind === 'create-directory';
+  const editParent = edit && (creating ? edit.path : parentOf(edit.path));
+  let placeholder: RowPlaceholder | undefined;
+  if (edit && edit.kind !== 'rename')
+    placeholder = {
+      parent: editParent!,
+      directory: edit.kind === 'create-directory',
+      ...(edit.kind === 'duplicate' ? { after: edit.path } : {}),
+    };
+  const editPath = edit && (edit.kind === 'rename' ? edit.path : placeholderPath(editParent!));
+  // Rows as shown, with any placeholder; keyboard navigation and selection skip the placeholder.
+  const rows = listVisibleRows(state.listings, checkoutIdentity, expanded, placeholder),
+    treeRows = placeholder ? rows.filter((row) => !row.placeholder) : rows;
+  const gitChanges = state.git[checkoutIdentity]?.changes,
+    statuses = useMemo(() => rollUpGitStatus(gitChanges ?? []), [gitChanges]);
   const rowId = (path: string) => `${id}-${encodeURIComponent(path)}`;
   const menuAvailable =
     !!menu &&
@@ -125,6 +215,7 @@ export function FilesTree({
       : false;
   }
   function openMenu(path: string, x: number, y: number) {
+    if (path === editPath) return;
     const paths = selected.has(path) ? [...tree.selected] : [path];
     if (!selected.has(path)) anchor.current = path;
     restoreMenuFocus.current = true;
@@ -137,12 +228,135 @@ export function FilesTree({
     });
     controller.tree(checkout, { focus: path, selected: paths });
   }
+  /** Starts typing a name: expands a folder created in, and selects an entry renamed. */
+  function startEdit(kind: TreeEditKind, path: string) {
+    const current = readOwn(controller.getSnapshot().recovery.views, checkout.checkoutId)?.tree;
+    if (!current) return;
+    if (kind === 'create-file' || kind === 'create-directory') {
+      const parts = path ? path.split('/') : [];
+      const opening = parts
+        .map((_, index) => parts.slice(0, index + 1).join('/'))
+        .filter((folder) => !current.expanded.includes(folder));
+      if (opening.length)
+        controller.tree(checkout, { expanded: [...current.expanded, ...opening] });
+      for (const folder of opening) void controller.list(checkout, folder).catch(controller.report);
+    } else {
+      anchor.current = path;
+      controller.tree(checkout, { focus: path, selected: [path] });
+    }
+    const started = readOwn(controller.getSnapshot().recovery.views, checkout.checkoutId)!.tree;
+    setEdit({
+      kind,
+      path,
+      id: ++editIds.current,
+      focus: started.focus,
+      selected: [...started.selected],
+    });
+  }
+  /** Whether focus is still the edit's to place: in the tree, in a prompt, or nowhere. */
+  function focusStayed() {
+    const element = treeElement.current,
+      focused = element?.ownerDocument.activeElement;
+    return (
+      !focused ||
+      focused === element?.ownerDocument.body ||
+      !!element?.contains(focused) ||
+      !!focused.closest('[role="dialog"]')
+    );
+  }
+  /**
+   * Ends an edit. Its result becomes the tree's focus and selection unless the user has selected
+   * something else meanwhile, and the tree takes focus back when asked and focus is still the
+   * edit's to place.
+   */
+  function endEdit(ended: TreeEdit, focusPath: string | undefined, focusTree: boolean) {
+    setEdit((current) => (current?.id === ended.id ? null : current));
+    if (!mounted.current) return;
+    const now = readOwn(controller.getSnapshot().recovery.views, checkout.checkoutId)?.tree;
+    const untouched =
+      !!now &&
+      now.focus === ended.focus &&
+      now.selected.length === ended.selected.length &&
+      now.selected.every((path, index) => path === ended.selected[index]);
+    if (focusPath && untouched)
+      try {
+        anchor.current = focusPath;
+        controller.tree(checkout, { focus: focusPath, selected: [focusPath] });
+      } catch (error) {
+        controller.report(error);
+      }
+    if (focusTree && focusStayed()) {
+      const element = returnTreeFocus();
+      if (element) element.focus();
+    }
+  }
+  /**
+   * Commits a typed name: an error to show beside the field after Enter, '' to keep editing after
+   * a declined replacement, or null once the edit has ended. Blur reports errors and ends it; a
+   * replace prompt it raises returns focus to `next`, where focus went, or else to the tree.
+   */
+  async function commitEdit(
+    current: TreeEdit,
+    name: string,
+    how: NameCommit,
+    next: Element | null,
+  ) {
+    const enter = how === 'enter',
+      create = current.kind === 'create-file' || current.kind === 'create-directory',
+      parent = create ? current.path : parentOf(current.path);
+    const end = (focusPath?: string) => {
+      endEdit(current, focusPath, enter);
+      return null;
+    };
+    const invalid = (message: string) => {
+      if (enter) return message;
+      controller.report(message);
+      return end();
+    };
+    // Names are taken as typed, spaces included, but one of only spaces is no name.
+    if (!name.trim()) return current.kind === 'rename' && enter ? 'Enter a name.' : end();
+    if (name.includes('/')) return invalid('A name can’t contain “/”.');
+    if (current.kind === 'rename' && name === nameOf(current.path)) return end(current.path);
+    const destination = parent ? `${parent}/${name}` : name;
+    let error = '';
+    committing.current = true;
+    const completed = await runMutation(
+      { checkout, kind: editMutations[current.kind], paths: create ? [] : [current.path] },
+      destination,
+      enter
+        ? {
+            inlineError: (message) => {
+              error = message;
+            },
+          }
+        : { finalFocus: () => (canRefocus(next) ? next : returnTreeFocus()) },
+    ).finally(() => {
+      committing.current = false;
+    });
+    if (completed) {
+      if (current.kind === 'create-file' && mounted.current)
+        void controller
+          .open({ checkout, path: destination }, { view: 'file', intent: 'keep' })
+          .catch(controller.report);
+      return end(destination);
+    }
+    if (error) return error;
+    return enter ? '' : end();
+  }
+  useEffect(() => {
+    if (!createRequest) return;
+    onCreateRequestTaken();
+    if (checkoutKey(createRequest.checkout) === checkoutIdentity)
+      startEdit(createRequest.kind, createRequest.parent);
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- Start each request once.
+  }, [createRequest?.id]);
   const commandContext = {
     controller,
     checkout,
     listings: state.listings,
     canRequestMutation,
     requestMutation,
+    startEdit,
     returnTreeFocus,
     copyPaths,
     revealPath,
@@ -160,17 +374,36 @@ export function FilesTree({
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- Restore scroll on checkout changes; ordinary scroll updates must not recreate the observer.
   }, [checkoutIdentity]);
   const focusIndex = Math.max(
-    0,
-    rows.findIndex((row) => row.path === tree.focus),
-  );
-  useEffect(() => {
+      0,
+      rows.findIndex((row) => row.path === tree.focus),
+    ),
+    treeFocusIndex = Math.max(
+      0,
+      treeRows.findIndex((row) => row.path === tree.focus),
+    ),
+    editIndex = editPath === null ? -1 : rows.findIndex((row) => row.path === editPath);
+  function scrollToRow(index: number) {
     const element = treeElement.current;
-    if (!element || !rows.length) return;
-    const top = focusIndex * rowHeight;
+    if (!element || index < 0 || index >= rows.length) return;
+    const top = index * rowHeight;
     if (top < element.scrollTop) element.scrollTop = top;
     else if (top + rowHeight > element.scrollTop + element.clientHeight)
       element.scrollTop = top + rowHeight - element.clientHeight;
+  }
+  useEffect(() => {
+    scrollToRow(focusIndex);
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- Follow focus, not every render.
   }, [tree.focus, focusIndex, rows.length]);
+  // Renaming or duplicating an entry that has gone, such as one moved elsewhere, ends the edit.
+  const sourceGone =
+    !!edit && !creating && !treeRows.some((row) => row.path === edit.path) && !committing.current;
+  useEffect(() => {
+    if (sourceGone) setEdit(null);
+  }, [sourceGone]);
+  useEffect(() => {
+    scrollToRow(editIndex);
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- Bring each new edit into view once.
+  }, [edit?.id, editIndex < 0]);
   function toggle(path: string, select = false) {
     const wasExpanded = expanded.has(path);
     controller.tree(checkout, {
@@ -184,8 +417,8 @@ export function FilesTree({
   const navigation: TreeNavigation = {
     controller,
     checkout,
-    rows,
-    focusIndex,
+    rows: treeRows,
+    focusIndex: treeFocusIndex,
     selection: tree.selected,
     expanded,
     anchor,
@@ -202,6 +435,7 @@ export function FilesTree({
     top: geometry.top,
     height: geometry.height,
     focusIndex,
+    pinnedPaths: editPath === null ? [] : [editPath],
   });
   return (
     <>
@@ -221,9 +455,13 @@ export function FilesTree({
         aria-multiselectable="true"
         tabIndex={0}
         aria-busy={!root}
-        aria-activedescendant={rows[focusIndex] ? rowId(rows[focusIndex].path) : undefined}
+        aria-activedescendant={
+          treeRows[treeFocusIndex] ? rowId(treeRows[treeFocusIndex].path) : undefined
+        }
         {...stylex.props(filesUI.tree, stylex.defaultMarker())}
         onFocus={(event) => {
+          // A row's name field keeps the focus, and its keys, while a name is typed.
+          if (isNameField(event.target)) return;
           if (event.currentTarget.contains(event.target)) event.currentTarget.focus();
         }}
         onScroll={(event) => {
@@ -233,10 +471,16 @@ export function FilesTree({
           setGeometry((old) => ({ ...old, top }));
           controller.tree(checkout, { scroll: top });
         }}
-        onKeyDown={(event) => handleTreeKeyDown(event, navigation)}>
+        onKeyDown={(event) => {
+          if (!isNameField(event.target)) handleTreeKeyDown(event, navigation);
+        }}>
         <div {...stylex.props(styles.treeExtent(rows.length * rowHeight))}>
           {mountedIndexes.map((index) => {
-            const row = rows[index];
+            const row = rows[index],
+              editing = edit && row.path === editPath ? edit : null;
+            let label: string | undefined;
+            if (row.placeholder && edit?.kind === 'duplicate') label = `Copy of ${edit.path}`;
+            else if (row.placeholder) label = row.directory ? 'New folder' : 'New file';
             return (
               <FilesTreeRow
                 key={row.path}
@@ -244,16 +488,32 @@ export function FilesTree({
                 row={row}
                 index={index}
                 expanded={expanded.has(row.path)}
-                selected={selected.has(row.path)}
-                focused={tree.focus === row.path}
+                selected={!row.placeholder && selected.has(row.path)}
+                focused={!row.placeholder && tree.focus === row.path}
                 active={row.path === active}
                 dirty={dirtyPaths.has(row.path)}
+                status={statuses.get(row.path)}
+                label={label}
+                editor={
+                  editing && (
+                    <FilesTreeName
+                      key={editing.id}
+                      label={editLabels[editing.kind]}
+                      initial={startingName(editing)}
+                      directory={row.directory}
+                      onCommit={(name, how, next) => commitEdit(editing, name, how, next)}
+                      onCancel={() => endEdit(editing, undefined, true)}
+                    />
+                  )
+                }
                 onOpenMenu={openMenu}
                 onSelect={(row, additive) => {
+                  if (row.path === editPath) return;
                   treeElement.current?.focus();
                   handleRowClick(navigation, row, additive);
                 }}
                 onOpen={(path) => {
+                  if (path === editPath) return;
                   void controller.open({ checkout, path }, { view: 'file', intent: 'keep' });
                 }}
               />

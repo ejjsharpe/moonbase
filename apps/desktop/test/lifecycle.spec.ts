@@ -87,7 +87,7 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
         })) as typeof dialog.showOpenDialog;
       }, f.cwd);
       await p.getByRole('button', { name: 'Open checkout', exact: true }).click();
-      await p.getByRole('treeitem', { name: 'a.ts', exact: true }).dblclick();
+      await p.getByRole('treeitem', { name: 'a.ts, untracked', exact: true }).dblclick();
       await p.getByRole('textbox', { name: 'a.ts editor', exact: true }).focus();
       await p.keyboard.press('Meta+a');
       await p.keyboard.insertText('retained local draft at reload');

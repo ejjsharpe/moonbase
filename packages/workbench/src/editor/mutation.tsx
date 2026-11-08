@@ -17,19 +17,20 @@ const empty = { busy: false, error: '', replacements: null };
 const emptySnapshot = () => empty;
 const noSubscription = () => () => {};
 
+/**
+ * The dialog for Move to Trash and Import, which need a confirmation or a destination; the tree
+ * runs its other file operations directly (see `mutation-runner.tsx`).
+ */
 export function Mutation({
   controller,
   action,
   close,
   finalFocus,
-  initialDestination = '',
 }: {
   controller: EditorController;
   action: Action;
   close: () => void;
   finalFocus?: () => boolean | HTMLElement | null;
-  /** Prefills a new file or folder's path, such as the folder its menu was opened on. */
-  initialDestination?: string;
 }) {
   const checkout = action.checkout,
     batchImport = action.kind === 'import' && action.nativeReferences!.length > 1;
@@ -38,9 +39,7 @@ export function Mutation({
     state.disposed ||
     !state.recovery.openCheckoutIds.includes(checkout.checkoutId) ||
     !state.recovery.checkouts.some((target) => checkoutKey(target) === checkoutKey(checkout));
-  const [destination, setDestination] = useState(
-    action.kind === 'move' ? (action.paths[0] ?? '') : initialDestination,
-  );
+  const [destination, setDestination] = useState('');
   const [replacementPaths, setReplacementPaths] = useState('');
   const [workflow, setWorkflow] = useState<EditorMutation | null>(null);
   const { replacements, busy, error } = useSyncExternalStore(
@@ -55,30 +54,15 @@ export function Mutation({
       void acquired.dispose().catch(controller.report);
     };
   }, [controller, action]);
-  const titles: Record<Action['kind'], string> = {
-    trash: 'Move to Trash',
-    move: 'Rename',
-    copy: 'Duplicate',
-    import: 'Import files',
-    'create-file': 'New File',
-    'create-directory': 'New Folder',
-  };
-  const title = titles[action.kind];
+  const title = action.kind === 'trash' ? 'Move to Trash' : 'Import files';
   let selectionDescription = action.paths.join(', ');
   if (action.nativeReferences)
     selectionDescription = `${action.nativeReferences.length} selected item(s)`;
-  let descriptionSuffix = '';
-  if (action.kind === 'trash')
-    descriptionSuffix = '. Unsaved text remains in recovery at its original path.';
-  else if (action.kind === 'move')
-    descriptionSuffix = '. Text and positions are preserved; text undo history resets.';
+  const descriptionSuffix =
+    action.kind === 'trash' ? '. Unsaved text remains in recovery at its original path.' : '';
   async function apply(consent = false) {
     if (unavailable || busy || (action.kind !== 'trash' && !batchImport && !destination)) return;
-    if (await workflow?.apply(destination, replacementPaths, consent)) {
-      if (action.kind === 'create-file')
-        await controller.open({ checkout, path: destination }, { view: 'file', intent: 'keep' });
-      close();
-    }
+    if (await workflow?.apply(destination, replacementPaths, consent)) close();
   }
   return (
     <Popup

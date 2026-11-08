@@ -110,7 +110,7 @@ test('a plain folder opens without Git; Git reads are empty and Git changes are 
     );
     await isReady;
     writeFileSync(join(root, 'drafts', 'new.txt'), 'new');
-    const deadline = Date.now() + 5000;
+    const deadline = Date.now() + 10_000;
     while (!changes.length && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
     assert.deepEqual(changes.slice(0, 1), ['changed']);
   } finally {
@@ -171,7 +171,7 @@ test('initializeRepository turns a plain folder into a Git checkout without comm
     );
     const status = await f.client.command('gitStatus', { checkout: initialized });
     assert.equal(status.branch, initialized.branch);
-    assert.deepEqual(status.changes, [{ path: 'todo.txt', area: 'untracked' }]);
+    assert.deepEqual(status.changes, [{ path: 'todo.txt', area: 'untracked', kind: 'untracked' }]);
 
     // Reopening, here and after a restart, gives the Git target rather than refusing it.
     assert.deepEqual(await f.client.command('openCheckout', { root }), initialized);

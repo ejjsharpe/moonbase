@@ -10,6 +10,7 @@ import {
   type FileDocument,
   type FileTarget,
   type GitCheckoutTarget,
+  type GitChange,
   type WorkspaceCommand,
   type EditorRecovery,
   type OperationResult,
@@ -27,6 +28,8 @@ type Seed = {
   head?: Record<string, string>;
   index?: Record<string, string>;
   ignored?: string[];
+  /** Unmerged paths, each reported as one conflicted change; one absent from `files` is `missing`. */
+  conflicted?: string[];
 };
 type Entry = FileDocument & { directory: boolean };
 const fail = (message: string, code: ApplicationError['code'] = 'InvalidInput'): never => {
@@ -412,20 +415,37 @@ export function memoryWorkspace(seeds: Seed[]) {
       }),
     gitStatus: ({ checkout }) =>
       call('gitStatus', () => {
-        const seed = exact(checkout);
+        const seed = exact(checkout),
+          working = entries(checkout),
+          changes: GitChange[] = [],
+          paths = new Set([
+            ...working.keys(),
+            ...Object.keys(seed.head ?? {}),
+            ...Object.keys(seed.index ?? {}),
+          ]);
         if (checkout.vcs === 'none') return { branch: '', changes: [] };
-        const changes: { path: string; area: 'staged' | 'unstaged' | 'untracked' }[] = [];
-        for (const [path, entry] of entries(checkout))
-          if (!entry.directory) {
-            const index = readOwn(seed.index, path) ?? readOwn(seed.head, path);
-            if (index === undefined) changes.push({ path, area: 'untracked' });
-            else if (entry.text !== index) changes.push({ path, area: 'unstaged' });
-            if (
-              readOwn(seed.index, path) !== undefined &&
-              readOwn(seed.index, path) !== readOwn(seed.head, path)
-            )
-              changes.push({ path, area: 'staged' });
+        for (const path of paths) {
+          const entry = working.get(path);
+          if (entry?.directory) continue;
+          if (seed.conflicted?.includes(path)) {
+            changes.push(
+              entry
+                ? { path, area: 'conflicted', kind: 'conflicted' }
+                : { path, area: 'conflicted', kind: 'conflicted', missing: true },
+            );
+            continue;
           }
+          const head = readOwn(seed.head, path),
+            staged = readOwn(seed.index, path),
+            index = staged ?? head;
+          if (index === undefined) {
+            if (!seed.ignored?.some((item) => affected(path, item)))
+              changes.push({ path, area: 'untracked', kind: 'untracked' });
+          } else if (!entry) changes.push({ path, area: 'unstaged', kind: 'deleted' });
+          else if (entry.text !== index) changes.push({ path, area: 'unstaged', kind: 'modified' });
+          if (staged !== undefined && staged !== head)
+            changes.push({ path, area: 'staged', kind: head === undefined ? 'added' : 'modified' });
+        }
         return { branch: checkout.branch, changes };
       }),
     listWorktrees: ({ checkout }) =>
@@ -629,10 +649,12 @@ export function memoryWorkspace(seeds: Seed[]) {
         )
           fail('The memory adapter transfers one captured source at a time.');
         if (operation.destination) pathCheck(operation.destination);
-        const replace = (destination: string) => {
+        const replace = (destination: string, source?: string) => {
           const collision = [...map.keys()].find(
             (path) =>
-              path.normalize('NFC').toLowerCase() === destination.normalize('NFC').toLowerCase(),
+              path.normalize('NFC').toLowerCase() === destination.normalize('NFC').toLowerCase() &&
+              // Like a case-insensitive disk, a move may change only its name's case.
+              !(operation.kind === 'move' && path === source),
           );
           if (collision && !operation.replacements?.some((ref) => ref.target.path === collision))
             fail('Destination exists. Explicit replacement consent required.', 'Conflict');
@@ -656,7 +678,7 @@ export function memoryWorkspace(seeds: Seed[]) {
             if (operation.kind !== 'trash' && !destination) fail('Destination required.');
             if (destination && affected(destination, source.target.path))
               fail('Cannot transfer an entry into itself.');
-            if (destination) replace(destination);
+            if (destination) replace(destination, source.target.path);
             const selected = [...map].filter(([path]) => affected(path, source.target.path));
             for (const [path, entry] of selected) {
               if (destination)
@@ -808,9 +830,14 @@ export function memoryWorkspace(seeds: Seed[]) {
       entries(target.checkout).set(target.path, { ...document(text), directory: false });
       notify(target.checkout, [target.path]);
     },
-    failNext(name: WorkspaceCommand, message = 'Injected IO failure', after = false) {
+    failNext(
+      name: WorkspaceCommand,
+      message = 'Injected IO failure',
+      after = false,
+      code: ApplicationError['code'] = after ? 'Uncertain' : 'Persistence',
+    ) {
       faults.set(name, {
-        error: new ApplicationError({ code: after ? 'Uncertain' : 'Persistence', message }),
+        error: new ApplicationError({ code, message }),
         after,
       });
     },

@@ -7,8 +7,11 @@ import {
   type PickerOpenFile,
   type PickerRequest,
 } from './picker.tsx';
-import { FilesTree } from './files-tree.tsx';
+import { FilesTree, type TreeCreateRequest } from './files-tree.tsx';
+import { findCreateFolder } from './files-tree-rows.ts';
+import { gitStatusMarks } from './files-tree-status.ts';
 import { Mutation, type Action } from './mutation.tsx';
+import { useMutationRunner } from './mutation-runner.tsx';
 import { Popup } from './popup.tsx';
 import {
   forwardRef,
@@ -28,7 +31,7 @@ import { Dialog } from '@base-ui/react/dialog';
 import { Tabs } from '@base-ui/react/tabs';
 import { ContextMenu as Menu } from '@base-ui/react/context-menu';
 import { controls } from '@moonbase/ui/controls';
-import { fileTypeMark } from '@moonbase/ui/files';
+import { fileTypeMark, gitStatusHues, gitStatusUI } from '@moonbase/ui/files';
 import { workbench } from '@moonbase/ui/workbench';
 import { overlays } from '@moonbase/ui/overlays';
 import type { CheckoutTarget, FileView } from '@moonbase/contracts/workspace';
@@ -91,10 +94,13 @@ export type WorkbenchProps = {
   /** The app's own shortcuts, listed after the editor's when no file is open. */
   shortcuts?: readonly Shortcut[];
 };
+// A conflicted path opens as its file, where its conflict markers are resolved; one both sides
+// deleted has no file to open, and is resolved in Git.
 const changeAreas = [
-  { area: 'staged', label: 'Staged' },
-  { area: 'unstaged', label: 'Changes' },
-  { area: 'untracked', label: 'Untracked' },
+  { area: 'conflicted', label: 'Conflicts', view: 'file' },
+  { area: 'staged', label: 'Staged', view: 'staged' },
+  { area: 'unstaged', label: 'Changes', view: 'unstaged' },
+  { area: 'untracked', label: 'Untracked', view: 'untracked' },
 ] as const;
 
 export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Workbench(
@@ -158,28 +164,26 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   const [mutationFinalFocus, setMutationFinalFocus] = useState<
     (() => boolean | HTMLElement | null) | undefined
   >(undefined);
-  // Where New File/Folder starts, such as the folder its menu was opened on.
-  const [mutationDestination, setMutationDestination] = useState('');
+  // The explorer's "…" New File/Folder, started by the files tree.
+  const [createRequest, setCreateRequest] = useState<TreeCreateRequest | null>(null),
+    createRequests = useRef(0);
   useLayoutEffect(() => {
     lookupRef.current = lookup;
     projectRef.current = project;
   }, [lookup, project]);
-  function setAction(
-    value: Action | null,
-    finalFocus?: () => boolean | HTMLElement | null,
-    destination = '',
-  ) {
-    if (value) {
-      setMutationFinalFocus(() => finalFocus);
-      setMutationDestination(destination);
-    }
+  function setAction(value: Action | null, finalFocus?: () => boolean | HTMLElement | null) {
+    if (value) setMutationFinalFocus(() => finalFocus);
     actionRef.current = value;
     updateAction(value);
   }
+  // Rename, Duplicate and New File/Folder run directly from the tree, asking only to replace.
+  const mutations = useMutationRunner(controller, (value) =>
+    canRequestMutation(value, controller.getSnapshot(), !!(actionRef.current || lookupRef.current)),
+  );
   function canRequestMutation(
     value: Action,
     snapshot: EditorSnapshot = state,
-    blocked = !!(action || lookup),
+    blocked = !!(action || lookup || mutations.running),
   ) {
     return (
       snapshot.ready &&
@@ -195,16 +199,12 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       (value.kind !== 'trash' || value.paths.length > 0)
     );
   }
-  function requestMutation(
-    value: Action,
-    finalFocus?: () => boolean | HTMLElement | null,
-    destination?: string,
-  ) {
+  function requestMutation(value: Action, finalFocus?: () => boolean | HTMLElement | null) {
     if (
       !canRequestMutation(
         value,
         controller.getSnapshot(),
-        !!(actionRef.current || lookupRef.current),
+        !!(actionRef.current || lookupRef.current || mutations.isRunning()),
       )
     ) {
       controller.report(
@@ -214,11 +214,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       );
       return;
     }
-    setAction(
-      { ...value, checkout: { ...value.checkout }, paths: [...value.paths] },
-      finalFocus,
-      destination,
-    );
+    setAction({ ...value, checkout: { ...value.checkout }, paths: [...value.paths] }, finalFocus);
   }
   const choice = state.closePrompt;
   const [recent, setRecent] = useState<{
@@ -572,19 +568,32 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     setPanel(next);
     if (sidebarHidden) onShowSidebar?.();
   }
+  /** Types a new entry's name in the focused folder, the focused file's folder, or the root. */
+  const requestCreate = (kind: TreeCreateRequest['kind']) => {
+    if (!checkout || !selected) return;
+    showPanel('files');
+    setCreateRequest({
+      checkout: { ...checkout },
+      kind,
+      parent: findCreateFolder(state.listings, checkoutKey(checkout), selected.tree.focus),
+      id: ++createRequests.current,
+    });
+  };
   const explorerActions: ExplorerAction[] = checkout
     ? [
         {
           label: 'New File…',
           icon: 'newFile',
           disabled: !canRequestMutation({ checkout, kind: 'create-file', paths: [] }),
-          run: () => requestMutation({ checkout, kind: 'create-file', paths: [] }),
+          movesFocus: true,
+          run: () => requestCreate('create-file'),
         },
         {
           label: 'New Folder…',
           icon: 'newFolder',
           disabled: !canRequestMutation({ checkout, kind: 'create-directory', paths: [] }),
-          run: () => requestMutation({ checkout, kind: 'create-directory', paths: [] }),
+          movesFocus: true,
+          run: () => requestCreate('create-directory'),
         },
         ...(selectNativeImports
           ? [
@@ -671,9 +680,12 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                 active={selected.active}
                 anchorReset={anchorReset}
                 visible={visible}
-                dialogOpen={!!(action || choice || lookup)}
+                dialogOpen={!!(action || choice || lookup || mutations.running)}
                 canRequestMutation={canRequestMutation}
                 requestMutation={requestMutation}
+                runMutation={mutations.runMutation}
+                createRequest={createRequest}
+                onCreateRequestTaken={() => setCreateRequest(null)}
                 copyPaths={copyPaths}
                 revealPath={revealPath}
                 mentionInChat={mentionInChat}
@@ -691,7 +703,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                   No changes
                 </p>
               )}
-              {changeAreas.map(({ area, label }) => {
+              {changeAreas.map(({ area, label, view }) => {
                 const listed = changes.filter((change) => change.area === area);
                 if (!listed.length) return null;
                 return (
@@ -702,14 +714,24 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                     </h2>
                     <ul {...stylex.props(controls.list)}>
                       {listed.map((change) => {
-                        const active = target?.path === change.path && mode === area;
+                        const active = target?.path === change.path && mode === view;
+                        const mark = gitStatusMarks[change.kind];
+                        const description = change.missing
+                          ? mark.label + ', deleted on both sides'
+                          : mark.label;
                         const folder = change.path.slice(0, change.path.lastIndexOf('/') + 1);
                         return (
                           <li key={change.path}>
                             <Button
                               aria-label={change.path}
+                              aria-description={description}
                               aria-current={active || undefined}
-                              title={change.path}
+                              disabled={change.missing}
+                              title={
+                                change.missing
+                                  ? `${change.path} (deleted on both sides)`
+                                  : change.path
+                              }
                               {...stylex.props(
                                 controls.button,
                                 controls.listButton,
@@ -720,16 +742,24 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                                 run(
                                   controller.open(
                                     { checkout, path: change.path },
-                                    { view: area, intent: 'preview' },
+                                    { view, intent: 'preview' },
                                   ),
                                 )
                               }>
-                              <span {...stylex.props(workbench.changeName)}>
+                              <span
+                                {...stylex.props(workbench.changeName, gitStatusHues[change.kind])}>
                                 {change.path.slice(folder.length)}
                               </span>
                               {folder && (
                                 <span {...stylex.props(workbench.changeFolder)}>{folder}</span>
                               )}
+                              <span aria-hidden="true" {...stylex.props(gitStatusUI.slot)}>
+                                <span
+                                  data-git-status={change.kind}
+                                  {...stylex.props(gitStatusUI.letter, gitStatusHues[change.kind])}>
+                                  {mark.letter}
+                                </span>
+                              </span>
                             </Button>
                           </li>
                         );
@@ -1289,9 +1319,9 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
           action={action}
           close={() => setAction(null)}
           finalFocus={mutationFinalFocus}
-          initialDestination={mutationDestination}
         />
       )}
+      {mutations.confirmation}
       {choice && (
         <Popup title="Save changes before closing?" onClose={() => answer('cancel')}>
           <Dialog.Description>{choice.buffer.target.path} has unsaved changes.</Dialog.Description>

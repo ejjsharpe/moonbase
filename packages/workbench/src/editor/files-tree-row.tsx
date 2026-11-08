@@ -1,8 +1,11 @@
 import * as stylex from '@stylexjs/stylex';
-import { filesUI } from '@moonbase/ui/files';
+import type { ReactNode } from 'react';
+import type { GitChangeKind } from '@moonbase/contracts/workspace';
+import { filesUI, gitStatusHues, gitStatusUI } from '@moonbase/ui/files';
 import { styles } from './styles.ts';
 import { Icon } from './icon.tsx';
 import { rowHeight, type VisibleRow } from './files-tree-rows.ts';
+import { gitStatusMarks } from './files-tree-status.ts';
 
 const isContextClick = (event: { button: number; ctrlKey: boolean }) =>
   event.button === 2 || (event.button === 0 && event.ctrlKey && navigator.platform.includes('Mac'));
@@ -17,6 +20,9 @@ export function FilesTreeRow({
   focused,
   active,
   dirty,
+  status,
+  label,
+  editor,
   onOpenMenu,
   onSelect,
   onOpen,
@@ -30,6 +36,12 @@ export function FilesTreeRow({
   focused: boolean;
   active: boolean;
   dirty: boolean;
+  /** A file's strongest Git change, or a folder's strongest changed descendant's. */
+  status?: GitChangeKind;
+  /** The accessible name, when it isn't the row's path, such as a placeholder's. */
+  label?: string;
+  /** The name field shown in place of the name while it's typed. */
+  editor?: ReactNode;
   /** Opens the context menu for this row at a point in the viewport. */
   onOpenMenu: (path: string, x: number, y: number) => void;
   /** A primary click; `additive` when ⌘ (Ctrl off a Mac) was held. */
@@ -38,6 +50,10 @@ export function FilesTreeRow({
   onOpen: (path: string) => void;
 }) {
   const folderIcon = expanded ? 'folderOpen' : 'folder';
+  let statusLabel = '';
+  if (status && !row.directory) statusLabel = ', ' + gitStatusMarks[status].label;
+  else if (status)
+    statusLabel = status === 'conflicted' ? ', contains conflicts' : ', contains changes';
   return (
     <div
       id={id}
@@ -49,7 +65,7 @@ export function FilesTreeRow({
       aria-expanded={row.directory ? expanded : undefined}
       aria-selected={selected}
       aria-current={active ? 'true' : undefined}
-      aria-label={row.path + (dirty ? ', unsaved' : '')}
+      aria-label={label ?? row.path + (dirty ? ', unsaved' : '') + statusLabel}
       aria-description={row.ignored ? 'Git-ignored' : undefined}
       {...stylex.props(
         styles.treeRow(index * rowHeight),
@@ -66,6 +82,10 @@ export function FilesTreeRow({
       }}
       onPointerDown={(event) => {
         if (isContextClick(event)) event.preventDefault();
+      }}
+      onMouseDown={(event) => {
+        // Pressing beside a name field keeps the name being typed.
+        if (editor) event.preventDefault();
       }}
       onClick={(event) => {
         if (
@@ -86,15 +106,39 @@ export function FilesTreeRow({
         {row.directory && <Icon name="chevronRight" />}
       </span>
       <Icon name={row.directory ? folderIcon : 'file'} />
-      <span
-        {...stylex.props(
-          styles.treeLabel,
-          active && filesUI.activeLabel,
-          row.ignored && filesUI.ignored,
-        )}>
-        {row.path.split('/').at(-1)}
-      </span>
-      {dirty && <span aria-hidden="true"> •</span>}
+      {editor ?? (
+        <span
+          {...stylex.props(
+            styles.treeLabel,
+            active && filesUI.activeLabel,
+            status && !row.directory && gitStatusHues[status],
+            row.ignored && filesUI.ignored,
+          )}>
+          {row.path.split('/').at(-1)}
+        </span>
+      )}
+      {!editor && (dirty || status) && (
+        <span aria-hidden="true" {...stylex.props(gitStatusUI.slot)}>
+          {dirty && <span>•</span>}
+          {status &&
+            (row.directory ? (
+              <span
+                data-git-status={status}
+                {...stylex.props(
+                  gitStatusUI.dot,
+                  status === 'conflicted' && gitStatusUI.conflictDot,
+                  gitStatusHues[status],
+                )}
+              />
+            ) : (
+              <span
+                data-git-status={status}
+                {...stylex.props(gitStatusUI.letter, gitStatusHues[status])}>
+                {gitStatusMarks[status].letter}
+              </span>
+            ))}
+        </span>
+      )}
     </div>
   );
 }

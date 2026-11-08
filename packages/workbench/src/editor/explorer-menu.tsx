@@ -1,4 +1,4 @@
-import type { Ref } from 'react';
+import { useRef, type Ref } from 'react';
 import { Menu } from '@base-ui/react/menu';
 import * as stylex from '@stylexjs/stylex';
 import type { icons } from '@moonbase/ui/icons';
@@ -13,6 +13,8 @@ export type ExplorerAction =
       icon: keyof typeof icons;
       keys?: string;
       disabled?: boolean;
+      /** Whether it places focus itself, so closing the menu leaves focus alone. */
+      movesFocus?: boolean;
       run(): void;
     }
   | 'separator';
@@ -26,8 +28,12 @@ export function ExplorerMenu({
   /** The "…" button, where focus lands when the editor has nothing better. */
   triggerRef?: Ref<HTMLButtonElement>;
 }) {
+  const chosen = useRef<ExplorerAction | null>(null);
   return (
-    <Menu.Root>
+    <Menu.Root
+      onOpenChange={(open) => {
+        if (open) chosen.current = null;
+      }}>
       <Menu.Trigger
         ref={triggerRef}
         aria-label="Explorer actions"
@@ -38,6 +44,9 @@ export function ExplorerMenu({
       <Menu.Portal>
         <Menu.Positioner align="end" sideOffset={4} {...stylex.props(overlays.positioner)}>
           <Menu.Popup
+            finalFocus={() =>
+              !(chosen.current && chosen.current !== 'separator' && chosen.current.movesFocus)
+            }
             aria-label="Explorer actions"
             {...stylex.props(overlays.popup, overlays.menuPopup, overlays.wideMenu)}>
             {actions.map((action, index) =>
@@ -47,7 +56,10 @@ export function ExplorerMenu({
                 <Menu.Item
                   key={action.label}
                   disabled={action.disabled}
-                  onClick={action.run}
+                  onClick={() => {
+                    chosen.current = action;
+                    action.run();
+                  }}
                   {...stylex.props(overlays.option, overlays.menuItem, overlays.commandItem)}>
                   <span {...stylex.props(overlays.commandIcon)}>
                     <Icon name={action.icon} />
