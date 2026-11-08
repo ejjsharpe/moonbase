@@ -445,7 +445,9 @@ test('released output retention yields to the existing 128-selection content bou
     }
   });
   const row = page.locator('[data-transcript-live]');
-  await openActivity(row);
+  // Only the output under test opens; the 129 details stay folded.
+  await openActivityGroups(page);
+  await stepToggle(row, 'm0.b0').click();
   const pre = row.locator('[data-transcript-part="m0.b0"] pre');
   await expect(pre).toHaveText(initial);
   await selectPrefix(page, pre);

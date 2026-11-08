@@ -62,7 +62,8 @@ export async function showRow(page: Page, key: string) {
 /** Opens every folded run of tool rows ("Worked for …"), so the steps inside are shown. */
 export async function openActivityGroups(page: Page) {
   const closed = page.locator('[data-transcript-activity-group][aria-expanded="false"]');
-  for (let i = 0; i < 50 && (await closed.count()); i++) await closed.first().click();
+  for (let i = 0; i < 1000 && (await closed.count()); i++) await closed.first().click();
+  await expect(closed).toHaveCount(0);
 }
 
 /** Opens folded runs, then every closed step in the scope, so all their recorded parts show. */
@@ -70,7 +71,8 @@ export async function openActivity(scope: Locator) {
   await openActivityGroups(scope.page());
   const closed = scope.getByRole('button', { name: /^Activity/, expanded: false });
   // A call's output in a later row has no opener of its own; it opens with its call.
-  for (let i = 0; i < 50 && (await closed.count()); i++) await closed.first().click();
+  for (let i = 0; i < 1000 && (await closed.count()); i++) await closed.first().click();
+  await expect(closed).toHaveCount(0);
 }
 
 /** The opener of the step that holds a recorded part. */

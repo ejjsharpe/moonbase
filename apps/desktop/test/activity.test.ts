@@ -342,6 +342,13 @@ test('a shell line names the program it runs past cd hops, assignments and wrapp
     rest: '-m http.server',
   });
   assert.equal(splitCommand('cd /work/app'), undefined);
+  // A word that also appears in an assignment, and wrapper options with values.
+  assert.deepEqual(splitCommand('FOO=npm npm test'), { program: 'npm', rest: 'test' });
+  assert.deepEqual(splitCommand('sudo -u root ls -la'), { program: 'ls', rest: '-la' });
+  assert.deepEqual(splitCommand('env -u HOME FOO=1 nice -n 5 node app.js'), {
+    program: 'node',
+    rest: 'app.js',
+  });
 });
 
 test('a step headline takes the tense of its state and its output from another row', () => {
@@ -403,7 +410,28 @@ test('a step headline takes the tense of its state and its output from another r
       part('more', 'thinking', { text: 'Second block.' }),
       call('read', { path: 'a.ts' }),
     ]).map((step) => step.action),
-    ['First block.', 'Reading a.ts'],
+    ['First block.', 'Read a.ts'],
+  );
+  // A saved call whose result isn't among the rows read isn't still running.
+  assert.deepEqual(headline([call('read', { path: 'a.ts' })]), [
+    { category: 'read', action: 'Read a.ts', detail: '', problem: 'no result shown' },
+  ]);
+  // Thoughts apart from each other stay apart, even with another step's output between them.
+  assert.equal(
+    groupActivitySteps(
+      [
+        call('bash', { command: 'ls' }),
+        part('one', 'thinking', { text: 'One.' }),
+        part('out', 'result', {
+          role: 'tool',
+          pairing: 'matched',
+          call: { entryId: 'origin', partId: 'call' },
+        }),
+        part('two', 'thinking', { text: 'Two.' }),
+      ],
+      'origin',
+    ).length,
+    3,
   );
 });
 
@@ -562,6 +590,26 @@ test("a reading anchor names a stored row and the offset from that row's own top
     { key: 'entry:a', offset: 70 },
   );
   assert.deepEqual(measured, []);
+  // An open run's rows all sit below the run's line (35px), so offsets are from where they are.
+  const below: Record<string, number> = {
+    'entry:a': 35,
+    'entry:b': 55,
+    'entry:c': 75,
+    'live:s': 95,
+  };
+  assert.deepEqual(
+    findReadingAnchor(
+      items,
+      { key: card, offset: 50 },
+      { ...geometry, rowTop: (key) => below[key] },
+    ),
+    { key: 'entry:a', offset: 15 },
+  );
+  // A folded run shows none of its rows: its first row names it, from the run's top.
+  assert.deepEqual(
+    findReadingAnchor(items, { key: card, offset: 10 }, { ...geometry, rowTop: () => undefined }),
+    { key: 'entry:a', offset: 10 },
+  );
   // A live row alone anchors to the last stored row before it, from that row's top.
   const alone = group([row('entry:q', 'message'), row('entry:r'), row('live:s', 'message')]);
   assert.deepEqual(findReadingAnchor(alone, { key: alone[2]!.key, offset: 12 }, geometry), {

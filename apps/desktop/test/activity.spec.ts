@@ -4,6 +4,7 @@ import {
   scrollToEnd,
   scrollToStart,
   stepToggle,
+  transcriptList,
 } from './transcript-list.ts';
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
@@ -189,11 +190,11 @@ test('ordered activity stays between authored answers across manifest and histor
     await window.demo.application.chat!.jumpToLatest();
   });
   const other = page.locator('[data-transcript-entry="other"]');
-  // A call with no result yet is the ○ glyph alone; no words repeat it.
+  // A saved call whose result isn't among the rows read isn't still running: its result isn't shown.
   const pending = other.locator('[data-transcript-step] > [data-glyph]', {
     hasText: 'second.ts',
   });
-  await expect(pending).toHaveText('Reading second.ts');
+  await expect(pending).toHaveText('Read second.ts · no result shown');
   await expect(pending).toHaveAttribute('data-glyph', '○');
   await expect(other).not.toContainText('failed');
   // Rows unmount while scrolled away, so the newest row is read before scrolling to the start.
@@ -1147,3 +1148,93 @@ for (const input of ['pointer', 'Enter', 'Space'] as const)
     await expect(unrelated).toHaveAttribute('aria-expanded', 'false');
     await expect(find).toBeFocused();
   });
+
+const answers = (count: number) =>
+  Array.from({ length: count }, (_, index) => ({
+    id: `answer-${index}`,
+    parts: [{ kind: 'text' as const, text: `Answer ${index}\n\n` + 'words '.repeat(60) }],
+  }));
+const runTop = (page: Page) =>
+  page.evaluate(() => {
+    const list = document.querySelector('[data-transcript-list]')!.getBoundingClientRect();
+    const line = document.querySelector('[data-transcript-activity-group]')!;
+    return line.getBoundingClientRect().top - list.top;
+  });
+
+test('a folded run stays folded as the reader scrolls it to the top, and is restored there', async ({
+  page,
+}) => {
+  await open(page);
+  await page.evaluate(
+    async ([calls, rest]) => {
+      await window.demo.transcript!.record([
+        { id: 'question', role: 'user', parts: [{ kind: 'text', role: 'user', text: 'Run it' }] },
+        ...calls,
+        ...rest,
+      ]);
+      // The run's first row: where a folded run's own place is, so it stays folded.
+      await window.demo.application.chat!.jumpToEntry('run-0');
+    },
+    [
+      Array.from({ length: 6 }, (_, index) => bashCall(`run-${index}`, `step ${index}`)),
+      answers(30),
+    ] as const,
+  );
+  const fold = page.locator('[data-transcript-activity-group]');
+  await expect(fold).toHaveAttribute('aria-expanded', 'false');
+  // The reader scrolls a few pixels past the run's line.
+  await transcriptList(page).hover();
+  await page.mouse.wheel(0, 4);
+  // The place saved is the run's first row: its other rows aren't shown.
+  await expect.poll(() => readAnchor(page)).toEqual({ key: 'entry:run-0', atLatest: false });
+  await page.waitForTimeout(500);
+  await expect(fold).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.locator('[data-transcript-row="entry:run-3"]')).toBeHidden();
+  const before = await runTop(page);
+  await page.getByRole('button', { name: 'Close Chat panel', exact: true }).locator('..').hover();
+  await page.getByRole('button', { name: 'Close Chat panel', exact: true }).click();
+  await page.getByRole('button', { name: 'Open Chat panel', exact: true }).click();
+  await expect(fold).toHaveAttribute('aria-expanded', 'false');
+  await expect.poll(async () => Math.abs((await runTop(page)) - before)).toBeLessThan(1.5);
+});
+
+test('a folded run opens for a Find match in it, folds again for that match, and reopens when Find moves to its next match', async ({
+  page,
+}) => {
+  await open(page);
+  await page.evaluate(
+    async ([run, output, rest]) => {
+      await window.demo.transcript!.record([
+        { id: 'question', role: 'user', parts: [{ kind: 'text', role: 'user', text: 'Run it' }] },
+        run[0]!,
+        run[1]!,
+        { id: 'result', role: 'tool', parts: [{ ...output, state: 'completed' }] },
+        run[2]!,
+        ...rest,
+      ]);
+      await window.demo.application.chat!.jumpToLatest();
+    },
+    [
+      [bashCall('run-0', 'ls'), bashCall('origin', 'check'), bashCall('run-2', 'pwd')],
+      originOutput('first NEEDLE and second NEEDLE'),
+      answers(3),
+    ] as const,
+  );
+  const fold = page.locator('[data-transcript-activity-group]');
+  await expect(fold).toHaveAttribute('aria-expanded', 'false');
+  await transcriptList(page).focus();
+  await page.keyboard.press('ControlOrMeta+f');
+  const find = page.getByRole('textbox', { name: 'Find in conversation', exact: true });
+  await find.fill('needle');
+  await expect(fold).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('[data-transcript-row="entry:result"] pre')).toBeVisible();
+  // The reader folds the run while its match is active; it stays folded.
+  await fold.click();
+  await expect(fold).toHaveAttribute('aria-expanded', 'false');
+  await page.waitForTimeout(300);
+  await expect(fold).toHaveAttribute('aria-expanded', 'false');
+  // Find moving to the next match in the run opens it again.
+  await find.focus();
+  await find.press('Enter');
+  await expect(fold).toHaveAttribute('aria-expanded', 'true');
+});

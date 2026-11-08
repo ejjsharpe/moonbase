@@ -181,6 +181,8 @@ export const transcriptStyles = stylex.create({
   },
   activityStep: {
     position: 'relative',
+    display: 'flex',
+    alignItems: 'baseline',
     paddingInline: '8px 36px',
     borderRadius: radius.control,
     cursor: 'pointer',
@@ -188,17 +190,24 @@ export const transcriptStyles = stylex.create({
     // One line per step; the full text is in its title.
     overflow: 'hidden',
     whiteSpace: 'nowrap',
-    textOverflow: 'ellipsis',
     '::before': {
       content: 'attr(data-glyph)',
-      display: 'inline-block',
+      flexShrink: 0,
       width: '1.6em',
       color: syntax.string,
     },
   },
   activityTool: { color: colors.secondary },
-  activityDetail: { color: colors.muted },
-  activityProblem: { color: colors.danger },
+  /** A step's verb phrase gives way only once what it touched has. */
+  activityAction: { flexShrink: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' },
+  activityDetail: {
+    flexShrink: 1000,
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    color: colors.muted,
+  },
+  activityProblem: { flexShrink: 0, color: colors.danger },
   /**
    * A folded run reads as the heading of the answer under it: the answer's text sits as far below
    * the rule as the "Worked for" text sits above it, not a full gap between list items.

@@ -103,8 +103,8 @@ export function groupTranscriptRows<Row extends { key: string; kind: string }>(
 /**
  * The reading anchor for the list's first visible item: a stored row and how far the viewport top
  * is below that row's own top, so it holds however much of a card a restore reads above the row.
- * `visible` is the item and its offset from the item's top; `rowTop` is a later row's top within
- * its item, in the same terms (undefined while unmeasured). The anchor is the stored row the
+ * `visible` is the item and its offset from the item's top; `rowTop` is a row's top within its
+ * item, in the same terms (undefined while unmeasured or not shown). The anchor is the stored row the
  * viewport top is in or below, or a live row's nearest stored row above it, at its offset from
  * that row's item (`measure`), so a reader in the live response isn't taken to follow the live
  * edge. With no stored row above, it names the item's first row.
@@ -128,7 +128,9 @@ export function findReadingAnchor<Row extends { key: string; kind: string }>(
     if (offset === undefined) return undefined;
     let anchor: { key: string; offset: number } | undefined;
     for (const [position, row] of item.rows.entries()) {
-      const top = position ? rowTop(row.key) : 0;
+      // The first row is at the item's top, unless something sits above it (a folded run's
+      // line); a row the item doesn't show (a folded run's) has no top and ends the search.
+      const top = rowTop(row.key) ?? (position ? undefined : 0);
       // A row landed a fraction of a device pixel below the viewport top still holds it.
       if (top === undefined || (top > offset + 1 && anchor)) break;
       if (row.kind === 'entry') anchor = { key: row.key, offset: offset - top };
@@ -250,9 +252,12 @@ export function groupActivitySteps(parts: readonly ChatTranscriptPart[], entryId
   const steps: ActivityStep[] = [],
     calls = new Map<string, ActivityStep>(),
     answered = new Map<string, ActivityStep>();
+  let previousPart: ChatTranscriptPart | undefined;
   for (const part of parts) {
-    const previous = steps.at(-1);
-    if (part.kind === 'thinking' && !part.call && previous?.lead.kind === 'thinking') {
+    const previous = steps.at(-1),
+      follows = previousPart?.kind === 'thinking';
+    previousPart = part;
+    if (part.kind === 'thinking' && !part.call && follows && previous?.lead.kind === 'thinking') {
       previous.answers.push(part);
       continue;
     }
@@ -408,30 +413,43 @@ function getToolArgument(part: ChatTranscriptPart, keys: string[]) {
   }
 }
 
+/** Commands that run another, and their options that take a value. */
+const commandWrappers: Record<string, readonly string[]> = {
+  sudo: ['-u', '-g', '-C', '-D', '-h', '-p', '-r', '-t', '-U'],
+  env: ['-u', '-C', '-S'],
+  time: ['-f', '-o'],
+  nice: ['-n'],
+  nohup: [],
+  exec: ['-a'],
+  command: [],
+  builtin: [],
+};
+
 /**
- * The program a shell line runs, past `cd` hops, variable assignments and wrappers, and the rest of
- * the line after it.
+ * The program a shell line runs, past `cd` hops, variable assignments and wrappers (with their
+ * options), and the rest of the line after it.
  */
 export function splitCommand(command: string) {
-  const separators = /&&|\|\||;|\|/g;
-  let from = 0;
-  for (const match of [...command.matchAll(separators), null]) {
-    const to = match ? match.index : command.length;
-    const words = command.slice(from, to).trim().split(/\s+/).filter(Boolean);
-    while (
-      words.length &&
-      (/^\w+=/.test(words[0]!) || ['sudo', 'env', 'time', 'exec'].includes(words[0]!))
-    )
-      words.shift();
-    const word = words[0];
-    if (word && word !== 'cd') {
-      const at = command.indexOf(word, from);
-      return {
-        program: fileName(word.replace(/^["']|["']$/g, '')),
-        rest: command.slice(at + word.length).trim(),
-      };
+  for (const segment of command.matchAll(/[^;&|]+/g)) {
+    const words = [...segment[0].matchAll(/\S+/g)];
+    let index = 0;
+    while (index < words.length) {
+      const word = words[index]![0];
+      const options = commandWrappers[word];
+      if (/^\w+=/.test(word)) index++;
+      else if (options) {
+        index++;
+        while (index < words.length && words[index]![0].startsWith('-'))
+          index += options.includes(words[index]![0]) ? 2 : 1;
+      } else break;
     }
-    if (match) from = match.index + match[0].length;
+    const found = words[index];
+    if (!found || found[0] === 'cd') continue;
+    const end = segment.index + found.index + found[0].length;
+    return {
+      program: fileName(found[0].replace(/^["']|["']$/g, '')),
+      rest: command.slice(end).trim(),
+    };
   }
   return undefined;
 }
@@ -468,8 +486,12 @@ export function describeActivityHeadline(
   evidence: ActivityEvidence,
 ): ActivityHeadline {
   const state = getActivityStepState(step, transcript, evidence);
-  const problem = describeActivityState(state);
-  const ongoing = state === 'running' || state === 'requested';
+  // A saved call with no result among the rows read: it isn't still running, its result just
+  // isn't shown. Only a live call waits for its result.
+  const live = transcript.source.kind === 'live';
+  const unanswered = state === 'requested' && !live;
+  const problem = unanswered ? 'no result shown' : describeActivityState(state);
+  const ongoing = state === 'running' || (state === 'requested' && live);
   const lead = step.lead;
   if (lead.kind === 'thinking') {
     const line = lead.availability === 'available' ? getThoughtLine(lead.text) : '';

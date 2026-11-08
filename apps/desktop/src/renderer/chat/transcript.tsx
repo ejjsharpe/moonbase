@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -448,7 +449,8 @@ function TranscriptList({
                 ? undefined
                 : ref.anchorVisibleContent({ key: item, hold: false })?.offset;
             const row = node?.querySelector(`[data-transcript-row="${CSS.escape(key)}"]`);
-            return offset === undefined || !row
+            // A row in a folded run isn't shown, so it has no place on screen.
+            return offset === undefined || !row || !row.getClientRects().length
               ? undefined
               : offset - (node!.getBoundingClientRect().top - row.getBoundingClientRect().top);
           },
@@ -505,7 +507,8 @@ function TranscriptList({
         target = held.current;
       if (!ref || !node || !target || current.current.dataset !== target.dataset) return;
       const row = node.querySelector(`[data-transcript-row="${CSS.escape(target.anchor.key)}"]`);
-      if (!row) return;
+      // A row a folded run hides has no place to hold.
+      if (!row || !row.getClientRects().length) return;
       const moved =
         row.getBoundingClientRect().top - node.getBoundingClientRect().top + target.anchor.offset;
       if (Math.abs(moved) >= 1)
@@ -615,7 +618,10 @@ function TranscriptList({
   const holdDisclosure = (event: { target: EventTarget; key?: string }) => {
     if (event.key !== undefined && event.key !== 'Enter' && event.key !== ' ') return;
     const toggle = (event.target as Element).closest?.('button[aria-expanded]');
-    if (toggle?.closest('[data-transcript-row]') && list.current?.getState().isFollowingEnd)
+    if (
+      toggle?.closest('[data-transcript-row], [data-transcript-run]') &&
+      list.current?.getState().isFollowingEnd
+    )
       setHolding(true);
   };
   return (
@@ -687,13 +693,13 @@ function findPlacement(
   return index >= 0 ? { dataset, anchor, index } : { dataset, anchor: null, index: -1 };
 }
 /**
- * A mounted row's top within its list item, the first of the item's rows (the item's rows are
- * siblings); undefined when it isn't mounted.
+ * A shown row's top below the first of its item's rows; undefined when it isn't mounted, or is in
+ * a folded run.
  */
 function readRowTop(scroller: HTMLElement | null | undefined, key: string) {
   const row = scroller?.querySelector(`[data-transcript-row="${CSS.escape(key)}"]`);
   const first = row?.parentElement?.firstElementChild;
-  return row && first
+  return row && first && row.getClientRects().length
     ? row.getBoundingClientRect().top - first.getBoundingClientRect().top
     : undefined;
 }
@@ -729,20 +735,35 @@ const RowContext = createContext<{
 function Item({ item }: { item: TranscriptItem<TranscriptRow> }) {
   const context = useContext(RowContext)!;
   const startedAt = useContext(GroupStartsContext).get(item.key);
-  const anchor = item.rows.find((row) => row.kind !== 'tool');
+  const entryRows = item.rows.filter((row) => row.kind !== 'tool');
+  const firstEntry = entryRows[0];
   const { controller } = context.shared;
-  const fold = useRememberedFold(
-    anchor?.entry.id ?? item.key,
+  // Remembered under both the item's key, which holds as earlier rows join the run's start, and
+  // its first row's, which holds as the live response leaves the run or starts a new attempt.
+  const expandedIds = firstEntry ? context.getRowProps(firstEntry.entry).expandedIds : [];
+  const byItem = useRememberedFold(item.key, 'activity-run', expandedIds, controller);
+  const byFirstRow = useRememberedFold(
+    firstEntry?.entry.id ?? item.key,
     'activity-run',
-    anchor ? context.getRowProps(anchor.entry).expandedIds : [],
+    expandedIds,
     controller,
   );
+  const fold = {
+    open: byItem.open || byFirstRow.open,
+    setOpen: (open: boolean) => {
+      byItem.setOpen(open);
+      byFirstRow.setOpen(open);
+    },
+  };
   // The reader's place moving into a folded run (a jump, a restored position) opens it, so the
-  // place is on a shown row. A reader's own scrolling can't reach a folded row, so this is never
-  // the reader's place inside a run they folded.
+  // place is on a shown row. A folded run's own place is its first stored row, at the run's line;
+  // a live row is never a place the reader scrolls to, so a place there is a jump.
+  const ownPlace = firstEntry?.kind === 'entry' ? firstEntry.key : undefined;
   const placeInside = useSyncExternalStore(controller.subscribe, () => {
     const key = controller.getSnapshot().transcript.view.anchor?.key;
-    return key !== undefined && item.rows.some((row) => row.key === key) ? key : null;
+    return key !== undefined && key !== ownPlace && item.rows.some((row) => row.key === key)
+      ? key
+      : null;
   });
   const [landed, setLanded] = useState<{ place: string | null; open: boolean }>({
     place: null,
@@ -750,6 +771,25 @@ function Item({ item }: { item: TranscriptItem<TranscriptRow> }) {
   });
   if (landed.place !== placeInside)
     setLanded({ place: placeInside, open: placeInside !== null || landed.open });
+  // The active Find match in the run opens it, unless the reader folded it for that match; Find
+  // revealing the match again opens it again.
+  const match = entryRows
+    .map((row) => context.getRowProps(row.entry))
+    .find((props) => props.findMatch);
+  const matchKey = match?.findMatch ? JSON.stringify(match.findMatch) : null;
+  const [foldedMatch, setFoldedMatch] = useState<string | null>(null);
+  if (foldedMatch !== null && (matchKey === null || match?.findRevealing)) setFoldedMatch(null);
+  // A reveal into a folded run can start and end before the run renders again, so the run
+  // listens for it while folded for a match.
+  useEffect(() => {
+    if (foldedMatch === null) return;
+    return controller.subscribe(() => {
+      const { find } = controller.getSnapshot().transcript;
+      if (find.revealing || !find.active || JSON.stringify(find.active) !== foldedMatch)
+        setFoldedMatch(null);
+    });
+  }, [controller, foldedMatch]);
+  const found = matchKey !== null && foldedMatch !== matchKey;
   // A response that is only working so far is a run of one, and gets the working line too.
   const first = item.rows[0]!;
   const working =
@@ -757,19 +797,24 @@ function Item({ item }: { item: TranscriptItem<TranscriptRow> }) {
   // Re-reads when a call's row is retained or let go, which decides whether its output is a step.
   const openCalls = useContext(OpenCallsContext);
   const retained = useSyncExternalStore(openCalls?.subscribe ?? noSubscription, () =>
-    item.rows
-      .flatMap((row) => (row.kind === 'tool' ? [] : (row.entry.transcript?.parts ?? [])))
+    entryRows
+      .flatMap((row) => row.entry.transcript?.parts ?? [])
       .flatMap((part) =>
         part.call && openCalls?.isRetained(part.call.entryId) !== false ? [part.call.entryId] : [],
       )
       .join('\n'),
   );
-  const group =
-    item.rows.length > 1 || working
-      ? collectGroupSteps(item.rows, context.shared.evidence, (entryId) =>
-          retained.split('\n').includes(entryId),
-        )
-      : null;
+  const { evidence } = context.shared;
+  const group = useMemo(
+    () =>
+      item.rows.length > 1 || working
+        ? collectGroupSteps(item.rows, evidence, (entryId) =>
+            retained.split('\n').includes(entryId),
+          )
+        : null,
+    [item.rows, working, evidence, retained],
+  );
+  const stepsId = useId();
   const rows = (fold: boolean) =>
     item.rows.map((row, index) => (
       <Row
@@ -780,16 +825,32 @@ function Item({ item }: { item: TranscriptItem<TranscriptRow> }) {
       />
     ));
   const folds = !!group && group.headlines.length >= (group.active ? 1 : 2);
-  const found = item.rows.some(
-    (row) => row.kind !== 'tool' && !!context.getRowProps(row.entry).findMatch,
-  );
   const expanded = !folds || fold.open || landed.open || found;
+  const toggle = () => {
+    if (expanded) {
+      // Folding the match is reader input: it ends Find's reveal, which would open the run again.
+      if (found) {
+        controller.cancelFindReveal();
+        setFoldedMatch(matchKey);
+      }
+      // A place left inside the run would name a row it no longer shows; the run's line holds it.
+      const { view } = controller.getSnapshot().transcript;
+      if (firstEntry && view.anchor && view.anchor.key === placeInside)
+        controller.setTranscriptView({ ...view, anchor: { key: firstEntry.key, offset: 0 } });
+    }
+    setLanded({ place: placeInside, open: false });
+    fold.setOpen(!expanded);
+  };
   // One shape whether or not the run folds, so its rows stay mounted as it starts or stops
   // folding (the live response leaving a run as its answer starts, say).
   return (
     <>
       {folds && (
-        <div {...stylex.props(styles.row)}>
+        <div
+          // Marks the run's line as part of its first row: the list holds the reader's place as
+          // it opens, and keeps it mounted while it has focus.
+          data-transcript-run={firstEntry?.key ?? item.key}
+          {...stylex.props(styles.row)}>
           <div {...stylex.props(styles.measure)}>
             <section
               {...stylex.props(
@@ -800,16 +861,14 @@ function Item({ item }: { item: TranscriptItem<TranscriptRow> }) {
                 {...group}
                 {...(startedAt ? { startedAt } : {})}
                 open={expanded}
-                onToggle={() => {
-                  setLanded({ ...landed, open: false });
-                  fold.setOpen(!expanded);
-                }}
+                stepsId={stepsId}
+                onToggle={toggle}
               />
             </section>
           </div>
         </div>
       )}
-      <div hidden={!expanded} {...stylex.props(folds && styles.activityGroupSteps)}>
+      <div id={stepsId} hidden={!expanded} {...stylex.props(folds && styles.activityGroupSteps)}>
         {rows(folds)}
       </div>
     </>
@@ -847,7 +906,8 @@ function collectGroupSteps(
       )
         continue;
       const state = getActivityStepState(step, transcript, evidence);
-      if (state === 'running') active = true;
+      // Only the response still running keeps a run's clock going.
+      if (state === 'running' && row.kind === 'live') active = true;
       const headline = describeActivityHeadline(step, transcript, evidence);
       headlines.push(headline);
       rowHeadlines.push(headline);
@@ -984,10 +1044,13 @@ type ReadingRows = {
   live: boolean;
 };
 const notReading: ReadingRows = { selected: null, selecting: false, focused: null, live: false };
-const findRowKeyOf = (node: Node | null | undefined) =>
-  (node instanceof Element ? node : node?.parentElement)?.closest<HTMLElement>(
-    '[data-transcript-row]',
-  )?.dataset.transcriptRow ?? null;
+/** The row a node is in; a run's line counts as its first row. */
+const findRowKeyOf = (node: Node | null | undefined) => {
+  const found = (node instanceof Element ? node : node?.parentElement)?.closest<HTMLElement>(
+    '[data-transcript-row], [data-transcript-run]',
+  );
+  return found?.dataset.transcriptRow ?? found?.dataset.transcriptRun ?? null;
+};
 /** Where the reader's selection and focus are in the transcript, updated on every change. */
 function useReadingRows(scroller: RefObject<HTMLElement | null>) {
   const [reading, setReading] = useState(notReading);

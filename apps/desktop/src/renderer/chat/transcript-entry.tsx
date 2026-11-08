@@ -130,6 +130,7 @@ export const Entry = memo(
       () => (transcript ? getTranscriptParts(transcript, manifest) : []),
       [transcript, manifest],
     );
+    const partGroups = useMemo(() => groupTranscriptParts(parts), [parts]);
     const matchedPart = findRevealing && findMatch ? findMatch.partId : undefined;
     const [replay, setReplay] = useState({ match: findMatch, done: false });
     if (replay.match !== findMatch) setReplay({ match: findMatch, done: false });
@@ -186,7 +187,7 @@ export const Entry = memo(
     if (transcript && source)
       body = (
         <>
-          {groupTranscriptParts(parts).map((group) => {
+          {partGroups.map((group) => {
             const renderParts = (
               activityOpen?: boolean,
               shown: readonly ChatTranscriptPart[] = group.parts,
@@ -348,7 +349,9 @@ function Activity({
   joinNext: boolean;
   parts: readonly ChatTranscriptPart[];
 }) {
-  const steps = groupActivitySteps(parts, source.kind === 'entry' ? source.entryId : undefined);
+  const ownEntry = source.kind === 'entry' ? source.entryId : undefined;
+  // Steps keep their identity while the row's parts do, so each step's headline is worked out once.
+  const steps = useMemo(() => groupActivitySteps(parts, ownEntry), [parts, ownEntry]);
   const openCalls = useContext(OpenCallsContext);
   /** The entries this row's outputs answer that the transcript retains. */
   const retainedCalls = useSyncExternalStore(openCalls?.subscribe ?? noSubscription, () =>
@@ -446,13 +449,14 @@ function ActivityStepView({
       ? `${source.entryId}\n${step.lead.partId}`
       : '';
   const openCalls = useContext(OpenCallsContext);
+  // Only an output follows a call, and only a call has outputs; other steps subscribe to nothing.
   const following = useSyncExternalStore(
-    openCalls?.subscribe ?? noSubscription,
+    (followKey && openCalls?.subscribe) || noSubscription,
     () => !!followKey && !!openCalls?.isOpen([followKey]),
   );
   /** This call's output is open on its own, so the call shows open. */
   const outputOpen = useSyncExternalStore(
-    openCalls?.subscribe ?? noSubscription,
+    (publishKey && openCalls?.subscribe) || noSubscription,
     () => !!publishKey && !!openCalls?.isOutputOpen([publishKey]),
   );
   useEffect(() => {
@@ -477,7 +481,18 @@ function ActivityStepView({
     if (!next && outputOpen) openCalls?.foldOutputs([publishKey]);
     if (next !== disclosure.open) disclosure.onOpenChange();
   };
-  const state = output ? undefined : getActivityStepState(step, { source }, evidence);
+  const described = useMemo(
+    () =>
+      output
+        ? null
+        : {
+            state: getActivityStepState(step, { source }, evidence),
+            headline: describeActivityHeadline(step, { source }, evidence),
+            summary: describeActivityStep(step, { source }, evidence),
+          },
+    [output, step, source, evidence],
+  );
+  const state = described?.state;
   const panelId = useId();
   // A plain disclosure, not a Collapsible: a long run renders hundreds of steps, and each
   // Collapsible measures its panel.
@@ -485,7 +500,7 @@ function ActivityStepView({
     <div data-transcript-step="" data-open={open ? '' : undefined}>
       {!output && (
         <div
-          title={describeActivityStep(step, { source }, evidence)}
+          title={described!.summary}
           data-glyph={(state && stepGlyphs[state]) ?? '·'}
           // The whole line opens the step, as its chevron does.
           onClick={(event) => {
@@ -498,10 +513,10 @@ function ActivityStepView({
             stepStyles[state ?? 'unknown'],
             state === 'running' && spinner.glyph,
           )}>
-          <ActivityHeadlineText headline={describeActivityHeadline(step, { source }, evidence)} />
+          <ActivityHeadlineText headline={described!.headline} />
           <button
             type="button"
-            aria-label={`Activity · ${parts.length} recorded ${parts.length === 1 ? 'part' : 'parts'}`}
+            aria-label={`Activity · ${describeHeadlineText(described!.headline)}`}
             aria-expanded={open}
             aria-controls={panelId}
             data-panel-open={open ? '' : undefined}
@@ -528,14 +543,26 @@ function ActivityStepView({
 
 const noSubscription = () => () => {};
 
-/** A step's verb phrase, then what it touched, quieter, then any trouble. */
+/** Separates a line's parts: a flex line drops ordinary spaces at its items' edges. */
+const nbsp = '\u00a0';
+
+/** A step's headline as one line of text, for its opener's accessible name. */
+const describeHeadlineText = (headline: ActivityHeadline) =>
+  [headline.action, headline.detail, headline.problem].filter(Boolean).join(' · ');
+
+/**
+ * A step's verb phrase, then what it touched, quieter, then any trouble. What it touched gives way
+ * first when the line is short, so the trouble always shows.
+ */
 function ActivityHeadlineText({ headline }: { headline: ActivityHeadline }) {
   return (
     <>
-      <span {...stylex.props(styles.activityTool)}>{headline.action}</span>
-      {headline.detail && <span {...stylex.props(styles.activityDetail)}> {headline.detail}</span>}
+      <span {...stylex.props(styles.activityTool, styles.activityAction)}>{headline.action}</span>
+      {headline.detail && (
+        <span {...stylex.props(styles.activityDetail)}>{nbsp + headline.detail.slice(0, 300)}</span>
+      )}
       {headline.problem && (
-        <span {...stylex.props(styles.activityProblem)}> · {headline.problem}</span>
+        <span {...stylex.props(styles.activityProblem)}>{`${nbsp}· ${headline.problem}`}</span>
       )}
     </>
   );
@@ -554,6 +581,7 @@ export function ActivityGroupLine({
   startedAt,
   endedAt,
   open,
+  stepsId,
   onToggle,
 }: {
   headlines: readonly ActivityHeadline[];
@@ -566,6 +594,8 @@ export function ActivityGroupLine({
   /** When its last step was recorded; a running group counts up to now instead. */
   endedAt?: string;
   open: boolean;
+  /** The ID of the run's rows, which the line opens. */
+  stepsId?: string;
   onToggle: () => void;
 }) {
   const now = useNow(active && !!startedAt);
@@ -584,6 +614,7 @@ export function ActivityGroupLine({
         <button
           type="button"
           aria-expanded={open}
+          aria-controls={stepsId}
           data-transcript-activity-group=""
           title={failed ? `${summary} · ${failed} failed` : summary}
           onClick={onToggle}
@@ -616,10 +647,14 @@ export function ActivityGroupLine({
             stepStyles.running,
             spinner.glyph,
           )}>
-          <span {...stylex.props(styles.activityTool)}>{current.action}</span>
+          <span {...stylex.props(styles.activityTool, styles.activityAction)}>
+            {current.action}
+          </span>
           {/* A command reads in full ("Running npm test"); a file is named by its action. */}
           {current.category === 'command' && current.detail && (
-            <span {...stylex.props(styles.activityTool)}> {current.detail}</span>
+            <span {...stylex.props(styles.activityDetail, styles.activityTool)}>
+              {nbsp + current.detail.slice(0, 300)}
+            </span>
           )}
         </div>
       )}
