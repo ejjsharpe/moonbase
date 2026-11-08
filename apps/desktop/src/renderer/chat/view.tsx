@@ -286,9 +286,18 @@ export function ChatView({
     // The draft being sent in a new worktree keeps the mentions it has.
     const making = newLocal && composer.getSnapshot().creatingWorktree;
     const folder = making ? null : chatFolder(current, local ? cwd : '');
-    const next = folder
-      ? appendMentions(current.draft, current.mentions, mentionRequest.files, folder)
-      : null;
+    // A path the new chat draft already mentions in another folder would name two files at once.
+    const prefix = (folder ?? '').replace(/\/+$/, '') + '/';
+    const clashes = new Map<string, string>();
+    if (newLocal && folder)
+      for (const file of mentionRequest.files) {
+        const clash = file.startsWith(prefix)
+          ? composer.findMentionClash(file.slice(prefix.length), folder)
+          : null;
+        if (clash) clashes.set(file, clash);
+      }
+    const files = mentionRequest.files.filter((file) => !clashes.has(file));
+    const next = folder ? appendMentions(current.draft, current.mentions, files, folder) : null;
     if (next && next.text !== current.draft) {
       controller.setDraft(next.text, next.mentions);
       if (newLocal && controller.getSnapshot().draft === next.text)
@@ -306,6 +315,12 @@ export function ChatView({
         : "This chat's working folder isn't known yet, so the files weren't mentioned.";
     else {
       const skipped: string[] = [];
+      if (clashes.size)
+        skipped.push(
+          clashes.size === 1
+            ? [...clashes.values()][0]!
+            : `${clashes.size} of the files have paths the draft already mentions in another folder, so they weren't mentioned.`,
+        );
       if (next.outside)
         skipped.push(
           next.outside === count
@@ -701,7 +716,8 @@ export function ChatView({
             // ⌘ Enter submits even while Send is disabled; one worktree per first message.
             if (creatingWorktree) return;
             setMentionError(null);
-            composer.clearMessages(placeKey);
+            // The new chat's messages are about its own sends, which an open chat's leave alone.
+            if (!state.selected) composer.clearMessages(placeKey);
             const settings =
               local && !state.selected && cwd && selection ? { cwd, ...selection } : undefined;
             // Mentions picked in another view's folder are checked against this one before sending.
@@ -733,6 +749,11 @@ export function ChatView({
               onMention={
                 !state.selected && local && cwd
                   ? (path) => composer.noteMentions([path], cwd)
+                  : undefined
+              }
+              refuseMention={
+                !state.selected && local && cwd
+                  ? (path) => composer.findMentionClash(path, cwd)
                   : undefined
               }
               placeholder={

@@ -42,6 +42,7 @@ export function MessageInput({
   commands,
   onCommand,
   onMention,
+  refuseMention,
 }: {
   controller: ChatController;
   draft: string;
@@ -56,6 +57,8 @@ export function MessageInput({
   onCommand(command: ChatCommand, option?: ChatCommandOption): void;
   /** Told of each file picked, once the draft mentions it. */
   onMention?(path: string): void;
+  /** Why a file can't be picked, if it can't; the picker shows it and leaves the draft alone. */
+  refuseMention?(path: string): string | null;
 }) {
   const textarea = useRef<HTMLTextAreaElement>(null),
     mirror = useRef<HTMLDivElement>(null),
@@ -67,7 +70,9 @@ export function MessageInput({
     [dismissed, setDismissed] = useState<string | null>(null),
     [search, setSearch] = useState<ChatFileSearch | null>(null),
     // The query (`queryKey`) the search last started; its answer belongs to no other.
-    [searched, setSearched] = useState<string | null>(null);
+    [searched, setSearched] = useState<string | null>(null),
+    // Why the query (`queryKey`) couldn't pick a file, shown while it is typed.
+    [refusal, setRefusal] = useState<{ key: string; message: string } | null>(null);
   const id = useId();
   useEffect(() => {
     const acquired = controller.createFileSearch();
@@ -146,6 +151,8 @@ export function MessageInput({
   }
   function pick(path: string) {
     if (!query || !fresh || (full && !mentions.some((mention) => mention.path === path))) return;
+    const refused = refuseMention?.(path);
+    if (refused) return setRefusal({ key: queryKey!, message: refused });
     const inserted = insertMention(draft, query, selection.caret, path);
     edit(
       inserted.text,
@@ -154,7 +161,7 @@ export function MessageInput({
     );
     onMention?.(path);
   }
-  let status = results.error;
+  let status = refusal?.key === queryKey ? refusal.message : results.error;
   if (!status && full) status = `A message can mention at most ${maximumChatMentions} files.`;
   else if (!status && !matches.length && results.busy) status = 'Searching files…';
   else if (!status && !results.busy && results.partial)

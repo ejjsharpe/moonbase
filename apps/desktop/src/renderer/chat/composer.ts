@@ -38,8 +38,9 @@ const plural = (count: number, one: string, many: string) =>
  *
  * The new chat's draft is shared by every view, but each view has its own folder, so the composer
  * remembers the folder each mention was picked in. Showing the draft never changes it; Send makes
- * its mentions relative to the folder it sends in (`resolveMentions`). A mention whose folder isn't
- * known, as after a restart, is relative to that folder.
+ * its mentions relative to the folder it sends in (`checkMentions`). The folders live only as long
+ * as this composer (its controller), so a mention whose folder isn't known, as after a restart,
+ * holds the first Send until the user confirms it as a file in the folder sent in.
  */
 export class ChatComposer {
   private snapshot: ChatComposerSnapshot = { places: {}, creatingWorktree: false, notice: null };
@@ -47,17 +48,40 @@ export class ChatComposer {
   private readonly chat: ComposerChat;
   /** The folder each of the new chat draft's mentions was picked in, by its path. */
   private folders = new Map<string, string>();
+  /** Worktrees a place made, kept as its folder until a chat is created in one. */
+  private readonly worktrees = new Map<
+    string,
+    { initialCwd: string; root: string; from: string }
+  >();
   private selected: string | null;
   constructor(chat: ComposerChat) {
     this.chat = chat;
     this.selected = chat.getSnapshot().selected?.conversationId ?? null;
-    // Opening a chat leaves the new chat's messages behind: they were about what it was going to do.
-    chat.subscribe(() => {
-      const selected = this.chat.getSnapshot().selected?.conversationId ?? null;
-      if (selected === this.selected) return;
-      this.selected = selected;
-      if (selected !== null) this.clearMessages();
-    });
+    chat.subscribe(() => this.observeChat());
+  }
+  private observeChat() {
+    const state = this.chat.getSnapshot();
+    const selected = state.selected?.conversationId ?? null;
+    // The folders cover only what the new chat draft mentions, so a sent or emptied one has none.
+    if (!selected) {
+      const mentioned = new Set(state.mentions.map((mention) => mention.path));
+      for (const path of this.folders.keys()) if (!mentioned.has(path)) this.folders.delete(path);
+    }
+    // Leaving the new chat for a chat leaves its messages behind: they were about what it would do.
+    const leftNewChat = this.selected === null && selected !== null;
+    this.selected = selected;
+    if (leftNewChat) this.clearMessages();
+    // Once a chat exists in a place's worktree, by this send or a retried one, the place starts over
+    // in the folder it made the worktree from.
+    for (const [key, made] of this.worktrees) {
+      const created =
+        state.snapshot?.conversation.cwd === made.root ||
+        state.chats.some((chat) => chat.cwd === made.root);
+      if (!created) continue;
+      this.worktrees.delete(key);
+      if (this.readPlace(key, made.initialCwd).cwd === made.root)
+        this.updatePlace(key, made.initialCwd, { cwd: made.from, newWorktree: false });
+    }
   }
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
@@ -97,6 +121,17 @@ export class ChatComposer {
     for (const path of this.folders.keys()) if (!mentioned.has(path)) this.folders.delete(path);
   }
   /**
+   * Why the new chat draft can't mention `path` picked in `folder`: one spelling names one file,
+   * and the draft already mentions that path in another folder.
+   */
+  findMentionClash(path: string, folder: string): string | null {
+    const state = this.chat.getSnapshot();
+    const own = this.folders.get(path);
+    if (state.selected || !own || own === folder) return null;
+    if (!state.mentions.some((mention) => mention.path === path)) return null;
+    return `The draft already mentions ${path} in ${own}, so the one in ${folder} can't be mentioned too.`;
+  }
+  /**
    * Makes the new chat draft's mentions relative to `folder`, the one it is about to send in, and
    * records them as picked in `sentIn` (a worktree holds its checkout's files at the same paths).
    * Returns how many were in another folder and became full paths, or null when the draft couldn't
@@ -116,18 +151,34 @@ export class ChatComposer {
     this.folders = new Map(resolved.mentions.map((mention) => [mention.path, sentIn]));
     return resolved.dropped;
   }
-  /** Why the new chat can't send in `folder` yet, after making its mentions relative to it. */
+  /**
+   * Why the new chat can't send in `folder` yet, after making its mentions relative to it: some
+   * were in another folder and are written out in full, or some had no known folder and are now
+   * taken as files in this one. Either way the next Send goes ahead.
+   */
   checkMentions(folder: string, sentIn = folder): string | null {
+    const state = this.chat.getSnapshot();
+    const unknown = state.selected
+      ? 0
+      : state.mentions.filter((mention) => !this.folders.has(mention.path)).length;
     const dropped = this.resolveMentions(folder, sentIn);
     if (dropped === null)
       return "The draft's mentions couldn't be made relative to its folder, so it wasn't sent.";
-    if (!dropped) return null;
-    return `${plural(dropped, "A mentioned file isn't", "mentioned files aren't")} in ${folder}, so ${dropped === 1 ? 'it is' : 'they are'} written out as ${dropped === 1 ? 'a full path' : 'full paths'} instead. Send again to send the message.`;
+    const problems: string[] = [];
+    if (dropped)
+      problems.push(
+        `${plural(dropped, "A mentioned file isn't", "mentioned files aren't")} in ${folder}, so ${dropped === 1 ? 'it is' : 'they are'} written out as ${dropped === 1 ? 'a full path' : 'full paths'} instead.`,
+      );
+    if (unknown)
+      problems.push(
+        `Moonbase can't tell which folder ${plural(unknown, 'a mention was', 'mentions were')} picked in, as after a restart, so ${unknown === 1 ? 'it is' : 'they are'} now taken as ${unknown === 1 ? 'a file' : 'files'} in ${folder}.`,
+      );
+    return problems.length ? [...problems, 'Send again to send the message.'].join(' ') : null;
   }
   /**
    * Makes a linked worktree of the place's folder and sends the new chat's first message in it.
-   * Until the chat is created the place keeps the worktree as its folder, so a retried send never
-   * makes a second one; once it is, the place starts over for the next new chat.
+   * Until a chat is created there the place keeps the worktree as its folder, so a retried send
+   * never makes a second one; then the place goes back to the folder it was made from.
    */
   sendInWorktree(
     key: string,
@@ -141,7 +192,11 @@ export class ChatComposer {
     this.publish({ creatingWorktree: true });
     void createWorktree(cwd, chatWorktreeBranch(this.chat.getSnapshot().draft)).then(
       (root) => {
+        this.worktrees.set(key, { initialCwd, root, from: cwd });
         this.updatePlace(key, initialCwd, { cwd: root, newWorktree: false });
+        // `cwd` is a repository root (main refuses others), and the worktree holds its committed
+        // files at the same relative paths, so mentions picked in `cwd` are in the worktree.
+        for (const [path, folder] of this.folders) if (folder === cwd) this.folders.set(path, root);
         if (this.chat.getSnapshot().selected) {
           this.publish({
             creatingWorktree: false,
@@ -149,20 +204,15 @@ export class ChatComposer {
           });
           return;
         }
-        // `cwd` is a repository root (main refuses others), and the worktree holds its committed
-        // files at the same relative paths. Mentions can't be added while it is made.
-        const problem = this.checkMentions(cwd, root);
+        // Mentions can't be added while it is made, but check them as any Send does.
+        const problem = this.checkMentions(root);
         if (problem) {
           this.publish({ creatingWorktree: false, notice: problem });
           return;
         }
         // Sent first, so a view shown again sees the send under way rather than an idle draft.
-        const sending = this.chat.send({ cwd: root, ...settings });
+        void this.chat.send({ cwd: root, ...settings });
         this.publish({ creatingWorktree: false });
-        void sending.then(() => {
-          if (this.chat.getSnapshot().selected)
-            this.updatePlace(key, initialCwd, { cwd: initialCwd, newWorktree: false });
-        });
       },
       (error: unknown) => {
         this.publish({
@@ -207,11 +257,17 @@ export class ChatComposer {
       ).values(),
     ];
     // One spelling can name only one file: the new draft's own mention of it from elsewhere wins.
-    const clash = mentions.find(
-      (mention) =>
-        state.mentions.some((own) => own.path === mention.path) &&
-        this.folders.get(mention.path) !== folder,
-    );
+    // A folder nobody knows can't be told apart, and Send will ask about it anyway.
+    const clash =
+      folder &&
+      mentions.find((mention) => {
+        const own = this.folders.get(mention.path);
+        return (
+          own !== undefined &&
+          own !== folder &&
+          state.mentions.some((mentioned) => mentioned.path === mention.path)
+        );
+      });
     let problem: string | null = null;
     if (clash)
       problem = `The new chat's draft already mentions ${clash.path} in another folder, so the rest of this message stays here.`;

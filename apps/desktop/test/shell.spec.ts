@@ -1729,7 +1729,10 @@ test('a new chat keeps its folder across project visits, and a worktree Git fini
   await expect(page.getByRole('alert').filter({ hasText: /worktree/i })).toHaveCount(0);
   await page.getByRole('button', { name: 'New chat', exact: true }).click();
   await expect(page.getByText('What should we work on?')).toBeVisible();
-  await expect(folderChoice).not.toHaveAttribute('title');
+  await expect(folderChoice).toHaveAttribute('title', '/Users/demo/notes');
+  await expect(page.getByRole('combobox', { name: 'Worktree', exact: true })).toContainText(
+    'This folder',
+  );
 });
 
 test('a worktree that fails while another view shows the chat says so there', async ({ page }) => {
@@ -1781,6 +1784,23 @@ test('a new chat’s mentions keep the folder they were picked in, and Send chec
   const dock = page.getByRole('complementary', { name: 'Project chats', exact: true });
   const dockMessage = dock.getByRole('textbox', { name: 'Message', exact: true });
   await expect(dockMessage).toHaveValue('Fix @README.md ');
+  await expect(dock.locator('mark')).toHaveCount(1);
+  // The same path in the dock's folder would be a second file under one spelling: it's refused.
+  await dockMessage.evaluate((element: HTMLTextAreaElement) => {
+    element.focus();
+    element.setSelectionRange(element.value.length, element.value.length);
+  });
+  await dockMessage.pressSequentially('@README');
+  const dockReadme = dock
+    .getByRole('listbox', { name: 'Files', exact: true })
+    .getByRole('option', { name: 'README.md', exact: true });
+  await expect(dockReadme).not.toHaveAttribute('aria-disabled');
+  await dockReadme.click();
+  await expect(dock.getByRole('status')).toHaveText(
+    "The draft already mentions README.md in /Users/demo/notes, so the one in /demo/moonbase can't be mentioned too.",
+  );
+  await expect(dockMessage).toHaveValue('Fix @README.md @README');
+  await dockMessage.fill('Fix @README.md ');
   await expect(dock.locator('mark')).toHaveCount(1);
   await page.getByRole('tab', { name: 'Agents', exact: true }).click();
   await expect(message).toHaveValue('Fix @README.md ');
