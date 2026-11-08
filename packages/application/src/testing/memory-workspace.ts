@@ -9,6 +9,7 @@ import {
   type CheckoutTarget,
   type FileDocument,
   type FileTarget,
+  type GitChange,
   type WorkspaceCommand,
   type EditorRecovery,
   type OperationResult,
@@ -26,6 +27,8 @@ type Seed = {
   head?: Record<string, string>;
   index?: Record<string, string>;
   ignored?: string[];
+  /** Unmerged paths, each reported as one conflicted change. */
+  conflicted?: string[];
 };
 type Entry = FileDocument & { directory: boolean };
 const fail = (message: string, code: ApplicationError['code'] = 'InvalidInput'): never => {
@@ -408,18 +411,31 @@ export function memoryWorkspace(seeds: Seed[]) {
     gitStatus: ({ checkout }) =>
       call('gitStatus', () => {
         const seed = exact(checkout),
-          changes: { path: string; area: 'staged' | 'unstaged' | 'untracked' }[] = [];
-        for (const [path, entry] of entries(checkout))
-          if (!entry.directory) {
-            const index = readOwn(seed.index, path) ?? readOwn(seed.head, path);
-            if (index === undefined) changes.push({ path, area: 'untracked' });
-            else if (entry.text !== index) changes.push({ path, area: 'unstaged' });
-            if (
-              readOwn(seed.index, path) !== undefined &&
-              readOwn(seed.index, path) !== readOwn(seed.head, path)
-            )
-              changes.push({ path, area: 'staged' });
+          working = entries(checkout),
+          changes: GitChange[] = [],
+          paths = new Set([
+            ...working.keys(),
+            ...Object.keys(seed.head ?? {}),
+            ...Object.keys(seed.index ?? {}),
+          ]);
+        for (const path of paths) {
+          const entry = working.get(path);
+          if (entry?.directory) continue;
+          if (seed.conflicted?.includes(path)) {
+            changes.push({ path, area: 'conflicted', kind: 'conflicted' });
+            continue;
           }
+          const head = readOwn(seed.head, path),
+            staged = readOwn(seed.index, path),
+            index = staged ?? head;
+          if (index === undefined) {
+            if (!seed.ignored?.some((item) => affected(path, item)))
+              changes.push({ path, area: 'untracked', kind: 'untracked' });
+          } else if (!entry) changes.push({ path, area: 'unstaged', kind: 'deleted' });
+          else if (entry.text !== index) changes.push({ path, area: 'unstaged', kind: 'modified' });
+          if (staged !== undefined && staged !== head)
+            changes.push({ path, area: 'staged', kind: head === undefined ? 'added' : 'modified' });
+        }
         return { branch: checkout.branch, changes };
       }),
     listWorktrees: ({ checkout }) =>

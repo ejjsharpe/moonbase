@@ -272,8 +272,10 @@ test('first native folder open displays ignored files before Git classification 
       'click',
       function begin(event) {
         if (
-          (event.target as Element).closest('[role="treeitem"]')?.getAttribute('aria-label') !==
-          'src'
+          (event.target as Element)
+            .closest('[role="treeitem"]')
+            ?.getAttribute('aria-label')
+            ?.replace(/, contains changes$/, '') !== 'src'
         )
           return;
         window.firstOpenTiming.started = performance.now();
@@ -290,9 +292,12 @@ test('first native folder open displays ignored files before Git classification 
     );
   });
   try {
-    await page.getByRole('treeitem', { name: 'src', exact: true }).click();
+    // Git status may still be pending, so the folder may not yet say it contains changes.
+    await page.getByRole('treeitem', { name: /^src(, contains changes)?$/ }).click();
     await expect(ignored).toBeVisible();
-    await expect(page.getByRole('treeitem', { name: 'src/normal.ts', exact: true })).toBeVisible();
+    await expect(
+      page.getByRole('treeitem', { name: /^src\/normal\.ts(, untracked)?$/ }),
+    ).toBeVisible();
     await expect.poll(() => app.evaluate(() => globalThis.desktopTest.held)).toBe('waiting');
     await expect(ignored).not.toHaveAttribute('aria-description');
     const milliseconds = await page.evaluate(
@@ -849,7 +854,7 @@ test('real create, dirty move and copy use native operations; lost move reply re
   await page.getByRole('dialog').getByRole('button', { name: 'New File', exact: true }).click();
   await expect(page.getByRole('tab', { name: 'created.ts', exact: true })).toBeVisible();
   await edit('dirty created buffer', 'created.ts');
-  await page.getByRole('treeitem', { name: 'created.ts, unsaved', exact: true }).click();
+  await page.getByRole('treeitem', { name: 'created.ts, unsaved, untracked', exact: true }).click();
   await page.getByRole('tree', { name: 'Files', exact: true }).press('ContextMenu');
   await page.getByRole('menuitem', { name: 'Rename…', exact: true }).click();
   await page.getByLabel('Destination relative path').fill('renamed.ts');
@@ -867,7 +872,7 @@ test('real create, dirty move and copy use native operations; lost move reply re
   await expect(
     page.locator('.view-line').filter({ hasText: 'dirty created buffer' }).first(),
   ).toBeVisible();
-  await page.getByRole('treeitem', { name: 'renamed.ts, unsaved', exact: true }).click();
+  await page.getByRole('treeitem', { name: 'renamed.ts, unsaved, untracked', exact: true }).click();
   await page.getByRole('tree', { name: 'Files', exact: true }).press('ContextMenu');
   await page.getByRole('menuitem', { name: 'Duplicate…', exact: true }).click();
   await page.getByLabel('Destination relative path').fill('copied.ts');
@@ -982,7 +987,7 @@ test('native Trash moves only a captured temporary fixture and leaves its dirty 
   const inode = statSync(join(checkout, name)).ino;
   await open(name);
   await edit('retained after native Trash', name);
-  await page.getByRole('treeitem', { name: name + ', unsaved', exact: true }).click();
+  await page.getByRole('treeitem', { name: name + ', unsaved, untracked', exact: true }).click();
   await page.getByRole('tree', { name: 'Files', exact: true }).press('ContextMenu');
   await page.getByRole('menuitem', { name: 'Move to Trash', exact: true }).click();
   await page
@@ -1225,7 +1230,7 @@ test('unacknowledged real move evidence restores dirty text on process restart w
     .poll(async () => (await recovery()).state.drafts[0]?.text)
     .toBe('draft before uncertain move');
   const inode = statSync(join(checkout, 'a.ts')).ino;
-  await page.getByRole('treeitem', { name: 'a.ts, unsaved', exact: true }).click();
+  await page.getByRole('treeitem', { name: 'a.ts, unsaved, modified', exact: true }).click();
   await page.getByRole('tree', { name: 'Files', exact: true }).press('ContextMenu');
   await page.getByRole('menuitem', { name: 'Rename…', exact: true }).click();
   await page.getByLabel('Destination relative path').fill('moved.ts');
@@ -1261,7 +1266,7 @@ test('replacement consent cannot overwrite another open dirty draft or admit a n
   await open('b.ts');
   await edit('DESTINATION DRAFT', 'b.ts');
   await expect.poll(async () => (await recovery()).state.drafts.length).toBe(2);
-  await page.getByRole('treeitem', { name: 'a.ts, unsaved', exact: true }).click();
+  await page.getByRole('treeitem', { name: 'a.ts, unsaved, modified', exact: true }).click();
   await page.getByRole('tree', { name: 'Files', exact: true }).press('ContextMenu');
   await page.getByRole('menuitem', { name: 'Rename…', exact: true }).click();
   await page.getByLabel('Destination relative path').fill('b.ts');

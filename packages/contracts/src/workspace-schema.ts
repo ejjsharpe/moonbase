@@ -165,9 +165,19 @@ export const DirectoryListingSchema = struct({
   partial: Schema.Boolean,
   error: optional(Schema.String),
 });
+export const GitChangeKindSchema = Schema.Literals([
+  'modified',
+  'added',
+  'deleted',
+  'untracked',
+  'conflicted',
+  'typechange',
+]);
+/** One path's change in one area; an unmerged path has a single `conflicted` entry. */
 export const GitChangeSchema = struct({
   path,
-  area: Schema.Literals(['staged', 'unstaged', 'untracked']),
+  area: Schema.Literals(['conflicted', 'staged', 'unstaged', 'untracked']),
+  kind: GitChangeKindSchema,
 });
 export const GitStatusSchema = struct({
   branch: Schema.String,

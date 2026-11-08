@@ -163,3 +163,75 @@ test('large expanded trees keep navigation and selection virtualized', async ({ 
   await expect(firstFolder).toHaveAttribute('aria-selected', 'true');
   await page.screenshot({ path: 'test-results/explorer-large-tree.png', fullPage: true });
 });
+
+test('Git status colours changed files, marks them with a letter and dots folders above them', async ({
+  page,
+}) => {
+  await page.goto('/');
+  const region = page.getByRole('region', { name: 'First editor', exact: true });
+  const tree = region.getByRole('tree', { name: 'Files', exact: true });
+  await expect(tree.getByRole('treeitem', { name: 'src', exact: true })).toBeVisible();
+  await expect(tree.getByRole('treeitem', { name: 'README.md', exact: true })).toBeVisible();
+  await page.evaluate(async () => {
+    const { first, checkout, memory } = window.demo;
+    memory.externalWrite({ checkout, path: 'src/example.ts' }, 'export const changed = true;\n');
+    await first.mutate({
+      checkout,
+      kind: 'create-file',
+      sources: [],
+      destination: 'notes.md',
+      replacements: [],
+    });
+  });
+  const folder = tree.getByRole('treeitem', { name: 'src, contains changes', exact: true });
+  const untracked = tree.getByRole('treeitem', { name: 'notes.md, untracked', exact: true });
+  await expect(folder).toBeVisible();
+  await expect(untracked).toBeVisible();
+  // Staged and unstaged edits to one file show it once, as modified.
+  await expect(
+    tree.getByRole('treeitem', { name: 'welcome.ts, modified', exact: true }),
+  ).toHaveCount(1);
+  const sand = 'rgb(217, 200, 160)',
+    green = 'rgb(167, 217, 139)';
+  await expect(folder.locator('[data-git-status="modified"]')).toHaveCSS('background-color', sand);
+  await expect(folder.locator('[data-git-status]')).toHaveText('');
+  await expect(untracked.locator('[data-git-status="untracked"]')).toHaveText('U');
+  await expect(untracked.locator('[data-git-status="untracked"]')).toHaveCSS('color', green);
+  await expect(untracked.getByText('notes.md', { exact: true })).toHaveCSS('color', green);
+  // A clean file keeps its plain name and no mark.
+  const clean = tree.getByRole('treeitem', { name: 'README.md', exact: true });
+  await expect(clean.locator('[data-git-status]')).toHaveCount(0);
+  await expect(clean.getByText('README.md', { exact: true })).toHaveCSS(
+    'color',
+    'rgb(180, 184, 198)',
+  );
+
+  await folder.click();
+  const modified = tree.getByRole('treeitem', { name: 'src/example.ts, modified', exact: true });
+  await expect(modified.locator('[data-git-status="modified"]')).toHaveText('M');
+  await expect(modified.getByText('example.ts', { exact: true })).toHaveCSS('color', sand);
+  // The unsaved dot and the letter share the trailing slot.
+  await page.evaluate(async () => {
+    const { first, checkout } = window.demo;
+    await first.open({ checkout, path: 'src/example.ts' }, { intent: 'keep' });
+    first.edit({ checkout, path: 'src/example.ts' }, 'export const changed = false;\n');
+  });
+  const dirty = tree.getByRole('treeitem', {
+    name: 'src/example.ts, unsaved, modified',
+    exact: true,
+  });
+  await expect(dirty).toBeVisible();
+  await expect(dirty.locator('[aria-hidden="true"]').last()).toHaveText('•M');
+  await page.screenshot({ path: 'test-results/explorer-git-status.png', fullPage: true });
+
+  await region.getByRole('button', { name: 'Changes', exact: true }).click();
+  const changes = region.getByRole('region', { name: 'Changes', exact: true });
+  const changedRow = changes.getByRole('button', { name: 'src/example.ts', exact: true });
+  await expect(changedRow).toHaveAttribute('aria-description', 'modified');
+  await expect(changedRow.locator('[data-git-status="modified"]')).toHaveText('M');
+  const untrackedRow = region
+    .getByRole('region', { name: 'Untracked', exact: true })
+    .getByRole('button', { name: 'notes.md', exact: true });
+  await expect(untrackedRow.locator('[data-git-status="untracked"]')).toHaveText('U');
+  await expect(untrackedRow.locator('[data-git-status="untracked"]')).toHaveCSS('color', green);
+});

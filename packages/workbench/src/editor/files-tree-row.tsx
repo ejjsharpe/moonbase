@@ -1,8 +1,10 @@
 import * as stylex from '@stylexjs/stylex';
-import { filesUI } from '@moonbase/ui/files';
+import type { GitChangeKind } from '@moonbase/contracts/workspace';
+import { filesUI, gitStatusHues, gitStatusUI } from '@moonbase/ui/files';
 import { styles } from './styles.ts';
 import { Icon } from './icon.tsx';
 import { rowHeight, type VisibleRow } from './files-tree-rows.ts';
+import { gitStatusMarks } from './files-tree-status.ts';
 
 const isContextClick = (event: { button: number; ctrlKey: boolean }) =>
   event.button === 2 || (event.button === 0 && event.ctrlKey && navigator.platform.includes('Mac'));
@@ -17,6 +19,7 @@ export function FilesTreeRow({
   focused,
   active,
   dirty,
+  status,
   onOpenMenu,
   onSelect,
   onOpen,
@@ -30,6 +33,8 @@ export function FilesTreeRow({
   focused: boolean;
   active: boolean;
   dirty: boolean;
+  /** A file's strongest Git change, or a folder's strongest changed descendant's. */
+  status?: GitChangeKind;
   /** Opens the context menu for this row at a point in the viewport. */
   onOpenMenu: (path: string, x: number, y: number) => void;
   /** A primary click; `additive` when ⌘ (Ctrl off a Mac) was held. */
@@ -38,6 +43,9 @@ export function FilesTreeRow({
   onOpen: (path: string) => void;
 }) {
   const folderIcon = expanded ? 'folderOpen' : 'folder';
+  let statusLabel = '';
+  if (status)
+    statusLabel = row.directory ? ', contains changes' : ', ' + gitStatusMarks[status].label;
   return (
     <div
       id={id}
@@ -49,7 +57,7 @@ export function FilesTreeRow({
       aria-expanded={row.directory ? expanded : undefined}
       aria-selected={selected}
       aria-current={active ? 'true' : undefined}
-      aria-label={row.path + (dirty ? ', unsaved' : '')}
+      aria-label={row.path + (dirty ? ', unsaved' : '') + statusLabel}
       aria-description={row.ignored ? 'Git-ignored' : undefined}
       {...stylex.props(
         styles.treeRow(index * rowHeight),
@@ -90,11 +98,29 @@ export function FilesTreeRow({
         {...stylex.props(
           styles.treeLabel,
           active && filesUI.activeLabel,
+          status && !row.directory && gitStatusHues[status],
           row.ignored && filesUI.ignored,
         )}>
         {row.path.split('/').at(-1)}
       </span>
-      {dirty && <span aria-hidden="true"> •</span>}
+      {(dirty || status) && (
+        <span aria-hidden="true" {...stylex.props(gitStatusUI.slot)}>
+          {dirty && <span>•</span>}
+          {status &&
+            (row.directory ? (
+              <span
+                data-git-status={status}
+                {...stylex.props(gitStatusUI.dot, gitStatusHues[status])}
+              />
+            ) : (
+              <span
+                data-git-status={status}
+                {...stylex.props(gitStatusUI.letter, gitStatusHues[status])}>
+                {gitStatusMarks[status].letter}
+              </span>
+            ))}
+        </span>
+      )}
     </div>
   );
 }

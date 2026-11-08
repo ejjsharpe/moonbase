@@ -268,8 +268,11 @@ test('Git staged and unstaged originals both compare against the current working
     assert.deepEqual(
       (await f.client.command('gitStatus', { checkout })).changes
         .filter((c) => c.path === 'file.txt')
-        .map((c) => c.area),
-      ['staged', 'unstaged'],
+        .map((c) => [c.area, c.kind]),
+      [
+        ['staged', 'modified'],
+        ['unstaged', 'modified'],
+      ],
     );
     assert(
       (await f.client.command('lookupFiles', { checkout, query: 'fltx' })).matches.some(

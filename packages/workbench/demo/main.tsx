@@ -29,28 +29,33 @@ const remoteCheckout = { ...checkout, hostId: 'remote-memory', root: '/demo/remo
 const secondCheckout = new URLSearchParams(location.search).has('remote')
   ? remoteCheckout
   : checkout;
+const committed = {
+  'README.md':
+    '# Volatile demo\n\nTwo editors share a workspace, with independent buffers and recovery identities.\n',
+  'src/example.ts': 'export function double(value: number) {\n  return value * 2;\n}\n',
+};
 const memory = memoryWorkspace([
   {
     checkout,
     files: {
       'welcome.ts': "// Moonbase editor module demo\nexport const greeting = 'Hello Moonbase';\n",
-      'README.md':
-        '# Volatile demo\n\nTwo editors share a workspace, with independent buffers and recovery identities.\n',
-      'src/example.ts': 'export function double(value: number) {\n  return value * 2;\n}\n',
+      ...committed,
       'src/ignored.ts': '// Git-ignored entries remain visible.\n',
       'ignored.txt': 'Hidden when Git-ignored files are filtered.\n',
     },
-    head: { 'welcome.ts': "export const greeting = 'Hello';\n" },
+    head: { ...committed, 'welcome.ts': "export const greeting = 'Hello';\n" },
     index: { 'welcome.ts': "export const greeting = 'Hello staged';\n" },
     ignored: ['ignored.txt', 'src/ignored.ts'],
   },
   {
     checkout: { ...checkout, checkoutId: 'other', root: '/demo/other' },
     files: { 'elsewhere.ts': 'export const other = true;\n' },
+    head: { 'elsewhere.ts': 'export const other = true;\n' },
   },
   {
     checkout: remoteCheckout,
     files: { 'welcome.ts': '// Controlled remote fixture\n', 'README.md': '# Remote fixture\n' },
+    head: { 'welcome.ts': '// Controlled remote fixture\n', 'README.md': '# Remote fixture\n' },
   },
 ]);
 // One demo composition root. Feature packages do not construct runtimes.

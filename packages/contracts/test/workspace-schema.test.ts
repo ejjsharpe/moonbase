@@ -111,7 +111,7 @@ const outputs = {
     partial: false,
   },
   getIgnoredPaths: { paths: [target.path] },
-  gitStatus: { branch: '', changes: [{ path: target.path, area: 'staged' }] },
+  gitStatus: { branch: '', changes: [{ path: target.path, area: 'staged', kind: 'modified' }] },
   listWorktrees: {
     worktrees: [
       { root: checkout.root, branch: 'main', main: true, locked: false, prunable: false },

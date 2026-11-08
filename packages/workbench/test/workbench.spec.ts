@@ -202,7 +202,7 @@ for (const destination of ['tab menu', 'file menu', 'second editor'] as const)
         focused = page.getByRole('menuitem', { name: 'Keep Open', exact: true });
       } else if (destination === 'file menu') {
         await first(page)
-          .getByRole('treeitem', { name: 'welcome.ts', exact: true })
+          .getByRole('treeitem', { name: 'welcome.ts, modified', exact: true })
           .click({ button: 'right' });
         await page.keyboard.press('Home');
         focused = page
@@ -501,6 +501,16 @@ test('buffer tabs are spaced pills that reveal only their own close control with
   await expect(example).toContainText('TS');
   await expect(example).toContainText('example.ts');
   await expect(example).toHaveCSS('font-style', 'italic');
+  // Measure once the tab's entry animation has settled.
+  await expect
+    .poll(() =>
+      example.evaluate(async (element) => {
+        const width = element.getBoundingClientRect().width;
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        return width === element.getBoundingClientRect().width;
+      }),
+    )
+    .toBe(true);
   const originalBounds = await example.boundingBox();
   await welcome.hover();
   await expect(closeWelcome).toHaveCSS('opacity', '1');
@@ -1050,7 +1060,7 @@ test('real close-checkout removes its Monaco models without a teardown exception
 
 test('rejected unchanged Rename leaves explicit Save and Close usable', async ({ page }) => {
   await page.goto('/');
-  await first(page).getByRole('treeitem', { name: 'welcome.ts', exact: true }).click();
+  await first(page).getByRole('treeitem', { name: 'welcome.ts, modified', exact: true }).click();
   await first(page).getByRole('tree', { name: 'Files', exact: true }).press('ContextMenu');
   await page.getByRole('menuitem', { name: 'Rename…', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: 'Rename', exact: true }).click();
@@ -1456,7 +1466,7 @@ test('delayed public Copy cannot reopen a destination closed through Monaco UI',
     window.recoveryRace.copy.releasePreflight();
   });
   await expect.poll(() => page.evaluate(() => window.recoveryRace.copy.phase)).toBe('read');
-  await page.getByRole('treeitem', { name: 'copy.ts', exact: true }).dblclick();
+  await page.getByRole('treeitem', { name: 'copy.ts, untracked', exact: true }).dblclick();
   await page.getByRole('textbox', { name: 'copy.ts editor', exact: true }).focus();
   await page.keyboard.type('destination discarded ');
   await page.getByRole('button', { name: 'Close copy.ts', exact: true }).click();
@@ -1770,7 +1780,9 @@ test('valid prototype-shaped filenames edit and save without changing browser pr
           }),
         path,
       );
-      await first(page).getByRole('treeitem', { name: path, exact: true }).dblclick();
+      await first(page)
+        .getByRole('treeitem', { name: path + ', untracked', exact: true })
+        .dblclick();
       const input = first(page).getByRole('textbox', { name: path + ' editor', exact: true });
       await expect(input).toBeVisible();
       await input.focus();
@@ -1980,14 +1992,14 @@ test('Reveal starts a new Shift tree range and captures only that Trash batch', 
   await tree.press('Home');
   await tree.press('Shift+ArrowDown');
   await explorerAction(first(page), 'Reveal Active File');
-  await expect.poll(selected).toEqual(['welcome.ts']);
+  await expect.poll(selected).toEqual(['welcome.ts, modified']);
   await tree.focus();
   await tree.press('Shift+ArrowUp');
-  expect(await selected()).toEqual(['README.md', 'welcome.ts']);
+  expect(await selected()).toEqual(['README.md', 'welcome.ts, modified']);
   await tree.press('Shift+ArrowDown');
-  expect(await selected()).toEqual(['welcome.ts']);
+  expect(await selected()).toEqual(['welcome.ts, modified']);
   await tree.press('Shift+ArrowUp');
-  expect(await selected()).toEqual(['README.md', 'welcome.ts']);
+  expect(await selected()).toEqual(['README.md', 'welcome.ts, modified']);
   await tree.press('ContextMenu');
   await page.getByRole('menuitem', { name: 'Move 2 Items to Trash', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Move to Trash', exact: true });
@@ -1997,9 +2009,9 @@ test('Reveal starts a new Shift tree range and captures only that Trash batch', 
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
   await tree.focus();
   await tree.press('Shift+ArrowDown');
-  expect(await selected()).toEqual(['welcome.ts']);
+  expect(await selected()).toEqual(['welcome.ts, modified']);
   await tree.press('Shift+ArrowUp');
-  expect(await selected()).toEqual(['README.md', 'welcome.ts']);
+  expect(await selected()).toEqual(['README.md', 'welcome.ts, modified']);
 });
 
 test('workbench renders its supplied checkout independently of application navigation', async ({
