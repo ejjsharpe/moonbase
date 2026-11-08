@@ -73,8 +73,8 @@ import { holdTranscriptSelection } from './transcript-selection.ts';
 import { holdPlaceWhileFocusMoves } from './transcript-focus.ts';
 import { transcriptStyles as styles } from './transcript-styles.ts';
 
-/** Pixels between rows (`space.xl`); the list needs a number to lay rows out. */
-const rowGap = 24;
+/** Pixels between rows (`space.lg`); the list needs a number to lay rows out. */
+const rowGap = 16;
 /**
  * A first-render hint from the demo's measured rows (answers about 200–250px, questions about
  * 100px); once rows render the list uses each row type's measured average.
@@ -720,8 +720,12 @@ const getItemType = (item: TranscriptItem<TranscriptRow>) => {
 const renderItem = ({ item }: LegendListRenderItemProps<TranscriptItem<TranscriptRow>>) => (
   <Item item={item} />
 );
-const kindOfRow = (row: TranscriptRow) =>
-  row.kind === 'tool' ? 'message' : classifyEntry(row.entry);
+/** The live response is never empty: until it has something to show, it is working. */
+const kindOfRow = (row: TranscriptRow) => {
+  if (row.kind === 'tool') return 'message';
+  const kind = classifyEntry(row.entry);
+  return kind === 'empty' && row.kind === 'live' ? 'activity' : kind;
+};
 
 type RowProps = Omit<
   EntryProps,
@@ -809,7 +813,8 @@ function Item({ item }: { item: TranscriptItem<TranscriptRow> }) {
         joinNext={index < item.rows.length - 1}
       />
     ));
-  const folds = !!group && group.headlines.length >= (group.active ? 1 : 2);
+  // A working run shows its line even before it has a step to name.
+  const folds = !!group && (group.active || group.headlines.length >= 2);
   const expanded = !folds || fold.open || landed.open || found.holdsOpen;
   const toggle = () => {
     if (expanded) {
