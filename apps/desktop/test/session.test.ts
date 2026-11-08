@@ -262,8 +262,12 @@ test('superseded classifications release desktop capacity for unrelated file com
     await editor.openCheckout(target.root);
     for (let index = 0; index < 160; index++) await editor.list(target, 'folder');
     assert.equal(signals.length, 160);
-    assert(signals.slice(0, -1).every((signal) => signal.aborted));
+    // A folder keeps one superseded classification running so refreshes cannot starve Git: the
+    // first here, which never answers. Every later superseded one is cancelled.
+    assert.equal(signals[0].aborted, false, 'The kept classification stays live');
+    assert(signals.slice(1, -1).every((signal) => signal.aborted));
     assert.equal(signals.at(-1)?.aborted, false);
+    assert.equal(signals.filter((signal) => !signal.aborted).length, 2);
     assert.equal(await editor.open({ checkout: target, path: 'a.ts' }), true);
     assert.deepEqual(editor.getSnapshot().errors, []);
   } finally {
