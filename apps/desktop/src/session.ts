@@ -1,5 +1,5 @@
-import { mkdir, rmdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, realpath, rmdir } from 'node:fs/promises';
+import { isAbsolute, join, relative, sep } from 'node:path';
 import type { ManagedRuntime } from 'effect';
 import {
   decodeWorkspaceInput,
@@ -26,6 +26,11 @@ import {
   type Reply,
 } from './wire.ts';
 
+/** Whether `path` is `root` or lies within it. */
+const inside = (root: string, path: string) => {
+  const rest = relative(root, path);
+  return rest === '' || (rest !== '..' && !rest.startsWith(`..${sep}`) && !isAbsolute(rest));
+};
 const exact = (a: CheckoutTarget, b: CheckoutTarget) =>
   ['hostId', 'checkoutId', 'projectId', 'root', 'branch', 'worktree'].every(
     (k) => a[k as keyof CheckoutTarget] === b[k as keyof CheckoutTarget],
@@ -43,6 +48,10 @@ export type NativeActions = {
     clientId: string;
     references: string[];
   }): Promise<void>;
+  /** Writes text to the OS clipboard. */
+  copyText(text: string): Promise<void>;
+  /** Shows an absolute path in the OS file manager. */
+  reveal(path: string): Promise<void>;
 };
 /** Authority belongs to this main-frame session, never to an arbitrary renderer root or caller ID. */
 export class EditorSession {
@@ -82,6 +91,26 @@ export class EditorSession {
         code: 'Unauthorized',
         message: 'Choose this exact checkout with the native picker.',
       });
+  }
+  /**
+   * The absolute path of `path` (relative, `/`-separated; empty for the root) inside an approved
+   * checkout. The renderer can name nothing outside the checkouts the user chose.
+   */
+  private checkoutPath(target: unknown, path: unknown) {
+    this.approved(target);
+    const root = (target as CheckoutTarget).root;
+    if (
+      typeof path !== 'string' ||
+      path.length > 4096 ||
+      isAbsolute(path) ||
+      path.includes('\0') ||
+      path.includes('\\') ||
+      (path !== '' && path.split('/').some((part) => part === '' || part === '.' || part === '..'))
+    )
+      invalid('Invalid checkout path.');
+    const absolute = join(root, path as string);
+    if (!inside(root, absolute)) invalid('Invalid checkout path.');
+    return absolute;
   }
   private inspect(value: unknown, depth = 0, arrayLimit = 8192): void {
     if (depth > 24) invalid('Input nesting limit exceeded.');
@@ -321,6 +350,33 @@ export class EditorSession {
         await request.retainDocumentRelease(() => this.native.release(capture));
         requireLive();
         value = references;
+      } else if (method === 'copy-paths') {
+        // Main writes the text, so the renderer can put only checkout paths on the clipboard.
+        const v = record(input);
+        keys(v, ['checkout', 'paths', 'relative']);
+        if (
+          !Array.isArray(v.paths) ||
+          !v.paths.length ||
+          v.paths.length > 20000 ||
+          typeof v.relative !== 'boolean'
+        )
+          invalid('Invalid paths to copy.');
+        const paths = v.paths as unknown[];
+        const absolute = paths.map((path) => this.checkoutPath(v.checkout, path));
+        await this.native.copyText((v.relative ? (paths as string[]) : absolute).join('\n'));
+        value = null;
+      } else if (method === 'reveal') {
+        const v = record(input);
+        keys(v, ['checkout', 'path']);
+        const target = this.checkoutPath(v.checkout, v.path);
+        // Follow links before checking again, so a link inside the checkout can't point out of it.
+        const [root, real] = await Promise.all([
+          realpath((v.checkout as CheckoutTarget).root),
+          realpath(target),
+        ]).catch(() => invalid('That file or folder no longer exists.'));
+        if (!inside(root, real)) invalid('Invalid checkout path.');
+        await this.native.reveal(real);
+        value = null;
       } else if (method === 'watch') {
         const v = decodeWorkspaceWatchInput(input);
         this.inspect(v);

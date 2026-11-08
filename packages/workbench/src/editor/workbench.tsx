@@ -27,7 +27,7 @@ import { Dialog } from '@base-ui/react/dialog';
 import { Tabs } from '@base-ui/react/tabs';
 import { ContextMenu as Menu } from '@base-ui/react/context-menu';
 import { controls } from '@moonbase/ui/controls';
-import { filesUI } from '@moonbase/ui/files';
+import { fileTypeMark, filesUI } from '@moonbase/ui/files';
 import { workbench } from '@moonbase/ui/workbench';
 import { overlays } from '@moonbase/ui/overlays';
 import type { CheckoutTarget, FileView } from '@moonbase/contracts/workspace';
@@ -72,6 +72,12 @@ export type WorkbenchProps = {
   /** Native/user-authorized selection belongs to the shell. A renderer path alone grants no access. */
   selectNativeImports?: (checkout: CheckoutTarget) => Promise<string[]>;
   selectClipboardImports?: (checkout: CheckoutTarget) => Promise<string[]>;
+  /** Copies a checkout's paths to the clipboard, joined by newlines: absolute, or as `relative`. */
+  copyPaths?: (checkout: CheckoutTarget, paths: string[], relative: boolean) => Promise<void>;
+  /** Shows a checkout's file or folder in the OS file manager. */
+  revealPath?: (checkout: CheckoutTarget, path: string) => Promise<void>;
+  /** Mentions a checkout's files in the chat beside it. */
+  mentionInChat?: (checkout: CheckoutTarget, paths: string[]) => void;
 };
 const changeAreas = [
   { area: 'staged', label: 'Staged' },
@@ -90,6 +96,9 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     onShowEditor,
     selectNativeImports,
     selectClipboardImports,
+    copyPaths,
+    revealPath,
+    mentionInChat,
   },
   ref,
 ) {
@@ -128,12 +137,21 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   const [mutationFinalFocus, setMutationFinalFocus] = useState<
     (() => boolean | HTMLElement | null) | undefined
   >(undefined);
+  // Where New File/Folder starts, such as the folder its menu was opened on.
+  const [mutationDestination, setMutationDestination] = useState('');
   useLayoutEffect(() => {
     lookupRef.current = lookup;
     projectRef.current = project;
   }, [lookup, project]);
-  function setAction(value: Action | null, finalFocus?: () => boolean | HTMLElement | null) {
-    if (value) setMutationFinalFocus(() => finalFocus);
+  function setAction(
+    value: Action | null,
+    finalFocus?: () => boolean | HTMLElement | null,
+    destination = '',
+  ) {
+    if (value) {
+      setMutationFinalFocus(() => finalFocus);
+      setMutationDestination(destination);
+    }
     actionRef.current = value;
     updateAction(value);
   }
@@ -156,7 +174,11 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       (value.kind !== 'trash' || value.paths.length > 0)
     );
   }
-  function requestMutation(value: Action, finalFocus?: () => boolean | HTMLElement | null) {
+  function requestMutation(
+    value: Action,
+    finalFocus?: () => boolean | HTMLElement | null,
+    destination?: string,
+  ) {
     if (
       !canRequestMutation(
         value,
@@ -171,7 +193,11 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       );
       return;
     }
-    setAction({ ...value, checkout: { ...value.checkout }, paths: [...value.paths] }, finalFocus);
+    setAction(
+      { ...value, checkout: { ...value.checkout }, paths: [...value.paths] },
+      finalFocus,
+      destination,
+    );
   }
   const choice = state.closePrompt;
   const [recent, setRecent] = useState<{
@@ -599,6 +625,9 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
               dialogOpen={!!(action || choice || lookup)}
               canRequestMutation={canRequestMutation}
               requestMutation={requestMutation}
+              copyPaths={copyPaths}
+              revealPath={revealPath}
+              mentionInChat={mentionInChat}
             />
           </>
         ) : (
@@ -677,17 +706,22 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                 current = state.buffers.find((buffer) => fileKey(buffer.target) === fileKey(file)),
                 dirty = current && current.text !== current.disk.text;
               const fileView = readOwn(selected.fileViews, path) || 'file';
+              // The file's name, then as much of its folder as tells it from other open tabs.
               const parts = path.split('/');
-              let label = parts.at(-1)!;
+              const label = parts.at(-1)!;
+              let hint = '';
               for (let count = 1; count <= parts.length; count++) {
-                label = parts.slice(-count).join('/');
+                const tail = parts.slice(-count).join('/');
                 if (
                   !selected.openFiles.some(
-                    (other) => other !== path && other.split('/').slice(-count).join('/') === label,
+                    (other) => other !== path && other.split('/').slice(-count).join('/') === tail,
                   )
-                )
+                ) {
+                  hint = parts.slice(-count, -1).join('/');
                   break;
+                }
               }
+              const mark = fileTypeMark(path);
               return (
                 <Menu.Root
                   key={fileKey(file)}
@@ -754,12 +788,22 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                         workbench.tabButton,
                         workbench.fileTabButton,
                         selected.preview === path && workbench.preview,
-                        dirty && workbench.unsaved,
                       )}>
-                      <span {...stylex.props(controls.icon)}>
-                        <Icon name="file" />
-                      </span>
+                      {mark ? (
+                        <span aria-hidden="true" {...stylex.props(mark.style)}>
+                          {mark.label}
+                        </span>
+                      ) : (
+                        <span {...stylex.props(controls.icon)}>
+                          <Icon name="file" />
+                        </span>
+                      )}
                       <span {...stylex.props(controls.truncate)}>{label}</span>
+                      {hint && (
+                        <span aria-hidden="true" {...stylex.props(workbench.fileTabHint)}>
+                          {hint}
+                        </span>
+                      )}
                     </Tabs.Tab>
                     <Button
                       {...stylex.props(
@@ -768,12 +812,21 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                         workbench.tabClose,
                         workbench.fileTabClose,
                         workbench.revealTabClose,
-                        selected.active === path && workbench.visibleTabClose,
+                        (selected.active === path || dirty) && workbench.visibleTabClose,
                       )}
                       aria-label={`Close ${path}`}
                       disabled={state.preserving}
                       onClick={() => run(closeFiles([path]))}>
-                      <Icon name="close" />
+                      {dirty ? (
+                        <>
+                          <span aria-hidden="true" {...stylex.props(workbench.unsavedDot)} />
+                          <span {...stylex.props(workbench.unsavedClose)}>
+                            <Icon name="close" />
+                          </span>
+                        </>
+                      ) : (
+                        <Icon name="close" />
+                      )}
                     </Button>
                   </Menu.Trigger>
                   <Menu.Portal>
@@ -1148,6 +1201,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
           action={action}
           close={() => setAction(null)}
           finalFocus={mutationFinalFocus}
+          initialDestination={mutationDestination}
         />
       )}
       {choice && (

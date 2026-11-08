@@ -30,6 +30,10 @@ import {
   IconUpload,
   IconUser,
   IconX,
+  IconAt,
+  IconFolderSearch,
+  IconLink,
+  IconPencil,
 } from '@tabler/icons-react';
 
 export const icons = {
@@ -64,4 +68,8 @@ export const icons = {
   send: IconArrowUp,
   stop: IconSquare,
   more: IconDots,
+  mention: IconAt,
+  link: IconLink,
+  rename: IconPencil,
+  finder: IconFolderSearch,
 } as const;

@@ -40,6 +40,10 @@ export type DesktopShellProps = {
   createChatWorktree?: (root: string, branch: string) => Promise<string>;
   selectCheckout?: () => Promise<string | null>;
   selectClipboardImports?: (checkout: CheckoutTarget) => Promise<string[]>;
+  /** Copies a checkout's paths to the clipboard, joined by newlines: absolute, or as `relative`. */
+  copyPaths?: (checkout: CheckoutTarget, paths: string[], relative: boolean) => Promise<void>;
+  /** Shows a checkout's file or folder in the OS file manager. */
+  revealPath?: (checkout: CheckoutTarget, path: string) => Promise<void>;
   selectDroppedImports?: (checkout: CheckoutTarget, files: File[]) => Promise<string[]>;
 };
 const noSubscription = () => () => {};
@@ -58,6 +62,8 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
     selectCheckout,
     selectClipboardImports,
     selectDroppedImports,
+    copyPaths,
+    revealPath,
   },
   ref,
 ) {
@@ -70,6 +76,8 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
     chat = application.chat;
   const [destination, setDestination] = useState<'project' | 'chat'>('chat');
   const [dockOpen, setDockOpen] = useState(true);
+  // Files the tree asked to mention in the dock's chat, until the dock takes them.
+  const [chatMention, setChatMention] = useState<{ id: number; files: string[] } | null>(null);
   const [settings, setSettings] = useState<SettingsSection | null>(null);
   const [projectWorktrees, setProjectWorktrees] = useState<{
     checkoutId: string;
@@ -488,6 +496,19 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
               checkout={selected}
               visible={view !== 'chat'}
               pickerEntries={pickerEntries}
+              copyPaths={copyPaths}
+              revealPath={revealPath}
+              mentionInChat={
+                chat
+                  ? (checkout, paths) => {
+                      setDockOpen(true);
+                      setChatMention((current) => ({
+                        id: (current?.id ?? 0) + 1,
+                        files: paths.map((path) => `${checkout.root}/${path}`),
+                      }));
+                    }
+                  : undefined
+              }
               onShowEditor={() => {
                 if (view !== 'chat') return;
                 setDestination('project');
@@ -578,6 +599,9 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
                             }
                           },
                           collapse: () => setDockOpen(false),
+                          mention: chatMention,
+                          mentionHandled: (id) =>
+                            setChatMention((current) => (current?.id === id ? null : current)),
                         }}
                       />
                     ) : (

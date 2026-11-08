@@ -2,7 +2,7 @@
 
 The macOS Electron app. It composes the workbench, headless application, workspace, local Pi and optional SSH/remote Pi modules. `src/main.ts` is the privileged composition root and owns native capabilities; the sandboxed renderer receives browser-safe clients only.
 
-The renderer opens only roots chosen in the native picker, already known, or listed by `listWorktrees` for an approved checkout. It cannot call `createWorktree` with a location of its own; a new chat's worktree is made by main instead (below).
+The renderer opens only roots chosen in the native picker, already known, or listed by `listWorktrees` for an approved checkout. It cannot call `createWorktree` with a location of its own; a new chat's worktree is made by main instead (below). Copy Path and Reveal in Finder likewise send main a checkout and relative paths: main writes the clipboard itself and reveals only paths that still resolve inside the checkout once links are followed.
 
 ## Run
 

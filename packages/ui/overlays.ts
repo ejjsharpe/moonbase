@@ -87,6 +87,25 @@ export const overlays = stylex.create({
     color: { default: colors.text, '[data-disabled]': colors.muted },
     cursor: { default: 'default', '[data-disabled]': 'not-allowed' },
   },
+  /** A menu row laid out as icon, label, then its shortcut. */
+  commandItem: {
+    justifyContent: 'flex-start',
+    gap: space.sm,
+    padding: '5px 10px',
+    fontSize: type.small,
+    whiteSpace: 'nowrap',
+  },
+  commandIcon: { display: 'inline-flex', flexShrink: 0, color: colors.muted },
+  commandLabel: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' },
+  commandKeys: {
+    flexShrink: 0,
+    paddingLeft: space.md,
+    color: colors.muted,
+    fontSize: type.caption,
+  },
+  dangerItem: { color: { default: colors.danger, '[data-disabled]': colors.muted } },
+  separator: { height: 1, margin: '4px 6px', backgroundColor: colors.border },
+  wideMenu: { width: 'min(280px, calc(100vw - 16px))' },
   detail: {
     display: 'block',
     color: colors.secondary,
