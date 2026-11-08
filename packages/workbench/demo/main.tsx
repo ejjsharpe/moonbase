@@ -106,7 +106,10 @@ const styles = stylex.create({
 function Demo() {
   const [visible, setVisible] = useState(true),
     [disposed, setDisposed] = useState(false),
-    [cleanupError, setCleanupError] = useState('');
+    [cleanupError, setCleanupError] = useState(''),
+    [sidebarHidden, setSidebarHidden] = useState(() =>
+      new URLSearchParams(location.search).has('sidebar-hidden'),
+    );
   return (
     <main {...stylex.props(workbench.document, styles.app)}>
       <div {...stylex.props(styles.tools)}>
@@ -156,7 +159,8 @@ function Demo() {
             controller={first}
             checkout={checkout}
             visible={visible}
-            sidebarHidden={new URLSearchParams(location.search).has('sidebar-hidden')}
+            sidebarHidden={sidebarHidden}
+            onShowSidebar={() => setSidebarHidden(false)}
             renderLayout={
               new URLSearchParams(location.search).has('editor-only')
                 ? ({ editor }) => editor

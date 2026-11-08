@@ -261,6 +261,115 @@ test('lookup debounce and A-B-A queries cancel obsolete reads and retain only th
   }
 });
 
+test('a refresh neither cancels an open from a lookup nor keeps restarting its query', async () => {
+  const { Layer } = await import('effect');
+  const { TestClock } = await import('effect/testing');
+  const memory = memoryWorkspace([{ checkout, files: { 'a.ts': 'A', 'b.ts': 'B', 'c.ts': 'C' } }]);
+  const runtime = ManagedRuntime.make(Layer.merge(memory.layer, TestClock.layer()));
+  const raw = makeEditorClient(runtime);
+  let read = gate(),
+    readEntered = gate(),
+    holdRead = false,
+    holdSearch = false;
+  const search = gate(),
+    searchEntered = gate();
+  const searches: { query: string; signal?: AbortSignal }[] = [];
+  const client: EditorClient = {
+    ...raw,
+    async command(name, input, options) {
+      if (name === 'readFile' && holdRead) {
+        readEntered.release();
+        await read.promise;
+      }
+      if (name === 'lookupFiles') {
+        searches.push({ query: (input as { query: string }).query, signal: options?.signal });
+        if (holdSearch) {
+          holdSearch = false;
+          searchEntered.release();
+          await search.promise;
+        }
+      }
+      return raw.command(name, input, options);
+    },
+  };
+  const editor = await acquireEditor(runtime, { client, clientId: 'lookup-refresh' });
+  await editor.load();
+  await editor.openCheckout(checkout.root);
+  await editor.flush();
+  const lookup = editor.createLookup();
+  const settled = (count: number) =>
+    new Promise<void>((resolve) => {
+      const off = lookup.subscribe(() => {
+        if (searches.length >= count && lookup.getSnapshot().message.endsWith('results')) {
+          off();
+          resolve();
+        }
+      });
+    });
+  const tick = () => runtime.runPromise(TestClock.adjust('120 millis'));
+  const openA = () =>
+    lookup.open((current) => editor.open(target('a.ts'), { intent: 'keep', current }));
+  try {
+    lookup.query('a', [checkout]);
+    const first = settled(1);
+    await tick();
+    await first;
+
+    // A change on disk re-runs the same query while the reader's open is reading the file.
+    holdRead = true;
+    const opening = openA();
+    await readEntered.promise;
+    lookup.query('a', [checkout]);
+    assert.notEqual(lookup.getSnapshot().message, 'Searching…', 'A refresh shows no search');
+    const refreshed = settled(2);
+    await tick();
+    await refreshed;
+    read.release();
+    assert.equal(await opening, true, 'The refresh must not cancel the open');
+    assert.equal(editor.getSnapshot().recovery.views[checkout.checkoutId].active, 'a.ts');
+
+    // A query the reader types still cancels an open in flight.
+    read = gate();
+    readEntered = gate();
+    const cancelled = openA();
+    await readEntered.promise;
+    lookup.query('b', [checkout]);
+    assert.equal(lookup.getSnapshot().message, 'Searching…');
+    read.release();
+    assert.equal(await cancelled, false);
+    holdRead = false;
+    const b = settled(3);
+    await tick();
+    await b;
+
+    // Refreshes that keep arriving while the query runs rerun it once it answers.
+    holdSearch = true;
+    lookup.query('c', [checkout]);
+    await tick();
+    await searchEntered.promise;
+    for (let i = 0; i < 3; i++) lookup.query('c', [checkout]);
+    await tick();
+    const c = settled(searches.length);
+    search.release();
+    await c;
+    assert.equal(lookup.getSnapshot().rows[0].path, 'c.ts');
+    const rerun = settled(searches.length + 1);
+    // The rerun waits out its own debounce.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await tick();
+    await rerun;
+    const cSearches = searches.filter((item) => item.query === 'c');
+    assert.equal(cSearches.length, 2, 'One rerun for every refresh that arrived meanwhile');
+    assert.equal(cSearches[0].signal?.aborted, false, 'Refreshes never restart the running search');
+  } finally {
+    read.release();
+    search.release();
+    await lookup.dispose();
+    await editor.dispose();
+    await runtime.dispose();
+  }
+});
+
 test('dismissing inspection admits no mutation; dismissing after dispatch retains model-owned outcome exactly once', async () => {
   const memory = memoryWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
   const runtime = ManagedRuntime.make(memory.layer),
