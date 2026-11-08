@@ -73,4 +73,26 @@ test('bundled first-party assets carry their own upstream notice', async (t) => 
   assert.match(text, /^BlexMono Nerd Font Mono 3\.5\.1 .*\("OFL-1\.1"\)\n\nLICENSE\.txt\n/);
   assert.match(text, /Copyright © 2017 IBM Corp\. with Reserved Font Name "Plex"/);
   assert.match(text, /SIL OPEN FONT LICENSE Version 1\.1/);
+  // The patched glyphs carry Nerd Fonts' own licence and each glyph set's upstream licence.
+  const nerdFonts = text.slice(text.indexOf('\nNerd Fonts 3.5.1 patched glyphs'));
+  assert.match(
+    nerdFonts,
+    /^\nNerd Fonts 3\.5\.1 .*\("MIT AND OFL-1\.1 AND CC-BY-4\.0 AND Apache-2\.0"\)\n\nLICENSE\n/,
+  );
+  assert.match(nerdFonts, /Copyright \(c\) 2014 Ryan L McIntyre/);
+  assert.match(nerdFonts, /\| Font Awesome +\| https:\/\/github\.com\/FortAwesome\/Font-Awesome/);
+  for (const [file, notice] of [
+    ['codicons/LICENSE.txt', /Attribution 4\.0 International/],
+    ['font-awesome/LICENSE.txt', /Font Awesome Free License/],
+    ['materialdesign/LICENSE', /Pictogrammers Free License/],
+    ['octicons/LICENSE', /Copyright \(c\) 2023 GitHub Inc\./],
+    ['pomicons/LICENSE', /Reserved Font Name Pomicons/],
+    ['powerline-extra/LICENSE', /Copyright \(c\) 2016 Ryan L McIntyre/],
+    ['powerline-symbols/LICENSE.txt', /Copyright 2013 Kim Silkebækken/],
+    ['weather-icons/OFL.txt', /Erik Flowers/],
+  ]) {
+    const start = nerdFonts.indexOf('\nglyphs/' + file + '\n');
+    assert(start > 0, file);
+    assert.match(nerdFonts.slice(start, nerdFonts.indexOf('\nglyphs/', start + 1) >>> 0), notice);
+  }
 });
