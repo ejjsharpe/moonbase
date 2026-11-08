@@ -35,8 +35,17 @@ import {
 import { rollUpGitStatus } from './files-tree-status.ts';
 import type { RunMutation } from './mutation-runner.tsx';
 
-/** A name being typed in the tree: renaming or duplicating `path`, or creating in folder `path`. */
-type TreeEdit = { kind: TreeEditKind; path: string; id: number };
+/**
+ * A name being typed in the tree: renaming or duplicating `path`, or creating in folder `path`.
+ * `focus` and `selected` are the tree's as the edit started.
+ */
+type TreeEdit = {
+  kind: TreeEditKind;
+  path: string;
+  id: number;
+  focus: string;
+  selected: string[];
+};
 /** A request from outside the tree, such as the explorer's "…" menu, to create in `parent`. */
 export type TreeCreateRequest = {
   checkout: CheckoutTarget;
@@ -49,6 +58,13 @@ const isNameField = (target: EventTarget) =>
   target instanceof HTMLElement && target.tagName === 'INPUT';
 const parentOf = (path: string) => path.split('/').slice(0, -1).join('/');
 const nameOf = (path: string) => path.split('/').at(-1)!;
+/** Whether an element that took focus can take it again. */
+const canRefocus = (element: Element | null): element is HTMLElement =>
+  element instanceof HTMLElement &&
+  element.isConnected &&
+  element.getClientRects().length > 0 &&
+  !element.matches(':disabled') &&
+  !element.closest('[inert]');
 /** `name copy.ext`, the name a duplicate starts with. */
 function copyName(name: string) {
   const stem = measureStem(name, false);
@@ -228,30 +244,64 @@ export function FilesTree({
       anchor.current = path;
       controller.tree(checkout, { focus: path, selected: [path] });
     }
-    setEdit({ kind, path, id: ++editIds.current });
+    const started = readOwn(controller.getSnapshot().recovery.views, checkout.checkoutId)!.tree;
+    setEdit({
+      kind,
+      path,
+      id: ++editIds.current,
+      focus: started.focus,
+      selected: [...started.selected],
+    });
   }
+  /** Whether focus is still the edit's to place: in the tree, in a prompt, or nowhere. */
+  function focusStayed() {
+    const element = treeElement.current,
+      focused = element?.ownerDocument.activeElement;
+    return (
+      !focused ||
+      focused === element?.ownerDocument.body ||
+      !!element?.contains(focused) ||
+      !!focused.closest('[role="dialog"]')
+    );
+  }
+  /**
+   * Ends an edit. Its result becomes the tree's focus and selection unless the user has selected
+   * something else meanwhile, and the tree takes focus back when asked and focus is still the
+   * edit's to place.
+   */
   function endEdit(ended: TreeEdit, focusPath: string | undefined, focusTree: boolean) {
     setEdit((current) => (current?.id === ended.id ? null : current));
     if (!mounted.current) return;
-    if (focusPath)
+    const now = readOwn(controller.getSnapshot().recovery.views, checkout.checkoutId)?.tree;
+    const untouched =
+      !!now &&
+      now.focus === ended.focus &&
+      now.selected.length === ended.selected.length &&
+      now.selected.every((path, index) => path === ended.selected[index]);
+    if (focusPath && untouched)
       try {
         anchor.current = focusPath;
         controller.tree(checkout, { focus: focusPath, selected: [focusPath] });
       } catch (error) {
         controller.report(error);
       }
-    if (focusTree) {
+    if (focusTree && focusStayed()) {
       const element = returnTreeFocus();
       if (element) element.focus();
     }
   }
   /**
    * Commits a typed name: an error to show beside the field after Enter, '' to keep editing after
-   * a declined replacement, or null once the edit has ended. Blur reports errors and ends it.
+   * a declined replacement, or null once the edit has ended. Blur reports errors and ends it; a
+   * replace prompt it raises returns focus to `next`, where focus went, or else to the tree.
    */
-  async function commitEdit(current: TreeEdit, typed: string, how: NameCommit) {
-    const name = typed.trim(),
-      enter = how === 'enter',
+  async function commitEdit(
+    current: TreeEdit,
+    name: string,
+    how: NameCommit,
+    next: Element | null,
+  ) {
+    const enter = how === 'enter',
       create = current.kind === 'create-file' || current.kind === 'create-directory',
       parent = create ? current.path : parentOf(current.path);
     const end = (focusPath?: string) => {
@@ -263,7 +313,8 @@ export function FilesTree({
       controller.report(message);
       return end();
     };
-    if (!name) return current.kind === 'rename' && enter ? 'Enter a name.' : end();
+    // Names are taken as typed, spaces included, but one of only spaces is no name.
+    if (!name.trim()) return current.kind === 'rename' && enter ? 'Enter a name.' : end();
     if (name.includes('/')) return invalid('A name can’t contain “/”.');
     if (current.kind === 'rename' && name === nameOf(current.path)) return end(current.path);
     const destination = parent ? `${parent}/${name}` : name;
@@ -278,7 +329,7 @@ export function FilesTree({
               error = message;
             },
           }
-        : undefined,
+        : { finalFocus: () => (canRefocus(next) ? next : returnTreeFocus()) },
     ).finally(() => {
       committing.current = false;
     });
@@ -450,7 +501,7 @@ export function FilesTree({
                       label={editLabels[editing.kind]}
                       initial={startingName(editing)}
                       directory={row.directory}
-                      onCommit={(name, how) => commitEdit(editing, name, how)}
+                      onCommit={(name, how, next) => commitEdit(editing, name, how, next)}
                       onCancel={() => endEdit(editing, undefined, true)}
                     />
                   )

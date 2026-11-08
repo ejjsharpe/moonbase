@@ -1,5 +1,5 @@
 import * as stylex from '@stylexjs/stylex';
-import { useId, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { controls } from '@moonbase/ui/controls';
 import { filesUI } from '@moonbase/ui/files';
 import { measureStem } from './files-tree-rows.ts';
@@ -9,8 +9,10 @@ export type NameCommit = 'enter' | 'blur';
 
 /**
  * The text field a tree row shows while its name is typed. It focuses itself with the stem
- * selected; Enter or blur commits and Escape cancels. `onCommit` resolves to an error to show
- * (or '' to keep editing without one), or null once the edit has ended.
+ * selected; Enter or blur commits and Escape cancels. Focus leaving the window is no blur: the
+ * field keeps editing and takes focus back when the window does. `onCommit` resolves to an error
+ * to show (or '' to keep editing without one), or null once the edit has ended; a blur passes
+ * where focus went.
  */
 export function FilesTreeName({
   label,
@@ -22,7 +24,7 @@ export function FilesTreeName({
   label: string;
   initial: string;
   directory: boolean;
-  onCommit: (name: string, how: NameCommit) => Promise<string | null>;
+  onCommit: (name: string, how: NameCommit, next: Element | null) => Promise<string | null>;
   onCancel: () => void;
 }) {
   const [value, setValue] = useState(initial),
@@ -42,11 +44,21 @@ export function FilesTreeName({
     };
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- Select the stem once, as the field opens.
   }, []);
-  async function commit(how: NameCommit) {
+  useEffect(() => {
+    const element = input.current!,
+      view = element.ownerDocument.defaultView!;
+    function regainFocus() {
+      const focused = element.ownerDocument.activeElement;
+      if (!ended.current && (!focused || focused === element.ownerDocument.body)) element.focus();
+    }
+    view.addEventListener('focus', regainFocus);
+    return () => view.removeEventListener('focus', regainFocus);
+  }, []);
+  async function commit(how: NameCommit, next: Element | null = null) {
     if (pending.current || ended.current) return;
     pending.current = true;
     setBusy(true);
-    const result = await onCommit(value, how);
+    const result = await onCommit(value, how, next);
     pending.current = false;
     if (result === null) {
       ended.current = true;
@@ -55,7 +67,17 @@ export function FilesTreeName({
     if (ended.current) return;
     setBusy(false);
     setError(result);
-    input.current?.focus();
+    // Take focus back from a closing prompt or from nowhere, but not from where the user went.
+    const element = input.current,
+      focused = element?.ownerDocument.activeElement;
+    if (
+      element &&
+      (!focused ||
+        focused === element ||
+        focused === element.ownerDocument.body ||
+        focused.closest('[role="dialog"]'))
+    )
+      element.focus();
   }
   return (
     <span {...stylex.props(filesUI.edit)}>
@@ -87,7 +109,11 @@ export function FilesTreeName({
             onCancel();
           }
         }}
-        onBlur={() => void commit('blur')}
+        onBlur={(event) => {
+          // The window losing focus, such as on ⌘Tab, leaves the name being typed.
+          if (!event.currentTarget.ownerDocument.hasFocus()) return;
+          void commit('blur', event.relatedTarget);
+        }}
         // The row's own pointer gestures select, open and toggle; the field keeps its own.
         onClick={(event) => event.stopPropagation()}
         onDoubleClick={(event) => event.stopPropagation()}

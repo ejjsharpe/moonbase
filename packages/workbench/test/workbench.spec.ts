@@ -1065,11 +1065,17 @@ test('rejected and unchanged Renames leave explicit Save and Close usable', asyn
   await first(page).getByRole('tree', { name: 'Files', exact: true }).press('ContextMenu');
   await page.getByRole('menuitem', { name: 'Rename…', exact: true }).click();
   const name = first(page).getByRole('textbox', { name: 'Rename', exact: true });
+  const error = first(page).getByRole('tree').getByRole('alert');
+  // The backend refuses a dispatched move of the dirty source.
+  await page.evaluate(() =>
+    window.demo.memory.failNext('mutate', 'Injected move refusal', false, 'InvalidInput'),
+  );
+  await name.fill('refused.ts');
+  await name.press('Enter');
+  await expect(error).toContainText('Injected move refusal');
   await name.fill('..');
   await name.press('Enter');
-  await expect(first(page).getByRole('tree').getByRole('alert')).toContainText(
-    'exact relative path',
-  );
+  await expect(error).toContainText('exact relative path');
   await name.fill('welcome.ts');
   await name.press('Enter');
   await expect(name).toHaveCount(0);

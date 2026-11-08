@@ -131,3 +131,75 @@ test('aborting a direct mutation while it asks declines it and disposes it', asy
     await f.dispose();
   }
 });
+
+test('a rejected confirmation returns its error instead of throwing', async () => {
+  const f = await counted();
+  try {
+    const result = await runMutation(
+      f.controller,
+      { checkout, kind: 'copy', paths: ['a.ts'] },
+      'b.ts',
+      { confirmReplace: () => Promise.reject(new Error('Prompt unavailable')) },
+    );
+    assert.equal(result.completed, false);
+    assert.notEqual(result.error, '');
+    assert.equal(await f.read('b.ts'), 'second');
+    assert.deepEqual(f.disposals, [1]);
+  } finally {
+    await f.dispose();
+  }
+});
+
+test('aborting while a confirmation is unanswered resolves at once and disposes once', async () => {
+  const f = await counted();
+  try {
+    const abort = new AbortController();
+    let asked!: () => void;
+    const asking = new Promise<void>((resolve) => {
+      asked = resolve;
+    });
+    const running = runMutation(f.controller, { checkout, kind: 'copy', paths: ['a.ts'] }, 'b.ts', {
+      signal: abort.signal,
+      confirmReplace: () => {
+        asked();
+        return new Promise<boolean>(() => {});
+      },
+    });
+    await asking;
+    abort.abort();
+    assert.deepEqual(await running, { completed: false, error: '' });
+    assert.equal(await f.read('b.ts'), 'second');
+    assert.deepEqual(f.disposals, [1]);
+  } finally {
+    await f.dispose();
+  }
+});
+
+test('a move may change only its name’s case, and a copy onto its source is refused', async () => {
+  const f = await counted();
+  try {
+    assert.deepEqual(
+      await runMutation(f.controller, { checkout, kind: 'move', paths: ['a.ts'] }, 'A.ts', {
+        confirmReplace: never,
+      }),
+      { completed: true, error: '' },
+    );
+    assert.equal(await f.read('A.ts'), 'const a = 1;');
+    const listing = await f.client.command('listDirectory', { checkout, path: '' });
+    assert.deepEqual(
+      listing.entries.map((entry) => entry.path).filter((path) => /^a\.ts$/i.test(path)),
+      ['A.ts'],
+    );
+    for (const destination of ['b.ts', 'B.ts'])
+      assert.deepEqual(
+        await runMutation(f.controller, { checkout, kind: 'copy', paths: ['b.ts'] }, destination, {
+          confirmReplace: never,
+        }),
+        { completed: false, error: 'Choose a different name from the original.' },
+      );
+    assert.equal(await f.read('b.ts'), 'second');
+    assert.deepEqual(f.disposals, [1, 1, 1]);
+  } finally {
+    await f.dispose();
+  }
+});

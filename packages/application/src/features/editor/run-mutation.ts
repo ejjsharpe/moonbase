@@ -5,11 +5,32 @@ import type { EditorMutation, MutationAction } from './workflows.ts';
 /** How a direct mutation ended: done, declined (or aborted) without an error, or failed. */
 export type MutationRunResult = { completed: boolean; error: string };
 
+/** Settles with `promise`, or with `fallback` as soon as `signal` aborts. */
+function settleUnlessAborted<T>(promise: Promise<T>, signal: AbortSignal | undefined, fallback: T) {
+  if (!signal) return promise;
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => resolve(fallback);
+    if (signal.aborted) return abort();
+    signal.addEventListener('abort', abort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', abort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', abort);
+        reject(error);
+      },
+    );
+  });
+}
+
 /**
  * Runs one file operation without a dialog: applies it, asks `confirmReplace` only when existing
- * destinations would be replaced, and applies again with that consent. It never throws; the
- * mutation is disposed on every path. Aborting `signal` disposes it at once, so a late reply
- * completes nothing, and resolves as declined.
+ * destinations would be replaced, and applies again with that consent. It never throws, even when
+ * `confirmReplace` does; the mutation is disposed exactly once on every path. Aborting `signal`
+ * disposes it at once, so a late reply completes nothing, and resolves as declined without
+ * waiting for a pending confirmation.
  */
 export async function runMutation(
   controller: {
@@ -42,7 +63,14 @@ export async function runMutation(
     let completed = await mutation.apply(destination, '', false);
     const { error, replacements } = mutation.getSnapshot();
     if (!completed && !error && replacements?.length && !signal?.aborted) {
-      if (!(await confirmReplace(replacements)) || signal?.aborted) return declined;
+      let consent: boolean;
+      try {
+        consent = await settleUnlessAborted(confirmReplace(replacements), signal, false);
+      } catch (error) {
+        if (signal?.aborted) return declined;
+        return { completed: false, error: normalizeApplicationError(error).message };
+      }
+      if (!consent || signal?.aborted) return declined;
       completed = await mutation.apply(destination, '', true);
     }
     if (completed || signal?.aborted) return { completed, error: '' };

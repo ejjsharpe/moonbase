@@ -14,12 +14,16 @@ import { styles } from './styles.ts';
 /**
  * Runs a file operation without its dialog, asking only before replacing existing entries.
  * Resolves true once it completed. A failure goes to `inlineError` when the caller shows it
- * beside its own field, otherwise to the editor's alerts. The caller places focus afterwards.
+ * beside its own field, otherwise to the editor's alerts. The caller places focus afterwards,
+ * or names with `finalFocus` where the replace prompt returns it as it closes.
  */
 export type RunMutation = (
   action: MutationAction,
   destination: string,
-  options?: { inlineError?: (message: string) => void },
+  options?: {
+    inlineError?: (message: string) => void;
+    finalFocus?: () => HTMLElement | false;
+  },
 ) => Promise<boolean>;
 
 /**
@@ -34,6 +38,7 @@ export function useMutationRunner(
   const [prompt, setPrompt] = useState<{
     paths: string[];
     answer: (replace: boolean) => void;
+    finalFocus?: () => HTMLElement | false;
   } | null>(null);
   const [running, setRunning] = useState(false);
   const runningRef = useRef(false),
@@ -43,7 +48,11 @@ export function useMutationRunner(
     lifetime.current = current;
     return () => current.abort();
   }, []);
-  const runMutation: RunMutation = async (action, destination, { inlineError } = {}) => {
+  const runMutation: RunMutation = async (
+    action,
+    destination,
+    { inlineError, finalFocus } = {},
+  ) => {
     const fail = (message: string) => {
       if (inlineError) inlineError(message);
       else controller.report(message);
@@ -73,7 +82,11 @@ export function useMutationRunner(
               };
               const decline = () => answer(false);
               signal.addEventListener('abort', decline, { once: true });
-              setPrompt({ paths: replacements.map((item) => item.target.path), answer });
+              setPrompt({
+                paths: replacements.map((item) => item.target.path),
+                answer,
+                finalFocus,
+              });
             }),
         },
       );
@@ -84,7 +97,9 @@ export function useMutationRunner(
       if (!signal.aborted) setRunning(false);
     }
   };
-  const confirmation = prompt && <ReplacePrompt paths={prompt.paths} answer={prompt.answer} />;
+  const confirmation = prompt && (
+    <ReplacePrompt paths={prompt.paths} answer={prompt.answer} finalFocus={prompt.finalFocus} />
+  );
   return {
     runMutation,
     running: running || !!prompt,
@@ -94,15 +109,28 @@ export function useMutationRunner(
   };
 }
 
-/** Asks before a file operation replaces existing entries. */
-function ReplacePrompt({ paths, answer }: { paths: string[]; answer: (replace: boolean) => void }) {
+/** Asks before a file operation replaces existing entries, starting on Cancel. */
+function ReplacePrompt({
+  paths,
+  answer,
+  finalFocus = () => false,
+}: {
+  paths: string[];
+  answer: (replace: boolean) => void;
+  finalFocus?: () => HTMLElement | false;
+}) {
+  const cancel = useRef<HTMLButtonElement>(null);
   const title =
     paths.length === 1
       ? `Replace ${paths[0].split('/').at(-1)}?`
       : `Replace ${paths.length} items?`;
   return (
-    // The caller places focus once it knows the outcome.
-    <Popup title={title} finalFocus={() => false} onClose={() => answer(false)}>
+    // Without `finalFocus`, the caller places focus once it knows the outcome.
+    <Popup
+      title={title}
+      initialFocus={cancel}
+      finalFocus={finalFocus}
+      onClose={() => answer(false)}>
       <Dialog.Description {...stylex.props(styles.path)}>
         {paths.join(', ')} {paths.length === 1 ? 'already exists' : 'already exist'} and will be
         replaced.
@@ -111,7 +139,7 @@ function ReplacePrompt({ paths, answer }: { paths: string[]; answer: (replace: b
         <Button {...stylex.props(controls.button)} onClick={() => answer(true)}>
           Replace
         </Button>
-        <Button {...stylex.props(controls.button)} onClick={() => answer(false)}>
+        <Button ref={cancel} {...stylex.props(controls.button)} onClick={() => answer(false)}>
           Cancel
         </Button>
       </div>

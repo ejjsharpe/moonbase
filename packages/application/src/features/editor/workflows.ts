@@ -409,9 +409,17 @@ export class EditorMutation {
           const matchingDestinations = new Set(
             destinations.map((path) => path.normalize('NFC').toLowerCase()),
           );
-          const collisions = listing.entries.filter((entry) =>
-            matchingDestinations.has(entry.path.normalize('NFC').toLowerCase()),
+          const sourcePaths = new Set(this.sources.map((source) => source.target.path));
+          const collisions = listing.entries.filter(
+            (entry) =>
+              matchingDestinations.has(entry.path.normalize('NFC').toLowerCase()) &&
+              // A move onto its own entry only changes the name's case or normalization.
+              !(action.kind === 'move' && sourcePaths.has(entry.path)),
           );
+          if (collisions.some((entry) => sourcePaths.has(entry.path))) {
+            this.update({ error: 'Choose a different name from the original.' });
+            return false;
+          }
           replace = collisions.length
             ? await dependencies.inspect(
                 action.checkout,

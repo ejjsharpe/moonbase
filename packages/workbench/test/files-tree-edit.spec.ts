@@ -32,6 +32,26 @@ const exists = (page: Page, path: string) =>
     const listing = await client.command('listDirectory', { checkout, path: parent });
     return listing.entries.some((entry) => entry.path === path);
   }, path);
+/** Holds the first editor's next mutation until `release()`. */
+async function holdNextMutation(page: Page) {
+  await page.evaluate(() => {
+    const editor = window.demo.first,
+      mutate = editor.mutate.bind(editor);
+    delete document.body.dataset.mutationReply;
+    editor.mutate = async (input) => {
+      editor.mutate = mutate;
+      await new Promise<void>((resolve) => {
+        window.addEventListener('release-mutation', () => resolve(), { once: true });
+        document.body.dataset.mutationReply = 'waiting';
+      });
+      return mutate(input);
+    };
+  });
+  return {
+    waiting: () => expect(page.locator('body')).toHaveAttribute('data-mutation-reply', 'waiting'),
+    release: () => page.evaluate(() => window.dispatchEvent(new Event('release-mutation'))),
+  };
+}
 async function explorerAction(page: Page, name: string) {
   await region(page).getByRole('button', { name: 'Explorer actions', exact: true }).click();
   await page.getByRole('menuitem', { name, exact: true }).click();
@@ -124,6 +144,84 @@ test('blur commits a rename, or cancels and reports when it fails', async ({ pag
   await expect(input).toHaveCount(0);
   await expect(region(page).getByRole('alert')).toContainText('can’t contain “/”');
   expect(await mutations(page)).toBe(before);
+  // Selecting another row while the rename runs keeps that selection.
+  await row(page, 'NOTES.md').click();
+  await tree(page).press('F2');
+  await input.pressSequentially('LATER');
+  const reply = await holdNextMutation(page);
+  await row(page, 'welcome.ts').click();
+  await reply.waiting();
+  await reply.release();
+  await expect(row(page, 'LATER.md')).toBeVisible();
+  await expect(input).toHaveCount(0);
+  await expectTreeFocusedOn(page, 'welcome.ts');
+});
+
+test('the window losing focus keeps the name being typed', async ({ page }) => {
+  await page.goto('/');
+  await row(page, 'README.md').click();
+  await tree(page).press('F2');
+  const input = field(page, 'Rename');
+  await input.pressSequentially('REA');
+  // As on ⌘Tab: the field blurs while the document has lost focus.
+  await input.evaluate((element) => {
+    document.hasFocus = () => false;
+    element.blur();
+    Reflect.deleteProperty(document, 'hasFocus');
+  });
+  await expect(input).not.toBeFocused();
+  await expect(input).toHaveValue('REA.md');
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue('REA.md');
+  expect(await exists(page, 'README.md')).toBe(true);
+  expect(await mutations(page)).toBe(0);
+  await input.press('Escape');
+  await expectTreeFocusedOn(page, 'README.md');
+  expect(await mutations(page)).toBe(0);
+});
+
+test('a rename may change only case, keeps surrounding spaces, and refuses only spaces', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await row(page, 'README.md').click();
+  await tree(page).press('F2');
+  const input = field(page, 'Rename');
+  await input.fill('readme.md');
+  await input.press('Enter');
+  await expect(input).toHaveCount(0);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expectTreeFocusedOn(page, 'readme.md');
+  expect(await exists(page, 'README.md')).toBe(false);
+  expect(await read(page, 'readme.md')).toContain('# Volatile demo');
+  expect(await mutations(page)).toBe(1);
+  // An untouched name with spaces around it is unchanged.
+  await page.evaluate(async () => {
+    const { first, checkout } = window.demo;
+    await first.mutate({
+      checkout,
+      kind: 'create-file',
+      sources: [],
+      destination: ' notes ',
+      replacements: [],
+    });
+  });
+  // The row's accessible name drops the leading space.
+  await row(page, 'notes ').click();
+  await tree(page).press('F2');
+  await expect(input).toHaveValue(' notes ');
+  await input.press('Enter');
+  await expect(input).toHaveCount(0);
+  await expect(tree(page)).toBeFocused();
+  expect(await treeState(page)).toEqual({ focus: ' notes ', selected: [' notes '] });
+  expect(await mutations(page)).toBe(2);
+  await tree(page).press('F2');
+  await input.fill('   ');
+  await input.press('Enter');
+  await expect(tree(page).getByRole('alert')).toHaveText('Enter a name.');
+  await input.press('Escape');
+  expect(await mutations(page)).toBe(2);
 });
 
 test('Enter shows errors beside the field and keeps it open', async ({ page }) => {
@@ -171,7 +269,7 @@ test('replacing an existing entry asks first; Cancel returns to the name', async
   await input.press('Enter');
   const prompt = page.getByRole('dialog', { name: 'Replace ignored.txt?', exact: true });
   await expect(prompt).toContainText('ignored.txt already exists and will be replaced.');
-  await expect(prompt.getByRole('button', { name: 'Replace', exact: true })).toBeFocused();
+  await expect(prompt.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused();
   await page.screenshot({ path: 'test-results/tree-replace.png' });
   await prompt.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(prompt).toHaveCount(0);
@@ -190,6 +288,73 @@ test('replacing an existing entry asks first; Cancel returns to the name', async
   await expectTreeFocusedOn(page, 'ignored.txt');
   expect(await read(page, 'ignored.txt')).toContain('# Volatile demo');
   expect(await exists(page, 'README.md')).toBe(false);
+});
+
+test('a replace prompt raised by blur returns focus where it went, or to the tree', async ({
+  page,
+}) => {
+  await page.goto('/');
+  const tab = region(page).getByRole('tab', { name: 'welcome.ts', exact: true });
+  const prompt = page.getByRole('dialog', { name: 'Replace ignored.txt?', exact: true });
+  const input = field(page, 'Rename');
+  await row(page, 'README.md').click();
+  await tree(page).press('F2');
+  await input.fill('ignored.txt');
+  await tab.click();
+  await expect(prompt.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused();
+  await prompt.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(prompt).toHaveCount(0);
+  await expect(input).toHaveCount(0);
+  await expect(tab).toBeFocused();
+  expect(await mutations(page)).toBe(0);
+  // Focus that went nowhere comes back to the tree.
+  await row(page, 'README.md').click();
+  await tree(page).press('F2');
+  await input.fill('ignored.txt');
+  await input.evaluate((element) => element.blur());
+  await prompt.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expectTreeFocusedOn(page, 'README.md');
+  // Replacing returns focus the same way.
+  await tree(page).press('F2');
+  await input.fill('ignored.txt');
+  await tab.click();
+  await prompt.getByRole('button', { name: 'Replace', exact: true }).click();
+  await expect(input).toHaveCount(0);
+  await expect(tab).toBeFocused();
+  expect(await read(page, 'ignored.txt')).toContain('# Volatile demo');
+  expect(await exists(page, 'README.md')).toBe(false);
+});
+
+test('an Enter commit left while it runs leaves focus and selection with the user', async ({
+  page,
+}) => {
+  await page.goto('/');
+  const tab = region(page).getByRole('tab', { name: 'welcome.ts', exact: true });
+  const input = field(page, 'Rename');
+  await row(page, 'README.md').click();
+  await tree(page).press('F2');
+  await input.fill('refused.md');
+  await page.evaluate(() =>
+    window.demo.memory.failNext('mutate', 'Injected refusal', false, 'InvalidInput'),
+  );
+  const reply = await holdNextMutation(page);
+  await input.press('Enter');
+  await reply.waiting();
+  await tab.click();
+  await expect(tab).toBeFocused();
+  await reply.release();
+  await expect(tree(page).getByRole('alert')).toContainText('Injected refusal');
+  await expect(tab).toBeFocused();
+  // A completed one keeps a row selected meanwhile.
+  await input.fill('done.md');
+  const done = await holdNextMutation(page);
+  await input.press('Enter');
+  await done.waiting();
+  await row(page, 'welcome.ts').click();
+  await done.release();
+  await expect(input).toHaveCount(0);
+  await expect(row(page, 'done.md')).toBeVisible();
+  await expectTreeFocusedOn(page, 'welcome.ts');
 });
 
 test('keys typed in the name field stay out of the tree', async ({ page }) => {
@@ -340,6 +505,19 @@ test('Duplicate… types a copy’s name right after its source', async ({ page 
   await expect(input).toHaveCount(0);
   await expectTreeFocusedOn(page, 'README copy.md');
   expect(await read(page, 'README copy.md')).toBe(await read(page, 'README.md'));
+  // A copy onto its own name is refused beside the field.
+  const copies = await mutations(page);
+  await row(page, 'README.md').click({ button: 'right' });
+  await item(page, 'Duplicate…').click();
+  await input.fill('readme.md');
+  await input.press('Enter');
+  await expect(tree(page).getByRole('alert')).toHaveText(
+    'Choose a different name from the original.',
+  );
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(input).toBeFocused();
+  expect(await mutations(page)).toBe(copies);
+  await input.press('Escape');
   // Escape leaves no copy.
   const before = await mutations(page);
   await row(page, 'README.md').click({ button: 'right' });
