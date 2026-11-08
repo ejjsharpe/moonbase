@@ -7,7 +7,7 @@ import {
   type PickerOpenFile,
   type PickerRequest,
 } from './picker.tsx';
-import { FilesTree, type TreeCreateRequest } from './files-tree.tsx';
+import { FilesTree, type FollowedFiles, type TreeCreateRequest } from './files-tree.tsx';
 import { findCreateFolder } from './files-tree-rows.ts';
 import { gitStatusMarks } from './files-tree-status.ts';
 import { Mutation, type Action } from './mutation.tsx';
@@ -178,6 +178,9 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   // The explorer's "…" New File/Folder, started by the files tree.
   const [createRequest, setCreateRequest] = useState<TreeCreateRequest | null>(null),
     createRequests = useRef(0);
+  // Per checkout, the active file its tree last followed, kept while the tree is unmounted.
+  const followedFiles = useRef<FollowedFiles>(new Map());
+  const following = state.recovery.followActiveFile ?? true;
   useLayoutEffect(() => {
     lookupRef.current = lookup;
     projectRef.current = project;
@@ -700,18 +703,25 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
         {
           label: 'Follow Active File',
           icon: 'follow',
-          checked: state.recovery.followActiveFile,
-          run: () =>
-            controller.setFollowActiveFile(!controller.getSnapshot().recovery.followActiveFile),
+          checked: following,
+          run: () => {
+            const follow = !(controller.getSnapshot().recovery.followActiveFile ?? true);
+            // Turning it on reveals each checkout's active file, followed or not.
+            if (follow)
+              for (const key of followedFiles.current.keys()) followedFiles.current.set(key, null);
+            controller.setFollowActiveFile(follow);
+          },
         },
         {
           label: 'Hide Ignored Files',
           icon: 'filter',
-          checked: !!selected?.tree.hideIgnored,
+          checked: !!selected?.tree.hideIgnoredFiles,
           run: () =>
             controller.tree(checkout, {
-              hideIgnored: !readOwn(controller.getSnapshot().recovery.views, checkout.checkoutId)
-                ?.tree.hideIgnored,
+              hideIgnoredFiles: !readOwn(
+                controller.getSnapshot().recovery.views,
+                checkout.checkoutId,
+              )?.tree.hideIgnoredFiles,
             }),
         },
         'separator',
@@ -774,7 +784,8 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                 active={selected.active}
                 anchorReset={anchorReset}
                 visible={visible}
-                follow={state.recovery.followActiveFile && !sidebarHidden && visible}
+                follow={following && !sidebarHidden && visible}
+                followed={followedFiles.current}
                 dialogOpen={!!(action || choice || lookup || mutations.running)}
                 canRequestMutation={canRequestMutation}
                 requestMutation={requestMutation}

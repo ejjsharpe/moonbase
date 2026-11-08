@@ -69,7 +69,13 @@ export const CheckoutViewSchema = struct({
     selected: array(path),
     focus: path,
     scroll: coordinate,
-    hideIgnored: Schema.Boolean,
+    /** Whether the tree leaves out entries Git has classified as ignored (Hide Ignored Files). */
+    hideIgnoredFiles: optional(Schema.Boolean),
+    /**
+     * Written by a since-removed Hide button whose choice was never applied; still accepted so
+     * views saved by it load, but never honoured, so an old `true` hides nothing.
+     */
+    hideIgnored: optional(Schema.Boolean),
   }),
 });
 export const RecoveryDraftSchema = struct({
@@ -87,8 +93,11 @@ export const EditorRecoverySchema = struct({
   drafts: array(RecoveryDraftSchema).check(Schema.isMaxLength(512)),
   recentFiles: array(FileTargetSchema).check(Schema.isMaxLength(1000)),
   sidebarWidth: Schema.Finite.check(Schema.isBetween({ minimum: 100, maximum: 2000 })),
-  /** Whether each checkout's files tree reveals the file made active. */
-  followActiveFile: Schema.Boolean,
+  /**
+   * Whether each checkout's files tree reveals the file made active (Follow Active File); absent
+   * in recovery saved before the setting existed, which reads as on.
+   */
+  followActiveFile: optional(Schema.Boolean),
 });
 export const RecoveryChangeSchema = struct({
   clientId: WorkspaceIdentifierSchema,

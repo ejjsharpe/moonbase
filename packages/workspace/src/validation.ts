@@ -83,6 +83,7 @@ export function canonical(value: unknown): string {
       : v,
   );
 }
+const optionalBoolean = (v: unknown) => v === undefined || typeof v === 'boolean';
 const record = (v: unknown): v is Record<string, unknown> =>
   !!v && typeof v === 'object' && !Array.isArray(v);
 export function recovery(state: EditorRecovery, clientId: string) {
@@ -105,7 +106,7 @@ export function recovery(state: EditorRecovery, clientId: string) {
       Number.isFinite(state.sidebarWidth) &&
       state.sidebarWidth >= 100 &&
       state.sidebarWidth <= 2000 &&
-      typeof state.followActiveFile === 'boolean',
+      optionalBoolean(state.followActiveFile),
     'Invalid recovery state.',
   );
   state.checkouts.forEach(checkout);
@@ -193,7 +194,8 @@ export function recovery(state: EditorRecovery, clientId: string) {
         Array.isArray(view.tree.selected) &&
         Number.isFinite(view.tree.scroll) &&
         view.tree.scroll >= 0 &&
-        typeof view.tree.hideIgnored === 'boolean',
+        optionalBoolean(view.tree.hideIgnoredFiles) &&
+        optionalBoolean(view.tree.hideIgnored),
       'Invalid tree memory.',
     );
     [...view.tree.expanded, ...view.tree.selected, view.tree.focus].forEach((p) => path(p, true));

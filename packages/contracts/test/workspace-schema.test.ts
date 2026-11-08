@@ -66,7 +66,7 @@ const state = {
       preview: null,
       fileViews: { [target.path]: 'file' as const },
       positions: { [target.path]: { 'file:original': { line: 1, column: 1, top: 0, left: 0 } } },
-      tree: { expanded: [''], selected: [], focus: '', scroll: 0, hideIgnored: true },
+      tree: { expanded: [''], selected: [], focus: '', scroll: 0, hideIgnoredFiles: true },
     },
   },
 };
@@ -202,6 +202,30 @@ test('all saved objects reject unfamiliar nested fields before reply projection'
     assert.equal(JSON.stringify(unknown), bytes);
   }
   assert.deepEqual(decodeEditorRecovery(state), state);
+});
+test('recovery saved before Follow Active File and Hide Ignored Files still decodes', () => {
+  // Saved by earlier builds: no followActiveFile, and the old Hide button's tree.hideIgnored.
+  const { followActiveFile: _follow, ...current } = structuredClone(state);
+  const { hideIgnoredFiles: _hide, ...tree } = current.views[checkout.checkoutId].tree;
+  const prior = {
+    ...current,
+    views: {
+      [checkout.checkoutId]: {
+        ...current.views[checkout.checkoutId],
+        tree: { ...tree, hideIgnored: true },
+      },
+    },
+  };
+  const decoded = decodeEditorRecovery(prior);
+  assert.equal(Object.hasOwn(decoded, 'followActiveFile'), false);
+  assert.equal(decoded.views[checkout.checkoutId].tree.hideIgnoredFiles, undefined);
+  assert.equal(decoded.views[checkout.checkoutId].tree.hideIgnored, true);
+  assert.deepEqual(decoded.drafts, state.drafts);
+  assert.deepEqual(
+    decodeWorkspaceOutput('loadRecovery', { ...outputs.loadRecovery, state: prior }).state,
+    decoded,
+  );
+  assert.throws(() => decodeEditorRecovery({ ...state, followActiveFile: 'yes' }));
 });
 test('reply projection, dynamic keys, optional omission and mutable DTOs remain supported', () => {
   const decoded = decodeEditorRecovery(state);

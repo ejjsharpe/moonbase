@@ -18,9 +18,11 @@ const sameCheckout = (a: CheckoutTarget, b: CheckoutTarget) => checkoutKey(a) ==
 type DiscoveryDependencies = {
   execute<A>(effect: Effect.Effect<A, ApplicationError>): Promise<A>;
   watch: EditorClient['watch'];
+  /** Lists a folder, reporting a failure unless `report` is false. */
   listDirectory(
     input: CommandInput<'listDirectory'>,
     scope: Scope.Scope,
+    report?: boolean,
   ): Promise<DirectoryListing>;
   readFile(target: FileTarget, scope: Scope.Scope): Promise<FileDocument>;
   readComparison(input: CommandInput<'readComparison'>, scope: Scope.Scope): Promise<Comparison>;
@@ -210,8 +212,8 @@ export class EditorDiscovery {
   readComparison(input: CommandInput<'readComparison'>, scope: Scope.Scope) {
     return this.dependencies.readComparison(input, scope);
   }
-  listDirectory(input: CommandInput<'listDirectory'>, scope: Scope.Scope) {
-    return this.dependencies.listDirectory(input, scope);
+  listDirectory(input: CommandInput<'listDirectory'>, scope: Scope.Scope, report = true) {
+    return this.dependencies.listDirectory(input, scope, report);
   }
   refresh(checkout: CheckoutTarget, capabilities: RefreshCapabilities): Promise<void> {
     const key = checkoutKey(checkout),

@@ -67,6 +67,46 @@ test('first folder open displays every file before Git finishes and then fades i
   }
 });
 
+test('with Hide Ignored Files on, rows show while Git classifies them and ignored ones then leave', async ({
+  page,
+}) => {
+  await page.goto('/');
+  const region = page.getByRole('region', { name: 'First editor', exact: true });
+  const tree = region.getByRole('tree', { name: 'Files', exact: true });
+  const folder = tree.getByRole('treeitem', { name: 'src', exact: true });
+  await expect(folder).toBeVisible();
+  await page.evaluate(() => {
+    const { client, first, checkout } = window.demo;
+    first.tree(checkout, { hideIgnoredFiles: true });
+    const command = client.command.bind(client);
+    window.ignoreProbe = { pending: false };
+    client.command = async (name, input, options) => {
+      if (name === 'getIgnoredPaths' && (input as { path: string }).path === 'src') {
+        window.ignoreProbe.pending = true;
+        await new Promise<void>((resolve) => {
+          window.ignoreProbe.release = resolve;
+        });
+        window.ignoreProbe.pending = false;
+      }
+      return command(name, input, options);
+    };
+  });
+  const normal = tree.getByRole('treeitem', { name: 'src/example.ts', exact: true });
+  const ignored = tree.getByRole('treeitem', { name: 'src/ignored.ts', exact: true });
+  try {
+    await folder.click();
+    // Unclassified, src/ignored.ts shows until Git says it is ignored.
+    await expect(normal).toBeVisible();
+    await expect(ignored).toBeVisible();
+    expect(await page.evaluate(() => window.ignoreProbe.pending)).toBe(true);
+    await page.evaluate(() => window.ignoreProbe.release?.());
+    await expect(ignored).toHaveCount(0);
+    await expect(normal).toBeVisible();
+  } finally {
+    await page.evaluate(() => window.ignoreProbe.release?.());
+  }
+});
+
 test('collapse skips filesystem reads and reopening shows cached children during revalidation', async ({
   page,
 }) => {

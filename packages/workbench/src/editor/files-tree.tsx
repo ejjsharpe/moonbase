@@ -73,6 +73,11 @@ export type TreeCreateRequest = {
   parent: string;
   id: number;
 };
+/**
+ * Per checkout key, the active file its tree last followed (or left alone while the user was in
+ * it), or null when the next chance to follow should reveal it whatever it is.
+ */
+export type FollowedFiles = Map<string, string | null>;
 
 /**
  * The drag a files tree in this document started, until it ends. A tree accepts only its own:
@@ -129,6 +134,7 @@ export function FilesTree({
   anchorReset,
   visible,
   follow,
+  followed,
   dialogOpen,
   canRequestMutation,
   requestMutation,
@@ -159,6 +165,12 @@ export function FilesTree({
    * shown: expanding its folders, then selecting it and scrolling it into view, without focus.
    */
   follow: boolean;
+  /**
+   * What each checkout's tree last followed, outliving the tree: while it can't follow, it
+   * catches up once it can (shown again, or back from Changes) when the active file has changed.
+   * A checkout first seen here keeps its restored tree rather than revealing at once.
+   */
+  followed: FollowedFiles;
   dialogOpen: boolean;
   canRequestMutation: (action: MutationAction) => boolean;
   requestMutation: (action: MutationAction, finalFocus: () => HTMLElement | false) => void;
@@ -272,7 +284,7 @@ export function FilesTree({
       checkoutIdentity,
       expanded,
       placeholder,
-      tree.hideIgnored,
+      !!tree.hideIgnoredFiles,
     ),
     treeRows = placeholder ? rows.filter((row) => !row.placeholder) : rows;
   const gitChanges = state.git[checkoutIdentity]?.changes,
@@ -446,10 +458,10 @@ export function FilesTree({
     return enter ? '' : end();
   }
   // Hiding ignored entries moves focus to the folder that still shows and drops hidden selections.
-  const shownFocus = tree.hideIgnored
+  const shownFocus = tree.hideIgnoredFiles
       ? findShownPath(state.listings, checkoutIdentity, tree.focus)
       : tree.focus,
-    shownSelection = tree.hideIgnored
+    shownSelection = tree.hideIgnoredFiles
       ? tree.selected.filter(
           (path) => findShownPath(state.listings, checkoutIdentity, path) === path,
         )
@@ -475,19 +487,31 @@ export function FilesTree({
     active,
     edit,
     menu,
+    dialogOpen,
     dropFolder,
     dragging: !!dragged.length,
   });
   useLayoutEffect(() => {
-    followState.current = { follow, active, edit, menu, dropFolder, dragging: !!dragged.length };
+    followState.current = {
+      follow,
+      active,
+      edit,
+      menu,
+      dialogOpen,
+      dropFolder,
+      dragging: !!dragged.length,
+    };
   });
-  const followed = useRef(active);
   useEffect(() => {
-    if (followed.current === active) return;
-    followed.current = active;
+    // A checkout first seen keeps its restored tree; later, a file made active while the tree
+    // couldn't follow (hidden, unmounted for Changes, or behind a dialog) is revealed once it can.
+    if (!followed.has(checkoutIdentity)) followed.set(checkoutIdentity, active);
+    const previous = followed.get(checkoutIdentity)!;
+    if (!follow || dialogOpen || !active || previous === active) return;
+    followed.set(checkoutIdentity, active);
     const path = active;
     // The tree follows only while shown and left alone: not while the user is in it, typing a
-    // name, dragging or in its menu, and only while `path` is still the active file.
+    // name, dragging, in its menu or a dialog, and only while `path` is still the active file.
     const canFollow = () => {
       const now = followState.current,
         element = treeElement.current;
@@ -497,6 +521,7 @@ export function FilesTree({
         now.active === path &&
         !now.edit &&
         !now.menu &&
+        !now.dialogOpen &&
         now.dropFolder === null &&
         !now.dragging &&
         !activeDrag &&
@@ -504,23 +529,34 @@ export function FilesTree({
         !element.contains(element.ownerDocument.activeElement)
       );
     };
-    if (!path || !canFollow()) return;
+    // While the user is in the tree it stays where they left it, even once they leave.
+    if (!canFollow()) return;
+    let started = false;
     // Rapid switches settle on the last file before anything is listed for it.
     const timer = setTimeout(() => {
+      started = true;
       if (!canFollow()) return;
-      // Hidden ignored files stay hidden rather than turning Hide Ignored Files off.
-      controller.reveal({ checkout, path }, { ignored: 'skip', current: canFollow }).then(
-        (revealed) => {
-          if (revealed) anchor.current = null;
-        },
-        () => {
-          // Following is best effort: a file that has gone simply isn't revealed.
-        },
-      );
+      // Hidden ignored files stay hidden rather than turning Hide Ignored Files off, and a follow
+      // the user didn't ask for reports nothing.
+      controller
+        .reveal({ checkout, path }, { ignored: 'skip', current: canFollow, quiet: true })
+        .then(
+          (revealed) => {
+            if (revealed) anchor.current = null;
+          },
+          () => {
+            // Following is best effort: a file that has gone simply isn't revealed.
+          },
+        );
     }, 50);
-    return () => clearTimeout(timer);
-    // oxlint-disable-next-line react-hooks/exhaustive-deps -- Follow each change of the active file.
-  }, [active]);
+    return () => {
+      clearTimeout(timer);
+      // Stopped before it began, such as by hiding the tree, it is still to catch up on.
+      if (!started && followed.get(checkoutIdentity) === path)
+        followed.set(checkoutIdentity, previous);
+    };
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- Follow each active file, catching up when following resumes.
+  }, [active, follow, dialogOpen]);
   useEffect(() => {
     if (!createRequest) return;
     onCreateRequestTaken();

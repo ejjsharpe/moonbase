@@ -290,7 +290,7 @@ test('recovery CAS conflict is visible and vetoes close', async () => {
 test('tree keeps ignored files visible and revealable while lookup retains its filtering', async () => {
   const f = await fixture();
   try {
-    f.editor.tree(checkout, { hideIgnored: true });
+    f.editor.tree(checkout, { hideIgnoredFiles: true });
     assert.equal(
       (await f.editor.list(checkout)).entries.some((entry) => entry.path === 'c.ts'),
       true,
