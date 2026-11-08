@@ -76,3 +76,14 @@ export const shadow = stylex.defineConsts({ raised: '0 18px 44px #00000080' });
 export const radius = stylex.defineConsts({ control: 7, row: 7, panel: 10, composer: 10 });
 export const layout = stylex.defineConsts({ conversation: 640, treeRow: 28 });
 export const sidebar = stylex.defineVars({ width: '270px' });
+/** The app rail: its width, its tiles and the space around them. */
+export const rail = stylex.defineVars({
+  width: '52px',
+  gutter: '10px',
+  tile: '32px',
+  tileRadius: '8px',
+  tileText: '11px',
+  gap: '8px',
+});
+/** The height of the row every pane starts with: window controls on the left, tabs and titles. */
+export const frame = stylex.defineVars({ header: '40px' });

@@ -1,4 +1,4 @@
-import { useState, type ReactElement, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import { Tabs } from '@base-ui/react/tabs';
 import { Tooltip } from '@base-ui/react/tooltip';
 import { Button } from '@base-ui/react/button';
@@ -54,6 +54,12 @@ function Peek({ trigger, children }: { trigger: ReactElement; children: ReactNod
   );
 }
 
+/** The shortcut that hides and shows the rail: the sidebar's key, plus ⌥ on macOS or Shift. */
+export const railShortcut = (mac: boolean) => (mac ? '⌃⌥⌘S' : 'Ctrl+Alt+Shift+S');
+
+/** How far past the revealed rail the pointer goes before the rail hides, so jitter at its edge does not. */
+const peekMargin = 12;
+
 /** Hovering this long opens a peek; moving between tiles then switches peeks at once. */
 const peekDelay = 140;
 
@@ -73,6 +79,9 @@ export function MainTabs({
   openChat,
   chatDisabled,
   openSettings,
+  collapsed,
+  toggleCollapsed,
+  mac,
 }: {
   checkouts: readonly CheckoutTarget[];
   /** The editor's selected checkout, whose project tile shows it even while Agents is in view. */
@@ -92,8 +101,38 @@ export function MainTabs({
   chatDisabled?: boolean;
   /** Hosts and providers; pinned to the foot of the rail. */
   openSettings?: () => void;
+  /** Whether the rail is hidden; it then slides out at the window's left edge. */
+  collapsed: boolean;
+  toggleCollapsed(): void;
+  /** Shows the rail's shortcut the platform's way. */
+  mac: boolean;
 }) {
   const reducedMotion = useReducedMotion();
+  // Hidden, the rail slides over the panes as soon as the pointer reaches the window's left edge,
+  // like the Dock set to hide, and slides away once the pointer is clearly past it. It follows the
+  // pointer's position rather than enter and leave events: those never fire when the rail slides
+  // in under a still pointer, and macOS's resize edge reports leaving the window at the very edge,
+  // where the rail must stay.
+  const [peeking, setPeeking] = useState(false);
+  const slot = useRef<HTMLDivElement>(null);
+  if (!collapsed && peeking) setPeeking(false);
+  useEffect(() => {
+    if (!peeking) return;
+    const move = (event: PointerEvent) => {
+      if (event.clientX <= (slot.current?.offsetWidth ?? 0) + peekMargin) return;
+      // The rail's own menus, such as +, keep it out while they are open.
+      if ((event.target as Element | null)?.closest?.('[role="menu"], [role="dialog"]')) return;
+      setPeeking(false);
+    };
+    const hide = () => setPeeking(false);
+    window.addEventListener('pointermove', move);
+    window.addEventListener('blur', hide);
+    return () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('blur', hide);
+    };
+  }, [peeking]);
+  const shown = !collapsed || peeking;
   const transition = { duration: reducedMotion ? 0 : 0.2, ease: [0.2, 0.8, 0.2, 1] as const };
   // Remembers each repository's last chosen checkout, so its tile returns to that worktree.
   const [chosen, setChosen] = useState<ReadonlyMap<string, string>>(new Map());
@@ -103,7 +142,21 @@ export function MainTabs({
     setChosen(new Map(chosen).set(currentKey, current.checkoutId));
   return (
     <Tooltip.Provider delay={peekDelay}>
-      <div {...stylex.props(styles.railSlot)}>
+      {collapsed && !peeking && (
+        <div
+          aria-hidden="true"
+          onPointerEnter={() => setPeeking(true)}
+          {...stylex.props(styles.railEdge)}
+        />
+      )}
+      <div
+        ref={slot}
+        inert={!shown}
+        {...stylex.props(
+          styles.railSlot,
+          collapsed && styles.railSlotCollapsed,
+          collapsed && peeking && styles.railSlotPeeking,
+        )}>
         <Tabs.List aria-label="Workbench views" {...stylex.props(styles.rail)}>
           <LayoutGroup>
             <AnimatePresence initial={false} mode="popLayout">
@@ -265,8 +318,29 @@ export function MainTabs({
               )}
             </div>
           </LayoutGroup>
+          <div {...stylex.props(styles.railRow, styles.railFoot)}>
+            <Peek
+              trigger={
+                <Button
+                  aria-label={collapsed ? 'Keep rail open' : 'Hide rail'}
+                  {...stylex.props(controls.button, styles.railTab)}
+                  onClick={toggleCollapsed}>
+                  <span aria-hidden="true" {...stylex.props(styles.tile, styles.settingsTile)}>
+                    <Icon name={collapsed ? 'railExpand' : 'railCollapse'} />
+                  </span>
+                </Button>
+              }>
+              <span {...stylex.props(styles.peekName)}>
+                {collapsed ? 'Keep rail open' : 'Hide rail'}
+              </span>
+              <span {...stylex.props(styles.peekDetail)}>
+                {collapsed ? 'Shows at the left edge while hidden · ' : ''}
+                {railShortcut(mac)}
+              </span>
+            </Peek>
+          </div>
           {openSettings && (
-            <div {...stylex.props(styles.railRow, styles.railFoot)}>
+            <div {...stylex.props(styles.railRow)}>
               <Peek
                 trigger={
                   <Button

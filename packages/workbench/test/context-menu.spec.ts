@@ -198,7 +198,7 @@ for (const key of ['Tab', 'Shift+Tab'])
     await expect(
       key === 'Tab'
         ? region(page).getByRole('tab', { name: 'welcome.ts', exact: true })
-        : region(page).getByRole('button', { name: 'Reveal Active File', exact: true }),
+        : region(page).getByRole('button', { name: 'Changes', exact: true }),
     ).toBeFocused();
     await expect(page.getByRole('dialog')).toHaveCount(0);
   });

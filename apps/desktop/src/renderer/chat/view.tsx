@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Dialog } from '@base-ui/react/dialog';
 import { Button } from '@base-ui/react/button';
 import { motion, useReducedMotion } from 'motion/react';
@@ -117,6 +117,7 @@ export function ChatView({
   hosts,
   setUpProviders,
   visible = true,
+  sidebarHidden = false,
 }: {
   controller: ChatController;
   chooseFolder?: () => Promise<string | null>;
@@ -135,6 +136,8 @@ export function ChatView({
   setUpProviders?: () => void;
   /** Whether this view is on screen, so the open chat counts as looked at. */
   visible?: boolean;
+  /** Hides the chat list, leaving the chat the full width. */
+  sidebarHidden?: boolean;
 }) {
   const compact = useSyncExternalStore(subscribeLayout, () => compactLayout.matches);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -406,111 +409,136 @@ export function ChatView({
   let emptyList = '';
   if (connected) emptyList = 'Your conversations will appear here.';
   else if (local) emptyList = 'Loading chats…';
+  const listElement = useRef<HTMLElement>(null),
+    focusInList = useRef(false);
+  // Hiding the chat list while focus is in it hands focus to the composer rather than the page.
+  useLayoutEffect(() => {
+    if (!sidebarHidden || compact || !focusInList.current) return;
+    focusInList.current = false;
+    document.getElementById('message')?.focus();
+  }, [sidebarHidden, compact]);
   const sidebar = (
     <aside
       aria-label="Saved chats"
-      {...stylex.props(styles.sidebar, compact && styles.drawerSidebar)}>
-      <div {...stylex.props(controls.row, styles.listHeader)}>
-        <h2 {...stylex.props(styles.sidebarTitle)}>Agents</h2>
-        <Button
-          aria-label="Refresh saved chats"
-          title="Refresh saved chats"
-          {...stylex.props(controls.button, controls.iconButton)}
-          disabled={!connected || busy('refresh')}
-          onClick={() => void controller.firstChats()}>
-          <Icon name="refresh" />
-        </Button>
-        <Button
-          aria-label="New chat"
-          title="New chat · ⌘N"
-          {...stylex.props(controls.button, styles.newChat)}
-          onClick={() => {
-            setSidebarOpen(false);
-            startNewChat();
-          }}>
-          <Icon name="compose" />
-          New <kbd {...stylex.props(styles.newKey)}>⌘N</kbd>
-        </Button>
-      </div>
-      {!local && !connected && (
-        <div {...stylex.props(controls.row, styles.offline)}>
-          <span role="status" {...stylex.props(styles.offlineText)}>
-            {state.connection?.state === 'connecting' ? 'Connecting…' : 'Not connected'}
-          </span>
+      ref={listElement}
+      onFocusCapture={() => (focusInList.current = true)}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) focusInList.current = false;
+      }}
+      inert={!compact && sidebarHidden}
+      {...stylex.props(
+        styles.sidebar,
+        compact && styles.drawerSidebar,
+        !compact && sidebarHidden && styles.sidebarClosed,
+      )}>
+      <div {...stylex.props(workbench.pane, styles.listPane)}>
+        <div {...stylex.props(controls.row, styles.listHeader)}>
+          <h2 {...stylex.props(styles.sidebarTitle)}>Agents</h2>
           <Button
-            {...stylex.props(controls.button)}
-            disabled={
-              !state.connection ||
-              busy('connect') ||
-              ['connecting', 'disconnecting'].includes(state.connection.state)
-            }
-            onClick={() => void controller.connect()}>
-            {busy('connect') ? 'Connecting…' : 'Connect'}
+            aria-label="Refresh saved chats"
+            title="Refresh saved chats"
+            {...stylex.props(controls.button, controls.iconButton)}
+            disabled={!connected || busy('refresh')}
+            onClick={() => void controller.firstChats()}>
+            <Icon name="refresh" />
+          </Button>
+          <Button
+            aria-label="New chat"
+            title="New chat · ⌘N"
+            {...stylex.props(controls.button, styles.newChat)}
+            onClick={() => {
+              setSidebarOpen(false);
+              startNewChat();
+            }}>
+            <Icon name="compose" />
+            New <kbd {...stylex.props(styles.newKey)}>⌘N</kbd>
           </Button>
         </div>
-      )}
-      <nav
-        aria-label="Conversations"
-        {...stylex.props(styles.chatList, styles.fillList, !settledShown && styles.clipList)}>
-        {!state.chats.length &&
-          // Offline, the Connect line above says why the list is empty.
-          emptyList && <p {...stylex.props(styles.small)}>{emptyList}</p>}
-        {groups.ready.length > 0 && (
-          <h3 {...stylex.props(styles.groupHeading)}>
-            Ready <span {...stylex.props(styles.groupCount)}>{groups.ready.length}</span>
-          </h3>
-        )}
-        {groups.ready.map(chatRow)}
-        {groups.working.length > 0 && (
-          <h3 {...stylex.props(styles.groupHeading)}>
-            Working <span {...stylex.props(styles.groupCount)}>{groups.working.length}</span>
-          </h3>
-        )}
-        {groups.working.map(chatRow)}
-        {groups.settled.length > 0 && (
-          // One block, like a drawer: closed, the heading waits at the foot of the list with its
-          // chats clipped below it; opening slides the whole block up, and closing slides it back.
-          <motion.div
-            layout={reducedMotion ? false : 'position'}
-            transition={settledMotion}
-            {...stylex.props(styles.settled, !settledShown && styles.settledClosed)}>
+        {!local && !connected && (
+          <div {...stylex.props(controls.row, styles.offline)}>
+            <span role="status" {...stylex.props(styles.offlineText)}>
+              {state.connection?.state === 'connecting' ? 'Connecting…' : 'Not connected'}
+            </span>
             <Button
-              aria-expanded={settledShown}
-              {...stylex.props(
-                controls.button,
-                styles.settledToggle,
-                (groups.ready.length > 0 || groups.working.length > 0) && styles.settledSeparated,
-              )}
-              onClick={() => showSettled(!settledOpen)}>
-              <span
-                aria-hidden="true"
-                {...stylex.props(styles.settledChevron, settledShown && styles.settledChevronOpen)}>
-                <Icon name="chevronRight" />
-              </span>
-              Settled <span {...stylex.props(styles.groupCount)}>{groups.settled.length}</span>
+              {...stylex.props(controls.button)}
+              disabled={
+                !state.connection ||
+                busy('connect') ||
+                ['connecting', 'disconnecting'].includes(state.connection.state)
+              }
+              onClick={() => void controller.connect()}>
+              {busy('connect') ? 'Connecting…' : 'Connect'}
             </Button>
-            {!settledShown &&
-              // The open chat stays in view after it settles, until another is chosen.
-              groups.settled
-                .filter((row) => row.chat.target.conversationId === state.selected?.conversationId)
-                .map(chatRow)}
-            <div
-              inert={!settledShown}
-              aria-hidden={settledShown ? undefined : true}
-              {...stylex.props(styles.settledRows, !settledShown && styles.settledRowsClosed)}>
-              {groups.settled.map(chatRow)}
-              {state.nextChats && (
-                <Button
-                  {...stylex.props(controls.button, controls.quietButton, styles.older)}
-                  disabled={!connected || busy('chats')}
-                  onClick={() => void controller.moreChats()}>
-                  Show older
-                </Button>
-              )}
-            </div>
-          </motion.div>
+          </div>
         )}
-      </nav>
+        <nav
+          aria-label="Conversations"
+          {...stylex.props(styles.chatList, styles.fillList, !settledShown && styles.clipList)}>
+          {!state.chats.length &&
+            // Offline, the Connect line above says why the list is empty.
+            emptyList && <p {...stylex.props(styles.small)}>{emptyList}</p>}
+          {groups.ready.length > 0 && (
+            <h3 {...stylex.props(styles.groupHeading)}>
+              Ready <span {...stylex.props(styles.groupCount)}>{groups.ready.length}</span>
+            </h3>
+          )}
+          {groups.ready.map(chatRow)}
+          {groups.working.length > 0 && (
+            <h3 {...stylex.props(styles.groupHeading)}>
+              Working <span {...stylex.props(styles.groupCount)}>{groups.working.length}</span>
+            </h3>
+          )}
+          {groups.working.map(chatRow)}
+          {groups.settled.length > 0 && (
+            // One block, like a drawer: closed, the heading waits at the foot of the list with its
+            // chats clipped below it; opening slides the whole block up, and closing slides it back.
+            <motion.div
+              layout={reducedMotion ? false : 'position'}
+              transition={settledMotion}
+              {...stylex.props(styles.settled, !settledShown && styles.settledClosed)}>
+              <Button
+                aria-expanded={settledShown}
+                {...stylex.props(
+                  controls.button,
+                  styles.settledToggle,
+                  (groups.ready.length > 0 || groups.working.length > 0) && styles.settledSeparated,
+                )}
+                onClick={() => showSettled(!settledOpen)}>
+                <span
+                  aria-hidden="true"
+                  {...stylex.props(
+                    styles.settledChevron,
+                    settledShown && styles.settledChevronOpen,
+                  )}>
+                  <Icon name="chevronRight" />
+                </span>
+                Settled <span {...stylex.props(styles.groupCount)}>{groups.settled.length}</span>
+              </Button>
+              {!settledShown &&
+                // The open chat stays in view after it settles, until another is chosen.
+                groups.settled
+                  .filter(
+                    (row) => row.chat.target.conversationId === state.selected?.conversationId,
+                  )
+                  .map(chatRow)}
+              <div
+                inert={!settledShown}
+                aria-hidden={settledShown ? undefined : true}
+                {...stylex.props(styles.settledRows, !settledShown && styles.settledRowsClosed)}>
+                {groups.settled.map(chatRow)}
+                {state.nextChats && (
+                  <Button
+                    {...stylex.props(controls.button, controls.quietButton, styles.older)}
+                    disabled={!connected || busy('chats')}
+                    onClick={() => void controller.moreChats()}>
+                    Show older
+                  </Button>
+                )}
+              </div>
+            </motion.div>
+          )}
+        </nav>
+      </div>
     </aside>
   );
   const findBar = state.transcript.find.open && (
@@ -862,12 +890,11 @@ export function ChatView({
         {...stylex.props(workbench.page, styles.page, styles.dockPage)}>
         {listing ? (
           <section aria-label={`${dock.project} chats`} {...stylex.props(styles.dockList)}>
-            <header {...stylex.props(styles.dockHeader)}>
-              <div {...stylex.props(styles.dockHeading)}>
+            <header {...stylex.props(workbench.paneHeader, styles.dockHeader)}>
+              <div
+                title="This project only · every project's chats are in Agents"
+                {...stylex.props(styles.dockHeading)}>
                 <h2 {...stylex.props(styles.dockTitle)}>{dock.project} chats</h2>
-                <p {...stylex.props(styles.small, controls.truncate)}>
-                  This project only · every project&apos;s chats are in Agents
-                </p>
               </div>
               <Button
                 {...stylex.props(controls.button, styles.dockNew)}
@@ -882,49 +909,53 @@ export function ChatView({
               </Button>
               {collapse}
             </header>
-            <nav aria-label={`${dock.project} conversations`} {...stylex.props(styles.chatList)}>
-              {!projectChats.length ? (
-                <p {...stylex.props(styles.small, styles.dockEmpty)}>
-                  {connected ? `No chats in ${dock.project} yet.` : 'Connect to read saved chats.'}
-                </p>
-              ) : (
-                projectChats.map((c) => (
-                  <Button
-                    key={c.target.conversationId}
-                    aria-pressed={state.selected?.conversationId === c.target.conversationId}
-                    {...stylex.props(
-                      controls.button,
-                      controls.listButton,
-                      styles.chat,
-                      state.selected?.conversationId === c.target.conversationId && styles.selected,
-                    )}
-                    disabled={!connected || busy('open')}
-                    onClick={() => {
-                      setDockList(false);
-                      void controller.select(c.target);
-                    }}>
-                    <span aria-hidden="true" {...stylex.props(styles.chatDot)} />
-                    <span {...stylex.props(styles.chatSummary)}>
-                      <span {...stylex.props(controls.truncate)}>{c.title}</span>
-                      <span {...stylex.props(styles.chatFolder, controls.truncate)}>
-                        {c.cwd.split('/').filter(Boolean).at(-1) || '/'}
+            <div {...stylex.props(workbench.pane, workbench.canvasPane, styles.scrollPane)}>
+              <nav aria-label={`${dock.project} conversations`} {...stylex.props(styles.chatList)}>
+                {!projectChats.length ? (
+                  <p {...stylex.props(styles.small, styles.dockEmpty)}>
+                    {connected
+                      ? `No chats in ${dock.project} yet.`
+                      : 'Connect to read saved chats.'}
+                  </p>
+                ) : (
+                  projectChats.map((c) => (
+                    <Button
+                      key={c.target.conversationId}
+                      aria-pressed={state.selected?.conversationId === c.target.conversationId}
+                      {...stylex.props(
+                        controls.button,
+                        controls.listButton,
+                        styles.chat,
+                        state.selected?.conversationId === c.target.conversationId &&
+                          styles.selected,
+                      )}
+                      disabled={!connected || busy('open')}
+                      onClick={() => {
+                        setDockList(false);
+                        void controller.select(c.target);
+                      }}>
+                      <span aria-hidden="true" {...stylex.props(styles.chatDot)} />
+                      <span {...stylex.props(styles.chatSummary)}>
+                        <span {...stylex.props(controls.truncate)}>{c.title}</span>
+                        <span {...stylex.props(styles.chatFolder, controls.truncate)}>
+                          {c.cwd.split('/').filter(Boolean).at(-1) || '/'}
+                        </span>
                       </span>
-                    </span>
-                    <time dateTime={c.createdAt} {...stylex.props(styles.chatDate)}>
-                      {new Date(c.createdAt).toLocaleDateString(undefined, {
-                        month: 'short',
-                        day: 'numeric',
-                      })}
-                    </time>
-                  </Button>
-                ))
-              )}
-            </nav>
+                      <time dateTime={c.createdAt} {...stylex.props(styles.chatDate)}>
+                        {new Date(c.createdAt).toLocaleDateString(undefined, {
+                          month: 'short',
+                          day: 'numeric',
+                        })}
+                      </time>
+                    </Button>
+                  ))
+                )}
+              </nav>
+            </div>
           </section>
         ) : (
           <main aria-label="Agent workspace" {...stylex.props(styles.content, styles.dockContent)}>
-            {findBar}
-            <header {...stylex.props(styles.dockHeader)}>
+            <header {...stylex.props(workbench.paneHeader, styles.dockHeader)}>
               <Button
                 aria-label={`All ${dock.project} chats`}
                 title={`All ${dock.project} chats`}
@@ -932,11 +963,10 @@ export function ChatView({
                 onClick={() => setDockList(true)}>
                 <Icon name="back" />
               </Button>
-              <div {...stylex.props(styles.dockHeading)}>
+              <div
+                title={state.selected ? contextLabel : `In ${dock.project}`}
+                {...stylex.props(styles.dockHeading)}>
                 <h1 {...stylex.props(styles.dockTitle, controls.truncate)}>{conversationTitle}</h1>
-                <p title={contextLabel} {...stylex.props(styles.small, controls.truncate)}>
-                  {state.selected ? contextLabel : `In ${dock.project}`}
-                </p>
               </div>
               {state.selected && (
                 <Button
@@ -949,7 +979,10 @@ export function ChatView({
               )}
               {collapse}
             </header>
-            {body}
+            <div {...stylex.props(workbench.pane, workbench.canvasPane)}>
+              {findBar}
+              {body}
+            </div>
           </main>
         )}
       </div>
@@ -960,12 +993,15 @@ export function ChatView({
       data-chat-find-owner={JSON.stringify([controller.backendId, state.selected])}
       onKeyDown={(event) => handleChatFindKeyDown(event, controller, findInput)}
       {...stylex.props(workbench.page, styles.page)}>
-      <div {...stylex.props(styles.workspace, !compact && styles.expandedWorkspace)}>
+      <div
+        {...stylex.props(
+          styles.workspace,
+          !compact && styles.expandedWorkspace,
+          !compact && sidebarHidden && styles.closedWorkspace,
+        )}>
         {!compact && sidebar}
-        <main aria-label="Agent workspace" {...stylex.props(styles.content)}>
-          {findBar}
-          <header
-            {...stylex.props(styles.context, !state.selected && !compact && styles.newChatContext)}>
+        <main aria-label="Agent workspace" data-title-anchor="" {...stylex.props(styles.content)}>
+          <header {...stylex.props(workbench.paneHeader, styles.context)}>
             {compact && (
               <Dialog.Root open={sidebarOpen} onOpenChange={setSidebarOpen}>
                 <Dialog.Trigger
@@ -1004,14 +1040,7 @@ export function ChatView({
                   </span>
                 </>
               )}
-              <h1
-                {...stylex.props(
-                  styles.title,
-                  controls.truncate,
-                  !state.selected && !compact && controls.hidden,
-                )}>
-                {conversationTitle}
-              </h1>
+              <h1 {...stylex.props(styles.title, controls.truncate)}>{conversationTitle}</h1>
             </div>
             <div {...stylex.props(controls.row)}>
               {state.selected && (
@@ -1034,7 +1063,10 @@ export function ChatView({
               )}
             </div>
           </header>
-          {body}
+          <div {...stylex.props(workbench.pane, workbench.canvasPane)}>
+            {findBar}
+            {body}
+          </div>
         </main>
       </div>
     </div>
@@ -1055,17 +1087,18 @@ const styles = stylex.create({
   dockPage: { display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'hidden' },
   dockContent: { flex: 1 },
   dockList: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflowY: 'auto' },
-  dockHeader: {
-    flexShrink: 0,
+  dockHeader: { gap: space.sm, paddingLeft: 4, paddingRight: 2 },
+  scrollPane: { overflowY: 'auto' },
+  listPane: { padding: '10px 8px 16px', gap: space.sm, overflowY: 'auto' },
+  // Takes the pointer from the drag region, so its hover text shows.
+  dockHeading: {
+    flex: 1,
+    minWidth: 0,
     display: 'flex',
-    alignItems: 'center',
-    gap: space.sm,
-    padding: '10px 12px',
-    borderBottomWidth: 1,
-    borderBottomStyle: 'solid',
-    borderBottomColor: colors.border,
+    flexDirection: 'column',
+    gap: 2,
+    WebkitAppRegion: 'no-drag',
   },
-  dockHeading: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 },
   dockTitle: { margin: 0, fontSize: type.body, fontWeight: 600 },
   dockNew: { display: 'inline-flex', alignItems: 'center', gap: space.xs, flexShrink: 0 },
   dockEmpty: { padding: space.md },
@@ -1095,19 +1128,28 @@ const styles = stylex.create({
       default: '288px minmax(0, 1fr)',
       '@media (max-width: 760px)': '210px minmax(0, 1fr)',
     },
+    transitionProperty: 'grid-template-columns',
+    transitionDuration: '160ms',
+    transitionTimingFunction: 'cubic-bezier(0.2, 0.8, 0.2, 1)',
   },
+  // The chat list slides to nothing; the chat takes the whole width.
+  closedWorkspace: {
+    gridTemplateColumns: {
+      default: '0px minmax(0, 1fr)',
+      '@media (max-width: 760px)': '0px minmax(0, 1fr)',
+    },
+  },
+  sidebarClosed: { borderRightWidth: 0 },
   sidebar: {
     flex: 1,
     minHeight: 0,
-    backgroundColor: colors.chrome,
+    overflow: 'hidden',
+    display: 'flex',
+    flexDirection: 'column',
     borderRightWidth: 1,
     borderRightStyle: 'solid',
     borderRightColor: colors.border,
-    padding: '12px 8px 16px',
-    overflowY: 'auto',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: space.sm,
+    backgroundColor: colors.surface,
   },
   newChat: {
     fontSize: type.small,
@@ -1175,7 +1217,7 @@ const styles = stylex.create({
     overflowWrap: 'anywhere',
   },
   label: { fontSize: type.small, fontWeight: 400, margin: 0, color: colors.muted },
-  listHeader: { gap: space.xs, flexWrap: 'nowrap', margin: '4px 4px 4px 8px' },
+  listHeader: { gap: space.xs, flexWrap: 'nowrap', paddingRight: 2 },
   chatList: { display: 'flex', flexDirection: 'column', gap: 2, minHeight: 80 },
   /** The sidebar list fills its column, so a closed Settled toggle can sit at its foot. */
   fillList: { flex: 1 },
@@ -1223,19 +1265,23 @@ const styles = stylex.create({
     flexDirection: 'column',
     minWidth: 0,
     minHeight: 0,
-    overflowY: 'auto',
+    overflow: 'hidden',
   },
-  newChatContext: { minHeight: 0, padding: 0 },
   context: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: space.sm,
-    padding: '16px 28px',
-    minHeight: 56,
-    flexShrink: 0,
+    paddingLeft: 12,
+    paddingRight: 2,
   },
-  crumbs: { display: 'flex', alignItems: 'center', gap: space.sm, minWidth: 0 },
+  crumbs: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: space.sm,
+    minWidth: 0,
+    WebkitAppRegion: 'no-drag',
+  },
   crumbTile: { width: 20, height: 20, borderRadius: 5, fontSize: 9 },
   crumbProject: { flexShrink: 1, maxWidth: 200, color: colors.secondary, fontSize: type.body },
   crumbSeparator: { color: colors.muted },

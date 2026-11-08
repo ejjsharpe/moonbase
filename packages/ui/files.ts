@@ -2,7 +2,6 @@ import * as stylex from '@stylexjs/stylex';
 import { colors, layout, projectHues, radius, space, type } from './tokens.stylex';
 
 export const filesUI = stylex.create({
-  tools: { display: 'flex', gap: space.xs, flexWrap: 'wrap', margin: '0 0 12px' },
   iconButton: {
     display: 'inline-flex',
     alignItems: 'center',

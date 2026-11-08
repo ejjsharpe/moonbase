@@ -33,12 +33,30 @@ type FileCommand = {
 const mac = typeof navigator !== 'undefined' && navigator.platform.includes('Mac');
 const revealLabel = mac ? 'Reveal in Finder' : 'Show in Folder';
 const keyGlyphs: Record<string, string> = mac
-  ? { Meta: '⌘', Alt: '⌥', Shift: '⇧', Backspace: '⌫', Enter: '⏎' }
-  : { Meta: 'Ctrl+', Alt: 'Alt+', Shift: 'Shift+', Backspace: 'Backspace', Enter: 'Enter' };
+  ? {
+      Meta: '⌘',
+      Control: '⌃',
+      Alt: '⌥',
+      Shift: '⇧',
+      Backspace: '⌫',
+      Enter: '⏎',
+      ArrowLeft: '←',
+      ArrowRight: '→',
+    }
+  : {
+      Meta: 'Ctrl+',
+      Control: 'Ctrl+',
+      Alt: 'Alt+',
+      Shift: 'Shift+',
+      Backspace: 'Backspace',
+      Enter: 'Enter',
+      ArrowLeft: 'Left',
+      ArrowRight: 'Right',
+    };
 /** A command's keys as `aria-keyshortcuts` names them on this platform. */
 const ariaKeys = (keys: string) => (mac ? keys : keys.replace('Meta', 'Control'));
 /** Shows a command's keys the platform's way: ⇧⌥⌘C on a Mac, Shift+Alt+Ctrl+C elsewhere. */
-function formatKeys(keys: string) {
+export function formatKeys(keys: string) {
   return keys
     .split('+')
     .map((key) => keyGlyphs[key] ?? key)
