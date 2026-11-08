@@ -82,6 +82,11 @@ export type WorkbenchProps = {
   /** Native/user-authorized selection belongs to the shell. A renderer path alone grants no access. */
   selectNativeImports?: (checkout: CheckoutTarget) => Promise<string[]>;
   selectClipboardImports?: (checkout: CheckoutTarget) => Promise<string[]>;
+  /**
+   * Approves files dropped from the OS onto the files tree, one reference per file in order, for
+   * importing into the folder dropped on. Without it, such drops pass through to the app.
+   */
+  selectDroppedImports?: (checkout: CheckoutTarget, files: File[]) => Promise<string[]>;
   /** Copies a checkout's paths to the clipboard, joined by newlines: absolute, or as `relative`. */
   copyPaths?: (checkout: CheckoutTarget, paths: string[], relative: boolean) => Promise<void>;
   /** Shows a checkout's file or folder in the OS file manager. */
@@ -117,6 +122,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     onShowEditor,
     selectNativeImports,
     selectClipboardImports,
+    selectDroppedImports,
     copyPaths,
     revealPath,
     mentionInChat,
@@ -702,6 +708,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                 copyPaths={copyPaths}
                 revealPath={revealPath}
                 mentionInChat={mentionInChat}
+                selectDroppedImports={selectDroppedImports}
               />
             </>
           ) : (

@@ -197,6 +197,9 @@ function Demo() {
                 ? () => window.demo.selectClipboardImports()
                 : undefined
             }
+            selectDroppedImports={(target, files) =>
+              window.demo.selectDroppedImports(target, files)
+            }
           />
         </section>
         {!disposed && (
@@ -228,6 +231,8 @@ declare global {
       application: typeof firstApplication;
       selectNativeImports(): Promise<string[]>;
       selectClipboardImports(): Promise<string[]>;
+      /** Approves files dropped on the first editor's tree; the demo approves none. */
+      selectDroppedImports(target: typeof checkout, files: File[]): Promise<string[]>;
       /** What the first editor's menu copied, revealed and mentioned in chat. */
       copied: string[];
       revealed: string[];
@@ -248,6 +253,7 @@ window.demo = {
   workbench: () => firstHandle.current!,
   selectNativeImports: async () => [],
   selectClipboardImports: async () => [],
+  selectDroppedImports: async () => [],
   copied: [],
   revealed: [],
   mentioned: [],

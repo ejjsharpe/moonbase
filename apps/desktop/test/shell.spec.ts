@@ -875,6 +875,70 @@ test('file paste uses the exact sidebar checkout and leaves editor text paste al
   ).toBeVisible();
 });
 
+test('files dropped on the tree import into its folder once; elsewhere they import at the root', async ({
+  page,
+}) => {
+  await page.goto('/?chat');
+  await project(page).click();
+  const calls = () =>
+    page.evaluate(
+      () => (window as unknown as { drops: { approved: string[][]; imported: unknown[] } }).drops,
+    );
+  await page.evaluate(() => {
+    const drops = { approved: [] as string[][], imported: [] as unknown[] };
+    Object.assign(window, { drops });
+    window.demo.selectDroppedImports = async (_checkout, files) => {
+      drops.approved.push(files.map((file) => file.name));
+      return files.map((file) => `ref:${file.name}`);
+    };
+    // The demo workspace has no native file authority; record the import instead.
+    const { first } = window.demo,
+      mutate = first.mutate.bind(first);
+    first.mutate = async (input) => {
+      if (input.kind !== 'import') return mutate(input);
+      drops.imported.push({
+        destination: input.destination,
+        nativeReferences: input.nativeReferences,
+      });
+      return {
+        ...input,
+        id: input.id!,
+        clientId: first.clientId,
+        recoveryChanges: [],
+        outcome: 'completed',
+        items: [],
+      };
+    };
+  });
+  /** Drops a Finder file named `name` on `selector`, as the OS does. */
+  const drop = (selector: string, name: string) =>
+    page.evaluate(
+      ({ selector, name }) => {
+        const target = document.querySelector(selector)!,
+          dataTransfer = new DataTransfer();
+        dataTransfer.items.add(new File(['x'], name));
+        for (const type of ['dragenter', 'dragover', 'drop'])
+          target.dispatchEvent(
+            new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer }),
+          );
+      },
+      { selector, name },
+    );
+  const src = shell(page).getByRole('treeitem', { name: /^src(,|$)/ });
+  await drop(`[id="${await src.getAttribute('id')}"]`, 'a.txt');
+  await expect.poll(calls).toEqual({
+    approved: [['a.txt']],
+    imported: [{ destination: 'src/a.txt', nativeReferences: ['ref:a.txt'] }],
+  });
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  // Outside the tree, the window still takes a drop and imports it at the root.
+  await drop('[aria-label="Window title bar"]', 'b.txt');
+  await expect(page.getByRole('dialog', { name: 'Import files', exact: true })).toBeVisible();
+  expect((await calls()).approved).toEqual([['a.txt'], ['b.txt']]);
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  expect((await calls()).imported).toHaveLength(1);
+});
+
 test('compact Agents navigation uses a keyboard-dismissable drawer and keeps Send reachable', async ({
   page,
 }) => {
