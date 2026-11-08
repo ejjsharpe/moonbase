@@ -42,7 +42,7 @@ Local chat needs no configuration: choose a provider in **Settings › Providers
 
 Typing `@` in the composer searches the chat's working folder on its host (the bundled ripgrep for local chats) and inserts the picked file as a mention.
 
-Typing `/` at the start of a message lists the composer's commands (`src/renderer/chat/commands.ts`): `/new`, `/model`, `/effort`, `/stop` and `/clear`, each shown only when it can run. The renderer runs them; a command line sent with ⌘ Enter runs instead of reaching the agent.
+Typing `/` at the start of a message lists the composer's commands (`src/renderer/chat/commands.ts`): `/new`, `/model`, `/effort`, `/stop` and `/clear`, each shown only when it can run. The renderer runs them; a command line sent with Enter runs instead of reaching the agent.
 
 Choosing **New worktree** for a new local chat creates a linked worktree when its first message is sent. The renderer sends only a branch named from the message (`chat/tidy-the-composer`); main makes it from the folder's current commit at `<main worktree>-worktrees/<branch>`, numbering a taken name, and approves it as the chat's working folder. It then lists in the project's worktree switcher, and the project's docked chat keeps chats in any of its worktrees.
 
