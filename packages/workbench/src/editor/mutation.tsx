@@ -22,11 +22,14 @@ export function Mutation({
   action,
   close,
   finalFocus,
+  initialDestination = '',
 }: {
   controller: EditorController;
   action: Action;
   close: () => void;
   finalFocus?: () => boolean | HTMLElement | null;
+  /** Prefills a new file or folder's path, such as the folder its menu was opened on. */
+  initialDestination?: string;
 }) {
   const checkout = action.checkout,
     batchImport = action.kind === 'import' && action.nativeReferences!.length > 1;
@@ -36,7 +39,7 @@ export function Mutation({
     !state.recovery.openCheckoutIds.includes(checkout.checkoutId) ||
     !state.recovery.checkouts.some((target) => checkoutKey(target) === checkoutKey(checkout));
   const [destination, setDestination] = useState(
-    action.kind === 'move' ? (action.paths[0] ?? '') : '',
+    action.kind === 'move' ? (action.paths[0] ?? '') : initialDestination,
   );
   const [replacementPaths, setReplacementPaths] = useState('');
   const [workflow, setWorkflow] = useState<EditorMutation | null>(null);
@@ -55,7 +58,7 @@ export function Mutation({
   const titles: Record<Action['kind'], string> = {
     trash: 'Move to Trash',
     move: 'Rename',
-    copy: 'Copy',
+    copy: 'Duplicate',
     import: 'Import files',
     'create-file': 'New File',
     'create-directory': 'New Folder',

@@ -334,7 +334,8 @@ for (const selected of ['other · main', 'moonbase · main', 'Agents']) {
           : [frame.selected === 'other · main' ? 'elsewhere.ts editor' : 'welcome.ts editor'],
       );
     }
-    expect([...new Set(frames.map((frame) => frame.top))]).toEqual([0]);
+    // Views sit under the title bar.
+    expect([...new Set(frames.map((frame) => frame.top))]).toEqual([44]);
     await expect(page.getByRole('tab', { name: next, exact: true })).toHaveAttribute(
       'aria-selected',
       'true',
@@ -698,9 +699,10 @@ test('Agents opens first and accepts a preserved draft without a project or save
   ).toBeVisible();
   const plus = tabs(page).getByRole('button', { name: 'Open checkout', exact: true });
   await expect(plus.locator('svg')).toBeVisible();
-  await expect(shell(page).getByRole('button', { name: 'Import files', exact: true })).toHaveCount(
-    0,
-  );
+  // The chat view offers no file actions; the explorer's are behind its own menu.
+  await expect(
+    shell(page).getByRole('button', { name: 'Explorer actions', exact: true }),
+  ).toHaveCount(0);
 });
 
 test('local model and effort defaults yield to preferences across new chats and panel reopening', async ({
@@ -865,7 +867,7 @@ test('file paste uses the exact sidebar checkout and leaves editor text paste al
   await expect(shell(page).locator('.view-lines')).toContainText('controlled ordinary text paste');
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(
-    shell(page).getByRole('button', { name: 'New File', exact: true }).locator('svg'),
+    shell(page).getByRole('button', { name: 'Explorer actions', exact: true }).locator('svg'),
   ).toBeVisible();
 });
 
@@ -896,8 +898,10 @@ test('the project rail shows coded tiles and peeks at a project on hover without
   await page.goto('/?local&design');
   await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
   const rail = page.getByRole('tablist', { name: 'Workbench views', exact: true });
-  await expect(rail).toHaveCSS('box-shadow', 'rgb(35, 37, 46) -1px 0px 0px 0px inset');
-  await expect(rail).toHaveCSS('width', '72px');
+  // The rail is part of the window's frame: the title bar's colour, with no edge of its own.
+  await expect(rail).toHaveCSS('background-color', 'rgb(11, 12, 16)');
+  await expect(rail).toHaveCSS('box-shadow', 'none');
+  await expect(rail).toHaveCSS('width', '52px');
   await page.evaluate(() => window.demo.first.openCheckout('/demo/other'));
   const agents = page.getByRole('tab', { name: 'Agents', exact: true });
   const project = page.getByRole('tab', { name: 'moonbase · main', exact: true });
@@ -927,9 +931,9 @@ test('the project rail shows coded tiles and peeks at a project on hover without
   await expect(peek).toContainText('main');
   await expect(peek).toContainText('memory-demo · /demo/moonbase');
   await expect(closeProject).toHaveCSS('opacity', '1');
-  await expect(rail).toHaveCSS('width', '72px');
+  await expect(rail).toHaveCSS('width', '52px');
   expect(await tile(project).boundingBox()).toEqual(tileBounds);
-  expect((await peek.boundingBox())!.x).toBeGreaterThanOrEqual(72);
+  expect((await peek.boundingBox())!.x).toBeGreaterThanOrEqual(52);
   await page.screenshot({ path: '../../test-results/redesign-review/rail-peek.png' });
   await page.mouse.move(900, 400);
   await expect(peek).toBeHidden();
@@ -1048,13 +1052,53 @@ test('the project dock shows only that project’s chats, with a back arrow to t
     dock.getByRole('navigation', { name: 'other conversations', exact: true }),
   ).toContainText('No chats in other yet.');
   await dock.getByRole('button', { name: 'Hide project chats', exact: true }).click();
-  await expect(dock.getByRole('button', { name: 'Show project chats', exact: true })).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Toggle project chats', exact: true }),
+  ).toHaveAttribute('aria-pressed', 'false');
   await page.getByRole('tab', { name: 'Agents', exact: true }).click();
   await expect(
     page
       .getByRole('navigation', { name: 'Conversations', exact: true })
       .getByRole('button', { name: /Tidy the rail peek spacing/ }),
   ).toBeVisible();
+});
+
+test('the file menu mentions files in the dock’s chat and copies and reveals through the shell', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?local&design');
+  await page.getByRole('tab', { name: 'moonbase · main', exact: true }).click();
+  const dock = page.getByRole('complementary', { name: 'Project chats', exact: true });
+  const message = dock.getByLabel('Message', { exact: true });
+  await message.fill('Look at');
+  await dock.getByRole('button', { name: 'Hide project chats', exact: true }).click();
+  const tree = page.getByRole('tree', { name: 'Files', exact: true });
+  const fileMenu = page.getByRole('menu', { name: 'File actions', exact: true });
+  await tree.getByRole('treeitem', { name: 'README.md', exact: true }).click({ button: 'right' });
+  await fileMenu.getByRole('menuitem', { name: 'Mention in Chat', exact: true }).click();
+  // The hidden dock opens with the draft kept, the mention after it and the caret at the end.
+  await expect(message).toBeFocused();
+  await expect(message).toHaveValue('Look at @README.md ');
+  expect(await message.evaluate((element: HTMLTextAreaElement) => element.selectionStart)).toBe(
+    'Look at @README.md '.length,
+  );
+  // A file already mentioned isn't repeated.
+  await tree.getByRole('treeitem', { name: 'README.md', exact: true }).click();
+  await tree.press('Shift+ArrowDown');
+  await tree.press('ContextMenu');
+  await fileMenu.getByRole('menuitem', { name: 'Mention 2 Files in Chat', exact: true }).click();
+  await expect(message).toHaveValue('Look at @README.md @welcome.ts ');
+  // Right-clicking inside a selection keeps it, so select one file first.
+  await tree.getByRole('treeitem', { name: 'README.md', exact: true }).click();
+  await tree.getByRole('treeitem', { name: 'README.md', exact: true }).click({ button: 'right' });
+  await fileMenu.getByRole('menuitem', { name: 'Copy Path', exact: true }).click();
+  await expect(tree).toBeFocused();
+  await tree.press('Alt+Meta+r');
+  expect(await page.evaluate(() => [window.demo.copied, window.demo.revealed])).toEqual([
+    ['/demo/moonbase/README.md'],
+    ['/demo/moonbase/README.md'],
+  ]);
 });
 
 test('the project dock resizes by dragging or keys, expands and closes', async ({ page }) => {
@@ -1084,7 +1128,7 @@ test('the project dock resizes by dragging or keys, expands and closes', async (
   await dock.getByRole('button', { name: 'Restore project chats width', exact: true }).click();
   await expect.poll(width).toBe(340);
   await dock.getByRole('button', { name: 'Hide project chats', exact: true }).click();
-  await expect.poll(width).toBe(44);
+  await expect.poll(width).toBe(0);
   await page.getByRole('textbox', { name: 'welcome.ts editor', exact: true }).press('Meta+j');
   await expect.poll(width).toBe(340);
 });
@@ -1133,7 +1177,7 @@ test('removing a middle project moves survivors smoothly up the rail', async ({ 
     .attach('middle-project-motion-frames', { path: framesPath, contentType: 'application/json' });
   const first = frames[0],
     last = frames.at(-1)!;
-  expect(first.y - last.y).toBeCloseTo(52, 0);
+  expect(first.y - last.y).toBeCloseTo(40, 0);
   expect(frames.some((frame) => frame.y < first.y - 1 && frame.y > last.y + 1)).toBe(true);
   for (let i = 1; i < frames.length; i++) {
     expect(frames[i].x).toBeCloseTo(first.x, 1);
@@ -1212,7 +1256,7 @@ for (const reducedMotion of [false, true]) {
     for (const frames of [opened, closed]) {
       const start = frames[0].y,
         end = frames.at(-1)!.y;
-      expect(Math.abs(end - start)).toBeCloseTo(52, 0);
+      expect(Math.abs(end - start)).toBeCloseTo(40, 0);
       const intermediate = frames.some(
         (frame) => frame.y > Math.min(start, end) + 1 && frame.y < Math.max(start, end) - 1,
       );
@@ -1319,7 +1363,7 @@ test('design fixture renders first-message composition, pinned navigation and co
     await page
       .getByRole('complementary', { name: 'Saved chats', exact: true })
       .evaluate((element) => getComputedStyle(element).backgroundColor),
-  ).toBe('rgb(11, 12, 16)');
+  ).toBe('rgb(15, 16, 21)');
   expect(
     await message.evaluate((element) => element.closest('form')!.getBoundingClientRect().width),
   ).toBe(720);
@@ -1327,7 +1371,7 @@ test('design fixture renders first-message composition, pinned navigation and co
     await page
       .getByRole('tablist', { name: 'Workbench views', exact: true })
       .evaluate((element) => element.getBoundingClientRect().width),
-  ).toBe(72);
+  ).toBe(52);
   const border = await message.evaluate((element) => {
     const style = getComputedStyle(element.closest('form')!);
     return [style.borderTopWidth, style.borderTopStyle];
@@ -1349,12 +1393,12 @@ test('design fixture renders first-message composition, pinned navigation and co
         radius: getComputedStyle(tile).borderRadius,
       };
     });
-    expect(geometry.size).toEqual([40, 40]);
-    expect(geometry.left).toBe(16);
-    expect(geometry.right).toBe(16);
+    expect(geometry.size).toEqual([32, 32]);
+    expect(geometry.left).toBe(10);
+    expect(geometry.right).toBe(10);
     expect(geometry.closeX).toBeCloseTo(0, 1);
     expect(geometry.closeY).toBeCloseTo(4, 1);
-    expect(geometry.radius).toBe('9px');
+    expect(geometry.radius).toBe('8px');
   }
   expect(
     await page
@@ -1381,7 +1425,7 @@ test('design fixture renders first-message composition, pinned navigation and co
   });
   await page.getByRole('tab', { name: 'moonbase · main', exact: true }).click();
   await expect(
-    page.getByRole('button', { name: 'New File', exact: true }).locator('svg'),
+    page.getByRole('button', { name: 'Explorer actions', exact: true }).locator('svg'),
   ).toBeVisible();
   const tree = page.getByRole('tree', { name: 'Files', exact: true });
   const folder = tree.getByRole('treeitem', { name: 'src', exact: true });
@@ -1395,7 +1439,7 @@ test('design fixture renders first-message composition, pinned navigation and co
   await expect(folder).toHaveAttribute('aria-expanded', 'true');
   await expect(folder.locator('svg.tabler-icon-folder-open')).toBeVisible();
   await page.getByRole('button', { name: 'Changes', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Refresh', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Explorer actions', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Files', exact: true }).click();
   await page.screenshot({ path: '../../test-results/redesign-review/editor.png', fullPage: true });
   await page.getByRole('tab', { name: 'Agents', exact: true }).click();
@@ -1642,7 +1686,7 @@ test('a new worktree is made only when a new chat sends, and its chat stays with
   await page.getByRole('button', { name: 'New chat', exact: true }).click();
   await page.getByRole('tab', { name: 'moonbase · main', exact: true }).click();
   const dock = page.getByRole('main', { name: 'Agent workspace', exact: true });
-  await expect(dock.getByText('In moonbase', { exact: true })).toBeVisible();
+  await expect(dock.getByTitle('In moonbase', { exact: true })).toBeVisible();
   await dock.getByRole('combobox', { name: 'Worktree', exact: true }).click();
   await page.getByRole('option', { name: 'New worktree', exact: true }).click();
   await dock.getByRole('textbox', { name: 'Message', exact: true }).fill('Fix the rail peek');
@@ -1922,4 +1966,114 @@ test('a long folder menu offers a filter: type, then Enter picks the first match
   await folderChoice.click();
   await filter.fill('zzz');
   await expect(menu.getByText('Nothing matches.', { exact: true })).toBeVisible();
+});
+
+/** The rounded width of the first element a locator finds. */
+const widthOf = (locator: ReturnType<Page['locator']>) => () =>
+  locator.evaluate((element) => Math.round(element.getBoundingClientRect().width));
+
+test('⌘B and the sidebar button hide the main sidebar in projects and Agents, and it stays hidden', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?local&design');
+  await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
+  await page.getByRole('tab', { name: 'moonbase · main', exact: true }).click();
+  const explorer = page.locator('aside[aria-label="Editor sidebar"]');
+  await expect.poll(widthOf(explorer)).toBeGreaterThan(100);
+  await page.getByRole('textbox', { name: 'welcome.ts editor', exact: true }).press('Meta+b');
+  await expect.poll(widthOf(explorer)).toBe(0);
+  expect(await explorer.evaluate((element) => (element as HTMLElement).inert)).toBe(true);
+  await page.getByRole('button', { name: 'Show sidebar', exact: true }).click();
+  await expect.poll(widthOf(explorer)).toBeGreaterThan(100);
+  await page.getByRole('button', { name: 'Hide sidebar', exact: true }).click();
+  await page.getByRole('tab', { name: 'Agents', exact: true }).click();
+  const list = page.locator('aside[aria-label="Saved chats"]');
+  await expect.poll(widthOf(list)).toBe(0);
+  await page.reload();
+  await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
+  await expect.poll(widthOf(list)).toBe(0);
+  // The key works with nothing focused, too.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press('Meta+b');
+  await expect.poll(widthOf(list)).toBeGreaterThan(100);
+});
+
+test('⌃⌘S toggles the sidebar and never saves', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?local&design');
+  await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
+  await page.getByRole('tab', { name: 'moonbase · main', exact: true }).click();
+  const editor = page.getByRole('textbox', { name: 'welcome.ts editor', exact: true });
+  await editor.focus();
+  await editor.pressSequentially('unsaved ');
+  const saves = () => page.evaluate(() => window.demo.memory.stats.saves);
+  const before = await saves();
+  const explorer = page.locator('aside[aria-label="Editor sidebar"]');
+  await editor.press('Control+Meta+s');
+  await expect.poll(widthOf(explorer)).toBe(0);
+  // Focus stays in the editor, so the next keys still work.
+  await expect(editor).toBeFocused();
+  await editor.press('Control+Meta+s');
+  await expect.poll(widthOf(explorer)).toBeGreaterThan(100);
+  expect(await saves()).toBe(before);
+  // Hiding the sidebar from inside it hands focus to the editor.
+  await page.getByRole('tree', { name: 'Files', exact: true }).focus();
+  await page.keyboard.press('Meta+b');
+  await expect(editor).toBeFocused();
+});
+
+test('a hidden rail slides over the window at its left edge and away once the pointer is past it', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?local&design');
+  await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
+  const left = () =>
+    page
+      .getByRole('tablist', { name: 'Workbench views', exact: true })
+      .evaluate((element) => Math.round(element.getBoundingClientRect().x));
+  await page.getByRole('button', { name: 'Hide rail', exact: true }).click();
+  // Focus leaves the hidden rail for the view, not the page.
+  await expect.poll(() => page.evaluate(() => document.activeElement !== document.body)).toBe(true);
+  await page.mouse.move(700, 500);
+  await expect.poll(left).toBe(-52);
+  await page.mouse.move(3, 500);
+  await expect.poll(left).toBe(0);
+  await page.mouse.move(30, 300);
+  await expect.poll(left).toBe(0);
+  await page.mouse.move(120, 500);
+  await expect.poll(left).toBe(-52);
+  await page.mouse.move(3, 500);
+  await page.getByRole('button', { name: 'Keep rail open', exact: true }).click();
+  await page.mouse.move(700, 500);
+  await expect.poll(left).toBe(0);
+  await expect(page.getByRole('button', { name: 'Hide rail', exact: true })).toBeVisible();
+});
+
+test('the title bar names the open file, and project chats close fully and reopen', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?local&design');
+  await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
+  const bar = page.locator('header[aria-label="Window title bar"]');
+  await expect(bar).toContainText('Agents');
+  await page.getByRole('tab', { name: 'moonbase · main', exact: true }).click();
+  await expect(bar).toContainText('moonbase/welcome.ts');
+  const dock = page.locator('aside[aria-label="Project chats"]');
+  await expect.poll(widthOf(dock)).toBe(400);
+  await bar.getByRole('button', { name: 'Toggle project chats', exact: true }).click();
+  await expect.poll(widthOf(dock)).toBe(0);
+  const editor = page.getByRole('textbox', { name: 'welcome.ts editor', exact: true });
+  await editor.press('Meta+j');
+  await expect.poll(widthOf(dock)).toBe(400);
+  await editor.press('Meta+w');
+  const sheet = page.getByRole('region', { name: 'Keyboard shortcuts', exact: true });
+  await expect(sheet.getByRole('term')).toHaveText([
+    'Go to file',
+    'Commands',
+    'Find in files',
+    'Project chats',
+  ]);
 });

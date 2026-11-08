@@ -157,12 +157,22 @@ function Demo() {
             controller={first}
             checkout={checkout}
             visible={visible}
+            sidebarHidden={new URLSearchParams(location.search).has('sidebar-hidden')}
             renderLayout={
               new URLSearchParams(location.search).has('editor-only')
                 ? ({ editor }) => editor
                 : undefined
             }
             selectNativeImports={() => window.demo.selectNativeImports()}
+            copyPaths={async (target, paths, relative) => {
+              window.demo.copied.push(
+                paths.map((path) => (relative ? path : `${target.root}/${path}`)).join('\n'),
+              );
+            }}
+            revealPath={async (target, path) => {
+              window.demo.revealed.push(`${target.root}/${path}`);
+            }}
+            mentionInChat={(_target, paths) => window.demo.mentioned.push(paths)}
             selectClipboardImports={
               new URLSearchParams(location.search).has('clipboard')
                 ? () => window.demo.selectClipboardImports()
@@ -199,6 +209,10 @@ declare global {
       application: typeof firstApplication;
       selectNativeImports(): Promise<string[]>;
       selectClipboardImports(): Promise<string[]>;
+      /** What the first editor's menu copied, revealed and mentioned in chat. */
+      copied: string[];
+      revealed: string[];
+      mentioned: string[][];
       modelCount(): number;
       diffReady(): boolean;
       client: typeof client;
@@ -215,6 +229,9 @@ window.demo = {
   workbench: () => firstHandle.current!,
   selectNativeImports: async () => [],
   selectClipboardImports: async () => [],
+  copied: [],
+  revealed: [],
+  mentioned: [],
   modelCount: () => monaco.editor.getModels().length,
   diffReady: () =>
     monaco.editor.getDiffEditors().every((editor) => editor.getLineChanges() !== null),

@@ -53,6 +53,8 @@ async function createSession(
           runtime,
           client,
           {
+            copyText: async () => {},
+            reveal: async () => {},
             chooseCheckout: async () => null,
             imports: async () => [],
             release: async () => {},

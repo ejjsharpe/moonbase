@@ -100,6 +100,12 @@ function Desktop({ application }: { application: MoonbaseApplication }) {
             ) as string[])
           : []
       }
+      copyPaths={async (checkout, paths, relative) => {
+        unwrap(await bridge.call('copy-paths', { checkout, paths, relative }, crypto.randomUUID()));
+      }}
+      revealPath={async (checkout, path) => {
+        unwrap(await bridge.call('reveal', { checkout, path }, crypto.randomUUID()));
+      }}
       selectDroppedImports={async (checkout, files) =>
         application.getSnapshot().phase === 'live' ? unwrap(await bridge.drop(checkout, files)) : []
       }

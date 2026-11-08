@@ -18,6 +18,72 @@ import {
 const isContextClick = (event: { button: number; ctrlKey: boolean }) =>
   event.button === 2 || (event.button === 0 && event.ctrlKey && navigator.platform.includes('Mac'));
 
+type FileCommand = {
+  id: string;
+  icon: Parameters<typeof Icon>[0]['name'];
+  label: string;
+  /** The shortcut with `Meta` for the platform's command key (⌘, or Ctrl off a Mac). */
+  keys?: string;
+  danger?: boolean;
+  disabled?: boolean;
+  /** Whether focus returns to the tree after it runs. */
+  staysInTree?: boolean;
+  run(): void;
+};
+const mac = typeof navigator !== 'undefined' && navigator.platform.includes('Mac');
+const revealLabel = mac ? 'Reveal in Finder' : 'Show in Folder';
+const keyGlyphs: Record<string, string> = mac
+  ? {
+      Meta: '⌘',
+      Control: '⌃',
+      Alt: '⌥',
+      Shift: '⇧',
+      Backspace: '⌫',
+      Enter: '⏎',
+      ArrowLeft: '←',
+      ArrowRight: '→',
+    }
+  : {
+      Meta: 'Ctrl+',
+      Control: 'Ctrl+',
+      Alt: 'Alt+',
+      Shift: 'Shift+',
+      Backspace: 'Backspace',
+      Enter: 'Enter',
+      ArrowLeft: 'Left',
+      ArrowRight: 'Right',
+    };
+/** A command's keys as `aria-keyshortcuts` names them on this platform. */
+const ariaKeys = (keys: string) => (mac ? keys : keys.replace('Meta', 'Control'));
+/** Shows a command's keys the platform's way: ⇧⌥⌘C on a Mac, Shift+Alt+Ctrl+C elsewhere. */
+export function formatKeys(keys: string) {
+  return keys
+    .split('+')
+    .map((key) => keyGlyphs[key] ?? key)
+    .join('');
+}
+/** The command keys (see `FileCommand.keys`) a press in the tree matches, or null. */
+function shortcutCommand(event: {
+  key: string;
+  code: string;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  altKey: boolean;
+  shiftKey: boolean;
+  getModifierState(key: string): boolean;
+}) {
+  // Off a Mac, Ctrl+Alt is also AltGr, which types characters such as ć.
+  if (event.getModifierState('AltGraph')) return null;
+  const command = mac ? event.metaKey : event.ctrlKey;
+  if (event.key === 'F2' && !command && !event.altKey && !event.shiftKey) return 'F2';
+  if (command && !event.altKey && !event.shiftKey && event.key === 'Backspace')
+    return 'Meta+Backspace';
+  if (command && event.altKey && event.code === 'KeyC')
+    return event.shiftKey ? 'Shift+Alt+Meta+C' : 'Alt+Meta+C';
+  if (command && event.altKey && !event.shiftKey && event.code === 'KeyR') return 'Alt+Meta+R';
+  return null;
+}
+
 export function FilesTree({
   controller,
   state,
@@ -28,6 +94,9 @@ export function FilesTree({
   dialogOpen,
   canRequestMutation,
   requestMutation,
+  copyPaths,
+  revealPath,
+  mentionInChat,
 }: {
   controller: EditorController;
   state: EditorSnapshot;
@@ -37,7 +106,17 @@ export function FilesTree({
   visible: boolean;
   dialogOpen: boolean;
   canRequestMutation: (action: MutationAction) => boolean;
-  requestMutation: (action: MutationAction, finalFocus: () => HTMLElement | false) => void;
+  requestMutation: (
+    action: MutationAction,
+    finalFocus: () => HTMLElement | false,
+    destination?: string,
+  ) => void;
+  /** Copies a checkout's paths to the clipboard, joined by newlines: absolute, or as `relative`. */
+  copyPaths?: (checkout: CheckoutTarget, paths: string[], relative: boolean) => Promise<void>;
+  /** Shows a checkout's file or folder in the OS file manager. */
+  revealPath?: (checkout: CheckoutTarget, path: string) => Promise<void>;
+  /** Mentions files in the chat beside this checkout. */
+  mentionInChat?: (checkout: CheckoutTarget, paths: string[]) => void;
 }) {
   const tree = readOwn(state.recovery.views, checkout.checkoutId)!.tree,
     treeElement = useRef<HTMLDivElement>(null),
@@ -136,6 +215,123 @@ export function FilesTree({
       scroll: treeElement.current!.scrollTop,
     });
     controller.tree(checkout, { focus: path, selected: paths });
+  }
+  /** What the menu and its shortcuts offer for `paths`: a file, a folder, or several items. */
+  function commandsFor(paths: string[]): (FileCommand | 'separator')[] {
+    // Every listed folder of this checkout, including selected ones a collapse has since hidden.
+    const listingKey = JSON.stringify([checkoutIdentity, '']).slice(0, -3);
+    const directories = new Set(
+      Object.entries(state.listings).flatMap(([key, listing]) =>
+        key.startsWith(listingKey)
+          ? (listing?.entries ?? []).filter((entry) => entry.directory).map((entry) => entry.path)
+          : [],
+      ),
+    );
+    const one = paths.length === 1 ? paths[0] : null,
+      folder = one !== null && directories.has(one),
+      files = paths.filter((path) => !directories.has(path)),
+      count = paths.length,
+      plural = count > 1 ? ` ${count} Items` : '',
+      mutation = (kind: MutationAction['kind'], sources: string[], destination?: string) => ({
+        disabled: !canRequestMutation({ checkout, paths: sources, kind }),
+        run: () =>
+          requestMutation({ checkout, paths: sources, kind }, returnTreeFocus, destination),
+      });
+    const open: FileCommand[] = [];
+    if (one !== null && !folder)
+      open.push({
+        id: 'open',
+        icon: 'file',
+        label: 'Open',
+        keys: 'Enter',
+        // Like Enter in the tree, so the keyboard stays where it was.
+        staysInTree: true,
+        run: () => {
+          void controller.open({ checkout, path: one }, { view: 'file', intent: 'keep' });
+        },
+      });
+    if (folder)
+      open.push(
+        {
+          id: 'new-file',
+          icon: 'newFile',
+          label: 'New File…',
+          ...mutation('create-file', [], `${one}/`),
+        },
+        {
+          id: 'new-folder',
+          icon: 'newFolder',
+          label: 'New Folder…',
+          ...mutation('create-directory', [], `${one}/`),
+        },
+      );
+    const chat: FileCommand[] =
+      mentionInChat && files.length
+        ? [
+            {
+              id: 'mention',
+              icon: 'mention',
+              label: files.length > 1 ? `Mention ${files.length} Files in Chat` : 'Mention in Chat',
+              run: () => mentionInChat(checkout, files),
+            },
+          ]
+        : [];
+    const edit: FileCommand[] = [];
+    if (one !== null) {
+      edit.push({
+        id: 'rename',
+        icon: 'rename',
+        label: 'Rename…',
+        keys: 'F2',
+        ...mutation('move', [one]),
+      });
+      if (!folder)
+        edit.push({
+          id: 'duplicate',
+          icon: 'copy',
+          label: 'Duplicate…',
+          ...mutation('copy', [one]),
+        });
+    }
+    if (copyPaths)
+      edit.push(
+        {
+          id: 'copy-path',
+          icon: 'link',
+          label: count > 1 ? 'Copy Paths' : 'Copy Path',
+          keys: 'Alt+Meta+C',
+          staysInTree: true,
+          run: () => void copyPaths(checkout, paths, false).catch(controller.report),
+        },
+        {
+          id: 'copy-relative-path',
+          icon: 'link',
+          label: count > 1 ? 'Copy Relative Paths' : 'Copy Relative Path',
+          keys: 'Shift+Alt+Meta+C',
+          staysInTree: true,
+          run: () => void copyPaths(checkout, paths, true).catch(controller.report),
+        },
+      );
+    if (revealPath && one !== null)
+      edit.push({
+        id: 'reveal',
+        icon: 'finder',
+        label: revealLabel,
+        keys: 'Alt+Meta+R',
+        staysInTree: true,
+        run: () => void revealPath(checkout, one).catch(controller.report),
+      });
+    const trash: FileCommand = {
+      id: 'trash',
+      icon: 'trash',
+      label: `Move${plural} to Trash`,
+      keys: 'Meta+Backspace',
+      danger: true,
+      ...mutation('trash', paths),
+    };
+    return [open, chat, edit, [trash]]
+      .filter((group) => group.length)
+      .flatMap((group, index) => (index ? ['separator' as const, ...group] : group));
   }
   useEffect(() => {
     const element = treeElement.current;
@@ -252,6 +448,13 @@ export function FilesTree({
             event.preventDefault();
             if (row.directory && expanded.has(row.path)) toggle(row.path);
             else controller.tree(checkout, { focus: row.path.split('/').slice(0, -1).join('/') });
+          } else if (shortcutCommand(event)) {
+            event.preventDefault();
+            const paths = selected.has(row.path) ? [...tree.selected] : [row.path];
+            const command = commandsFor(paths).find(
+              (item) => item !== 'separator' && item.keys === shortcutCommand(event),
+            );
+            if (command && command !== 'separator' && !command.disabled) command.run();
           } else if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault();
             if (row.directory) toggle(row.path);
@@ -396,27 +599,42 @@ export function FilesTree({
                   event.stopPropagation();
                 }
               }}
-              {...stylex.props(overlays.popup, overlays.menuPopup)}>
-              {(['move', 'copy', 'trash'] as const).map((kind) => (
-                <ContextMenu.Item
-                  key={kind}
-                  disabled={
-                    !menu ||
-                    !canRequestMutation({ checkout: menu.checkout, paths: menu.paths, kind })
-                  }
-                  {...stylex.props(overlays.option, overlays.menuItem)}
-                  onClick={() => {
-                    if (!menu) return;
-                    restoreMenuFocus.current = false;
-                    requestMutation(
-                      { checkout: menu.checkout, paths: menu.paths, kind },
-                      returnTreeFocus,
-                    );
-                    setMenu(null);
-                  }}>
-                  {{ move: 'Rename', copy: 'Copy', trash: 'Move to Trash' }[kind]}
-                </ContextMenu.Item>
-              ))}
+              {...stylex.props(overlays.popup, overlays.menuPopup, overlays.wideMenu)}>
+              {menu &&
+                commandsFor(menu.paths).map((item, index) =>
+                  item === 'separator' ? (
+                    <ContextMenu.Separator key={index} {...stylex.props(overlays.separator)} />
+                  ) : (
+                    <ContextMenu.Item
+                      key={item.id}
+                      disabled={item.disabled}
+                      aria-keyshortcuts={item.keys && ariaKeys(item.keys)}
+                      {...stylex.props(
+                        overlays.option,
+                        overlays.menuItem,
+                        overlays.commandItem,
+                        item.danger && overlays.dangerItem,
+                      )}
+                      onClick={() => {
+                        if (item.disabled) return;
+                        // Copy and reveal leave focus in the tree; the rest move it to a dialog,
+                        // the editor or the chat.
+                        restoreMenuFocus.current = !!item.staysInTree;
+                        setMenu(null);
+                        item.run();
+                      }}>
+                      <span {...stylex.props(overlays.commandIcon)}>
+                        <Icon name={item.icon} />
+                      </span>
+                      <span {...stylex.props(overlays.commandLabel)}>{item.label}</span>
+                      {item.keys && (
+                        <span aria-hidden="true" {...stylex.props(overlays.commandKeys)}>
+                          {formatKeys(item.keys)}
+                        </span>
+                      )}
+                    </ContextMenu.Item>
+                  ),
+                )}
             </ContextMenu.Popup>
           </ContextMenu.Positioner>
         </ContextMenu.Portal>

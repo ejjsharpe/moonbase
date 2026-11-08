@@ -28,7 +28,9 @@ test('native imports require consent, preserve capture identity and cancel befor
         clipboardReads++;
         return [];
       },
+      writeText: async () => {},
     },
+    shell: { showItemInFolder: () => {} },
     capture: async (input) => {
       captured.push(input);
       return ['reference'];

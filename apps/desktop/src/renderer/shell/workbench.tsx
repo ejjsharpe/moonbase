@@ -1,6 +1,8 @@
 import type { TranscriptNative } from '../../chat/wire.ts';
 import {
+  Fragment,
   forwardRef,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useLayoutEffect,
@@ -21,6 +23,7 @@ import { getChatPlace } from '../chat/folder.ts';
 import { ChatView } from '../chat/view.tsx';
 import { checkoutName } from '@moonbase/ui/projects';
 import { homePath } from '../folder-menu.tsx';
+import { readOwn } from '@moonbase/application/editor';
 import { Icon } from '../icon.tsx';
 import { Workbench, type PickerEntry, pickerMode, type WorkbenchHandle } from '@moonbase/workbench';
 import { styles } from './styles.ts';
@@ -44,9 +47,43 @@ export type DesktopShellProps = {
   turnChatIntoProject?: (conversationId: string) => Promise<string>;
   selectCheckout?: () => Promise<string | null>;
   selectClipboardImports?: (checkout: CheckoutTarget) => Promise<string[]>;
+  /** Copies a checkout's paths to the clipboard, joined by newlines: absolute, or as `relative`. */
+  copyPaths?: (checkout: CheckoutTarget, paths: string[], relative: boolean) => Promise<void>;
+  /** Shows a checkout's file or folder in the OS file manager. */
+  revealPath?: (checkout: CheckoutTarget, path: string) => Promise<void>;
   selectDroppedImports?: (checkout: CheckoutTarget, files: File[]) => Promise<string[]>;
 };
 const noSubscription = () => () => {};
+/** Electron reports MacIntel on Apple silicon too. */
+const mac = navigator.platform.startsWith('Mac');
+const railCollapsedKey = 'moonbase.rail.collapsed';
+const sidebarHiddenKey = 'moonbase.sidebar.hidden';
+/** The title never starts before the sidebar button, which follows the window controls on macOS. */
+const titleMinLeft = (mac ? 84 : 8) + 28 + 12;
+/** Hides and shows the main sidebar, as in most editors; ⌃⌘S, the macOS sidebar key, works too. */
+const sidebarShortcut = mac ? '⌘B' : 'Ctrl+B';
+/** The window's shortcut on the editor's cheat sheet. */
+const windowShortcuts = [{ label: 'Project chats', keys: 'Meta+J' }];
+/** A remembered on/off choice, kept in this renderer's local storage. */
+function useStoredToggle(key: string) {
+  const [on, setOn] = useState(() => {
+    try {
+      return localStorage.getItem(key) === 'true';
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(key, String(on));
+    } catch {
+      // The choice lasts this session only.
+    }
+  }, [key, on]);
+  const toggle = useCallback(() => setOn((value) => !value), []);
+  return [on, toggle] as const;
+}
+const railWidth = (collapsed: boolean) => (collapsed ? 0 : 52);
 const dockDefaultWidth = 400,
   dockMinWidth = 320;
 const noEditor = () => undefined;
@@ -63,6 +100,8 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
     selectCheckout,
     selectClipboardImports,
     selectDroppedImports,
+    copyPaths,
+    revealPath,
   },
   ref,
 ) {
@@ -75,11 +114,53 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
     chat = application.chat;
   const [destination, setDestination] = useState<'project' | 'chat'>('chat');
   const [dockOpen, setDockOpen] = useState(true);
+  const [resizingDock, setResizingDock] = useState(false);
+  // Files the tree asked to mention in the dock's chat, until the dock takes them.
+  const [chatMention, setChatMention] = useState<{ id: number; files: string[] } | null>(null);
   const [settings, setSettings] = useState<SettingsSection | null>(null);
   const [projectWorktrees, setProjectWorktrees] = useState<{
     checkoutId: string;
     roots: readonly string[];
   } | null>(null);
+  const [railCollapsed, toggleRail] = useStoredToggle(railCollapsedKey);
+  const [sidebarHidden, toggleSidebar] = useStoredToggle(sidebarHiddenKey);
+  // Hiding the rail while focus is in it hands focus back to the view, not the page.
+  const toggleRailKeepingFocus = () => {
+    if (!railCollapsed && document.activeElement?.closest('[aria-label="Workbench views"]'))
+      restoreFocus(view);
+    toggleRail();
+  };
+  const railToggle = useRef(toggleRailKeepingFocus);
+  railToggle.current = toggleRailKeepingFocus;
+  // The sidebar and rail keys work wherever focus is, even on the page itself. They are caught
+  // before anything else sees them: ⌃⌘S would otherwise reach the editor's Save.
+  useEffect(() => {
+    const keyDown = (event: KeyboardEvent) => {
+      if (
+        event.defaultPrevented ||
+        event.getModifierState('AltGraph') ||
+        (event.target as Element | null)?.closest?.('[role="dialog"], [role="alertdialog"]')
+      )
+        return;
+      const command = mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+      let toggle: (() => void) | undefined;
+      if (event.code === 'KeyB' && command && !event.altKey && !event.shiftKey)
+        toggle = toggleSidebar;
+      else if (
+        event.code === 'KeyS' &&
+        event.ctrlKey &&
+        (mac ? event.metaKey && !event.shiftKey : event.altKey && !event.metaKey)
+      )
+        // ⌃⌘S also toggles the sidebar; the rail adds ⌥ on macOS and Shift elsewhere.
+        toggle = (mac ? event.altKey : event.shiftKey) ? railToggle.current : toggleSidebar;
+      if (!toggle) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (!event.repeat) toggle();
+    };
+    window.addEventListener('keydown', keyDown, true);
+    return () => window.removeEventListener('keydown', keyDown, true);
+  }, [toggleSidebar]);
   const [dockWidth, setDockWidth] = useState(dockDefaultWidth),
     [dockRestoreWidth, setDockRestoreWidth] = useState(dockDefaultWidth);
   const handle = useRef<WorkbenchHandle>(null),
@@ -119,6 +200,22 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
   const view = (destination === 'chat' || !selected) && chatTab ? 'chat' : projectValue;
   // One ChatView at a time: in the project dock while it shows, otherwise in Agents.
   const dockVisible = view !== 'chat' && !!selected && !!chat && dockOpen;
+  // The title starts over the content column's left edge, wherever the rail and sidebar leave it,
+  // and after the sidebar button when the sidebar is hidden.
+  const title = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const panel = view === 'chat' ? panels.current.chat : panels.current.project;
+    const anchor = panel?.querySelector('[data-title-anchor]');
+    if (!anchor) return;
+    const observer = new ResizeObserver(() => {
+      if (title.current)
+        title.current.style.left = `${Math.max(titleMinLeft, Math.round(anchor.getBoundingClientRect().left))}px`;
+    });
+    observer.observe(anchor);
+    return () => observer.disconnect();
+  }, [view, railCollapsed, sidebarHidden, selected?.checkoutId, dockVisible, chat]);
+  const activePath =
+    selected && state && readOwn(state.recovery.views, selected.checkoutId)?.active;
   const projectCheckouts = selected
     ? openCheckouts.filter(
         (checkout) =>
@@ -154,7 +251,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
       : []),
   ];
   // The dock leaves the explorer and a usable editor beside it.
-  const dockMaxWidth = Math.max(dockMinWidth, window.innerWidth - 72 - 560);
+  const dockMaxWidth = Math.max(dockMinWidth, window.innerWidth - railWidth(railCollapsed) - 560);
   const resizeDock = (width: number) =>
     setDockWidth(Math.round(Math.min(Math.max(width, dockMinWidth), dockMaxWidth)));
   const dockExpanded = dockWidth >= dockMaxWidth;
@@ -331,7 +428,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
           restoreFocus(next);
       }}
       inert={closing || ['prepared', 'disposing', 'disposed', 'failed'].includes(lifecycle.phase)}
-      {...stylex.props(workbench.document, styles.shell)}
+      {...stylex.props(workbench.document, styles.shell, railCollapsed && styles.shellCollapsed)}
       onKeyDown={(event) => {
         if (event.metaKey && !event.altKey && !event.shiftKey && event.key === ',') {
           event.preventDefault();
@@ -394,6 +491,62 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
         }
         run(importFiles(selected, selectDroppedImports(selected, [...event.dataTransfer.files])));
       }}>
+      <header aria-label="Window title bar" {...stylex.props(styles.titleBar)}>
+        <Button
+          aria-label={sidebarHidden ? 'Show sidebar' : 'Hide sidebar'}
+          title={`${sidebarHidden ? 'Show' : 'Hide'} sidebar · ${sidebarShortcut}`}
+          onClick={toggleSidebar}
+          {...stylex.props(controls.button, styles.sidebarToggle, mac && styles.sidebarToggleMac)}>
+          <Icon name="sidebar" />
+        </Button>
+        <div ref={title} {...stylex.props(styles.title)}>
+          <span aria-hidden="true" {...stylex.props(styles.titleDivider)} />
+          {view === 'chat' ? (
+            <span {...stylex.props(styles.titleCurrent)}>Agents</span>
+          ) : (
+            selected && (
+              <>
+                <span aria-hidden="true" {...stylex.props(styles.titleIcon)}>
+                  <Icon name="folder" />
+                </span>
+                <span>{checkoutName(selected)}</span>
+                {activePath &&
+                  activePath.split('/').map((part, index, parts) => (
+                    <Fragment key={index}>
+                      <span aria-hidden="true" {...stylex.props(styles.titleSeparator)}>
+                        /
+                      </span>
+                      <span {...stylex.props(index === parts.length - 1 && styles.titleCurrent)}>
+                        {part}
+                      </span>
+                    </Fragment>
+                  ))}
+              </>
+            )
+          )}
+        </div>
+        <div {...stylex.props(styles.barActions)}>
+          {view !== 'chat' && chat && selected && (
+            <Button
+              aria-label="Toggle project chats"
+              title={`${dockOpen ? 'Hide' : 'Show'} project chats · ⌘J`}
+              aria-pressed={dockOpen}
+              onClick={() => setDockOpen((open) => !open)}
+              {...stylex.props(controls.button, styles.barButton, dockOpen && styles.barButtonOn)}>
+              <Icon name="sidebarRight" />
+            </Button>
+          )}
+          {chat && (
+            <Button
+              aria-label="Start a new chat"
+              title="New chat · ⌘N"
+              onClick={startNewChat}
+              {...stylex.props(controls.button, styles.barButton)}>
+              <Icon name="plus" />
+            </Button>
+          )}
+        </div>
+      </header>
       <MainTabs
         checkouts={openCheckouts}
         selectedCheckoutId={state?.recovery.selectedCheckoutId}
@@ -413,6 +566,9 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
             : undefined
         }
         openSettings={() => setSettings('hosts')}
+        collapsed={railCollapsed}
+        toggleCollapsed={toggleRailKeepingFocus}
+        mac={mac}
         openChat={
           !chat && lifecycle.chat.state !== 'unavailable'
             ? () => run(application.openChat().then(() => setDestination('chat')))
@@ -484,14 +640,30 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
           onFocusCapture={(event) => {
             focus.current[projectValue] = event.target as HTMLElement;
           }}
-          {...stylex.props(styles.panel)}>
+          {...stylex.props(styles.panel, styles.framed, railCollapsed && styles.framedFlush)}>
           <section {...stylex.props(styles.panel)} aria-label="Editor workbench">
             <Workbench
               ref={handle}
               controller={controller}
               checkout={selected}
+              showBreadcrumbs={false}
+              sidebarHidden={sidebarHidden}
+              shortcuts={windowShortcuts}
               visible={view !== 'chat'}
               pickerEntries={pickerEntries}
+              copyPaths={copyPaths}
+              revealPath={revealPath}
+              mentionInChat={
+                chat
+                  ? (checkout, paths) => {
+                      setDockOpen(true);
+                      setChatMention((current) => ({
+                        id: (current?.id ?? 0) + 1,
+                        files: paths.map((path) => `${checkout.root}/${path}`),
+                      }));
+                    }
+                  : undefined
+              }
               onShowEditor={() => {
                 if (view !== 'chat') return;
                 setDestination('project');
@@ -501,11 +673,13 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
                 chat && selected ? (
                   <aside
                     aria-label="Project chats"
+                    inert={!dockVisible}
                     {...stylex.props(
                       styles.dock,
                       dockVisible
                         ? styles.dockWidth(Math.min(dockWidth, dockMaxWidth))
-                        : styles.dockCollapsed,
+                        : styles.dockClosed,
+                      resizingDock && styles.dockStill,
                     )}>
                     {dockVisible && (
                       <div
@@ -529,9 +703,11 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
                           resizeDock(width);
                         }}
                         onPointerDown={(event) => {
-                          if (event.button === 0)
-                            event.currentTarget.setPointerCapture(event.pointerId);
+                          if (event.button !== 0) return;
+                          event.currentTarget.setPointerCapture(event.pointerId);
+                          setResizingDock(true);
                         }}
+                        onLostPointerCapture={() => setResizingDock(false)}
                         onPointerMove={(event) => {
                           if (event.currentTarget.hasPointerCapture(event.pointerId))
                             resizeDock(
@@ -582,17 +758,12 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
                             }
                           },
                           collapse: () => setDockOpen(false),
+                          mention: chatMention,
+                          mentionHandled: (id) =>
+                            setChatMention((current) => (current?.id === id ? null : current)),
                         }}
                       />
-                    ) : (
-                      <Button
-                        aria-label="Show project chats"
-                        title="Show project chats · ⌘J"
-                        {...stylex.props(controls.button, controls.iconButton)}
-                        onClick={() => setDockOpen(true)}>
-                        <Icon name="agents" />
-                      </Button>
-                    )}
+                    ) : null}
                   </aside>
                 ) : undefined
               }
@@ -617,12 +788,13 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
         onFocusCapture={(event) => {
           focus.current.chat = event.target as HTMLElement;
         }}
-        {...stylex.props(styles.panel)}>
+        {...stylex.props(styles.panel, styles.framed, railCollapsed && styles.framedFlush)}>
         {chat ? (
           !dockVisible && (
             <ChatView
               key={lifecycle.chatTargetId}
               controller={chat}
+              sidebarHidden={sidebarHidden}
               chooseFolder={chooseChatFolder}
               recentFolders={recentChatFolders}
               folderProjects={folderProjects}

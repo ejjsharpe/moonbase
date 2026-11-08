@@ -2,7 +2,11 @@
 
 The macOS Electron app. It composes the workbench, headless application, workspace, local Pi and optional SSH/remote Pi modules. `src/main.ts` is the privileged composition root and owns native capabilities; the sandboxed renderer receives browser-safe clients only.
 
-The renderer opens only roots chosen in the native picker, already known, listed by `listWorktrees` for an approved checkout, or opened by main with `EditorSession.openFolderProject`. It cannot call `createWorktree` with a location of its own; a new chat's worktree is made by main instead (below). A plain folder opens as a project without branch, worktree or Changes controls; its sidebar header offers **Initialize Git**, after which main approves the Git checkout in its place.
+The renderer opens only roots chosen in the native picker, already known, listed by `listWorktrees` for an approved checkout, or opened by main with `EditorSession.openFolderProject`. It cannot call `createWorktree` with a location of its own; a new chat's worktree is made by main instead (below). A plain folder opens as a project without branch, worktree or Changes controls; its sidebar header offers **Initialize Git**, after which main approves the Git checkout in its place. Copy Path and Reveal in Finder likewise send main a checkout and relative paths: main writes the clipboard itself and reveals only paths that still resolve inside the checkout once links are followed.
+
+## Window
+
+A title bar runs across the top: the window controls, the sidebar button, then the open file or view's title over the content column, and buttons for project chats (⌘J) and a new chat. ⌘B (or ⌃⌘S) hides the main sidebar: the explorer, or the chat list in Agents. The project rail sits under the title bar; ⌃⌥⌘S or the button at its foot hides it, and it then slides over the window while the pointer is at the left edge. Both choices are kept in renderer local storage.
 
 ## Run
 

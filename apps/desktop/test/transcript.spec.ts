@@ -753,8 +753,8 @@ test('safe GFM, literal user content, progressive source, exact native callbacks
         .getByRole('main', { name: 'Agent workspace', exact: true })
         .evaluate((element) => element.getBoundingClientRect().width),
     )
-    // The window less the 72px project rail.
-    .toBe(568);
+    // The window less the 52px project rail and the panel's 1px edge.
+    .toBe(587);
   await page.setViewportSize({ width: 540, height: 844 });
   await row.getByRole('heading').scrollIntoViewIfNeeded();
   await page.screenshot({ path: resolve(output, 'compact.png') });

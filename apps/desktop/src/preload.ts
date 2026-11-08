@@ -27,9 +27,15 @@ const bridge: DesktopBridge = {
   clientId: 'desktop-primary',
   call(method, input, id) {
     if (
-      !['command', 'choose-checkout', 'choose-imports', 'clipboard-imports', 'watch'].includes(
-        method,
-      )
+      ![
+        'command',
+        'choose-checkout',
+        'choose-imports',
+        'clipboard-imports',
+        'watch',
+        'copy-paths',
+        'reveal',
+      ].includes(method)
     )
       return Promise.reject(Error('Unsupported bridge method.'));
     return call(method, input, id);

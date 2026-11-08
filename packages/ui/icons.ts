@@ -32,6 +32,15 @@ import {
   IconUpload,
   IconUser,
   IconX,
+  IconAt,
+  IconFolderSearch,
+  IconLink,
+  IconPencil,
+  IconLayoutSidebar,
+  IconLayoutSidebarRight,
+  IconFold,
+  IconLayoutSidebarLeftCollapse,
+  IconLayoutSidebarLeftExpand,
 } from '@tabler/icons-react';
 
 export const icons = {
@@ -68,4 +77,13 @@ export const icons = {
   more: IconDots,
   settle: IconArchive,
   unsettle: IconArchiveRestore,
+  mention: IconAt,
+  link: IconLink,
+  rename: IconPencil,
+  finder: IconFolderSearch,
+  sidebar: IconLayoutSidebar,
+  sidebarRight: IconLayoutSidebarRight,
+  collapseAll: IconFold,
+  railCollapse: IconLayoutSidebarLeftCollapse,
+  railExpand: IconLayoutSidebarLeftExpand,
 } as const;

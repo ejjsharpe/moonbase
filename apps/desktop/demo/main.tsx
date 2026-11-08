@@ -196,6 +196,14 @@ function Demo() {
           turnChatIntoProject={(conversationId) => chat.turnIntoProject(conversationId)}
           selectCheckout={() => window.demo.selectCheckout()}
           selectClipboardImports={(checkout) => window.demo.selectClipboardImports(checkout)}
+          copyPaths={async (target, paths, relative) => {
+            window.demo.copied.push(
+              paths.map((path) => (relative ? path : `${target.root}/${path}`)).join('\n'),
+            );
+          }}
+          revealPath={async (checkout, path) => {
+            window.demo.revealed.push(`${checkout.root}/${path}`);
+          }}
           selectDroppedImports={(checkout, files) =>
             window.demo.selectDroppedImports(checkout, files)
           }
@@ -252,6 +260,14 @@ function Demo() {
             transcriptNative={transcriptDemo ? () => transcriptDemo.native : undefined}
             selectCheckout={() => window.demo.selectCheckout()}
             selectClipboardImports={(checkout) => window.demo.selectClipboardImports(checkout)}
+            copyPaths={async (target, paths, relative) => {
+              window.demo.copied.push(
+                paths.map((path) => (relative ? path : `${target.root}/${path}`)).join('\n'),
+              );
+            }}
+            revealPath={async (checkout, path) => {
+              window.demo.revealed.push(`${checkout.root}/${path}`);
+            }}
             selectDroppedImports={(checkout, files) =>
               window.demo.selectDroppedImports(checkout, files)
             }
@@ -302,6 +318,9 @@ declare global {
       selectCheckout(): Promise<string | null>;
       selectClipboardImports(target: CheckoutTarget): Promise<string[]>;
       selectDroppedImports(target: CheckoutTarget, files: File[]): Promise<string[]>;
+      /** What the file menu copied and revealed; the demo never touches the OS clipboard. */
+      copied: string[];
+      revealed: string[];
       modelCount(): number;
       diffReady(): boolean;
       client: typeof client;
@@ -321,6 +340,8 @@ window.demo = {
   selectCheckout: async () => null,
   selectClipboardImports: async () => [],
   selectDroppedImports: async () => [],
+  copied: [],
+  revealed: [],
   checkout,
   memory,
   workbench: () => firstHandle.current!,

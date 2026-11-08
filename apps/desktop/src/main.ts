@@ -150,6 +150,7 @@ async function main() {
     window,
     dialog,
     clipboard,
+    shell,
     capture: (input) =>
       runApplicationEffect(
         runtime,

@@ -5,6 +5,12 @@ import { test, expect, type Page, type ElectronApplication } from '@playwright/t
 import type { RecoveryLoad } from '@moonbase/contracts/workspace';
 import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 
+/** Runs one of the explorer's "…" menu actions: New File…, Go to File…, Refresh and so on. */
+export async function explorerAction(page: Page, name: string) {
+  await page.getByRole('button', { name: 'Explorer actions', exact: true }).click();
+  await page.getByRole('menuitem', { name, exact: true }).click();
+}
+
 export async function openTabMenu(editor: Page | Locator) {
   await editor
     .getByRole('tablist', { name: 'Open files', exact: true })
@@ -75,7 +81,7 @@ export async function checkFilenameMaps(
   };
   await edit(sibling, 'retained sibling draft');
   for (const path of filenameCases) {
-    await page.getByRole('button', { name: 'Find file', exact: true }).click();
+    await explorerAction(page, 'Go to File…');
     await page.getByRole('combobox').fill(path);
     await expect(page.getByRole('option', { name: path, exact: true })).toBeVisible();
     await page.getByRole('option', { name: path, exact: true }).click();

@@ -25,7 +25,14 @@ export type DesktopAction = 'quit' | 'dispose' | 'cleanup-error';
 export interface DesktopBridge {
   readonly clientId: string;
   call(
-    method: 'command' | 'choose-checkout' | 'choose-imports' | 'clipboard-imports' | 'watch',
+    method:
+      | 'command'
+      | 'choose-checkout'
+      | 'choose-imports'
+      | 'clipboard-imports'
+      | 'watch'
+      | 'copy-paths'
+      | 'reveal',
     input: unknown,
     id: string,
   ): Promise<Reply>;

@@ -27,7 +27,7 @@ import { Dialog } from '@base-ui/react/dialog';
 import { Tabs } from '@base-ui/react/tabs';
 import { ContextMenu as Menu } from '@base-ui/react/context-menu';
 import { controls } from '@moonbase/ui/controls';
-import { filesUI } from '@moonbase/ui/files';
+import { fileTypeMark } from '@moonbase/ui/files';
 import { workbench } from '@moonbase/ui/workbench';
 import { overlays } from '@moonbase/ui/overlays';
 import type { CheckoutTarget, FileView } from '@moonbase/contracts/workspace';
@@ -41,6 +41,9 @@ import {
 } from '@moonbase/application/editor';
 import { MonacoView, readSelection, type EditorReveal } from './monaco-view.tsx';
 import { WorktreeSwitcher } from './worktree-switcher.tsx';
+import { ExplorerMenu, type ExplorerAction } from './explorer-menu.tsx';
+import { CheatSheet, editorShortcuts, type Shortcut } from './cheat-sheet.tsx';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { styles } from './styles.ts';
 import { Icon } from './icon.tsx';
 
@@ -72,6 +75,18 @@ export type WorkbenchProps = {
   /** Native/user-authorized selection belongs to the shell. A renderer path alone grants no access. */
   selectNativeImports?: (checkout: CheckoutTarget) => Promise<string[]>;
   selectClipboardImports?: (checkout: CheckoutTarget) => Promise<string[]>;
+  /** Copies a checkout's paths to the clipboard, joined by newlines: absolute, or as `relative`. */
+  copyPaths?: (checkout: CheckoutTarget, paths: string[], relative: boolean) => Promise<void>;
+  /** Shows a checkout's file or folder in the OS file manager. */
+  revealPath?: (checkout: CheckoutTarget, path: string) => Promise<void>;
+  /** Mentions a checkout's files in the chat beside it. */
+  mentionInChat?: (checkout: CheckoutTarget, paths: string[]) => void;
+  /** False when the window's title bar already names the open file. */
+  showBreadcrumbs?: boolean;
+  /** Hides the explorer, leaving the editor the full width. */
+  sidebarHidden?: boolean;
+  /** The app's own shortcuts, listed after the editor's when no file is open. */
+  shortcuts?: readonly Shortcut[];
 };
 const changeAreas = [
   { area: 'staged', label: 'Staged' },
@@ -90,6 +105,12 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     onShowEditor,
     selectNativeImports,
     selectClipboardImports,
+    copyPaths,
+    revealPath,
+    mentionInChat,
+    showBreadcrumbs = true,
+    sidebarHidden = false,
+    shortcuts = [],
   },
   ref,
 ) {
@@ -131,12 +152,21 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   const [mutationFinalFocus, setMutationFinalFocus] = useState<
     (() => boolean | HTMLElement | null) | undefined
   >(undefined);
+  // Where New File/Folder starts, such as the folder its menu was opened on.
+  const [mutationDestination, setMutationDestination] = useState('');
   useLayoutEffect(() => {
     lookupRef.current = lookup;
     projectRef.current = project;
   }, [lookup, project]);
-  function setAction(value: Action | null, finalFocus?: () => boolean | HTMLElement | null) {
-    if (value) setMutationFinalFocus(() => finalFocus);
+  function setAction(
+    value: Action | null,
+    finalFocus?: () => boolean | HTMLElement | null,
+    destination = '',
+  ) {
+    if (value) {
+      setMutationFinalFocus(() => finalFocus);
+      setMutationDestination(destination);
+    }
     actionRef.current = value;
     updateAction(value);
   }
@@ -159,7 +189,11 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       (value.kind !== 'trash' || value.paths.length > 0)
     );
   }
-  function requestMutation(value: Action, finalFocus?: () => boolean | HTMLElement | null) {
+  function requestMutation(
+    value: Action,
+    finalFocus?: () => boolean | HTMLElement | null,
+    destination?: string,
+  ) {
     if (
       !canRequestMutation(
         value,
@@ -174,7 +208,11 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       );
       return;
     }
-    setAction({ ...value, checkout: { ...value.checkout }, paths: [...value.paths] }, finalFocus);
+    setAction(
+      { ...value, checkout: { ...value.checkout }, paths: [...value.paths] },
+      finalFocus,
+      destination,
+    );
   }
   const choice = state.closePrompt;
   const [recent, setRecent] = useState<{
@@ -191,10 +229,26 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     interaction: number;
   } | null>(null);
   const focusInteraction = useRef(0);
+  const [resizingSidebar, setResizingSidebar] = useState(false);
+  const sidebarElement = useRef<HTMLElement>(null),
+    focusInSidebar = useRef(false);
+  // Hiding the explorer while focus is in it hands focus to the editor rather than the page.
+  useLayoutEffect(() => {
+    if (!sidebarHidden || !focusInSidebar.current) return;
+    focusInSidebar.current = false;
+    (
+      root.current?.querySelector<HTMLElement>(
+        'section[aria-label="Main editor"] .monaco-editor textarea[role="textbox"]',
+      ) ?? root.current
+    )?.focus();
+  }, [sidebarHidden]);
+  // Buffer tabs slide open and shut; the rest slide along to close the gap.
+  const reducedMotion = useReducedMotion();
+  const tabMotion = { duration: reducedMotion ? 0 : 0.18, ease: [0.2, 0.8, 0.2, 1] as const };
   const menuCapture = useRef<string[]>([]),
     menuKeyboard = useRef(false),
     root = useRef<HTMLDivElement>(null),
-    findFile = useRef<HTMLButtonElement>(null);
+    explorerActionsButton = useRef<HTMLButtonElement>(null);
   const targetIdentity = target && fileKey(target);
   const targetPath = target?.path;
   const checkoutIdentity = checkout && checkoutKey(checkout);
@@ -228,12 +282,13 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
           (element) => element.getAttribute('aria-label') === targetPath + (strip ? '' : ' editor'),
         );
       }
-      (element ?? findFile.current ?? root.current)?.focus();
+      (element ?? (sidebarHidden ? null : explorerActionsButton.current) ?? root.current)?.focus();
     }
     // oxlint-disable-next-line react/set-state-in-effect -- Consume this one-shot DOM focus request after the target has rendered.
     setFocusRequest(null);
   }, [
     focusRequest,
+    sidebarHidden,
     targetIdentity,
     targetPath,
     checkoutIdentity,
@@ -388,7 +443,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       if (!checkout || !selected || state.preserving) return;
       const key = event.key.toLowerCase(),
         command = event.metaKey || event.ctrlKey;
-      if (command && key === 's') {
+      if (command && key === 's' && !event.altKey && !(event.ctrlKey && event.metaKey)) {
         event.preventDefault();
         event.stopPropagation();
         if (target) run(controller.save(target));
@@ -482,6 +537,61 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     const captured = { ...checkout };
     run(selectClipboardImports(captured).then((references) => importFiles(captured, references)));
   }
+  const revealActive = () => {
+    if (!checkout || !target) return;
+    run(
+      controller.reveal(target).then(() => {
+        const current = controller.getSnapshot().recovery;
+        if (
+          current.openCheckoutIds.includes(checkout.checkoutId) &&
+          current.checkouts.some((item) => checkoutKey(item) === checkoutKey(checkout))
+        )
+          setAnchorReset((value) => value + 1);
+      }),
+    );
+  };
+  const explorerActions: ExplorerAction[] = checkout
+    ? [
+        {
+          label: 'New File…',
+          icon: 'newFile',
+          disabled: !canRequestMutation({ checkout, kind: 'create-file', paths: [] }),
+          run: () => requestMutation({ checkout, kind: 'create-file', paths: [] }),
+        },
+        {
+          label: 'New Folder…',
+          icon: 'newFolder',
+          disabled: !canRequestMutation({ checkout, kind: 'create-directory', paths: [] }),
+          run: () => requestMutation({ checkout, kind: 'create-directory', paths: [] }),
+        },
+        ...(selectNativeImports
+          ? [
+              {
+                label: 'Import Files…',
+                icon: 'import',
+                disabled: state.preserving,
+                run: () =>
+                  run(
+                    (async () => {
+                      const target = { ...checkout };
+                      importFiles(target, await selectNativeImports(target));
+                    })(),
+                  ),
+              } satisfies ExplorerAction,
+            ]
+          : []),
+        'separator',
+        {
+          label: 'Collapse All Folders',
+          icon: 'collapseAll',
+          run: () => controller.tree(checkout, { expanded: [] }),
+        },
+        { label: 'Reveal Active File', icon: 'reveal', disabled: !target, run: revealActive },
+        'separator',
+        { label: 'Go to File…', icon: 'search', keys: '⌘P', run: () => openPicker('goto') },
+        { label: 'Refresh', icon: 'refresh', run: () => run(controller.refresh(checkout)) },
+      ]
+    : [];
   const explorer =
     checkout && selected ? (
       <div
@@ -491,520 +601,500 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
           if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'v')
             pasteFiles(event);
         }}>
-        <WorktreeSwitcher controller={controller} checkout={checkout} run={run} />
-        <div {...stylex.props(workbench.viewNav)}>
-          {git ? (
-            <div role="group" aria-label="Sidebar view" {...stylex.props(workbench.viewSwitch)}>
-              <Button
-                title="Files · ⇧⌘E"
-                {...stylex.props(
-                  controls.button,
-                  workbench.viewButton,
-                  panel === 'files' && workbench.activeView,
-                )}
-                aria-pressed={panel === 'files'}
-                onClick={() => setPanel('files')}>
-                Files
-              </Button>
-              <Button
-                title={`${changes.length} changed · ⇧⌘G`}
-                {...stylex.props(
-                  controls.button,
-                  workbench.viewButton,
-                  panel === 'git' && workbench.activeView,
-                )}
-                aria-pressed={panel === 'git'}
-                onClick={() => setPanel('git')}>
-                Changes
-                {changes.length > 0 && (
-                  <span aria-hidden="true" {...stylex.props(workbench.changeCount)}>
-                    {changes.length}
-                  </span>
-                )}
-              </Button>
+        <div {...stylex.props(workbench.pane, workbench.explorerPane)}>
+          <div {...stylex.props(workbench.explorerHeader)}>
+            <WorktreeSwitcher controller={controller} checkout={checkout} run={run} />
+            <ExplorerMenu actions={explorerActions} triggerRef={explorerActionsButton} />
+          </div>
+          {git && (
+            <div {...stylex.props(workbench.viewNav)}>
+              <div role="group" aria-label="Sidebar view" {...stylex.props(workbench.viewSwitch)}>
+                <Button
+                  title="Files · ⇧⌘E"
+                  {...stylex.props(
+                    controls.button,
+                    workbench.viewButton,
+                    panel === 'files' && workbench.activeView,
+                  )}
+                  aria-pressed={panel === 'files'}
+                  onClick={() => setPanel('files')}>
+                  Files
+                </Button>
+                <Button
+                  title={`${changes.length} changed · ⇧⌘G`}
+                  {...stylex.props(
+                    controls.button,
+                    workbench.viewButton,
+                    panel === 'git' && workbench.activeView,
+                  )}
+                  aria-pressed={panel === 'git'}
+                  onClick={() => setPanel('git')}>
+                  Changes
+                  {changes.length > 0 && (
+                    <span aria-hidden="true" {...stylex.props(workbench.changeCount)}>
+                      {changes.length}
+                    </span>
+                  )}
+                </Button>
+              </div>
             </div>
-          ) : (
-            <span {...stylex.props(styles.grow)} />
           )}
-          <Button
-            ref={findFile}
-            aria-label="Find file"
-            title="Go to file · ⌘P"
-            {...stylex.props(controls.button, filesUI.iconButton)}
-            onClick={() => openPicker('goto')}>
-            <Icon name="search" />
-          </Button>
-          <Button
-            aria-label="Refresh"
-            title="Refresh"
-            {...stylex.props(controls.button, filesUI.iconButton)}
-            onClick={() => run(controller.refresh(checkout))}>
-            <Icon name="refresh" />
-          </Button>
-        </div>
-        {panel === 'files' ? (
-          <>
-            <div {...stylex.props(filesUI.tools)}>
-              {(['create-file', 'create-directory'] as const).map((kind) => (
-                <Button
-                  key={kind}
-                  {...stylex.props(controls.button, filesUI.iconButton)}
-                  aria-label={kind === 'create-file' ? 'New File' : 'New Folder'}
-                  title={kind === 'create-file' ? 'New file' : 'New folder'}
-                  disabled={!canRequestMutation({ checkout, kind, paths: [] })}
-                  onClick={() => requestMutation({ checkout, kind, paths: [] })}>
-                  <Icon name={kind === 'create-file' ? 'newFile' : 'newFolder'} />
-                </Button>
-              ))}
-
-              {selectNativeImports && (
-                <Button
-                  {...stylex.props(controls.button, filesUI.iconButton)}
-                  aria-label="Import files"
-                  title="Import files"
-                  disabled={state.preserving}
-                  onClick={() =>
-                    run(
-                      (async () => {
-                        const target = { ...checkout };
-                        importFiles(target, await selectNativeImports(target));
-                      })(),
-                    )
-                  }>
-                  <Icon name="import" />
-                </Button>
+          {panel === 'files' ? (
+            <>
+              <FilesTree
+                key={checkoutKey(checkout)}
+                controller={controller}
+                state={state}
+                checkout={checkout}
+                active={selected.active}
+                anchorReset={anchorReset}
+                visible={visible}
+                dialogOpen={!!(action || choice || lookup)}
+                canRequestMutation={canRequestMutation}
+                requestMutation={requestMutation}
+                copyPaths={copyPaths}
+                revealPath={revealPath}
+                mentionInChat={mentionInChat}
+              />
+            </>
+          ) : (
+            <>
+              {state.git[checkoutKey(checkout)]?.error && (
+                <p role="status" {...stylex.props(controls.alert)}>
+                  {state.git[checkoutKey(checkout)].error}
+                </p>
               )}
-              <Button
-                {...stylex.props(controls.button, filesUI.iconButton)}
-                aria-label="Reveal Active File"
-                title="Reveal active file"
-                disabled={!target}
-                onClick={() => {
-                  if (target)
-                    run(
-                      controller.reveal(target).then(() => {
-                        const current = controller.getSnapshot().recovery;
-                        if (
-                          current.openCheckoutIds.includes(checkout.checkoutId) &&
-                          current.checkouts.some(
-                            (item) => checkoutKey(item) === checkoutKey(checkout),
-                          )
-                        )
-                          setAnchorReset((value) => value + 1);
-                      }),
-                    );
-                }}>
-                <Icon name="reveal" />
-              </Button>
-            </div>
-            <FilesTree
-              key={checkoutKey(checkout)}
-              controller={controller}
-              state={state}
-              checkout={checkout}
-              active={selected.active}
-              anchorReset={anchorReset}
-              visible={visible}
-              dialogOpen={!!(action || choice || lookup)}
-              canRequestMutation={canRequestMutation}
-              requestMutation={requestMutation}
-            />
-          </>
-        ) : (
-          <>
-            {state.git[checkoutKey(checkout)]?.error && (
-              <p role="status" {...stylex.props(controls.alert)}>
-                {state.git[checkoutKey(checkout)].error}
-              </p>
-            )}
-            {state.git[checkoutKey(checkout)] && !changes.length && (
-              <p role="status" {...stylex.props(workbench.noChanges)}>
-                No changes
-              </p>
-            )}
-            {changeAreas.map(({ area, label }) => {
-              const listed = changes.filter((change) => change.area === area);
-              if (!listed.length) return null;
-              return (
-                <section key={area} aria-label={label}>
-                  <h2 {...stylex.props(workbench.changeHeading)}>
-                    {label}
-                    <span {...stylex.props(workbench.changeHeadingCount)}>{listed.length}</span>
-                  </h2>
-                  <ul {...stylex.props(controls.list)}>
-                    {listed.map((change) => {
-                      const active = target?.path === change.path && mode === area;
-                      const folder = change.path.slice(0, change.path.lastIndexOf('/') + 1);
-                      return (
-                        <li key={change.path}>
-                          <Button
-                            aria-label={change.path}
-                            aria-current={active || undefined}
-                            title={change.path}
-                            {...stylex.props(
-                              controls.button,
-                              controls.listButton,
-                              workbench.changeRow,
-                              active && workbench.activeChange,
-                            )}
-                            onClick={() =>
-                              run(
-                                controller.open(
-                                  { checkout, path: change.path },
-                                  { view: area, intent: 'preview' },
-                                ),
-                              )
-                            }>
-                            <span {...stylex.props(workbench.changeName)}>
-                              {change.path.slice(folder.length)}
-                            </span>
-                            {folder && (
-                              <span {...stylex.props(workbench.changeFolder)}>{folder}</span>
-                            )}
-                          </Button>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </section>
-              );
-            })}
-          </>
-        )}
+              {state.git[checkoutKey(checkout)] && !changes.length && (
+                <p role="status" {...stylex.props(workbench.noChanges)}>
+                  No changes
+                </p>
+              )}
+              {changeAreas.map(({ area, label }) => {
+                const listed = changes.filter((change) => change.area === area);
+                if (!listed.length) return null;
+                return (
+                  <section key={area} aria-label={label}>
+                    <h2 {...stylex.props(workbench.changeHeading)}>
+                      {label}
+                      <span {...stylex.props(workbench.changeHeadingCount)}>{listed.length}</span>
+                    </h2>
+                    <ul {...stylex.props(controls.list)}>
+                      {listed.map((change) => {
+                        const active = target?.path === change.path && mode === area;
+                        const folder = change.path.slice(0, change.path.lastIndexOf('/') + 1);
+                        return (
+                          <li key={change.path}>
+                            <Button
+                              aria-label={change.path}
+                              aria-current={active || undefined}
+                              title={change.path}
+                              {...stylex.props(
+                                controls.button,
+                                controls.listButton,
+                                workbench.changeRow,
+                                active && workbench.activeChange,
+                              )}
+                              onClick={() =>
+                                run(
+                                  controller.open(
+                                    { checkout, path: change.path },
+                                    { view: area, intent: 'preview' },
+                                  ),
+                                )
+                              }>
+                              <span {...stylex.props(workbench.changeName)}>
+                                {change.path.slice(folder.length)}
+                              </span>
+                              {folder && (
+                                <span {...stylex.props(workbench.changeFolder)}>{folder}</span>
+                              )}
+                            </Button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </section>
+                );
+              })}
+            </>
+          )}
+        </div>
       </div>
     ) : null;
   const editor =
     checkout && selected ? (
-      <section {...stylex.props(workbench.content, styles.panel)} aria-label="Main editor">
+      <section
+        data-title-anchor=""
+        {...stylex.props(workbench.content, styles.panel)}
+        aria-label="Main editor">
         <Tabs.Root
           value={selected.active}
           onValueChange={(value) => run(controller.open({ checkout, path: String(value) }))}
           {...stylex.props(styles.panel)}>
           <Tabs.List aria-label="Open files" {...stylex.props(workbench.fileTabs)}>
-            {selected.openFiles.map((path) => {
-              const file = { checkout, path },
-                current = state.buffers.find((buffer) => fileKey(buffer.target) === fileKey(file)),
-                dirty = current && current.text !== current.disk.text;
-              const fileView = readOwn(selected.fileViews, path) || 'file';
-              const parts = path.split('/');
-              let label = parts.at(-1)!;
-              for (let count = 1; count <= parts.length; count++) {
-                label = parts.slice(-count).join('/');
-                if (
-                  !selected.openFiles.some(
-                    (other) => other !== path && other.split('/').slice(-count).join('/') === label,
-                  )
-                )
-                  break;
-              }
-              return (
-                <Menu.Root
-                  key={fileKey(file)}
-                  disabled={state.preserving}
-                  onOpenChange={(open) => {
-                    if (open) menuCapture.current = [...selected.openFiles];
-                    else menuKeyboard.current = false;
-                  }}>
-                  <Menu.Trigger
-                    render={<span />}
-                    onKeyDown={(event) => {
-                      if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
-                        event.preventDefault();
-                        menuKeyboard.current = true;
-                        const bounds = event.currentTarget.getBoundingClientRect();
-                        event.currentTarget.dispatchEvent(
-                          new MouseEvent('contextmenu', {
-                            bubbles: true,
-                            cancelable: true,
-                            clientX: bounds.left,
-                            clientY: bounds.bottom,
-                          }),
-                        );
-                      }
-                    }}
-                    {...stylex.props(
-                      stylex.defaultMarker(),
-                      workbench.fileTab,
-                      selected.active === path && workbench.activeFileTab,
-                    )}
-                    onDragOver={(event) => {
-                      if (dragged.current) event.preventDefault();
-                    }}
-                    onDrop={(event) => {
-                      event.preventDefault();
-                      if (dragged.current)
-                        controller.reorder(
-                          checkout,
-                          dragged.current,
-                          selected.openFiles.indexOf(path),
-                        );
-                      dragged.current = null;
+            {/* One group per checkout: switching swaps the list outright, since a tab's value is its
+                path and an outgoing tab must never share it with an incoming one. */}
+            <AnimatePresence key={checkoutKey(checkout)} initial={false}>
+              {selected.openFiles.map((path) => {
+                const file = { checkout, path },
+                  current = state.buffers.find(
+                    (buffer) => fileKey(buffer.target) === fileKey(file),
+                  ),
+                  dirty = current && current.text !== current.disk.text;
+                const fileView = readOwn(selected.fileViews, path) || 'file';
+                // The file's name, then as much of its folder as tells it from other open tabs.
+                const parts = path.split('/');
+                const label = parts.at(-1)!;
+                let hint = '';
+                for (let count = 1; count <= parts.length; count++) {
+                  const tail = parts.slice(-count).join('/');
+                  if (
+                    !selected.openFiles.some(
+                      (other) =>
+                        other !== path && other.split('/').slice(-count).join('/') === tail,
+                    )
+                  ) {
+                    hint = parts.slice(-count, -1).join('/');
+                    break;
+                  }
+                }
+                const mark = fileTypeMark(path);
+                return (
+                  <Menu.Root
+                    key={fileKey(file)}
+                    disabled={state.preserving}
+                    onOpenChange={(open) => {
+                      if (open) menuCapture.current = [...selected.openFiles];
+                      else menuKeyboard.current = false;
                     }}>
-                    <Tabs.Tab
-                      value={path}
-                      aria-label={path}
-                      title={`${checkout.hostId} · ${checkout.root}/${path}`}
-                      aria-description={
-                        [selected.preview === path && 'Preview', dirty && 'Unsaved']
-                          .filter(Boolean)
-                          .join(', ') || undefined
+                    <Menu.Trigger
+                      render={
+                        <motion.span
+                          layout="position"
+                          initial={{ opacity: 0, width: 0 }}
+                          animate={{ opacity: 1, width: 'auto' }}
+                          exit={{ opacity: 0, width: 0, pointerEvents: 'none' }}
+                          transition={tabMotion}
+                        />
                       }
-                      draggable={!state.preserving}
-                      onDragStart={(event) => {
-                        dragged.current = path;
-                        event.dataTransfer.setData('text/plain', path);
+                      onKeyDown={(event) => {
+                        if (
+                          event.key === 'ContextMenu' ||
+                          (event.shiftKey && event.key === 'F10')
+                        ) {
+                          event.preventDefault();
+                          menuKeyboard.current = true;
+                          const bounds = event.currentTarget.getBoundingClientRect();
+                          event.currentTarget.dispatchEvent(
+                            new MouseEvent('contextmenu', {
+                              bubbles: true,
+                              cancelable: true,
+                              clientX: bounds.left,
+                              clientY: bounds.bottom,
+                            }),
+                          );
+                        }
                       }}
-                      onDragEnd={() => {
-                        dragged.current = null;
-                      }}
-                      onDoubleClick={() => controller.keepOpen(file)}
                       {...stylex.props(
-                        controls.button,
-                        workbench.tabButton,
-                        workbench.fileTabButton,
-                        selected.preview === path && workbench.preview,
-                        dirty && workbench.unsaved,
-                      )}>
-                      <span {...stylex.props(controls.icon)}>
-                        <Icon name="file" />
-                      </span>
-                      <span {...stylex.props(controls.truncate)}>{label}</span>
-                    </Tabs.Tab>
-                    <Button
-                      {...stylex.props(
-                        controls.button,
-                        controls.iconButton,
-                        workbench.tabClose,
-                        workbench.fileTabClose,
-                        workbench.revealTabClose,
-                        selected.active === path && workbench.visibleTabClose,
+                        stylex.defaultMarker(),
+                        workbench.fileTab,
+                        selected.active === path && workbench.activeFileTab,
                       )}
-                      aria-label={`Close ${path}`}
-                      disabled={state.preserving}
-                      onClick={() => run(closeFiles([path]))}>
-                      <Icon name="close" />
-                    </Button>
-                  </Menu.Trigger>
-                  <Menu.Portal>
-                    <Menu.Positioner {...stylex.props(overlays.positioner)}>
-                      <Menu.Popup
-                        onFocus={(event) => {
-                          if (menuKeyboard.current) {
-                            menuKeyboard.current = false;
-                            event.currentTarget
-                              .querySelector<HTMLElement>('[role="menuitem"]')
-                              ?.focus();
-                          }
+                      onDragOver={(event) => {
+                        if (dragged.current) event.preventDefault();
+                      }}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        if (dragged.current)
+                          controller.reorder(
+                            checkout,
+                            dragged.current,
+                            selected.openFiles.indexOf(path),
+                          );
+                        dragged.current = null;
+                      }}>
+                      <Tabs.Tab
+                        value={path}
+                        aria-label={path}
+                        title={`${checkout.hostId} · ${checkout.root}/${path}`}
+                        aria-description={
+                          [selected.preview === path && 'Preview', dirty && 'Unsaved']
+                            .filter(Boolean)
+                            .join(', ') || undefined
+                        }
+                        draggable={!state.preserving}
+                        onDragStart={(event) => {
+                          dragged.current = path;
+                          event.dataTransfer.setData('text/plain', path);
                         }}
-                        {...stylex.props(overlays.popup, overlays.options)}>
-                        <Menu.Item
-                          {...stylex.props(overlays.option)}
-                          onClick={() => controller.keepOpen(file)}>
-                          Keep Open
-                        </Menu.Item>
-                        {(
-                          ['Close', 'Close Others', 'Close to the Right', 'Close All'] as const
-                        ).map((label) => (
+                        onDragEnd={() => {
+                          dragged.current = null;
+                        }}
+                        onDoubleClick={() => controller.keepOpen(file)}
+                        {...stylex.props(
+                          controls.button,
+                          workbench.tabButton,
+                          workbench.fileTabButton,
+                          selected.preview === path && workbench.preview,
+                        )}>
+                        {mark ? (
+                          <span aria-hidden="true" {...stylex.props(mark.style)}>
+                            {mark.label}
+                          </span>
+                        ) : (
+                          <span {...stylex.props(controls.icon)}>
+                            <Icon name="file" />
+                          </span>
+                        )}
+                        <span {...stylex.props(controls.truncate)}>{label}</span>
+                        {hint && (
+                          <span aria-hidden="true" {...stylex.props(workbench.fileTabHint)}>
+                            {hint}
+                          </span>
+                        )}
+                      </Tabs.Tab>
+                      <Button
+                        {...stylex.props(
+                          controls.button,
+                          controls.iconButton,
+                          workbench.tabClose,
+                          workbench.fileTabClose,
+                          workbench.revealTabClose,
+                          (selected.active === path || dirty) && workbench.visibleTabClose,
+                        )}
+                        aria-label={`Close ${path}`}
+                        disabled={state.preserving}
+                        onClick={() => run(closeFiles([path]))}>
+                        {dirty ? (
+                          <>
+                            <span aria-hidden="true" {...stylex.props(workbench.unsavedDot)} />
+                            <span {...stylex.props(workbench.unsavedClose)}>
+                              <Icon name="close" />
+                            </span>
+                          </>
+                        ) : (
+                          <Icon name="close" />
+                        )}
+                      </Button>
+                    </Menu.Trigger>
+                    <Menu.Portal>
+                      <Menu.Positioner {...stylex.props(overlays.positioner)}>
+                        <Menu.Popup
+                          onFocus={(event) => {
+                            if (menuKeyboard.current) {
+                              menuKeyboard.current = false;
+                              event.currentTarget
+                                .querySelector<HTMLElement>('[role="menuitem"]')
+                                ?.focus();
+                            }
+                          }}
+                          {...stylex.props(overlays.popup, overlays.options)}>
                           <Menu.Item
-                            key={label}
                             {...stylex.props(overlays.option)}
-                            onClick={() => {
-                              let paths;
-                              if (label === 'Close') {
-                                paths = [file.path];
-                              } else if (label === 'Close Others') {
-                                paths = menuCapture.current.filter((path) => path !== file.path);
-                              } else if (label === 'Close to the Right') {
-                                paths = menuCapture.current.slice(
-                                  menuCapture.current.indexOf(file.path) + 1,
-                                );
-                              } else {
-                                paths = menuCapture.current;
-                              }
-                              run(withFocus(closeFiles(paths), 'strip', true));
-                            }}>
-                            {label}
+                            onClick={() => controller.keepOpen(file)}>
+                            Keep Open
                           </Menu.Item>
-                        ))}
-                        <Menu.Item
-                          {...stylex.props(overlays.option)}
-                          onClick={() =>
-                            controller.reorder(
-                              checkout,
-                              file.path,
-                              selected.openFiles.indexOf(file.path) - 1,
-                            )
-                          }>
-                          Move tab left
-                        </Menu.Item>
-                        <Menu.Item
-                          {...stylex.props(overlays.option)}
-                          onClick={() =>
-                            controller.reorder(
-                              checkout,
-                              file.path,
-                              selected.openFiles.indexOf(file.path) + 1,
-                            )
-                          }>
-                          Move tab right
-                        </Menu.Item>
-                        <Menu.Item
-                          {...stylex.props(overlays.option)}
-                          disabled={!current || current.saving || state.preserving}
-                          onClick={() => run(controller.save(file))}>
-                          {current?.pendingSave ? 'Retry Save' : 'Save'}
-                        </Menu.Item>
-                        <Menu.SubmenuRoot>
-                          <Menu.SubmenuTrigger {...stylex.props(overlays.option)}>
-                            File view <Icon name="chevronRight" />
-                          </Menu.SubmenuTrigger>
-                          <Menu.Portal>
-                            <Menu.Positioner {...stylex.props(overlays.positioner)}>
-                              <Menu.Popup {...stylex.props(overlays.popup, overlays.options)}>
-                                <Menu.RadioGroup
-                                  aria-label="File view"
-                                  value={fileView}
-                                  onValueChange={(view: FileView) =>
-                                    run(controller.open(file, { view }))
-                                  }>
-                                  {(git
-                                    ? (['file', 'staged', 'unstaged', 'untracked'] as const)
-                                    : (['file'] as const)
-                                  ).map((view) => (
-                                    <Menu.RadioItem
-                                      key={view}
-                                      value={view}
-                                      closeOnClick
-                                      {...stylex.props(
-                                        overlays.option,
-                                        fileView === view && workbench.fileSelected,
-                                      )}>
-                                      {view === 'file' ? 'File' : view}
-                                    </Menu.RadioItem>
-                                  ))}
-                                  {(current?.conflict || fileView === 'conflict') && (
-                                    <Menu.RadioItem
-                                      value="conflict"
-                                      closeOnClick
-                                      {...stylex.props(
-                                        overlays.option,
-                                        fileView === 'conflict' && workbench.fileSelected,
-                                      )}>
-                                      Save conflict
-                                    </Menu.RadioItem>
-                                  )}
-                                </Menu.RadioGroup>
-                              </Menu.Popup>
-                            </Menu.Positioner>
-                          </Menu.Portal>
-                        </Menu.SubmenuRoot>
-                        <Menu.Item
-                          {...stylex.props(overlays.option)}
-                          onClick={() => run(controller.reopen(checkout))}>
-                          Reopen Closed Files
-                        </Menu.Item>
-                      </Menu.Popup>
-                    </Menu.Positioner>
-                  </Menu.Portal>
-                </Menu.Root>
-              );
-            })}
+                          {(
+                            ['Close', 'Close Others', 'Close to the Right', 'Close All'] as const
+                          ).map((label) => (
+                            <Menu.Item
+                              key={label}
+                              {...stylex.props(overlays.option)}
+                              onClick={() => {
+                                let paths;
+                                if (label === 'Close') {
+                                  paths = [file.path];
+                                } else if (label === 'Close Others') {
+                                  paths = menuCapture.current.filter((path) => path !== file.path);
+                                } else if (label === 'Close to the Right') {
+                                  paths = menuCapture.current.slice(
+                                    menuCapture.current.indexOf(file.path) + 1,
+                                  );
+                                } else {
+                                  paths = menuCapture.current;
+                                }
+                                run(withFocus(closeFiles(paths), 'strip', true));
+                              }}>
+                              {label}
+                            </Menu.Item>
+                          ))}
+                          <Menu.Item
+                            {...stylex.props(overlays.option)}
+                            onClick={() =>
+                              controller.reorder(
+                                checkout,
+                                file.path,
+                                selected.openFiles.indexOf(file.path) - 1,
+                              )
+                            }>
+                            Move tab left
+                          </Menu.Item>
+                          <Menu.Item
+                            {...stylex.props(overlays.option)}
+                            onClick={() =>
+                              controller.reorder(
+                                checkout,
+                                file.path,
+                                selected.openFiles.indexOf(file.path) + 1,
+                              )
+                            }>
+                            Move tab right
+                          </Menu.Item>
+                          <Menu.Item
+                            {...stylex.props(overlays.option)}
+                            disabled={!current || current.saving || state.preserving}
+                            onClick={() => run(controller.save(file))}>
+                            {current?.pendingSave ? 'Retry Save' : 'Save'}
+                          </Menu.Item>
+                          <Menu.SubmenuRoot>
+                            <Menu.SubmenuTrigger {...stylex.props(overlays.option)}>
+                              File view <Icon name="chevronRight" />
+                            </Menu.SubmenuTrigger>
+                            <Menu.Portal>
+                              <Menu.Positioner {...stylex.props(overlays.positioner)}>
+                                <Menu.Popup {...stylex.props(overlays.popup, overlays.options)}>
+                                  <Menu.RadioGroup
+                                    aria-label="File view"
+                                    value={fileView}
+                                    onValueChange={(view: FileView) =>
+                                      run(controller.open(file, { view }))
+                                    }>
+                                    {(git
+                                      ? (['file', 'staged', 'unstaged', 'untracked'] as const)
+                                      : (['file'] as const)
+                                    ).map((view) => (
+                                      <Menu.RadioItem
+                                        key={view}
+                                        value={view}
+                                        closeOnClick
+                                        {...stylex.props(
+                                          overlays.option,
+                                          fileView === view && workbench.fileSelected,
+                                        )}>
+                                        {view === 'file' ? 'File' : view}
+                                      </Menu.RadioItem>
+                                    ))}
+                                    {(current?.conflict || fileView === 'conflict') && (
+                                      <Menu.RadioItem
+                                        value="conflict"
+                                        closeOnClick
+                                        {...stylex.props(
+                                          overlays.option,
+                                          fileView === 'conflict' && workbench.fileSelected,
+                                        )}>
+                                        Save conflict
+                                      </Menu.RadioItem>
+                                    )}
+                                  </Menu.RadioGroup>
+                                </Menu.Popup>
+                              </Menu.Positioner>
+                            </Menu.Portal>
+                          </Menu.SubmenuRoot>
+                          <Menu.Item
+                            {...stylex.props(overlays.option)}
+                            onClick={() => run(controller.reopen(checkout))}>
+                            Reopen Closed Files
+                          </Menu.Item>
+                        </Menu.Popup>
+                      </Menu.Positioner>
+                    </Menu.Portal>
+                  </Menu.Root>
+                );
+              })}
+            </AnimatePresence>
           </Tabs.List>
-          {!!breadcrumbs.length && (
-            <nav
-              aria-label="File breadcrumbs"
-              title={`${checkout.root}/${selected.active}`}
-              {...stylex.props(workbench.breadcrumbs)}>
-              <ol {...stylex.props(workbench.breadcrumbList)}>
-                {breadcrumbs.map((part, index) => (
-                  <li
-                    key={index}
-                    aria-current={index === breadcrumbs.length - 1 ? 'page' : undefined}
-                    {...stylex.props(
-                      workbench.breadcrumb,
-                      index === breadcrumbs.length - 1 && workbench.currentBreadcrumb,
-                    )}>
-                    {index > 0 && (
-                      <span aria-hidden="true" {...stylex.props(workbench.breadcrumbSeparator)}>
-                        /
+          <div {...stylex.props(workbench.pane, workbench.canvasPane)}>
+            {showBreadcrumbs && !!breadcrumbs.length && (
+              <nav
+                aria-label="File breadcrumbs"
+                title={`${checkout.root}/${selected.active}`}
+                {...stylex.props(workbench.breadcrumbs)}>
+                <ol {...stylex.props(workbench.breadcrumbList)}>
+                  {breadcrumbs.map((part, index) => (
+                    <li
+                      key={index}
+                      aria-current={index === breadcrumbs.length - 1 ? 'page' : undefined}
+                      {...stylex.props(
+                        workbench.breadcrumb,
+                        index === breadcrumbs.length - 1 && workbench.currentBreadcrumb,
+                      )}>
+                      {index > 0 && (
+                        <span aria-hidden="true" {...stylex.props(workbench.breadcrumbSeparator)}>
+                          /
+                        </span>
+                      )}
+                      <span {...stylex.props(controls.truncate)} title={part}>
+                        {part}
+                        {index === breadcrumbs.length - 1 &&
+                        buffer &&
+                        buffer.text !== buffer.disk.text
+                          ? ' · Unsaved'
+                          : ''}
                       </span>
-                    )}
-                    <span {...stylex.props(controls.truncate)} title={part}>
-                      {part}
-                      {index === breadcrumbs.length - 1 &&
-                      buffer &&
-                      buffer.text !== buffer.disk.text
-                        ? ' · Unsaved'
-                        : ''}
-                    </span>
-                  </li>
-                ))}
-              </ol>
-            </nav>
-          )}
-          {buffer?.pendingSave && !buffer.saving && target && (
-            <p role="status" {...stylex.props(controls.status)}>
-              Save result unconfirmed. Your edits are retained.{' '}
-              <Button
-                {...stylex.props(controls.button)}
-                disabled={state.preserving}
-                onClick={() => run(controller.save(target))}>
-                Retry Save
-              </Button>
-            </p>
-          )}
-          {buffer?.conflict && target && (
-            <div role="alert" {...stylex.props(controls.alert, workbench.conflict)}>
-              <p>{target.path} changed on disk. Your edits are retained.</p>
-              <div {...stylex.props(styles.toolbar)}>
+                    </li>
+                  ))}
+                </ol>
+              </nav>
+            )}
+            {buffer?.pendingSave && !buffer.saving && target && (
+              <p role="status" {...stylex.props(controls.status)}>
+                Save result unconfirmed. Your edits are retained.{' '}
                 <Button
                   {...stylex.props(controls.button)}
-                  onClick={() => run(controller.open(target, { view: 'conflict' }))}>
-                  Compare
+                  disabled={state.preserving}
+                  onClick={() => run(controller.save(target))}>
+                  Retry Save
                 </Button>
-                <Button
-                  {...stylex.props(controls.button)}
-                  onClick={() => run(controller.save(target, true))}>
-                  Overwrite observed version
-                </Button>
-                <Button
-                  {...stylex.props(controls.button)}
-                  onClick={() => run(controller.reload(target))}>
-                  Reload
-                </Button>
-                <Button
-                  {...stylex.props(controls.button)}
-                  onClick={() => controller.cancelConflict(target)}>
-                  Cancel
-                </Button>
+              </p>
+            )}
+            {buffer?.conflict && target && (
+              <div role="alert" {...stylex.props(controls.alert, workbench.conflict)}>
+                <p>{target.path} changed on disk. Your edits are retained.</p>
+                <div {...stylex.props(styles.toolbar)}>
+                  <Button
+                    {...stylex.props(controls.button)}
+                    onClick={() => run(controller.open(target, { view: 'conflict' }))}>
+                    Compare
+                  </Button>
+                  <Button
+                    {...stylex.props(controls.button)}
+                    onClick={() => run(controller.save(target, true))}>
+                    Overwrite observed version
+                  </Button>
+                  <Button
+                    {...stylex.props(controls.button)}
+                    onClick={() => run(controller.reload(target))}>
+                    Reload
+                  </Button>
+                  <Button
+                    {...stylex.props(controls.button)}
+                    onClick={() => controller.cancelConflict(target)}>
+                    Cancel
+                  </Button>
+                </div>
               </div>
-            </div>
-          )}
-          {!target && (
-            <p {...stylex.props(styles.empty)}>
-              Choose a file from Files or Find file. Save writes explicitly; typing retains a
-              recovery draft.
-            </p>
-          )}
-          {target && !buffer && !state.comparisons[fileKey(target)] && (
-            <p role="status" {...stylex.props(controls.alert)}>
-              File unavailable; retained tab and recovery references remain.{' '}
-              <Button
-                {...stylex.props(controls.button)}
-                onClick={() => run(controller.open(target))}>
-                Retry file
-              </Button>
-            </p>
-          )}
-          <MonacoView
-            controller={controller}
-            state={state}
-            target={target}
-            mode={mode}
-            visible={visible}
-            reveal={reveal}
-            onRevealed={() => setReveal(undefined)}
-          />
+            )}
+            {!target && <CheatSheet shortcuts={[...editorShortcuts, ...shortcuts]} />}
+            {target && !buffer && !state.comparisons[fileKey(target)] && (
+              <p role="status" {...stylex.props(controls.alert)}>
+                File unavailable; retained tab and recovery references remain.{' '}
+                <Button
+                  {...stylex.props(controls.button)}
+                  onClick={() => run(controller.open(target))}>
+                  Retry file
+                </Button>
+              </p>
+            )}
+            <MonacoView
+              controller={controller}
+              state={state}
+              target={target}
+              mode={mode}
+              visible={visible}
+              reveal={reveal}
+              onRevealed={() => setReveal(undefined)}
+            />
+          </div>
         </Tabs.Root>
       </section>
     ) : null;
@@ -1051,43 +1141,62 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
           ) : (
             <div {...stylex.props(styles.tabPanel, !!trailing && workbench.withTrailing)}>
               <div {...stylex.props(workbench.sidebarLayout(state.recovery.sidebarWidth))}>
-                <div {...stylex.props(workbench.workspace)}>
-                  <div
-                    role="separator"
-                    tabIndex={0}
-                    aria-label="Resize sidebar"
-                    aria-orientation="vertical"
-                    aria-valuemin={190}
-                    aria-valuemax={380}
-                    aria-valuenow={state.recovery.sidebarWidth}
-                    {...stylex.props(workbench.sidebarResize)}
-                    onKeyDown={(event) => {
-                      if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
-                        event.preventDefault();
-                        let width =
-                          state.recovery.sidebarWidth + (event.key === 'ArrowRight' ? 10 : -10);
-                        if (event.key === 'Home') width = 190;
-                        else if (event.key === 'End') width = 380;
-                        controller.resizeSidebar(width);
-                      }
-                    }}
-                    onPointerDown={(event) => {
-                      if (event.button === 0)
+                <div
+                  {...stylex.props(
+                    workbench.workspace,
+                    sidebarHidden && workbench.workspaceSolo,
+                    resizingSidebar && workbench.workspaceStill,
+                  )}>
+                  {!sidebarHidden && (
+                    <div
+                      role="separator"
+                      tabIndex={0}
+                      aria-label="Resize sidebar"
+                      aria-orientation="vertical"
+                      aria-valuemin={190}
+                      aria-valuemax={380}
+                      aria-valuenow={state.recovery.sidebarWidth}
+                      {...stylex.props(workbench.sidebarResize)}
+                      onKeyDown={(event) => {
+                        if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+                          event.preventDefault();
+                          let width =
+                            state.recovery.sidebarWidth + (event.key === 'ArrowRight' ? 10 : -10);
+                          if (event.key === 'Home') width = 190;
+                          else if (event.key === 'End') width = 380;
+                          controller.resizeSidebar(width);
+                        }
+                      }}
+                      onPointerDown={(event) => {
+                        if (event.button !== 0) return;
                         event.currentTarget.setPointerCapture(event.pointerId);
+                        setResizingSidebar(true);
+                      }}
+                      onLostPointerCapture={() => setResizingSidebar(false)}
+                      onPointerMove={(event) => {
+                        if (event.currentTarget.hasPointerCapture(event.pointerId))
+                          controller.resizeSidebar(
+                            event.clientX -
+                              event.currentTarget.parentElement!.getBoundingClientRect().left,
+                          );
+                      }}
+                      onPointerUp={(event) => {
+                        if (event.currentTarget.hasPointerCapture(event.pointerId))
+                          event.currentTarget.releasePointerCapture(event.pointerId);
+                      }}
+                    />
+                  )}
+                  {/* Kept while hidden, so it slides closed with its contents. */}
+                  <aside
+                    ref={sidebarElement}
+                    onFocusCapture={() => (focusInSidebar.current = true)}
+                    onBlurCapture={(event) => {
+                      if (!event.currentTarget.contains(event.relatedTarget))
+                        focusInSidebar.current = false;
                     }}
-                    onPointerMove={(event) => {
-                      if (event.currentTarget.hasPointerCapture(event.pointerId))
-                        controller.resizeSidebar(
-                          event.clientX -
-                            event.currentTarget.parentElement!.getBoundingClientRect().left,
-                        );
-                    }}
-                    onPointerUp={(event) => {
-                      if (event.currentTarget.hasPointerCapture(event.pointerId))
-                        event.currentTarget.releasePointerCapture(event.pointerId);
-                    }}
-                  />
-                  <aside {...stylex.props(workbench.sidebar)} aria-label="Editor sidebar">
+                    inert={sidebarHidden}
+                    {...stylex.props(workbench.sidebar, sidebarHidden && workbench.sidebarClosed)}
+                    aria-label="Editor sidebar">
                     {explorer}
                   </aside>
                   {editor}
@@ -1158,6 +1267,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
           action={action}
           close={() => setAction(null)}
           finalFocus={mutationFinalFocus}
+          initialDestination={mutationDestination}
         />
       )}
       {choice && (

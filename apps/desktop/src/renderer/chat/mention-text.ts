@@ -52,3 +52,31 @@ export function removeMentionBefore(text: string, caret: number, mentions: reado
   if (!range) return null;
   return { text: text.slice(0, range.start) + text.slice(range.end), caret: range.start };
 }
+
+/**
+ * Appends mentions of `files` (absolute paths) that lie inside `folder` to a draft, skipping ones
+ * it already mentions. `outside` counts the files left out because they are elsewhere.
+ */
+export function appendMentions(
+  text: string,
+  mentions: readonly ChatMention[],
+  files: readonly string[],
+  folder: string,
+) {
+  const prefix = folder.replace(/\/+$/, '') + '/';
+  // An unknown folder (or the filesystem root) would make every absolute path look inside it.
+  const inside =
+    prefix === '/'
+      ? []
+      : files.filter((file) => file.startsWith(prefix) && file.length > prefix.length);
+  const added = [...new Set(inside.map((file) => file.slice(prefix.length)))].filter(
+    (path) => !mentions.some((mention) => mention.path === path),
+  );
+  const tokens = added.map(formatChatMention).join(' ');
+  const separator = text && !/\s$/.test(text) ? ' ' : '';
+  return {
+    text: tokens ? `${text}${separator}${tokens} ` : text,
+    mentions: [...mentions, ...added.map((path) => ({ path }))],
+    outside: files.length - inside.length,
+  };
+}

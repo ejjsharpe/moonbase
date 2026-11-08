@@ -3,6 +3,8 @@ import { colors, radius, space, type } from './tokens.stylex';
 
 export const controls = stylex.create({
   button: {
+    // Buttons in a header row take clicks instead of dragging the window.
+    WebkitAppRegion: 'no-drag',
     fontFamily: type.ui,
     fontSize: type.small,
     lineHeight: '18px',

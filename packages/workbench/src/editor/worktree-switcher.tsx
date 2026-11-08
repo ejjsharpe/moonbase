@@ -11,7 +11,7 @@ import { colors, radius, space, type } from '@moonbase/ui/tokens.stylex';
 import { Icon } from './icon.tsx';
 
 /**
- * The project sidebar's header: the checkout's tile, name and branch. It opens a menu of the
+ * The project sidebar's header: the checkout's name and branch. It opens a menu of the
  * repository's worktrees; choosing one opens it as the selected checkout. A plain folder has no
  * branch or worktrees, so its header offers Initialize Git instead.
  */
@@ -26,17 +26,9 @@ export function WorktreeSwitcher({
 }) {
   const [worktrees, setWorktrees] = useState<readonly Worktree[] | null>(null);
   const name = checkoutName(checkout);
-  const tile = (
-    <span
-      aria-hidden="true"
-      data-initials={projectInitials(name)}
-      {...stylex.props(projectTiles.tile, projectHue(checkout.projectId), styles.tile)}
-    />
-  );
   if (checkout.vcs === 'none')
     return (
       <div title={`${checkout.hostId} · ${checkout.root}`} {...stylex.props(styles.folder)}>
-        {tile}
         <span {...stylex.props(styles.text)}>
           <span {...stylex.props(styles.name)}>{name}</span>
           <span {...stylex.props(styles.detail)}>No Git</span>
@@ -60,12 +52,13 @@ export function WorktreeSwitcher({
         aria-label={`Switch worktree, ${name} · ${checkout.branch}`}
         title={`${checkout.hostId} · ${checkout.root}`}
         {...stylex.props(controls.button, styles.trigger)}>
-        {tile}
         <span {...stylex.props(styles.text)}>
-          <span {...stylex.props(styles.name)}>{name}</span>
+          <span {...stylex.props(styles.nameRow)}>
+            <span {...stylex.props(styles.name)}>{name}</span>
+            <Icon name="chevron" />
+          </span>
           <span {...stylex.props(styles.branch)}>{checkout.branch}</span>
         </span>
-        <Icon name="chevron" />
       </Menu.Trigger>
       <Menu.Portal>
         <Menu.Positioner align="start" sideOffset={4} {...stylex.props(overlays.positioner)}>
@@ -116,17 +109,18 @@ export function WorktreeSwitcher({
 }
 
 const styles = stylex.create({
+  // The explorer's header: the name over its branch; the rail shows the tile.
   trigger: {
     display: 'flex',
     alignItems: 'center',
-    gap: 10,
-    width: 'calc(100% - 8px)',
-    margin: '0 4px 12px',
-    padding: 6,
+    flex: 1,
+    minWidth: 0,
+    padding: '3px 6px',
     borderWidth: 0,
     borderRadius: radius.row,
     textAlign: 'left',
     color: colors.secondary,
+    WebkitAppRegion: 'no-drag',
     backgroundColor: {
       default: 'transparent',
       ':hover:not(:disabled)': colors.hover,
@@ -136,10 +130,12 @@ const styles = stylex.create({
   folder: {
     display: 'flex',
     alignItems: 'center',
-    gap: 10,
-    margin: '0 4px 12px',
-    padding: 6,
+    gap: 8,
+    flex: 1,
+    minWidth: 0,
+    padding: '3px 6px',
     color: colors.secondary,
+    WebkitAppRegion: 'no-drag',
   },
   initialize: { flexShrink: 0, padding: '3px 8px', fontSize: type.caption },
   detail: {
@@ -149,8 +145,8 @@ const styles = stylex.create({
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
   },
-  tile: { width: 28, height: 28, borderRadius: radius.row, fontSize: type.caption },
   text: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', lineHeight: 1.35 },
+  nameRow: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, color: colors.muted },
   name: {
     color: colors.text,
     fontSize: type.body,
