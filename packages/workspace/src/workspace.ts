@@ -119,7 +119,8 @@ export class LocalWorkspace {
     );
     this.worktrees = new WorkspaceWorktrees(
       (target) => this.directory(target),
-      (root, signal) => this.open(root, signal, true),
+      (root, source, signal) =>
+        this.open(root, signal, { root, common: this.approval(source).common }),
       (root) => this.protected(root),
     );
     this.store = new Store(config.dataDirectory, config.hostId);
@@ -522,13 +523,21 @@ export class LocalWorkspace {
       }
     }
   }
-  /** Approves a checkout root; `created` says this workspace just made it, as `createWorktree` does. */
-  async open(root: string, signal: AbortSignal, created = false) {
+  /**
+   * Approves a checkout root. `created` names a worktree this workspace just made at exactly
+   * `root`, in the repository whose common directory is `common`.
+   */
+  async open(
+    root: string,
+    signal: AbortSignal,
+    created?: { root: string; common: { path: string; identity: string } },
+  ) {
     ensure(
       typeof root === 'string' && isAbsolute(root) && !root.includes('\0'),
       'Choose an absolute checkout root through the native picker.',
     );
     root = realpathSync(root);
+    if (created) ensure(root === created.root, 'The new worktree location changed. Inspect it.');
     this.protected(root);
     const fd = openSync(root, constants.O_RDONLY | constants.O_DIRECTORY | 0x20000000);
     const id = identity(fstatSync(fd));
@@ -556,13 +565,18 @@ export class LocalWorkspace {
       const commonIdentity = identity(fstatSync(commonFd));
       const projectId = hash(canonical([this.config.hostId, common, commonIdentity]));
       closeSync(commonFd);
+      if (created)
+        ensure(
+          common === created.common.path && commonIdentity === created.common.identity,
+          'The new worktree belongs to another repository. Inspect it.',
+        );
       const previous = this.store.all<Approval>('approvals').filter((a) => a.target.root === root);
       const current = previous.find((a) => a.identity === id && a.target.projectId === projectId);
       if (current) return current.target;
       // A worktree this workspace just made at a removed one's location is approved afresh; the
       // stale approval stays but matches nothing. Anywhere else a replaced directory is refused.
       ensure(
-        !previous.length || created,
+        !previous.length || created !== undefined,
         'Checkout or repository identity changed. Restore the original directory.',
       );
       const branch = await this.discovery.getBranch(directory, signal);
