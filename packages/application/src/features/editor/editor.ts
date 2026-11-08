@@ -63,6 +63,7 @@ function listOperationDestinations(operation: WorkspaceOperation) {
     return getMutationDestinations(operation.sources, operation.destination).destinations;
   return operation.destination ? [operation.destination] : [];
 }
+const parentOf = (path: string) => path.split('/').slice(0, -1).join('/');
 const validPath = (path: string, directory = false) => {
   if (directory && path === '') return;
   if (
@@ -174,6 +175,8 @@ class EditorModelState {
   private keptClassifications = new Map<string, Scope.Closeable>();
   private classifiedListings = new Map<string, number>();
   private listingSequence = 0;
+  /** Per checkout, the newest reveal's number; an older one still listing is abandoned. */
+  private reveals = new Map<string, number>();
   private git: Record<string, GitStatus> = {};
   private errors: string[] = [];
   private operations = new Map<
@@ -1001,6 +1004,13 @@ class EditorModelState {
     this.recovery.sidebarWidth = Math.max(190, Math.min(380, Math.round(width)));
     this.changed();
   }
+  /** Sets whether every checkout's files tree reveals the file made active. */
+  setFollowActiveFile(follow: boolean) {
+    if (!this.admissionsOpen) return;
+    if (this.closing) return;
+    this.recovery.followActiveFile = follow;
+    this.changed();
+  }
   list(checkout: CheckoutTarget, path = '') {
     this.assertAdmission();
     return this.listCheckout(checkout, path);
@@ -1133,34 +1143,57 @@ class EditorModelState {
       });
     return promise;
   }
-  async reveal(target: FileTarget, showIgnored = false) {
+  /**
+   * Shows a file in its checkout's tree: expands the folders above it, then focuses and selects
+   * it. While Hide Ignored Files is on, a Git-ignored file (or one in an ignored folder) turns it
+   * off, or with `ignored: 'skip'` is left unrevealed. A newer reveal in the same checkout, or
+   * `current` returning false, abandons this one before it changes the tree. Resolves whether the
+   * file was revealed.
+   */
+  async reveal(target: FileTarget, options: RevealOptions = {}) {
     this.assertAdmission();
-    const selected = this.checkout(target.checkout);
+    this.checkout(target.checkout);
     validPath(target.path);
-    const scope = this.discovery.getCheckoutScope(target.checkout);
+    const key = checkoutKey(target.checkout),
+      sequence = (this.reveals.get(key) ?? 0) + 1;
+    this.reveals.set(key, sequence);
+    const isCurrent = () =>
+      !this.closing && this.reveals.get(key) === sequence && (options.current?.() ?? true);
     const parts = target.path.split('/'),
-      expanded: string[] = [];
-    for (let i = 0; i < parts.length; i++) {
-      const path = parts.slice(0, i + 1).join('/');
-      const listing = await this.discovery.listDirectory(
-        {
-          checkout: target.checkout,
-          path: parts.slice(0, i).join('/'),
-          includeIgnoredStatus: false,
-        },
-        scope,
+      levels = parts.map((_, i) => parts.slice(0, i + 1).join('/'));
+    for (const path of levels) {
+      const listing = await this.listCheckout(target.checkout, parentOf(path));
+      if (!isCurrent()) return false;
+      if (!listing.entries.some((item) => item.path === path))
+        throw editorError(listing.error ?? 'Active file unavailable. Refresh and retry.');
+    }
+    let showIgnored = false;
+    if (this.checkout(target.checkout).tree.hideIgnored) {
+      const scope = this.discovery.getCheckoutScope(target.checkout);
+      const answers = await Promise.all(
+        levels.map((path) =>
+          this.command(
+            'getIgnoredPaths',
+            { checkout: target.checkout, path: parentOf(path), paths: [path] },
+            scope,
+          ),
+        ),
       );
-      const entry = listing.entries.find((item) => item.path === path);
-      if (!entry) throw editorError(listing.error ?? 'Active file unavailable. Refresh and retry.');
-      if (i < parts.length - 1) expanded.push(path);
+      if (!isCurrent()) return false;
+      if (answers.some((answer) => answer.paths.length)) {
+        if (options.ignored === 'skip') return false;
+        showIgnored = true;
+      }
     }
     this.updateTree(target.checkout, {
-      expanded: [...new Set([...selected.tree.expanded, ...expanded])],
+      expanded: [
+        ...new Set([...this.checkout(target.checkout).tree.expanded, ...levels.slice(0, -1)]),
+      ],
       focus: target.path,
       selected: [target.path],
       ...(showIgnored ? { hideIgnored: false } : {}),
     });
-    await Promise.all(['', ...expanded].map((path) => this.listCheckout(target.checkout, path)));
+    return true;
   }
   async lookup(checkout: CheckoutTarget, query: string) {
     this.assertAdmission();
@@ -1751,6 +1784,13 @@ class EditorModelState {
   }
 }
 
+/** How `reveal` treats an ignored file while Hide Ignored Files is on, and when it gives up. */
+export type RevealOptions = {
+  /** 'show' (the default) turns Hide Ignored Files off; 'skip' leaves the file unrevealed. */
+  ignored?: 'show' | 'skip';
+  /** Checked after each listing; once false, the reveal stops without changing the tree. */
+  current?: () => boolean;
+};
 export type EditorDependencies = { client: EditorClient; clientId?: string };
 export type EditorModel = EditorModelState;
 export interface EditorController {
@@ -1791,8 +1831,9 @@ export interface EditorController {
   reopen(checkout: CheckoutTarget): Promise<boolean>;
   tree(checkout: CheckoutTarget, patch: Partial<CheckoutView['tree']>): void;
   resizeSidebar(width: number): void;
+  setFollowActiveFile(follow: boolean): void;
   list(checkout: CheckoutTarget, path?: string): Promise<DirectoryListing>;
-  reveal(target: FileTarget, showIgnored?: boolean): Promise<void>;
+  reveal(target: FileTarget, options?: RevealOptions): Promise<boolean>;
   lookup(checkout: CheckoutTarget, query: string): Promise<CommandOutput<'lookupFiles'>>;
   refresh(checkout: CheckoutTarget): Promise<void>;
   createLookup(): EditorLookup;

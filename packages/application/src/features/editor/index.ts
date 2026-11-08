@@ -4,6 +4,7 @@ export {
   type EditorController,
   type EditorModel,
   type EditorDependencies,
+  type RevealOptions,
   checkoutKey,
   fileKey,
   type EditorSnapshot,

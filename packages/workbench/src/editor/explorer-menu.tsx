@@ -13,6 +13,8 @@ export type ExplorerAction =
       icon: keyof typeof icons;
       keys?: string;
       disabled?: boolean;
+      /** Set for a setting it toggles, shown as a checkbox item with a check while on. */
+      checked?: boolean;
       /** Whether it places focus itself, so closing the menu leaves focus alone. */
       movesFocus?: boolean;
       run(): void;
@@ -49,18 +51,15 @@ export function ExplorerMenu({
             }
             aria-label="Explorer actions"
             {...stylex.props(overlays.popup, overlays.menuPopup, overlays.wideMenu)}>
-            {actions.map((action, index) =>
-              action === 'separator' ? (
-                <Menu.Separator key={index} {...stylex.props(overlays.separator)} />
-              ) : (
-                <Menu.Item
-                  key={action.label}
-                  disabled={action.disabled}
-                  onClick={() => {
-                    chosen.current = action;
-                    action.run();
-                  }}
-                  {...stylex.props(overlays.option, overlays.menuItem, overlays.commandItem)}>
+            {actions.map((action, index) => {
+              if (action === 'separator')
+                return <Menu.Separator key={index} {...stylex.props(overlays.separator)} />;
+              const choose = () => {
+                chosen.current = action;
+                action.run();
+              };
+              const contents = (
+                <>
                   <span {...stylex.props(overlays.commandIcon)}>
                     <Icon name={action.icon} />
                   </span>
@@ -70,9 +69,32 @@ export function ExplorerMenu({
                       {action.keys}
                     </span>
                   )}
+                </>
+              );
+              const style = stylex.props(overlays.option, overlays.menuItem, overlays.commandItem);
+              return action.checked === undefined ? (
+                <Menu.Item
+                  key={action.label}
+                  disabled={action.disabled}
+                  onClick={choose}
+                  {...style}>
+                  {contents}
                 </Menu.Item>
-              ),
-            )}
+              ) : (
+                // A toggle leaves the menu open, so its new state shows.
+                <Menu.CheckboxItem
+                  key={action.label}
+                  disabled={action.disabled}
+                  checked={action.checked}
+                  onCheckedChange={choose}
+                  {...style}>
+                  {contents}
+                  <Menu.CheckboxItemIndicator {...stylex.props(overlays.menuCheck)}>
+                    <Icon name="check" />
+                  </Menu.CheckboxItemIndicator>
+                </Menu.CheckboxItem>
+              );
+            })}
           </Menu.Popup>
         </Menu.Positioner>
       </Menu.Portal>

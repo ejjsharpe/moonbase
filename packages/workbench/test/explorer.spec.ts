@@ -18,8 +18,7 @@ test('first folder open displays every file before Git finishes and then fades i
   await expect(folder).toBeVisible();
   await expect(region.getByRole('button', { name: 'Hide Git-ignored files' })).toHaveCount(0);
   await page.evaluate(() => {
-    const { client, first, checkout } = window.demo;
-    first.tree(checkout, { hideIgnored: true });
+    const { client } = window.demo;
     const command = client.command.bind(client);
     window.ignoreProbe = { pending: false };
     client.command = async (name, input, options) => {

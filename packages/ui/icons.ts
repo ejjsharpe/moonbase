@@ -1,5 +1,7 @@
 import {
   IconArrowBackUp,
+  IconCheck,
+  IconCrosshair,
   IconArrowUp,
   IconArrowsDiagonal,
   IconArrowsDiagonalMinimize2,
@@ -88,4 +90,6 @@ export const icons = {
   railCollapse: IconLayoutSidebarLeftCollapse,
   railExpand: IconLayoutSidebarLeftExpand,
   undo: IconArrowBackUp,
+  check: IconCheck,
+  follow: IconCrosshair,
 } as const;

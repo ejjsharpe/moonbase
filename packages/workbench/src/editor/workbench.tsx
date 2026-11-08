@@ -697,6 +697,23 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
           run: () => controller.tree(checkout, { expanded: [] }),
         },
         { label: 'Reveal Active File', icon: 'reveal', disabled: !target, run: revealActive },
+        {
+          label: 'Follow Active File',
+          icon: 'follow',
+          checked: state.recovery.followActiveFile,
+          run: () =>
+            controller.setFollowActiveFile(!controller.getSnapshot().recovery.followActiveFile),
+        },
+        {
+          label: 'Hide Ignored Files',
+          icon: 'filter',
+          checked: !!selected?.tree.hideIgnored,
+          run: () =>
+            controller.tree(checkout, {
+              hideIgnored: !readOwn(controller.getSnapshot().recovery.views, checkout.checkoutId)
+                ?.tree.hideIgnored,
+            }),
+        },
         'separator',
         { label: 'Go to File…', icon: 'search', keys: '⌘P', run: () => openPicker('goto') },
         { label: 'Refresh', icon: 'refresh', run: () => run(controller.refresh(checkout)) },
@@ -757,6 +774,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                 active={selected.active}
                 anchorReset={anchorReset}
                 visible={visible}
+                follow={state.recovery.followActiveFile && !sidebarHidden && visible}
                 dialogOpen={!!(action || choice || lookup || mutations.running)}
                 canRequestMutation={canRequestMutation}
                 requestMutation={requestMutation}

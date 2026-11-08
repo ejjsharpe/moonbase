@@ -104,7 +104,8 @@ export function recovery(state: EditorRecovery, clientId: string) {
       state.recentFiles.length <= 1000 &&
       Number.isFinite(state.sidebarWidth) &&
       state.sidebarWidth >= 100 &&
-      state.sidebarWidth <= 2000,
+      state.sidebarWidth <= 2000 &&
+      typeof state.followActiveFile === 'boolean',
     'Invalid recovery state.',
   );
   state.checkouts.forEach(checkout);

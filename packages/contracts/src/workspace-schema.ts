@@ -87,6 +87,8 @@ export const EditorRecoverySchema = struct({
   drafts: array(RecoveryDraftSchema).check(Schema.isMaxLength(512)),
   recentFiles: array(FileTargetSchema).check(Schema.isMaxLength(1000)),
   sidebarWidth: Schema.Finite.check(Schema.isBetween({ minimum: 100, maximum: 2000 })),
+  /** Whether each checkout's files tree reveals the file made active. */
+  followActiveFile: Schema.Boolean,
 });
 export const RecoveryChangeSchema = struct({
   clientId: WorkspaceIdentifierSchema,
