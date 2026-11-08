@@ -26,24 +26,29 @@ export type ClaudeCodeConfiguration = {
 
 export type ClaudeCodeSubscription = Provider & {
   /**
-   * Why the latest sign-in check couldn't tell whether Claude Code is signed in, such as a CLI that
-   * failed to start; undefined after a definite answer.
+   * Why the sign-in check made with `signal` couldn't tell whether Claude Code is signed in, such as
+   * a CLI that failed to start; undefined after a definite answer. Pass a fresh signal per check.
    */
-  getCheckProblem(): string | undefined;
+  getCheckProblem(signal: AbortSignal): string | undefined;
 };
 
-/** GUI apps and non-login SSH commands often get a PATH without these. */
-const installDirectories = () => [
-  join(homedir(), '.local/bin'),
-  join(homedir(), '.claude/local'),
-  '/opt/homebrew/bin',
-  '/usr/local/bin',
-];
+/**
+ * GUI apps and non-login SSH commands often get a PATH without these. Without an absolute home
+ * they'd resolve against the cwd, which on a host is a chat folder, so they're left out.
+ */
+function listInstallDirectories() {
+  const home = homedir();
+  return [
+    ...(isAbsolute(home) ? [join(home, '.local/bin'), join(home, '.claude/local')] : []),
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+  ];
+}
 const pathDirectories = () => (process.env.PATH ?? '').split(delimiter).filter(isAbsolute);
 
 /** The caller's PATH wins, so a stale copy in an install location can't shadow the user's own. */
 async function findInstalledClaudeCode() {
-  for (const directory of new Set([...pathDirectories(), ...installDirectories()])) {
+  for (const directory of new Set([...pathDirectories(), ...listInstallDirectories()])) {
     const candidate = join(directory, 'claude');
     try {
       await access(candidate, constants.X_OK);
@@ -62,7 +67,7 @@ function findClaudeCodePath(command: string | undefined) {
     ...new Set([
       ...(command && isAbsolute(command) ? [dirname(command)] : []),
       ...pathDirectories(),
-      ...installDirectories(),
+      ...listInstallDirectories(),
     ]),
   ].join(delimiter);
 }
@@ -94,7 +99,8 @@ export function createClaudeCodeSubscription(
     process.env.PI_CLAUDE_CODE_COMMAND ||
     (await input.ctx.env('PI_CLAUDE_CODE_COMMAND')) ||
     (await findCommand());
-  let checkProblem: string | undefined;
+  // Keyed by each check's own signal, so concurrent checks can't swap answers.
+  const checkProblems = new WeakMap<AbortSignal, string>();
   const helperEnv = config.helperEnv ?? {};
   return {
     ...provider,
@@ -114,7 +120,7 @@ export function createClaudeCodeSubscription(
           if (command) env.PI_CLAUDE_CODE_COMMAND = command;
           env.PATH = findClaudeCodePath(command);
           const status = await getClaudeStatus(env, input.signal);
-          checkProblem = status.diagnostic ? status.detail : undefined;
+          if (status.diagnostic && status.detail) checkProblems.set(input.signal, status.detail);
           if (!status.available || !status.loggedIn) return undefined;
           return status.subscription
             ? { type: 'oauth', source: `Claude Code ${status.plan ?? 'subscription'}` }
@@ -148,6 +154,6 @@ export function createClaudeCodeSubscription(
       } as typeof options),
     streamSimple: (model, context, options) =>
       provider.streamSimple(model, context, { ...options, env: { ...options?.env, ...helperEnv } }),
-    getCheckProblem: () => checkProblem,
+    getCheckProblem: (signal) => checkProblems.get(signal),
   };
 }

@@ -35,9 +35,10 @@ const assetNotices = [
   },
   {
     // The patched fonts add Nerd Fonts' glyph sets: its README lists each set's upstream and licence.
+    // `glyphs/` comes from Nerd Fonts; `upstream/` from sets it ships no licence for, and Apache-2.0.
     inputs: /(?:^|\/)packages\/ui\/fonts\.css$/,
     label: 'Nerd Fonts 3.5.1 patched glyphs in BlexMono Nerd Font Mono',
-    license: 'MIT AND OFL-1.1 AND CC-BY-4.0 AND Apache-2.0',
+    license: 'MIT AND OFL-1.1 AND CC-BY-4.0 AND Apache-2.0 AND Unlicense',
     directory: new URL('nerd-fonts/', fonts),
     files: [
       'LICENSE',
@@ -50,6 +51,13 @@ const assetNotices = [
       'glyphs/powerline-extra/LICENSE',
       'glyphs/powerline-symbols/LICENSE.txt',
       'glyphs/weather-icons/OFL.txt',
+      'upstream/apache/LICENSE-2.0.txt',
+      'upstream/devicon/LICENSE',
+      'upstream/font-awesome-extension/LICENCE',
+      'upstream/font-logos/LICENSE',
+      'upstream/hack/LICENSE.md',
+      'upstream/seti-ui/LICENSE.md',
+      'upstream/unicode-iec/LICENSE.txt',
     ],
   },
 ];

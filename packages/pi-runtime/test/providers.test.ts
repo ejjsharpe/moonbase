@@ -64,6 +64,8 @@ test('an unconfigured provider reports why its check failed, bounded for the sta
   const models = createModels({
     authContext: { env: async () => undefined, fileExists: async () => false },
   });
+  const problem = 'Claude Code status check failed (exit 127):\0 \ud800' + 'é'.repeat(400),
+    problems = new WeakMap<AbortSignal, string>();
   for (const id of localProviderIds) {
     const provider = fauxProvider({ provider: id }).provider;
     models.setProvider(
@@ -71,20 +73,26 @@ test('an unconfigured provider reports why its check failed, bounded for the sta
         ? {
             ...provider,
             auth: {
-              apiKey: { name: 'CLI', check: async () => undefined, resolve: async () => undefined },
+              apiKey: {
+                name: 'CLI',
+                check: async ({ signal }) => {
+                  problems.set(signal, problem);
+                  return undefined;
+                },
+                resolve: async () => undefined,
+              },
             },
           }
         : provider,
     );
   }
-  const problem = 'Claude Code status check failed (exit 127):\0 \ud800' + 'é'.repeat(400);
   const runtime = ManagedRuntime.make(
     ProviderSetupLive({
       models,
       deviceId: 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa',
       openUrl: async () => {},
-      // Only a provider whose check found nothing reports one.
-      getCheckProblem: () => problem,
+      // Only the check that made it, and found nothing, reports one.
+      getCheckProblem: (_id, signal) => problems.get(signal) ?? problem.slice(0, 5),
     }),
   );
   t.after(() => runtime.dispose());
