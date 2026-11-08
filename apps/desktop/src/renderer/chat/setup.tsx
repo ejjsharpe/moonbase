@@ -46,7 +46,8 @@ export function ProviderSetup({ controller }: { controller: ProviderSetupControl
           {key ? 'Add key' : 'Sign in'}
         </Button>
       );
-    let detail = 'Not set up';
+    // A check that failed outright says nothing about the sign-in, so don't ask to sign in again.
+    let detail = provider.problem ? "Couldn't check sign-in" : 'Not set up';
     if (provider.configured)
       detail = `${provider.models.length} ${provider.models.length === 1 ? 'model' : 'models'}`;
     if (provider.configured && external) detail += ' · signed in with Claude Code';
@@ -75,11 +76,18 @@ export function ProviderSetup({ controller }: { controller: ProviderSetupControl
         {external && !provider.configured && (
           <p {...stylex.props(styles.note, styles.panel)}>
             {/* One span keeps the command inline in the panel's flex column. */}
-            <span>
-              Install Claude Code and run{' '}
-              <code {...stylex.props(styles.command)}>claude auth login</code> in a terminal, then
-              refresh providers. Usage counts against your Claude plan.
-            </span>
+            {provider.problem ? (
+              <span>
+                Claude Code couldn't report its sign-in. Check that it runs, then refresh providers.{' '}
+                {provider.problem}
+              </span>
+            ) : (
+              <span>
+                Install Claude Code and run{' '}
+                <code {...stylex.props(styles.command)}>claude auth login</code> in a terminal, then
+                refresh providers. Usage counts against your Claude plan.
+              </span>
+            )}
           </p>
         )}
         {own && (

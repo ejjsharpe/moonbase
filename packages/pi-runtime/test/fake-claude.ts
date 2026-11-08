@@ -1,11 +1,12 @@
-import { chmod, writeFile } from 'node:fs/promises';
+import { chmod, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 // A stand-in for the Claude Code CLI: it reports a subscription login, starts the inert tool
-// inventory exactly as Claude Code would and streams scripted turns without any network.
-const source = (node: string, directory: string) => `#!${node}
+// inventory exactly as Claude Code would and streams scripted turns without any network. Like an
+// npm install, it runs through `env node`, with its `node` beside it.
+const source = (directory: string) => `#!/usr/bin/env node
 import { spawn } from 'node:child_process';
-import { appendFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import readline from 'node:readline';
 const directory = ${JSON.stringify(directory)};
 appendFileSync(directory + '/invocations.log', JSON.stringify(process.argv.slice(2, 4)) + '\\n');
@@ -14,6 +15,8 @@ if (process.argv.includes('auth') && process.argv.includes('status')) {
   console.log(JSON.stringify(loggedIn ? { loggedIn, authMethod: 'claude.ai', subscriptionType: 'max' } : { loggedIn }));
   process.exit(0);
 }
+const system = readFileSync(process.argv[process.argv.indexOf('--system-prompt-file') + 1], 'utf8');
+appendFileSync(directory + '/workers.log', JSON.stringify({ cwd: process.cwd(), system }) + '\\n');
 const config = JSON.parse(process.argv[process.argv.indexOf('--mcp-config') + 1]);
 const server = config.mcpServers.pi;
 const mcp = spawn(server.command, server.args, { env: { ...process.env, ...server.env }, stdio: ['pipe', 'pipe', 'inherit'] });
@@ -58,10 +61,22 @@ for await (const line of input) {
 mcp.kill();
 `;
 
-/** Writes the fake `claude` executable into a test directory, which also receives its logs. */
-export async function writeFakeClaude(directory: string) {
-  const command = join(directory, 'claude');
-  await writeFile(command, source(process.execPath, directory));
+/**
+ * Writes the fake `claude` executable and its `node` into `bin` (default `directory`); `directory`
+ * receives its logs: `invocations.log`, and per worker its cwd and system prompt in `workers.log`.
+ */
+export async function writeFakeClaude(directory: string, bin = directory) {
+  const command = join(bin, 'claude');
+  await writeFile(command, source(directory));
+  await chmod(command, 0o755);
+  await symlink(process.execPath, join(bin, 'node'));
+  return command;
+}
+
+/** A `claude` that can't start, like an npm install whose `node` isn't on PATH. */
+export async function writeBrokenClaude(bin: string) {
+  const command = join(bin, 'claude');
+  await writeFile(command, '#!/usr/bin/env moonbase-missing-node\n');
   await chmod(command, 0o755);
   return command;
 }

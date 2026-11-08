@@ -27,6 +27,8 @@ export const ProviderStateSchema = struct({
         name: text(128),
         auth: Schema.Literals(['oauth', 'api_key', 'claude_code']),
         configured: Schema.Boolean,
+        /** Why the provider's check couldn't tell whether it is configured, e.g. a CLI that won't start. */
+        problem: optional(text(512)),
         defaultModel: optional(ChatModelPreferenceSchema),
         models: Schema.mutable(
           Schema.Array(
