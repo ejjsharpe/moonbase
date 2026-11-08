@@ -267,7 +267,7 @@ export function ChatView({
   const openRunning = !!state.snapshot?.run;
   useEffect(() => {
     if (!connected) return;
-    void controller.reloadChats();
+    void controller.reloadChats({ latest: true });
     const timer = setInterval(() => {
       if (document.visibilityState === 'visible') void controller.reloadChats();
     }, chatReloadMs);
