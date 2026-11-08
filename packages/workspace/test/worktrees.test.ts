@@ -254,21 +254,36 @@ test('cancelling creation removes what Git had added', async () => {
   }
 });
 
-test('cleanup keeps files a failed creation did not own', async () => {
+test("cleanup removes what a failed creation's own hook wrote, and a success stays unlocked", async () => {
   const f = repository();
   try {
     const checkout = await f.client.command('openCheckout', { root: f.root });
     const hook = join(f.root, '.git/hooks/post-checkout');
-    // The hook leaves an untracked file, so removal without force must refuse and report it.
-    writeFileSync(hook, '#!/bin/sh\necho note > untracked.txt\nexit 1\n');
-    chmodSync(hook, 0o755);
-    const location = join(f.base, 'kept');
-    await assert.rejects(
-      f.client.command('createWorktree', { checkout, base: 'main', branch: 'kept', location }),
-      (error) => rejects('Uncertain')(error) && (error as Error).message.includes(location),
+    const locale = join(f.base, 'hook-locale');
+    // The worktree still holds this creation's lock, so the untracked file its hook left goes
+    // with it. Hooks run in the user's locale.
+    writeFileSync(
+      hook,
+      `#!/bin/sh\necho "\${LC_ALL-unset}" > '${locale}'\necho note > untracked.txt\nexit 1\n`,
     );
-    assert.equal(readFileSync(join(location, 'untracked.txt'), 'utf8'), 'note\n');
-    assert.ok(branches(f.git).includes('kept'), 'a checked-out branch is never deleted');
+    chmodSync(hook, 0o755);
+    const location = join(f.base, 'hooked-files');
+    await assert.rejects(
+      f.client.command('createWorktree', { checkout, base: 'main', branch: 'hooked', location }),
+      rejects('Unavailable'),
+    );
+    assert.equal(existsSync(location), false);
+    assert.equal(branches(f.git).includes('hooked'), false);
+    assert.equal(readFileSync(locale, 'utf8').trim(), process.env.LC_ALL ?? 'unset');
+    writeFileSync(hook, '#!/bin/sh\nexit 0\n');
+    const created = await f.client.command('createWorktree', {
+      checkout,
+      base: 'main',
+      branch: 'hooked',
+      location,
+    });
+    const listed = await f.client.command('listWorktrees', { checkout: created });
+    assert.equal(listed.worktrees.find((worktree) => worktree.root === location)?.locked, false);
   } finally {
     await f.close();
   }
@@ -369,7 +384,7 @@ test('cancelling during checkout stops Git and its children and removes the lock
 function withGit(
   f: ReturnType<typeof repository>,
   afterAdd: string,
-  create: { before?: string; after?: string } = {},
+  create: { before?: string; after?: string; unlock?: string } = {},
 ) {
   const git = join(f.base, 'wrapped-git');
   writeFileSync(
@@ -378,7 +393,10 @@ function withGit(
       '#!/bin/sh',
       'last=; location=',
       'for arg; do location=$last; last=$arg; done',
-      `case " $* " in *" update-ref --create-reflog "*) ${create.before ?? ':'} ;; esac`,
+      'case " $* " in',
+      `  *" update-ref --create-reflog "*) ${create.before ?? ':'} ;;`,
+      `  *" worktree unlock "*) ${create.unlock ?? ':'} ;;`,
+      'esac',
       '/usr/bin/git "$@" || exit $?',
       'case " $* " in',
       `  *" worktree add "*) ${afterAdd} ;;`,
@@ -403,13 +421,10 @@ const waitFor = async (path: string) => {
 const registered = (f: ReturnType<typeof repository>) =>
   f.git(['worktree', 'list', '--porcelain']).split('\n\n').length;
 
-test('cleanup removes a worktree Git left locked mid-creation, and its branch', async () => {
+test('cleanup removes a worktree this creation still has locked, and its branch', async () => {
   const f = repository();
-  // Git leaves the new worktree locked, as an interrupted checkout does.
-  const { runtime, client } = withGit(
-    f,
-    '/usr/bin/git worktree lock --reason initializing "$location"; echo checkout interrupted >&2; exit 1',
-  );
+  // Git fails after adding the worktree, as an interrupted checkout does.
+  const { runtime, client } = withGit(f, 'echo checkout interrupted >&2; exit 1');
   try {
     const checkout = await client.command('openCheckout', { root: f.root });
     const before = branches(f.git);
@@ -432,7 +447,7 @@ test('cleanup never forces a worktree locked for any other reason', async () => 
   const f = repository();
   const { runtime, client } = withGit(
     f,
-    '/usr/bin/git worktree lock --reason "on a portable drive" "$location"; echo failed >&2; exit 1',
+    '/usr/bin/git worktree unlock "$location"; /usr/bin/git worktree lock --reason "on a portable drive" "$location"; echo failed >&2; exit 1',
   );
   try {
     const checkout = await client.command('openCheckout', { root: f.root });
@@ -604,7 +619,7 @@ test('a new worktree that resolves into another repository is not approved', asy
   // Between creation and approval the location becomes another repository's worktree.
   const { runtime, client } = withGit(
     f,
-    `/usr/bin/git worktree remove --force "$location" && /usr/bin/git -C '${other}' worktree add -q --detach "$location"`,
+    `/usr/bin/git worktree remove --force --force "$location" &&/usr/bin/git -C '${other}' worktree add -q --detach "$location"`,
   );
   try {
     const checkout = await client.command('openCheckout', { root: f.root });
@@ -676,6 +691,130 @@ test('a registered location differing only in case is refused as taken', async (
     assert.equal(branches(f.git).includes('chat-x'), false);
     assert.equal(existsSync(join(f.root, '.git/worktrees/Chat-X/HEAD')), true);
   } finally {
+    await f.close();
+  }
+});
+
+test('cleanup leaves a worktree someone else added on this creation’s branch after it failed', async () => {
+  const f = repository();
+  // Ours goes, then a terminal adds its own worktree there on the same branch (as `git worktree
+  // add <path>` does for a branch named after the folder) and starts working in it.
+  const { runtime, client } = withGit(
+    f,
+    '/usr/bin/git worktree remove --force --force "$location" && /usr/bin/git worktree add -q "$location" "$last" && echo mine > "$location/notes.txt"; exit 1',
+  );
+  try {
+    const checkout = await client.command('openCheckout', { root: f.root });
+    const location = join(f.base, 'taken-over');
+    await assert.rejects(
+      client.command('createWorktree', { checkout, base: 'main', branch: 'taken-over', location }),
+      (error) => rejects('Uncertain')(error) && /another worktree/.test((error as Error).message),
+    );
+    assert.equal(readFileSync(join(location, 'notes.txt'), 'utf8'), 'mine\n');
+    assert.equal(registered(f), 2);
+    assert.ok(branches(f.git).includes('taken-over'));
+  } finally {
+    await runtime.dispose();
+    await f.close();
+  }
+});
+
+test('cleanup keeps a branch that moved or became a symbolic ref', async () => {
+  for (const change of ['moved', 'symbolic'] as const) {
+    const f = repository();
+    f.git(['branch', 'userbr']);
+    f.git(['commit', '-q', '--allow-empty', '-m', 'later']);
+    const later = f.git(['rev-parse', 'HEAD']);
+    f.git(['reset', '-q', '--hard', 'HEAD~1']);
+    const { runtime, client } = withGit(
+      f,
+      `/usr/bin/git worktree remove --force --force "$location"; ${
+        change === 'moved'
+          ? `/usr/bin/git update-ref "refs/heads/$last" ${later}`
+          : '/usr/bin/git symbolic-ref "refs/heads/$last" refs/heads/userbr'
+      }; exit 1`,
+    );
+    try {
+      const checkout = await client.command('openCheckout', { root: f.root });
+      await assert.rejects(
+        client.command('createWorktree', {
+          checkout,
+          base: 'main',
+          branch: change,
+          location: join(f.base, change),
+        }),
+        (error) =>
+          rejects('Uncertain')(error) &&
+          (change === 'moved' ? /moved/ : /symbolic/).test((error as Error).message),
+      );
+      assert.ok(branches(f.git).includes('userbr'), 'the branch a symbolic ref names is kept');
+      assert.ok(branches(f.git).includes(change));
+    } finally {
+      await runtime.dispose();
+      await f.close();
+    }
+  }
+});
+
+test('a branch step that dies without a cancel (as at the time limit) is still cleaned up', async () => {
+  const f = repository();
+  // The branch is made, then Git dies by a signal before reporting back.
+  const { runtime, client } = withGit(f, ':', { after: 'kill -TERM $$' });
+  try {
+    const checkout = await client.command('openCheckout', { root: f.root });
+    await assert.rejects(
+      client.command('createWorktree', {
+        checkout,
+        base: 'main',
+        branch: 'killed',
+        location: join(f.base, 'killed'),
+      }),
+      rejects('Unavailable'),
+    );
+    assert.equal(branches(f.git).includes('killed'), false);
+  } finally {
+    await runtime.dispose();
+    await f.close();
+  }
+});
+
+test('a decomposed (NFD) folder name is created and approved as Git names it', async () => {
+  const f = repository();
+  try {
+    const checkout = await f.client.command('openCheckout', { root: f.root });
+    const created = await f.client.command('createWorktree', {
+      checkout,
+      base: 'main',
+      branch: 'cafe',
+      location: join(f.base, 'café'),
+    });
+    assert.equal(created.root, join(f.base, 'café'));
+    const file = await f.client.command('readFile', { checkout: created, path: 'file.txt' });
+    assert.equal(file.text, 'main');
+  } finally {
+    await f.close();
+  }
+});
+
+test('a lock that will not release is reported without undoing the created worktree', async () => {
+  const f = repository();
+  const { runtime, client } = withGit(f, ':', { unlock: 'echo unlock refused >&2; exit 1' });
+  let disposed = false;
+  try {
+    const checkout = await client.command('openCheckout', { root: f.root });
+    const location = join(f.base, 'still-locked');
+    const created = await client.command('createWorktree', {
+      checkout,
+      base: 'main',
+      branch: 'still-locked',
+      location,
+    });
+    const file = await client.command('readFile', { checkout: created, path: 'file.txt' });
+    assert.equal(file.text, 'main');
+    disposed = true;
+    await assert.rejects(runtime.dispose(), /still locked.*unlock refused/s);
+  } finally {
+    if (!disposed) await runtime.dispose();
     await f.close();
   }
 });

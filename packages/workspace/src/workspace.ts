@@ -122,6 +122,8 @@ export class LocalWorkspace {
       (root, source, signal) =>
         this.open(root, signal, { root, common: this.approval(source).common }),
       (root) => this.protected(root),
+      (message) =>
+        this.cleanupFailures.push(Cause.die(new ApplicationError({ code: 'Uncertain', message }))),
     );
     this.store = new Store(config.dataDirectory, config.hostId);
     this.run = makeRunner(helper, ownership.runHelper, (cause) => this.cleanupFailures.push(cause));

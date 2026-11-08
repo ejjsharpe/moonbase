@@ -23,7 +23,7 @@ export type Run = (
     env?: Record<string, string | undefined>;
   },
 ) => Promise<Buffer>;
-/** Git's messages, and so lock reasons and errors read back, stay untranslated. */
+/** Untranslated Git output, for commands whose text is read back. */
 const gitLocale = { LC_ALL: 'C', LANGUAGE: undefined };
 const helperEnvironment = (overrides: Record<string, string | undefined> = {}) => {
   const env: Record<string, string | undefined> = {
@@ -284,7 +284,11 @@ export class Directory {
     this.check();
     await this.run(args, { fd: this.fd, signal, onLine });
   }
-  git(args: string[], input?: string, signal?: AbortSignal) {
+  /**
+   * Runs Git in the checkout. `untranslated` runs it in the C locale, for output read back; other
+   * commands keep the user's locale, which hooks and filters they run inherit.
+   */
+  git(args: string[], input?: string, signal?: AbortSignal, { untranslated = false } = {}) {
     this.check();
     return this.run(
       [
@@ -298,7 +302,7 @@ export class Directory {
         '--work-tree=.',
         ...args,
       ],
-      { fd: this.fd, input, signal, env: gitLocale },
+      { fd: this.fd, input, signal, ...(untranslated ? { env: gitLocale } : {}) },
     );
   }
   async entry(p: string, signal?: AbortSignal, spellings?: Map<string, Set<string>>) {

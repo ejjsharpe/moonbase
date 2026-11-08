@@ -33,11 +33,16 @@ const realRoot = (root: string) => {
     }
   }
 };
-/** macOS volumes are usually case-insensitive, so roots differing only in case are one place. */
-const sameRoot = (a: string, b: string) =>
-  process.platform === 'darwin' ? a.toLowerCase() === b.toLowerCase() : a === b;
-/** The lock reason `git worktree add` writes until its checkout completes. */
-const initializing = 'initializing';
+/**
+ * Whether two roots are one place. macOS volumes are usually case-insensitive and ignore Unicode
+ * normalization, and Git there precomposes the paths it is given.
+ */
+const sameRoot = (a: string, b: string) => {
+  const normal = (root: string) =>
+    process.platform === 'darwin' ? root.normalize('NFC').toLowerCase() : root;
+  return normal(a) === normal(b);
+};
+const listArgs = ['worktree', 'list', '--porcelain', '-z'];
 
 type WorktreeRecord = Worktree & {
   lockReason: string | undefined;
@@ -102,24 +107,24 @@ export class WorkspaceWorktrees {
     signal: AbortSignal,
   ) => Promise<CheckoutTarget>;
   private readonly protect: (root: string) => void;
+  /** Reports a failure that does not undo a finished creation, such as a lock left behind. */
+  private readonly report: (message: string) => void;
   /** Creations run one at a time per project, so none mistakes another's worktree for its own. */
   private readonly creations = new Map<string, Promise<unknown>>();
   constructor(
     directory: (target: CheckoutTarget) => Promise<Directory>,
     open: (root: string, source: CheckoutTarget, signal: AbortSignal) => Promise<CheckoutTarget>,
     protect: (root: string) => void,
+    report: (message: string) => void,
   ) {
     this.directory = directory;
     this.open = open;
     this.protect = protect;
+    this.report = report;
   }
   async listWorktrees(target: CheckoutTarget, signal: AbortSignal) {
     const directory = await this.directory(target);
-    const output = await directory.git(
-      ['worktree', 'list', '--porcelain', '-z'],
-      undefined,
-      signal,
-    );
+    const output = await directory.git(listArgs, undefined, signal, { untranslated: true });
     return { worktrees: parseWorktrees(output.toString()).slice(0, 1000) };
   }
   /** Creates `branch` at `base` in a new linked worktree at `location`, then approves and opens it. */
@@ -167,14 +172,13 @@ export class WorkspaceWorktrees {
       return fail('InvalidInput', 'The worktree location parent folder does not exist.');
     }
     ensure(lstatSync(parent).isDirectory(), 'The worktree location parent must be a folder.');
-    const location = join(parent, basename(input.location));
+    // Git precomposes the paths it is given, so the folder it makes is named in NFC.
+    const location = join(parent, basename(input.location).normalize('NFC'));
     this.protect(location);
     if (exists(location)) fail('Conflict', 'The worktree location already exists.');
     // A worktree whose folder is missing (moved, or on an unmounted drive) still owns its location.
     const before = readWorktrees(
-      (
-        await directory.git(['worktree', 'list', '--porcelain', '-z'], undefined, signal)
-      ).toString(),
+      (await directory.git(listArgs, undefined, signal, { untranslated: true })).toString(),
     );
     if (before.some((worktree) => sameRoot(worktree.root, location)))
       fail('Conflict', 'Another worktree is registered at the worktree location.');
@@ -203,8 +207,8 @@ export class WorkspaceWorktrees {
       .then((output) => output.toString().trim())
       .catch(() => '');
     ensure(/^[a-f0-9]{40,64}$/.test(commit), `Base ${base} is not a commit.`);
-    // The empty old value creates the branch only if it does not exist, and the reflog entry
-    // names this creation, so cleanup deletes only a branch this creation made.
+    // The empty old value creates the branch only if it does not exist, and the reflog entry and
+    // the new worktree's lock reason name this creation, so cleanup removes only what it made.
     const created = { ref, commit, nonce: `moonbase: create worktree ${randomUUID()}` };
     const made = await directory
       .git(
@@ -217,25 +221,28 @@ export class WorkspaceWorktrees {
         (error) => error,
       );
     if (made !== true) {
-      // Stopped mid-write, the branch may be this creation's after all.
-      const cleanup = signal.aborted
-        ? await this.removeBranch(directory, created, false)
-        : undefined;
+      // Stopped mid-write (cancelled or at the time limit), the branch may be this creation's.
+      const cleanup =
+        signal.aborted || gitFailure(made).uncertain
+          ? await this.removeBranch(directory, created, false)
+          : undefined;
       if (cleanup)
         fail(
           'Uncertain',
-          `Worktree creation was cancelled and cleanup is incomplete (${cleanup}). Inspect branch ${branch}.`,
+          `Worktree creation stopped and cleanup is incomplete (${cleanup}). Inspect branch ${branch}.`,
         );
       if (signal.aborted) fail('Cancelled', 'Worktree creation cancelled; nothing was kept.');
       throw asCreationFailure(made);
     }
+    let target: CheckoutTarget;
     try {
+      // Locked from its start until approved, with a reason only this creation knows.
       await directory.git(
-        ['worktree', 'add', '--quiet', '--', location, branch],
+        ['worktree', 'add', '--quiet', '--lock', '--reason', created.nonce, '--', location, branch],
         undefined,
         signal,
       );
-      return await this.open(location, input.checkout, signal);
+      target = await this.open(location, input.checkout, signal);
     } catch (error) {
       const cleanup = await this.removeCreated(directory, location, before, created);
       if (cleanup)
@@ -246,11 +253,21 @@ export class WorkspaceWorktrees {
       if (signal.aborted) fail('Cancelled', 'Worktree creation cancelled; nothing was kept.');
       throw asCreationFailure(error);
     }
+    // The worktree is approved and kept: a lock left behind is reported but does not undo it.
+    const unlock = () => directory.git(['worktree', 'unlock', '--', location]);
+    await unlock()
+      .catch(unlock)
+      .catch((error) =>
+        this.report(
+          `Worktree ${location} was created but is still locked (${failureText(error)}). Run git worktree unlock on it.`,
+        ),
+      );
+    return target;
   }
   /**
    * Removes only what this creation added: the worktree registered at `location` since `before`
-   * on the branch it created, still at its commit (clean, or still locked by Git's own unfinished
-   * checkout), then that branch. Anything else at the location is left for inspection.
+   * that still holds this creation's lock, on its branch at its commit, then that branch.
+   * Anything else at the location is left for inspection.
    */
   private async removeCreated(
     directory: Directory,
@@ -259,7 +276,7 @@ export class WorkspaceWorktrees {
     created: CreatedBranch,
   ): Promise<string | undefined> {
     try {
-      const listed = await directory.git(['worktree', 'list', '--porcelain', '-z']);
+      const listed = await directory.git(listArgs, undefined, undefined, { untranslated: true });
       const registered = readWorktrees(listed.toString()).find((worktree) =>
         sameRoot(worktree.root, location),
       );
@@ -267,22 +284,14 @@ export class WorkspaceWorktrees {
         // Another tool or terminal may have added its own worktree here since the snapshot.
         if (
           before.some((worktree) => sameRoot(worktree.root, location)) ||
+          registered.lockReason !== created.nonce ||
           registered.ref !== created.ref ||
           registered.head !== created.commit
         )
           return 'another worktree is at the location';
-        // Git keeps a new worktree locked as `initializing` until its checkout completes, so
-        // such a worktree holds nothing but this creation's partial checkout: remove it despite
-        // the lock. Any other is removed only while clean and unlocked.
-        await directory.git([
-          'worktree',
-          'remove',
-          ...(registered.locked && registered.lockReason === initializing
-            ? ['--force', '--force']
-            : []),
-          '--',
-          location,
-        ]);
+        // Still locked by this creation, it holds nothing but this creation's checkout (perhaps
+        // partial) and what its hooks wrote: remove it despite the lock and any changes.
+        await directory.git(['worktree', 'remove', '--force', '--force', '--', location]);
       }
       // A checkout left at the location may still use the branch, so both are kept.
       if (exists(location)) return 'location still exists';
@@ -301,23 +310,29 @@ export class WorkspaceWorktrees {
     { ref, commit, nonce }: CreatedBranch,
     made: boolean,
   ): Promise<string | undefined> {
-    try {
-      const current = await directory
+    const resolveRef = () =>
+      directory
         .git(['rev-parse', '--verify', '--quiet', '--end-of-options', ref])
         .then((output) => output.toString().trim())
         .catch(() => '');
-      if (current !== commit) return undefined;
+    try {
+      // A symbolic ref names another branch, which deleting through it would remove.
+      const symbolic = await directory.git(['symbolic-ref', '-q', ref]).then(
+        () => true,
+        () => false,
+      );
+      if (symbolic) return 'the branch was replaced by a symbolic ref';
+      const current = await resolveRef();
+      if (!current) return undefined;
+      // A branch that moved is someone's work; one this creation did not make is theirs.
+      if (current !== commit) return made ? 'the branch has moved since it was made' : undefined;
       const latest = await directory
         .git(['log', '-g', '-n', '1', '--format=%H%x00%gs', '--end-of-options', ref, '--'])
         .then((output) => output.toString().trim())
         .catch(() => undefined);
       if (latest === `${commit}\0${nonce}`) {
-        await directory.git(['update-ref', '-d', ref, commit]).catch(() => undefined);
-        const remaining = await directory
-          .git(['rev-parse', '--verify', '--quiet', '--end-of-options', ref])
-          .then((output) => output.toString().trim())
-          .catch(() => '');
-        return remaining === commit ? 'branch still exists' : undefined;
+        await directory.git(['update-ref', '--no-deref', '-d', ref, commit]).catch(() => undefined);
+        return (await resolveRef()) === commit ? 'branch still exists' : undefined;
       }
       if (!made && latest) return undefined;
       return 'branch still exists and its reflog does not confirm this creation made it';
