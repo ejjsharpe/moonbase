@@ -124,12 +124,33 @@ type WatchAttempt = {
 const maximumSavedBytes = 2 * 1024 * 1024;
 /** Pages a listing reads, so a chat that is active again is listed however long ago it started. */
 const chatListPages = 16;
+/** Most pages a background reload reads again; older chats Show older added past them stay as listed. */
+const chatReloadPages = 64;
 const bytes = (value: string) => new TextEncoder().encode(value).length;
 const text = (value: string, limit: number) =>
   value.isWellFormed() && !value.includes('\0') && bytes(value) <= limit;
 const sameStop = (a: ChatStopTarget, b: ChatStopTarget) =>
   sameTarget(a.target, b.target) && a.submissionId === b.submissionId && a.taskId === b.taskId;
 const invalid = (message: string) => new ApplicationError({ code: 'InvalidInput', message });
+/**
+ * Merges a fresh listing into the one on screen. Chats are never removed, so a chat the listing
+ * did not return (one past its pages, or one created while it read) stays, after the chat it
+ * followed on screen.
+ */
+function keepUnreachedChats(shown: readonly ChatSummary[], listed: readonly ChatSummary[]) {
+  const reached = new Set(listed.map((chat) => chat.target.conversationId));
+  const following = new Map<string | null, ChatSummary[]>();
+  let anchor: string | null = null;
+  for (const chat of shown) {
+    const id = chat.target.conversationId;
+    if (reached.has(id)) anchor = id;
+    else following.set(anchor, [...(following.get(anchor) ?? []), chat]);
+  }
+  return [
+    ...(following.get(null) ?? []),
+    ...listed.flatMap((chat) => [chat, ...(following.get(chat.target.conversationId) ?? [])]),
+  ];
+}
 
 class ChatModelState {
   private saved: Saved;
@@ -600,7 +621,10 @@ class ChatModelState {
         });
         const listed = yield* Effect.exit(this.listChats());
         if (!owner.alive || epoch !== this.epoch) return;
-        if (Exit.isSuccess(listed)) this.listed(listed.value);
+        if (Exit.isSuccess(listed)) {
+          this.chatPages = listed.value.pages;
+          this.listed(listed.value);
+        }
         if (this.state.transcript.observation === 'failed') {
           void this.closeOwner(this.selection);
           this.selection = undefined;
@@ -624,33 +648,38 @@ class ChatModelState {
           cursor = this.state.nextChats;
         if (!cursor) return;
         const page = yield* this.call('listChats', { session: this.session, cursor });
-        if (owner?.alive && epoch === this.epoch)
+        if (owner?.alive && epoch === this.epoch) {
+          this.chatPages++;
           this.listed({
             chats: [...this.state.chats, ...page.conversations],
             next: page.nextCursor,
           });
+        }
       }),
       owner,
     );
   };
-  /** The first pages of chats, deduplicated; `next` continues past them. */
-  private listChats(): Effect.Effect<
-    { chats: ChatSummary[]; next: string | null },
-    ApplicationError
-  > {
+  /** Pages the chat list on screen spans: the first listing's, plus one per Show older. */
+  private chatPages = 0;
+  /** Up to `limit` first pages of chats; `next` continues past the `pages` it read. */
+  private listChats(
+    limit = chatListPages,
+  ): Effect.Effect<{ chats: ChatSummary[]; next: string | null; pages: number }, ApplicationError> {
     return Effect.gen({ self: this }, function* () {
       const chats: ChatSummary[] = [];
-      let cursor: string | null = null;
-      for (let page = 0; page < chatListPages; page++) {
+      let cursor: string | null = null,
+        pages = 0;
+      while (pages < limit) {
         const listed: ChatOutput<'listChats'> = yield* this.call('listChats', {
           session: this.session,
           ...(cursor ? { cursor } : {}),
         });
+        pages++;
         chats.push(...listed.conversations);
         cursor = listed.nextCursor;
         if (!cursor) break;
       }
-      return { chats, next: cursor };
+      return { chats, next: cursor, pages };
     });
   }
   private listed({ chats, next }: { chats: ChatSummary[]; next: string | null }) {
@@ -675,13 +704,14 @@ class ChatModelState {
   private reloading?: Promise<void>;
   private reloadQueued = false;
   /**
-   * Lists chats again in the background, keeping the last list if it fails. Unlike Refresh it
-   * neither re-verifies the host nor clears an error on screen, and it keeps the older chats Show
-   * older added past the pages it reads. A call during a reload runs one more after it.
+   * Lists chats again in the background, through the pages on screen (at most `chatReloadPages`),
+   * keeping the last list if it fails. Unlike Refresh it neither re-verifies the host nor clears an
+   * error on screen, and it keeps listed chats it did not reach. A call during a reload joins it;
+   * with `latest` (the list must show a change made since that reload began) one more runs after it.
    */
-  reloadChats = (): Promise<void> => {
+  reloadChats = ({ latest = false }: { latest?: boolean } = {}): Promise<void> => {
     if (this.reloading) {
-      this.reloadQueued = true;
+      if (latest) this.reloadQueued = true;
       return this.reloading;
     }
     const listing = this.listAgain();
@@ -704,22 +734,21 @@ class ChatModelState {
     }
     return this.runEffect(
       Effect.flatMap(
-        Effect.forkIn(this.listChats(), owner.scope, { startImmediately: true }),
+        Effect.forkIn(
+          this.listChats(Math.min(Math.max(this.chatPages, chatListPages), chatReloadPages)),
+          owner.scope,
+          { startImmediately: true },
+        ),
         Fiber.join,
       ),
     )
       .then((listed) => {
         if (!owner.alive || epoch !== this.epoch || this.closed) return;
-        // Chats are never removed, so a listed chat the first pages no longer reach lies past them.
-        const reached = new Set(listed.chats.map((chat) => chat.target.conversationId));
-        const older = listed.next
-          ? this.state.chats.filter((chat) => !reached.has(chat.target.conversationId))
-          : [];
-        this.listed(
-          older.length
-            ? { chats: [...listed.chats, ...older], next: this.state.nextChats }
-            : listed,
-        );
+        const kept = keepUnreachedChats(this.state.chats, listed.chats);
+        // The list reaches past the pages read only when a chat it did not reach comes last.
+        const past = kept.length > 0 && !listed.chats.includes(kept.at(-1)!);
+        if (!past) this.chatPages = listed.pages;
+        this.listed({ chats: kept, next: past ? this.state.nextChats : listed.next });
       })
       .catch(() => {});
   }
