@@ -377,7 +377,10 @@ test('controlled remote host and local checkout with matching IDs and paths stay
   await expect(
     otherTree.getByRole('treeitem', { name: 'remote-copy.md, untracked', exact: true }),
   ).toBeVisible();
-  await expect(row(page, 'remote-copy.md')).toHaveCount(0);
+  // Absent under any Git state, such as "remote-copy.md, untracked".
+  await expect(
+    tree(page).getByRole('treeitem', { name: /^remote-copy\.md(,|$)/, includeHidden: true }),
+  ).toHaveCount(0);
 });
 
 test('portal typing and paste do not import files or navigate the explorer', async ({ page }) => {

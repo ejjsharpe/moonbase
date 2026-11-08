@@ -299,11 +299,20 @@ export type MutationAction = {
   kind: WorkspaceOperation['kind'];
   paths: string[];
   nativeReferences?: string[];
+  /**
+   * The names `nativeReferences` import as, in order, when the caller knows them, such as dropped
+   * files'. A batch import then finds the existing entries it would replace in its destination
+   * folder, rather than taking them as typed paths. The workspace still checks each replacement
+   * against the actual source names, so a wrong name replaces nothing.
+   */
+  nativeNames?: string[];
 };
 export type MutationSnapshot = {
   busy: boolean;
   error: string;
   replacements: EntryReference[] | null;
+  /** The dispatched operation's result, with each item's outcome, once one arrives. */
+  result: OperationResult | null;
 };
 type MutationDependencies = {
   inspect(checkout: CheckoutTarget, paths: string[], scope: Scope.Scope): Promise<EntryReference[]>;
@@ -340,7 +349,12 @@ export class EditorMutation {
   private generation = 0;
   private closed = false;
   private completion?: Promise<void>;
-  private snapshot: MutationSnapshot = { busy: false, error: '', replacements: null };
+  private snapshot: MutationSnapshot = {
+    busy: false,
+    error: '',
+    replacements: null,
+    result: null,
+  };
   private listeners = new Set<() => void>();
   private admits: () => boolean;
   constructor(
@@ -384,6 +398,7 @@ export class EditorMutation {
     try {
       if (dependencies.pending(this.operationId)) {
         const result = await dependencies.resolve(this.operationId);
+        if (result && current()) this.update({ result });
         if (result?.outcome === 'completed') return current();
         this.update({
           error:
@@ -397,13 +412,27 @@ export class EditorMutation {
       if (!current()) return false;
       let replace = this.snapshot.replacements;
       if (action.kind !== 'trash' && replace === null) {
-        if (batchImport) {
+        const names = batchImport ? action.nativeNames : undefined;
+        if (
+          names &&
+          (names.length !== action.nativeReferences!.length ||
+            names.some((name) => !name || name.includes('/')))
+        ) {
+          this.update({ error: 'Imported names don’t match the selection.' });
+          return false;
+        }
+        if (batchImport && !names) {
           const paths = replacementPaths.split('\n').filter(Boolean);
           replace = paths.length
             ? await dependencies.inspect(action.checkout, paths, this.scope)
             : [];
         } else {
-          const { parent, destinations } = getMutationDestinations(this.sources, destination);
+          const { parent, destinations } = names
+            ? {
+                parent: destination,
+                destinations: names.map((name) => (destination ? `${destination}/${name}` : name)),
+              }
+            : getMutationDestinations(this.sources, destination);
           const listing = await dependencies.list(action.checkout, parent, this.scope);
           if (!current()) return false;
           const matchingDestinations = new Set(
@@ -443,6 +472,7 @@ export class EditorMutation {
         replacements: replace ?? [],
       });
       if (!current()) return false;
+      this.update({ result });
       if (result.outcome !== 'completed') {
         this.update({
           error:

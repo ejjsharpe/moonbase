@@ -13,6 +13,10 @@ import { controlledHostFixture, until } from '../../../tests/chat/fixture.ts';
 import { closeSettings, createRemoteChat, openSettings, selectRemoteChat } from './chat-target.ts';
 import { captureNative } from './editor-regressions.ts';
 import { readFindHighlight } from './find-highlight.ts';
+import { openActivity } from './transcript-list.ts';
+
+const transcriptRegion = (page: Page) =>
+  page.getByRole('region', { name: 'Chat transcript', exact: true });
 
 /** Opens the composer's folder menu and chooses a folder with the native picker. */
 async function chooseFolderNatively(page: Page) {
@@ -159,9 +163,9 @@ async function image(app: ElectronApplication, page: Page) {
     .locator('[data-transcript-activity]')
     .filter({ has: page.locator('[data-transcript-part]').filter({ hasText: 'Stored image' }) })
     .first();
-  // An output row's toggle is visually hidden; it still opens from the keyboard.
-  const activity = group.getByRole('button', { name: /^Activity/ });
-  if ((await activity.getAttribute('aria-expanded')) !== 'true') await activity.press('Enter');
+  // The image is the read call's output, recorded in a later row with no opener of its own; the
+  // call's step opens it.
+  await openActivity(transcriptRegion(page));
   const trigger = group.getByRole('button', { name: 'View stored image', exact: true }).first();
   await expect(trigger).toBeEnabled();
   await trigger.click();

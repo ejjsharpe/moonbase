@@ -1,3 +1,4 @@
+import { openActivity, openActivityGroups, stepToggle } from './transcript-list.ts';
 import { test, expect, type Page, type Locator } from '@playwright/test';
 import { Layer, ManagedRuntime } from 'effect';
 import type { ChatClient } from '@moonbase/contracts/chat';
@@ -135,6 +136,7 @@ for (const manifest of [false, true])
     await update('first');
     const row = page.locator('[data-transcript-live]');
     if (manifest) {
+      await openActivityGroups(page);
       await row.getByRole('button', { name: 'Load more parts', exact: true }).click();
       await expect
         .poll(() =>
@@ -144,7 +146,7 @@ for (const manifest of [false, true])
         )
         .toBe('complete');
     }
-    await row.getByRole('button', { name: /^Activity/ }).click();
+    await openActivity(row);
     const output = row.locator('[data-transcript-part="m0.b1"]');
     const pre = output.locator('pre');
     await pre.scrollIntoViewIfNeeded();
@@ -196,8 +198,9 @@ for (const outcome of ['success', 'error'] as const)
     try {
       await publishOutput(page, initial);
       const row = page.locator('[data-transcript-live]');
+      await openActivityGroups(page);
       await row.getByRole('button', { name: 'Load more parts', exact: true }).click();
-      await row.getByRole('button', { name: /^Activity/ }).click();
+      await openActivity(row);
       const output = row.locator('[data-transcript-part="m0.b1"]');
       const pre = output.locator('pre');
       await expect(pre).toHaveText(initial);
@@ -304,7 +307,7 @@ for (const change of ['prefix replacement', 'attempt retirement'] as const)
       const initial = 'SELECT THIS stable prefix\nfirst';
       await publishOutput(page, initial);
       const row = page.locator('[data-transcript-live]');
-      await row.getByRole('button', { name: /^Activity/ }).click();
+      await openActivity(row);
       const output = row.locator('[data-transcript-part="m0.b1"]');
       const pre = output.locator('pre');
       await selectPrefix(page, pre);
@@ -322,7 +325,7 @@ for (const change of ['prefix replacement', 'attempt retirement'] as const)
       expect(native.inputs[0]?.source).toEqual(JSON.parse(originalSource!));
       if (change === 'attempt retirement') {
         await page.getByRole('button', { name: 'Jump to latest', exact: true }).click();
-        await row.getByRole('button', { name: /^Activity/ }).click();
+        await openActivity(row);
       } else await pre.click({ position: { x: 8, y: 8 } });
       await expect(pre).toHaveText(currentText);
       await button.click();
@@ -341,7 +344,7 @@ for (const input of ['pointer', 'Space'] as const)
       const initial = 'SELECT THIS stable prefix\nfirst';
       await publishOutput(page, initial);
       const row = page.locator('[data-transcript-live]');
-      await row.getByRole('button', { name: /^Activity/ }).click();
+      await openActivity(row);
       const output = row.locator('[data-transcript-part="m0.b1"]');
       const pre = output.locator('pre');
       await selectPrefix(page, pre);
@@ -376,7 +379,7 @@ test('held Copy intent does not migrate to a new source after navigation', async
     const initial = 'SELECT THIS stable prefix\nfirst';
     await publishOutput(page, initial);
     const row = page.locator('[data-transcript-live]');
-    await row.getByRole('button', { name: /^Activity/ }).click();
+    await openActivity(row);
     const output = row.locator('[data-transcript-part="m0.b1"]');
     await selectPrefix(page, output.locator('pre'));
     const button = output.getByRole('button', { name: 'Copy part', exact: true });
@@ -397,7 +400,7 @@ test('held Copy intent does not migrate to a new source after navigation', async
       });
     });
     // The new attempt's card starts folded; the keyboard opens it while the press is held.
-    await row.getByRole('button', { name: /^Activity/ }).press('Enter');
+    await stepToggle(row, 'm0.b1').press('Enter');
     await expect(output.locator('pre')).toHaveText(initial + ' new source');
     const after = await button.boundingBox();
     await page.mouse.move(after!.x + after!.width / 2, after!.y + after!.height / 2);
@@ -438,7 +441,9 @@ test('released output retention yields to the existing 128-selection content bou
     }
   });
   const row = page.locator('[data-transcript-live]');
-  await row.getByRole('button', { name: /^Activity/ }).click();
+  // Only the output under test opens; the 129 details stay folded.
+  await openActivityGroups(page);
+  await stepToggle(row, 'm0.b0').click();
   const pre = row.locator('[data-transcript-part="m0.b0"] pre');
   await expect(pre).toHaveText(initial);
   await selectPrefix(page, pre);
@@ -525,6 +530,7 @@ for (const manifest of [false, true])
     await update(initial);
     const row = page.locator('[data-transcript-live]');
     if (manifest) {
+      await openActivityGroups(page);
       await row.getByRole('button', { name: 'Load more parts', exact: true }).click();
       await expect
         .poll(() =>
@@ -534,7 +540,7 @@ for (const manifest of [false, true])
         )
         .toBe('complete');
     }
-    await row.getByRole('button', { name: /^Activity/ }).click();
+    await openActivity(row);
     const output = row.locator('[data-transcript-part="m0.b1"]');
     const pre = output.locator('pre');
     await expect(pre).toHaveText(initial);

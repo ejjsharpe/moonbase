@@ -643,12 +643,33 @@ export function memoryWorkspace(seeds: Seed[]) {
         }
         if (operation.kind === 'import')
           fail('Memory adapter has no native file authority.', 'Unavailable');
-        if (
-          (operation.kind === 'move' || operation.kind === 'copy') &&
-          operation.sources.length !== 1
-        )
-          fail('The memory adapter transfers one captured source at a time.');
+        // Like the workspace, several sources move or copy into an existing folder ('' is the
+        // root), keeping their names; one source goes to its exact destination path.
+        const batch =
+          (operation.kind === 'move' || operation.kind === 'copy') && operation.sources.length > 1;
         if (operation.destination) pathCheck(operation.destination);
+        if (batch) {
+          const folder = operation.destination ?? fail('Destination required.');
+          if (folder && !map.get(folder)?.directory)
+            fail('Batch destination must be an existing folder.');
+          const names = operation.sources.map((source) =>
+            source.target.path.split('/').at(-1)!.normalize('NFC').toLowerCase(),
+          );
+          if (new Set(names).size !== names.length)
+            fail('Selection has colliding destination names.');
+          if (
+            operation.sources.some((source) =>
+              operation.sources.some(
+                (other) => other !== source && affected(source.target.path, other.target.path),
+              ),
+            )
+          )
+            fail('Overlapping sources are not one selection.');
+        }
+        const destinationOf = (source: string) =>
+          batch
+            ? [operation.destination, source.split('/').at(-1)].filter(Boolean).join('/')
+            : operation.destination;
         const replace = (destination: string, source?: string) => {
           const collision = [...map.keys()].find(
             (path) =>
@@ -674,7 +695,7 @@ export function memoryWorkspace(seeds: Seed[]) {
           result.items.push({ source: '', destination, outcome: 'completed' });
         } else
           for (const source of operation.sources) {
-            const destination = operation.destination;
+            const destination = destinationOf(source.target.path);
             if (operation.kind !== 'trash' && !destination) fail('Destination required.');
             if (destination && affected(destination, source.target.path))
               fail('Cannot transfer an entry into itself.');

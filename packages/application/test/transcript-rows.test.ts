@@ -33,7 +33,7 @@ function running(snapshot: ChatSnapshot, text: string, transcript = true): ChatS
             transcript: {
               source,
               parts: [part('m0.b0', text)],
-              thinking: 'pending' as const,
+              thinking: 'none' as const,
               nextCursor: null,
             },
           }

@@ -27,6 +27,7 @@ import { homePath } from '../folder-menu.tsx';
 import { readOwn } from '@moonbase/application/editor';
 import { Icon } from '../icon.tsx';
 import {
+  isFileDropTaken,
   Workbench,
   type PickerEntry,
   pickerCommand,
@@ -582,7 +583,8 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
         if (event.dataTransfer.types.includes('Files')) event.preventDefault();
       }}
       onDrop={(event) => {
-        if (!event.dataTransfer.files.length) return;
+        // The files tree takes a drop on it, importing into the folder dropped on.
+        if (isFileDropTaken(event.nativeEvent) || !event.dataTransfer.files.length) return;
         event.preventDefault();
         if (application.getSnapshot().phase !== 'live' || view === 'chat' || !selectDroppedImports)
           return;
@@ -880,6 +882,13 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
                 ((checkout) =>
                   application.getSnapshot().phase === 'live'
                     ? selectClipboardImports(checkout)
+                    : Promise.resolve([]))
+              }
+              selectDroppedImports={
+                selectDroppedImports &&
+                ((checkout, files) =>
+                  application.getSnapshot().phase === 'live'
+                    ? selectDroppedImports(checkout, files)
                     : Promise.resolve([]))
               }
             />

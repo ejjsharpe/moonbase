@@ -109,9 +109,12 @@ test('a plain folder opens without Git; Git reads are empty and Git changes are 
       },
     );
     await isReady;
-    writeFileSync(join(root, 'new.txt'), 'new');
+    // FSEvents may miss a write made as its stream starts, so write until one is reported.
     const deadline = Date.now() + 10_000;
-    while (!changes.length && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+    for (let write = 0; !changes.length && Date.now() < deadline; write++) {
+      writeFileSync(join(root, 'new.txt'), `new ${write}`);
+      await new Promise((r) => setTimeout(r, 250));
+    }
     assert.deepEqual(changes.slice(0, 1), ['changed']);
   } finally {
     await stop?.();

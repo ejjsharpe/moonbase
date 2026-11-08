@@ -60,6 +60,16 @@ const deferObservation = Symbol('defer recovery observation');
 const definitiveNonAdmission = (error: unknown) =>
   ApplicationError.is(error) && error.code === 'InvalidInput';
 const affected = (path: string, parent: string) => path === parent || path.startsWith(parent + '/');
+/**
+ * The paths an operation writes: each entry's path in a batch's destination folder (which may be
+ * the root), or one destination path.
+ */
+function listOperationDestinations(operation: WorkspaceOperation) {
+  if (operation.destination === undefined) return [];
+  if (operation.sources.length > 1)
+    return getMutationDestinations(operation.sources, operation.destination).destinations;
+  return operation.destination ? [operation.destination] : [];
+}
 const validPath = (path: string, directory = false) => {
   if (directory && path === '') return;
   if (
@@ -1537,12 +1547,14 @@ class EditorModelState {
       throw editorError(
         'Operation already submitted. Resolve its status instead of dispatching it again.',
       );
+    // A batch's destination is a folder, which may be the root.
+    const batch = operation.sources.length > 1;
     if (operation.destination !== undefined)
-      validPath(operation.destination, operation.kind === 'import');
+      validPath(operation.destination, operation.kind === 'import' || batch);
+    const destinations = listOperationDestinations(operation);
     if (
       operation.sources.some((source) => this.uncertainAffects(source.target)) ||
-      (operation.destination &&
-        this.uncertainAffects({ checkout: operation.checkout, path: operation.destination }))
+      destinations.some((path) => this.uncertainAffects({ checkout: operation.checkout, path }))
     )
       throw editorError('Resolve the pending operation on these entries before applying another.');
     for (const source of [...operation.sources, ...(operation.replacements ?? [])]) {
@@ -1550,11 +1562,10 @@ class EditorModelState {
       if (!sameCheckout(source.target.checkout, operation.checkout))
         throw editorError('A file operation must use one exact checkout.');
     }
-    const replacementPaths = (operation.replacements ?? []).map((item) => item.target.path);
-    if (operation.destination)
-      replacementPaths.push(
-        ...getMutationDestinations(operation.sources, operation.destination).destinations,
-      );
+    const replacementPaths = [
+      ...(operation.replacements ?? []).map((item) => item.target.path),
+      ...destinations,
+    ];
     if (
       [...this.buffers.values()].some(
         (buffer) =>
@@ -1654,7 +1665,7 @@ class EditorModelState {
       const paths = operation
         ? [
             ...operation.sources.map((source) => source.target.path),
-            ...(operation.destination ? [operation.destination] : []),
+            ...listOperationDestinations(operation),
           ]
         : result.items.flatMap((item) => [
             item.source,

@@ -12,6 +12,9 @@ import { findCreateFolder } from './files-tree-rows.ts';
 import { gitStatusMarks } from './files-tree-status.ts';
 import { Mutation, type Action } from './mutation.tsx';
 import { useMutationRunner } from './mutation-runner.tsx';
+import { useMoveUndo } from './move-undo.ts';
+import { maxDraggedEntries } from './files-tree-drop.ts';
+import { formatKeys } from './file-commands.ts';
 import { Popup } from './popup.tsx';
 import {
   forwardRef,
@@ -79,6 +82,11 @@ export type WorkbenchProps = {
   /** Native/user-authorized selection belongs to the shell. A renderer path alone grants no access. */
   selectNativeImports?: (checkout: CheckoutTarget) => Promise<string[]>;
   selectClipboardImports?: (checkout: CheckoutTarget) => Promise<string[]>;
+  /**
+   * Approves files dropped from the OS onto the files tree, one reference per file in order, for
+   * importing into the folder dropped on. Without it, such drops pass through to the app.
+   */
+  selectDroppedImports?: (checkout: CheckoutTarget, files: File[]) => Promise<string[]>;
   /** Copies a checkout's paths to the clipboard, joined by newlines: absolute, or as `relative`. */
   copyPaths?: (checkout: CheckoutTarget, paths: string[], relative: boolean) => Promise<void>;
   /** Shows a checkout's file or folder in the OS file manager. */
@@ -114,6 +122,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     onShowEditor,
     selectNativeImports,
     selectClipboardImports,
+    selectDroppedImports,
     copyPaths,
     revealPath,
     mentionInChat,
@@ -195,10 +204,15 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       snapshot.recovery.checkouts.some(
         (target) => checkoutKey(target) === checkoutKey(value.checkout),
       ) &&
-      (!(value.kind === 'move' || value.kind === 'copy') || value.paths.length === 1) &&
+      // Several entries move or copy into one folder, as a drag from the tree does.
+      (!(value.kind === 'move' || value.kind === 'copy') ||
+        (value.paths.length >= 1 && value.paths.length <= maxDraggedEntries)) &&
       (value.kind !== 'trash' || value.paths.length > 0)
     );
   }
+  // Moves and renames made from the tree, one per checkout, for Undo; any other file operation
+  // from the tree or a dialog forgets the checkout's.
+  const moveUndo = useMoveUndo(controller, mutations.runMutation, openCheckouts);
   function requestMutation(value: Action, finalFocus?: () => boolean | HTMLElement | null) {
     if (
       !canRequestMutation(
@@ -611,6 +625,15 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
               } satisfies ExplorerAction,
             ]
           : []),
+        {
+          label: moveUndo.labelFor(checkout) ?? 'Undo Move',
+          icon: 'undo',
+          keys: formatKeys('Meta+Z'),
+          disabled:
+            !moveUndo.labelFor(checkout) ||
+            !canRequestMutation({ checkout, kind: 'move', paths: moveUndo.movedPaths(checkout) }),
+          run: () => void moveUndo.undo(checkout, () => explorerActionsButton.current ?? false),
+        },
         'separator',
         {
           label: 'Collapse All Folders',
@@ -683,12 +706,16 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                 dialogOpen={!!(action || choice || lookup || mutations.running)}
                 canRequestMutation={canRequestMutation}
                 requestMutation={requestMutation}
-                runMutation={mutations.runMutation}
+                runMutation={moveUndo.run}
+                undoLabel={moveUndo.labelFor(checkout)}
+                onMoved={(moves) => moveUndo.record(checkout, moves)}
+                onUndo={(finalFocus) => moveUndo.undo(checkout, finalFocus)}
                 createRequest={createRequest}
                 onCreateRequestTaken={() => setCreateRequest(null)}
                 copyPaths={copyPaths}
                 revealPath={revealPath}
                 mentionInChat={mentionInChat}
+                selectDroppedImports={selectDroppedImports}
               />
             </>
           ) : (
@@ -856,13 +883,14 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                         if (dragged.current) event.preventDefault();
                       }}
                       onDrop={(event) => {
+                        // Only a tab drag is the tabs'; files from the OS pass through to the app.
+                        if (!dragged.current) return;
                         event.preventDefault();
-                        if (dragged.current)
-                          controller.reorder(
-                            checkout,
-                            dragged.current,
-                            selected.openFiles.indexOf(path),
-                          );
+                        controller.reorder(
+                          checkout,
+                          dragged.current,
+                          selected.openFiles.indexOf(path),
+                        );
                         dragged.current = null;
                       }}>
                       <Tabs.Tab
@@ -1319,6 +1347,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
           action={action}
           close={() => setAction(null)}
           finalFocus={mutationFinalFocus}
+          onApplied={() => moveUndo.clear(action.checkout)}
         />
       )}
       {mutations.confirmation}

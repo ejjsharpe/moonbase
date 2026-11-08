@@ -354,6 +354,54 @@ test('lost move response resolves status once and publishes dirty drafts at the 
   }
 });
 
+test('a pending batch into the root guards the paths it lands at, and a root batch is guarded too', async () => {
+  const f = await fixture('editor-one', false);
+  const pending = /Resolve the pending operation on these entries/;
+  try {
+    await f.editor.mutate({
+      checkout,
+      kind: 'create-file',
+      sources: [],
+      destination: 'folder/d.ts',
+    });
+    await f.editor.mutate({ checkout, kind: 'create-directory', sources: [], destination: 'out' });
+    // A move into the root whose reply is lost stays pending; the entries did move.
+    f.memory.failNext('mutate', 'Response lost', true);
+    await assert.rejects(
+      f.editor.mutate({
+        id: 'to-root',
+        checkout,
+        kind: 'move',
+        sources: await f.editor.inspect(checkout, ['folder/nested.ts', 'folder/d.ts']),
+        destination: '',
+      }),
+    );
+    const landed = await f.editor.inspect(checkout, ['nested.ts']);
+    await assert.rejects(f.editor.mutate({ checkout, kind: 'trash', sources: landed }), pending);
+    await f.editor.resolveOperation('to-root');
+    // A create whose reply is lost before it ran stays pending at its path.
+    f.memory.failNext('mutate', 'Response lost', false, 'Uncertain');
+    await assert.rejects(
+      f.editor.mutate({ checkout, kind: 'create-file', sources: [], destination: 'b.ts.bak' }),
+    );
+    for (const destination of ['out/b.ts.bak', 'out/e.ts'])
+      await f.editor.mutate({ checkout, kind: 'create-file', sources: [], destination });
+    const before = f.memory.stats.mutations;
+    await assert.rejects(
+      f.editor.mutate({
+        checkout,
+        kind: 'move',
+        sources: await f.editor.inspect(checkout, ['out/b.ts.bak', 'out/e.ts']),
+        destination: '',
+      }),
+      pending,
+    );
+    assert.equal(f.memory.stats.mutations, before);
+  } finally {
+    await f.dispose();
+  }
+});
+
 test('incompatible recovered operation evidence never rebinds equal checkout/path strings', async () => {
   const f = await fixture();
   try {

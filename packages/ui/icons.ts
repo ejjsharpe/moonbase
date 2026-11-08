@@ -1,6 +1,7 @@
 import {
   IconArchive,
   IconArchiveRestore,
+  IconArrowBackUp,
   IconArrowUp,
   IconArrowsDiagonal,
   IconArrowsDiagonalMinimize2,
@@ -86,4 +87,5 @@ export const icons = {
   collapseAll: IconFold,
   railCollapse: IconLayoutSidebarLeftCollapse,
   railExpand: IconLayoutSidebarLeftExpand,
+  undo: IconArrowBackUp,
 } as const;

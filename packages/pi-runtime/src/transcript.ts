@@ -576,13 +576,10 @@ async function getTaskPairing(
   };
 }
 
-function summarizeThinking(
-  parts: readonly Part[],
-  fallback: ChatTranscript['thinking'],
-): ChatTranscript['thinking'] {
+function summarizeThinking(parts: readonly Part[]): ChatTranscript['thinking'] {
   const thinking = parts.filter((part) => part.kind === 'thinking');
   if (thinking.some(isAvailable)) return 'available';
-  return thinking.length ? 'redacted' : fallback;
+  return thinking.length ? 'redacted' : 'none';
 }
 type EntryTranscript = {
   /** Saved entries never move, so a cached transcript can authorize its own reads. */
@@ -639,7 +636,7 @@ async function getEntryTranscript(
   const transcript = {
     conversationId: entry.conversationId,
     parts,
-    thinking: summarizeThinking(parts, 'none'),
+    thinking: summarizeThinking(parts),
   };
   cache.set(String(entry.id), transcript);
   return transcript;
@@ -782,7 +779,7 @@ async function getLiveTranscript(
   // Only generation parts can hold thinking; tool and nested parts are built lazily.
   return {
     parts: listLiveParts(harness, source, capture, generation, signal),
-    thinking: summarizeThinking(generation, 'pending'),
+    thinking: summarizeThinking(generation),
   };
 }
 async function* listLiveParts(
