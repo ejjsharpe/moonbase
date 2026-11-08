@@ -26,6 +26,7 @@ import {
   chatStreamFeature,
   chatTranscriptFeature,
   findChatMentionStarts,
+  isChatMentionPath,
   maximumChatMentions,
 } from '@moonbase/contracts/chat';
 import type { ConnectionClient, ConnectionSnapshot } from '@moonbase/contracts/connection';
@@ -70,6 +71,8 @@ export type ChatState = {
   mentions: ChatMention[];
   modelPreference: ChatModelPreference | null;
   pending: Pending[];
+  /** Request IDs of pending commands this session is still sending; their outcome is not yet in doubt. */
+  dispatching: string[];
   active: string[];
   error: string | null;
   storageError: string | null;
@@ -221,6 +224,7 @@ class ChatModelState {
       mentions: this.draftMentions(),
       modelPreference: this.saved.modelPreference ?? null,
       pending: this.saved.pending,
+      dispatching: [],
       active: [],
       error: null,
       storageError,
@@ -668,22 +672,36 @@ class ChatModelState {
         /* commit reports storage failures in state. */
       }
   }
-  private reloading = false;
+  private reloading?: Promise<void>;
+  private reloadQueued = false;
   /**
    * Lists chats again in the background, keeping the last list if it fails. Unlike Refresh it
-   * neither re-verifies the host nor clears an error on screen.
+   * neither re-verifies the host nor clears an error on screen, and it keeps the older chats Show
+   * older added past the pages it reads. A call during a reload runs one more after it.
    */
   reloadChats = (): Promise<void> => {
+    if (this.reloading) {
+      this.reloadQueued = true;
+      return this.reloading;
+    }
+    const listing = this.listAgain();
+    if (!listing) return Promise.resolve();
+    return (this.reloading = listing.then(() => {
+      this.reloading = undefined;
+      if (!this.reloadQueued) return;
+      this.reloadQueued = false;
+      return this.reloadChats();
+    }));
+  };
+  private listAgain(): Promise<void> | undefined {
     const owner = this.generation;
-    if (!this.admissionsOpen || this.closed || this.reloading || !owner?.alive || !this.state.ready)
-      return Promise.resolve();
+    if (!this.admissionsOpen || this.closed || !owner?.alive || !this.state.ready) return;
     let epoch: number;
     try {
       epoch = this.connected();
     } catch {
-      return Promise.resolve();
+      return;
     }
-    this.reloading = true;
     return this.runEffect(
       Effect.flatMap(
         Effect.forkIn(this.listChats(), owner.scope, { startImmediately: true }),
@@ -691,13 +709,20 @@ class ChatModelState {
       ),
     )
       .then((listed) => {
-        if (owner.alive && epoch === this.epoch && !this.closed) this.listed(listed);
+        if (!owner.alive || epoch !== this.epoch || this.closed) return;
+        // Chats are never removed, so a listed chat the first pages no longer reach lies past them.
+        const reached = new Set(listed.chats.map((chat) => chat.target.conversationId));
+        const older = listed.next
+          ? this.state.chats.filter((chat) => !reached.has(chat.target.conversationId))
+          : [];
+        this.listed(
+          older.length
+            ? { chats: [...listed.chats, ...older], next: this.state.nextChats }
+            : listed,
+        );
       })
-      .catch(() => {})
-      .finally(() => {
-        this.reloading = false;
-      });
-  };
+      .catch(() => {});
+  }
   /** Records that you saw a chat as of its activity time; an older look never replaces a newer one. */
   markSeen(conversationId: string, at: string) {
     if (!this.admissionsOpen || this.closed || this.state.storageError) return;
@@ -750,6 +775,14 @@ class ChatModelState {
     ];
     if (kept.length > maximumChatMentions) {
       this.update({ error: `A message can mention at most ${maximumChatMentions} files.` });
+      return;
+    }
+    // A mention the saved format rejects is refused before it is shown, so it never blocks storage.
+    if (kept.some((mention) => !isChatMentionPath(mention.path))) {
+      this.update({
+        error:
+          'Mention a file by a relative path of at most 1 KiB, without quotes, backslashes, control characters or ./.. segments.',
+      });
       return;
     }
     const target = this.saved.selected;
@@ -1062,8 +1095,7 @@ class ChatModelState {
           input: structuredClone(captured),
           message: 'Outcome pending. Original creation identity retained.',
         };
-        this.reserve(pending);
-        yield* this.dispatch(pending);
+        yield* this.dispatch(pending, () => this.reserve(pending));
       }),
     );
   send = (settings?: ChatCreationSettings) =>
@@ -1109,8 +1141,7 @@ class ChatModelState {
             firstMessage: { requestId: this.newId(), ...message },
             message: 'Outcome pending. Original creation and first message retained.',
           };
-          this.reserve(pending);
-          yield* this.dispatch(pending);
+          yield* this.dispatch(pending, () => this.reserve(pending));
           return;
         }
         if (
@@ -1129,8 +1160,7 @@ class ChatModelState {
           }),
           message: 'Outcome pending. Original Send identity and text retained.',
         };
-        this.reserve(pending);
-        yield* this.dispatch(pending);
+        yield* this.dispatch(pending, () => this.reserve(pending));
       }),
     );
   stop = () =>
@@ -1151,8 +1181,7 @@ class ChatModelState {
           input: { stop: structuredClone(stop), requestId: this.newId() },
           message: 'Outcome pending. Exact submission/task retained.',
         };
-        this.reserve(pending);
-        yield* this.dispatch(pending);
+        yield* this.dispatch(pending, () => this.reserve(pending));
       }),
     );
   retry = (id: string) =>
@@ -1243,7 +1272,30 @@ class ChatModelState {
     if (firstSend) next.pending.push(firstSend);
     this.commit(next);
   }
-  private dispatch(pending: Pending): Effect.Effect<void, ApplicationError> {
+  private sending = new Map<string, number>();
+  private countSending(requestId: string, change: 1 | -1) {
+    const count = (this.sending.get(requestId) ?? 0) + change;
+    if (count > 0) this.sending.set(requestId, count);
+    else this.sending.delete(requestId);
+    this.update({ dispatching: [...this.sending.keys()] });
+  }
+  /**
+   * Sends a pending command, counting it as in flight from before `prepare` (which reserves or
+   * publishes it) until its reply or failure is recorded.
+   */
+  private dispatch(pending: Pending, prepare?: () => void): Effect.Effect<void, ApplicationError> {
+    const requestId = pending.input.requestId;
+    return Effect.acquireUseRelease(
+      Effect.sync(() => this.countSending(requestId, 1)),
+      () =>
+        Effect.gen({ self: this }, function* () {
+          prepare?.();
+          yield* this.sendPending(pending);
+        }),
+      () => Effect.sync(() => this.countSending(requestId, -1)),
+    );
+  }
+  private sendPending(pending: Pending): Effect.Effect<void, ApplicationError> {
     return Effect.gen({ self: this }, function* () {
       this.commit(structuredClone(this.saved));
       if (pending.operation === 'createChat') {
@@ -1264,25 +1316,28 @@ class ChatModelState {
             }
           : undefined;
         // Publish the exact Send with the Create receipt before disclosing the message.
-        this.resolve(pending, receipt.conversation, firstSend);
-        this.update({
-          chats: [
-            receipt.conversation,
-            ...this.state.chats.filter(
-              (chat) => !sameTarget(chat.target, receipt.conversation.target),
-            ),
-          ].slice(0, 32),
-        });
-        if (
-          this.generation?.alive &&
-          sameTarget(this.saved.selected, receipt.conversation.target)
-        ) {
-          const target = receipt.conversation.target;
-          void this.action('open', this.openSelected(target), this.generation, false, () =>
-            sameTarget(this.saved.selected, target),
-          );
-        }
-        if (firstSend) yield* this.dispatch(firstSend);
+        const publish = () => {
+          this.resolve(pending, receipt.conversation, firstSend);
+          this.update({
+            chats: [
+              receipt.conversation,
+              ...this.state.chats.filter(
+                (chat) => !sameTarget(chat.target, receipt.conversation.target),
+              ),
+            ],
+          });
+          if (
+            this.generation?.alive &&
+            sameTarget(this.saved.selected, receipt.conversation.target)
+          ) {
+            const target = receipt.conversation.target;
+            void this.action('open', this.openSelected(target), this.generation, false, () =>
+              sameTarget(this.saved.selected, target),
+            );
+          }
+        };
+        if (firstSend) yield* this.dispatch(firstSend, publish);
+        else publish();
       } else if (pending.operation === 'sendChat') {
         const receipt = yield* this.call(pending.operation, pending.input);
         if (receipt.admission === 'admitted') this.resolve(pending);
