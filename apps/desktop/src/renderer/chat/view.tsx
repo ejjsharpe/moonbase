@@ -713,7 +713,7 @@ export function ChatView({
               return;
             }
             setCommandError(null);
-            // ⌘ Enter submits even while Send is disabled; one worktree per first message.
+            // Enter submits even while Send is disabled; one worktree per first message.
             if (creatingWorktree) return;
             setMentionError(null);
             // The new chat's messages are about its own sends, which an open chat's leave alone.
@@ -875,7 +875,7 @@ export function ChatView({
               <Button
                 type="submit"
                 aria-label="Send message"
-                title="Send message · ⌘ Enter"
+                title="Send message · Enter"
                 {...stylex.props(controls.button, styles.sendButton)}
                 disabled={
                   typedCommand
@@ -903,7 +903,7 @@ export function ChatView({
           <span>{toolNotice}</span>
           <span
             title={`${new TextEncoder().encode(state.draft).length.toLocaleString()} / 32,768 bytes`}>
-            ⌘ / Ctrl Enter
+            ⇧ Enter for a new line
           </span>
         </div>
       </div>

@@ -567,7 +567,7 @@ test('native 200% normal/constrained live chat keeps wheel/Tab Stop and Send rea
     await expect(p.getByLabel('Message', { exact: true })).toHaveValue(
       'newer independent zoom draft',
     );
-    await p.getByLabel('Message', { exact: true }).press('Control+Enter');
+    await p.getByLabel('Message', { exact: true }).press('Enter');
     await expect
       .poll(async () => (await f.stats()).commands.filter((v) => v === 'sendChat').length)
       .toBe(2);

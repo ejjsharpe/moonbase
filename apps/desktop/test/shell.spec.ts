@@ -1415,7 +1415,7 @@ test('design fixture renders first-message composition, pinned navigation and co
   ).toContain('tabler-icon');
   await page.screenshot({ path: '../../test-results/redesign-review/desktop.png', fullPage: true });
   await message.fill('Review the desktop shell and editor');
-  await message.press('Meta+Enter');
+  await message.press('Enter');
   await expect(
     page.getByRole('heading', { name: 'Review the desktop shell and editor', exact: true }),
   ).toBeVisible();
@@ -1564,8 +1564,16 @@ test('@ in the composer searches the chat folder and sends picked files as menti
   await expect(message).toHaveValue('Compare @apps/desktop/src/renderer/chat/view.tsx with ');
   await expect(shell(page).locator('mark')).toHaveCount(1);
   await message.pressSequentially('care');
-  await message.press('ControlOrMeta+Enter');
+  // Shift+Enter adds a line; Enter sends.
+  await message.press('Shift+Enter');
+  await expect(message).toHaveValue('Compare @apps/desktop/src/renderer/chat/view.tsx with care\n');
+  await message.press('Backspace');
+  await message.press('Enter');
   await expect(message).toHaveValue('');
+  // Enter in an empty composer neither sends nor adds a line.
+  await message.press('Enter');
+  await expect(message).toHaveValue('');
+  await expect(page.getByText('Write a message before sending.')).toBeHidden();
   expect(await page.evaluate(() => window.demo.chat.sent.at(-1))).toMatchObject({
     text: 'Compare @apps/desktop/src/renderer/chat/view.tsx with care',
     mentions: [{ path: 'apps/desktop/src/renderer/chat/view.tsx' }],
@@ -1595,11 +1603,11 @@ test('/ at the start of a message lists commands that switch model and effort, c
   await expect(effort).toContainText('High');
   // A typed command runs on Send instead of reaching the agent; the lines after it stay.
   await message.fill('/model coding\nKeep this');
-  await message.press('ControlOrMeta+Enter');
+  await message.press('Enter');
   await expect(model).toContainText('Demo coding model');
   await expect(message).toHaveValue('Keep this');
   await message.fill('/stop');
-  await message.press('ControlOrMeta+Enter');
+  await message.press('Enter');
   await expect(page.getByRole('alert').filter({ hasText: '/stop' })).toHaveText(
     "/stop isn't available here.",
   );
@@ -1643,7 +1651,7 @@ test('a new worktree is made only when a new chat sends, and its chat stays with
   await page.getByRole('option', { name: 'New worktree', exact: true }).click();
   await message.fill("Tidy the composer's spacing");
   expect(await page.evaluate(() => window.demo.chat.worktrees)).toEqual([]);
-  await message.press('ControlOrMeta+Enter');
+  await message.press('Enter');
   await expect(
     page.getByRole('heading', { name: "Tidy the composer's spacing", exact: true }),
   ).toBeVisible();
