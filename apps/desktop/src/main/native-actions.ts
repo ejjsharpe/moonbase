@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import type { BrowserWindow, Clipboard, Dialog } from 'electron';
+import type { BrowserWindow, Clipboard, Dialog, Shell } from 'electron';
 import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
 import type { NativeActions } from '../session.ts';
 
@@ -7,12 +7,14 @@ export function createNativeActions({
   window,
   dialog,
   clipboard,
+  shell,
   capture,
   release,
 }: {
   window: BrowserWindow;
   dialog: Pick<Dialog, 'showOpenDialog' | 'showMessageBox'>;
-  clipboard: Pick<Clipboard, 'read'>;
+  clipboard: Pick<Clipboard, 'read' | 'writeText'>;
+  shell: Pick<Shell, 'showItemInFolder'>;
   capture(input: {
     checkout: CheckoutTarget;
     clientId: string;
@@ -87,6 +89,12 @@ export function createNativeActions({
     },
     release(input: { checkout: CheckoutTarget; clientId: string; references: string[] }) {
       return release(input);
+    },
+    async copyText(text: string) {
+      await clipboard.writeText(text);
+    },
+    async reveal(path: string) {
+      shell.showItemInFolder(path);
     },
   };
 }

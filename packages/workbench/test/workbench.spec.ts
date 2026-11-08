@@ -452,7 +452,7 @@ for (const survivor of [true, false])
     ).toBeFocused();
   });
 
-test('buffer tabs join edge to edge and reveal only their own close control without moving', async ({
+test('buffer tabs are spaced pills that reveal only their own close control without moving', async ({
   page,
 }) => {
   await page.goto('/');
@@ -482,8 +482,11 @@ test('buffer tabs join edge to edge and reveal only their own close control with
       gaps: groups.slice(1).map((group, index) => group.left - groups[index]!.right),
     };
   });
-  expect(geometry).toEqual({ height: 36, inset: 0, gaps: [0, 0] });
-  await expect(welcome).toHaveCSS('border-radius', '0px');
+  expect(geometry).toEqual({ height: 40, inset: 8, gaps: [3, 3] });
+  await expect(welcome).toHaveCSS('border-radius', '8px');
+  // Type marks stand in for the file icon; the name alone labels the tab.
+  await expect(example).toContainText('TS');
+  await expect(example).toContainText('example.ts');
   await expect(example).toHaveCSS('font-style', 'italic');
   const originalBounds = await example.boundingBox();
   await welcome.hover();
@@ -515,10 +518,43 @@ test('buffer tabs join edge to edge and reveal only their own close control with
     .press('a');
   const longTab = strip.getByRole('tab', { name: path, exact: true });
   await expect(longTab).toHaveAttribute('aria-description', 'Unsaved');
-  expect(await longTab.evaluate((element) => getComputedStyle(element, '::after').width)).toBe(
-    '6px',
+  // An unsaved tab keeps its control visible as a dot, which turns into × under the pointer.
+  const closeLong = strip.getByRole('button', { name: `Close ${path}`, exact: true });
+  await expect(closeLong).toBeVisible();
+  await welcome.click();
+  await page.mouse.move(0, 0);
+  await expect(closeLong).toHaveCSS('opacity', '1');
+  const dot = closeLong.locator('span[aria-hidden="true"]');
+  await expect(dot).toHaveCSS('width', '7px');
+  await expect(closeLong.locator('svg')).toBeHidden();
+  await longTab.hover();
+  await expect(dot).toBeHidden();
+  await expect(closeLong.locator('svg')).toBeVisible();
+});
+
+test('tabs that share a file name show the folder that tells them apart', async ({ page }) => {
+  await page.goto('/');
+  await page.evaluate(async () => {
+    const { first, checkout } = window.demo;
+    await first.mutate({
+      checkout,
+      kind: 'create-file',
+      sources: [],
+      destination: 'src/welcome.ts',
+      text: '',
+    });
+    await first.open({ checkout, path: 'src/welcome.ts' }, { intent: 'keep' });
+  });
+  const strip = first(page).getByRole('tablist', { name: 'Open files', exact: true });
+  const nested = strip.getByRole('tab', { name: 'src/welcome.ts', exact: true });
+  await expect(nested).toHaveText('TSwelcome.tssrc');
+  await expect(strip.getByRole('tab', { name: 'welcome.ts', exact: true })).toHaveText(
+    'TSwelcome.ts',
   );
-  await expect(strip.getByRole('button', { name: `Close ${path}`, exact: true })).toBeVisible();
+  await strip.getByRole('button', { name: 'Close src/welcome.ts', exact: true }).click();
+  await expect(strip.getByRole('tab', { name: 'welcome.ts', exact: true })).toHaveText(
+    'TSwelcome.ts',
+  );
 });
 
 test('opening, editing and saving a UTF-8 BOM file preserves its marker', async ({ page }) => {
@@ -888,7 +924,7 @@ test('rejected unchanged Rename leaves explicit Save and Close usable', async ({
   await page.goto('/');
   await first(page).getByRole('treeitem', { name: 'welcome.ts', exact: true }).click();
   await first(page).getByRole('tree', { name: 'Files', exact: true }).press('ContextMenu');
-  await page.getByRole('menuitem', { name: 'Rename', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Rename…', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: 'Rename', exact: true }).click();
   await page.getByRole('button', { name: 'Replace captured destination', exact: true }).click();
   await expect(page.getByRole('dialog').getByRole('alert').last()).toContainText(
@@ -1776,7 +1812,7 @@ test('Shift tree ranges extend and shrink from a stable anchor before Trash', as
   await tree.press('Shift+ArrowDown');
   expect(await selected()).toEqual(paths.slice(0, 2));
   await tree.press('ContextMenu');
-  await page.getByRole('menuitem', { name: 'Move to Trash', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Move 2 Items to Trash', exact: true }).click();
   await expect(page.getByRole('dialog', { name: 'Move to Trash', exact: true })).toContainText(
     paths.slice(0, 2).join(', '),
   );
@@ -1823,7 +1859,7 @@ test('Reveal starts a new Shift tree range and captures only that Trash batch', 
   await tree.press('Shift+ArrowUp');
   expect(await selected()).toEqual(['README.md', 'welcome.ts']);
   await tree.press('ContextMenu');
-  await page.getByRole('menuitem', { name: 'Move to Trash', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Move 2 Items to Trash', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Move to Trash', exact: true });
   await expect(dialog).toContainText('README.md, welcome.ts');
   await expect(dialog).not.toContainText('ignored.txt');

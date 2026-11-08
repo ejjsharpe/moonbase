@@ -1,5 +1,5 @@
 import * as stylex from '@stylexjs/stylex';
-import { colors, layout, radius, space, type } from './tokens.stylex';
+import { colors, layout, projectHues, radius, space, type } from './tokens.stylex';
 
 export const filesUI = stylex.create({
   tools: { display: 'flex', gap: space.xs, flexWrap: 'wrap', margin: '0 0 12px' },
@@ -71,3 +71,52 @@ export const filesUI = stylex.create({
   extent: (height: number) => ({ height, position: 'relative' }),
   mounted: (top: number) => ({ position: 'absolute', top, width: '100%' }),
 });
+
+const typeMarks: Record<string, { label: string; hue: keyof typeof typeHues }> = {
+  ts: { label: 'TS', hue: 'periwinkle' },
+  tsx: { label: 'TSX', hue: 'periwinkle' },
+  mts: { label: 'TS', hue: 'periwinkle' },
+  js: { label: 'JS', hue: 'sand' },
+  jsx: { label: 'JSX', hue: 'sand' },
+  mjs: { label: 'JS', hue: 'sand' },
+  cjs: { label: 'JS', hue: 'sand' },
+  json: { label: '{}', hue: 'sand' },
+  md: { label: 'MD', hue: 'silver' },
+  mdx: { label: 'MDX', hue: 'silver' },
+  css: { label: '#', hue: 'pink' },
+  scss: { label: '#', hue: 'pink' },
+  html: { label: '<>', hue: 'pink' },
+  py: { label: 'PY', hue: 'green' },
+  rs: { label: 'RS', hue: 'sand' },
+  go: { label: 'GO', hue: 'periwinkle' },
+  sh: { label: '$', hue: 'green' },
+  yml: { label: 'YML', hue: 'lavender' },
+  yaml: { label: 'YML', hue: 'lavender' },
+  toml: { label: 'TML', hue: 'lavender' },
+};
+const typeHues = stylex.create({
+  silver: { color: projectHues.silver },
+  periwinkle: { color: projectHues.periwinkle },
+  green: { color: projectHues.green },
+  pink: { color: projectHues.pink },
+  lavender: { color: projectHues.lavender },
+  sand: { color: projectHues.sand },
+});
+const typeMarkStyle = stylex.create({
+  mark: {
+    flexShrink: 0,
+    minWidth: 18,
+    textAlign: 'center',
+    fontFamily: type.mono,
+    fontSize: 9.5,
+    fontWeight: 700,
+    letterSpacing: '-0.02em',
+  },
+});
+
+/** A short coloured mark for a file's type, such as TS or MD; null for a type it doesn't know. */
+export function fileTypeMark(path: string) {
+  const extension = path.split('/').at(-1)!.split('.').slice(1).at(-1)?.toLowerCase();
+  const mark = extension ? typeMarks[extension] : undefined;
+  return mark ? { label: mark.label, style: [typeMarkStyle.mark, typeHues[mark.hue]] } : null;
+}

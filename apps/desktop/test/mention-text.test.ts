@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  appendMentions,
   findMentionQuery,
   findMentionRanges,
   insertMention,
@@ -45,4 +46,34 @@ test('mentions are found only as whole words, and Backspace removes one whole', 
     { start: 5, end: 10, path: 'a.ts' },
   ]);
   assert.deepEqual(findMentionRanges('Open @a.ts.bak', mentions), []);
+});
+
+test('files mentioned from the file tree join the draft relative to the chat folder', () => {
+  assert.deepEqual(
+    appendMentions('Look at', [], ['/repo/src/a.ts', '/repo/My notes.md'], '/repo'),
+    {
+      text: 'Look at @src/a.ts @"My notes.md" ',
+      mentions: [{ path: 'src/a.ts' }, { path: 'My notes.md' }],
+      outside: 0,
+    },
+  );
+  // Already mentioned, outside the folder, or the folder itself: left out.
+  assert.deepEqual(
+    appendMentions(
+      '@src/a.ts ',
+      [{ path: 'src/a.ts' }],
+      ['/repo/src/a.ts', '/other/b.ts', '/repo'],
+      '/repo/',
+    ),
+    { text: '@src/a.ts ', mentions: [{ path: 'src/a.ts' }], outside: 2 },
+  );
+  assert.deepEqual(appendMentions('', [], ['/repo/b.ts'], '/repo').text, '@b.ts ');
+  // A sibling folder that shares the prefix is not inside.
+  assert.equal(appendMentions('', [], ['/repository/b.ts'], '/repo').outside, 1);
+  // An unknown folder mentions nothing rather than every path from the root.
+  assert.deepEqual(appendMentions('hi', [], ['/Users/e/repo/a.ts'], ''), {
+    text: 'hi',
+    mentions: [],
+    outside: 1,
+  });
 });

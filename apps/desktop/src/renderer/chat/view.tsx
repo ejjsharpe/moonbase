@@ -21,6 +21,7 @@ import type { TranscriptNative } from '../../chat/wire.ts';
 import { Choice } from './choice.tsx';
 import { ModelPicker } from './model-picker.tsx';
 import { FolderPicker, type ChatFolderProject } from './folder-picker.tsx';
+import { appendMentions } from './mention-text.ts';
 import { Icon } from '../icon.tsx';
 import { MessageInput } from './message-input.tsx';
 import {
@@ -46,6 +47,9 @@ export type ChatDock = {
   cwd: string;
   /** Whether the dock fills most of the project view. */
   expanded: boolean;
+  /** Files to mention in the dock's chat, sent from the file tree as absolute paths. */
+  mention?: { id: number; files: readonly string[] } | null;
+  mentionHandled?(id: number): void;
   toggleExpanded(): void;
   collapse(): void;
 };
@@ -75,6 +79,24 @@ const reasonLabels: Record<ChatActivityReason, string> = {
   running: 'running',
   settled: '',
 };
+
+type ChatState = ReturnType<ChatController['getSnapshot']>;
+/** The selected chat's working folder, once its snapshot or list entry has loaded. */
+function selectedChatFolder(state: ChatState) {
+  return (
+    state.snapshot?.conversation.cwd ??
+    state.chats.find((c) => c.target.conversationId === state.selected?.conversationId)?.cwd
+  );
+}
+/**
+ * The folder the dock's chat works in: the selected chat's, or a new chat's (`newChatFolder`
+ * locally, else the host's). Null while it isn't known, so nothing is mentioned against a guess.
+ */
+function chatFolder(state: ChatState, newChatFolder: string) {
+  if (state.selected) return selectedChatFolder(state) || null;
+  if (newChatFolder) return newChatFolder;
+  return (state.host && 'cwd' in state.host && state.host.cwd) || null;
+}
 
 export type ChatHosts = {
   targets: readonly { id: string; label: string }[];
@@ -193,14 +215,7 @@ export function ChatView({
         : 'Choose a working folder to send. Local tools are not sandboxed.';
   if (local && !state.selected && !models.length)
     toolNotice = 'Set up a provider to send. Local tools are not sandboxed.';
-  const selectedFolder = (
-    state.snapshot?.conversation.cwd ??
-    state.chats.find((c) => c.target.conversationId === state.selected?.conversationId)?.cwd ??
-    ''
-  )
-    .split('/')
-    .filter(Boolean)
-    .at(-1);
+  const selectedFolder = (selectedChatFolder(state) ?? '').split('/').filter(Boolean).at(-1);
   const connected = state.ready,
     busy = (id: string) => state.active.includes(id);
   const hostDot = (
@@ -248,6 +263,37 @@ export function ChatView({
     }, chatReloadMs);
     return () => clearInterval(timer);
   }, [controller, connected, openRunning]);
+  // Files sent from the file tree join the draft as mentions relative to the chat's folder.
+  const mentionRequest = dock?.mention;
+  const mentionHandled = dock?.mentionHandled;
+  useEffect(() => {
+    if (!mentionRequest) return;
+    mentionHandled?.(mentionRequest.id);
+    const current = controller.getSnapshot();
+    const folder = chatFolder(current, local ? cwd : '');
+    const next = folder
+      ? appendMentions(current.draft, current.mentions, mentionRequest.files, folder)
+      : null;
+    if (next && next.text !== current.draft) controller.setDraft(next.text, next.mentions);
+    requestAnimationFrame(() => {
+      if (!next)
+        setFolderError(
+          local && !current.selected
+            ? "Choose this chat's working folder first, so the files can be mentioned in it."
+            : "This chat's working folder isn't known yet, so the files weren't mentioned.",
+        );
+      else if (next.outside)
+        setFolderError(
+          next.outside === mentionRequest.files.length
+            ? "Those files are outside this chat's working folder, so they weren't mentioned."
+            : `${next.outside} of the files are outside this chat's working folder and weren't mentioned.`,
+        );
+      const input = document.getElementById('message');
+      if (!(input instanceof HTMLTextAreaElement)) return;
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    });
+  }, [controller, mentionRequest, mentionHandled, local, cwd]);
   const startNewChat = () =>
     void controller.closeView().then(() => document.getElementById('message')?.focus());
   const choosing = local && !state.selected && !busy('send') && !creatingWorktree;

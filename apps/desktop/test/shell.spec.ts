@@ -1061,6 +1061,44 @@ test('the project dock shows only that project’s chats, with a back arrow to t
   ).toBeVisible();
 });
 
+test('the file menu mentions files in the dock’s chat and copies and reveals through the shell', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?local&design');
+  await page.getByRole('tab', { name: 'moonbase · main', exact: true }).click();
+  const dock = page.getByRole('complementary', { name: 'Project chats', exact: true });
+  const message = dock.getByLabel('Message', { exact: true });
+  await message.fill('Look at');
+  await dock.getByRole('button', { name: 'Hide project chats', exact: true }).click();
+  const tree = page.getByRole('tree', { name: 'Files', exact: true });
+  const fileMenu = page.getByRole('menu', { name: 'File actions', exact: true });
+  await tree.getByRole('treeitem', { name: 'README.md', exact: true }).click({ button: 'right' });
+  await fileMenu.getByRole('menuitem', { name: 'Mention in Chat', exact: true }).click();
+  // The hidden dock opens with the draft kept, the mention after it and the caret at the end.
+  await expect(message).toBeFocused();
+  await expect(message).toHaveValue('Look at @README.md ');
+  expect(await message.evaluate((element: HTMLTextAreaElement) => element.selectionStart)).toBe(
+    'Look at @README.md '.length,
+  );
+  // A file already mentioned isn't repeated.
+  await tree.getByRole('treeitem', { name: 'README.md', exact: true }).click();
+  await tree.press('Shift+ArrowDown');
+  await tree.press('ContextMenu');
+  await fileMenu.getByRole('menuitem', { name: 'Mention 2 Files in Chat', exact: true }).click();
+  await expect(message).toHaveValue('Look at @README.md @welcome.ts ');
+  // Right-clicking inside a selection keeps it, so select one file first.
+  await tree.getByRole('treeitem', { name: 'README.md', exact: true }).click();
+  await tree.getByRole('treeitem', { name: 'README.md', exact: true }).click({ button: 'right' });
+  await fileMenu.getByRole('menuitem', { name: 'Copy Path', exact: true }).click();
+  await expect(tree).toBeFocused();
+  await tree.press('Alt+Meta+r');
+  expect(await page.evaluate(() => [window.demo.copied, window.demo.revealed])).toEqual([
+    ['/demo/moonbase/README.md'],
+    ['/demo/moonbase/README.md'],
+  ]);
+});
+
 test('the project dock resizes by dragging or keys, expands and closes', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/?local&design');

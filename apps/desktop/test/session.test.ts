@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test, after } from 'node:test';
-import { mkdtemp, realpath, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Layer, ManagedRuntime } from 'effect';
@@ -81,6 +81,8 @@ function fixture() {
     runtime,
     client,
     {
+      copyText: async () => {},
+      reveal: async () => {},
       chooseCheckout: async () => '/approved',
       imports: async () => ['opaque'],
       release: async () => {},
@@ -237,7 +239,13 @@ test('superseded classifications release desktop capacity for unrelated file com
         return raw.command(name, input, options);
       },
     },
-    { chooseCheckout: async () => target.root, imports: async () => [], release: async () => {} },
+    {
+      copyText: async () => {},
+      reveal: async () => {},
+      chooseCheckout: async () => target.root,
+      imports: async () => [],
+      release: async () => {},
+    },
     () => {},
   );
   const client = bridgeClient({
@@ -354,7 +362,13 @@ test('document release retains approvals but cancels waits and isolates reused o
   const owner = new EditorSession(
     runtime,
     client,
-    { chooseCheckout: async () => null, imports: async () => [], release: async () => {} },
+    {
+      copyText: async () => {},
+      reveal: async () => {},
+      chooseCheckout: async () => null,
+      imports: async () => [],
+      release: async () => {},
+    },
     () => sends++,
   );
   await owner.call(
@@ -398,7 +412,13 @@ test('cancel joins the actual watch finalizer, fences delivery and retains its f
   const owner = new EditorSession(
     runtime,
     client,
-    { chooseCheckout: async () => null, imports: async () => [], release: async () => {} },
+    {
+      copyText: async () => {},
+      reveal: async () => {},
+      chooseCheckout: async () => null,
+      imports: async () => [],
+      release: async () => {},
+    },
     () => sends++,
   );
   await owner.call(
@@ -453,6 +473,8 @@ test('document replacement joins late capture and releases it before completion 
     runtime,
     client,
     {
+      copyText: async () => {},
+      reveal: async () => {},
       chooseCheckout: () => picker.promise,
       imports: () => capture.promise,
       release: async ({ references }) => {
@@ -554,6 +576,8 @@ test('late native capture release failure remains in document and session cleanu
     runtime,
     client,
     {
+      copyText: async () => {},
+      reveal: async () => {},
       chooseCheckout: async () => null,
       imports: () => captured.promise,
       release: async () => {
@@ -602,6 +626,8 @@ test('cancelling native capture in a live document releases unpublished referenc
     runtime,
     client,
     {
+      copyText: async () => {},
+      reveal: async () => {},
       chooseCheckout: async () => null,
       imports: () => captured.promise,
       release: async () => {
@@ -666,7 +692,13 @@ for (const failure of ['none', 'release', 'acquisition'] as const) {
     const owner = new EditorSession(
       runtime,
       client,
-      { chooseCheckout: async () => null, imports: async () => [], release: async () => {} },
+      {
+        copyText: async () => {},
+        reveal: async () => {},
+        chooseCheckout: async () => null,
+        imports: async () => [],
+        release: async () => {},
+      },
       () => {
         delivered++;
         acknowledgment = owner.cancel('watch');
@@ -735,7 +767,13 @@ test('a chat worktree is made beside the main worktree, never where a renderer s
     const session = new EditorSession(
       runtime,
       client,
-      { chooseCheckout: async () => null, imports: async () => [], release: async () => {} },
+      {
+        copyText: async () => {},
+        reveal: async () => {},
+        chooseCheckout: async () => null,
+        imports: async () => [],
+        release: async () => {},
+      },
       () => {},
     );
     assert.equal(session.hasFolder(linked), false);
@@ -806,7 +844,13 @@ test('chat worktrees are made one at a time, fall back from a blocked prefix and
     const session = new EditorSession(
       runtime,
       client,
-      { chooseCheckout: async () => null, imports: async () => [], release: async () => {} },
+      {
+        copyText: async () => {},
+        reveal: async () => {},
+        chooseCheckout: async () => null,
+        imports: async () => [],
+        release: async () => {},
+      },
       () => {},
     );
     const parent = join(directory, 'repo-worktrees');
@@ -832,5 +876,80 @@ test('chat worktrees are made one at a time, fall back from a blocked prefix and
     await session.dispose();
   } finally {
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('copy-paths and reveal reach native actions only for approved checkouts and paths inside them', async () => {
+  // A real folder, so reveal can follow links: `out` points outside the checkout.
+  const base = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-reveal-')));
+  const root = join(base, 'checkout');
+  await mkdir(join(root, 'src'), { recursive: true });
+  await writeFile(join(root, 'src', 'a.ts'), 'A');
+  await writeFile(join(base, 'secret'), 'S');
+  await symlink(base, join(root, 'out'));
+  const checkout = { ...target, root };
+  const memory = memoryWorkspace([{ checkout, files: { 'src/a.ts': 'A' } }]);
+  const backend = ManagedRuntime.make(memory.layer);
+  const copied: string[] = [],
+    revealed: string[] = [];
+  const session = new EditorSession(
+    runtime,
+    makeEditorClient(backend),
+    {
+      copyText: async (text) => {
+        copied.push(text);
+      },
+      reveal: async (path) => {
+        revealed.push(path);
+      },
+      chooseCheckout: async () => root,
+      imports: async () => [],
+      release: async () => {},
+    },
+    () => {},
+  );
+  const call = (method: string, input: unknown) => session.call(method, input, crypto.randomUUID());
+  const copy = (paths: unknown, relative: unknown = false) =>
+    call('copy-paths', { checkout, paths, relative });
+  try {
+    // Not yet approved: the renderer naming a checkout grants nothing.
+    assert.equal((await copy(['src/a.ts'])).ok, false);
+    assert.equal((await call('reveal', { checkout, path: 'src/a.ts' })).ok, false);
+    assert((await call('choose-checkout', null)).ok);
+    assert((await call('command', { operation: 'openCheckout', input: { root } })).ok);
+    assert((await copy(['src/a.ts', ''])).ok);
+    assert((await copy(['src/a.ts', 'src'], true)).ok);
+    assert.deepEqual(copied, [`${join(root, 'src/a.ts')}\n${root}`, 'src/a.ts\nsrc']);
+    for (const paths of [[], 'src/a.ts', [7], Array.from({ length: 20001 }, () => 'a')])
+      assert.equal((await copy(paths)).ok, false, JSON.stringify(paths).slice(0, 40));
+    assert.equal((await copy(['src/a.ts'], 'yes')).ok, false);
+    assert((await call('reveal', { checkout, path: 'src/a.ts' })).ok);
+    assert((await call('reveal', { checkout, path: '' })).ok);
+    for (const path of [
+      '../outside',
+      'src/../../outside',
+      '/etc/hosts',
+      './src',
+      'src//a.ts',
+      'src\\a.ts',
+      'src/\0',
+      'a'.repeat(4097),
+      // Inside by name, outside once the link is followed.
+      'out/secret',
+      // Gone since the menu opened.
+      'src/missing.ts',
+    ]) {
+      assert.equal((await call('reveal', { checkout, path })).ok, false, path.slice(0, 40));
+      assert.equal((await copy([path])).ok, path === 'out/secret' || path === 'src/missing.ts');
+    }
+    assert.equal(
+      (await call('reveal', { checkout: { ...checkout, root: base }, path: 'secret' })).ok,
+      false,
+    );
+    assert.deepEqual(revealed, [join(root, 'src/a.ts'), root]);
+  } finally {
+    await session.dispose();
+    await backend.dispose();
+    await rm(base, { recursive: true, force: true });
   }
 });
