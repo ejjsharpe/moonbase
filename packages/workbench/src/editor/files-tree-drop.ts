@@ -57,7 +57,8 @@ const join = (folder: string, name: string) => (folder ? `${folder}/${name}` : n
 /** Whether `path` is `folder` or inside it; every path is inside the root, ''. */
 const within = (path: string, folder: string) =>
   !folder || path === folder || path.startsWith(folder + '/');
-const fold = (path: string) => path.normalize('NFC').toLowerCase();
+/** A path or name as the workspace compares them: NFC-normalized and case-folded. */
+export const fold = (path: string) => path.normalize('NFC').toLowerCase();
 
 /**
  * What dragging the row at `path` drags: the whole selection when the row is selected, else just
@@ -75,22 +76,38 @@ export function findDropFolder(row?: Pick<DirectoryEntry, 'path' | 'directory'>)
 }
 
 /**
+ * What moving `paths` into `folder` moves, or why it can't: `into-itself` for a move onto one of
+ * them or into one of its folders, `in-place` when every entry is already in `folder`, and
+ * `collision` when one would land on another's path or two on one path (as the workspace folds
+ * names). Entries already there are left out of the rest.
+ */
+export function planMove(
+  paths: readonly string[],
+  folder: string,
+): { paths: string[] } | { refused: 'into-itself' | 'in-place' | 'collision' } {
+  if (paths.some((path) => folder === path || folder.startsWith(path + '/')))
+    return { refused: 'into-itself' };
+  const moving = paths.filter((path) => parentOf(path) !== folder);
+  const moved = new Set(paths.map(fold));
+  if (
+    listDroppedPaths(moving, folder).some((path) => moved.has(fold(path))) ||
+    findCollidingName(moving.map(nameOf))
+  )
+    return { refused: 'collision' };
+  return moving.length ? { paths: moving } : { refused: 'in-place' };
+}
+
+/**
  * The entries a drop into `folder` moves or copies, or null to refuse it: a drag from another
- * editor or checkout, a drop onto a dragged entry or into one of its folders, a drop where every
- * dragged entry is already in `folder`, and one that would land an entry on another dragged
- * entry's path (as the workspace folds names). Entries already there are left out of the rest.
+ * editor or checkout, or one `planMove` refuses.
  */
 export function planDrop(
   drag: TreeDrag | null,
   target: { source: string; checkout: string; folder: string },
 ) {
   if (!drag || drag.source !== target.source || drag.checkout !== target.checkout) return null;
-  const { folder } = target;
-  if (drag.paths.some((path) => folder === path || folder.startsWith(path + '/'))) return null;
-  const paths = drag.paths.filter((path) => parentOf(path) !== folder);
-  const dragged = new Set(drag.paths.map(fold));
-  if (listDroppedPaths(paths, folder).some((path) => dragged.has(fold(path)))) return null;
-  return paths.length ? paths : null;
+  const plan = planMove(drag.paths, target.folder);
+  return 'paths' in plan ? plan.paths : null;
 }
 
 /**

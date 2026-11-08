@@ -6,7 +6,9 @@ import { createNativeActions } from '../src/main/native-actions.ts';
 test('native imports require consent, preserve capture identity and cancel before capture', async () => {
   let consent = 0,
     cancelled = false,
-    clipboardReads = 0;
+    prompts = 0,
+    reads = 0,
+    finderFiles = false;
   let finishPicker!: () => void;
   let holdPicker = false;
   const captured: unknown[] = [],
@@ -21,12 +23,25 @@ test('native imports require consent, preserve capture identity and cancel befor
           });
         return { canceled: cancelled, filePaths: ['/picked'] };
       },
-      showMessageBox: async () => ({ response: consent, checkboxChecked: false }),
+      showMessageBox: async () => {
+        prompts++;
+        return { response: consent, checkboxChecked: false };
+      },
     } as Pick<Dialog, 'showOpenDialog' | 'showMessageBox'>,
     clipboard: {
+      // Finder's file list, empty here, under the raw type Electron names it by.
+      has: async (format) =>
+        finderFiles && format === 'electron application/osclipboard;format="NSFilenamesPboardType"',
       read: async () => {
-        clipboardReads++;
-        return [];
+        reads++;
+        return finderFiles
+          ? [
+              {
+                types: ['electron application/osclipboard;format="NSFilenamesPboardType"'],
+                getType: async () => new Blob([]),
+              } as unknown as Electron.ClipboardItem,
+            ]
+          : [];
       },
       writeText: async () => {},
     },
@@ -48,10 +63,18 @@ test('native imports require consent, preserve capture identity and cancel befor
     branch: 'main',
     worktree: 'main' as 'main' | 'linked',
   };
+  // A clipboard without Finder files has nothing to import or ask about, and isn't read.
+  consent = 1;
   assert.deepEqual(await actions.imports(checkout, 'clipboard'), []);
-  assert.equal(clipboardReads, 0);
+  assert.deepEqual([prompts, reads], [0, 0]);
+  // Finder files are read only after consent; declining is told apart from having none.
+  finderFiles = true;
+  consent = 0;
+  assert.equal(await actions.imports(checkout, 'clipboard'), null);
+  assert.deepEqual([prompts, reads], [1, 0]);
   consent = 1;
   await assert.rejects(actions.imports(checkout, 'clipboard'), { code: 'InvalidInput' });
+  assert.deepEqual([prompts, reads], [2, 1]);
   assert.equal(await actions.chooseCheckout(), '/picked');
   assert.deepEqual(await actions.imports(checkout, 'picker'), ['reference']);
   assert.deepEqual(captured, [{ checkout, clientId: 'desktop-primary', paths: ['/picked'] }]);

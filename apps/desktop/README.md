@@ -2,7 +2,7 @@
 
 The macOS Electron app. It composes the workbench, headless application, workspace, local Pi and optional SSH/remote Pi modules. `src/main.ts` is the privileged composition root and owns native capabilities; the sandboxed renderer receives browser-safe clients only.
 
-The renderer opens only roots chosen in the native picker, already known, listed by `listWorktrees` for an approved checkout, or opened by main with `EditorSession.openFolderProject`. It cannot call `createWorktree` with a location of its own; a new chat's worktree is made by main instead (below). A plain folder opens as a project without branch, worktree or Changes controls; its sidebar header offers **Initialize Git**, after which main approves the Git checkout in its place. Copy Path and Reveal in Finder likewise send main a checkout and relative paths: main writes the clipboard itself and reveals only paths that still resolve inside the checkout once links are followed.
+The renderer opens only roots chosen in the native picker, already known, listed by `listWorktrees` for an approved checkout, or opened by main with `EditorSession.openFolderProject`. It cannot call `createWorktree` with a location of its own; a new chat's worktree is made by main instead (below). Copy Path and Reveal in Finder likewise send main a checkout and relative paths: main writes the clipboard itself and reveals only paths that still resolve inside the checkout once links are followed. A clipboard import asks for consent only when the clipboard holds Finder files, checking for their type without reading anything, and finds none otherwise, so ⌘V can paste the tree's own entries; a declined prompt returns null, so it pastes nothing.
 
 ## Window
 

@@ -1,7 +1,7 @@
 import type { KeyboardEvent, RefObject } from 'react';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import type { EditorController } from '@moonbase/application/editor';
-import { shortcutCommand, type FileCommand } from './file-commands.ts';
+import { isCommandKey, shortcutCommand, type FileCommand } from './file-commands.ts';
 import type { VisibleRow } from './files-tree-rows.ts';
 
 /** What the tree's keyboard and pointer selection read and act on. */
@@ -21,18 +21,12 @@ export type TreeNavigation = {
   commandsFor(paths: string[]): (FileCommand | 'separator')[];
   /** Undoes the tree's last move or rename (⌘Z, Ctrl+Z off a Mac). */
   undo(): void;
+  /** Clears a pending cut (Escape); true when there was one. */
+  cancelCut(): boolean;
 };
 
-const mac = typeof navigator !== 'undefined' && navigator.platform.includes('Mac');
-/**
- * Whether a press is Undo: ⌘Z on a Mac, Ctrl+Z elsewhere. A layout without Latin letters types
- * another character on the Z key, so that key counts too.
- */
-const isUndoKey = (event: KeyboardEvent<HTMLElement>) =>
-  (mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey) &&
-  !event.altKey &&
-  !event.shiftKey &&
-  (event.key.toLowerCase() === 'z' || (!/^[a-z]$/i.test(event.key) && event.code === 'KeyZ'));
+/** Whether a press is Undo: ⌘Z on a Mac, Ctrl+Z elsewhere. */
+const isUndoKey = (event: KeyboardEvent<HTMLElement>) => isCommandKey(event, 'z');
 
 /** Moves focus and selection, expands and collapses, opens, and runs file shortcuts. */
 export function handleTreeKeyDown(event: KeyboardEvent<HTMLElement>, navigation: TreeNavigation) {
@@ -97,6 +91,8 @@ export function handleTreeKeyDown(event: KeyboardEvent<HTMLElement>, navigation:
         { checkout, path: row.path },
         { view: 'file', intent: event.key === ' ' ? 'preview' : 'keep' },
       );
+  } else if (event.key === 'Escape' && !event.metaKey && !event.ctrlKey && !event.altKey) {
+    if (navigation.cancelCut()) event.preventDefault();
   } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'a') {
     event.preventDefault();
     controller.tree(checkout, { selected: rows.map((row) => row.path) });

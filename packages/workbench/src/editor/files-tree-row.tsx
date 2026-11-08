@@ -20,6 +20,7 @@ export function FilesTreeRow({
   focused,
   active,
   dirty,
+  cut,
   status,
   label,
   editor,
@@ -38,6 +39,8 @@ export function FilesTreeRow({
   focused: boolean;
   active: boolean;
   dirty: boolean;
+  /** Whether the entry, or a folder it is in, is cut and waiting to be pasted. */
+  cut: boolean;
   /** A file's strongest Git change, or a folder's strongest changed descendant's. */
   status?: GitChangeKind;
   /** The accessible name, when it isn't the row's path, such as a placeholder's. */
@@ -71,7 +74,9 @@ export function FilesTreeRow({
       aria-expanded={row.directory ? expanded : undefined}
       aria-selected={selected}
       aria-current={active ? 'true' : undefined}
-      aria-label={label ?? row.path + (dirty ? ', unsaved' : '') + statusLabel}
+      aria-label={
+        label ?? row.path + (dirty ? ', unsaved' : '') + (cut ? ', cut' : '') + statusLabel
+      }
       aria-description={row.ignored ? 'Git-ignored' : undefined}
       draggable={draggable}
       data-drop-target={dropTarget || undefined}
@@ -82,6 +87,7 @@ export function FilesTreeRow({
         selected && filesUI.selected,
         focused && filesUI.focused,
         dropTarget && filesUI.dropRegion,
+        cut && filesUI.cut,
       )}
       onContextMenu={(event) => {
         if (!event.currentTarget.contains(event.target as Node)) return;

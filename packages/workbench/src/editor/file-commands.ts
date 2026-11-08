@@ -61,6 +61,19 @@ export function formatKeys(keys: string) {
     .map((key) => keyGlyphs[key] ?? key)
     .join('');
 }
+/**
+ * Whether a press is ⌘ (Ctrl off a Mac) and `letter` alone: the typed character, or the physical
+ * key on a layout whose character isn't Latin.
+ */
+export const isCommandKey = (
+  event: Pick<KeyboardEvent, 'key' | 'code' | 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey'>,
+  letter: string,
+) =>
+  (mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey) &&
+  !event.altKey &&
+  !event.shiftKey &&
+  (event.key.toLowerCase() === letter ||
+    (!/^[a-z]$/i.test(event.key) && event.code === `Key${letter.toUpperCase()}`));
 /** The command keys (see `FileCommand.keys`) a press in the tree matches, or null. */
 export function shortcutCommand(event: {
   key: string;
@@ -77,6 +90,8 @@ export function shortcutCommand(event: {
   if (event.key === 'F2' && !command && !event.altKey && !event.shiftKey) return 'F2';
   if (command && !event.altKey && !event.shiftKey && event.key === 'Backspace')
     return 'Meta+Backspace';
+  if (isCommandKey(event, 'c')) return 'Meta+C';
+  if (isCommandKey(event, 'x')) return 'Meta+X';
   if (command && event.altKey && event.code === 'KeyC')
     return event.shiftKey ? 'Shift+Alt+Meta+C' : 'Alt+Meta+C';
   if (command && event.altKey && !event.shiftKey && event.code === 'KeyR') return 'Alt+Meta+R';
@@ -98,9 +113,18 @@ export type FileCommandContext = {
   copyPaths?: (checkout: CheckoutTarget, paths: string[], relative: boolean) => Promise<void>;
   revealPath?: (checkout: CheckoutTarget, path: string) => Promise<void>;
   mentionInChat?: (checkout: CheckoutTarget, paths: string[]) => void;
+  /** Puts entries on the workbench's file clipboard, to copy or move where they are pasted. */
+  putOnClipboard: (paths: string[], mode: 'copy' | 'cut') => void;
+  /** Whether the file clipboard has something to paste into `folder`. */
+  canPasteInto: (folder: string) => boolean;
+  /** Pastes into `folder`: files copied in the OS since, else the file clipboard. */
+  pasteInto: (folder: string) => void;
 };
 
-/** What the menu and its shortcuts offer for `paths`: a file, a folder, or several items. */
+/**
+ * What the menu and its shortcuts offer for `paths`: a file, a folder, or several items. Paste
+ * goes into `row`, the row the menu is for, or the folder of a file there.
+ */
 export function listFileCommands(
   {
     controller,
@@ -113,8 +137,12 @@ export function listFileCommands(
     copyPaths,
     revealPath,
     mentionInChat,
+    putOnClipboard,
+    canPasteInto,
+    pasteInto,
   }: FileCommandContext,
   paths: string[],
+  row = paths[0],
 ): (FileCommand | 'separator')[] {
   // Every listed folder of this checkout, including selected ones a collapse has since hidden.
   const listingKey = JSON.stringify([checkoutKey(checkout), '']).slice(0, -3);
@@ -180,6 +208,34 @@ export function listFileCommands(
           },
         ]
       : [];
+  const pasteFolder = directories.has(row) ? row : row.split('/').slice(0, -1).join('/');
+  const clipboard: FileCommand[] = [
+    {
+      id: 'cut',
+      icon: 'cut',
+      label: 'Cut',
+      keys: 'Meta+X',
+      staysInTree: true,
+      run: () => putOnClipboard(paths, 'cut'),
+    },
+    {
+      id: 'copy',
+      icon: 'copy',
+      label: 'Copy',
+      keys: 'Meta+C',
+      staysInTree: true,
+      run: () => putOnClipboard(paths, 'copy'),
+    },
+    {
+      id: 'paste',
+      icon: 'paste',
+      label: 'Paste',
+      keys: 'Meta+V',
+      disabled: !canPasteInto(pasteFolder),
+      staysInTree: true,
+      run: () => pasteInto(pasteFolder),
+    },
+  ];
   const edit: FileCommand[] = [];
   if (one !== null) {
     edit.push({
@@ -233,7 +289,7 @@ export function listFileCommands(
     danger: true,
     ...mutation('trash', paths),
   };
-  return [open, chat, edit, [trash]]
+  return [open, chat, clipboard, edit, [trash]]
     .filter((group) => group.length)
     .flatMap((group, index) => (index ? ['separator' as const, ...group] : group));
 }

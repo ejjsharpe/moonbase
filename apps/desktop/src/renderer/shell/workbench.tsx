@@ -54,7 +54,7 @@ export type DesktopShellProps = {
   /** Opens a local chat without a project's folder as a project where it is, returning its root. */
   turnChatIntoProject?: (conversationId: string) => Promise<string>;
   selectCheckout?: () => Promise<string | null>;
-  selectClipboardImports?: (checkout: CheckoutTarget) => Promise<string[]>;
+  selectClipboardImports?: (checkout: CheckoutTarget) => Promise<string[] | null>;
   /** Copies a checkout's paths to the clipboard, joined by newlines: absolute, or as `relative`. */
   copyPaths?: (checkout: CheckoutTarget, paths: string[], relative: boolean) => Promise<void>;
   /** Shows a checkout's file or folder in the OS file manager. */

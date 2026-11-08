@@ -336,7 +336,7 @@ declare global {
       transcript: typeof transcriptDemo;
       retryChat(): void;
       selectCheckout(): Promise<string | null>;
-      selectClipboardImports(target: CheckoutTarget): Promise<string[]>;
+      selectClipboardImports(target: CheckoutTarget): Promise<string[] | null>;
       selectDroppedImports(target: CheckoutTarget, files: File[]): Promise<string[]>;
       /** What the file menu copied and revealed; the demo never touches the OS clipboard. */
       copied: string[];

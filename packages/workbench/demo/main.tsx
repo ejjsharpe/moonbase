@@ -232,7 +232,7 @@ declare global {
       workbench(): WorkbenchHandle;
       application: typeof firstApplication;
       selectNativeImports(): Promise<string[]>;
-      selectClipboardImports(): Promise<string[]>;
+      selectClipboardImports(): Promise<string[] | null>;
       /** Approves files dropped on the first editor's tree; the demo approves none. */
       selectDroppedImports(target: CheckoutTarget, files: File[]): Promise<string[]>;
       /** Whether a tree took a drop of OS files, as an app importing window-wide drops asks. */
