@@ -62,7 +62,9 @@ export function MessageInput({
   const [selection, setSelection] = useState({ text: draft, caret: 0 }),
     [active, setActive] = useState(0),
     [dismissed, setDismissed] = useState<string | null>(null),
-    [search, setSearch] = useState<ChatFileSearch | null>(null);
+    [search, setSearch] = useState<ChatFileSearch | null>(null),
+    // The query (`queryKey`) the search last started; its answer belongs to no other.
+    [searched, setSearched] = useState<string | null>(null);
   const id = useId();
   useEffect(() => {
     const acquired = controller.createFileSearch();
@@ -98,6 +100,7 @@ export function MessageInput({
     } else search.clear();
     // oxlint-disable-next-line react/set-state-in-effect -- A new query starts at its first match.
     setActive(0);
+    setSearched(queryKey);
   }, [search, queryKey, commandText]);
   useEffect(() => {
     // Restores the caret after a programmatic edit, once React has rendered the edited text.
@@ -108,6 +111,8 @@ export function MessageInput({
   }, [draft]);
   const fileOpen = !!query && (results.matches.length > 0 || !!results.error || results.busy);
   const matches = query ? results.matches : [];
+  // Earlier matches stay listed while a newer search runs, but only the current query's are picked.
+  const fresh = !!query && searched === queryKey && !results.busy && results.query === query.query;
   const full = mentions.length >= maximumChatMentions;
   const commandOpen =
     commandQuery?.kind === 'option' || (commandQuery?.kind === 'command' && !!commandRows.length);
@@ -137,7 +142,7 @@ export function MessageInput({
     edit(draft.includes('\n') ? `${head}\n${rest}` : head, undefined, head.length);
   }
   function pick(path: string) {
-    if (!query || (full && !mentions.some((mention) => mention.path === path))) return;
+    if (!query || !fresh || (full && !mentions.some((mention) => mention.path === path))) return;
     const inserted = insertMention(draft, query, selection.caret, path);
     edit(
       inserted.text,
@@ -211,6 +216,8 @@ export function MessageInput({
         onBlur={() => setDismissed(pickerKey)}
         onFocus={() => setDismissed(null)}
         onKeyDown={(event) => {
+          // Keys that compose text with an input method belong to it, not to the picker or Send.
+          if (event.nativeEvent.isComposing) return;
           const element = event.currentTarget;
           if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
             event.preventDefault();
@@ -317,6 +324,7 @@ export function MessageInput({
                   id={optionId(index)}
                   role="option"
                   aria-selected={index === active}
+                  aria-disabled={!fresh || undefined}
                   title={match.path}
                   {...stylex.props(styles.file, index === active && styles.activeFile)}
                   onMouseDown={(event) => event.preventDefault()}
