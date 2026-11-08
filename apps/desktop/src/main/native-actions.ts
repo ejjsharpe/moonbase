@@ -3,6 +3,9 @@ import type { BrowserWindow, Clipboard, Dialog, Shell } from 'electron';
 import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
 import type { NativeActions } from '../session.ts';
 
+/** The raw pasteboard type under which Finder lists copied files, all of them in one plist. */
+const finderFiles = 'electron application/osclipboard;format="NSFilenamesPboardType"';
+
 export function createNativeActions({
   window,
   dialog,
@@ -13,7 +16,7 @@ export function createNativeActions({
 }: {
   window: BrowserWindow;
   dialog: Pick<Dialog, 'showOpenDialog' | 'showMessageBox'>;
-  clipboard: Pick<Clipboard, 'read' | 'writeText'>;
+  clipboard: Pick<Clipboard, 'has' | 'read' | 'writeText'>;
   shell: Pick<Shell, 'showItemInFolder'>;
   capture(input: {
     checkout: CheckoutTarget;
@@ -46,13 +49,9 @@ export function createNativeActions({
       }
       if (kind === 'clipboard') {
         // Only Finder files import. Without them, such as after text was copied, there is
-        // nothing to ask about, and the renderer pastes its own entries instead.
-        const items = await clipboard.read();
-        const item = items.find((item) =>
-          item.types.some((type) => type.includes('NSFilenamesPboardType')),
-        );
-        const format = item?.types.find((type) => type.includes('NSFilenamesPboardType'));
-        if (!item || !format) return [];
+        // nothing to ask about, and the renderer pastes its own entries instead. Until consent,
+        // only the type's presence is checked; nothing on the clipboard is read.
+        if (!(await clipboard.has(finderFiles))) return [];
         const consent = await dialog.showMessageBox(window, {
           type: 'question',
           message: 'Import clipboard files?',
@@ -61,10 +60,14 @@ export function createNativeActions({
           defaultId: 0,
           cancelId: 0,
         });
-        if (consent.response !== 1) return [];
-        const payload = await item.getType(format);
+        // Declined: the renderer pastes nothing, rather than its own entries.
+        if (consent.response !== 1) return null;
+        const item = (await clipboard.read()).find((item) => item.types.includes(finderFiles));
+        const payload = item && (await item.getType(finderFiles));
         const bytes =
-          'arrayBuffer' in payload ? Buffer.from(await payload.arrayBuffer()) : Buffer.alloc(0);
+          payload && 'arrayBuffer' in payload
+            ? Buffer.from(await payload.arrayBuffer())
+            : Buffer.alloc(0);
         if (!bytes.length)
           throw new ApplicationError({
             code: 'InvalidInput',

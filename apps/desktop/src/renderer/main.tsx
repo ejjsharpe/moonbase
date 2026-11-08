@@ -94,9 +94,9 @@ function Desktop({ application }: { application: MoonbaseApplication }) {
       }
       selectClipboardImports={async (checkout) =>
         application.getSnapshot().phase === 'live'
-          ? (unwrap(
-              await bridge.call('clipboard-imports', { checkout }, crypto.randomUUID()),
-            ) as string[])
+          ? (unwrap(await bridge.call('clipboard-imports', { checkout }, crypto.randomUUID())) as
+              | string[]
+              | null)
           : []
       }
       copyPaths={async (checkout, paths, relative) => {

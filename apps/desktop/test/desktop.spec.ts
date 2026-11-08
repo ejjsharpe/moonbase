@@ -802,6 +802,7 @@ test("controlled clipboard fixtures require native consent and capture real file
       response: 0,
       checkboxChecked: false,
     })) as typeof dialog.showMessageBox;
+    clipboard.has = async (format) => format.includes('NSFilenamesPboardType');
     clipboard.read = async () => {
       throw Error('Clipboard must not be read after Cancel');
     };
@@ -811,7 +812,7 @@ test("controlled clipboard fixtures require native consent and capture real file
       window.moonbase.call('clipboard-imports', { checkout }, crypto.randomUUID()),
     approved,
   );
-  expect(refs).toEqual({ ok: true, value: [] });
+  expect(refs).toEqual({ ok: true, value: null });
   await app.evaluate(({ clipboard, dialog, ClipboardItem }, source) => {
     dialog.showMessageBox = (async () => ({
       response: 1,

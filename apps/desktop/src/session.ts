@@ -37,12 +37,13 @@ const exact = (a: CheckoutTarget, b: CheckoutTarget) =>
   );
 export type NativeActions = {
   chooseCheckout(): Promise<string | null>;
+  /** Captured references, none when there is nothing to import, or null for a declined prompt. */
   imports(
     target: CheckoutTarget,
     kind: 'picker' | 'clipboard',
     paths?: string[],
     signal?: AbortSignal,
-  ): Promise<string[]>;
+  ): Promise<string[] | null>;
   release(input: {
     checkout: CheckoutTarget;
     clientId: string;
@@ -347,9 +348,11 @@ export class EditorSession {
           v.paths as string[] | undefined,
           request.signal,
         );
-        const capture = { checkout, clientId: this.clientId, references };
-        // Install cleanup ownership before any successful capture is published to the renderer.
-        await request.retainDocumentRelease(() => this.native.release(capture));
+        if (references) {
+          const capture = { checkout, clientId: this.clientId, references };
+          // Install cleanup ownership before any successful capture is published to the renderer.
+          await request.retainDocumentRelease(() => this.native.release(capture));
+        }
         requireLive();
         value = references;
       } else if (method === 'copy-paths') {

@@ -24,11 +24,16 @@ test('a copy is named like a duplicate, then numbered, keeping a file’s extens
   expect(findFreeName('e\u0301.ts', false, new Set(['\u00e9 copy.ts']))).toBe('e\u0301 copy 2.ts');
 });
 
-test('a folder pasted onto itself lands beside it', () => {
-  expect(findPasteFolder(['src'], 'src')).toBe('');
-  expect(findPasteFolder(['src/lib'], 'src/lib')).toBe('src');
-  expect(findPasteFolder(['src'], 'docs')).toBe('docs');
-  expect(findPasteFolder(['src'], 'src/lib')).toBe('src/lib');
+test('a copied folder pasted onto itself lands beside it; a cut one stays to be refused', () => {
+  expect(findPasteFolder('copy', ['src'], 'src')).toBe('');
+  expect(findPasteFolder('copy', ['src/lib'], 'src/lib')).toBe('src');
+  expect(findPasteFolder('copy', ['src'], 'docs')).toBe('docs');
+  expect(findPasteFolder('copy', ['src'], 'src/lib')).toBe('src/lib');
+  expect(findPasteFolder('cut', ['src', 'a.ts'], 'src')).toBe('src');
+  expect(planPaste('cut', [folder('src'), file('a.ts')], 'src', [])).toEqual({
+    kind: 'refused',
+    message: 'Can’t move a folder into itself.',
+  });
 });
 
 test('a copy keeps free names and picks copy names for the rest', () => {

@@ -16,7 +16,7 @@ import {
   type MoveRecord,
 } from './files-tree-drop.ts';
 import { measureStem } from './files-tree-rows.ts';
-import { selectEntries } from './move-undo.ts';
+import { listFolders, selectEntries } from './move-undo.ts';
 import type { RunMutation } from './mutation-runner.tsx';
 
 /** Entries cut or copied in a workbench's files tree, waiting to be pasted into a folder. */
@@ -53,9 +53,15 @@ export function findFreeName(name: string, directory: boolean, taken: ReadonlySe
   }
 }
 
-/** The folder a paste into `folder` lands in: beside a pasted folder rather than inside it. */
-export const findPasteFolder = (paths: readonly string[], folder: string) =>
-  paths.includes(folder) ? parentOf(folder) : folder;
+/**
+ * The folder a paste into `folder` lands in: a copied folder pasted onto itself lands beside it. A
+ * cut stays on `folder`, where a move into one of its entries is refused.
+ */
+export const findPasteFolder = (
+  mode: FileClipboard['mode'],
+  paths: readonly string[],
+  folder: string,
+) => (mode === 'copy' && paths.includes(folder) ? parentOf(folder) : folder);
 
 /** Whether `folder` is strictly inside one of `paths`. */
 const isInside = (paths: readonly string[], folder: string) =>
@@ -105,26 +111,6 @@ export function planPaste(
     return { path: source.path, name };
   });
   return { kind: 'copy', paths: kept, renamed };
-}
-
-/** Each folder's fresh entries, leaving out those that can't be listed. */
-async function listFolders(
-  controller: EditorController,
-  checkout: CheckoutTarget,
-  folders: readonly string[],
-) {
-  const listings = new Map<string, readonly DirectoryEntry[]>();
-  await Promise.all(
-    folders.map(async (folder) => {
-      try {
-        const listing = await controller.list(checkout, folder);
-        if (!listing.error) listings.set(folder, listing.entries);
-      } catch {
-        // A folder that can't be listed has no entries to paste from or check names in.
-      }
-    }),
-  );
-  return listings;
 }
 
 /**
@@ -184,15 +170,16 @@ export function useFileClipboard({
     if (!current || checkoutKey(current.checkout) !== checkoutKey(checkout)) return false;
     if (!canRequestMutation({ checkout, kind: kindOf(current), paths: current.paths }))
       return false;
-    const into = findPasteFolder(current.paths, folder);
+    const into = findPasteFolder(current.mode, current.paths, folder);
     return current.mode === 'cut'
       ? 'paths' in planMove(current.paths, into)
       : !isInside(current.paths, into);
   }
   /**
    * Pastes the clipboard into a checkout's `folder` and selects what landed, resolving with it. A
-   * cut moves, asking before replacing entries, and is then cleared; a copy picks free names. A
-   * replace prompt returns focus to `finalFocus`.
+   * cut moves, asking before replacing entries, and is then cleared; a copy picks free names.
+   * Entries that have gone are forgotten; ones whose folders can't be listed are kept. A replace
+   * prompt returns focus to `finalFocus`.
    */
   async function paste(
     checkout: CheckoutTarget,
@@ -213,10 +200,17 @@ export function useFileClipboard({
     }
     pasting.current = true;
     try {
-      const into = findPasteFolder(current.paths, folder);
-      const listings = await listFolders(controller, checkout, [
+      const into = findPasteFolder(current.mode, current.paths, folder);
+      const { listings, unlisted } = await listFolders(controller, checkout, [
         ...new Set([into, ...current.paths.map(parentOf)]),
       ]);
+      // Entries that may still be there stay on the clipboard to paste once they list again.
+      if (unlisted !== undefined) {
+        controller.report(
+          `Can’t paste yet: ${unlisted || 'the checkout’s root'} couldn’t be listed. Try again.`,
+        );
+        return [];
+      }
       const sources: DirectoryEntry[] = [],
         missing: string[] = [];
       for (const path of current.paths) {
@@ -235,7 +229,7 @@ export function useFileClipboard({
       }
       const entries = listings.get(into);
       if (!entries) {
-        controller.report(`Can’t paste: ${into || 'the checkout’s root'} couldn’t be listed.`);
+        controller.report(`Can’t paste: ${into || 'the checkout’s root'} no longer exists.`);
         return [];
       }
       const plan = planPaste(current.mode, sources, into, entries);

@@ -61,6 +61,19 @@ export function formatKeys(keys: string) {
     .map((key) => keyGlyphs[key] ?? key)
     .join('');
 }
+/**
+ * Whether a press is ⌘ (Ctrl off a Mac) and `letter` alone: the typed character, or the physical
+ * key on a layout whose character isn't Latin.
+ */
+export const isCommandKey = (
+  event: Pick<KeyboardEvent, 'key' | 'code' | 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey'>,
+  letter: string,
+) =>
+  (mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey) &&
+  !event.altKey &&
+  !event.shiftKey &&
+  (event.key.toLowerCase() === letter ||
+    (!/^[a-z]$/i.test(event.key) && event.code === `Key${letter.toUpperCase()}`));
 /** The command keys (see `FileCommand.keys`) a press in the tree matches, or null. */
 export function shortcutCommand(event: {
   key: string;
@@ -77,8 +90,8 @@ export function shortcutCommand(event: {
   if (event.key === 'F2' && !command && !event.altKey && !event.shiftKey) return 'F2';
   if (command && !event.altKey && !event.shiftKey && event.key === 'Backspace')
     return 'Meta+Backspace';
-  if (command && !event.altKey && !event.shiftKey && event.code === 'KeyC') return 'Meta+C';
-  if (command && !event.altKey && !event.shiftKey && event.code === 'KeyX') return 'Meta+X';
+  if (isCommandKey(event, 'c')) return 'Meta+C';
+  if (isCommandKey(event, 'x')) return 'Meta+X';
   if (command && event.altKey && event.code === 'KeyC')
     return event.shiftKey ? 'Shift+Alt+Meta+C' : 'Alt+Meta+C';
   if (command && event.altKey && !event.shiftKey && event.code === 'KeyR') return 'Alt+Meta+R';

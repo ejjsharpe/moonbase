@@ -1,7 +1,7 @@
 import type { KeyboardEvent, RefObject } from 'react';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import type { EditorController } from '@moonbase/application/editor';
-import { shortcutCommand, type FileCommand } from './file-commands.ts';
+import { isCommandKey, shortcutCommand, type FileCommand } from './file-commands.ts';
 import type { VisibleRow } from './files-tree-rows.ts';
 
 /** What the tree's keyboard and pointer selection read and act on. */
@@ -25,16 +25,8 @@ export type TreeNavigation = {
   cancelCut(): boolean;
 };
 
-const mac = typeof navigator !== 'undefined' && navigator.platform.includes('Mac');
-/**
- * Whether a press is Undo: ⌘Z on a Mac, Ctrl+Z elsewhere. A layout without Latin letters types
- * another character on the Z key, so that key counts too.
- */
-const isUndoKey = (event: KeyboardEvent<HTMLElement>) =>
-  (mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey) &&
-  !event.altKey &&
-  !event.shiftKey &&
-  (event.key.toLowerCase() === 'z' || (!/^[a-z]$/i.test(event.key) && event.code === 'KeyZ'));
+/** Whether a press is Undo: ⌘Z on a Mac, Ctrl+Z elsewhere. */
+const isUndoKey = (event: KeyboardEvent<HTMLElement>) => isCommandKey(event, 'z');
 
 /** Moves focus and selection, expands and collapses, opens, and runs file shortcuts. */
 export function handleTreeKeyDown(event: KeyboardEvent<HTMLElement>, navigation: TreeNavigation) {
