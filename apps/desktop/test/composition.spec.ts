@@ -277,7 +277,7 @@ test('dirty editor/live chat, two drafts, no-resend reconnect, view close and cl
     for (let step = 0; step < 24 && !(await editorHasFocus()); step++)
       await p.keyboard.press('Tab');
     expect(await editorHasFocus()).toBe(true);
-    await p.keyboard.press('Meta+p');
+    await p.keyboard.press('ControlOrMeta+p');
     const lookup = p.getByRole('dialog').getByRole('combobox');
     await lookup.fill('a.ts');
     await lookup.press('Enter');

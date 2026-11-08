@@ -370,6 +370,69 @@ test('a refresh neither cancels an open from a lookup nor keeps restarting its q
   }
 });
 
+test('a failed open stays on screen through refreshes until the reader types again', async () => {
+  const { Layer } = await import('effect');
+  const { TestClock } = await import('effect/testing');
+  const memory = memoryWorkspace([{ checkout, files: { 'a.ts': 'A', 'b.ts': 'B' } }]);
+  const runtime = ManagedRuntime.make(Layer.merge(memory.layer, TestClock.layer()));
+  const raw = makeEditorClient(runtime);
+  let searches = 0;
+  const client: EditorClient = {
+    ...raw,
+    async command(name, input, options) {
+      if (name === 'lookupFiles') searches++;
+      return raw.command(name, input, options);
+    },
+  };
+  const editor = await acquireEditor(runtime, { client, clientId: 'lookup-failed-open' });
+  await editor.load();
+  await editor.openCheckout(checkout.root);
+  await editor.flush();
+  const lookup = editor.createLookup();
+  /** Resolves on the first update after the `count`th search. */
+  const searched = (count: number) =>
+    new Promise<void>((resolve) => {
+      const off = lookup.subscribe(() => {
+        if (searches >= count && lookup.getSnapshot().message !== 'Searching…') {
+          off();
+          resolve();
+        }
+      });
+    });
+  const tick = () => runtime.runPromise(TestClock.adjust('120 millis'));
+  try {
+    lookup.query('a', [checkout]);
+    let done = searched(1);
+    await tick();
+    await done;
+    memory.failNext('readFile', 'a.ts was deleted');
+    assert.equal(
+      await lookup.open((current) => editor.open(target('a.ts'), { intent: 'keep', current })),
+      false,
+    );
+    assert.match(lookup.getSnapshot().message, /^File unavailable/);
+    // A change on disk refreshes the rows but keeps the failure in view.
+    const rows = lookup.getSnapshot().rows;
+    lookup.query('a', [checkout]);
+    done = searched(2);
+    await tick();
+    await done;
+    assert.notStrictEqual(lookup.getSnapshot().rows, rows, 'The refresh delivers its rows');
+    assert.match(lookup.getSnapshot().message, /^File unavailable/);
+    // A query the reader types replaces it.
+    lookup.query('b', [checkout]);
+    assert.equal(lookup.getSnapshot().message, 'Searching…');
+    done = searched(3);
+    await tick();
+    await done;
+    assert.equal(lookup.getSnapshot().message, '1 results');
+  } finally {
+    await lookup.dispose();
+    await editor.dispose();
+    await runtime.dispose();
+  }
+});
+
 test('dismissing inspection admits no mutation; dismissing after dispatch retains model-owned outcome exactly once', async () => {
   const memory = memoryWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
   const runtime = ManagedRuntime.make(memory.layer),

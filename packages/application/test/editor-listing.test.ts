@@ -65,6 +65,7 @@ test('first folder listing is visible while Git is held, and stale classificatio
   const f = await fixture('listing-isolation-source', false);
   const entered = held(),
     release = held(),
+    returned = held(),
     classified = held();
   let hold = false;
   let obsoleteSignal: AbortSignal | undefined;
@@ -81,19 +82,21 @@ test('first folder listing is visible while Git is held, and stale classificatio
           (listing as { paths: string[] }).paths = [];
           entered.release();
           await release.promise;
+          returned.release();
           return listing;
         }
         return f.client.command(name, input, options);
       },
     },
   });
+  // Every value c.ts's classification takes after Git first marks it ignored.
+  const seen: (boolean | undefined)[] = [];
   const off = editor.subscribe(() => {
-    if (
-      editor
-        .getSnapshot()
-        .listings[fileKey(target(''))]?.entries.find((entry) => entry.path === 'c.ts')?.ignored
-    )
-      classified.release();
+    const ignored = editor
+      .getSnapshot()
+      .listings[fileKey(target(''))]?.entries.find((entry) => entry.path === 'c.ts')?.ignored;
+    if (ignored) classified.release();
+    if (seen.length || ignored) seen.push(ignored);
   });
   try {
     await editor.load();
@@ -118,7 +121,11 @@ test('first folder listing is visible while Git is held, and stale classificatio
     assert.equal(obsoleteSignal?.aborted, false, 'A refresh keeps the running classification');
     await classified.promise;
     release.release();
+    // The stale reply (nothing ignored) returns and is processed; it must not replace the newer one.
+    await returned.promise;
+    for (let turn = 0; turn < 10; turn++) await new Promise((resolve) => setTimeout(resolve, 0));
     await f.runtime.runPromise(Effect.yieldNow);
+    assert.deepEqual([...new Set(seen)], [true], 'c.ts must stay ignored');
     assert(
       editor
         .getSnapshot()
@@ -379,6 +386,64 @@ test('a failed Git classification leaves refreshed entries unclassified, not sta
     await f.editor.list(checkout);
     await expectClassification(f.editor, true);
   } finally {
+    await f.dispose();
+  }
+});
+
+test('a kept classification that reports an error does not stand in for a failed newer one', async () => {
+  const f = await fixture('listing-ignored-soft-error-source', false);
+  let hold = false,
+    entered = held();
+  const asked: {
+    answer(value: { paths: string[]; error?: string }): void;
+    fail(error: Error): void;
+    returned: Promise<void>;
+  }[] = [];
+  const editor = await acquireEditor(f.runtime, {
+    clientId: 'listing-ignored-soft-error',
+    client: {
+      ...f.client,
+      watch: () => async () => {},
+      async command(name, input, options) {
+        if (!hold || name !== 'getIgnoredPaths' || (input as { path: string }).path !== '')
+          return f.client.command(name, input, options);
+        const returned = held();
+        const reply = new Promise<{ paths: string[]; error?: string }>((resolve, reject) =>
+          asked.push({ answer: resolve, fail: reject, returned: returned.promise }),
+        );
+        entered.release();
+        try {
+          return (await reply) as never;
+        } finally {
+          returned.release();
+        }
+      },
+    },
+  });
+  const refresh = async () => {
+    entered = held();
+    await editor.list(checkout);
+    await entered.promise;
+  };
+  try {
+    await editor.load();
+    await editor.openCheckout(checkout.root);
+    await editor.list(checkout);
+    await expectClassification(editor, true);
+    hold = true;
+    await refresh();
+    await refresh();
+    // The kept classification answers with an error, which classifies nothing.
+    asked[0].answer({ paths: [], error: 'Git timed out' });
+    await asked[0].returned;
+    for (let turn = 0; turn < 10; turn++) await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(readIgnored(editor), true);
+    // The newest one fails outright: nothing classified the listing, so it shows unclassified.
+    asked[1].fail(new Error('Git failed'));
+    await expectClassification(editor, undefined);
+  } finally {
+    for (const call of asked) call.answer({ paths: [] });
+    await editor.dispose();
     await f.dispose();
   }
 });

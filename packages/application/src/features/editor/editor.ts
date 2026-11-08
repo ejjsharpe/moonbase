@@ -1085,8 +1085,10 @@ class EditorModelState {
           throw error;
         }
         if (!isOpen() || (this.classifiedListings.get(key) ?? 0) > sequence) return;
-        this.classifiedListings.set(key, sequence);
         const paths = new Set(ignored.paths);
+        // Only an answer that replaces the shown flags counts as the newest classification.
+        if (isCurrent() || (!ignored.error && this.listings[key]))
+          this.classifiedListings.set(key, sequence);
         if (isCurrent())
           this.listings[key] = {
             ...listing,

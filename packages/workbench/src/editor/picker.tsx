@@ -335,8 +335,9 @@ export function Picker({
   const preview = mode === 'find' ? matches[selected] : undefined;
 
   // Results stay on screen while a newly typed query runs, so Enter waits for that query to settle
-  // and then opens the selected row: the top one unless the reader has moved since. A refresh
-  // after a change on disk reports no search, so Enter never waits on one.
+  // and then opens the row the reader moved to if the new results still hold it, or else the top
+  // one: never a row in its place they have not seen. A refresh after a change on disk reports no
+  // search, so Enter never waits on one.
   const searching =
     mode === 'goto'
       ? !commands && !!checkout && !!query.trim() && files.message === 'Searching…'
@@ -345,7 +346,7 @@ export function Picker({
   useEffect(() => {
     if (!pendingEnter.current || searching) return;
     pendingEnter.current = false;
-    activate();
+    activate(Math.max(kept, 0));
   });
   function activate(at = selected) {
     if (mode === 'goto') {

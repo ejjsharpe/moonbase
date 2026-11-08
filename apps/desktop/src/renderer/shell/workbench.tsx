@@ -24,7 +24,13 @@ import { ChatView } from '../chat/view.tsx';
 import { checkoutName } from '@moonbase/ui/projects';
 import { readOwn } from '@moonbase/application/editor';
 import { Icon } from '../icon.tsx';
-import { Workbench, type PickerEntry, pickerMode, type WorkbenchHandle } from '@moonbase/workbench';
+import {
+  Workbench,
+  type PickerEntry,
+  pickerCommand,
+  pickerMode,
+  type WorkbenchHandle,
+} from '@moonbase/workbench';
 import { styles } from './styles.ts';
 import { MainTabs, tabValue } from './main-tabs.tsx';
 
@@ -87,7 +93,7 @@ function useStoredToggle(key: string) {
     }
   }, [key, on]);
   const toggle = useCallback(() => setOn((value) => !value), []);
-  return [on, toggle] as const;
+  return [on, toggle, setOn] as const;
 }
 const railWidth = (collapsed: boolean) => (collapsed ? 0 : 52);
 const dockDefaultWidth = 400,
@@ -128,7 +134,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
     roots: readonly string[];
   } | null>(null);
   const [railCollapsed, toggleRail] = useStoredToggle(railCollapsedKey);
-  const [sidebarHidden, toggleSidebar] = useStoredToggle(sidebarHiddenKey);
+  const [sidebarHidden, toggleSidebar, setSidebarHidden] = useStoredToggle(sidebarHiddenKey);
   // Hiding the rail while focus is in it hands focus back to the view, not the page.
   const toggleRailKeepingFocus = () => {
     if (!railCollapsed && document.activeElement?.closest('[aria-label="Workbench views"]'))
@@ -463,8 +469,8 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
       startNewChat();
       return;
     }
-    // ⌘ only: Control+P is "previous line" in macOS text fields.
-    const mode = pickerMode(event, event.metaKey);
+    // ⌘ on a Mac, where Control+P is "previous line" in text fields; Ctrl elsewhere.
+    const mode = pickerMode(event, pickerCommand(event));
     if (
       controller &&
       mode &&
@@ -700,7 +706,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
               checkout={selected}
               showBreadcrumbs={false}
               sidebarHidden={sidebarHidden}
-              onShowSidebar={sidebarHidden ? toggleSidebar : undefined}
+              onShowSidebar={() => setSidebarHidden(false)}
               shortcuts={windowShortcuts}
               visible={view !== 'chat'}
               pickerEntries={pickerEntries}

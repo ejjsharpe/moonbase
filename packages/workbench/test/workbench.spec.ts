@@ -910,6 +910,34 @@ test('Enter opens the highlighted row while changes on disk keep refreshing Go t
   }
 });
 
+test('a deferred Enter never opens a row in place of one the new results dropped', async ({
+  page,
+}) => {
+  await page.goto('/');
+  const editor = first(page);
+  const files = editor.getByRole('button', { name: 'Files', exact: true });
+  await editor.getByRole('button', { name: 'Changes', exact: true }).click();
+  await editor.getByRole('textbox', { name: 'welcome.ts editor', exact: true }).focus();
+  await page.keyboard.press('ControlOrMeta+p');
+  const goTo = page.getByRole('dialog', { name: 'Go to', exact: true });
+  const field = goTo.getByRole('combobox');
+  const rows = goTo.getByRole('option');
+  // 'file' names no file, only commands: Show Files first, then Refresh files.
+  await field.fill('file');
+  await expect(rows.first()).toHaveAccessibleName('Show Files');
+  await expect(rows.nth(1)).toHaveAccessibleName('Refresh files');
+  await field.fill('.ts');
+  await expect(rows.nth(1)).toHaveAccessibleName('src/example.ts');
+  // Until 'file' answers, the old file rows stay listed above its commands. The reader moves onto
+  // one, src/example.ts, which the new results drop, and presses Enter.
+  await field.fill('file');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  await expect(goTo).toHaveCount(0);
+  // The top row ran (Show Files), not whatever took the second place (Refresh files).
+  await expect(files).toHaveAttribute('aria-pressed', 'true');
+});
+
 test('shortcuts switch an open picker, and a failed open stays on screen', async ({ page }) => {
   await page.goto('/');
   await first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true }).focus();

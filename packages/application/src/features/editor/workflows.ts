@@ -26,6 +26,8 @@ abstract class EditorQuery<Snapshot extends { message: string; busy: boolean }> 
   private queryKey?: string;
   private settled = true;
   private rerun?: () => void;
+  /** Why the last open failed, shown until the next query or open the user starts. */
+  private failedOpen?: string;
   protected closed = false;
   private completion?: Promise<void>;
   private listeners = new Set<() => void>();
@@ -54,6 +56,10 @@ abstract class EditorQuery<Snapshot extends { message: string; busy: boolean }> 
   protected repeats(key: string) {
     return key === this.queryKey;
   }
+  /** A query's message, unless a failed open is still on screen: a refresh only updates rows. */
+  protected resultMessage(message: string) {
+    return this.failedOpen ?? message;
+  }
   /**
    * Replaces the running query: the previous one's scope closes before the next debounced run.
    * Repeating the last query refreshes it. A refresh leaves an open running, and one that arrives
@@ -69,7 +75,10 @@ abstract class EditorQuery<Snapshot extends { message: string; busy: boolean }> 
       this.rerun = () => this.replaceQuery(key, work);
       return;
     }
-    if (!refresh) this.openGeneration++;
+    if (!refresh) {
+      this.openGeneration++;
+      this.failedOpen = undefined;
+    }
     this.queryKey = key;
     this.settled = false;
     this.rerun = undefined;
@@ -99,9 +108,14 @@ abstract class EditorQuery<Snapshot extends { message: string; busy: boolean }> 
   async open(open: (current: () => boolean) => Promise<boolean>): Promise<boolean> {
     if (!this.admits() || this.closed || this.snapshot.busy) return false;
     const generation = ++this.openGeneration;
+    this.failedOpen = undefined;
     this.update({ busy: true } as Partial<Snapshot>);
+    const current = () => !this.closed && generation === this.openGeneration;
+    const fail = (message: string) => {
+      this.failedOpen = message;
+      this.update({ message } as Partial<Snapshot>);
+    };
     try {
-      const current = () => !this.closed && generation === this.openGeneration;
       const result = await this.execute(
         Effect.flatMap(
           Effect.forkIn(
@@ -112,13 +126,12 @@ abstract class EditorQuery<Snapshot extends { message: string; busy: boolean }> 
         ),
       );
       if (!result && current())
-        this.update({
-          message:
-            'File unavailable. Your current selection and edits are retained. Edit the path or retry.',
-        } as Partial<Snapshot>);
+        fail(
+          'File unavailable. Your current selection and edits are retained. Edit the path or retry.',
+        );
       return result && current();
     } catch (error) {
-      this.update({ message: normalizeApplicationError(error).message } as Partial<Snapshot>);
+      if (current()) fail(normalizeApplicationError(error).message);
       return false;
     } finally {
       this.update({ busy: false } as Partial<Snapshot>);
@@ -206,7 +219,9 @@ export class EditorLookup extends EditorQuery<LookupSnapshot> {
         );
         this.update({
           rows: unique.slice(0, 100),
-          message: `${Math.min(unique.length, 100)} results${partial || unique.length > 100 ? '; partial coverage. Refine the query or Refresh.' : ''}${errors.length ? '; ' + errors.join('; ') : ''}`,
+          message: this.resultMessage(
+            `${Math.min(unique.length, 100)} results${partial || unique.length > 100 ? '; partial coverage. Refine the query or Refresh.' : ''}${errors.length ? '; ' + errors.join('; ') : ''}`,
+          ),
         });
       }),
     );
@@ -242,7 +257,7 @@ export class EditorTextSearch extends EditorQuery<TextSearchSnapshot> {
     const key = JSON.stringify([query, matchCase, wholeWord, regex, checkoutKey(checkout)]);
     if (!query) {
       this.replaceQuery(key, () => Effect.void);
-      this.update({ files: [], checkout, message: 'Type text to search for.' });
+      this.update({ files: [], checkout, message: this.resultMessage('Type text to search for.') });
       return;
     }
     if (!this.repeats(key)) this.update({ message: 'Searching…' });
@@ -260,7 +275,9 @@ export class EditorTextSearch extends EditorQuery<TextSearchSnapshot> {
           this.update({
             files: [],
             checkout: input.checkout,
-            message: reason?._tag === 'Fail' ? reason.error.message : 'Search failed.',
+            message: this.resultMessage(
+              reason?._tag === 'Fail' ? reason.error.message : 'Search failed.',
+            ),
           });
           return;
         }
@@ -271,7 +288,7 @@ export class EditorTextSearch extends EditorQuery<TextSearchSnapshot> {
           : 'No matches.';
         if (partial) message += '; capped. Refine the query.';
         if (error) message += '; ' + error;
-        this.update({ files, checkout: input.checkout, message });
+        this.update({ files, checkout: input.checkout, message: this.resultMessage(message) });
       }),
     );
   }

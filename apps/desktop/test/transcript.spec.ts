@@ -1553,7 +1553,7 @@ test('Find reading navigation cancels held reveal and editor shortcuts retain th
   await expect(
     page.getByRole('textbox', { name: 'Find in conversation', exact: true }),
   ).toHaveCount(0);
-  await page.getByRole('tab', { name: 'moonbase · main', exact: true }).press('Meta+p');
+  await page.getByRole('tab', { name: 'moonbase · main', exact: true }).press('ControlOrMeta+p');
   await expect(page.getByRole('dialog', { name: 'Go to', exact: true })).toBeVisible();
 });
 
