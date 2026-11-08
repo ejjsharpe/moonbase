@@ -53,7 +53,7 @@ import { ExplorerMenu, type ExplorerAction } from './explorer-menu.tsx';
 import { CheatSheet, editorShortcuts, type Shortcut } from './cheat-sheet.tsx';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { styles } from './styles.ts';
-import { Icon } from './icon.tsx';
+import { FileIcon, Icon } from './icon.tsx';
 
 type FocusOrigin = 'editor' | 'strip' | 'tree';
 const focusOrigin = (element: HTMLElement): FocusOrigin => {
@@ -982,7 +982,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                           </span>
                         ) : (
                           <span {...stylex.props(controls.icon)}>
-                            <Icon name="file" />
+                            <FileIcon path={path} />
                           </span>
                         )}
                         <span {...stylex.props(controls.truncate)}>{label}</span>
