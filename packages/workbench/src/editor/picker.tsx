@@ -43,6 +43,11 @@ export type PickerEntry = {
 export type PickerMode = 'goto' | 'commands' | 'find';
 export type PickerRequest = { mode: PickerMode; text: string };
 
+/** Chromium reports MacIntel on Apple silicon too. */
+const mac = typeof navigator !== 'undefined' && navigator.platform.startsWith('Mac');
+/** The picker's modifier: ⌘ on a Mac, where ⌃P moves up a line in text, and Ctrl elsewhere. */
+export const pickerCommand = (event: { metaKey: boolean; ctrlKey: boolean }) =>
+  mac ? event.metaKey : event.ctrlKey;
 /** ⌘P is Go to, ⌘⇧P its commands and ⌘⇧F Find; `command` says which modifier counts. */
 export function pickerMode(
   event: { key: string; shiftKey: boolean; altKey: boolean },
@@ -329,7 +334,9 @@ export function Picker({
   const select = (at: number) => setSelection({ at, key: rowKeys[at] });
   const preview = mode === 'find' ? matches[selected] : undefined;
 
-  // Results stay on screen while the next query runs, so Enter waits for that query to settle.
+  // Results stay on screen while a newly typed query runs, so Enter waits for that query to settle
+  // and then opens the selected row: the top one unless the reader has moved since. A refresh
+  // after a change on disk reports no search, so Enter never waits on one.
   const searching =
     mode === 'goto'
       ? !commands && !!checkout && !!query.trim() && files.message === 'Searching…'
@@ -338,7 +345,7 @@ export function Picker({
   useEffect(() => {
     if (!pendingEnter.current || searching) return;
     pendingEnter.current = false;
-    activate(0);
+    activate();
   });
   function activate(at = selected) {
     if (mode === 'goto') {
@@ -553,7 +560,7 @@ export function Picker({
               onChange={(event) => setQuery(event.target.value.replace(/[\n\r]/g, ''))}
               onKeyDown={(event) => {
                 if (event.nativeEvent.isComposing) return;
-                const shortcut = pickerMode(event, event.metaKey);
+                const shortcut = pickerMode(event, pickerCommand(event));
                 if (shortcut) {
                   // The picker is modal, so its own shortcuts switch it rather than reopen it.
                   event.preventDefault();

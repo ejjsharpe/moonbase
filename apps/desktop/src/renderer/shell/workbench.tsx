@@ -700,6 +700,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
               checkout={selected}
               showBreadcrumbs={false}
               sidebarHidden={sidebarHidden}
+              onShowSidebar={sidebarHidden ? toggleSidebar : undefined}
               shortcuts={windowShortcuts}
               visible={view !== 'chat'}
               pickerEntries={pickerEntries}

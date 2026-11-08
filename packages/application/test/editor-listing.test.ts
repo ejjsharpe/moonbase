@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { acquireEditor } from './editor-model-fixture.ts';
 import { checkout, second, fixture, held, target } from './editor-fixture.ts';
-import { fileKey } from '@moonbase/application/editor';
+import { fileKey, type EditorSnapshot } from '@moonbase/application/editor';
 import { Effect } from 'effect';
 
 test('overlapping folder reads share one request and later navigation reads fresh entries', async () => {
@@ -114,7 +114,8 @@ test('first folder listing is visible while Git is held, and stale classificatio
     assert(other.entries.some((entry) => entry.path === 'c.ts'));
     assert.equal(obsoleteSignal?.aborted, false, 'Other checkouts retain their classification');
     await editor.list(checkout);
-    assert.equal(obsoleteSignal?.aborted, true, 'Superseded classification must be cancelled');
+    // One superseded classification per folder keeps running, so refreshes cannot starve Git.
+    assert.equal(obsoleteSignal?.aborted, false, 'A refresh keeps the running classification');
     await classified.promise;
     release.release();
     await f.runtime.runPromise(Effect.yieldNow);
@@ -288,6 +289,95 @@ test('a refreshed listing keeps its ignored classification until Git classifies 
     }
     assert(seen.length > 0, 'The refresh must publish its listing');
     assert.deepEqual([...new Set(seen)], [true], 'c.ts must not flash as unignored');
+  } finally {
+    await f.dispose();
+  }
+});
+
+type Snapshots = { getSnapshot(): EditorSnapshot };
+/** c.ts's Git classification in the root listing. */
+const readIgnored = (editor: Snapshots) =>
+  editor.getSnapshot().listings[fileKey(target(''))]?.entries.find((entry) => entry.path === 'c.ts')
+    ?.ignored;
+async function expectClassification(editor: Snapshots, expected: boolean | undefined) {
+  for (let i = 0; i < 200 && readIgnored(editor) !== expected; i++)
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(readIgnored(editor), expected);
+}
+
+test('refreshes faster than Git cannot keep a file dimmed after a .gitignore edit', async () => {
+  const f = await fixture('listing-ignored-starved-source', false);
+  // What Git answers, and the held answers in the order they were asked.
+  let ignoredPaths = ['c.ts'],
+    hold = false,
+    entered = held();
+  const asked: { signal?: AbortSignal; release(): void }[] = [];
+  const editor = await acquireEditor(f.runtime, {
+    clientId: 'listing-ignored-starved',
+    client: {
+      ...f.client,
+      watch: () => async () => {},
+      async command(name, input, options) {
+        if (name !== 'getIgnoredPaths' || (input as { path: string }).path !== '')
+          return f.client.command(name, input, options);
+        const answer = { paths: ignoredPaths.slice() };
+        if (hold) {
+          const release = held();
+          asked.push({ signal: options?.signal, release: release.release });
+          entered.release();
+          await release.promise;
+        }
+        return answer as never;
+      },
+    },
+  });
+  const refresh = async () => {
+    entered = held();
+    await editor.list(checkout);
+    await entered.promise;
+  };
+  try {
+    await editor.load();
+    await editor.openCheckout(checkout.root);
+    await editor.list(checkout);
+    await expectClassification(editor, true);
+    // .gitignore no longer lists c.ts, and each refresh arrives before Git answers the last.
+    ignoredPaths = [];
+    hold = true;
+    await refresh();
+    await refresh();
+    await refresh();
+    assert.equal(readIgnored(editor), true, 'Listings carry it over meanwhile');
+    assert.equal(asked[0].signal?.aborted, false, 'The first superseded classification runs on');
+    assert.equal(asked[1].signal?.aborted, true, 'Later superseded ones are cancelled');
+    asked[0].release();
+    await expectClassification(editor, false);
+    asked[2].release();
+    await expectClassification(editor, false);
+  } finally {
+    for (const call of asked) call.release();
+    await editor.dispose();
+    await f.dispose();
+  }
+});
+
+test('a failed Git classification leaves refreshed entries unclassified, not stale', async () => {
+  const f = await fixture('listing-ignored-failure', false);
+  try {
+    await f.editor.list(checkout);
+    await expectClassification(f.editor, true);
+    f.memory.failNext('getIgnoredPaths', 'Ignore classification failed');
+    await f.editor.list(checkout);
+    await expectClassification(f.editor, undefined);
+    assert(
+      f.editor
+        .getSnapshot()
+        .listings[fileKey(target(''))].entries.some((entry) => entry.path === 'c.ts'),
+      'The files stay listed',
+    );
+    // The next refresh classifies again.
+    await f.editor.list(checkout);
+    await expectClassification(f.editor, true);
   } finally {
     await f.dispose();
   }
