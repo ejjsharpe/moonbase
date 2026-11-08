@@ -82,7 +82,7 @@ test('Initialize Git is disabled and shows its progress while git init runs', as
   await page.getByRole('button', { name: 'Initialize Git', exact: true }).click();
   const initializing = page.getByRole('button', { name: 'Initializing…', exact: true });
   await expect(initializing).toBeDisabled();
-  expect(await page.evaluate(() => window.demo.first.getSnapshot().initializing.length)).toBe(1);
+  expect(await page.evaluate(() => window.demo.first.getSnapshot().initializing)).not.toBeNull();
 
   await page.evaluate(() =>
     (window as unknown as { releaseInitialization(): void }).releaseInitialization(),

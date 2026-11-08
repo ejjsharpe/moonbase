@@ -1655,8 +1655,25 @@ test('a new chat sends without a project and lists as No project', async ({ page
     .toBe(true);
   const saved = page.getByRole('complementary', { name: 'Saved chats', exact: true });
   await expect(saved.getByRole('button', { name: /^Plan a trip/ })).toContainText('No project');
+  // A failure is shown in the open chat, which stays as it was.
+  const turn = page.getByRole('button', { name: 'Turn into project', exact: true });
+  await page.evaluate(() => {
+    const chat = window.demo.chat,
+      original = chat.turnIntoProject;
+    chat.turnIntoProject = async () => {
+      chat.turnIntoProject = original;
+      throw new Error('The folder changed.');
+    };
+  });
+  const turnError = page
+    .getByRole('alert')
+    .filter({ hasText: 'The chat could not become a project.' });
+  await turn.click();
+  await expect(turnError).toHaveText('The chat could not become a project. The folder changed.');
+  await expect(saved.getByRole('button', { name: /^Plan a trip/ })).toContainText('No project');
   // Its folder becomes a project where it is, and the chat lists under that project.
-  await page.getByRole('button', { name: 'Turn into project', exact: true }).click();
+  await turn.click();
+  await expect(turnError).toBeHidden();
   await expect(
     page
       .getByRole('group', { name: 'Project tabs', exact: true })

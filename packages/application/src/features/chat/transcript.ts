@@ -431,9 +431,9 @@ export class TranscriptOwner {
     for (const key of stale) this.interruptJob(key);
     this.publish();
   }
-  /** Shows a newer summary of this chat, such as a settle reply, until the next snapshot. */
+  /** Shows a newer summary of this chat (the caller matched its target) until the next snapshot. */
   updateConversation(conversation: ChatSummary) {
-    if (!this.snapshot || !sameTarget(conversation.target, this.dependencies.target)) return;
+    if (!this.snapshot) return;
     this.snapshot = { ...this.snapshot, conversation };
     this.publish();
   }

@@ -85,11 +85,11 @@ const reasonLabels: Record<ChatActivityReason, string> = {
 };
 
 type ChatState = ReturnType<ChatController['getSnapshot']>;
-/** The selected chat's working folder, once its snapshot or list entry has loaded. */
-function selectedChatFolder(state: ChatState) {
+/** The selected chat's summary, once its snapshot or list entry has loaded. */
+function findSelectedChat(state: ChatState) {
   return (
-    state.snapshot?.conversation.cwd ??
-    state.chats.find((c) => c.target.conversationId === state.selected?.conversationId)?.cwd
+    state.snapshot?.conversation ??
+    state.chats.find((c) => c.target.conversationId === state.selected?.conversationId)
   );
 }
 /**
@@ -97,7 +97,7 @@ function selectedChatFolder(state: ChatState) {
  * locally, else the host's). Null while it isn't known, so nothing is mentioned against a guess.
  */
 function chatFolder(state: ChatState, newChatFolder: string) {
-  if (state.selected) return selectedChatFolder(state) || null;
+  if (state.selected) return findSelectedChat(state)?.cwd || null;
   if (newChatFolder) return newChatFolder;
   return (state.host && 'cwd' in state.host && state.host.cwd) || null;
 }
@@ -163,6 +163,8 @@ export function ChatView({
     // An error belongs to the command line it was about; editing it or changing chat hides it.
     [commandError, setCommandError] = useState<{ text: string; message: string } | null>(null),
     [turning, setTurning] = useState(false),
+    // Why a chat could not become a project, in the chat it was for.
+    [turnError, setTurnError] = useState<{ chat: string; message: string } | null>(null),
     // Why files from the file tree weren't mentioned, in the chat (or new chat, '') they were for.
     [mentionError, setMentionError] = useState<{ chat: string; message: string } | null>(null);
   // A new chat's folder choices outlive this view, which unmounts while another view shows the chat.
@@ -235,9 +237,7 @@ export function ChatView({
         : 'Runs in a new empty folder. Local tools are not sandboxed.';
   if (local && !state.selected && !models.length)
     toolNotice = 'Set up a provider to send. Local tools are not sandboxed.';
-  const selectedChat =
-    state.snapshot?.conversation ??
-    state.chats.find((c) => c.target.conversationId === state.selected?.conversationId);
+  const selectedChat = findSelectedChat(state);
   // A chat without a project has no project crumb.
   const selectedFolder =
     selectedChat && !selectedChat.ownFolder ? folderName(selectedChat.cwd) : undefined;
@@ -271,20 +271,18 @@ export function ChatView({
       onClick={() => {
         const id = state.selected!.conversationId;
         setTurning(true);
-        setFolderError(null);
+        setTurnError(null);
         void turnIntoProject(id)
           .then(
             () => controller.reloadChats(),
-            (error: unknown) => {
-              if (mounted.current)
-                setFolderError(
+            (error: unknown) =>
+              setTurnError({
+                chat: id,
+                message:
                   `The chat could not become a project. ${error instanceof Error ? error.message : ''}`.trim(),
-                );
-            },
+              }),
           )
-          .finally(() => {
-            if (mounted.current) setTurning(false);
-          });
+          .finally(() => setTurning(false));
       }}>
       <Icon name="newFolder" />
     </Button>
@@ -417,13 +415,6 @@ export function ChatView({
     !!createWorktree &&
     !!cwd &&
     !folderProjects.some((project) => project.root === cwd && project.branch === undefined);
-  const mounted = useRef(true);
-  useEffect(
-    () => () => {
-      mounted.current = false;
-    },
-    [],
-  );
   const commands = listChatCommands({
     selected: !!state.selected,
     running: !!run && connected && !busy('stop') && !state.storageError,
@@ -447,7 +438,7 @@ export function ChatView({
       const rest = removeCommandLine(state.draft),
         target = state.selected?.conversationId ?? '';
       void composer
-        .startNewChat(rest, state.mentions, selectedChatFolder(state))
+        .startNewChat(rest, state.mentions, findSelectedChat(state)?.cwd)
         .then((message) =>
           message ? setCommandError({ text: `${target}\n${rest}`, message }) : focusMessage(),
         );
@@ -762,6 +753,11 @@ export function ChatView({
         {!state.selected && folderError && (
           <p role="alert" {...stylex.props(styles.warning)}>
             {folderError}
+          </p>
+        )}
+        {state.selected && turnError?.chat === state.selected.conversationId && (
+          <p role="alert" {...stylex.props(styles.warning)}>
+            {turnError.message}
           </p>
         )}
         {mentionError?.chat === (state.selected?.conversationId ?? '') && (

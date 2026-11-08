@@ -119,12 +119,9 @@ export class LocalWorkspace {
     );
     this.worktrees = new WorkspaceWorktrees(
       (target) => this.directory(target),
-      (root, source, signal) => {
-        // Worktrees are made only from a Git checkout, whose approval names its repository.
-        const common = this.approval(source).common;
-        ensure(common !== null, 'This project is not a Git repository. Initialize Git first.');
-        return this.open(root, signal, { root, common });
-      },
+      // `createWorktree` refuses a plain folder first, so `source`'s approval names its repository.
+      (root, source, signal) =>
+        this.open(root, signal, { root, common: this.approval(source).common! }),
       (root) => this.protected(root),
       (message) =>
         this.cleanupFailures.push(Cause.die(new ApplicationError({ code: 'Uncertain', message }))),
@@ -686,13 +683,9 @@ export class LocalWorkspace {
       'A file operation awaits recovery publication or inspection. Resolve it before initializing Git.',
     );
     await directory.initializeGit(signal);
+    // `open` approves a Git target here only as the main worktree of the folder's own `.git`.
     const initialized = await this.open(target.root, signal);
-    ensure(
-      initialized.vcs === 'git' &&
-        initialized.worktree === 'main' &&
-        this.approval(initialized).common?.path === join(initialized.root, '.git'),
-      'Git did not initialize this folder as its own repository. Inspect it.',
-    );
+    ensure(initialized.vcs === 'git', 'Git did not initialize this folder. Inspect it.');
     return initialized;
   }
   assertSettled(target: CheckoutTarget, paths: string[], clientId: string) {

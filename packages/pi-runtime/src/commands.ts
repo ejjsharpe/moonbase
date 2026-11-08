@@ -260,11 +260,7 @@ export class Host {
       data: ChatInput<K>,
     ) => Promise<ChatOutput<K>> | Effect.Effect<ChatOutput<K>, ApplicationError>,
   ): Effect.Effect<ChatOutput<K>, ApplicationError> {
-    const mutation =
-      operation === 'createChat' ||
-      operation === 'sendChat' ||
-      operation === 'stopChat' ||
-      operation === 'settleChat';
+    const mutation = V.isMutation(operation);
     return Effect.gen({ self: this }, function* () {
       const data = yield* Effect.try({
         try: () => V.input(operation, value),
@@ -553,52 +549,42 @@ export class Host {
     await this.metadata(d.target);
     return this.lookup(d.target, d.requestId);
   }
+  /** Changes an owned chat's metadata, which the caller has already read through `metadata`. */
+  private updateMetadata(
+    target: ChatTarget,
+    change: (meta: { settledAt?: string; settings?: ChatSettings }) => void,
+  ) {
+    return this.harness.commit(async (tx) => {
+      const meta = await tx.doc(Metadata, cid(target.conversationId), 'metadata', {
+        identity: this.identity,
+        title: '',
+        createdAt: '',
+      });
+      S.savedMetadata(meta);
+      change(meta);
+    }, context);
+  }
   /** Settles or unsettles a chat; asking for its current state again commits nothing. */
   async settle(d: ChatInput<'settleChat'>): Promise<ChatSummary> {
     const current = await this.metadata(d.target);
-    if ((current.settledAt !== undefined) !== d.settled) {
-      try {
-        await this.harness.commit(async (tx) => {
-          const meta = await tx.doc(Metadata, cid(d.target.conversationId), 'metadata', {
-            identity: this.identity,
-            title: '',
-            createdAt: '',
-          });
-          S.savedMetadata(meta);
-          if (meta.identity !== this.identity)
-            V.fail('Unauthorized', 'Conversation does not belong to this configured actor/store.');
-          if (d.settled) meta.settledAt ??= new Date().toISOString();
-          else if (meta.settledAt !== undefined) delete meta.settledAt;
-        }, context);
-      } catch (error) {
-        throw safeError(error, true);
-      }
-    }
+    if ((current.settledAt !== undefined) !== d.settled)
+      await this.updateMetadata(d.target, (meta) => {
+        if (d.settled) meta.settledAt ??= new Date().toISOString();
+        else delete meta.settledAt;
+      });
     return this.summary(d.target.conversationId, await this.metadata(d.target));
   }
   /** Lists a chat without a project under the project its folder became; the folder stays put. */
   async markFolderAsProject(target: ChatTarget): Promise<void> {
-    if (!('mode' in this.config))
-      V.fail('InvalidInput', 'Only a local chat has a folder of its own.');
     if (this.closed || !this.admissionsOpen)
       V.fail('Unavailable', 'Local chat is preparing to quit.');
     // Counted as active work, so Quit waits for it.
     this.mutations++;
     try {
       if (!(await this.metadata(target)).settings?.ownFolder) return;
-      await this.harness.commit(async (tx) => {
-        const meta = await tx.doc(Metadata, cid(target.conversationId), 'metadata', {
-          identity: this.identity,
-          title: '',
-          createdAt: '',
-        });
-        S.savedMetadata(meta);
-        if (meta.identity !== this.identity)
-          V.fail('Unauthorized', 'Conversation does not belong to this configured actor/store.');
-        if (meta.settings?.ownFolder) delete meta.settings.ownFolder;
-      }, context);
-    } catch (error) {
-      throw safeError(error, true);
+      await this.updateMetadata(target, (meta) => {
+        delete meta.settings?.ownFolder;
+      });
     } finally {
       this.mutations--;
     }

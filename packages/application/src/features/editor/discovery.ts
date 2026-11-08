@@ -247,15 +247,13 @@ export class EditorDiscovery {
   private async refreshOnce(checkout: CheckoutTarget, capabilities: RefreshCapabilities) {
     await capabilities.refreshListings();
     if (this.dependencies.isClosing() || !capabilities.isCurrent()) return;
-    // A plain folder has no Git status to read.
-    if (checkout.vcs === 'git')
-      try {
-        const status = await this.dependencies.gitStatus(checkout, this.getCheckoutScope(checkout));
-        if (!this.dependencies.isClosing() && capabilities.isCurrent())
-          capabilities.publishGit(status);
-      } catch {
-        /* The public command already reported the error; retained buffers stay usable. */
-      }
+    try {
+      const status = await this.dependencies.gitStatus(checkout, this.getCheckoutScope(checkout));
+      if (!this.dependencies.isClosing() && capabilities.isCurrent())
+        capabilities.publishGit(status);
+    } catch {
+      /* The public command already reported the error; retained buffers stay usable. */
+    }
     if (this.dependencies.isClosing() || !capabilities.isCurrent()) return;
     const generation = this.activation;
     const comparison = capabilities.captureComparison();

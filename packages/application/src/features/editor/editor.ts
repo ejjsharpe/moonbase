@@ -102,8 +102,8 @@ export type EditorSnapshot = {
   disposed: boolean;
   closePrompt: ClosePrompt | null;
   preserving: boolean;
-  /** Checkouts whose `initializeRepository` is running; they refuse saves and file operations. */
-  initializing: readonly string[];
+  /** The checkout whose `initializeRepository` is running; it refuses saves and file operations. */
+  initializing: string | null;
   discoveryRevision: number;
   recovery: EditorRecovery;
   buffers: readonly EditorBuffer[];
@@ -302,7 +302,7 @@ class EditorModelState {
       disposed: this.disposed,
       closePrompt: this.preservation.prompt,
       preserving: this.preservation.active,
-      initializing: this.initialization ? [this.initialization.checkoutId] : [],
+      initializing: this.initialization?.checkoutId ?? null,
       discoveryRevision: this.discovery.discoveryRevision,
       recovery: this.recovery,
       buffers: [...this.buffers.values()],
@@ -438,7 +438,9 @@ class EditorModelState {
   async openCheckout(root: string) {
     this.assertAdmission();
     this.assertReady();
-    return this.addCheckout(await this.command('openCheckout', { root }));
+    const target = await this.command('openCheckout', { root });
+    this.assertNotInitializing(target);
+    return this.addCheckout(target);
   }
   async listWorktrees(checkout: CheckoutTarget) {
     this.assertAdmission();
@@ -502,7 +504,7 @@ class EditorModelState {
         initialized = reopened;
       }
       try {
-        target = await this.addCheckout(initialized, true);
+        target = await this.addCheckout(initialized);
       } catch (error) {
         if (this.closing) throw error;
         await this.settleInitialization(checkout, initialized);
@@ -573,17 +575,9 @@ class EditorModelState {
     )
       throw editorError('Wait for saves and file operations in this project to finish.');
   }
-  /**
-   * Moves a checkout's views, buffers, drafts and recents to the target it became. `initialized`
-   * skips the check that nothing is saving: `initializeRepository` made it before `git init` and
-   * refused saves and file operations since.
-   */
-  private async rebindCheckout(
-    previous: CheckoutTarget,
-    next: CheckoutTarget,
-    initialized = false,
-  ) {
-    if (!initialized) this.assertRebindable(previous);
+  /** Moves a checkout's views, buffers, drafts and recents to the target it became. */
+  private async rebindCheckout(previous: CheckoutTarget, next: CheckoutTarget) {
+    this.assertRebindable(previous);
     const open = this.recovery.openCheckoutIds.includes(previous.checkoutId);
     await this.discovery.releaseObservation(previous);
     this.moveCheckout(previous, next);
@@ -619,15 +613,13 @@ class EditorModelState {
     delete this.git[previousKey];
     this.preservation.rebindClosedReferences(previous, next);
   }
-  private async addCheckout(target: CheckoutTarget, initializing = false) {
+  private async addCheckout(target: CheckoutTarget) {
     if (this.closing) return target;
-    if (!initializing) this.assertNotInitializing(target);
     const collision = this.recovery.checkouts.find(
       (item) => item.checkoutId === target.checkoutId && !sameCheckout(item, target),
     );
     // A plain folder that became a repository keeps its tabs and drafts as the Git checkout.
-    if (collision && isInitialized(collision, target))
-      await this.rebindCheckout(collision, target, initializing);
+    if (collision && isInitialized(collision, target)) await this.rebindCheckout(collision, target);
     else if (collision)
       throw editorError('Checkout identity changed; retained work has not been rebound.');
     if (!this.recovery.checkouts.some((item) => sameCheckout(item, target))) {

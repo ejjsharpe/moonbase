@@ -619,15 +619,11 @@ class ChatModelState {
               ? 'Local tools use this computer’s permissions. The selected folder is context, not a sandbox.'
               : 'Verified host. Reconnection reads saved state; it does not send.',
         });
-        const settles = this.settles;
         const listed = yield* Effect.exit(this.listChats());
         if (!owner.alive || epoch !== this.epoch) return;
         if (Exit.isSuccess(listed)) {
           this.chatPages = listed.value.pages;
-          this.listed({
-            chats: this.keepSettles(listed.value.chats, settles),
-            next: listed.value.next,
-          });
+          this.listed(listed.value);
         }
         if (this.state.transcript.observation === 'failed') {
           void this.closeOwner(this.selection);
@@ -651,12 +647,11 @@ class ChatModelState {
         const epoch = this.connected(),
           cursor = this.state.nextChats;
         if (!cursor) return;
-        const settles = this.settles;
         const page = yield* this.call('listChats', { session: this.session, cursor });
         if (owner?.alive && epoch === this.epoch) {
           this.chatPages++;
           this.listed({
-            chats: [...this.state.chats, ...this.keepSettles(page.conversations, settles)],
+            chats: [...this.state.chats, ...page.conversations],
             next: page.nextCursor,
           });
         }
@@ -708,19 +703,6 @@ class ChatModelState {
   }
   private reloading?: Promise<void>;
   private reloadQueued = false;
-  /** Settle replies applied so far; a listing begun before one would undo it in the list. */
-  private settles = 0;
-  /** Each chat's latest settle reply, numbered by `settles`. */
-  private settleReplies = new Map<string, { settles: number; settledAt: string | undefined }>();
-  /** A listing begun when `since` replies had arrived, with any later settle reply kept. */
-  private keepSettles(chats: ChatSummary[], since: number) {
-    return chats.map((chat) => {
-      const reply = this.settleReplies.get(chat.target.conversationId);
-      if (!reply || reply.settles <= since || reply.settledAt === chat.settledAt) return chat;
-      const { settledAt: _, ...rest } = chat;
-      return reply.settledAt ? { ...rest, settledAt: reply.settledAt } : rest;
-    });
-  }
   /**
    * Lists chats again in the background, through the pages on screen (at most `chatReloadPages`),
    * keeping the last list if it fails. Unlike Refresh it neither re-verifies the host nor clears an
@@ -750,7 +732,6 @@ class ChatModelState {
     } catch {
       return;
     }
-    const settles = this.settles;
     return this.runEffect(
       Effect.flatMap(
         Effect.forkIn(
@@ -763,10 +744,9 @@ class ChatModelState {
     )
       .then((listed) => {
         if (!owner.alive || epoch !== this.epoch || this.closed) return;
-        const fresh = this.keepSettles(listed.chats, settles);
-        const kept = keepUnreachedChats(this.state.chats, fresh);
+        const kept = keepUnreachedChats(this.state.chats, listed.chats);
         // The list reaches past the pages read only when a chat it did not reach comes last.
-        const past = kept.length > 0 && !fresh.includes(kept.at(-1)!);
+        const past = kept.length > 0 && !listed.chats.includes(kept.at(-1)!);
         if (!past) this.chatPages = listed.pages;
         this.listed({ chats: kept, next: past ? this.state.nextChats : listed.next });
       })
@@ -1235,7 +1215,8 @@ class ChatModelState {
     );
   /**
    * Settles or unsettles a chat on its host. The listed chat and the open snapshot take the host's
-   * reply, so the chat moves group without waiting for a reload.
+   * reply, so the chat moves group at once; a reload then lists it again, after any listing that
+   * began before the reply.
    */
   settle = (target: ChatTarget, settled: boolean) =>
     this.action(
@@ -1246,11 +1227,6 @@ class ChatModelState {
         if (!sameSession(input.target, this.session))
           throw invalid('Chat belongs to another context.');
         const summary = yield* this.call('settleChat', input);
-        this.settles++;
-        this.settleReplies.set(summary.target.conversationId, {
-          settles: this.settles,
-          settledAt: summary.settledAt,
-        });
         const listed = this.state.chats.findIndex((chat) =>
           sameTarget(chat.target, summary.target),
         );
@@ -1262,6 +1238,7 @@ class ChatModelState {
         }
         if (this.selection?.alive && sameTarget(this.selection.target, summary.target))
           this.selection.transcript?.updateConversation(summary);
+        void this.reloadChats({ latest: true });
       }),
       this.generation,
     );

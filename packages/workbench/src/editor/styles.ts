@@ -12,7 +12,6 @@ export const styles = stylex.create({
   },
   tabPanel: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 },
   panel: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 },
-  grow: { flex: 1 },
   toolbar: { display: 'flex', gap: space.sm, alignItems: 'center', flexWrap: 'wrap' },
   label: { display: 'flex', flexDirection: 'column', gap: space.xs, marginBottom: space.md },
   empty: { margin: space.xl, maxWidth: 540, color: colors.secondary, fontSize: type.body },

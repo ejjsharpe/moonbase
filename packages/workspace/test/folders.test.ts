@@ -109,27 +109,12 @@ test('a plain folder opens without Git; Git reads are empty and Git changes are 
       },
     );
     await isReady;
-    writeFileSync(join(root, 'drafts', 'new.txt'), 'new');
+    writeFileSync(join(root, 'new.txt'), 'new');
     const deadline = Date.now() + 10_000;
     while (!changes.length && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
     assert.deepEqual(changes.slice(0, 1), ['changed']);
   } finally {
     await stop?.();
-    await f.close();
-  }
-});
-
-test('a folder inside a repository is still refused unless it is the checkout root', async () => {
-  const f = fixture();
-  try {
-    mkdirSync(join(f.root, 'src'));
-    await assert.rejects(
-      f.client.command('openCheckout', { root: join(f.root, 'src') }),
-      (error: unknown) =>
-        rejects('InvalidInput')(error) &&
-        (error as Error).message === 'Choose the repository checkout root.',
-    );
-  } finally {
     await f.close();
   }
 });

@@ -2489,18 +2489,26 @@ test('a background reload lists again without clearing an error or Refresh state
   assert.deepEqual(f.controller.getSnapshot().active, []);
 });
 
-test('settle updates the listed chat and the open snapshot from the host reply', async (t) => {
+test('settle updates the listed chat and the open snapshot from the host reply, then lists again', async (t) => {
   const f = await fixture(t);
   const activity = { state: 'idle' as const, at: '2026-01-02T00:00:00Z' };
+  // The host lists the chat as settled once a settle reply has been sent.
+  let hostSettledAt: string | undefined;
   f.answers.set('listChats', async () => ({
-    conversations: [{ ...summary, activity }],
+    conversations: [
+      { ...summary, activity, ...(hostSettledAt ? { settledAt: hostSettledAt } : {}) },
+    ],
     nextCursor: null,
   }));
   await ready(f);
   await turn();
+  const listings = () => f.calls.filter((call) => call.operation === 'listChats').length;
   const settledAt = '2026-02-01T00:00:00Z';
-  let reply: ChatCommands['settleChat']['output'] = { ...summary, settledAt };
-  f.answers.set('settleChat', async () => reply);
+  f.answers.set('settleChat', async (input: ChatCommands['settleChat']['input']) => {
+    hostSettledAt = input.settled ? settledAt : undefined;
+    return hostSettledAt ? { ...summary, settledAt } : summary;
+  });
+  let before = listings();
   await f.controller.settle(target, true);
   assert.deepEqual(
     f.calls.filter((call) => call.operation === 'settleChat').map((call) => call.input),
@@ -2511,12 +2519,18 @@ test('settle updates the listed chat and the open snapshot from the host reply',
   // The listing keeps its activity, which only listings carry.
   assert.deepEqual(state.chats[0], { ...summary, settledAt, activity });
   assert.equal(state.snapshot?.conversation.settledAt, settledAt);
-  reply = summary;
+  // A reload follows, so a listing begun before the reply can't leave the list behind it.
+  await f.controller.reloadChats();
+  assert(listings() > before);
+  assert.deepEqual(f.controller.getSnapshot().chats[0], { ...summary, settledAt, activity });
+  before = listings();
   await f.controller.settle(target, false);
   state = f.controller.getSnapshot();
   assert.equal('settledAt' in state.chats[0]!, false);
   assert.equal(state.snapshot?.conversation.settledAt, undefined);
   assert.deepEqual(state.active, []);
+  await f.controller.reloadChats();
+  assert(listings() > before);
   // A refusal is shown and changes nothing.
   f.answers.set('settleChat', async () => {
     throw new ApplicationError({ code: 'Unauthorized', message: 'Not yours.' });
@@ -2538,48 +2552,6 @@ test('settle needs a connected host', async (t) => {
   await f.controller.settle(target, true);
   assert(!f.calls.some((call) => call.operation === 'settleChat'));
   assert.match(f.controller.getSnapshot().error!, /^Unavailable/);
-});
-
-test('a refresh begun before a settle reply keeps that settle', async (t) => {
-  const f = await fixture(t);
-  await ready(f);
-  await turn();
-  let release!: () => void;
-  const held = new Promise<void>((resolve) => (release = resolve));
-  f.answers.set('listChats', async () => {
-    await held;
-    return { conversations: [summary], nextCursor: null };
-  });
-  f.answers.set('settleChat', async () => ({ ...summary, settledAt: '2026-02-01T00:00:00Z' }));
-  const refreshing = f.controller.refresh();
-  await turn();
-  await f.controller.settle(target, true);
-  release();
-  await refreshing;
-  assert.equal(f.controller.getSnapshot().chats[0]!.settledAt, '2026-02-01T00:00:00Z');
-  // A listing begun after the reply is the host's word again.
-  f.answers.set('listChats', async () => ({ conversations: [summary], nextCursor: null }));
-  await f.controller.refresh();
-  assert.equal(f.controller.getSnapshot().chats[0]!.settledAt, undefined);
-});
-
-test('a chat reload begun before a settle reply does not undo it', async (t) => {
-  const f = await fixture(t);
-  await ready(f);
-  await turn();
-  let release!: () => void;
-  const held = new Promise<void>((resolve) => (release = resolve));
-  f.answers.set('listChats', async () => {
-    await held;
-    return { conversations: [summary], nextCursor: null };
-  });
-  f.answers.set('settleChat', async () => ({ ...summary, settledAt: '2026-02-01T00:00:00Z' }));
-  const reloading = f.controller.reloadChats();
-  await turn();
-  await f.controller.settle(target, true);
-  release();
-  await reloading;
-  assert.equal(f.controller.getSnapshot().chats[0]!.settledAt, '2026-02-01T00:00:00Z');
 });
 
 test('a draft mention the saved format rejects is refused without blocking storage, Send or Quit', async (t) => {

@@ -6,11 +6,9 @@ import * as V from './validation.ts';
 const slugLength = 40;
 
 /** `2026-11-08-tidy-the-composer-a1b2c3d4`: the local date, the title's first words and a short id. */
-export function nameChatFolder(
-  title: string,
-  date = new Date(),
-  id = randomBytes(4).toString('hex'),
-) {
+function nameChatFolder(title: string) {
+  const date = new Date(),
+    id = randomBytes(4).toString('hex');
   const day = [date.getFullYear(), date.getMonth() + 1, date.getDate()]
     .map((part) => String(part).padStart(2, '0'))
     .join('-');
@@ -57,15 +55,10 @@ export async function makeChatFolder(parent: string, title: string) {
     );
   try {
     await mkdir(parent, { recursive: true, mode: 0o700 });
-    for (let attempt = 1; ; attempt++) {
-      const folder = join(parent, nameChatFolder(title));
-      try {
-        await mkdir(folder, { mode: 0o700 });
-        return await realpath(folder);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || attempt === 5) throw error;
-      }
-    }
+    // The random suffix makes a taken name a failure to report, not one to retry.
+    const folder = join(parent, nameChatFolder(title));
+    await mkdir(folder, { mode: 0o700 });
+    return await realpath(folder);
   } catch {
     return V.fail('Unavailable', 'A folder for the new chat could not be made.');
   }

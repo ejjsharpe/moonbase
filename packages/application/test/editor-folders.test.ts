@@ -120,18 +120,18 @@ async function startInitializing(
   await f.editor.open({ checkout: folder, path: 'a.ts' }, { intent: 'keep' });
   const initializing = f.editor.initializeRepository(folder);
   await initialization.started;
-  assert.deepEqual(f.editor.getSnapshot().initializing, [folder.checkoutId]);
+  assert.equal(f.editor.getSnapshot().initializing, folder.checkoutId);
   return { initializing, commands: f.commands.length };
 }
 
-test('a plain-folder checkout opens and refreshes without reading Git status', async () => {
+test('a plain-folder checkout opens and refreshes with an empty Git status', async () => {
   const f = await fixture();
   try {
     assert.deepEqual(await f.editor.openCheckout(folder.root), folder);
     await f.editor.open({ checkout: folder, path: 'a.ts' }, { intent: 'keep' });
     await f.editor.refresh(folder);
-    assert(!f.commands.includes('gitStatus'));
-    assert.equal(f.editor.getSnapshot().git[checkoutKey(folder)], undefined);
+    // The workspace answers a plain folder's Git status with no changes.
+    assert.deepEqual(f.editor.getSnapshot().git[checkoutKey(folder)]?.changes, []);
     assert.deepEqual((await f.editor.listWorktrees(folder)).worktrees, []);
     await f.editor.openCheckout(repository.root);
     await assert.rejects(
@@ -285,7 +285,7 @@ test('a save or file operation during initializeRepository is refused, and the r
     initialization.finish();
     const initialized = await initializing;
     assert.deepEqual(f.editor.getSnapshot().recovery.checkouts, [initialized]);
-    assert.deepEqual(f.editor.getSnapshot().initializing, []);
+    assert.equal(f.editor.getSnapshot().initializing, null);
     // Saving works again, on the Git checkout.
     assert.equal(await f.editor.save({ checkout: initialized, path: 'a.ts' }), true);
     assert.equal(
@@ -374,7 +374,7 @@ test('if the rebind fails after git init, the folder’s work still moves to the
     const initialized = recovery.checkouts[0];
     assert.equal(initialized.vcs, 'git');
     assert.deepEqual(recovery.checkouts, [initialized]);
-    assert.deepEqual(initializing, []);
+    assert.equal(initializing, null);
     assert.equal(publication, undefined);
     assert.equal(f.editor.buffer({ checkout: initialized, path: 'a.ts' })?.text, 'unsaved');
     assert.deepEqual(

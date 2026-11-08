@@ -25,8 +25,9 @@ export function WorktreeSwitcher({
   run(work: Promise<unknown>): void;
 }) {
   const [worktrees, setWorktrees] = useState<readonly Worktree[] | null>(null);
-  const initializing = useSyncExternalStore(controller.subscribe, () =>
-    controller.getSnapshot().initializing.includes(checkout.checkoutId),
+  const initializing = useSyncExternalStore(
+    controller.subscribe,
+    () => controller.getSnapshot().initializing === checkout.checkoutId,
   );
   const name = checkoutName(checkout);
   if (checkout.vcs === 'none')
