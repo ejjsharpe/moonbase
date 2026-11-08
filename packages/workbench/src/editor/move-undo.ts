@@ -36,11 +36,11 @@ export function selectEntries(
 }
 
 /**
- * Lists the folders an undo reads: each folder's entries, or none when it is gone. A folder whose
- * listing fails is gone only when its parent lists without it; otherwise, since it may still be
- * there, the result names it as `unlisted`.
+ * Lists the folders an undo or paste reads: each folder's entries, or none when it is gone. A
+ * folder whose listing fails is gone only when its parent lists without it; otherwise, since it
+ * may still be there, the result names it as `unlisted`.
  */
-async function listUndoFolders(
+export async function listFolders(
   controller: EditorController,
   checkout: CheckoutTarget,
   folders: readonly string[],
@@ -152,7 +152,7 @@ export function useMoveUndo(
       const folders = [
         ...new Set(current.moves.flatMap((move) => [parentOf(move.to), parentOf(move.from)])),
       ];
-      const { listings, unlisted } = await listUndoFolders(controller, checkout, folders);
+      const { listings, unlisted } = await listFolders(controller, checkout, folders);
       if (unlisted !== undefined) {
         controller.report(
           `Can’t undo the move yet: ${unlisted || 'the checkout’s root'} couldn’t be listed. Try again.`,

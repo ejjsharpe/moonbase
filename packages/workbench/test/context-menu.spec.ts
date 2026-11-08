@@ -567,10 +567,8 @@ for (const timing of ['normal', 'before completion', 'late completion'])
         focus: 'welcome.ts',
       }),
     );
-    // Open, Mention in Chat, Rename…, Duplicate…
-    await page.keyboard.press('ArrowDown');
-    await page.keyboard.press('ArrowDown');
-    await page.keyboard.press('ArrowDown');
+    // Open, Mention in Chat, Cut, Copy, Paste (disabled, but focusable), Rename…, Duplicate…
+    for (let step = 0; step < 6; step++) await page.keyboard.press('ArrowDown');
     await expect(item(page, 'Duplicate…')).toBeFocused();
     if (timing === 'late completion') {
       await page.evaluate(() => window.finishMenuOpening());
@@ -720,6 +718,10 @@ test('file, folder and multi-item menus group their own commands with shortcuts'
     '—',
     'Mention in Chat',
     '—',
+    `Cut [${mod}+X]`,
+    `Copy [${mod}+C]`,
+    `Paste [${mod}+V]`,
+    '—',
     'Rename… [F2]',
     'Duplicate…',
     `Copy Path [Alt+${mod}+C]`,
@@ -733,6 +735,10 @@ test('file, folder and multi-item menus group their own commands with shortcuts'
   expect(await menuItems(page)).toEqual([
     'New File…',
     'New Folder…',
+    '—',
+    `Cut [${mod}+X]`,
+    `Copy [${mod}+C]`,
+    `Paste [${mod}+V]`,
     '—',
     'Rename… [F2]',
     `Copy Path [Alt+${mod}+C]`,
@@ -751,6 +757,10 @@ test('file, folder and multi-item menus group their own commands with shortcuts'
   expect(await menuItems(page)).toEqual([
     `Mention ${files.length} Files in Chat`,
     '—',
+    `Cut [${mod}+X]`,
+    `Copy [${mod}+C]`,
+    `Paste [${mod}+V]`,
+    '—',
     `Copy Paths [Alt+${mod}+C]`,
     `Copy Relative Paths [Shift+Alt+${mod}+C]`,
     '—',
@@ -764,6 +774,10 @@ test('file, folder and multi-item menus group their own commands with shortcuts'
     .click({ button: 'right' });
   expect(await menuItems(page)).toEqual([
     'Open [Enter]',
+    '—',
+    `Cut [${mod}+X]`,
+    `Copy [${mod}+C]`,
+    `Paste [${mod}+V]`,
     '—',
     'Rename… [F2]',
     'Duplicate…',
