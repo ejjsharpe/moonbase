@@ -535,7 +535,14 @@ test.describe('the virtualized transcript', () => {
   test('a failed view restore shows its error and Retry above the list', async ({ page }) => {
     await openLong(page, 400);
     await page.evaluate(() => window.demo.application.chat!.jumpToEntry('long-100'));
-    await expect(page.locator('[data-transcript-row="entry:long-100"]')).toBeVisible();
+    const row = page.locator('[data-transcript-row="entry:long-100"]');
+    await expect(row).toBeVisible();
+    // The reader was 40px into the row.
+    const anchor = { key: 'entry:long-100', offset: 40 };
+    await page.evaluate(
+      (anchor) => window.demo.application.chat!.setTranscriptView({ anchor, expanded: [] }),
+      anchor,
+    );
     await page.getByRole('button', { name: 'Close Chat panel', exact: true }).locator('..').hover();
     await page.getByRole('button', { name: 'Close Chat panel', exact: true }).click();
     await page.evaluate(() => {
@@ -557,7 +564,18 @@ test.describe('the virtualized transcript', () => {
     await expect(transcriptList(page).getByRole('alert')).toHaveCount(0);
     await alert.getByRole('button', { name: 'Retry history', exact: true }).click();
     await expect(alert).toHaveCount(0);
-    await expect(page.locator('[data-transcript-row="entry:long-100"]')).toBeVisible();
+    await expect(row).toBeVisible();
+    // Retry restores the saved position, not the row's top.
+    expect(await savedAnchor(page)).toEqual(anchor);
+    await expect
+      .poll(async () => {
+        const [box, list] = await Promise.all([
+          row.boundingBox(),
+          transcriptList(page).boundingBox(),
+        ]);
+        return Math.round(box!.y - list!.y);
+      })
+      .toBe(-40);
   });
 });
 

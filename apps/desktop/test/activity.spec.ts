@@ -1,4 +1,4 @@
-import { scrollToStart } from './transcript-list.ts';
+import { scrollToEnd, scrollToStart } from './transcript-list.ts';
 import { test, expect, type Page } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -656,6 +656,98 @@ test('reading a durable row in the latest window retains current live activity b
   await expect(row).toContainText('Current held output');
   await row.getByRole('button', { name: /^Activity/ }).click();
   await expect(row.locator('pre')).toHaveText('Current held output');
+});
+test('an activity card stays mounted as the live response joins and leaves it, and anchors to a stored row', async ({
+  page,
+}) => {
+  test.setTimeout(90000);
+  await open(page);
+  const output = {
+    kind: 'result' as const,
+    role: 'tool' as const,
+    toolName: 'bash',
+    state: 'running' as const,
+    pairing: 'matched' as const,
+    call: { entryId: 'origin', partId: 'call' },
+    text: 'Check output',
+  };
+  // Enough earlier calls in the card that it is taller than the viewport.
+  await page.evaluate(async () => {
+    const call = (id: string, command: string) => ({
+      id,
+      parts: [
+        {
+          kind: 'arguments' as const,
+          partId: 'call',
+          toolName: 'bash',
+          state: 'completed' as const,
+          text: JSON.stringify({ command }),
+        },
+      ],
+    });
+    await window.demo.transcript!.record([
+      { id: 'question', role: 'user', parts: [{ kind: 'text', role: 'user', text: 'Run it' }] },
+      ...Array.from({ length: 60 }, (_, index) => call(`step-${index}`, `step ${index}`)),
+      call('origin', 'check'),
+    ]);
+    await window.demo.application.chat!.jumpToLatest();
+  });
+  const origin = page.locator('[data-transcript-row="entry:origin"]');
+  await expect(origin).toContainText('bash · check');
+  // Remounting the card would drop this mark with its DOM.
+  await origin.evaluate((node) => Object.assign(node, { cardMark: true }));
+  const marked = () => origin.evaluate((node) => 'cardMark' in node);
+  // The call's output arrives in the live response, which joins the card's end.
+  await page.evaluate((part) => window.demo.transcript!.activity([part], 'none'), output);
+  const row = live(page);
+  await expect(row).toBeAttached();
+  // One card: the live row is the call's row's sibling in the same list item.
+  await expect(
+    page.locator('[data-transcript-row="entry:origin"] + [data-transcript-row]'),
+  ).toHaveAttribute('data-transcript-row', /^live:/);
+  expect(await marked()).toBe(true);
+  // The live row holds only the call's output, so it has no chevron (or hidden control) of its own.
+  await expect(row.getByRole('button', { name: /^Activity/ })).toHaveCount(0);
+  // Reading the card above its end saves its stored row, not the live row: the reader isn't
+  // following the live edge.
+  await origin.getByRole('button', { name: /^Activity/ }).click();
+  await expect(row.locator('pre')).toHaveText('Check output');
+  expect(await marked()).toBe(true);
+  await scrollToEnd(page);
+  await page.mouse.wheel(0, -400);
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const { view, atLatest } = window.demo.application.chat!.getSnapshot().transcript;
+        return { key: view.anchor?.key, atLatest };
+      }),
+    )
+    .toEqual({ key: 'entry:origin', atLatest: false });
+  // The answer starts, so the live row leaves the card; the card stays as it was.
+  await page.evaluate(
+    (part) =>
+      window.demo.transcript!.activity([part, { kind: 'text', text: 'All checks pass' }], 'none'),
+    output,
+  );
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const last = window.demo.application.chat!.getSnapshot().transcript.rows.at(-1)!;
+        return last.kind === 'live' ? last.entry.text : null;
+      }),
+    )
+    .toBe('All checks pass');
+  await page.evaluate(() => new Promise(requestAnimationFrame));
+  expect(await marked()).toBe(true);
+  await expect(origin.getByRole('button', { name: /^Activity/ })).toHaveAttribute(
+    'aria-expanded',
+    'true',
+  );
+  await scrollToEnd(page);
+  await expect(row).toContainText('All checks pass');
+  await expect(
+    page.locator('[data-transcript-row="entry:origin"] + [data-transcript-row]'),
+  ).toHaveCount(0);
 });
 for (const valid of [false, true])
   test(`EOF patch source without terminal newline stays exact in Copy: ${valid ? 'valid replacement' : 'truncated replacement'}`, async ({
