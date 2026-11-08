@@ -102,24 +102,40 @@ test('files whose paths a mention cannot hold are left out of the draft and coun
   });
 });
 
-test('mentions moved to another folder are respelled inside it and dropped outside it', () => {
+test('mentions moved to another folder are respelled inside it and written out outside it', () => {
   const mentions = [{ path: 'src/a.ts' }, { path: 'README.md' }, { path: 'src/My notes.md' }];
   const text = 'Read @src/a.ts, @README.md and @"src/My notes.md".';
-  assert.deepEqual(rebaseMentions(text, mentions, '/repo', '/repo/src/'), {
-    text: 'Read @a.ts, @README.md and @"My notes.md".',
+  const repo = () => '/repo';
+  // Outside the folder, a mention becomes its absolute path, which no later mention can spell.
+  assert.deepEqual(rebaseMentions(text, mentions, repo, '/repo/src/'), {
+    text: 'Read @a.ts, /repo/README.md and @"My notes.md".',
     mentions: [{ path: 'a.ts' }, { path: 'My notes.md' }],
     dropped: 1,
   });
-  assert.deepEqual(rebaseMentions('See @a.ts', [{ path: 'a.ts' }], '/repo/src', '/repo'), {
-    text: 'See @src/a.ts',
-    mentions: [{ path: 'src/a.ts' }],
-    dropped: 0,
-  });
+  assert.deepEqual(
+    rebaseMentions('See @a.ts', [{ path: 'a.ts' }], () => '/repo/src', '/repo'),
+    {
+      text: 'See @src/a.ts',
+      mentions: [{ path: 'src/a.ts' }],
+      dropped: 0,
+    },
+  );
+  // Each mention keeps its own folder.
+  const folders: Record<string, string> = { 'a.ts': '/notes', 'b.ts': '/repo' };
+  assert.deepEqual(
+    rebaseMentions(
+      '@a.ts @b.ts',
+      [{ path: 'a.ts' }, { path: 'b.ts' }],
+      (p) => folders[p]!,
+      '/repo',
+    ),
+    { text: '/notes/a.ts @b.ts', mentions: [{ path: 'b.ts' }], dropped: 1 },
+  );
   // A sibling sharing the prefix, or the filesystem root, is not inside.
-  assert.deepEqual(rebaseMentions('@a.ts', [{ path: 'a.ts' }], '/repo', '/repository'), {
-    text: '@a.ts',
+  assert.deepEqual(rebaseMentions('@a.ts', [{ path: 'a.ts' }], repo, '/repository'), {
+    text: '/repo/a.ts',
     mentions: [],
     dropped: 1,
   });
-  assert.equal(rebaseMentions('@a.ts', [{ path: 'a.ts' }], '/repo', '/').dropped, 1);
+  assert.equal(rebaseMentions('@a.ts', [{ path: 'a.ts' }], repo, '/').dropped, 1);
 });

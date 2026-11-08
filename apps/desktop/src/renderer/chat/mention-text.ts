@@ -87,34 +87,33 @@ export function appendMentions(
 }
 
 /**
- * Moves a draft's mentions from folder `from` to folder `to` (absolute paths): a mentioned file
- * inside `to` is spelled relative to it instead, and one outside stops being a mention, its text
- * left as typed. `dropped` counts those.
+ * Makes a draft's mentions relative to folder `to`. Each mention is relative to its own folder,
+ * `folderOf(path)` (an absolute path). A mentioned file inside `to` is spelled relative to it; one
+ * outside stops being a mention, and its text becomes the file's absolute path without the `@`, so
+ * it can't read as another file. `dropped` counts those.
  */
 export function rebaseMentions(
   text: string,
   mentions: readonly ChatMention[],
-  from: string,
+  folderOf: (path: string) => string,
   to: string,
 ) {
-  const source = from.replace(/\/+$/, '') + '/',
-    target = to.replace(/\/+$/, '') + '/';
-  const moved = new Map<string, string | null>();
+  const target = to.replace(/\/+$/, '') + '/';
+  const moved = new Map<string, { path: string | null; file: string }>();
   for (const { path } of mentions) {
-    const file = source + path;
+    const file = folderOf(path).replace(/\/+$/, '') + '/' + path;
     const relative = target !== '/' && file.startsWith(target) ? file.slice(target.length) : '';
-    moved.set(path, relative && isChatMentionPath(relative) ? relative : null);
+    moved.set(path, { path: relative && isChatMentionPath(relative) ? relative : null, file });
   }
   let rebased = '',
     at = 0;
   for (const range of findMentionRanges(text, mentions)) {
-    const path = moved.get(range.path);
-    if (!path) continue;
-    rebased += text.slice(at, range.start) + formatChatMention(path);
+    const { path, file } = moved.get(range.path)!;
+    rebased += text.slice(at, range.start) + (path ? formatChatMention(path) : file);
     at = range.end;
   }
   rebased += text.slice(at);
-  const kept = [...moved.values()].filter((path) => path !== null);
+  const kept = [...moved.values()].flatMap(({ path }) => (path === null ? [] : [path]));
   return {
     text: rebased,
     mentions: [...new Set(kept)].map((path) => ({ path })),
