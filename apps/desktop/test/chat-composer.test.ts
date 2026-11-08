@@ -12,43 +12,62 @@ const target = (conversationId: string) =>
   ({ conversationId, session: { actorId: 'a', hostId: 'h', storeId: 's' } }) as never as ChatTarget;
 const settings = { model: { provider: 'faux', modelId: 'faux-1' } };
 
-/** A chat controller's draft rules in memory: one draft per chat, and one for a new chat. */
+/**
+ * A chat controller's draft rules in memory: one draft per chat and one for a new chat. A new chat's
+ * send creates and opens a chat, as the controller does once the host confirms it.
+ */
 function makeChat(selected: ChatTarget | null = null) {
   const drafts = new Map<string, { text: string; mentions: ChatMention[] }>();
   const key = () => selected?.conversationId ?? '';
-  const sent: ChatCreationSettings[] = [];
-  let failClose = false;
+  const sent: Record<string, unknown>[] = [];
+  const listeners = new Set<() => void>();
+  let failClose = false,
+    rejectDraft = false,
+    created = 0;
+  const notify = () => listeners.forEach((listener) => listener());
   const chat = {
     sent,
     drafts,
     failNextClose: () => (failClose = true),
+    rejectNextDraft: () => (rejectDraft = true),
     getSnapshot: () => ({
       selected,
       draft: drafts.get(key())?.text ?? '',
       mentions: drafts.get(key())?.mentions ?? [],
-      active: [] as string[],
     }),
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
     setDraft(text: string, mentions?: readonly ChatMention[]) {
+      if (rejectDraft) return void (rejectDraft = false);
       const kept = (mentions ?? drafts.get(key())?.mentions ?? []).filter(
         (mention) => findChatMentionStarts(text, mention.path).length,
       );
       drafts.set(key(), { text, mentions: kept.map(({ path }) => ({ path })) });
+      notify();
     },
     send: async (creation?: ChatCreationSettings) => {
-      sent.push(creation!);
+      sent.push({ creation, ...chat.getSnapshot() });
+      drafts.delete(key());
+      if (!selected) selected = target(`created-${++created}`);
+      notify();
     },
     closeView: async () => {
       if (failClose) failClose = false;
       else selected = null;
+      notify();
     },
     select: async (next: ChatTarget) => {
       selected = next;
+      notify();
     },
   };
   return chat;
 }
 const composerOf = (chat: ReturnType<typeof makeChat>) =>
   new ChatComposer(chat as never as ConstructorParameters<typeof ChatComposer>[0]);
+const settle = () => new Promise((resolve) => setTimeout(resolve));
 
 test('a place keeps its new chat folder, worktree choice and error across views', () => {
   const chat = makeChat();
@@ -75,12 +94,12 @@ test('a place keeps its new chat folder, worktree choice and error across views'
   assert.notEqual(getChatComposer(makeChat() as never), composer);
 });
 
-test('a worktree made after its view went away still sends, and keeps the place on it', async () => {
+test('a worktree made after its view went away still sends, then the place starts over', async () => {
   const chat = makeChat();
   const composer = composerOf(chat);
   chat.setDraft('Tidy @src/a.ts', [{ path: 'src/a.ts' }]);
+  composer.noteMentions(['src/a.ts'], '/repo');
   composer.updatePlace('agents', '', { cwd: '/repo', newWorktree: true });
-  composer.moveMentions('/repo');
   const made = Promise.withResolvers<string>();
   const asked: string[] = [];
   let published = 0;
@@ -100,22 +119,27 @@ test('a worktree made after its view went away still sends, and keeps the place 
   assert.deepEqual(asked, ['/repo chat/tidy']);
   // No view is subscribed any more; the creation still completes.
   made.resolve('/repo-worktrees/chat-tidy');
-  await made.promise;
-  await Promise.resolve();
+  await settle();
   assert.ok(published > 0);
-  assert.deepEqual(chat.sent, [{ cwd: '/repo-worktrees/chat-tidy', ...settings }]);
+  // The worktree holds the checkout's files at the same paths, so its mentions stay.
+  assert.deepEqual(chat.sent, [
+    {
+      creation: { cwd: '/repo-worktrees/chat-tidy', ...settings },
+      selected: null,
+      draft: 'Tidy @src/a.ts',
+      mentions: [{ path: 'src/a.ts' }],
+    },
+  ]);
   assert.equal(composer.getSnapshot().creatingWorktree, false);
+  // The chat was created, so the next new chat in this place doesn't start in its worktree.
   assert.deepEqual(composer.readPlace('agents', ''), {
-    cwd: '/repo-worktrees/chat-tidy',
+    cwd: '',
     newWorktree: false,
     folderError: null,
   });
-  // The worktree holds the checkout's files at the same paths, so its mentions stay.
-  assert.equal(composer.moveMentions('/repo-worktrees/chat-tidy'), 0);
-  assert.deepEqual(chat.getSnapshot().mentions, [{ path: 'src/a.ts' }]);
 });
 
-test('a worktree finished after another chat opened waits for a new chat, and a failure says so', async () => {
+test('a worktree outcome reaches every view, until a chat is opened or Send is pressed', async () => {
   const chat = makeChat();
   const composer = composerOf(chat);
   chat.setDraft('Fix it');
@@ -124,43 +148,80 @@ test('a worktree finished after another chat opened waits for a new chat, and a 
   composer.sendInWorktree('agents', '', () => made.promise, settings);
   await chat.select(target('other'));
   made.resolve('/repo-worktrees/chat-fix-it');
-  await made.promise;
-  await Promise.resolve();
+  await settle();
   assert.deepEqual(chat.sent, []);
+  // The place keeps the worktree, so sending from it there reuses it.
   assert.equal(composer.readPlace('agents', '').cwd, '/repo-worktrees/chat-fix-it');
-  assert.match(composer.readPlace('agents', '').folderError!, /ready at \/repo-worktrees/);
+  assert.match(composer.getSnapshot().notice!, /ready at \/repo-worktrees\/chat-fix-it/);
+  // Back to a new chat, the notice still shows; opening a chat clears it.
+  await chat.closeView();
+  assert.match(composer.getSnapshot().notice!, /ready at/);
+  await chat.select(target('other'));
+  assert.equal(composer.getSnapshot().notice, null);
 
+  await chat.closeView();
+  chat.setDraft('Fix it');
   const failing = Promise.withResolvers<string>();
-  composer.updatePlace('dock:/b', '/b', { newWorktree: true });
+  composer.updatePlace('dock:/b', '/b', { newWorktree: true, folderError: 'Old' });
   composer.sendInWorktree('dock:/b', '/b', () => failing.promise, settings);
+  assert.equal(composer.readPlace('dock:/b', '/b').folderError, null);
   failing.reject(Error('Git said no.'));
-  await failing.promise.catch(() => {});
-  await Promise.resolve();
+  await settle();
   assert.equal(composer.getSnapshot().creatingWorktree, false);
+  assert.equal(composer.getSnapshot().notice, 'The worktree could not be created. Git said no.');
   assert.deepEqual(composer.readPlace('dock:/b', '/b'), {
     cwd: '/b',
     newWorktree: true,
-    folderError: 'The worktree could not be created. Git said no.',
+    folderError: null,
   });
+  composer.clearMessages('dock:/b');
+  assert.equal(composer.getSnapshot().notice, null);
+  // Opening a chat clears every place's errors too.
+  composer.updatePlace('agents', '', { folderError: 'Stale' });
+  await chat.select(target('third'));
+  assert.equal(composer.readPlace('agents', '').folderError, null);
 });
 
-test('mentions follow the folder the composer shows, and ones outside it become plain text', () => {
+test('showing the draft elsewhere leaves its mentions; Send checks them against its folder', () => {
   const chat = makeChat();
   const composer = composerOf(chat);
-  // No folder shown yet: nothing to move.
-  assert.equal(composer.moveMentions(''), 0);
-  composer.moveMentions('/repo');
-  chat.setDraft('See @src/a.ts and @b.ts', [{ path: 'src/a.ts' }, { path: 'b.ts' }]);
-  assert.equal(composer.moveMentions('/repo/src'), 1);
+  // Mentions picked in Agents' folder, then the draft is shown in a dock with another folder.
+  chat.setDraft('Fix @index.md and @src/a.ts', [{ path: 'index.md' }, { path: 'src/a.ts' }]);
+  composer.noteMentions(['index.md'], '/notes');
+  composer.noteMentions(['src/a.ts'], '/repo');
+  assert.deepEqual(chat.getSnapshot().mentions, [{ path: 'index.md' }, { path: 'src/a.ts' }]);
+  // Sending from the notes folder writes out the file from elsewhere and holds the send.
+  assert.match(composer.checkMentions('/notes')!, /^A mentioned file isn't in \/notes/);
   assert.deepEqual(chat.getSnapshot(), {
     selected: null,
-    draft: 'See @a.ts and @b.ts',
-    mentions: [{ path: 'a.ts' }],
-    active: [],
+    draft: 'Fix @index.md and /repo/src/a.ts',
+    mentions: [{ path: 'index.md' }],
   });
-  assert.equal(composer.moveMentions('/repo'), 0);
-  assert.equal(chat.getSnapshot().draft, 'See @src/a.ts and @b.ts');
-  assert.deepEqual(chat.getSnapshot().mentions, [{ path: 'src/a.ts' }]);
+  // Now every mention is relative to it, so the next Send goes ahead.
+  assert.equal(composer.checkMentions('/notes'), null);
+  assert.equal(chat.getSnapshot().draft, 'Fix @index.md and /repo/src/a.ts');
+  // A mention inside a subfolder is respelled without holding the send.
+  chat.setDraft('See @docs/x.md', [{ path: 'docs/x.md' }]);
+  composer.noteMentions(['docs/x.md'], '/notes');
+  assert.equal(composer.checkMentions('/notes/docs'), null);
+  assert.equal(chat.getSnapshot().draft, 'See @x.md');
+  // A mention whose folder isn't known, as after a restart, is relative to the folder it sends in.
+  const restarted = composerOf(chat);
+  assert.equal(restarted.checkMentions('/elsewhere'), null);
+  assert.equal(chat.getSnapshot().draft, 'See @x.md');
+});
+
+test('a draft that refuses the rewrite holds the send and keeps the mentions’ folders', () => {
+  const chat = makeChat();
+  const composer = composerOf(chat);
+  chat.setDraft('Fix @a.ts', [{ path: 'a.ts' }]);
+  composer.noteMentions(['a.ts'], '/notes');
+  chat.rejectNextDraft();
+  assert.match(composer.checkMentions('/repo')!, /couldn't be made relative/);
+  assert.equal(chat.getSnapshot().draft, 'Fix @a.ts');
+  // The mention is still known to be in /notes.
+  assert.match(composer.checkMentions('/repo')!, /isn't in \/repo/);
+  assert.equal(chat.getSnapshot().draft, 'Fix /notes/a.ts');
 });
 
 test('/new carries the rest of the message to the new chat and empties the open one', async () => {
@@ -168,23 +229,26 @@ test('/new carries the rest of the message to the new chat and empties the open 
   const composer = composerOf(chat);
   chat.setDraft('/new\nLook at @src/a.ts', [{ path: 'src/a.ts' }]);
   assert.equal(
-    await composer.startNewChat('Look at @src/a.ts', [{ path: 'src/a.ts' }], '/repo'),
+    await composer.startNewChat('Look at @src/a.ts', [{ path: 'src/a.ts' }], '/repo-wt'),
     null,
   );
   assert.equal(chat.getSnapshot().selected, null);
   assert.deepEqual(chat.drafts.get('open'), { text: '', mentions: [] });
-  assert.deepEqual(chat.getSnapshot().mentions, [{ path: 'src/a.ts' }]);
   assert.equal(chat.getSnapshot().draft, 'Look at @src/a.ts');
-  // Its mentions are relative to the open chat's folder until the composer shows another.
-  assert.equal(composer.moveMentions('/repo/src'), 0);
-  assert.equal(chat.getSnapshot().draft, 'Look at @a.ts');
+  assert.deepEqual(chat.getSnapshot().mentions, [{ path: 'src/a.ts' }]);
+  // Its mentions stay in the open chat's folder: sending elsewhere says so before sending.
+  assert.match(composer.checkMentions('/repo')!, /isn't in \/repo/);
+  assert.equal(chat.getSnapshot().draft, 'Look at /repo-wt/src/a.ts');
 
   // A new chat draft already there keeps its text, and the rest follows it.
+  chat.setDraft('Mine @b.ts', [{ path: 'b.ts' }]);
+  composer.noteMentions(['b.ts'], '/repo');
   await chat.select(target('second'));
   chat.setDraft('/new\nAnd @README.md', [{ path: 'README.md' }]);
-  await composer.startNewChat('And @README.md', [{ path: 'README.md' }], '/repo/src');
-  assert.equal(chat.getSnapshot().draft, 'Look at @a.ts\nAnd @README.md');
-  assert.deepEqual(chat.getSnapshot().mentions, [{ path: 'a.ts' }, { path: 'README.md' }]);
+  await composer.startNewChat('And @README.md', [{ path: 'README.md' }], '/repo');
+  assert.equal(chat.getSnapshot().draft, 'Mine @b.ts\nAnd @README.md');
+  assert.deepEqual(chat.getSnapshot().mentions, [{ path: 'b.ts' }, { path: 'README.md' }]);
+  assert.equal(composer.checkMentions('/repo'), null);
 });
 
 test('/new keeps the rest in the open chat when the new chat cannot take it', async () => {
@@ -200,6 +264,18 @@ test('/new keeps the rest in the open chat when the new chat cannot take it', as
   assert.equal(chat.getSnapshot().selected?.conversationId, 'open');
   assert.equal(chat.getSnapshot().draft, 'More');
   assert.equal(chat.drafts.get('')!.text.length, 32 * 1024 - 2);
+  // The same spelling mentioning a file in another folder can't join the new chat's draft.
+  await chat.closeView();
+  chat.setDraft('See @a.ts', [{ path: 'a.ts' }]);
+  composer.noteMentions(['a.ts'], '/notes');
+  await chat.select(target('open'));
+  chat.setDraft('/new\nAnd @a.ts', [{ path: 'a.ts' }]);
+  assert.match(
+    (await composer.startNewChat('And @a.ts', [{ path: 'a.ts' }], '/repo'))!,
+    /already mentions a\.ts in another folder/,
+  );
+  assert.equal(chat.getSnapshot().draft, 'And @a.ts');
+  assert.equal(chat.drafts.get('')!.text, 'See @a.ts');
   // A view that can't close keeps the rest in the open chat too.
   chat.setDraft('/new\nStill here');
   chat.failNextClose();
