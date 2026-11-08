@@ -1,7 +1,13 @@
-import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import type { ChatController } from '@moonbase/application/chat';
-import type { ChatTranscriptMatch, ChatTranscriptSource } from '@moonbase/contracts/chat';
-import { areJsonValuesEqual } from '@moonbase/contracts/common';
+import type { ChatTranscriptMatch } from '@moonbase/contracts/chat';
 import { getTranscriptDisclosureId } from '../../chat/transcript-source.ts';
 
 /**
@@ -35,6 +41,10 @@ function useExpansionId(entryId: string, id: string) {
   return { expansion, failed: failed === disclosure };
 }
 
+/** Whether view memory holds a disclosure open; one whose ID can't be worked out shows open. */
+const isRemembered = (expansion: string | null, failed: boolean, expandedIds: readonly string[]) =>
+  failed || (expansion !== null && expandedIds.includes(expansion));
+
 /** Writes one expansion into view memory. */
 function setExpansion(controller: ChatController, expansion: string, open: boolean) {
   const { view } = controller.getSnapshot().transcript;
@@ -57,7 +67,7 @@ export function useRememberedFold(
 ) {
   const { expansion, failed } = useExpansionId(entryId, id);
   return {
-    open: failed || (expansion !== null && expandedIds.includes(expansion)),
+    open: isRemembered(expansion, failed, expandedIds),
     setOpen: (open: boolean) => {
       if (expansion) setExpansion(controller, expansion, open);
     },
@@ -85,7 +95,7 @@ export function useRememberedExpansion(id: string | null) {
   const [local, setLocal] = useState(false);
   if (!row || id === null) return { open: local, setOpen: setLocal };
   return {
-    open: failed || (expansion !== null && row.expandedIds.includes(expansion)),
+    open: isRemembered(expansion, failed, row.expandedIds),
     setOpen: (open: boolean) => {
       if (expansion) setExpansion(row.controller, expansion, open);
     },
@@ -93,15 +103,44 @@ export function useRememberedExpansion(id: string | null) {
 }
 
 /**
- * A remembered disclosure: expanded when its view memory says so, and while the active Find match
- * is inside it unless the reader collapsed it for that match. Find revealing the match again
- * (returning to it) expands it again. The result controls a Base UI Collapsible.
+ * The active Find match a reader folded a disclosure on. The fold lasts while that match is
+ * active, and ends once no match is here or Find reveals the match again.
+ */
+export function useFoldedFindMatch(
+  match: ChatTranscriptMatch | null,
+  revealing: boolean,
+  controller: ChatController,
+) {
+  const key = match ? JSON.stringify(match) : null;
+  const [folded, setFolded] = useState<string | null>(null);
+  if (folded !== null && (key === null || revealing)) setFolded(null);
+  // A reveal into a folded run can start and end before it renders again, so the fold listens.
+  useEffect(() => {
+    if (folded === null) return;
+    return controller.subscribe(() => {
+      const { find } = controller.getSnapshot().transcript;
+      if (find.revealing || !find.active || JSON.stringify(find.active) !== folded) setFolded(null);
+    });
+  }, [controller, folded]);
+  return {
+    /** The match holds the disclosure open. */
+    holdsOpen: key !== null && folded !== key,
+    /** Folds on the match: reader input, so it ends the reveal, which would open it again. */
+    fold() {
+      if (key === null) return;
+      controller.cancelFindReveal();
+      setFolded(key);
+    },
+  };
+}
+
+/**
+ * A remembered disclosure: open when its view memory says so, and while the active Find match is
+ * inside it unless the reader folded it for that match.
  */
 export function useDisclosure({
   entryId,
   id,
-  partIds,
-  source,
   expandedIds,
   match,
   revealing,
@@ -109,8 +148,6 @@ export function useDisclosure({
 }: {
   entryId: string;
   id: string;
-  partIds: readonly string[];
-  source: ChatTranscriptSource;
   /** View memory of expanded disclosure IDs. */
   expandedIds: readonly string[];
   /** The active Find match, when it is inside this disclosure. */
@@ -120,30 +157,12 @@ export function useDisclosure({
   controller: ChatController;
 }) {
   const { expansion, failed: disclosureError } = useExpansionId(entryId, id);
-  const revealKey = match ? JSON.stringify(match) : null;
-  /** The match the reader folded again. The active match's row stays mounted, so this does too. */
-  const [collapsedReveal, setCollapsedReveal] = useState<string | null>(null);
-  // The fold lasts while its match is active. It ends once no match is here, and when Find reveals
-  // the match again.
-  if (collapsedReveal !== null && (revealKey === null || revealing)) setCollapsedReveal(null);
-  const open =
-    disclosureError ||
-    (expansion !== null && expandedIds.includes(expansion)) ||
-    (revealKey !== null && collapsedReveal !== revealKey);
+  const found = useFoldedFindMatch(match, revealing, controller);
+  const open = isRemembered(expansion, disclosureError, expandedIds) || found.holdsOpen;
   const toggle = () => {
     if (!expansion) return;
-    const collapse = open;
-    const active = controller.getSnapshot().transcript.find.active;
-    const inside =
-      active && areJsonValuesEqual(active.source, source) && partIds.includes(active.partId)
-        ? active
-        : null;
-    if (collapse && inside) {
-      // Folding the match is reader input: it ends the reveal, which would expand it again.
-      controller.cancelFindReveal();
-      setCollapsedReveal(JSON.stringify(inside));
-    }
-    setExpansion(controller, expansion, !collapse);
+    if (open) found.fold();
+    setExpansion(controller, expansion, !open);
   };
   return {
     open,
@@ -154,19 +173,18 @@ export function useDisclosure({
 }
 
 /**
- * Which tool calls have their card open. A call and its output are separate rows: the call's row
- * publishes whether it is open, and the output's row, which shows no line of its own while the
- * call's entry is retained, opens with it. An output open on its own (Find revealing a match in
- * it) shows its call's card open too, and folding the call folds it. Keys are `entryId\npartId` of
- * the call.
+ * Which tool calls are open. A call and its output are separate rows: the call's step publishes
+ * whether it is open, and the output's step, which shows no line of its own while the call's entry
+ * is retained, opens with it. An output open on its own (Find revealing a match in it) shows its
+ * call open too, and folding the call folds it. Keys are `entryId\npartId` of the call.
  */
 export type OpenCalls = {
-  isOpen(keys: readonly string[]): boolean;
-  set(keys: readonly string[], open: boolean): void;
-  /** Publishes an output row's own disclosure under its calls' keys; null when it unmounts. */
-  setOutput(id: string, keys: readonly string[], output: OutputDisclosure | null): void;
-  isOutputOpen(keys: readonly string[]): boolean;
-  foldOutputs(keys: readonly string[]): void;
+  isOpen(key: string): boolean;
+  set(key: string, open: boolean): void;
+  /** Publishes an output step's own disclosure under its call's key; null when it unmounts. */
+  setOutput(id: string, key: string, output: OutputDisclosure | null): void;
+  isOutputOpen(key: string): boolean;
+  foldOutputs(key: string): void;
   /** The retained entries, whose calls' outputs open with them. */
   setRetained(entryIds: readonly string[]): void;
   isRetained(entryId: string): boolean;
@@ -176,36 +194,30 @@ type OutputDisclosure = { open: boolean; fold(): void };
 /** `retained` seeds the retained entries, so the first render already reads them. */
 export function createOpenCalls(retained: readonly string[] = []): OpenCalls {
   const open = new Set<string>(),
-    outputs = new Map<string, { keys: readonly string[]; output: OutputDisclosure }>(),
+    outputs = new Map<string, { key: string; output: OutputDisclosure }>(),
     listeners = new Set<() => void>();
   let retainedIds = new Set(retained);
   const notify = () => {
     for (const listener of listeners) listener();
   };
-  const outputsOf = (keys: readonly string[]) =>
-    [...outputs.values()].filter((value) => value.keys.some((key) => keys.includes(key)));
+  const outputsOf = (key: string) => [...outputs.values()].filter((value) => value.key === key);
   return {
-    isOpen: (keys) => keys.some((key) => open.has(key)),
-    set(keys, value) {
-      let changed = false;
-      for (const key of keys)
-        if (open.has(key) !== value) {
-          if (value) open.add(key);
-          else open.delete(key);
-          changed = true;
-        }
-      if (changed) notify();
+    isOpen: (key) => open.has(key),
+    set(key, value) {
+      if (open.has(key) === value) return;
+      if (value) open.add(key);
+      else open.delete(key);
+      notify();
     },
-    setOutput(id, keys, output) {
+    setOutput(id, key, output) {
       const previous = outputs.get(id);
-      if (output) outputs.set(id, { keys, output });
+      if (output) outputs.set(id, { key, output });
       else outputs.delete(id);
-      if (previous?.output.open !== output?.open || previous?.keys.join('\t') !== keys.join('\t'))
-        notify();
+      if (previous?.output.open !== output?.open || previous?.key !== key) notify();
     },
-    isOutputOpen: (keys) => outputsOf(keys).some((value) => value.output.open),
-    foldOutputs(keys) {
-      for (const { output } of outputsOf(keys)) if (output.open) output.fold();
+    isOutputOpen: (key) => outputsOf(key).some((value) => value.output.open),
+    foldOutputs(key) {
+      for (const { output } of outputsOf(key)) if (output.open) output.fold();
     },
     setRetained(entryIds) {
       if (entryIds.length === retainedIds.size && entryIds.every((id) => retainedIds.has(id)))
@@ -221,3 +233,21 @@ export function createOpenCalls(retained: readonly string[] = []): OpenCalls {
   };
 }
 export const OpenCallsContext = createContext<OpenCalls | null>(null);
+
+/** A store subscription for when there is nothing to subscribe to. */
+export const noSubscription = () => () => {};
+
+/**
+ * Whether the transcript retains each call's entry, re-read as it retains or lets them go: a
+ * retained call's output belongs to the call's step.
+ */
+export function useRetainedCalls(entryIds: readonly string[]) {
+  const openCalls = useContext(OpenCallsContext);
+  const retained = useSyncExternalStore(openCalls?.subscribe ?? noSubscription, () =>
+    entryIds.filter((id) => openCalls?.isRetained(id) ?? true).join('\n'),
+  );
+  return useMemo(() => {
+    const ids = new Set(retained.split('\n'));
+    return (entryId: string) => ids.has(entryId);
+  }, [retained]);
+}

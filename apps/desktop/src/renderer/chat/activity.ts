@@ -217,31 +217,14 @@ export function describeActivityState(state: string | undefined) {
   return state === 'missing-result' ? 'no result' : state;
 }
 
-/** Folded Activity shows each part's state, and the start of what a result or thought holds. */
-export function describeActivityPart(
-  part: ChatTranscriptPart,
-  transcript: Pick<ChatTranscript, 'source'>,
-  evidence: ActivityEvidence,
-) {
-  const status = describeActivityState(getActivityState(part, transcript, evidence));
-  if (part.kind === 'thinking') {
-    // Only an unusual availability (redacted, withheld) is worth saying.
-    const details = ['Thinking'];
-    if (part.availability !== 'available') details.push(part.availability);
-    if (status) details.push(status);
-    if (part.availability === 'available' && excerpt(part)) details.push(excerpt(part));
-    return details.join(' · ');
-  }
-  const details = [getToolSummary(part)];
-  if (status) details.push(status);
-  // "no output" would only repeat a missing result.
-  if (part.kind === 'result' && (excerpt(part) || status !== 'no result'))
-    details.push(excerpt(part) || 'no output');
-  return details.join(' · ');
-}
-
 /** A tool call with the parts that answer it in the same group, shown as one step. */
 export type ActivityStep = { lead: ChatTranscriptPart; answers: ChatTranscriptPart[] };
+
+/** The call in another row a step answers, when the step is that call's output. */
+export const getAnsweredCall = (step: ActivityStep) =>
+  step.lead.call && step.lead.pairing === 'matched' && step.lead.kind !== 'arguments'
+    ? step.lead.call
+    : undefined;
 
 /**
  * Pairs each part with the call it answers: the call itself when it is in this group (from the
@@ -293,29 +276,6 @@ function countPatchLines(part: ChatTranscriptPart) {
   return added || removed ? `+${added} −${removed}` : '';
 }
 
-/**
- * A step reads as its lead part. Answers add a recorded patch's line counts, and a later output's
- * failure or running progress.
- */
-export function describeActivityStep(
-  step: ActivityStep,
-  transcript: Pick<ChatTranscript, 'source'>,
-  evidence: ActivityEvidence,
-) {
-  const details = [describeActivityPart(step.lead, transcript, evidence)];
-  const changes = [step.lead, ...step.answers]
-    .filter((part) => part.kind === 'patch' || part.kind === 'diff')
-    .map(countPatchLines)
-    .find(Boolean);
-  if (changes) details.push(changes);
-  for (const answer of step.answers) {
-    const status = getActivityState(answer, transcript, evidence);
-    if (answer.kind === 'result' && ['running', 'failed', 'interrupted'].includes(status ?? ''))
-      details.push(excerpt(answer));
-  }
-  return details.join(' · ');
-}
-
 /** The state that marks a step: its call's, unless an answer in the step failed or still runs. */
 export function getActivityStepState(
   step: ActivityStep,
@@ -330,38 +290,11 @@ export function getActivityStepState(
   );
 }
 
+/** A call's tool and its main argument: "bash · npm test", "read · src/a.ts". */
 export function getToolSummary(part: ChatTranscriptPart, text = part.text) {
   const name = part.toolName ?? 'Tool';
-  if (
-    !['arguments', 'executed-arguments'].includes(part.kind) ||
-    text.length > structuredSourceLimits.units
-  )
-    return name;
-  let keys: string[] = [];
-  if (['read', 'write', 'edit'].includes(name)) keys = ['path', 'file_path'];
-  else if (name === 'bash') keys = ['command'];
-  let value: unknown;
-  try {
-    const args: unknown = JSON.parse(text);
-    if (!args || typeof args !== 'object' || Array.isArray(args)) return name;
-    const values = args as Record<string, unknown>;
-    value = keys.map((key) => values[key]).find((item) => item !== undefined);
-  } catch {
-    // A preview cut short of its JSON still names a leading path or command.
-    for (const key of keys) {
-      const found = new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`).exec(text);
-      if (found) {
-        try {
-          value = JSON.parse(`"${found[1]}"`);
-        } catch {
-          value = found[1];
-        }
-        break;
-      }
-    }
-  }
-  if (typeof value !== 'string') return name;
-  return `${name} · ${value.replace(/\s+/g, ' ').slice(0, 160)}`;
+  const value = getToolArgument(part, text);
+  return value === undefined ? name : `${name} · ${value.replace(/\s+/g, ' ').slice(0, 160)}`;
 }
 
 export function getEntryTranscripts(
@@ -395,19 +328,37 @@ export type ActivityHeadline = {
 
 const fileName = (path: string) => path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
 
-/** The tool's main argument (a command or a path) from a call's recorded JSON. */
-function getToolArgument(part: ChatTranscriptPart, keys: string[]) {
-  if (!['arguments', 'executed-arguments'].includes(part.kind)) return undefined;
+/** The arguments that name what a tool acts on: a path for file tools, a shell's command. */
+const getArgumentKeys = (tool: string | undefined) => {
+  if (tool === 'read' || tool === 'write' || tool === 'edit') return ['path', 'file_path'];
+  if (tool === 'bash' || tool === 'powershell') return ['command'];
+  return [];
+};
+
+/** A call's main argument (a command or a path) from its recorded JSON. */
+function getToolArgument(part: ChatTranscriptPart, text = part.text): string | undefined {
+  const keys = getArgumentKeys(part.toolName);
+  if (
+    !keys.length ||
+    !['arguments', 'executed-arguments'].includes(part.kind) ||
+    text.length > structuredSourceLimits.units
+  )
+    return undefined;
   try {
-    const args: unknown = JSON.parse(part.text);
+    const args: unknown = JSON.parse(text);
     if (!args || typeof args !== 'object' || Array.isArray(args)) return undefined;
     const value = keys.map((key) => (args as Record<string, unknown>)[key]).find(Boolean);
     return typeof value === 'string' ? value : undefined;
   } catch {
     // A preview cut short of its JSON still names a leading path or command.
     for (const key of keys) {
-      const found = new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`).exec(part.text);
-      if (found) return found[1]!.replace(/\\(.)/g, '$1');
+      const found = new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`).exec(text);
+      if (!found) continue;
+      try {
+        return JSON.parse(`"${found[1]}"`) as string;
+      } catch {
+        return found[1];
+      }
     }
     return undefined;
   }
@@ -492,65 +443,66 @@ export function describeActivityHeadline(
   const unanswered = state === 'requested' && !live;
   const problem = unanswered ? 'no result shown' : describeActivityState(state);
   const ongoing = state === 'running' || (state === 'requested' && live);
+  const headline = describeHeadline(step, ongoing ? 0 : 1, transcript, evidence);
+  return problem ? { ...headline, problem } : headline;
+}
+
+function describeHeadline(
+  step: ActivityStep,
+  tense: 0 | 1,
+  transcript: Pick<ChatTranscript, 'source'>,
+  evidence: ActivityEvidence,
+): ActivityHeadline {
   const lead = step.lead;
   if (lead.kind === 'thinking') {
     const line = lead.availability === 'available' ? getThoughtLine(lead.text) : '';
     return {
       category: 'thinking',
-      action: line || (ongoing ? 'Thinking' : 'Thought'),
+      action: line || (tense ? 'Thought' : 'Thinking'),
       detail: lead.availability === 'available' ? '' : lead.availability,
-      ...(problem ? { problem } : {}),
     };
   }
   const name = lead.toolName ?? 'tool';
-  const tense = ongoing ? 0 : 1;
   // A call's output, patch and details are often recorded in a later row.
   const recorded =
     lead.kind === 'arguments' && transcript.source.kind === 'entry'
       ? (evidence.get(callKey(transcript, transcript.source.entryId, lead.partId)) ?? [])
       : [];
   const parts = [lead, ...step.answers, ...recorded];
-  if (['read', 'write', 'edit'].includes(name)) {
-    const path = parts.map((part) => getToolArgument(part, ['path', 'file_path'])).find(Boolean);
+  const argument = parts.map((part) => getToolArgument(part)).find(Boolean);
+  if (name === 'read' || name === 'write' || name === 'edit') {
     const changes = parts
       .filter((part) => part.kind === 'patch' || part.kind === 'diff')
       .map(countPatchLines)
       .find(Boolean);
-    const kind = name as 'read' | 'write' | 'edit';
     return {
-      category: kind === 'read' ? 'read' : 'edit',
-      action: `${verbs[kind][tense]} ${path ? fileName(path) : 'a file'}`,
+      category: name === 'read' ? 'read' : 'edit',
+      action: `${verbs[name][tense]} ${argument ? fileName(argument) : 'a file'}`,
       // The verb phrase names the file; the detail adds its folder.
-      detail: [changes, path?.split(/[\\/]/).slice(0, -1).join('/')].filter(Boolean).join(' · '),
-      ...(problem ? { problem } : {}),
-      ...(path && kind !== 'read' ? { path } : {}),
+      detail: [changes, argument?.split(/[\\/]/).slice(0, -1).join('/')]
+        .filter(Boolean)
+        .join(' · '),
+      ...(argument && name !== 'read' ? { path: argument } : {}),
     };
   }
   if (name === 'bash' || name === 'powershell') {
-    const command = parts.map((part) => getToolArgument(part, ['command'])).find(Boolean);
-    const split = command ? splitCommand(command) : undefined;
+    const split = argument ? splitCommand(argument) : undefined;
     const output = parts.find((part) => part.kind === 'result');
     return {
       category: 'command',
       action: `${verbs.command[tense]} ${split?.program ?? 'a command'}`,
       // The verb phrase names the program; the detail is the rest of its line.
-      detail: split ? split.rest : (command ?? (output ? excerpt(output) : '')),
-      ...(problem ? { problem } : {}),
+      detail: split ? split.rest : (argument ?? (output ? excerpt(output) : '')),
     };
   }
-  return {
-    category: 'tool',
-    action: `${verbs.tool[tense]} ${name}`,
-    detail: getToolSummary(lead).slice(name.length + 3),
-    ...(problem ? { problem } : {}),
-  };
+  return { category: 'tool', action: `${verbs.tool[tense]} ${name}`, detail: '' };
 }
 
 const counters = {
-  read: ['Read', 'file', 'files'],
-  edit: ['Edited', 'file', 'files'],
-  command: ['Ran', 'command', 'commands'],
-  tool: ['Used', 'tool', 'tools'],
+  read: [verbs.read[1], 'file', 'files'],
+  edit: [verbs.edit[1], 'file', 'files'],
+  command: [verbs.command[1], 'command', 'commands'],
+  tool: [verbs.tool[1], 'tool', 'tools'],
 } as const;
 
 /** A finished run of steps in one line: "Read 2 files, ran 3 commands". Thinking is not counted. */

@@ -132,29 +132,15 @@ export const transcriptStyles = stylex.create({
   },
   /** Tool work reads as quiet lines of steps; consecutive activity rows join into one list. */
   activity: {
-    position: 'relative',
     // Contains its content's margins, so joined rows have no seam when a step opens.
     display: 'flow-root',
     minWidth: 0,
     marginBlock: space.sm,
     marginInline: 0,
     paddingBlock: 2,
-    borderWidth: 0,
   },
-  activityJoinPrevious: {
-    marginTop: 0,
-    paddingTop: 0,
-    borderTopWidth: 0,
-    borderTopLeftRadius: 0,
-    borderTopRightRadius: 0,
-  },
-  activityJoinNext: {
-    marginBottom: 0,
-    paddingBottom: 0,
-    borderBottomWidth: 0,
-    borderBottomLeftRadius: 0,
-    borderBottomRightRadius: 0,
-  },
+  activityJoinPrevious: { marginTop: 0, paddingTop: 0 },
+  activityJoinNext: { marginBottom: 0, paddingBottom: 0 },
   /** A call's output row draws no line while closed; open, it shows the output under the call. */
   activityOutput: { paddingTop: 0 },
   /** The step list's opener: always shown, pointing right, and down once its parts are open. */
@@ -166,24 +152,19 @@ export const transcriptStyles = stylex.create({
     height: 24,
     padding: 4,
     color: colors.muted,
-    transform: { default: 'rotate(-90deg)', ':is([data-panel-open])': 'none' },
+    transform: { default: 'rotate(-90deg)', ':is([aria-expanded=true])': 'none' },
   },
-
-  activitySteps: {
-    listStyle: 'none',
-    margin: 0,
-    padding: '1px 0',
-    // Steps read at the answer's size and face, only quieter.
-    fontFamily: type.ui,
-    fontSize: type.message,
-    lineHeight: 1.7,
-    color: colors.secondary,
-  },
+  /** A step's line: at the answer's size and face, only quieter. */
   activityStep: {
     position: 'relative',
     display: 'flex',
     alignItems: 'baseline',
+    paddingBlock: 1,
     paddingInline: '8px 36px',
+    fontFamily: type.ui,
+    fontSize: type.message,
+    lineHeight: 1.7,
+    color: colors.secondary,
     borderRadius: radius.control,
     cursor: 'pointer',
     backgroundColor: { default: null, ':hover': colors.hover },
@@ -197,7 +178,6 @@ export const transcriptStyles = stylex.create({
       color: syntax.string,
     },
   },
-  activityTool: { color: colors.secondary },
   /** A step's verb phrase gives way only once what it touched has. */
   activityAction: { flexShrink: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' },
   activityDetail: {
@@ -269,8 +249,6 @@ export const transcriptStyles = stylex.create({
   stepRunning: { '::before': { color: colors.accent } },
   stepFailed: { '::before': { color: colors.danger } },
   stepPending: { '::before': { color: colors.muted } },
-  /** A call's output, indented under it. */
-  stepOutput: { paddingLeft: 30, color: colors.muted, '::before': { color: colors.muted } },
   small: {
     color: colors.secondary,
     fontSize: type.small,

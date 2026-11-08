@@ -47,6 +47,7 @@ import {
   getActivityStepState,
   groupActivitySteps,
   findReadingAnchor,
+  getAnsweredCall,
   groupTranscriptRows,
   isSameActivityEvidence,
   type ActivityEvidence,
@@ -57,7 +58,13 @@ import { StoredImages } from './stored-image.tsx';
 import { getTranscriptParts } from './transcript-parts.ts';
 import { isReadingNodePinned, subscribeReadingChanges } from './reading-pin.ts';
 import { ActivityGroupLine, Entry, type EntryProps } from './transcript-entry.tsx';
-import { createOpenCalls, OpenCallsContext, useRememberedFold } from './transcript-disclosure.ts';
+import {
+  createOpenCalls,
+  OpenCallsContext,
+  useFoldedFindMatch,
+  useRememberedFold,
+  useRetainedCalls,
+} from './transcript-disclosure.ts';
 import { useTranscriptActions } from './transcript-actions.ts';
 import { groupBySource } from './stable-props.ts';
 import { TranscriptScroller, revealFindMatch } from './transcript-geometry.ts';
@@ -729,8 +736,8 @@ const RowContext = createContext<{
 } | null>(null);
 
 /**
- * A list item: one row, or a run of activity rows drawn as one card. A run with more than one step
- * folds to a single line; its rows stay mounted underneath so Find can reach them.
+ * A list item: one row, or a run of consecutive activity rows. A run with more than one step folds
+ * behind one line; its rows stay mounted underneath so Find can reach them.
  */
 function Item({ item }: { item: TranscriptItem<TranscriptRow> }) {
   const context = useContext(RowContext)!;
@@ -771,48 +778,26 @@ function Item({ item }: { item: TranscriptItem<TranscriptRow> }) {
   });
   if (landed.place !== placeInside)
     setLanded({ place: placeInside, open: placeInside !== null || landed.open });
-  // The active Find match in the run opens it, unless the reader folded it for that match; Find
-  // revealing the match again opens it again.
+  // The active Find match in the run opens it, unless the reader folded it for that match.
   const match = entryRows
     .map((row) => context.getRowProps(row.entry))
     .find((props) => props.findMatch);
-  const matchKey = match?.findMatch ? JSON.stringify(match.findMatch) : null;
-  const [foldedMatch, setFoldedMatch] = useState<string | null>(null);
-  if (foldedMatch !== null && (matchKey === null || match?.findRevealing)) setFoldedMatch(null);
-  // A reveal into a folded run can start and end before the run renders again, so the run
-  // listens for it while folded for a match.
-  useEffect(() => {
-    if (foldedMatch === null) return;
-    return controller.subscribe(() => {
-      const { find } = controller.getSnapshot().transcript;
-      if (find.revealing || !find.active || JSON.stringify(find.active) !== foldedMatch)
-        setFoldedMatch(null);
-    });
-  }, [controller, foldedMatch]);
-  const found = matchKey !== null && foldedMatch !== matchKey;
+  const found = useFoldedFindMatch(match?.findMatch ?? null, !!match?.findRevealing, controller);
   // A response that is only working so far is a run of one, and gets the working line too.
   const first = item.rows[0]!;
   const working =
     item.rows.length === 1 && first.kind === 'live' && kindOfRow(first) === 'activity';
-  // Re-reads when a call's row is retained or let go, which decides whether its output is a step.
-  const openCalls = useContext(OpenCallsContext);
-  const retained = useSyncExternalStore(openCalls?.subscribe ?? noSubscription, () =>
-    entryRows
-      .flatMap((row) => row.entry.transcript?.parts ?? [])
-      .flatMap((part) =>
-        part.call && openCalls?.isRetained(part.call.entryId) !== false ? [part.call.entryId] : [],
-      )
-      .join('\n'),
+  // Whether a call's row is retained decides whether its output is a step of its own.
+  const isRetained = useRetainedCalls(
+    entryRows.flatMap((row) =>
+      (row.entry.transcript?.parts ?? []).flatMap((part) => part.call?.entryId ?? []),
+    ),
   );
   const { evidence } = context.shared;
   const group = useMemo(
     () =>
-      item.rows.length > 1 || working
-        ? collectGroupSteps(item.rows, evidence, (entryId) =>
-            retained.split('\n').includes(entryId),
-          )
-        : null,
-    [item.rows, working, evidence, retained],
+      item.rows.length > 1 || working ? collectGroupSteps(item.rows, evidence, isRetained) : null,
+    [item.rows, working, evidence, isRetained],
   );
   const stepsId = useId();
   const rows = (fold: boolean) =>
@@ -825,14 +810,10 @@ function Item({ item }: { item: TranscriptItem<TranscriptRow> }) {
       />
     ));
   const folds = !!group && group.headlines.length >= (group.active ? 1 : 2);
-  const expanded = !folds || fold.open || landed.open || found;
+  const expanded = !folds || fold.open || landed.open || found.holdsOpen;
   const toggle = () => {
     if (expanded) {
-      // Folding the match is reader input: it ends Find's reveal, which would open the run again.
-      if (found) {
-        controller.cancelFindReveal();
-        setFoldedMatch(matchKey);
-      }
+      if (found.holdsOpen) found.fold();
       // A place left inside the run would name a row it no longer shows; the run's line holds it.
       const { view } = controller.getSnapshot().transcript;
       if (firstEntry && view.anchor && view.anchor.key === placeInside)
@@ -882,9 +863,9 @@ function collectGroupSteps(
   /** Whether a call's row is retained; its output then belongs to the call's step. */
   isRetained: (entryId: string) => boolean,
 ) {
-  const headlines: ActivityHeadline[] = [],
-    states: (string | undefined)[] = [];
-  let active = false,
+  const headlines: ActivityHeadline[] = [];
+  let failed = 0,
+    active = false,
     endedAt: string | undefined,
     // The last row's steps: the model message the work is on now.
     latestRow: ActivityHeadline[] = [];
@@ -897,21 +878,16 @@ function collectGroupSteps(
     const entryId = transcript.source.kind === 'entry' ? transcript.source.entryId : undefined;
     const rowHeadlines: ActivityHeadline[] = [];
     for (const step of groupActivitySteps(transcript.parts, entryId)) {
-      const lead = step.lead;
-      if (
-        lead.call &&
-        lead.pairing === 'matched' &&
-        lead.kind !== 'arguments' &&
-        isRetained(lead.call.entryId)
-      )
-        continue;
+      const call = getAnsweredCall(step);
+      if (call && isRetained(call.entryId)) continue;
       const state = getActivityStepState(step, transcript, evidence);
-      // Only the response still running keeps a run's clock going.
+      if (['failed', 'interrupted', 'missing-result'].includes(state ?? '')) failed++;
+      // A running step keeps the clock going only in the live response (stopping or deferred
+      // included); a saved step can't still be running.
       if (state === 'running' && row.kind === 'live') active = true;
       const headline = describeActivityHeadline(step, transcript, evidence);
       headlines.push(headline);
       rowHeadlines.push(headline);
-      states.push(state);
     }
     if (rowHeadlines.length) latestRow = rowHeadlines;
   }
@@ -923,14 +899,12 @@ function collectGroupSteps(
       : (latestRow.findLast((headline) => headline.category === 'thinking') ?? latestRow.at(-1));
   return {
     headlines,
-    states,
+    failed,
     active,
     ...(current ? { current } : {}),
     ...(endedAt ? { endedAt } : {}),
   };
 }
-
-const noSubscription = () => () => {};
 
 const getLaterTime = (a: string | undefined, b: string | undefined) =>
   !a || (b && Date.parse(b) > Date.parse(a)) ? b : a;

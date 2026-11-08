@@ -9,6 +9,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type MouseEvent,
   type ReactNode,
 } from 'react';
 import { Button } from '@base-ui/react/button';
@@ -33,9 +34,10 @@ import { Markdown } from './markdown.tsx';
 import type { MarkdownCache } from './markdown-model.ts';
 import {
   classifyEntry,
-  describeActivityStep,
   describeActivityHeadline,
+  describeActivityState,
   getActivityState,
+  getAnsweredCall,
   getActivityStepState,
   summarizeActivityHeadlines,
   type ActivityHeadline,
@@ -51,7 +53,13 @@ import { getTranscriptParts } from './transcript-parts.ts';
 import { usePartBody } from './part-body.ts';
 import { usePartContent } from './part-content.ts';
 import { FindExcerpt, useFindHighlight, useFindHydration } from './part-find.tsx';
-import { OpenCallsContext, RowExpansionContext, useDisclosure } from './transcript-disclosure.ts';
+import {
+  noSubscription,
+  OpenCallsContext,
+  RowExpansionContext,
+  useDisclosure,
+  useRetainedCalls,
+} from './transcript-disclosure.ts';
 import type { TranscriptActions } from './transcript-actions.ts';
 import { compareProps } from './stable-props.ts';
 import { transcriptStyles as styles } from './transcript-styles.ts';
@@ -67,7 +75,7 @@ export type EntryProps = {
   live?: boolean;
   /** The live row's status, when it is something other than running. */
   liveLabel?: string;
-  /** An activity row continues the activity card above or below it. */
+  /** An activity row continues the run of activity rows above or below it. */
   joinPrevious?: boolean;
   joinNext?: boolean;
   controller: ChatController;
@@ -350,22 +358,15 @@ function Activity({
   parts: readonly ChatTranscriptPart[];
 }) {
   const ownEntry = source.kind === 'entry' ? source.entryId : undefined;
-  // Steps keep their identity while the row's parts do, so each step's headline is worked out once.
+  // Steps keep their identity while the row's parts do, so a step's line isn't worked out again.
   const steps = useMemo(() => groupActivitySteps(parts, ownEntry), [parts, ownEntry]);
-  const openCalls = useContext(OpenCallsContext);
-  /** The entries this row's outputs answer that the transcript retains. */
-  const retainedCalls = useSyncExternalStore(openCalls?.subscribe ?? noSubscription, () =>
-    steps
-      .flatMap((step) => {
-        const call = getAnsweredCall(step);
-        return call && (openCalls?.isRetained(call.entryId) ?? true) ? [call.entryId] : [];
-      })
-      .join('\n'),
-  ).split('\n');
+  const isRetained = useRetainedCalls(
+    steps.flatMap((step) => getAnsweredCall(step)?.entryId ?? []),
+  );
   // While its call's row is retained, an output draws no line: it continues its call's step.
   const isOutput = (step: ActivityStep) => {
     const call = getAnsweredCall(step);
-    return !!call && retainedCalls.includes(call.entryId);
+    return !!call && isRetained(call.entryId);
   };
   const outputOnly = steps.every(isOutput);
   return (
@@ -403,12 +404,6 @@ type StepContext = {
   children: (open: boolean, parts: readonly ChatTranscriptPart[]) => ReactNode;
 };
 
-/** The call in another row a step answers: the step is that call's output. */
-const getAnsweredCall = (step: ActivityStep) =>
-  step.lead.call && step.lead.pairing === 'matched' && step.lead.kind !== 'arguments'
-    ? step.lead.call
-    : undefined;
-
 /**
  * One step: a line saying what it did, which opens to the parts behind it. A call's output in a
  * later row draws no line and opens with the call; an output open on its own (Find revealing a
@@ -435,8 +430,6 @@ function ActivityStepView({
   const disclosure = useDisclosure({
     entryId,
     id: 'activity:' + step.lead.partId,
-    partIds,
-    source,
     expandedIds,
     match: match && partIds.includes(match.partId) ? match : null,
     revealing,
@@ -452,16 +445,16 @@ function ActivityStepView({
   // Only an output follows a call, and only a call has outputs; other steps subscribe to nothing.
   const following = useSyncExternalStore(
     (followKey && openCalls?.subscribe) || noSubscription,
-    () => !!followKey && !!openCalls?.isOpen([followKey]),
+    () => !!followKey && !!openCalls?.isOpen(followKey),
   );
   /** This call's output is open on its own, so the call shows open. */
   const outputOpen = useSyncExternalStore(
     (publishKey && openCalls?.subscribe) || noSubscription,
-    () => !!publishKey && !!openCalls?.isOutputOpen([publishKey]),
+    () => !!publishKey && !!openCalls?.isOutputOpen(publishKey),
   );
   useEffect(() => {
     if (!openCalls || !publishKey) return;
-    openCalls.set([publishKey], disclosure.open);
+    openCalls.set(publishKey, disclosure.open);
   }, [openCalls, publishKey, disclosure.open]);
   const outputId = useId();
   const fold = useRef(disclosure.onOpenChange);
@@ -470,15 +463,15 @@ function ActivityStepView({
   });
   useEffect(() => {
     if (!openCalls || !followKey) return;
-    openCalls.setOutput(outputId, [followKey], {
+    openCalls.setOutput(outputId, followKey, {
       open: disclosure.open,
       fold: () => fold.current(),
     });
-    return () => openCalls.setOutput(outputId, [followKey], null);
+    return () => openCalls.setOutput(outputId, followKey, null);
   }, [openCalls, followKey, outputId, disclosure.open]);
   const open = disclosure.open || following || outputOpen;
   const changeOpen = (next: boolean) => {
-    if (!next && outputOpen) openCalls?.foldOutputs([publishKey]);
+    if (!next && outputOpen) openCalls?.foldOutputs(publishKey);
     if (next !== disclosure.open) disclosure.onOpenChange();
   };
   const described = useMemo(
@@ -488,45 +481,34 @@ function ActivityStepView({
         : {
             state: getActivityStepState(step, { source }, evidence),
             headline: describeActivityHeadline(step, { source }, evidence),
-            summary: describeActivityStep(step, { source }, evidence),
           },
     [output, step, source, evidence],
   );
-  const state = described?.state;
   const panelId = useId();
   // A plain disclosure, not a Collapsible: a long run renders hundreds of steps, and each
   // Collapsible measures its panel.
   return (
     <div data-transcript-step="" data-open={open ? '' : undefined}>
-      {!output && (
-        <div
-          title={described!.summary}
-          data-glyph={(state && stepGlyphs[state]) ?? '·'}
+      {described && (
+        <StepLine
+          {...described}
           // The whole line opens the step, as its chevron does.
           onClick={(event) => {
             if ((event.target as Element).closest('button')) return;
             if (!window.getSelection()?.toString()) changeOpen(!open);
-          }}
-          {...stylex.props(
-            styles.activitySteps,
-            styles.activityStep,
-            stepStyles[state ?? 'unknown'],
-            state === 'running' && spinner.glyph,
-          )}>
-          <ActivityHeadlineText headline={described!.headline} />
+          }}>
           <button
             type="button"
-            aria-label={`Activity · ${describeHeadlineText(described!.headline)}`}
+            aria-label={`Activity · ${describeHeadlineText(described.headline)}`}
             aria-expanded={open}
             aria-controls={panelId}
-            data-panel-open={open ? '' : undefined}
             title="Show recorded parts"
             disabled={disclosure.disabled}
             onClick={() => changeOpen(!open)}
             {...stylex.props(controls.button, controls.iconButton, styles.activityToggle)}>
             <Icon name="chevron" />
           </button>
-        </div>
+        </StepLine>
       )}
       {disclosure.disclosureError && (
         <p role="alert" {...stylex.props(styles.small)}>
@@ -541,7 +523,34 @@ function ActivityStepView({
   );
 }
 
-const noSubscription = () => () => {};
+/** A step's line: its state's glyph, then its headline, with the full text in its title. */
+function StepLine({
+  state,
+  headline,
+  onClick,
+  children,
+}: {
+  state: string | undefined;
+  headline: ActivityHeadline;
+  onClick?: (event: MouseEvent<HTMLDivElement>) => void;
+  /** The line's opener, if it opens. */
+  children?: ReactNode;
+}) {
+  return (
+    <div
+      title={describeHeadlineText(headline)}
+      data-glyph={(state && stepGlyphs[state]) ?? '·'}
+      onClick={onClick}
+      {...stylex.props(
+        styles.activityStep,
+        stepStyles[state ?? 'unknown'],
+        state === 'running' && spinner.glyph,
+      )}>
+      <ActivityHeadlineText headline={headline} />
+      {children}
+    </div>
+  );
+}
 
 /** Separates a line's parts: a flex line drops ordinary spaces at its items' edges. */
 const nbsp = '\u00a0';
@@ -557,7 +566,7 @@ const describeHeadlineText = (headline: ActivityHeadline) =>
 function ActivityHeadlineText({ headline }: { headline: ActivityHeadline }) {
   return (
     <>
-      <span {...stylex.props(styles.activityTool, styles.activityAction)}>{headline.action}</span>
+      <span {...stylex.props(styles.activityAction)}>{headline.action}</span>
       {headline.detail && (
         <span {...stylex.props(styles.activityDetail)}>{nbsp + headline.detail.slice(0, 300)}</span>
       )}
@@ -575,7 +584,7 @@ function ActivityHeadlineText({ headline }: { headline: ActivityHeadline }) {
  */
 export function ActivityGroupLine({
   headlines,
-  states,
+  failed,
   active,
   current,
   startedAt,
@@ -585,7 +594,8 @@ export function ActivityGroupLine({
   onToggle,
 }: {
   headlines: readonly ActivityHeadline[];
-  states: readonly (string | undefined)[];
+  /** How many steps failed, were interrupted or have no result. */
+  failed: number;
   active: boolean;
   /** What the work is on now: the latest message's thought, else its latest step. */
   current?: ActivityHeadline;
@@ -602,9 +612,6 @@ export function ActivityGroupLine({
   const until = active ? now : Date.parse(endedAt ?? '');
   const elapsed = startedAt ? until - Date.parse(startedAt) : NaN;
   const duration = Number.isFinite(elapsed) && elapsed >= 0 ? formatDuration(elapsed) : null;
-  const failed = states.filter((state) =>
-    ['failed', 'interrupted', 'missing-result'].includes(state ?? ''),
-  ).length;
   const summary = summarizeActivityHeadlines(headlines);
   let label = duration ? `Worked for ${duration}` : summary;
   if (active) label = duration ? `Working for ${duration}` : 'Working…';
@@ -639,24 +646,11 @@ export function ActivityGroupLine({
         )}
       </div>
       {active && !open && current && (
-        <div
-          data-glyph={stepGlyphs.running}
-          {...stylex.props(
-            styles.activitySteps,
-            styles.activityStep,
-            stepStyles.running,
-            spinner.glyph,
-          )}>
-          <span {...stylex.props(styles.activityTool, styles.activityAction)}>
-            {current.action}
-          </span>
-          {/* A command reads in full ("Running npm test"); a file is named by its action. */}
-          {current.category === 'command' && current.detail && (
-            <span {...stylex.props(styles.activityDetail, styles.activityTool)}>
-              {nbsp + current.detail.slice(0, 300)}
-            </span>
-          )}
-        </div>
+        <StepLine
+          state="running"
+          // A command reads in full ("Running npm test"); a file is named by its action.
+          headline={{ ...current, detail: current.category === 'command' ? current.detail : '' }}
+        />
       )}
     </>
   );
@@ -668,7 +662,7 @@ type PartProps = PartContext & {
   entryId: string;
   /** The active Find match, when it is in this part. */
   match: ChatTranscriptMatch | null;
-  /** Set inside an activity card: the part shows whenever the card is open, with no fold of its own. */
+  /** Set inside a step: the part shows whenever the step is open, with no fold of its own. */
   activityOpen?: boolean;
 };
 const Part = memo(
@@ -693,8 +687,6 @@ const Part = memo(
     const disclosure = useDisclosure({
       entryId,
       id: part.partId,
-      partIds: [part.partId],
-      source,
       expandedIds,
       match,
       revealing,
@@ -954,11 +946,9 @@ const Part = memo(
       // Inside a step the step's line already names the tool and what it touched.
       (part.toolName && !grouped ? `${getToolSummary(part, text)} · ` : '') +
       partLabels[part.kind] +
-      (status && status !== 'completed'
-        ? ` · ${status === 'missing-result' ? 'no result' : status}`
-        : '') +
+      (status && status !== 'completed' ? ` · ${describeActivityState(status) ?? status}` : '') +
       (part.availability !== 'available' ? ` · ${part.availability}` : '');
-    // Inside an open card a part simply shows: its label, copy, then content.
+    // Inside an open step a part simply shows: its label, copy, then content.
     if (grouped)
       return (
         <section data-transcript-part={part.partId}>
