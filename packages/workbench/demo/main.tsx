@@ -34,6 +34,15 @@ const committed = {
     '# Volatile demo\n\nTwo editors share a workspace, with independent buffers and recovery identities.\n',
   'src/example.ts': 'export function double(value: number) {\n  return value * 2;\n}\n',
 };
+// `?conflicts` adds a merge conflict and a path both sides deleted.
+const merge: { files: Record<string, string>; head: Record<string, string>; conflicted: string[] } =
+  new URLSearchParams(location.search).has('conflicts')
+    ? {
+        files: { 'merge/both.ts': '<<<<<<< ours\nmain\n=======\nside\n>>>>>>> theirs\n' },
+        head: { 'merge/both.ts': 'main\n', 'merge/gone.ts': 'base\n' },
+        conflicted: ['merge/both.ts', 'merge/gone.ts'],
+      }
+    : { files: {}, head: {}, conflicted: [] };
 const memory = memoryWorkspace([
   {
     checkout,
@@ -42,10 +51,12 @@ const memory = memoryWorkspace([
       ...committed,
       'src/ignored.ts': '// Git-ignored entries remain visible.\n',
       'ignored.txt': 'Hidden when Git-ignored files are filtered.\n',
+      ...merge.files,
     },
-    head: { ...committed, 'welcome.ts': "export const greeting = 'Hello';\n" },
+    head: { ...committed, ...merge.head, 'welcome.ts': "export const greeting = 'Hello';\n" },
     index: { 'welcome.ts': "export const greeting = 'Hello staged';\n" },
     ignored: ['ignored.txt', 'src/ignored.ts'],
+    conflicted: merge.conflicted,
   },
   {
     checkout: { ...checkout, checkoutId: 'other', root: '/demo/other' },

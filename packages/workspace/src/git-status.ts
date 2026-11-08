@@ -22,7 +22,8 @@ function readKind(code: string, record: string) {
 /**
  * The changes in `git status --porcelain=v1 -z` output: a staged and an unstaged entry for each
  * side that differs, one `untracked` entry for a new file and one `conflicted` entry for an
- * unmerged path. Ignored records are skipped, and a rename or copy lists only its target.
+ * unmerged path, `missing` when both sides deleted it. Ignored records are skipped, and a rename
+ * or copy lists only its target.
  */
 export function parseGitStatus(output: string): GitChange[] {
   const records = output.split('\0'),
@@ -38,6 +39,9 @@ export function parseGitStatus(output: string): GitChange[] {
     if (/[RC]/.test(code)) index++;
     if (code === '!!') continue;
     if (code === '??') changes.push({ path, area: 'untracked', kind: 'untracked' });
+    // Both sides deleted the path, so the working tree has no file at it.
+    else if (code === 'DD')
+      changes.push({ path, area: 'conflicted', kind: 'conflicted', missing: true });
     else if (unmergedCodes.has(code))
       changes.push({ path, area: 'conflicted', kind: 'conflicted' });
     else {

@@ -27,7 +27,7 @@ type Seed = {
   head?: Record<string, string>;
   index?: Record<string, string>;
   ignored?: string[];
-  /** Unmerged paths, each reported as one conflicted change. */
+  /** Unmerged paths, each reported as one conflicted change; one absent from `files` is `missing`. */
   conflicted?: string[];
 };
 type Entry = FileDocument & { directory: boolean };
@@ -422,7 +422,11 @@ export function memoryWorkspace(seeds: Seed[]) {
           const entry = working.get(path);
           if (entry?.directory) continue;
           if (seed.conflicted?.includes(path)) {
-            changes.push({ path, area: 'conflicted', kind: 'conflicted' });
+            changes.push(
+              entry
+                ? { path, area: 'conflicted', kind: 'conflicted' }
+                : { path, area: 'conflicted', kind: 'conflicted', missing: true },
+            );
             continue;
           }
           const head = readOwn(seed.head, path),

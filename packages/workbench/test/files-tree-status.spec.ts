@@ -15,9 +15,10 @@ test('a path shows its strongest kind and each folder its strongest descendant',
   ];
   expect(Object.fromEntries(rollUpGitStatus(changes))).toEqual({
     'README.md': 'untracked',
-    'src/lib/util.ts': 'modified',
-    'src/lib': 'modified',
-    src: 'modified',
+    // A new file edited since it was staged is still added.
+    'src/lib/util.ts': 'added',
+    'src/lib': 'added',
+    src: 'typechange',
     'src/main.ts': 'typechange',
     'docs/a/b/old.md': 'deleted',
     'docs/a/b': 'deleted',
@@ -33,6 +34,49 @@ test('a path shows its strongest kind and each folder its strongest descendant',
     Object.fromEntries(rollUpGitStatus(changes)),
   );
   expect(rollUpGitStatus([]).size).toBe(0);
+});
+
+test('a path staged and unstaged shows what happened to it, else its strongest kind', () => {
+  const change = (path: string, area: GitChange['area'], kind: GitChange['kind']): GitChange => ({
+    path,
+    area,
+    kind,
+  });
+  const changes: GitChange[] = [
+    change('am.ts', 'staged', 'added'),
+    change('am.ts', 'unstaged', 'modified'),
+    // `git rm --cached`: deleted from the index, still on disk.
+    change('cached.ts', 'staged', 'deleted'),
+    change('cached.ts', 'untracked', 'untracked'),
+    // Added, then removed from disk: gone.
+    change('ad.ts', 'staged', 'added'),
+    change('ad.ts', 'unstaged', 'deleted'),
+    change('md.ts', 'staged', 'modified'),
+    change('md.ts', 'unstaged', 'deleted'),
+    change('mm.ts', 'staged', 'modified'),
+    change('mm.ts', 'unstaged', 'modified'),
+    change('mt.ts', 'staged', 'modified'),
+    change('mt.ts', 'unstaged', 'typechange'),
+  ];
+  const kinds = rollUpGitStatus(changes);
+  expect(Object.fromEntries(kinds)).toEqual({
+    'am.ts': 'added',
+    'cached.ts': 'untracked',
+    'ad.ts': 'deleted',
+    'md.ts': 'deleted',
+    'mm.ts': 'modified',
+    'mt.ts': 'modified',
+  });
+  expect(rollUpGitStatus([...changes].reverse())).toEqual(kinds);
+  // Folders still take the strongest of their descendants' kinds.
+  expect(
+    rollUpGitStatus([
+      change('a/am.ts', 'staged', 'added'),
+      change('a/am.ts', 'unstaged', 'modified'),
+      change('a/cached.ts', 'staged', 'deleted'),
+      change('a/cached.ts', 'untracked', 'untracked'),
+    ]).get('a'),
+  ).toBe('added');
 });
 
 test('kinds rank conflicted, deleted, modified, typechange, added, then untracked', () => {

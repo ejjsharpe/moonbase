@@ -235,3 +235,42 @@ test('Git status colours changed files, marks them with a letter and dots folder
   await expect(untrackedRow.locator('[data-git-status="untracked"]')).toHaveText('U');
   await expect(untrackedRow.locator('[data-git-status="untracked"]')).toHaveCSS('color', green);
 });
+
+test('conflicts mark their folders apart and a path both sides deleted opens nothing', async ({
+  page,
+}) => {
+  await page.goto('/?conflicts');
+  const region = page.getByRole('region', { name: 'First editor', exact: true });
+  const tree = region.getByRole('tree', { name: 'Files', exact: true });
+  const folder = tree.getByRole('treeitem', { name: 'merge, contains conflicts', exact: true });
+  await expect(folder).toBeVisible();
+  // A folder above other changes still says so, with a round dot.
+  await page.evaluate(() => {
+    const { checkout, memory } = window.demo;
+    memory.externalWrite({ checkout, path: 'src/example.ts' }, 'export const changed = true;\n');
+  });
+  const changed = tree.getByRole('treeitem', { name: 'src, contains changes', exact: true });
+  await expect(changed.locator('[data-git-status="modified"]')).toHaveCSS('transform', 'none');
+  // The conflict's dot is a diamond, so its shape tells it apart, not only its colour.
+  await expect(folder.locator('[data-git-status="conflicted"]')).not.toHaveCSS('transform', 'none');
+  await folder.click();
+  await expect(
+    tree.getByRole('treeitem', { name: 'merge/both.ts, conflicted', exact: true }),
+  ).toBeVisible();
+  await expect(tree.getByRole('treeitem', { name: /gone\.ts/ })).toHaveCount(0);
+
+  await region.getByRole('button', { name: 'Changes', exact: true }).click();
+  const conflicts = region.getByRole('region', { name: 'Conflicts', exact: true });
+  const gone = conflicts.getByRole('button', { name: 'merge/gone.ts', exact: true });
+  await expect(gone).toBeDisabled();
+  await expect(gone).toHaveAttribute('aria-description', 'conflicted, deleted on both sides');
+  await expect(gone).toHaveAttribute('title', 'merge/gone.ts (deleted on both sides)');
+  const both = conflicts.getByRole('button', { name: 'merge/both.ts', exact: true });
+  await expect(both).toBeEnabled();
+  await expect(both).toHaveAttribute('aria-description', 'conflicted');
+  await both.click();
+  await expect(
+    region.getByRole('textbox', { name: 'merge/both.ts editor', exact: true }),
+  ).toBeVisible();
+  await expect(both).toHaveAttribute('aria-current', 'true');
+});

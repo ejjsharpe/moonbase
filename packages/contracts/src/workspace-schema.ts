@@ -178,6 +178,8 @@ export const GitChangeSchema = struct({
   path,
   area: Schema.Literals(['conflicted', 'staged', 'unstaged', 'untracked']),
   kind: GitChangeKindSchema,
+  /** A conflict with no working file to resolve in, because both sides deleted it. */
+  missing: optional(Schema.Boolean),
 });
 export const GitStatusSchema = struct({
   branch: Schema.String,

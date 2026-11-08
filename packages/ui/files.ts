@@ -157,4 +157,9 @@ export const gitStatusUI = stylex.create({
     borderRadius: '50%',
     backgroundColor: 'currentColor',
   },
+  /** A folder above a conflict: a diamond, so its shape, not only its colour, tells it apart. */
+  conflictDot: {
+    borderRadius: 1,
+    transform: 'rotate(45deg)',
+  },
 });

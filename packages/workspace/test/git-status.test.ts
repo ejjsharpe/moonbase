@@ -48,7 +48,13 @@ test('every unmerged pair is one conflicted change, never a staged and an unstag
   const codes = ['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU'];
   assert.deepEqual(
     parseGitStatus(records(...codes.map((code) => `${code} ${code}.ts`))),
-    codes.map((code) => ({ path: `${code}.ts`, area: 'conflicted', kind: 'conflicted' })),
+    codes.map((code) => ({
+      path: `${code}.ts`,
+      area: 'conflicted',
+      kind: 'conflicted',
+      // Only a path both sides deleted has no working file to resolve in.
+      ...(code === 'DD' && { missing: true }),
+    })),
   );
 });
 

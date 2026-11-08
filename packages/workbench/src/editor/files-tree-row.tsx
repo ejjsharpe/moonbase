@@ -44,8 +44,9 @@ export function FilesTreeRow({
 }) {
   const folderIcon = expanded ? 'folderOpen' : 'folder';
   let statusLabel = '';
-  if (status)
-    statusLabel = row.directory ? ', contains changes' : ', ' + gitStatusMarks[status].label;
+  if (status && !row.directory) statusLabel = ', ' + gitStatusMarks[status].label;
+  else if (status)
+    statusLabel = status === 'conflicted' ? ', contains conflicts' : ', contains changes';
   return (
     <div
       id={id}
@@ -110,7 +111,11 @@ export function FilesTreeRow({
             (row.directory ? (
               <span
                 data-git-status={status}
-                {...stylex.props(gitStatusUI.dot, gitStatusHues[status])}
+                {...stylex.props(
+                  gitStatusUI.dot,
+                  status === 'conflicted' && gitStatusUI.conflictDot,
+                  gitStatusHues[status],
+                )}
               />
             ) : (
               <span

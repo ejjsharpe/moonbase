@@ -92,7 +92,8 @@ export type WorkbenchProps = {
   /** The app's own shortcuts, listed after the editor's when no file is open. */
   shortcuts?: readonly Shortcut[];
 };
-// A conflicted path opens as its file, where its conflict markers are resolved.
+// A conflicted path opens as its file, where its conflict markers are resolved; one both sides
+// deleted has no file to open, and is resolved in Git.
 const changeAreas = [
   { area: 'conflicted', label: 'Conflicts', view: 'file' },
   { area: 'staged', label: 'Staged', view: 'staged' },
@@ -700,14 +701,22 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                       {listed.map((change) => {
                         const active = target?.path === change.path && mode === view;
                         const mark = gitStatusMarks[change.kind];
+                        const description = change.missing
+                          ? mark.label + ', deleted on both sides'
+                          : mark.label;
                         const folder = change.path.slice(0, change.path.lastIndexOf('/') + 1);
                         return (
                           <li key={change.path}>
                             <Button
                               aria-label={change.path}
-                              aria-description={mark.label}
+                              aria-description={description}
                               aria-current={active || undefined}
-                              title={change.path}
+                              disabled={change.missing}
+                              title={
+                                change.missing
+                                  ? `${change.path} (deleted on both sides)`
+                                  : change.path
+                              }
                               {...stylex.props(
                                 controls.button,
                                 controls.listButton,
