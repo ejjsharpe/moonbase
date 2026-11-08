@@ -9,6 +9,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
 import { Tabs } from '@base-ui/react/tabs';
 import { Button } from '@base-ui/react/button';
@@ -58,6 +59,15 @@ const sidebarHiddenKey = 'moonbase.sidebar.hidden';
 const titleMinLeft = (mac ? 84 : 8) + 28 + 12;
 /** Hides and shows the main sidebar, as in most editors; ⌃⌘S, the macOS sidebar key, works too. */
 const sidebarShortcut = mac ? '⌘B' : 'Ctrl+B';
+/**
+ * The letter a shortcut key types, lowercased: its character, so ⌘B follows the layout (on Dvorak
+ * the key that types B, not the one where QWERTY has it). A key that types no Latin letter, on a
+ * non-Latin layout or with ⌥ held on macOS, falls back to its physical key.
+ */
+function shortcutLetter(event: KeyboardEvent) {
+  if (/^[a-z]$/i.test(event.key)) return event.key.toLowerCase();
+  return /^Key[A-Z]$/.test(event.code) ? event.code.slice(3).toLowerCase() : undefined;
+}
 /** The window's shortcut on the editor's cheat sheet. */
 const windowShortcuts = [{ label: 'Project chats', keys: 'Meta+J' }];
 /** A remembered on/off choice, kept in this renderer's local storage. */
@@ -138,11 +148,11 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
       )
         return;
       const command = mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+      const letter = shortcutLetter(event);
       let toggle: (() => void) | undefined;
-      if (event.code === 'KeyB' && command && !event.altKey && !event.shiftKey)
-        toggle = toggleSidebar;
+      if (letter === 'b' && command && !event.altKey && !event.shiftKey) toggle = toggleSidebar;
       else if (
-        event.code === 'KeyS' &&
+        letter === 's' &&
         event.ctrlKey &&
         (mac ? event.metaKey && !event.shiftKey : event.altKey && !event.metaKey)
       )
@@ -156,6 +166,17 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
     window.addEventListener('keydown', keyDown, true);
     return () => window.removeEventListener('keydown', keyDown, true);
   }, [toggleSidebar]);
+  // Focus falls to the page itself when a focused control unmounts or turns inert; the shell's keys
+  // still work there. The live handler is read on each key.
+  const shellKeys = useRef<(event: KeyboardEvent) => void>(() => {});
+  useEffect(() => {
+    const keyDown = (event: KeyboardEvent) => {
+      if (event.target === document.body || event.target === document.documentElement)
+        shellKeys.current(event);
+    };
+    window.addEventListener('keydown', keyDown);
+    return () => window.removeEventListener('keydown', keyDown);
+  }, []);
   const [dockWidth, setDockWidth] = useState(dockDefaultWidth),
     [dockRestoreWidth, setDockRestoreWidth] = useState(dockDefaultWidth);
   const handle = useRef<WorkbenchHandle>(null),
@@ -313,7 +334,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
             kind: 'command' as const,
             label: dockOpen ? 'Hide project chats' : 'Show project chats',
             shortcut: '⌘J',
-            run: () => setDockOpen((open) => !open),
+            run: () => showDock(!dockOpen),
           },
         ]
       : []),
@@ -331,19 +352,43 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
         ]
       : []),
   ];
+  /**
+   * Focuses a view where it was last focused, else its editor or first control, skipping anything
+   * in `leaving`: a part about to hide, which would drop focus to the page.
+   */
+  const focusView = (value: string, leaving?: Element | null) => {
+    const panel = panels.current[value === 'chat' ? 'chat' : 'project'];
+    const usable = (element: HTMLElement | null | undefined): element is HTMLElement =>
+      !!element?.isConnected && !!panel?.contains(element) && !leaving?.contains(element);
+    const candidates = [
+      focus.current[value],
+      ...(panel?.querySelectorAll<HTMLElement>('.monaco-editor textarea[role="textbox"]') ?? []),
+      ...(panel?.querySelectorAll<HTMLElement>('button:not([disabled]), [tabindex="0"]') ?? []),
+    ];
+    for (const target of candidates) {
+      if (!usable(target)) continue;
+      target.focus();
+      // An inert or hidden candidate refuses focus; try the next.
+      if (document.activeElement === target) return;
+    }
+  };
   useLayoutEffect(() => {
     const value = requestedFocus.current;
     requestedFocus.current = null;
-    if (value !== view) return;
-    const panel = panels.current[value === 'chat' ? 'chat' : 'project'];
-    const previous = focus.current[value];
-    const target =
-      previous?.isConnected && panel?.contains(previous)
-        ? previous
-        : (panel?.querySelector<HTMLElement>('.monaco-editor textarea[role="textbox"]') ??
-          panel?.querySelector<HTMLElement>('button:not([disabled]), [tabindex="0"]'));
-    target?.focus();
+    if (value === view) focusView(value);
   });
+  // Hiding project chats while focus is in them hands it back to the project, not the page.
+  const dock = useRef<HTMLElement>(null),
+    projectFocus = useRef<HTMLElement | null>(null);
+  const showDock = (open: boolean) => {
+    const element = dock.current;
+    if (!open && element?.contains(document.activeElement)) {
+      const previous = projectFocus.current;
+      if (previous?.isConnected && !element.contains(previous)) previous.focus();
+      if (element.contains(document.activeElement)) focusView(projectValue, element);
+    }
+    setDockOpen(open);
+  };
   useImperativeHandle(ref, () => ({
     async prepareQuit() {
       // Reveal the editor's exact prompts and uncertainty controls, including Quit from Chat.
@@ -397,6 +442,58 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
       handle.current?.importFiles(checkout, references);
     }
   }
+  const shellInert =
+    closing || ['prepared', 'disposing', 'disposed', 'failed'].includes(lifecycle.phase);
+  /** The window's keys, from inside the shell or, through the listener below, the page itself. */
+  const keyDown = (event: ReactKeyboardEvent | KeyboardEvent) => {
+    if (event.metaKey && !event.altKey && !event.shiftKey && event.key === ',') {
+      event.preventDefault();
+      setSettings((open) => open ?? 'hosts');
+      return;
+    }
+    if (
+      chat &&
+      event.metaKey &&
+      !event.altKey &&
+      !event.shiftKey &&
+      event.key.toLowerCase() === 'n' &&
+      !(event.target as HTMLElement).closest('[role="dialog"], [role="alertdialog"]')
+    ) {
+      event.preventDefault();
+      startNewChat();
+      return;
+    }
+    // ⌘ only: Control+P is "previous line" in macOS text fields.
+    const mode = pickerMode(event, event.metaKey);
+    if (
+      controller &&
+      mode &&
+      !(event.target as HTMLElement).closest(
+        '[role="dialog"]:not([data-picker]), [role="alertdialog"], [role="menu"]',
+      )
+    ) {
+      event.preventDefault();
+      handle.current?.openPicker(mode);
+      return;
+    }
+    if (
+      view !== 'chat' &&
+      chat &&
+      event.metaKey &&
+      !event.shiftKey &&
+      !event.altKey &&
+      event.key.toLowerCase() === 'j'
+    ) {
+      event.preventDefault();
+      showDock(!dockOpen);
+      return;
+    }
+    if (view !== 'chat' && !event.defaultPrevented)
+      handle.current?.keyDown(event as ReactKeyboardEvent);
+  };
+  shellKeys.current = (event) => {
+    if (!shellInert) keyDown(event);
+  };
   let status = view === 'chat' ? 'Agents · Explicit Send' : 'Explicit Save · Local workspace';
   if (closing || lifecycle.phase === 'prepared') status = 'Closing workbench…';
   else if (state?.publication) status = 'Recovery confirmation pending';
@@ -423,53 +520,9 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
         if (next !== view && details.event instanceof MouseEvent && details.event.detail > 0)
           restoreFocus(next);
       }}
-      inert={closing || ['prepared', 'disposing', 'disposed', 'failed'].includes(lifecycle.phase)}
+      inert={shellInert}
       {...stylex.props(workbench.document, styles.shell, railCollapsed && styles.shellCollapsed)}
-      onKeyDown={(event) => {
-        if (event.metaKey && !event.altKey && !event.shiftKey && event.key === ',') {
-          event.preventDefault();
-          setSettings((open) => open ?? 'hosts');
-          return;
-        }
-        if (
-          chat &&
-          event.metaKey &&
-          !event.altKey &&
-          !event.shiftKey &&
-          event.key.toLowerCase() === 'n' &&
-          !(event.target as HTMLElement).closest('[role="dialog"], [role="alertdialog"]')
-        ) {
-          event.preventDefault();
-          startNewChat();
-          return;
-        }
-        // ⌘ only: Control+P is "previous line" in macOS text fields.
-        const mode = pickerMode(event, event.metaKey);
-        if (
-          controller &&
-          mode &&
-          !(event.target as HTMLElement).closest(
-            '[role="dialog"]:not([data-picker]), [role="alertdialog"], [role="menu"]',
-          )
-        ) {
-          event.preventDefault();
-          handle.current?.openPicker(mode);
-          return;
-        }
-        if (
-          view !== 'chat' &&
-          chat &&
-          event.metaKey &&
-          !event.shiftKey &&
-          !event.altKey &&
-          event.key.toLowerCase() === 'j'
-        ) {
-          event.preventDefault();
-          setDockOpen((open) => !open);
-          return;
-        }
-        if (view !== 'chat' && !event.defaultPrevented) handle.current?.keyDown(event);
-      }}
+      onKeyDown={keyDown}
       onKeyUp={(event) => {
         if (view !== 'chat' && !event.defaultPrevented) handle.current?.keyUp(event);
       }}
@@ -527,7 +580,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
               aria-label="Toggle project chats"
               title={`${dockOpen ? 'Hide' : 'Show'} project chats · ⌘J`}
               aria-pressed={dockOpen}
-              onClick={() => setDockOpen((open) => !open)}
+              onClick={() => showDock(!dockOpen)}
               {...stylex.props(controls.button, styles.barButton, dockOpen && styles.barButtonOn)}>
               <Icon name="sidebarRight" />
             </Button>
@@ -564,6 +617,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
         openSettings={() => setSettings('hosts')}
         collapsed={railCollapsed}
         toggleCollapsed={toggleRailKeepingFocus}
+        focusView={() => focusView(view)}
         mac={mac}
         openChat={
           !chat && lifecycle.chat.state !== 'unavailable'
@@ -634,7 +688,9 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
             panels.current.project = element;
           }}
           onFocusCapture={(event) => {
-            focus.current[projectValue] = event.target as HTMLElement;
+            const target = event.target as HTMLElement;
+            focus.current[projectValue] = target;
+            if (!dock.current?.contains(target)) projectFocus.current = target;
           }}
           {...stylex.props(styles.panel, styles.framed, railCollapsed && styles.framedFlush)}>
           <section {...stylex.props(styles.panel)} aria-label="Editor workbench">
@@ -668,6 +724,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
               trailing={
                 chat && selected ? (
                   <aside
+                    ref={dock}
                     aria-label="Project chats"
                     inert={!dockVisible}
                     {...stylex.props(
@@ -753,7 +810,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
                               setDockWidth(dockMaxWidth);
                             }
                           },
-                          collapse: () => setDockOpen(false),
+                          collapse: () => showDock(false),
                           mention: chatMention,
                           mentionHandled: (id) =>
                             setChatMention((current) => (current?.id === id ? null : current)),
