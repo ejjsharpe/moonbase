@@ -154,11 +154,12 @@ export type OpenCalls = {
   subscribe(listener: () => void): () => void;
 };
 type OutputDisclosure = { open: boolean; fold(): void };
-export function createOpenCalls(): OpenCalls {
+/** `retained` seeds the retained entries, so the first render already reads them. */
+export function createOpenCalls(retained: readonly string[] = []): OpenCalls {
   const open = new Set<string>(),
     outputs = new Map<string, { keys: readonly string[]; output: OutputDisclosure }>(),
     listeners = new Set<() => void>();
-  let retained = new Set<string>();
+  let retainedIds = new Set(retained);
   const notify = () => {
     for (const listener of listeners) listener();
   };
@@ -188,11 +189,12 @@ export function createOpenCalls(): OpenCalls {
       for (const { output } of outputsOf(keys)) if (output.open) output.fold();
     },
     setRetained(entryIds) {
-      if (entryIds.length === retained.size && entryIds.every((id) => retained.has(id))) return;
-      retained = new Set(entryIds);
+      if (entryIds.length === retainedIds.size && entryIds.every((id) => retainedIds.has(id)))
+        return;
+      retainedIds = new Set(entryIds);
       notify();
     },
-    isRetained: (entryId) => retained.has(entryId),
+    isRetained: (entryId) => retainedIds.has(entryId),
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);

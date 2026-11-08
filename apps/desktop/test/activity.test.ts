@@ -318,12 +318,15 @@ const row = (key: string, read: GroupedRow['read'] = 'activity'): GroupedRow => 
   kind: key.startsWith('live:') ? 'live' : 'entry',
   read,
 });
-const group = (rows: GroupedRow[], previous: readonly TranscriptItem<GroupedRow>[] = []) =>
-  groupTranscriptRows(rows, (value) => value.read, previous);
+const group = (
+  rows: GroupedRow[],
+  previous: readonly TranscriptItem<GroupedRow>[] = [],
+  following = false,
+) => groupTranscriptRows(rows, (value) => value.read, previous, following);
 const keysOf = (items: readonly TranscriptItem<GroupedRow>[]) =>
   items.map((item) => [item.key, item.rows.map((value) => value.key)]);
 
-test('an activity card keeps its list key as rows join its start or end; the live row keeps it as it leaves', () => {
+test('an activity card keeps its list key as rows join its start or end, and as the live row leaves it the part the reader is in keeps it', () => {
   const question = row('entry:q', 'message'),
     call = row('entry:call'),
     output = row('entry:output'),
@@ -346,13 +349,18 @@ test('an activity card keeps its list key as rows join its start or end; the liv
   assert.deepEqual(keysOf(items), [
     ['entry:call', ['entry:earlier', 'entry:call', 'entry:output', 'live:submission']],
   ]);
-  // The live row leaves as the answer starts: it keeps the item, so nothing in the running
-  // response remounts, and the stored rows have an item of their own.
+  // The live row leaves as the answer starts. A reader following the live edge keeps the running
+  // response mounted; the stored rows have an item of their own.
   const answering = row('live:submission', 'message');
-  const split = group([earlier, call, output, answering], items);
-  assert.deepEqual(keysOf(split), [
+  assert.deepEqual(keysOf(group([earlier, call, output, answering], items, true)), [
     ['entry:output', ['entry:earlier', 'entry:call', 'entry:output']],
     ['entry:call', ['live:submission']],
+  ]);
+  // A reader scrolled up into the card keeps the card mounted instead.
+  const split = group([earlier, call, output, answering], items);
+  assert.deepEqual(keysOf(split), [
+    ['entry:call', ['entry:earlier', 'entry:call', 'entry:output']],
+    ['live:submission', ['live:submission']],
   ]);
   // Unchanged rows keep the item itself.
   const again = group([earlier, call, output, answering], split);
@@ -375,11 +383,17 @@ test('a split card never gives two items one key', () => {
     ['entry:q', ['entry:q']],
     ['live:s', ['entry:tool', 'live:s']],
   ]);
-  items = group([question, tool, row('live:s', 'message')], items);
-  assert.deepEqual(keysOf(items), [
+  assert.deepEqual(keysOf(group([question, tool, row('live:s', 'message')], items, true)), [
     ['entry:q', ['entry:q']],
     ['entry:tool', ['entry:tool']],
     ['live:s', ['live:s']],
+  ]);
+  // Not following, the stored row keeps the card's key, and the live row takes an unclaimed one.
+  const split = group([question, tool, row('live:s', 'message')], items);
+  assert.deepEqual(keysOf(split), [
+    ['entry:q', ['entry:q']],
+    ['live:s', ['entry:tool']],
+    ['live:s#1', ['live:s']],
   ]);
   // A stored row keyed like a claimed key takes an unclaimed one.
   const stored = group([row('entry:a'), row('entry:b')]);
@@ -408,6 +422,11 @@ test("a reading anchor names a stored row and the offset from that row's own top
   assert.deepEqual(findReadingAnchor(items, { key: card, offset: 25 }, geometry), {
     key: 'entry:b',
     offset: 5,
+  });
+  // A row landed a fraction of a pixel below the viewport top still holds it.
+  assert.deepEqual(findReadingAnchor(items, { key: card, offset: 19.6 }, geometry), {
+    key: 'entry:b',
+    offset: 19.6 - 20,
   });
   // Above the card's top it names the first row, with a negative offset.
   assert.deepEqual(findReadingAnchor(items, { key: card, offset: -8 }, geometry), {

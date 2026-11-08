@@ -635,16 +635,24 @@ test.describe('the virtualized transcript', () => {
     await page.getByRole('button', { name: 'Open Chat panel', exact: true }).click();
     await expect(row).toBeVisible();
     // The restore reads only the history around the row, so less of the card is above it.
-    expect(await card()).toBeLessThan(above);
-    await expect
-      .poll(async () => {
-        const [box, list] = await Promise.all([
-          row.boundingBox(),
-          transcriptList(page).boundingBox(),
-        ]);
-        return Math.abs(box!.y - list!.y + offset);
-      })
-      .toBeLessThan(1.5);
+    const restored = await card();
+    expect(restored).toBeLessThan(above);
+    const placed = async () => {
+      const [box, list] = await Promise.all([
+        row.boundingBox(),
+        transcriptList(page).boundingBox(),
+      ]);
+      return Math.abs(box!.y - list!.y + offset);
+    };
+    await expect.poll(placed).toBeLessThan(1.5);
+    // An earlier page that lands later joins rows to the card's start; the row stays put.
+    await page.evaluate(async () => {
+      const chat = window.demo.application.chat!;
+      while (chat.getSnapshot().transcript.earlier) await chat.showEarlier();
+    });
+    expect(await card()).toBe(50);
+    await expect.poll(placed).toBeLessThan(1.5);
+    expect((await savedAnchor(page))?.key).toBe('entry:step-50');
   });
 });
 

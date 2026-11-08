@@ -768,6 +768,72 @@ test('an activity card stays mounted as the live response joins it, the live res
   await expect.poll(() => readAnchor(page)).toEqual({ key: 'entry:origin', atLatest: false });
 });
 
+test('a reader scrolled up into the card stays put, and the card stays mounted, as the answer starts', async ({
+  page,
+}) => {
+  test.setTimeout(90000);
+  await open(page);
+  await page.evaluate(
+    async ([calls, last]) => {
+      await window.demo.transcript!.record([
+        { id: 'question', role: 'user', parts: [{ kind: 'text', role: 'user', text: 'Run it' }] },
+        ...calls,
+        last,
+      ]);
+      await window.demo.application.chat!.jumpToLatest();
+    },
+    [
+      Array.from({ length: 60 }, (_, index) => bashCall(`step-${index}`, `step ${index}`)),
+      bashCall('origin', 'check', 'running'),
+    ] as const,
+  );
+  const origin = page.locator('[data-transcript-row="entry:origin"]');
+  await expect(origin).toContainText('bash · check');
+  await page.evaluate(
+    (part) => window.demo.transcript!.activity([part], 'none'),
+    originOutput('Check output'),
+  );
+  await expect(page.locator('[data-transcript-row^="live:"]')).toBeAttached();
+  // The reader scrolls up into the card, away from the live edge.
+  await scrollToEnd(page);
+  await page.mouse.wheel(0, -400);
+  await expect.poll(() => readAnchor(page)).toMatchObject({ atLatest: false });
+  const step = page.locator('[data-transcript-row="entry:step-50"]');
+  const readTop = () =>
+    step.evaluate(
+      (node) =>
+        node.getBoundingClientRect().top -
+        node.closest('[aria-label="Chat transcript"]')!.getBoundingClientRect().top,
+    );
+  await expect
+    .poll(async () => {
+      await mark(step);
+      await page.waitForTimeout(500);
+      return isMarked(step);
+    })
+    .toBe(true);
+  const before = await readTop();
+  await page.evaluate(
+    (part) =>
+      window.demo.transcript!.activity(
+        [part, { kind: 'text', text: 'All checks pass.\n\n' + 'Detail.\n\n'.repeat(40) }],
+        'none',
+      ),
+    originOutput('Check output'),
+  );
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const last = window.demo.application.chat!.getSnapshot().transcript.rows.at(-1)!;
+        return last.kind === 'live' ? last.entry.text.slice(0, 16) : null;
+      }),
+    )
+    .toBe('All checks pass.');
+  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 300)));
+  expect(await isMarked(step)).toBe(true);
+  expect(Math.abs((await readTop()) - before)).toBeLessThan(1.5);
+});
+
 test("an output whose call isn't retained reads as its own step with a chevron", async ({
   page,
 }) => {

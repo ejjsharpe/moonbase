@@ -44,9 +44,10 @@ export function classifyEntry(entry: ChatEntry): 'empty' | 'activity' | 'message
  * The list keys an item's content and measured size by the item's key, so a new key remounts it.
  * Rows join a run at its start (history loading above) and its end (the live response, a later
  * page), so a run holding a row of a `previous` item keeps that item's key. The live row (any row
- * not `entry`) leaves a run as the answer starts: the run holding it keeps the key, so a selection,
- * focus or Find fold in the running response survives; the card's stored rows move to an item of
- * their own. Otherwise, when an item splits the first run keeps it, and a new item is keyed by its
+ * not `entry`) leaves a run as the answer starts, and the key stays with the part the reader is
+ * in: the live row when they follow the live edge (`following`), so a selection, focus or Find
+ * fold in the running response survives, else the card's stored rows, which the list holds in
+ * place. Otherwise, when an item splits the first run keeps it, and a new item is keyed by its
  * last row. Keys are list keys only: `findReadingAnchor` names a row.
  */
 export type TranscriptItem<Row> = { key: string; rows: readonly Row[] };
@@ -54,6 +55,7 @@ export function groupTranscriptRows<Row extends { key: string; kind: string }>(
   rows: readonly Row[],
   kindOf: (row: Row) => 'empty' | 'activity' | 'message',
   previous: readonly TranscriptItem<Row>[],
+  following = false,
 ) {
   const runs: Row[][] = [];
   let open = false;
@@ -72,13 +74,14 @@ export function groupTranscriptRows<Row extends { key: string; kind: string }>(
     claimed.add(old.key);
     carried.set(run, old);
   };
-  // A live row that left its item's other rows keeps the item.
-  for (const run of runs)
-    for (const row of run) {
-      const old = row.kind !== 'entry' ? itemOf.get(row.key) : undefined;
-      if (old && !claimed.has(old.key) && old.rows.some((value) => runOf.get(value.key) !== run))
-        carry(run, old);
-    }
+  // Following, a live row that left its item's other rows keeps the item.
+  if (following)
+    for (const run of runs)
+      for (const row of run) {
+        const old = row.kind !== 'entry' ? itemOf.get(row.key) : undefined;
+        if (old && !claimed.has(old.key) && old.rows.some((value) => runOf.get(value.key) !== run))
+          carry(run, old);
+      }
   for (const run of runs) {
     if (carried.has(run)) continue;
     const old = run
@@ -126,7 +129,8 @@ export function findReadingAnchor<Row extends { key: string; kind: string }>(
     let anchor: { key: string; offset: number } | undefined;
     for (const [position, row] of item.rows.entries()) {
       const top = position ? rowTop(row.key) : 0;
-      if (top === undefined || (top > offset && anchor)) break;
+      // A row landed a fraction of a device pixel below the viewport top still holds it.
+      if (top === undefined || (top > offset + 1 && anchor)) break;
       if (row.kind === 'entry') anchor = { key: row.key, offset: offset - top };
     }
     if (anchor) return anchor;
