@@ -1319,8 +1319,10 @@ class EditorModelState {
       throw editorError(
         'Operation already submitted. Resolve its status instead of dispatching it again.',
       );
+    // A batch's destination is a folder, which may be the root.
+    const batch = operation.sources.length > 1;
     if (operation.destination !== undefined)
-      validPath(operation.destination, operation.kind === 'import');
+      validPath(operation.destination, operation.kind === 'import' || batch);
     if (
       operation.sources.some((source) => this.uncertainAffects(source.target)) ||
       (operation.destination &&
@@ -1333,7 +1335,7 @@ class EditorModelState {
         throw editorError('A file operation must use one exact checkout.');
     }
     const replacementPaths = (operation.replacements ?? []).map((item) => item.target.path);
-    if (operation.destination)
+    if (operation.destination || (batch && operation.destination === ''))
       replacementPaths.push(
         ...getMutationDestinations(operation.sources, operation.destination).destinations,
       );

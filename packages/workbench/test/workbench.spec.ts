@@ -2046,6 +2046,7 @@ test("the explorer's … menu holds its file actions and collapses every folder"
     'New File…',
     'New Folder…',
     'Import Files…',
+    'Undo Move',
     'Collapse All Folders',
     'Reveal Active File',
     'Go to File…',

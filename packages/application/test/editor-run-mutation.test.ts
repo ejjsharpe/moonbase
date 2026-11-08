@@ -44,6 +44,32 @@ test('a direct mutation completes without consent when nothing is replaced', asy
   }
 });
 
+test('several entries move into a folder and back to the root as one batch each', async () => {
+  const f = await counted();
+  try {
+    await f.editor.open(target('a.ts'));
+    f.editor.edit(target('a.ts'), 'unsaved');
+    const move = (paths: string[], destination: string) =>
+      runMutation(f.controller, { checkout, kind: 'move', paths }, destination, {
+        confirmReplace: never,
+      });
+    assert.deepEqual(await move(['a.ts', 'c.ts'], 'folder'), { completed: true, error: '' });
+    assert.equal(await f.read('folder/c.ts'), 'third');
+    assert.equal(f.editor.buffer(target('folder/a.ts'))?.text, 'unsaved');
+    assert.deepEqual(await move(['folder/a.ts', 'folder/c.ts'], ''), {
+      completed: true,
+      error: '',
+    });
+    assert.equal(await f.read('a.ts'), 'const a = 1;');
+    assert.equal(await f.read('c.ts'), 'third');
+    assert.equal(f.editor.buffer(target('a.ts'))?.text, 'unsaved');
+    assert.equal(f.editor.buffer(target('folder/a.ts')), undefined);
+    assert.deepEqual(f.disposals, [1, 1]);
+  } finally {
+    await f.dispose();
+  }
+});
+
 test('a direct mutation asks before replacing and applies only with consent', async () => {
   const f = await counted();
   try {

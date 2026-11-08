@@ -12,6 +12,8 @@ import { findCreateFolder } from './files-tree-rows.ts';
 import { gitStatusMarks } from './files-tree-status.ts';
 import { Mutation, type Action } from './mutation.tsx';
 import { useMutationRunner } from './mutation-runner.tsx';
+import { useMoveUndo } from './move-undo.ts';
+import { formatKeys } from './file-commands.ts';
 import { Popup } from './popup.tsx';
 import {
   forwardRef,
@@ -192,10 +194,14 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       snapshot.recovery.checkouts.some(
         (target) => checkoutKey(target) === checkoutKey(value.checkout),
       ) &&
-      (!(value.kind === 'move' || value.kind === 'copy') || value.paths.length === 1) &&
+      // Several entries move or copy into one folder, as a drag from the tree does.
+      (!(value.kind === 'move' || value.kind === 'copy') ||
+        (value.paths.length >= 1 && value.paths.length <= 128)) &&
       (value.kind !== 'trash' || value.paths.length > 0)
     );
   }
+  // Moves and renames made from the tree, one per checkout, for Undo.
+  const moveUndo = useMoveUndo(controller, mutations.runMutation, openCheckouts);
   function requestMutation(value: Action, finalFocus?: () => boolean | HTMLElement | null) {
     if (
       !canRequestMutation(
@@ -606,6 +612,15 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
               } satisfies ExplorerAction,
             ]
           : []),
+        {
+          label: moveUndo.labelFor(checkout) ?? 'Undo Move',
+          icon: 'undo',
+          keys: formatKeys('Meta+Z'),
+          disabled:
+            !moveUndo.labelFor(checkout) ||
+            !canRequestMutation({ checkout, kind: 'move', paths: moveUndo.movedPaths(checkout) }),
+          run: () => void moveUndo.undo(checkout),
+        },
         'separator',
         {
           label: 'Collapse All Folders',
@@ -677,6 +692,9 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                 canRequestMutation={canRequestMutation}
                 requestMutation={requestMutation}
                 runMutation={mutations.runMutation}
+                undoLabel={moveUndo.labelFor(checkout)}
+                onMoved={(moves) => moveUndo.record(checkout, moves)}
+                onUndo={() => moveUndo.undo(checkout)}
                 createRequest={createRequest}
                 onCreateRequestTaken={() => setCreateRequest(null)}
                 copyPaths={copyPaths}
