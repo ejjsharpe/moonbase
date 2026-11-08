@@ -858,7 +858,7 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
           .getByLabel('Message', { exact: true })
           .fill('One admitted task before exact Stop');
         await page.getByRole('button', { name: 'Send message', exact: true }).click();
-        // The live row holds only the call's output, which opens with its call's card above it.
+        // Once the call is stored above it, the live row holds only its output and opens with its card.
         await openCallCard(page, 'inspect_remote_context');
         await expect(page.getByRole('article', { name: 'Live response' })).toContainText(
           'Controlled remote tool activity',
@@ -1040,7 +1040,7 @@ for (const failsWrite of [false, true])
         .getByLabel('Message', { exact: true })
         .fill('First admitted input keeps chat busy');
       await page.getByRole('button', { name: 'Send message', exact: true }).click();
-      // The live row holds only the call's output, which opens with its call's card above it.
+      // Once the call is stored above it, the live row holds only its output and opens with its card.
       await openCallCard(page, 'inspect_remote_context');
       await expect(page.getByRole('article', { name: 'Live response' })).toContainText(
         'Controlled remote tool activity',
