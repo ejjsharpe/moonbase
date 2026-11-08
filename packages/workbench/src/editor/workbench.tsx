@@ -8,6 +8,7 @@ import {
   type PickerRequest,
 } from './picker.tsx';
 import { FilesTree } from './files-tree.tsx';
+import { gitStatusMarks } from './files-tree-status.ts';
 import { Mutation, type Action } from './mutation.tsx';
 import { Popup } from './popup.tsx';
 import {
@@ -28,7 +29,7 @@ import { Dialog } from '@base-ui/react/dialog';
 import { Tabs } from '@base-ui/react/tabs';
 import { ContextMenu as Menu } from '@base-ui/react/context-menu';
 import { controls } from '@moonbase/ui/controls';
-import { fileTypeMark } from '@moonbase/ui/files';
+import { fileTypeMark, gitStatusHues, gitStatusUI } from '@moonbase/ui/files';
 import { workbench } from '@moonbase/ui/workbench';
 import { overlays } from '@moonbase/ui/overlays';
 import type { CheckoutTarget, FileView } from '@moonbase/contracts/workspace';
@@ -91,10 +92,13 @@ export type WorkbenchProps = {
   /** The app's own shortcuts, listed after the editor's when no file is open. */
   shortcuts?: readonly Shortcut[];
 };
+// A conflicted path opens as its file, where its conflict markers are resolved; one both sides
+// deleted has no file to open, and is resolved in Git.
 const changeAreas = [
-  { area: 'staged', label: 'Staged' },
-  { area: 'unstaged', label: 'Changes' },
-  { area: 'untracked', label: 'Untracked' },
+  { area: 'conflicted', label: 'Conflicts', view: 'file' },
+  { area: 'staged', label: 'Staged', view: 'staged' },
+  { area: 'unstaged', label: 'Changes', view: 'unstaged' },
+  { area: 'untracked', label: 'Untracked', view: 'untracked' },
 ] as const;
 
 export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Workbench(
@@ -684,7 +688,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                   No changes
                 </p>
               )}
-              {changeAreas.map(({ area, label }) => {
+              {changeAreas.map(({ area, label, view }) => {
                 const listed = changes.filter((change) => change.area === area);
                 if (!listed.length) return null;
                 return (
@@ -695,14 +699,24 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                     </h2>
                     <ul {...stylex.props(controls.list)}>
                       {listed.map((change) => {
-                        const active = target?.path === change.path && mode === area;
+                        const active = target?.path === change.path && mode === view;
+                        const mark = gitStatusMarks[change.kind];
+                        const description = change.missing
+                          ? mark.label + ', deleted on both sides'
+                          : mark.label;
                         const folder = change.path.slice(0, change.path.lastIndexOf('/') + 1);
                         return (
                           <li key={change.path}>
                             <Button
                               aria-label={change.path}
+                              aria-description={description}
                               aria-current={active || undefined}
-                              title={change.path}
+                              disabled={change.missing}
+                              title={
+                                change.missing
+                                  ? `${change.path} (deleted on both sides)`
+                                  : change.path
+                              }
                               {...stylex.props(
                                 controls.button,
                                 controls.listButton,
@@ -713,16 +727,24 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                                 run(
                                   controller.open(
                                     { checkout, path: change.path },
-                                    { view: area, intent: 'preview' },
+                                    { view, intent: 'preview' },
                                   ),
                                 )
                               }>
-                              <span {...stylex.props(workbench.changeName)}>
+                              <span
+                                {...stylex.props(workbench.changeName, gitStatusHues[change.kind])}>
                                 {change.path.slice(folder.length)}
                               </span>
                               {folder && (
                                 <span {...stylex.props(workbench.changeFolder)}>{folder}</span>
                               )}
+                              <span aria-hidden="true" {...stylex.props(gitStatusUI.slot)}>
+                                <span
+                                  data-git-status={change.kind}
+                                  {...stylex.props(gitStatusUI.letter, gitStatusHues[change.kind])}>
+                                  {mark.letter}
+                                </span>
+                              </span>
                             </Button>
                           </li>
                         );

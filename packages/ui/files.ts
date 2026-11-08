@@ -1,5 +1,5 @@
 import * as stylex from '@stylexjs/stylex';
-import { colors, layout, projectHues, radius, space, type } from './tokens.stylex';
+import { colors, gitStatus, layout, projectHues, radius, space, type } from './tokens.stylex';
 
 export const filesUI = stylex.create({
   iconButton: {
@@ -119,3 +119,47 @@ export function fileTypeMark(path: string) {
   const mark = extension ? typeMarks[extension] : undefined;
   return mark ? { label: mark.label, style: [typeMarkStyle.mark, typeHues[mark.hue]] } : null;
 }
+
+/** A Git status's colour, for a file's name, its letter or a folder's dot. */
+export const gitStatusHues = stylex.create({
+  added: { color: gitStatus.added },
+  untracked: { color: gitStatus.untracked },
+  modified: { color: gitStatus.modified },
+  deleted: { color: gitStatus.deleted },
+  conflicted: { color: gitStatus.conflicted },
+  typechange: { color: gitStatus.typechange },
+});
+
+/** The trailing marks of a file row: an unsaved dot and a Git status letter or folder dot. */
+export const gitStatusUI = stylex.create({
+  slot: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 4,
+    flexShrink: 0,
+    minWidth: 12,
+    marginLeft: 'auto',
+    paddingLeft: 4,
+  },
+  letter: {
+    display: 'inline-block',
+    width: 12,
+    textAlign: 'center',
+    fontFamily: type.mono,
+    fontSize: type.caption,
+    fontWeight: 600,
+  },
+  dot: {
+    width: 6,
+    height: 6,
+    marginInline: 3,
+    borderRadius: '50%',
+    backgroundColor: 'currentColor',
+  },
+  /** A folder above a conflict: a diamond, so its shape, not only its colour, tells it apart. */
+  conflictDot: {
+    borderRadius: 1,
+    transform: 'rotate(45deg)',
+  },
+});

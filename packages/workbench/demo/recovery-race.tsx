@@ -39,9 +39,10 @@ const memory = memoryWorkspace(
     return {
       checkout,
       files,
+      // Committed files are clean, except a.ts when a test needs Git baselines for it.
       ...(dirtyArea || missingArea
-        ? { head: { 'a.ts': 'HEAD A' }, index: { 'a.ts': 'INDEX A' } }
-        : {}),
+        ? { head: { 'a.ts': 'HEAD A', 'b.ts': 'current B' }, index: { 'a.ts': 'INDEX A' } }
+        : { head: { ...files } }),
     };
   }),
 );

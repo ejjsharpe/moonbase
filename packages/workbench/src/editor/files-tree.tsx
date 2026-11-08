@@ -2,7 +2,7 @@ import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
 import { styles } from './styles.ts';
 import { Icon } from './icon.tsx';
-import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { filesUI } from '@moonbase/ui/files';
 import { overlays } from '@moonbase/ui/overlays';
 import { ContextMenu } from '@base-ui/react/context-menu';
@@ -18,6 +18,7 @@ import { ariaKeys, formatKeys, listFileCommands } from './file-commands.ts';
 import { handleRowClick, handleTreeKeyDown, type TreeNavigation } from './files-tree-keyboard.ts';
 import { FilesTreeRow } from './files-tree-row.tsx';
 import { listVisibleRows, rowHeight, selectMountedIndexes } from './files-tree-rows.ts';
+import { rollUpGitStatus } from './files-tree-status.ts';
 
 export function FilesTree({
   controller,
@@ -87,6 +88,8 @@ export function FilesTree({
   }, [anchorReset]);
   const [geometry, setGeometry] = useState({ top: tree.scroll, height: 500 });
   const rows = listVisibleRows(state.listings, checkoutIdentity, expanded);
+  const gitChanges = state.git[checkoutIdentity]?.changes,
+    statuses = useMemo(() => rollUpGitStatus(gitChanges ?? []), [gitChanges]);
   const rowId = (path: string) => `${id}-${encodeURIComponent(path)}`;
   const menuAvailable =
     !!menu &&
@@ -248,6 +251,7 @@ export function FilesTree({
                 focused={tree.focus === row.path}
                 active={row.path === active}
                 dirty={dirtyPaths.has(row.path)}
+                status={statuses.get(row.path)}
                 onOpenMenu={openMenu}
                 onSelect={(row, additive) => {
                   treeElement.current?.focus();

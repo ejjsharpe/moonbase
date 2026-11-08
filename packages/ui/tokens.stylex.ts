@@ -37,6 +37,17 @@ export const projectHues = stylex.defineConsts({
   sand: '#d9c8a0',
 });
 
+// Git status of a file, from the palette above: green is new, sand is edited, danger is gone,
+// amber needs resolving and lavender changed type.
+export const gitStatus = stylex.defineConsts({
+  added: '#a7d98b',
+  untracked: '#a7d98b',
+  modified: '#d9c8a0',
+  deleted: '#f28b82',
+  conflicted: '#f2b35b',
+  typechange: '#c3a6f0',
+});
+
 // Code highlighting for read-only code and Monaco's theme rules alike.
 export const syntax = stylex.defineConsts({
   comment: '#878c9e',

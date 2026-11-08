@@ -27,38 +27,47 @@ const checkout = {
   branch: 'main',
   worktree: 'main' as 'main' | 'linked',
 };
+const committed = {
+  'README.md':
+    '# Volatile demo\n\nTwo editors share a workspace, with independent buffers and recovery identities.\n',
+  'src/example.ts': 'export function double(value: number) {\n  return value * 2;\n}\n',
+};
+// Each seed's files are committed, except the main checkout's edited welcome.ts.
+const committedSeed = (target: typeof checkout, files: Record<string, string>) => ({
+  checkout: target,
+  files,
+  head: { ...files },
+});
 const memory = memoryWorkspace([
   {
     checkout,
     files: {
       'welcome.ts': "// Moonbase editor module demo\nexport const greeting = 'Hello Moonbase';\n",
-      'README.md':
-        '# Volatile demo\n\nTwo editors share a workspace, with independent buffers and recovery identities.\n',
-      'src/example.ts': 'export function double(value: number) {\n  return value * 2;\n}\n',
+      ...committed,
       'ignored.txt': 'Hidden when Git-ignored files are filtered.\n',
     },
-    head: { 'welcome.ts': "export const greeting = 'Hello';\n" },
+    head: { ...committed, 'welcome.ts': "export const greeting = 'Hello';\n" },
     index: { 'welcome.ts': "export const greeting = 'Hello staged';\n" },
     ignored: ['ignored.txt'],
   },
-  {
-    checkout: { ...checkout, checkoutId: 'other', projectId: 'demo-other', root: '/demo/other' },
-    files: { 'elsewhere.ts': 'export const other = true;\n' },
-  },
-  {
-    checkout: { ...checkout, checkoutId: 'third', projectId: 'demo-third', root: '/demo/third' },
-    files: { 'third.ts': 'export const third = true;\n' },
-  },
-  {
-    checkout: {
+  committedSeed(
+    { ...checkout, checkoutId: 'other', projectId: 'demo-other', root: '/demo/other' },
+    { 'elsewhere.ts': 'export const other = true;\n' },
+  ),
+  committedSeed(
+    { ...checkout, checkoutId: 'third', projectId: 'demo-third', root: '/demo/third' },
+    { 'third.ts': 'export const third = true;\n' },
+  ),
+  committedSeed(
+    {
       ...checkout,
       checkoutId: 'legend',
       root: '/demo/legend-list',
       branch: 'feat/legend-list',
       worktree: 'linked',
     },
-    files: { 'welcome.ts': "export const greeting = 'Hello from a worktree';\n" },
-  },
+    { 'welcome.ts': "export const greeting = 'Hello from a worktree';\n" },
+  ),
 ]);
 // One demo composition root. Feature packages do not construct runtimes.
 const runtime = ManagedRuntime.make(memory.layer),

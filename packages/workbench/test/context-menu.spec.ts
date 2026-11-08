@@ -295,7 +295,7 @@ test('menus dismiss on hide, target loss, checkout navigation and unmount', asyn
   await expect(menu(page)).toHaveCount(0);
   const second = page.getByRole('region', { name: 'Second editor', exact: true });
   await second
-    .getByRole('treeitem', { name: 'welcome.ts', exact: true })
+    .getByRole('treeitem', { name: 'welcome.ts, modified', exact: true })
     .click({ button: 'right' });
   await page.evaluate(() =>
     (
@@ -382,7 +382,7 @@ test('controlled remote host and local checkout with matching IDs and paths stay
   await dialog.getByRole('button', { name: 'Duplicate', exact: true }).click();
   await expect(dialog).toHaveCount(0);
   await expect(
-    otherTree.getByRole('treeitem', { name: 'remote-copy.md', exact: true }),
+    otherTree.getByRole('treeitem', { name: 'remote-copy.md, untracked', exact: true }),
   ).toBeVisible();
   await expect(row(page, 'remote-copy.md')).toHaveCount(0);
 });
