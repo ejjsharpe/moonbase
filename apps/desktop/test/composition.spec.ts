@@ -15,6 +15,7 @@ import {
   type Page,
 } from '@playwright/test';
 import { fixture, until } from '../../../tests/chat/tool-fixture.ts';
+import { openCallCard } from './transcript-list.ts';
 import { mkdir, writeFile, readFile, appendFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
@@ -857,12 +858,8 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
           .getByLabel('Message', { exact: true })
           .fill('One admitted task before exact Stop');
         await page.getByRole('button', { name: 'Send message', exact: true }).click();
-        const activity = page
-          .getByRole('article', { name: 'Live response' })
-          .getByRole('button', { name: /^Activity/ });
-        // The live row holds only the call's output, so its toggle is visually hidden: the call's
-        // headline is in the row above. It still opens from the keyboard.
-        await activity.press('Enter');
+        // The live row holds only the call's output, which opens with its call's card above it.
+        await openCallCard(page, 'inspect_remote_context');
         await expect(page.getByRole('article', { name: 'Live response' })).toContainText(
           'Controlled remote tool activity',
         );
@@ -1043,11 +1040,8 @@ for (const failsWrite of [false, true])
         .getByLabel('Message', { exact: true })
         .fill('First admitted input keeps chat busy');
       await page.getByRole('button', { name: 'Send message', exact: true }).click();
-      const activity = page
-        .getByRole('article', { name: 'Live response' })
-        .getByRole('button', { name: /^Activity/ });
-      // The live row holds only the call's output; its visually hidden toggle opens from the keyboard.
-      await activity.press('Enter');
+      // The live row holds only the call's output, which opens with its call's card above it.
+      await openCallCard(page, 'inspect_remote_context');
       await expect(page.getByRole('article', { name: 'Live response' })).toContainText(
         'Controlled remote tool activity',
       );

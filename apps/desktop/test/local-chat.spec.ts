@@ -15,6 +15,7 @@ import {
   showChat,
 } from './chat-target.ts';
 import { captureNative } from './editor-regressions.ts';
+import { openCallCard } from './transcript-list.ts';
 import { retainedImage } from './stored-image-fixture.ts';
 
 /** Opens the composer's folder menu and chooses a folder with the native picker. */
@@ -799,11 +800,15 @@ for (const mode of ['local', 'remote'] as const)
       // Folded, the card shows the running call's state; opened, the output recorded so far.
       const part = live.locator('[data-transcript-part]').filter({ hasText: /· Output · running/ });
       await expect(part).toHaveCount(1);
-      const group = live.getByRole('button', { name: /^Activity/ });
-      await expect(group).toHaveAttribute('aria-expanded', 'false');
+      // The live row holds only the call's output: it has no toggle of its own, and opens with
+      // its call's card above it.
+      await expect(live.getByRole('button', { name: /^Activity/ })).toHaveCount(0);
       await expect(live).toContainText('running');
-      // A live row holding only the call's output has a visually hidden toggle; Enter opens it.
-      await group.press('Enter');
+      const group = await openCallCard(
+        page,
+        host ? 'inspect_remote_context' : 'controlled_activity',
+      );
+      await expect(group).toHaveAttribute('aria-expanded', 'true');
       await expect(part.locator('pre')).toContainText(
         host ? 'Controlled remote tool activity' : 'First local tool chunk',
       );

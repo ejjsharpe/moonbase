@@ -38,14 +38,20 @@ export function classifyEntry(entry: ChatEntry): 'empty' | 'activity' | 'message
 
 /**
  * The list's items: each row on its own, except that empty turn markers are left out and a run of
- * consecutive activity rows is one item, so the list's gap never splits a turn's card. An item's
- * key is its last row's. Items whose rows are unchanged keep their identity.
+ * consecutive activity rows is one item, so the list's gap never splits a turn's card. Items whose
+ * rows are unchanged keep their identity.
+ *
+ * The list keys an item's content and measured size by the item's key, so a new key remounts the
+ * card. Rows join a run at its start (history loading above) and its end (the live response, a
+ * later page), and the live row leaves it when the answer starts. So a run holding a row of a
+ * `previous` item keeps that item's key; when an item splits, the first run keeps it. Otherwise an
+ * item is keyed by its last row. Keys are list keys only: `findReadingAnchor` names a row.
  */
 export type TranscriptItem<Row> = { key: string; rows: readonly Row[] };
 export function groupTranscriptRows<Row extends { key: string }>(
   rows: readonly Row[],
   kindOf: (row: Row) => 'empty' | 'activity' | 'message',
-  previous: WeakMap<Row, TranscriptItem<Row>>,
+  previous: readonly TranscriptItem<Row>[],
 ) {
   const runs: Row[][] = [];
   let open = false;
@@ -56,17 +62,49 @@ export function groupTranscriptRows<Row extends { key: string }>(
     else runs.push([row]);
     open = kind === 'activity';
   }
-  return runs.map((run) => {
-    // Keyed by its last row: history loading above can join rows to a run's start, and its key
-    // must not change under the reader.
-    const last = run.at(-1)!;
-    const old = previous.get(last);
-    if (old && old.rows.length === run.length && old.rows.every((row, i) => row === run[i]))
-      return old;
-    const item = { key: last.key, rows: run };
-    previous.set(last, item);
-    return item;
+  const itemOf = new Map(previous.flatMap((item) => item.rows.map((row) => [row.key, item])));
+  const claimed = new Set<string>();
+  const carried = runs.map((run) => {
+    for (const row of run) {
+      const old = itemOf.get(row.key);
+      if (old && !claimed.has(old.key)) {
+        claimed.add(old.key);
+        return old;
+      }
+    }
+    return undefined;
   });
+  return runs.map((run, index): TranscriptItem<Row> => {
+    const old = carried[index];
+    if (old?.rows.length === run.length && old.rows.every((row, i) => row === run[i])) return old;
+    let key = old?.key ?? run.at(-1)!.key;
+    // A row's key can name another run's carried key, so a new key must be unclaimed.
+    for (let suffix = 1; !old && claimed.has(key); suffix++) key = `${run.at(-1)!.key}#${suffix}`;
+    claimed.add(key);
+    return { key, rows: run };
+  });
+}
+
+/**
+ * The reading anchor for the list's first visible item, `{key, offset}` from its top: the item's
+ * last stored row, so a card whose last row is the live response doesn't read as following the
+ * live edge. An item of live rows alone anchors to the nearest earlier stored row, at its offset
+ * from that row's item (`measure`); with none before it, it names its own row.
+ */
+export function findReadingAnchor<Row extends { key: string; kind: string }>(
+  items: readonly TranscriptItem<Row>[],
+  visible: { key: string; offset: number },
+  measure: (itemKey: string) => number | undefined,
+) {
+  const index = items.findIndex((item) => item.key === visible.key);
+  if (index < 0) return undefined;
+  for (let i = index; i >= 0; i--) {
+    const row = items[i]!.rows.findLast((row) => row.kind === 'entry');
+    if (!row) continue;
+    const offset = i === index ? visible.offset : measure(items[i]!.key);
+    return offset === undefined ? undefined : { key: row.key, offset };
+  }
+  return { key: items[index]!.rows[0]!.key, offset: visible.offset };
 }
 
 /** Only consecutive activity folds; authored answers keep their recorded position. */
