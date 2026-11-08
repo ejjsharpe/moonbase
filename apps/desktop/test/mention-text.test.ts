@@ -5,8 +5,10 @@ import {
   findMentionQuery,
   findMentionRanges,
   insertMention,
+  rebaseMentions,
   removeMentionBefore,
 } from '../src/renderer/chat/mention-text.ts';
+import { isChatMentionPath } from '@moonbase/contracts/chat';
 
 test('an @ at a word start opens a query; an email or a finished mention does not', () => {
   assert.deepEqual(findMentionQuery('@', 1, []), { start: 0, query: '' });
@@ -55,6 +57,7 @@ test('files mentioned from the file tree join the draft relative to the chat fol
       text: 'Look at @src/a.ts @"My notes.md" ',
       mentions: [{ path: 'src/a.ts' }, { path: 'My notes.md' }],
       outside: 0,
+      unmentionable: 0,
     },
   );
   // Already mentioned, outside the folder, or the folder itself: left out.
@@ -65,7 +68,7 @@ test('files mentioned from the file tree join the draft relative to the chat fol
       ['/repo/src/a.ts', '/other/b.ts', '/repo'],
       '/repo/',
     ),
-    { text: '@src/a.ts ', mentions: [{ path: 'src/a.ts' }], outside: 2 },
+    { text: '@src/a.ts ', mentions: [{ path: 'src/a.ts' }], outside: 2, unmentionable: 0 },
   );
   assert.deepEqual(appendMentions('', [], ['/repo/b.ts'], '/repo').text, '@b.ts ');
   // A sibling folder that shares the prefix is not inside.
@@ -75,5 +78,48 @@ test('files mentioned from the file tree join the draft relative to the chat fol
     text: 'hi',
     mentions: [],
     outside: 1,
+    unmentionable: 0,
   });
+});
+
+test('files whose paths a mention cannot hold are left out of the draft and counted', () => {
+  const long = `/repo/${'a'.repeat(1025)}.ts`;
+  const files = ['/repo/a\\b.txt', '/repo/say "hi".md', '/repo/tab\there.md', long, '/repo/ok.ts'];
+  const appended = appendMentions('', [], files, '/repo');
+  assert.deepEqual(appended, {
+    text: '@ok.ts ',
+    mentions: [{ path: 'ok.ts' }],
+    outside: 0,
+    unmentionable: 4,
+  });
+  // Every kept path is one ChatMentionSchema accepts.
+  assert.ok(appended.mentions.every((mention) => isChatMentionPath(mention.path)));
+  assert.deepEqual(appendMentions('hi', [], ['/repo/a\\b.txt'], '/repo'), {
+    text: 'hi',
+    mentions: [],
+    outside: 0,
+    unmentionable: 1,
+  });
+});
+
+test('mentions moved to another folder are respelled inside it and dropped outside it', () => {
+  const mentions = [{ path: 'src/a.ts' }, { path: 'README.md' }, { path: 'src/My notes.md' }];
+  const text = 'Read @src/a.ts, @README.md and @"src/My notes.md".';
+  assert.deepEqual(rebaseMentions(text, mentions, '/repo', '/repo/src/'), {
+    text: 'Read @a.ts, @README.md and @"My notes.md".',
+    mentions: [{ path: 'a.ts' }, { path: 'My notes.md' }],
+    dropped: 1,
+  });
+  assert.deepEqual(rebaseMentions('See @a.ts', [{ path: 'a.ts' }], '/repo/src', '/repo'), {
+    text: 'See @src/a.ts',
+    mentions: [{ path: 'src/a.ts' }],
+    dropped: 0,
+  });
+  // A sibling sharing the prefix, or the filesystem root, is not inside.
+  assert.deepEqual(rebaseMentions('@a.ts', [{ path: 'a.ts' }], '/repo', '/repository'), {
+    text: '@a.ts',
+    mentions: [],
+    dropped: 1,
+  });
+  assert.equal(rebaseMentions('@a.ts', [{ path: 'a.ts' }], '/repo', '/').dropped, 1);
 });

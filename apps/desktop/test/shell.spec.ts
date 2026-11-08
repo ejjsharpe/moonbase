@@ -1535,6 +1535,7 @@ test('@ in the composer searches the chat folder and sends picked files as menti
   const files = shell(page).getByRole('listbox', { name: 'Files', exact: true });
   await message.fill('Compare @vie');
   await expect(files.getByRole('option').first()).toHaveAccessibleName(/view\.tsx/);
+  await expect(files.getByRole('option').first()).not.toHaveAttribute('aria-disabled');
   await expect(message).toHaveAttribute('aria-activedescendant', /option-0$/);
   await message.press('Enter');
   await expect(message).toHaveValue('Compare @apps/desktop/src/renderer/chat/view.tsx ');
@@ -1548,6 +1549,7 @@ test('@ in the composer searches the chat folder and sends picked files as menti
   await message.pressSequentially('e');
   await message.press('ArrowDown');
   await message.press('ArrowUp');
+  await expect(files.getByRole('option').first()).not.toHaveAttribute('aria-disabled');
   await message.press('Tab');
   await expect(message).toHaveValue(
     'Compare @apps/desktop/src/renderer/chat/view.tsx with @"docs/Release notes.md" ',
@@ -1665,6 +1667,165 @@ test('a new worktree is made only when a new chat sends, and its chat stays with
   await expect(
     page.getByRole('menuitem', { name: /chat-fix-the-rail-peek · chat\/fix-the-rail-peek/ }),
   ).toBeVisible();
+});
+
+test('a new chat keeps its folder across project visits, and a worktree Git finishes meanwhile still sends', async ({
+  page,
+}) => {
+  // StrictMode mounts each view twice, as a remount would.
+  await page.goto('/?local&design&strict');
+  const message = page.getByRole('textbox', { name: 'Message', exact: true });
+  const folderChoice = page.getByRole('button', { name: 'Choose working folder', exact: true });
+  const worktree = page.getByRole('combobox', { name: 'Worktree', exact: true });
+  const send = page.getByRole('button', { name: 'Send message', exact: true });
+  const projectTab = page.getByRole('tab', { name: 'moonbase · main', exact: true });
+  const agentsTab = page.getByRole('tab', { name: 'Agents', exact: true });
+  await folderChoice.click();
+  await page
+    .getByRole('dialog', { name: 'Working folder', exact: true })
+    .getByRole('button', { name: /^notes/ })
+    .click();
+  await expect(folderChoice).toHaveAttribute('title', '/Users/demo/notes');
+  await worktree.click();
+  await page.getByRole('option', { name: 'New worktree', exact: true }).click();
+  await message.fill('Tidy the notes index');
+  // Visiting a project shows its docked chat instead, unmounting Agents' view; its choices stay.
+  await projectTab.click();
+  await expect(
+    page
+      .getByRole('complementary', { name: 'Project chats', exact: true })
+      .getByRole('button', { name: 'Choose working folder', exact: true }),
+  ).toHaveAttribute('title', '/demo/moonbase');
+  await agentsTab.click();
+  await expect(folderChoice).toHaveAttribute('title', '/Users/demo/notes');
+  await expect(worktree).toContainText('New worktree');
+  await expect(send).toBeEnabled();
+  // Git takes a while, and the view goes away before it finishes.
+  await page.evaluate(() => {
+    const chat = window.demo.chat,
+      create = chat.createWorktree;
+    chat.createWorktree = (root, branch) =>
+      new Promise((resolve) => {
+        Object.assign(window, { finishWorktree: () => resolve(create(root, branch)) });
+      });
+  });
+  await send.click();
+  await expect(send).toBeDisabled();
+  await projectTab.click();
+  await page.evaluate(() => (window as never as { finishWorktree(): void }).finishWorktree());
+  await agentsTab.click();
+  await expect(
+    page.getByRole('heading', { name: 'Tidy the notes index', exact: true }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => window.demo.application.chat!.getSnapshot().snapshot?.conversation.cwd,
+    ),
+  ).toBe('/Users/demo/notes-worktrees/chat-tidy-the-notes-index');
+  expect(await page.evaluate(() => window.demo.chat.worktrees)).toEqual([
+    '/Users/demo/notes chat/tidy-the-notes-index',
+  ]);
+});
+
+test('a new chat’s mentions belong to its folder: choosing another leaves them plain text', async ({
+  page,
+}) => {
+  await page.goto('/?local&design');
+  const message = page.getByRole('textbox', { name: 'Message', exact: true });
+  const files = page.getByRole('listbox', { name: 'Files', exact: true });
+  const folderChoice = page.getByRole('button', { name: 'Choose working folder', exact: true });
+  await chooseFolderNatively(page);
+  await message.fill('Compare @vie');
+  await expect(files.getByRole('option').first()).not.toHaveAttribute('aria-disabled');
+  await message.press('Enter');
+  await expect(page.locator('mark')).toHaveCount(1);
+  await folderChoice.click();
+  await page
+    .getByRole('dialog', { name: 'Working folder', exact: true })
+    .getByRole('button', { name: /^notes/ })
+    .click();
+  await expect(
+    page.getByRole('alert').filter({ hasText: "A mentioned file isn't in this folder" }),
+  ).toHaveText("A mentioned file isn't in this folder, so it's no longer mentioned.");
+  await expect(page.locator('mark')).toHaveCount(0);
+  await message.press('ControlOrMeta+Enter');
+  await expect(page.getByRole('heading', { name: /^Compare/ })).toBeVisible();
+  const sent = await page.evaluate(
+    () => window.demo.application.chat!.getSnapshot().snapshot?.conversation.cwd,
+  );
+  expect(sent).toBe('/Users/demo/notes');
+  expect(await page.evaluate(() => window.demo.chat.sent.at(-1)?.mentions)).toBeUndefined();
+});
+
+test('/new starts the new chat from the lines after it and leaves the open chat’s draft empty', async ({
+  page,
+}) => {
+  await page.goto('/?local&design');
+  const message = page.getByRole('textbox', { name: 'Message', exact: true });
+  await chooseFolderNatively(page);
+  await message.fill('Start a chat');
+  await page.getByRole('button', { name: 'Send message', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Start a chat', exact: true })).toBeVisible();
+  await message.fill('/new\nCarry this on');
+  await message.press('ControlOrMeta+Enter');
+  await expect(page.getByText('What should we work on?')).toBeVisible();
+  await expect(message).toHaveValue('Carry this on');
+  const list = page.getByRole('navigation', { name: 'Conversations', exact: true });
+  await list.getByRole('button', { name: /^Settled/ }).click();
+  await list.getByRole('button', { name: /Start a chat/ }).click();
+  await expect(page.getByRole('heading', { name: 'Start a chat', exact: true })).toBeVisible();
+  await expect(message).toHaveValue('');
+});
+
+test('the @ picker picks only from the current query’s matches and leaves IME keys alone', async ({
+  page,
+}) => {
+  await page.goto('/?local&design');
+  const message = page.getByRole('textbox', { name: 'Message', exact: true });
+  const files = page.getByRole('listbox', { name: 'Files', exact: true });
+  await chooseFolderNatively(page);
+  // The search for `rele` answers only when the test says.
+  await page.evaluate(() => {
+    const chat = window.demo.application.chat!,
+      find = chat.findFiles.bind(chat);
+    const held: (() => void)[] = [];
+    Object.assign(window, { answerHeld: () => held.splice(0).forEach((answer) => answer()) });
+    chat.findFiles = (query, options) =>
+      query === 'rele'
+        ? new Promise((resolve, reject) => {
+            held.push(() => void find(query, options).then(resolve, reject));
+          })
+        : find(query, options);
+  });
+  await message.fill('@rel');
+  const first = files.getByRole('option').first();
+  await expect(first).toHaveAccessibleName(/Release notes\.md/);
+  await expect(first).not.toHaveAttribute('aria-disabled');
+  await message.pressSequentially('e');
+  // The `rel` matches stay listed while `rele` is searched, but can't be picked.
+  await expect(first).toHaveAttribute('aria-disabled', 'true');
+  await message.press('Enter');
+  await message.press('Tab');
+  await first.click({ force: true });
+  await expect(message).toHaveValue('@rele');
+  await page.evaluate(() => (window as never as { answerHeld(): void }).answerHeld());
+  await expect(first).not.toHaveAttribute('aria-disabled');
+  // Keys an input method is composing with go to it.
+  const keyDown = (key: string, isComposing: boolean) =>
+    message.evaluate(
+      (element, init) =>
+        !element.dispatchEvent(
+          new KeyboardEvent('keydown', { ...init, bubbles: true, cancelable: true }),
+        ),
+      { key, isComposing },
+    );
+  for (const key of ['Enter', 'Tab', 'ArrowDown', 'ArrowUp', 'Escape'])
+    expect(await keyDown(key, true)).toBe(false);
+  await expect(message).toHaveValue('@rele');
+  await expect(files).toBeVisible();
+  await expect(message).toHaveAttribute('aria-activedescendant', /option-0$/);
+  expect(await keyDown('Enter', false)).toBe(true);
+  await expect(message).toHaveValue('@"docs/Release notes.md" ');
 });
 
 test('Settings holds hosts and providers; the sidebar keeps only a Connect line', async ({
