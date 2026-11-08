@@ -117,6 +117,8 @@ export const ChatSummarySchema = struct({
   reasoningEffort: optional(ChatReasoningEffortSchema),
   /** Present in chat listings; a snapshot reports the open chat's state itself. */
   activity: optional(ChatActivitySchema),
+  /** When you settled the chat (set it aside); sending to it unsettles it. */
+  settledAt: optional(timestamp),
 });
 const preview = unicode.check(
   Schema.makeFilter((value) => new TextEncoder().encode(value).length <= chatPreviewBytes),
@@ -359,6 +361,8 @@ export const chatInputSchemas = {
   }).check(Schema.makeFilter(areChatMentionsInText)),
   getChatSend: struct(receipt),
   stopChat: struct({ stop: ChatStopTargetSchema, requestId: ChatIdentifierSchema }),
+  /** Settles or unsettles a chat; setting its current state again changes nothing. */
+  settleChat: struct({ target: ChatTargetSchema, settled: Schema.Boolean }),
   /** Files in a chat's working folder: an existing chat's, or an approved folder for a new one. */
   findChatFiles: Schema.Union([
     struct({ target: ChatTargetSchema, query: fileQuery }),
@@ -451,6 +455,7 @@ export const chatOutputSchemas = {
     requestId: ChatIdentifierSchema,
     outcome: Schema.Literals(['stopped', 'terminal', 'superseded', 'pending']),
   }),
+  settleChat: ChatSummarySchema,
   findChatFiles: struct({
     query: fileQuery,
     matches: Schema.mutable(Schema.Array(ChatFileMatchSchema)).check(

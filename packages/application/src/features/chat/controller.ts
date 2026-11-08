@@ -669,6 +669,8 @@ class ChatModelState {
       }
   }
   private reloading = false;
+  /** Settle replies applied so far; a reload begun before one would undo it in the list. */
+  private settles = 0;
   /**
    * Lists chats again in the background, keeping the last list if it fails. Unlike Refresh it
    * neither re-verifies the host nor clears an error on screen.
@@ -684,6 +686,7 @@ class ChatModelState {
       return Promise.resolve();
     }
     this.reloading = true;
+    const settles = this.settles;
     return this.runEffect(
       Effect.flatMap(
         Effect.forkIn(this.listChats(), owner.scope, { startImmediately: true }),
@@ -691,7 +694,8 @@ class ChatModelState {
       ),
     )
       .then((listed) => {
-        if (owner.alive && epoch === this.epoch && !this.closed) this.listed(listed);
+        if (owner.alive && epoch === this.epoch && !this.closed && settles === this.settles)
+          this.listed(listed);
       })
       .catch(() => {})
       .finally(() => {
@@ -1155,6 +1159,34 @@ class ChatModelState {
         yield* this.dispatch(pending);
       }),
     );
+  /**
+   * Settles or unsettles a chat on its host. The listed chat and the open snapshot take the host's
+   * reply, so the chat moves group without waiting for a reload.
+   */
+  settle = (target: ChatTarget, settled: boolean) =>
+    this.action(
+      'settle',
+      Effect.gen({ self: this }, function* () {
+        this.connected();
+        const input = decodeChatInput('settleChat', { target, settled });
+        if (!sameSession(input.target, this.session))
+          throw invalid('Chat belongs to another context.');
+        const summary = yield* this.call('settleChat', input);
+        this.settles++;
+        const listed = this.state.chats.findIndex((chat) =>
+          sameTarget(chat.target, summary.target),
+        );
+        if (listed >= 0) {
+          const chats = [...this.state.chats],
+            activity = chats[listed]!.activity;
+          chats[listed] = { ...summary, ...(activity ? { activity } : {}) };
+          this.update({ chats });
+        }
+        if (this.selection?.alive && sameTarget(this.selection.target, summary.target))
+          this.selection.transcript?.updateConversation(summary);
+      }),
+      this.generation,
+    );
   retry = (id: string) =>
     this.action(
       id,
@@ -1440,6 +1472,7 @@ export type ChatController = Pick<
   | 'create'
   | 'send'
   | 'stop'
+  | 'settle'
   | 'retry'
   | 'query'
   | 'preserve'

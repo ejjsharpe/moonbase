@@ -57,8 +57,8 @@ export async function createRemoteChat(page: Page, title: string) {
 }
 
 /**
- * A listed chat's sidebar button, made visible: a Settled chat waits behind a toggle that starts
- * closed, so once the chat is listed this opens Settled if the chat is behind it.
+ * A listed chat's sidebar button, made visible: a chat you settled waits behind a toggle that
+ * starts closed, so once the chat is listed this opens Settled if the chat is behind it.
  */
 export async function showChat(page: Page, name: string | RegExp) {
   const chat = page.getByRole('button', { name, exact: false });

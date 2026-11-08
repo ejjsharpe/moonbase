@@ -49,6 +49,8 @@ export const Metadata = defineDocFamily({
     createdAt: string;
     identity: string;
     settings?: ChatSettings;
+    /** When the user settled the chat; a Send clears it. */
+    settledAt?: string;
   }) => ({
     ...value,
     pending: 0,

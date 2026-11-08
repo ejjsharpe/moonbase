@@ -43,6 +43,7 @@ export function installCommandIpc({
     | 'chooseFolder'
     | 'recentFolders'
     | 'createWorktree'
+    | 'turnIntoProject'
     | 'requireLocal'
     | 'getSession'
   >;
@@ -124,6 +125,21 @@ export function installCommandIpc({
             message: 'Recent folders are unavailable.',
           });
         return { ok: true, value: await chatBackends.recentFolders() };
+      }
+      if (v.kind === 'turn-into-project') {
+        fields(v, ['kind', 'backendId', 'conversationId']);
+        if (backendId !== 'local' || lifecycle.isQuitting())
+          throw new ApplicationError({
+            code: 'Unavailable',
+            message: 'Turning a chat into a project is unavailable.',
+          });
+        if (
+          typeof v.conversationId !== 'string' ||
+          !v.conversationId ||
+          v.conversationId.length > 512
+        )
+          throw new ApplicationError({ code: 'InvalidInput', message: 'Choose a local chat.' });
+        return { ok: true, value: await chatBackends.turnIntoProject(v.conversationId) };
       }
       if (v.kind === 'create-worktree') {
         fields(v, ['kind', 'backendId', 'root', 'branch']);

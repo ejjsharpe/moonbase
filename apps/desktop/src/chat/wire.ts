@@ -62,6 +62,8 @@ export interface ChatBridge {
   recentFolders?(): Promise<string[]>;
   /** Creates a new local chat's linked worktree beside the repository, returning its root. */
   createWorktree?(root: string, branch: string): Promise<string>;
+  /** Opens a local chat without a project's folder as a project where it is, returning its root. */
+  turnIntoProject?(conversationId: string): Promise<string>;
   confirmQuit?(): Promise<boolean>;
   context(backendId?: string): Promise<ChatSession>;
   call(

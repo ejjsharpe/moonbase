@@ -9,6 +9,7 @@ import {
   type CheckoutTarget,
   type FileDocument,
   type FileTarget,
+  type GitCheckoutTarget,
   type WorkspaceCommand,
   type EditorRecovery,
   type OperationResult,
@@ -300,6 +301,10 @@ export function memoryWorkspace(seeds: Seed[]) {
   for (const seed of seeds) addSeed(seed);
   const projectSeeds = (checkout: CheckoutTarget) =>
     seeds.filter((seed) => seed.checkout.projectId === exact(checkout).checkout.projectId);
+  const requireGit = (checkout: CheckoutTarget): GitCheckoutTarget =>
+    checkout.vcs === 'git'
+      ? checkout
+      : fail('This project is not a Git repository. Initialize Git first.');
   const call = <A>(name: WorkspaceCommand, action: () => A) =>
     Effect.try({
       try: () => {
@@ -407,8 +412,9 @@ export function memoryWorkspace(seeds: Seed[]) {
       }),
     gitStatus: ({ checkout }) =>
       call('gitStatus', () => {
-        const seed = exact(checkout),
-          changes: { path: string; area: 'staged' | 'unstaged' | 'untracked' }[] = [];
+        const seed = exact(checkout);
+        if (checkout.vcs === 'none') return { branch: '', changes: [] };
+        const changes: { path: string; area: 'staged' | 'unstaged' | 'untracked' }[] = [];
         for (const [path, entry] of entries(checkout))
           if (!entry.directory) {
             const index = readOwn(seed.index, path) ?? readOwn(seed.head, path);
@@ -425,7 +431,8 @@ export function memoryWorkspace(seeds: Seed[]) {
     listWorktrees: ({ checkout }) =>
       call('listWorktrees', () => ({
         worktrees: projectSeeds(checkout)
-          .map(({ checkout }) => ({
+          .flatMap(({ checkout }) => (checkout.vcs === 'git' ? [checkout] : []))
+          .map((checkout) => ({
             root: checkout.root,
             branch: checkout.branch,
             main: checkout.worktree === 'main',
@@ -437,17 +444,19 @@ export function memoryWorkspace(seeds: Seed[]) {
     // Seeds the new linked worktree with the base branch's committed files.
     createWorktree: ({ checkout, base, branch, location }) =>
       call('createWorktree', () => {
-        const project = projectSeeds(checkout);
-        const source = project.find((seed) => seed.checkout.branch === base);
+        const from = requireGit(checkout);
+        const project = projectSeeds(checkout).filter((seed) => seed.checkout.vcs === 'git');
+        const branchOf = (seed: Seed) => seed.checkout.vcs === 'git' && seed.checkout.branch;
+        const source = project.find((seed) => branchOf(seed) === base);
         if (!source) fail(`Base ${base} is not a commit.`);
-        if (project.some((seed) => seed.checkout.branch === branch))
+        if (project.some((seed) => branchOf(seed) === branch))
           fail(`Branch ${branch} already exists.`, 'Conflict');
         if (seeds.some((seed) => seed.checkout.root === location))
           fail('The worktree location already exists.', 'Conflict');
         const head = { ...(source!.head ?? source!.files) };
         const seed: Seed = {
           checkout: {
-            ...checkout,
+            ...from,
             checkoutId: `${checkout.projectId}:${location}`,
             root: location,
             branch,
@@ -460,9 +469,28 @@ export function memoryWorkspace(seeds: Seed[]) {
         addSeed(seed);
         return seed.checkout;
       }),
+    // The folder's files become untracked in a repository with no commits.
+    initializeRepository: ({ checkout }) =>
+      call('initializeRepository', () => {
+        const seed = exact(checkout);
+        if (checkout.vcs !== 'none') fail('This project is already a Git repository.');
+        const { vcs: _, ...identity } = checkout;
+        const initialized: GitCheckoutTarget = {
+          ...identity,
+          vcs: 'git',
+          projectId: `${checkout.projectId}:git`,
+          branch: 'main',
+          worktree: 'main',
+        };
+        seeds[seeds.indexOf(seed)] = { ...seed, checkout: initialized, head: {}, index: {} };
+        files.set(checkoutKey(initialized), files.get(checkoutKey(checkout))!);
+        files.delete(checkoutKey(checkout));
+        return initialized;
+      }),
     readComparison: ({ target, area }) =>
       call('readComparison', () => {
         const seed = exact(target.checkout);
+        requireGit(target.checkout);
         pathCheck(target.path);
         let original;
         if (area === 'untracked') {

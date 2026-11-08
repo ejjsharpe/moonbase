@@ -26,6 +26,7 @@ export function createChatBackends({
   emit,
   pickFolder,
   createWorktree,
+  openFolderProject,
   transcript,
 }: {
   runtime: ManagedRuntime.ManagedRuntime<never, ApplicationError>;
@@ -38,6 +39,8 @@ export function createChatBackends({
   pickFolder(): Promise<string | null>;
   /** Creates a linked worktree of the checkout at `root`, returning its root. */
   createWorktree?(root: string, branch: string, signal: AbortSignal): Promise<string>;
+  /** Opens a folder main trusts as a project, approving it for the editor; returns its root. */
+  openFolderProject?(root: string): Promise<string>;
   transcript?: NativeTranscriptActions;
 }) {
   let local = localResult.backend;
@@ -182,6 +185,35 @@ export function createChatBackends({
       } finally {
         worktreeCreations.delete(creation);
       }
+    },
+    /**
+     * Opens a local chat without a project's folder as a project where it is, so nothing moves and
+     * the agent keeps working in the same place, then lists the chat under that project.
+     */
+    async turnIntoProject(conversationId: string) {
+      if (!local || !openFolderProject)
+        throw new ApplicationError({
+          code: 'Unavailable',
+          message: 'Turning a chat into a project is unavailable.',
+        });
+      const owner = documentId,
+        target = { ...local.session, conversationId };
+      const { conversation } = await runApplicationEffect(runtime, local.chat.getChat({ target }));
+      if (!conversation.ownFolder)
+        throw new ApplicationError({
+          code: 'InvalidInput',
+          message: 'Only a chat without a project can become one.',
+        });
+      await local.requireChatFolder(conversation.cwd);
+      // Opening first leaves the chat as it was if that fails; a retry opens the same folder again.
+      const root = await openFolderProject(conversation.cwd);
+      if (owner !== documentId)
+        throw new ApplicationError({
+          code: 'Cancelled',
+          message: 'The window reloaded while the project was opened.',
+        });
+      await runApplicationEffect(runtime, local.control.markFolderAsProject(target));
+      return root;
     },
     requireLocal(backendId: string) {
       if (backendId === 'local' && !local) throw localResult.error;

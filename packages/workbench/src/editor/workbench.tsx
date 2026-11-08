@@ -109,6 +109,8 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     target && state.buffers.find((buffer) => fileKey(buffer.target) === fileKey(target));
   const mode = (target && readOwn(selected?.fileViews, target.path)) || 'file';
   const changes = (checkout && state.git[checkoutKey(checkout)]?.changes) || [];
+  // A plain folder has no Git changes, comparisons or Changes view.
+  const git = checkout?.vcs === 'git';
   const breadcrumbs =
     checkout && selected?.active
       ? [
@@ -119,8 +121,9 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   const [anchorReset, setAnchorReset] = useState(0);
   const [picker, setPicker] = useState<PickerRequest | null>(null),
     [reveal, setReveal] = useState<EditorReveal>(),
-    [panel, setPanel] = useState('files'),
+    [chosenPanel, setPanel] = useState('files'),
     [action, updateAction] = useState<Action | null>(null);
+  const panel = git ? chosenPanel : 'files';
   const lookup = !!picker;
   const actionRef = useRef<Action | null>(null),
     lookupRef = useRef(lookup),
@@ -358,7 +361,9 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     ...(checkout
       ? [
           editorCommand('show-files', 'Show Files', '⌘⇧E', () => setPanel('files')),
-          editorCommand('show-changes', 'Show Changes', '⌘⇧G', () => setPanel('git')),
+          ...(git
+            ? [editorCommand('show-changes', 'Show Changes', '⌘⇧G', () => setPanel('git'))]
+            : []),
           editorCommand('reopen-file', 'Reopen closed file', '⌘⇧T', () =>
             run(controller.reopen(checkout)),
           ),
@@ -488,35 +493,39 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
         }}>
         <WorktreeSwitcher controller={controller} checkout={checkout} run={run} />
         <div {...stylex.props(workbench.viewNav)}>
-          <div role="group" aria-label="Sidebar view" {...stylex.props(workbench.viewSwitch)}>
-            <Button
-              title="Files · ⇧⌘E"
-              {...stylex.props(
-                controls.button,
-                workbench.viewButton,
-                panel === 'files' && workbench.activeView,
-              )}
-              aria-pressed={panel === 'files'}
-              onClick={() => setPanel('files')}>
-              Files
-            </Button>
-            <Button
-              title={`${changes.length} changed · ⇧⌘G`}
-              {...stylex.props(
-                controls.button,
-                workbench.viewButton,
-                panel === 'git' && workbench.activeView,
-              )}
-              aria-pressed={panel === 'git'}
-              onClick={() => setPanel('git')}>
-              Changes
-              {changes.length > 0 && (
-                <span aria-hidden="true" {...stylex.props(workbench.changeCount)}>
-                  {changes.length}
-                </span>
-              )}
-            </Button>
-          </div>
+          {git ? (
+            <div role="group" aria-label="Sidebar view" {...stylex.props(workbench.viewSwitch)}>
+              <Button
+                title="Files · ⇧⌘E"
+                {...stylex.props(
+                  controls.button,
+                  workbench.viewButton,
+                  panel === 'files' && workbench.activeView,
+                )}
+                aria-pressed={panel === 'files'}
+                onClick={() => setPanel('files')}>
+                Files
+              </Button>
+              <Button
+                title={`${changes.length} changed · ⇧⌘G`}
+                {...stylex.props(
+                  controls.button,
+                  workbench.viewButton,
+                  panel === 'git' && workbench.activeView,
+                )}
+                aria-pressed={panel === 'git'}
+                onClick={() => setPanel('git')}>
+                Changes
+                {changes.length > 0 && (
+                  <span aria-hidden="true" {...stylex.props(workbench.changeCount)}>
+                    {changes.length}
+                  </span>
+                )}
+              </Button>
+            </div>
+          ) : (
+            <span {...stylex.props(styles.grow)} />
+          )}
           <Button
             ref={findFile}
             aria-label="Find file"
@@ -858,20 +867,21 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                                   onValueChange={(view: FileView) =>
                                     run(controller.open(file, { view }))
                                   }>
-                                  {(['file', 'staged', 'unstaged', 'untracked'] as const).map(
-                                    (view) => (
-                                      <Menu.RadioItem
-                                        key={view}
-                                        value={view}
-                                        closeOnClick
-                                        {...stylex.props(
-                                          overlays.option,
-                                          fileView === view && workbench.fileSelected,
-                                        )}>
-                                        {view === 'file' ? 'File' : view}
-                                      </Menu.RadioItem>
-                                    ),
-                                  )}
+                                  {(git
+                                    ? (['file', 'staged', 'unstaged', 'untracked'] as const)
+                                    : (['file'] as const)
+                                  ).map((view) => (
+                                    <Menu.RadioItem
+                                      key={view}
+                                      value={view}
+                                      closeOnClick
+                                      {...stylex.props(
+                                        overlays.option,
+                                        fileView === view && workbench.fileSelected,
+                                      )}>
+                                      {view === 'file' ? 'File' : view}
+                                    </Menu.RadioItem>
+                                  ))}
                                   {(current?.conflict || fileView === 'conflict') && (
                                     <Menu.RadioItem
                                       value="conflict"

@@ -6,6 +6,8 @@ import type { CommandOptions, ObservationClose } from './common.ts';
 export { ApplicationError, type ApplicationErrorCode } from './errors.ts';
 export type { CommandOptions, ObservationClose } from './common.ts';
 export type CheckoutTarget = typeof Contracts.CheckoutTargetSchema.Type;
+export type GitCheckoutTarget = typeof Contracts.GitCheckoutTargetSchema.Type;
+export type FolderCheckoutTarget = typeof Contracts.FolderCheckoutTargetSchema.Type;
 export type FileTarget = typeof Contracts.FileTargetSchema.Type;
 export type FileDocument = typeof Contracts.FileDocumentSchema.Type;
 export type FileView = typeof Contracts.FileViewSchema.Type;

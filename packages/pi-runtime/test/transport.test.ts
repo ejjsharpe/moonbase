@@ -1426,6 +1426,29 @@ test('authenticated file search reaches the host and refuses another folder', as
   });
 });
 
+test('authenticated settling reaches the remote host, and a lost reply is uncertain', async (t) => {
+  const f = await setup(t);
+  const target = (
+    await f.remote.command('createChat', { session, requestId: 'c', title: 'Remote' })
+  ).conversation.target;
+  const settled = await f.remote.command('settleChat', { target, settled: true });
+  assert(settled.settledAt);
+  assert.equal(
+    (await f.client.command('getChat', { target })).conversation.settledAt,
+    settled.settledAt,
+  );
+  assert.equal(
+    (await f.remote.command('settleChat', { target, settled: false })).settledAt,
+    undefined,
+  );
+  f.afterDispatch = async (operation) => {
+    if (operation === 'settleChat') f.disconnect();
+  };
+  await assert.rejects(f.remote.command('settleChat', { target, settled: true }), {
+    code: 'Uncertain',
+  });
+});
+
 test('authenticated Find transports saved matches, rejects foreign continuations and cancels peer waits', async (t) => {
   const f = await setup(t);
   const target = (

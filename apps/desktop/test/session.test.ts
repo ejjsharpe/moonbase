@@ -23,6 +23,7 @@ const target: CheckoutTarget = {
   checkoutId: 'checkout',
   projectId: 'project',
   root: '/approved',
+  vcs: 'git' as const,
   branch: 'main',
   worktree: 'main' as 'main' | 'linked',
 };
@@ -163,6 +164,67 @@ test('listed worktrees of an approved checkout may open; renderer worktree locat
   assert.equal(created.error.code, 'Unauthorized');
   assert.equal(f.dispatches, 3);
   await f.session.dispose();
+});
+test('a plain folder main trusts opens for the renderer, and Initialize Git replaces its approval', async () => {
+  const folder: CheckoutTarget = {
+    hostId: 'local',
+    checkoutId: 'notes',
+    projectId: 'notes',
+    root: '/notes',
+    vcs: 'none',
+  };
+  const initialized: CheckoutTarget = {
+    ...folder,
+    projectId: 'notes-repository',
+    vcs: 'git',
+    branch: 'main',
+    worktree: 'main',
+  };
+  const dispatched: string[] = [];
+  const client: EditorClient = {
+    command: async (name) => {
+      dispatched.push(name);
+      if (name === 'openCheckout') return folder as never;
+      if (name === 'initializeRepository') return initialized as never;
+      return { paths: [] } as never;
+    },
+    watch: () => async () => {},
+  };
+  const session = new EditorSession(
+    runtime,
+    client,
+    { chooseCheckout: async () => null, imports: async () => [], release: async () => {} },
+    () => {},
+  );
+  const call = (operation: string, input: unknown) =>
+    session.call('command', { operation, input }, crypto.randomUUID());
+  const ignored = (checkout: unknown) =>
+    call('getIgnoredPaths', { checkout, path: '', paths: ['a.txt'] });
+  // The renderer cannot name the root, until main opens it as a project.
+  assert.equal((await call('openCheckout', { root: folder.root })).ok, false);
+  assert.deepEqual(await session.openFolderProject(folder.root), folder);
+  assert((await call('openCheckout', { root: folder.root })).ok);
+  assert((await ignored(folder)).ok);
+  // A Git-shaped copy of the folder's target is not its approval.
+  for (const shape of [
+    { ...folder, branch: 'main', worktree: 'main' },
+    { ...folder, vcs: 'git', branch: 'main', worktree: 'main' },
+  ])
+    assert.equal((await ignored(shape)).ok, false);
+  const reply = await call('initializeRepository', { checkout: folder });
+  assert(reply.ok);
+  assert.deepEqual(reply.value, initialized);
+  assert.equal((await ignored(folder)).ok, false);
+  assert((await ignored(initialized)).ok);
+  assert.equal((await call('initializeRepository', { checkout: folder })).ok, false);
+  assert.deepEqual(dispatched, [
+    'openCheckout',
+    'openCheckout',
+    'getIgnoredPaths',
+    'initializeRepository',
+    'getIgnoredPaths',
+  ]);
+  await session.dispose();
 });
 test('restored exact approvals, owned cancellation, failed-watch cleanup and disposal', async () => {
   const f = fixture();

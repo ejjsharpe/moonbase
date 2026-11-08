@@ -19,12 +19,16 @@ export type ChatCommandContext = {
   selected: boolean;
   /** Whether the open chat has a run to stop. */
   running: boolean;
+  /** Whether the open chat is settled, or null when it can't be settled or unsettled now. */
+  settled: boolean | null;
   /** A new local chat's models; an open chat or a remote host keeps its own. */
   models: readonly ChatCommandOption[];
   /** The chosen model's reasoning efforts. */
   efforts: readonly ChatCommandOption[];
   newChat(): void;
   stop(): void;
+  settle(): void;
+  unsettle(): void;
   clearDraft(): void;
   chooseModel(value: string): void;
   chooseEffort(value: string): void;
@@ -53,12 +57,24 @@ export function listChatCommands(context: ChatCommandContext): ChatCommand[] {
     });
   if (context.running)
     commands.push({ name: 'stop', description: 'Stop the current run', run: context.stop });
+  if (context.settled === false)
+    commands.push({ name: 'settle', description: 'Settle this chat', run: context.settle });
+  if (context.settled === true)
+    commands.push({ name: 'unsettle', description: 'Unsettle this chat', run: context.unsettle });
   commands.push({ name: 'clear', description: 'Clear the draft', run: context.clearDraft });
   return commands;
 }
 
 /** Every command name, so a message never sends an unavailable command to the agent. */
-export const chatCommandNames = ['new', 'model', 'effort', 'stop', 'clear'] as const;
+export const chatCommandNames = [
+  'new',
+  'model',
+  'effort',
+  'stop',
+  'settle',
+  'unsettle',
+  'clear',
+] as const;
 
 /** What the caret is typing on a message's first line: a command name, or a command's argument. */
 export type CommandQuery =

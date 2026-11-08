@@ -239,3 +239,68 @@ test('a new worktree starts only from a folder local chat may use, and is approv
     await runtime.dispose();
   }
 });
+test('turning a chat into a project opens only its own folder, then lists it under that project', async () => {
+  const runtime = ManagedRuntime.make(Layer.empty);
+  const session = { host: { hostId: 'local', storeId: 'store' }, actorId: 'owner' };
+  type Backend = NonNullable<Parameters<typeof createChatBackends>[0]['localResult']['backend']>;
+  const chats: Record<string, { cwd: string; ownFolder?: true }> = {
+    own: { cwd: '/profile/chats/2026-11-08-notes-a1b2c3d4', ownFolder: true },
+    project: { cwd: '/repo' },
+    planted: { cwd: '/elsewhere', ownFolder: true },
+  };
+  const opened: string[] = [],
+    marked: string[] = [];
+  let failOpen = false;
+  const backend = {
+    session,
+    chat: {
+      getChat: ({ target }: { target: { conversationId: string } }) =>
+        Effect.succeed({ conversation: chats[target.conversationId] }),
+    },
+    requireChatFolder: async (path: string) => {
+      if (!path.startsWith('/profile/chats/'))
+        throw new ApplicationError({ code: 'Unauthorized', message: 'Not a chat folder.' });
+    },
+    providers: { releaseOwner: () => Effect.void },
+    control: {
+      setAdmissionsOpen() {},
+      hasActiveWork: () => Effect.succeed(false),
+      markFolderAsProject: (target: { conversationId: string }) =>
+        Effect.sync(() => {
+          marked.push(target.conversationId);
+          delete chats[target.conversationId].ownFolder;
+        }),
+    },
+  } as unknown as Backend;
+  const owner = createChatBackends({
+    runtime,
+    localResult: { backend, error: null },
+    acquireLocal: async () => ({ backend, error: null }),
+    chatConfiguration: null,
+    remoteChat: null,
+    connection: null,
+    emit: () => {},
+    pickFolder: async () => null,
+    openFolderProject: async (root) => {
+      if (failOpen) throw new ApplicationError({ code: 'Unavailable', message: 'Busy.' });
+      opened.push(root);
+      return root;
+    },
+  });
+  try {
+    await assert.rejects(owner.turnIntoProject('project'), { code: 'InvalidInput' });
+    await assert.rejects(owner.turnIntoProject('planted'), { code: 'Unauthorized' });
+    // A failed open leaves the chat without a project, ready to try again.
+    failOpen = true;
+    await assert.rejects(owner.turnIntoProject('own'), { code: 'Unavailable' });
+    assert.deepEqual(marked, []);
+    failOpen = false;
+    assert.equal(await owner.turnIntoProject('own'), chats.own.cwd);
+    assert.deepEqual(opened, [chats.own.cwd]);
+    assert.deepEqual(marked, ['own']);
+    await assert.rejects(owner.turnIntoProject('own'), { code: 'InvalidInput' });
+  } finally {
+    await owner.releaseDocument();
+    await runtime.dispose();
+  }
+});

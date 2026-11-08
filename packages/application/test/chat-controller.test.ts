@@ -2482,3 +2482,73 @@ test('a background reload lists again without clearing an error or Refresh state
   assert.equal(f.controller.getSnapshot().chats[0].title, 'Renamed');
   assert.deepEqual(f.controller.getSnapshot().active, []);
 });
+
+test('settle updates the listed chat and the open snapshot from the host reply', async (t) => {
+  const f = await fixture(t);
+  const activity = { state: 'idle' as const, at: '2026-01-02T00:00:00Z' };
+  f.answers.set('listChats', async () => ({
+    conversations: [{ ...summary, activity }],
+    nextCursor: null,
+  }));
+  await ready(f);
+  await turn();
+  const settledAt = '2026-02-01T00:00:00Z';
+  let reply: ChatCommands['settleChat']['output'] = { ...summary, settledAt };
+  f.answers.set('settleChat', async () => reply);
+  await f.controller.settle(target, true);
+  assert.deepEqual(
+    f.calls.filter((call) => call.operation === 'settleChat').map((call) => call.input),
+    [{ target, settled: true }],
+  );
+  let state = f.controller.getSnapshot();
+  assert.equal(state.error, null);
+  // The listing keeps its activity, which only listings carry.
+  assert.deepEqual(state.chats[0], { ...summary, settledAt, activity });
+  assert.equal(state.snapshot?.conversation.settledAt, settledAt);
+  reply = summary;
+  await f.controller.settle(target, false);
+  state = f.controller.getSnapshot();
+  assert.equal('settledAt' in state.chats[0]!, false);
+  assert.equal(state.snapshot?.conversation.settledAt, undefined);
+  assert.deepEqual(state.active, []);
+  // A refusal is shown and changes nothing.
+  f.answers.set('settleChat', async () => {
+    throw new ApplicationError({ code: 'Unauthorized', message: 'Not yours.' });
+  });
+  await f.controller.settle(target, true);
+  state = f.controller.getSnapshot();
+  assert.equal(state.error, 'Unauthorized: Not yours.');
+  assert.equal(state.chats[0]!.settledAt, undefined);
+  // Another context's chat is refused before reaching the host.
+  const count = f.calls.length;
+  await f.controller.settle({ ...target, actorId: 'stranger' }, true);
+  assert.equal(f.calls.length, count);
+  assert.match(f.controller.getSnapshot().error!, /another context/);
+});
+
+test('settle needs a connected host', async (t) => {
+  const f = await fixture(t);
+  await f.controller.start();
+  await f.controller.settle(target, true);
+  assert(!f.calls.some((call) => call.operation === 'settleChat'));
+  assert.match(f.controller.getSnapshot().error!, /^Unavailable/);
+});
+
+test('a chat reload begun before a settle reply does not undo it', async (t) => {
+  const f = await fixture(t);
+  await ready(f);
+  await turn();
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  f.answers.set('listChats', async () => {
+    await held;
+    return { conversations: [summary], nextCursor: null };
+  });
+  f.answers.set('settleChat', async () => ({ ...summary, settledAt: '2026-02-01T00:00:00Z' }));
+  const reloading = f.controller.reloadChats();
+  await turn();
+  await f.controller.settle(target, true);
+  release();
+  await reloading;
+  assert.equal(f.controller.getSnapshot().chats[0]!.settledAt, '2026-02-01T00:00:00Z');
+});

@@ -87,7 +87,7 @@ const writeCursor = (scan: Cursor | undefined, kind: string, conversationId?: st
 export function summarizeConversation(
   session: ChatSession,
   conversationId: string,
-  meta: { title: string; createdAt: string; settings?: ChatSettings },
+  meta: { title: string; createdAt: string; settings?: ChatSettings; settledAt?: string },
   settings: ChatSettings,
 ): ChatSummary {
   return {
@@ -98,6 +98,7 @@ export function summarizeConversation(
     ...(settings.ownFolder ? { ownFolder: true as const } : {}),
     model: `${settings.model.provider}/${settings.model.modelId}`,
     ...(settings.reasoningEffort ? { reasoningEffort: settings.reasoningEffort } : {}),
+    ...(meta.settledAt ? { settledAt: meta.settledAt } : {}),
   };
 }
 /** Running while a submission owns the chat; otherwise how its latest generation ended, and when. */

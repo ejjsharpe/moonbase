@@ -144,7 +144,7 @@ export class LocalWorkspace {
     );
     this.observations = new WorkspaceObservations(
       (target) => this.directory(target),
-      (target) => this.approval(target).common.path,
+      (target) => this.approval(target).common?.path,
       ownership.observationScope,
       (fn) => this.effect(fn),
       () => this.closed,
@@ -208,6 +208,13 @@ export class LocalWorkspace {
       ),
       createWorktree: call<'createWorktree'>('createWorktree', (input, signal) =>
         this.worktrees.createWorktree(input, signal),
+      ),
+      initializeRepository: call<'initializeRepository'>(
+        'initializeRepository',
+        (input, signal) => this.initializeRepository(input.checkout, signal),
+        false,
+        // Waits for, and holds off, every save and file operation in the checkout.
+        (input) => ({ checkoutId: input.checkout.checkoutId, paths: [''] }),
       ),
       readComparison: call<'readComparison'>('readComparison', (input, signal) =>
         this.discovery.readComparison(input, signal),
@@ -470,6 +477,8 @@ export class LocalWorkspace {
       this.directories.set(target.checkoutId, directory);
     }
     directory.check();
+    // A plain folder runs no Git, so only its own identity matters.
+    if (!approved.common) return directory;
     ensure(
       same(this.gitEntry(target.root), approved.gitEntry),
       'Checkout Git metadata identity changed. Restore the original repository.',
@@ -488,8 +497,15 @@ export class LocalWorkspace {
     }
     return directory;
   }
+  /** The root's `.git` entry, or null when it has none. */
   gitEntry(root: string) {
-    const fd = openSync(join(root, '.git'), constants.O_RDONLY | constants.O_NONBLOCK | 0x20000000);
+    let fd: number;
+    try {
+      fd = openSync(join(root, '.git'), constants.O_RDONLY | constants.O_NONBLOCK | 0x20000000);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
+    }
     try {
       const info = fstatSync(fd);
       ensure(
@@ -503,6 +519,7 @@ export class LocalWorkspace {
   }
   policy(target: CheckoutTarget) {
     const common = this.approval(target).common;
+    if (!common) return;
     for (const p of ['info', 'info/exclude']) {
       let fd: number;
       try {
@@ -522,7 +539,7 @@ export class LocalWorkspace {
       }
     }
   }
-  async open(root: string, signal: AbortSignal) {
+  async open(root: string, signal: AbortSignal): Promise<CheckoutTarget> {
     ensure(
       typeof root === 'string' && isAbsolute(root) && !root.includes('\0'),
       'Choose an absolute checkout root through the native picker.',
@@ -540,48 +557,97 @@ export class LocalWorkspace {
       this.config.gitExecutable ?? '/usr/bin/git',
     );
     try {
-      const top = (await directory.git(['rev-parse', '--show-toplevel'], undefined, signal))
-        .toString()
-        .trim();
-      ensure(realpathSync(top) === root, 'Choose the repository checkout root.');
-      const [gitDirectory, common] = (
-        await directory.git(['rev-parse', '--git-dir', '--git-common-dir'], undefined, signal)
-      )
-        .toString()
-        .trim()
-        .split('\n')
-        .map((p) => realpathSync(resolve(root, p)));
-      const commonFd = openSync(common, constants.O_RDONLY | constants.O_DIRECTORY | 0x20000000);
-      const commonIdentity = identity(fstatSync(commonFd));
-      const projectId = hash(canonical([this.config.hostId, common, commonIdentity]));
-      closeSync(commonFd);
+      const repository = gitEntry ? await this.inspectRepository(directory, signal) : null;
+      if (!repository) {
+        // No `.git` here: a folder inside a repository is not its checkout root.
+        const inside = await directory.git(['rev-parse', '--git-dir'], undefined, signal).then(
+          () => true,
+          (error: { status?: number; stderr?: string }) => {
+            if (error.status === 128 && /not a git repository/i.test(error.stderr ?? ''))
+              return false;
+            throw error;
+          },
+        );
+        ensure(!inside, 'Choose the repository checkout root.');
+      }
+      const projectId = hash(
+        canonical(
+          repository
+            ? [this.config.hostId, repository.common.path, repository.common.identity]
+            : [this.config.hostId, id],
+        ),
+      );
       const previous = this.store.all<Approval>('approvals').find((a) => a.target.root === root);
       if (previous) {
+        // A plain folder that has since become a repository is approved again as Git.
+        const initialized = previous.target.vcs === 'none' && repository;
         ensure(
-          previous.identity === id && previous.target.projectId === projectId,
+          previous.identity === id && (previous.target.projectId === projectId || initialized),
           'Checkout or repository identity changed. Restore the original directory.',
         );
-        return previous.target;
+        if (!initialized) return previous.target;
       }
-      const branch = await this.discovery.getBranch(directory, signal);
-      const target = {
+      const base = {
         hostId: this.config.hostId,
         checkoutId: hash(canonical([this.config.hostId, root, id])),
         projectId,
         root,
-        branch,
-        worktree: gitDirectory === common ? ('main' as const) : ('linked' as const),
       };
+      const target: CheckoutTarget = repository
+        ? {
+            vcs: 'git',
+            ...base,
+            branch: await this.discovery.getBranch(directory, signal),
+            worktree: repository.worktree,
+          }
+        : { vcs: 'none', ...base };
       this.store.put('approvals', target.checkoutId, {
         target,
         identity: id,
-        common: { path: common, identity: commonIdentity },
+        common: repository?.common ?? null,
         gitEntry,
       });
       return target;
     } finally {
       directory.close();
     }
+  }
+  /** The repository whose working tree `directory` is the top of. */
+  private async inspectRepository(directory: Directory, signal: AbortSignal) {
+    const root = directory.root;
+    const top = (await directory.git(['rev-parse', '--show-toplevel'], undefined, signal))
+      .toString()
+      .trim();
+    ensure(realpathSync(top) === root, 'Choose the repository checkout root.');
+    const [gitDirectory, common] = (
+      await directory.git(['rev-parse', '--git-dir', '--git-common-dir'], undefined, signal)
+    )
+      .toString()
+      .trim()
+      .split('\n')
+      .map((p) => realpathSync(resolve(root, p)));
+    const commonFd = openSync(common, constants.O_RDONLY | constants.O_DIRECTORY | 0x20000000);
+    try {
+      return {
+        common: { path: common, identity: identity(fstatSync(commonFd)) },
+        worktree: gitDirectory === common ? ('main' as const) : ('linked' as const),
+      };
+    } finally {
+      closeSync(commonFd);
+    }
+  }
+  /** Runs `git init` in a plain folder, then approves and returns it as a Git checkout. */
+  async initializeRepository(target: CheckoutTarget, signal: AbortSignal) {
+    ensure(target.vcs === 'none', 'This project is already a Git repository.');
+    const directory = await this.directory(target);
+    ensure(
+      !this.recovery.getPendingSaves(target).length,
+      'A save awaits recovery. Resolve it before initializing Git.',
+    );
+    await directory.initializeGit(signal);
+    const initialized = await this.open(target.root, signal);
+    ensure(initialized.vcs === 'git', 'Git did not initialize this folder.');
+    return initialized;
   }
   assertSettled(target: CheckoutTarget, paths: string[], clientId: string) {
     if (

@@ -18,10 +18,6 @@ const input = (page: Page) =>
 async function chat(page: Page) {
   await tabs(page).getByRole('tab', { name: 'Agents', exact: true }).click();
   await shell(page).getByRole('button', { name: 'Connect', exact: true }).click();
-  // The demo chat is Settled, behind a toggle that starts closed.
-  await shell(page)
-    .getByRole('button', { name: /^Settled/ })
-    .click();
   await shell(page)
     .getByRole('button', { name: /^Conversation/ })
     .click();
@@ -1288,7 +1284,7 @@ test('design fixture renders first-message composition, pinned navigation and co
   const send = page.getByRole('button', { name: 'Send message', exact: true });
   // The folder, host and model sit in the composer's own toolbar, on the send button's row.
   expect(await folderChoice.evaluate((element) => !!element.closest('form'))).toBe(true);
-  await expect(folderChoice).toHaveText(/^Folder/);
+  await expect(folderChoice).toHaveText(/^No project/);
   // The menu offers the editor's projects and folders chosen before, without the native picker.
   await folderChoice.click();
   const folders = page.getByRole('dialog', { name: 'Working folder', exact: true });
@@ -1476,7 +1472,7 @@ test('⌘P jumps between chats, projects and files, and > runs app commands', as
   await expect(goTo.getByRole('option').first()).toHaveAccessibleName('Conversation');
   await page.keyboard.press('Enter');
   await expect(goTo).toHaveCount(0);
-  // The chat opens; it is Settled, so the sidebar keeps it behind the closed toggle.
+  // The chat opens.
   await expect(
     shell(page).getByRole('heading', { level: 1, name: 'Conversation', exact: true }),
   ).toBeVisible();
@@ -1577,6 +1573,42 @@ test('/ at the start of a message lists commands that switch model and effort, c
   await expect(model).toContainText('Demo coding model');
 });
 
+test('a new chat sends without a project and lists as No project', async ({ page }) => {
+  await page.goto('/?local&design');
+  const folderChoice = page.getByRole('button', { name: 'Choose working folder', exact: true });
+  const send = page.getByRole('button', { name: 'Send message', exact: true });
+  const folders = page.getByRole('dialog', { name: 'Working folder', exact: true });
+  const noProject = folders.getByRole('button', { name: /^No project/ });
+  await expect(folderChoice).toHaveText(/^No project/);
+  await expect(page.getByText(/^Runs in a new empty folder/)).toBeVisible();
+  // A chosen folder can be put back to none from the same menu.
+  await folderChoice.click();
+  await expect(noProject).toHaveAttribute('aria-pressed', 'true');
+  await folders.getByRole('button', { name: /^moonbase/ }).click();
+  await expect(folderChoice).toHaveAttribute('title', '/demo/moonbase');
+  await folderChoice.click();
+  await expect(noProject).toHaveAttribute('aria-pressed', 'false');
+  await noProject.click();
+  await expect(folders).toBeHidden();
+  await expect(folderChoice).toHaveText(/^No project/);
+  await page.getByLabel('Message', { exact: true }).fill('Plan a trip');
+  await send.click();
+  await expect
+    .poll(() => page.evaluate(() => window.demo.chat.snapshot.conversation.ownFolder))
+    .toBe(true);
+  const saved = page.getByRole('complementary', { name: 'Saved chats', exact: true });
+  await expect(saved.getByRole('button', { name: /^Plan a trip/ })).toContainText('No project');
+  // Its folder becomes a project where it is, and the chat lists under that project.
+  await page.getByRole('button', { name: 'Turn into project', exact: true }).click();
+  await expect(
+    page
+      .getByRole('group', { name: 'Project tabs', exact: true })
+      .getByRole('tab', { name: 'chat-1', exact: true }),
+  ).toBeVisible();
+  await expect(saved.getByRole('button', { name: /^Plan a trip/ })).toContainText('chat-1');
+  await expect(page.getByRole('button', { name: 'Turn into project', exact: true })).toBeHidden();
+});
+
 test('a new worktree is made only when a new chat sends, and its chat stays with the project', async ({
   page,
 }) => {
@@ -1644,7 +1676,7 @@ test('Settings holds hosts and providers; the sidebar keeps only a Connect line'
   await expect(settings).toHaveCount(0);
   // Connected, the Connect line goes and the chats are listed.
   await expect(sidebar.getByRole('status')).toHaveCount(0);
-  await expect(sidebar.getByRole('button', { name: /^Settled/ })).toHaveText(/Settled\s*1/);
+  await expect(sidebar.getByRole('heading', { name: 'Idle 1', exact: true })).toBeVisible();
 });
 
 test('the local model menu opens provider setup in Settings', async ({ page }) => {
@@ -1687,7 +1719,7 @@ test('the local model menu opens provider setup in Settings', async ({ page }) =
   await expect(settings).toBeVisible();
 });
 
-test('the chats sidebar orders by activity: Ready, Working, then a Settled toggle', async ({
+test('the chats sidebar orders by activity: Ready, Working, Idle, then a Settled toggle', async ({
   page,
 }) => {
   await page.goto('/?chat&activity');
@@ -1704,14 +1736,20 @@ test('the chats sidebar orders by activity: Ready, Working, then a Settled toggl
   await expect(rows.nth(2)).toContainText('stopped');
   await expect(rows.nth(4)).toContainText('Move the transcript to Legend List');
   await expect(rows.nth(4)).toContainText('running');
+  // The chat seen before anything else listed is idle; nothing is settled until you settle it.
+  await expect(list.getByRole('heading', { name: 'Idle 1' })).toBeVisible();
+  await expect(rows.nth(6)).toContainText('Conversation');
   const settled = list.getByRole('button', { name: /^Settled/ });
-  await expect(settled).toHaveAttribute('aria-expanded', 'false');
-  // The chat seen before anything else listed is settled and hidden behind the toggle.
-  await expect(list.getByRole('button', { name: /^Conversation/ })).toHaveCount(0);
-  // Opening a Ready chat settles it; it stays in view under the closed toggle while it is open.
+  await expect(settled).toHaveCount(0);
+  // Opening a Ready chat makes it Idle.
   await list.getByRole('button', { name: /^Summarise this repository/ }).click();
   await expect(list.getByRole('heading', { name: 'Ready 3' })).toBeVisible();
-  await expect(settled).toHaveText(/Settled\s*2/);
+  await expect(list.getByRole('heading', { name: 'Idle 2' })).toBeVisible();
+  // Settled from its header, it stays in view under the closed toggle while it is open.
+  await shell(page).getByRole('button', { name: 'Settle chat', exact: true }).click();
+  await expect(settled).toHaveText(/Settled\s*1/);
+  await expect(settled).toHaveAttribute('aria-expanded', 'false');
+  await expect(list.getByRole('heading', { name: 'Idle 1' })).toBeVisible();
   await expect(list.getByRole('button', { name: /^Summarise this repository/ })).toHaveAttribute(
     'aria-pressed',
     'true',
@@ -1722,17 +1760,22 @@ test('the chats sidebar orders by activity: Ready, Working, then a Settled toggl
     return box.y + box.height;
   };
   expect((await bottom(list)) - (await bottom(settled))).toBeLessThan(80);
+  // Another chat opened, the settled one is behind the toggle.
+  await list.getByRole('button', { name: /^Conversation/ }).click();
+  await expect(list.getByRole('button', { name: /^Summarise this repository/ })).toHaveCount(0);
   await settled.click();
   await expect(settled).toHaveAttribute('aria-expanded', 'true');
-  await expect(list.getByRole('button', { name: /^Conversation/ })).toBeVisible();
+  await expect(list.getByRole('button', { name: /^Summarise this repository/ })).toBeVisible();
   await settled.click();
   await expect(settled).toHaveAttribute('aria-expanded', 'false');
-  await expect(list.getByRole('button', { name: /^Conversation/ })).toHaveCount(0);
+  await expect(list.getByRole('button', { name: /^Summarise this repository/ })).toHaveCount(0);
   await settled.click();
   // The toggle is remembered.
   await page.reload();
   await tabs(page).getByRole('tab', { name: 'Agents', exact: true }).click();
   await shell(page).getByRole('button', { name: 'Connect', exact: true }).click();
+  await list.getByRole('button', { name: /^Conversation/ }).click();
+  await shell(page).getByRole('button', { name: 'Settle chat', exact: true }).click();
   await expect(list.getByRole('button', { name: /^Settled/ })).toHaveAttribute(
     'aria-expanded',
     'true',
@@ -1745,6 +1788,57 @@ test('the chats sidebar orders by activity: Ready, Working, then a Settled toggl
     'aria-selected',
     'true',
   );
+});
+
+test('a chat settles and unsettles from its header or the composer, and a Send unsettles it', async ({
+  page,
+}) => {
+  await page.goto('/?local');
+  await tabs(page).getByRole('tab', { name: 'Agents', exact: true }).click();
+  const list = shell(page).getByRole('navigation', { name: 'Conversations', exact: true });
+  const toggle = list.getByRole('button', { name: /^Settled/ });
+  const settle = shell(page).getByRole('button', { name: 'Settle chat', exact: true });
+  const unsettle = shell(page).getByRole('button', { name: 'Unsettle chat', exact: true });
+  const message = shell(page).getByRole('textbox', { name: 'Message', exact: true });
+  await list.getByRole('button', { name: /^Conversation/ }).click();
+  await expect(list.getByRole('heading', { name: 'Idle 1' })).toBeVisible();
+  await expect(toggle).toHaveCount(0);
+  // Settled from the header, the chat moves from Idle into Settled.
+  await settle.click();
+  await expect(unsettle).toBeVisible();
+  await expect(toggle).toHaveText(/Settled\s*1/);
+  await expect(list.getByRole('heading', { name: /^Idle/ })).toHaveCount(0);
+  await expect(
+    page.evaluate(() => window.demo.chat.calls.filter((call) => call === 'settleChat').length),
+  ).resolves.toBe(1);
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(list.getByRole('button', { name: /^Conversation/ })).toBeVisible();
+  // Unsettled, it is Idle again and the drawer goes.
+  await unsettle.click();
+  await expect(settle).toBeVisible();
+  await expect(list.getByRole('heading', { name: 'Idle 1' })).toBeVisible();
+  await expect(toggle).toHaveCount(0);
+  // The composer offers whichever command applies.
+  await message.fill('/');
+  const commands = page.getByRole('listbox', { name: 'Commands', exact: true });
+  await expect(commands.getByRole('option', { name: /^\/settle/ })).toBeVisible();
+  await expect(commands.getByRole('option', { name: /^\/unsettle/ })).toHaveCount(0);
+  await message.fill('/settle');
+  await message.press('ControlOrMeta+Enter');
+  await expect(unsettle).toBeVisible();
+  await expect(message).toHaveValue('');
+  await message.fill('/unsettle');
+  await message.press('ControlOrMeta+Enter');
+  await expect(settle).toBeVisible();
+  // Sending to a settled chat takes it up again.
+  await settle.click();
+  await expect(toggle).toHaveText(/Settled\s*1/);
+  await message.fill('Pick this back up');
+  await shell(page).getByRole('button', { name: 'Send message', exact: true }).click();
+  await shell(page).getByRole('button', { name: 'Refresh saved chats', exact: true }).click();
+  await expect(settle).toBeVisible();
+  await expect(toggle).toHaveCount(0);
 });
 
 test("the model picker lists providers that are set up, beside the chosen one's models", async ({

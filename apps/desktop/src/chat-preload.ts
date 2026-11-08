@@ -23,6 +23,14 @@ const bridge: ChatBridge = {
         branch,
       }),
     ) as never,
+  turnIntoProject: async (conversationId) =>
+    unwrap(
+      await ipcRenderer.invoke(channels.call, {
+        kind: 'turn-into-project',
+        backendId: 'local',
+        conversationId,
+      }),
+    ) as never,
   confirmQuit: async () =>
     unwrap(
       await ipcRenderer.invoke(channels.call, { kind: 'confirm-quit', backendId: 'local' }),

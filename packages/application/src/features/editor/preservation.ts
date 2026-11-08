@@ -206,6 +206,10 @@ export class EditorPreservation {
       return action.files.length ? [action] : [];
     });
   }
+  rebindClosedReferences(previous: CheckoutTarget, next: CheckoutTarget) {
+    for (const action of this.history)
+      if (sameCheckout(action.checkout, previous)) action.checkout = next;
+  }
   moveClosedReferences(checkout: CheckoutTarget, source: string, destination: string) {
     const move = (path: string) =>
       path === source || path.startsWith(source + '/')

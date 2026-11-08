@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { lstat, mkdir, open, realpath, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { safeStorage } from 'electron';
 import { Context, Effect, Exit, Layer, Scope, type ManagedRuntime } from 'effect';
 import { LocalPiRuntimeLive, LocalPiControl } from '@moonbase/pi-runtime';
@@ -112,6 +112,19 @@ export async function acquireLocalChat(
     await folders.touch(settings.cwd);
   };
   const approveSearch = (cwd: string) => requireApprovedFolder(cwd, 'searching its files');
+  const chatFolders = join(directory, 'chats');
+  /** Refuses any folder but one the runtime made for a chat without a project. */
+  const requireChatFolder = async (path: string) => {
+    const [parent, folder] = await Promise.all([
+      realpath(chatFolders).catch(() => ''),
+      realpath(path).catch(() => ''),
+    ]);
+    if (!parent || !folder || folder !== path || dirname(folder) !== parent)
+      throw new ApplicationError({
+        code: 'Unauthorized',
+        message: 'This chat’s folder is not one Moonbase made for it.',
+      });
+  };
   const scope = Scope.forkUnsafe(runtime.scope, 'parallel');
   try {
     const services = await runApplicationEffect(
@@ -121,7 +134,7 @@ export async function acquireLocalChat(
           LocalPiRuntimeLive({
             ...session,
             databasePath: join(directory, 'chat.sqlite'),
-            chatFolders: join(directory, 'chats'),
+            chatFolders,
             models,
             approveCreation: approveSettings,
             approveFolder: approveSearch,
@@ -137,6 +150,7 @@ export async function acquireLocalChat(
       session,
       approveFolder: folders.approve,
       listRecentFolders: folders.listRecent,
+      requireChatFolder,
       requireApprovedFolder: (path: string) =>
         requireApprovedFolder(path, 'starting a worktree from it'),
       chat: Context.get(services, ChatService),

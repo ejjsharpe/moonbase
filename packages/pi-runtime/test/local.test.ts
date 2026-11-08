@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Harness } from '@earendil-works/pi-durable';
 import { mkdtemp, mkdir, readFile, readdir, rm, realpath } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Effect, ManagedRuntime } from 'effect';
 import { createModels } from '@earendil-works/pi-ai/models';
@@ -194,7 +194,7 @@ test('a local chat without a project runs in a new, empty folder of its own', as
   });
   let client = makeChatClient(runtime);
   const settings = { model: { provider: faux.provider.id, modelId: 'model' } };
-  const input = (requestId: string) => ({ session, requestId, title: requestId, settings });
+  const input = (requestId: string, title = requestId) => ({ session, requestId, title, settings });
   // A host with nowhere to make chat folders still requires one.
   await assert.rejects(client.command('createChat', input('nowhere')), { code: 'InvalidInput' });
   await runtime.dispose();
@@ -206,17 +206,25 @@ test('a local chat without a project runs in a new, empty folder of its own', as
   // A refused chat leaves no folder behind.
   await assert.rejects(readdir(chatFolders), { code: 'ENOENT' });
   refuse = false;
-  const first = await client.command('createChat', input('first'));
-  const second = await client.command('createChat', input('second'));
+  const title = 'Convert these PNGs to WebP, please!';
+  const first = await client.command('createChat', input('first', title));
+  const second = await client.command('createChat', input('second', '☕'));
   const folders = [first, second].map((chat) => chat.conversation.cwd);
   assert.equal(new Set(folders).size, 2);
   for (const folder of folders) {
     assert.equal(dirname(folder), chatFolders);
     assert.deepEqual(await readdir(folder), []);
   }
+  // Named for the day, the title's first words and a short id.
+  const day = String.raw`\d{4}-\d{2}-\d{2}`;
+  assert.match(
+    basename(folders[0]!),
+    RegExp(`^${day}-convert-these-pngs-to-webp-please-[a-f0-9]{8}$`),
+  );
+  assert.match(basename(folders[1]!), RegExp(`^${day}-[a-f0-9]{8}$`));
   assert.equal(first.conversation.ownFolder, true);
   // Retrying the same request returns the same chat and makes no other folder.
-  assert.deepEqual(await client.command('createChat', input('first')), first);
+  assert.deepEqual(await client.command('createChat', input('first', title)), first);
   assert.equal((await readdir(chatFolders)).length, 2);
   faux.setResponses([
     fauxAssistantMessage(fauxToolCall('write', { path: 'notes.txt', content: 'own folder' }), {
@@ -240,6 +248,56 @@ test('a local chat without a project runs in a new, empty folder of its own', as
     folders.map((folder) => [folder, true]).sort(),
   );
   assert.equal((await client.command('getChat', { target })).conversation.ownFolder, true);
+  // Once its folder becomes a project, the chat lists under it, in the same folder with its files.
+  const control = await runtime.runPromise(LocalPiControl);
+  await runtime.runPromise(control.markFolderAsProject(target));
+  await runtime.runPromise(control.markFolderAsProject(target));
+  const adopted = (await client.command('getChat', { target })).conversation;
+  assert.equal(adopted.ownFolder, undefined);
+  assert.equal(adopted.cwd, folders[0]);
+  assert.equal(await readFile(join(folders[0]!, 'notes.txt'), 'utf8'), 'own folder');
+  const relisted = (await client.command('listChats', { session })).conversations;
+  assert.deepEqual(
+    relisted.map((chat) => [chat.cwd, chat.ownFolder ?? false]).sort(),
+    [
+      [folders[0], false],
+      [folders[1], true],
+    ].sort(),
+  );
+  // A foreign chat is refused.
+  await assert.rejects(
+    runtime.runPromise(control.markFolderAsProject({ ...target, actorId: 'someone-else' })),
+    { code: 'Unauthorized' },
+  );
+});
+test('a chat without a project is refused while its folders would sit inside a Git checkout', async (t) => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-own-folder-git-')));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, '.git'));
+  const models = createModels(),
+    faux = fauxProvider({ models: [{ id: 'model' }] });
+  models.setProvider(faux.provider);
+  const runtime = ManagedRuntime.make(
+    LocalPiRuntimeLive({
+      ...session,
+      databasePath: join(root, 'local.sqlite'),
+      models,
+      chatFolders: join(root, 'profile', 'chats'),
+    }),
+  );
+  t.after(() => runtime.dispose());
+  const settings = { model: { provider: faux.provider.id, modelId: 'model' } };
+  await assert.rejects(
+    makeChatClient(runtime).command('createChat', {
+      session,
+      requestId: 'git',
+      title: 'Git',
+      settings,
+    }),
+    { code: 'Unavailable' },
+  );
+  // Nothing was made for it.
+  await assert.rejects(readdir(join(root, 'profile')), { code: 'ENOENT' });
 });
 test('Quit control sees hidden work and gates unfinished local mutations without Stop', async (t) => {
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-local-active-')));

@@ -12,8 +12,9 @@ import { FolderMenu, folderMenuStyles, folderName, parentPath } from '../folder-
 export type ChatFolderProject = {
   root: string;
   projectId: string;
-  branch: string;
-  worktree: 'main' | 'linked';
+  /** Absent for a plain folder, which is in no Git repository. */
+  branch?: string;
+  worktree?: 'main' | 'linked';
   /** Whether it is open in the editor now. */
   open: boolean;
 };
@@ -49,7 +50,7 @@ export function FolderPicker({
   const focusTarget = useRef<HTMLElement>(null);
   // Open projects first, then the rest; a linked worktree only while it is open.
   const listed = projects
-    .filter((project) => project.open || project.worktree === 'main')
+    .filter((project) => project.open || project.worktree !== 'linked')
     .sort((a, b) => Number(b.open) - Number(a.open));
   const roots = new Set(projects.map((project) => project.root));
   const others = recent.filter((folder) => !roots.has(folder));
@@ -83,7 +84,9 @@ export function FolderPicker({
         ) : (
           <Icon name="folder" />
         )}
-        <span {...stylex.props(controls.truncate)}>{name || (noProject ? 'No project' : 'Folder')}</span>
+        <span {...stylex.props(controls.truncate)}>
+          {name || (noProject ? 'No project' : 'Folder')}
+        </span>
         <span aria-hidden="true" {...stylex.props(styles.caret)}>
           ▾
         </span>
@@ -123,7 +126,7 @@ export function FolderPicker({
                     detail:
                       project.worktree === 'linked'
                         ? `${project.branch} · worktree`
-                        : project.branch,
+                        : (project.branch ?? parentPath(project.root)),
                     badge: project.open ? 'open' : undefined,
                     chosen: project.root === cwd,
                   })),

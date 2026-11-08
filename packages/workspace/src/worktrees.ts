@@ -8,7 +8,7 @@ import {
 } from '@moonbase/contracts/workspace';
 import type { Directory } from './filesystem.ts';
 import { errorText } from './recovery.ts';
-import { ensure, fail } from './validation.ts';
+import { ensure, fail, requireGit } from './validation.ts';
 
 const gitFailure = (error: unknown) =>
   error as { status?: number; uncertain?: boolean; stderr?: string };
@@ -68,8 +68,10 @@ export class WorkspaceWorktrees {
     this.open = open;
     this.protect = protect;
   }
+  /** A plain folder has no worktrees, like a bare repository. */
   async listWorktrees(target: CheckoutTarget, signal: AbortSignal) {
     const directory = await this.directory(target);
+    if (target.vcs === 'none') return { worktrees: [] };
     const output = await directory.git(
       ['worktree', 'list', '--porcelain', '-z'],
       undefined,
@@ -79,6 +81,7 @@ export class WorkspaceWorktrees {
   }
   /** Creates `branch` at `base` in a new linked worktree at `location`, then approves and opens it. */
   async createWorktree(input: CommandInput<'createWorktree'>, signal: AbortSignal) {
+    requireGit(input.checkout);
     const directory = await this.directory(input.checkout);
     const { base, branch } = input;
     ensure(

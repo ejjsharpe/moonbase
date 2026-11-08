@@ -67,7 +67,10 @@ export function requestId(value: unknown): asserts value is string {
 }
 export function checkout(value: unknown): asserts value is CheckoutTarget {
   const v = record(value);
-  keys(v, ['hostId', 'checkoutId', 'projectId', 'root', 'branch', 'worktree']);
+  const identity = ['vcs', 'hostId', 'checkoutId', 'projectId', 'root'];
+  if (v.vcs === 'git') keys(v, [...identity, 'branch', 'worktree']);
+  else if (v.vcs === 'none') keys(v, identity);
+  else invalid('Invalid checkout version control.');
   for (const field of Object.values(v)) string(field);
 }
 export function errorDTO(error: unknown): ErrorDTO {

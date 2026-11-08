@@ -1,3 +1,4 @@
+import * as Effect from 'effect/Effect';
 import * as Schema from 'effect/Schema';
 import { ApplicationError, maximumFileBytes } from './workspace.ts';
 import type { CommandInput, CommandOutput, WorkspaceCommand } from './workspace.ts';
@@ -19,15 +20,29 @@ const text = Schema.String.check(
       new TextEncoder().encode(value).length <= maximumFileBytes,
   ),
 );
-export const CheckoutTargetSchema = struct({
+const checkoutFields = {
   hostId: nonempty,
   checkoutId: nonempty,
   projectId: nonempty,
   root: path.check(Schema.isMinLength(1)),
+};
+/** A checkout at the top of a Git working tree. Saved targets without `vcs` decode as Git. */
+export const GitCheckoutTargetSchema = struct({
+  vcs: Schema.Literal('git').pipe(Schema.withDecodingDefaultKey(Effect.succeed('git' as const))),
+  ...checkoutFields,
   branch: nonempty,
   /** Whether `root` is the repository's main working tree or a linked `git worktree`. */
   worktree: Schema.Literals(['main', 'linked']),
 });
+/** A plain folder in no Git repository: it has no branch, worktrees or Git status. */
+export const FolderCheckoutTargetSchema = struct({
+  vcs: Schema.Literal('none'),
+  ...checkoutFields,
+});
+export const CheckoutTargetSchema = Schema.Union([
+  GitCheckoutTargetSchema,
+  FolderCheckoutTargetSchema,
+]);
 export const FileTargetSchema = struct({
   checkout: CheckoutTargetSchema,
   path: path.check(Schema.isMinLength(1)),
@@ -244,6 +259,7 @@ export const workspaceInputSchemas = {
     branch: refName,
     location: path.check(Schema.isMinLength(2)),
   }),
+  initializeRepository: struct({ checkout: CheckoutTargetSchema }),
   readComparison: struct({
     target: FileTargetSchema,
     area: Schema.Literals(['staged', 'unstaged', 'untracked']),
@@ -305,6 +321,7 @@ export const workspaceOutputSchemas = {
   gitStatus: GitStatusSchema,
   listWorktrees: struct({ worktrees: array(WorktreeSchema).check(Schema.isMaxLength(1000)) }),
   createWorktree: CheckoutTargetSchema,
+  initializeRepository: GitCheckoutTargetSchema,
   readComparison: ComparisonSchema,
   lookupFiles: struct({
     matches: array(LookupMatchSchema).check(Schema.isMaxLength(100)),

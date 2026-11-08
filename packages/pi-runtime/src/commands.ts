@@ -1,5 +1,4 @@
-import { mkdir, mkdtemp, realpath, rmdir, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { realpath, rmdir, stat } from 'node:fs/promises';
 import { BACKGROUND_CONTEXT as context, withCancel } from '@earendil-works/chord/context';
 import {
   LiveDoc,
@@ -53,17 +52,9 @@ import type { RuntimeConfiguration, RetainedWork } from './runtime-types.ts';
 import { findTranscript } from './find.ts';
 import { NestedSourceRetired, readTranscriptContent } from './transcript.ts';
 import * as V from './validation.ts';
+import { makeChatFolder } from './chat-folders.ts';
 import * as S from './private-schema.ts';
 
-/** A new, empty, private folder under `parent` for a chat without a project. */
-async function makeChatFolder(parent: string) {
-  try {
-    await mkdir(parent, { recursive: true, mode: 0o700 });
-    return await realpath(await mkdtemp(join(parent, 'chat-')));
-  } catch {
-    return V.fail('Unavailable', 'A folder for the new chat could not be made.');
-  }
-}
 const unknownOutcome = () =>
   new ApplicationError({
     code: 'Uncertain',
@@ -220,7 +211,7 @@ export class Host {
   }
   summary(
     conversationId: string,
-    meta: { title: string; createdAt: string; settings?: ChatSettings },
+    meta: { title: string; createdAt: string; settings?: ChatSettings; settledAt?: string },
   ): ChatSummary {
     return summarizeConversation(
       { host: this.config.host, actorId: this.config.actorId },
@@ -270,7 +261,10 @@ export class Host {
     ) => Promise<ChatOutput<K>> | Effect.Effect<ChatOutput<K>, ApplicationError>,
   ): Effect.Effect<ChatOutput<K>, ApplicationError> {
     const mutation =
-      operation === 'createChat' || operation === 'sendChat' || operation === 'stopChat';
+      operation === 'createChat' ||
+      operation === 'sendChat' ||
+      operation === 'stopChat' ||
+      operation === 'settleChat';
     return Effect.gen({ self: this }, function* () {
       const data = yield* Effect.try({
         try: () => V.input(operation, value),
@@ -445,7 +439,7 @@ export class Host {
       await this.config.approveCreation?.(requested);
       if (requested.cwd !== undefined) settings = { ...requested, cwd: requested.cwd };
       else {
-        ownFolder = await makeChatFolder(this.config.chatFolders!);
+        ownFolder = await makeChatFolder(this.config.chatFolders!, d.title);
         settings = { ...requested, cwd: ownFolder, ownFolder: true };
       }
     } else settings = { cwd: this.config.cwd, model: this.config.model };
@@ -525,6 +519,8 @@ export class Host {
           V.fail('Persistence', 'Stored pending-intent metadata is invalid.');
         meta.pending++;
         request.pending = true;
+        // Sending to a settled chat takes it up again; a retry of the same Send does not.
+        if (meta.settledAt !== undefined) delete meta.settledAt;
       }
       request.conversationId = d.target.conversationId;
     }, context);
@@ -549,6 +545,51 @@ export class Host {
   async getSend(d: ChatInput<'getChatSend'>): Promise<ChatSendReceipt | null> {
     await this.metadata(d.target);
     return this.lookup(d.target, d.requestId);
+  }
+  /** Settles or unsettles a chat; asking for its current state again commits nothing. */
+  async settle(d: ChatInput<'settleChat'>): Promise<ChatSummary> {
+    const current = await this.metadata(d.target);
+    if ((current.settledAt !== undefined) !== d.settled) {
+      try {
+        await this.harness.commit(async (tx) => {
+          const meta = await tx.doc(Metadata, cid(d.target.conversationId), 'metadata', {
+            identity: this.identity,
+            title: '',
+            createdAt: '',
+          });
+          S.savedMetadata(meta);
+          if (meta.identity !== this.identity)
+            V.fail('Unauthorized', 'Conversation does not belong to this configured actor/store.');
+          if (d.settled) meta.settledAt ??= new Date().toISOString();
+          else if (meta.settledAt !== undefined) delete meta.settledAt;
+        }, context);
+      } catch (error) {
+        throw safeError(error, true);
+      }
+    }
+    return this.summary(d.target.conversationId, await this.metadata(d.target));
+  }
+  /** Lists a chat without a project under the project its folder became; the folder stays put. */
+  async markFolderAsProject(target: ChatTarget): Promise<void> {
+    if (!('mode' in this.config))
+      V.fail('InvalidInput', 'Only a local chat has a folder of its own.');
+    if (!this.admissionsOpen) V.fail('Unavailable', 'Local chat is preparing to quit.');
+    if (!(await this.metadata(target)).settings?.ownFolder) return;
+    try {
+      await this.harness.commit(async (tx) => {
+        const meta = await tx.doc(Metadata, cid(target.conversationId), 'metadata', {
+          identity: this.identity,
+          title: '',
+          createdAt: '',
+        });
+        S.savedMetadata(meta);
+        if (meta.identity !== this.identity)
+          V.fail('Unauthorized', 'Conversation does not belong to this configured actor/store.');
+        if (meta.settings?.ownFolder) delete meta.settings.ownFolder;
+      }, context);
+    } catch (error) {
+      throw safeError(error, true);
+    }
   }
   async lookup(target: ChatTarget, requestId: string): Promise<ChatSendReceipt | null> {
     const requestKey = key(target.actorId, requestId),

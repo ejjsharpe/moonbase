@@ -182,6 +182,7 @@ const target = {
     checkoutId: 'checkout',
     projectId: 'project',
     root: '/checkout',
+    vcs: 'git' as const,
     branch: 'main',
     worktree: 'main' as 'main' | 'linked',
   },

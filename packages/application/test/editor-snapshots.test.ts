@@ -18,7 +18,7 @@ test('snapshot consumers cannot mutate buffers, recovery, comparisons or discove
     snapshot.buffers[0].disk.text = 'consumer disk';
     snapshot.buffers[0].target.checkout.root = '/consumer';
     snapshot.buffers[0].target.path = 'consumer.ts';
-    snapshot.recovery.checkouts[0].branch = 'consumer';
+    snapshot.recovery.checkouts[0].root = '/consumer-root';
     snapshot.recovery.views[checkout.checkoutId].openFiles.push('consumer.ts');
     snapshot.recovery.views[checkout.checkoutId].fileViews['a.ts'] = 'file';
     snapshot.recovery.views[checkout.checkoutId].tree.expanded.push('consumer');

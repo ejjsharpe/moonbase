@@ -75,14 +75,15 @@ export class WorkspaceObservations {
   private readonly subscriptions = new Set<Scope.Closeable>();
   private readonly watcherReleases = new Set<Effect.Effect<void>>();
   private readonly directory: (target: CheckoutTarget) => Promise<Directory>;
-  private readonly getCommonGitPath: (target: CheckoutTarget) => string;
+  /** The repository's Git folder, or undefined for a plain folder. */
+  private readonly getCommonGitPath: (target: CheckoutTarget) => string | undefined;
   private readonly scope: Scope.Closeable;
   private readonly runCommand: <A>(fn: () => Promise<A>) => Effect.Effect<A, ApplicationError>;
   private readonly isClosed: () => boolean;
   private readonly reportCleanup: (cause: Cause.Cause<never>) => void;
   constructor(
     directory: (target: CheckoutTarget) => Promise<Directory>,
-    getCommonGitPath: (target: CheckoutTarget) => string,
+    getCommonGitPath: (target: CheckoutTarget) => string | undefined,
     scope: Scope.Closeable,
     runCommand: <A>(fn: () => Promise<A>) => Effect.Effect<A, ApplicationError>,
     isClosed: () => boolean,
@@ -222,7 +223,7 @@ export class WorkspaceObservations {
             catch: normalizeApplicationError,
           });
         }
-        if (!common.startsWith(directory.root + '/')) yield* acquire(common);
+        if (common && !common.startsWith(directory.root + '/')) yield* acquire(common);
         const events = Stream.fromQueue(changes).pipe(
           Stream.mapEffect(() =>
             Effect.gen(function* () {
@@ -234,7 +235,7 @@ export class WorkspaceObservations {
                 changedPaths = new Set();
                 // Agents in other worktrees run Git and write files constantly; only changes
                 // that can affect this checkout reach its clients.
-                if (!error && paths) {
+                if (!error && paths && common) {
                   const worktrees = readWorktrees(common);
                   if (
                     [...paths].every((changedPath) =>

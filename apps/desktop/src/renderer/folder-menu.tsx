@@ -164,7 +164,7 @@ export function FolderMenu({
             })}
           </div>
         ))}
-        {!shown.length && !(none && !needle) && (
+        {!shown.length && (
           <p {...stylex.props(styles.empty)}>{needle ? 'Nothing matches.' : empty}</p>
         )}
       </div>

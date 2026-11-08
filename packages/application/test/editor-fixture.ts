@@ -9,6 +9,7 @@ export const checkout: CheckoutTarget = {
   checkoutId: 'first',
   projectId: 'project',
   root: '/memory/first',
+  vcs: 'git' as const,
   branch: 'main',
   worktree: 'main' as 'main' | 'linked',
 };
@@ -17,10 +18,11 @@ export const second: CheckoutTarget = {
   checkoutId: 'second',
   projectId: 'project',
   root: '/memory/second',
+  vcs: 'git' as const,
   branch: 'main',
   worktree: 'main' as 'main' | 'linked',
 };
-export const target = (path: string, c = checkout) => ({ checkout: c, path });
+export const target = (path: string, c: CheckoutTarget = checkout) => ({ checkout: c, path });
 export async function fixture(clientId = 'editor-one', observe = true) {
   const memory = memoryWorkspace(
     [checkout, second].map((checkout) => ({

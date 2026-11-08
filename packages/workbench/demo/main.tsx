@@ -22,6 +22,7 @@ const checkout = {
   checkoutId: 'sample',
   projectId: 'demo',
   root: '/demo/moonbase',
+  vcs: 'git' as const,
   branch: 'main',
   worktree: 'main' as 'main' | 'linked',
 };

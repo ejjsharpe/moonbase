@@ -101,10 +101,12 @@ const localProgrammatic = Schema.Struct({
   ripgrepExecutable: Schema.optional(path),
 });
 const store = Schema.Struct({ identity: Schema.String });
+const timestamp = text(64).check(Schema.makeFilter((value) => Number.isFinite(Date.parse(value))));
 const metadata = Schema.Struct({
   identity: Schema.String,
   title: text(200),
-  createdAt: text(64).check(Schema.makeFilter((value) => Number.isFinite(Date.parse(value)))),
+  createdAt: timestamp,
+  settledAt: Schema.optional(timestamp),
   settings: Schema.optional(
     Schema.Struct({
       cwd: path,

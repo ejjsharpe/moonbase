@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import * as stylex from '@stylexjs/stylex';
+import { Button } from '@base-ui/react/button';
 import { Menu } from '@base-ui/react/menu';
 import type { EditorController } from '@moonbase/application/editor';
 import type { CheckoutTarget, Worktree } from '@moonbase/contracts/workspace';
@@ -11,7 +12,8 @@ import { Icon } from './icon.tsx';
 
 /**
  * The project sidebar's header: the checkout's tile, name and branch. It opens a menu of the
- * repository's worktrees; choosing one opens it as the selected checkout.
+ * repository's worktrees; choosing one opens it as the selected checkout. A plain folder has no
+ * branch or worktrees, so its header offers Initialize Git instead.
  */
 export function WorktreeSwitcher({
   controller,
@@ -24,6 +26,29 @@ export function WorktreeSwitcher({
 }) {
   const [worktrees, setWorktrees] = useState<readonly Worktree[] | null>(null);
   const name = checkoutName(checkout);
+  const tile = (
+    <span
+      aria-hidden="true"
+      data-initials={projectInitials(name)}
+      {...stylex.props(projectTiles.tile, projectHue(checkout.projectId), styles.tile)}
+    />
+  );
+  if (checkout.vcs === 'none')
+    return (
+      <div title={`${checkout.hostId} · ${checkout.root}`} {...stylex.props(styles.folder)}>
+        {tile}
+        <span {...stylex.props(styles.text)}>
+          <span {...stylex.props(styles.name)}>{name}</span>
+          <span {...stylex.props(styles.detail)}>No Git</span>
+        </span>
+        <Button
+          title="Run git init in this folder"
+          {...stylex.props(controls.button, styles.initialize)}
+          onClick={() => run(controller.initializeRepository(checkout))}>
+          Initialize Git
+        </Button>
+      </div>
+    );
   return (
     <Menu.Root
       onOpenChange={(open) => {
@@ -35,11 +60,7 @@ export function WorktreeSwitcher({
         aria-label={`Switch worktree, ${name} · ${checkout.branch}`}
         title={`${checkout.hostId} · ${checkout.root}`}
         {...stylex.props(controls.button, styles.trigger)}>
-        <span
-          aria-hidden="true"
-          data-initials={projectInitials(name)}
-          {...stylex.props(projectTiles.tile, projectHue(checkout.projectId), styles.tile)}
-        />
+        {tile}
         <span {...stylex.props(styles.text)}>
           <span {...stylex.props(styles.name)}>{name}</span>
           <span {...stylex.props(styles.branch)}>{checkout.branch}</span>
@@ -111,6 +132,22 @@ const styles = stylex.create({
       ':hover:not(:disabled)': colors.hover,
       '[data-popup-open]': colors.elevated,
     },
+  },
+  folder: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    margin: '0 4px 12px',
+    padding: 6,
+    color: colors.secondary,
+  },
+  initialize: { flexShrink: 0, padding: '3px 8px', fontSize: type.caption },
+  detail: {
+    color: colors.muted,
+    fontSize: type.caption,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
   },
   tile: { width: 28, height: 28, borderRadius: radius.row, fontSize: type.caption },
   text: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', lineHeight: 1.35 },

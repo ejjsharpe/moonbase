@@ -62,6 +62,10 @@ test('command IPC authenticates every channel, validates envelopes and tears dow
         calls++;
         return `${root}-worktrees/${branch.replaceAll('/', '-')}`;
       },
+      turnIntoProject: async (conversationId) => {
+        calls++;
+        return `/chats/${conversationId}`;
+      },
       requireLocal: () => {},
       getSession: () => undefined,
     },
@@ -106,6 +110,7 @@ test('command IPC authenticates every channel, validates envelopes and tears dow
       chatChannels.call,
       { kind: 'create-worktree', backendId: 'local', root: '/repo', branch: 'chat/task' },
     ],
+    [chatChannels.call, { kind: 'turn-into-project', backendId: 'local', conversationId: '7' }],
   ] as const;
   for (const event of f.badEvents())
     for (const [channel, input] of inputs)
@@ -151,6 +156,15 @@ test('command IPC authenticates every channel, validates envelopes and tears dow
     { ...worktree, location: '/elsewhere' },
     { ...worktree, branch: 1 },
     { ...worktree, backendId: 'remote' },
+  ])
+    assert.equal((await invoke(chatChannels.call, f.event, input)).ok, false);
+  const turn = { kind: 'turn-into-project', backendId: 'local', conversationId: '7' };
+  assert.deepEqual(await invoke(chatChannels.call, f.event, turn), { ok: true, value: '/chats/7' });
+  for (const input of [
+    { ...turn, root: '/elsewhere' },
+    { ...turn, conversationId: 7 },
+    { ...turn, conversationId: '' },
+    { ...turn, backendId: 'remote' },
   ])
     assert.equal((await invoke(chatChannels.call, f.event, input)).ok, false);
   assert.deepEqual(await invoke(channels.cancel, f.event, 'id'), failure);

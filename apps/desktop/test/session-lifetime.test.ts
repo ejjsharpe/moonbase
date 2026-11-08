@@ -17,6 +17,7 @@ const checkout = {
   checkoutId: 'checkout',
   projectId: 'project',
   root: '/approved',
+  vcs: 'git' as const,
   branch: 'main',
   worktree: 'main' as 'main' | 'linked',
 };

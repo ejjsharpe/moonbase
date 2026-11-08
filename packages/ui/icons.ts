@@ -1,4 +1,6 @@
 import {
+  IconArchive,
+  IconArchiveRestore,
   IconArrowUp,
   IconArrowsDiagonal,
   IconArrowsDiagonalMinimize2,
@@ -64,4 +66,6 @@ export const icons = {
   send: IconArrowUp,
   stop: IconSquare,
   more: IconDots,
+  settle: IconArchive,
+  unsettle: IconArchiveRestore,
 } as const;

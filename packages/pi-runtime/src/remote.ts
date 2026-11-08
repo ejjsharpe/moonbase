@@ -46,7 +46,10 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
             }),
           );
         const mutation =
-          operation === 'createChat' || operation === 'sendChat' || operation === 'stopChat';
+          operation === 'createChat' ||
+          operation === 'sendChat' ||
+          operation === 'stopChat' ||
+          operation === 'settleChat';
         let dispatched = false;
         const shape = input as {
           host?: { hostId: string; storeId: string };
@@ -337,6 +340,7 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
       sendChat: (d) => call('sendChat', d),
       getChatSend: (d) => call('getChatSend', d),
       stopChat: (d) => call('stopChat', d),
+      settleChat: (d) => call('settleChat', d),
       findChatFiles: (d) => call('findChatFiles', d),
       watch: ({ target }) => watch(target),
     } satisfies ChatServiceShape;

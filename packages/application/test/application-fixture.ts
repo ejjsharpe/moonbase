@@ -7,6 +7,7 @@ export const checkout = {
   checkoutId: 'checkout',
   projectId: 'project',
   root: '/memory/application',
+  vcs: 'git' as const,
   branch: 'main',
   worktree: 'main' as 'main' | 'linked',
 };

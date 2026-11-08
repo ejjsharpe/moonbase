@@ -48,6 +48,13 @@ export { checkoutKey, fileKey } from './references.ts';
 // These diagnostics are authored by this module; injected failures use shared normalization.
 const editorError = (message: string) => new ApplicationError({ code: 'Unavailable', message });
 const sameCheckout = (a: CheckoutTarget, b: CheckoutTarget) => checkoutKey(a) === checkoutKey(b);
+/** Whether `next` is the Git checkout that a plain-folder checkout became after `git init`. */
+const isInitialized = (previous: CheckoutTarget, next: CheckoutTarget) =>
+  previous.vcs === 'none' &&
+  next.vcs === 'git' &&
+  previous.hostId === next.hostId &&
+  previous.checkoutId === next.checkoutId &&
+  previous.root === next.root;
 const operationKey = (clientId: string, id: string) => JSON.stringify([clientId, id]);
 const deferObservation = Symbol('defer recovery observation');
 const definitiveNonAdmission = (error: unknown) =>
@@ -429,12 +436,91 @@ class EditorModelState {
     this.checkout(input.checkout);
     return this.addCheckout(await this.command('createWorktree', input));
   }
+  /**
+   * Runs `git init` in an open plain-folder checkout, then rebinds it, with its tabs and drafts,
+   * to the Git checkout that results and selects it.
+   */
+  async initializeRepository(checkout: CheckoutTarget) {
+    this.assertAdmission();
+    this.assertReady();
+    this.checkout(checkout);
+    if (checkout.vcs !== 'none')
+      throw new ApplicationError({
+        code: 'InvalidInput',
+        message: 'This project is already a Git repository.',
+      });
+    this.assertRebindable(checkout);
+    // The folder's approval ends with `git init`: publish while it holds, and end its reads.
+    await this.flushRecovery();
+    await this.discovery.releaseObservation(checkout);
+    let initialized: CheckoutTarget;
+    try {
+      initialized = await this.command('initializeRepository', { checkout });
+    } catch (error) {
+      if (!this.closing && this.recovery.openCheckoutIds.includes(checkout.checkoutId))
+        await this.observe(checkout).catch(this.report);
+      throw error;
+    }
+    const target = await this.addCheckout(initialized);
+    if (!this.closing && !this.preservation.active) await this.flushRecovery();
+    return target;
+  }
+  private assertRebindable(checkout: CheckoutTarget) {
+    if (
+      this.preservation.active ||
+      [...this.buffers.values()].some(
+        (buffer) =>
+          sameCheckout(buffer.target.checkout, checkout) && (buffer.saving || buffer.pendingSave),
+      ) ||
+      [...this.operations.values()].some(
+        (value) => !value.acknowledged && sameCheckout(value.result.checkout, checkout),
+      )
+    )
+      throw editorError('Wait for saves and file operations in this project to finish.');
+  }
+  /** Moves a checkout's views, buffers, drafts and recents to the target it became. */
+  private async rebindCheckout(previous: CheckoutTarget, next: CheckoutTarget) {
+    this.assertRebindable(previous);
+    const open = this.recovery.openCheckoutIds.includes(previous.checkoutId);
+    await this.discovery.releaseObservation(previous);
+    this.referenceRevision++;
+    const previousKey = checkoutKey(previous);
+    const ofPrevious = (key: string) => JSON.parse(key)[0] === previousKey;
+    const rebind = <T extends { checkout: CheckoutTarget }>(item: T): T =>
+      sameCheckout(item.checkout, previous) ? { ...item, checkout: next } : item;
+    this.recovery.checkouts = this.recovery.checkouts.map((item) =>
+      sameCheckout(item, previous) ? next : item,
+    );
+    this.recovery.drafts = this.recovery.drafts.map((draft) => ({
+      ...draft,
+      target: rebind(draft.target),
+    }));
+    this.recovery.recentFiles = this.recovery.recentFiles.map(rebind);
+    // oxlint-disable-next-line no-useless-spread -- Rebinding reinserts buffers; visit each once.
+    for (const [key, buffer] of [...this.buffers])
+      if (sameCheckout(buffer.target.checkout, previous)) {
+        this.buffers.delete(key);
+        buffer.target = rebind(buffer.target);
+        this.buffers.set(fileKey(buffer.target), buffer);
+      }
+    // Listings, comparisons and Git status are read again for the new target.
+    for (const key of Object.keys(this.comparisons))
+      if (ofPrevious(key)) delete this.comparisons[key];
+    for (const key of this.comparisonAttempts.keys())
+      if (ofPrevious(key)) this.comparisonAttempts.delete(key);
+    for (const key of Object.keys(this.listings)) if (ofPrevious(key)) delete this.listings[key];
+    delete this.git[previousKey];
+    this.preservation.rebindClosedReferences(previous, next);
+    if (open) await this.observe(next);
+  }
   private async addCheckout(target: CheckoutTarget) {
     if (this.closing) return target;
     const collision = this.recovery.checkouts.find(
       (item) => item.checkoutId === target.checkoutId && !sameCheckout(item, target),
     );
-    if (collision)
+    // A plain folder that became a repository keeps its tabs and drafts as the Git checkout.
+    if (collision && isInitialized(collision, target)) await this.rebindCheckout(collision, target);
+    else if (collision)
       throw editorError('Checkout identity changed; retained work has not been rebound.');
     if (!this.recovery.checkouts.some((item) => sameCheckout(item, target))) {
       this.recovery.checkouts.push(target);
@@ -1704,6 +1790,8 @@ export interface EditorController {
   openCheckout(root: string): Promise<CheckoutTarget>;
   listWorktrees(checkout: CheckoutTarget): Promise<CommandOutput<'listWorktrees'>>;
   createWorktree(input: CommandInput<'createWorktree'>): Promise<CheckoutTarget>;
+  /** Runs `git init` in an open plain-folder checkout; its tabs and drafts move to the result. */
+  initializeRepository(checkout: CheckoutTarget): Promise<CheckoutTarget>;
   selectCheckout(target: CheckoutTarget): Promise<boolean>;
   resolveRecoveryPublication(): Promise<boolean>;
   flush(): Promise<void>;

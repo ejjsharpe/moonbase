@@ -15,6 +15,7 @@ const makeContext = (overrides: Partial<ChatCommandContext> = {}) => {
   const context: ChatCommandContext = {
     selected: false,
     running: false,
+    settled: null,
     models: [
       { value: 'fast', label: 'Fast model', current: true },
       { value: 'coding', label: 'Coding model' },
@@ -26,6 +27,8 @@ const makeContext = (overrides: Partial<ChatCommandContext> = {}) => {
     ],
     newChat: () => ran.push('new'),
     stop: () => ran.push('stop'),
+    settle: () => ran.push('settle'),
+    unsettle: () => ran.push('unsettle'),
     clearDraft: () => ran.push('clear'),
     chooseModel: (value) => ran.push(`model ${value}`),
     chooseEffort: (value) => ran.push(`effort ${value}`),
@@ -43,6 +46,25 @@ test('the composer lists only commands it can run now', () => {
     'stop',
     'clear',
   ]);
+  // An open chat offers whichever of /settle and /unsettle applies to it.
+  assert.deepEqual(names({ selected: true, settled: false, models: [], efforts: [] }), [
+    'new',
+    'settle',
+    'clear',
+  ]);
+  assert.deepEqual(names({ selected: true, settled: true, models: [], efforts: [] }), [
+    'new',
+    'unsettle',
+    'clear',
+  ]);
+  const { context, ran } = makeContext({ selected: true, settled: true });
+  const typed = resolveCommandLine('/unsettle', listChatCommands(context));
+  assert(typed && 'command' in typed);
+  typed.command.run();
+  assert.deepEqual(ran, ['unsettle']);
+  assert.deepEqual(resolveCommandLine('/settle', listChatCommands(context)), {
+    error: "/settle isn't available here.",
+  });
 });
 
 test('a / opens commands only at the start of the first line, then a command’s choices', () => {
