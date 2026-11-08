@@ -756,14 +756,17 @@ test('historical patches retain real coordinates, malformed/numbered/large fallb
   await mkdir(output, { recursive: true });
   await page.screenshot({ path: resolve(output, 'historical-patches.png') });
 });
-test('no thinking and redaction are honest; stopped partial activity survives without provider signatures', async ({
+test('a running response shows no status notes; redaction is honest; stopped partial activity survives without provider signatures', async ({
   page,
 }) => {
   await open(page);
   await page.evaluate(() =>
     window.demo.transcript!.activity([{ text: 'Working answer', kind: 'text' }], 'none'),
   );
-  await expect(live(page)).toContainText('No thinking supplied');
+  await expect(live(page)).toContainText('Working answer');
+  // The activity shows a run is going, so neither the row nor the page repeats it.
+  await expect(live(page)).not.toContainText(/running|thinking/i);
+  await expect(page.getByRole('status', { name: 'Conversation status' })).toHaveCount(0);
   await page.evaluate(async () => {
     await window.demo.transcript!.activity(
       [
@@ -791,10 +794,10 @@ test('no thinking and redaction are honest; stopped partial activity survives wi
   });
   const row = live(page);
   await expect(row).toContainText('Stopped');
+  await expect(page.getByRole('status', { name: 'Conversation status' })).toHaveText('Stopped');
   await expect(row).toContainText('Thinking · redacted');
   await expect(row).toContainText('interrupted');
   await expect(row).toContainText('missing-result');
-  await expect(row).not.toContainText('No thinking supplied');
   await row.getByRole('button', { name: /^Activity/ }).click();
   await expect(row.locator('pre')).toHaveText('published partial');
   // Redacted thinking has no content to copy, and parts in a card have no fold of their own.

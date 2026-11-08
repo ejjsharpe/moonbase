@@ -69,7 +69,7 @@ function live(
           incarnation,
         },
         parts: [part('m0.b0', text)],
-        thinking: 'pending',
+        thinking: 'none',
         nextCursor: null,
       },
     },

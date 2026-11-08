@@ -58,8 +58,10 @@ import { Icon } from '../icon.tsx';
  */
 export type EntryProps = {
   entry: ChatEntry;
-  /** Set for the live row: its status label. */
-  liveState?: string;
+  /** Set for the live row. */
+  live?: boolean;
+  /** The live row's status, when it is something other than running. */
+  liveLabel?: string;
   /** An activity row continues the activity card above or below it. */
   joinPrevious?: boolean;
   joinNext?: boolean;
@@ -99,7 +101,8 @@ type PartContext = Pick<
 export const Entry = memo(
   function Entry({
     entry,
-    liveState,
+    live = false,
+    liveLabel,
     joinPrevious = false,
     joinNext = false,
     controller,
@@ -159,20 +162,15 @@ export const Entry = memo(
     const conversational = kind === 'message' && ['assistant', 'user'].includes(entry.role);
     const label = entry.role === 'system' && kind !== 'empty' ? 'system' : '';
     // A failed tool step shows its failure on the step, not as a line between steps.
-    let status = entry.isError ? 'Failed' : liveState;
-    if (kind === 'activity' && !liveState) status = undefined;
-    const notes = [
-      label,
-      status,
-      liveState && transcript?.thinking === 'none' && 'No thinking supplied',
-      liveState && transcript?.thinking === 'pending' && 'Working · thinking not yet supplied',
-    ].filter(Boolean);
+    let status = entry.isError ? 'Failed' : liveLabel;
+    if (kind === 'activity' && !live) status = undefined;
+    const notes = [label, status].filter(Boolean);
     const user = entry.role === 'user';
     let body = <p {...stylex.props(styles.literal)}>{entry.text}</p>;
     if (entry.role === 'assistant')
       body = (
         <Markdown
-          source={entry.text || (liveState ? 'Working…' : '')}
+          source={entry.text || (live ? 'Working…' : '')}
           identity={entry.id}
           revision=""
           cache={cache}
@@ -222,13 +220,13 @@ export const Entry = memo(
         </>
       );
     // An empty turn marker keeps its row (Find and reading positions key on it) but shows nothing.
-    if (kind === 'empty' && !liveState && !findMatch)
+    if (kind === 'empty' && !live && !findMatch)
       return <article data-transcript-entry={entry.id} {...stylex.props(styles.message)} />;
     return (
       <article
-        data-transcript-entry={liveState ? undefined : entry.id}
-        data-transcript-live={liveState ? JSON.stringify(source ?? 'legacy') : undefined}
-        aria-label={liveState ? 'Live response' : undefined}
+        data-transcript-entry={live ? undefined : entry.id}
+        data-transcript-live={live ? JSON.stringify(source ?? 'legacy') : undefined}
+        aria-label={live ? 'Live response' : undefined}
         {...stylex.props(stylex.defaultMarker(), styles.message, user && styles.userMessage)}>
         {notes.length > 0 && (
           <div {...stylex.props(styles.header)}>

@@ -30,7 +30,7 @@ function publishLive(
       text: text.slice(0, 64),
       truncated: text.length > 64,
       tools: [],
-      transcript: { source, parts: [descriptor], nextCursor: null, thinking: 'pending' },
+      transcript: { source, parts: [descriptor], nextCursor: null, thinking: 'none' },
     },
   };
   f.sources.set(JSON.stringify(source), { source, data: [text] });

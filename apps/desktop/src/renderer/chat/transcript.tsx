@@ -28,6 +28,7 @@ import {
 } from '@moonbase/application/chat';
 import type {
   ChatEntry,
+  ChatRun,
   ChatToolActivity,
   ChatTranscriptMatch,
   ChatTranscriptSource,
@@ -205,8 +206,8 @@ export function Transcript({
                 : 'This view is offline. Its draft and unresolved command identities are retained.'}
             </p>
           )}
-          {/* Idle needs no line; running, stopped and failed say so. */}
-          {currentSnapshot && currentSnapshot.state !== 'idle' && (
+          {/* Idle and running need no line; stopped and failed say so. */}
+          {currentSnapshot && !['idle', 'running'].includes(currentSnapshot.state) && (
             <p
               aria-label="Conversation status"
               role={failed ? 'alert' : 'status'}
@@ -586,7 +587,7 @@ const kindOfRow = (row: TranscriptRow) =>
 
 type RowProps = Omit<
   EntryProps,
-  'entry' | 'liveState' | 'joinPrevious' | 'joinNext' | keyof SharedRowProps
+  'entry' | 'live' | 'liveLabel' | 'joinPrevious' | 'joinNext' | keyof SharedRowProps
 >;
 type SharedRowProps = Pick<EntryProps, 'controller' | 'cache' | 'native' | 'actions' | 'evidence'>;
 /** What every row reads from the transcript: shared props, and its own slice of state. */
@@ -620,7 +621,10 @@ function Row({
         ) : (
           <Entry
             entry={row.entry}
-            liveState={row.kind === 'live' ? (context.liveLabel ?? row.state) : undefined}
+            live={row.kind === 'live'}
+            liveLabel={
+              row.kind === 'live' ? (context.liveLabel ?? getRunLabel(row.state)) : undefined
+            }
             joinPrevious={joinPrevious}
             joinNext={joinNext}
             {...context.shared}
@@ -767,6 +771,8 @@ function getLiveIdentity(state: ChatState) {
     state.snapshot?.run?.transcript?.source ?? state.snapshot?.run?.stop ?? null,
   );
 }
+/** A run that is simply running needs no label; its activity already shows it. */
+const getRunLabel = (state: ChatRun['state']) => (state === 'running' ? undefined : state);
 const snapshotLabels = {
   idle: 'Idle',
   running: 'Running',
