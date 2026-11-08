@@ -35,16 +35,13 @@ export function WorktreeSwitcher({
         aria-label={`Switch worktree, ${name} · ${checkout.branch}`}
         title={`${checkout.hostId} · ${checkout.root}`}
         {...stylex.props(controls.button, styles.trigger)}>
-        <span
-          aria-hidden="true"
-          data-initials={projectInitials(name)}
-          {...stylex.props(projectTiles.tile, projectHue(checkout.projectId), styles.tile)}
-        />
         <span {...stylex.props(styles.text)}>
-          <span {...stylex.props(styles.name)}>{name}</span>
+          <span {...stylex.props(styles.nameRow)}>
+            <span {...stylex.props(styles.name)}>{name}</span>
+            <Icon name="chevron" />
+          </span>
           <span {...stylex.props(styles.branch)}>{checkout.branch}</span>
         </span>
-        <Icon name="chevron" />
       </Menu.Trigger>
       <Menu.Portal>
         <Menu.Positioner align="start" sideOffset={4} {...stylex.props(overlays.positioner)}>
@@ -95,25 +92,26 @@ export function WorktreeSwitcher({
 }
 
 const styles = stylex.create({
+  // The explorer's header: the name over its branch; the rail shows the tile.
   trigger: {
     display: 'flex',
     alignItems: 'center',
-    gap: 10,
-    width: 'calc(100% - 8px)',
-    margin: '0 4px 12px',
-    padding: 6,
+    flex: 1,
+    minWidth: 0,
+    padding: '3px 6px',
     borderWidth: 0,
     borderRadius: radius.row,
     textAlign: 'left',
     color: colors.secondary,
+    WebkitAppRegion: 'no-drag',
     backgroundColor: {
       default: 'transparent',
       ':hover:not(:disabled)': colors.hover,
       '[data-popup-open]': colors.elevated,
     },
   },
-  tile: { width: 28, height: 28, borderRadius: radius.row, fontSize: type.caption },
   text: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', lineHeight: 1.35 },
+  nameRow: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, color: colors.muted },
   name: {
     color: colors.text,
     fontSize: type.body,

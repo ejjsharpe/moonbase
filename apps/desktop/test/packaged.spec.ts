@@ -1,5 +1,11 @@
 import { openSettings } from './chat-target.ts';
-import { saveFile, selectFileView, captureNative, pasteNativeFile } from './editor-regressions.ts';
+import {
+  saveFile,
+  selectFileView,
+  captureNative,
+  pasteNativeFile,
+  explorerAction,
+} from './editor-regressions.ts';
 import {
   filenameCases,
   checkFilenameMaps,
@@ -155,7 +161,7 @@ test('unsigned macOS package runs with only system PATH, SQLite, native/rg resou
       })) as typeof dialog.showOpenDialog;
     }, checkout);
     await page.getByRole('button', { name: 'Open checkout', exact: true }).click();
-    await page.getByRole('button', { name: 'Find file', exact: true }).click();
+    await explorerAction(page, 'Go to File…');
     await page.getByRole('combobox').fill('lookup-native');
     await expect(page.getByRole('option').first()).toHaveAccessibleName(
       'lookup-native-resource.txt',
@@ -172,7 +178,7 @@ test('unsigned macOS package runs with only system PATH, SQLite, native/rg resou
       .toBe('export const packaged = 42;');
     await selectFileView(page, 'staged');
     await expect(page.getByRole('textbox', { name: / original$/ })).toHaveCount(1);
-    await page.getByRole('button', { name: 'New File', exact: true }).click();
+    await explorerAction(page, 'New File…');
     await page.getByLabel('Destination relative path').fill('packaged-created.txt');
     await page.getByRole('dialog').getByRole('button', { name: 'New File', exact: true }).click();
     await expect(

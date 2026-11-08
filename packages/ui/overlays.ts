@@ -19,7 +19,8 @@ export const overlays = stylex.create({
     fontSize: type.body,
   },
   modelTrigger: { padding: space.xs, fontSize: type.small },
-  positioner: { zIndex: 100 },
+  // Popups often open over a header row that drags the window; they take clicks instead.
+  positioner: { zIndex: 100, WebkitAppRegion: 'no-drag' },
   menuBackdrop: { position: 'fixed', inset: 0, zIndex: 99 },
   popup: {
     fontFamily: type.ui,

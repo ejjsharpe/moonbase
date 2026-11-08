@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import type { Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 import type { EditorController } from '@moonbase/application/editor';
 
 declare global {
@@ -7,6 +7,12 @@ declare global {
     importCalls: Parameters<EditorController['mutate']>[0][];
     importRefs: string[];
   }
+}
+/** Runs one of the explorer's "…" menu actions. */
+async function explorerAction(scope: Locator | Page, name: string) {
+  await scope.getByRole('button', { name: 'Explorer actions', exact: true }).click();
+  const page = 'goto' in scope ? scope : scope.page();
+  await page.getByRole('menuitem', { name, exact: true }).click();
 }
 const dialog = (page: Page) => page.getByRole('dialog');
 const imports = (page: Page) =>
@@ -40,10 +46,10 @@ test('native picker asks for a full single destination and captures explicit rep
   page,
 }) => {
   await setup(page);
-  await page
-    .getByRole('region', { name: 'First editor', exact: true })
-    .getByRole('button', { name: 'Import files', exact: true })
-    .click();
+  await explorerAction(
+    page.getByRole('region', { name: 'First editor', exact: true }),
+    'Import Files…',
+  );
   await expect(imports(page)).toBeDisabled();
   await page.getByLabel('Destination relative path', { exact: true }).press('Enter');
   expect(await page.evaluate(() => window.importCalls)).toEqual([]);
@@ -138,10 +144,10 @@ test('cancelled/empty/closed-checkout imports dispatch nothing; create file/fold
     ['New File', 'created.ts'],
     ['New Folder', 'created-folder'],
   ]) {
-    await page
-      .getByRole('region', { name: 'First editor', exact: true })
-      .getByRole('button', { name: title, exact: true })
-      .click();
+    await explorerAction(
+      page.getByRole('region', { name: 'First editor', exact: true }),
+      `${title}…`,
+    );
     await page.getByLabel('Destination relative path', { exact: true }).fill(destination);
     await dialog(page).getByRole('button', { name: title, exact: true }).click();
     await expect(dialog(page)).toHaveCount(0);
@@ -166,10 +172,10 @@ test('a delayed native picker cannot approve a checkout closed while selection w
       });
     Object.assign(window, { finishPicker: () => release(['late-reference']) });
   });
-  await page
-    .getByRole('region', { name: 'First editor', exact: true })
-    .getByRole('button', { name: 'Import files', exact: true })
-    .click();
+  await explorerAction(
+    page.getByRole('region', { name: 'First editor', exact: true }),
+    'Import Files…',
+  );
   await page.evaluate(async () => {
     await window.demo.first.closeCheckout(window.demo.checkout);
     (window as unknown as { finishPicker(): void }).finishPicker();

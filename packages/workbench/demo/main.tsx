@@ -156,6 +156,7 @@ function Demo() {
             controller={first}
             checkout={checkout}
             visible={visible}
+            sidebarHidden={new URLSearchParams(location.search).has('sidebar-hidden')}
             renderLayout={
               new URLSearchParams(location.search).has('editor-only')
                 ? ({ editor }) => editor

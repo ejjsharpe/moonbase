@@ -30,6 +30,12 @@ declare global {
 }
 
 const first = (page: Page) => page.getByRole('region', { name: 'First editor', exact: true });
+/** Runs one of the explorer's "…" menu actions. */
+async function explorerAction(scope: Locator | Page, name: string) {
+  await scope.getByRole('button', { name: 'Explorer actions', exact: true }).click();
+  const page = 'goto' in scope ? scope : scope.page();
+  await page.getByRole('menuitem', { name, exact: true }).click();
+}
 async function expectSaveEnabled(editor: Page | Locator, enabled: boolean) {
   const page = 'page' in editor ? editor.page() : editor;
   await openTabMenu(editor);
@@ -443,7 +449,7 @@ for (const survivor of [true, false])
     await expect(tab).toHaveCount(0);
     const fallback = survivor
       ? first(page).getByRole('tab', { name: 'welcome.ts', exact: true })
-      : first(page).getByRole('button', { name: 'Find file', exact: true });
+      : first(page).getByRole('button', { name: 'Explorer actions', exact: true });
     await expect(fallback).toBeFocused();
     await page.keyboard.press('Meta+Shift+t');
     await expect(tab).toBeVisible();
@@ -690,7 +696,7 @@ test('close dialog Cancel then Discard; Reopen reads disk and disposal releases 
   await expect.poll(() => page.evaluate(() => window.demo.modelCount())).toBe(before - 1);
 });
 
-for (const origin of ['editor', 'file tab', 'Find file button'] as const)
+for (const origin of ['editor', 'file tab', 'Explorer actions button'] as const)
   test(`Go to restores ${origin} focus and reopens after dismissal`, async ({ page }) => {
     await page.goto('/');
     let focused = first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true });
@@ -698,13 +704,12 @@ for (const origin of ['editor', 'file tab', 'Find file button'] as const)
       focused = first(page)
         .getByRole('tablist', { name: 'Open files', exact: true })
         .getByRole('tab', { name: 'welcome.ts', exact: true });
-    else if (origin === 'Find file button')
-      focused = first(page).getByRole('button', { name: 'Find file', exact: true });
+    else if (origin === 'Explorer actions button')
+      focused = first(page).getByRole('button', { name: 'Explorer actions', exact: true });
     await focused.focus();
     const dialog = page.getByRole('dialog', { name: 'Go to', exact: true });
     for (const dismiss of ['Escape', 'outside click'] as const) {
-      if (origin === 'Find file button') await focused.click();
-      else await page.keyboard.press('Meta+p');
+      await page.keyboard.press('Meta+p');
       await expect(dialog.getByRole('combobox')).toBeFocused();
       if (dismiss === 'Escape') await page.keyboard.press('Escape');
       else await page.mouse.click(4, 4);
@@ -727,7 +732,7 @@ test('Go to lists recent files first, highlights matches and opens an exact path
 }) => {
   await page.goto('/');
   await page.setViewportSize({ width: 760, height: 720 });
-  await first(page).getByRole('button', { name: 'Find file', exact: true }).click();
+  await explorerAction(first(page), 'Go to File…');
   const dialog = page.getByRole('dialog', { name: 'Go to', exact: true });
   await expect(dialog.getByRole('option').first()).toHaveAccessibleName('welcome.ts');
   await dialog.getByRole('combobox').fill('exmp');
@@ -745,7 +750,7 @@ test('Go to lists recent files first, highlights matches and opens an exact path
   await expect(
     first(page).getByRole('textbox', { name: 'README.md editor', exact: true }),
   ).toBeFocused();
-  await first(page).getByRole('button', { name: 'New File', exact: true }).click();
+  await explorerAction(first(page), 'New File…');
   await page.getByLabel('Destination relative path').fill('created.txt');
   await page.getByRole('dialog').getByRole('button', { name: 'New File', exact: true }).click();
   await expect(first(page).getByRole('tab', { name: 'created.txt', exact: true })).toBeVisible();
@@ -1165,7 +1170,9 @@ test('keyboard close/reopen retains tree or strip origin and meaningful empty-ed
   await page.keyboard.press('Meta+w');
   await first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true }).focus();
   await page.keyboard.press('Meta+w');
-  await expect(first(page).getByRole('button', { name: 'Find file', exact: true })).toBeFocused();
+  await expect(
+    first(page).getByRole('button', { name: 'Explorer actions', exact: true }),
+  ).toBeFocused();
   await page.keyboard.press('Meta+Shift+t');
   await expect(
     first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true }),
@@ -1405,7 +1412,7 @@ for (const area of ['staged', 'unstaged'] as const)
     await page.getByRole('tab', { name: 'beta · main', exact: true }).click();
     await page.evaluate(() => window.recoveryRace.recreateWorking());
     await page.getByRole('tab', { name: 'alpha · main', exact: true }).click();
-    await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+    await explorerAction(page, 'Refresh');
     await expectSaveEnabled(page, true);
     await expect(original).toHaveJSProperty('readOnly', true);
     await expect(modified).toHaveJSProperty('readOnly', false);
@@ -1743,7 +1750,7 @@ test('delayed Create reply after disposal does not open the created file', async
       return false;
     };
   });
-  await second.getByRole('button', { name: 'New File', exact: true }).click();
+  await explorerAction(second, 'New File…');
   await page.getByRole('textbox', { name: 'Destination relative path' }).fill('delayed.ts');
   await page
     .getByRole('dialog', { name: 'New File', exact: true })
@@ -1777,7 +1784,7 @@ test('delayed Create reply after disposal does not open the created file', async
 
 test('StrictMode lookup searches and opens a result after effect replay', async ({ page }) => {
   await page.goto('/?strict');
-  await first(page).getByRole('button', { name: 'Find file', exact: true }).click();
+  await explorerAction(first(page), 'Go to File…');
   await page.getByRole('combobox').fill('README');
   await expect(page.getByRole('option', { name: 'README.md', exact: true })).toBeVisible();
   await page.screenshot({ path: 'test-results/strict-lookup.png', fullPage: true });
@@ -1849,7 +1856,7 @@ test('Reveal starts a new Shift tree range and captures only that Trash batch', 
   await tree.focus();
   await tree.press('Home');
   await tree.press('Shift+ArrowDown');
-  await first(page).getByRole('button', { name: 'Reveal Active File', exact: true }).click();
+  await explorerAction(first(page), 'Reveal Active File');
   await expect.poll(selected).toEqual(['welcome.ts']);
   await tree.focus();
   await tree.press('Shift+ArrowUp');
@@ -1895,7 +1902,7 @@ test('workbench renders its supplied checkout independently of application navig
     first(page).getByRole('tablist', { name: 'Workbench views', exact: true }),
   ).toHaveCount(0);
   await expect(first(page).getByRole('tab', { name: 'Chat', exact: true })).toHaveCount(0);
-  await first(page).getByRole('button', { name: 'Find file', exact: true }).click();
+  await explorerAction(first(page), 'Go to File…');
   await page.getByRole('combobox').fill('elsewhere');
   await expect(page.getByRole('dialog').getByRole('status')).toHaveText('No results.');
   await expect(page.getByRole('option')).toHaveCount(0);
@@ -1927,4 +1934,61 @@ test('editor remains usable when the app omits the explorer from its layout', as
   await expect(first(page).locator('[aria-label="Moonbase editor"]')).toBeFocused();
   await page.keyboard.press('Meta+Shift+t');
   await expect(input).toBeFocused();
+});
+
+test("the explorer's … menu holds its file actions and collapses every folder", async ({
+  page,
+}) => {
+  await page.goto('/');
+  const folder = first(page)
+    .getByRole('tree', { name: 'Files', exact: true })
+    .getByRole('treeitem', { name: 'src', exact: true });
+  await folder.focus();
+  await folder.press('ArrowRight');
+  await expect(folder).toHaveAttribute('aria-expanded', 'true');
+  await first(page).getByRole('button', { name: 'Explorer actions', exact: true }).click();
+  const menu = page.getByRole('menu', { name: 'Explorer actions', exact: true });
+  for (const name of [
+    'New File…',
+    'New Folder…',
+    'Import Files…',
+    'Collapse All Folders',
+    'Reveal Active File',
+    'Go to File…',
+    'Refresh',
+  ])
+    await expect(menu.getByRole('menuitem', { name, exact: true })).toBeVisible();
+  await menu.getByRole('menuitem', { name: 'Collapse All Folders', exact: true }).click();
+  await expect(menu).toHaveCount(0);
+  await expect(folder).toHaveAttribute('aria-expanded', 'false');
+});
+
+test('with no file open, the editor lists its main shortcuts', async ({ page }) => {
+  await page.goto('/');
+  const tabs = first(page).getByRole('tablist', { name: 'Open files', exact: true });
+  await expect(tabs.getByRole('tab').first()).toBeVisible();
+  while (await tabs.getByRole('tab').count()) {
+    await tabs.getByRole('tab').first().focus();
+    await page.keyboard.press('Meta+w');
+    await page.waitForTimeout(250);
+  }
+  const sheet = first(page).getByRole('region', { name: 'Keyboard shortcuts', exact: true });
+  await expect(sheet.getByRole('term')).toHaveText(['Go to file', 'Commands', 'Find in files']);
+  await expect(sheet.getByRole('definition')).toHaveText(['⌘P', '⇧⌘P', '⇧⌘F']);
+  await page.keyboard.press('Meta+Shift+t');
+  await expect(sheet).toHaveCount(0);
+});
+
+test('a hidden sidebar slides the explorer away and leaves the editor usable', async ({ page }) => {
+  await page.goto('/?sidebar-hidden');
+  const sidebar = first(page).locator('aside[aria-label="Editor sidebar"]');
+  await expect
+    .poll(() => sidebar.evaluate((element) => Math.round(element.getBoundingClientRect().width)))
+    .toBe(0);
+  expect(await sidebar.evaluate((element) => (element as HTMLElement).inert)).toBe(true);
+  const input = first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true });
+  await input.focus();
+  await input.pressSequentially('with the sidebar hidden ');
+  await input.press('Meta+s');
+  await expect.poll(() => page.evaluate(() => window.demo.memory.stats.saves)).toBe(1);
 });

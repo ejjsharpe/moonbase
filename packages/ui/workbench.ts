@@ -1,5 +1,5 @@
 import * as stylex from '@stylexjs/stylex';
-import { colors, radius, sidebar, space, type } from './tokens.stylex';
+import { colors, frame, radius, sidebar, space, type } from './tokens.stylex';
 
 export const workbench = stylex.create({
   document: {
@@ -29,20 +29,52 @@ export const workbench = stylex.create({
     flex: 1,
     minHeight: 0,
     overflow: 'hidden',
+    transitionProperty: 'grid-template-columns',
+    transitionDuration: '160ms',
+    transitionTimingFunction: 'cubic-bezier(0.2, 0.8, 0.2, 1)',
   },
   sidebar: {
     position: 'relative',
     minHeight: 0,
     display: 'flex',
     flexDirection: 'column',
+    overflow: 'hidden',
     borderRightWidth: 1,
     borderRightStyle: 'solid',
     borderRightColor: colors.border,
-    padding: '12px 8px',
-    overflow: 'auto',
+    // One left panel with the rail: the same surface, no line between them.
     backgroundColor: colors.surface,
   },
+  /** A pane's slot in the header row: it takes the pane's colour and drags the window. */
+  paneHeader: {
+    flexShrink: 0,
+    height: frame.header,
+    display: 'flex',
+    alignItems: 'center',
+    gap: space.xs,
+    minWidth: 0,
+    WebkitAppRegion: 'drag',
+  },
+  /** A pane's body below its header row. */
+  pane: {
+    flex: 1,
+    minHeight: 0,
+    minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    overflow: 'hidden',
+    backgroundColor: colors.surface,
+  },
+  canvasPane: { position: 'relative', backgroundColor: colors.canvas },
+  explorerPane: { padding: '10px 8px 12px', overflowY: 'auto' },
+  /** The worktree switcher and the explorer's "…" menu. */
+  explorerHeader: { display: 'flex', alignItems: 'flex-start', gap: 2, margin: '0 0 10px' },
   sidebarItem: { flexShrink: 0 },
+  // With the sidebar hidden, its column slides to nothing and the editor takes the whole width.
+  workspaceSolo: { gridTemplateColumns: '0px minmax(0, 1fr)' },
+  // While a resize handle is dragged, columns follow the pointer without easing.
+  workspaceStill: { transitionProperty: 'none' },
+  sidebarClosed: { borderRightWidth: 0 },
   // Lays a trailing app panel beside the explorer and editor.
   withTrailing: { flexDirection: 'row' },
   sidebarLayout: (width: number) => ({ display: 'contents', [sidebar.width]: `${width}px` }),
@@ -67,7 +99,7 @@ export const workbench = stylex.create({
     minHeight: 0,
     display: 'flex',
     flexDirection: 'column',
-    overflow: 'auto',
+    overflow: 'hidden',
     backgroundColor: colors.canvas,
   },
   projectTabs: {
@@ -206,7 +238,6 @@ export const workbench = stylex.create({
     padding: '0 16px',
     minWidth: 0,
     overflow: 'hidden',
-    backgroundColor: colors.chrome,
     fontSize: type.body,
     flexShrink: 0,
   },
@@ -233,15 +264,12 @@ export const workbench = stylex.create({
     display: 'flex',
     alignItems: 'center',
     gap: 3,
-    height: 40,
+    height: frame.header,
     paddingInline: space.sm,
     overflowX: 'auto',
     flexShrink: 0,
     scrollbarWidth: 'none',
-    borderBottomWidth: 1,
-    borderBottomStyle: 'solid',
-    borderBottomColor: colors.border,
-    backgroundColor: colors.canvas,
+    WebkitAppRegion: 'drag',
   },
   fileTab: {
     display: 'flex',
@@ -251,6 +279,9 @@ export const workbench = stylex.create({
     height: 28,
     paddingRight: 4,
     borderRadius: 8,
+    // Clips its contents while it slides open or shut.
+    overflow: 'hidden',
+    WebkitAppRegion: 'no-drag',
     color: { default: colors.secondary, ':hover': colors.text, ':focus-within': colors.text },
     backgroundColor: { default: 'transparent', ':hover': colors.hover },
   },
