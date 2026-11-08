@@ -3,6 +3,9 @@ import { test } from 'node:test';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { ManagedRuntime } from 'effect';
+import { makeEditorClient } from '@moonbase/application/runtime/clients';
+import { WorkspaceLive } from '../src/index.ts';
 import { fixture, rejects } from './workspace-fixture.ts';
 
 function repository() {
@@ -276,6 +279,126 @@ test('a bare repository has no main working tree to list', async () => {
       { root: linkedRoot, branch: 'topic', main: false, locked: false, prunable: false },
     ]);
   } finally {
+    await f.close();
+  }
+});
+
+test("a removed worktree's location and branch name can be created again", async () => {
+  const f = repository();
+  try {
+    const checkout = await f.client.command('openCheckout', { root: f.root });
+    const location = join(f.base, 'again');
+    const create = () =>
+      f.client.command('createWorktree', { checkout, base: 'main', branch: 'again', location });
+    const first = await create();
+    f.git(['worktree', 'remove', location]);
+    f.git(['branch', '-D', 'again']);
+    // The removed worktree's approval no longer names the directory now at its location.
+    const second = await create();
+    assert.notEqual(second.checkoutId, first.checkoutId);
+    const file = await f.client.command('readFile', { checkout: second, path: 'file.txt' });
+    assert.equal(file.text, 'main');
+    assert.deepEqual(await f.client.command('openCheckout', { root: location }), second);
+    await assert.rejects(f.client.command('readFile', { checkout: first, path: 'file.txt' }));
+    // Only a creation supersedes an approval: a directory replaced by anything else is refused.
+    f.git(['worktree', 'remove', location]);
+    f.git(['worktree', 'add', '-q', '--detach', location, 'main']);
+    await assert.rejects(
+      f.client.command('openCheckout', { root: location }),
+      rejects('InvalidInput'),
+    );
+    await assert.rejects(f.client.command('readFile', { checkout: second, path: 'file.txt' }));
+  } finally {
+    await f.close();
+  }
+});
+
+test('cancelling during checkout stops Git and its children and removes the locked worktree', async () => {
+  const f = repository();
+  try {
+    const checkout = await f.client.command('openCheckout', { root: f.root });
+    // A slow smudge filter holds Git inside the checkout, while the new worktree is still locked.
+    const started = join(f.base, 'smudge-started');
+    writeFileSync(join(f.root, '.gitattributes'), '*.txt filter=slow\n');
+    f.git(['add', '.']);
+    f.git(['commit', '-qm', 'attributes']);
+    f.git([
+      'config',
+      'filter.slow.smudge',
+      `echo $$ > '${started}.tmp'; mv '${started}.tmp' '${started}'; sleep 30; cat`,
+    ]);
+    const before = branches(f.git);
+    const location = join(f.base, 'checkout-cancelled');
+    const abort = new AbortController();
+    const pending = f.client.command(
+      'createWorktree',
+      { checkout, base: 'main', branch: 'checkout-cancelled', location },
+      { signal: abort.signal },
+    );
+    while (!existsSync(started)) await new Promise((resolve) => setTimeout(resolve, 10));
+    const filter = Number(readFileSync(started, 'utf8'));
+    assert.match(f.git(['worktree', 'list', '--porcelain']), /\nlocked/, 'checkout under way');
+    const cancelledAt = Date.now();
+    abort.abort();
+    await assert.rejects(pending, rejects('Cancelled'));
+    const deadline = Date.now() + 10_000;
+    while (
+      (existsSync(location) || branches(f.git).includes('checkout-cancelled')) &&
+      Date.now() < deadline
+    )
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    assert(Date.now() - cancelledAt < 10_000, 'the filter was not left to finish');
+    assert.equal(existsSync(location), false);
+    assert.deepEqual(branches(f.git), before);
+    assert.equal(f.git(['worktree', 'list', '--porcelain']).split('\n\n').length, 1);
+    assert.throws(() => process.kill(filter, 0), { code: 'ESRCH' });
+  } finally {
+    await f.close();
+  }
+});
+
+test('cleanup removes a worktree Git left locked mid-creation, and its branch', async () => {
+  const f = repository();
+  // A Git that leaves the new worktree locked, as an interrupted checkout does.
+  const git = join(f.base, 'interrupted-git');
+  writeFileSync(
+    git,
+    [
+      '#!/bin/sh',
+      'last=; location=',
+      'for arg; do location=$last; last=$arg; done',
+      '/usr/bin/git "$@" || exit $?',
+      'case " $* " in',
+      '  *" worktree add "*)',
+      '    /usr/bin/git worktree lock --reason initializing "$location"',
+      '    echo checkout interrupted >&2; exit 1 ;;',
+      'esac',
+      '',
+    ].join('\n'),
+  );
+  chmodSync(git, 0o755);
+  const runtime = ManagedRuntime.make(
+    WorkspaceLive({
+      dataDirectory: join(f.base, 'interrupted-state'),
+      hostId: 'local-test',
+      gitExecutable: git,
+    }),
+  );
+  try {
+    const client = makeEditorClient(runtime);
+    const checkout = await client.command('openCheckout', { root: f.root });
+    const before = branches(f.git);
+    const location = join(f.base, 'interrupted');
+    await assert.rejects(
+      client.command('createWorktree', { checkout, base: 'main', branch: 'interrupted', location }),
+      (error) =>
+        rejects('Unavailable')(error) && /checkout interrupted/.test((error as Error).message),
+    );
+    assert.equal(existsSync(location), false);
+    assert.deepEqual(branches(f.git), before);
+    assert.equal(f.git(['worktree', 'list', '--porcelain']).split('\n\n').length, 1);
+  } finally {
+    await runtime.dispose();
     await f.close();
   }
 });

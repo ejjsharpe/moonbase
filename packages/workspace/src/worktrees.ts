@@ -57,6 +57,7 @@ export function parseWorktrees(output: string): Worktree[] {
 
 export class WorkspaceWorktrees {
   private readonly directory: (target: CheckoutTarget) => Promise<Directory>;
+  /** Approves a checkout this class just created, superseding any stale approval of its root. */
   private readonly open: (root: string, signal: AbortSignal) => Promise<CheckoutTarget>;
   private readonly protect: (root: string) => void;
   constructor(
@@ -148,8 +149,20 @@ export class WorkspaceWorktrees {
   ): Promise<string | undefined> {
     try {
       const listed = await directory.git(['worktree', 'list', '--porcelain', '-z']);
-      if (parseWorktrees(listed.toString()).some((worktree) => worktree.root === location))
-        await directory.git(['worktree', 'remove', '--', location]);
+      const added = parseWorktrees(listed.toString()).find(
+        (worktree) => worktree.root === location,
+      );
+      // Git keeps a worktree locked until its checkout completes, so a locked one is this
+      // creation's partial checkout, holding nothing of the user's: remove it despite the lock.
+      // An unlocked one is removed only while clean.
+      if (added)
+        await directory.git([
+          'worktree',
+          'remove',
+          ...(added.locked ? ['--force', '--force'] : []),
+          '--',
+          location,
+        ]);
       // Deletes the ref only while it still points at the commit this creation used.
       const ref = 'refs/heads/' + branch;
       await directory.git(['update-ref', '-d', ref, commit]).catch(() => undefined);
