@@ -77,6 +77,23 @@ export const filesUI = stylex.create({
     borderRadius: radius.control,
   },
   drop: { outline: `2px solid ${colors.accent}`, outlineOffset: -2 },
+  // Where dragged tree entries would land: a folder's row and its visible descendants, or the
+  // whole tree for the root. It outranks hover and selection while the drag lasts.
+  dropRegion: { backgroundColor: { default: colors.selection, ':hover': colors.selection } },
+  dropRoot: { backgroundColor: colors.selection },
+  // The count shown under the pointer while several entries are dragged; it is drawn off-screen.
+  dragImage: {
+    position: 'fixed',
+    top: -100,
+    left: 0,
+    padding: '2px 8px',
+    borderRadius: radius.control,
+    fontFamily: type.ui,
+    fontSize: type.small,
+    fontWeight: 600,
+    color: colors.onAccent,
+    backgroundColor: colors.accent,
+  },
   dropStatus: {
     position: 'absolute',
     zIndex: 2,

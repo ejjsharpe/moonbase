@@ -1,9 +1,17 @@
-import type { EntryReference } from '@moonbase/contracts/workspace';
+import type { EntryReference, OperationResult } from '@moonbase/contracts/workspace';
 import { normalizeApplicationError } from '../../runtime/effect-client.ts';
 import type { EditorMutation, MutationAction } from './workflows.ts';
 
-/** How a direct mutation ended: done, declined (or aborted) without an error, or failed. */
-export type MutationRunResult = { completed: boolean; error: string };
+/**
+ * How a direct mutation ended: done, declined (or aborted) without an error, or failed. `items`
+ * are the dispatched operation's per-entry outcomes, empty when none was dispatched; a batch that
+ * failed partway lists the entries it did complete.
+ */
+export type MutationRunResult = {
+  completed: boolean;
+  error: string;
+  items: OperationResult['items'];
+};
 
 /** Settles with `promise`, or with `fallback` as soon as `signal` aborts. */
 function settleUnlessAborted<T>(promise: Promise<T>, signal: AbortSignal | undefined, fallback: T) {
@@ -48,14 +56,15 @@ export async function runMutation(
     signal?: AbortSignal;
   },
 ): Promise<MutationRunResult> {
-  const declined = { completed: false, error: '' };
-  if (signal?.aborted) return declined;
+  if (signal?.aborted) return { completed: false, error: '', items: [] };
   let mutation: EditorMutation;
   try {
     mutation = controller.createMutation(action);
   } catch (error) {
-    return { completed: false, error: normalizeApplicationError(error).message };
+    return { completed: false, error: normalizeApplicationError(error).message, items: [] };
   }
+  const items = () => structuredClone(mutation.getSnapshot().result?.items ?? []);
+  const declined = () => ({ completed: false, error: '', items: items() });
   let disposal: Promise<void> | undefined;
   const dispose = () => (disposal ??= mutation.dispose().catch(controller.report));
   signal?.addEventListener('abort', dispose, { once: true });
@@ -67,16 +76,17 @@ export async function runMutation(
       try {
         consent = await settleUnlessAborted(confirmReplace(replacements), signal, false);
       } catch (error) {
-        if (signal?.aborted) return declined;
-        return { completed: false, error: normalizeApplicationError(error).message };
+        if (signal?.aborted) return declined();
+        return { completed: false, error: normalizeApplicationError(error).message, items: [] };
       }
-      if (!consent || signal?.aborted) return declined;
+      if (!consent || signal?.aborted) return declined();
       completed = await mutation.apply(destination, '', true);
     }
-    if (completed || signal?.aborted) return { completed, error: '' };
+    if (completed || signal?.aborted) return { completed, error: '', items: items() };
     return {
       completed: false,
       error: mutation.getSnapshot().error || 'File action unavailable. Try again.',
+      items: items(),
     };
   } finally {
     signal?.removeEventListener('abort', dispose);

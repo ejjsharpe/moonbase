@@ -304,6 +304,8 @@ export type MutationSnapshot = {
   busy: boolean;
   error: string;
   replacements: EntryReference[] | null;
+  /** The dispatched operation's result, with each item's outcome, once one arrives. */
+  result: OperationResult | null;
 };
 type MutationDependencies = {
   inspect(checkout: CheckoutTarget, paths: string[], scope: Scope.Scope): Promise<EntryReference[]>;
@@ -340,7 +342,12 @@ export class EditorMutation {
   private generation = 0;
   private closed = false;
   private completion?: Promise<void>;
-  private snapshot: MutationSnapshot = { busy: false, error: '', replacements: null };
+  private snapshot: MutationSnapshot = {
+    busy: false,
+    error: '',
+    replacements: null,
+    result: null,
+  };
   private listeners = new Set<() => void>();
   private admits: () => boolean;
   constructor(
@@ -384,6 +391,7 @@ export class EditorMutation {
     try {
       if (dependencies.pending(this.operationId)) {
         const result = await dependencies.resolve(this.operationId);
+        if (result && current()) this.update({ result });
         if (result?.outcome === 'completed') return current();
         this.update({
           error:
@@ -443,6 +451,7 @@ export class EditorMutation {
         replacements: replace ?? [],
       });
       if (!current()) return false;
+      this.update({ result });
       if (result.outcome !== 'completed') {
         this.update({
           error:

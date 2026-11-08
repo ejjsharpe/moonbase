@@ -23,6 +23,8 @@ export function FilesTreeRow({
   status,
   label,
   editor,
+  draggable,
+  dropTarget,
   onOpenMenu,
   onSelect,
   onOpen,
@@ -42,6 +44,10 @@ export function FilesTreeRow({
   label?: string;
   /** The name field shown in place of the name while it's typed. */
   editor?: ReactNode;
+  /** Whether the row can be dragged to move it; the tree handles the drag. */
+  draggable: boolean;
+  /** Whether the row is in the region a drag in progress would drop into. */
+  dropTarget: boolean;
   /** Opens the context menu for this row at a point in the viewport. */
   onOpenMenu: (path: string, x: number, y: number) => void;
   /** A primary click; `additive` when ⌘ (Ctrl off a Mac) was held. */
@@ -67,12 +73,15 @@ export function FilesTreeRow({
       aria-current={active ? 'true' : undefined}
       aria-label={label ?? row.path + (dirty ? ', unsaved' : '') + statusLabel}
       aria-description={row.ignored ? 'Git-ignored' : undefined}
+      draggable={draggable}
+      data-drop-target={dropTarget || undefined}
       {...stylex.props(
         styles.treeRow(index * rowHeight),
         filesUI.row(row.level),
         row.ignored && filesUI.ignored,
         selected && filesUI.selected,
         focused && filesUI.focused,
+        dropTarget && filesUI.dropRegion,
       )}
       onContextMenu={(event) => {
         if (!event.currentTarget.contains(event.target as Node)) return;

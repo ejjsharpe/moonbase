@@ -19,11 +19,29 @@ export type TreeNavigation = {
   /** Opens the context menu below the row for `path`. */
   openMenuBelow(path: string): void;
   commandsFor(paths: string[]): (FileCommand | 'separator')[];
+  /** Undoes the tree's last move or rename (⌘Z, Ctrl+Z off a Mac). */
+  undo(): void;
 };
+
+const mac = typeof navigator !== 'undefined' && navigator.platform.includes('Mac');
+/**
+ * Whether a press is Undo: ⌘Z on a Mac, Ctrl+Z elsewhere. A layout without Latin letters types
+ * another character on the Z key, so that key counts too.
+ */
+const isUndoKey = (event: KeyboardEvent<HTMLElement>) =>
+  (mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey) &&
+  !event.altKey &&
+  !event.shiftKey &&
+  (event.key.toLowerCase() === 'z' || (!/^[a-z]$/i.test(event.key) && event.code === 'KeyZ'));
 
 /** Moves focus and selection, expands and collapses, opens, and runs file shortcuts. */
 export function handleTreeKeyDown(event: KeyboardEvent<HTMLElement>, navigation: TreeNavigation) {
   if (!event.currentTarget.contains(event.target as Node)) return;
+  if (isUndoKey(event)) {
+    event.preventDefault();
+    navigation.undo();
+    return;
+  }
   const { controller, checkout, rows, focusIndex, selection, expanded, anchor, toggle } =
     navigation;
   const row = rows[focusIndex];
