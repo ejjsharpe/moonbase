@@ -33,6 +33,18 @@ export function isSameDrag(data: string, drag: TreeDrag | null) {
   );
 }
 
+const takenFileDrops = new WeakSet<Event>();
+/** Marks a drop of OS files the files tree took, importing or refusing them itself. */
+export function takeFileDrop(event: Event) {
+  takenFileDrops.add(event);
+}
+/**
+ * Whether the files tree took this drop of OS files, so an app importing window-wide drops skips
+ * it. Other drops, such as one on a tab, stay the app's even when something prevented their
+ * default.
+ */
+export const isFileDropTaken = (event: Event) => takenFileDrops.has(event);
+
 /** An entry moved from the tree, for undoing the move. */
 export type TreeMove = { from: string; to: string; directory: boolean };
 
@@ -108,6 +120,16 @@ export const isInDropRegion = (path: string, folder: string | null) =>
  */
 export const getDropDestination = (paths: readonly string[], folder: string) =>
   paths.length > 1 ? folder : join(folder, nameOf(paths[0]));
+
+/** The first of `names` that another lands on, as the workspace folds names, or undefined. */
+export function findCollidingName(names: readonly string[]) {
+  const seen = new Set<string>();
+  for (const name of names) {
+    if (seen.has(fold(name))) return name;
+    seen.add(fold(name));
+  }
+  return undefined;
+}
 
 /** Where each of `paths` lands in `folder`. */
 export const listDroppedPaths = (paths: readonly string[], folder: string) =>

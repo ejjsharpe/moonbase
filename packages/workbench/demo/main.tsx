@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { createRef, StrictMode, useState } from 'react';
 import { ManagedRuntime } from 'effect';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
-import { Workbench, type WorkbenchHandle } from '../src/index.ts';
+import { isFileDropTaken, Workbench, type WorkbenchHandle } from '../src/index.ts';
 import { configureMonacoWorkers } from '../src/workers.ts';
 import { memoryWorkspace } from '@moonbase/application/testing/memory-workspace';
 import * as monaco from 'monaco-editor';
@@ -197,6 +197,9 @@ function Demo() {
                 ? () => window.demo.selectClipboardImports()
                 : undefined
             }
+            selectDroppedImports={(target, files) =>
+              window.demo.selectDroppedImports(target, files)
+            }
           />
         </section>
         {!disposed && (
@@ -228,6 +231,10 @@ declare global {
       application: typeof firstApplication;
       selectNativeImports(): Promise<string[]>;
       selectClipboardImports(): Promise<string[]>;
+      /** Approves files dropped on the first editor's tree; the demo approves none. */
+      selectDroppedImports(target: typeof checkout, files: File[]): Promise<string[]>;
+      /** Whether a tree took a drop of OS files, as an app importing window-wide drops asks. */
+      isFileDropTaken: typeof isFileDropTaken;
       /** What the first editor's menu copied, revealed and mentioned in chat. */
       copied: string[];
       revealed: string[];
@@ -248,6 +255,8 @@ window.demo = {
   workbench: () => firstHandle.current!,
   selectNativeImports: async () => [],
   selectClipboardImports: async () => [],
+  selectDroppedImports: async () => [],
+  isFileDropTaken,
   copied: [],
   revealed: [],
   mentioned: [],

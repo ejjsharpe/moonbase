@@ -36,6 +36,7 @@ import {
 import { rollUpGitStatus } from './files-tree-status.ts';
 import {
   entriesType,
+  findCollidingName,
   findDropFolder,
   getDropDestination,
   isInDropRegion,
@@ -46,6 +47,7 @@ import {
   maxDraggedEntries,
   planDrop,
   selectDraggedPaths,
+  takeFileDrop,
   type MoveRecord,
   type TreeDrag,
 } from './files-tree-drop.ts';
@@ -91,9 +93,13 @@ function setCountImage(dataTransfer: DataTransfer, count: number) {
   setTimeout(() => badge.remove());
 }
 
+/** Whether a drag carries files from the OS, such as Finder's, rather than the tree's entries. */
+const isFileDrag = (dataTransfer: DataTransfer) =>
+  dataTransfer.types.includes('Files') && !dataTransfer.types.includes(entriesType);
 const isNameField = (target: EventTarget) =>
   target instanceof HTMLElement && target.tagName === 'INPUT';
 const parentOf = (path: string) => path.split('/').slice(0, -1).join('/');
+const join = (folder: string, name: string) => (folder ? `${folder}/${name}` : name);
 const nameOf = (path: string) => path.split('/').at(-1)!;
 /** Whether an element that took focus can take it again. */
 const canRefocus = (element: Element | null): element is HTMLElement =>
@@ -138,6 +144,7 @@ export function FilesTree({
   copyPaths,
   revealPath,
   mentionInChat,
+  selectDroppedImports,
 }: {
   controller: EditorController;
   state: EditorSnapshot;
@@ -167,6 +174,11 @@ export function FilesTree({
   revealPath?: (checkout: CheckoutTarget, path: string) => Promise<void>;
   /** Mentions files in the chat beside this checkout. */
   mentionInChat?: (checkout: CheckoutTarget, paths: string[]) => void;
+  /**
+   * Approves files dropped from the OS for import into a checkout, one opaque reference per file
+   * in order. Without it, such drops pass through to the app.
+   */
+  selectDroppedImports?: (checkout: CheckoutTarget, files: File[]) => Promise<string[]>;
 }) {
   const tree = readOwn(state.recovery.views, checkout.checkoutId)!.tree,
     treeElement = useRef<HTMLDivElement>(null),
@@ -204,7 +216,13 @@ export function FilesTree({
   const [edit, setEdit] = useState<TreeEdit | null>(null),
     editIds = useRef(0),
     committing = useRef(false),
-    mounted = useRef(true);
+    mounted = useRef(true),
+    // What a drop's import, once approved, finds the tree doing now.
+    latest = useRef({ edit, dialogOpen, checkoutIdentity }),
+    importingDrop = useRef(false);
+  useLayoutEffect(() => {
+    latest.current = { edit, dialogOpen, checkoutIdentity };
+  });
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -508,12 +526,15 @@ export function FilesTree({
       controller.report(error);
     }
   }
-  /** Starts, keeps or cancels the pending expansion of the collapsed folder under a drag. */
-  function hoverForDrag(row: VisibleRow | undefined) {
+  /**
+   * Starts, keeps or cancels the pending expansion of the collapsed folder under a drag, other
+   * than one of the `dragged` entries or inside one.
+   */
+  function hoverForDrag(row: VisibleRow | undefined, dragged: readonly string[]) {
     const path =
       row?.directory &&
       !expanded.has(row.path) &&
-      !activeDrag?.paths.some((path) => row.path === path || row.path.startsWith(path + '/'))
+      !dragged.some((path) => row.path === path || row.path.startsWith(path + '/'))
         ? row.path
         : null;
     if (hoverExpansion.current?.path === path) return;
@@ -571,6 +592,100 @@ export function FilesTree({
       controller.report(error);
     }
     anchor.current = landed[0];
+    const element = returnTreeFocus();
+    if (element) element.focus();
+  }
+  /** Whether the tree takes a drag of OS files, importing them when the app can approve them. */
+  const takesFiles = (dataTransfer: DataTransfer) =>
+    !!selectDroppedImports && isFileDrag(dataTransfer);
+  /** Why OS files can't be dropped into the tree now, or '' when they can. */
+  function findFileDropProblem() {
+    if (importingDrop.current) return 'Wait for the dropped files to import before dropping more.';
+    if (edit) return 'Finish naming the entry before importing files.';
+    if (dialogOpen)
+      return 'Finish the current editor dialog or preservation before importing files.';
+    if (!canRequestMutation({ checkout, kind: 'import', paths: [] }))
+      return 'Open the exact import checkout before importing files.';
+    return '';
+  }
+  /**
+   * Imports files dropped from the OS into `folder`, asking before replacing entries their names
+   * land on, then expands the folder and selects what was imported. One drop imports at a time.
+   */
+  async function importDropped(files: File[], folder: string) {
+    const names = files.map((file) => file.name),
+      colliding = findCollidingName(names);
+    // The workspace would refuse them after the replace prompt; say why before asking anything.
+    if (colliding) {
+      controller.report(
+        `More than one dropped item is named “${colliding}”. Drop them into different folders.`,
+      );
+      return;
+    }
+    importingDrop.current = true;
+    try {
+      await importApproved(files, names, folder);
+    } finally {
+      importingDrop.current = false;
+    }
+  }
+  async function importApproved(files: File[], names: string[], folder: string) {
+    const captured = { ...checkout },
+      focusAtDrop = treeElement.current?.ownerDocument.activeElement;
+    // Approval can take a while; the tree may have moved on meanwhile. An approval this abandons
+    // has no release from here: its references expire unused, or go with the document.
+    const references = await selectDroppedImports!(captured, files);
+    if (!references.length) return;
+    const recovery = controller.getSnapshot().recovery;
+    if (
+      !mounted.current ||
+      latest.current.checkoutIdentity !== checkoutIdentity ||
+      !recovery.openCheckoutIds.includes(captured.checkoutId) ||
+      !recovery.checkouts.some((target) => checkoutKey(target) === checkoutIdentity)
+    ) {
+      controller.report('Open the exact import checkout before importing files.');
+      return;
+    }
+    if (latest.current.edit) {
+      controller.report('Finish naming the entry before importing files.');
+      return;
+    }
+    if (latest.current.dialogOpen) {
+      controller.report('Finish the current editor dialog or preservation before importing files.');
+      return;
+    }
+    // Each reference stands for its file, so the files' names are where they land.
+    if (references.length !== names.length) {
+      controller.report('Only files and folders can be imported.');
+      return;
+    }
+    const result = await runMutation(
+      {
+        checkout: captured,
+        kind: 'import',
+        paths: [],
+        nativeReferences: references,
+        nativeNames: names,
+      },
+      references.length > 1 ? folder : join(folder, names[0]),
+      { finalFocus: returnTreeFocus },
+    );
+    const landed = result.items.flatMap((item) =>
+      item.outcome === 'completed' && item.destination !== undefined ? [item.destination] : [],
+    );
+    if (!mounted.current || (!result.completed && !landed.length)) return;
+    // A name typed meanwhile keeps its field, and another checkout's tree isn't this import's.
+    if (latest.current.edit || latest.current.checkoutIdentity !== checkoutIdentity) return;
+    try {
+      if (landed.length) selectEntries(controller, captured, landed);
+      else if (folder) expandForDrag(folder);
+    } catch (error) {
+      controller.report(error);
+    }
+    if (landed.length) anchor.current = landed[0];
+    // Focus the user moved elsewhere meanwhile stays there.
+    const focused = treeElement.current?.ownerDocument.activeElement;
+    if (focused !== focusAtDrop && !focusStayed()) return;
     const element = returnTreeFocus();
     if (element) element.focus();
   }
@@ -715,6 +830,12 @@ export function FilesTree({
           releasePress();
         }}
         onDragEnter={(event) => {
+          if (takesFiles(event.dataTransfer)) {
+            clearTimeout(dragLeave.current);
+            // Refused here, the drop is still the tree's, so the app doesn't import it elsewhere.
+            event.preventDefault();
+            return;
+          }
           if (!event.dataTransfer.types.includes(entriesType)) return;
           clearTimeout(dragLeave.current);
           // Entering a row that takes the drop must be accepted too, or the browser passes the
@@ -722,7 +843,18 @@ export function FilesTree({
           if (planDropInto(findDropFolder(findRowAt(event.target)))) event.preventDefault();
         }}
         onDragOver={(event) => {
-          // Files from the OS and other drags pass through to the app.
+          if (takesFiles(event.dataTransfer)) {
+            clearTimeout(dragLeave.current);
+            event.preventDefault();
+            scrollForDrag(event.clientY);
+            const row = findRowAt(event.target);
+            hoverForDrag(row, []);
+            const refused = !!findFileDropProblem();
+            event.dataTransfer.dropEffect = refused ? 'none' : 'copy';
+            setDropFolder(refused ? null : findDropFolder(row));
+            return;
+          }
+          // Other drags pass through to the app.
           if (!event.dataTransfer.types.includes(entriesType)) return;
           clearTimeout(dragLeave.current);
           if (
@@ -734,7 +866,7 @@ export function FilesTree({
           }
           scrollForDrag(event.clientY);
           const row = findRowAt(event.target);
-          hoverForDrag(row);
+          hoverForDrag(row, activeDrag.paths);
           const folder = findDropFolder(row);
           if (!planDropInto(folder)) {
             event.dataTransfer.dropEffect = 'none';
@@ -746,12 +878,26 @@ export function FilesTree({
           setDropFolder(folder);
         }}
         onDragLeave={(event) => {
-          if (!event.dataTransfer.types.includes(entriesType)) return;
+          if (!event.dataTransfer.types.includes(entriesType) && !takesFiles(event.dataTransfer))
+            return;
           // Moving between rows leaves one as it enters the next; only leaving the tree counts.
           clearTimeout(dragLeave.current);
           dragLeave.current = window.setTimeout(leaveDrag, 50);
         }}
         onDrop={(event) => {
+          if (takesFiles(event.dataTransfer)) {
+            // Taken, so the app's window-wide drop doesn't import the files at the root too.
+            event.preventDefault();
+            takeFileDrop(event.nativeEvent);
+            const files = [...event.dataTransfer.files],
+              folder = findDropFolder(findRowAt(event.target)),
+              problem = findFileDropProblem();
+            leaveDrag();
+            if (!files.length) return;
+            if (problem) controller.report(problem);
+            else void importDropped(files, folder).catch(controller.report);
+            return;
+          }
           if (!event.dataTransfer.types.includes(entriesType)) return;
           event.preventDefault();
           // Only the drag this document started, as the DataTransfer confirms, drops.

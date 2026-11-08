@@ -239,3 +239,74 @@ test('a move may change only its name’s case, and a copy onto its source is re
     await f.dispose();
   }
 });
+
+test('a batch import with known names asks before replacing what they would land on', async () => {
+  const f = await counted();
+  try {
+    const dispatched: Parameters<typeof f.editor.mutate>[0][] = [];
+    // The memory workspace has no native file authority; record what would be imported.
+    f.editor.mutate = async (input) => {
+      dispatched.push(structuredClone(input));
+      return {
+        id: input.id!,
+        clientId: 'editor-one',
+        checkout: input.checkout,
+        kind: input.kind,
+        outcome: 'completed',
+        recoveryChanges: [],
+        items: [],
+      };
+    };
+    const asked: string[][] = [];
+    const confirm = (answer: boolean) => async (replacements: EntryReference[]) => {
+      asked.push(replacements.map((item) => item.target.path));
+      return answer;
+    };
+    const action = {
+      checkout,
+      kind: 'import' as const,
+      paths: [],
+      nativeReferences: ['one', 'two'],
+      // Names match as the workspace folds them.
+      nativeNames: ['NESTED.ts', 'new.ts'],
+    };
+    assert.deepEqual(
+      await runMutation(f.controller, action, 'folder', { confirmReplace: confirm(false) }),
+      declined,
+    );
+    assert.equal(dispatched.length, 0);
+    const result = await runMutation(f.controller, action, 'folder', {
+      confirmReplace: confirm(true),
+    });
+    assert.equal(result.completed, true);
+    assert.deepEqual(asked, [['folder/nested.ts'], ['folder/nested.ts']]);
+    assert.equal(dispatched.length, 1);
+    assert.equal(dispatched[0].destination, 'folder');
+    assert.deepEqual(dispatched[0].nativeReferences, ['one', 'two']);
+    assert.deepEqual(
+      dispatched[0].replacements?.map((item) => item.target.path),
+      ['folder/nested.ts'],
+    );
+    // Into the root with nothing in the way, it imports without asking.
+    assert.equal(
+      (
+        await runMutation(f.controller, { ...action, nativeNames: ['x.ts', 'y.ts'] }, '', {
+          confirmReplace: never,
+        })
+      ).completed,
+      true,
+    );
+    assert.deepEqual(dispatched[1].replacements, []);
+    // Names that don't match the references are refused before anything is dispatched.
+    assert.deepEqual(
+      await runMutation(f.controller, { ...action, nativeNames: ['only.ts'] }, '', {
+        confirmReplace: never,
+      }),
+      { completed: false, error: 'Imported names don’t match the selection.', items: [] },
+    );
+    assert.equal(dispatched.length, 2);
+    assert.deepEqual(f.disposals, [1, 1, 1, 1]);
+  } finally {
+    await f.dispose();
+  }
+});
