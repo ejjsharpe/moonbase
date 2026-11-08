@@ -2089,23 +2089,127 @@ test('the sidebar key follows the layout: ⌘ with the key that types B, not the
   await expect.poll(widthOf(explorer)).toBeGreaterThan(100);
 });
 
-test('Settings shows why switching hosts failed', async ({ page }) => {
+test('Settings shows why switching hosts failed, holding Use and focus while it tries', async ({
+  page,
+}) => {
   await page.goto('/?local&hosts');
   await tabs(page).getByRole('tab', { name: 'Agents', exact: true }).click();
   const message = shell(page).getByLabel('Message', { exact: true });
   await expect(message).toBeEnabled();
-  // The switch fails the way the application refuses one, with its own error.
+  // The current chat can't be preserved, so the application refuses to switch. The attempt waits
+  // for the test, so it can be seen in progress.
   await page.evaluate(() => {
+    window.demo.chat.storage.write = () => {
+      throw Error('Controlled draft storage failure');
+    };
     const application = window.demo.application;
     const select = application.selectChatTarget.bind(application);
-    application.selectChatTarget = () => select('missing');
+    const gate = Promise.withResolvers<void>();
+    Object.assign(window, { releaseSwitch: gate.resolve });
+    application.selectChatTarget = (id) => gate.promise.then(() => select(id));
   });
   await message.press('Meta+,');
   const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
   const use = settings.getByRole('button', { name: 'Use Studio', exact: true });
   await use.click();
+  await expect(use).toBeDisabled();
+  await expect(use).toBeFocused();
+  await page.evaluate(() => (window as unknown as { releaseSwitch(): void }).releaseSwitch());
   await expect(settings.getByRole('alert')).toHaveText(
-    'Chat target is unavailable or another selection is pending.',
+    'Preserve the current chat before switching targets.',
   );
   await expect(use).toBeEnabled();
+  await expect(use).toBeFocused();
+});
+
+test('a host switch keeps focus in Settings, and the window keys wait behind it', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?local&hosts&design');
+  await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
+  await page.getByRole('tab', { name: 'moonbase · main', exact: true }).click();
+  const editor = page.getByRole('textbox', { name: 'welcome.ts editor', exact: true });
+  const dock = page.locator('aside[aria-label="Project chats"]');
+  await expect.poll(widthOf(dock)).toBe(400);
+  await editor.press('Meta+,');
+  const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+  // Once Studio is in use its Use button goes; focus stays in the dialog.
+  await settings.getByRole('button', { name: 'Use Studio', exact: true }).click();
+  await expect(settings.getByRole('button', { name: 'Use This Mac', exact: true })).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(() => !!document.activeElement?.closest('[role="dialog"][aria-labelledby]')),
+    )
+    .toBe(true);
+  // Even with focus fallen to the page, the shell and editor behind the modal ignore their keys.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  for (const key of ['Meta+w', 'Meta+n', 'Meta+p', 'Meta+j']) await page.keyboard.press(key);
+  await expect(settings).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Go to', exact: true })).toHaveCount(0);
+  // The modal hides the shell from the accessibility tree, so these look past that.
+  await expect(
+    page.getByRole('tab', { name: 'moonbase · main', exact: true, includeHidden: true }),
+  ).toHaveAttribute('aria-selected', 'true');
+  await expect(
+    page.getByRole('tab', { name: 'welcome.ts', exact: true, includeHidden: true }),
+  ).toHaveCount(1);
+  await expect.poll(widthOf(dock)).toBe(400);
+});
+
+test('hiding project chats from the picker hands focus back to the project', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?local&design');
+  await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
+  await page.getByRole('tab', { name: 'moonbase · main', exact: true }).click();
+  const dock = page.locator('aside[aria-label="Project chats"]');
+  const editor = page.getByRole('textbox', { name: 'welcome.ts editor', exact: true });
+  await expect.poll(widthOf(dock)).toBe(400);
+  await editor.focus();
+  await dock.getByLabel('Message', { exact: true }).press('Meta+Shift+p');
+  const goTo = page.getByRole('dialog', { name: 'Go to', exact: true });
+  await goTo.getByRole('option', { name: 'Hide project chats', exact: true }).click();
+  await expect(goTo).toHaveCount(0);
+  await expect.poll(widthOf(dock)).toBe(0);
+  await expect(editor).toBeFocused();
+});
+
+test('releasing Control commits the recent-tabs switcher opened with focus on the page', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?local&design');
+  await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
+  await page.getByRole('tab', { name: 'moonbase · main', exact: true }).click();
+  await page
+    .getByRole('tree', { name: 'Files', exact: true })
+    .getByRole('treeitem', { name: 'README.md', exact: true })
+    .dblclick();
+  const bar = page.locator('header[aria-label="Window title bar"]');
+  await expect(bar).toContainText('moonbase/README.md');
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.down('Control');
+  await page.keyboard.press('Tab');
+  const recent = page.getByRole('listbox', { name: 'Recent tabs', exact: true });
+  await expect(recent).toBeVisible();
+  await page.keyboard.up('Control');
+  await expect(recent).toHaveCount(0);
+  await expect(bar).toContainText('moonbase/welcome.ts');
+});
+
+test('a key pressed on the page acts in one shell: the one last focused', async ({ page }) => {
+  await page.goto('/?local');
+  const blur = () => page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  const goTo = page.getByRole('dialog', { name: 'Go to', exact: true });
+  for (const name of ['First editor', 'Second editor']) {
+    const region = page.getByRole('region', { name, exact: true });
+    // Both shells open on Agents.
+    await region.getByRole('tab', { name: 'moonbase · main', exact: true }).click();
+    await region.getByRole('textbox', { name: 'welcome.ts editor', exact: true }).focus();
+    await blur();
+    await page.keyboard.press('Meta+p');
+    await expect(goTo).toHaveCount(1);
+    await page.keyboard.press('Escape');
+    await expect(goTo).toHaveCount(0);
+  }
 });
