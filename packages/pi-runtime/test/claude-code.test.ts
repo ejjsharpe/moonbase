@@ -36,7 +36,7 @@ async function main() {
   const session = {host:{hostId:'claude-code',storeId:'claude-code-store'},actorId:'owner'};
   const runtime = ManagedRuntime.make(Layer.merge(
     LocalPiRuntimeLive({...session,models,databasePath:join(directory,'chat.sqlite')}),
-    ProviderSetupLive({models,openUrl:async()=>{},deviceId:'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa',getCheckProblem:(id)=>id===subscription.id?subscription.getCheckProblem():undefined}),
+    ProviderSetupLive({models,openUrl:async()=>{},deviceId:'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa',getCheckProblem:(id,signal)=>id===subscription.id?subscription.getCheckProblem(signal):undefined}),
   ));
   try {
     const providers = makeProviderSetupClient(runtime, 'document');
@@ -136,8 +136,9 @@ import { createClaudeCodeSubscription } from './src/claude-code.ts';
 const models = createModels();
 const subscription = createClaudeCodeSubscription();
 models.setProvider(subscription);
-const configured = !!(await models.checkAuth('claude-code'));
-console.log(JSON.stringify({ configured, problem: subscription.getCheckProblem() ?? null }));`;
+const signal = new AbortController().signal;
+const configured = !!(await models.checkAuth('claude-code', { signal }));
+console.log(JSON.stringify({ configured, problem: subscription.getCheckProblem(signal) ?? null }));`;
 
 test('Claude Code is found on the caller PATH before its install locations, and runs from a bare GUI PATH', async () => {
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-claude-find-')));
@@ -145,10 +146,13 @@ test('Claude Code is found on the caller PATH before its install locations, and 
     const file = join(directory, 'discovery.mjs'),
       home = join(directory, 'home'),
       installed = join(home, '.local/bin'),
-      onPath = join(directory, 'path-bin');
+      onPath = join(directory, 'path-bin'),
+      // Finder's PATH, without any directory a real install could be in.
+      bare = join(directory, 'bare-bin');
     await bundleScript(discovery, file);
     await mkdir(installed, { recursive: true });
     await mkdir(onPath);
+    await mkdir(bare);
     await mkdir(join(directory, 'path-logs'));
     await mkdir(join(directory, 'installed-logs'));
     // Every case gives an earlier candidate than any real install, so none can run the real CLI.
@@ -164,19 +168,19 @@ test('Claude Code is found on the caller PATH before its install locations, and 
     // A stale copy in an install location doesn't shadow the one on the caller's PATH.
     await writeBrokenClaude(installed);
     await writeFakeClaude(join(directory, 'path-logs'), onPath);
-    assert.deepEqual(await run(`${onPath}:/usr/bin:/bin`), { configured: true, problem: null });
+    assert.deepEqual(await run(`${onPath}:${bare}`), { configured: true, problem: null });
     assert.match(
       await readFile(join(directory, 'path-logs/invocations.log'), 'utf8'),
       /"auth","status"/,
     );
     // From Finder's PATH, the broken install location is all there is, and it says why.
-    const failed = await run('/usr/bin:/bin');
+    const failed = await run(bare);
     assert.equal(failed.configured, false);
     assert.match(failed.problem ?? '', /status check failed \(exit 127\)/);
     // A working npm-style install there runs, though its `node` isn't on that PATH.
     await rm(join(installed, 'claude'));
     await writeFakeClaude(join(directory, 'installed-logs'), installed);
-    assert.deepEqual(await run('/usr/bin:/bin'), { configured: true, problem: null });
+    assert.deepEqual(await run(bare), { configured: true, problem: null });
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
