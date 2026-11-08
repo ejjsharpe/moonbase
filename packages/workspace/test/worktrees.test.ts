@@ -366,7 +366,11 @@ test('cancelling during checkout stops Git and its children and removes the lock
 });
 
 /** A workspace whose Git runs `afterAdd` (sh, with `$location`) after a real `worktree add`. */
-function withGit(f: ReturnType<typeof repository>, afterAdd: string) {
+function withGit(
+  f: ReturnType<typeof repository>,
+  afterAdd: string,
+  create: { before?: string; after?: string } = {},
+) {
   const git = join(f.base, 'wrapped-git');
   writeFileSync(
     git,
@@ -374,9 +378,11 @@ function withGit(f: ReturnType<typeof repository>, afterAdd: string) {
       '#!/bin/sh',
       'last=; location=',
       'for arg; do location=$last; last=$arg; done',
+      `case " $* " in *" update-ref --create-reflog "*) ${create.before ?? ':'} ;; esac`,
       '/usr/bin/git "$@" || exit $?',
       'case " $* " in',
       `  *" worktree add "*) ${afterAdd} ;;`,
+      `  *" update-ref --create-reflog "*) ${create.after ?? ':'} ;;`,
       'esac',
       '',
     ].join('\n'),
@@ -391,6 +397,9 @@ function withGit(f: ReturnType<typeof repository>, afterAdd: string) {
   );
   return { runtime, client: makeEditorClient(runtime) };
 }
+const waitFor = async (path: string) => {
+  while (!existsSync(path)) await new Promise((resolve) => setTimeout(resolve, 10));
+};
 const registered = (f: ReturnType<typeof repository>) =>
   f.git(['worktree', 'list', '--porcelain']).split('\n\n').length;
 
@@ -515,6 +524,157 @@ test('concurrent creations at one location never remove each other', async () =>
     const file = await f.client.command('readFile', { checkout: created[0]!, path: 'file.txt' });
     assert.equal(file.text, 'main');
     assert.equal(registered(f), 2);
+  } finally {
+    await f.close();
+  }
+});
+
+test('cleanup leaves a worktree another tool added at the location meanwhile', async () => {
+  const f = repository();
+  writeFileSync(join(f.root, '.gitignore'), '.env\n');
+  f.git(['add', '.']);
+  f.git(['commit', '-qm', 'ignore']);
+  const location = join(f.base, 'shared');
+  // Just before the branch is made, a terminal adds its own worktree there with an ignored secret.
+  const { runtime, client } = withGit(f, ':', {
+    before: `/usr/bin/git worktree add -q -b users-branch '${location}' main >/dev/null 2>&1; echo SECRET > '${location}/.env'`,
+  });
+  try {
+    const checkout = await client.command('openCheckout', { root: f.root });
+    await assert.rejects(
+      client.command('createWorktree', { checkout, base: 'main', branch: 'chat-x', location }),
+      (error) => rejects('Uncertain')(error) && /another worktree/.test((error as Error).message),
+    );
+    assert.equal(readFileSync(join(location, '.env'), 'utf8'), 'SECRET\n');
+    assert.equal(registered(f), 2);
+    assert.ok(branches(f.git).includes('users-branch'));
+  } finally {
+    await runtime.dispose();
+    await f.close();
+  }
+});
+
+test("cancelling around the branch's creation deletes only a branch this creation made", async () => {
+  for (const ours of [false, true]) {
+    const f = repository();
+    const marker = join(f.base, 'branch-step');
+    // Either someone else makes the branch first, so the create-only update fails, or the
+    // update succeeds; either way the request is cancelled before Git reports back.
+    const { runtime, client } = withGit(
+      f,
+      ':',
+      ours
+        ? { after: `touch '${marker}'; sleep 5` }
+        : { before: `/usr/bin/git branch chat-x main; touch '${marker}'; sleep 5` },
+    );
+    try {
+      const checkout = await client.command('openCheckout', { root: f.root });
+      const abort = new AbortController();
+      const pending = client.command(
+        'createWorktree',
+        { checkout, base: 'main', branch: 'chat-x', location: join(f.base, 'chat-x') },
+        { signal: abort.signal },
+      );
+      await waitFor(marker);
+      abort.abort();
+      await assert.rejects(pending, rejects('Cancelled'));
+      // Cleanup outlives the released caller but never the workspace.
+      await runtime.dispose();
+      assert.equal(
+        branches(f.git).includes('chat-x'),
+        !ours,
+        ours ? 'ours removed' : 'theirs kept',
+      );
+      assert.equal(existsSync(join(f.base, 'chat-x')), false);
+    } finally {
+      await runtime.dispose();
+      await f.close();
+    }
+  }
+});
+
+test('a new worktree that resolves into another repository is not approved', async () => {
+  const f = repository();
+  const other = join(f.base, 'other');
+  mkdirSync(other);
+  f.git(['init', '-q', '-b', 'main'], other);
+  writeFileSync(join(other, 'other.txt'), 'other');
+  f.git(['add', '.'], other);
+  f.git(['commit', '-qm', 'other'], other);
+  // Between creation and approval the location becomes another repository's worktree.
+  const { runtime, client } = withGit(
+    f,
+    `/usr/bin/git worktree remove --force "$location" && /usr/bin/git -C '${other}' worktree add -q --detach "$location"`,
+  );
+  try {
+    const checkout = await client.command('openCheckout', { root: f.root });
+    const location = join(f.base, 'elsewhere');
+    await assert.rejects(
+      client.command('createWorktree', { checkout, base: 'main', branch: 'elsewhere', location }),
+      (error) => rejects('Uncertain')(error) && /another repository/.test((error as Error).message),
+    );
+    assert.equal(readFileSync(join(location, 'other.txt'), 'utf8'), 'other');
+  } finally {
+    await runtime.dispose();
+    await f.close();
+  }
+});
+
+test('a creation cancelled while queued behind another ends at once and adds nothing', async () => {
+  const f = repository();
+  try {
+    const checkout = await f.client.command('openCheckout', { root: f.root });
+    const hook = join(f.root, '.git/hooks/post-checkout');
+    const marker = join(f.base, 'first-checkout');
+    writeFileSync(hook, `#!/bin/sh\ntouch '${marker}'\nsleep 2\n`);
+    chmodSync(hook, 0o755);
+    let firstDone = false;
+    const first = f.client
+      .command('createWorktree', {
+        checkout,
+        base: 'main',
+        branch: 'first',
+        location: join(f.base, 'first'),
+      })
+      .finally(() => {
+        firstDone = true;
+      });
+    await waitFor(marker);
+    const abort = new AbortController();
+    const queued = f.client.command(
+      'createWorktree',
+      { checkout, base: 'main', branch: 'queued', location: join(f.base, 'queued') },
+      { signal: abort.signal },
+    );
+    abort.abort();
+    await assert.rejects(queued, rejects('Cancelled'));
+    assert.equal(firstDone, false, 'the queued creation did not wait for the running one');
+    assert.equal((await first).worktree, 'linked');
+    assert.equal(branches(f.git).includes('queued'), false);
+    assert.equal(existsSync(join(f.base, 'queued')), false);
+  } finally {
+    await f.close();
+  }
+});
+
+test('a registered location differing only in case is refused as taken', async () => {
+  const f = repository();
+  try {
+    const checkout = await f.client.command('openCheckout', { root: f.root });
+    const users = join(f.base, 'Chat-X');
+    f.git(['worktree', 'add', '-q', '-b', 'users', users, 'main']);
+    renameSync(users, users + '-away');
+    await assert.rejects(
+      f.client.command('createWorktree', {
+        checkout,
+        base: 'main',
+        branch: 'chat-x',
+        location: join(f.base, 'chat-x'),
+      }),
+      rejects('Conflict'),
+    );
+    assert.equal(branches(f.git).includes('chat-x'), false);
+    assert.equal(existsSync(join(f.root, '.git/worktrees/Chat-X/HEAD')), true);
   } finally {
     await f.close();
   }
