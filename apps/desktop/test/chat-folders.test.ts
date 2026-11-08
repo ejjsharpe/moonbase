@@ -76,3 +76,34 @@ test('an unreadable approvals file approves nothing and is replaced on the next 
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('chat worktree approvals never push picker folders out of the recent list', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-folders-')));
+  try {
+    const file = join(root, 'approved-folders.json');
+    const folder = async (name: string) => {
+      const path = join(root, name);
+      await mkdir(path);
+      return path;
+    };
+    const approvals = createFolderApprovals(file);
+    const picked = [await folder('alpha'), await folder('beta')];
+    for (const path of picked) await approvals.approve(path);
+    const worktrees: string[] = [];
+    for (let n = 0; n < 201; n++) {
+      worktrees.push(await approvals.approve(await folder(`worktree-${n}`), { recent: false }));
+      // A worktree chat in use stays approved however many follow it.
+      if (n === 100) await approvals.touch(worktrees[0]!);
+    }
+    const restarted = createFolderApprovals(file);
+    assert.deepEqual(await restarted.listRecent(), [...picked].reverse());
+    for (const path of picked) assert.equal(await restarted.has(path), true);
+    assert.equal(await restarted.has(worktrees[0]!), true);
+    // Past their own limit, the least recently used worktree approvals lapse.
+    assert.equal(await restarted.has(worktrees[1]!), false);
+    assert.equal(await restarted.has(worktrees[2]!), true);
+    assert.equal(await restarted.has(worktrees.at(-1)!), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

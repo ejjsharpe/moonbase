@@ -811,7 +811,9 @@ test('chat worktrees are made one at a time, fall back from a blocked prefix and
     const repository = join(directory, 'repo');
     const checkout = { ...target, root: repository };
     const branches = new Set(['chat']);
-    let failNext = false;
+    const attempts: string[] = [];
+    let failNext = false,
+      refuseNext = false;
     const client: EditorClient = {
       command: async (name, input, options) => {
         if (name === 'openCheckout') return checkout as never;
@@ -825,6 +827,11 @@ test('chat worktrees are made one at a time, fall back from a blocked prefix and
           const { branch, location } = input as { branch: string; location: string };
           await new Promise((resolve) => setTimeout(resolve, 5));
           options?.signal?.throwIfAborted();
+          attempts.push(branch);
+          if (refuseNext) {
+            refuseNext = false;
+            throw new ApplicationError({ code: 'InvalidInput', message: 'Identity changed.' });
+          }
           if (failNext) {
             failNext = false;
             throw new ApplicationError({ code: 'Unavailable', message: 'HEAD is unborn.' });
@@ -858,6 +865,14 @@ test('chat worktrees are made one at a time, fall back from a blocked prefix and
     failNext = true;
     await assert.rejects(session.createChatWorktree(repository, 'task'), { code: 'Unavailable' });
     await assert.rejects(stat(parent), { code: 'ENOENT' });
+    // Only Git refusing the branch falls back to `chat-…`, which names the same location, so
+    // other refusals are reported after one attempt.
+    refuseNext = true;
+    attempts.length = 0;
+    await assert.rejects(session.createChatWorktree(repository, 'chat/stale'), {
+      code: 'InvalidInput',
+    });
+    assert.deepEqual(attempts, ['chat/stale']);
     // Two at once with the same name each get their own worktree.
     const [first, second] = await Promise.all([
       session.createChatWorktree(repository, 'chat/fix'),

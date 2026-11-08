@@ -119,7 +119,7 @@ export class LocalWorkspace {
     );
     this.worktrees = new WorkspaceWorktrees(
       (target) => this.directory(target),
-      (root, signal) => this.open(root, signal),
+      (root, signal) => this.open(root, signal, true),
       (root) => this.protected(root),
     );
     this.store = new Store(config.dataDirectory, config.hostId);
@@ -522,7 +522,8 @@ export class LocalWorkspace {
       }
     }
   }
-  async open(root: string, signal: AbortSignal) {
+  /** Approves a checkout root; `created` says this workspace just made it, as `createWorktree` does. */
+  async open(root: string, signal: AbortSignal, created = false) {
     ensure(
       typeof root === 'string' && isAbsolute(root) && !root.includes('\0'),
       'Choose an absolute checkout root through the native picker.',
@@ -555,14 +556,15 @@ export class LocalWorkspace {
       const commonIdentity = identity(fstatSync(commonFd));
       const projectId = hash(canonical([this.config.hostId, common, commonIdentity]));
       closeSync(commonFd);
-      const previous = this.store.all<Approval>('approvals').find((a) => a.target.root === root);
-      if (previous) {
-        ensure(
-          previous.identity === id && previous.target.projectId === projectId,
-          'Checkout or repository identity changed. Restore the original directory.',
-        );
-        return previous.target;
-      }
+      const previous = this.store.all<Approval>('approvals').filter((a) => a.target.root === root);
+      const current = previous.find((a) => a.identity === id && a.target.projectId === projectId);
+      if (current) return current.target;
+      // A worktree this workspace just made at a removed one's location is approved afresh; the
+      // stale approval stays but matches nothing. Anywhere else a replaced directory is refused.
+      ensure(
+        !previous.length || created,
+        'Checkout or repository identity changed. Restore the original directory.',
+      );
       const branch = await this.discovery.getBranch(directory, signal);
       const target = {
         hostId: this.config.hostId,
