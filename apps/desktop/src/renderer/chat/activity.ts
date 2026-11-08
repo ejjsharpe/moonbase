@@ -137,27 +137,35 @@ function excerpt(part: ChatTranscriptPart) {
   return text.slice(0, progressExcerptUnits) + (cut ? '…' : '');
 }
 
+/**
+ * The words a state adds to its glyph. Completed (✓), running (spinner) and requested (○) need
+ * none; a failure is worth saying in words.
+ */
+export function describeActivityState(state: string | undefined) {
+  if (!state || ['completed', 'running', 'requested'].includes(state)) return undefined;
+  return state === 'missing-result' ? 'no result' : state;
+}
+
 /** Folded Activity shows each part's state, and the start of what a result or thought holds. */
 export function describeActivityPart(
   part: ChatTranscriptPart,
   transcript: Pick<ChatTranscript, 'source'>,
   evidence: ActivityEvidence,
 ) {
-  const status = getActivityState(part, transcript, evidence);
+  const status = describeActivityState(getActivityState(part, transcript, evidence));
   if (part.kind === 'thinking') {
     // Only an unusual availability (redacted, withheld) is worth saying.
     const details = ['Thinking'];
     if (part.availability !== 'available') details.push(part.availability);
-    if (status && status !== 'completed') details.push(status);
+    if (status) details.push(status);
     if (part.availability === 'available' && excerpt(part)) details.push(excerpt(part));
     return details.join(' · ');
   }
-  // A completed step's ✓ already says so.
   const details = [getToolSummary(part)];
-  if (status && status !== 'completed')
-    details.push(status === 'requested' ? 'requested · result not shown' : status);
-  if (part.pairing && part.pairing !== 'matched') details.push(part.pairing);
-  if (part.kind === 'result') details.push(excerpt(part) || 'no output');
+  if (status) details.push(status);
+  // "no output" would only repeat a missing result.
+  if (part.kind === 'result' && (excerpt(part) || status !== 'no result'))
+    details.push(excerpt(part) || 'no output');
   return details.join(' · ');
 }
 
@@ -290,4 +298,181 @@ export function getEntryTranscripts(
         ]
       : [],
   );
+}
+
+/** A step as the reader sees it: what it did, what it did it to, and a word only for trouble. */
+export type ActivityHeadline = {
+  /** Which counter the step adds to in a folded summary. */
+  category: 'thinking' | 'read' | 'edit' | 'command' | 'tool';
+  /** A verb phrase in the tense of the step's state: "Running npm", "Read logger.ts". */
+  action: string;
+  /** What the action touched, in full: a command line, a path, line counts. */
+  detail: string;
+  /** Set for a failure, interruption or missing result. */
+  problem?: string;
+  /** For an edit or write, the file, so a summary counts files rather than calls. */
+  path?: string;
+};
+
+const fileName = (path: string) => path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
+
+/** The tool's main argument (a command or a path) from a call's recorded JSON. */
+function getToolArgument(part: ChatTranscriptPart, keys: string[]) {
+  if (!['arguments', 'executed-arguments'].includes(part.kind)) return undefined;
+  try {
+    const args: unknown = JSON.parse(part.text);
+    if (!args || typeof args !== 'object' || Array.isArray(args)) return undefined;
+    const value = keys.map((key) => (args as Record<string, unknown>)[key]).find(Boolean);
+    return typeof value === 'string' ? value : undefined;
+  } catch {
+    // A preview cut short of its JSON still names a leading path or command.
+    for (const key of keys) {
+      const found = new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`).exec(part.text);
+      if (found) return found[1]!.replace(/\\(.)/g, '$1');
+    }
+    return undefined;
+  }
+}
+
+/**
+ * The program a shell line runs, past `cd` hops, variable assignments and wrappers, and the rest of
+ * the line after it.
+ */
+export function splitCommand(command: string) {
+  const separators = /&&|\|\||;|\|/g;
+  let from = 0;
+  for (const match of [...command.matchAll(separators), null]) {
+    const to = match ? match.index : command.length;
+    const words = command.slice(from, to).trim().split(/\s+/).filter(Boolean);
+    while (
+      words.length &&
+      (/^\w+=/.test(words[0]!) || ['sudo', 'env', 'time', 'exec'].includes(words[0]!))
+    )
+      words.shift();
+    const word = words[0];
+    if (word && word !== 'cd') {
+      const at = command.indexOf(word, from);
+      return {
+        program: fileName(word.replace(/^["']|["']$/g, '')),
+        rest: command.slice(at + word.length).trim(),
+      };
+    }
+    if (match) from = match.index + match[0].length;
+  }
+  return undefined;
+}
+
+/**
+ * One line of thinking for a glance: the heading a model opens a thought with, else its first
+ * sentence, with Markdown marks removed.
+ */
+export function getThoughtLine(text: string) {
+  const heading = /^\s*\*\*([^*\r\n]+)\*\*[ \t]*\r?(?:\n|$)/.exec(text)?.[1];
+  const line = (heading ?? text)
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/^[ \t]*(?:#{1,6}|[-*+]|\d+\.)[ \t]+/gm, '')
+    .replace(/`+|\*\*|~~/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (heading !== undefined) return line;
+  const end = /[.?!]["'”’)]?(?=\s)/.exec(line);
+  return end ? line.slice(0, end.index + end[0].length) : line;
+}
+
+const verbs = {
+  read: ['Reading', 'Read'],
+  edit: ['Editing', 'Edited'],
+  write: ['Writing', 'Wrote'],
+  command: ['Running', 'Ran'],
+  tool: ['Using', 'Used'],
+} as const;
+
+/** A step's headline, in the present while it runs or waits and the past once it has ended. */
+export function describeActivityHeadline(
+  step: ActivityStep,
+  transcript: Pick<ChatTranscript, 'source'>,
+  evidence: ActivityEvidence,
+): ActivityHeadline {
+  const state = getActivityStepState(step, transcript, evidence);
+  const problem = describeActivityState(state);
+  const ongoing = state === 'running' || state === 'requested';
+  const lead = step.lead;
+  if (lead.kind === 'thinking') {
+    const line = lead.availability === 'available' ? getThoughtLine(lead.text) : '';
+    return {
+      category: 'thinking',
+      action: line || (ongoing ? 'Thinking' : 'Thought'),
+      detail: lead.availability === 'available' ? '' : lead.availability,
+      ...(problem ? { problem } : {}),
+    };
+  }
+  const name = lead.toolName ?? 'tool';
+  const tense = ongoing ? 0 : 1;
+  // A call's output, patch and details are often recorded in a later row.
+  const recorded =
+    lead.kind === 'arguments' && transcript.source.kind === 'entry'
+      ? (evidence.get(callKey(transcript, transcript.source.entryId, lead.partId)) ?? [])
+      : [];
+  const parts = [lead, ...step.answers, ...recorded];
+  if (['read', 'write', 'edit'].includes(name)) {
+    const path = parts.map((part) => getToolArgument(part, ['path', 'file_path'])).find(Boolean);
+    const changes = parts
+      .filter((part) => part.kind === 'patch' || part.kind === 'diff')
+      .map(countPatchLines)
+      .find(Boolean);
+    const kind = name as 'read' | 'write' | 'edit';
+    return {
+      category: kind === 'read' ? 'read' : 'edit',
+      action: `${verbs[kind][tense]} ${path ? fileName(path) : 'a file'}`,
+      // The verb phrase names the file; the detail adds its folder.
+      detail: [changes, path?.split(/[\\/]/).slice(0, -1).join('/')].filter(Boolean).join(' · '),
+      ...(problem ? { problem } : {}),
+      ...(path && kind !== 'read' ? { path } : {}),
+    };
+  }
+  if (name === 'bash' || name === 'powershell') {
+    const command = parts.map((part) => getToolArgument(part, ['command'])).find(Boolean);
+    const split = command ? splitCommand(command) : undefined;
+    const output = parts.find((part) => part.kind === 'result');
+    return {
+      category: 'command',
+      action: `${verbs.command[tense]} ${split?.program ?? 'a command'}`,
+      // The verb phrase names the program; the detail is the rest of its line.
+      detail: split ? split.rest : (command ?? (output ? excerpt(output) : '')),
+      ...(problem ? { problem } : {}),
+    };
+  }
+  return {
+    category: 'tool',
+    action: `${verbs.tool[tense]} ${name}`,
+    detail: getToolSummary(lead).slice(name.length + 3),
+    ...(problem ? { problem } : {}),
+  };
+}
+
+const counters = {
+  read: ['Read', 'file', 'files'],
+  edit: ['Edited', 'file', 'files'],
+  command: ['Ran', 'command', 'commands'],
+  tool: ['Used', 'tool', 'tools'],
+} as const;
+
+/** A finished run of steps in one line: "Read 2 files, ran 3 commands". Thinking is not counted. */
+export function summarizeActivityHeadlines(headlines: readonly ActivityHeadline[]) {
+  const counts = new Map<keyof typeof counters, number>();
+  const edited = new Set<string>();
+  for (const headline of headlines) {
+    if (headline.category === 'thinking') continue;
+    if (headline.category === 'edit' && headline.path) {
+      if (edited.has(headline.path)) continue;
+      edited.add(headline.path);
+    }
+    counts.set(headline.category, (counts.get(headline.category) ?? 0) + 1);
+  }
+  const phrases = [...counts].map(([category, count], index) => {
+    const [verb, one, many] = counters[category];
+    const phrase = `${verb} ${count} ${count === 1 ? one : many}`;
+    return index ? phrase[0]!.toLowerCase() + phrase.slice(1) : phrase;
+  });
+  return phrases.join(', ') || 'Thought';
 }

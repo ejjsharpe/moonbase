@@ -15,6 +15,7 @@ import {
   showChat,
 } from './chat-target.ts';
 import { captureNative } from './editor-regressions.ts';
+import { openActivityGroups, openWorkingFold } from './transcript-list.ts';
 import { retainedImage } from './stored-image-fixture.ts';
 
 /** Opens the composer's folder menu and chooses a folder with the native picker. */
@@ -596,7 +597,9 @@ test('transcript local rendering precedes held completion; native Copy/link fail
     await expect(
       live.getByText('First local chunk 🌔 and second chunk', { exact: true }),
     ).toBeVisible();
-    await expect(live.getByText('Local thinking first and next', { exact: true })).toBeVisible();
+    await expect(
+      live.locator('pre').getByText('Local thinking first and next', { exact: true }),
+    ).toBeVisible();
     await expect(thought).toBeFocused();
     expect(
       await app.evaluate(
@@ -796,13 +799,16 @@ for (const mode of ['local', 'remote'] as const)
       await page.getByLabel('Message', { exact: true }).fill('Observe held tool progress');
       await page.getByRole('button', { name: 'Send message', exact: true }).click();
       const live = page.getByRole('article', { name: 'Live response' });
-      // Folded, the card shows the running call's state; opened, the output recorded so far.
-      const part = live.locator('[data-transcript-part]').filter({ hasText: /· Output · running/ });
+      // The running call's output sits in the run's "Working…" fold; opened, it shows so far.
+      const part = live.locator('[data-transcript-part]').filter({ hasText: /Output · running/ });
+      await openWorkingFold(page, part);
       await expect(part).toHaveCount(1);
       const group = live.getByRole('button', { name: /^Activity/ });
       await expect(group).toHaveAttribute('aria-expanded', 'false');
       await expect(live).toContainText('running');
-      // A live row holding only the call's output has a visually hidden toggle; Enter opens it.
+      // A live row holding only the call's output has a visually hidden toggle; Enter opens it
+      // once the "Working for" fold around the run is open.
+      await openActivityGroups(page);
       await group.press('Enter');
       await expect(part.locator('pre')).toContainText(
         host ? 'Controlled remote tool activity' : 'First local tool chunk',
@@ -909,7 +915,7 @@ test('transcript remote first/next chunks render through authenticated stream an
     const before = await host.stats();
     host.nextChunk();
     await expect(live.getByText('first remote text 4', { exact: true })).toBeVisible();
-    await expect(live.getByText('remote thinking 4', { exact: true })).toBeVisible();
+    await expect(live.locator('pre').getByText('remote thinking 4', { exact: true })).toBeVisible();
     await expect(thought).toBeFocused();
     const after = await host.stats();
     expect(after.reads!.scans).toBe(before.reads!.scans);
@@ -998,12 +1004,12 @@ for (const mode of ['local', 'remote'] as const)
       await page.getByRole('button', { name: 'Send message', exact: true }).click();
       if (!host) {
         // The tool is running once its output part is recorded; the output itself stays folded.
-        await expect(
-          page
-            .getByRole('article', { name: 'Live response' })
-            .locator('[data-transcript-part]')
-            .filter({ hasText: /· Output · running/ }),
-        ).toHaveCount(1);
+        const output = page
+          .getByRole('article', { name: 'Live response' })
+          .locator('[data-transcript-part]')
+          .filter({ hasText: /Output · running/ });
+        await openWorkingFold(page, output);
+        await expect(output).toHaveCount(1);
         await app.evaluate(() =>
           (globalThis as unknown as { localActivity: { release(): void } }).localActivity.release(),
         );
@@ -1013,7 +1019,9 @@ for (const mode of ['local', 'remote'] as const)
         .filter({ has: page.locator('[data-transcript-part]').filter({ hasText: 'Stored image' }) })
         .first();
       await expect(group).toBeAttached();
-      // An output row's toggle is visually hidden; it still opens from the keyboard.
+      // An output row's toggle is visually hidden; it still opens from the keyboard once the
+      // fold around the run is open.
+      await openActivityGroups(page);
       const activity = group.getByRole('button', { name: /^Activity/ });
       if ((await activity.getAttribute('aria-expanded')) !== 'true') await activity.press('Enter');
       const trigger = group.getByRole('button', { name: 'View stored image', exact: true }).first();

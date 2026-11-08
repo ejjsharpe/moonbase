@@ -40,14 +40,19 @@ import {
   collectActivityEvidence,
   getEntryTranscripts,
   classifyEntry,
+  describeActivityHeadline,
+  getActivityStepState,
+  groupActivitySteps,
   groupTranscriptRows,
   isSameActivityEvidence,
+  type ActivityEvidence,
+  type ActivityHeadline,
   type TranscriptItem,
 } from './activity.ts';
 import { StoredImages } from './stored-image.tsx';
 import { getTranscriptParts } from './transcript-parts.ts';
 import { isReadingNodePinned, subscribeReadingChanges } from './reading-pin.ts';
-import { Entry, type EntryProps } from './transcript-entry.tsx';
+import { ActivityGroupLine, Entry, type EntryProps } from './transcript-entry.tsx';
 import { createOpenCalls, OpenCallsContext } from './transcript-disclosure.ts';
 import { useTranscriptActions } from './transcript-actions.ts';
 import { groupBySource } from './stable-props.ts';
@@ -373,6 +378,7 @@ function TranscriptList({
     () => groupTranscriptRows(transcript.rows, kindOfRow, itemCache),
     [transcript.rows],
   );
+  const groupStarts = useMemo(() => findGroupStarts(items), [items]);
   /** The list item holding each row: a row in an activity run is drawn by the run's item. */
   const itemKeys = useMemo(
     () => new Map(items.flatMap((item) => item.rows.map((row) => [row.key, item.key] as const))),
@@ -510,53 +516,55 @@ function TranscriptList({
       setHolding(true);
   };
   return (
-    <LegendList<TranscriptItem<TranscriptRow>>
-      ref={list}
-      role="region"
-      aria-label="Chat transcript"
-      data-transcript-list=""
-      tabIndex={0}
-      data={items}
-      dataKey={dataset}
-      keyExtractor={getItemKey}
-      getItemType={getItemType}
-      renderItem={renderItem}
-      estimatedItemSize={estimatedRowSize}
-      {...(placement.anchor
-        ? {
-            initialScrollIndex: {
-              index: placement.index,
-              viewOffset: -placement.anchor.offset,
-            },
-          }
-        : { initialScrollAtEnd: true })}
-      maintainScrollAtEnd={!selecting && (holding ? followingNewRows : following)}
-      maintainVisibleContentPosition={keepPosition}
-      alwaysRender={alwaysRender}
-      // An edge with no more history has no callback: the list gates its edge callbacks on the
-      // previous one, so an ignored call would hold back the other edge.
-      onStartReached={earlier ? pageEarlier : undefined}
-      onEndReached={later ? pageLater : undefined}
-      onUserScroll={() => {
-        setHolding(false);
-        onReaderInput();
-      }}
-      onItemSizeChanged={holdFindReveal}
-      onPointerDownCapture={(event) => {
-        holdDisclosure(event);
-        onReaderInput();
-      }}
-      onKeyDownCapture={(event) => {
-        holdDisclosure(event);
-        onReaderInput();
-      }}
-      onFocusCapture={onReaderInput}
-      onReady={() => setReadyDataset(dataset)}
-      ListHeaderComponent={header}
-      ListFooterComponent={footer}
-      contentContainerStyle={{ gap: rowGap }}
-      {...stylex.props(styles.list)}
-    />
+    <GroupStartsContext.Provider value={groupStarts}>
+      <LegendList<TranscriptItem<TranscriptRow>>
+        ref={list}
+        role="region"
+        aria-label="Chat transcript"
+        data-transcript-list=""
+        tabIndex={0}
+        data={items}
+        dataKey={dataset}
+        keyExtractor={getItemKey}
+        getItemType={getItemType}
+        renderItem={renderItem}
+        estimatedItemSize={estimatedRowSize}
+        {...(placement.anchor
+          ? {
+              initialScrollIndex: {
+                index: placement.index,
+                viewOffset: -placement.anchor.offset,
+              },
+            }
+          : { initialScrollAtEnd: true })}
+        maintainScrollAtEnd={!selecting && (holding ? followingNewRows : following)}
+        maintainVisibleContentPosition={keepPosition}
+        alwaysRender={alwaysRender}
+        // An edge with no more history has no callback: the list gates its edge callbacks on the
+        // previous one, so an ignored call would hold back the other edge.
+        onStartReached={earlier ? pageEarlier : undefined}
+        onEndReached={later ? pageLater : undefined}
+        onUserScroll={() => {
+          setHolding(false);
+          onReaderInput();
+        }}
+        onItemSizeChanged={holdFindReveal}
+        onPointerDownCapture={(event) => {
+          holdDisclosure(event);
+          onReaderInput();
+        }}
+        onKeyDownCapture={(event) => {
+          holdDisclosure(event);
+          onReaderInput();
+        }}
+        onFocusCapture={onReaderInput}
+        onReady={() => setReadyDataset(dataset)}
+        ListHeaderComponent={header}
+        ListFooterComponent={footer}
+        contentContainerStyle={{ gap: rowGap }}
+        {...stylex.props(styles.list)}
+      />
+    </GroupStartsContext.Provider>
   );
 }
 
@@ -597,11 +605,116 @@ const RowContext = createContext<{
   liveLabel: string | undefined;
 } | null>(null);
 
-/** A list item: one row, or a run of activity rows drawn as one card. */
+/**
+ * A list item: one row, or a run of activity rows drawn as one card. A run with more than one step
+ * folds to a single line; its rows stay mounted underneath so Find can reach them.
+ */
 function Item({ item }: { item: TranscriptItem<TranscriptRow> }) {
-  return item.rows.map((row, index) => (
-    <Row key={row.key} row={row} joinPrevious={index > 0} joinNext={index < item.rows.length - 1} />
-  ));
+  const context = useContext(RowContext)!;
+  const startedAt = useContext(GroupStartsContext).get(item.key);
+  const [open, setOpen] = useState(false);
+  // A response that is only working so far is a run of one, and gets the working line too.
+  const first = item.rows[0]!;
+  const working =
+    item.rows.length === 1 && first.kind === 'live' && kindOfRow(first) === 'activity';
+  const group =
+    item.rows.length > 1 || working ? collectGroupSteps(item.rows, context.shared.evidence) : null;
+  const rows = (fold: boolean) =>
+    item.rows.map((row, index) => (
+      <Row
+        key={row.key}
+        row={row}
+        joinPrevious={fold || index > 0}
+        joinNext={index < item.rows.length - 1}
+      />
+    ));
+  if (!group || group.headlines.length < (group.active ? 1 : 2)) return rows(false);
+  const found = item.rows.some(
+    (row) => row.kind !== 'tool' && !!context.getRowProps(row.entry).findMatch,
+  );
+  const expanded = open || found;
+  return (
+    <>
+      <div {...stylex.props(styles.row)}>
+        <div {...stylex.props(styles.measure)}>
+          <section
+            {...stylex.props(
+              styles.activity,
+              expanded ? styles.activityGroupOpen : styles.activityGroup,
+            )}>
+            <ActivityGroupLine
+              {...group}
+              {...(startedAt ? { startedAt } : {})}
+              open={expanded}
+              onToggle={() => setOpen(!expanded)}
+            />
+          </section>
+        </div>
+      </div>
+      <div hidden={!expanded} {...stylex.props(styles.activityGroupSteps)}>
+        {rows(true)}
+      </div>
+    </>
+  );
+}
+
+/** Every step a run of rows shows, in order; a call's output row adds none of its own. */
+function collectGroupSteps(rows: readonly TranscriptRow[], evidence: ActivityEvidence) {
+  const headlines: ActivityHeadline[] = [],
+    states: (string | undefined)[] = [];
+  let active = false,
+    endedAt: string | undefined,
+    // The last row's steps: the model message the work is on now.
+    latestRow: ActivityHeadline[] = [];
+  for (const row of rows) {
+    if (row.kind === 'tool') continue;
+    endedAt = getLaterTime(endedAt, row.entry.createdAt);
+    if (!row.entry.transcript) continue;
+    if (row.kind === 'live' && row.state === 'running') active = true;
+    const transcript = row.entry.transcript;
+    const entryId = transcript.source.kind === 'entry' ? transcript.source.entryId : undefined;
+    const rowHeadlines: ActivityHeadline[] = [];
+    for (const step of groupActivitySteps(transcript.parts, entryId)) {
+      const lead = step.lead;
+      if (lead.call && lead.pairing === 'matched' && lead.kind !== 'arguments') continue;
+      const state = getActivityStepState(step, transcript, evidence);
+      if (state === 'running') active = true;
+      const headline = describeActivityHeadline(step, transcript, evidence);
+      headlines.push(headline);
+      rowHeadlines.push(headline);
+      states.push(state);
+    }
+    if (rowHeadlines.length) latestRow = rowHeadlines;
+  }
+  // Now: the thought the latest message opened with, which says why; else the step itself. A
+  // thought from an earlier message may be about other work, so it is never paired with this one.
+  const current =
+    latestRow.at(-1)?.category === 'thinking'
+      ? latestRow.at(-1)
+      : (latestRow.findLast((headline) => headline.category === 'thinking') ?? latestRow.at(-1));
+  return {
+    headlines,
+    states,
+    active,
+    ...(current ? { current } : {}),
+    ...(endedAt ? { endedAt } : {}),
+  };
+}
+
+const getLaterTime = (a: string | undefined, b: string | undefined) =>
+  !a || (b && Date.parse(b) > Date.parse(a)) ? b : a;
+
+/** Each item's start: the latest time recorded before it, where the work it shows began. */
+const GroupStartsContext = createContext<ReadonlyMap<string, string>>(new Map());
+function findGroupStarts(items: readonly TranscriptItem<TranscriptRow>[]) {
+  const starts = new Map<string, string>();
+  let last: string | undefined;
+  for (const item of items) {
+    if (last) starts.set(item.key, last);
+    for (const row of item.rows)
+      if (row.kind !== 'tool') last = getLaterTime(last, row.entry.createdAt);
+  }
+  return starts;
 }
 function Row({
   row,

@@ -130,20 +130,16 @@ export const transcriptStyles = stylex.create({
       [stylex.when.ancestor('[data-panel-open]')]: 'none',
     },
   },
-  /** Folded tool work reads as one card of steps; consecutive activity rows join into one. */
+  /** Tool work reads as quiet lines of steps; consecutive activity rows join into one list. */
   activity: {
     position: 'relative',
-    // Contains its content's margins, so a joined card has no seam when a step opens.
+    // Contains its content's margins, so joined rows have no seam when a step opens.
     display: 'flow-root',
     minWidth: 0,
     marginBlock: space.sm,
     marginInline: 0,
-    paddingBlock: 6,
-    backgroundColor: colors.elevated,
-    borderWidth: 1,
-    borderStyle: 'solid',
-    borderColor: colors.border,
-    borderRadius: radius.panel,
+    paddingBlock: 2,
+    borderWidth: 0,
   },
   activityJoinPrevious: {
     marginTop: 0,
@@ -161,6 +157,7 @@ export const transcriptStyles = stylex.create({
   },
   /** A call's output row draws no line while closed; open, it shows the output under the call. */
   activityOutput: { paddingTop: 0 },
+  /** The step list's opener: always shown, pointing right, and down once its parts are open. */
   activityToggle: {
     position: 'absolute',
     top: 2,
@@ -169,24 +166,25 @@ export const transcriptStyles = stylex.create({
     height: 24,
     padding: 4,
     color: colors.muted,
-    transform: { default: null, ':is([data-panel-open])': 'rotate(180deg)' },
-    opacity: {
-      default: 0,
-      ':focus-visible': 1,
-      [stylex.when.ancestor(':hover')]: 1,
-    },
+    transform: { default: 'rotate(-90deg)', ':is([data-panel-open])': 'none' },
   },
+
   activitySteps: {
     listStyle: 'none',
     margin: 0,
     padding: '1px 0',
-    fontFamily: type.mono,
-    fontSize: type.small,
-    lineHeight: 1.75,
+    // Steps read at the answer's size and face, only quieter.
+    fontFamily: type.ui,
+    fontSize: type.message,
+    lineHeight: 1.7,
     color: colors.secondary,
   },
   activityStep: {
-    paddingInline: '14px 36px',
+    position: 'relative',
+    paddingInline: '8px 36px',
+    borderRadius: radius.control,
+    cursor: 'pointer',
+    backgroundColor: { default: null, ':hover': colors.hover },
     // One line per step; the full text is in its title.
     overflow: 'hidden',
     whiteSpace: 'nowrap',
@@ -198,7 +196,67 @@ export const transcriptStyles = stylex.create({
       color: syntax.string,
     },
   },
-  activityTool: { color: syntax.keyword },
+  activityTool: { color: colors.secondary },
+  activityDetail: { color: colors.muted },
+  activityProblem: { color: colors.danger },
+  /**
+   * A folded run reads as the heading of the answer under it: the answer's text sits as far below
+   * the rule as the "Worked for" text sits above it, not a full gap between list items.
+   */
+  activityGroup: { marginBottom: -24 },
+  /** Open, the first step's letters start 16px below the rule… */
+  activityGroupOpen: { marginBottom: 5 },
+  /** …and the answer sits as far below the last step. */
+  activityGroupSteps: { marginBottom: -35 },
+  /** A folded run of tool rows: "Worked for 1m 29s", a chevron, the time, and a rule under it. */
+  activityFold: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 4,
+    paddingTop: 2,
+    paddingBottom: 6,
+    borderBottomWidth: 1,
+    borderBottomStyle: 'solid',
+    borderBottomColor: colors.border,
+  },
+  activityFoldButton: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 4,
+    paddingInline: 4,
+    fontFamily: type.ui,
+    fontSize: type.message,
+    lineHeight: 1.7,
+    color: { default: colors.muted, ':hover': colors.text },
+    fontVariantNumeric: 'tabular-nums',
+    cursor: 'pointer',
+  },
+  /** Points right while folded, down once open. */
+  activityFoldChevron: {
+    display: 'inline-flex',
+    transform: { default: 'rotate(-90deg)', ':is([aria-expanded=true] *)': 'none' },
+  },
+  activityFoldTime: {
+    marginLeft: 'auto',
+    paddingInline: 4,
+    color: colors.muted,
+    fontSize: type.caption,
+    fontVariantNumeric: 'tabular-nums',
+  },
+  /**
+   * An opened step's recorded parts, indented under it behind a rule, so it is plain where the step
+   * ends and the next closed step begins. A call's output row continues the same rule.
+   */
+  activityPanel: {
+    marginInline: '20px 8px',
+    paddingLeft: 10,
+    borderLeftWidth: 2,
+    borderLeftStyle: 'solid',
+    borderLeftColor: colors.border,
+    // Its last block's own bottom margin would push the next line further than a closed step's.
+    marginBottom: -4,
+    ':empty': { display: 'none' },
+  },
   stepRunning: { '::before': { color: colors.accent } },
   stepFailed: { '::before': { color: colors.danger } },
   stepPending: { '::before': { color: colors.muted } },

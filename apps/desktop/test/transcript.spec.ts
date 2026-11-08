@@ -3,7 +3,13 @@ import { test, expect, type Page } from '@playwright/test';
 import { mkdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { readFindHighlight } from './find-highlight.ts';
-import { scrollToEnd, scrollToStart, showRow, transcriptList } from './transcript-list.ts';
+import {
+  scrollToEnd,
+  scrollToStart,
+  showRow,
+  transcriptList,
+  openActivity,
+} from './transcript-list.ts';
 import type * as readingPins from '../src/renderer/chat/reading-pin.ts';
 
 // These tests open the demo chat, which is Settled; the sidebar's own test covers the toggle.
@@ -19,9 +25,7 @@ async function open(page: Page) {
   await page.goto('/?local&design&transcript');
   await page.getByRole('button', { name: /^Conversation/ }).click();
   await expect(page.getByRole('heading', { name: 'Reading a retained answer' })).toBeAttached();
-  await answer(page)
-    .getByRole('button', { name: /^Activity/ })
-    .click();
+  await openActivity(answer(page));
   // Expanding the activity can move the reader off the end.
   const jump = page.getByRole('button', { name: 'Jump to latest', exact: true });
   if (await jump.isVisible()) await jump.click();
@@ -584,7 +588,7 @@ test("the image viewer's row stays mounted while the transcript scrolls", async 
   await scrollToStart(page);
   const row = page.locator('[data-transcript-row="entry:image-row"]');
   // The image shows once its card is open; it has no fold of its own.
-  await row.getByRole('button', { name: /^Activity/ }).click();
+  await openActivity(row);
   const trigger = row.getByRole('button', { name: 'View stored image' });
   await expect(trigger).toBeEnabled();
   await trigger.click();
@@ -739,8 +743,10 @@ test('safe GFM, literal user content, progressive source, exact native callbacks
     .poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1)?.length))
     .toBeGreaterThan(90000);
   await row.getByRole('button', { name: 'Load more parts' }).click();
-  // Redacted thinking is a step in a card: it says so without a fold of its own.
-  await expect(row.getByText(/Thinking · redacted/).first()).toBeVisible();
+  // Redacted thinking is a step whose line says so.
+  await expect(
+    row.locator('[data-transcript-step] > [data-glyph]', { hasText: 'Thought redacted' }),
+  ).toBeVisible();
   await expect(row.getByRole('button', { name: 'Load more parts' })).toHaveCount(0);
   await row.getByRole('button', { name: /Notice.*unsupported/ }).click();
   await expect(
@@ -2143,8 +2149,10 @@ test('a row re-renders when its own disclosure, content or Find state changes', 
   await open(page);
   await settle(page);
   await rows.take();
-  // Folding the card, opened by open(), changes the row's expanded state.
-  const card = answer(page).getByRole('button', { name: /^Activity/ });
+  // Folding the long output's step, opened by open(), changes the row's expanded state.
+  const card = answer(page)
+    .getByRole('button', { name: /^Activity/ })
+    .first();
   await card.click();
   await expect(card).toHaveAttribute('aria-expanded', 'false');
   await settle(page);
