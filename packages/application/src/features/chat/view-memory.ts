@@ -5,8 +5,10 @@ import { struct } from '@moonbase/contracts/schema';
 import { countTranscriptBytes, makeTranscriptFailure } from './transcript-read.ts';
 
 /**
- * A reading position, as the list reports it: the first visible row (a `TranscriptRow` key) and
- * the pixels from the viewport top to that row.
+ * A reading position: a row (a `TranscriptRow` key), normally the first visible one, and `offset`,
+ * how far the viewport top is below that row's own top in pixels (negative above it). A reader in
+ * the live response is anchored to the stored row above it where there is one, so a live row key
+ * means the reader is at the live edge.
  */
 export type TranscriptViewAnchor = { key: string; offset: number };
 export type TranscriptView = { anchor: TranscriptViewAnchor | null; expanded: string[] };

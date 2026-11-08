@@ -2,6 +2,7 @@ import {
   findChatMentionStarts,
   formatChatMention,
   isChatMentionEnd,
+  isChatMentionPath,
   type ChatMention,
 } from '@moonbase/contracts/chat';
 
@@ -55,7 +56,8 @@ export function removeMentionBefore(text: string, caret: number, mentions: reado
 
 /**
  * Appends mentions of `files` (absolute paths) that lie inside `folder` to a draft, skipping ones
- * it already mentions. `outside` counts the files left out because they are elsewhere.
+ * it already mentions. `outside` counts the files left out because they are elsewhere, and
+ * `unmentionable` those inside whose relative path a mention can't hold (`isChatMentionPath`).
  */
 export function appendMentions(
   text: string,
@@ -69,7 +71,9 @@ export function appendMentions(
     prefix === '/'
       ? []
       : files.filter((file) => file.startsWith(prefix) && file.length > prefix.length);
-  const added = [...new Set(inside.map((file) => file.slice(prefix.length)))].filter(
+  const paths = inside.map((file) => file.slice(prefix.length));
+  const mentionable = paths.filter(isChatMentionPath);
+  const added = [...new Set(mentionable)].filter(
     (path) => !mentions.some((mention) => mention.path === path),
   );
   const tokens = added.map(formatChatMention).join(' ');
@@ -78,5 +82,41 @@ export function appendMentions(
     text: tokens ? `${text}${separator}${tokens} ` : text,
     mentions: [...mentions, ...added.map((path) => ({ path }))],
     outside: files.length - inside.length,
+    unmentionable: paths.length - mentionable.length,
+  };
+}
+
+/**
+ * Makes a draft's mentions relative to folder `to`. Each mention is relative to its own folder,
+ * `folderOf(path)` (an absolute path). A mentioned file inside `to` is spelled relative to it; one
+ * outside stops being a mention, and its text becomes the file's absolute path without the `@`, so
+ * it can't read as another file. `dropped` counts those.
+ */
+export function rebaseMentions(
+  text: string,
+  mentions: readonly ChatMention[],
+  folderOf: (path: string) => string,
+  to: string,
+) {
+  const target = to.replace(/\/+$/, '') + '/';
+  const moved = new Map<string, { path: string | null; file: string }>();
+  for (const { path } of mentions) {
+    const file = folderOf(path).replace(/\/+$/, '') + '/' + path;
+    const relative = target !== '/' && file.startsWith(target) ? file.slice(target.length) : '';
+    moved.set(path, { path: relative && isChatMentionPath(relative) ? relative : null, file });
+  }
+  let rebased = '',
+    at = 0;
+  for (const range of findMentionRanges(text, mentions)) {
+    const { path, file } = moved.get(range.path)!;
+    rebased += text.slice(at, range.start) + (path ? formatChatMention(path) : file);
+    at = range.end;
+  }
+  rebased += text.slice(at);
+  const kept = [...moved.values()].flatMap(({ path }) => (path === null ? [] : [path]));
+  return {
+    text: rebased,
+    mentions: [...new Set(kept)].map((path) => ({ path })),
+    dropped: moved.size - kept.length,
   };
 }

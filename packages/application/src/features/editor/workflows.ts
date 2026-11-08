@@ -10,7 +10,7 @@ import {
   type WorkspaceOperation,
   type OperationResult,
 } from '@moonbase/contracts/workspace';
-import { fileKey } from './references.ts';
+import { checkoutKey, fileKey } from './references.ts';
 
 type Run = <A>(effect: Effect.Effect<A, ApplicationError>) => Promise<A>;
 export type LookupRow = LookupMatch & { checkout: CheckoutTarget; recent: boolean };
@@ -21,6 +21,13 @@ abstract class EditorQuery<Snapshot extends { message: string; busy: boolean }> 
   protected scope: Scope.Closeable;
   protected queryScope?: Scope.Closeable;
   protected generation = 0;
+  /** A new query or open bumps it, a refresh never does: only what the user did cancels an open. */
+  private openGeneration = 0;
+  private queryKey?: string;
+  private settled = true;
+  private rerun?: () => void;
+  /** Why the last open failed, shown until the next query or open the user starts. */
+  private failedOpen?: string;
   protected closed = false;
   private completion?: Promise<void>;
   private listeners = new Set<() => void>();
@@ -45,26 +52,70 @@ abstract class EditorQuery<Snapshot extends { message: string; busy: boolean }> 
     this.snapshot = { ...this.snapshot, ...patch };
     for (const listener of this.listeners) listener();
   }
-  /** Replaces the running query: the previous one's scope closes before the next debounced run. */
-  protected replaceQuery(work: (current: () => boolean) => Effect.Effect<void, ApplicationError>) {
+  /** Whether `key` repeats the last query, as the refresh after a change on disk does. */
+  protected repeats(key: string) {
+    return key === this.queryKey;
+  }
+  /** A query's message, unless a failed open is still on screen: a refresh only updates rows. */
+  protected resultMessage(message: string) {
+    return this.failedOpen ?? message;
+  }
+  /**
+   * Replaces the running query: the previous one's scope closes before the next debounced run.
+   * Repeating the last query refreshes it. A refresh leaves an open running, and one that arrives
+   * while the query still runs waits for it and reruns once, so a stream of refreshes (a watcher
+   * reports several a second while an agent works) cannot keep restarting the query.
+   */
+  protected replaceQuery(
+    key: string,
+    work: (current: () => boolean) => Effect.Effect<void, ApplicationError>,
+  ) {
+    const refresh = this.repeats(key);
+    if (refresh && !this.settled) {
+      this.rerun = () => this.replaceQuery(key, work);
+      return;
+    }
+    if (!refresh) {
+      this.openGeneration++;
+      this.failedOpen = undefined;
+    }
+    this.queryKey = key;
+    this.settled = false;
+    this.rerun = undefined;
     const generation = ++this.generation;
+    const current = () => !this.closed && generation === this.generation;
     const previous = this.queryScope;
     const scope = (this.queryScope = Scope.forkUnsafe(this.scope));
     const run = Effect.gen({ self: this }, function* () {
       if (previous) yield* Scope.close(previous, Exit.void);
       yield* Effect.sleep('120 millis');
-      yield* work(() => !this.closed && generation === this.generation);
-    });
+      yield* work(current);
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          if (!current()) return;
+          this.settled = true;
+          const rerun = this.rerun;
+          this.rerun = undefined;
+          if (rerun && this.admits()) rerun();
+        }),
+      ),
+    );
     void this.execute(Effect.forkIn(run, scope)).catch((error) =>
       this.update({ message: normalizeApplicationError(error).message } as Partial<Snapshot>),
     );
   }
   async open(open: (current: () => boolean) => Promise<boolean>): Promise<boolean> {
     if (!this.admits() || this.closed || this.snapshot.busy) return false;
-    const generation = ++this.generation;
+    const generation = ++this.openGeneration;
+    this.failedOpen = undefined;
     this.update({ busy: true } as Partial<Snapshot>);
+    const current = () => !this.closed && generation === this.openGeneration;
+    const fail = (message: string) => {
+      this.failedOpen = message;
+      this.update({ message } as Partial<Snapshot>);
+    };
     try {
-      const current = () => !this.closed && generation === this.generation;
       const result = await this.execute(
         Effect.flatMap(
           Effect.forkIn(
@@ -75,13 +126,12 @@ abstract class EditorQuery<Snapshot extends { message: string; busy: boolean }> 
         ),
       );
       if (!result && current())
-        this.update({
-          message:
-            'File unavailable. Your current selection and edits are retained. Edit the path or retry.',
-        } as Partial<Snapshot>);
+        fail(
+          'File unavailable. Your current selection and edits are retained. Edit the path or retry.',
+        );
       return result && current();
     } catch (error) {
-      this.update({ message: normalizeApplicationError(error).message } as Partial<Snapshot>);
+      if (current()) fail(normalizeApplicationError(error).message);
       return false;
     } finally {
       this.update({ busy: false } as Partial<Snapshot>);
@@ -122,11 +172,13 @@ export class EditorLookup extends EditorQuery<LookupSnapshot> {
   }
   query(query: string, checkouts: CheckoutTarget[]) {
     if (!this.admits() || this.closed) return;
-    // Earlier rows stay until the new ones arrive, so the list does not flicker while typing.
-    this.update({ message: 'Searching…' });
+    const key = JSON.stringify([query, checkouts.map(checkoutKey)]);
+    // Earlier rows stay until the new ones arrive, so the list does not flicker while typing. A
+    // refresh keeps its message too: the rows on screen already answer the same query.
+    if (!this.repeats(key)) this.update({ message: 'Searching…' });
     const captured = structuredClone(checkouts);
     const search = this.search;
-    this.replaceQuery((current) =>
+    this.replaceQuery(key, (current) =>
       Effect.gen({ self: this }, function* () {
         const results = yield* Effect.all(
           captured.slice(0, 8).map((checkout) =>
@@ -167,7 +219,9 @@ export class EditorLookup extends EditorQuery<LookupSnapshot> {
         );
         this.update({
           rows: unique.slice(0, 100),
-          message: `${Math.min(unique.length, 100)} results${partial || unique.length > 100 ? '; partial coverage. Refine the query or Refresh.' : ''}${errors.length ? '; ' + errors.join('; ') : ''}`,
+          message: this.resultMessage(
+            `${Math.min(unique.length, 100)} results${partial || unique.length > 100 ? '; partial coverage. Refine the query or Refresh.' : ''}${errors.length ? '; ' + errors.join('; ') : ''}`,
+          ),
         });
       }),
     );
@@ -199,15 +253,17 @@ export class EditorTextSearch extends EditorQuery<TextSearchSnapshot> {
   }
   query(query: string, options: TextSearchOptions, checkout: CheckoutTarget) {
     if (!this.admits() || this.closed) return;
+    const { matchCase, wholeWord, regex } = options;
+    const key = JSON.stringify([query, matchCase, wholeWord, regex, checkoutKey(checkout)]);
     if (!query) {
-      this.replaceQuery(() => Effect.void);
-      this.update({ files: [], checkout, message: 'Type text to search for.' });
+      this.replaceQuery(key, () => Effect.void);
+      this.update({ files: [], checkout, message: this.resultMessage('Type text to search for.') });
       return;
     }
-    this.update({ message: 'Searching…' });
+    if (!this.repeats(key)) this.update({ message: 'Searching…' });
     const input = { ...structuredClone(options), checkout: structuredClone(checkout), query };
     const search = this.search;
-    this.replaceQuery((current) =>
+    this.replaceQuery(key, (current) =>
       Effect.gen({ self: this }, function* () {
         const result = yield* Effect.tryPromise({
           try: (signal) => search(input, signal),
@@ -219,7 +275,9 @@ export class EditorTextSearch extends EditorQuery<TextSearchSnapshot> {
           this.update({
             files: [],
             checkout: input.checkout,
-            message: reason?._tag === 'Fail' ? reason.error.message : 'Search failed.',
+            message: this.resultMessage(
+              reason?._tag === 'Fail' ? reason.error.message : 'Search failed.',
+            ),
           });
           return;
         }
@@ -230,7 +288,7 @@ export class EditorTextSearch extends EditorQuery<TextSearchSnapshot> {
           : 'No matches.';
         if (partial) message += '; capped. Refine the query.';
         if (error) message += '; ' + error;
-        this.update({ files, checkout: input.checkout, message });
+        this.update({ files, checkout: input.checkout, message: this.resultMessage(message) });
       }),
     );
   }

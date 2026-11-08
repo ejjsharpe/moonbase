@@ -45,6 +45,25 @@ function setExpansion(controller: ChatController, expansion: string, open: boole
   });
 }
 
+/**
+ * A fold remembered in view memory under a row and an ID, so it stays as the reader left it while
+ * its rows are scrolled away and unmounted.
+ */
+export function useRememberedFold(
+  entryId: string,
+  id: string,
+  expandedIds: readonly string[],
+  controller: ChatController,
+) {
+  const { expansion, failed } = useExpansionId(entryId, id);
+  return {
+    open: failed || (expansion !== null && expandedIds.includes(expansion)),
+    setOpen: (open: boolean) => {
+      if (expansion) setExpansion(controller, expansion, open);
+    },
+  };
+}
+
 /** Rows' view memory, for disclosures inside rendered content such as a long code block. */
 export type RowExpansions = {
   entryId: string;
@@ -136,17 +155,35 @@ export function useDisclosure({
 
 /**
  * Which tool calls have their card open. A call and its output are separate rows: the call's row
- * publishes whether it is open, and the output's row, which shows no line of its own, opens with
- * it. Keys are `entryId\npartId` of the call.
+ * publishes whether it is open, and the output's row, which shows no line of its own while the
+ * call's entry is retained, opens with it. An output open on its own (Find revealing a match in
+ * it) shows its call's card open too, and folding the call folds it. Keys are `entryId\npartId` of
+ * the call.
  */
 export type OpenCalls = {
   isOpen(keys: readonly string[]): boolean;
   set(keys: readonly string[], open: boolean): void;
+  /** Publishes an output row's own disclosure under its calls' keys; null when it unmounts. */
+  setOutput(id: string, keys: readonly string[], output: OutputDisclosure | null): void;
+  isOutputOpen(keys: readonly string[]): boolean;
+  foldOutputs(keys: readonly string[]): void;
+  /** The retained entries, whose calls' outputs open with them. */
+  setRetained(entryIds: readonly string[]): void;
+  isRetained(entryId: string): boolean;
   subscribe(listener: () => void): () => void;
 };
-export function createOpenCalls(): OpenCalls {
+type OutputDisclosure = { open: boolean; fold(): void };
+/** `retained` seeds the retained entries, so the first render already reads them. */
+export function createOpenCalls(retained: readonly string[] = []): OpenCalls {
   const open = new Set<string>(),
+    outputs = new Map<string, { keys: readonly string[]; output: OutputDisclosure }>(),
     listeners = new Set<() => void>();
+  let retainedIds = new Set(retained);
+  const notify = () => {
+    for (const listener of listeners) listener();
+  };
+  const outputsOf = (keys: readonly string[]) =>
+    [...outputs.values()].filter((value) => value.keys.some((key) => keys.includes(key)));
   return {
     isOpen: (keys) => keys.some((key) => open.has(key)),
     set(keys, value) {
@@ -157,8 +194,26 @@ export function createOpenCalls(): OpenCalls {
           else open.delete(key);
           changed = true;
         }
-      if (changed) for (const listener of listeners) listener();
+      if (changed) notify();
     },
+    setOutput(id, keys, output) {
+      const previous = outputs.get(id);
+      if (output) outputs.set(id, { keys, output });
+      else outputs.delete(id);
+      if (previous?.output.open !== output?.open || previous?.keys.join('\t') !== keys.join('\t'))
+        notify();
+    },
+    isOutputOpen: (keys) => outputsOf(keys).some((value) => value.output.open),
+    foldOutputs(keys) {
+      for (const { output } of outputsOf(keys)) if (output.open) output.fold();
+    },
+    setRetained(entryIds) {
+      if (entryIds.length === retainedIds.size && entryIds.every((id) => retainedIds.has(id)))
+        return;
+      retainedIds = new Set(entryIds);
+      notify();
+    },
+    isRetained: (entryId) => retainedIds.has(entryId),
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);

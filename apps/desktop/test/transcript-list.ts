@@ -69,13 +69,8 @@ export async function openActivityGroups(page: Page) {
 export async function openActivity(scope: Locator) {
   await openActivityGroups(scope.page());
   const closed = scope.getByRole('button', { name: /^Activity/, expanded: false });
-  // An output step's opener is visually hidden (clipped away) and opens from the keyboard.
-  for (let i = 0; i < 50 && (await closed.count()); i++) {
-    const opener = closed.first();
-    if (await opener.evaluate((node) => getComputedStyle(node).clipPath !== 'none'))
-      await opener.press('Enter');
-    else await opener.click();
-  }
+  // A call's output in a later row has no opener of its own; it opens with its call.
+  for (let i = 0; i < 50 && (await closed.count()); i++) await closed.first().click();
 }
 
 /** The opener of the step that holds a recorded part. */
@@ -94,4 +89,22 @@ export async function openWorkingFold(page: Page, ready: Locator) {
   await expect.poll(async () => (await fold.isVisible()) || (await ready.count()) > 0).toBe(true);
   if ((await fold.count()) && (await fold.getAttribute('aria-expanded')) !== 'true')
     await fold.click();
+}
+
+/**
+ * Opens the latest stored call whose headline names `tool`, with a pointer on its chevron as a
+ * reader does, once the call is stored. A call's output in a later row (the live response, say)
+ * has no chevron and opens with it.
+ */
+export async function openCallCard(page: Page, tool: string) {
+  const line = page
+    .locator('[data-transcript-row^="entry:"] [data-transcript-step] > [data-glyph]')
+    .filter({ hasText: tool })
+    .last();
+  await expect(line).toBeAttached();
+  await openActivityGroups(page);
+  const toggle = line.getByRole('button', { name: /^Activity/ });
+  await expect(toggle).toBeVisible();
+  await toggle.click();
+  return toggle;
 }

@@ -298,8 +298,8 @@ test('pointer image reading cancels held Find reveal before collapse; only a new
       {
         id: 'stored-image',
         role: 'tool',
-        // One call's image and output, as a tool result records them; the call's own row is
-        // not loaded, so the step opens from its keyboard opener.
+        // One call's image and output, as a tool result records them. The call's own row isn't
+        // retained, so they read as one step with its own chevron.
         parts: [
           {
             kind: 'image',

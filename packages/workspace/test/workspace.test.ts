@@ -460,6 +460,22 @@ test('text search honours ignore policies, options, context lines and UTF-16 ran
     assert.equal((await search('follow.nd(')).files.length, 0);
     assert.equal((await search('follow.nd\\(', { regex: true })).files[0].path, 'src/view.ts');
     await assert.rejects(search('(', { regex: true }), rejects('InvalidInput'));
+    // ripgrep's reason is shown, not its trailing hint, and every pattern refusal is invalid input.
+    await assert.rejects(
+      search('(?<=x)y', { regex: true }),
+      (error) =>
+        rejects('InvalidInput')(error) &&
+        /^Invalid regular expression: look-around.* is not supported$/.test(
+          (error as Error).message,
+        ),
+    );
+    await assert.rejects(
+      search('a\\nb', { regex: true }),
+      (error) =>
+        rejects('InvalidInput')(error) &&
+        (error as Error).message ===
+          'Invalid regular expression: the literal "\\n" is not allowed in a regex',
+    );
     // Past 50 matches a file is capped and reported partial, whether its matches are adjacent
     // (ripgrep keeps reporting matches inside trailing context) or spread out.
     writeFileSync(join(f.root, 'src/many.ts'), 'manyMatch\n'.repeat(60));
@@ -489,6 +505,38 @@ test('text search honours ignore policies, options, context lines and UTF-16 ran
     } finally {
       chmodSync(join(f.root, 'src/locked.ts'), 0o644);
     }
+  } finally {
+    await f.close();
+  }
+});
+
+test('a broad text search stops at the cap with a clean partial result', async () => {
+  const f = fixture();
+  try {
+    // Far more than 16 MiB of ripgrep output if every file were searched to its own cap.
+    const line = 'e'.repeat(1500) + '\n';
+    for (let n = 0; n < 60; n++)
+      writeFileSync(join(f.root, `file-${String(n).padStart(2, '0')}.txt`), line.repeat(60));
+    const checkout = await f.client.command('openCheckout', { root: f.root });
+    const result = await f.client.command('searchText', {
+      checkout,
+      query: 'e',
+      matchCase: false,
+      wholeWord: false,
+      regex: false,
+    });
+    assert.equal(result.error, undefined);
+    assert.equal(result.partial, true);
+    assert.equal(
+      result.files.reduce((total, file) => total + file.matches.length, 0),
+      500,
+    );
+    assert.deepEqual(
+      result.files.map((file) => file.path),
+      Array.from({ length: 10 }, (_, n) => `file-${String(n).padStart(2, '0')}.txt`),
+    );
+    // The last match kept still has its trailing context.
+    assert.equal(result.files.at(-1)!.matches.at(-1)!.after.length, 3);
   } finally {
     await f.close();
   }

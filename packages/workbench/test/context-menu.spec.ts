@@ -711,6 +711,8 @@ test('file, folder and multi-item menus group their own commands with shortcuts'
 }) => {
   await page.goto('/');
   const reveal = process.platform === 'darwin' ? 'Reveal in Finder' : 'Show in Folder';
+  // The tree's command key is ⌘ on a Mac and Ctrl elsewhere.
+  const mod = process.platform === 'darwin' ? 'Meta' : 'Control';
   await row(page, 'README.md').click({ button: 'right' });
   expect(await menuItems(page)).toEqual([
     'Open [Enter]',
@@ -719,11 +721,11 @@ test('file, folder and multi-item menus group their own commands with shortcuts'
     '—',
     'Rename… [F2]',
     'Duplicate…',
-    'Copy Path [Alt+Meta+C]',
-    'Copy Relative Path [Shift+Alt+Meta+C]',
-    `${reveal} [Alt+Meta+R]`,
+    `Copy Path [Alt+${mod}+C]`,
+    `Copy Relative Path [Shift+Alt+${mod}+C]`,
+    `${reveal} [Alt+${mod}+R]`,
     '—',
-    'Move to Trash [Meta+Backspace]',
+    `Move to Trash [${mod}+Backspace]`,
   ]);
   await page.keyboard.press('Escape');
   await row(page, 'src').click({ button: 'right' });
@@ -732,11 +734,11 @@ test('file, folder and multi-item menus group their own commands with shortcuts'
     'New Folder…',
     '—',
     'Rename… [F2]',
-    'Copy Path [Alt+Meta+C]',
-    'Copy Relative Path [Shift+Alt+Meta+C]',
-    `${reveal} [Alt+Meta+R]`,
+    `Copy Path [Alt+${mod}+C]`,
+    `Copy Relative Path [Shift+Alt+${mod}+C]`,
+    `${reveal} [Alt+${mod}+R]`,
     '—',
-    'Move to Trash [Meta+Backspace]',
+    `Move to Trash [${mod}+Backspace]`,
   ]);
   await page.keyboard.press('Escape');
   await tree(page).focus();
@@ -748,10 +750,10 @@ test('file, folder and multi-item menus group their own commands with shortcuts'
   expect(await menuItems(page)).toEqual([
     `Mention ${files.length} Files in Chat`,
     '—',
-    'Copy Paths [Alt+Meta+C]',
-    'Copy Relative Paths [Shift+Alt+Meta+C]',
+    `Copy Paths [Alt+${mod}+C]`,
+    `Copy Relative Paths [Shift+Alt+${mod}+C]`,
     '—',
-    `Move ${all.length} Items to Trash [Meta+Backspace]`,
+    `Move ${all.length} Items to Trash [${mod}+Backspace]`,
   ]);
   // The second editor's shell supplies no clipboard, file manager or chat.
   await page.keyboard.press('Escape');
@@ -765,7 +767,7 @@ test('file, folder and multi-item menus group their own commands with shortcuts'
     'Rename… [F2]',
     'Duplicate…',
     '—',
-    'Move to Trash [Meta+Backspace]',
+    `Move to Trash [${mod}+Backspace]`,
   ]);
 });
 

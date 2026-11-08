@@ -1126,6 +1126,42 @@ for (const outcome of ['success', 'error'] as const)
     }
   });
 
+test('Retry after a failed view restore keeps the saved offset; other jumps place the entry at its top', async (t) => {
+  const f = await transcriptController(t, 640);
+  f.controller.setTranscriptView({ anchor: { key: 'entry:e100', offset: 37 }, expanded: [] });
+  await f.controller.detach();
+  let failed = false;
+  f.handlers.set('getChatHistoryAround', async (_raw, _signal, fallback) => {
+    if (failed) return fallback();
+    failed = true;
+    throw new ApplicationError({ code: 'Unavailable', message: 'Controlled restore failure' });
+  });
+  await f.controller.start();
+  await tick();
+  let state = f.controller.getSnapshot().transcript;
+  assert.match(state.error ?? '', /Controlled restore failure/);
+  assert(!state.entries.some((entry) => entry.id === 'e100'));
+  assert.deepEqual(state.view.anchor, { key: 'entry:e100', offset: 37 });
+  // Retry jumps to the saved anchor's entry, which isn't retained.
+  await f.controller.jumpToEntry('e100');
+  state = f.controller.getSnapshot().transcript;
+  assert(state.entries.some((entry) => entry.id === 'e100'));
+  assert.equal(state.error, null);
+  assert.equal(state.atLatest, false);
+  assert.deepEqual(state.view.anchor, { key: 'entry:e100', offset: 37 });
+  // Once retained, a jump to it places it at its top, as does a jump elsewhere.
+  await f.controller.jumpToEntry('e100');
+  assert.deepEqual(f.controller.getSnapshot().transcript.view.anchor, {
+    key: 'entry:e100',
+    offset: 0,
+  });
+  await f.controller.jumpToEntry('e400');
+  assert.deepEqual(f.controller.getSnapshot().transcript.view.anchor, {
+    key: 'entry:e400',
+    offset: 0,
+  });
+});
+
 test('capture before delayed initial read cancels restoration without losing older history', async (t) => {
   const f = await transcriptController(t, 640);
   f.controller.setTranscriptView({ anchor: { key: 'entry:e100', offset: -4 }, expanded: [] });

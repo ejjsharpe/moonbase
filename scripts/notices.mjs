@@ -23,13 +23,42 @@ const releaseNotices = [
     sha256: 'c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4',
   },
 ];
-// First-party modules that bundle upstream assets, whose own release notice is kept beside them.
+// First-party modules that bundle upstream assets, whose own release notices are kept beside them.
+const fonts = new URL('../packages/ui/fonts/', import.meta.url);
 const assetNotices = [
   {
     inputs: /(?:^|\/)packages\/ui\/fonts\.css$/,
     label: 'BlexMono Nerd Font Mono 3.5.1 (IBM Plex Mono patched by Nerd Fonts)',
     license: 'OFL-1.1',
-    file: new URL('../packages/ui/fonts/LICENSE.txt', import.meta.url),
+    directory: fonts,
+    files: ['LICENSE.txt'],
+  },
+  {
+    // The patched fonts add Nerd Fonts' glyph sets: its README lists each set's upstream and licence.
+    // `glyphs/` comes from Nerd Fonts; `upstream/` from sets it ships no licence for, and Apache-2.0.
+    inputs: /(?:^|\/)packages\/ui\/fonts\.css$/,
+    label: 'Nerd Fonts 3.5.1 patched glyphs in BlexMono Nerd Font Mono',
+    license: 'MIT AND OFL-1.1 AND CC-BY-4.0 AND Apache-2.0 AND Unlicense',
+    directory: new URL('nerd-fonts/', fonts),
+    files: [
+      'LICENSE',
+      'README.md',
+      'glyphs/codicons/LICENSE.txt',
+      'glyphs/font-awesome/LICENSE.txt',
+      'glyphs/materialdesign/LICENSE',
+      'glyphs/octicons/LICENSE',
+      'glyphs/pomicons/LICENSE',
+      'glyphs/powerline-extra/LICENSE',
+      'glyphs/powerline-symbols/LICENSE.txt',
+      'glyphs/weather-icons/OFL.txt',
+      'upstream/apache/LICENSE-2.0.txt',
+      'upstream/devicon/LICENSE',
+      'upstream/font-awesome-extension/LICENCE',
+      'upstream/font-logos/LICENSE',
+      'upstream/hack/LICENSE.md',
+      'upstream/seti-ui/LICENSE.md',
+      'upstream/unicode-iec/LICENSE.txt',
+    ],
   },
 ];
 async function downloadNotice({ label, url, sha256 }) {
@@ -97,8 +126,15 @@ export async function notices(inputs, output) {
         asset.label +
           ' (' +
           JSON.stringify(asset.license) +
-          ')\n\nLICENSE.txt\n' +
-          (await readFile(asset.file, 'utf8')),
+          ')\n' +
+          (
+            await Promise.all(
+              asset.files.map(
+                async (file) =>
+                  '\n' + file + '\n' + (await readFile(new URL(file, asset.directory), 'utf8')),
+              ),
+            )
+          ).join('\n'),
       );
   await writeFile(output, sections.join('\n\n========================================\n\n'));
   return [...packages.keys()].sort();

@@ -3,7 +3,11 @@ import { open, realpath, rename, stat } from 'node:fs/promises';
 import { ApplicationError } from '@moonbase/contracts/errors';
 
 type Approval = { path: string; dev: number; ino: number; at: string; recent: boolean };
-const maxApprovals = 50;
+// Picker folders and chat worktrees are kept to separate limits, so worktree chats never push
+// out the folders the picker offers again.
+const maxRecentApprovals = 50;
+const maxWorktreeApprovals = 200;
+const maxApprovals = maxRecentApprovals + maxWorktreeApprovals;
 const maxRecent = 8;
 
 /**
@@ -13,12 +17,24 @@ const maxRecent = 8;
  */
 export function createFolderApprovals(file: string) {
   let approvals: Promise<Map<string, Approval>> | undefined;
-  let saving: Promise<unknown> = Promise.resolve();
+  let saving: Promise<unknown> = Promise.resolve(),
+    last = 0;
+  // Strictly increasing, so the order of uses within one millisecond survives sorting.
+  const now = () => new Date((last = Math.max(Date.now(), last + 1))).toISOString();
   const load = () => (approvals ??= readApprovals(file));
   const save = (map: Map<string, Approval>) => {
     const entries = [...map.values()].sort((a, b) => b.at.localeCompare(a.at));
-    for (const old of entries.slice(maxApprovals)) map.delete(old.path);
-    const write = saving.then(() => writeApprovals(file, entries.slice(0, maxApprovals)));
+    const kept = new Set([
+      ...entries.filter((approval) => approval.recent).slice(0, maxRecentApprovals),
+      ...entries.filter((approval) => !approval.recent).slice(0, maxWorktreeApprovals),
+    ]);
+    for (const old of entries) if (!kept.has(old)) map.delete(old.path);
+    const write = saving.then(() =>
+      writeApprovals(
+        file,
+        entries.filter((approval) => kept.has(approval)),
+      ),
+    );
     saving = write.catch(() => {});
     return write;
   };
@@ -55,19 +71,22 @@ export function createFolderApprovals(file: string) {
         path: cwd,
         dev: info.dev,
         ino: info.ino,
-        at: new Date().toISOString(),
+        at: now(),
         recent: recent || !!map.get(cwd)?.recent,
       });
       // A folder stays approved for this run even if it could not be saved for the next one.
       await save(map).catch(() => {});
       return cwd;
     },
-    /** Marks an approved folder as just used, so it leads the recent folders. */
+    /**
+     * Marks an approved folder as just used, so it leads the recent folders, or for a worktree is
+     * the last to lapse.
+     */
     async touch(path: string) {
       const map = await load(),
         approved = map.get(path);
-      if (!approved?.recent) return;
-      map.set(path, { ...approved, at: new Date().toISOString() });
+      if (!approved) return;
+      map.set(path, { ...approved, at: now() });
       await save(map).catch(() => {});
     },
     /** Recently used approved folders that are still the same directory, newest first. */
@@ -98,7 +117,7 @@ async function readApprovals(file: string) {
     const info = await handle.stat();
     if (
       !info.isFile() ||
-      info.size > 64 * 1024 ||
+      info.size > 512 * 1024 ||
       info.uid !== process.getuid?.() ||
       info.mode & 0o077
     )

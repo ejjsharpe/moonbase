@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -348,8 +349,22 @@ function Activity({
   parts: readonly ChatTranscriptPart[];
 }) {
   const steps = groupActivitySteps(parts, source.kind === 'entry' ? source.entryId : undefined);
-  // An output row has no line of its own: it continues its call's step above it.
-  const outputOnly = steps.every(isOutputStep);
+  const openCalls = useContext(OpenCallsContext);
+  /** The entries this row's outputs answer that the transcript retains. */
+  const retainedCalls = useSyncExternalStore(openCalls?.subscribe ?? noSubscription, () =>
+    steps
+      .flatMap((step) => {
+        const call = getAnsweredCall(step);
+        return call && (openCalls?.isRetained(call.entryId) ?? true) ? [call.entryId] : [];
+      })
+      .join('\n'),
+  ).split('\n');
+  // While its call's row is retained, an output draws no line: it continues its call's step.
+  const isOutput = (step: ActivityStep) => {
+    const call = getAnsweredCall(step);
+    return !!call && retainedCalls.includes(call.entryId);
+  };
+  const outputOnly = steps.every(isOutput);
   return (
     <section
       data-transcript-activity=""
@@ -360,7 +375,12 @@ function Activity({
         outputOnly && styles.activityOutput,
       )}>
       {steps.map((step) => (
-        <ActivityStepView key={step.lead.partId} step={step} source={source} {...context}>
+        <ActivityStepView
+          key={step.lead.partId}
+          step={step}
+          output={isOutput(step)}
+          source={source}
+          {...context}>
           {children}
         </ActivityStepView>
       ))}
@@ -380,13 +400,16 @@ type StepContext = {
   children: (open: boolean, parts: readonly ChatTranscriptPart[]) => ReactNode;
 };
 
-/** A step whose lead answers a call recorded in another row: the call's output, shown with it. */
-const isOutputStep = (step: ActivityStep) =>
-  !!step.lead.call && step.lead.pairing === 'matched' && step.lead.kind !== 'arguments';
+/** The call in another row a step answers: the step is that call's output. */
+const getAnsweredCall = (step: ActivityStep) =>
+  step.lead.call && step.lead.pairing === 'matched' && step.lead.kind !== 'arguments'
+    ? step.lead.call
+    : undefined;
 
 /**
  * One step: a line saying what it did, which opens to the parts behind it. A call's output in a
- * later row opens and closes with the call.
+ * later row draws no line and opens with the call; an output open on its own (Find revealing a
+ * match in it) shows its call open too, and folding the call folds it.
  */
 function ActivityStepView({
   step,
@@ -397,8 +420,13 @@ function ActivityStepView({
   expandedIds,
   match,
   revealing,
+  output,
   children,
-}: StepContext & { step: ActivityStep }) {
+}: StepContext & {
+  step: ActivityStep;
+  /** The step answers a call in a retained row, so it shows under that call's line. */
+  output: boolean;
+}) {
   const parts = [step.lead, ...step.answers];
   const partIds = parts.map((part) => part.partId);
   const disclosure = useDisclosure({
@@ -411,8 +439,8 @@ function ActivityStepView({
     revealing,
     controller,
   });
-  const output = isOutputStep(step);
-  const followKey = output ? `${step.lead.call!.entryId}\n${step.lead.call!.partId}` : '';
+  const call = output ? getAnsweredCall(step) : undefined;
+  const followKey = call ? `${call.entryId}\n${call.partId}` : '';
   const publishKey =
     step.lead.kind === 'arguments' && source.kind === 'entry'
       ? `${source.entryId}\n${step.lead.partId}`
@@ -422,27 +450,39 @@ function ActivityStepView({
     openCalls?.subscribe ?? noSubscription,
     () => !!followKey && !!openCalls?.isOpen([followKey]),
   );
+  /** This call's output is open on its own, so the call shows open. */
+  const outputOpen = useSyncExternalStore(
+    openCalls?.subscribe ?? noSubscription,
+    () => !!publishKey && !!openCalls?.isOutputOpen([publishKey]),
+  );
   useEffect(() => {
     if (!openCalls || !publishKey) return;
     openCalls.set([publishKey], disclosure.open);
   }, [openCalls, publishKey, disclosure.open]);
-  const open = disclosure.open || following;
+  const outputId = useId();
+  const fold = useRef(disclosure.onOpenChange);
+  useLayoutEffect(() => {
+    fold.current = disclosure.onOpenChange;
+  });
+  useEffect(() => {
+    if (!openCalls || !followKey) return;
+    openCalls.setOutput(outputId, [followKey], {
+      open: disclosure.open,
+      fold: () => fold.current(),
+    });
+    return () => openCalls.setOutput(outputId, [followKey], null);
+  }, [openCalls, followKey, outputId, disclosure.open]);
+  const open = disclosure.open || following || outputOpen;
+  const changeOpen = (next: boolean) => {
+    if (!next && outputOpen) openCalls?.foldOutputs([publishKey]);
+    if (next !== disclosure.open) disclosure.onOpenChange();
+  };
   const state = output ? undefined : getActivityStepState(step, { source }, evidence);
+  const panelId = useId();
+  // A plain disclosure, not a Collapsible: a long run renders hundreds of steps, and each
+  // Collapsible measures its panel.
   return (
-    <Collapsible.Root
-      open={open}
-      onOpenChange={disclosure.onOpenChange}
-      disabled={disclosure.disabled}
-      render={<div data-transcript-step="" />}>
-      {/* An output step draws no line; its opener stays for the keyboard, for when its call's
-          row is not loaded. */}
-      {output && (
-        <Collapsible.Trigger
-          aria-label={`Activity · ${parts.length} recorded ${parts.length === 1 ? 'part' : 'parts'}`}
-          {...stylex.props(controls.button, controls.iconButton, controls.hidden)}>
-          <Icon name="chevron" />
-        </Collapsible.Trigger>
-      )}
+    <div data-transcript-step="" data-open={open ? '' : undefined}>
       {!output && (
         <div
           title={describeActivityStep(step, { source }, evidence)}
@@ -450,7 +490,7 @@ function ActivityStepView({
           // The whole line opens the step, as its chevron does.
           onClick={(event) => {
             if ((event.target as Element).closest('button')) return;
-            if (!window.getSelection()?.toString()) disclosure.onOpenChange();
+            if (!window.getSelection()?.toString()) changeOpen(!open);
           }}
           {...stylex.props(
             styles.activitySteps,
@@ -459,12 +499,18 @@ function ActivityStepView({
             state === 'running' && spinner.glyph,
           )}>
           <ActivityHeadlineText headline={describeActivityHeadline(step, { source }, evidence)} />
-          <Collapsible.Trigger
+          <button
+            type="button"
             aria-label={`Activity · ${parts.length} recorded ${parts.length === 1 ? 'part' : 'parts'}`}
+            aria-expanded={open}
+            aria-controls={panelId}
+            data-panel-open={open ? '' : undefined}
             title="Show recorded parts"
+            disabled={disclosure.disabled}
+            onClick={() => changeOpen(!open)}
             {...stylex.props(controls.button, controls.iconButton, styles.activityToggle)}>
             <Icon name="chevron" />
-          </Collapsible.Trigger>
+          </button>
         </div>
       )}
       {disclosure.disclosureError && (
@@ -473,10 +519,10 @@ function ActivityStepView({
         </p>
       )}
       {/* Kept mounted so Find can hydrate folded parts. */}
-      <Collapsible.Panel keepMounted {...stylex.props(open && styles.activityPanel)}>
+      <div id={panelId} hidden={!open} {...stylex.props(open && styles.activityPanel)}>
         {children(open, parts)}
-      </Collapsible.Panel>
-    </Collapsible.Root>
+      </div>
+    </div>
   );
 }
 
@@ -496,7 +542,7 @@ function ActivityHeadlineText({ headline }: { headline: ActivityHeadline }) {
 }
 
 /**
- * A run of tool rows folded behind one line, as T3 Code does it: "Worked for 1m 29s", a chevron, the
+ * A run of tool rows folded behind one line: "Worked for 1m 29s", a chevron, the
  * clock time at the far end, and a rule under it. While it works it reads "Working for 14s", and the
  * line under the rule says what it is doing now or the thought it is on.
  */
