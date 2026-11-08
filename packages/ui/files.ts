@@ -50,6 +50,8 @@ export const filesUI = stylex.create({
   },
   activeLabel: { color: colors.text },
   ignored: { color: colors.muted },
+  // A cut entry, until it is pasted or the cut is cleared.
+  cut: { opacity: 0.55 },
   disclosure: { display: 'inline-flex', width: 16, height: 16, flexShrink: 0 },
   rotated: { transform: 'rotate(90deg)' },
   message: { color: colors.muted, fontSize: type.small },

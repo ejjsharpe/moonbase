@@ -26,7 +26,6 @@ import { FilesTreeName, type NameCommit } from './files-tree-name.tsx';
 import { FilesTreeRow } from './files-tree-row.tsx';
 import {
   listVisibleRows,
-  measureStem,
   placeholderPath,
   rowHeight,
   selectMountedIndexes,
@@ -52,6 +51,7 @@ import {
   type TreeDrag,
 } from './files-tree-drop.ts';
 import { selectEntries } from './move-undo.ts';
+import { copyName, type FileClipboard } from './file-clipboard.ts';
 import type { RunMutation } from './mutation-runner.tsx';
 
 /**
@@ -108,15 +108,10 @@ const canRefocus = (element: Element | null): element is HTMLElement =>
   element.getClientRects().length > 0 &&
   !element.matches(':disabled') &&
   !element.closest('[inert]');
-/** `name copy.ext`, the name a duplicate starts with. */
-function copyName(name: string) {
-  const stem = measureStem(name, false);
-  return `${name.slice(0, stem)} copy${name.slice(stem)}`;
-}
 /** The name a field starts with: an entry's own, its copy's, or none for a new one. */
 function startingName(edit: TreeEdit) {
   if (edit.kind === 'rename') return nameOf(edit.path);
-  return edit.kind === 'duplicate' ? copyName(nameOf(edit.path)) : '';
+  return edit.kind === 'duplicate' ? copyName(nameOf(edit.path), false) : '';
 }
 const editLabels: Record<TreeEditKind, string> = {
   rename: 'Rename',
@@ -145,6 +140,11 @@ export function FilesTree({
   revealPath,
   mentionInChat,
   selectDroppedImports,
+  clipboard,
+  onClipboard,
+  onCancelCut,
+  canPasteInto,
+  onPaste,
 }: {
   controller: EditorController;
   state: EditorSnapshot;
@@ -179,6 +179,16 @@ export function FilesTree({
    * in order. Without it, such drops pass through to the app.
    */
   selectDroppedImports?: (checkout: CheckoutTarget, files: File[]) => Promise<string[]>;
+  /** The workbench's file clipboard, whose cut entries in this checkout are dimmed. */
+  clipboard: FileClipboard | null;
+  /** Puts entries on the file clipboard to copy or move (⌘C, ⌘X). */
+  onClipboard: (paths: string[], mode: FileClipboard['mode']) => void;
+  /** Clears a pending cut in this checkout; true when there was one. */
+  onCancelCut: () => boolean;
+  /** Whether the file clipboard has something to paste into `folder`. */
+  canPasteInto: (folder: string) => boolean;
+  /** Pastes into `folder`, as ⌘V does into the focused one. */
+  onPaste: (folder: string) => void;
 }) {
   const tree = readOwn(state.recovery.views, checkout.checkoutId)!.tree,
     treeElement = useRef<HTMLDivElement>(null),
@@ -440,7 +450,14 @@ export function FilesTree({
     copyPaths,
     revealPath,
     mentionInChat,
+    putOnClipboard: onClipboard,
+    canPasteInto,
+    pasteInto: onPaste,
   };
+  const cutPaths =
+    clipboard?.mode === 'cut' && checkoutKey(clipboard.checkout) === checkoutIdentity
+      ? clipboard.paths
+      : [];
   useEffect(() => {
     const element = treeElement.current;
     if (!element) return;
@@ -762,6 +779,7 @@ export function FilesTree({
         }
       });
     },
+    cancelCut: onCancelCut,
   };
   const root = state.listings[JSON.stringify([checkoutIdentity, ''])];
   const mountedIndexes = selectMountedIndexes({
@@ -947,6 +965,10 @@ export function FilesTree({
                 focused={!row.placeholder && tree.focus === row.path}
                 active={row.path === active}
                 dirty={dirtyPaths.has(row.path)}
+                cut={
+                  !row.placeholder &&
+                  cutPaths.some((path) => row.path === path || row.path.startsWith(path + '/'))
+                }
                 status={statuses.get(row.path)}
                 label={label}
                 draggable={!edit && !dialogOpen && !row.placeholder}
@@ -1015,7 +1037,7 @@ export function FilesTree({
               }}
               {...stylex.props(overlays.popup, overlays.menuPopup, overlays.wideMenu)}>
               {menu &&
-                listFileCommands(commandContext, menu.paths).map((item, index) =>
+                listFileCommands(commandContext, menu.paths, menu.path).map((item, index) =>
                   item === 'separator' ? (
                     <ContextMenu.Separator key={index} {...stylex.props(overlays.separator)} />
                   ) : (

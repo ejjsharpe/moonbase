@@ -13,6 +13,7 @@ import { gitStatusMarks } from './files-tree-status.ts';
 import { Mutation, type Action } from './mutation.tsx';
 import { useMutationRunner } from './mutation-runner.tsx';
 import { useMoveUndo } from './move-undo.ts';
+import { useFileClipboard } from './file-clipboard.ts';
 import { maxDraggedEntries } from './files-tree-drop.ts';
 import { formatKeys } from './file-commands.ts';
 import { Popup } from './popup.tsx';
@@ -210,6 +211,19 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   // Moves and renames made from the tree, one per checkout, for Undo; any other file operation
   // from the tree or a dialog forgets the checkout's.
   const moveUndo = useMoveUndo(controller, mutations.runMutation, openCheckouts);
+  // Entries cut or copied in the tree, until pasted; copies forget the move to undo.
+  const fileClipboard = useFileClipboard({
+    controller,
+    runMutation: moveUndo.run,
+    recordMove: moveUndo.record,
+    canRequestMutation: (value) =>
+      canRequestMutation(
+        value,
+        controller.getSnapshot(),
+        !!(actionRef.current || lookupRef.current || mutations.isRunning()),
+      ),
+    copyPaths,
+  });
   function requestMutation(value: Action, finalFocus?: () => boolean | HTMLElement | null) {
     if (
       !canRequestMutation(
@@ -261,6 +275,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   const menuCapture = useRef<string[]>([]),
     menuKeyboard = useRef(false),
     root = useRef<HTMLDivElement>(null),
+    explorerElement = useRef<HTMLDivElement>(null),
     explorerActionsButton = useRef<HTMLButtonElement>(null);
   const targetIdentity = target && fileKey(target);
   const targetPath = target?.path;
@@ -544,10 +559,12 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     document?.addEventListener('keydown', onExternalTab, true);
     return () => document?.removeEventListener('keydown', onExternalTab, true);
   }, [controller]);
+  /** ⌘V in the explorer: pastes into the tree's focused folder, or the focused file's folder. */
   function pasteFiles(event: React.ClipboardEvent | React.KeyboardEvent) {
     if (
       !checkout ||
-      !selectClipboardImports ||
+      !selected ||
+      (!selectClipboardImports && !fileClipboard.clipboard) ||
       !event.currentTarget.contains(event.target as Node) ||
       (event.target as HTMLElement).closest('[role="menu"], [role="dialog"]') ||
       (event.target as HTMLElement).closest('input,textarea,select,[contenteditable=true]')
@@ -555,8 +572,40 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       return;
     event.preventDefault();
     event.stopPropagation();
-    const captured = { ...checkout };
-    run(selectClipboardImports(captured).then((references) => importFiles(captured, references)));
+    pasteInto(
+      checkout,
+      findCreateFolder(state.listings, checkoutKey(checkout), selected.tree.focus),
+    );
+  }
+  const filesTree = () =>
+    explorerElement.current?.querySelector<HTMLElement>('[role="tree"][aria-label="Files"]') ??
+    false;
+  /**
+   * Pastes into a checkout's `folder`: files copied in the OS since, which import as before, or
+   * else the tree's cut or copied entries, which are then selected in the tree.
+   */
+  function pasteInto(target: CheckoutTarget, folder: string) {
+    const captured = { ...target };
+    run(
+      (async () => {
+        if (selectClipboardImports) {
+          const references = await selectClipboardImports(captured);
+          if (references.length) {
+            importFiles(captured, references);
+            return;
+          }
+        }
+        const landed = await fileClipboard.paste(captured, folder, filesTree);
+        if (!landed.length) return;
+        setAnchorReset((value) => value + 1);
+        // Focus the user moved elsewhere meanwhile stays there.
+        const focused = document.activeElement;
+        if (!focused || focused === document.body || explorerElement.current?.contains(focused)) {
+          const tree = filesTree();
+          if (tree) tree.focus();
+        }
+      })(),
+    );
   }
   function revealActive() {
     if (!checkout || !target) return;
@@ -644,6 +693,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   const explorer =
     checkout && selected ? (
       <div
+        ref={explorerElement}
         {...stylex.props(styles.panel)}
         onPaste={pasteFiles}
         onKeyDown={(event) => {
@@ -709,6 +759,11 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                 revealPath={revealPath}
                 mentionInChat={mentionInChat}
                 selectDroppedImports={selectDroppedImports}
+                clipboard={fileClipboard.clipboard}
+                onClipboard={(paths, mode) => fileClipboard.put(checkout, paths, mode)}
+                onCancelCut={() => fileClipboard.cancelCut(checkout)}
+                canPasteInto={(folder) => fileClipboard.canPaste(checkout, folder)}
+                onPaste={(folder) => pasteInto(checkout, folder)}
               />
             </>
           ) : (

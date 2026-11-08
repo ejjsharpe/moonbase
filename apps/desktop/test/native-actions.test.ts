@@ -6,7 +6,9 @@ import { createNativeActions } from '../src/main/native-actions.ts';
 test('native imports require consent, preserve capture identity and cancel before capture', async () => {
   let consent = 0,
     cancelled = false,
-    clipboardReads = 0;
+    prompts = 0,
+    payloadReads = 0,
+    finderFiles = false;
   let finishPicker!: () => void;
   let holdPicker = false;
   const captured: unknown[] = [],
@@ -21,13 +23,25 @@ test('native imports require consent, preserve capture identity and cancel befor
           });
         return { canceled: cancelled, filePaths: ['/picked'] };
       },
-      showMessageBox: async () => ({ response: consent, checkboxChecked: false }),
+      showMessageBox: async () => {
+        prompts++;
+        return { response: consent, checkboxChecked: false };
+      },
     } as Pick<Dialog, 'showOpenDialog' | 'showMessageBox'>,
     clipboard: {
-      read: async () => {
-        clipboardReads++;
-        return [];
-      },
+      // Finder's file list, empty here, under the type Electron reports for it.
+      read: async () =>
+        finderFiles
+          ? [
+              {
+                types: ['NSFilenamesPboardType'],
+                getType: async () => {
+                  payloadReads++;
+                  return new Blob([]);
+                },
+              } as unknown as Electron.ClipboardItem,
+            ]
+          : [],
       writeText: async () => {},
     },
     shell: { showItemInFolder: () => {} },
@@ -47,10 +61,18 @@ test('native imports require consent, preserve capture identity and cancel befor
     branch: 'main',
     worktree: 'main' as 'main' | 'linked',
   };
+  // A clipboard without Finder files has nothing to import or ask about.
+  consent = 1;
   assert.deepEqual(await actions.imports(checkout, 'clipboard'), []);
-  assert.equal(clipboardReads, 0);
+  assert.equal(prompts, 0);
+  // Finder files are read only after consent.
+  finderFiles = true;
+  consent = 0;
+  assert.deepEqual(await actions.imports(checkout, 'clipboard'), []);
+  assert.deepEqual([prompts, payloadReads], [1, 0]);
   consent = 1;
   await assert.rejects(actions.imports(checkout, 'clipboard'), { code: 'InvalidInput' });
+  assert.deepEqual([prompts, payloadReads], [2, 1]);
   assert.equal(await actions.chooseCheckout(), '/picked');
   assert.deepEqual(await actions.imports(checkout, 'picker'), ['reference']);
   assert.deepEqual(captured, [{ checkout, clientId: 'desktop-primary', paths: ['/picked'] }]);

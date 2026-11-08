@@ -21,6 +21,8 @@ export type TreeNavigation = {
   commandsFor(paths: string[]): (FileCommand | 'separator')[];
   /** Undoes the tree's last move or rename (⌘Z, Ctrl+Z off a Mac). */
   undo(): void;
+  /** Clears a pending cut (Escape); true when there was one. */
+  cancelCut(): boolean;
 };
 
 const mac = typeof navigator !== 'undefined' && navigator.platform.includes('Mac');
@@ -97,6 +99,8 @@ export function handleTreeKeyDown(event: KeyboardEvent<HTMLElement>, navigation:
         { checkout, path: row.path },
         { view: 'file', intent: event.key === ' ' ? 'preview' : 'keep' },
       );
+  } else if (event.key === 'Escape' && !event.metaKey && !event.ctrlKey && !event.altKey) {
+    if (navigation.cancelCut()) event.preventDefault();
   } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'a') {
     event.preventDefault();
     controller.tree(checkout, { selected: rows.map((row) => row.path) });

@@ -45,6 +45,14 @@ export function createNativeActions({
         paths = result.filePaths;
       }
       if (kind === 'clipboard') {
+        // Only Finder files import. Without them, such as after text was copied, there is
+        // nothing to ask about, and the renderer pastes its own entries instead.
+        const items = await clipboard.read();
+        const item = items.find((item) =>
+          item.types.some((type) => type.includes('NSFilenamesPboardType')),
+        );
+        const format = item?.types.find((type) => type.includes('NSFilenamesPboardType'));
+        if (!item || !format) return [];
         const consent = await dialog.showMessageBox(window, {
           type: 'question',
           message: 'Import clipboard files?',
@@ -54,16 +62,9 @@ export function createNativeActions({
           cancelId: 0,
         });
         if (consent.response !== 1) return [];
-        const items = await clipboard.read();
-        const item = items.find((item) =>
-          item.types.some((type) => type.includes('NSFilenamesPboardType')),
-        );
-        const format = item?.types.find((type) => type.includes('NSFilenamesPboardType'));
-        const payload = item && format ? await item.getType(format) : undefined;
+        const payload = await item.getType(format);
         const bytes =
-          payload && 'arrayBuffer' in payload
-            ? Buffer.from(await payload.arrayBuffer())
-            : Buffer.alloc(0);
+          'arrayBuffer' in payload ? Buffer.from(await payload.arrayBuffer()) : Buffer.alloc(0);
         if (!bytes.length)
           throw new ApplicationError({
             code: 'InvalidInput',

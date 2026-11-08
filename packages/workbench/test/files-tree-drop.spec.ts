@@ -50,6 +50,8 @@ test('a drop is refused onto or into a dragged entry, where nothing would move, 
     'b.ts',
     'docs/c.md',
   ]);
+  // Two entries landing on one name.
+  expect(planDrop(drag('x/a.ts', 'y/A.ts'), into('src'))).toBeNull();
   // Another editor, another checkout, or no drag from a tree at all.
   expect(planDrop(drag('a.ts'), { ...into('src'), source: 'other' })).toBeNull();
   expect(planDrop(drag('a.ts'), { ...into('src'), checkout: 'other' })).toBeNull();
