@@ -1985,3 +1985,129 @@ test('the title bar names the open file, and project chats close fully and reope
     'Project chats',
   ]);
 });
+
+test('hiding project chats from inside them hands focus to the project, so the window keys still work', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?local&design');
+  await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
+  await page.getByRole('tab', { name: 'moonbase · main', exact: true }).click();
+  const dock = page.locator('aside[aria-label="Project chats"]');
+  const editor = page.getByRole('textbox', { name: 'welcome.ts editor', exact: true });
+  const message = dock.getByLabel('Message', { exact: true });
+  await expect.poll(widthOf(dock)).toBe(400);
+  await editor.focus();
+  // The dock's own Hide button returns focus to where it last was in the project.
+  await message.focus();
+  await dock.getByRole('button', { name: 'Hide project chats', exact: true }).click();
+  await expect.poll(widthOf(dock)).toBe(0);
+  await expect(editor).toBeFocused();
+  await page.keyboard.press('Meta+j');
+  await expect.poll(widthOf(dock)).toBe(400);
+  // So does ⌘J from the composer.
+  await message.focus();
+  await page.keyboard.press('Meta+j');
+  await expect.poll(widthOf(dock)).toBe(0);
+  await expect(editor).toBeFocused();
+  // With focus on the page itself, the shell's keys still work.
+  const blur = () => page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await blur();
+  await page.keyboard.press('Meta+j');
+  await expect.poll(widthOf(dock)).toBe(400);
+  await blur();
+  await page.keyboard.press('Meta+p');
+  const goTo = page.getByRole('dialog', { name: 'Go to', exact: true });
+  await expect(goTo).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(goTo).toHaveCount(0);
+  await blur();
+  await page.keyboard.press('Meta+,');
+  await expect(page.getByRole('dialog', { name: 'Settings', exact: true })).toBeVisible();
+});
+
+test('a peeked rail that slides away hands its focus to the view', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?local&design');
+  await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
+  const rail = page.getByRole('tablist', { name: 'Workbench views', exact: true });
+  const left = () => rail.evaluate((element) => Math.round(element.getBoundingClientRect().x));
+  await page.getByRole('button', { name: 'Hide rail', exact: true }).click();
+  await page.mouse.move(700, 500);
+  await expect.poll(left).toBe(-52);
+  await page.mouse.move(3, 500);
+  await expect.poll(left).toBe(0);
+  // Agents is already open, so its tab keeps focus.
+  const agents = rail.getByRole('tab', { name: 'Agents', exact: true });
+  await agents.click();
+  await expect(agents).toBeFocused();
+  await page.mouse.move(700, 500);
+  await expect.poll(left).toBe(-52);
+  const focused = () =>
+    page.evaluate(() => {
+      const element = document.activeElement;
+      if (!element || element === document.body) return 'page';
+      return element.closest('[aria-label="Workbench views"]') ? 'rail' : 'view';
+    });
+  await expect.poll(focused).toBe('view');
+});
+
+test('the sidebar key follows the layout: ⌘ with the key that types B, not the physical B key', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?local&design');
+  await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
+  await page.getByRole('tab', { name: 'moonbase · main', exact: true }).click();
+  const explorer = page.locator('aside[aria-label="Editor sidebar"]');
+  await expect.poll(widthOf(explorer)).toBeGreaterThan(100);
+  // Playwright can't switch layouts, so this sends the keys a layout reports. It resolves whether
+  // the page took the key, preventing its default.
+  const press = (key: string, code: string) =>
+    page.evaluate(
+      ([key, code]) => {
+        const mac = navigator.platform.startsWith('Mac');
+        return !document.body.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key,
+            code,
+            metaKey: mac,
+            ctrlKey: !mac,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      },
+      [key, code],
+    );
+  // On Dvorak the physical B key types X: that's Cut, left alone.
+  expect(await press('x', 'KeyB')).toBe(false);
+  await expect.poll(widthOf(explorer)).toBeGreaterThan(100);
+  // The key that types B there, physically N, hides the sidebar.
+  expect(await press('b', 'KeyN')).toBe(true);
+  await expect.poll(widthOf(explorer)).toBe(0);
+  // A non-Latin layout falls back to the physical key.
+  expect(await press('и', 'KeyB')).toBe(true);
+  await expect.poll(widthOf(explorer)).toBeGreaterThan(100);
+});
+
+test('Settings shows why switching hosts failed', async ({ page }) => {
+  await page.goto('/?local&hosts');
+  await tabs(page).getByRole('tab', { name: 'Agents', exact: true }).click();
+  const message = shell(page).getByLabel('Message', { exact: true });
+  await expect(message).toBeEnabled();
+  // The switch fails the way the application refuses one, with its own error.
+  await page.evaluate(() => {
+    const application = window.demo.application;
+    const select = application.selectChatTarget.bind(application);
+    application.selectChatTarget = () => select('missing');
+  });
+  await message.press('Meta+,');
+  const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+  const use = settings.getByRole('button', { name: 'Use Studio', exact: true });
+  await use.click();
+  await expect(settings.getByRole('alert')).toHaveText(
+    'Chat target is unavailable or another selection is pending.',
+  );
+  await expect(use).toBeEnabled();
+});

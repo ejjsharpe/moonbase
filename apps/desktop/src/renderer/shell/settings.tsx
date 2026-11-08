@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { Button } from '@base-ui/react/button';
 import { Dialog } from '@base-ui/react/dialog';
@@ -10,6 +10,7 @@ import { colors, radius, shadow, space, type } from '@moonbase/ui/tokens.stylex'
 import { workbench } from '@moonbase/ui/workbench';
 import { ProviderSetup } from '../chat/setup.tsx';
 import { Icon } from '../icon.tsx';
+import { errorDTO } from '../../wire.ts';
 
 export type SettingsSection = 'hosts' | 'providers';
 const noSubscription = () => () => {};
@@ -112,6 +113,12 @@ function Hosts({
   let targets = lifecycle.chatTargets;
   if (!targets.length && chat) targets = [{ id: '', label: local ? 'Local' : 'Remote host' }];
   const switching = lifecycle.phase !== 'live' || lifecycle.chat.state === 'opening';
+  // Why the last Use failed, such as a chat that could not be preserved; the next Use clears it.
+  const [switchError, setSwitchError] = useState<string | null>(null);
+  const switchTarget = (id: string) => {
+    setSwitchError(null);
+    void application.selectChatTarget(id).catch((error) => setSwitchError(errorDTO(error).message));
+  };
   return (
     <>
       <h2 {...stylex.props(styles.heading)}>Hosts</h2>
@@ -125,7 +132,7 @@ function Hosts({
                 aria-label={`Use ${target.label}`}
                 {...stylex.props(controls.button)}
                 disabled={switching}
-                onClick={() => void application.selectChatTarget(target.id).catch(() => {})}>
+                onClick={() => switchTarget(target.id)}>
                 Use
               </Button>
             );
@@ -168,6 +175,11 @@ function Hosts({
           );
         })}
       </ul>
+      {switchError && (
+        <p role="alert" {...stylex.props(styles.note, controls.alert)}>
+          {switchError}
+        </p>
+      )}
       {state && chat && (
         <div {...stylex.props(styles.details)}>
           <p {...stylex.props(styles.para)}>
