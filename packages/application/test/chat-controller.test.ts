@@ -2482,3 +2482,202 @@ test('a background reload lists again without clearing an error or Refresh state
   assert.equal(f.controller.getSnapshot().chats[0].title, 'Renamed');
   assert.deepEqual(f.controller.getSnapshot().active, []);
 });
+
+test('a draft mention the saved format rejects is refused without blocking storage, Send or Quit', async (t) => {
+  const { formatChatMention } = await import('@moonbase/contracts/chat');
+  const f = await fixture(t);
+  await ready(f);
+  f.controller.setDraft('Before');
+  for (const path of [
+    'a"b.ts',
+    'a\\b.ts',
+    'x\u0001.ts',
+    '../up.ts',
+    'a/./b.ts',
+    'd/'.repeat(600),
+  ]) {
+    const value = `Look at ${formatChatMention(path)} `;
+    f.controller.setDraft(value, [{ path }]);
+    const state = f.controller.getSnapshot();
+    assert.match(state.error ?? '', /relative path/, path);
+    assert.equal(state.storageError, null);
+    assert.equal(state.draft, 'Before');
+    assert.deepEqual(state.mentions, []);
+  }
+  assert.equal(JSON.parse(f.storage.value!).drafts[0].text, 'Before');
+  assert.equal(f.controller.preserve(), true);
+  f.controller.setDraft('Now @ok.ts', [{ path: 'ok.ts' }]);
+  assert.equal(f.controller.getSnapshot().storageError, null);
+  await f.controller.send();
+  const send = f.calls.find((call) => call.operation === 'sendChat')!.input as {
+    mentions?: unknown;
+  };
+  assert.deepEqual(send.mentions, [{ path: 'ok.ts' }]);
+  assert.equal(f.controller.preserve(), true);
+});
+
+test('a Send in flight is dispatching, and only an uncertain one stays pending for the Ready list', async (t) => {
+  const { groupChatsByActivity } = await import('@moonbase/application/chat');
+  const f = await fixture(t);
+  await ready(f);
+  const reasons = () => {
+    const state = f.controller.getSnapshot();
+    return groupChatsByActivity({
+      chats: [summary],
+      pending: state.pending,
+      dispatching: state.dispatching,
+    }).ready.map((row) => row.reason);
+  };
+  const reply = Promise.withResolvers<void>(),
+    entered = Promise.withResolvers<void>();
+  f.answers.set('sendChat', async () => {
+    entered.resolve();
+    await reply.promise;
+    throw failure();
+  });
+  let sawReservation = false;
+  f.controller.subscribe(() => {
+    const state = f.controller.getSnapshot();
+    // The Send is counted as in flight before its reservation is published.
+    if (state.pending.length && !sawReservation) {
+      sawReservation = true;
+      assert.deepEqual(state.dispatching, [state.pending[0]!.input.requestId]);
+    }
+  });
+  f.controller.setDraft('Hello');
+  const sending = f.controller.send();
+  await entered.promise;
+  assert(sawReservation);
+  const id = f.controller.getSnapshot().pending[0]!.input.requestId;
+  assert.deepEqual(f.controller.getSnapshot().dispatching, [id]);
+  assert.deepEqual(reasons(), []);
+  reply.resolve();
+  await sending;
+  assert.deepEqual(f.controller.getSnapshot().dispatching, []);
+  assert.equal(f.controller.getSnapshot().pending.length, 1);
+  assert.deepEqual(reasons(), ['unconfirmed']);
+  // An explicit retry is in flight again until it is admitted.
+  const retried = Promise.withResolvers<void>();
+  f.answers.set('sendChat', async (input: ChatCommands['sendChat']['input']) => {
+    await retried.promise;
+    return { target, requestId: input.requestId, admission: 'admitted', submissionId: 's' };
+  });
+  const retrying = f.controller.retry(id);
+  await turn();
+  assert.deepEqual(f.controller.getSnapshot().dispatching, [id]);
+  assert.deepEqual(reasons(), []);
+  retried.resolve();
+  await retrying;
+  assert.deepEqual(f.controller.getSnapshot().dispatching, []);
+  assert.deepEqual(f.controller.getSnapshot().pending, []);
+});
+
+test('a new chat’s first message is in flight from the moment its Create is answered', async (t) => {
+  const f = await fixture(t);
+  await ready(f);
+  await f.controller.closeView();
+  const reply = Promise.withResolvers<void>(),
+    entered = Promise.withResolvers<void>();
+  f.answers.set('sendChat', async (input: ChatCommands['sendChat']['input']) => {
+    entered.resolve();
+    await reply.promise;
+    return { target, requestId: input.requestId, admission: 'admitted', submissionId: 's' };
+  });
+  let checked = 0;
+  f.controller.subscribe(() => {
+    const state = f.controller.getSnapshot();
+    for (const pending of state.pending)
+      if (pending.operation === 'sendChat') {
+        checked++;
+        assert(state.dispatching.includes(pending.input.requestId));
+      }
+  });
+  f.controller.setDraft('First message');
+  const sending = f.controller.send();
+  await entered.promise;
+  assert.equal(f.controller.getSnapshot().pending[0]!.operation, 'sendChat');
+  reply.resolve();
+  await sending;
+  assert(checked > 0);
+  assert.deepEqual(f.controller.getSnapshot().dispatching, []);
+});
+
+function pagedChats(f: Awaited<ReturnType<typeof fixture>>, pages: number) {
+  const chat = (n: number) => ({
+    ...summary,
+    target: { ...context, conversationId: 'page-chat-' + n },
+    title: 'Chat ' + n,
+  });
+  let renamed = '';
+  f.answers.set('listChats', async (input: { cursor?: string }) => {
+    const page = input.cursor ? Number(input.cursor.slice('page-'.length)) : 0;
+    return {
+      conversations: [{ ...chat(page), ...(renamed && page === 0 ? { title: renamed } : {}) }],
+      nextCursor: page + 1 < pages ? `page-${page + 1}` : null,
+    };
+  });
+  return {
+    rename: (title: string) => {
+      renamed = title;
+    },
+  };
+}
+
+test('a background reload keeps the older chats Show older added and where it continues', async (t) => {
+  const f = await fixture(t);
+  const list = pagedChats(f, 20);
+  await f.controller.start();
+  await f.controller.connect();
+  await f.controller.refresh();
+  const ids = () => f.controller.getSnapshot().chats.map((chat) => chat.target.conversationId);
+  assert.equal(ids().length, 16);
+  assert.equal(f.controller.getSnapshot().nextChats, 'page-16');
+  await f.controller.moreChats();
+  await f.controller.moreChats();
+  assert.equal(ids().length, 18);
+  assert.equal(f.controller.getSnapshot().nextChats, 'page-18');
+  list.rename('Renamed');
+  await f.controller.reloadChats();
+  assert.deepEqual(
+    ids(),
+    Array.from({ length: 18 }, (_, n) => 'page-chat-' + n),
+  );
+  assert.equal(f.controller.getSnapshot().chats[0]!.title, 'Renamed');
+  assert.equal(f.controller.getSnapshot().nextChats, 'page-18');
+  await f.controller.moreChats();
+  assert.equal(ids().at(-1), 'page-chat-18');
+  // A creation keeps the older chats too.
+  f.answers.set('createChat', async (input: ChatCommands['createChat']['input']) => ({
+    requestId: input.requestId,
+    conversation: { ...summary, target: { ...context, conversationId: 'created' } },
+  }));
+  await f.controller.create('Created');
+  assert.equal(ids().length, 20);
+  assert.equal(ids()[0], 'created');
+});
+
+test('a reload asked for during another runs once more after it', async (t) => {
+  const f = await fixture(t);
+  await f.controller.start();
+  await f.controller.connect();
+  let listings = 0,
+    title = 'First';
+  const held = Promise.withResolvers<void>();
+  f.answers.set('listChats', async () => {
+    listings++;
+    const current = title;
+    if (listings === 1) await held.promise;
+    return { conversations: [{ ...summary, title: current }], nextCursor: null };
+  });
+  const first = f.controller.reloadChats();
+  await turn();
+  title = 'After the run ended';
+  const second = f.controller.reloadChats();
+  const third = f.controller.reloadChats();
+  held.resolve();
+  await Promise.all([first, second, third]);
+  assert.equal(listings, 2);
+  assert.equal(f.controller.getSnapshot().chats[0]!.title, 'After the run ended');
+  await f.controller.reloadChats();
+  assert.equal(listings, 3);
+});

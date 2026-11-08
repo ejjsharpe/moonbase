@@ -72,3 +72,24 @@ test("the open chat's snapshot overrides its listed state", () => {
   assert.deepEqual(names(open('idle').ready), ['open:finished']);
   assert.deepEqual(names(open('idle', true).working), ['open:running']);
 });
+
+test('a Send still being sent is not unconfirmed; one whose outcome is in doubt is', () => {
+  const sending = chat('sending', { at: at(3) }),
+    uncertain = chat('uncertain', { at: at(2) });
+  const pending = [sending, uncertain].map((item) => ({
+    operation: 'sendChat' as const,
+    input: { target: item.target, requestId: 'send-' + item.target.conversationId, text: 'Hi' },
+    message: 'Outcome pending.',
+  }));
+  const groups = groupChatsByActivity({
+    chats: [sending, uncertain],
+    seen: [
+      { conversationId: 'sending', at: at(3) },
+      { conversationId: 'uncertain', at: at(2) },
+    ],
+    pending,
+    dispatching: ['send-sending'],
+  });
+  assert.deepEqual(names(groups.ready), ['uncertain:unconfirmed']);
+  assert.deepEqual(names(groups.settled), ['sending:settled']);
+});

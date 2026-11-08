@@ -368,6 +368,7 @@ export function ChatView({
     chats: state.chats,
     seen: state.seen,
     pending: state.pending,
+    dispatching: state.dispatching,
     open: state.snapshot,
   });
   const settledShown = settledOpen;
