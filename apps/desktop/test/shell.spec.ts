@@ -1018,7 +1018,10 @@ test('⇧⌘G and ⇧⌘E switch the project sidebar between Changes and Files',
   await expect(editor).toBeVisible();
   const files = page.getByRole('button', { name: 'Files', exact: true });
   const changes = page.getByRole('button', { name: 'Changes', exact: true });
+  // Inside the editor ⇧⌘G stays Monaco's Find Previous.
   await editor.press('Shift+Meta+g');
+  await expect(files).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('tree', { name: 'Files', exact: true }).press('Shift+Meta+g');
   await expect(changes).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByRole('region', { name: 'Staged', exact: true })).toBeVisible();
   await editor.press('Shift+Meta+e');
