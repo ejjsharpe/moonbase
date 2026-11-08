@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -39,6 +40,7 @@ import {
   groupActivitySteps,
   groupTranscriptParts,
   type ActivityEvidence,
+  type ActivityStep,
 } from './activity.ts';
 import { RecordedPatch } from './recorded-patch.tsx';
 import { StoredImage } from './stored-image.tsx';
@@ -366,17 +368,33 @@ function Activity({
     revealing,
     controller,
   });
-  // One headline per call, marked by its state like a task list. A call's output is recorded in
-  // a later row; that row shows no line of its own and opens with its call's card.
-  const steps = new Map<string, string | undefined>();
-  const follows: string[] = [];
-  for (const step of groupActivitySteps(
+  const openCalls = useContext(OpenCallsContext);
+  const activitySteps = groupActivitySteps(
     parts,
     source.kind === 'entry' ? source.entryId : undefined,
-  )) {
-    const lead = step.lead;
-    if (lead.call && lead.pairing === 'matched' && lead.kind !== 'arguments') {
-      follows.push(`${lead.call.entryId}\n${lead.call.partId}`);
+  );
+  const answers = (step: ActivityStep) =>
+    step.lead.call && step.lead.pairing === 'matched' && step.lead.kind !== 'arguments'
+      ? step.lead.call
+      : undefined;
+  /** The entries this group's outputs answer that the transcript retains. */
+  const retainedCalls = useSyncExternalStore(openCalls?.subscribe ?? noSubscription, () =>
+    activitySteps
+      .flatMap((step) => {
+        const call = answers(step);
+        return call && (openCalls?.isRetained(call.entryId) ?? true) ? [call.entryId] : [];
+      })
+      .join('\n'),
+  ).split('\n');
+  // One headline per call, marked by its state like a task list. A call's output is recorded in
+  // a later row; while the call's row is retained, that row shows no line of its own and opens
+  // with its call's card.
+  const steps = new Map<string, string | undefined>();
+  const follows: string[] = [];
+  for (const step of activitySteps) {
+    const call = answers(step);
+    if (call && retainedCalls.includes(call.entryId)) {
+      follows.push(`${call.entryId}\n${call.partId}`);
       continue;
     }
     const summary = describeActivityStep(step, { source }, evidence);
@@ -388,25 +406,44 @@ function Activity({
           .filter((part) => part.kind === 'arguments')
           .map((part) => `${source.entryId}\n${part.partId}`)
       : [];
-  const openCalls = useContext(OpenCallsContext);
   const followKey = follows.join('\t'),
     publishKey = publishes.join('\t');
   const following = useSyncExternalStore(
     openCalls?.subscribe ?? noSubscription,
     () => !!followKey && !!openCalls?.isOpen(followKey.split('\t')),
   );
+  /** An output of this card's calls is open on its own, so the card shows open. */
+  const outputOpen = useSyncExternalStore(
+    openCalls?.subscribe ?? noSubscription,
+    () => !!publishKey && !!openCalls?.isOutputOpen(publishKey.split('\t')),
+  );
   useEffect(() => {
     if (!openCalls || !publishKey) return;
     const keys = publishKey.split('\t');
     openCalls.set(keys, disclosure.open);
   }, [openCalls, publishKey, disclosure.open]);
-  const open = disclosure.open || following;
+  const open = disclosure.open || following || outputOpen;
   // An output row has no headline: it is part of the call's step above it.
   const outputOnly = steps.size === 0 && follows.length > 0;
+  const outputId = useId();
+  const fold = useRef(disclosure.onOpenChange);
+  useLayoutEffect(() => {
+    fold.current = disclosure.onOpenChange;
+  });
+  useEffect(() => {
+    if (!openCalls || !outputOnly) return;
+    const keys = followKey.split('\t');
+    openCalls.setOutput(outputId, keys, { open: disclosure.open, fold: () => fold.current() });
+    return () => openCalls.setOutput(outputId, keys, null);
+  }, [openCalls, outputOnly, followKey, outputId, disclosure.open]);
+  const changeOpen = (next: boolean) => {
+    if (!next && outputOpen) openCalls?.foldOutputs(publishKey.split('\t'));
+    if (next !== disclosure.open) disclosure.onOpenChange();
+  };
   return (
     <Collapsible.Root
       open={open}
-      onOpenChange={disclosure.onOpenChange}
+      onOpenChange={changeOpen}
       disabled={disclosure.disabled}
       render={<section data-transcript-activity />}
       {...stylex.props(

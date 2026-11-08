@@ -60,15 +60,17 @@ export async function showRow(page: Page, key: string) {
 }
 
 /**
- * Opens the latest card whose headline names `tool`, with a pointer on its chevron as a reader
- * does. A call's output in a later row (the live response, say) has no chevron and opens with it.
+ * Opens the latest stored call whose headline names `tool`, with a pointer on its chevron as a
+ * reader does, once the call is stored. A call's output in a later row (the live response, say)
+ * has no chevron and opens with it.
  */
 export async function openCallCard(page: Page, tool: string) {
   const toggle = page
-    .locator('[data-transcript-row]')
+    .locator('[data-transcript-row^="entry:"]')
     .filter({ has: page.getByRole('listitem').filter({ hasText: tool }) })
     .last()
     .getByRole('button', { name: /^Activity/ });
+  await expect(toggle).toBeVisible();
   await toggle.click();
   return toggle;
 }

@@ -173,6 +173,10 @@ export function Transcript({
   if (preserve) liveLabel = 'Selected response';
   const getRowProps = useRowProps(transcript);
   const [openCalls] = useState(createOpenCalls);
+  useLayoutEffect(
+    () => openCalls.setRetained(transcript.entries.map((entry) => entry.id)),
+    [openCalls, transcript.entries],
+  );
   const rowContext = useMemo(
     () => ({
       shared: { controller, cache, native, actions, evidence },
@@ -407,13 +411,24 @@ function TranscriptList({
     else {
       // The list reports its first visible item; the anchor names one of its stored rows.
       const visible = ref.anchorVisibleContent({ hold: false });
+      const node = ref.getScrollableNode();
       const anchor =
         visible &&
-        findReadingAnchor(
-          currentItems.current,
-          visible,
-          (key) => ref.anchorVisibleContent({ key, hold: false })?.offset,
-        );
+        findReadingAnchor(currentItems.current, visible, {
+          measure: (key) => ref.anchorVisibleContent({ key, hold: false })?.offset,
+          // From where the row is on screen, so the offset reads as the restore places it.
+          rowTop: (key) => {
+            const item = currentItemKeys.current.get(key);
+            const offset =
+              item === undefined
+                ? undefined
+                : ref.anchorVisibleContent({ key: item, hold: false })?.offset;
+            const row = node?.querySelector(`[data-transcript-row="${CSS.escape(key)}"]`);
+            return offset === undefined || !row
+              ? undefined
+              : offset - (node!.getBoundingClientRect().top - row.getBoundingClientRect().top);
+          },
+        });
       if (anchor) views.save(anchor);
     }
   }, [list, views, ready]);
@@ -450,10 +465,38 @@ function TranscriptList({
       end();
     };
   }, [list, onFollowingChange, holding]);
+  // The list placed the anchor's item at the anchor's offset; the anchor's offset is from its row,
+  // which may sit lower in the item (a card), so once placed the row moves to its own offset.
+  const { active: findActive, revealing: findRevealing } = transcript.find;
+  // Rows above it in the card can still grow as they render, so it is held there for a few frames.
+  const placed = useRef<number | null>(null),
+    placing = useRef(0);
+  useLayoutEffect(() => {
+    const ref = list.current,
+      { anchor } = placement;
+    if (!ref || !ready || placed.current === dataset) return;
+    placed.current = dataset;
+    cancelAnimationFrame(placing.current);
+    if (!anchor || findRevealing || !readRowTop(ref.getScrollableNode(), anchor.key)) return;
+    let frames = 0;
+    const hold = () => {
+      const node = ref.getScrollableNode();
+      const row = node?.querySelector(`[data-transcript-row="${CSS.escape(anchor.key)}"]`);
+      if (!node || !row || current.current.dataset !== dataset) return;
+      const moved =
+        row.getBoundingClientRect().top - node.getBoundingClientRect().top + anchor.offset;
+      if (Math.abs(moved) >= 1)
+        void ref.scrollToOffset({ offset: node.scrollTop + moved, animated: false });
+      if (++frames < 12) placing.current = requestAnimationFrame(hold);
+    };
+    hold();
+  }, [list, ready, dataset, placement, findRevealing]);
+  /** The reader's own scroll, press or key ends that hold. */
+  const releasePlace = () => cancelAnimationFrame(placing.current);
+  useEffect(() => () => cancelAnimationFrame(placing.current), []);
   // A newly revealed Find match, or one a jump just placed: scrolling to its row releases
   // following, then the match itself is revealed inside it. A match rendered later is revealed by
   // its part.
-  const { active: findActive, revealing: findRevealing } = transcript.find;
   useLayoutEffect(() => {
     const ref = list.current;
     if (!findActive || !findRevealing || !ref || !ready) return;
@@ -554,15 +597,19 @@ function TranscriptList({
       onStartReached={earlier ? pageEarlier : undefined}
       onEndReached={later ? pageLater : undefined}
       onUserScroll={() => {
+        releasePlace();
         setHolding(false);
         onReaderInput();
       }}
+      onWheelCapture={releasePlace}
       onItemSizeChanged={holdFindReveal}
       onPointerDownCapture={(event) => {
+        releasePlace();
         holdDisclosure(event);
         onReaderInput();
       }}
       onKeyDownCapture={(event) => {
+        releasePlace();
         holdDisclosure(event);
         onReaderInput();
       }}
@@ -586,6 +633,17 @@ function findPlacement(
     ? items.findIndex((item) => item.rows.some((row) => row.key === anchor.key))
     : -1;
   return index >= 0 ? { dataset, anchor, index } : { dataset, anchor: null, index: -1 };
+}
+/**
+ * A mounted row's top within its list item, the first of the item's rows (the item's rows are
+ * siblings); undefined when it isn't mounted.
+ */
+function readRowTop(scroller: HTMLElement | null | undefined, key: string) {
+  const row = scroller?.querySelector(`[data-transcript-row="${CSS.escape(key)}"]`);
+  const first = row?.parentElement?.firstElementChild;
+  return row && first
+    ? row.getBoundingClientRect().top - first.getBoundingClientRect().top
+    : undefined;
 }
 const readDevicePixel = () => 1 / window.devicePixelRatio;
 const getItemKey = (item: TranscriptItem<TranscriptRow>) => item.key;

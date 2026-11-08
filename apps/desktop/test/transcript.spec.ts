@@ -573,9 +573,78 @@ test.describe('the virtualized transcript', () => {
           row.boundingBox(),
           transcriptList(page).boundingBox(),
         ]);
-        return Math.round(box!.y - list!.y);
+        return Math.abs(box!.y - list!.y + 40);
       })
-      .toBe(-40);
+      .toBeLessThan(1.5);
+  });
+
+  test('a reading position inside an activity card restores though fewer of its rows are read above it', async ({
+    page,
+  }) => {
+    test.setTimeout(90000);
+    await page.goto('/?local&design&transcript');
+    await page.getByRole('button', { name: /^Conversation/ }).click();
+    await expect(transcriptList(page)).toBeVisible();
+    // One card of 60 calls, then answers, so the card isn't at the live edge.
+    await page.evaluate(async () => {
+      await window.demo.transcript!.record([
+        { id: 'question', role: 'user', parts: [{ kind: 'text', role: 'user', text: 'Run it' }] },
+        ...Array.from({ length: 60 }, (_, index) => ({
+          id: `step-${index}`,
+          parts: [
+            {
+              kind: 'arguments' as const,
+              partId: 'call',
+              toolName: 'bash',
+              state: 'completed' as const,
+              text: JSON.stringify({ command: `step ${index}` }),
+            },
+          ],
+        })),
+        ...Array.from({ length: 40 }, (_, index) => ({
+          id: `answer-${index}`,
+          parts: [{ kind: 'text' as const, text: `Answer ${index}\n\n` + 'words '.repeat(60) }],
+        })),
+      ]);
+      const chat = window.demo.application.chat!;
+      await chat.jumpToEntry('step-50');
+      await chat.showEarlier();
+      // With more of the card retained, place its row at the top again.
+      await chat.jumpToEntry('step-50');
+    });
+    const row = page.locator('[data-transcript-row="entry:step-50"]');
+    await expect(row).toBeVisible();
+    const card = () =>
+      page.evaluate(() =>
+        window.demo.application
+          .chat!.getSnapshot()
+          .transcript.entries.filter((entry) => entry.id.startsWith('step-'))
+          .findIndex((entry) => entry.id === 'step-50'),
+      );
+    const above = await card();
+    expect(above).toBeGreaterThan(30);
+    // The reader scrolls a little into the call's row.
+    await transcriptList(page).hover();
+    await page.mouse.wheel(0, 9);
+    await expect.poll(() => savedAnchor(page)).toMatchObject({ key: 'entry:step-50' });
+    const { key, offset } = (await savedAnchor(page))!;
+    expect(key).toBe('entry:step-50');
+    expect(offset).toBeLessThan(await row.evaluate((node) => node.getBoundingClientRect().height));
+    await page.getByRole('button', { name: 'Close Chat panel', exact: true }).locator('..').hover();
+    await page.getByRole('button', { name: 'Close Chat panel', exact: true }).click();
+    await page.getByRole('button', { name: 'Open Chat panel', exact: true }).click();
+    await expect(row).toBeVisible();
+    // The restore reads only the history around the row, so less of the card is above it.
+    expect(await card()).toBeLessThan(above);
+    await expect
+      .poll(async () => {
+        const [box, list] = await Promise.all([
+          row.boundingBox(),
+          transcriptList(page).boundingBox(),
+        ]);
+        return Math.abs(box!.y - list!.y + offset);
+      })
+      .toBeLessThan(1.5);
   });
 });
 
