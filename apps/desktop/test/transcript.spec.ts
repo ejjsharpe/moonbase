@@ -535,7 +535,14 @@ test.describe('the virtualized transcript', () => {
   test('a failed view restore shows its error and Retry above the list', async ({ page }) => {
     await openLong(page, 400);
     await page.evaluate(() => window.demo.application.chat!.jumpToEntry('long-100'));
-    await expect(page.locator('[data-transcript-row="entry:long-100"]')).toBeVisible();
+    const row = page.locator('[data-transcript-row="entry:long-100"]');
+    await expect(row).toBeVisible();
+    // The reader was 40px into the row.
+    const anchor = { key: 'entry:long-100', offset: 40 };
+    await page.evaluate(
+      (anchor) => window.demo.application.chat!.setTranscriptView({ anchor, expanded: [] }),
+      anchor,
+    );
     await page.getByRole('button', { name: 'Close Chat panel', exact: true }).locator('..').hover();
     await page.getByRole('button', { name: 'Close Chat panel', exact: true }).click();
     await page.evaluate(() => {
@@ -557,7 +564,95 @@ test.describe('the virtualized transcript', () => {
     await expect(transcriptList(page).getByRole('alert')).toHaveCount(0);
     await alert.getByRole('button', { name: 'Retry history', exact: true }).click();
     await expect(alert).toHaveCount(0);
-    await expect(page.locator('[data-transcript-row="entry:long-100"]')).toBeVisible();
+    await expect(row).toBeVisible();
+    // Retry restores the saved position, not the row's top.
+    expect(await savedAnchor(page)).toEqual(anchor);
+    await expect
+      .poll(async () => {
+        const [box, list] = await Promise.all([
+          row.boundingBox(),
+          transcriptList(page).boundingBox(),
+        ]);
+        return Math.abs(box!.y - list!.y + 40);
+      })
+      .toBeLessThan(1.5);
+  });
+
+  test('a reading position inside an activity card restores though fewer of its rows are read above it', async ({
+    page,
+  }) => {
+    test.setTimeout(90000);
+    await page.goto('/?local&design&transcript');
+    await page.getByRole('button', { name: /^Conversation/ }).click();
+    await expect(transcriptList(page)).toBeVisible();
+    // One card of 60 calls, then answers, so the card isn't at the live edge.
+    await page.evaluate(async () => {
+      await window.demo.transcript!.record([
+        { id: 'question', role: 'user', parts: [{ kind: 'text', role: 'user', text: 'Run it' }] },
+        ...Array.from({ length: 60 }, (_, index) => ({
+          id: `step-${index}`,
+          parts: [
+            {
+              kind: 'arguments' as const,
+              partId: 'call',
+              toolName: 'bash',
+              state: 'completed' as const,
+              text: JSON.stringify({ command: `step ${index}` }),
+            },
+          ],
+        })),
+        ...Array.from({ length: 40 }, (_, index) => ({
+          id: `answer-${index}`,
+          parts: [{ kind: 'text' as const, text: `Answer ${index}\n\n` + 'words '.repeat(60) }],
+        })),
+      ]);
+      const chat = window.demo.application.chat!;
+      await chat.jumpToEntry('step-50');
+      await chat.showEarlier();
+      // With more of the card retained, place its row at the top again.
+      await chat.jumpToEntry('step-50');
+    });
+    const row = page.locator('[data-transcript-row="entry:step-50"]');
+    await expect(row).toBeVisible();
+    const card = () =>
+      page.evaluate(() =>
+        window.demo.application
+          .chat!.getSnapshot()
+          .transcript.entries.filter((entry) => entry.id.startsWith('step-'))
+          .findIndex((entry) => entry.id === 'step-50'),
+      );
+    const above = await card();
+    expect(above).toBeGreaterThan(30);
+    // The reader scrolls a little into the call's row.
+    await transcriptList(page).hover();
+    await page.mouse.wheel(0, 9);
+    await expect.poll(() => savedAnchor(page)).toMatchObject({ key: 'entry:step-50' });
+    const { key, offset } = (await savedAnchor(page))!;
+    expect(key).toBe('entry:step-50');
+    expect(offset).toBeLessThan(await row.evaluate((node) => node.getBoundingClientRect().height));
+    await page.getByRole('button', { name: 'Close Chat panel', exact: true }).locator('..').hover();
+    await page.getByRole('button', { name: 'Close Chat panel', exact: true }).click();
+    await page.getByRole('button', { name: 'Open Chat panel', exact: true }).click();
+    await expect(row).toBeVisible();
+    // The restore reads only the history around the row, so less of the card is above it.
+    const restored = await card();
+    expect(restored).toBeLessThan(above);
+    const placed = async () => {
+      const [box, list] = await Promise.all([
+        row.boundingBox(),
+        transcriptList(page).boundingBox(),
+      ]);
+      return Math.abs(box!.y - list!.y + offset);
+    };
+    await expect.poll(placed).toBeLessThan(1.5);
+    // An earlier page that lands later joins rows to the card's start; the row stays put.
+    await page.evaluate(async () => {
+      const chat = window.demo.application.chat!;
+      while (chat.getSnapshot().transcript.earlier) await chat.showEarlier();
+    });
+    expect(await card()).toBe(50);
+    await expect.poll(placed).toBeLessThan(1.5);
+    expect((await savedAnchor(page))?.key).toBe('entry:step-50');
   });
 });
 
@@ -1553,7 +1648,7 @@ test('Find reading navigation cancels held reveal and editor shortcuts retain th
   await expect(
     page.getByRole('textbox', { name: 'Find in conversation', exact: true }),
   ).toHaveCount(0);
-  await page.getByRole('tab', { name: 'moonbase · main', exact: true }).press('Meta+p');
+  await page.getByRole('tab', { name: 'moonbase · main', exact: true }).press('ControlOrMeta+p');
   await expect(page.getByRole('dialog', { name: 'Go to', exact: true })).toBeVisible();
 });
 

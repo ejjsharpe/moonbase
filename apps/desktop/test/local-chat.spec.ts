@@ -15,6 +15,7 @@ import {
   showChat,
 } from './chat-target.ts';
 import { captureNative } from './editor-regressions.ts';
+import { openCallCard } from './transcript-list.ts';
 import { retainedImage } from './stored-image-fixture.ts';
 
 /** Opens the composer's folder menu and chooses a folder with the native picker. */
@@ -50,14 +51,21 @@ test.beforeAll(async () => {
         setup(builder) {
           builder.onLoad({ filter: /pi-runtime\/src\/index\.ts$/ }, async ({ path }) => {
             const source = await readFile(path, 'utf8');
+            const tools = '        registry.install(CodingTools);',
+              reads =
+                "    getChat: (d) => host.run('getChat', d, (input) => host.snapshot(input.target)),";
+            assert(
+              source.includes(tools) && source.includes(reads),
+              'Local activity tool injection point is missing',
+            );
             return {
               loader: 'ts',
               contents:
                 "import { defineExtension, defineTool } from '@earendil-works/pi-durable'; import { Type } from 'typebox';\n" +
                 source
                   .replace(
-                    '      if (!config.registry) registry.install(CodingTools);',
-                    `      if (!config.registry) registry.install(CodingTools);
+                    tools,
+                    `        registry.install(CodingTools);
       if (process.env.MOONBASE_TEST_ACTIVITY) registry.install(defineExtension({ name: 'held-local-activity', tools: [defineTool({
         name: 'controlled_activity', description: 'Controlled held output; no filesystem access', parameters: Type.Object({}),
         execute: async (_input, api, ctx) => {
@@ -70,7 +78,7 @@ test.beforeAll(async () => {
       })] }));`,
                   )
                   .replace(
-                    "    getChat: (d) => host.run('getChat', d, (input) => host.snapshot(input.target)),",
+                    reads,
                     "    getChat: (d) => { (globalThis.activityReads ??= []).push('getChat'); return host.run('getChat', d, (input) => host.snapshot(input.target)); },",
                   ),
             };
@@ -799,11 +807,15 @@ for (const mode of ['local', 'remote'] as const)
       // Folded, the card shows the running call's state; opened, the output recorded so far.
       const part = live.locator('[data-transcript-part]').filter({ hasText: /· Output · running/ });
       await expect(part).toHaveCount(1);
-      const group = live.getByRole('button', { name: /^Activity/ });
-      await expect(group).toHaveAttribute('aria-expanded', 'false');
+      // The live row holds only the call's output: it has no toggle of its own, and opens with
+      // its call's card above it.
+      await expect(live.getByRole('button', { name: /^Activity/ })).toHaveCount(0);
       await expect(live).toContainText('running');
-      // A live row holding only the call's output has a visually hidden toggle; Enter opens it.
-      await group.press('Enter');
+      const group = await openCallCard(
+        page,
+        host ? 'inspect_remote_context' : 'controlled_activity',
+      );
+      await expect(group).toHaveAttribute('aria-expanded', 'true');
       await expect(part.locator('pre')).toContainText(
         host ? 'Controlled remote tool activity' : 'First local tool chunk',
       );
@@ -1013,9 +1025,10 @@ for (const mode of ['local', 'remote'] as const)
         .filter({ has: page.locator('[data-transcript-part]').filter({ hasText: 'Stored image' }) })
         .first();
       await expect(group).toBeAttached();
-      // An output row's toggle is visually hidden; it still opens from the keyboard.
-      const activity = group.getByRole('button', { name: /^Activity/ });
-      if ((await activity.getAttribute('aria-expanded')) !== 'true') await activity.press('Enter');
+      // The image is the call's output, recorded in a later row with no chevron of its own; the
+      // call's card opens it.
+      await expect(group.getByRole('button', { name: /^Activity/ })).toHaveCount(0);
+      await openCallCard(page, host ? 'retained_images' : 'controlled_activity');
       const trigger = group.getByRole('button', { name: 'View stored image', exact: true }).first();
       await trigger.scrollIntoViewIfNeeded();
       await expect(trigger).toBeEnabled();

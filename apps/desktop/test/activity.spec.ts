@@ -1,5 +1,5 @@
-import { scrollToStart } from './transcript-list.ts';
-import { test, expect, type Page } from '@playwright/test';
+import { scrollToEnd, scrollToStart } from './transcript-list.ts';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { readFindHighlight } from './find-highlight.ts';
@@ -656,6 +656,261 @@ test('reading a durable row in the latest window retains current live activity b
   await expect(row).toContainText('Current held output');
   await row.getByRole('button', { name: /^Activity/ }).click();
   await expect(row.locator('pre')).toHaveText('Current held output');
+});
+/** A completed `bash` call recorded as its own entry, as Pi records each tool call. */
+const bashCall = (id: string, command: string, state = 'completed') => ({
+  id,
+  parts: [
+    {
+      kind: 'arguments' as const,
+      partId: 'call',
+      toolName: 'bash',
+      state: state as 'completed',
+      text: JSON.stringify({ command }),
+    },
+  ],
+});
+/** A running output of the `origin` call, recorded in a later row. */
+const originOutput = (text: string) => ({
+  kind: 'result' as const,
+  role: 'tool' as const,
+  toolName: 'bash',
+  state: 'running' as const,
+  pairing: 'matched' as const,
+  call: { entryId: 'origin', partId: 'call' },
+  text,
+});
+/** Marks a row's DOM; remounting the row would drop the mark. */
+const mark = (row: Locator) => row.evaluate((node) => Object.assign(node, { rowMark: true }));
+const isMarked = (row: Locator) => row.evaluate((node) => 'rowMark' in node);
+/** The space between a row's drawn content and the next row's. */
+const readGap = (above: Locator, below: Locator) =>
+  Promise.all([
+    above.locator('[data-transcript-activity]').boundingBox(),
+    below.locator('article').boundingBox(),
+  ]).then(([a, b]) => b!.y - (a!.y + a!.height));
+const readAnchor = (page: Page) =>
+  page.evaluate(() => {
+    const { view, atLatest } = window.demo.application.chat!.getSnapshot().transcript;
+    return { key: view.anchor?.key, atLatest };
+  });
+test('an activity card stays mounted as the live response joins it, the live response as it leaves, and a reader in either anchors to a stored row', async ({
+  page,
+}) => {
+  test.setTimeout(90000);
+  await open(page);
+  // Enough earlier calls in the card that it is taller than the viewport.
+  await page.evaluate(
+    async ([calls, last]) => {
+      await window.demo.transcript!.record([
+        { id: 'question', role: 'user', parts: [{ kind: 'text', role: 'user', text: 'Run it' }] },
+        ...calls,
+        last,
+      ]);
+      await window.demo.application.chat!.jumpToLatest();
+    },
+    [
+      Array.from({ length: 60 }, (_, index) => bashCall(`step-${index}`, `step ${index}`)),
+      bashCall('origin', 'check', 'running'),
+    ] as const,
+  );
+  const origin = page.locator('[data-transcript-row="entry:origin"]');
+  await expect(origin).toContainText('bash · check');
+  // The list mounts rows afresh while it first lays the dataset out; mark once that settles.
+  await expect
+    .poll(async () => {
+      await mark(origin);
+      await page.waitForTimeout(1000);
+      return isMarked(origin);
+    })
+    .toBe(true);
+  // The call's output arrives in the live response, which joins the card's end.
+  await page.evaluate(
+    (part) => window.demo.transcript!.activity([part], 'none'),
+    originOutput('Check output'),
+  );
+  const row = page.locator('[data-transcript-row^="live:"]');
+  await expect(row).toBeAttached();
+  await mark(row);
+  expect(await isMarked(origin)).toBe(true);
+  await expect.poll(async () => Math.abs(await readGap(origin, row))).toBeLessThan(1);
+  // The live row holds only the call's output, so it has no chevron (or hidden control) of its own.
+  await expect(row.getByRole('button', { name: /^Activity/ })).toHaveCount(0);
+  await origin.getByRole('button', { name: /^Activity/ }).click();
+  await expect(row.locator('pre')).toHaveText('Check output');
+  // The answer starts, so the live row leaves the card and keeps its item: the running response
+  // stays mounted, and the card's stored rows move to an item of their own, still open.
+  const answer = (text: string) =>
+    page.evaluate(
+      ([part, text]) => window.demo.transcript!.activity([part, { kind: 'text', text }], 'none'),
+      [originOutput('Check output'), text] as const,
+    );
+  await answer('All checks pass.');
+  await expect(row).toContainText('All checks pass.');
+  expect(await isMarked(row)).toBe(true);
+  await expect(origin.getByRole('button', { name: /^Activity/ })).toHaveAttribute(
+    'aria-expanded',
+    'true',
+  );
+  await expect.poll(() => readGap(origin, row)).toBeGreaterThan(8);
+  // Reading the card saves a stored row: the reader isn't following the live edge.
+  await scrollToEnd(page);
+  await page.mouse.wheel(0, -400);
+  await expect
+    .poll(() => readAnchor(page))
+    .toEqual({ key: expect.stringMatching(/^entry:step-/), atLatest: false });
+  // A reader inside the live response anchors to the stored row above it.
+  await answer('All checks pass.\n\n' + 'Detail.\n\n'.repeat(400));
+  await expect(row).toContainText('Detail.');
+  await scrollToEnd(page);
+  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 300)));
+  await page.mouse.wheel(0, -300);
+  await expect.poll(() => readAnchor(page)).toEqual({ key: 'entry:origin', atLatest: false });
+});
+
+test('a reader scrolled up into the card stays put, and the card stays mounted, as the answer starts', async ({
+  page,
+}) => {
+  test.setTimeout(90000);
+  await open(page);
+  await page.evaluate(
+    async ([calls, last]) => {
+      await window.demo.transcript!.record([
+        { id: 'question', role: 'user', parts: [{ kind: 'text', role: 'user', text: 'Run it' }] },
+        ...calls,
+        last,
+      ]);
+      await window.demo.application.chat!.jumpToLatest();
+    },
+    [
+      Array.from({ length: 60 }, (_, index) => bashCall(`step-${index}`, `step ${index}`)),
+      bashCall('origin', 'check', 'running'),
+    ] as const,
+  );
+  const origin = page.locator('[data-transcript-row="entry:origin"]');
+  await expect(origin).toContainText('bash · check');
+  await page.evaluate(
+    (part) => window.demo.transcript!.activity([part], 'none'),
+    originOutput('Check output'),
+  );
+  await expect(page.locator('[data-transcript-row^="live:"]')).toBeAttached();
+  // The reader scrolls up into the card, away from the live edge.
+  await scrollToEnd(page);
+  await page.mouse.wheel(0, -400);
+  await expect.poll(() => readAnchor(page)).toMatchObject({ atLatest: false });
+  const step = page.locator('[data-transcript-row="entry:step-50"]');
+  const readTop = () =>
+    step.evaluate(
+      (node) =>
+        node.getBoundingClientRect().top -
+        node.closest('[aria-label="Chat transcript"]')!.getBoundingClientRect().top,
+    );
+  await expect
+    .poll(async () => {
+      await mark(step);
+      await page.waitForTimeout(500);
+      return isMarked(step);
+    })
+    .toBe(true);
+  const before = await readTop();
+  await page.evaluate(
+    (part) =>
+      window.demo.transcript!.activity(
+        [part, { kind: 'text', text: 'All checks pass.\n\n' + 'Detail.\n\n'.repeat(40) }],
+        'none',
+      ),
+    originOutput('Check output'),
+  );
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const last = window.demo.application.chat!.getSnapshot().transcript.rows.at(-1)!;
+        return last.kind === 'live' ? last.entry.text.slice(0, 16) : null;
+      }),
+    )
+    .toBe('All checks pass.');
+  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 300)));
+  expect(await isMarked(step)).toBe(true);
+  expect(Math.abs((await readTop()) - before)).toBeLessThan(1.5);
+});
+
+test("an output whose call isn't retained reads as its own step with a chevron", async ({
+  page,
+}) => {
+  await open(page);
+  await page.evaluate(async () => {
+    await window.demo.transcript!.record([
+      { id: 'question', role: 'user', parts: [{ kind: 'text', role: 'user', text: 'Run it' }] },
+      {
+        id: 'result',
+        role: 'tool',
+        parts: [
+          {
+            kind: 'result',
+            role: 'tool',
+            toolName: 'bash',
+            state: 'completed',
+            pairing: 'matched',
+            // The call's entry is older than the retained history.
+            call: { entryId: 'evicted-origin', partId: 'call' },
+            text: 'Orphaned output',
+          },
+        ],
+      },
+    ]);
+    await window.demo.application.chat!.jumpToLatest();
+  });
+  const result = page.locator('[data-transcript-row="entry:result"]');
+  await expect(result.locator('[data-transcript-activity] li')).toContainText('bash');
+  const toggle = result.getByRole('button', { name: /^Activity/ });
+  await toggle.click();
+  await expect(result.locator('pre')).toHaveText('Orphaned output');
+});
+
+test("Find revealing a match in a call's output shows the call's card open, and folding the call folds it", async ({
+  page,
+}) => {
+  await open(page);
+  await page.evaluate(async (output) => {
+    await window.demo.transcript!.record([
+      { id: 'question', role: 'user', parts: [{ kind: 'text', role: 'user', text: 'Run it' }] },
+      {
+        id: 'origin',
+        parts: [
+          {
+            kind: 'arguments',
+            partId: 'call',
+            toolName: 'bash',
+            state: 'completed',
+            text: '{"command":"check"}',
+          },
+        ],
+      },
+      { id: 'result', role: 'tool', parts: [{ ...output, state: 'completed' }] },
+    ]);
+    await window.demo.application.chat!.jumpToLatest();
+  }, originOutput('Found the NEEDLE here'));
+  const origin = page.locator('[data-transcript-row="entry:origin"]'),
+    result = page.locator('[data-transcript-row="entry:result"]');
+  const chevron = origin.getByRole('button', { name: /^Activity/ });
+  await expect(chevron).toHaveAttribute('aria-expanded', 'false');
+  await expect(result.getByRole('button', { name: /^Activity/ })).toHaveCount(0);
+  await page.getByRole('region', { name: 'Chat transcript', exact: true }).focus();
+  await page.keyboard.press('ControlOrMeta+f');
+  await page.getByRole('textbox', { name: 'Find in conversation', exact: true }).fill('needle');
+  await expect(result.locator('pre')).toBeVisible();
+  await expect
+    .poll(() => readFindHighlight(page))
+    .toEqual([expect.objectContaining({ text: 'NEEDLE', entry: 'result' })]);
+  // The call's card shows the output it opened, and its chevron folds it.
+  await expect(chevron).toHaveAttribute('aria-expanded', 'true');
+  await chevron.click();
+  await expect(chevron).toHaveAttribute('aria-expanded', 'false');
+  await expect(result.locator('pre')).toBeHidden();
+  // The chevron opens the call and its output again.
+  await chevron.click();
+  await expect(chevron).toHaveAttribute('aria-expanded', 'true');
+  await expect(result.locator('pre')).toBeVisible();
 });
 for (const valid of [false, true])
   test(`EOF patch source without terminal newline stays exact in Copy: ${valid ? 'valid replacement' : 'truncated replacement'}`, async ({

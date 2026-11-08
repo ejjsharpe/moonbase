@@ -156,9 +156,14 @@ class EditorModelState {
       classificationScope: Scope.Closeable;
       revision: number;
       listed: boolean;
+      classifying: boolean;
       promise: Promise<DirectoryListing>;
     }
   >();
+  /** Per folder: a superseded Git classification left to finish, and the newest one shown. */
+  private keptClassifications = new Map<string, Scope.Closeable>();
+  private classifiedListings = new Map<string, number>();
+  private listingSequence = 0;
   private git: Record<string, GitStatus> = {};
   private errors: string[] = [];
   private operations = new Map<
@@ -1001,11 +1006,19 @@ class EditorModelState {
       pending = this.listingReads.get(key);
     if (pending?.scope === scope && !pending.listed && pending.revision === revision)
       return pending.promise;
-    if (pending)
+    // A newer read cancels the Git classification it replaces, except for one kept running per
+    // folder: refreshes that come faster than Git answers would otherwise keep every entry on its
+    // last classification, so a file un-ignored by a .gitignore edit would stay dimmed.
+    if (pending?.scope === scope && pending.classifying && !this.keptClassifications.has(key))
+      this.keptClassifications.set(key, pending.classificationScope);
+    else if (pending)
       void this.run(Scope.close(pending.classificationScope, Exit.void), pending.scope).catch(
         this.report,
       );
-    const classificationScope = Scope.forkUnsafe(scope);
+    const classificationScope = Scope.forkUnsafe(scope),
+      sequence = ++this.listingSequence;
+    // The newest classification shown when this listing replaced the last one.
+    let shownClassification: number | undefined;
     const promise = this.discovery
       .listDirectory(
         {
@@ -1018,6 +1031,7 @@ class EditorModelState {
       .then((listing) => {
         if (!isCurrent()) return listing;
         this.listingReads.get(key)!.listed = true;
+        shownClassification = this.classifiedListings.get(key);
         // Entries keep their last Git classification until the new one arrives, so a refresh
         // does not flash ignored files as unignored.
         const previous = new Map(
@@ -1034,35 +1048,68 @@ class EditorModelState {
         this.emit();
         return listing;
       });
-    const isCurrent = () =>
+    const isOpen = () =>
       !this.closing &&
       scope.state._tag !== 'Closed' &&
-      this.recovery.openCheckoutIds.includes(checkout.checkoutId) &&
-      this.listingReads.get(key)?.promise === promise;
-    this.listingReads.set(key, { scope, classificationScope, revision, listed: false, promise });
+      this.recovery.openCheckoutIds.includes(checkout.checkoutId);
+    const isCurrent = () => isOpen() && this.listingReads.get(key)?.promise === promise;
+    this.listingReads.set(key, {
+      scope,
+      classificationScope,
+      revision,
+      listed: false,
+      classifying: false,
+      promise,
+    });
     void promise
       .then(async (listing) => {
         if (!isCurrent() || !listing.entries.some((entry) => entry.ignored === undefined)) return;
-        const ignored = await this.command(
-          'getIgnoredPaths',
-          {
-            checkout,
-            path,
-            paths: listing.entries.map((entry) => entry.path),
-          },
-          classificationScope,
-        );
-        if (!isCurrent()) return;
+        this.listingReads.get(key)!.classifying = true;
+        let ignored: CommandOutput<'getIgnoredPaths'>;
+        try {
+          ignored = await this.command(
+            'getIgnoredPaths',
+            {
+              checkout,
+              path,
+              paths: listing.entries.map((entry) => entry.path),
+            },
+            classificationScope,
+          );
+        } catch (error) {
+          // Without an answer, entries show as unclassified rather than as a stale classification.
+          if (isCurrent() && this.classifiedListings.get(key) === shownClassification) {
+            this.listings[key] = { ...this.listings[key], entries: listing.entries };
+            this.emit();
+          }
+          throw error;
+        }
+        if (!isOpen() || (this.classifiedListings.get(key) ?? 0) > sequence) return;
         const paths = new Set(ignored.paths);
-        this.listings[key] = {
-          ...listing,
-          entries: listing.entries.map((entry) => ({
-            ...entry,
-            ignored: ignored.error ? undefined : paths.has(entry.path),
-          })),
-          partial: listing.partial || !!ignored.error,
-          error: ignored.error ?? listing.error,
-        };
+        // Only an answer that replaces the shown flags counts as the newest classification.
+        if (isCurrent() || (!ignored.error && this.listings[key]))
+          this.classifiedListings.set(key, sequence);
+        if (isCurrent())
+          this.listings[key] = {
+            ...listing,
+            entries: listing.entries.map((entry) => ({
+              ...entry,
+              ignored: ignored.error ? undefined : paths.has(entry.path),
+            })),
+            partial: listing.partial || !!ignored.error,
+            error: ignored.error ?? listing.error,
+          };
+        else if (!ignored.error && this.listings[key]) {
+          // A kept classification answers after a newer listing replaced its own; it is still
+          // newer than the classification that listing carried over.
+          const classified = new Set(listing.entries.map((entry) => entry.path));
+          this.listings[key] = {
+            ...this.listings[key],
+            entries: this.listings[key].entries.map((entry) =>
+              classified.has(entry.path) ? { ...entry, ignored: paths.has(entry.path) } : entry,
+            ),
+          };
+        } else return;
         this.emit();
       })
       .catch(() => {
@@ -1070,6 +1117,8 @@ class EditorModelState {
       })
       .finally(() => {
         if (this.listingReads.get(key)?.promise === promise) this.listingReads.delete(key);
+        if (this.keptClassifications.get(key) === classificationScope)
+          this.keptClassifications.delete(key);
         return this.run(Scope.close(classificationScope, Exit.void), scope).catch(this.report);
       });
     return promise;

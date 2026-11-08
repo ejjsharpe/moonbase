@@ -60,6 +60,55 @@ test('maintained defaults and reasoning options match the pinned provider catalo
   });
 });
 
+test('an unconfigured provider reports why its check failed, bounded for the status contract', async (t) => {
+  const models = createModels({
+    authContext: { env: async () => undefined, fileExists: async () => false },
+  });
+  const problem = 'Claude Code status check failed (exit 127):\0 \ud800' + 'é'.repeat(400),
+    problems = new WeakMap<AbortSignal, string>();
+  for (const id of localProviderIds) {
+    const provider = fauxProvider({ provider: id }).provider;
+    models.setProvider(
+      id === 'claude-code'
+        ? {
+            ...provider,
+            auth: {
+              apiKey: {
+                name: 'CLI',
+                check: async ({ signal }) => {
+                  problems.set(signal, problem);
+                  return undefined;
+                },
+                resolve: async () => undefined,
+              },
+            },
+          }
+        : provider,
+    );
+  }
+  const runtime = ManagedRuntime.make(
+    ProviderSetupLive({
+      models,
+      deviceId: 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa',
+      openUrl: async () => {},
+      // Only the check that made it, and found nothing, reports one.
+      getCheckProblem: (_id, signal) => problems.get(signal) ?? problem.slice(0, 5),
+    }),
+  );
+  t.after(() => runtime.dispose());
+  const status = await makeProviderSetupClient(runtime, 'problem').command('getProviders', {});
+  const claude = status.providers.find((provider) => provider.id === 'claude-code')!;
+  assert.equal(claude.configured, false);
+  assert.match(claude.problem!, /^Claude Code status check failed \(exit 127\): é+$/);
+  assert(new TextEncoder().encode(claude.problem).length <= 512);
+  assert(new TextEncoder().encode(claude.problem).length > 500);
+  for (const provider of status.providers)
+    if (provider.id !== 'claude-code') {
+      assert.equal(provider.configured, true);
+      assert.equal(provider.problem, undefined);
+    }
+});
+
 test('provider-owned setup binds prompts and URLs to the live document, supports cancellation and never publishes answers', async (t) => {
   const models = createModels({
     authContext: { env: async () => undefined, fileExists: async () => false },

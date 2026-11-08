@@ -24,6 +24,13 @@ async function main() {
   if (bytes.length > 64 * 1024) V.fail('InvalidInput', 'Host configuration exceeds its bound.');
   const data = S.cliConfiguration(P.json(bytes));
   const session = { host: data.host, actorId: data.actorId };
+  // Every chat here shares this cwd, and Claude Code runs (and tells the model it runs) in this
+  // process's own working directory, which the library has no option to change.
+  try {
+    process.chdir(data.cwd);
+  } catch {
+    V.fail('InvalidInput', 'Chat working directory must exist.');
+  }
   const models = createModels();
   models.setProvider(openaiProvider());
   models.setProvider(anthropicProvider());

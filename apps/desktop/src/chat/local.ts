@@ -86,12 +86,12 @@ export async function acquireLocalChat(
       (await safeStorage.decryptStringAsync(Buffer.from(encrypted))).result,
   });
   const models = createLocalModels(credentials);
-  models.setProvider(
-    createClaudeCodeSubscription({
-      // Claude Code starts the tool-inventory helper with this executable.
-      helperEnv: { ELECTRON_RUN_AS_NODE: '1' },
-    }),
-  );
+  const claudeCode = createClaudeCodeSubscription({
+    // Claude Code starts the tool-inventory helper with this executable. The library fixes that
+    // helper's own env, so this reaches it only because Claude Code passes its env to MCP servers.
+    helperEnv: { ELECTRON_RUN_AS_NODE: '1' },
+  });
+  models.setProvider(claudeCode);
   const folders = createFolderApprovals(join(directory, 'approved-folders.json'));
   // A folder chosen in the native picker, still the same directory, may be searched and chatted in,
   // as may a checkout the editor approved, such as a project's root in its docked chat.
@@ -110,25 +110,35 @@ export async function acquireLocalChat(
     await folders.touch(settings.cwd);
   };
   const approveSearch = (cwd: string) => requireApprovedFolder(cwd, 'searching its files');
-  const scope = Scope.forkUnsafe(runtime.scope, 'parallel');
+  // A sequential scope closes in reverse: the chat services (in parallel) first, then Claude Code's
+  // warm workers, so a turn finishing during shutdown can't leave a worker cached behind them.
+  const scope = Scope.forkUnsafe(runtime.scope, 'sequential');
   try {
     const services = await runApplicationEffect(
       runtime,
-      Layer.buildWithScope(
-        Layer.mergeAll(
-          LocalPiRuntimeLive({
-            ...session,
-            databasePath: join(directory, 'chat.sqlite'),
-            models,
-            approveCreation: approveSettings,
-            approveFolder: approveSearch,
-            ...(ripgrepExecutable ? { ripgrepExecutable } : {}),
-          }),
-          ProviderSetupLive({ models, openUrl, deviceId: session.host.hostId }),
-          Layer.effectDiscard(Effect.addFinalizer(() => Effect.promise(closeClaudeCodeProcesses))),
-        ),
-        scope,
-      ),
+      Effect.gen(function* () {
+        yield* Scope.addFinalizer(scope, Effect.promise(closeClaudeCodeProcesses));
+        return yield* Layer.buildWithScope(
+          Layer.mergeAll(
+            LocalPiRuntimeLive({
+              ...session,
+              databasePath: join(directory, 'chat.sqlite'),
+              models,
+              approveCreation: approveSettings,
+              approveFolder: approveSearch,
+              ...(ripgrepExecutable ? { ripgrepExecutable } : {}),
+            }),
+            ProviderSetupLive({
+              models,
+              openUrl,
+              deviceId: session.host.hostId,
+              getCheckProblem: (id, signal) =>
+                id === claudeCode.id ? claudeCode.getCheckProblem(signal) : undefined,
+            }),
+          ),
+          Scope.forkUnsafe(scope, 'parallel'),
+        );
+      }),
     );
     return {
       session,

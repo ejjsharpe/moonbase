@@ -8,7 +8,7 @@
 
 ## Search
 
-`lookupFiles` ranks file paths; `searchText` finds text in file contents (fixed string or regular expression, optionally case-sensitive or whole-word). Both run the configured ripgrep in the checkout, honour `.gitignore`, `.ignore` and `.rgignore`, and skip VCS folders and `node_modules`. Text search returns up to 50 matches per file and 500 in all, each with its UTF-16 match ranges and three lines either side, and reports a partial result when capped.
+`lookupFiles` ranks file paths; `searchText` finds text in file contents (fixed string or regular expression, optionally case-sensitive or whole-word). Both run the configured ripgrep in the checkout, honour `.gitignore`, `.ignore` and `.rgignore`, and skip VCS folders and `node_modules`. Text search returns up to 50 matches per file and 500 in all, each with its UTF-16 match ranges and three lines either side, and reports a partial result when capped; ripgrep is stopped as soon as the result is full.
 
 ## Watching
 
@@ -16,12 +16,13 @@
 
 ## Worktrees
 
-A `CheckoutTarget` says whether its root is the repository's `main` working tree or a `linked` worktree; every worktree of one repository shares its `projectId`. `listWorktrees` returns a project's worktrees from `git worktree list` (main first; bare repositories have none). `createWorktree` adds a new branch at a base commit in a new linked worktree at an absolute location whose parent exists, then approves and returns it like `openCheckout`. Taken branches and locations are refused before Git runs; if Git fails or the request is cancelled, only a clean worktree and unchanged branch it added are removed, otherwise the error is `Uncertain` and names what to inspect. Each Git step shares the helper's 30-second limit.
+A `CheckoutTarget` says whether its root is the repository's `main` working tree or a `linked` worktree; every worktree of one repository shares its `projectId`. `listWorktrees` returns a project's worktrees from `git worktree list` (main first; bare repositories have none). `createWorktree` adds a new branch at a base commit in a new linked worktree at an absolute location whose parent exists, then approves and returns it like `openCheckout`. Creations in one project run one at a time; one cancelled while waiting ends at once. Taken branches and locations, including a location still registered to a worktree whose folder is missing or whose spelling differs only in case or Unicode normalization (a location is made in NFC, as Git names it), are refused before Git adds anything; the branch is created only if absent, with a reflog entry naming this creation. A location whose earlier worktree was removed may be used again, and the new directory is approved afresh only if it is exactly that location in the same repository (opening a replaced directory otherwise stays refused). The new worktree is locked with a reason naming this creation from the start of `git worktree add` until it is approved, then unlocked; an unlock that fails is reported when the workspace closes, without undoing the creation. If Git fails, stops or the request is cancelled, only what this creation added is removed: the worktree still holding its lock, on its branch at its commit (with anything its hooks wrote), and the branch while it is not a symbolic ref, has not moved and its latest reflog entry is still this creation's. Anything else is left and the error is `Uncertain`. Otherwise the error is `Uncertain` and names what to inspect. Each Git step shares the helper's 30-second limit.
 
 ## Safety
 
 - Only native, user-approved checkout identities grant filesystem access; path strings from clients grant nothing.
 - Saves check content versions. Replacing an existing file requires explicit consent and moves the old one to Trash.
+- Helper processes run in their own process group. Stopping one (cancellation, a limit) sends the group SIGTERM, then SIGKILL after 2 seconds, and waits for it to exit, so Git and its children can clean up first.
 - Files must be UTF-8 text up to 2 MiB. Filesystem changes and SQLite commits are not one atomic transaction.
 
 ## Checks

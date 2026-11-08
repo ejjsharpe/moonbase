@@ -38,14 +38,24 @@ export function classifyEntry(entry: ChatEntry): 'empty' | 'activity' | 'message
 
 /**
  * The list's items: each row on its own, except that empty turn markers are left out and a run of
- * consecutive activity rows is one item, so the list's gap never splits a turn's card. An item's
- * key is its last row's. Items whose rows are unchanged keep their identity.
+ * consecutive activity rows is one item, so the list's gap never splits a turn's card. Items whose
+ * rows are unchanged keep their identity.
+ *
+ * The list keys an item's content and measured size by the item's key, so a new key remounts it.
+ * Rows join a run at its start (history loading above) and its end (the live response, a later
+ * page), so a run holding a row of a `previous` item keeps that item's key. The live row (any row
+ * not `entry`) leaves a run as the answer starts, and the key stays with the part the reader is
+ * in: the live row when they follow the live edge (`following`), so a selection, focus or Find
+ * fold in the running response survives, else the card's stored rows, which the list holds in
+ * place. Otherwise, when an item splits the first run keeps it, and a new item is keyed by its
+ * last row. Keys are list keys only: `findReadingAnchor` names a row.
  */
 export type TranscriptItem<Row> = { key: string; rows: readonly Row[] };
-export function groupTranscriptRows<Row extends { key: string }>(
+export function groupTranscriptRows<Row extends { key: string; kind: string }>(
   rows: readonly Row[],
   kindOf: (row: Row) => 'empty' | 'activity' | 'message',
-  previous: WeakMap<Row, TranscriptItem<Row>>,
+  previous: readonly TranscriptItem<Row>[],
+  following = false,
 ) {
   const runs: Row[][] = [];
   let open = false;
@@ -56,17 +66,76 @@ export function groupTranscriptRows<Row extends { key: string }>(
     else runs.push([row]);
     open = kind === 'activity';
   }
-  return runs.map((run) => {
-    // Keyed by its last row: history loading above can join rows to a run's start, and its key
-    // must not change under the reader.
-    const last = run.at(-1)!;
-    const old = previous.get(last);
-    if (old && old.rows.length === run.length && old.rows.every((row, i) => row === run[i]))
-      return old;
-    const item = { key: last.key, rows: run };
-    previous.set(last, item);
-    return item;
+  const itemOf = new Map(previous.flatMap((item) => item.rows.map((row) => [row.key, item])));
+  const runOf = new Map(runs.flatMap((run) => run.map((row) => [row.key, run])));
+  const claimed = new Set<string>();
+  const carried = new Map<Row[], TranscriptItem<Row>>();
+  const carry = (run: Row[], old: TranscriptItem<Row>) => {
+    claimed.add(old.key);
+    carried.set(run, old);
+  };
+  // Following, a live row that left its item's other rows keeps the item.
+  if (following)
+    for (const run of runs)
+      for (const row of run) {
+        const old = row.kind !== 'entry' ? itemOf.get(row.key) : undefined;
+        if (old && !claimed.has(old.key) && old.rows.some((value) => runOf.get(value.key) !== run))
+          carry(run, old);
+      }
+  for (const run of runs) {
+    if (carried.has(run)) continue;
+    const old = run
+      .map((row) => itemOf.get(row.key))
+      .find((item) => item && !claimed.has(item.key));
+    if (old) carry(run, old);
+  }
+  return runs.map((run): TranscriptItem<Row> => {
+    const old = carried.get(run);
+    if (old?.rows.length === run.length && old.rows.every((row, i) => row === run[i])) return old;
+    let key = old?.key ?? run.at(-1)!.key;
+    // A row's key can name another run's carried key, so a new key must be unclaimed.
+    for (let suffix = 1; !old && claimed.has(key); suffix++) key = `${run.at(-1)!.key}#${suffix}`;
+    claimed.add(key);
+    return { key, rows: run };
   });
+}
+
+/**
+ * The reading anchor for the list's first visible item: a stored row and how far the viewport top
+ * is below that row's own top, so it holds however much of a card a restore reads above the row.
+ * `visible` is the item and its offset from the item's top; `rowTop` is a later row's top within
+ * its item, in the same terms (undefined while unmeasured). The anchor is the stored row the
+ * viewport top is in or below, or a live row's nearest stored row above it, at its offset from
+ * that row's item (`measure`), so a reader in the live response isn't taken to follow the live
+ * edge. With no stored row above, it names the item's first row.
+ */
+export function findReadingAnchor<Row extends { key: string; kind: string }>(
+  items: readonly TranscriptItem<Row>[],
+  visible: { key: string; offset: number },
+  {
+    measure,
+    rowTop,
+  }: {
+    measure(itemKey: string): number | undefined;
+    rowTop(rowKey: string): number | undefined;
+  },
+) {
+  const index = items.findIndex((item) => item.key === visible.key);
+  if (index < 0) return undefined;
+  for (let i = index; i >= 0; i--) {
+    const item = items[i]!;
+    const offset = i === index ? visible.offset : measure(item.key);
+    if (offset === undefined) return undefined;
+    let anchor: { key: string; offset: number } | undefined;
+    for (const [position, row] of item.rows.entries()) {
+      const top = position ? rowTop(row.key) : 0;
+      // A row landed a fraction of a device pixel below the viewport top still holds it.
+      if (top === undefined || (top > offset + 1 && anchor)) break;
+      if (row.kind === 'entry') anchor = { key: row.key, offset: offset - top };
+    }
+    if (anchor) return anchor;
+  }
+  return { key: items[index]!.rows[0]!.key, offset: visible.offset };
 }
 
 /** Only consecutive activity folds; authored answers keep their recorded position. */
