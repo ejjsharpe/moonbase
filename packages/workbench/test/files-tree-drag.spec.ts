@@ -1,4 +1,5 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
+import type { OperationResult, WorkspaceOperation } from '@moonbase/contracts/workspace';
 
 const region = (page: Page) => page.getByRole('region', { name: 'First editor', exact: true });
 const tree = (page: Page) => region(page).getByRole('tree', { name: 'Files', exact: true });
@@ -56,6 +57,62 @@ async function dragOver(
   // Chromium starts the drag on the first move and fires dragover on the next.
   await target.hover({ position });
   await target.hover({ position });
+}
+/**
+ * Makes the workspace fail `path`'s item in any batch move that includes it, as a batch failing
+ * partway does, while still moving the rest. Resolves to a function that stops it.
+ */
+async function failInBatches(page: Page, path: string) {
+  await page.evaluate((path) => {
+    const { client } = window.demo;
+    const command = client.command;
+    const join = (folder: string | undefined, name: string) =>
+      [folder, name].filter(Boolean).join('/');
+    const nameOf = (path: string) => path.split('/').at(-1)!;
+    client.command = (async (name: string, input: unknown, options: unknown) => {
+      const operation = input as WorkspaceOperation;
+      const call = command as (name: string, input: unknown, options: unknown) => Promise<unknown>;
+      if (
+        name !== 'mutate' ||
+        operation.sources.length < 2 ||
+        !operation.sources.some((source) => source.target.path === path)
+      )
+        return call.call(client, name, input, options);
+      const rest = operation.sources.filter((source) => source.target.path !== path);
+      const result = (await call.call(
+        client,
+        name,
+        {
+          ...operation,
+          sources: rest,
+          destination:
+            rest.length > 1
+              ? operation.destination
+              : join(operation.destination, nameOf(rest[0].target.path)),
+        },
+        options,
+      )) as OperationResult;
+      return {
+        ...result,
+        outcome: 'failed',
+        message: `Couldn’t move ${path}.`,
+        items: [
+          ...result.items,
+          {
+            source: path,
+            destination: join(operation.destination, nameOf(path)),
+            outcome: 'failed',
+          },
+        ],
+      } satisfies OperationResult;
+    }) as typeof command;
+    Object.assign(window, {
+      stopFailing: () => {
+        client.command = command;
+      },
+    });
+  }, path);
+  return () => page.evaluate(() => (window as unknown as { stopFailing(): void }).stopFailing());
 }
 async function explorerMenu(page: Page) {
   await region(page).getByRole('button', { name: 'Explorer actions', exact: true }).click();
@@ -279,14 +336,24 @@ test('⌘Z undoes an inline rename, but not while the name is typed', async ({ p
   const menu = await explorerMenu(page);
   await expect(menu.getByRole('menuitem', { name: 'Undo Rename', exact: true })).toBeVisible();
   await page.keyboard.press('Escape');
-  // In the name field, ⌘Z is the field's own.
+  // In the name field, ⌘Z is the field's own: it brings back the cleared name, and the rename
+  // stays, even once an undo would have had time to run.
   await tree(page).press('F2');
   await input.press('ControlOrMeta+a');
   await input.press('Backspace');
+  await expect(input).toHaveValue('');
+  const before = await mutations(page);
   await input.press('ControlOrMeta+z');
-  await input.press('Escape');
+  await expect(input).toHaveValue('NOTES.md');
+  await page.waitForTimeout(300);
+  expect(await mutations(page)).toBe(before);
   expect(await exists(page, 'NOTES.md')).toBe(true);
+  expect(await exists(page, 'README.md')).toBe(false);
+  await input.press('Escape');
+  await expect(input).toHaveCount(0);
   await tree(page).press('ControlOrMeta+z');
+  await expect.poll(() => exists(page, 'README.md')).toBe(true);
+  expect(await mutations(page)).toBe(before + 1);
   await expect(row(page, 'README.md')).toBeVisible();
   await expect(row(page, 'NOTES.md')).toHaveCount(0);
   await expectSelected(page, ['README.md']);
@@ -337,4 +404,185 @@ test('unsaved text follows a move and its undo', async ({ page }) => {
   expect(await buffer('welcome.ts')).toBe('Unsaved draft\n');
   expect(await buffer('dest/welcome.ts')).toBeUndefined();
   expect(await read(page, 'welcome.ts')).toContain('Moonbase editor module demo');
+});
+
+/** Renames the row at `path` to `name` in the tree. */
+async function rename(page: Page, path: string, name: string) {
+  await row(page, path).click();
+  await tree(page).press('F2');
+  const input = tree(page).getByRole('textbox', { name: 'Rename', exact: true });
+  await input.fill(name);
+  await input.press('Enter');
+  await expect(input).toHaveCount(0);
+}
+async function expectNoUndo(page: Page) {
+  const menu = await explorerMenu(page);
+  await expect(menu.getByRole('menuitem', { name: 'Undo Move' })).toHaveAttribute(
+    'aria-disabled',
+    'true',
+  );
+  await page.keyboard.press('Escape');
+}
+
+test('any other file operation forgets the undo, so ⌘Z never reaches past it', async ({ page }) => {
+  await page.goto('/');
+  await create(page, 'dest/');
+  // An Alt-copy after a rename.
+  await rename(page, 'README.md', 'NOTES.md');
+  await expect(row(page, 'NOTES.md')).toBeVisible();
+  await dragOver(page, row(page, 'welcome.ts'), row(page, 'dest'));
+  await page.keyboard.down('Alt');
+  const box = (await row(page, 'dest').boundingBox())!;
+  await page.mouse.move(box.x + 20, box.y + 10, { steps: 2 });
+  await page.mouse.up();
+  await page.keyboard.up('Alt');
+  await expect(row(page, 'dest/welcome.ts')).toBeVisible();
+  await expectNoUndo(page);
+  let before = await mutations(page);
+  await tree(page).focus();
+  await tree(page).press('ControlOrMeta+z');
+  await page.waitForTimeout(300);
+  expect(await mutations(page)).toBe(before);
+  expect(await exists(page, 'NOTES.md')).toBe(true);
+  // Move to Trash, from its dialog, after a rename.
+  await rename(page, 'NOTES.md', 'README.md');
+  await row(page, 'dest/welcome.ts').click();
+  await tree(page).press('ControlOrMeta+Backspace');
+  const trash = page.getByRole('dialog', { name: 'Move to Trash', exact: true });
+  await trash.getByRole('button', { name: 'Move to Trash', exact: true }).click();
+  await expect(trash).toHaveCount(0);
+  await expect(row(page, 'dest/welcome.ts')).toHaveCount(0);
+  await expectNoUndo(page);
+  before = await mutations(page);
+  await tree(page).focus();
+  await tree(page).press('ControlOrMeta+z');
+  await page.waitForTimeout(300);
+  expect(await mutations(page)).toBe(before);
+  expect(await exists(page, 'README.md')).toBe(true);
+  // A trash cancelled in its dialog changes nothing, and keeps the undo.
+  await rename(page, 'README.md', 'NOTES.md');
+  await row(page, 'welcome.ts').click();
+  await tree(page).press('ControlOrMeta+Backspace');
+  await trash.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await tree(page).focus();
+  await tree(page).press('ControlOrMeta+z');
+  await expect(row(page, 'README.md')).toBeVisible();
+  expect(await exists(page, 'NOTES.md')).toBe(false);
+});
+
+test('a batch that fails partway selects and undoes what moved, and so does its undo', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await create(page, 'dest/');
+  await row(page, 'README.md').click();
+  await row(page, 'welcome.ts').click({ modifiers: ['ControlOrMeta'] });
+  let stop = await failInBatches(page, 'welcome.ts');
+  await row(page, 'welcome.ts').dragTo(row(page, 'dest'));
+  await expect(region(page).getByRole('alert')).toContainText('Couldn’t move welcome.ts.');
+  await expect(row(page, 'dest/README.md')).toBeVisible();
+  expect(await exists(page, 'welcome.ts')).toBe(true);
+  await expectSelected(page, ['dest/README.md']);
+  await stop();
+  let menu = await explorerMenu(page);
+  await expect(menu.getByRole('menuitem', { name: 'Undo Move', exact: true })).not.toHaveAttribute(
+    'aria-disabled',
+  );
+  await page.keyboard.press('Escape');
+  await tree(page).focus();
+  await tree(page).press('ControlOrMeta+z');
+  await expect(row(page, 'README.md')).toBeVisible();
+  expect(await exists(page, 'dest/README.md')).toBe(false);
+  // An undo that fails partway keeps exactly what is left.
+  await row(page, 'README.md').click();
+  await row(page, 'welcome.ts').click({ modifiers: ['ControlOrMeta'] });
+  await row(page, 'welcome.ts').dragTo(row(page, 'dest'));
+  await expect(row(page, 'dest/welcome.ts')).toBeVisible();
+  stop = await failInBatches(page, 'dest/welcome.ts');
+  await tree(page).focus();
+  await tree(page).press('ControlOrMeta+z');
+  await expect(row(page, 'README.md')).toBeVisible();
+  expect(await exists(page, 'dest/welcome.ts')).toBe(true);
+  await stop();
+  menu = await explorerMenu(page);
+  await expect(menu.getByRole('menuitem', { name: 'Undo Move', exact: true })).not.toHaveAttribute(
+    'aria-disabled',
+  );
+  await page.keyboard.press('Escape');
+  await tree(page).focus();
+  await tree(page).press('ControlOrMeta+z');
+  await expect(row(page, 'welcome.ts')).toBeVisible();
+  expect(await exists(page, 'dest/welcome.ts')).toBe(false);
+  await expectNoUndo(page);
+});
+
+test('an undo whose folders can’t be listed reports it and stays to retry', async ({ page }) => {
+  await page.goto('/');
+  await create(page, 'dest/');
+  await row(page, 'welcome.ts').dragTo(row(page, 'dest'));
+  await expect(row(page, 'dest/welcome.ts')).toBeVisible();
+  await page.evaluate(() => {
+    const { client } = window.demo;
+    const command = client.command;
+    client.command = ((...args: Parameters<typeof command>) =>
+      args[0] === 'listDirectory'
+        ? Promise.reject(new Error('Listing unavailable.'))
+        : command.apply(client, args)) as typeof command;
+    Object.assign(window, {
+      stopFailing: () => {
+        client.command = command;
+      },
+    });
+  });
+  const before = await mutations(page);
+  await tree(page).focus();
+  await tree(page).press('ControlOrMeta+z');
+  await expect(region(page).getByRole('alert')).toContainText(
+    'Can’t undo the move yet: dest couldn’t be listed. Try again.',
+  );
+  expect(await mutations(page)).toBe(before);
+  await page.evaluate(() => (window as unknown as { stopFailing(): void }).stopFailing());
+  await tree(page).press('ControlOrMeta+z');
+  await expect(row(page, 'welcome.ts')).toBeVisible();
+  expect(await exists(page, 'dest/welcome.ts')).toBe(false);
+});
+
+test('a drop whose DataTransfer isn’t the tree’s own drag is refused', async ({ page }) => {
+  await page.goto('/');
+  await create(page, 'dest/');
+  const before = await mutations(page);
+  await dragOver(page, row(page, 'welcome.ts'), row(page, 'dest'));
+  await expect.poll(() => dropTargets(page)).toEqual(['dest']);
+  // Another page's drop naming other entries, while this tree's drag goes on.
+  await row(page, 'dest').evaluate((target) => {
+    const data = new DataTransfer();
+    data.setData(
+      'application/x-moonbase-entries',
+      JSON.stringify({ source: 'elsewhere', checkout: 'elsewhere', paths: ['README.md'] }),
+    );
+    target.dispatchEvent(
+      new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: data }),
+    );
+  });
+  await page.mouse.up();
+  await page.waitForTimeout(300);
+  expect(await mutations(page)).toBe(before);
+  expect(await exists(page, 'README.md')).toBe(true);
+  expect(await exists(page, 'welcome.ts')).toBe(true);
+});
+
+test('dragging more entries than one move takes says so', async ({ page }) => {
+  await page.goto('/');
+  const paths = Array.from({ length: 129 }, (_, index) => `many/${index}.ts`);
+  await create(page, 'many/', ...paths);
+  await row(page, 'many').click();
+  await expect(row(page, 'many/0.ts')).toBeVisible();
+  await page.evaluate((paths) => {
+    const { first, checkout } = window.demo;
+    first.tree(checkout, { focus: paths[0], selected: paths });
+  }, paths);
+  const before = await mutations(page);
+  await row(page, 'many/0.ts').dragTo(tree(page));
+  await expect(region(page).getByRole('alert')).toContainText('Drag at most 128 items at a time.');
+  expect(await mutations(page)).toBe(before);
 });

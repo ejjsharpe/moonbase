@@ -24,12 +24,15 @@ export type TreeNavigation = {
 };
 
 const mac = typeof navigator !== 'undefined' && navigator.platform.includes('Mac');
-/** Whether a press is Undo: ⌘Z on a Mac, Ctrl+Z elsewhere. */
+/**
+ * Whether a press is Undo: ⌘Z on a Mac, Ctrl+Z elsewhere. A layout without Latin letters types
+ * another character on the Z key, so that key counts too.
+ */
 const isUndoKey = (event: KeyboardEvent<HTMLElement>) =>
   (mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey) &&
   !event.altKey &&
   !event.shiftKey &&
-  event.key.toLowerCase() === 'z';
+  (event.key.toLowerCase() === 'z' || (!/^[a-z]$/i.test(event.key) && event.code === 'KeyZ'));
 
 /** Moves focus and selection, expands and collapses, opens, and runs file shortcuts. */
 export function handleTreeKeyDown(event: KeyboardEvent<HTMLElement>, navigation: TreeNavigation) {

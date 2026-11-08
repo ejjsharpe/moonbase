@@ -7,15 +7,17 @@ import {
   runMutation as runMutationDirectly,
   type EditorController,
   type MutationAction,
+  type MutationRunResult,
 } from '@moonbase/application/editor';
 import { Popup } from './popup.tsx';
 import { styles } from './styles.ts';
 
 /**
  * Runs a file operation without its dialog, asking only before replacing existing entries.
- * Resolves true once it completed. A failure goes to `inlineError` when the caller shows it
- * beside its own field, otherwise to the editor's alerts. The caller places focus afterwards,
- * or names with `finalFocus` where the replace prompt returns it as it closes.
+ * Resolves with whether it completed and, for a batch that failed partway, the items that did. A
+ * failure goes to `inlineError` when the caller shows it beside its own field, otherwise to the
+ * editor's alerts. The caller places focus afterwards, or names with `finalFocus` where the
+ * replace prompt returns it as it closes.
  */
 export type RunMutation = (
   action: MutationAction,
@@ -24,7 +26,7 @@ export type RunMutation = (
     inlineError?: (message: string) => void;
     finalFocus?: () => HTMLElement | false;
   },
-) => Promise<boolean>;
+) => Promise<MutationRunResult>;
 
 /**
  * One workbench's direct mutations: `runMutation` admits one at a time while `admits` allows it,
@@ -58,10 +60,10 @@ export function useMutationRunner(
       else controller.report(message);
     };
     if (runningRef.current || !admits(action)) {
-      fail(
-        'File action unavailable. Check the selection and finish the current editor dialog or preservation.',
-      );
-      return false;
+      const error =
+        'File action unavailable. Check the selection and finish the current editor dialog or preservation.';
+      fail(error);
+      return { completed: false, error, items: [] };
     }
     const signal = lifetime.current.signal;
     runningRef.current = true;
@@ -90,8 +92,9 @@ export function useMutationRunner(
             }),
         },
       );
-      if (result.error && !signal.aborted) fail(result.error);
-      return result.completed && !signal.aborted;
+      if (signal.aborted) return { completed: false, error: '', items: [] };
+      if (result.error) fail(result.error);
+      return result;
     } finally {
       runningRef.current = false;
       if (!signal.aborted) setRunning(false);

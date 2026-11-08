@@ -39,8 +39,11 @@ import {
   findDropFolder,
   getDropDestination,
   isInDropRegion,
+  isSameDrag,
   listDroppedPaths,
   listFoldersToExpand,
+  listTransferred,
+  maxDraggedEntries,
   planDrop,
   selectDraggedPaths,
   type MoveRecord,
@@ -150,8 +153,11 @@ export function FilesTree({
   undoLabel?: string;
   /** Records a move or rename made from the tree, for ⌘Z. */
   onMoved: (record: MoveRecord) => void;
-  /** Undoes the last move or rename; resolves true once undone. */
-  onUndo: () => Promise<boolean>;
+  /**
+   * Undoes the last move or rename; a replace prompt it raises returns focus to `finalFocus`.
+   * Resolves true once undone.
+   */
+  onUndo: (finalFocus: () => HTMLElement | false) => Promise<boolean>;
   createRequest: TreeCreateRequest | null;
   /** Called once the tree has started `createRequest`'s edit. */
   onCreateRequestTaken: () => void;
@@ -205,7 +211,7 @@ export function FilesTree({
       mounted.current = false;
     };
   }, []);
-  // A drag from this tree: the paths it drags, kept mounted, and where it would drop.
+  // A drag from this tree: the rows kept mounted for it, and where it would drop.
   const [dragged, setDragged] = useState<string[]>([]),
     [dropFolder, setDropFolder] = useState<string | null>(null),
     ownDrag = useRef<TreeDrag | null>(null),
@@ -373,7 +379,7 @@ export function FilesTree({
     const directory = isDirectory(current.path);
     let error = '';
     committing.current = true;
-    const completed = await runMutation(
+    const { completed } = await runMutation(
       { checkout, kind: editMutations[current.kind], paths: create ? [] : [current.path] },
       destination,
       enter
@@ -535,20 +541,24 @@ export function FilesTree({
     clearTimeout(dragLeave.current);
     setDropFolder(null);
   }
-  /** Moves or copies dropped entries into `folder`, then expands it and selects them there. */
+  /**
+   * Moves or copies dropped entries into `folder`, then expands it and selects them there. A batch
+   * that fails partway records and selects the entries it did move.
+   */
   async function dropEntries(paths: string[], folder: string, copy: boolean) {
     const directories = new Map(paths.map((path) => [path, isDirectory(path)]));
-    const completed = await runMutation(
+    const result = await runMutation(
       { checkout, kind: copy ? 'copy' : 'move', paths },
       getDropDestination(paths, folder),
       { finalFocus: returnTreeFocus },
     );
-    if (!completed) return;
-    const landed = listDroppedPaths(paths, folder);
+    const transferred = listTransferred(paths, result);
+    if (!transferred.length) return;
+    const landed = listDroppedPaths(transferred, folder);
     if (!copy)
       onMoved({
         kind: 'move',
-        moves: paths.map((from, index) => ({
+        moves: transferred.map((from, index) => ({
           from,
           to: landed[index],
           directory: directories.get(from)!,
@@ -566,16 +576,24 @@ export function FilesTree({
   }
   useEffect(() => {
     if (!dragged.length) return;
-    // The browser ends a drag on Escape with dragend; these cover a drag it abandons.
+    // The browser ends a drag on Escape with dragend; these cover a drag it abandons, or a
+    // dragend that never reaches the tree. A press can't happen while a drag goes on, so one
+    // means it has ended. Drops bubble here after the tree has taken its own.
     const end = () => endDrag.current();
     const escape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') end();
     };
     window.addEventListener('blur', end);
     window.addEventListener('keydown', escape, true);
+    window.addEventListener('pointerdown', end, true);
+    window.addEventListener('dragend', end);
+    window.addEventListener('drop', end);
     return () => {
       window.removeEventListener('blur', end);
       window.removeEventListener('keydown', escape, true);
+      window.removeEventListener('pointerdown', end, true);
+      window.removeEventListener('dragend', end);
+      window.removeEventListener('drop', end);
     };
   }, [dragged.length]);
   useEffect(
@@ -620,7 +638,7 @@ export function FilesTree({
     commandsFor: (paths) => listFileCommands(commandContext, paths),
     undo() {
       if (!undoLabel) return;
-      void onUndo().then((undone) => {
+      void onUndo(returnTreeFocus).then((undone) => {
         if (!undone || !mounted.current) return;
         anchor.current = null;
         if (focusStayed()) {
@@ -667,9 +685,16 @@ export function FilesTree({
           stylex.defaultMarker(),
         )}
         onDragStart={(event) => {
+          // A drag whose end never arrived is over once another starts.
+          endDrag.current();
           const row = findRowAt(event.target);
           if (!row) return;
           const paths = selectDraggedPaths(row.path, tree.selected);
+          if (paths.length > maxDraggedEntries) {
+            event.preventDefault();
+            controller.report(`Drag at most ${maxDraggedEntries} items at a time.`);
+            return;
+          }
           if (edit || dialogOpen || !canRequestMutation({ checkout, kind: 'move', paths })) {
             event.preventDefault();
             return;
@@ -682,7 +707,8 @@ export function FilesTree({
           if (paths.length > 1) setCountImage(event.dataTransfer, paths.length);
           activeDrag = ownDrag.current = drag;
           setMenu(null);
-          setDragged(paths);
+          // The grabbed row stays mounted even when it moves with a dragged folder.
+          setDragged([...new Set([row.path, ...paths])]);
         }}
         onDragEnd={() => {
           endDrag.current();
@@ -728,8 +754,10 @@ export function FilesTree({
         onDrop={(event) => {
           if (!event.dataTransfer.types.includes(entriesType)) return;
           event.preventDefault();
+          // Only the drag this document started, as the DataTransfer confirms, drops.
+          const ours = isSameDrag(event.dataTransfer.getData(entriesType), activeDrag);
           const folder = findDropFolder(findRowAt(event.target)),
-            paths = planDropInto(folder),
+            paths = ours ? planDropInto(folder) : null,
             copy = event.altKey;
           endDrag.current();
           if (paths) void dropEntries(paths, folder, copy);

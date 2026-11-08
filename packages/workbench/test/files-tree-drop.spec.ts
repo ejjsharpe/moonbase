@@ -6,8 +6,10 @@ import {
   findUndoProblem,
   getDropDestination,
   isInDropRegion,
+  isSameDrag,
   listDroppedPaths,
   listFoldersToExpand,
+  listTransferred,
   listUndoMoves,
   planDrop,
   selectDraggedPaths,
@@ -52,6 +54,47 @@ test('a drop is refused onto or into a dragged entry, where nothing would move, 
   expect(planDrop(drag('a.ts'), { ...into('src'), source: 'other' })).toBeNull();
   expect(planDrop(drag('a.ts'), { ...into('src'), checkout: 'other' })).toBeNull();
   expect(planDrop(null, into('src'))).toBeNull();
+});
+
+test('a drop that would land an entry on another dragged entry is refused', () => {
+  // x.ts is already in the root, so a/x.ts would replace the file being dragged with it.
+  expect(planDrop(drag('x.ts', 'a/x.ts'), into(''))).toBeNull();
+  expect(planDrop(drag('X.ts', 'a/x.ts'), into(''))).toBeNull();
+  expect(planDrop(drag('src', 'lib/src'), into(''))).toBeNull();
+  expect(planDrop(drag('src/x.ts', 'a/x.ts'), into('src'))).toBeNull();
+  // Names that differ, or a dragged entry elsewhere, still drop.
+  expect(planDrop(drag('x.ts', 'a/y.ts'), into(''))).toEqual(['a/y.ts']);
+  expect(planDrop(drag('src/x.ts', 'a/y.ts'), into('a'))).toEqual(['src/x.ts']);
+});
+
+test('a drop is the tree’s own drag only when its DataTransfer names the same one', () => {
+  const own = drag('a.ts', 'src');
+  expect(isSameDrag(JSON.stringify(own), own)).toBe(true);
+  expect(isSameDrag(JSON.stringify({ ...own, source: 'other' }), own)).toBe(false);
+  expect(isSameDrag(JSON.stringify({ ...own, checkout: 'other' }), own)).toBe(false);
+  expect(isSameDrag(JSON.stringify(drag('a.ts')), own)).toBe(false);
+  expect(isSameDrag(JSON.stringify(drag('src', 'a.ts')), own)).toBe(false);
+  expect(isSameDrag(JSON.stringify(own), null)).toBe(false);
+  for (const data of ['', 'not json', 'null', '[]', '{"paths":"a.ts"}'])
+    expect(isSameDrag(data, own)).toBe(false);
+});
+
+test('a batch that failed partway transferred only the items it completed', () => {
+  const paths = ['a.ts', 'b.ts', 'c.ts'];
+  expect(listTransferred(paths, { completed: true, items: [] })).toEqual(paths);
+  expect(
+    listTransferred(paths, {
+      completed: false,
+      items: [
+        // A replaced entry, which moved to the Trash.
+        { source: 'dest/a.ts', outcome: 'completed' },
+        { source: 'a.ts', destination: 'dest/a.ts', outcome: 'completed' },
+        { source: 'b.ts', destination: 'dest/b.ts', outcome: 'failed', message: 'Busy' },
+        { source: 'c.ts', destination: 'dest/c.ts', outcome: 'uncertain' },
+      ],
+    }),
+  ).toEqual(['a.ts']);
+  expect(listTransferred(paths, { completed: false, items: [] })).toEqual([]);
 });
 
 test('the drop region is a folder and its descendants; the root is the whole tree', () => {

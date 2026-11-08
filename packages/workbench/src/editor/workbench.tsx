@@ -13,6 +13,7 @@ import { gitStatusMarks } from './files-tree-status.ts';
 import { Mutation, type Action } from './mutation.tsx';
 import { useMutationRunner } from './mutation-runner.tsx';
 import { useMoveUndo } from './move-undo.ts';
+import { maxDraggedEntries } from './files-tree-drop.ts';
 import { formatKeys } from './file-commands.ts';
 import { Popup } from './popup.tsx';
 import {
@@ -196,11 +197,12 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       ) &&
       // Several entries move or copy into one folder, as a drag from the tree does.
       (!(value.kind === 'move' || value.kind === 'copy') ||
-        (value.paths.length >= 1 && value.paths.length <= 128)) &&
+        (value.paths.length >= 1 && value.paths.length <= maxDraggedEntries)) &&
       (value.kind !== 'trash' || value.paths.length > 0)
     );
   }
-  // Moves and renames made from the tree, one per checkout, for Undo.
+  // Moves and renames made from the tree, one per checkout, for Undo; any other file operation
+  // from the tree or a dialog forgets the checkout's.
   const moveUndo = useMoveUndo(controller, mutations.runMutation, openCheckouts);
   function requestMutation(value: Action, finalFocus?: () => boolean | HTMLElement | null) {
     if (
@@ -619,7 +621,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
           disabled:
             !moveUndo.labelFor(checkout) ||
             !canRequestMutation({ checkout, kind: 'move', paths: moveUndo.movedPaths(checkout) }),
-          run: () => void moveUndo.undo(checkout),
+          run: () => void moveUndo.undo(checkout, () => explorerActionsButton.current ?? false),
         },
         'separator',
         {
@@ -691,10 +693,10 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                 dialogOpen={!!(action || choice || lookup || mutations.running)}
                 canRequestMutation={canRequestMutation}
                 requestMutation={requestMutation}
-                runMutation={mutations.runMutation}
+                runMutation={moveUndo.run}
                 undoLabel={moveUndo.labelFor(checkout)}
                 onMoved={(moves) => moveUndo.record(checkout, moves)}
-                onUndo={() => moveUndo.undo(checkout)}
+                onUndo={(finalFocus) => moveUndo.undo(checkout, finalFocus)}
                 createRequest={createRequest}
                 onCreateRequestTaken={() => setCreateRequest(null)}
                 copyPaths={copyPaths}
@@ -1329,6 +1331,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
           action={action}
           close={() => setAction(null)}
           finalFocus={mutationFinalFocus}
+          onApplied={() => moveUndo.clear(action.checkout)}
         />
       )}
       {mutations.confirmation}

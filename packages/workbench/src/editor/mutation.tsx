@@ -13,7 +13,7 @@ import type {
   MutationAction as Action,
 } from '@moonbase/application/editor';
 import { checkoutKey } from '@moonbase/application/editor';
-const empty = { busy: false, error: '', replacements: null };
+const empty = { busy: false, error: '', replacements: null, result: null };
 const emptySnapshot = () => empty;
 const noSubscription = () => () => {};
 
@@ -26,11 +26,14 @@ export function Mutation({
   action,
   close,
   finalFocus,
+  onApplied,
 }: {
   controller: EditorController;
   action: Action;
   close: () => void;
   finalFocus?: () => boolean | HTMLElement | null;
+  /** Called once applying it may have changed files: it ran, or failed, rather than asking. */
+  onApplied?: () => void;
 }) {
   const checkout = action.checkout,
     batchImport = action.kind === 'import' && action.nativeReferences!.length > 1;
@@ -62,7 +65,11 @@ export function Mutation({
     action.kind === 'trash' ? '. Unsaved text remains in recovery at its original path.' : '';
   async function apply(consent = false) {
     if (unavailable || busy || (action.kind !== 'trash' && !batchImport && !destination)) return;
-    if (await workflow?.apply(destination, replacementPaths, consent)) close();
+    if (!workflow) return;
+    const applied = await workflow.apply(destination, replacementPaths, consent);
+    const { error, result } = workflow.getSnapshot();
+    if (applied || error || result) onApplied?.();
+    if (applied) close();
   }
   return (
     <Popup

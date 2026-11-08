@@ -1,10 +1,37 @@
 import type { DirectoryEntry } from '@moonbase/contracts/workspace';
+import type { MutationRunResult } from '@moonbase/application/editor';
 
 /** The DataTransfer type of entries dragged from a files tree: a JSON `TreeDrag`. */
 export const entriesType = 'application/x-moonbase-entries';
 
+/** The most entries one move or copy takes, and so one drag. */
+export const maxDraggedEntries = 128;
+
 /** Entries dragged from one tree: `source` is its editor instance, `checkout` its checkout key. */
 export type TreeDrag = { source: string; checkout: string; paths: string[] };
+
+/**
+ * Whether a drop's DataTransfer `data` (its `entriesType` text) is `drag`, the drag this document
+ * started: the same tree, checkout and paths.
+ */
+export function isSameDrag(data: string, drag: TreeDrag | null) {
+  if (!drag || !data) return false;
+  let dropped: unknown;
+  try {
+    dropped = JSON.parse(data);
+  } catch {
+    return false;
+  }
+  if (typeof dropped !== 'object' || !dropped) return false;
+  const { source, checkout, paths } = dropped as Partial<TreeDrag>;
+  return (
+    source === drag.source &&
+    checkout === drag.checkout &&
+    Array.isArray(paths) &&
+    paths.length === drag.paths.length &&
+    paths.every((path, index) => path === drag.paths[index])
+  );
+}
 
 /** An entry moved from the tree, for undoing the move. */
 export type TreeMove = { from: string; to: string; directory: boolean };
@@ -37,8 +64,9 @@ export function findDropFolder(row?: Pick<DirectoryEntry, 'path' | 'directory'>)
 
 /**
  * The entries a drop into `folder` moves or copies, or null to refuse it: a drag from another
- * editor or checkout, a drop onto a dragged entry or into one of its folders, and a drop where
- * every dragged entry is already in `folder`. Entries already there are left out of the rest.
+ * editor or checkout, a drop onto a dragged entry or into one of its folders, a drop where every
+ * dragged entry is already in `folder`, and one that would land an entry on another dragged
+ * entry's path (as the workspace folds names). Entries already there are left out of the rest.
  */
 export function planDrop(
   drag: TreeDrag | null,
@@ -48,7 +76,26 @@ export function planDrop(
   const { folder } = target;
   if (drag.paths.some((path) => folder === path || folder.startsWith(path + '/'))) return null;
   const paths = drag.paths.filter((path) => parentOf(path) !== folder);
+  const dragged = new Set(drag.paths.map(fold));
+  if (listDroppedPaths(paths, folder).some((path) => dragged.has(fold(path)))) return null;
   return paths.length ? paths : null;
+}
+
+/**
+ * Which of `paths` a move or copy took: all of them once it completed, else those its items
+ * report completed, as a batch that failed partway does.
+ */
+export function listTransferred(
+  paths: readonly string[],
+  result: Pick<MutationRunResult, 'completed' | 'items'>,
+) {
+  if (result.completed) return [...paths];
+  const done = new Set(
+    result.items
+      .filter((item) => item.outcome === 'completed' && item.destination !== undefined)
+      .map((item) => item.source),
+  );
+  return paths.filter((path) => done.has(path));
 }
 
 /** Whether a row belongs to the highlighted region of a drop into `folder`, other than the root. */

@@ -27,6 +27,13 @@ async function counted() {
 }
 
 const never = () => Promise.reject(new Error('No replacement was expected'));
+/** A completed result, moving or copying each `[source, destination]`. */
+const done = (...pairs: [string, string][]) => ({
+  completed: true,
+  error: '',
+  items: pairs.map(([source, destination]) => ({ source, destination, outcome: 'completed' })),
+});
+const declined = { completed: false, error: '', items: [] };
 
 test('a direct mutation completes without consent when nothing is replaced', async () => {
   const f = await counted();
@@ -35,7 +42,7 @@ test('a direct mutation completes without consent when nothing is replaced', asy
       await runMutation(f.controller, { checkout, kind: 'move', paths: ['a.ts'] }, 'moved.ts', {
         confirmReplace: never,
       }),
-      { completed: true, error: '' },
+      done(['a.ts', 'moved.ts']),
     );
     assert.equal(await f.read('moved.ts'), 'const a = 1;');
     assert.deepEqual(f.disposals, [1]);
@@ -53,13 +60,16 @@ test('several entries move into a folder and back to the root as one batch each'
       runMutation(f.controller, { checkout, kind: 'move', paths }, destination, {
         confirmReplace: never,
       });
-    assert.deepEqual(await move(['a.ts', 'c.ts'], 'folder'), { completed: true, error: '' });
+    assert.deepEqual(
+      await move(['a.ts', 'c.ts'], 'folder'),
+      done(['a.ts', 'folder/a.ts'], ['c.ts', 'folder/c.ts']),
+    );
     assert.equal(await f.read('folder/c.ts'), 'third');
     assert.equal(f.editor.buffer(target('folder/a.ts'))?.text, 'unsaved');
-    assert.deepEqual(await move(['folder/a.ts', 'folder/c.ts'], ''), {
-      completed: true,
-      error: '',
-    });
+    assert.deepEqual(
+      await move(['folder/a.ts', 'folder/c.ts'], ''),
+      done(['folder/a.ts', 'a.ts'], ['folder/c.ts', 'c.ts']),
+    );
     assert.equal(await f.read('a.ts'), 'const a = 1;');
     assert.equal(await f.read('c.ts'), 'third');
     assert.equal(f.editor.buffer(target('a.ts'))?.text, 'unsaved');
@@ -81,12 +91,12 @@ test('a direct mutation asks before replacing and applies only with consent', as
     const copy = { checkout, kind: 'copy' as const, paths: ['a.ts'] };
     assert.deepEqual(
       await runMutation(f.controller, copy, 'b.ts', { confirmReplace: confirm(false) }),
-      { completed: false, error: '' },
+      declined,
     );
     assert.equal(await f.read('b.ts'), 'second');
     assert.deepEqual(
       await runMutation(f.controller, copy, 'b.ts', { confirmReplace: confirm(true) }),
-      { completed: true, error: '' },
+      done(['a.ts', 'b.ts']),
     );
     assert.equal(await f.read('b.ts'), 'const a = 1;');
     assert.deepEqual(asked, [['b.ts'], ['b.ts']]);
@@ -141,7 +151,7 @@ test('aborting a direct mutation while it asks declines it and disposes it', asy
         },
       },
     );
-    assert.deepEqual(result, { completed: false, error: '' });
+    assert.deepEqual(result, declined);
     assert.equal(await f.read('b.ts'), 'second');
     assert.deepEqual(f.disposals, [1]);
     // An aborted signal creates nothing.
@@ -150,7 +160,7 @@ test('aborting a direct mutation while it asks declines it and disposes it', asy
         signal: abort.signal,
         confirmReplace: never,
       }),
-      { completed: false, error: '' },
+      declined,
     );
     assert.deepEqual(f.disposals, [1]);
   } finally {
@@ -193,7 +203,7 @@ test('aborting while a confirmation is unanswered resolves at once and disposes 
     });
     await asking;
     abort.abort();
-    assert.deepEqual(await running, { completed: false, error: '' });
+    assert.deepEqual(await running, declined);
     assert.equal(await f.read('b.ts'), 'second');
     assert.deepEqual(f.disposals, [1]);
   } finally {
@@ -208,7 +218,7 @@ test('a move may change only its name’s case, and a copy onto its source is re
       await runMutation(f.controller, { checkout, kind: 'move', paths: ['a.ts'] }, 'A.ts', {
         confirmReplace: never,
       }),
-      { completed: true, error: '' },
+      done(['a.ts', 'A.ts']),
     );
     assert.equal(await f.read('A.ts'), 'const a = 1;');
     const listing = await f.client.command('listDirectory', { checkout, path: '' });
@@ -221,7 +231,7 @@ test('a move may change only its name’s case, and a copy onto its source is re
         await runMutation(f.controller, { checkout, kind: 'copy', paths: ['b.ts'] }, destination, {
           confirmReplace: never,
         }),
-        { completed: false, error: 'Choose a different name from the original.' },
+        { completed: false, error: 'Choose a different name from the original.', items: [] },
       );
     assert.equal(await f.read('b.ts'), 'second');
     assert.deepEqual(f.disposals, [1, 1, 1]);

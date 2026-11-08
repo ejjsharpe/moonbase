@@ -1989,9 +1989,7 @@ test('workbench renders its supplied checkout independently of application navig
   await expect(
     first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true }),
   ).toBeVisible();
-  await expect(
-    first(page).getByRole('treeitem', { name: 'elsewhere.ts', exact: true }),
-  ).toHaveCount(0);
+  await expect(first(page).getByRole('treeitem', { name: /^elsewhere\.ts(,|$)/ })).toHaveCount(0);
   await expect(
     first(page).getByRole('tablist', { name: 'Workbench views', exact: true }),
   ).toHaveCount(0);
@@ -2128,7 +2126,8 @@ test('commands that need the hidden explorer ask the app to show it', async ({ p
     'aria-pressed',
     'true',
   );
-  const active = first(page).getByRole('treeitem', { name: 'welcome.ts', exact: true });
+  // The row's name goes on with its Git state, such as "welcome.ts, modified".
+  const active = first(page).getByRole('treeitem', { name: /^welcome\.ts(,|$)/ });
   await expect(active).toHaveAttribute('aria-selected', 'true');
   await page.goto('/?sidebar-hidden');
   await command('Reveal Active File');
