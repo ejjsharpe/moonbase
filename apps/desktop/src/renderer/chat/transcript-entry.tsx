@@ -722,7 +722,7 @@ const Part = memo(
       contents,
       wanted: readable && (ordinary || expanded),
     });
-    const { text, frozen, matchVisible, matchedText, complete } = useFindHydration({
+    const { text, held, frozen, matchVisible, matchedText, complete } = useFindHydration({
       part,
       match,
       revealing,
@@ -919,7 +919,10 @@ const Part = memo(
             </Button>
           </p>
         )}
+        {/* Held text already reads past the preview and its own read replaces it, so a status line
+            or Read more under it would come and go with every streamed revision. */}
         {readable &&
+          !held &&
           (content?.status === 'loading' ? (
             <p role="status" {...stylex.props(styles.small)}>
               Loading content…

@@ -238,7 +238,7 @@ export function useFindHydration({
     if (match.start < base) load(true);
     else if (!matchVisible && (!content || content.status === 'partial')) load();
   }, [match, readable, shown, content, base, matchVisible, load, revealing]);
-  return { text, frozen, matchVisible, matchedText, complete };
+  return { text, held, frozen, matchVisible, matchedText, complete };
 }
 
 /**
