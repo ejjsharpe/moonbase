@@ -144,7 +144,6 @@ test.describe('the virtualized transcript', () => {
       if (!earlier && !loading && (await list.evaluate((node) => node.scrollTop)) < 1) break;
     }
     await expect(page.locator('[data-transcript-row="entry:long-0"]')).toBeVisible();
-    await expect(page.getByText('Start of conversation', { exact: true })).toBeVisible();
     const retained = await page.evaluate(
       () => window.demo.application.chat!.getSnapshot().transcript.entries.length,
     );

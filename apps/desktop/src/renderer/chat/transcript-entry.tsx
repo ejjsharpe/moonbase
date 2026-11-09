@@ -307,12 +307,6 @@ export const Entry = memo(
               The saved Find part is unavailable. Refresh results.
             </p>
           )}
-        {!transcript && entry.truncated && (
-          <p {...stylex.props(styles.small)}>
-            Only a preview is available from this host. Upgrade the host to read the complete
-            source.
-          </p>
-        )}
         {transcript?.thinking === 'redacted' && !parts.some((part) => part.kind === 'thinking') && (
           <p {...stylex.props(styles.small)}>Thinking is redacted by the provider.</p>
         )}
@@ -722,7 +716,7 @@ const Part = memo(
       contents,
       wanted: readable && (ordinary || expanded),
     });
-    const { text, held, frozen, matchVisible, matchedText, complete } = useFindHydration({
+    const { text, frozen, matchVisible, matchedText, complete } = useFindHydration({
       part,
       match,
       revealing,
@@ -882,13 +876,9 @@ const Part = memo(
             mark={mark}
           />
         )}
-        {match && !matchVisible && (
-          <p
-            role={content?.status === 'complete' ? 'alert' : 'status'}
-            {...stylex.props(styles.small)}>
-            {content?.status === 'complete'
-              ? 'The saved match differs from this source. Refresh results.'
-              : 'Loading original source through this match…'}
+        {match && !matchVisible && content?.status === 'complete' && (
+          <p role="alert" {...stylex.props(styles.small)}>
+            The saved match differs from this source. Refresh results.
           </p>
         )}
         {part.pairing && part.pairing !== 'matched' && (
@@ -919,24 +909,18 @@ const Part = memo(
             </Button>
           </p>
         )}
-        {/* Held text already reads past the preview and its own read replaces it, so a status line
-            or Read more under it would come and go with every streamed revision. */}
-        {readable &&
-          !held &&
-          (content?.status === 'loading' ? (
-            <p role="status" {...stylex.props(styles.small)}>
-              Loading content…
-            </p>
-          ) : (
-            (content?.nextCursor || (!content && part.truncated)) && (
-              <Button
-                {...stylex.props(controls.button, controls.quietButton)}
-                onClick={() => load()}>
-                Read more · {content?.loadedBytes.toLocaleString() ?? 0} of{' '}
-                {part.bytes.toLocaleString()} bytes
-              </Button>
-            )
-          ))}
+        {/* A shown part reads its content by itself, so only a part read in pages offers more. It
+            stays in place while a page loads: a line that came and went with every read would
+            move the rows below it, and the list following the end with them. */}
+        {readable && content?.nextCursor && (
+          <Button
+            {...stylex.props(controls.button, controls.quietButton)}
+            disabled={content.status === 'loading'}
+            onClick={() => load()}>
+            Read more · {content.loadedBytes.toLocaleString()} of {part.bytes.toLocaleString()}{' '}
+            bytes
+          </Button>
+        )}
       </>
     );
     let copyLabel = 'part';

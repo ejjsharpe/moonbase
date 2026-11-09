@@ -10,7 +10,6 @@ import {
   useState,
   useSyncExternalStore,
   type ReactElement,
-  type ReactNode,
   type RefObject,
 } from 'react';
 import { Button } from '@base-ui/react/button';
@@ -219,13 +218,6 @@ export function Transcript({
     <section aria-label="Chat conversation" {...stylex.props(styles.transcript)}>
       <div {...stylex.props(styles.row)}>
         <div {...stylex.props(styles.measure)}>
-          {!snapshot && (
-            <p>
-              {state.ready
-                ? 'Reading the saved chat…'
-                : 'This view is offline. Its draft and unresolved command identities are retained.'}
-            </p>
-          )}
           {/* Idle and running need no line; stopped and failed say so. */}
           {currentSnapshot && !['idle', 'running'].includes(currentSnapshot.state) && (
             <p
@@ -254,25 +246,9 @@ export function Transcript({
               </Button>
             </p>
           )}
-          {status.observation === 'reconnecting' && (
-            <p role="status" {...stylex.props(styles.small)}>
-              Reconnecting. Showing the last received content; live reads and Copy wait for a fresh
-              connection.
-            </p>
-          )}
           {status.observation === 'failed' && (
             <p role="alert" {...stylex.props(styles.warning)}>
               Live updates stopped. Reopen the conversation to refresh.
-            </p>
-          )}
-          {status.observation === 'legacy' && (
-            <p {...stylex.props(styles.small)}>
-              This host updates periodically. Upgrade the host for streaming responses.
-            </p>
-          )}
-          {status.capabilities.transcript === 'legacy' && (
-            <p {...stylex.props(styles.small)}>
-              Upgrade this host for complete transcript reads and Copy. Previews remain readable.
             </p>
           )}
           {preserve && (
@@ -298,27 +274,8 @@ export function Transcript({
                 onHoldingChange={setHolding}
                 onPage={page}
                 onReaderInput={controller.cancelFindReveal}
-                header={
-                  <Edge>
-                    {paging === 'earlier' && (
-                      <p role="status" {...stylex.props(styles.small)}>
-                        Loading earlier…
-                      </p>
-                    )}
-                    {!transcript.earlier && (
-                      <p {...stylex.props(styles.small)}>Start of conversation</p>
-                    )}
-                  </Edge>
-                }
-                footer={
-                  <Edge>
-                    {(paging === 'later' || (transcript.later && transcript.loading)) && (
-                      <p role="status" {...stylex.props(styles.small)}>
-                        Loading later…
-                      </p>
-                    )}
-                  </Edge>
-                }
+                header={edge}
+                footer={edge}
               />
             </OpenCallsContext.Provider>
           </RowContext.Provider>
@@ -1001,13 +958,8 @@ function Row({
     </div>
   );
 }
-function Edge({ children }: { children: ReactNode }) {
-  return (
-    <div {...stylex.props(styles.row, styles.edge)}>
-      <div {...stylex.props(styles.measure)}>{children}</div>
-    </div>
-  );
-}
+/** The space above the first row and below the last. */
+const edge = <div {...stylex.props(styles.edge)} />;
 /** A legacy host's tool output preview, shown while its run is live. */
 function ToolPreview({ tool }: { tool: ChatToolActivity }) {
   return (
@@ -1018,11 +970,6 @@ function ToolPreview({ tool }: { tool: ChatToolActivity }) {
       <pre tabIndex={0} {...stylex.props(styles.output)}>
         {tool.text}
       </pre>
-      {tool.truncated && (
-        <p {...stylex.props(styles.small)}>
-          This host supplied a tool-output preview. Upgrade the host for complete reads.
-        </p>
-      )}
     </section>
   );
 }
