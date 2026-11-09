@@ -1238,3 +1238,51 @@ test('a folded run opens for a Find match in it, folds again for that match, and
   await find.press('Enter');
   await expect(fold).toHaveAttribute('aria-expanded', 'true');
 });
+
+test('a thought shows while the reply works and gives way to its text; an empty thought never shows', async ({
+  page,
+}) => {
+  await open(page);
+  const thought = {
+    kind: 'thinking',
+    text: '**Checking the newline rules**\n\nPOSIX says so.',
+  } as const;
+  const update = (parts: { kind: 'thinking' | 'text'; text: string }[]) =>
+    page.evaluate(async (parts) => {
+      await window.demo.transcript!.activity(
+        parts.map((part, index) => ({ ...part, partId: `m0.b${index}` })),
+      );
+      await window.demo.application.chat!.jumpToLatest();
+    }, parts);
+  const row = live(page);
+  // Only a thought with nothing to read: the reply is working, with no step to name.
+  await update([{ kind: 'thinking', text: '' }]);
+  await expect(page.locator('[data-transcript-activity-group]')).toHaveText(/Working/);
+  await expect(row.locator('[data-transcript-step]')).toHaveCount(0);
+  // A thought to read names what the reply is doing, under its working line.
+  await update([{ kind: 'thinking', text: '' }, thought]);
+  await expect(page.getByText('Checking the newline rules', { exact: true }).first()).toBeVisible();
+  // Its text takes the thought's place.
+  await update([{ kind: 'thinking', text: '' }, thought, { kind: 'text', text: 'Yes, end it.' }]);
+  await expect(row.getByText('Yes, end it.', { exact: true })).toBeVisible();
+  await expect(page.getByText('Checking the newline rules', { exact: true })).toHaveCount(0);
+  await expect(row.locator('[data-transcript-step]')).toHaveCount(0);
+  // Saved, the reply reads the same.
+  await page.evaluate(async () => {
+    await window.demo.transcript!.record([
+      {
+        id: 'answered',
+        thinking: 'available',
+        parts: [
+          { kind: 'thinking', text: '' },
+          { kind: 'thinking', text: 'Checking the newline rules' },
+          { kind: 'text', text: 'Yes, end it.' },
+        ],
+      },
+    ]);
+  });
+  const saved = page.locator('[data-transcript-entry="answered"]');
+  await expect(saved.getByText('Yes, end it.', { exact: true })).toBeVisible();
+  await expect(saved.locator('[data-transcript-step]')).toHaveCount(0);
+  await expect(saved).not.toContainText('Thought');
+});

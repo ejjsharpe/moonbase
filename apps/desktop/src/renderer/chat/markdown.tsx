@@ -91,7 +91,13 @@ const Block = memo(
     return (
       <div
         ref={root}
-        {...(start !== undefined && end !== undefined ? getFindSourceProps(start, end) : {})}>
+        {...(start !== undefined && end !== undefined ? getFindSourceProps(start, end) : {})}
+        {...stylex.props(
+          stylex.defaultMarker(),
+          only?.type === 'heading' || only?.type === 'thematicBreak'
+            ? styles.sectionFlow
+            : styles.flow,
+        )}>
         <ParsedBlock
           block={selected.block}
           openLink={selected.openLink}
@@ -175,8 +181,12 @@ function ParsedBlock({ block, openLink, copyCode }: Actions & { block: MarkdownB
   const rehypePlugins = useMemo(() => [markFindSources], []);
   const components = useMemo<Components>(
     () => ({
-      p: ({ children }) => <p {...stylex.props(styles.paragraph)}>{children}</p>,
-      h1: ({ children }) => <h1 {...stylex.props(styles.heading)}>{children}</h1>,
+      p: ({ children }) => <p {...stylex.props(stylex.defaultMarker(), styles.flow)}>{children}</p>,
+      h1: ({ children }) => (
+        <h1 {...stylex.props(stylex.defaultMarker(), styles.sectionFlow, styles.heading)}>
+          {children}
+        </h1>
+      ),
       // GFM labels its footnotes with a visually hidden heading.
       h2: ({ children, node }) =>
         isFootnoteLabel(node) ? (
@@ -184,12 +194,30 @@ function ParsedBlock({ block, openLink, copyCode }: Actions & { block: MarkdownB
             {children}
           </h2>
         ) : (
-          <h2 {...stylex.props(styles.heading)}>{children}</h2>
+          <h2 {...stylex.props(stylex.defaultMarker(), styles.sectionFlow, styles.heading)}>
+            {children}
+          </h2>
         ),
-      h3: ({ children }) => <h3 {...stylex.props(styles.heading)}>{children}</h3>,
-      h4: ({ children }) => <h4 {...stylex.props(styles.heading)}>{children}</h4>,
-      h5: ({ children }) => <h5 {...stylex.props(styles.heading)}>{children}</h5>,
-      h6: ({ children }) => <h6 {...stylex.props(styles.heading)}>{children}</h6>,
+      h3: ({ children }) => (
+        <h3 {...stylex.props(stylex.defaultMarker(), styles.sectionFlow, styles.heading)}>
+          {children}
+        </h3>
+      ),
+      h4: ({ children }) => (
+        <h4 {...stylex.props(stylex.defaultMarker(), styles.sectionFlow, styles.heading)}>
+          {children}
+        </h4>
+      ),
+      h5: ({ children }) => (
+        <h5 {...stylex.props(stylex.defaultMarker(), styles.sectionFlow, styles.heading)}>
+          {children}
+        </h5>
+      ),
+      h6: ({ children }) => (
+        <h6 {...stylex.props(stylex.defaultMarker(), styles.sectionFlow, styles.heading)}>
+          {children}
+        </h6>
+      ),
       code: ({ children }) => <code {...stylex.props(styles.inlineCode)}>{children}</code>,
       pre: ({ node }) => {
         const code = node?.children.find(
@@ -258,15 +286,19 @@ function ParsedBlock({ block, openLink, copyCode }: Actions & { block: MarkdownB
         <span aria-label={checked ? 'Completed' : 'Incomplete'}>{checked ? '[x] ' : '[ ] '}</span>
       ),
       blockquote: ({ children }) => (
-        <blockquote {...stylex.props(styles.quote)}>{children}</blockquote>
+        <blockquote {...stylex.props(stylex.defaultMarker(), styles.flow, styles.quote)}>
+          {children}
+        </blockquote>
       ),
-      ul: ({ children }) => <ul {...stylex.props(styles.list)}>{children}</ul>,
+      ul: ({ children }) => (
+        <ul {...stylex.props(stylex.defaultMarker(), styles.flow, styles.list)}>{children}</ul>
+      ),
       ol: ({ children, start }) => (
-        <ol start={start} {...stylex.props(styles.list)}>
+        <ol start={start} {...stylex.props(stylex.defaultMarker(), styles.flow, styles.list)}>
           {children}
         </ol>
       ),
-      hr: () => <hr {...stylex.props(styles.rule)} />,
+      hr: () => <hr {...stylex.props(stylex.defaultMarker(), styles.sectionFlow, styles.rule)} />,
       section: ({ children, node }) => (
         <section
           {...stylex.props(node?.properties.dataFootnotes !== undefined && styles.footnotes)}>
@@ -274,7 +306,11 @@ function ParsedBlock({ block, openLink, copyCode }: Actions & { block: MarkdownB
         </section>
       ),
       table: ({ children }) => (
-        <div role="region" aria-label="Table" tabIndex={0} {...stylex.props(styles.overflow)}>
+        <div
+          role="region"
+          aria-label="Table"
+          tabIndex={0}
+          {...stylex.props(stylex.defaultMarker(), styles.flow, styles.overflow)}>
           <table {...stylex.props(styles.table)}>{children}</table>
         </div>
       ),
@@ -472,7 +508,7 @@ const Code = memo(function Code({
       {...(sourceStart !== undefined && sourceEnd !== undefined
         ? getFindSourceProps(sourceStart, sourceEnd)
         : {})}
-      {...stylex.props(styles.code)}>
+      {...stylex.props(stylex.defaultMarker(), styles.flow, styles.code)}>
       <div {...stylex.props(controls.row, styles.codeHeader)}>
         <span data-find-ignore>
           {language || 'Plain text'}
@@ -517,14 +553,25 @@ const Code = memo(function Code({
 });
 const styles = stylex.create({
   prose: { fontSize: type.message, lineHeight: 1.7, overflowWrap: 'anywhere', minWidth: 0 },
-  paragraph: { marginBlock: space.sm, marginInline: 0 },
+  /**
+   * Blocks are spaced only between each other, at any depth: no space above a message's first
+   * block or below its last, so a row's own spacing decides how far it sits from the next.
+   */
+  flow: {
+    marginTop: { default: 0, [stylex.when.siblingBefore(':is(*)')]: space.md },
+    marginBottom: 0,
+    marginInline: 0,
+  },
+  /** A heading or rule starts a section, so it sits further from what came before. */
+  sectionFlow: {
+    marginTop: { default: 0, [stylex.when.siblingBefore(':is(*)')]: space.xl },
+    marginBottom: 0,
+    marginInline: 0,
+  },
   heading: {
     fontSize: type.heading,
     fontWeight: 600,
     lineHeight: 1.5,
-    marginTop: space.xl,
-    marginBottom: space.sm,
-    marginInline: 0,
   },
   visuallyHidden: {
     position: 'absolute',
@@ -553,23 +600,19 @@ const styles = stylex.create({
   },
   quote: {
     color: colors.secondary,
-    marginBlock: space.md,
-    marginInline: 0,
     paddingLeft: space.lg,
     borderLeftWidth: 1,
     borderLeftStyle: 'solid',
     borderLeftColor: colors.controlBorder,
   },
-  list: { paddingLeft: space.xl, marginBlock: space.sm, marginInline: 0 },
+  list: { paddingLeft: space.xl },
   rule: {
     borderWidth: 0,
     borderTopWidth: 1,
     borderTopStyle: 'solid',
     borderTopColor: colors.border,
-    marginBlock: space.xl,
-    marginInline: 0,
   },
-  overflow: { overflowX: 'auto', maxWidth: '100%', marginBlock: space.md, marginInline: 0 },
+  overflow: { overflowX: 'auto', maxWidth: '100%' },
   table: {
     borderCollapse: 'collapse',
     fontSize: type.body,
@@ -589,8 +632,6 @@ const styles = stylex.create({
   code: {
     backgroundColor: colors.surface,
     borderRadius: radius.panel,
-    marginBlock: space.md,
-    marginInline: 0,
     minWidth: 0,
     overflow: 'hidden',
   },

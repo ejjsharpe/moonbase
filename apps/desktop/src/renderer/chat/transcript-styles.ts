@@ -46,7 +46,8 @@ export const transcriptStyles = stylex.create({
   bubble: {
     maxWidth: '82%',
     minWidth: 0,
-    padding: '2px 14px',
+    paddingBlock: space.sm,
+    paddingInline: 14,
     backgroundColor: colors.elevated,
     borderWidth: 1,
     borderStyle: 'solid',
@@ -70,8 +71,7 @@ export const transcriptStyles = stylex.create({
     lineHeight: 1.7,
     whiteSpace: 'pre-wrap',
     overflowWrap: 'anywhere',
-    marginBlock: space.sm,
-    marginInline: 0,
+    margin: 0,
   },
   output: {
     fontFamily: type.mono,
@@ -189,14 +189,14 @@ export const transcriptStyles = stylex.create({
   },
   activityProblem: { flexShrink: 0, color: colors.danger },
   /**
-   * A folded run reads as the heading of the answer under it: the answer's text sits as far below
-   * the rule as the "Worked for" text sits above it, not a full gap between list items.
+   * A folded run reads as the heading of the answer under it: the answer starts 12px below the
+   * rule, not a full gap between list items.
    */
-  activityGroup: { marginBottom: -24 },
+  activityGroup: { marginTop: 0, marginBottom: -7 },
   /** Open, the first step's letters start 16px below the rule… */
-  activityGroupOpen: { marginBottom: 5 },
-  /** …and the answer sits as far below the last step. */
-  activityGroupSteps: { marginBottom: -35 },
+  activityGroupOpen: { marginTop: 0, marginBottom: 5 },
+  /** …and the answer starts 12px below the last step, as it does below the folded rule. */
+  activityGroupSteps: { marginBottom: -14 },
   /** A folded run of tool rows: "Worked for 1m 29s", a chevron, the time, and a rule under it. */
   activityFold: {
     display: 'flex',

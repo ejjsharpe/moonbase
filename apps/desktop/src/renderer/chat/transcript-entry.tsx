@@ -39,6 +39,8 @@ import {
   getActivityState,
   getAnsweredCall,
   getActivityStepState,
+  findAnsweredThoughts,
+  isEmptyThought,
   summarizeActivityHeadlines,
   type ActivityHeadline,
   getToolSummary,
@@ -138,7 +140,16 @@ export const Entry = memo(
       () => (transcript ? getTranscriptParts(transcript, manifest) : []),
       [transcript, manifest],
     );
-    const partGroups = useMemo(() => groupTranscriptParts(parts), [parts]);
+    // A thought gives way to the text that answers it, and an empty one never shows; a Find
+    // match keeps its part shown.
+    const shownParts = useMemo(() => {
+      const answered = findAnsweredThoughts(parts);
+      return parts.filter(
+        (part) =>
+          part.partId === findMatch?.partId || !(isEmptyThought(part) || answered.has(part.partId)),
+      );
+    }, [parts, findMatch?.partId]);
+    const partGroups = useMemo(() => groupTranscriptParts(shownParts), [shownParts]);
     const matchedPart = findRevealing && findMatch ? findMatch.partId : undefined;
     const [replay, setReplay] = useState({ match: findMatch, done: false });
     if (replay.match !== findMatch) setReplay({ match: findMatch, done: false });
@@ -369,6 +380,8 @@ function Activity({
     return !!call && isRetained(call.entryId);
   };
   const outputOnly = steps.every(isOutput);
+  // Only empty thoughts: nothing to show yet, and no margins either.
+  if (!steps.length) return null;
   return (
     <section
       data-transcript-activity=""
