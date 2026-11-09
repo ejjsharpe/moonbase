@@ -268,11 +268,6 @@ test('transcript reads cross the real child/forwarding boundary with identity, l
   const f = await fixture(t, true),
     client = f.root();
   const connected = await client.connection.command('connect', { profileId: client.profile.id });
-  assert(
-    (await client.chat.command('getChatHost', { host: f.session.host })).features?.includes(
-      'transcript-v1',
-    ),
-  );
   const target = (
     await client.chat.command('createChat', {
       session: f.session,
@@ -454,7 +449,10 @@ test('cross-process tool progress arrives while execution is held and independen
   await root.chat.command('sendChat', { target, requestId: 'tool-stream-send', text: 'Tool' });
   await until(
     async () => views.at(-1),
-    (v) => !!v?.run?.tools.some((tool) => tool.text.includes('Controlled remote tool activity')),
+    (v) =>
+      !!v?.run?.transcript?.parts.some(
+        (part) => part.kind === 'result' && part.text.includes('Controlled remote tool activity'),
+      ),
   );
   assert.equal((await f.stats()).commands.filter((c) => c === 'getChat').length, 0);
   const started = Date.now();

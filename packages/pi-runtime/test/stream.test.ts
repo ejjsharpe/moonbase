@@ -28,6 +28,12 @@ const snapshot: ChatSnapshot = {
   state: 'idle',
   transcriptBoundary: null,
 };
+const entryTranscript = (entryId: string) => ({
+  source: { kind: 'entry' as const, target, entryId },
+  parts: [],
+  nextCursor: null,
+  thinking: 'none' as const,
+});
 const wait = async (predicate: () => boolean) => {
   const end = Date.now() + 6000;
   while (!predicate()) {
@@ -235,9 +241,8 @@ function interceptFrames(
   return () => attempts;
 }
 
-test('installed endpoint alone advertises streaming, delivers replacements without getChat and fences generation/close', async (t) => {
+test('installed endpoint delivers replacements without getChat and fences generation/close', async (t) => {
   const f = await fixture(t);
-  assert((await f.client.command('getChatHost', { host })).features?.includes('chat-stream-v1'));
   const w = f.observe();
   await wait(() => w.views.length === 1);
   assert.equal(w.views[0].observationStatus, 'connected');
@@ -265,6 +270,7 @@ test('actual envelope bounds and 32KiB chunks reconstruct escaped snapshots thro
       role: 'assistant' as const,
       text: '\u0001'.repeat(1000),
       truncated: false,
+      transcript: entryTranscript(String(i + 1)),
     })),
   };
   f.publish(large);
@@ -441,6 +447,7 @@ test('an oversized source snapshot ends the stream with a signed InvalidInput in
       role: 'assistant' as const,
       text: 'x'.repeat(1000),
       truncated: false,
+      transcript: entryTranscript(String(i + 1)),
     })),
   });
   await wait(() => w.errors.length === 1);
@@ -536,7 +543,7 @@ test('64 subscriptions leave ordinary reads usable; excess observations fail and
   await wait(() => extra.errors.length === 1);
   assert.equal(extra.errors[0].code, 'Unavailable');
   assert.equal(f.acquisitions, 64);
-  assert((await f.client.command('getChatHost', { host })).features?.includes('chat-stream-v1'));
+  assert.equal((await f.client.command('getChatHost', { host })).actorId, target.actorId);
   await Promise.all(observers.map((w) => w.close()));
   await wait(() => f.listeners.size === 0);
   const next = f.observe();
@@ -580,45 +587,6 @@ test('idle expiry is bounded separately after the initial snapshot', async (t) =
   await wait(() => w.errors.length === 1);
   assert(w.views.some((v) => v.observationStatus === 'reconnecting'));
   assert.equal(f.acquisitions, 4);
-});
-
-test('legacy capability absence retains the 250ms polling path and never opens a stream', async (t) => {
-  const f = await fixture(t),
-    original = fetch;
-  let streams = 0;
-  t.mock.method(
-    globalThis,
-    'fetch',
-    async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
-      if (String(url).endsWith(P.streamPath)) streams++;
-      const response = await original(url, init);
-      if (!init?.body || JSON.parse(String(init.body)).operation !== 'getChatHost') return response;
-      const envelope = (await response.json()) as { value: { features?: string[] } };
-      delete envelope.value.features;
-      const bytes = JSON.stringify(envelope),
-        headers = new Headers(response.headers);
-      headers.set(
-        'x-moonbase-proof',
-        P.mac(
-          f.token,
-          'response',
-          headers.get('x-moonbase-nonce'),
-          headers.get('x-moonbase-challenge'),
-          response.status,
-          P.hash(bytes),
-        ),
-      );
-      headers.delete('content-length');
-      return new Response(bytes, { headers, status: response.status });
-    },
-  );
-  const w = f.observe();
-  await wait(() => w.views.length >= 3);
-  await w.close();
-  assert.equal(streams, 0);
-  assert.equal(f.acquisitions, 0);
-  assert(f.calls.filter((c) => c === 'getChat').length >= 3);
-  assert.deepEqual(w.errors, []);
 });
 
 test('an exact repeated frame is rejected while verified content becomes stale without accepting replayed data', async (t) => {
@@ -683,7 +651,7 @@ test('a blocked writer has its own drain deadline and releases its watch while R
   const w = f.observe();
   await wait(() => w.views.length === 1);
   f.publish({ ...snapshot, message: 'blocked' });
-  assert((await f.client.command('getChatHost', { host })).features?.includes('chat-stream-v1'));
+  assert.equal((await f.client.command('getChatHost', { host })).actorId, target.actorId);
   await wait(() => w.errors.length === 1);
   await wait(() => f.listeners.size === 0);
   assert.equal(w.errors[0].code, 'Unavailable');
@@ -900,7 +868,7 @@ test('a lost challenge body retries without treating its existing read error as 
     'fetch',
     async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
       const response = await original(url, init);
-      if (!String(url).endsWith('/v1/chat/challenge') || challenges++ !== 1) return response;
+      if (!String(url).endsWith('/v1/chat/challenge') || challenges++ !== 0) return response;
       await response.body!.cancel();
       return new Response(
         new ReadableStream({
@@ -917,7 +885,7 @@ test('a lost challenge body retries without treating its existing read error as 
     if (w.errors.length) throw w.errors[0];
     return w.views.length > 0;
   });
-  assert.equal(challenges, 3);
+  assert.equal(challenges, 2);
   assert.deepEqual(w.errors, []);
   assert.equal(f.acquisitions, 1);
   assert(!f.calls.includes('getChat'));
@@ -1058,9 +1026,7 @@ for (const reason of ['close', 'generation'] as const)
       await wait(() => entered);
       assert.equal(settled, false);
       assert.equal(w.errors.length, 0);
-      assert(
-        (await f.client.command('getChatHost', { host })).features?.includes('chat-stream-v1'),
-      );
+      assert.equal((await f.client.command('getChatHost', { host })).actorId, target.actorId);
       release.resolve();
       if (reason === 'close') {
         const error = await closing;
@@ -1194,9 +1160,7 @@ test(
       );
       await entered.promise;
       assert.equal(f.releases, 0);
-      assert(
-        (await f.client.command('getChatHost', { host })).features?.includes('chat-stream-v1'),
-      );
+      assert.equal((await f.client.command('getChatHost', { host })).actorId, target.actorId);
       t.mock.timers.tick(P.streamLimits.drainMs - 1);
       assert.equal(f.releases, 0);
       t.mock.timers.tick(1);

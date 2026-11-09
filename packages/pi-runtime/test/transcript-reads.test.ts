@@ -121,7 +121,9 @@ test('live manifest cursors survive growing running output and appended parts, n
   );
   const view = await until(
     () => f.client.command('getChat', { target }),
-    (view) => !!view.run?.transcript?.nextCursor && view.run.tools.every((tool) => !!tool.text),
+    (view) =>
+      !!view.run?.transcript?.nextCursor &&
+      view.run.transcript.parts.every((part) => part.kind !== 'result' || !!part.text),
   );
   const embedded = view.run!.transcript!,
     source = embedded.source,

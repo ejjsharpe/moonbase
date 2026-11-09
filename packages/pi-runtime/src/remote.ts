@@ -1,8 +1,7 @@
-import { Effect, Layer, Stream, Schedule, Exit, Cause, Queue, Clock } from 'effect';
+import { Effect, Layer, Stream, Exit, Cause, Queue, Clock } from 'effect';
 import type { ChatHostTarget } from '@moonbase/contracts/host';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import {
-  chatStreamFeature,
   type ChatCommand,
   type ChatInput,
   type ChatOutput,
@@ -219,13 +218,6 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
                 message: 'Chat stream connection generation changed.',
               }),
           );
-          const configuration = yield* call('getChatHost', { host: target.host });
-          yield* assertGeneration;
-          if (!configuration.features?.includes(chatStreamFeature))
-            return Stream.fromEffectSchedule(
-              call('getChat', { target }),
-              Schedule.spaced('250 millis'),
-            );
           return Stream.callback<ChatSnapshot, ApplicationError>(
             (queue) =>
               Effect.gen(function* () {

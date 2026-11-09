@@ -16,10 +16,6 @@ export const chatContentChunkBytes = 32 * 1024;
 export const chatManifestPageSize = 32;
 export const maximumChatFindQueryBytes = 1024;
 export const chatFindPageSize = 32;
-export const chatTranscriptFeature = 'transcript-v1';
-export const chatFindFeature = 'transcript-find-v1';
-/** The host searches a chat's working folder for files to mention (`findChatFiles`). */
-export const chatFilesFeature = 'chat-files-v1';
 export const maximumChatMentions = 32;
 export const maximumChatFileQueryBytes = 256;
 export const chatFileMatchLimit = 50;
@@ -51,7 +47,6 @@ export type ChatTranscriptMatch = typeof Contracts.ChatTranscriptMatchSchema.Typ
 /** A file in the chat's working folder that a message refers to, by relative path. */
 export type ChatMention = typeof Contracts.ChatMentionSchema.Type;
 export type ChatFileMatch = typeof Contracts.ChatFileMatchSchema.Type;
-export const chatStreamFeature = 'chat-stream-v1';
 export type ChatStreamRequest = typeof Contracts.ChatStreamRequestSchema.Type;
 export type ChatStreamFrame = typeof Contracts.ChatStreamFrameSchema.Type;
 export type ChatTranscriptSource = typeof Contracts.ChatTranscriptSourceSchema.Type;
@@ -70,7 +65,6 @@ export type ChatEntry = typeof Contracts.ChatEntrySchema.Type;
 /** Newest first, with an opaque cursor for the next older page. */
 export type ChatHistoryPage = typeof Contracts.ChatHistoryPageSchema.Type;
 export type ChatStopTarget = typeof Contracts.ChatStopTargetSchema.Type;
-export type ChatToolActivity = typeof Contracts.ChatToolActivitySchema.Type;
 export type ChatRun = typeof Contracts.ChatRunSchema.Type;
 /** A bounded replacement snapshot, never an unbounded append-only event feed. */
 export type ChatSnapshot = typeof Contracts.ChatSnapshotSchema.Type;

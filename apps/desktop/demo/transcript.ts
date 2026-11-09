@@ -95,7 +95,6 @@ export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabili
     if (operation === 'getChatHost')
       return {
         ...chat.dependencies.context,
-        features: ['transcript-v1', 'chat-stream-v1', 'transcript-find-v1', 'chat-files-v1'],
         ...(chat.dependencies.mode === 'local'
           ? { mode: 'local' }
           : { cwd: '/controlled', model: 'controlled' }),
@@ -347,7 +346,7 @@ export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabili
     entries.splice(0, entries.length, ...next);
     chat.snapshot.entries = entries.slice(-32).reverse();
     chat.snapshot.olderCursor = entries.length > 32 ? String(entries.length - 32) : null;
-    chat.snapshot.transcriptBoundary = entries.at(-1)?.id;
+    chat.snapshot.transcriptBoundary = entries.at(-1)?.id ?? null;
     chat.snapshot.run = null;
     chat.snapshot.state = 'idle';
     chat.controls.receiveChat(structuredClone(chat.snapshot));
@@ -377,7 +376,6 @@ export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabili
       state: 'running',
       text: [...text].slice(0, 1000).join(''),
       truncated: text.length > 1000,
-      tools: [],
       transcript: {
         source,
         parts: giveWholeText(parts.slice(0, 4), texts.slice(0, 4)),

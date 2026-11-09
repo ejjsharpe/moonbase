@@ -9,7 +9,6 @@ import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import { ApplicationError } from '@moonbase/contracts/workspace';
-import { chatFilesFeature } from '@moonbase/contracts/chat';
 import { ChatFileIndex, type ChatFileListingRun } from '../src/files.ts';
 import { LocalPiRuntimeLive } from '../src/index.ts';
 import { fixture, session } from './runtime-fixture.ts';
@@ -138,8 +137,6 @@ test('a fixed host searches only its working folder, for new and existing chats'
   // Git lists the folder whether or not this machine has ripgrep.
   execFileSync('git', ['init', '-q'], { cwd: f.config.cwd });
   const client = f.client;
-  const host = await client.command('getChatHost', { host: session.host });
-  assert(host.features?.includes(chatFilesFeature));
   await writeFile(join(f.config.cwd, 'notes.md'), 'x');
   const cwd = await realpath(f.config.cwd);
   assert(

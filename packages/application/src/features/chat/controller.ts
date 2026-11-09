@@ -21,10 +21,6 @@ import type {
   ChatTranscriptSelection,
 } from '@moonbase/contracts/chat';
 import {
-  chatFilesFeature,
-  chatFindFeature,
-  chatStreamFeature,
-  chatTranscriptFeature,
   findChatMentionStarts,
   isChatMentionPath,
   maximumChatMentions,
@@ -841,10 +837,6 @@ class ChatModelState {
       this.error(error);
     }
   }
-  /** Whether the host can search a chat's working folder for files to mention. */
-  get canFindFiles() {
-    return !!this.state.host?.features?.includes(chatFilesFeature);
-  }
   /**
    * Searches the selected chat's working folder on its host, or, for a new chat, `cwd` (a local
    * chat's chosen folder) or the remote host's fixed folder. Results are not retained.
@@ -856,11 +848,6 @@ class ChatModelState {
     return this.runEffect(
       Effect.gen({ self: this }, function* () {
         this.connected();
-        if (!this.canFindFiles)
-          throw new ApplicationError({
-            code: 'Unavailable',
-            message: 'This chat host cannot search files.',
-          });
         const target = this.saved.selected,
           host = this.state.host;
         const cwd = options.cwd ?? (host && 'cwd' in host ? host.cwd : undefined);
@@ -897,7 +884,7 @@ class ChatModelState {
       void this.closeOwner(this.selection);
       this.selection = undefined;
       // A selection supersedes an old list read without suppressing the new view's refresh. Until
-      // refresh verifies the host's features, it owns opening the selection, and Select awaits it.
+      // refresh verifies the host, it owns opening the selection, and Select awaits it.
       const verifying = !this.state.host;
       let refreshing: Promise<void> | undefined;
       if (verifying || (this.refreshOwner?.alive && this.actions.has('refresh')))
@@ -934,9 +921,8 @@ class ChatModelState {
   private openSelected(target: ChatTarget): Effect.Effect<void, ApplicationError> {
     return Effect.gen({ self: this }, function* () {
       if (!this.attachment?.alive || !this.generation?.alive || this.closed) return;
-      // Transcript capabilities are fixed at open, so wait for refresh to read the host's features.
+      // A chat opens only on a host that refresh has verified.
       if (!this.state.host) return;
-      const features = this.state.host.features ?? [];
       if (this.selection?.alive && sameTarget(this.selection.target, target)) return;
       void this.closeOwner(this.selection);
       const owner = (this.selection = Object.assign(this.owner(this.generation), {
@@ -949,9 +935,6 @@ class ChatModelState {
         target: structuredClone(target),
         backend: this.backend,
         memory: this.transcriptMemory,
-        capable: features.includes(chatTranscriptFeature),
-        findCapable: features.includes(chatFindFeature),
-        streaming: features.includes(chatStreamFeature),
         local: this.mode === 'local',
         scope: owner.scope,
         closeGraceMs: this.transcriptCloseGraceMs,
@@ -1531,7 +1514,6 @@ export type ChatController = Pick<
   | 'reloadChats'
   | 'markSeen'
   | 'setDraft'
-  | 'canFindFiles'
   | 'findFiles'
   | 'createFileSearch'
   | 'setModelPreference'

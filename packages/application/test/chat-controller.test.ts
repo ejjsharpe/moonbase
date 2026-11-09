@@ -4,6 +4,8 @@ import { ApplicationError } from '@moonbase/contracts/workspace';
 import { Effect } from 'effect';
 import type {
   ChatClient,
+  ChatEntry,
+  ChatInput,
   ChatSnapshot,
   ChatSummary,
   ChatTarget,
@@ -27,7 +29,20 @@ const snapshot: ChatSnapshot = {
   run: null,
   entries: [],
   olderCursor: null,
+  transcriptBoundary: null,
 };
+const makeEntry = (id: string, text: string, role: ChatEntry['role'] = 'assistant'): ChatEntry => ({
+  id,
+  role,
+  text,
+  truncated: false,
+  transcript: {
+    source: { kind: 'entry', target, entryId: id },
+    parts: [],
+    nextCursor: null,
+    thinking: 'none',
+  },
+});
 const profile = {
   id: 'configured',
   label: 'Configured',
@@ -676,7 +691,6 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'])
         stop: { target, submissionId: 'one', taskId: 'task' },
         text: '',
         truncated: false,
-        tools: [],
       },
     });
     f.storage.fail = true;
@@ -741,7 +755,7 @@ test('same-input retry queries first, keeps original Create/Send/Stop identities
   f.publish({
     ...snapshot,
     state: 'running',
-    run: { state: 'running', stop: old, text: '', truncated: false, tools: [] },
+    run: { state: 'running', stop: old, text: '', truncated: false },
   });
   await f.controller.stop();
   const pending = structuredClone(f.controller.getSnapshot().pending);
@@ -753,7 +767,6 @@ test('same-input retry queries first, keeps original Create/Send/Stop identities
       stop: { target, submissionId: 'later', taskId: 'successor' },
       text: '',
       truncated: false,
-      tools: [],
     },
   });
   for (const p of pending) {
@@ -785,7 +798,6 @@ test('pending Send does not block captured Stop or status and detach never stops
       stop: { target, submissionId: 'one', taskId: 'task' },
       text: 'live',
       truncated: false,
-      tools: [],
     },
   });
   await f.controller.stop();
@@ -823,28 +835,35 @@ test('read-only admitted lookup resolves without Send; foreign storage writes ar
   assert(f.controller.getSnapshot().storageError);
   await f.controller.dispose();
 });
-test('replacement watch snapshots and overlapping legacy history keep output bounded', async (t) => {
+test('replacement watch snapshots and overlapping history keep output bounded', async (t) => {
   const f = await fixture(t);
   await ready(f);
-  for (let i = 0; i < 500; i++)
-    f.publish({
-      ...snapshot,
-      entries: [{ id: 'entry', role: 'assistant', text: String(i), truncated: false }],
-    });
+  const latest = (text: string): ChatSnapshot => ({
+    ...snapshot,
+    entries: [makeEntry('entry', text)],
+    olderCursor: 'page',
+    transcriptBoundary: 'entry',
+  });
+  for (let i = 0; i < 500; i++) f.publish(latest(String(i)));
   assert.equal(f.controller.getSnapshot().snapshot!.entries.length, 1);
   assert.equal(f.controller.getSnapshot().snapshot!.entries[0].text, '499');
   let pageNumber = 0;
-  f.answers.set('getChatHistory', async () => ({
-    entries: Array.from({ length: 32 }, (_, i) => ({
-      id: 'older-' + i,
-      role: 'user',
-      text: 'bounded',
-      truncated: false,
-    })),
+  // Every page repeats the same window of entries.
+  f.answers.set('getChatHistoryAround', async (input: ChatInput<'getChatHistoryAround'>) => ({
+    target,
+    cursor: input.cursor ?? null,
+    entryId: input.entryId,
+    upperEntryId: 'entry',
+    entries: [
+      makeEntry('entry', '499'),
+      ...Array.from({ length: 31 }, (_, i) => makeEntry('older-' + i, 'bounded', 'user')),
+    ],
     olderCursor: 'next-' + ++pageNumber,
+    newerCursor: null,
   }));
-  f.publish({ ...snapshot, olderCursor: 'page' });
   for (let i = 0; i < 4; i++) await f.controller.showEarlier();
+  assert.equal(pageNumber, 4);
+  assert.equal(f.controller.getSnapshot().transcript.error, null);
   assert.equal(f.controller.getSnapshot().transcript.entries.length, 32);
   await f.controller.dispose();
 });
@@ -871,7 +890,7 @@ test('Create and captured Stop are written before disclosure; lost replies recov
   f.publish({
     ...snapshot,
     state: 'running',
-    run: { state: 'running', stop, text: '', truncated: false, tools: [] },
+    run: { state: 'running', stop, text: '', truncated: false },
   });
   await f.controller.stop();
   const retained = structuredClone(f.controller.getSnapshot().pending);
@@ -938,7 +957,6 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
         stop: { target, submissionId: 'admitted', taskId: 'captured-task' },
         text: 'live',
         truncated: false,
-        tools: [],
       },
     });
     let release!: () => void;
@@ -1014,7 +1032,6 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
               stop: { target, submissionId: 'original-submission', taskId: 'original-task' },
               text: 'live',
               truncated: false,
-              tools: [],
             },
           });
           await f.controller.stop();
@@ -1173,7 +1190,6 @@ for (const lifecycle of ['detach', 'dispose'] as const)
         stop: { target, submissionId: 'one', taskId: 'task' },
         text: '',
         truncated: false,
-        tools: [],
       },
     });
     await f.controller.stop();
@@ -1311,7 +1327,7 @@ for (const code of ['Persistence', 'Cancelled', null] as const)
     f.controller.setDraft('late edit');
     late({
       ...snapshot,
-      entries: [{ id: 'late', role: 'assistant', text: 'late output', truncated: false }],
+      entries: [makeEntry('late', 'late output')],
     });
     reply.resolve({
       target,
@@ -2360,17 +2376,10 @@ test('draft mentions persist with their text, drop when their text is deleted, a
 test('file search asks the host for the open chat, a new chat folder, or the host folder', async (t) => {
   const f = await fixture(t);
   await f.controller.start();
+  await assert.rejects(f.controller.findFiles('a'), { code: 'Unavailable' });
   await f.controller.connect();
   await turn();
-  await assert.rejects(f.controller.findFiles('a'), { code: 'Unavailable' });
-  f.answers.set('getChatHost', async () => ({
-    ...context,
-    cwd: summary.cwd,
-    model: summary.model,
-    features: ['chat-files-v1'],
-  }));
   await f.controller.refresh();
-  assert.equal(f.controller.canFindFiles, true);
   const reply = { query: 'a', matches: [{ path: 'a.ts', positions: [0] }], partial: false };
   f.answers.set('findChatFiles', async () => reply);
   assert.deepEqual(await f.controller.findFiles('a'), reply);

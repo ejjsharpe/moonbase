@@ -60,7 +60,6 @@ export function transcriptFixture(count = 640, local = true) {
     if (operation === 'getChatHost')
       return {
         ...base.dependencies.context,
-        features: ['transcript-v1', 'chat-stream-v1', 'transcript-find-v1'],
         ...(local ? { mode: 'local' } : { cwd: '/controlled', model: 'controlled' }),
       };
     if (operation === 'listChats')

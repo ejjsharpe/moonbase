@@ -21,12 +21,27 @@ const conversation = {
   cwd: '/remote/project',
   model: 'configured-model',
 };
+const entryTranscript = (entryId: string) => ({
+  source: { kind: 'entry' as const, target, entryId },
+  parts: [],
+  nextCursor: null,
+  thinking: 'none' as const,
+});
 const snapshot = {
-  entries: [{ id: 'entry', role: 'user' as const, text: '', truncated: false }],
+  entries: [
+    {
+      id: 'entry',
+      role: 'user' as const,
+      text: '',
+      truncated: false,
+      transcript: entryTranscript('entry'),
+    },
+  ],
   olderCursor: null,
   conversation,
   run: null,
   state: 'idle' as const,
+  transcriptBoundary: 'entry',
 };
 const inputs = {
   getChatHost: { host },
@@ -183,7 +198,7 @@ test('text checks preserve whitespace and count UTF-8 bytes, rejecting invalid U
     );
 });
 
-test('page/tool limits, nullable tasks and Send admission combinations keep existing bounds', () => {
+test('page limits, required snapshot fields, nullable tasks and Send admission combinations keep existing bounds', () => {
   const page = (count: number) => ({
     conversations: Array.from({ length: count }, () => conversation),
     nextCursor: null,
@@ -197,19 +212,10 @@ test('page/tool limits, nullable tasks and Send admission combinations keep exis
   assert.equal(decodeChatOutput('getChatHistory', history(32)).entries.length, 32);
   assert.throws(() => decodeChatOutput('getChatHistory', history(33)));
   assert.throws(() => decodeChatOutput('getChat', { ...snapshot, state: 'unknown' }));
-  const tool = { taskId: 'task', name: 'tool', state: 'running', text: '', truncated: false };
-  const run = (count: number) => ({
-    ...snapshot,
-    run: {
-      stop,
-      state: 'running',
-      text: '',
-      truncated: false,
-      tools: Array.from({ length: count }, () => tool),
-    },
-  });
-  assert.equal(decodeChatOutput('getChat', run(8)).run!.tools.length, 8);
-  assert.throws(() => decodeChatOutput('getChat', run(9)));
+  const { transcript: _, ...untranscribed } = snapshot.entries[0];
+  assert.throws(() => decodeChatOutput('getChat', { ...snapshot, entries: [untranscribed] }));
+  const { transcriptBoundary: __, ...unbounded } = snapshot;
+  assert.throws(() => decodeChatOutput('getChat', unbounded));
   assert.equal(decodeChatInput('stopChat', inputs.stopChat).stop.taskId, null);
   assert.throws(() =>
     decodeChatInput('stopChat', { ...inputs.stopChat, stop: { ...stop, taskId: undefined } }),
@@ -284,7 +290,13 @@ test('derived public types retain mutable DTO fields and arrays', () => {
   const decoded = decodeChatOutput('getChat', snapshot);
   decoded.state = 'stopped';
   decoded.conversation.title = 'Changed';
-  decoded.entries.push({ id: 'next', role: 'assistant', text: 'reply', truncated: false });
+  decoded.entries.push({
+    id: 'next',
+    role: 'assistant',
+    text: 'reply',
+    truncated: false,
+    transcript: entryTranscript('next'),
+  });
   assert.equal(decoded.entries.length, 2);
   assert.equal(snapshot.entries.length, 1);
 });
@@ -354,19 +366,6 @@ test('transcript schemas bound decoded chunks, canonical base64, identities and 
   );
   assert.throws(() =>
     decodeChatInput('getChatTranscriptContent', { source, selection: { ...selection, bytes: -1 } }),
-  );
-  assert.equal(decodeChatOutput('getChatHost', outputs.getChatHost).features, undefined);
-  assert.deepEqual(
-    decodeChatOutput('getChatHost', { ...outputs.getChatHost, features: ['transcript-v1'] })
-      .features,
-    ['transcript-v1'],
-  );
-  assert.deepEqual(
-    decodeChatOutput('getChatHost', {
-      ...outputs.getChatHost,
-      features: ['transcript-v1', 'future-feature'],
-    }).features,
-    ['transcript-v1', 'future-feature'],
   );
   assert.equal(isChatCommand('findChatTranscript'), true);
 });

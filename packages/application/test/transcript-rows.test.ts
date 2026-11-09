@@ -22,12 +22,6 @@ function running(snapshot: ChatSnapshot, text: string, transcript = true): ChatS
       state: 'running',
       text,
       truncated: false,
-      tools: transcript
-        ? []
-        : [
-            { taskId: 'tool-1', name: 'bash', state: 'running', text: 'first', truncated: false },
-            { taskId: 'tool-2', name: 'read', state: 'completed', text: 'second', truncated: true },
-          ],
       ...(transcript
         ? {
             transcript: {
@@ -67,7 +61,7 @@ test('rows are keyed by entry and keep their identity while unchanged', async (t
   assert(paged.slice(added).every((row, index) => row === first.rows[index]));
 });
 
-test('the live response and legacy tool previews are rows after the stored entries', async (t) => {
+test('the live response is a row after the stored entries', async (t) => {
   const f = await transcriptController(t, 64);
   const stored = f.controller.getSnapshot().transcript.rows;
   f.publish(running(f.snapshot, 'one'));
@@ -84,18 +78,14 @@ test('the live response and legacy tool previews are rows after the stored entri
   assert.notEqual(rows.at(-1), live);
   assert.equal(rows.at(-1)!.key, 'live:send');
   assert(rows.slice(0, -1).every((row, index) => row === stored[index]));
-  // A host without transcripts shows its tool previews as their own rows.
-  f.publish(running(f.snapshot, 'legacy', false));
-  assert.deepEqual(rowKeys(f).slice(-3), ['live:send', 'tool:tool-1', 'tool:tool-2']);
-  const tools = f.controller.getSnapshot().transcript.rows.slice(-2);
-  assert(tools[0]!.kind === 'tool' && tools[0]!.tool.name === 'bash');
-  f.publish({ ...running(f.snapshot, 'legacy', false), message: 'unrelated' });
-  assert(
-    f.controller
-      .getSnapshot()
-      .transcript.rows.slice(-2)
-      .every((row, i) => row === tools[i]),
-  );
+  // A run whose task is completing has no transcript; its live row shows the text preview alone.
+  f.publish(running(f.snapshot, 'completing', false));
+  assert.deepEqual(rowKeys(f).slice(-2), [stored.at(-1)!.key, 'live:send']);
+  const completing = f.controller.getSnapshot().transcript.rows.at(-1)!;
+  assert(completing.kind === 'live' && !completing.entry.transcript);
+  assert.equal(completing.entry.text, 'completing');
+  f.publish({ ...running(f.snapshot, 'completing', false), message: 'unrelated' });
+  assert.equal(f.controller.getSnapshot().transcript.rows.at(-1), completing);
   f.publish({ ...f.snapshot, run: null, state: 'idle' });
   assert.deepEqual(
     rowKeys(f),

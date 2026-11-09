@@ -25,7 +25,7 @@ import type {
   ChatTranscriptSource,
   ChatTranscriptPart,
 } from '@moonbase/contracts/chat';
-import { fixture, until, session } from './runtime-fixture.ts';
+import { fixture, until } from './runtime-fixture.ts';
 
 async function manifest(client: ChatClient, source: ChatTranscriptSource) {
   const parts: ChatTranscriptPart[] = [];
@@ -91,11 +91,6 @@ test('all retained blocks, large escaped Unicode/JSON/patch/image content and 1,
     f = await fixture(t),
     target = await f.create(),
     other = await f.create('other');
-  assert.deepEqual((await f.client.command('getChatHost', { host: session.host })).features, [
-    'transcript-v1',
-    'transcript-find-v1',
-    'chat-files-v1',
-  ]);
   const text = '😀\\"\n\u0000\u0001'.repeat(70000);
   const args = { content: text },
     patch = '--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+' + text;
@@ -733,7 +728,7 @@ test('live executed arguments, retained tails and interrupted tool evidence stay
   await until(async () => entered, Boolean);
   const view = await until(
     () => f.client.command('getChat', { target }),
-    (view) => !!view.run?.tools[0]?.text,
+    (view) => !!view.run?.transcript?.parts.some((part) => part.kind === 'result' && part.text),
   );
   const source = view.run!.transcript!.source;
   const parts = await until(

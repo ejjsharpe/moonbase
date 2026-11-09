@@ -19,11 +19,11 @@ import { controls } from '@moonbase/ui/controls';
 import { spinner } from '@moonbase/ui/spinner';
 import type {
   ChatController,
+  LiveEntry,
   TranscriptContentState,
   TranscriptManifestState,
 } from '@moonbase/application/chat';
 import type {
-  ChatEntry,
   ChatTranscriptMatch,
   ChatTranscriptPart,
   ChatTranscriptSource,
@@ -72,7 +72,8 @@ import { Icon } from '../icon.tsx';
  * values that keep their identity while unchanged, so rows skip unrelated updates.
  */
 export type EntryProps = {
-  entry: ChatEntry;
+  /** A stored entry, or the live response, which has no transcript while its task completes. */
+  entry: LiveEntry;
   /** Set for the live row. */
   live?: boolean;
   /** The live row's status, when it is something other than running. */
@@ -253,7 +254,7 @@ export const Entry = memo(
     return (
       <article
         data-transcript-entry={live ? undefined : entry.id}
-        data-transcript-live={live ? JSON.stringify(source ?? 'legacy') : undefined}
+        data-transcript-live={live ? (sourceKey ?? '') : undefined}
         aria-label={live ? 'Live response' : undefined}
         {...stylex.props(stylex.defaultMarker(), styles.message, user && styles.userMessage)}>
         {notes.length > 0 && (

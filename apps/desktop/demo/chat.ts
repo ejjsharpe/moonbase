@@ -2,12 +2,14 @@ import { ApplicationError } from '@moonbase/contracts/errors';
 import type { ChatDependencies } from '@moonbase/application/chat';
 import type {
   ChatClient,
+  ChatEntry,
   ChatSnapshot,
   ChatSummary,
   ChatCreationSettings,
+  ChatTarget,
 } from '@moonbase/contracts/chat';
 import type { ConnectionClient, ConnectionSnapshot } from '@moonbase/contracts/connection';
-import { chatFilesFeature, chatFileMatchLimit, type ChatInput } from '@moonbase/contracts/chat';
+import { chatFileMatchLimit, type ChatInput } from '@moonbase/contracts/chat';
 import { compareMatches, matchPath } from '@moonbase/contracts/lookup';
 
 /** The demo working folder's files, for @ mentions. */
@@ -22,6 +24,43 @@ export const demoFiles = [
   'packages/workbench/src/editor/file-lookup.tsx',
   'docs/Release notes.md',
 ];
+
+/** A demo message whose transcript is its whole text, as one part. */
+async function makeEntry(
+  target: ChatTarget,
+  id: string,
+  role: 'user' | 'assistant',
+  text: string,
+): Promise<ChatEntry> {
+  const bytes = new TextEncoder().encode(text);
+  const revision = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))]
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+  return {
+    id,
+    role,
+    text,
+    truncated: false,
+    transcript: {
+      source: { kind: 'entry', target, entryId: id },
+      parts: [
+        {
+          partId: 'm0.b0',
+          kind: 'text',
+          role,
+          availability: 'available',
+          encoding: 'utf8',
+          text,
+          truncated: false,
+          bytes: bytes.length,
+          revision,
+        },
+      ],
+      nextCursor: null,
+      thinking: 'none',
+    },
+  };
+}
 
 /** Volatile, trusted browser demo capabilities; no host, transport or provider is installed. */
 export function chatCapabilities(local = false, activity = false) {
@@ -68,6 +107,7 @@ export function chatCapabilities(local = false, activity = false) {
     run: null,
     entries: [],
     olderCursor: null,
+    transcriptBoundary: null,
   };
   const profile = {
     id: 'profile',
@@ -118,13 +158,8 @@ export function chatCapabilities(local = false, activity = false) {
         case 'getChatHost':
           return (
             local
-              ? { ...context, mode: 'local', features: [chatFilesFeature] }
-              : {
-                  ...context,
-                  cwd: conversation.cwd,
-                  model: conversation.model,
-                  features: [chatFilesFeature],
-                }
+              ? { ...context, mode: 'local' }
+              : { ...context, cwd: conversation.cwd, model: conversation.model }
           ) as never;
         case 'listChats':
           // `?activity` adds chats after the first listing, which marks only that one as seen.
@@ -163,16 +198,18 @@ export function chatCapabilities(local = false, activity = false) {
           sent.push(structuredClone(input as ChatInput<'sendChat'>));
           settled.delete((input as ChatInput<'sendChat'>).target.conversationId);
           if (local) {
-            const message = input as { requestId: string; text: string };
+            const message = input as { requestId: string; text: string },
+              replyId = message.requestId + '-reply';
             snapshot.entries.unshift(
-              {
-                id: message.requestId + '-reply',
-                role: 'assistant',
-                text: 'I’ll inspect the desktop shell and file sidebar, then check that the editor keeps its buffers and undo history when switching views.',
-                truncated: false,
-              },
-              { id: message.requestId, role: 'user', text: message.text, truncated: false },
+              await makeEntry(
+                target,
+                replyId,
+                'assistant',
+                'I’ll inspect the desktop shell and file sidebar, then check that the editor keeps its buffers and undo history when switching views.',
+              ),
+              await makeEntry(target, message.requestId, 'user', message.text),
             );
+            snapshot.transcriptBoundary = replyId;
             controls.receiveChat(structuredClone(snapshot));
           }
           return {
@@ -186,7 +223,7 @@ export function chatCapabilities(local = false, activity = false) {
         case 'getChatHistoryAround':
           throw new ApplicationError({
             code: 'Incompatible',
-            message: 'This legacy demo does not advertise transcript reads.',
+            message: 'This demo serves no transcript reads.',
           });
         case 'findChatFiles': {
           const { query } = input as ChatInput<'findChatFiles'>;

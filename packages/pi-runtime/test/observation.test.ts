@@ -310,11 +310,13 @@ test('live tool output is observed while execution is held; progress does not in
     fauxAssistantMessage('done'),
   ]);
   await f.client.command('sendChat', { target, requestId: 'tool', text: 'Tool' });
-  await watch.wait((view) => view.run?.tools[0]?.text === 'first tool output');
+  const toolOutput = (view: ChatSnapshot) =>
+    view.run?.transcript?.parts.find((part) => part.partId === 'tool0.output')?.text;
+  await watch.wait((view) => toolOutput(view) === 'first tool output');
   const before = { ...measured.counts };
   for (let i = 0; i < 3; i++) {
     output(' more ' + i);
-    await watch.wait((view) => !!view.run?.tools[0]?.text.includes(' more ' + i));
+    await watch.wait((view) => !!toolOutput(view)?.includes(' more ' + i));
   }
   assert.equal(measured.counts.scans, before.scans);
   assert.equal(measured.counts.inspections, before.inspections);
@@ -883,61 +885,40 @@ test('missing and failed-migration task definitions update without a commit, the
   assert.deepEqual(watch.errors, []);
 });
 
-test('growing escaped live previews resize cached history within the byte budget and keep exact older cursors', async (t) => {
-  const hold = gate(),
-    registry = createRegistry(),
-    outputs: ((text: string) => void)[] = [];
+test('a growing escaped live preview resizes cached history within the byte budget and keeps exact older cursors', async (t) => {
+  const hold = gate();
   t.after(hold.release);
-  registry.install(
-    defineExtension({
-      name: 'large-progress',
-      tools: [
-        defineTool({
-          name: 'large_progress',
-          description: 'Held output',
-          parameters: Type.Object({}),
-          execute: async (_, api) => {
-            outputs.push((text) => api.output(text));
-            api.output('start');
-            await hold.promise;
-            return { output: [{ type: 'text', text: 'completed' }] };
-          },
-        }),
-      ],
-    }),
-  );
   const measured = instrument(t),
-    f = await fixture(t, registry),
+    f = await fixture(t),
     target = await f.create();
   await measured.harness().commit(async (tx) => {
     for (let i = 0; i < 50; i++)
       await tx.appendEntry(conversationId(target), {
         kind: 'app.history',
         data: {},
-        model: [fauxAssistantMessage('\0'.repeat(4096))],
+        model: [fauxAssistantMessage('\0'.repeat(2048))],
       });
   }, context);
   f.faux.setResponses([
-    fauxAssistantMessage(
-      Array.from({ length: 8 }, (_, index) =>
-        fauxToolCall('large_progress', {}, { id: 'call-' + index }),
-      ),
-      { stopReason: 'toolUse' },
-    ),
-    fauxAssistantMessage('finished'),
+    async () => {
+      await hold.promise;
+      return fauxAssistantMessage('finished');
+    },
   ]);
   const watch = observe(t, f.client, target);
-  await f.client.command('sendChat', { target, requestId: 'large', text: 'Eight tools' });
-  const small = await watch.wait(
-    (view) => view.run?.tools.length === 8 && view.run.tools.every((tool) => tool.text === 'start'),
+  await f.client.command('sendChat', { target, requestId: 'large', text: 'Hold' });
+  await until(
+    () => measured.harness().snapshot(LiveDoc, conversationId(target), context),
+    (live) => !!live?.generation,
   );
+  const small = await watch.wait((view) => !!view.run && !view.run.text);
   const before = measured.counts.scans;
-  assert.equal(outputs.length, 8);
-  for (const output of outputs) output('\t'.repeat(4096));
-  const large = await watch.wait(
-    (view) =>
-      view.run?.tools.length === 8 && view.run.tools.every((tool) => tool.text.includes('\t')),
-  );
+  // The escaped preview grows by more than one history entry.
+  await measured.harness().commit(async (tx) => {
+    const live = await tx.doc(LiveDoc, conversationId(target));
+    live.generation!.message = JSON.parse(JSON.stringify(fauxAssistantMessage('\0'.repeat(4096))));
+  }, context);
+  const large = await watch.wait((view) => !!view.run?.text.includes('\0'));
   assert.equal(measured.counts.scans, before);
   assert(large.entries.length < small.entries.length);
   assert.equal(large.transcriptBoundary, small.transcriptBoundary);

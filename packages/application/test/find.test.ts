@@ -81,7 +81,7 @@ test('query replacement, close, Hide and disposal fence late results and errors 
   }
 });
 
-test('Find rejects wrong query/authority/cutoff/ranges and advertised failures remain visible; older hosts explain upgrade', async (t) => {
+test('Find rejects wrong query/authority/cutoff/ranges and host read failures remain visible', async (t) => {
   for (const change of [
     (page: ChatOutput<'findChatTranscript'>) => ({ ...page, query: 'wrong' }),
     (page: ChatOutput<'findChatTranscript'>) => ({ ...page, cursor: 'wrong' }),
@@ -121,10 +121,10 @@ test('Find rejects wrong query/authority/cutoff/ranges and advertised failures r
   }
   const f = await transcriptController(t, 32);
   f.handlers.set('findChatTranscript', async () => {
-    throw new ApplicationError({ code: 'Unavailable', message: 'advertised read failed' });
+    throw new ApplicationError({ code: 'Unavailable', message: 'host read failed' });
   });
   await f.controller.findTranscript('same');
-  assert.match(f.controller.getSnapshot().transcript.find.error!, /advertised read failed/);
+  assert.match(f.controller.getSnapshot().transcript.find.error!, /host read failed/);
 });
 
 test('retained text chunks retain UTF16 bases independently of byte offsets', async (t) => {
@@ -167,7 +167,7 @@ test('Find reaches beginning/middle/end on local and remote controllers and surf
   }
 });
 
-test('empty Find slices remain searching until completion and old hosts give an explicit upgrade state', async (t) => {
+test('empty Find slices remain searching until completion', async (t) => {
   const f = await transcriptController(t, 1100);
   let release!: () => void,
     entered = false;
@@ -186,17 +186,6 @@ test('empty Find slices remain searching until completion and old hosts give an 
   release();
   await pending;
   assert.equal(f.controller.getSnapshot().transcript.find.status, 'complete');
-  await f.controller.detach();
-  f.handlers.set('getChatHost', async (_input, _signal, fallback) => ({
-    ...(fallback() as object),
-    features: ['transcript-v1'],
-  }));
-  await f.controller.start();
-  const calls = f.calls.filter((call) => call.operation === 'findChatTranscript').length;
-  await f.controller.findTranscript('literal');
-  assert.equal(f.controller.getSnapshot().transcript.capabilities.find, 'unavailable');
-  assert.match(f.controller.getSnapshot().transcript.find.error!, /Upgrade this host/);
-  assert.equal(f.calls.filter((call) => call.operation === 'findChatTranscript').length, calls);
 });
 
 test('replacing Find aborts matched hydration immediately and keeps its real settlement owned', async (t) => {

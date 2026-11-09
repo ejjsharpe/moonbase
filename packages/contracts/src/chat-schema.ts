@@ -90,16 +90,14 @@ export const ChatCreationSettingsSchema = struct({
   cwd: optional(text(4096)),
   ...ChatModelPreferenceSchema.fields,
 });
-const features = optional(Schema.mutable(Schema.Array(text(64))).check(Schema.isMaxLength(16)));
 const remoteHostConfiguration = struct({
-  features,
   ...ChatSessionSchema.fields,
   cwd: text(4096),
   model: text(512),
 });
 export const ChatHostConfigurationSchema = Schema.Union([
   remoteHostConfiguration,
-  struct({ ...ChatSessionSchema.fields, mode: Schema.Literal('local'), features }),
+  struct({ ...ChatSessionSchema.fields, mode: Schema.Literal('local') }),
 ]);
 const timestamp = text(64).check(Schema.makeFilter((value) => Number.isFinite(Date.parse(value))));
 /** A listed chat's latest run: whether it is running or how it last ended, and when. */
@@ -249,29 +247,22 @@ export const ChatEntrySchema = struct({
   truncated: Schema.Boolean,
   toolName: optional(text(128)),
   isError: optional(Schema.Boolean),
-  /** When the message was recorded; hosts that predate it omit it. */
+  /** When the message was recorded; a record without a message timestamp omits it. */
   createdAt: optional(
     text(64).check(Schema.makeFilter((value) => Number.isFinite(Date.parse(value)))),
   ),
-  transcript: optional(ChatTranscriptSchema),
+  transcript: ChatTranscriptSchema,
 });
 export const ChatHistoryPageSchema = struct({
   entries: Schema.mutable(Schema.Array(ChatEntrySchema)).check(Schema.isMaxLength(chatPageSize)),
   olderCursor: Schema.NullOr(cursor),
-});
-export const ChatToolActivitySchema = struct({
-  taskId: ChatIdentifierSchema,
-  name: text(128),
-  state: Schema.Literals(['running', 'completed', 'failed']),
-  text: preview,
-  truncated: Schema.Boolean,
 });
 export const ChatRunSchema = struct({
   stop: ChatStopTargetSchema,
   state: Schema.Literals(['running', 'stopping', 'deferred']),
   text: preview,
   truncated: Schema.Boolean,
-  tools: Schema.mutable(Schema.Array(ChatToolActivitySchema)).check(Schema.isMaxLength(8)),
+  /** Absent while the run's task is completing, when only its text preview shows. */
   transcript: optional(ChatLiveTranscriptSchema),
 });
 export const ChatSnapshotSchema = struct({
@@ -280,7 +271,7 @@ export const ChatSnapshotSchema = struct({
   run: Schema.NullOr(ChatRunSchema),
   state: Schema.Literals(['idle', 'running', 'stopped', 'failed', 'uncertain']),
   message: optional(text(512)),
-  transcriptBoundary: optional(Schema.NullOr(ChatIdentifierSchema)),
+  transcriptBoundary: Schema.NullOr(ChatIdentifierSchema),
   observationStatus: optional(Schema.Literals(['connected', 'reconnecting'])),
 });
 /** Error codes a chat stream may sign; a stream never carries a mutation's `Uncertain` outcome. */

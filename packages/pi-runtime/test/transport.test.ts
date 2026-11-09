@@ -227,10 +227,10 @@ test('oversized authenticated envelopes remain bounded before dispatch', async (
 
 test('production remote/server route shared commands and immutable retries without key disclosure', async (t) => {
   const f = await setup(t);
-  assert.deepEqual(await f.remote.command('getChatHost', { host }), {
-    ...(await f.client.command('getChatHost', { host })),
-    features: ['transcript-v1', 'transcript-find-v1', 'chat-files-v1', 'chat-stream-v1'],
-  });
+  assert.deepEqual(
+    await f.remote.command('getChatHost', { host }),
+    await f.client.command('getChatHost', { host }),
+  );
   const created = await f.remote.command('createChat', {
       session,
       requestId: 'create',
@@ -1289,57 +1289,6 @@ test('R1 incomplete pre-authentication request hits its real deadline without a 
   }
 });
 
-test('legacy host replies without features/descriptors keep existing remote chat usable', async (t) => {
-  const f = await setup(t),
-    original = fetch;
-  t.mock.method(globalThis, 'fetch', async (...args: Parameters<typeof fetch>) => {
-    const response = await original(...args);
-    if (String(args[0]) !== f.origin + '/v1/chat') return response;
-    const request = JSON.parse(String(args[1]?.body)),
-      envelope = await response.json();
-    if (envelope.ok && request.operation === 'getChatHost') delete envelope.value.features;
-    if (envelope.ok && request.operation === 'getChat') {
-      delete envelope.value.transcriptBoundary;
-      if (envelope.value.run) delete envelope.value.run.transcript;
-      for (const entry of envelope.value.entries) delete entry.transcript;
-    }
-    const bytes = JSON.stringify(envelope),
-      headers = new Headers(response.headers);
-    headers.set(
-      'x-moonbase-proof',
-      mac(
-        f.token,
-        'response',
-        headers.get('x-moonbase-nonce'),
-        headers.get('x-moonbase-challenge'),
-        response.status,
-        hash(bytes),
-      ),
-    );
-    headers.delete('content-length');
-    return new Response(bytes, { status: response.status, headers });
-  });
-  assert.equal((await f.remote.command('getChatHost', { host })).features, undefined);
-  const target = (
-    await f.remote.command('createChat', { session, requestId: 'legacy', title: 'Legacy' })
-  ).conversation.target;
-  f.faux.setResponses([fauxAssistantMessage('Legacy completed')]);
-  const receipt = await f.remote.command('sendChat', {
-    target,
-    requestId: 'send',
-    text: 'Legacy prompt',
-  });
-  assert.equal(receipt.admission, 'admitted');
-  let view = await f.remote.command('getChat', { target });
-  for (let i = 0; view.run && i < 300; i++) {
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    view = await f.remote.command('getChat', { target });
-  }
-  assert(view.entries.some((entry) => entry.text === 'Legacy completed'));
-  assert(view.entries.every((entry) => entry.transcript === undefined));
-  assert.equal(f.faux.state.callCount, 1);
-});
-
 test('transcript output validation rejects authenticated source/selection/cursor/target substitution', async (t) => {
   const f = await setup(t),
     target = (
@@ -1411,7 +1360,6 @@ test('transcript output validation rejects authenticated source/selection/cursor
 test('authenticated file search reaches the host and refuses another folder', async (t) => {
   const f = await setup(t);
   const host = await f.remote.command('getChatHost', { host: session.host });
-  assert(host.features?.includes('chat-files-v1'));
   assert('cwd' in host);
   // Git lists the folder whether or not this machine has ripgrep.
   execFileSync('git', ['init', '-q'], { cwd: host.cwd });

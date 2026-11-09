@@ -43,15 +43,11 @@ export type TranscriptManifestState = {
   error: string | null;
 };
 export type TranscriptState = {
-  capabilities: {
-    transcript: 'unknown' | 'available' | 'legacy';
-    find: 'available' | 'unavailable';
-  };
   find: TranscriptFindState;
-  observation: 'inactive' | 'local' | 'streaming' | 'legacy' | 'reconnecting' | 'failed';
+  observation: 'inactive' | 'local' | 'streaming' | 'reconnecting' | 'failed';
   /** Every retained history record, oldest first. */
   entries: ChatEntry[];
-  /** The retained entries, then the running response and its legacy tool previews. */
+  /** The retained entries, then the running response. */
   rows: TranscriptRow[];
   /**
    * Changes whenever the retained rows are replaced rather than extended (a jump to an entry or to
@@ -97,7 +93,6 @@ export const makeEmptyFindState = (): TranscriptFindState => ({
 });
 export function makeEmptyTranscriptState(): TranscriptState {
   return {
-    capabilities: { transcript: 'unknown', find: 'unavailable' },
     find: makeEmptyFindState(),
     observation: 'inactive',
     entries: [],

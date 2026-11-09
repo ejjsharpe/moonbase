@@ -187,7 +187,7 @@ test('null-task Stop never falls through to active work; captured task Stop coop
   await f.client.command('sendChat', { target, requestId: 'active', text: 'Wait' });
   const active = await until(
     () => f.client.command('getChat', { target }),
-    (s) => entered === 1 && !!s.run?.tools.length,
+    (s) => entered === 1 && !!s.run?.transcript?.parts.some((p) => p.role === 'tool'),
   );
   const stop = active.run!.stop;
   assert.equal(

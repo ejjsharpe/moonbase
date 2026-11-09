@@ -57,9 +57,6 @@ type TranscriptDependencies = {
   target: ChatTarget;
   backend: string;
   memory: TranscriptViewMemory;
-  capable: boolean;
-  streaming: boolean;
-  findCapable: boolean;
   local: boolean;
   /** The selection's scope; the owner's read fibers live in a child of it. */
   scope: Scope.Scope;
@@ -136,10 +133,6 @@ export class TranscriptOwner {
     this.state.view = dependencies.memory.get(dependencies.backend, dependencies.target);
     const anchor = this.state.view.anchor;
     this.history = new TranscriptHistory(!anchor || isLiveRowKey(anchor.key));
-    this.state.capabilities = {
-      transcript: dependencies.capable ? 'available' : 'legacy',
-      find: dependencies.findCapable && dependencies.capable ? 'available' : 'unavailable',
-    };
     this.scope = Scope.forkUnsafe(dependencies.scope);
     [this.jobs, this.search, this.reveal] = Effect.runSync(
       Scope.provide(this.scope)(
@@ -379,10 +372,9 @@ export class TranscriptOwner {
     const { entries, run } = next;
     this.snapshot = old && areJsonValuesEqual(old, next) ? old : next;
     this.failed = false;
-    let observation: TranscriptState['observation'] = this.dependencies.streaming
-      ? 'streaming'
-      : 'legacy';
-    if (this.dependencies.local) observation = 'local';
+    let observation: TranscriptState['observation'] = this.dependencies.local
+      ? 'local'
+      : 'streaming';
     if (input.observationStatus === 'reconnecting') observation = 'reconnecting';
     this.state = {
       ...this.state,
@@ -541,11 +533,6 @@ export class TranscriptOwner {
       }
       const target = this.dependencies.target;
       decodeChatInput('findChatTranscript', { target, query });
-      if (this.state.capabilities.find !== 'available')
-        throw makeTranscriptFailure(
-          'Upgrade this host for complete conversation Find.',
-          'Unavailable',
-        );
       const pass = new TranscriptFindPass(target, query);
       let cursor: string | null = null;
       do {
@@ -696,17 +683,15 @@ export class TranscriptOwner {
     return Effect.gen({ self: this }, function* () {
       const history = this.history,
         target = this.dependencies.target;
-      if (this.dependencies.capable && history.records.length) {
-        const read = history.findAroundRead(direction);
-        if (read) yield* this.readAround(read.entryId, read.cursor, direction);
-      } else if (direction === 'earlier') {
-        const cursor = history.findOlderCursor(this.snapshot?.olderCursor);
-        if (cursor) {
-          const dataset = history.dataset;
-          const page = yield* this.call('getChatHistory', { target, cursor });
-          if (history.dataset === dataset) history.applyOlderPage(page, cursor, target);
-        }
-      } else history.applyLatestEntries(this.snapshot?.entries ?? []);
+      const read = history.findAroundRead(direction);
+      if (read) yield* this.readAround(read.entryId, read.cursor, direction);
+      else if (direction === 'earlier' && this.snapshot?.olderCursor) {
+        // With no records to read around, history continues from the snapshot's older cursor.
+        const cursor = this.snapshot.olderCursor,
+          dataset = history.dataset;
+        const page = yield* this.call('getChatHistory', { target, cursor });
+        if (history.dataset === dataset) history.applyOlderPage(page, cursor, target);
+      }
       this.publish(direction);
     });
   }
@@ -747,14 +732,9 @@ export class TranscriptOwner {
       saved = this.state.view.anchor;
     const offset = saved?.key === key && !this.history.findRecord(entryId) ? saved.offset : 0;
     const work = Effect.gen({ self: this }, function* () {
-      if (!this.history.findRecord(entryId)) {
-        if (!this.dependencies.capable)
-          throw makeTranscriptFailure(
-            'This host requires an upgrade for transcript navigation.',
-            'Unavailable',
-          );
+      if (!this.history.findRecord(entryId))
         yield* this.readAround(entryId, undefined, 'earlier', true);
-      } else if (resetView) this.history.dataset++;
+      else if (resetView) this.history.dataset++;
       if (resetView) this.setView({ anchor: { key, offset }, expanded: this.state.view.expanded });
     });
     return this.runJob(historyJob, work, { replace: true });
@@ -801,13 +781,6 @@ export class TranscriptOwner {
       (!captured.anchor || isLiveRowKey(captured.anchor.key)) && !this.history.hasLater();
     this.publish();
   }
-  private requireContentReads() {
-    if (!this.dependencies.capable)
-      throw makeTranscriptFailure(
-        'This host requires an upgrade for transcript content.',
-        'Unavailable',
-      );
-  }
   loadManifest(source: ChatTranscriptSource, restart = false) {
     const captured = decodeChatInput('getChatTranscriptContent', { source }).source;
     const replace = restart || !areJsonValuesEqual(this.state.manifest?.source, captured);
@@ -829,7 +802,6 @@ export class TranscriptOwner {
       this.state = { ...this.state, manifest: appendManifestPage(manifest, reply, known) };
     });
     const work = Effect.gen({ self: this }, function* () {
-      this.requireContentReads();
       this.state = { ...this.state, manifest: { ...manifest, status: 'loading', error: null } };
       yield* this.notify;
       yield* read;
@@ -874,7 +846,6 @@ export class TranscriptOwner {
       this.contents.append(key, before, reply);
     });
     const work = Effect.gen({ self: this }, function* () {
-      this.requireContentReads();
       this.contents.mark(key, { status: 'loading', error: null }, before);
       yield* this.notify;
       yield* read;

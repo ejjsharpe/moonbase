@@ -49,9 +49,12 @@ test('public chat controller creates, lists, opens, streams real tool output and
   await f.controller.send();
   const active = await until(
     async () => f.controller.getSnapshot(),
-    (s) => !!s.snapshot?.run?.tools.some((t) => t.text.length > 0),
+    (s) =>
+      !!s.snapshot?.run?.transcript?.parts.some(
+        (part) => part.kind === 'result' && part.text.length > 0,
+      ),
   );
-  assert(active.snapshot!.run!.tools[0].truncated);
+  assert(active.snapshot!.run!.transcript!.parts.find((part) => part.kind === 'result')!.truncated);
   assert.equal((await f.stats()).tools, 1);
   const stop = structuredClone(active.snapshot!.run!.stop);
   await f.controller.stop();
@@ -157,7 +160,7 @@ test('view detach and Disconnect leave remote tool running; reopen queries same 
   await f.controller.select(target);
   await until(
     async () => f.controller.getSnapshot(),
-    (s) => !!s.snapshot?.run?.tools.length,
+    (s) => !!s.snapshot?.run?.transcript?.parts.some((part) => part.role === 'tool'),
   );
   assert.equal((await f.stats()).tools, 1);
   assert.equal((await f.stats()).commands.filter((s) => s === 'sendChat').length, 1);

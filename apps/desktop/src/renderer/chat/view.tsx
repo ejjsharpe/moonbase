@@ -832,11 +832,7 @@ export function ChatView({
               controller={controller}
               draft={state.draft}
               mentions={state.mentions}
-              searchable={
-                controller.canFindFiles &&
-                connected &&
-                (!!state.selected || !local || (!!cwd && !creatingWorktree))
-              }
+              searchable={connected && (!!state.selected || !local || (!!cwd && !creatingWorktree))}
               cwd={!state.selected && local && cwd ? cwd : undefined}
               onMention={
                 !state.selected && local && cwd
