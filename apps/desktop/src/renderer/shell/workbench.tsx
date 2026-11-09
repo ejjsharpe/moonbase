@@ -256,6 +256,8 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
   // The title starts over the content column's left edge, wherever the rail and sidebar leave it,
   // and after the sidebar button when the sidebar is hidden.
   const title = useRef<HTMLDivElement>(null);
+  // Agents puts the open chat's title and actions here, in place of a header of its own.
+  const [chatTitle, setChatTitle] = useState<HTMLDivElement | null>(null);
   useEffect(() => {
     const panel = view === 'chat' ? panels.current.chat : panels.current.project;
     const anchor = panel?.querySelector('[data-title-anchor]');
@@ -602,30 +604,32 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
           {...stylex.props(controls.button, styles.sidebarToggle, mac && styles.sidebarToggleMac)}>
           <Icon name="sidebar" />
         </Button>
-        <div ref={title} {...stylex.props(styles.title)}>
+        <div
+          ref={title}
+          {...stylex.props(styles.title, view === 'chat' && chat && styles.titleBesideNew)}>
           <span aria-hidden="true" {...stylex.props(styles.titleDivider)} />
-          {view === 'chat' ? (
-            <span {...stylex.props(styles.titleCurrent)}>Agents</span>
-          ) : (
-            selected && (
-              <>
-                <span aria-hidden="true" {...stylex.props(styles.titleIcon)}>
-                  <Icon name="folder" />
-                </span>
-                <span>{checkoutName(selected)}</span>
-                {activePath &&
-                  activePath.split('/').map((part, index, parts) => (
-                    <Fragment key={index}>
-                      <span aria-hidden="true" {...stylex.props(styles.titleSeparator)}>
-                        /
-                      </span>
-                      <span {...stylex.props(index === parts.length - 1 && styles.titleCurrent)}>
-                        {part}
-                      </span>
-                    </Fragment>
-                  ))}
-              </>
-            )
+          {view === 'chat' && chat && (
+            <div ref={setChatTitle} {...stylex.props(styles.titleSlot)} />
+          )}
+          {view === 'chat' && !chat && <span {...stylex.props(styles.titleCurrent)}>Agents</span>}
+          {view !== 'chat' && selected && (
+            <>
+              <span aria-hidden="true" {...stylex.props(styles.titleIcon)}>
+                <Icon name="folder" />
+              </span>
+              <span>{checkoutName(selected)}</span>
+              {activePath &&
+                activePath.split('/').map((part, index, parts) => (
+                  <Fragment key={index}>
+                    <span aria-hidden="true" {...stylex.props(styles.titleSeparator)}>
+                      /
+                    </span>
+                    <span {...stylex.props(index === parts.length - 1 && styles.titleCurrent)}>
+                      {part}
+                    </span>
+                  </Fragment>
+                ))}
+            </>
           )}
         </div>
         <div {...stylex.props(styles.barActions)}>
@@ -911,6 +915,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
             <ChatView
               key={lifecycle.chatTargetId}
               controller={chat}
+              titleBar={chatTitle}
               sidebarHidden={sidebarHidden}
               chooseFolder={chooseChatFolder}
               recentFolders={recentChatFolders}

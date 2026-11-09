@@ -66,6 +66,9 @@ export const styles = stylex.create({
     marginRight: 8,
     backgroundColor: colors.border,
   },
+  // Agents has only the new-chat button at the bar's end, so the chat's own buttons sit beside it.
+  titleBesideNew: { right: 36 },
+  titleSlot: { flex: 1, minWidth: 0, height: '100%', display: 'flex', alignItems: 'center' },
   titleIcon: { display: 'flex', flexShrink: 0, color: colors.muted },
   titleSeparator: { color: colors.muted },
   titleCurrent: {

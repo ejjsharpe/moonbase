@@ -24,7 +24,9 @@ async function open(page: Page) {
   await openActivity(answer(page));
   // Expanding the activity can move the reader off the end.
   const jump = page.getByRole('button', { name: 'Jump to latest', exact: true });
-  if (await jump.isVisible()) await jump.click();
+  // It can also settle back by itself between seeing the button and clicking it.
+  if (await jump.isVisible()) await jump.click({ timeout: 2000 }).catch(() => undefined);
+  await expect(jump).toBeHidden();
 }
 const transcript = (page: Page) =>
   page.getByRole('region', { name: 'Chat transcript', exact: true });
@@ -1342,14 +1344,16 @@ test('Find shortcut skips every editable host and uses the physical F key on non
 }) => {
   await open(page);
   for (const value of ['', 'true', 'plaintext-only']) {
-    await page.locator('[data-chat-find-owner]').evaluate((owner, value) => {
-      const editable = document.createElement('div');
-      editable.setAttribute('contenteditable', value);
-      editable.setAttribute('data-test-editable', '');
-      editable.textContent = 'Editable';
-      owner.append(editable);
-      editable.focus();
-    }, value);
+    await page
+      .getByRole('main', { name: 'Agent workspace', exact: true })
+      .evaluate((owner, value) => {
+        const editable = document.createElement('div');
+        editable.setAttribute('contenteditable', value);
+        editable.setAttribute('data-test-editable', '');
+        editable.textContent = 'Editable';
+        owner.append(editable);
+        editable.focus();
+      }, value);
     await page.keyboard.press('Control+f');
     expect(await findOpen(page), `contenteditable="${value}"`).toBe(false);
     await page.locator('[data-test-editable]').evaluate((node) => node.remove());
@@ -2125,7 +2129,7 @@ for (const activation of ['Control+f', 'Meta+f', 'Find button'])
     });
     if (activation === 'Find button')
       await page
-        .getByRole('main', { name: 'Agent workspace', exact: true })
+        .locator('header[aria-label="Window title bar"]')
         .getByRole('button', { name: 'Find', exact: true })
         .click();
     else await page.keyboard.press(activation);
