@@ -7,6 +7,11 @@ export const maximumChatRequestBytes = 6 * maximumChatInputBytes + 4096;
 export const maximumChatReplyBytes = 256 * 1024;
 export const chatPageSize = 32;
 export const chatPreviewBytes = 4096;
+/**
+ * The text a running response's transcript parts carry in all, so its reply renders as it streams
+ * without reading content: its text parts whole while they fit, the rest as previews.
+ */
+export const chatLiveTextBytes = 64 * 1024;
 export const chatContentChunkBytes = 32 * 1024;
 export const chatManifestPageSize = 32;
 export const maximumChatFindQueryBytes = 1024;

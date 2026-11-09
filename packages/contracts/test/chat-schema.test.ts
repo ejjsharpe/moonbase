@@ -229,6 +229,57 @@ test('page/tool limits, nullable tasks and Send admission combinations keep exis
     assert.throws(() => decodeChatOutput('sendChat', { ...outputs.sendChat, ...changed }));
 });
 
+test("a running response's text parts may carry their whole text within the live budget", () => {
+  const source = {
+    kind: 'live',
+    target,
+    submissionId: 'submission',
+    taskId: 'task',
+    attempt: 0,
+    incarnation: 'a'.repeat(64),
+  };
+  const part = (text: string) => ({
+    partId: 'm0.b0',
+    bytes: Buffer.byteLength(text),
+    revision: 'b'.repeat(64),
+    kind: 'text',
+    role: 'assistant',
+    availability: 'available',
+    encoding: 'utf8',
+    text,
+    truncated: false,
+  });
+  const transcript = (parts: unknown[]) => ({ source, parts, nextCursor: null, thinking: 'none' });
+  const running = (parts: unknown[]) => ({
+    ...snapshot,
+    run: {
+      stop,
+      state: 'running',
+      text: '',
+      truncated: false,
+      tools: [],
+      transcript: transcript(parts),
+    },
+  });
+  const whole = 'streamed '.repeat(2000);
+  assert.equal(
+    decodeChatOutput('getChat', running([part(whole)])).run!.transcript!.parts[0]!.text,
+    whole,
+  );
+  // The budget holds across the parts, not per part.
+  const half = 'x'.repeat(40 * 1024);
+  assert.throws(() => decodeChatOutput('getChat', running([part(half), part(half)])));
+  // A stored entry's parts keep their preview bound.
+  const entry = {
+    id: 'entry',
+    role: 'assistant',
+    text: '',
+    truncated: false,
+    transcript: transcript([part(whole)]),
+  };
+  assert.throws(() => decodeChatOutput('getChat', { ...snapshot, entries: [entry] }));
+});
+
 test('derived public types retain mutable DTO fields and arrays', () => {
   const decoded = decodeChatOutput('getChat', snapshot);
   decoded.state = 'stopped';

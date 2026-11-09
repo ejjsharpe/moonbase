@@ -143,6 +143,36 @@ test.describe('the virtualized transcript', () => {
     expect(shown.filter((length, index) => index > 0 && length < shown[index - 1]!)).toEqual([]);
   });
 
+  test('a streaming reply renders from its snapshot without reading its text', async ({ page }) => {
+    await openLong(page, 40);
+    const result = await page.evaluate(async () => {
+      const client = window.demo.chat.dependencies.chat,
+        original = client.command;
+      let reads = 0;
+      client.command = async (operation, input, options) => {
+        const request = input as { source?: { kind?: string }; selection?: unknown };
+        if (
+          operation === 'getChatTranscriptContent' &&
+          request.source?.kind === 'live' &&
+          request.selection
+        )
+          reads++;
+        return original(operation, input, options) as never;
+      };
+      let text = 'Streaming reply\n\n';
+      for (let step = 0; step < 12; step++) {
+        text += 'more streaming words arrive here. ';
+        await window.demo.transcript!.live(text);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      client.command = original;
+      return { reads, shown: document.querySelector('[data-transcript-live]')!.textContent! };
+    });
+    expect(result.reads).toBe(0);
+    expect(result.shown).toContain('more streaming words arrive here. '.repeat(12).trim());
+  });
+
   test('a finished reply keeps the text it streamed while its stored text loads', async ({
     page,
   }) => {
@@ -1173,9 +1203,10 @@ test('retired live DOM stays pinned for focus and selection until Jump to latest
 test('partial Markdown cannot copy a different complete-source code node', async ({ page }) => {
   await open(page);
   const prefix = 'x'.repeat(15993) + '\n\n```js';
+  // Past the live budget, so the reply is read in chunks rather than carried whole.
   await page.evaluate(
     (text) => window.demo.transcript!.live(text),
-    prefix + '`invalid\n\n```python\nWRONG BLOCK\n```\n',
+    prefix + '`invalid\n\n```python\nWRONG BLOCK\n```\n\n' + 'y'.repeat(64 * 1024),
   );
   const live = page.locator('[data-transcript-live]');
   await expect(live.locator('pre')).toHaveText('');
