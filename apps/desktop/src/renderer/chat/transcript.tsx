@@ -73,13 +73,12 @@ import { holdTranscriptSelection } from './transcript-selection.ts';
 import { holdPlaceWhileFocusMoves } from './transcript-focus.ts';
 import { transcriptStyles as styles } from './transcript-styles.ts';
 
-/** Pixels between rows (`space.lg`); the list needs a number to lay rows out. */
-const rowGap = 16;
 /**
- * A first-render hint from the demo's measured rows (answers about 200–250px, questions about
- * 100px); once rows render the list uses each row type's measured average.
+ * A first-render hint from the demo's measured items (answers about 200–250px, questions about
+ * 100px, each with the 16px space below it); once rows render the list uses each row type's
+ * measured average.
  */
-const estimatedRowSize = 200;
+const estimatedRowSize = 216;
 /**
  * Following keeps the end visible through every change: rows appending and growing, and the
  * oldest rows evicted as new ones arrive at the record budget (not a pure append).
@@ -524,6 +523,29 @@ function TranscriptList({
     };
     hold();
   }, [list]);
+  /**
+   * Settles a dataset that opens at its end on the end as the page measures it. The list scrolls
+   * there from estimated row sizes and corrects itself only after a fallback delay, so it would
+   * rest short of the end meanwhile. Done once the end holds for two frames; a streaming reply
+   * moves it every frame, so after a second the list's own following carries on.
+   */
+  const settleEnd = useCallback(() => {
+    cancelAnimationFrame(holdFrame.current);
+    let frames = 0,
+      still = 0;
+    const settle = () => {
+      const ref = list.current,
+        node = ref?.getScrollableNode();
+      if (!ref || !node) return;
+      const end = node.scrollHeight - node.clientHeight;
+      if (Math.abs(end - node.scrollTop) >= 1) {
+        still = 0;
+        void ref.scrollToOffset({ offset: end, animated: false });
+      } else if (++still >= 2) return;
+      if (++frames < 60) holdFrame.current = requestAnimationFrame(settle);
+    };
+    settle();
+  }, [list]);
   /** The reader's own scroll, press or key ends the hold. */
   const releasePlace = useCallback(() => {
     held.current = null;
@@ -535,6 +557,10 @@ function TranscriptList({
     if (!ref || !ready || placed.current === dataset) return;
     placed.current = dataset;
     releasePlace();
+    if (!anchor && !findRevealing) {
+      settleEnd();
+      return;
+    }
     // At the end the list follows it; a row that isn't mounted can't be measured.
     if (
       !anchor ||
@@ -545,7 +571,7 @@ function TranscriptList({
       return;
     held.current = { dataset, anchor };
     holdAnchor();
-  }, [list, ready, dataset, placement, findRevealing, holdAnchor, releasePlace]);
+  }, [list, ready, dataset, placement, findRevealing, holdAnchor, settleEnd, releasePlace]);
   // Rows joining the anchor's card (an earlier page) move the row; hold it again.
   useLayoutEffect(() => {
     if (held.current) holdAnchor();
@@ -681,7 +707,6 @@ function TranscriptList({
         onReady={() => setReadyDataset(dataset)}
         ListHeaderComponent={header}
         ListFooterComponent={footer}
-        contentContainerStyle={{ gap: rowGap }}
         {...stylex.props(styles.list)}
       />
     </GroupStartsContext.Provider>
@@ -717,8 +742,14 @@ const getItemType = (item: TranscriptItem<TranscriptRow>) => {
   const row = item.rows[0]!;
   return row.kind === 'entry' ? row.entry.role : row.kind;
 };
+/**
+ * Each item carries the space below it. Legend List's own `gap` stays under the last item in the
+ * page but not in the length the list scrolls by, so following would stop a gap short of the end.
+ */
 const renderItem = ({ item }: LegendListRenderItemProps<TranscriptItem<TranscriptRow>>) => (
-  <Item item={item} />
+  <div {...stylex.props(styles.item)}>
+    <Item item={item} />
+  </div>
 );
 /** The live response is never empty: until it has something to show, it is working. */
 const kindOfRow = (row: TranscriptRow) => {

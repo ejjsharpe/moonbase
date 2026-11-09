@@ -19,6 +19,8 @@ export const transcriptStyles = stylex.create({
   row: { paddingInline: space.xl, minWidth: 0 },
   measure: { maxWidth: layout.conversation, margin: '0 auto', minWidth: 0 },
   edge: { paddingBlock: space.sm },
+  /** A list item: rows sit `space.lg` apart. */
+  item: { paddingBottom: space.lg },
   navigation: { flexWrap: 'wrap', minHeight: 28 },
   jump: {
     position: 'absolute',

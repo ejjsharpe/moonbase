@@ -22,19 +22,42 @@ export async function scrollToStart(page: Page) {
     .toBe(true);
 }
 
-/** Scrolls the transcript to its end with the wheel. */
+/**
+ * Scrolls the transcript to its end with the wheel, no further than the end: Chromium keeps an
+ * overshooting wheel's target past the end, and the next wheel up is spent against it.
+ */
 export async function scrollToEnd(page: Page) {
   const list = transcriptList(page);
+  const readFromEnd = () =>
+    list.evaluate((node) => node.scrollHeight - node.scrollTop - node.clientHeight);
   await list.hover();
   await expect
     .poll(
       async () => {
-        await page.mouse.wheel(0, 100000);
-        return list.evaluate((node) => node.scrollHeight - node.scrollTop - node.clientHeight);
+        const remaining = Math.floor(await readFromEnd());
+        if (remaining > 0) await page.mouse.wheel(0, remaining);
+        return readFromEnd();
       },
       { timeout: 15000 },
     )
     .toBeLessThan(30);
+}
+
+/**
+ * Waits until the mounted rows are in the page in the order they show. The list places rows as it
+ * scrolls and sorts them in the page once scrolling rests, and a selection follows page order.
+ */
+export async function waitForRowOrder(page: Page) {
+  await expect
+    .poll(() =>
+      transcriptList(page).evaluate((node) => {
+        const tops = [...node.querySelectorAll('[data-transcript-row]')].map(
+          (row) => row.getBoundingClientRect().top,
+        );
+        return tops.every((top, index) => index === 0 || top >= tops[index - 1]!);
+      }),
+    )
+    .toBe(true);
 }
 
 /** Scrolls up with the wheel until the row with `key` is in view. */

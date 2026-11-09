@@ -8,6 +8,7 @@ import {
   scrollToStart,
   showRow,
   transcriptList,
+  waitForRowOrder,
   openActivity,
 } from './transcript-list.ts';
 import type * as readingPins from '../src/renderer/chat/reading-pin.ts';
@@ -102,7 +103,7 @@ test.describe('the virtualized transcript', () => {
 
   test('opens at the end and follows while the live row grows', async ({ page }) => {
     await openLong(page, 200);
-    expect((await readList(page)).fromEnd).toBeLessThan(30);
+    await expect.poll(async () => (await readList(page)).fromEnd).toBeLessThan(1);
     await expect(jumpButton(page)).toHaveCount(0);
     for (let step = 1; step <= 6; step++) {
       await page.evaluate(
@@ -111,7 +112,8 @@ test.describe('the virtualized transcript', () => {
         step,
       );
       await expect(page.locator('[data-transcript-live]')).toContainText('Streaming reply');
-      await expect.poll(async () => (await readList(page)).fromEnd).toBeLessThan(30);
+      // At the real end: nothing is left to scroll below the live row.
+      await expect.poll(async () => (await readList(page)).fromEnd).toBeLessThan(1);
     }
     expect(await savedAnchor(page)).toBeNull();
   });
@@ -325,6 +327,7 @@ test.describe('the virtualized transcript', () => {
   test('a cross-row selection keeps its rows mounted while scrolled away', async ({ page }) => {
     await openLong(page, 200);
     await showRow(page, 'entry:long-196');
+    await waitForRowOrder(page);
     await page.evaluate(() => {
       const part = (key: string) =>
         document.querySelector(`[data-transcript-row="${key}"] [data-transcript-part]`)!;
