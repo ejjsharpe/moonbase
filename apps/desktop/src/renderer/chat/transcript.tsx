@@ -737,10 +737,14 @@ function readRowTop(scroller: HTMLElement | null | undefined, key: string) {
 }
 const readDevicePixel = () => 1 / window.devicePixelRatio;
 const getItemKey = (item: TranscriptItem<TranscriptRow>) => item.key;
+/**
+ * The list sizes unmeasured items by their type's average, and an item whose type changes is sized
+ * afresh. The running response is typed as the answer it becomes, so storing it keeps its size.
+ */
 const getItemType = (item: TranscriptItem<TranscriptRow>) => {
   if (item.rows.length > 1) return 'activity';
   const row = item.rows[0]!;
-  return row.kind === 'entry' ? row.entry.role : row.kind;
+  return row.kind === 'tool' ? row.kind : row.entry.role;
 };
 /**
  * Each item carries the space below it. Legend List's own `gap` stays under the last item in the

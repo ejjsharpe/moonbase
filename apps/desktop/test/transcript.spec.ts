@@ -143,6 +143,59 @@ test.describe('the virtualized transcript', () => {
     expect(shown.filter((length, index) => index > 0 && length < shown[index - 1]!)).toEqual([]);
   });
 
+  test('a finished reply keeps the text it streamed while its stored text loads', async ({
+    page,
+  }) => {
+    await openLong(page, 20);
+    const shown = await page.evaluate(async () => {
+      const transcript = window.demo.transcript!;
+      // The demo's long conversation, as `long(20)` records it.
+      const records = Array.from({ length: 20 }, (_, index) => {
+        const user = index % 2 === 0;
+        let text = user
+          ? `Question ${index}: how does part ${index} fit together?`
+          : `Answer ${index}.\n\n` + 'A paragraph of steady explanation. '.repeat(1 + (index % 7));
+        if (!user && index % 10 === 1)
+          text +=
+            '\n\n```typescript\n' +
+            Array.from({ length: 60 }, (_, line) => `const line${line} = ${index};`).join('\n') +
+            '\n```\n';
+        if (index === 5) text += '\n\nThe old lighthouse note.';
+        const role = user ? ('user' as const) : ('assistant' as const);
+        return { id: `long-${index}`, role, parts: [{ text, kind: 'text' as const, role }] };
+      });
+      const list = document.querySelector('[data-transcript-list]')!;
+      let text = 'Finished reply\n\n';
+      for (let step = 0; step < 10; step++) {
+        text += 'more streaming words arrive here. ';
+        await transcript.live(text);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const live = list.querySelector('[data-transcript-live]')!.textContent!.length;
+      const lengths: number[] = [];
+      const observer = new MutationObserver(() => {
+        const reply = [...list.querySelectorAll('article')].find((article) =>
+          article.textContent!.includes('Finished reply'),
+        );
+        lengths.push(reply?.textContent!.length ?? 0);
+      });
+      observer.observe(list, { subtree: true, childList: true, characterData: true });
+      await transcript.record([
+        ...records,
+        { id: 'finished', role: 'assistant', parts: [{ text, kind: 'text', role: 'assistant' }] },
+      ]);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      observer.disconnect();
+      return { lengths, live };
+    });
+    await expect(page.locator('[data-transcript-row="entry:finished"]')).toContainText(
+      'more streaming words',
+    );
+    // The demo's previews are 64 characters; the stored reply never shows only its preview.
+    expect(Math.min(...shown.lengths)).toBeGreaterThanOrEqual(shown.live);
+    await expect.poll(async () => (await readList(page)).fromEnd).toBeLessThan(1);
+  });
+
   test('scrolling up stops following, and new output does not move the reader', async ({
     page,
   }) => {

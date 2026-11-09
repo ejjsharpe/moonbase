@@ -164,6 +164,7 @@ export function useFindHydration({
   readable,
   shown,
   holdsGrowth,
+  findHandOff,
   load,
 }: {
   part: ChatTranscriptPart;
@@ -181,6 +182,8 @@ export function useFindHydration({
    * previous body (`usePartBody`) shows the preview, so it can say which version it shows.
    */
   holdsGrowth: boolean;
+  /** Text already shown for this part elsewhere (the running response it was), held until it loads. */
+  findHandOff?: () => string | undefined;
   load(restart?: boolean): void;
 }) {
   const matchedText =
@@ -192,7 +195,10 @@ export function useFindHydration({
   const matchVisible = !!match && matchedText === expectedText;
   // Preserve the reading body while Find hydrates; show the source once it contains the match.
   const frozen = !!match && !(matchVisible && base === 0);
-  const [reading, setReading] = useState({ revision: part.revision, text: part.text, held: false });
+  const [reading, setReading] = useState(() => {
+    const handedOff = holdsGrowth && part.truncated && !content ? findHandOff?.() : undefined;
+    return { revision: part.revision, text: handedOff ?? part.text, held: handedOff !== undefined };
+  });
   const { text, held } = useMemo(() => {
     const revised = reading.revision !== part.revision;
     if (frozen && !revised) return reading;
