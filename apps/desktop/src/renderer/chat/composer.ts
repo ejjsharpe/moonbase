@@ -158,6 +158,8 @@ export class ChatComposer {
    */
   checkMentions(folder: string, sentIn = folder): string | null {
     const state = this.chat.getSnapshot();
+    // `''` is a chat without a project, whose folder the host makes: no mention is in it yet.
+    const place = folder || 'the chat’s new folder';
     const unknown = state.selected
       ? 0
       : state.mentions.filter((mention) => !this.folders.has(mention.path)).length;
@@ -167,11 +169,11 @@ export class ChatComposer {
     const problems: string[] = [];
     if (dropped)
       problems.push(
-        `${plural(dropped, "A mentioned file isn't", "mentioned files aren't")} in ${folder}, so ${dropped === 1 ? 'it is' : 'they are'} written out as ${dropped === 1 ? 'a full path' : 'full paths'} instead.`,
+        `${plural(dropped, "A mentioned file isn't", "mentioned files aren't")} in ${place}, so ${dropped === 1 ? 'it is' : 'they are'} written out as ${dropped === 1 ? 'a full path' : 'full paths'} instead.`,
       );
     if (unknown)
       problems.push(
-        `Moonbase can't tell which folder ${plural(unknown, 'a mention was', 'mentions were')} picked in, as after a restart, so ${unknown === 1 ? 'it is' : 'they are'} now taken as ${unknown === 1 ? 'a file' : 'files'} in ${folder}.`,
+        `Moonbase can't tell which folder ${plural(unknown, 'a mention was', 'mentions were')} picked in, as after a restart, so ${unknown === 1 ? 'it is' : 'they are'} now taken as ${unknown === 1 ? 'a file' : 'files'} in ${place}.`,
       );
     return problems.length ? [...problems, 'Send again to send the message.'].join(' ') : null;
   }

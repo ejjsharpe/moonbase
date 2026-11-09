@@ -10,6 +10,7 @@ const checkout = {
   checkoutId: 'filenames',
   projectId: 'project',
   root: '/memory/filenames',
+  vcs: 'git' as const,
   branch: 'main',
   worktree: 'main' as 'main' | 'linked',
 };

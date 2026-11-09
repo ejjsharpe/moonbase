@@ -1213,6 +1213,35 @@ class ChatModelState {
         yield* this.dispatch(pending, () => this.reserve(pending));
       }),
     );
+  /**
+   * Settles or unsettles a chat on its host. The listed chat and the open snapshot take the host's
+   * reply, so the chat moves group at once; a reload then lists it again, after any listing that
+   * began before the reply.
+   */
+  settle = (target: ChatTarget, settled: boolean) =>
+    this.action(
+      'settle',
+      Effect.gen({ self: this }, function* () {
+        this.connected();
+        const input = decodeChatInput('settleChat', { target, settled });
+        if (!sameSession(input.target, this.session))
+          throw invalid('Chat belongs to another context.');
+        const summary = yield* this.call('settleChat', input);
+        const listed = this.state.chats.findIndex((chat) =>
+          sameTarget(chat.target, summary.target),
+        );
+        if (listed >= 0) {
+          const chats = [...this.state.chats],
+            activity = chats[listed]!.activity;
+          chats[listed] = { ...summary, ...(activity ? { activity } : {}) };
+          this.update({ chats });
+        }
+        if (this.selection?.alive && sameTarget(this.selection.target, summary.target))
+          this.selection.transcript?.updateConversation(summary);
+        void this.reloadChats({ latest: true });
+      }),
+      this.generation,
+    );
   retry = (id: string) =>
     this.action(
       id,
@@ -1524,6 +1553,7 @@ export type ChatController = Pick<
   | 'create'
   | 'send'
   | 'stop'
+  | 'settle'
   | 'retry'
   | 'query'
   | 'preserve'

@@ -14,7 +14,11 @@ Chat Find (`getChatFindExpression`) matches the literal query in original text w
 
 A message's file mentions are relative paths in its working folder, each spelled in the text by `formatChatMention` (`@path`, or `@"path"` with whitespace), so the text alone still names every file. `findChatFiles` searches an existing chat's folder, or a folder a new chat may use.
 
-`CheckoutTarget.worktree` is `main` or `linked`; worktrees of one repository share `projectId`.
+A local chat's creation settings may leave out `cwd` for a chat without a project; the host gives it a folder of its own and lists it with `ownFolder: true`.
+
+`settleChat` settles or unsettles a chat (`{ target, settled }`) and returns its summary, whose `settledAt` says when it was settled.
+
+A `CheckoutTarget` is a Git checkout (`vcs: 'git'`, with `branch` and `worktree`: `main` or `linked`) or a plain folder (`vcs: 'none'`); worktrees of one repository share `projectId`. Saved targets without `vcs` decode as Git.
 
 Client entries use type-only schema imports, so they emit no Effect runtime code. `services` is privileged: `ConnectionService.endpoint` carries origin and key data that must never reach renderers, settings or logs.
 

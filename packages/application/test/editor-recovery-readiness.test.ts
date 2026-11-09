@@ -17,6 +17,7 @@ const checkout: CheckoutTarget = {
   checkoutId: 'ready',
   projectId: 'project',
   root: '/memory/ready',
+  vcs: 'git' as const,
   branch: 'main',
   worktree: 'main' as 'main' | 'linked',
 };

@@ -8,6 +8,7 @@ import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { DesktopShell, type DesktopShellHandle } from '../src/renderer/shell/workbench.tsx';
 import { configureMonacoWorkers } from '@moonbase/workbench/workers';
 import { memoryWorkspace } from '@moonbase/application/testing/memory-workspace';
+import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import * as monaco from 'monaco-editor';
 import * as stylex from '@stylexjs/stylex';
 import { Button } from '@base-ui/react/button';
@@ -24,6 +25,7 @@ const checkout = {
   checkoutId: 'sample',
   projectId: 'demo',
   root: '/demo/moonbase',
+  vcs: 'git' as const,
   branch: 'main',
   worktree: 'main' as 'main' | 'linked',
 };
@@ -58,11 +60,34 @@ const memory = memoryWorkspace([
     { ...checkout, checkoutId: 'third', projectId: 'demo-third', root: '/demo/third' },
     { 'third.ts': 'export const third = true;\n' },
   ),
+  // A plain folder in no Git repository, until Initialize Git.
+  {
+    checkout: {
+      hostId: 'memory-demo',
+      checkoutId: 'notes',
+      projectId: 'demo-notes',
+      root: '/demo/notes',
+      vcs: 'none',
+    },
+    files: { 'notes.md': '# Notes\n\nA folder without Git.\n' },
+  },
+  // The first demo chat without a project's folder, which Turn into project opens.
+  {
+    checkout: {
+      hostId: 'memory-demo',
+      checkoutId: 'own-chat',
+      projectId: 'demo-own-chat',
+      root: '/demo/chats/chat-1',
+      vcs: 'none',
+    },
+    files: {},
+  },
   committedSeed(
     {
       ...checkout,
       checkoutId: 'legend',
       root: '/demo/legend-list',
+      vcs: 'git' as const,
       branch: 'feat/legend-list',
       worktree: 'linked',
     },
@@ -154,7 +179,7 @@ async function createChatWorktree(root: string, branch: string) {
   chat.worktrees.push(`${root} ${branch}`);
   const created = await client.command('createWorktree', {
     checkout,
-    base: checkout.branch,
+    base: checkout.vcs === 'git' ? checkout.branch : 'HEAD',
     branch,
     location: `${root}-worktrees/${branch.replaceAll('/', '-')}`,
   });
@@ -188,6 +213,7 @@ function Demo() {
               : ['/Users/demo/notes', '/demo/moonbase']
           }
           createChatWorktree={createChatWorktree}
+          turnChatIntoProject={(conversationId) => chat.turnIntoProject(conversationId)}
           selectCheckout={() => window.demo.selectCheckout()}
           selectClipboardImports={(checkout) => window.demo.selectClipboardImports(checkout)}
           copyPaths={async (target, paths, relative) => {
@@ -310,8 +336,8 @@ declare global {
       transcript: typeof transcriptDemo;
       retryChat(): void;
       selectCheckout(): Promise<string | null>;
-      selectClipboardImports(target: typeof checkout): Promise<string[] | null>;
-      selectDroppedImports(target: typeof checkout, files: File[]): Promise<string[]>;
+      selectClipboardImports(target: CheckoutTarget): Promise<string[] | null>;
+      selectDroppedImports(target: CheckoutTarget, files: File[]): Promise<string[]>;
       /** What the file menu copied and revealed; the demo never touches the OS clipboard. */
       copied: string[];
       revealed: string[];

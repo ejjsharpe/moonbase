@@ -57,7 +57,10 @@ export function ProjectOpener({
                   items: recent.map((checkout) => ({
                     path: checkout.root,
                     projectId: checkout.projectId,
-                    detail: `${checkout.branch} · ${homePath(checkout.root)}`,
+                    detail:
+                      checkout.vcs === 'git'
+                        ? `${checkout.branch} · ${homePath(checkout.root)}`
+                        : homePath(checkout.root),
                   })),
                 },
               ]}

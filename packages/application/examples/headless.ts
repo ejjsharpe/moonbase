@@ -19,6 +19,7 @@ function editorCapabilities() {
     checkoutId: 'headless',
     projectId: 'example',
     root: '/memory/headless',
+    vcs: 'git' as const,
     branch: 'main',
     worktree: 'main' as 'main' | 'linked',
   };

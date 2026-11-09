@@ -40,6 +40,7 @@ const inputs = {
   sendChat: { target, requestId: 'send', text: '  Keep original text  ' },
   getChatSend: { target, requestId: 'send' },
   stopChat: { stop, requestId: 'stop' },
+  settleChat: { target, settled: true },
   findChatFiles: { target, query: 'src' },
 } satisfies { [K in ChatCommand]: ChatInput<K> };
 const outputs = {
@@ -83,6 +84,7 @@ const outputs = {
   },
   getChatSend: null,
   stopChat: { stop, requestId: 'stop', outcome: 'pending' as const },
+  settleChat: { ...conversation, settledAt: '2026-11-02T00:00:00Z' },
   findChatFiles: {
     query: 'src',
     matches: [{ path: 'src/a.ts', positions: [0, 1, 2] }],

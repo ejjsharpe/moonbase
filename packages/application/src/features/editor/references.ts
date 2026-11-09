@@ -13,8 +13,8 @@ export const checkoutKey = (target: CheckoutTarget) =>
     target.checkoutId,
     target.projectId,
     target.root,
-    target.branch,
-    target.worktree,
+    target.vcs,
+    ...(target.vcs === 'git' ? [target.branch, target.worktree] : []),
   ]);
 export const fileKey = (target: FileTarget) =>
   JSON.stringify([checkoutKey(target.checkout), target.path]);

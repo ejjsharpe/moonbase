@@ -8,9 +8,9 @@ export const struct = <const F extends Schema.Struct.Fields>(fields: F) =>
 export const array = <S extends Schema.Constraint>(schema: S) =>
   Schema.mutable(Schema.Array(schema));
 // Optional undefined values are omitted, matching the existing wire projection.
-export const optional = <T>(schema: Schema.Codec<T>) =>
+export const optional = <T, E>(schema: Schema.Codec<T, E>) =>
   Schema.optional(schema).pipe(
-    Schema.decodeTo(Schema.optionalKey(schema), {
+    Schema.decodeTo(Schema.optionalKey(Schema.toType(schema)), {
       decode: SchemaGetter.transformOptional<T, T | undefined>((value) =>
         Option.filter(value, (item): item is T => item !== undefined),
       ),

@@ -11,10 +11,6 @@ import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { readFindHighlight } from './find-highlight.ts';
 
-// These tests open the demo chat, which is Settled; the sidebar's own test covers the toggle.
-test.beforeEach(({ page }) =>
-  page.addInitScript(() => localStorage.setItem('moonbase.chats.settled', 'open')),
-);
 const output = resolve('../../test-results/transcript-112');
 async function open(page: Page) {
   await page.goto('/?local&design&transcript');

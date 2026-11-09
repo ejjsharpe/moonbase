@@ -8,6 +8,8 @@ import {
   type TaskId,
 } from '@earendil-works/pi-durable';
 import type { ChatCreationSettings, ChatTarget } from '@moonbase/contracts/chat';
+/** A chat's saved folder and model; `ownFolder` marks a folder made for a chat without a project. */
+export type ChatSettings = ChatCreationSettings & { cwd: string; ownFolder?: true };
 import * as V from './validation.ts';
 import * as S from './private-schema.ts';
 
@@ -46,7 +48,9 @@ export const Metadata = defineDocFamily({
     title: string;
     createdAt: string;
     identity: string;
-    settings?: ChatCreationSettings;
+    settings?: ChatSettings;
+    /** When the user settled the chat; a Send clears it. */
+    settledAt?: string;
   }) => ({
     ...value,
     pending: 0,
@@ -86,9 +90,9 @@ export async function readOwnedMetadata(
   return saved;
 }
 export function getSettings(
-  meta: { settings?: ChatCreationSettings },
-  fixedSettings?: ChatCreationSettings,
-): ChatCreationSettings {
+  meta: { settings?: ChatSettings },
+  fixedSettings?: ChatSettings,
+): ChatSettings {
   if (!fixedSettings) {
     if (!meta.settings)
       return V.fail('Persistence', 'Stored local conversation settings are missing.');

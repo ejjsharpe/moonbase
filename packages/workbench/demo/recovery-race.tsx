@@ -26,6 +26,7 @@ const alpha = {
   checkoutId: 'alpha',
   projectId: 'race',
   root: '/race/alpha',
+  vcs: 'git' as const,
   branch: 'main',
   worktree: 'main' as 'main' | 'linked',
 };
@@ -165,7 +166,7 @@ function RecoveryRace() {
                 key={item.checkoutId}
                 value={item.checkoutId}
                 {...stylex.props(controls.button)}>
-                {item.checkoutId} · {item.branch}
+                {item.checkoutId} · {item.vcs === 'git' ? item.branch : 'folder'}
               </Tabs.Tab>
             ))}
         </Tabs.List>

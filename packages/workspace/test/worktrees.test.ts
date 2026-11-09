@@ -49,9 +49,9 @@ test('worktrees of one repository share a project and report main or linked', as
     rmSync(join(f.base, 'gone'), { recursive: true });
     const main = await f.client.command('openCheckout', { root: f.root });
     const linked = await f.client.command('openCheckout', { root: linkedRoot });
-    assert.equal(main.worktree, 'main');
-    assert.equal(linked.worktree, 'linked');
-    assert.equal(linked.branch, 'linked');
+    assert.equal(main.vcs === 'git' && main.worktree, 'main');
+    assert.equal(linked.vcs === 'git' && linked.worktree, 'linked');
+    assert.equal(linked.vcs === 'git' && linked.branch, 'linked');
     assert.equal(linked.projectId, main.projectId);
     assert.notEqual(linked.checkoutId, main.checkoutId);
 
@@ -76,12 +76,17 @@ test('worktrees of one repository share a project and report main or linked', as
   }
 });
 
-test('a plain folder is not a checkout and lists no worktrees', async () => {
+test('a plain folder opens without Git and lists no worktrees', async () => {
   const f = fixture();
   try {
     const folder = join(f.base, 'folder');
     mkdirSync(folder);
-    await assert.rejects(f.client.command('openCheckout', { root: folder }));
+    const plain = await f.client.command('openCheckout', { root: folder });
+    assert.equal(plain.vcs, 'none');
+    assert.deepEqual(await f.client.command('listWorktrees', { checkout: plain }), {
+      worktrees: [],
+    });
+    // A repository's target moved onto the folder's root grants nothing.
     const checkout = await f.client.command('openCheckout', { root: f.root });
     await assert.rejects(
       f.client.command('listWorktrees', { checkout: { ...checkout, root: folder } }),
@@ -111,6 +116,7 @@ test('createWorktree branches from base into a new opened linked checkout', asyn
         checkoutId: undefined,
         projectId: main.projectId,
         root: location,
+        vcs: 'git' as const,
         branch: 'feature/one',
         worktree: 'linked',
       },
@@ -218,7 +224,7 @@ test('a failed creation removes the worktree and branch it added', async () => {
       branch: 'hooked',
       location,
     });
-    assert.equal(created.worktree, 'linked');
+    assert.equal(created.vcs === 'git' && created.worktree, 'linked');
   } finally {
     await f.close();
   }
@@ -297,7 +303,7 @@ test('a bare repository has no main working tree to list', async () => {
     const linkedRoot = join(f.base, 'from-bare');
     f.git(['worktree', 'add', '-q', '-b', 'topic', linkedRoot, 'main'], bare);
     const linked = await f.client.command('openCheckout', { root: linkedRoot });
-    assert.equal(linked.worktree, 'linked');
+    assert.equal(linked.vcs === 'git' && linked.worktree, 'linked');
     assert.deepEqual((await f.client.command('listWorktrees', { checkout: linked })).worktrees, [
       { root: linkedRoot, branch: 'topic', main: false, locked: false, prunable: false },
     ]);
@@ -664,7 +670,8 @@ test('a creation cancelled while queued behind another ends at once and adds not
     abort.abort();
     await assert.rejects(queued, rejects('Cancelled'));
     assert.equal(firstDone, false, 'the queued creation did not wait for the running one');
-    assert.equal((await first).worktree, 'linked');
+    const made = await first;
+    assert.equal(made.vcs === 'git' && made.worktree, 'linked');
     assert.equal(branches(f.git).includes('queued'), false);
     assert.equal(existsSync(join(f.base, 'queued')), false);
   } finally {

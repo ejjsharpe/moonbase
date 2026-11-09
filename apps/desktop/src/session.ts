@@ -31,10 +31,11 @@ const inside = (root: string, path: string) => {
   const rest = relative(root, path);
   return rest === '' || (rest !== '..' && !rest.startsWith(`..${sep}`) && !isAbsolute(rest));
 };
-const exact = (a: CheckoutTarget, b: CheckoutTarget) =>
-  ['hostId', 'checkoutId', 'projectId', 'root', 'branch', 'worktree'].every(
-    (k) => a[k as keyof CheckoutTarget] === b[k as keyof CheckoutTarget],
-  );
+const exact = (a: CheckoutTarget, b: CheckoutTarget) => {
+  const [x, y]: Record<string, unknown>[] = [a, b];
+  const fields = Object.keys(x);
+  return fields.length === Object.keys(y).length && fields.every((k) => x[k] === y[k]);
+};
 export type NativeActions = {
   chooseCheckout(): Promise<string | null>;
   /** Captured references, none when there is nothing to import, or null for a declined prompt. */
@@ -185,6 +186,25 @@ export class EditorSession {
       });
     return v;
   }
+  /**
+   * Opens a root main trusts, such as a chat's own folder becoming a project, and approves the
+   * checkout for the renderer, which may then open it. The caller authorizes `root`.
+   */
+  async openFolderProject(root: string): Promise<CheckoutTarget> {
+    string(root);
+    const target = decodeWorkspaceOutput(
+      'openCheckout',
+      await this.client.command('openCheckout', { root }),
+    );
+    // The workspace resolves links: a folder replaced by one since main checked it opens elsewhere.
+    if (target.root !== root)
+      throw new ApplicationError({
+        code: 'Unauthorized',
+        message: 'The folder changed before it opened as a project. Inspect it.',
+      });
+    this.known.set(target.checkoutId, target);
+    return target;
+  }
   /** Whether a root is a natively approved checkout, or a worktree Git listed for one. */
   hasFolder(root: string) {
     return this.worktreeRoots.has(root) || [...this.known.values()].some((t) => t.root === root);
@@ -301,7 +321,8 @@ export class EditorSession {
           operation,
           await this.client.command(operation, validated as never, { signal: request.signal }),
         );
-        if (operation === 'openCheckout' && live()) {
+        // After `git init` the folder's Git target replaces its approval under the same ID.
+        if ((operation === 'openCheckout' || operation === 'initializeRepository') && live()) {
           checkout(value);
           this.known.set(value.checkoutId, value);
         }

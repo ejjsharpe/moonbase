@@ -4,6 +4,7 @@ export default defineConfig({
   testDir: './test',
   testMatch: [
     'shell.spec.ts',
+    'folders.spec.ts',
     'transcript.spec.ts',
     'activity.spec.ts',
     'activity-selection.spec.ts',

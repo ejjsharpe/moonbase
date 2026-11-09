@@ -20,8 +20,10 @@ import { controls } from '@moonbase/ui/controls';
 import { workbench } from '@moonbase/ui/workbench';
 import { Settings, type SettingsSection } from './settings.tsx';
 import { formatChatAge } from '../chat/age.ts';
+import { getChatPlace } from '../chat/folder.ts';
 import { ChatView } from '../chat/view.tsx';
 import { checkoutName } from '@moonbase/ui/projects';
+import { homePath } from '../folder-menu.tsx';
 import { readOwn } from '@moonbase/application/editor';
 import { Icon } from '../icon.tsx';
 import {
@@ -49,6 +51,8 @@ export type DesktopShellProps = {
   recentChatFolders?: () => Promise<readonly string[]>;
   /** Creates a new local chat's linked worktree beside the repository, returning its root. */
   createChatWorktree?: (root: string, branch: string) => Promise<string>;
+  /** Opens a local chat without a project's folder as a project where it is, returning its root. */
+  turnChatIntoProject?: (conversationId: string) => Promise<string>;
   selectCheckout?: () => Promise<string | null>;
   selectClipboardImports?: (checkout: CheckoutTarget) => Promise<string[] | null>;
   /** Copies a checkout's paths to the clipboard, joined by newlines: absolute, or as `relative`. */
@@ -110,6 +114,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
     chooseChatFolder,
     recentChatFolders,
     createChatWorktree,
+    turnChatIntoProject,
     transcriptNative,
     selectCheckout,
     selectClipboardImports,
@@ -223,20 +228,21 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
   const folderProjects = (state?.recovery.checkouts ?? []).map((checkout) => ({
     root: checkout.root,
     projectId: checkout.projectId,
-    branch: checkout.branch,
-    worktree: checkout.worktree,
+    ...(checkout.vcs === 'git' ? { branch: checkout.branch, worktree: checkout.worktree } : {}),
     open: !!state?.recovery.openCheckoutIds.includes(checkout.checkoutId),
   }));
   // Closed projects, newest first: one per repository whose projects are all closed, its main
   // worktree when the editor knows it. The editor approved each, so it reopens without a picker.
   const recentCheckouts: CheckoutTarget[] = [];
+  const isMain = (checkout: CheckoutTarget) =>
+    checkout.vcs === 'git' && checkout.worktree === 'main';
   for (const checkout of [...(state?.recovery.checkouts ?? [])].reverse()) {
     const sameProject = (other: CheckoutTarget) =>
       other.hostId === checkout.hostId && other.projectId === checkout.projectId;
     if (openCheckouts.some(sameProject)) continue;
     const listed = recentCheckouts.findIndex(sameProject);
     if (listed < 0) recentCheckouts.push(checkout);
-    else if (checkout.worktree === 'main' && recentCheckouts[listed].worktree !== 'main')
+    else if (isMain(checkout) && !isMain(recentCheckouts[listed]))
       recentCheckouts[listed] = checkout;
   }
   const selected = openCheckouts.find(
@@ -302,9 +308,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
   const resizeDock = (width: number) =>
     setDockWidth(Math.round(Math.min(Math.max(width, dockMinWidth), dockMaxWidth)));
   const dockExpanded = dockWidth >= dockMaxWidth;
-  const projectName = checkoutName(
-    projectCheckouts.find((checkout) => checkout.worktree === 'main') ?? selected ?? { root: '' },
-  );
+  const projectName = checkoutName(projectCheckouts.find(isMain) ?? selected ?? { root: '' });
   const report = controller?.report ?? application.reportCleanup;
   const run = (task: Promise<unknown>) => {
     void task.catch(report);
@@ -328,7 +332,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
       id: summary.target.conversationId,
       kind: 'chat' as const,
       label: summary.title,
-      detail: `${summary.cwd.split('/').filter(Boolean).at(-1) || '/'} · ${formatChatAge(summary.activity?.at ?? summary.createdAt)}`,
+      detail: `${getChatPlace(summary)} · ${formatChatAge(summary.activity?.at ?? summary.createdAt)}`,
       recent: index < 3,
       run: () => {
         if (!chat) return;
@@ -340,7 +344,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
       id: checkout.checkoutId,
       kind: 'project' as const,
       label: checkoutName(checkout),
-      detail: '⎇ ' + checkout.branch,
+      detail: checkout.vcs === 'git' ? '⎇ ' + checkout.branch : homePath(checkout.root),
       projectId: checkout.projectId,
       run: () => {
         if (controller) run(controller.selectCheckout(checkout));
@@ -912,6 +916,16 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
               recentFolders={recentChatFolders}
               folderProjects={folderProjects}
               createWorktree={createChatWorktree}
+              turnIntoProject={
+                turnChatIntoProject && controller
+                  ? async (conversationId) => {
+                      const root = await turnChatIntoProject(conversationId);
+                      // The new project joins the rail; the chat stays open here.
+                      if (application.getSnapshot().phase === 'live')
+                        await controller.openCheckout(root);
+                    }
+                  : undefined
+              }
               transcriptNative={transcriptNative?.(lifecycle.chatTargetId ?? 'remote')}
               hosts={
                 lifecycle.chatTargets.length

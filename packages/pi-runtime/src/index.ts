@@ -2,6 +2,7 @@ import { createRegistry, defineExtension, section } from '@earendil-works/pi-dur
 import { CodingTools } from '@earendil-works/pi-durable/tools';
 import { Context, Effect, Layer } from 'effect';
 import type { ApplicationError } from '@moonbase/contracts/workspace';
+import type { ChatTarget } from '@moonbase/contracts/chat';
 import { ChatService, type ChatServiceShape } from '@moonbase/contracts/services';
 import { type Host, safeError } from './commands.ts';
 import { openHost } from './resources.ts';
@@ -15,6 +16,8 @@ export class LocalPiControl extends Context.Service<
   {
     setAdmissionsOpen(open: boolean): void;
     hasActiveWork(): Effect.Effect<boolean, ApplicationError>;
+    /** Clears `ownFolder` once a chat's own folder has become a project where it is. */
+    markFolderAsProject(target: ChatTarget): Effect.Effect<void, ApplicationError>;
   }
 >()('moonbase/LocalPiControl') {}
 function makeChatService(host: Host): ChatServiceShape {
@@ -33,6 +36,7 @@ function makeChatService(host: Host): ChatServiceShape {
     sendChat: (d) => host.run('sendChat', d, (input) => host.send(input)),
     getChatSend: (d) => host.run('getChatSend', d, (input) => host.getSend(input)),
     stopChat: (d) => host.run('stopChat', d, (input) => host.stop(input)),
+    settleChat: (d) => host.run('settleChat', d, (input) => host.settle(input)),
     findChatFiles: (d) => host.run('findChatFiles', d, (input) => host.findFiles(input)),
     watch: ({ target }) => host.watch(target),
   };
@@ -81,6 +85,11 @@ export const LocalPiRuntimeLive = (
           },
           hasActiveWork: () =>
             Effect.tryPromise({ try: () => host.hasActiveWork(), catch: safeError }),
+          markFolderAsProject: (target) =>
+            Effect.tryPromise({
+              try: () => host.markFolderAsProject(target),
+              catch: (error) => safeError(error, true),
+            }),
         }),
       );
     }),

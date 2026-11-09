@@ -20,6 +20,7 @@ const checkout = {
   checkoutId: 'measurement',
   projectId: 'measurement',
   root: '/memory/snapshot-measurement',
+  vcs: 'git',
   branch: 'main',
   worktree: 'main',
 };

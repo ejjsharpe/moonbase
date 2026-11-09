@@ -4,7 +4,7 @@ import { basename, dirname, isAbsolute, join } from 'node:path';
 import type { CheckoutTarget, CommandInput, CommandOutput } from '@moonbase/contracts/workspace';
 import type { Directory } from './filesystem.ts';
 import { matchPath, compareMatches } from '@moonbase/contracts/lookup';
-import { document, ensure, fail, path } from './validation.ts';
+import { document, ensure, fail, path, requireGit } from './validation.ts';
 import { parseGitStatus } from './git-status.ts';
 
 /** Names discovery and text search never descend into, matching the native lookup preflight. */
@@ -148,6 +148,8 @@ export class WorkspaceDiscovery {
     });
     const directory = await this.directory(input.checkout);
     await directory.entry(input.path, signal);
+    // A plain folder has no Git ignore policy, so nothing in it is ignored.
+    if (input.checkout.vcs === 'none') return { paths: [] };
     let error: string | undefined;
     try {
       this.policy(input.checkout);
@@ -178,8 +180,10 @@ export class WorkspaceDiscovery {
     }
     return { paths: [], error };
   }
+  /** A plain folder's status is empty, so a caller that polls it keeps working. */
   async getStatus(target: CheckoutTarget, signal: AbortSignal) {
     const directory = await this.directory(target);
+    if (target.vcs === 'none') return { branch: '', changes: [] };
     try {
       const changes = parseGitStatus(
         (
@@ -203,6 +207,7 @@ export class WorkspaceDiscovery {
   async readComparison(input: CommandInput<'readComparison'>, signal: AbortSignal) {
     path(input.target.path);
     ensure(['staged', 'unstaged', 'untracked'].includes(input.area), 'Invalid comparison area.');
+    requireGit(input.target.checkout);
     const directory = await this.directory(input.target.checkout),
       p = input.target.path;
     let working = null;

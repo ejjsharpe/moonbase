@@ -6,6 +6,7 @@ import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { isFileDropTaken, Workbench, type WorkbenchHandle } from '../src/index.ts';
 import { configureMonacoWorkers } from '../src/workers.ts';
 import { memoryWorkspace } from '@moonbase/application/testing/memory-workspace';
+import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import * as monaco from 'monaco-editor';
 import * as stylex from '@stylexjs/stylex';
 import { Button } from '@base-ui/react/button';
@@ -22,6 +23,7 @@ const checkout = {
   checkoutId: 'sample',
   projectId: 'demo',
   root: '/demo/moonbase',
+  vcs: 'git' as const,
   branch: 'main',
   worktree: 'main' as 'main' | 'linked',
 };
@@ -232,7 +234,7 @@ declare global {
       selectNativeImports(): Promise<string[]>;
       selectClipboardImports(): Promise<string[] | null>;
       /** Approves files dropped on the first editor's tree; the demo approves none. */
-      selectDroppedImports(target: typeof checkout, files: File[]): Promise<string[]>;
+      selectDroppedImports(target: CheckoutTarget, files: File[]): Promise<string[]>;
       /** Whether a tree took a drop of OS files, as an app importing window-wide drops asks. */
       isFileDropTaken: typeof isFileDropTaken;
       /** What the first editor's menu copied, revealed and mentioned in chat. */

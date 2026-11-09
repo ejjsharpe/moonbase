@@ -19,7 +19,7 @@ const at = (minute: number) => `2026-11-07T10:${String(minute).padStart(2, '0')}
 const names = (rows: { chat: ChatSummary; reason: string }[]) =>
   rows.map((row) => `${row.chat.target.conversationId}:${row.reason}`);
 
-test('chats group into Ready, Working and Settled by state and what you have seen', () => {
+test('chats group into Ready, Working and Idle by state and what you have seen', () => {
   const groups = groupChatsByActivity({
     chats: [
       chat('never-ran'),
@@ -54,11 +54,44 @@ test('chats group into Ready, Working and Settled by state and what you have see
     'stopped:stopped',
   ]);
   assert.deepEqual(names(groups.working), ['running-new:running', 'running-old:running']);
-  assert.deepEqual(names(groups.settled), [
-    'finished-seen:settled',
-    'failed-seen:settled',
-    'never-ran:settled',
+  assert.deepEqual(names(groups.idle), [
+    'finished-seen:idle',
+    'failed-seen:idle',
+    'never-ran:idle',
   ]);
+  // Nothing is settled until you settle it.
+  assert.deepEqual(groups.settled, []);
+});
+
+test('Settled holds the chats you settled, most recently settled first, unless running or unconfirmed', () => {
+  const settled = (id: string, minute: number, activity?: Partial<ChatActivity>) => ({
+    ...chat(id, activity),
+    settledAt: at(minute),
+  });
+  const groups = groupChatsByActivity({
+    chats: [
+      settled('old', 1, { at: at(9) }),
+      settled('new', 5),
+      // Unseen work in a settled chat stays settled.
+      settled('failed-unseen', 3, { state: 'failed', at: at(8) }),
+      settled('running', 4, { state: 'running', at: at(6) }),
+      settled('unconfirmed', 2),
+      chat('idle'),
+    ],
+    pending: [
+      {
+        operation: 'sendChat',
+        input: { target: chat('unconfirmed').target, requestId: 'send', text: 'Hi' },
+        message: 'Send could not be confirmed.',
+      },
+    ],
+  });
+  assert.deepEqual(names(groups.settled), ['new:settled', 'failed-unseen:settled', 'old:settled']);
+  // A settled row shows when it was settled.
+  assert.equal(groups.settled[0]!.at, at(5));
+  assert.deepEqual(names(groups.working), ['running:running']);
+  assert.deepEqual(names(groups.ready), ['unconfirmed:unconfirmed']);
+  assert.deepEqual(names(groups.idle), ['idle:idle']);
 });
 
 test("the open chat's snapshot overrides its listed state", () => {
@@ -71,6 +104,20 @@ test("the open chat's snapshot overrides its listed state", () => {
   assert.deepEqual(names(open('failed').ready), ['open:failed']);
   assert.deepEqual(names(open('idle').ready), ['open:finished']);
   assert.deepEqual(names(open('idle', true).working), ['open:running']);
+  // The open chat's snapshot also says whether it is settled, as a Send may have unsettled it.
+  const settledListing = { ...listed, settledAt: at(4) };
+  const settledGroups = (settledAt?: string) =>
+    groupChatsByActivity({
+      chats: [settledListing],
+      seen: [{ conversationId: 'open', at: at(3) }],
+      open: {
+        conversation: { ...listed, ...(settledAt ? { settledAt } : {}) },
+        state: 'idle',
+        run: null,
+      },
+    });
+  assert.deepEqual(names(settledGroups().idle), ['open:idle']);
+  assert.deepEqual(names(settledGroups(at(7)).settled), ['open:settled']);
 });
 
 test('a Send still being sent is not unconfirmed; one whose outcome is in doubt is', () => {
@@ -91,5 +138,5 @@ test('a Send still being sent is not unconfirmed; one whose outcome is in doubt 
     dispatching: ['send-sending'],
   });
   assert.deepEqual(names(groups.ready), ['uncertain:unconfirmed']);
-  assert.deepEqual(names(groups.settled), ['sending:settled']);
+  assert.deepEqual(names(groups.idle), ['sending:idle']);
 });

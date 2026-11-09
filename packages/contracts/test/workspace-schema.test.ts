@@ -32,8 +32,16 @@ const checkout = {
   checkoutId: 'checkout',
   projectId: 'project',
   root: '/checkout',
+  vcs: 'git' as const,
   branch: 'main',
   worktree: 'main' as 'main' | 'linked',
+};
+const folder = {
+  hostId: 'host',
+  checkoutId: 'folder',
+  projectId: 'folder-project',
+  root: '/folder',
+  vcs: 'none' as const,
 };
 const target = { checkout, path: 'file.txt' };
 const disk = { text: '', version: 'version' };
@@ -85,6 +93,7 @@ const inputs = {
   gitStatus: { checkout },
   listWorktrees: { checkout },
   createWorktree: { checkout, base: 'main', branch: 'feature/one', location: '/feature-one' },
+  initializeRepository: { checkout: folder },
   readComparison: { target, area: 'staged' },
   lookupFiles: { checkout, query: '', limit: 100, history: [target.path] },
   searchText: { checkout, query: 'needle', matchCase: false, wholeWord: true, regex: false },
@@ -118,6 +127,7 @@ const outputs = {
     ],
   },
   createWorktree: { ...checkout, checkoutId: 'feature', root: '/feature-one', worktree: 'linked' },
+  initializeRepository: { ...checkout, checkoutId: folder.checkoutId, root: folder.root },
   readComparison: { original: '', title: '', working: null },
   lookupFiles: {
     matches: [{ path: target.path, score: 0, positions: [] }],
@@ -272,6 +282,23 @@ test('file bytes, finite values, identity grammars and collection bounds retain 
         decodeWorkspaceInput('createWorktree', { ...inputs.createWorktree, [field]: name }),
       );
   assert.throws(() => decodeWorkspaceOutput('openCheckout', { ...checkout, worktree: 'bare' }));
+  // A plain folder has no branch or worktree, and initializing one always gives Git.
+  assert.deepEqual(decodeWorkspaceOutput('openCheckout', folder), folder);
+  for (const bad of [
+    { ...folder, branch: 'main' },
+    { ...folder, worktree: 'main' },
+    { ...folder, vcs: 'svn' },
+    { ...checkout, vcs: 'none' },
+  ])
+    assert.throws(() => decodeWorkspaceInput('gitStatus', { checkout: bad }));
+  assert.throws(() => decodeWorkspaceOutput('initializeRepository', folder));
+  // Saved targets from before `vcs` existed decode as Git checkouts.
+  const { vcs: _, ...saved } = checkout;
+  assert.deepEqual(decodeWorkspaceOutput('openCheckout', saved), checkout);
+  assert.deepEqual(
+    decodeEditorRecovery({ ...state, checkouts: [saved], drafts: [], recentFiles: [] }).checkouts,
+    [checkout],
+  );
   assert.throws(() =>
     decodeEditorRecovery({ ...state, drafts: Array.from({ length: 513 }, () => state.drafts[0]) }),
   );

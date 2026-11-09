@@ -8,6 +8,7 @@ import type {
   ChatOutput,
   ChatEntry,
   ChatSnapshot,
+  ChatSummary,
   ChatTarget,
   ChatTranscriptSource,
   ChatTranscriptSelection,
@@ -428,6 +429,12 @@ export class TranscriptOwner {
       stale.add(manifestJob);
     }
     for (const key of stale) this.interruptJob(key);
+    this.publish();
+  }
+  /** Shows a newer summary of this chat (the caller matched its target) until the next snapshot. */
+  updateConversation(conversation: ChatSummary) {
+    if (!this.snapshot) return;
+    this.snapshot = { ...this.snapshot, conversation };
     this.publish();
   }
   /** Shows the last accepted snapshot as reconnecting while the watch is reopened. */

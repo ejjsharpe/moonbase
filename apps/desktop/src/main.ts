@@ -184,6 +184,7 @@ async function main() {
     },
     createWorktree: (root, branch, signal) =>
       editorSession.createChatWorktree(root, branch, signal),
+    openFolderProject: async (root) => (await editorSession.openFolderProject(root)).root,
     pickFolder: async () => {
       const selection = await dialog.showOpenDialog(window, {
         title: 'Choose a local chat working folder',

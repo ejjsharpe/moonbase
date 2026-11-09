@@ -34,7 +34,15 @@ export function chatCapabilities(local = false, activity = false) {
     model: 'fake',
     createdAt: '2026-01-01T00:00:00Z',
   };
-  let listings = 0;
+  let listings = 0,
+    ownFolders = 0;
+  /** When each chat was settled, as the host keeps it; a Send unsettles it. */
+  const settled = new Map<string, string>();
+  const withSettled = (chat: ChatSummary): ChatSummary => {
+    const { settledAt: _, ...rest } = chat;
+    const at = settled.get(chat.target.conversationId);
+    return at ? { ...rest, settledAt: at } : rest;
+  };
   const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
   const activityChats = (): ChatSummary[] =>
     (
@@ -78,6 +86,17 @@ export function chatCapabilities(local = false, activity = false) {
     worktrees.push(`${root} ${branch}`);
     return `${root}-worktrees/${branch.replaceAll('/', '-')}`;
   };
+  /** Like main: a chat without a project's folder becomes a project where it is. */
+  const turnIntoProject = async (conversationId: string) => {
+    if (conversation.target.conversationId !== conversationId || !conversation.ownFolder)
+      throw new ApplicationError({
+        code: 'InvalidInput',
+        message: 'Only a chat without a project can become one.',
+      });
+    delete conversation.ownFolder;
+    controls.receiveChat(structuredClone({ ...snapshot, conversation: withSettled(conversation) }));
+    return conversation.cwd;
+  };
   const storage = { value: null as string | null, writes: 0, write: (_value: string) => {} };
   const controls = {
     release: async () => {},
@@ -110,19 +129,20 @@ export function chatCapabilities(local = false, activity = false) {
         case 'listChats':
           // `?activity` adds chats after the first listing, which marks only that one as seen.
           return {
-            conversations:
-              activity && ++listings > 1 ? [conversation, ...activityChats()] : [conversation],
+            conversations: (activity && ++listings > 1
+              ? [conversation, ...activityChats()]
+              : [conversation]
+            ).map(withSettled),
             nextCursor: null,
           } as never;
         case 'getChat': {
           const id = (input as ChatInput<'getChat'>).target.conversationId;
           const listed =
             activity && activityChats().find((chat) => chat.target.conversationId === id);
-          return (
-            listed
-              ? { ...structuredClone(snapshot), conversation: listed, entries: [] }
-              : structuredClone(snapshot)
-          ) as never;
+          const opened = listed
+            ? { ...structuredClone(snapshot), conversation: listed, entries: [] }
+            : structuredClone(snapshot);
+          return { ...opened, conversation: withSettled(opened.conversation) } as never;
         }
         case 'createChat':
           if (local) {
@@ -131,13 +151,17 @@ export function chatCapabilities(local = false, activity = false) {
               settings: ChatCreationSettings;
             };
             conversation.title = creation.title;
-            conversation.cwd = creation.settings.cwd;
+            // Like the host, a chat without a project gets a new folder of its own.
+            conversation.cwd = creation.settings.cwd ?? `/demo/chats/chat-${++ownFolders}`;
+            if (creation.settings.cwd) delete conversation.ownFolder;
+            else conversation.ownFolder = true;
             conversation.model = creation.settings.model.modelId;
             conversation.reasoningEffort = creation.settings.reasoningEffort;
           }
           return { requestId: (input as { requestId: string }).requestId, conversation } as never;
         case 'sendChat':
           sent.push(structuredClone(input as ChatInput<'sendChat'>));
+          settled.delete((input as ChatInput<'sendChat'>).target.conversationId);
           if (local) {
             const message = input as { requestId: string; text: string };
             snapshot.entries.unshift(
@@ -180,6 +204,16 @@ export function chatCapabilities(local = false, activity = false) {
           return null as never;
         case 'stopChat':
           return { ...input, outcome: 'terminal' } as never;
+        case 'settleChat': {
+          const request = input as ChatInput<'settleChat'>,
+            id = request.target.conversationId;
+          if (!request.settled) settled.delete(id);
+          else if (!settled.has(id)) settled.set(id, new Date().toISOString());
+          const chat =
+            (activity && activityChats().find((c) => c.target.conversationId === id)) ||
+            conversation;
+          return withSettled(chat) as never;
+        }
         default:
           throw Error(`Unexpected fake operation: ${operation}`);
       }
@@ -306,5 +340,6 @@ export function chatCapabilities(local = false, activity = false) {
     sent,
     worktrees,
     createWorktree,
+    turnIntoProject,
   };
 }

@@ -58,11 +58,14 @@ export function decodeConfiguration(value: unknown) {
     });
   }
 }
+/** A plain-folder checkout's approval has no repository: `common` and `gitEntry` are null. */
 export const ApprovalSchema = struct({
   target: CheckoutTargetSchema,
   identity: Schema.String,
-  common: struct({ path: absolute, identity: Schema.String }),
-  gitEntry: struct({ identity: Schema.String, pointer: Schema.NullOr(Schema.String) }),
+  common: Schema.NullOr(struct({ path: absolute, identity: Schema.String })),
+  gitEntry: Schema.NullOr(
+    struct({ identity: Schema.String, pointer: Schema.NullOr(Schema.String) }),
+  ),
 });
 export const SaveRecordSchema = struct({
   restorePending: optional(Schema.Boolean),

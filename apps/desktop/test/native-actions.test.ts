@@ -59,6 +59,7 @@ test('native imports require consent, preserve capture identity and cancel befor
     checkoutId: 'c',
     projectId: 'p',
     root: '/checkout',
+    vcs: 'git' as const,
     branch: 'main',
     worktree: 'main' as 'main' | 'linked',
   };

@@ -12,8 +12,9 @@ import { FolderMenu, folderMenuStyles, folderName, parentPath } from '../folder-
 export type ChatFolderProject = {
   root: string;
   projectId: string;
-  branch: string;
-  worktree: 'main' | 'linked';
+  /** Absent for a plain folder, which is in no Git repository. */
+  branch?: string;
+  worktree?: 'main' | 'linked';
   /** Whether it is open in the editor now. */
   open: boolean;
 };
@@ -26,6 +27,8 @@ export type FolderPickerProps = {
   choose(folder: string): void;
   /** Opens the native folder picker. */
   browse?: () => void;
+  /** Offers a chat without a project, which runs in a new empty folder; chosen while `cwd` is empty. */
+  noProject?: () => void;
   disabled?: boolean;
 };
 
@@ -39,6 +42,7 @@ export function FolderPicker({
   recentFolders,
   choose,
   browse,
+  noProject,
   disabled = false,
 }: FolderPickerProps) {
   const [open, setOpen] = useState(false);
@@ -46,7 +50,7 @@ export function FolderPicker({
   const focusTarget = useRef<HTMLElement>(null);
   // Open projects first, then the rest; a linked worktree only while it is open.
   const listed = projects
-    .filter((project) => project.open || project.worktree === 'main')
+    .filter((project) => project.open || project.worktree !== 'linked')
     .sort((a, b) => Number(b.open) - Number(a.open));
   const roots = new Set(projects.map((project) => project.root));
   const others = recent.filter((folder) => !roots.has(folder));
@@ -64,7 +68,7 @@ export function FolderPicker({
       }}>
       <Popover.Trigger
         aria-label="Choose working folder"
-        title={cwd || undefined}
+        title={cwd || (noProject ? 'No project · runs in a new empty folder' : undefined)}
         disabled={disabled}
         {...stylex.props(controls.button, controls.quietButton, styles.chip)}>
         {name ? (
@@ -80,7 +84,9 @@ export function FolderPicker({
         ) : (
           <Icon name="folder" />
         )}
-        <span {...stylex.props(controls.truncate)}>{name || 'Folder'}</span>
+        <span {...stylex.props(controls.truncate)}>
+          {name || (noProject ? 'No project' : 'Folder')}
+        </span>
         <span aria-hidden="true" {...stylex.props(styles.caret)}>
           ▾
         </span>
@@ -100,6 +106,17 @@ export function FolderPicker({
               focusRef={(element) => {
                 focusTarget.current = element;
               }}
+              none={
+                noProject && {
+                  label: 'No project',
+                  detail: 'A new empty folder',
+                  chosen: !cwd,
+                  choose: () => {
+                    noProject();
+                    setOpen(false);
+                  },
+                }
+              }
               groups={[
                 {
                   label: 'Projects',
@@ -109,7 +126,7 @@ export function FolderPicker({
                     detail:
                       project.worktree === 'linked'
                         ? `${project.branch} · worktree`
-                        : project.branch,
+                        : (project.branch ?? parentPath(project.root)),
                     badge: project.open ? 'open' : undefined,
                     chosen: project.root === cwd,
                   })),

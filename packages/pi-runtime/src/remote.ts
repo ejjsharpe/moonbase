@@ -45,8 +45,7 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
               message: 'Remote chats retain the host’s fixed working folder and model.',
             }),
           );
-        const mutation =
-          operation === 'createChat' || operation === 'sendChat' || operation === 'stopChat';
+        const mutation = V.isMutation(operation);
         let dispatched = false;
         const shape = input as {
           host?: { hostId: string; storeId: string };
@@ -337,6 +336,7 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
       sendChat: (d) => call('sendChat', d),
       getChatSend: (d) => call('getChatSend', d),
       stopChat: (d) => call('stopChat', d),
+      settleChat: (d) => call('settleChat', d),
       findChatFiles: (d) => call('findChatFiles', d),
       watch: ({ target }) => watch(target),
     } satisfies ChatServiceShape;

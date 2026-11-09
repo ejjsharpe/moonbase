@@ -49,6 +49,13 @@ export { checkoutKey, fileKey } from './references.ts';
 // These diagnostics are authored by this module; injected failures use shared normalization.
 const editorError = (message: string) => new ApplicationError({ code: 'Unavailable', message });
 const sameCheckout = (a: CheckoutTarget, b: CheckoutTarget) => checkoutKey(a) === checkoutKey(b);
+/** Whether `next` is the Git checkout that a plain-folder checkout became after `git init`. */
+const isInitialized = (previous: CheckoutTarget, next: CheckoutTarget) =>
+  previous.vcs === 'none' &&
+  next.vcs === 'git' &&
+  previous.hostId === next.hostId &&
+  previous.checkoutId === next.checkoutId &&
+  previous.root === next.root;
 const operationKey = (clientId: string, id: string) => JSON.stringify([clientId, id]);
 const deferObservation = Symbol('defer recovery observation');
 const definitiveNonAdmission = (error: unknown) =>
@@ -107,6 +114,8 @@ export type EditorSnapshot = {
   disposed: boolean;
   closePrompt: ClosePrompt | null;
   preserving: boolean;
+  /** The checkout whose `initializeRepository` is running; it refuses saves and file operations. */
+  initializing: string | null;
   discoveryRevision: number;
   recovery: EditorRecovery;
   buffers: readonly EditorBuffer[];
@@ -155,6 +164,11 @@ class EditorModelState {
   private bound = false;
   private runEffect!: <A>(effect: Effect.Effect<A, ApplicationError>) => Promise<A>;
   private factsLock = Semaphore.makeUnsafe(1);
+  /**
+   * The one running `initializeRepository`. Until it rebinds, every recovery capture would name
+   * the folder target that `git init` retires, so publications wait for it to finish.
+   */
+  private initialization?: { checkoutId: string; done: Promise<void> };
   private preservation: EditorPreservation;
   private buffers = new Map<string, EditorBuffer>();
   private saveResults = new Map<string, Extract<SaveResult, { kind: 'saved' }>>();
@@ -297,12 +311,14 @@ class EditorModelState {
         !this.loading &&
         !this.closing &&
         !this.preservation.active &&
+        !this.initialization &&
         this.publications.confirmed &&
         ![...this.buffers.values()].some((buffer) => buffer.saving || buffer.pendingSave) &&
         ![...this.operations.values()].some((value) => !value.acknowledged),
       disposed: this.disposed,
       closePrompt: this.preservation.prompt,
       preserving: this.preservation.active,
+      initializing: this.initialization?.checkoutId ?? null,
       discoveryRevision: this.discovery.discoveryRevision,
       recovery: this.recovery,
       buffers: [...this.buffers.values()],
@@ -439,7 +455,9 @@ class EditorModelState {
   async openCheckout(root: string) {
     this.assertAdmission();
     this.assertReady();
-    return this.addCheckout(await this.command('openCheckout', { root }));
+    const target = await this.command('openCheckout', { root });
+    this.assertNotInitializing(target);
+    return this.addCheckout(target);
   }
   async listWorktrees(checkout: CheckoutTarget) {
     this.assertAdmission();
@@ -453,12 +471,173 @@ class EditorModelState {
     this.checkout(input.checkout);
     return this.addCheckout(await this.command('createWorktree', input));
   }
+  /**
+   * Runs `git init` in an open plain-folder checkout, then rebinds it, with its tabs and drafts,
+   * to the Git checkout that results and selects it. Until then the checkout refuses saves and
+   * file operations, and recovery publication waits; edits continue and move with the rebind.
+   */
+  async initializeRepository(checkout: CheckoutTarget) {
+    this.assertAdmission();
+    this.assertReady();
+    this.checkout(checkout);
+    if (checkout.vcs !== 'none')
+      throw new ApplicationError({
+        code: 'InvalidInput',
+        message: 'This project is already a Git repository.',
+      });
+    if (this.initialization)
+      throw new ApplicationError({
+        code: 'Conflict',
+        message: 'Git is already being initialized. Wait for it to finish.',
+      });
+    this.assertRebindable(checkout);
+    let finish!: () => void;
+    this.initialization = {
+      checkoutId: checkout.checkoutId,
+      done: new Promise<void>((resolve) => (finish = resolve)),
+    };
+    this.publications.cancelScheduled();
+    this.emit();
+    let target: CheckoutTarget | undefined, failure: ApplicationError | undefined;
+    try {
+      // The folder's approval ends with `git init`: publish while it holds, and end its reads.
+      await this.publish(this.capture());
+      await this.discovery.releaseObservation(checkout);
+      let initialized: CheckoutTarget;
+      try {
+        initialized = await this.command('initializeRepository', { checkout }, this.scope, false);
+        if (!isInitialized(checkout, initialized))
+          throw editorError('Git initialized a different checkout. Reopen the folder.');
+      } catch (error) {
+        // A failed or lost reply may follow a `git init` that ran: the folder then opens as its
+        // repository, and moves there as if the reply had arrived.
+        const reopened = this.closing ? undefined : await this.findInitialized(checkout);
+        if (!reopened) {
+          this.report(error);
+          if (!this.closing && this.recovery.openCheckoutIds.includes(checkout.checkoutId))
+            await this.observe(checkout).catch(this.report);
+          throw error;
+        }
+        initialized = reopened;
+      }
+      try {
+        target = await this.addCheckout(initialized);
+      } catch (error) {
+        if (this.closing) throw error;
+        await this.settleInitialization(checkout, initialized);
+        failure = editorError(
+          'Git was initialized, but the project did not finish moving to it: ' +
+            ApplicationError.fromUnknown(error).message +
+            ' Your tabs and drafts are kept on the repository.',
+        );
+      }
+    } finally {
+      this.initialization = undefined;
+      finish();
+      if (!this.closing) {
+        this.emit();
+        this.resumeFacts();
+      }
+    }
+    // Drafts edited meanwhile publish now, under the Git target.
+    if (!this.closing && !this.preservation.active) {
+      const flushed = this.flushRecovery();
+      await (failure ? flushed.catch(this.report) : flushed);
+    }
+    if (failure || !target) throw failure ?? editorError('Editor disposed.');
+    return target;
+  }
+  /**
+   * After `git init`, the folder target is no longer approved: whatever stopped the rebind, move
+   * the checkout's work to the repository and watch it there rather than strand it.
+   */
+  private async settleInitialization(previous: CheckoutTarget, next: CheckoutTarget) {
+    if (this.recovery.checkouts.some((item) => sameCheckout(item, previous)))
+      this.moveCheckout(previous, next);
+    if (this.recovery.openCheckoutIds.includes(next.checkoutId)) {
+      // A watch that failed to start repeats that failure, already reported, when released.
+      await this.discovery.releaseObservation(next).catch(() => undefined);
+      await this.observe(next).catch(this.report);
+    }
+  }
+  /** The repository a plain folder became, when `git init` ran but its reply was lost. */
+  private async findInitialized(checkout: CheckoutTarget) {
+    try {
+      const reopened = await this.command(
+        'openCheckout',
+        { root: checkout.root },
+        this.scope,
+        true,
+      );
+      return isInitialized(checkout, reopened) ? reopened : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  /** Refuses work on a checkout while Git is initializing in it. */
+  private assertNotInitializing(checkout: CheckoutTarget) {
+    if (this.initialization?.checkoutId === checkout.checkoutId)
+      throw editorError('Git is initializing in this project. Try again when it finishes.');
+  }
+  private assertRebindable(checkout: CheckoutTarget) {
+    if (
+      this.preservation.active ||
+      [...this.buffers.values()].some(
+        (buffer) =>
+          sameCheckout(buffer.target.checkout, checkout) && (buffer.saving || buffer.pendingSave),
+      ) ||
+      [...this.operations.values()].some(
+        (value) => !value.acknowledged && sameCheckout(value.result.checkout, checkout),
+      )
+    )
+      throw editorError('Wait for saves and file operations in this project to finish.');
+  }
+  /** Moves a checkout's views, buffers, drafts and recents to the target it became. */
+  private async rebindCheckout(previous: CheckoutTarget, next: CheckoutTarget) {
+    this.assertRebindable(previous);
+    const open = this.recovery.openCheckoutIds.includes(previous.checkoutId);
+    await this.discovery.releaseObservation(previous);
+    this.moveCheckout(previous, next);
+    if (open) await this.observe(next);
+  }
+  private moveCheckout(previous: CheckoutTarget, next: CheckoutTarget) {
+    this.referenceRevision++;
+    const previousKey = checkoutKey(previous);
+    const ofPrevious = (key: string) => JSON.parse(key)[0] === previousKey;
+    const rebind = <T extends { checkout: CheckoutTarget }>(item: T): T =>
+      sameCheckout(item.checkout, previous) ? { ...item, checkout: next } : item;
+    this.recovery.checkouts = this.recovery.checkouts.map((item) =>
+      sameCheckout(item, previous) ? next : item,
+    );
+    this.recovery.drafts = this.recovery.drafts.map((draft) => ({
+      ...draft,
+      target: rebind(draft.target),
+    }));
+    this.recovery.recentFiles = this.recovery.recentFiles.map(rebind);
+    // oxlint-disable-next-line no-useless-spread -- Rebinding reinserts buffers; visit each once.
+    for (const [key, buffer] of [...this.buffers])
+      if (sameCheckout(buffer.target.checkout, previous)) {
+        this.buffers.delete(key);
+        buffer.target = rebind(buffer.target);
+        this.buffers.set(fileKey(buffer.target), buffer);
+      }
+    // Listings, comparisons and Git status are read again for the new target.
+    for (const key of Object.keys(this.comparisons))
+      if (ofPrevious(key)) delete this.comparisons[key];
+    for (const key of this.comparisonAttempts.keys())
+      if (ofPrevious(key)) this.comparisonAttempts.delete(key);
+    for (const key of Object.keys(this.listings)) if (ofPrevious(key)) delete this.listings[key];
+    delete this.git[previousKey];
+    this.preservation.rebindClosedReferences(previous, next);
+  }
   private async addCheckout(target: CheckoutTarget) {
     if (this.closing) return target;
     const collision = this.recovery.checkouts.find(
       (item) => item.checkoutId === target.checkoutId && !sameCheckout(item, target),
     );
-    if (collision)
+    // A plain folder that became a repository keeps its tabs and drafts as the Git checkout.
+    if (collision && isInitialized(collision, target)) await this.rebindCheckout(collision, target);
+    else if (collision)
       throw editorError('Checkout identity changed; retained work has not been rebound.');
     if (!this.recovery.checkouts.some((item) => sameCheckout(item, target))) {
       this.recovery.checkouts.push(target);
@@ -518,7 +697,13 @@ class EditorModelState {
     );
   }
   private resumeFacts() {
-    if (this.closing || this.preservation.active || this.publications.pending) return;
+    if (
+      this.closing ||
+      this.preservation.active ||
+      this.initialization ||
+      this.publications.pending
+    )
+      return;
     // A pre-capture recovery snapshot may predate a committed Discard; fetch fresh state.
     for (const request of this.deferredFacts.splice(0))
       void this.publishFacts(
@@ -541,6 +726,8 @@ class EditorModelState {
       this.loading ||
       this.closing ||
       this.preservation.active ||
+      // `initializeRepository` publishes once it has rebound.
+      this.initialization ||
       this.publications.pending
     )
       return;
@@ -586,6 +773,9 @@ class EditorModelState {
   }
   private async flushRecovery() {
     this.assertReady();
+    // A capture now would name the folder target that `git init` retires.
+    while (this.initialization) await this.initialization.done;
+    this.assertReady();
     if (this.preservation.active)
       throw editorError('Finish the captured preservation action before flushing.');
     this.publications.cancelScheduled();
@@ -621,6 +811,16 @@ class EditorModelState {
     options: { view?: FileView; intent?: 'preview' | 'keep'; current?: () => boolean } = {},
   ) {
     this.assertAdmission();
+    // The folder's reads end during `git init`: open the file once it is the repository instead.
+    const initializing = this.initialization;
+    if (initializing?.checkoutId === target.checkout.checkoutId) {
+      await initializing.done;
+      const checkout = this.recovery.checkouts.find(
+        (item) => item.checkoutId === target.checkout.checkoutId,
+      );
+      if (!checkout || this.closing) return false;
+      return this.openFile({ ...target, checkout }, options);
+    }
     return this.openFile(target, options);
   }
   private async openFile(
@@ -727,6 +927,10 @@ class EditorModelState {
     preservation?: number,
   ): Promise<boolean> {
     this.checkout(target.checkout);
+    if (this.initialization?.checkoutId === target.checkout.checkoutId) {
+      this.report('Git is initializing in this project. Save again when it finishes.');
+      return false;
+    }
     if (this.publicationBlocked()) return false;
     if (this.uncertainAffects(target)) {
       this.report('Resolve the pending file operation before saving this file.');
@@ -786,7 +990,13 @@ class EditorModelState {
       key = fileKey(captured);
     this.checkout(captured.checkout);
     const buffer = this.buffers.get(key);
-    if (!buffer || buffer.pendingSave || this.preservation.active || this.publicationBlocked())
+    if (
+      !buffer ||
+      buffer.pendingSave ||
+      this.preservation.active ||
+      this.initialization ||
+      this.publicationBlocked()
+    )
       return false;
     const reference = this.referenceRevision,
       revision = this.publications.currentRevision;
@@ -893,6 +1103,7 @@ class EditorModelState {
       this.loading ||
       this.closing ||
       this.preservation.active ||
+      this.initialization ||
       this.publications.pending ||
       this.publications.inFlight !== 0 ||
       [...this.buffers.values()].some(
@@ -916,6 +1127,10 @@ class EditorModelState {
     checkout?: CheckoutTarget,
   ) {
     this.assertReady();
+    if (this.initialization) {
+      this.report('Git is initializing. Close again when it finishes.');
+      return false;
+    }
     if (
       this.publicationBlocked() ||
       this.preservation.active ||
@@ -1409,6 +1624,7 @@ class EditorModelState {
   async mutate(input: Omit<WorkspaceOperation, 'clientId' | 'id'> & { id?: string }) {
     this.assertAdmission();
     this.checkout(input.checkout);
+    this.assertNotInitializing(input.checkout);
     if (this.preservation.active || this.publicationBlocked())
       throw editorError('Finish the captured preservation/publication action first.');
     const operation: WorkspaceOperation = {
@@ -1657,6 +1873,7 @@ class EditorModelState {
             const check = () => {
               if (
                 this.closing ||
+                this.initialization ||
                 this.publications.pending ||
                 boundary !== this.preservation.generation ||
                 (this.preservation.active && preservation !== boundary)
@@ -1864,6 +2081,8 @@ export interface EditorController {
   openCheckout(root: string): Promise<CheckoutTarget>;
   listWorktrees(checkout: CheckoutTarget): Promise<CommandOutput<'listWorktrees'>>;
   createWorktree(input: CommandInput<'createWorktree'>): Promise<CheckoutTarget>;
+  /** Runs `git init` in an open plain-folder checkout; its tabs and drafts move to the result. */
+  initializeRepository(checkout: CheckoutTarget): Promise<CheckoutTarget>;
   selectCheckout(target: CheckoutTarget): Promise<boolean>;
   resolveRecoveryPublication(): Promise<boolean>;
   flush(): Promise<void>;

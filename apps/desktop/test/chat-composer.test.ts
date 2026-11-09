@@ -69,7 +69,7 @@ function makeChat(selected: ChatTarget | null = null) {
       if (failSend) return void (failSend = false);
       drafts.delete(key());
       if (!selected) {
-        chats.push({ target: target(`created-${chats.length}`), cwd: creation!.cwd });
+        chats.push({ target: target(`created-${chats.length}`), cwd: creation!.cwd! });
         selected = chats.at(-1)!.target;
       }
       notify();
@@ -256,6 +256,16 @@ test('showing the draft elsewhere leaves its mentions; Send checks them against 
   // Now every mention is relative to it, so the next Send goes ahead.
   assert.equal(composer.checkMentions('/notes'), null);
   assert.equal(chat.getSnapshot().draft, 'Fix @index.md and /repo/src/a.ts');
+  // A chat without a project runs in a new empty folder, so a picked file is written out in full.
+  chat.setDraft('Plan from @plan.md', [{ path: 'plan.md' }]);
+  composer.noteMentions(['plan.md'], '/notes');
+  assert.equal(
+    composer.checkMentions(''),
+    "A mentioned file isn't in the chat’s new folder, so it is written out as a full path instead. Send again to send the message.",
+  );
+  assert.equal(chat.getSnapshot().draft, 'Plan from /notes/plan.md');
+  assert.deepEqual(chat.getSnapshot().mentions, []);
+  assert.equal(composer.checkMentions(''), null);
   // A mention inside a subfolder is respelled without holding the send.
   chat.setDraft('See @docs/x.md', [{ path: 'docs/x.md' }]);
   composer.noteMentions(['docs/x.md'], '/notes');

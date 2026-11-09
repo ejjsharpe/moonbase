@@ -305,6 +305,10 @@ export class Directory {
       { fd: this.fd, input, signal, ...(untranslated ? { env: gitLocale } : {}) },
     );
   }
+  /** Makes the root a new repository; `git` above names a work tree, which needs one already. */
+  initializeGit(signal?: AbortSignal) {
+    return this.io(['git', this.gitExecutable, 'init', '--quiet'], undefined, signal);
+  }
   async entry(p: string, signal?: AbortSignal, spellings?: Map<string, Set<string>>) {
     path(p, true);
     this.check();

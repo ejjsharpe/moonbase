@@ -2489,6 +2489,71 @@ test('a background reload lists again without clearing an error or Refresh state
   assert.deepEqual(f.controller.getSnapshot().active, []);
 });
 
+test('settle updates the listed chat and the open snapshot from the host reply, then lists again', async (t) => {
+  const f = await fixture(t);
+  const activity = { state: 'idle' as const, at: '2026-01-02T00:00:00Z' };
+  // The host lists the chat as settled once a settle reply has been sent.
+  let hostSettledAt: string | undefined;
+  f.answers.set('listChats', async () => ({
+    conversations: [
+      { ...summary, activity, ...(hostSettledAt ? { settledAt: hostSettledAt } : {}) },
+    ],
+    nextCursor: null,
+  }));
+  await ready(f);
+  await turn();
+  const listings = () => f.calls.filter((call) => call.operation === 'listChats').length;
+  const settledAt = '2026-02-01T00:00:00Z';
+  f.answers.set('settleChat', async (input: ChatCommands['settleChat']['input']) => {
+    hostSettledAt = input.settled ? settledAt : undefined;
+    return hostSettledAt ? { ...summary, settledAt } : summary;
+  });
+  let before = listings();
+  await f.controller.settle(target, true);
+  assert.deepEqual(
+    f.calls.filter((call) => call.operation === 'settleChat').map((call) => call.input),
+    [{ target, settled: true }],
+  );
+  let state = f.controller.getSnapshot();
+  assert.equal(state.error, null);
+  // The listing keeps its activity, which only listings carry.
+  assert.deepEqual(state.chats[0], { ...summary, settledAt, activity });
+  assert.equal(state.snapshot?.conversation.settledAt, settledAt);
+  // A reload follows, so a listing begun before the reply can't leave the list behind it.
+  await f.controller.reloadChats();
+  assert(listings() > before);
+  assert.deepEqual(f.controller.getSnapshot().chats[0], { ...summary, settledAt, activity });
+  before = listings();
+  await f.controller.settle(target, false);
+  state = f.controller.getSnapshot();
+  assert.equal('settledAt' in state.chats[0]!, false);
+  assert.equal(state.snapshot?.conversation.settledAt, undefined);
+  assert.deepEqual(state.active, []);
+  await f.controller.reloadChats();
+  assert(listings() > before);
+  // A refusal is shown and changes nothing.
+  f.answers.set('settleChat', async () => {
+    throw new ApplicationError({ code: 'Unauthorized', message: 'Not yours.' });
+  });
+  await f.controller.settle(target, true);
+  state = f.controller.getSnapshot();
+  assert.equal(state.error, 'Unauthorized: Not yours.');
+  assert.equal(state.chats[0]!.settledAt, undefined);
+  // Another context's chat is refused before reaching the host.
+  const count = f.calls.length;
+  await f.controller.settle({ ...target, actorId: 'stranger' }, true);
+  assert.equal(f.calls.length, count);
+  assert.match(f.controller.getSnapshot().error!, /another context/);
+});
+
+test('settle needs a connected host', async (t) => {
+  const f = await fixture(t);
+  await f.controller.start();
+  await f.controller.settle(target, true);
+  assert(!f.calls.some((call) => call.operation === 'settleChat'));
+  assert.match(f.controller.getSnapshot().error!, /^Unavailable/);
+});
+
 test('a draft mention the saved format rejects is refused without blocking storage, Send or Quit', async (t) => {
   const { formatChatMention } = await import('@moonbase/contracts/chat');
   const f = await fixture(t);

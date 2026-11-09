@@ -7,6 +7,7 @@ import {
   type CheckoutTarget,
   type EditorRecovery,
   type FileDocument,
+  type GitCheckoutTarget,
 } from '@moonbase/contracts/workspace';
 export const fail = (code: ApplicationError['code'], message: string): never => {
   throw new ApplicationError({ code, message });
@@ -44,12 +45,20 @@ export function checkout(value: unknown): asserts value is CheckoutTarget {
       value.root.length <= 4096,
     'Invalid checkout root.',
   );
-  for (const key of ['hostId', 'checkoutId', 'projectId', 'branch'] as const)
+  ensure(value.vcs === 'git' || value.vcs === 'none', 'Invalid checkout version control.');
+  const keys = ['hostId', 'checkoutId', 'projectId', ...(value.vcs === 'git' ? ['branch'] : [])];
+  for (const key of keys)
     ensure(
       typeof value[key] === 'string' && value[key].length > 0 && value[key].length <= 4096,
       'Invalid checkout identity.',
     );
-  ensure(value.worktree === 'main' || value.worktree === 'linked', 'Invalid checkout worktree.');
+  if (value.vcs === 'git')
+    ensure(value.worktree === 'main' || value.worktree === 'linked', 'Invalid checkout worktree.');
+  else ensure(!('branch' in value) && !('worktree' in value), 'A folder checkout has no branch.');
+}
+/** Refuses a Git-only operation on a plain-folder checkout. */
+export function requireGit(target: CheckoutTarget): asserts target is GitCheckoutTarget {
+  ensure(target.vcs === 'git', 'This project is not a Git repository. Initialize Git first.');
 }
 export const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
 export function document(bytes: Buffer): FileDocument {

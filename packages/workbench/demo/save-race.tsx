@@ -17,6 +17,7 @@ const checkout = {
   checkoutId: 'race',
   projectId: 'race',
   root: '/controlled/save-race',
+  vcs: 'git' as const,
   branch: 'main',
   worktree: 'main' as 'main' | 'linked',
 };

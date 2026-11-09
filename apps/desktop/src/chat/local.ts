@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { lstat, mkdir, open, realpath, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { safeStorage } from 'electron';
 import { Context, Effect, Exit, Layer, Scope, type ManagedRuntime } from 'effect';
 import { LocalPiRuntimeLive, LocalPiControl } from '@moonbase/pi-runtime';
@@ -105,11 +105,26 @@ export async function acquireLocalChat(
       message: `Choose this working folder with the native picker before ${purpose}.`,
     });
   };
+  // A chat without a project runs in a new folder the runtime makes for it under `chats`.
   const approveSettings = async (settings: ChatCreationSettings) => {
+    if (settings.cwd === undefined) return;
     await requireApprovedFolder(settings.cwd, 'creating or retrying a local chat');
     await folders.touch(settings.cwd);
   };
   const approveSearch = (cwd: string) => requireApprovedFolder(cwd, 'searching its files');
+  const chatFolders = join(directory, 'chats');
+  /** Refuses any folder but one the runtime made for a chat without a project. */
+  const requireChatFolder = async (path: string) => {
+    const [parent, folder] = await Promise.all([
+      realpath(chatFolders).catch(() => ''),
+      realpath(path).catch(() => ''),
+    ]);
+    if (!parent || !folder || folder !== path || dirname(folder) !== parent)
+      throw new ApplicationError({
+        code: 'Unauthorized',
+        message: 'This chat’s folder is not one Moonbase made for it.',
+      });
+  };
   // A sequential scope closes in reverse: the chat services (in parallel) first, then Claude Code's
   // warm workers, so a turn finishing during shutdown can't leave a worker cached behind them.
   const scope = Scope.forkUnsafe(runtime.scope, 'sequential');
@@ -123,6 +138,7 @@ export async function acquireLocalChat(
             LocalPiRuntimeLive({
               ...session,
               databasePath: join(directory, 'chat.sqlite'),
+              chatFolders,
               models,
               approveCreation: approveSettings,
               approveFolder: approveSearch,
@@ -144,6 +160,7 @@ export async function acquireLocalChat(
       session,
       approveFolder: folders.approve,
       listRecentFolders: folders.listRecent,
+      requireChatFolder,
       requireApprovedFolder: (path: string) =>
         requireApprovedFolder(path, 'starting a worktree from it'),
       chat: Context.get(services, ChatService),

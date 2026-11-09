@@ -34,8 +34,11 @@ export function FolderMenu({
   browseShortcut,
   empty,
   focusRef,
+  none,
 }: {
   groups: readonly FolderMenuGroup[];
+  /** A first row choosing no folder at all, such as a chat without a project. */
+  none?: { label: string; detail: string; chosen: boolean; choose(): void };
   choose(path: string): void;
   browse?: () => void;
   browseLabel: string;
@@ -96,6 +99,25 @@ export function FolderMenu({
         </label>
       )}
       <div {...stylex.props(styles.list)}>
+        {none && !needle && (
+          <button
+            type="button"
+            aria-pressed={none.chosen}
+            ref={none.chosen && !filtering ? focusRef : undefined}
+            {...stylex.props(styles.item, none.chosen && styles.chosen)}
+            onClick={none.choose}>
+            <span aria-hidden="true" {...stylex.props(styles.noneIcon)}>
+              <Icon name="folder" />
+            </span>
+            <span {...stylex.props(styles.itemText)}>
+              <span {...stylex.props(controls.truncate)}>{none.label}</span>
+              <span {...stylex.props(controls.truncate, styles.detail)}>{none.detail}</span>
+            </span>
+            <span aria-hidden="true" {...stylex.props(styles.check)}>
+              {none.chosen ? '✓' : ''}
+            </span>
+          </button>
+        )}
         {shown.map((group, index) => (
           <div
             key={group.label}
@@ -242,6 +264,14 @@ const styles = stylex.create({
     outlineOffset: -1,
   },
   itemTile: { width: 22, height: 22, borderRadius: 6, fontSize: 10 },
+  noneIcon: {
+    display: 'grid',
+    placeItems: 'center',
+    flexShrink: 0,
+    width: 22,
+    height: 22,
+    color: colors.muted,
+  },
   itemText: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', lineHeight: 1.3 },
   detail: { color: colors.muted, fontSize: type.caption },
   badge: { flexShrink: 0, color: colors.muted, fontSize: type.caption },

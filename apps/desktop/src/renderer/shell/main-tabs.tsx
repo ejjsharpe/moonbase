@@ -237,6 +237,8 @@ export function MainTabs({
                 {railProjects(checkouts, chosen).map(({ key, active: checkout, open }) => {
                   const value = tabValue({ kind: 'project', checkout });
                   const name = checkoutName(checkout);
+                  // A plain folder has no branch to name.
+                  const label = checkout.vcs === 'git' ? `${name} · ${checkout.branch}` : name;
                   return (
                     <AnimatedTab
                       key={key}
@@ -251,7 +253,7 @@ export function MainTabs({
                               <Tabs.Tab
                                 value={value}
                                 disabled={!present}
-                                aria-label={`${name} · ${checkout.branch}`}
+                                aria-label={label}
                                 {...stylex.props(
                                   controls.button,
                                   styles.railTab,
@@ -266,15 +268,17 @@ export function MainTabs({
                                     styles.tile,
                                   )}
                                 />
-                                <span {...stylex.props(styles.visuallyHidden)}>
-                                  {name} · {checkout.branch}
-                                </span>
+                                <span {...stylex.props(styles.visuallyHidden)}>{label}</span>
                               </Tabs.Tab>
                             }>
                             <span {...stylex.props(styles.peekName)}>{name}</span>
-                            <span {...stylex.props(styles.peekDetail, styles.peekBranch)}>
-                              {checkout.branch}
-                            </span>
+                            {checkout.vcs === 'git' ? (
+                              <span {...stylex.props(styles.peekDetail, styles.peekBranch)}>
+                                {checkout.branch}
+                              </span>
+                            ) : (
+                              <span {...stylex.props(styles.peekDetail)}>No Git repository</span>
+                            )}
                             <span {...stylex.props(styles.peekDetail, styles.peekPath)}>
                               {checkout.hostId} · {checkout.root}
                             </span>

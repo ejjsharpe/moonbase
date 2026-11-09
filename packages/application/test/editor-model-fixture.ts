@@ -78,6 +78,7 @@ type ExpectedEditorController = {
   openCheckout(root: string): Promise<CheckoutTarget>;
   listWorktrees(checkout: CheckoutTarget): Promise<CommandOutput<'listWorktrees'>>;
   createWorktree(input: CommandInput<'createWorktree'>): Promise<CheckoutTarget>;
+  initializeRepository(checkout: CheckoutTarget): Promise<CheckoutTarget>;
   selectCheckout(target: CheckoutTarget): Promise<boolean>;
   resolveRecoveryPublication(): Promise<boolean>;
   flush(): Promise<void>;

@@ -16,6 +16,7 @@ const checkout: CheckoutTarget = {
   checkoutId: 'checkout',
   projectId: 'project',
   root: '/checkout',
+  vcs: 'git' as const,
   branch: 'main',
   worktree: 'main' as 'main' | 'linked',
 };
@@ -76,6 +77,7 @@ function fixture(
     gitStatus: unavailable,
     listWorktrees: unavailable,
     createWorktree: unavailable,
+    initializeRepository: unavailable,
     readComparison: unavailable,
     lookupFiles: unavailable,
     searchText: unavailable,

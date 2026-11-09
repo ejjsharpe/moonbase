@@ -32,6 +32,8 @@ import {
   type ChatCommand,
   type ChatCommandOption,
 } from './commands.ts';
+import { getChatPlace } from './folder.ts';
+import { folderName } from '../folder-menu.tsx';
 import { projectInitials, projectTiles } from '@moonbase/ui/projects';
 const compactLayout = window.matchMedia('(max-width: 640px)');
 const subscribeLayout = (listener: () => void) => {
@@ -69,6 +71,7 @@ const glyphs: Record<ChatActivityReason, string> = {
   stopped: '■',
   finished: '●',
   running: '',
+  idle: '',
   settled: '',
 };
 const reasonLabels: Record<ChatActivityReason, string> = {
@@ -77,15 +80,16 @@ const reasonLabels: Record<ChatActivityReason, string> = {
   stopped: 'stopped',
   finished: 'finished',
   running: 'running',
+  idle: '',
   settled: '',
 };
 
 type ChatState = ReturnType<ChatController['getSnapshot']>;
-/** The selected chat's working folder, once its snapshot or list entry has loaded. */
-function selectedChatFolder(state: ChatState) {
+/** The selected chat's summary, once its snapshot or list entry has loaded. */
+function findSelectedChat(state: ChatState) {
   return (
-    state.snapshot?.conversation.cwd ??
-    state.chats.find((c) => c.target.conversationId === state.selected?.conversationId)?.cwd
+    state.snapshot?.conversation ??
+    state.chats.find((c) => c.target.conversationId === state.selected?.conversationId)
   );
 }
 /**
@@ -93,7 +97,7 @@ function selectedChatFolder(state: ChatState) {
  * locally, else the host's). Null while it isn't known, so nothing is mentioned against a guess.
  */
 function chatFolder(state: ChatState, newChatFolder: string) {
-  if (state.selected) return selectedChatFolder(state) || null;
+  if (state.selected) return findSelectedChat(state)?.cwd || null;
   if (newChatFolder) return newChatFolder;
   return (state.host && 'cwd' in state.host && state.host.cwd) || null;
 }
@@ -112,6 +116,7 @@ export function ChatView({
   recentFolders,
   folderProjects = [],
   createWorktree,
+  turnIntoProject,
   transcriptNative,
   dock,
   hosts,
@@ -127,6 +132,8 @@ export function ChatView({
   folderProjects?: readonly ChatFolderProject[];
   /** Creates a linked worktree of a local folder, named for the branch, and returns its root. */
   createWorktree?: (root: string, branch: string) => Promise<string>;
+  /** Opens a local chat without a project's folder as a project where it is. */
+  turnIntoProject?: (conversationId: string) => Promise<void>;
   transcriptNative?: TranscriptNative;
   /** Shows only one project's chats, beside its editor, with a back arrow to their list. */
   dock?: ChatDock;
@@ -155,6 +162,9 @@ export function ChatView({
     [dockList, setDockList] = useState(false),
     // An error belongs to the command line it was about; editing it or changing chat hides it.
     [commandError, setCommandError] = useState<{ text: string; message: string } | null>(null),
+    [turning, setTurning] = useState(false),
+    // Why a chat could not become a project, in the chat it was for.
+    [turnError, setTurnError] = useState<{ chat: string; message: string } | null>(null),
     // Why files from the file tree weren't mentioned, in the chat (or new chat, '') they were for.
     [mentionError, setMentionError] = useState<{ chat: string; message: string } | null>(null);
   // A new chat's folder choices outlive this view, which unmounts while another view shows the chat.
@@ -224,12 +234,59 @@ export function ChatView({
     toolNotice =
       state.selected || cwd
         ? 'Local tools can access files outside the working folder.'
-        : 'Choose a working folder to send. Local tools are not sandboxed.';
+        : 'Runs in a new empty folder. Local tools are not sandboxed.';
   if (local && !state.selected && !models.length)
     toolNotice = 'Set up a provider to send. Local tools are not sandboxed.';
-  const selectedFolder = (selectedChatFolder(state) ?? '').split('/').filter(Boolean).at(-1);
+  const selectedChat = findSelectedChat(state);
+  // A chat without a project has no project crumb.
+  const selectedFolder =
+    selectedChat && !selectedChat.ownFolder ? folderName(selectedChat.cwd) : undefined;
   const connected = state.ready,
     busy = (id: string) => state.active.includes(id);
+  // Whether the open chat is settled, or null while it can't be settled or unsettled.
+  const openSettled =
+    state.selected && selectedChat && connected && !busy('settle')
+      ? selectedChat.settledAt !== undefined
+      : null;
+  const settleOpen = (settled: boolean) => {
+    if (state.selected) void controller.settle(state.selected, settled);
+  };
+  const settleButton = state.selected && selectedChat && (
+    <Button
+      aria-label={selectedChat.settledAt ? 'Unsettle chat' : 'Settle chat'}
+      title={selectedChat.settledAt ? 'Unsettle chat' : 'Settle chat'}
+      {...stylex.props(controls.button, controls.iconButton)}
+      disabled={openSettled === null}
+      onClick={() => settleOpen(!selectedChat.settledAt)}>
+      <Icon name={selectedChat.settledAt ? 'unsettle' : 'settle'} />
+    </Button>
+  );
+  // A chat without a project can become one: its folder opens as a project where it is.
+  const turnButton = turnIntoProject && local && state.selected && selectedChat?.ownFolder && (
+    <Button
+      aria-label="Turn into project"
+      title="Turn into project · opens this chat’s folder as a project"
+      {...stylex.props(controls.button, controls.iconButton)}
+      disabled={turning || !connected}
+      onClick={() => {
+        const id = state.selected!.conversationId;
+        setTurning(true);
+        setTurnError(null);
+        void turnIntoProject(id)
+          .then(
+            () => controller.reloadChats(),
+            (error: unknown) =>
+              setTurnError({
+                chat: id,
+                message:
+                  `The chat could not become a project. ${error instanceof Error ? error.message : ''}`.trim(),
+              }),
+          )
+          .finally(() => setTurning(false));
+      }}>
+      <Icon name="newFolder" />
+    </Button>
+  );
   const hostDot = (
     <span
       aria-hidden="true"
@@ -351,10 +408,17 @@ export function ChatView({
   const startNewChat = () => void controller.closeView().then(focusMessage);
   const choosing = local && !state.selected && !busy('send') && !creatingWorktree;
   // A new worktree is made only when the first message is sent, so an unsent chat leaves no trace.
-  const worktreeChoice = !state.selected && local && !!createWorktree && !!cwd;
+  // A project without Git has no worktrees to make.
+  const worktreeChoice =
+    !state.selected &&
+    local &&
+    !!createWorktree &&
+    !!cwd &&
+    !folderProjects.some((project) => project.root === cwd && project.branch === undefined);
   const commands = listChatCommands({
     selected: !!state.selected,
     running: !!run && connected && !busy('stop') && !state.storageError,
+    settled: openSettled,
     models: choosing
       ? models.map((entry) => ({
           value: entry.value,
@@ -374,12 +438,14 @@ export function ChatView({
       const rest = removeCommandLine(state.draft),
         target = state.selected?.conversationId ?? '';
       void composer
-        .startNewChat(rest, state.mentions, selectedChatFolder(state))
+        .startNewChat(rest, state.mentions, findSelectedChat(state)?.cwd)
         .then((message) =>
           message ? setCommandError({ text: `${target}\n${rest}`, message }) : focusMessage(),
         );
     },
     stop: () => void controller.stop(),
+    settle: () => settleOpen(true),
+    unsettle: () => settleOpen(false),
     clearDraft: () => controller.setDraft(''),
     chooseModel,
     chooseEffort,
@@ -410,7 +476,7 @@ export function ChatView({
         controls.button,
         controls.listButton,
         styles.chat,
-        reason === 'settled' && styles.settledChat,
+        (reason === 'idle' || reason === 'settled') && styles.restingChat,
         state.selected?.conversationId === c.target.conversationId && styles.selected,
       )}
       disabled={!connected || busy('open')}
@@ -426,7 +492,7 @@ export function ChatView({
       <span {...stylex.props(styles.chatSummary)}>
         <span {...stylex.props(controls.truncate)}>{c.title}</span>
         <span {...stylex.props(styles.chatFolder, controls.truncate)}>
-          {c.cwd.split('/').filter(Boolean).at(-1) || '/'}
+          {getChatPlace(c)}
           {reasonLabels[reason] && ` · ${reasonLabels[reason]}`}
         </span>
       </span>
@@ -518,6 +584,21 @@ export function ChatView({
             </h3>
           )}
           {groups.working.map(chatRow)}
+          {groups.idle.length > 0 && (
+            <h3 {...stylex.props(styles.groupHeading)}>
+              Idle <span {...stylex.props(styles.groupCount)}>{groups.idle.length}</span>
+            </h3>
+          )}
+          {groups.idle.map(chatRow)}
+          {state.nextChats && (
+            // Older pages hold idle and settled chats alike, so this sits outside the drawer.
+            <Button
+              {...stylex.props(controls.button, controls.quietButton, styles.older)}
+              disabled={!connected || busy('chats')}
+              onClick={() => void controller.moreChats()}>
+              Show older
+            </Button>
+          )}
           {groups.settled.length > 0 && (
             // One block, like a drawer: closed, the heading waits at the foot of the list with its
             // chats clipped below it; opening slides the whole block up, and closing slides it back.
@@ -530,7 +611,10 @@ export function ChatView({
                 {...stylex.props(
                   controls.button,
                   styles.settledToggle,
-                  (groups.ready.length > 0 || groups.working.length > 0) && styles.settledSeparated,
+                  (groups.ready.length > 0 ||
+                    groups.working.length > 0 ||
+                    groups.idle.length > 0) &&
+                    styles.settledSeparated,
                 )}
                 onClick={() => showSettled(!settledOpen)}>
                 <span
@@ -555,14 +639,6 @@ export function ChatView({
                 aria-hidden={settledShown ? undefined : true}
                 {...stylex.props(styles.settledRows, !settledShown && styles.settledRowsClosed)}>
                 {groups.settled.map(chatRow)}
-                {state.nextChats && (
-                  <Button
-                    {...stylex.props(controls.button, controls.quietButton, styles.older)}
-                    disabled={!connected || busy('chats')}
-                    onClick={() => void controller.moreChats()}>
-                    Show older
-                  </Button>
-                )}
               </div>
             </motion.div>
           )}
@@ -616,7 +692,7 @@ export function ChatView({
                   <p {...stylex.props(styles.small)}>
                     {p.input.title}
                     {p.input.settings
-                      ? ` · ${p.input.settings.cwd} · ${p.input.settings.model.provider}/${p.input.settings.model.modelId}${p.input.settings.reasoningEffort ? ` · ${effortLabels[p.input.settings.reasoningEffort]}` : ''}`
+                      ? ` · ${p.input.settings.cwd ?? 'No project'} · ${p.input.settings.model.provider}/${p.input.settings.model.modelId}${p.input.settings.reasoningEffort ? ` · ${effortLabels[p.input.settings.reasoningEffort]}` : ''}`
                       : ''}
                   </p>
                 )}
@@ -679,6 +755,11 @@ export function ChatView({
             {folderError}
           </p>
         )}
+        {state.selected && turnError?.chat === state.selected.conversationId && (
+          <p role="alert" {...stylex.props(styles.warning)}>
+            {turnError.message}
+          </p>
+        )}
         {mentionError?.chat === (state.selected?.conversationId ?? '') && (
           <p role="alert" {...stylex.props(styles.warning)}>
             {mentionError.message}
@@ -718,8 +799,11 @@ export function ChatView({
             setMentionError(null);
             // The new chat's messages are about its own sends, which an open chat's leave alone.
             if (!state.selected) composer.clearMessages(placeKey);
+            // Without a folder, a new local chat runs in one the host makes for it.
             const settings =
-              local && !state.selected && cwd && selection ? { cwd, ...selection } : undefined;
+              local && !state.selected && selection
+                ? { ...(cwd ? { cwd } : {}), ...selection }
+                : undefined;
             // Mentions picked in another view's folder are checked against this one before sending.
             const problem = settings && composer.checkMentions(cwd);
             if (problem) {
@@ -775,6 +859,12 @@ export function ChatView({
                     projects={folderProjects}
                     recentFolders={recentFolders}
                     disabled={busy('send') || creatingWorktree}
+                    noProject={
+                      // A project's dock keeps its chats in the project.
+                      dock
+                        ? undefined
+                        : () => updatePlace({ cwd: '', newWorktree: false, folderError: null })
+                    }
                     choose={(folder) => {
                       setFolderError(null);
                       if (folder !== cwd) setCwd(folder);
@@ -886,7 +976,7 @@ export function ChatView({
                       busy('send') ||
                       busy('create') ||
                       !!state.storageError ||
-                      (!state.selected && local && (!cwd || !selection)) ||
+                      (!state.selected && local && !selection) ||
                       state.pending.some(
                         (p) =>
                           (p.operation === 'sendChat' &&
@@ -993,7 +1083,7 @@ export function ChatView({
                       <span {...stylex.props(styles.chatSummary)}>
                         <span {...stylex.props(controls.truncate)}>{c.title}</span>
                         <span {...stylex.props(styles.chatFolder, controls.truncate)}>
-                          {c.cwd.split('/').filter(Boolean).at(-1) || '/'}
+                          {getChatPlace(c)}
                         </span>
                       </span>
                       <time dateTime={c.createdAt} {...stylex.props(styles.chatDate)}>
@@ -1023,6 +1113,7 @@ export function ChatView({
                 {...stylex.props(styles.dockHeading)}>
                 <h1 {...stylex.props(styles.dockTitle, controls.truncate)}>{conversationTitle}</h1>
               </div>
+              {settleButton}
               {state.selected && (
                 <Button
                   aria-label="Find"
@@ -1098,6 +1189,8 @@ export function ChatView({
               <h1 {...stylex.props(styles.title, controls.truncate)}>{conversationTitle}</h1>
             </div>
             <div {...stylex.props(controls.row)}>
+              {turnButton}
+              {settleButton}
               {state.selected && (
                 <Button
                   aria-label="Find"
@@ -1254,7 +1347,8 @@ const styles = stylex.create({
   settledRowsClosed: { position: 'absolute', top: '100%', left: 0, right: 0 },
   settledChevron: { display: 'inline-flex', color: colors.muted, transition: 'transform 120ms' },
   settledChevronOpen: { transform: 'rotate(90deg)' },
-  settledChat: { color: colors.secondary },
+  /** An idle or settled chat: nothing in it needs you. */
+  restingChat: { color: colors.secondary },
   older: { alignSelf: 'flex-start', fontSize: type.small },
   glyph: {
     flexShrink: 0,
@@ -1468,5 +1562,6 @@ const glyphStyles = stylex.create({
   stopped: { color: colors.warningText },
   finished: { color: syntax.keyword, fontSize: 9, marginTop: 4 },
   running: { color: syntax.keyword },
+  idle: {},
   settled: {},
 });

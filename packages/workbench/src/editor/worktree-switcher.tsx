@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import * as stylex from '@stylexjs/stylex';
+import { Button } from '@base-ui/react/button';
 import { Menu } from '@base-ui/react/menu';
 import type { EditorController } from '@moonbase/application/editor';
 import type { CheckoutTarget, Worktree } from '@moonbase/contracts/workspace';
@@ -10,8 +11,9 @@ import { colors, radius, space, type } from '@moonbase/ui/tokens.stylex';
 import { Icon } from './icon.tsx';
 
 /**
- * The project sidebar's header: the checkout's tile, name and branch. It opens a menu of the
- * repository's worktrees; choosing one opens it as the selected checkout.
+ * The project sidebar's header: the checkout's name and branch. It opens a menu of the
+ * repository's worktrees; choosing one opens it as the selected checkout. A plain folder has no
+ * branch or worktrees, so its header offers Initialize Git instead, disabled while it runs.
  */
 export function WorktreeSwitcher({
   controller,
@@ -23,7 +25,27 @@ export function WorktreeSwitcher({
   run(work: Promise<unknown>): void;
 }) {
   const [worktrees, setWorktrees] = useState<readonly Worktree[] | null>(null);
+  const initializing = useSyncExternalStore(
+    controller.subscribe,
+    () => controller.getSnapshot().initializing === checkout.checkoutId,
+  );
   const name = checkoutName(checkout);
+  if (checkout.vcs === 'none')
+    return (
+      <div title={`${checkout.hostId} · ${checkout.root}`} {...stylex.props(styles.folder)}>
+        <span {...stylex.props(styles.text)}>
+          <span {...stylex.props(styles.name)}>{name}</span>
+          <span {...stylex.props(styles.detail)}>No Git</span>
+        </span>
+        <Button
+          title="Run git init in this folder"
+          disabled={initializing}
+          {...stylex.props(controls.button, styles.initialize)}
+          onClick={() => run(controller.initializeRepository(checkout))}>
+          {initializing ? 'Initializing…' : 'Initialize Git'}
+        </Button>
+      </div>
+    );
   return (
     <Menu.Root
       onOpenChange={(open) => {
@@ -109,6 +131,24 @@ const styles = stylex.create({
       ':hover:not(:disabled)': colors.hover,
       '[data-popup-open]': colors.elevated,
     },
+  },
+  folder: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    flex: 1,
+    minWidth: 0,
+    padding: '3px 6px',
+    color: colors.secondary,
+    WebkitAppRegion: 'no-drag',
+  },
+  initialize: { flexShrink: 0, padding: '3px 8px', fontSize: type.caption },
+  detail: {
+    color: colors.muted,
+    fontSize: type.caption,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
   },
   text: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', lineHeight: 1.35 },
   nameRow: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, color: colors.muted },

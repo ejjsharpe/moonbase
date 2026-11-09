@@ -9,7 +9,7 @@ import {
 } from '@moonbase/contracts/workspace';
 import type { Directory } from './filesystem.ts';
 import { errorText } from './recovery.ts';
-import { ensure, fail } from './validation.ts';
+import { ensure, fail, requireGit } from './validation.ts';
 
 const gitFailure = (error: unknown) =>
   error as { status?: number; uncertain?: boolean; stderr?: string };
@@ -122,8 +122,10 @@ export class WorkspaceWorktrees {
     this.protect = protect;
     this.report = report;
   }
+  /** A plain folder has no worktrees, like a bare repository. */
   async listWorktrees(target: CheckoutTarget, signal: AbortSignal) {
     const directory = await this.directory(target);
+    if (target.vcs === 'none') return { worktrees: [] };
     const output = await directory.git(listArgs, undefined, signal, { untranslated: true });
     return { worktrees: parseWorktrees(output.toString()).slice(0, 1000) };
   }
@@ -157,6 +159,7 @@ export class WorkspaceWorktrees {
   }
   private async createNow(input: CommandInput<'createWorktree'>, signal: AbortSignal) {
     if (signal.aborted) fail('Cancelled', 'Worktree creation cancelled; nothing was kept.');
+    requireGit(input.checkout);
     const directory = await this.directory(input.checkout);
     const { base, branch } = input;
     ensure(

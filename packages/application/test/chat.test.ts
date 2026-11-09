@@ -116,6 +116,8 @@ function fixture(options: { slowSend?: boolean; cleanupFailure?: boolean } = {})
         assert.equal(input.stop.taskId, '101');
         return { ...input, outcome: 'stopped' as const };
       }),
+    settleChat: () =>
+      Effect.fail(new ApplicationError({ code: 'Incompatible', message: 'Legacy fixture.' })),
     watch: (input) =>
       Stream.unwrap(
         Effect.as(

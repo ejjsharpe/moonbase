@@ -10,13 +10,17 @@
 
 `lookupFiles` ranks file paths; `searchText` finds text in file contents (fixed string or regular expression, optionally case-sensitive or whole-word). Both run the configured ripgrep in the checkout, honour `.gitignore`, `.ignore` and `.rgignore`, and skip VCS folders and `node_modules`. Text search returns up to 50 matches per file and 500 in all, each with its UTF-16 match ranges and three lines either side, and reports a partial result when capped; ripgrep is stopped as soon as the result is full.
 
+## Plain folders
+
+A folder in no Git repository opens as a plain-folder checkout (`vcs: 'none'`), whose `projectId` comes from the host and the folder's identity; a folder inside a repository but not at its top is refused. On a plain folder `gitStatus`, `listWorktrees` and `getIgnoredPaths` return empty results, while `readComparison` and `createWorktree` fail with `InvalidInput`. `initializeRepository` runs `git init` (no commit) in a plain folder with no `.git` entry and no unsettled saves or file operations, and returns its Git checkout, which keeps its `checkoutId` and replaces the folder's approval; reopening a folder that became its own repository some other way (its main working tree, with its own `.git` folder) does the same.
+
 ## Git status
 
 `gitStatus` lists one change per differing area (`staged`, `unstaged` or `untracked`) with its kind: modified, added, deleted, untracked or typechange. An unmerged path is a single `conflicted` change instead, marked `missing` when both sides deleted it. Renames are not detected, so a moved file is deleted at its old path and added or untracked at its new one.
 
 ## Watching
 
-`watch` reports changes under the checkout and in the repository's Git folder, at most every 100 ms. It skips changes that belong to other worktrees of the same repository: files in a worktree nested inside the checkout, another worktree's private Git folder or index, new objects and lock files. Shared refs still count.
+`watch` reports changes under the checkout and, for a repository, in its Git folder, at most every 100 ms. It skips changes that belong to other worktrees of the same repository: files in a worktree nested inside the checkout, another worktree's private Git folder or index, new objects and lock files. Shared refs still count.
 
 ## Worktrees
 

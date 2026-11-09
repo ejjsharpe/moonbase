@@ -18,6 +18,7 @@ const checkout: CheckoutTarget = {
   checkoutId: 'checkout',
   projectId: 'project',
   root: '/receipt-fixture',
+  vcs: 'git' as const,
   branch: 'main',
   worktree: 'main' as 'main' | 'linked',
 };

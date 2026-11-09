@@ -3,10 +3,6 @@ import { readFile, mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { readFindHighlight } from './find-highlight.ts';
 
-// These tests open the demo chat, which is Settled; the sidebar's own test covers the toggle.
-test.beforeEach(({ page }) =>
-  page.addInitScript(() => localStorage.setItem('moonbase.chats.settled', 'open')),
-);
 type ImageWindow = Window & { imageUrls: number; releaseImageUrl(): void };
 const png = (await readFile(new URL('./fixtures/images/retained.png', import.meta.url))).toString(
   'base64',

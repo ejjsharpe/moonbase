@@ -11,6 +11,7 @@ const main: CheckoutTarget = {
   checkoutId: 'main',
   projectId: 'moonbase',
   root: '/memory/moonbase',
+  vcs: 'git' as const,
   branch: 'main',
   worktree: 'main',
 };
@@ -18,6 +19,7 @@ const linked: CheckoutTarget = {
   ...main,
   checkoutId: 'linked',
   root: '/memory/moonbase-topic',
+  vcs: 'git' as const,
   branch: 'topic',
   worktree: 'linked',
 };
@@ -72,7 +74,7 @@ test('createWorktree opens and selects the new linked checkout from the base com
       branch: 'feature',
       location: '/memory/moonbase-feature',
     });
-    assert.equal(created.worktree, 'linked');
+    assert.equal(created.vcs === 'git' && created.worktree, 'linked');
     assert.equal(created.projectId, main.projectId);
     const { recovery } = f.editor.getSnapshot();
     assert.deepEqual(recovery.openCheckoutIds, [main.checkoutId, created.checkoutId]);

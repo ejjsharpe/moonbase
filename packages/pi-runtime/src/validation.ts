@@ -71,6 +71,12 @@ export const sameTarget = (a: ChatTarget, b: ChatTarget) =>
 export function cursor(value: unknown): string {
   return string(value, 1024);
 }
+/** Commands that change chat state: a lost reply is `Uncertain`, and Quit waits for them. */
+export const isMutation = (operation: ChatCommand) =>
+  operation === 'createChat' ||
+  operation === 'sendChat' ||
+  operation === 'stopChat' ||
+  operation === 'settleChat';
 /** Reads a caller may abandon; every other command runs to completion once dispatched. */
 export const isCancellableRead = (operation: ChatCommand) =>
   operation === 'getChatTranscriptContent' ||

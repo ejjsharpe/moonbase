@@ -323,7 +323,7 @@ test('native local setup, approved folders/models, streaming/tools, hidden work 
     child = app.process();
     page = await app.firstWindow();
     await openChat();
-    // Both chats survive the restart; finished and seen, they may be Settled.
+    // Both chats survive the restart.
     await showChat(page, /Local conversation 0/);
     await showChat(page, /Local conversation 1/);
     const after = await page.evaluate(() => window.moonbaseChat.context('local'));
