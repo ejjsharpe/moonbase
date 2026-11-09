@@ -349,11 +349,23 @@ test.describe('the virtualized transcript', () => {
     await wheelUp(page, 1200);
     await expect(jumpButton(page)).toBeVisible();
     await jumpButton(page).click();
-    await expect.poll(async () => (await readList(page)).fromEnd).toBeLessThan(30);
+    await expect.poll(async () => (await readList(page)).fromEnd).toBeLessThan(1);
     await expect(jumpButton(page)).toHaveCount(0);
     expect(await savedAnchor(page)).toBeNull();
     await page.evaluate(() => window.demo.transcript!.live('After jumping'));
-    await expect.poll(async () => (await readList(page)).fromEnd).toBeLessThan(30);
+    await expect.poll(async () => (await readList(page)).fromEnd).toBeLessThan(1);
+  });
+
+  test('Jump to latest from the start lands at the real end', async ({ page }) => {
+    await openLong(page, 200);
+    await scrollToStart(page);
+    await expect(jumpButton(page)).toBeVisible();
+    await jumpButton(page).click();
+    // Rows between were never measured, so the list's own scroll aims from estimates.
+    await expect.poll(async () => (await readList(page)).fromEnd).toBeLessThan(1);
+    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 500)));
+    expect((await readList(page)).fromEnd).toBeLessThan(1);
+    await expect(jumpButton(page)).toHaveCount(0);
   });
 
   test('Find reveals a match in a row that is not mounted', async ({ page }) => {
