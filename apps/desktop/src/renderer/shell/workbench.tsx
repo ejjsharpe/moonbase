@@ -589,11 +589,11 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
       }
     },
   }));
-  // Chat stays attached while the window is hidden (minimised, on another Space or covered), so
-  // coming back shows the transcript as it was, still following a running reply.
+  // Chat stays attached while it exists, behind a project or a hidden window too, so coming back
+  // shows the transcript as it was, still following a running reply. Disposal detaches it.
   useEffect(() => {
-    if (chat) void (view === 'chat' || dockVisible ? chat.start() : chat.detach()).catch(report);
-  }, [view, dockVisible, chat, report]);
+    if (chat) void chat.start().catch(report);
+  }, [chat, report]);
   async function openCheckout() {
     const root = await selectCheckout?.();
     if (root && controller && application.getSnapshot().phase === 'live') {

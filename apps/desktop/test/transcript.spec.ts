@@ -112,6 +112,20 @@ const readTranscriptKept = (page: Page) =>
     const kept = window.transcriptKept!;
     return { mounted: kept.list.isConnected, cleared: kept.cleared };
   });
+const viewTab = (page: Page, name: string) =>
+  page
+    .getByRole('tablist', { name: 'Workbench views', exact: true })
+    .getByRole('tab', { name, exact: true });
+/** Closes the project's chat dock, so leaving Agents for the project shows no chat view. */
+async function closeProjectDock(page: Page) {
+  await viewTab(page, 'moonbase · main').click();
+  await page
+    .getByRole('complementary', { name: 'Project chats', exact: true })
+    .getByRole('button', { name: 'Hide project chats', exact: true })
+    .click();
+  await viewTab(page, 'Agents').click();
+  await expect(transcriptList(page)).toBeVisible();
+}
 
 test.describe('the virtualized transcript', () => {
   test('mounts a bounded number of rows across a full scroll', async ({ page }) => {
@@ -324,6 +338,50 @@ test.describe('the virtualized transcript', () => {
     expect(after.row).toBe(before.row);
     expect(Math.abs(after.offset - before.offset)).toBeLessThan(1);
     expect(await readTranscriptKept(page)).toEqual({ mounted: true, cleared: false });
+  });
+
+  test('a project view and back keeps the transcript and follows a running reply', async ({
+    page,
+  }) => {
+    await openLong(page, 200);
+    await closeProjectDock(page);
+    await page.evaluate(() => window.demo.transcript!.live('Streaming reply'));
+    await expect.poll(async () => (await readList(page)).fromEnd).toBeLessThan(1);
+    await watchTranscriptKept(page);
+    await viewTab(page, 'moonbase · main').click();
+    await expect(transcriptList(page)).toBeHidden();
+    for (let step = 1; step <= 4; step++)
+      await page.evaluate(
+        (step) =>
+          window.demo.transcript!.live(
+            'Streaming reply\n\n' + 'more words '.repeat(step * 200) + `step ${step}`,
+          ),
+        step,
+      );
+    await viewTab(page, 'Agents').click();
+    await expect(page.locator('[data-transcript-live]')).toContainText('step 4');
+    await expect.poll(async () => (await readList(page)).fromEnd).toBeLessThan(1);
+    expect(await readTranscriptKept(page)).toEqual({ mounted: true, cleared: false });
+    await expect(jumpButton(page)).toHaveCount(0);
+  });
+
+  test('a project view and back keeps the reader in place', async ({ page }) => {
+    await openLong(page, 200);
+    await closeProjectDock(page);
+    await wheelUp(page, 1500);
+    await expect.poll(() => savedAnchor(page)).not.toBeNull();
+    const before = await readFirstVisible(page);
+    await watchTranscriptKept(page);
+    await viewTab(page, 'moonbase · main').click();
+    await expect(transcriptList(page)).toBeHidden();
+    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 300)));
+    await viewTab(page, 'Agents').click();
+    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 300)));
+    const after = await readFirstVisible(page);
+    expect(after.row).toBe(before.row);
+    expect(Math.abs(after.offset - before.offset)).toBeLessThan(1);
+    expect(await readTranscriptKept(page)).toEqual({ mounted: true, cleared: false });
+    await expect(jumpButton(page)).toBeVisible();
   });
 
   test('a selection pauses following, and clearing it resumes', async ({ page }) => {
