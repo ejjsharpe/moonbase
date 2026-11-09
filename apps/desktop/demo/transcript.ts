@@ -7,6 +7,7 @@ import type {
   ChatTranscriptSource,
   ChatTranscript,
 } from '@moonbase/contracts/chat';
+import { chatLiveTextBytes } from '@moonbase/contracts/chat';
 import type { TranscriptNative } from '../src/chat/wire.ts';
 import type { chatCapabilities } from './chat.ts';
 import { parseTranscriptMarkdown } from '../src/chat/transcript-source.ts';
@@ -379,13 +380,27 @@ export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabili
       tools: [],
       transcript: {
         source,
-        parts: parts.slice(0, 4),
+        parts: giveWholeText(parts.slice(0, 4), texts.slice(0, 4)),
         nextCursor: parts.length > 4 ? '4' : null,
         thinking,
       },
     };
     chat.snapshot.state = 'running';
     chat.controls.receiveChat(structuredClone(chat.snapshot));
+  }
+  /** As the host does for a running response: its text parts whole while their text fits. */
+  function giveWholeText(parts: ChatTranscriptPart[], texts: string[]) {
+    const bytes = (text: string) => new TextEncoder().encode(text).length;
+    let spent = parts.reduce((sum, part) => sum + bytes(part.text), 0);
+    return parts.map((part, index) => {
+      const text = texts[index];
+      if (part.kind !== 'text' || part.encoding !== 'utf8' || !part.truncated || text === undefined)
+        return part;
+      const next = spent - bytes(part.text) + bytes(text);
+      if (next > chatLiveTextBytes) return part;
+      spent = next;
+      return { ...part, text, truncated: false };
+    });
   }
   async function live(text: string, outputs: string[] = []) {
     await activity(

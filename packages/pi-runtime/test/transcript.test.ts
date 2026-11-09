@@ -418,6 +418,56 @@ test('live Copy fixes a prefix and rejects replacement/finalization, while held 
   await assert.rejects(manifest(f.client, source), { code: 'Conflict' });
 });
 
+test("a running response's snapshot carries its reply text whole within the live budget", async (t) => {
+  const getHarness = captureHarness(t),
+    f = await fixture(t),
+    target = await f.create();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  t.after(() => release());
+  f.faux.setResponses([
+    async () => {
+      await gate;
+      return fauxAssistantMessage('Final');
+    },
+  ]);
+  await f.client.command('sendChat', { target, requestId: 'send', text: 'Hold' });
+  await until(
+    () => getHarness().snapshot(LiveDoc, Number(target.conversationId) as ConversationId, context),
+    (live) => !!live?.generation,
+  );
+  async function streamed(text: string) {
+    await getHarness().commit(async (tx) => {
+      const live = await tx.doc(LiveDoc, Number(target.conversationId) as ConversationId);
+      live.generation!.message = JSON.parse(JSON.stringify(fauxAssistantMessage(text)));
+    }, context);
+    const view = await f.client.command('getChat', { target });
+    const part = view.run!.transcript!.parts.find((value) => value.kind === 'text')!;
+    return { view, part };
+  }
+  // Longer than a preview, so it would otherwise need a content read.
+  const reply = 'Streamed words 😀 '.repeat(400);
+  const { view, part } = await streamed(reply);
+  assert.equal(part.text, reply);
+  assert.equal(part.truncated, false);
+  assert.equal(part.bytes, Buffer.byteLength(reply));
+  // The whole text is the selected content a read returns.
+  assert.equal((await content(f.client, view.run!.transcript!.source, part)).toString(), reply);
+  // Past the budget, the part falls back to its preview.
+  const long = 'x'.repeat(70 * 1024);
+  const over = (await streamed(long)).part;
+  assert.equal(over.truncated, true);
+  assert(Buffer.byteLength(over.text) <= 256);
+  assert(long.startsWith(over.text));
+  release();
+  await until(
+    () => f.client.command('getChat', { target }),
+    (state) => !state.run,
+  );
+});
+
 test('same-attempt restart commits the old partial without treating it as the successor live response', async (t) => {
   const getHarness = captureHarness(t),
     f = await fixture(t, undefined, { tokensPerSecond: 1000 }),

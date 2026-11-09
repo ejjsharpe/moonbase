@@ -19,6 +19,7 @@ import type { Message, ToolResultMessage } from '@earendil-works/pi-ai';
 import { LRUCache } from 'lru-cache';
 import {
   chatContentChunkBytes,
+  chatLiveTextBytes,
   chatManifestPageSize,
   type ChatTarget,
   type ChatTranscriptSource,
@@ -264,6 +265,22 @@ const getRevision = (part: Part) => (part.memo.revision ??= hashPrefix(part, par
 const isAvailable = (part: Part) => (part.extra.availability ?? 'available') === 'available';
 /** Enough leading bytes for a 256-byte preview to know whether it was truncated. */
 const previewWindowBytes = 1024;
+/**
+ * Upgrades a running response's available text parts, in order, to carry their whole text while
+ * the page's text stays within `budget` in all; the rest keep their previews.
+ */
+function giveWholeText(page: ChatTranscriptPart[], parts: Part[], budget: number) {
+  let spent = page.reduce((sum, part) => sum + Buffer.byteLength(part.text), 0);
+  for (const [index, part] of parts.entries()) {
+    const described = page[index]!;
+    if (part.kind !== 'text' || part.encoding !== 'utf8' || !isAvailable(part)) continue;
+    if (!described.truncated) continue;
+    const next = spent - Buffer.byteLength(described.text) + part.value.length;
+    if (next > budget) continue;
+    page[index] = { ...described, text: part.value.toString('utf8'), truncated: false };
+    spent = next;
+  }
+}
 function describePart(part: Part): ChatTranscriptPart {
   const bytes = part.value.length;
   return {
@@ -945,18 +962,25 @@ async function projectManifest(
   start: number,
   limit: number,
   revision?: string,
+  /** A running response's page carries its text parts whole within this many bytes of text. */
+  wholeTextBytes?: number,
 ): Promise<ChatTranscript> {
   const seen: [string, ChatTranscriptPart['kind']][] = [];
   const page: ChatTranscriptPart[] = [];
+  const pageParts: Part[] = [];
   let more = false;
   for await (const part of transcript.parts) {
     if (seen.length === start + limit) {
       more = true;
       break;
     }
-    if (seen.length >= start) page.push(describePart(part));
+    if (seen.length >= start) {
+      page.push(describePart(part));
+      pageParts.push(part);
+    }
     seen.push([part.id, part.kind]);
   }
+  if (wholeTextBytes !== undefined) giveWholeText(page, pageParts, wholeTextBytes);
   if (
     revision !== undefined &&
     (seen.length < start || hashJson(seen.slice(0, start)) !== revision)
@@ -1002,6 +1026,8 @@ export async function projectLiveTranscript(
     await getLiveTranscript(harness, source, { capture: captured }),
     0,
     embeddedManifestParts,
+    undefined,
+    chatLiveTextBytes,
   );
 }
 async function findPart(parts: TranscriptParts['parts'], partId: string) {

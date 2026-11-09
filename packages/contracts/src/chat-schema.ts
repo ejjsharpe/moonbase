@@ -8,6 +8,7 @@ import {
   maximumChatFindQueryBytes,
   chatFindPageSize,
   chatPreviewBytes,
+  chatLiveTextBytes,
   chatContentChunkBytes,
   chatManifestPageSize,
   maximumChatInputBytes,
@@ -225,6 +226,22 @@ export const ChatTranscriptSchema = struct({
   nextCursor: Schema.NullOr(cursor),
   thinking: Schema.Literals(['available', 'redacted', 'none']),
 });
+const utf8Bytes = (value: string) => new TextEncoder().encode(value).length;
+/**
+ * A running response's transcript: a text part may carry its whole text (`truncated` false), and
+ * its parts' text stays within `chatLiveTextBytes` in all.
+ */
+export const ChatLiveTranscriptSchema = struct({
+  ...ChatTranscriptSchema.fields,
+  parts: Schema.mutable(
+    Schema.Array(struct({ ...ChatTranscriptPartSchema.fields, text: unicode })),
+  ).check(
+    Schema.isMaxLength(chatManifestPageSize),
+    Schema.makeFilter(
+      (parts) => parts.reduce((sum, part) => sum + utf8Bytes(part.text), 0) <= chatLiveTextBytes,
+    ),
+  ),
+});
 export const ChatEntrySchema = struct({
   id: ChatIdentifierSchema,
   role: Schema.Literals(['user', 'assistant', 'tool', 'system']),
@@ -255,7 +272,7 @@ export const ChatRunSchema = struct({
   text: preview,
   truncated: Schema.Boolean,
   tools: Schema.mutable(Schema.Array(ChatToolActivitySchema)).check(Schema.isMaxLength(8)),
-  transcript: optional(ChatTranscriptSchema),
+  transcript: optional(ChatLiveTranscriptSchema),
 });
 export const ChatSnapshotSchema = struct({
   ...ChatHistoryPageSchema.fields,
