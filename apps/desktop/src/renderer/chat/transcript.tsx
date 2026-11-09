@@ -10,7 +10,6 @@ import {
   useState,
   useSyncExternalStore,
   type ReactElement,
-  type ReactNode,
   type RefObject,
 } from 'react';
 import { Button } from '@base-ui/react/button';
@@ -26,16 +25,11 @@ import {
   getEntryRowKey,
   type ChatController,
   type ChatState,
+  type LiveEntry,
   type TranscriptRow,
   type TranscriptViewAnchor,
 } from '@moonbase/application/chat';
-import type {
-  ChatEntry,
-  ChatRun,
-  ChatToolActivity,
-  ChatTranscriptMatch,
-  ChatTranscriptSource,
-} from '@moonbase/contracts/chat';
+import type { ChatRun, ChatTranscriptMatch, ChatTranscriptSource } from '@moonbase/contracts/chat';
 import { areJsonValuesEqual } from '@moonbase/contracts/common';
 import type { TranscriptNative } from '../../chat/wire.ts';
 import { MarkdownCache } from './markdown-model.ts';
@@ -219,13 +213,6 @@ export function Transcript({
     <section aria-label="Chat conversation" {...stylex.props(styles.transcript)}>
       <div {...stylex.props(styles.row)}>
         <div {...stylex.props(styles.measure)}>
-          {!snapshot && (
-            <p>
-              {state.ready
-                ? 'Reading the saved chat…'
-                : 'This view is offline. Its draft and unresolved command identities are retained.'}
-            </p>
-          )}
           {/* Idle and running need no line; stopped and failed say so. */}
           {currentSnapshot && !['idle', 'running'].includes(currentSnapshot.state) && (
             <p
@@ -254,25 +241,9 @@ export function Transcript({
               </Button>
             </p>
           )}
-          {status.observation === 'reconnecting' && (
-            <p role="status" {...stylex.props(styles.small)}>
-              Reconnecting. Showing the last received content; live reads and Copy wait for a fresh
-              connection.
-            </p>
-          )}
           {status.observation === 'failed' && (
             <p role="alert" {...stylex.props(styles.warning)}>
               Live updates stopped. Reopen the conversation to refresh.
-            </p>
-          )}
-          {status.observation === 'legacy' && (
-            <p {...stylex.props(styles.small)}>
-              This host updates periodically. Upgrade the host for streaming responses.
-            </p>
-          )}
-          {status.capabilities.transcript === 'legacy' && (
-            <p {...stylex.props(styles.small)}>
-              Upgrade this host for complete transcript reads and Copy. Previews remain readable.
             </p>
           )}
           {preserve && (
@@ -298,27 +269,8 @@ export function Transcript({
                 onHoldingChange={setHolding}
                 onPage={page}
                 onReaderInput={controller.cancelFindReveal}
-                header={
-                  <Edge>
-                    {paging === 'earlier' && (
-                      <p role="status" {...stylex.props(styles.small)}>
-                        Loading earlier…
-                      </p>
-                    )}
-                    {!transcript.earlier && (
-                      <p {...stylex.props(styles.small)}>Start of conversation</p>
-                    )}
-                  </Edge>
-                }
-                footer={
-                  <Edge>
-                    {(paging === 'later' || (transcript.later && transcript.loading)) && (
-                      <p role="status" {...stylex.props(styles.small)}>
-                        Loading later…
-                      </p>
-                    )}
-                  </Edge>
-                }
+                header={edge}
+                footer={edge}
               />
             </OpenCallsContext.Provider>
           </RowContext.Provider>
@@ -747,8 +699,8 @@ const getItemType = (item: TranscriptItem<TranscriptRow>) => {
   const row = item.rows[0]!;
   if (item.rows.length > 1 || kindOfRow(row) === 'activity') return 'activity';
   if (row.kind !== 'entry') return row.kind;
-  const parts = row.entry.transcript?.parts.filter((part) => part.kind === 'text');
-  const size = parts?.length
+  const parts = row.entry.transcript.parts.filter((part) => part.kind === 'text');
+  const size = parts.length
     ? parts.reduce((sum, part) => sum + part.bytes, 0)
     : row.entry.text.length;
   const bucket = Math.max(0, Math.floor(Math.log2(size / 1000)));
@@ -765,7 +717,6 @@ const renderItem = ({ item }: LegendListRenderItemProps<TranscriptItem<Transcrip
 );
 /** The live response is never empty: until it has something to show, it is working. */
 const kindOfRow = (row: TranscriptRow) => {
-  if (row.kind === 'tool') return 'message';
   const kind = classifyEntry(row.entry);
   return kind === 'empty' && row.kind === 'live' ? 'activity' : kind;
 };
@@ -778,7 +729,7 @@ type SharedRowProps = Pick<EntryProps, 'controller' | 'cache' | 'native' | 'acti
 /** What every row reads from the transcript: shared props, and its own slice of state. */
 const RowContext = createContext<{
   shared: SharedRowProps;
-  getRowProps(entry: ChatEntry): RowProps;
+  getRowProps(entry: LiveEntry): RowProps;
   liveLabel: string | undefined;
 } | null>(null);
 
@@ -789,8 +740,7 @@ const RowContext = createContext<{
 function Item({ item }: { item: TranscriptItem<TranscriptRow> }) {
   const context = useContext(RowContext)!;
   const startedAt = useContext(GroupStartsContext).get(item.key);
-  const entryRows = item.rows.filter((row) => row.kind !== 'tool');
-  const firstEntry = entryRows[0];
+  const firstEntry = item.rows[0];
   const { controller } = context.shared;
   // Remembered under both the item's key, which holds as earlier rows join the run's start, and
   // its first row's, which holds as the live response leaves the run or starts a new attempt.
@@ -826,7 +776,7 @@ function Item({ item }: { item: TranscriptItem<TranscriptRow> }) {
   if (landed.place !== placeInside)
     setLanded({ place: placeInside, open: placeInside !== null || landed.open });
   // The active Find match in the run opens it, unless the reader folded it for that match.
-  const match = entryRows
+  const match = item.rows
     .map((row) => context.getRowProps(row.entry))
     .find((props) => props.findMatch);
   const found = useFoldedFindMatch(match?.findMatch ?? null, !!match?.findRevealing, controller);
@@ -836,7 +786,7 @@ function Item({ item }: { item: TranscriptItem<TranscriptRow> }) {
     item.rows.length === 1 && first.kind === 'live' && kindOfRow(first) === 'activity';
   // Whether a call's row is retained decides whether its output is a step of its own.
   const isRetained = useRetainedCalls(
-    entryRows.flatMap((row) =>
+    item.rows.flatMap((row) =>
       (row.entry.transcript?.parts ?? []).flatMap((part) => part.call?.entryId ?? []),
     ),
   );
@@ -918,7 +868,6 @@ function collectGroupSteps(
     // The last row's steps: the model message the work is on now.
     latestRow: ActivityHeadline[] = [];
   for (const row of rows) {
-    if (row.kind === 'tool') continue;
     endedAt = getLaterTime(endedAt, row.entry.createdAt);
     if (!row.entry.transcript) continue;
     if (row.kind === 'live' && row.state === 'running') active = true;
@@ -964,8 +913,7 @@ function findGroupStarts(items: readonly TranscriptItem<TranscriptRow>[]) {
   let last: string | undefined;
   for (const item of items) {
     if (last) starts.set(item.key, last);
-    for (const row of item.rows)
-      if (row.kind !== 'tool') last = getLaterTime(last, row.entry.createdAt);
+    for (const row of item.rows) last = getLaterTime(last, row.entry.createdAt);
   }
   return starts;
 }
@@ -982,50 +930,23 @@ function Row({
   return (
     <div data-transcript-row={row.key} {...stylex.props(styles.row)}>
       <div {...stylex.props(styles.measure)}>
-        {row.kind === 'tool' ? (
-          <ToolPreview tool={row.tool} />
-        ) : (
-          <Entry
-            entry={row.entry}
-            live={row.kind === 'live'}
-            liveLabel={
-              row.kind === 'live' ? (context.liveLabel ?? getRunLabel(row.state)) : undefined
-            }
-            joinPrevious={joinPrevious}
-            joinNext={joinNext}
-            {...context.shared}
-            {...context.getRowProps(row.entry)}
-          />
-        )}
+        <Entry
+          entry={row.entry}
+          live={row.kind === 'live'}
+          liveLabel={
+            row.kind === 'live' ? (context.liveLabel ?? getRunLabel(row.state)) : undefined
+          }
+          joinPrevious={joinPrevious}
+          joinNext={joinNext}
+          {...context.shared}
+          {...context.getRowProps(row.entry)}
+        />
       </div>
     </div>
   );
 }
-function Edge({ children }: { children: ReactNode }) {
-  return (
-    <div {...stylex.props(styles.row, styles.edge)}>
-      <div {...stylex.props(styles.measure)}>{children}</div>
-    </div>
-  );
-}
-/** A legacy host's tool output preview, shown while its run is live. */
-function ToolPreview({ tool }: { tool: ChatToolActivity }) {
-  return (
-    <section {...stylex.props(styles.message)}>
-      <strong>
-        {tool.name} · {tool.state}
-      </strong>
-      <pre tabIndex={0} {...stylex.props(styles.output)}>
-        {tool.text}
-      </pre>
-      {tool.truncated && (
-        <p {...stylex.props(styles.small)}>
-          This host supplied a tool-output preview. Upgrade the host for complete reads.
-        </p>
-      )}
-    </section>
-  );
-}
+/** The space above the first row and below the last. */
+const edge = <div {...stylex.props(styles.edge)} />;
 
 /** Slices transcript state per row, in values that keep their identity while unchanged. */
 function useRowProps(transcript: ChatState['transcript']) {
@@ -1036,7 +957,7 @@ function useRowProps(transcript: ChatState['transcript']) {
   const { manifest, observation } = transcript;
   const offline = ['reconnecting', 'failed', 'inactive'].includes(observation);
   return useCallback(
-    (entry: ChatEntry): RowProps => {
+    (entry: LiveEntry): RowProps => {
       const source = entry.transcript?.source;
       const findMatch =
         active && source && areJsonValuesEqual(active.source, source) ? active : null;
@@ -1125,9 +1046,7 @@ function useMountedRowKeys(
   }
   if (reading.focused) keys.add(reading.focused);
   if (imageSource) {
-    const row = rows.find(
-      (row) => row.kind !== 'tool' && areJsonValuesEqual(row.entry.transcript?.source, imageSource),
-    );
+    const row = rows.find((row) => areJsonValuesEqual(row.entry.transcript?.source, imageSource));
     if (row) keys.add(row.key);
   }
   if (findActive) keys.add(getEntryRowKey(findActive.source.entryId));

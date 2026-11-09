@@ -22,6 +22,7 @@ const snapshot: ChatSnapshot = {
   run: null,
   entries: [],
   olderCursor: null,
+  transcriptBoundary: null,
 };
 function event<T>() {
   let resolve!: (value: T) => void;
@@ -71,13 +72,21 @@ function fixture(options: { slowSend?: boolean; cleanupFailure?: boolean } = {})
         return { entries: [], olderCursor: null };
       }),
     getChatTranscriptContent: () =>
-      Effect.fail(new ApplicationError({ code: 'Incompatible', message: 'Legacy fixture.' })),
+      Effect.fail(
+        new ApplicationError({ code: 'Incompatible', message: 'Not served by this fixture.' }),
+      ),
     findChatTranscript: () =>
-      Effect.fail(new ApplicationError({ code: 'Incompatible', message: 'Legacy fixture.' })),
+      Effect.fail(
+        new ApplicationError({ code: 'Incompatible', message: 'Not served by this fixture.' }),
+      ),
     getChatHistoryAround: () =>
-      Effect.fail(new ApplicationError({ code: 'Incompatible', message: 'Legacy fixture.' })),
+      Effect.fail(
+        new ApplicationError({ code: 'Incompatible', message: 'Not served by this fixture.' }),
+      ),
     findChatFiles: () =>
-      Effect.fail(new ApplicationError({ code: 'Incompatible', message: 'Legacy fixture.' })),
+      Effect.fail(
+        new ApplicationError({ code: 'Incompatible', message: 'Not served by this fixture.' }),
+      ),
     sendChat: (input) =>
       Effect.gen(function* () {
         assert.deepEqual(input.target, target);
@@ -117,7 +126,9 @@ function fixture(options: { slowSend?: boolean; cleanupFailure?: boolean } = {})
         return { ...input, outcome: 'stopped' as const };
       }),
     settleChat: () =>
-      Effect.fail(new ApplicationError({ code: 'Incompatible', message: 'Legacy fixture.' })),
+      Effect.fail(
+        new ApplicationError({ code: 'Incompatible', message: 'Not served by this fixture.' }),
+      ),
     watch: (input) =>
       Stream.unwrap(
         Effect.as(

@@ -135,7 +135,7 @@ export async function captureTranscript(
     toolSlots = Infinity,
   }: {
     cache?: { boundary?: EntryId | null; retired?: boolean };
-    /** Leading tool slots to read; snapshots read only what their previews and first page show. */
+    /** Leading tool slots to read; snapshots read only what their embedded first page shows. */
     toolSlots?: number;
   } = {},
 ) {

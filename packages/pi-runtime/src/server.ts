@@ -2,10 +2,8 @@ import type { AddressInfo } from 'node:net';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { Effect } from 'effect';
 import {
-  chatStreamFeature,
   chatContentChunkBytes,
   type ChatClient,
-  type ChatOutput,
   type ChatStreamRequest,
   type ChatStreamFrame,
 } from '@moonbase/contracts/chat';
@@ -264,18 +262,7 @@ export const serveChat = (config: ChatServerConfiguration, client: ChatClient) =
                 200,
                 {
                   ok: true,
-                  value:
-                    operation === 'getChatHost'
-                      ? {
-                          ...value,
-                          features: [
-                            ...new Set([
-                              ...((value as ChatOutput<'getChatHost'>).features ?? []),
-                              chatStreamFeature,
-                            ]),
-                          ],
-                        }
-                      : value,
+                  value,
                 },
                 challenge,
               );

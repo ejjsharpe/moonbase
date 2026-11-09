@@ -53,12 +53,17 @@ test('counted tools publish bounded progress; old task Stop cannot follow genera
   await f.client.command('sendChat', { target, requestId: 'tools', text: 'Run counted tool' });
   const active = await until(
     () => f.client.command('getChat', { target }),
-    (s) => !!s.run?.tools.some((t) => t.text.length),
+    (s) =>
+      !!s.run?.transcript?.parts.some(
+        (p) => p.kind === 'result' && p.toolName === 'counted' && p.text.length,
+      ),
   );
   const old = active.run!.stop;
   assert.equal(tools, 1);
   assert(
-    active.run!.tools.every((t) => Buffer.byteLength(t.text) <= 4096 && t.text.isWellFormed()),
+    active.run!.transcript!.parts.every(
+      (p) => Buffer.byteLength(p.text) <= 4096 && p.text.isWellFormed(),
+    ),
   );
   assert(Buffer.byteLength(JSON.stringify(active)) <= 256 * 1024);
   release();
@@ -134,7 +139,7 @@ test('bounded escaped Unicode history pages retain every durable entry ID withou
   );
 });
 
-test('ten actual tools retain only eight live previews and view disposal never stops them', async (t) => {
+test('ten actual tools keep the live snapshot bounded and view disposal never stops them', async (t) => {
   let calls = 0,
     release!: () => void;
   const gate = new Promise<void>((r) => (release = r)),
@@ -189,9 +194,11 @@ test('ten actual tools retain only eight live previews and view disposal never s
     );
     const view = await until(
       () => f.client.command('getChat', { target }),
-      (s) => s.run?.tools.length === 8 && s.run.tools.every((t) => t.text.length > 0),
+      (s) =>
+        !!s.run?.transcript?.parts.some(
+          (p) => p.kind === 'result' && p.toolName === 'many' && p.text.length > 0,
+        ),
     );
-    assert.equal(view.run!.tools.length, 8);
     assert(Buffer.byteLength(JSON.stringify(view)) <= 256 * 1024);
     await off();
     const before = snapshots.length;
@@ -274,9 +281,14 @@ test('completed failing tool activity is projected as failed while another tool 
     await f.client.command('sendChat', { target, requestId: 'status', text: 'Show tool states' });
     const view = await until(
       () => f.client.command('getChat', { target }),
-      (s) => !!s.run?.tools.some((t) => t.name === 'fails' && t.state !== 'running'),
+      (s) =>
+        !!s.run?.transcript?.parts.some(
+          (p) => p.kind === 'result' && p.toolName === 'fails' && p.state !== 'running',
+        ),
     );
-    assert.equal(view.run!.tools.find((t) => t.name === 'fails')!.state, 'failed');
+    const parts = view.run!.transcript!.parts.filter((p) => p.kind === 'result');
+    assert.equal(parts.find((p) => p.toolName === 'fails')!.state, 'failed');
+    assert.equal(parts.find((p) => p.toolName === 'holds')!.state, 'running');
   } finally {
     release();
   }

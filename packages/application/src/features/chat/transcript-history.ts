@@ -27,11 +27,7 @@ export const reuseParts = (previous: ChatTranscriptPart[], next: ChatTranscriptP
   });
 export function reuseEntry(old: ChatEntry | undefined, next: ChatEntry): ChatEntry {
   if (old && areJsonValuesEqual(old, next)) return old;
-  if (
-    old?.transcript &&
-    next.transcript &&
-    areJsonValuesEqual(old.transcript.source, next.transcript.source)
-  )
+  if (old && areJsonValuesEqual(old.transcript.source, next.transcript.source))
     return {
       ...next,
       transcript: {
@@ -71,10 +67,9 @@ function mergeEntries(previous: ChatEntry[], page: ChatEntry[], direction: Histo
 export function checkEntrySources(entries: ChatEntry[], target: ChatTarget) {
   for (const entry of entries)
     if (
-      entry.transcript &&
-      (entry.transcript.source.kind !== 'entry' ||
-        entry.transcript.source.entryId !== entry.id ||
-        !sameTarget(entry.transcript.source.target, target))
+      entry.transcript.source.kind !== 'entry' ||
+      entry.transcript.source.entryId !== entry.id ||
+      !sameTarget(entry.transcript.source.target, target)
     )
       throw makeTranscriptFailure('Transcript entry belongs to another source.');
 }
@@ -145,8 +140,6 @@ export class TranscriptHistory {
    */
   following: boolean;
   private navigation?: Navigation;
-  /** Legacy paging: each page or snapshot's oldest entry ID maps to its older-page cursor. */
-  private olderCursors = new Map<string, string | null>();
   private olderEnd = true;
   private newerEnd = true;
   constructor(following: boolean) {
@@ -201,7 +194,6 @@ export class TranscriptHistory {
       );
       if (old && old.transcriptBoundary !== input.transcriptBoundary) this.newerEnd = false;
     }
-    this.rememberOlderCursor(entries, input.olderCursor);
   }
   /** The around-entry read that continues past the retained edge in `direction`. */
   findAroundRead(direction: HistoryDirection) {
@@ -257,23 +249,15 @@ export class TranscriptHistory {
         page.entries[0]?.id === this.records[0]?.id &&
         newestLive === this.records[0]?.id;
   }
-  /** Merges a legacy older page read from `cursor`. */
+  /**
+   * Takes the older page read from `cursor`, the snapshot's own older cursor, while no records are
+   * retained: a snapshot whose live run left no room for entries still has older history.
+   */
   applyOlderPage(page: ChatOutput<'getChatHistory'>, cursor: string, target: ChatTarget) {
     if (page.olderCursor === cursor) throw makeTranscriptFailure('History cursor did not advance.');
     checkEntrySources(page.entries, target);
     this.records = mergeEntries(this.records, page.entries, 'earlier');
-    this.rememberOlderCursor(page.entries, page.olderCursor);
     this.olderEnd = page.olderCursor === null;
-  }
-  /**
-   * Legacy hosts read no newer pages: later history continues with the latest snapshot's entries,
-   * or jumps to them when they don't overlap the retained records.
-   */
-  applyLatestEntries(entries: ChatEntry[]) {
-    if (entries.some((entry) => this.findRecord(entry.id)))
-      this.records = mergeEntries(this.records, entries, 'later');
-    else this.replaceRecords(entries);
-    this.newerEnd = true;
   }
   /** Drops records and navigation before an explicit read of the latest snapshot. */
   resetToLatest() {
@@ -301,25 +285,7 @@ export class TranscriptHistory {
     } else this.olderEnd = false;
     return removed;
   }
-  /**
-   * Resumes legacy paging from the oldest cached checkpoint, so records evicted from the older end
-   * are read again rather than skipped; mergeEntries drops the overlap by entry ID.
-   */
-  findOlderCursor(snapshotCursor: string | null | undefined) {
-    for (let index = this.records.length - 1; index >= 0; index--) {
-      const cursor = this.olderCursors.get(this.records[index].id);
-      if (cursor !== undefined) return cursor;
-    }
-    // Empty records page from the snapshot's own older cursor.
-    return this.records.length ? null : (snapshotCursor ?? null);
-  }
   clear() {
     this.records = [];
-  }
-  private rememberOlderCursor(entries: ChatEntry[], cursor: string | null) {
-    const oldest = entries.at(-1);
-    if (oldest) this.olderCursors.set(oldest.id, cursor);
-    const cached = new Set(this.records.map((entry) => entry.id));
-    for (const id of this.olderCursors.keys()) if (!cached.has(id)) this.olderCursors.delete(id);
   }
 }

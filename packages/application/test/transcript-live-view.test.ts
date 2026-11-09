@@ -29,7 +29,6 @@ function publishLive(
       state: 'running',
       text: text.slice(0, 64),
       truncated: text.length > 64,
-      tools: [],
       transcript: { source, parts: [descriptor], nextCursor: null, thinking: 'none' },
     },
   };

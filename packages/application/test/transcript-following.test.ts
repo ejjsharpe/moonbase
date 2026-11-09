@@ -48,7 +48,7 @@ function holdAroundRead(f: Fixture) {
 }
 const isOriginal = (f: Fixture, count: number) => (entry: { id: string }) =>
   f.entries.findIndex((value) => value.id === entry.id) < count;
-function legacyRun(snapshot: ChatSnapshot): ChatSnapshot {
+function runningRun(snapshot: ChatSnapshot): ChatSnapshot {
   const target = snapshot.conversation.target;
   return {
     ...snapshot,
@@ -58,7 +58,6 @@ function legacyRun(snapshot: ChatSnapshot): ChatSnapshot {
       state: 'running',
       text: 'working',
       truncated: false,
-      tools: [{ taskId: 'tool-1', name: 'bash', state: 'running', text: 'ls', truncated: false }],
     },
   };
 }
@@ -153,11 +152,11 @@ test('budget eviction outside a page read keeps the rows around a reader near th
   assert(state.later);
 });
 
-test('a legacy tool preview anchor is at the live edge', async (t) => {
+test('a live response anchor is at the live edge', async (t) => {
   const f = await transcriptController(t, 64);
-  f.publish(legacyRun(f.snapshot));
-  assert.equal(f.controller.getSnapshot().transcript.rows.at(-1)!.key, 'tool:tool-1');
-  f.controller.setTranscriptView({ anchor: { key: 'tool:tool-1', offset: -3 }, expanded: [] });
+  f.publish(runningRun(f.snapshot));
+  assert.equal(f.controller.getSnapshot().transcript.rows.at(-1)!.key, 'live:send');
+  f.controller.setTranscriptView({ anchor: { key: 'live:send', offset: -3 }, expanded: [] });
   assert.equal(f.controller.getSnapshot().transcript.atLatest, true);
   // A latest snapshot replaces the records for a reader at the live edge.
   const dataset = f.controller.getSnapshot().transcript.dataset;
@@ -165,13 +164,13 @@ test('a legacy tool preview anchor is at the live edge', async (t) => {
   let state = f.controller.getSnapshot().transcript;
   assert.equal(state.dataset, dataset + 1);
   assert.equal(state.later, false);
-  // Reopening with the tool anchor follows the live edge rather than reading history.
-  f.controller.setTranscriptView({ anchor: { key: 'tool:tool-1', offset: -3 }, expanded: [] });
+  // Reopening with the live anchor follows the live edge rather than reading history.
+  f.controller.setTranscriptView({ anchor: { key: 'live:send', offset: -3 }, expanded: [] });
   await f.controller.detach();
-  f.publish(legacyRun(f.snapshot));
+  f.publish(runningRun(f.snapshot));
   await f.controller.start();
   state = f.controller.getSnapshot().transcript;
-  assert.deepEqual(state.view.anchor, { key: 'tool:tool-1', offset: -3 });
+  assert.deepEqual(state.view.anchor, { key: 'live:send', offset: -3 });
   assert.equal(state.atLatest, true);
   assert.equal(
     f.calls.filter((call) => call.operation === 'getChatHistoryAround').length,

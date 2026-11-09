@@ -20,6 +20,7 @@ export function chatCapabilities() {
     run: null,
     entries: [],
     olderCursor: null,
+    transcriptBoundary: null,
   };
   const profile = {
     id: 'profile',
@@ -71,7 +72,7 @@ export function chatCapabilities() {
         case 'getChatHistoryAround':
           throw new ApplicationError({
             code: 'Incompatible',
-            message: 'This legacy demo does not advertise transcript reads.',
+            message: 'This fixture serves no transcript reads.',
           });
         case 'getChatSend':
           return null as never;

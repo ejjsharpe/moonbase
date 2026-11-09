@@ -53,7 +53,8 @@ export function usePartBody(
   return {
     root,
     body,
-    held: body !== current,
+    /** The reader's selection holds an earlier version; one held while the next loads goes unsaid. */
+    held: body !== current && selected,
     takeCopyBody,
     copyProps: {
       onPointerDown: () => {

@@ -251,6 +251,7 @@ for (const outcome of ['success', 'error'] as const)
         .toBe(true);
       await expect(pre).toHaveText(initial);
       expect(await page.evaluate(() => window.getSelection()?.toString())).toBe('SELECT THIS');
+      await expect(output).toContainText('Showing previously read output');
       await pre.click({ position: { x: 8, y: 8 } });
       await expect.poll(() => page.evaluate(() => window.getSelection()?.isCollapsed)).toBe(true);
       await expect(pre).toHaveText(initial);
@@ -264,7 +265,9 @@ for (const outcome of ['success', 'error'] as const)
           ),
         )
         .toBe(new TextEncoder().encode(initial + 'appended current tail\n').length);
-      await expect(output).toContainText('Showing previously read output');
+      // The version shown while the next one loads is what Copy copies, so it goes unsaid; only a
+      // selection holding it is called out.
+      await expect(output).not.toContainText('Showing previously read output');
       await output.getByRole('button', { name: 'Copy part', exact: true }).click();
       await expect.poll(() => native.writes).toEqual([initial]);
       expect(native.inputs[0]?.selection).toEqual({

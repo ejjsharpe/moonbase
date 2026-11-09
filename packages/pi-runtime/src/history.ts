@@ -43,8 +43,8 @@ const historyPageBytes = 250 * 1024;
 const entryListBytes = 240 * 1024;
 /** Rows one listing or history page may scan before returning a continuation. */
 const rowsPerPage = 32;
-/** The run summary previews at most this many live tools; the transcript holds the rest. */
-const liveToolPreviews = 8;
+/** Leading live tool slots a snapshot reads, more than its embedded transcript page reaches. */
+const snapshotToolSlots = 8;
 
 const getCursorIdentity = (identity: string) => createHash('sha256').update(identity).digest('hex');
 type BlockedReason = Extract<TaskInspection['state'], { kind: 'blocked' }>['reason'];
@@ -273,7 +273,7 @@ async function projectSnapshotOnce(
   signal?.throwIfAborted();
   const captured = await captureTranscript(harness, target, {
     cache,
-    toolSlots: liveToolPreviews,
+    toolSlots: snapshotToolSlots,
   });
   signal?.throwIfAborted();
   const { live, task, latest } = captured;
@@ -307,26 +307,6 @@ async function projectSnapshotOnce(
       }
     }
     blocked = status?.blocked;
-    const tools = (live.tools ?? []).slice(0, liveToolPreviews).map((tool, index) => {
-      const entry = captured.tools[index];
-      const result = entry?.model?.find((message) => message.role === 'toolResult');
-      const text =
-        result?.role === 'toolResult'
-          ? result.content
-              .filter((part) => part.type === 'text')
-              .map((part) => part.text)
-              .join('')
-          : (tool.output ?? '');
-      let toolState: 'running' | 'completed' | 'failed' = 'running';
-      if (tool.status === 'done')
-        toolState = result?.role === 'toolResult' && !result.isError ? 'completed' : 'failed';
-      return {
-        taskId: String(tool.taskId ?? live.run!.taskId),
-        name: V.preview(tool.name, 128).text,
-        state: toolState,
-        ...V.preview(text),
-      };
-    });
     let runState: ChatRun['state'] = 'running';
     if (task?.abortRequested) runState = 'stopping';
     else if (live.generation?.deferred) runState = 'deferred';
@@ -340,7 +320,6 @@ async function projectSnapshotOnce(
             .map((part) => part.text)
             .join('') ?? '',
         ),
-        tools,
       };
   }
   let state: ChatSnapshot['state'];

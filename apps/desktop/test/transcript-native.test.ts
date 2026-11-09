@@ -228,13 +228,13 @@ function fixture(live = false, text = '  **raw**\r\n\t🌔 é\r\n' + 'α'.repea
     },
     entries: [],
     olderCursor: null,
+    transcriptBoundary: null,
     state: 'running',
     run: {
       stop: { target, submissionId: 'submission', taskId: 'task' },
       state: 'running',
       text: part.text,
       truncated: true,
-      tools: [],
       transcript: { source, parts: [part], thinking: 'none', nextCursor: null },
     },
   };

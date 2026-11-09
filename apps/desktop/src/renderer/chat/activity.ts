@@ -1,3 +1,4 @@
+import type { LiveEntry } from '@moonbase/application/chat';
 import type { ChatEntry, ChatTranscript, ChatTranscriptPart } from '@moonbase/contracts/chat';
 import { areJsonValuesEqual } from '@moonbase/contracts/common';
 import { structuredSourceLimits } from './source-limits.ts';
@@ -47,7 +48,7 @@ export function findAnsweredThoughts(parts: readonly ChatTranscriptPart[]) {
  * consecutive rows join into one card. A reply that only thought, with nothing to read, is empty
  * too.
  */
-export function classifyEntry(entry: ChatEntry): 'empty' | 'activity' | 'message' {
+export function classifyEntry(entry: LiveEntry): 'empty' | 'activity' | 'message' {
   const parts = entry.transcript?.parts ?? [];
   if (
     entry.role === 'system' &&
@@ -340,14 +341,10 @@ export function getEntryTranscripts(
   entries: ChatEntry[],
   manifest: Pick<ChatTranscript, 'source' | 'parts'> | null,
 ) {
-  return entries.flatMap((entry) =>
-    entry.transcript
-      ? [
-          manifest?.parts.length && areJsonValuesEqual(manifest.source, entry.transcript.source)
-            ? manifest
-            : entry.transcript,
-        ]
-      : [],
+  return entries.map((entry) =>
+    manifest?.parts.length && areJsonValuesEqual(manifest.source, entry.transcript.source)
+      ? manifest
+      : entry.transcript,
   );
 }
 

@@ -58,7 +58,6 @@ function live(
       state: 'running',
       text,
       truncated: false,
-      tools: [],
       transcript: {
         source: {
           kind: 'live',

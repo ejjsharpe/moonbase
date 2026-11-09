@@ -19,11 +19,11 @@ import { controls } from '@moonbase/ui/controls';
 import { spinner } from '@moonbase/ui/spinner';
 import type {
   ChatController,
+  LiveEntry,
   TranscriptContentState,
   TranscriptManifestState,
 } from '@moonbase/application/chat';
 import type {
-  ChatEntry,
   ChatTranscriptMatch,
   ChatTranscriptPart,
   ChatTranscriptSource,
@@ -72,7 +72,8 @@ import { Icon } from '../icon.tsx';
  * values that keep their identity while unchanged, so rows skip unrelated updates.
  */
 export type EntryProps = {
-  entry: ChatEntry;
+  /** A stored entry, or the live response, which has no transcript while its task completes. */
+  entry: LiveEntry;
   /** Set for the live row. */
   live?: boolean;
   /** The live row's status, when it is something other than running. */
@@ -253,7 +254,7 @@ export const Entry = memo(
     return (
       <article
         data-transcript-entry={live ? undefined : entry.id}
-        data-transcript-live={live ? JSON.stringify(source ?? 'legacy') : undefined}
+        data-transcript-live={live ? (sourceKey ?? '') : undefined}
         aria-label={live ? 'Live response' : undefined}
         {...stylex.props(stylex.defaultMarker(), styles.message, user && styles.userMessage)}>
         {notes.length > 0 && (
@@ -307,12 +308,6 @@ export const Entry = memo(
               The saved Find part is unavailable. Refresh results.
             </p>
           )}
-        {!transcript && entry.truncated && (
-          <p {...stylex.props(styles.small)}>
-            Only a preview is available from this host. Upgrade the host to read the complete
-            source.
-          </p>
-        )}
         {transcript?.thinking === 'redacted' && !parts.some((part) => part.kind === 'thinking') && (
           <p {...stylex.props(styles.small)}>Thinking is redacted by the provider.</p>
         )}
@@ -882,13 +877,9 @@ const Part = memo(
             mark={mark}
           />
         )}
-        {match && !matchVisible && (
-          <p
-            role={content?.status === 'complete' ? 'alert' : 'status'}
-            {...stylex.props(styles.small)}>
-            {content?.status === 'complete'
-              ? 'The saved match differs from this source. Refresh results.'
-              : 'Loading original source through this match…'}
+        {match && !matchVisible && content?.status === 'complete' && (
+          <p role="alert" {...stylex.props(styles.small)}>
+            The saved match differs from this source. Refresh results.
           </p>
         )}
         {part.pairing && part.pairing !== 'matched' && (
@@ -919,21 +910,18 @@ const Part = memo(
             </Button>
           </p>
         )}
-        {readable &&
-          (content?.status === 'loading' ? (
-            <p role="status" {...stylex.props(styles.small)}>
-              Loading content…
-            </p>
-          ) : (
-            (content?.nextCursor || (!content && part.truncated)) && (
-              <Button
-                {...stylex.props(controls.button, controls.quietButton)}
-                onClick={() => load()}>
-                Read more · {content?.loadedBytes.toLocaleString() ?? 0} of{' '}
-                {part.bytes.toLocaleString()} bytes
-              </Button>
-            )
-          ))}
+        {/* A shown part reads its content by itself, so only a part read in pages offers more. It
+            stays in place while a page loads: a line that came and went with every read would
+            move the rows below it, and the list following the end with them. */}
+        {readable && content?.nextCursor && (
+          <Button
+            {...stylex.props(controls.button, controls.quietButton)}
+            disabled={content.status === 'loading'}
+            onClick={() => load()}>
+            Read more · {content.loadedBytes.toLocaleString()} of {part.bytes.toLocaleString()}{' '}
+            bytes
+          </Button>
+        )}
       </>
     );
     let copyLabel = 'part';

@@ -144,7 +144,6 @@ test.describe('the virtualized transcript', () => {
       if (!earlier && !loading && (await list.evaluate((node) => node.scrollTop)) < 1) break;
     }
     await expect(page.locator('[data-transcript-row="entry:long-0"]')).toBeVisible();
-    await expect(page.getByText('Start of conversation', { exact: true })).toBeVisible();
     const retained = await page.evaluate(
       () => window.demo.application.chat!.getSnapshot().transcript.entries.length,
     );
@@ -225,6 +224,39 @@ test.describe('the virtualized transcript', () => {
     });
     expect(result.reads).toBe(0);
     expect(result.shown).toContain('more streaming words arrive here. '.repeat(12).trim());
+  });
+
+  test('following a streaming reply never moves the text back down', async ({ page }) => {
+    await openLong(page, 40);
+    const text = 'Streaming reply\n\n' + 'more streaming words arrive here. '.repeat(4);
+    await page.evaluate((text) => window.demo.transcript!.live(text), text);
+    await expect(page.locator('[data-transcript-live]')).toContainText('more streaming words');
+    const moves = await page.evaluate(async (text) => {
+      const list = document.querySelector('[data-transcript-list]')!;
+      const above = list.querySelector('[data-transcript-row="entry:long-39"]')!;
+      // Each frame, where the row above the reply sits: following only ever moves it up.
+      const tops: number[] = [];
+      let sampling = true;
+      const sample = () => {
+        tops.push(above.getBoundingClientRect().top - list.getBoundingClientRect().top);
+        if (sampling) requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+      for (let step = 0; step < 40; step++) {
+        text += 'more streaming words arrive here. ';
+        await window.demo.transcript!.live(text);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      sampling = false;
+      return tops.flatMap((top, index) =>
+        index && top > tops[index - 1]! + 1 ? [Math.round(top - tops[index - 1]!)] : [],
+      );
+    }, text);
+    // A status line under the reply while each revision loads was measured and then dropped, so
+    // the list followed an end 43px too far and fell back as the reply grew.
+    expect(moves).toEqual([]);
+    await expect.poll(async () => (await readList(page)).fromEnd).toBeLessThan(1);
   });
 
   test('a finished reply keeps the text it streamed while its stored text loads', async ({

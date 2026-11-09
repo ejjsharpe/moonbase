@@ -47,8 +47,8 @@ export function findKnownParts(
   if (snapshot?.run?.transcript && areJsonValuesEqual(snapshot.run.transcript.source, source))
     return snapshot.run.transcript.parts;
   return (
-    records.find((entry) => areJsonValuesEqual(entry.transcript?.source, source))?.transcript
-      ?.parts ?? []
+    records.find((entry) => areJsonValuesEqual(entry.transcript.source, source))?.transcript
+      .parts ?? []
   );
 }
 
