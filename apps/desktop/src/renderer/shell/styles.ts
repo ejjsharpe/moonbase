@@ -47,7 +47,7 @@ export const styles = stylex.create({
     position: 'absolute',
     top: 0,
     // Until the content column is measured; then it follows that column's left edge.
-    left: 124,
+    left: 184,
     right: 96,
     height: titleBarHeight,
     display: 'flex',
@@ -176,12 +176,17 @@ export const styles = stylex.create({
     // Wider than macOS's resize edge, which takes the first few pixels.
     width: 8,
   },
-  // Shows and hides the main sidebar, after the window controls on macOS.
-  sidebarToggle: {
+  // Back, forward and the sidebar button, after the window controls on macOS.
+  barStart: {
     position: 'absolute',
     zIndex: 30,
     top: (titleBarHeight - 28) / 2,
     left: 8,
+    display: 'flex',
+    gap: 2,
+  },
+  barStartMac: { left: 84 },
+  barStartButton: {
     width: 28,
     height: 28,
     padding: 6,
@@ -189,9 +194,9 @@ export const styles = stylex.create({
     borderRadius: radius.control,
     color: { default: colors.muted, ':hover:not(:disabled)': colors.text },
     backgroundColor: { default: 'transparent', ':hover:not(:disabled)': colors.hover },
+    opacity: { default: 1, ':disabled': 0.4 },
     WebkitAppRegion: 'no-drag',
   },
-  sidebarToggleMac: { left: 84 },
   rail: {
     height: '100%',
     display: 'flex',

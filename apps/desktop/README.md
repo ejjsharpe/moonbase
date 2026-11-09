@@ -6,7 +6,7 @@ The renderer opens only roots chosen in the native picker, already known, listed
 
 ## Window
 
-A title bar runs across the top: the window controls, the sidebar button, then the open file or view's title over the content column, and buttons for project chats (⌘J) and a new chat. ⌘B (or ⌃⌘S) hides the main sidebar: the explorer, or the chat list in Agents. The project rail sits under the title bar; ⌃⌥⌘S or the button at its foot hides it, and it then slides over the window while the pointer is at the left edge. Both choices are kept in renderer local storage.
+A title bar runs across the top: the window controls, back and forward, the sidebar button, then the open file or view's title over the content column, and buttons for project chats (⌘J) and a new chat. Back and forward (⌃- and ⌃⇧-, Alt+← and Alt+→ off macOS, or the mouse's side buttons) step through the places the window has shown: a chat in Agents, or a project and its file. The history lasts as long as the window, up to 50 places; a closed project is passed over, and a chat or file that can no longer open drops out. ⌘B (or ⌃⌘S) hides the main sidebar: the explorer, or the chat list in Agents. The project rail sits under the title bar; ⌃⌥⌘S or the button at its foot hides it, and it then slides over the window while the pointer is at the left edge. Both choices are kept in renderer local storage.
 
 ## Run
 

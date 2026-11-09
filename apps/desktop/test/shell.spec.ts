@@ -2436,6 +2436,93 @@ test('on Agents the title bar names the open chat and holds its actions', async 
   await expect(bar.getByRole('heading', { level: 1 })).toHaveText('New chat');
 });
 
+test('back and forward step through chats, projects and files', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?local&design&transcript');
+  const bar = page.locator('header[aria-label="Window title bar"]');
+  const title = bar.getByRole('heading', { level: 1 });
+  const back = bar.getByRole('button', { name: 'Back', exact: true });
+  const forward = bar.getByRole('button', { name: 'Forward', exact: true });
+  // A place counts once it has shown for a moment, as it would between a person's clicks.
+  const settle = () => page.waitForTimeout(300);
+  await expect(title).toHaveText('New chat');
+  await expect(back).toBeDisabled();
+  await expect(forward).toBeDisabled();
+  await settle();
+  // A new chat gives way to the chat chosen from it.
+  await page.getByRole('button', { name: /^Conversation/ }).click();
+  await expect(title).toHaveText('Conversation');
+  await settle();
+  await expect(back).toBeDisabled();
+  await page.getByRole('tab', { name: 'moonbase · main', exact: true }).click();
+  await expect(bar).toContainText('moonbase/welcome.ts');
+  await expect(back).toBeEnabled();
+  await settle();
+  await page.getByRole('treeitem', { name: 'README.md' }).dblclick();
+  await expect(bar).toContainText('moonbase/README.md');
+  await settle();
+  await back.click();
+  await expect(bar).toContainText('moonbase/welcome.ts');
+  await expect(forward).toBeEnabled();
+  // Back to Agents shows the chat that was open there.
+  await page.keyboard.press('Control+Minus');
+  await expect(title).toHaveText('Conversation');
+  await expect(back).toBeDisabled();
+  await page.keyboard.press('Control+Shift+Minus');
+  await expect(bar).toContainText('moonbase/welcome.ts');
+  // The mouse's own forward button.
+  await bar.dispatchEvent('mouseup', { button: 4 });
+  await expect(bar).toContainText('moonbase/README.md');
+  await expect(forward).toBeDisabled();
+  await back.click();
+  await expect(bar).toContainText('moonbase/welcome.ts');
+  await expect(forward).toBeEnabled();
+  // Going somewhere new from here drops what was forward of it.
+  await settle();
+  await bar.getByRole('button', { name: 'Start a new chat', exact: true }).click();
+  await expect(title).toHaveText('New chat');
+  await expect(forward).toBeDisabled();
+  await settle();
+  await back.click();
+  await expect(bar).toContainText('moonbase/welcome.ts');
+});
+
+test('a place chosen while back is on its way counts, and a closed file opens again', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?local&design&transcript');
+  const bar = page.locator('header[aria-label="Window title bar"]');
+  const back = bar.getByRole('button', { name: 'Back', exact: true });
+  const forward = bar.getByRole('button', { name: 'Forward', exact: true });
+  const settle = () => page.waitForTimeout(300);
+  await page.getByRole('tab', { name: 'moonbase · main', exact: true }).click();
+  await expect(bar).toContainText('moonbase/welcome.ts');
+  await settle();
+  await page.getByRole('treeitem', { name: 'README.md' }).dblclick();
+  await expect(bar).toContainText('moonbase/README.md');
+  await settle();
+  // Back, and straight away somewhere else, before the step has finished.
+  await back.click();
+  await page.getByRole('treeitem', { name: 'ignored.txt' }).dblclick();
+  await expect(bar).toContainText('moonbase/ignored.txt');
+  await settle();
+  await settle();
+  await expect(forward).toBeDisabled();
+  await back.click();
+  await expect(bar).toContainText('moonbase/welcome.ts');
+  // A file closed since opens again.
+  await settle();
+  await page.getByRole('treeitem', { name: 'README.md' }).dblclick();
+  await expect(bar).toContainText('moonbase/README.md');
+  await settle();
+  await page.getByRole('button', { name: 'Close README.md', exact: true }).click();
+  await expect(bar).not.toContainText('README.md');
+  await settle();
+  await back.click();
+  await expect(bar).toContainText('moonbase/README.md');
+});
+
 test('the title bar names the open file, and project chats close fully and reopen', async ({
   page,
 }) => {

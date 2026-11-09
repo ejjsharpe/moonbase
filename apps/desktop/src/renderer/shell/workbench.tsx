@@ -35,6 +35,15 @@ import {
   type WorkbenchHandle,
 } from '@moonbase/workbench';
 import { styles } from './styles.ts';
+import {
+  emptyHistory,
+  findStep,
+  isSamePlace,
+  settleStep,
+  stepTo,
+  visitPlace,
+  type Place,
+} from './history.ts';
 import { MainTabs, tabValue } from './main-tabs.tsx';
 
 export type DesktopShellHandle = {
@@ -66,8 +75,25 @@ const noSubscription = () => () => {};
 const mac = navigator.platform.startsWith('Mac');
 const railCollapsedKey = 'moonbase.rail.collapsed';
 const sidebarHiddenKey = 'moonbase.sidebar.hidden';
-/** The title never starts before the sidebar button, which follows the window controls on macOS. */
-const titleMinLeft = (mac ? 84 : 8) + 28 + 12;
+/**
+ * The title never starts before back, forward and the sidebar button, which follow the window
+ * controls on macOS.
+ */
+const titleMinLeft = (mac ? 84 : 8) + 3 * 28 + 2 * 2 + 12;
+/** Back and forward through places, as in VS Code: ⌃- and ⌃⇧- on macOS, Alt+← and Alt+→ elsewhere. */
+const placeSettleMs = 150,
+  stepTimeoutMs = 3000;
+const backShortcut = mac ? '⌃-' : 'Alt+←',
+  forwardShortcut = mac ? '⌃⇧-' : 'Alt+→';
+function readHistoryStep(event: KeyboardEvent): 1 | -1 | undefined {
+  if (mac) {
+    if (event.code !== 'Minus' || !event.ctrlKey || event.metaKey || event.altKey) return undefined;
+    return event.shiftKey ? 1 : -1;
+  }
+  if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return undefined;
+  if (event.key === 'ArrowLeft') return -1;
+  return event.key === 'ArrowRight' ? 1 : undefined;
+}
 /** Hides and shows the main sidebar, as in most editors; ⌃⌘S, the macOS sidebar key, works too. */
 const sidebarShortcut = mac ? '⌘B' : 'Ctrl+B';
 /**
@@ -81,6 +107,20 @@ function shortcutLetter(event: KeyboardEvent) {
 }
 /** The shell last focused, which takes keys pressed on the page itself when several share it. */
 let pageKeysOwner: HTMLElement | null = null;
+/**
+ * Whether a shell takes keys pressed on the page itself: the one last focused, else the first one
+ * showing, and none while a modal dialog has marked it aria-hidden.
+ */
+function ownsPageKeys(element: HTMLElement | null) {
+  if (!element?.checkVisibility() || element.closest('[aria-hidden="true"]')) return false;
+  const owner =
+    pageKeysOwner?.isConnected && pageKeysOwner.checkVisibility()
+      ? pageKeysOwner
+      : [...document.querySelectorAll<HTMLElement>('[data-moonbase-shell]')].find((shell) =>
+          shell.checkVisibility(),
+        );
+  return owner === element;
+}
 /** The window's shortcut on the editor's cheat sheet. */
 const windowShortcuts = [{ label: 'Project chats', keys: 'Meta+J' }];
 /** A remembered on/off choice, kept in this renderer's local storage. */
@@ -150,6 +190,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
     toggleRail();
   };
   const railToggle = useRef(toggleRailKeepingFocus);
+  const navigation = useRef<(direction: 1 | -1) => void>(() => {});
   railToggle.current = toggleRailKeepingFocus;
   // The sidebar and rail keys work wherever focus is, even on the page itself. They are caught
   // before anything else sees them: ⌃⌘S would otherwise reach the editor's Save.
@@ -172,6 +213,18 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
       )
         // ⌃⌘S also toggles the sidebar; the rail adds ⌥ on macOS and Shift elsewhere.
         toggle = (mac ? event.altKey : event.shiftKey) ? railToggle.current : toggleSidebar;
+      else {
+        // Back and forward belong to the shell the key was pressed in, or that owns the page's.
+        const step = readHistoryStep(event);
+        const target = event.target;
+        const onPage = target === document.body || target === document.documentElement;
+        const inShell =
+          target instanceof Node &&
+          !!root.current?.contains(target) &&
+          !root.current.closest('[aria-hidden="true"]');
+        if (step && (inShell || (onPage && ownsPageKeys(root.current))))
+          toggle = () => navigation.current(step);
+      }
       if (!toggle) return;
       event.preventDefault();
       event.stopPropagation();
@@ -180,6 +233,19 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
     window.addEventListener('keydown', keyDown, true);
     return () => window.removeEventListener('keydown', keyDown, true);
   }, [toggleSidebar]);
+  // The mouse's own back and forward buttons.
+  useEffect(() => {
+    const mouseUp = (event: MouseEvent) => {
+      if (event.button !== 3 && event.button !== 4) return;
+      const shell = root.current;
+      if (!(event.target instanceof Node) || !shell?.contains(event.target)) return;
+      if (shell.closest('[aria-hidden="true"]')) return;
+      event.preventDefault();
+      navigation.current(event.button === 3 ? -1 : 1);
+    };
+    window.addEventListener('mouseup', mouseUp);
+    return () => window.removeEventListener('mouseup', mouseUp);
+  }, []);
   // Focus falls to the page itself when a focused control unmounts or turns inert; the shell's keys
   // still work there, in one shell: the one last focused, else the first one showing. A modal
   // dialog marks the shell aria-hidden while it is open, and then owns the keys. The live handlers
@@ -190,20 +256,9 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
     up() {},
   });
   useEffect(() => {
-    const ownsPageKeys = () => {
-      const element = root.current;
-      if (!element?.checkVisibility() || element.closest('[aria-hidden="true"]')) return false;
-      const owner =
-        pageKeysOwner?.isConnected && pageKeysOwner.checkVisibility()
-          ? pageKeysOwner
-          : [...document.querySelectorAll<HTMLElement>('[data-moonbase-shell]')].find((shell) =>
-              shell.checkVisibility(),
-            );
-      return owner === element;
-    };
     const forward = (event: KeyboardEvent) => {
       if (event.target !== document.body && event.target !== document.documentElement) return;
-      if (!ownsPageKeys()) return;
+      if (!ownsPageKeys(root.current)) return;
       if (event.type === 'keydown') shellKeys.current.down(event);
       else shellKeys.current.up(event);
     };
@@ -271,6 +326,41 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
   }, [view, railCollapsed, sidebarHidden, selected?.checkoutId, dockVisible, chat]);
   const activePath =
     selected && state && readOwn(state.recovery.views, selected.checkoutId)?.active;
+  // Where the window is, for back and forward: a chat in Agents, or a project and its file.
+  const chatSelected = useSyncExternalStore(
+    chat?.subscribe ?? noSubscription,
+    () => chat?.getSnapshot().selected ?? null,
+  );
+  let place: Place | null = null;
+  if (view === 'chat') place = chat ? { kind: 'chat', chat: chatSelected } : null;
+  else if (selected)
+    place = { kind: 'project', checkoutId: selected.checkoutId, path: activePath || null };
+  const [history, setHistory] = useState(emptyHistory);
+  // The step back or forward on its way: until it is done, what shows isn't a visit of its own.
+  const stepping = useRef<{ place: Place; from: number; to: number; reached: boolean } | null>(
+    null,
+  );
+  const stepCount = useRef(0);
+  const placeNow = useRef(place);
+  placeNow.current = place;
+  const placeKey = place && JSON.stringify(place);
+  useEffect(() => {
+    if (!place) return;
+    const step = stepping.current;
+    if (step) {
+      if (isSamePlace(place, step.place)) step.reached = true;
+      return;
+    }
+    // A place counts once it settles: one shown on the way, as when a project shows its last file
+    // before the one asked for opens, is passed over.
+    const visited = place;
+    const settle = setTimeout(
+      () => setHistory((history) => visitPlace(history, visited)),
+      placeSettleMs,
+    );
+    return () => clearTimeout(settle);
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- The key stands for the place.
+  }, [placeKey]);
   const projectCheckouts = selected
     ? openCheckouts.filter(
         (checkout) =>
@@ -327,6 +417,49 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
     setDestination('chat');
     if (view !== 'chat') restoreFocus('chat');
   };
+  // A project since closed is passed over; a chat or file that has gone drops out once tried.
+  const canShow = (place: Place) =>
+    place.kind === 'chat'
+      ? !!chat
+      : openCheckouts.some((checkout) => checkout.checkoutId === place.checkoutId);
+  const showPlace = async (place: Place) => {
+    if (place.kind === 'chat') {
+      if (!chat) return;
+      setDestination('chat');
+      await (place.chat ? chat.select(place.chat) : chat.closeView());
+      return;
+    }
+    const checkout = openCheckouts.find((open) => open.checkoutId === place.checkoutId);
+    if (!checkout || !controller) return;
+    setDestination('project');
+    if (checkout.checkoutId !== selected?.checkoutId) await controller.selectCheckout(checkout);
+    // A file closed since opens again, as a preview, as in VS Code.
+    if (place.path) await controller.open({ checkout, path: place.path }, { intent: 'preview' });
+  };
+  const backIndex = findStep(history, -1, canShow),
+    forwardIndex = findStep(history, 1, canShow);
+  const goTo = (index: number | undefined) => {
+    if (index === undefined) return;
+    const target = history.places[index];
+    const step = { place: target, from: history.index, to: index, reached: false };
+    const count = ++stepCount.current;
+    stepping.current = step;
+    setHistory((current) => stepTo(current, index));
+    // Once the step is done and has had a moment to show, the history follows what is showing.
+    void Promise.race([
+      showPlace(target).catch(report),
+      new Promise((resolve) => setTimeout(resolve, stepTimeoutMs)),
+    ])
+      .then(() => new Promise((resolve) => setTimeout(resolve, placeSettleMs)))
+      .then(() => {
+        if (count !== stepCount.current) return;
+        stepping.current = null;
+        const showing = placeNow.current;
+        if (showing && isSamePlace(showing, target)) step.reached = true;
+        setHistory((current) => settleStep(current, step, showing));
+      });
+  };
+  navigation.current = (direction) => goTo(direction < 0 ? backIndex : forwardIndex);
   // The picker's chats, projects and app commands, read only while it is open; the workbench
   // adds files and editor commands.
   const pickerEntries = (): PickerEntry[] => [
@@ -597,13 +730,31 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
         run(importFiles(selected, selectDroppedImports(selected, [...event.dataTransfer.files])));
       }}>
       <header aria-label="Window title bar" {...stylex.props(styles.titleBar)}>
-        <Button
-          aria-label={sidebarHidden ? 'Show sidebar' : 'Hide sidebar'}
-          title={`${sidebarHidden ? 'Show' : 'Hide'} sidebar · ${sidebarShortcut}`}
-          onClick={toggleSidebar}
-          {...stylex.props(controls.button, styles.sidebarToggle, mac && styles.sidebarToggleMac)}>
-          <Icon name="sidebar" />
-        </Button>
+        <div {...stylex.props(styles.barStart, mac && styles.barStartMac)}>
+          <Button
+            aria-label="Back"
+            title={`Back · ${backShortcut}`}
+            disabled={backIndex === undefined}
+            onClick={() => goTo(backIndex)}
+            {...stylex.props(controls.button, styles.barStartButton)}>
+            <Icon name="goBack" />
+          </Button>
+          <Button
+            aria-label="Forward"
+            title={`Forward · ${forwardShortcut}`}
+            disabled={forwardIndex === undefined}
+            onClick={() => goTo(forwardIndex)}
+            {...stylex.props(controls.button, styles.barStartButton)}>
+            <Icon name="goForward" />
+          </Button>
+          <Button
+            aria-label={sidebarHidden ? 'Show sidebar' : 'Hide sidebar'}
+            title={`${sidebarHidden ? 'Show' : 'Hide'} sidebar · ${sidebarShortcut}`}
+            onClick={toggleSidebar}
+            {...stylex.props(controls.button, styles.barStartButton)}>
+            <Icon name="sidebar" />
+          </Button>
+        </div>
         <div
           ref={title}
           {...stylex.props(styles.title, view === 'chat' && chat && styles.titleBesideNew)}>
