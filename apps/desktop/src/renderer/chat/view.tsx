@@ -1,4 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { createPortal } from 'react-dom';
 import { Dialog } from '@base-ui/react/dialog';
 import { Button } from '@base-ui/react/button';
 import { motion, useReducedMotion } from 'motion/react';
@@ -123,6 +124,7 @@ export function ChatView({
   setUpProviders,
   visible = true,
   sidebarHidden = false,
+  titleBar,
 }: {
   controller: ChatController;
   chooseFolder?: () => Promise<string | null>;
@@ -145,9 +147,15 @@ export function ChatView({
   visible?: boolean;
   /** Hides the chat list, leaving the chat the full width. */
   sidebarHidden?: boolean;
+  /**
+   * The window title bar's slot for the open chat's title and actions. Given one, the view has no
+   * header of its own; it is null until the slot mounts.
+   */
+  titleBar?: HTMLElement | null;
 }) {
   const compact = useSyncExternalStore(subscribeLayout, () => compactLayout.matches);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const titleId = useId();
   const [settledOpen, setSettledOpen] = useState(readSettledOpen);
   const showSettled = (open: boolean) => {
     setSettledOpen(open);
@@ -1134,6 +1142,82 @@ export function ChatView({
       </div>
     );
   }
+  const inBar = titleBar !== undefined;
+  const context = (
+    <>
+      {compact && (
+        <Dialog.Root open={sidebarOpen} onOpenChange={setSidebarOpen}>
+          <Dialog.Trigger
+            aria-label="Show conversations"
+            {...stylex.props(controls.button, controls.iconButton)}>
+            <Icon name="agents" />
+          </Dialog.Trigger>
+          <Dialog.Portal>
+            <Dialog.Backdrop {...stylex.props(styles.drawerBackdrop)} />
+            <Dialog.Popup {...stylex.props(workbench.document, styles.drawer)}>
+              <Dialog.Title {...stylex.props(controls.hidden)}>Conversations</Dialog.Title>
+              <Dialog.Close
+                aria-label="Close conversations"
+                {...stylex.props(controls.button, controls.iconButton, styles.drawerClose)}>
+                <Icon name="close" />
+              </Dialog.Close>
+              {sidebar}
+            </Dialog.Popup>
+          </Dialog.Portal>
+        </Dialog.Root>
+      )}
+      {/* Breadcrumb: the chat's project, then the chat. Folder and model are in its title. */}
+      <div
+        title={state.selected ? contextLabel : undefined}
+        {...stylex.props(styles.crumbs, inBar && styles.barCrumbs)}>
+        {state.selected && selectedFolder && (
+          <>
+            <span
+              aria-hidden="true"
+              data-initials={projectInitials(selectedFolder)}
+              {...stylex.props(projectTiles.tile, projectTiles.silver, styles.crumbTile)}
+            />
+            <span {...stylex.props(styles.crumbProject, controls.truncate)}>{selectedFolder}</span>
+            <span aria-hidden="true" {...stylex.props(styles.crumbSeparator)}>
+              /
+            </span>
+          </>
+        )}
+        {inBar && !compact && !(state.selected && selectedFolder) && (
+          <span aria-hidden="true" {...stylex.props(styles.barIcon)}>
+            <Icon name="agents" />
+          </span>
+        )}
+        <h1
+          id={titleId}
+          {...stylex.props(styles.title, inBar && styles.barTitle, controls.truncate)}>
+          {conversationTitle}
+        </h1>
+      </div>
+      <div {...stylex.props(controls.row, inBar && styles.barButtons)}>
+        {turnButton}
+        {settleButton}
+        {state.selected && (
+          <Button
+            aria-label="Find"
+            title="Find · ⌘F"
+            {...stylex.props(controls.button, controls.iconButton)}
+            onClick={(event) => activateChatFind(controller, event.currentTarget, findInput)}>
+            <Icon name="search" />
+          </Button>
+        )}
+        {state.selected && (
+          <Button
+            aria-label="Close view"
+            title="Back to new chat"
+            {...stylex.props(controls.button, controls.iconButton)}
+            onClick={() => void controller.closeView()}>
+            <Icon name="close" />
+          </Button>
+        )}
+      </div>
+    </>
+  );
   return (
     <div
       data-chat-find-owner={JSON.stringify([controller.backendId, state.selected])}
@@ -1146,71 +1230,27 @@ export function ChatView({
           !compact && sidebarHidden && styles.closedWorkspace,
         )}>
         {!compact && sidebar}
-        <main aria-label="Agent workspace" data-title-anchor="" {...stylex.props(styles.content)}>
-          <header {...stylex.props(workbench.paneHeader, styles.context)}>
-            {compact && (
-              <Dialog.Root open={sidebarOpen} onOpenChange={setSidebarOpen}>
-                <Dialog.Trigger
-                  aria-label="Show conversations"
-                  {...stylex.props(controls.button, controls.iconButton)}>
-                  <Icon name="agents" />
-                </Dialog.Trigger>
-                <Dialog.Portal>
-                  <Dialog.Backdrop {...stylex.props(styles.drawerBackdrop)} />
-                  <Dialog.Popup {...stylex.props(workbench.document, styles.drawer)}>
-                    <Dialog.Title {...stylex.props(controls.hidden)}>Conversations</Dialog.Title>
-                    <Dialog.Close
-                      aria-label="Close conversations"
-                      {...stylex.props(controls.button, controls.iconButton, styles.drawerClose)}>
-                      <Icon name="close" />
-                    </Dialog.Close>
-                    {sidebar}
-                  </Dialog.Popup>
-                </Dialog.Portal>
-              </Dialog.Root>
-            )}
-            {/* Breadcrumb: the chat's project, then the chat. Folder and model are in its title. */}
-            <div title={state.selected ? contextLabel : undefined} {...stylex.props(styles.crumbs)}>
-              {state.selected && selectedFolder && (
-                <>
-                  <span
-                    aria-hidden="true"
-                    data-initials={projectInitials(selectedFolder)}
-                    {...stylex.props(projectTiles.tile, projectTiles.silver, styles.crumbTile)}
-                  />
-                  <span {...stylex.props(styles.crumbProject, controls.truncate)}>
-                    {selectedFolder}
-                  </span>
-                  <span aria-hidden="true" {...stylex.props(styles.crumbSeparator)}>
-                    /
-                  </span>
-                </>
-              )}
-              <h1 {...stylex.props(styles.title, controls.truncate)}>{conversationTitle}</h1>
-            </div>
-            <div {...stylex.props(controls.row)}>
-              {turnButton}
-              {settleButton}
-              {state.selected && (
-                <Button
-                  aria-label="Find"
-                  title="Find · ⌘F"
-                  {...stylex.props(controls.button, controls.iconButton)}
-                  onClick={(event) => activateChatFind(controller, event.currentTarget, findInput)}>
-                  <Icon name="search" />
-                </Button>
-              )}
-              {state.selected && (
-                <Button
-                  aria-label="Close view"
-                  title="Back to new chat"
-                  {...stylex.props(controls.button, controls.iconButton)}
-                  onClick={() => void controller.closeView()}>
-                  <Icon name="close" />
-                </Button>
-              )}
-            </div>
-          </header>
+        <main
+          aria-label="Agent workspace"
+          // The title is in the window's title bar, outside this landmark, so it names the chat here.
+          aria-describedby={inBar && titleBar ? titleId : undefined}
+          data-title-anchor=""
+          {...stylex.props(styles.content)}>
+          {inBar ? (
+            titleBar &&
+            createPortal(
+              // The bar belongs to this chat for Find, as its header did.
+              <div
+                data-chat-find-owner={JSON.stringify([controller.backendId, state.selected])}
+                onKeyDown={(event) => handleChatFindKeyDown(event, controller, findInput)}
+                {...stylex.props(styles.barContext)}>
+                {context}
+              </div>,
+              titleBar,
+            )
+          ) : (
+            <header {...stylex.props(workbench.paneHeader, styles.context)}>{context}</header>
+          )}
           <div {...stylex.props(workbench.pane, workbench.canvasPane)}>
             {findBar}
             {body}
@@ -1424,6 +1464,23 @@ const styles = stylex.create({
     paddingLeft: 12,
     paddingRight: 2,
   },
+  // In the window title bar: the chat's crumbs, then its actions at the bar's end.
+  barContext: {
+    flex: 1,
+    minWidth: 0,
+    height: '100%',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: space.sm,
+    // Room for the last button's focus ring inside the title's clipped box.
+    paddingRight: 4,
+  },
+  barButtons: { flexWrap: 'nowrap', flexShrink: 0 },
+  // The title drags the window, like the file path on a project.
+  barCrumbs: { WebkitAppRegion: 'drag' },
+  barIcon: { display: 'flex', flexShrink: 0, color: colors.muted },
+  barTitle: { color: colors.text, fontWeight: 600 },
   crumbs: {
     display: 'flex',
     alignItems: 'center',
@@ -1432,7 +1489,8 @@ const styles = stylex.create({
     WebkitAppRegion: 'no-drag',
   },
   crumbTile: { width: 20, height: 20, borderRadius: 5, fontSize: 9 },
-  crumbProject: { flexShrink: 1, maxWidth: 200, color: colors.secondary, fontSize: type.body },
+  // The project gives way before the chat's own title.
+  crumbProject: { flexShrink: 4, maxWidth: 200, color: colors.secondary, fontSize: type.body },
   crumbSeparator: { color: colors.muted },
   title: {
     fontSize: type.body,

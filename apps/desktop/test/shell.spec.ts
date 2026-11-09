@@ -1,5 +1,5 @@
 import { selectFileView } from './editor-regressions.ts';
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 import { mkdir, writeFile } from 'node:fs/promises';
 
 /** Opens the composer's folder menu and chooses a folder with the native picker. */
@@ -2406,6 +2406,36 @@ test('a hidden rail slides over the window at its left edge and away once the po
   await expect(page.getByRole('button', { name: 'Hide rail', exact: true })).toBeVisible();
 });
 
+test('on Agents the title bar names the open chat and holds its actions', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?local&design&transcript');
+  const bar = page.locator('header[aria-label="Window title bar"]');
+  const workspace = page.getByRole('main', { name: 'Agent workspace', exact: true });
+  await expect(bar.getByRole('heading', { level: 1 })).toHaveText('New chat');
+  await expect(workspace.locator('header')).toHaveCount(0);
+  await page.getByRole('button', { name: /^Conversation/ }).click();
+  await expect(bar.getByRole('heading', { level: 1 })).toHaveText('Conversation');
+  await expect(workspace).toHaveAccessibleDescription('Conversation');
+  // The title still drags the window; the chat's buttons don't.
+  const region = (locator: Locator) =>
+    locator.evaluate((element) => getComputedStyle(element).getPropertyValue('-webkit-app-region'));
+  expect(await region(bar.getByRole('heading', { level: 1 }))).toBe('drag');
+  expect(await region(bar.getByRole('button', { name: 'Find', exact: true }))).toBe('no-drag');
+  await expect(workspace.locator('header')).toHaveCount(0);
+  // The chat's own buttons sit in the bar, and Find still opens from there and from its key.
+  await bar.getByRole('button', { name: 'Find', exact: true }).click();
+  const find = page.getByRole('textbox', { name: 'Find in conversation', exact: true });
+  await expect(find).toBeFocused();
+  await find.press('Escape');
+  await expect(find).toHaveCount(0);
+  await bar.getByRole('button', { name: 'Find', exact: true }).focus();
+  await page.keyboard.press('Meta+f');
+  await expect(find).toBeFocused();
+  await find.press('Escape');
+  await bar.getByRole('button', { name: 'Close view', exact: true }).click();
+  await expect(bar.getByRole('heading', { level: 1 })).toHaveText('New chat');
+});
+
 test('the title bar names the open file, and project chats close fully and reopen', async ({
   page,
 }) => {
@@ -2413,7 +2443,7 @@ test('the title bar names the open file, and project chats close fully and reope
   await page.goto('/?local&design');
   await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
   const bar = page.locator('header[aria-label="Window title bar"]');
-  await expect(bar).toContainText('Agents');
+  await expect(bar).toContainText('New chat');
   await page.getByRole('tab', { name: 'moonbase · main', exact: true }).click();
   await expect(bar).toContainText('moonbase/welcome.ts');
   const dock = page.locator('aside[aria-label="Project chats"]');
