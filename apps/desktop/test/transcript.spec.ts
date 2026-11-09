@@ -116,6 +116,31 @@ test.describe('the virtualized transcript', () => {
     expect(await savedAnchor(page)).toBeNull();
   });
 
+  test('a streaming reply never shrinks back to its preview between updates', async ({ page }) => {
+    await openLong(page, 40);
+    const shown = await page.evaluate(async () => {
+      const list = document.querySelector('[data-transcript-list]')!;
+      const lengths: number[] = [];
+      const observer = new MutationObserver(() => {
+        const live = list.querySelector('[data-transcript-live]');
+        if (live) lengths.push(live.textContent!.length);
+      });
+      observer.observe(list, { subtree: true, childList: true, characterData: true });
+      let text = 'Streaming reply\n\n';
+      for (let step = 0; step < 12; step++) {
+        text += 'more streaming words arrive here. ';
+        await window.demo.transcript!.live(text);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      observer.disconnect();
+      return lengths;
+    });
+    // The demo's previews are 64 characters, so every update after the first would shrink to one.
+    expect(shown.at(-1)).toBeGreaterThan(300);
+    expect(shown.filter((length, index) => index > 0 && length < shown[index - 1]!)).toEqual([]);
+  });
+
   test('scrolling up stops following, and new output does not move the reader', async ({
     page,
   }) => {

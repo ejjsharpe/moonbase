@@ -731,6 +731,7 @@ const Part = memo(
       original,
       readable,
       shown: expanded || ordinary,
+      holdsGrowth: ordinary,
       load,
     });
     const plain =
