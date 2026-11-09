@@ -580,16 +580,13 @@ test('selected file replacement cancels held comparison refresh and checkout clo
     release = gate();
     heldName = 'listDirectory';
     signal = undefined;
+    // Closing the checkout aborts the held read and abandons the reveal, which resolves false.
     const reveal = editor.reveal(target('folder/c.ts'));
-    const cancelled = assert.rejects(
-      reveal,
-      (error) => ApplicationError.is(error) && error.code === 'Cancelled',
-    );
     await entered.promise;
     assert.equal(await editor.closeCheckout(checkout), true);
     assert.equal(wasAborted(), true);
     release.release();
-    await cancelled;
+    assert.equal(await reveal, false);
   } finally {
     release.release();
     await editor.dispose();

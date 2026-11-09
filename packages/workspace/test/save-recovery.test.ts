@@ -210,7 +210,7 @@ for (const kind of ['move', 'copy'] as const)
             preview: null,
             fileViews: { 'file.txt': 'file' },
             positions: {},
-            tree: { expanded: [], selected: [], focus: '', scroll: 0, hideIgnored: false },
+            tree: { expanded: [], selected: [], focus: '', scroll: 0, hideIgnoredFiles: false },
           },
         },
       };

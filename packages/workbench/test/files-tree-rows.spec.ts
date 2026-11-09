@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import type { DirectoryListing } from '@moonbase/contracts/workspace';
 import {
   findCreateFolder,
+  findShownPath,
   listVisibleRows,
   measureStem,
   placeholderPath,
@@ -113,6 +114,33 @@ test('a placeholder row leads its folder or follows the entry it copies', () => 
   expect(
     shape(listVisibleRows({}, checkout, new Set(['src']), { parent: '', directory: false })),
   ).toEqual([['\0', 1, 1, 1, true]]);
+});
+
+test('hiding ignored entries leaves out them and all they contain', () => {
+  const hidden = {
+    ...listings,
+    [JSON.stringify([checkout, 'src'])]: listing(
+      { path: 'src/lib', directory: true, ignored: true },
+      { path: 'src/main.ts', directory: false, ignored: false },
+    ),
+  };
+  expect(
+    listVisibleRows(hidden, checkout, new Set(['src', 'src/lib']), undefined, true).map((row) => [
+      row.path,
+      row.position,
+      row.size,
+    ]),
+  ).toEqual([
+    ['src', 1, 2],
+    ['src/main.ts', 1, 1],
+    ['docs', 2, 2],
+  ]);
+  // A hidden path shows at the folder holding its outermost ignored entry.
+  expect(findShownPath(hidden, checkout, 'src/lib/util.ts')).toBe('src');
+  expect(findShownPath(hidden, checkout, 'README.md')).toBe('');
+  expect(findShownPath(hidden, checkout, 'src/main.ts')).toBe('src/main.ts');
+  expect(findShownPath(hidden, checkout, '')).toBe('');
+  expect(findShownPath(hidden, checkout, 'gone/file.ts')).toBe('gone/file.ts');
 });
 
 test('New File starts in the focused folder, a focused file’s folder, or the root', () => {

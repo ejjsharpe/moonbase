@@ -16,6 +16,7 @@ import type {
   EditorTextSearch,
   EditorMutation,
   MutationAction,
+  RevealOptions,
 } from '@moonbase/application/editor';
 import { Effect, Exit, Scope, type ManagedRuntime } from 'effect';
 import type { ApplicationError } from '@moonbase/contracts/workspace';
@@ -104,8 +105,9 @@ type ExpectedEditorController = {
   reopen(checkout: CheckoutTarget): Promise<boolean>;
   tree(checkout: CheckoutTarget, patch: Partial<CheckoutView['tree']>): void;
   resizeSidebar(width: number): void;
+  setFollowActiveFile(follow: boolean): void;
   list(checkout: CheckoutTarget, path?: string): Promise<DirectoryListing>;
-  reveal(target: FileTarget, showIgnored?: boolean): Promise<void>;
+  reveal(target: FileTarget, options?: RevealOptions): Promise<boolean>;
   lookup(checkout: CheckoutTarget, query: string): Promise<CommandOutput<'lookupFiles'>>;
   refresh(checkout: CheckoutTarget): Promise<void>;
   createLookup(): EditorLookup;

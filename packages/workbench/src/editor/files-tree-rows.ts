@@ -22,18 +22,21 @@ export const placeholderPath = (parent: string) => (parent ? `${parent}/` : '') 
 
 /**
  * A checkout's tree in display order: listed entries, descending into expanded folders, with an
- * optional `placeholder` row among its parent's children when that parent is shown.
+ * optional `placeholder` row among its parent's children when that parent is shown. With
+ * `hideIgnored`, entries Git has classified as ignored are left out, with all they contain.
  */
 export function listVisibleRows(
   listings: Readonly<Record<string, DirectoryListing>>,
   checkoutIdentity: string,
   expanded: ReadonlySet<string>,
   placeholder?: RowPlaceholder,
+  hideIgnored = false,
 ) {
   const rows: VisibleRow[] = [];
   function visit(parent: string, level: number) {
     let entries: (DirectoryEntry & { placeholder?: true })[] =
       listings[JSON.stringify([checkoutIdentity, parent])]?.entries ?? [];
+    if (hideIgnored) entries = entries.filter((entry) => !entry.ignored);
     if (placeholder?.parent === parent) {
       const index =
         placeholder.after === undefined
@@ -52,6 +55,27 @@ export function listVisibleRows(
   }
   visit('', 1);
   return rows;
+}
+
+/**
+ * Where `path` shows while ignored entries are hidden: itself, or the folder holding its
+ * outermost ignored ancestor (or itself, when it is ignored), as far as the listings say.
+ */
+export function findShownPath(
+  listings: Readonly<Record<string, DirectoryListing>>,
+  checkoutIdentity: string,
+  path: string,
+) {
+  const parts = path ? path.split('/') : [];
+  for (let index = 0; index < parts.length; index++) {
+    const parent = parts.slice(0, index).join('/'),
+      level = parts.slice(0, index + 1).join('/');
+    const entry = listings[JSON.stringify([checkoutIdentity, parent])]?.entries.find(
+      (item) => item.path === level,
+    );
+    if (entry?.ignored) return parent;
+  }
+  return path;
 }
 
 /**

@@ -134,7 +134,10 @@ test('blur commits a rename, or cancels and reports when it fails', async ({ pag
   await expect(input).toHaveCount(0);
   await expect(row(page, 'NOTES.md')).toBeVisible();
   expect(await exists(page, 'README.md')).toBe(false);
-  expect(await treeState(page)).toEqual({ focus: 'NOTES.md', selected: ['NOTES.md'] });
+  // Clicking the tab makes welcome.ts active, so Follow Active File selects it.
+  await expect
+    .poll(() => treeState(page))
+    .toEqual({ focus: 'welcome.ts', selected: ['welcome.ts'] });
   await expect(tree(page)).not.toBeFocused();
   const before = await mutations(page);
   await row(page, 'NOTES.md').click();
