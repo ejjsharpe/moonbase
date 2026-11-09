@@ -75,6 +75,44 @@ async function wheelUp(page: Page, pixels: number) {
   await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 300)));
 }
 
+/** Reports the page hidden or visible, as Electron does for a minimised or covered window. */
+const setWindowHidden = (page: Page, hidden: boolean) =>
+  page.evaluate((hidden) => {
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden });
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => (hidden ? 'hidden' : 'visible'),
+    });
+    document.dispatchEvent(new Event('visibilitychange'));
+  }, hidden);
+declare global {
+  interface Window {
+    transcriptKept?: { list: Element; cleared: boolean };
+  }
+}
+/** Marks the mounted list and notes whether the chat's transcript is ever cleared from here on. */
+const watchTranscriptKept = (page: Page) =>
+  page.evaluate(() => {
+    const chat = window.demo.application.chat!;
+    const kept: NonNullable<Window['transcriptKept']> = {
+      list: document.querySelector('[data-transcript-list]')!,
+      cleared: false,
+    };
+    window.transcriptKept = kept;
+    chat.subscribe(() => {
+      const { snapshot, transcript } = chat.getSnapshot();
+      if (!snapshot || !transcript.rows.length) kept.cleared = true;
+    });
+    new MutationObserver(() => {
+      if (document.body.textContent!.includes('Reading the saved chat…')) kept.cleared = true;
+    }).observe(document.body, { subtree: true, childList: true, characterData: true });
+  });
+const readTranscriptKept = (page: Page) =>
+  page.evaluate(() => {
+    const kept = window.transcriptKept!;
+    return { mounted: kept.list.isConnected, cleared: kept.cleared };
+  });
+
 test.describe('the virtualized transcript', () => {
   test('mounts a bounded number of rows across a full scroll', async ({ page }) => {
     test.setTimeout(180000);
@@ -247,6 +285,45 @@ test.describe('the virtualized transcript', () => {
     const after = await readFirstVisible(page);
     expect(after.row).toBe(before.row);
     expect(Math.abs(after.offset - before.offset)).toBeLessThan(1);
+  });
+
+  test('hiding and showing the window keeps the transcript and follows a running reply', async ({
+    page,
+  }) => {
+    await openLong(page, 200);
+    await page.evaluate(() => window.demo.transcript!.live('Streaming reply'));
+    await expect.poll(async () => (await readList(page)).fromEnd).toBeLessThan(1);
+    await watchTranscriptKept(page);
+    await setWindowHidden(page, true);
+    for (let step = 1; step <= 4; step++)
+      await page.evaluate(
+        (step) =>
+          window.demo.transcript!.live(
+            'Streaming reply\n\n' + 'more words '.repeat(step * 200) + `step ${step}`,
+          ),
+        step,
+      );
+    await setWindowHidden(page, false);
+    await expect(page.locator('[data-transcript-live]')).toContainText('step 4');
+    await expect.poll(async () => (await readList(page)).fromEnd).toBeLessThan(1);
+    expect(await readTranscriptKept(page)).toEqual({ mounted: true, cleared: false });
+    await expect(jumpButton(page)).toHaveCount(0);
+  });
+
+  test('hiding and showing the window keeps the reader in place', async ({ page }) => {
+    await openLong(page, 200);
+    await wheelUp(page, 1500);
+    await expect.poll(() => savedAnchor(page)).not.toBeNull();
+    const before = await readFirstVisible(page);
+    await watchTranscriptKept(page);
+    await setWindowHidden(page, true);
+    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 300)));
+    await setWindowHidden(page, false);
+    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 300)));
+    const after = await readFirstVisible(page);
+    expect(after.row).toBe(before.row);
+    expect(Math.abs(after.offset - before.offset)).toBeLessThan(1);
+    expect(await readTranscriptKept(page)).toEqual({ mounted: true, cleared: false });
   });
 
   test('a selection pauses following, and clearing it resumes', async ({ page }) => {
