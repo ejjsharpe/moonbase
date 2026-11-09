@@ -163,6 +163,7 @@ export function useFindHydration({
   original,
   readable,
   shown,
+  holdsGrowth,
   load,
 }: {
   part: ChatTranscriptPart;
@@ -175,6 +176,11 @@ export function useFindHydration({
   readable: boolean;
   /** The part's body is rendered (an ordinary part, or an expanded disclosure). */
   shown: boolean;
+  /**
+   * Keeps the shown text while a growing part's next revision loads. Output that holds its own
+   * previous body (`usePartBody`) shows the preview, so it can say which version it shows.
+   */
+  holdsGrowth: boolean;
   load(restart?: boolean): void;
 }) {
   const matchedText =
@@ -186,14 +192,27 @@ export function useFindHydration({
   const matchVisible = !!match && matchedText === expectedText;
   // Preserve the reading body while Find hydrates; show the source once it contains the match.
   const frozen = !!match && !(matchVisible && base === 0);
-  const [reading, setReading] = useState({ revision: part.revision, text: part.text });
-  const text = useMemo(() => {
-    if (reading.revision !== part.revision) return part.text;
-    if (frozen) return reading.text;
-    return content?.chunks.length ? original : part.text;
-  }, [reading, part, frozen, content, original]);
-  if (reading.revision !== part.revision || (!frozen && text !== reading.text))
-    setReading({ revision: part.revision, text });
+  const [reading, setReading] = useState({ revision: part.revision, text: part.text, held: false });
+  const { text, held } = useMemo(() => {
+    const revised = reading.revision !== part.revision;
+    if (frozen && !revised) return reading;
+    if (content?.chunks.length) return { text: original, held: false };
+    // A streaming part's next revision carries only a preview until its content loads. The text
+    // already shown still reads on from that preview, so it stays until then rather than
+    // shrinking to the preview each update. Content released at the same revision shows the preview.
+    const holds =
+      holdsGrowth &&
+      (revised || reading.held) &&
+      part.truncated &&
+      reading.text.length > part.text.length &&
+      reading.text.startsWith(part.text);
+    return holds ? { text: reading.text, held: true } : { text: part.text, held: false };
+  }, [reading, part, frozen, content, original, holdsGrowth]);
+  if (
+    reading.revision !== part.revision ||
+    (!frozen && (text !== reading.text || held !== reading.held))
+  )
+    setReading({ revision: part.revision, text, held });
   const complete =
     !part.truncated ||
     (content?.status === 'complete' &&
