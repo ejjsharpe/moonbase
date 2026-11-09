@@ -885,7 +885,27 @@ test('Create and captured Stop are written before disclosure; lost replies recov
   assert.deepEqual(next.getSnapshot().pending, retained);
   await next.dispose();
 });
-test('hide/detach releases observations, resume is read-only, and draft capacity failure blocks Quit', async (t) => {
+test('start while attached keeps the open chat, its transcript and its watch', async (t) => {
+  // The shell starts chat whenever a chat view shows, so a repeated start must not read it again.
+  const f = await fixture(t);
+  await ready(f);
+  await turn();
+  const before = f.controller.getSnapshot();
+  const reads = f.calls.filter((c) => c.operation === 'getChat').length;
+  assert(before.snapshot);
+  await f.controller.start();
+  await turn();
+  const after = f.controller.getSnapshot();
+  assert.equal(after.snapshot, before.snapshot);
+  assert.equal(after.transcript, before.transcript);
+  assert.equal(after.ready, true);
+  assert.equal(f.subscriptions, 1);
+  assert.equal(f.calls.filter((c) => c.operation === 'getChat').length, reads);
+  f.publish({ ...snapshot, state: 'running' });
+  assert.equal(f.controller.getSnapshot().snapshot?.state, 'running');
+  await f.controller.dispose();
+});
+test('detach releases observations, resume is read-only, and draft capacity failure blocks Quit', async (t) => {
   const f = await fixture(t);
   await ready(f);
   await f.controller.detach();
