@@ -732,6 +732,8 @@ const Part = memo(
       readable,
       shown: expanded || ordinary,
       holdsGrowth: ordinary,
+      findHandOff:
+        source.kind === 'entry' ? () => cache.findLiveSource(part.text, part.bytes) : undefined,
       load,
     });
     const plain =

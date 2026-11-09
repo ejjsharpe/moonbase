@@ -737,10 +737,22 @@ function readRowTop(scroller: HTMLElement | null | undefined, key: string) {
 }
 const readDevicePixel = () => 1 / window.devicePixelRatio;
 const getItemKey = (item: TranscriptItem<TranscriptRow>) => item.key;
+/**
+ * The list sizes an unmeasured item by its type's average, so messages are typed by role and length
+ * (as T3 Code does): messages of one role differ in height by orders of magnitude, and a long one
+ * is its own type rather than an average of unlike ones. An item whose type changes is sized afresh,
+ * so the running response keeps one type as it grows.
+ */
 const getItemType = (item: TranscriptItem<TranscriptRow>) => {
-  if (item.rows.length > 1) return 'activity';
   const row = item.rows[0]!;
-  return row.kind === 'entry' ? row.entry.role : row.kind;
+  if (item.rows.length > 1 || kindOfRow(row) === 'activity') return 'activity';
+  if (row.kind !== 'entry') return row.kind;
+  const parts = row.entry.transcript?.parts.filter((part) => part.kind === 'text');
+  const size = parts?.length
+    ? parts.reduce((sum, part) => sum + part.bytes, 0)
+    : row.entry.text.length;
+  const bucket = Math.max(0, Math.floor(Math.log2(size / 1000)));
+  return bucket < 2 ? `${row.entry.role}:${bucket}` : `${row.entry.role}:${row.key}`;
 };
 /**
  * Each item carries the space below it. Legend List's own `gap` stays under the last item in the

@@ -53,10 +53,25 @@ export class MarkdownCache {
     this.messages.set(key, { source, blocks });
     return blocks;
   }
+  /**
+   * The text a running response's part last rendered, when it reads as a stored part's: the same
+   * size and starting with its preview. A response that ends shows its stored parts from their
+   * previews until their content loads; this text stands in until then.
+   */
+  findLiveSource(preview: string, bytes: number): string | undefined {
+    for (const [key, { source }] of this.messages.entries()) {
+      if (source.length < preview.length || !source.startsWith(preview)) continue;
+      const [identity] = JSON.parse(key) as [string];
+      const [partSource] = JSON.parse(identity) as [{ kind?: string }];
+      if (partSource?.kind === 'live' && textEncoder.encode(source).length === bytes) return source;
+    }
+    return undefined;
+  }
   clear() {
     this.messages.clear();
   }
 }
+const textEncoder = new TextEncoder();
 /**
  * Records where a long code block's folded lines start in the source (`data-code-fold`), so Find
  * can map the shown and folded lines separately and unfold for a match in the folded ones.
