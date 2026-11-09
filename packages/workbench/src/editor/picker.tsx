@@ -24,7 +24,7 @@ import { controls } from '@moonbase/ui/controls';
 import { checkoutName, projectHue, projectInitials, projectTiles } from '@moonbase/ui/projects';
 import { colors, radius, shadow, space, type } from '@moonbase/ui/tokens.stylex';
 import { workbench } from '@moonbase/ui/workbench';
-import { Icon } from './icon.tsx';
+import { FileIcon, Icon } from './icon.tsx';
 
 /** Something besides a file that Go to can jump to, supplied by the workbench or its app. */
 export type PickerEntry = {
@@ -78,7 +78,7 @@ type GoToRow = {
   activate: () => void;
 };
 
-const rowIcons = { file: 'file', chat: 'agents', command: 'chevronRight' } as const;
+const rowIcons = { chat: 'agents', command: 'chevronRight' } as const;
 const emptyLookup: LookupSnapshot = { rows: [], message: '', busy: false };
 const emptySearch: TextSearchSnapshot = { files: [], message: '', busy: false };
 const noSubscription = () => () => {};
@@ -449,7 +449,11 @@ export function Picker({
       else
         leading = (
           <span {...stylex.props(styles.icon)}>
-            <Icon name={rowIcons[row.kind]} />
+            {row.kind === 'file' ? (
+              <FileIcon path={row.label} />
+            ) : (
+              <Icon name={rowIcons[row.kind]} />
+            )}
           </span>
         );
       return [
@@ -487,7 +491,7 @@ export function Picker({
       <div key={file.path} role="group" aria-label={file.path}>
         <div role="presentation" {...stylex.props(styles.fileHeading)}>
           <span {...stylex.props(styles.icon)}>
-            <Icon name="file" />
+            <FileIcon path={file.path} />
           </span>
           <span {...stylex.props(styles.label)}>{file.path.split('/').at(-1)}</span>
           <span {...stylex.props(styles.detail, styles.trailing)}>{file.matches.length}</span>

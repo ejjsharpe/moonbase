@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { ChatEntry, ChatTranscript, ChatTranscriptPart } from '@moonbase/contracts/chat';
 import {
+  classifyEntry,
   collectActivityEvidence,
   describeActivityHeadline,
+  findAnsweredThoughts,
   findReadingAnchor,
   getActivityState,
   getEntryTranscripts,
@@ -11,6 +13,7 @@ import {
   getToolSummary,
   groupActivitySteps,
   groupTranscriptParts,
+  isEmptyThought,
   splitCommand,
   summarizeActivityHeadlines,
   type ActivityHeadline,
@@ -432,6 +435,62 @@ test('a step headline takes the tense of its state and its output from another r
       'origin',
     ).length,
     3,
+  );
+});
+
+test('a thought with nothing to read is no step, and a reply that only had one is empty', () => {
+  const empty = part('signature', 'thinking');
+  const read = part('read', 'arguments', { toolName: 'read', text: '{"path":"a.ts"}' });
+  // Only an available thought whose whole text is blank is empty; redacted and cut ones show.
+  assert.equal(isEmptyThought(empty), true);
+  assert.equal(isEmptyThought(part('blank', 'thinking', { text: ' \n', bytes: 2 })), true);
+  assert.equal(isEmptyThought(part('hidden', 'thinking', { availability: 'redacted' })), false);
+  assert.equal(isEmptyThought(part('cut', 'thinking', { truncated: true, bytes: 9000 })), false);
+  assert.equal(isEmptyThought(part('text', 'text')), false);
+  assert.deepEqual(
+    groupActivitySteps([empty, read]).map((step) => step.lead.partId),
+    ['read'],
+  );
+  // An empty thought between two thoughts doesn't split them.
+  assert.deepEqual(
+    groupActivitySteps([
+      part('one', 'thinking', { text: 'One.' }),
+      empty,
+      part('two', 'thinking', { text: 'Two.' }),
+    ]).map((step) => [step.lead.partId, step.answers.map((answer) => answer.partId)]),
+    [['one', ['two']]],
+  );
+  const entry = (text: string, parts: ChatTranscriptPart[]): ChatEntry => ({
+    id: 'entry',
+    role: 'assistant',
+    text,
+    truncated: false,
+    transcript: transcript('entry', parts),
+  });
+  assert.equal(classifyEntry(entry('', [empty])), 'empty');
+  assert.equal(classifyEntry(entry('', [empty, read])), 'activity');
+  assert.equal(classifyEntry(entry('Yes.', [empty, part('answer', 'text')])), 'message');
+});
+
+test('reply text takes the place of the thoughts it follows; thoughts before tool work stay', () => {
+  const thought = (id: string) => part(id, 'thinking', { text: `${id}.`, bytes: 4 });
+  assert.deepEqual(
+    [
+      ...findAnsweredThoughts([
+        thought('a'),
+        thought('b'),
+        part('answer', 'text', { text: 'Yes.' }),
+        thought('c'),
+        part('call', 'arguments', { toolName: 'read' }),
+        part('after', 'text', { text: 'Done.' }),
+        thought('d'),
+        // A tool's own text is no reply.
+        part('output', 'text', { role: 'tool' }),
+        part('last', 'text', { text: 'Done.' }),
+        thought('trailing'),
+      ]),
+    ],
+    ['a', 'b'],
   );
 });
 

@@ -104,6 +104,8 @@ export const overlays = stylex.create({
     color: colors.muted,
     fontSize: type.caption,
   },
+  /** A checked menu row's check, after its label. */
+  menuCheck: { display: 'inline-flex', flexShrink: 0, paddingLeft: space.md, color: colors.text },
   dangerItem: { color: { default: colors.danger, '[data-disabled]': colors.muted } },
   separator: { height: 1, margin: '4px 6px', backgroundColor: colors.border },
   wideMenu: { width: 'min(280px, calc(100vw - 16px))' },

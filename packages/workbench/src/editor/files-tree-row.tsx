@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import type { GitChangeKind } from '@moonbase/contracts/workspace';
 import { filesUI, gitStatusHues, gitStatusUI } from '@moonbase/ui/files';
 import { styles } from './styles.ts';
-import { Icon } from './icon.tsx';
+import { FileIcon, Icon } from './icon.tsx';
 import { rowHeight, type VisibleRow } from './files-tree-rows.ts';
 import { gitStatusMarks } from './files-tree-status.ts';
 
@@ -120,7 +120,7 @@ export function FilesTreeRow({
         {...stylex.props(filesUI.disclosure, row.directory && expanded && filesUI.rotated)}>
         {row.directory && <Icon name="chevronRight" />}
       </span>
-      <Icon name={row.directory ? folderIcon : 'file'} />
+      {row.directory ? <Icon name={folderIcon} /> : <FileIcon path={row.path} />}
       {editor ?? (
         <span
           {...stylex.props(

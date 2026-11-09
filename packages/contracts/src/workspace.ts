@@ -42,6 +42,7 @@ export const emptyRecovery = (clientId: string): EditorRecovery => ({
   drafts: [],
   recentFiles: [],
   sidebarWidth: 270,
+  followActiveFile: true,
 });
 export type WorkspaceCommands = {
   [K in keyof typeof Contracts.workspaceInputSchemas]: {

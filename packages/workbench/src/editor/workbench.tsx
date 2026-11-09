@@ -7,7 +7,7 @@ import {
   type PickerOpenFile,
   type PickerRequest,
 } from './picker.tsx';
-import { FilesTree, type TreeCreateRequest } from './files-tree.tsx';
+import { FilesTree, type FollowedFiles, type TreeCreateRequest } from './files-tree.tsx';
 import { findCreateFolder } from './files-tree-rows.ts';
 import { gitStatusMarks } from './files-tree-status.ts';
 import { Mutation, type Action } from './mutation.tsx';
@@ -53,7 +53,7 @@ import { ExplorerMenu, type ExplorerAction } from './explorer-menu.tsx';
 import { CheatSheet, editorShortcuts, type Shortcut } from './cheat-sheet.tsx';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { styles } from './styles.ts';
-import { Icon } from './icon.tsx';
+import { FileIcon, Icon } from './icon.tsx';
 
 type FocusOrigin = 'editor' | 'strip' | 'tree';
 const focusOrigin = (element: HTMLElement): FocusOrigin => {
@@ -181,6 +181,9 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   // The explorer's "…" New File/Folder, started by the files tree.
   const [createRequest, setCreateRequest] = useState<TreeCreateRequest | null>(null),
     createRequests = useRef(0);
+  // Per checkout, the active file its tree last followed, kept while the tree is unmounted.
+  const followedFiles = useRef<FollowedFiles>(new Map());
+  const following = state.recovery.followActiveFile ?? true;
   useLayoutEffect(() => {
     lookupRef.current = lookup;
     projectRef.current = project;
@@ -702,6 +705,30 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
           run: () => controller.tree(checkout, { expanded: [] }),
         },
         { label: 'Reveal Active File', icon: 'reveal', disabled: !target, run: revealActive },
+        {
+          label: 'Follow Active File',
+          icon: 'follow',
+          checked: following,
+          run: () => {
+            const follow = !(controller.getSnapshot().recovery.followActiveFile ?? true);
+            // Turning it on reveals each checkout's active file, followed or not.
+            if (follow)
+              for (const key of followedFiles.current.keys()) followedFiles.current.set(key, null);
+            controller.setFollowActiveFile(follow);
+          },
+        },
+        {
+          label: 'Hide Ignored Files',
+          icon: 'filter',
+          checked: !!selected?.tree.hideIgnoredFiles,
+          run: () =>
+            controller.tree(checkout, {
+              hideIgnoredFiles: !readOwn(
+                controller.getSnapshot().recovery.views,
+                checkout.checkoutId,
+              )?.tree.hideIgnoredFiles,
+            }),
+        },
         'separator',
         { label: 'Go to File…', icon: 'search', keys: '⌘P', run: () => openPicker('goto') },
         { label: 'Refresh', icon: 'refresh', run: () => run(controller.refresh(checkout)) },
@@ -764,6 +791,8 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                 active={selected.active}
                 anchorReset={anchorReset}
                 visible={visible}
+                follow={following && !sidebarHidden && visible}
+                followed={followedFiles.current}
                 dialogOpen={!!(action || choice || lookup || mutations.running)}
                 canRequestMutation={canRequestMutation}
                 requestMutation={requestMutation}
@@ -989,7 +1018,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                           </span>
                         ) : (
                           <span {...stylex.props(controls.icon)}>
-                            <Icon name="file" />
+                            <FileIcon path={path} />
                           </span>
                         )}
                         <span {...stylex.props(controls.truncate)}>{label}</span>

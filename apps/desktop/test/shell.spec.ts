@@ -1527,7 +1527,7 @@ test('design fixture renders first-message composition, pinned navigation and co
   const folder = tree.getByRole('treeitem', { name: 'src', exact: true });
   const file = tree.getByRole('treeitem', { name: 'welcome.ts, modified', exact: true });
   await expect(folder.locator('svg.tabler-icon-folder')).toBeVisible();
-  await expect(file.locator('svg.tabler-icon-file')).toBeVisible();
+  await expect(file.locator('svg.tabler-icon-brand-typescript')).toBeVisible();
   expect((await folder.getByText('src', { exact: true }).boundingBox())!.x).toBe(
     (await file.getByText('welcome.ts', { exact: true }).boundingBox())!.x,
   );

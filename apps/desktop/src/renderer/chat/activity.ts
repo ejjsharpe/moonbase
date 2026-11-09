@@ -13,9 +13,39 @@ export function isActivityPart(part: ChatTranscriptPart) {
 }
 
 /**
+ * A thought with nothing to read: a provider can send one with only its signature or encrypted
+ * reasoning. It shows no step of its own.
+ */
+export const isEmptyThought = (part: ChatTranscriptPart) =>
+  part.kind === 'thinking' &&
+  part.availability === 'available' &&
+  !part.truncated &&
+  !part.text.trim();
+
+/**
+ * The thoughts a reply's text follows. The text takes their place, as it does in the live response
+ * once it arrives; a thought that leads into tool work stays a step.
+ */
+export function findAnsweredThoughts(parts: readonly ChatTranscriptPart[]) {
+  const answered = new Set<string>();
+  let thoughts: string[] = [];
+  for (const part of parts) {
+    if (part.kind === 'thinking') {
+      thoughts.push(part.partId);
+      continue;
+    }
+    if (part.kind === 'text' && part.role === 'assistant')
+      for (const id of thoughts) answered.add(id);
+    thoughts = [];
+  }
+  return answered;
+}
+
+/**
  * How an entry reads in the transcript. Pi records each tool call, result and turn marker as its
  * own entry: an empty marker takes no space, and calls and results read as activity, which
- * consecutive rows join into one card.
+ * consecutive rows join into one card. A reply that only thought, with nothing to read, is empty
+ * too.
  */
 export function classifyEntry(entry: ChatEntry): 'empty' | 'activity' | 'message' {
   const parts = entry.transcript?.parts ?? [];
@@ -23,6 +53,13 @@ export function classifyEntry(entry: ChatEntry): 'empty' | 'activity' | 'message
     entry.role === 'system' &&
     !entry.text.trim() &&
     parts.every((part) => part.kind === 'text' && part.bytes === 0)
+  )
+    return 'empty';
+  if (
+    entry.role === 'assistant' &&
+    !entry.text.trim() &&
+    parts.length &&
+    parts.every(isEmptyThought)
   )
     return 'empty';
   if (entry.role === 'tool') return 'activity';
@@ -229,7 +266,8 @@ export const getAnsweredCall = (step: ActivityStep) =>
 /**
  * Pairs each part with the call it answers: the call itself when it is in this group (from the
  * row's own entry), else the first answer to the same call here, so an edit's output, details,
- * patch and diff read as one step. Consecutive thinking blocks are one thought, so one step.
+ * patch and diff read as one step. Consecutive thinking blocks are one thought, so one step; an
+ * empty thought is no step.
  */
 export function groupActivitySteps(parts: readonly ChatTranscriptPart[], entryId?: string) {
   const steps: ActivityStep[] = [],
@@ -237,6 +275,7 @@ export function groupActivitySteps(parts: readonly ChatTranscriptPart[], entryId
     answered = new Map<string, ActivityStep>();
   let previousPart: ChatTranscriptPart | undefined;
   for (const part of parts) {
+    if (isEmptyThought(part)) continue;
     const previous = steps.at(-1),
       follows = previousPart?.kind === 'thinking';
     previousPart = part;

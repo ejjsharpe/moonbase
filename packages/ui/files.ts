@@ -1,4 +1,5 @@
 import * as stylex from '@stylexjs/stylex';
+import { findFileTypeMark } from './file-icons.ts';
 import { colors, gitStatus, layout, projectHues, radius, space, type } from './tokens.stylex';
 
 export const filesUI = stylex.create({
@@ -110,28 +111,6 @@ export const filesUI = stylex.create({
   mounted: (top: number) => ({ position: 'absolute', top, width: '100%' }),
 });
 
-const typeMarks: Record<string, { label: string; hue: keyof typeof typeHues }> = {
-  ts: { label: 'TS', hue: 'periwinkle' },
-  tsx: { label: 'TSX', hue: 'periwinkle' },
-  mts: { label: 'TS', hue: 'periwinkle' },
-  js: { label: 'JS', hue: 'sand' },
-  jsx: { label: 'JSX', hue: 'sand' },
-  mjs: { label: 'JS', hue: 'sand' },
-  cjs: { label: 'JS', hue: 'sand' },
-  json: { label: '{}', hue: 'sand' },
-  md: { label: 'MD', hue: 'silver' },
-  mdx: { label: 'MDX', hue: 'silver' },
-  css: { label: '#', hue: 'pink' },
-  scss: { label: '#', hue: 'pink' },
-  html: { label: '<>', hue: 'pink' },
-  py: { label: 'PY', hue: 'green' },
-  rs: { label: 'RS', hue: 'sand' },
-  go: { label: 'GO', hue: 'periwinkle' },
-  sh: { label: '$', hue: 'green' },
-  yml: { label: 'YML', hue: 'lavender' },
-  yaml: { label: 'YML', hue: 'lavender' },
-  toml: { label: 'TML', hue: 'lavender' },
-};
 const typeHues = stylex.create({
   silver: { color: projectHues.silver },
   periwinkle: { color: projectHues.periwinkle },
@@ -152,10 +131,12 @@ const typeMarkStyle = stylex.create({
   },
 });
 
-/** A short coloured mark for a file's type, such as TS or MD; null for a type it doesn't know. */
+/**
+ * A short coloured mark for a file's type, such as TS or MD, standing in for its `findFileIcon`
+ * icon; null where the icon shows instead: a type without a mark, or a file known by its whole name.
+ */
 export function fileTypeMark(path: string) {
-  const extension = path.split('/').at(-1)!.split('.').slice(1).at(-1)?.toLowerCase();
-  const mark = extension ? typeMarks[extension] : undefined;
+  const mark = findFileTypeMark(path);
   return mark ? { label: mark.label, style: [typeMarkStyle.mark, typeHues[mark.hue]] } : null;
 }
 

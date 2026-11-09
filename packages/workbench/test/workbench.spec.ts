@@ -2051,6 +2051,13 @@ test("the explorer's … menu holds its file actions and collapses every folder"
     'Refresh',
   ])
     await expect(menu.getByRole('menuitem', { name, exact: true })).toBeVisible();
+  // Settings show as checkbox items: Follow Active File starts on, Hide Ignored Files off.
+  await expect(
+    menu.getByRole('menuitemcheckbox', { name: 'Follow Active File', exact: true }),
+  ).toHaveAttribute('aria-checked', 'true');
+  await expect(
+    menu.getByRole('menuitemcheckbox', { name: 'Hide Ignored Files', exact: true }),
+  ).toHaveAttribute('aria-checked', 'false');
   await menu.getByRole('menuitem', { name: 'Collapse All Folders', exact: true }).click();
   await expect(menu).toHaveCount(0);
   await expect(folder).toHaveAttribute('aria-expanded', 'false');

@@ -103,7 +103,7 @@ test('first folder listing is visible while Git is held, and stale classificatio
     await editor.openCheckout(checkout.root);
     await editor.openCheckout(second.root);
     hold = true;
-    editor.tree(checkout, { hideIgnored: true });
+    editor.tree(checkout, { hideIgnoredFiles: true });
     const unfiltered = await editor.list(checkout);
     await entered.promise;
     assert(unfiltered.entries.some((entry) => entry.path === 'c.ts'));
