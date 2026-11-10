@@ -1,17 +1,27 @@
-import { randomUUID } from 'node:crypto';
+import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { mkdir, lstat, open, rename, unlink } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import * as Schema from 'effect/Schema';
 import type { CreateModelsOptions } from '@earendil-works/pi-ai/models';
 import { ApplicationError } from '@moonbase/contracts/errors';
+import type { CredentialKeySource } from './credential-keys.ts';
+
+export {
+  createKeyFileSource,
+  createKeychainKeySource,
+  createMemoryKeySource,
+  type CredentialKeySource,
+  type KeychainKeySourceOptions,
+} from './credential-keys.ts';
 
 type CredentialStore = NonNullable<CreateModelsOptions['credentials']>;
 type Credential = NonNullable<Awaited<ReturnType<CredentialStore['read']>>>;
+/** Encrypts one provider's credential file; `providerId` names the file it belongs to. */
 export type CredentialEncryption = {
   available(): Promise<boolean>;
-  encrypt(value: string): Promise<Uint8Array>;
-  decrypt(value: Uint8Array): Promise<string>;
+  encrypt(value: string, providerId: string): Promise<Uint8Array>;
+  decrypt(value: Uint8Array, providerId: string): Promise<string>;
 };
 const failure = () =>
   new ApplicationError({
@@ -52,9 +62,62 @@ function decodeCredential(value: unknown): Credential | undefined {
 async function protectStorage<A>(operation: () => Promise<A>): Promise<A> {
   try {
     return await operation();
-  } catch {
+  } catch (error) {
+    // A key source that can't work says why, such as a locked keychain; nothing else is disclosed.
+    if (ApplicationError.is(error) && error.code === 'Unavailable') throw error;
     throw failure();
   }
+}
+const sealVersion = 1,
+  nonceBytes = 12,
+  tagBytes = 16;
+const getAssociatedData = (providerId: string) =>
+  Buffer.from(`moonbase-credential-v${sealVersion}\0${providerId}`);
+/**
+ * AES-256-GCM under a key from `source`: `version | 96-bit random nonce | ciphertext | tag`, with
+ * the version and provider id authenticated, so a file can't be moved to another provider. The
+ * first write creates the key; a read never does.
+ */
+export function createKeyEncryption(source: CredentialKeySource): CredentialEncryption {
+  // Sources never overwrite a stored key, so concurrent first writes all read back the same one.
+  let cached: Uint8Array | undefined;
+  const getKey = async (create: boolean) =>
+    (cached ??= (await source.load()) ?? (create ? await source.create() : undefined));
+  return {
+    available: async () => {
+      if (await source.available()) return true;
+      throw new ApplicationError({
+        code: 'Unavailable',
+        message:
+          'The credential key store is unavailable on this system. Configure a private credential key file for this host instead.',
+      });
+    },
+    encrypt: async (value, providerId) => {
+      const nonce = randomBytes(nonceBytes),
+        cipher = createCipheriv('aes-256-gcm', (await getKey(true))!, nonce);
+      cipher.setAAD(getAssociatedData(providerId));
+      return Buffer.concat([
+        Buffer.of(sealVersion),
+        nonce,
+        cipher.update(value, 'utf8'),
+        cipher.final(),
+        cipher.getAuthTag(),
+      ]);
+    },
+    decrypt: async (value, providerId) => {
+      const data = Buffer.from(value);
+      if (data.byteLength < 1 + nonceBytes + tagBytes || data[0] !== sealVersion) throw failure();
+      const secret = await getKey(false);
+      if (!secret) throw failure();
+      const decipher = createDecipheriv('aes-256-gcm', secret, data.subarray(1, 1 + nonceBytes));
+      decipher.setAAD(getAssociatedData(providerId));
+      decipher.setAuthTag(data.subarray(-tagBytes));
+      return Buffer.concat([
+        decipher.update(data.subarray(1 + nonceBytes, -tagBytes)),
+        decipher.final(),
+      ]).toString('utf8');
+    },
+  };
 }
 /** One private Moonbase namespace; the process root must hold its single-instance lock. */
 export function createCredentialStore(
@@ -98,7 +161,9 @@ export function createCredentialStore(
         )
           throw failure();
         if (!(await encryption.available())) throw failure();
-        return decodeCredential(JSON.parse(await encryption.decrypt(await file.readFile())));
+        return decodeCredential(
+          JSON.parse(await encryption.decrypt(await file.readFile(), providerId)),
+        );
       } finally {
         await file.close();
       }
@@ -108,7 +173,7 @@ export function createCredentialStore(
       const plain = JSON.stringify(decodeCredential(value ?? null) ?? null);
       if (Buffer.byteLength(plain) > 64 * 1024) throw failure();
       if (!(await encryption.available())) throw failure();
-      const encrypted = await encryption.encrypt(plain);
+      const encrypted = await encryption.encrypt(plain, providerId);
       if (encrypted.byteLength > 128 * 1024) throw failure();
       const temporary = join(directory, '.' + randomUUID());
       try {
