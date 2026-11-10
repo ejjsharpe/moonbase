@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ManagedRuntime } from 'effect';
@@ -225,4 +225,66 @@ test('a Send carries mentions the text spells, and refuses ones it does not', as
     }),
     (error) => ApplicationError.is(error) && error.code === 'InvalidInput',
   );
+});
+
+const isRunning = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if ((error as { code?: unknown }).code === 'ESRCH') return false;
+    throw error;
+  }
+};
+
+test('a cancelled search returns at once, and its stalled listing is stopped at its time budget', async (t) => {
+  const root = await folder(t, false),
+    bin = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-files-bin-')));
+  // A listing that prints part of the folder, then stalls like ripgrep on a hung mount.
+  const pids = join(bin, 'pids'),
+    stalled = join(bin, 'rg');
+  await writeFile(
+    stalled,
+    `#!/bin/sh\necho $$ >> '${pids}'\nprintf 'README.md\\0src/app/main.ts\\0'\nexec sleep 60\n`,
+    { mode: 0o755 },
+  );
+  const runtime = ManagedRuntime.make(
+    LocalPiRuntimeLive({
+      ...session,
+      databasePath: join(bin, 'chat.sqlite'),
+      models: createModels(),
+      ripgrepExecutable: stalled,
+      approveFolder: async () => {},
+    }),
+  );
+  t.after(async () => {
+    try {
+      await runtime.dispose();
+    } finally {
+      await rm(bin, { recursive: true, force: true });
+    }
+  });
+  const client = makeChatClient(runtime),
+    input = { session, cwd: root, query: '' };
+  const abort = new AbortController(),
+    cancelled = client.command('findChatFiles', input, { signal: abort.signal });
+  let pid: number | undefined;
+  for (let i = 0; i < 500 && !pid; i++) {
+    pid = Number((await readFile(pids, 'utf8').catch(() => '')).trim()) || undefined;
+    if (!pid) await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert(pid, 'The listing never started');
+  const started = Date.now();
+  abort.abort();
+  await assert.rejects(cancelled, { code: 'Cancelled' });
+  assert(Date.now() - started < 1_000, 'Cancelling waited for the listing');
+  // The listing is shared, so cancelling one search leaves it to finish for the next.
+  assert(isRunning(pid));
+  const result = await client.command('findChatFiles', input);
+  assert.deepEqual(paths(result), ['README.md', 'src/app/main.ts']);
+  assert.equal(result.partial, true);
+  for (let i = 0; i < 100 && isRunning(pid); i++)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  assert(!isRunning(pid), 'The stalled listing outlived its budget');
+  assert.equal((await readFile(pids, 'utf8')).trim(), String(pid), 'The search listed twice');
 });

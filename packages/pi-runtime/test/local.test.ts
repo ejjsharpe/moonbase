@@ -280,7 +280,6 @@ test('a local chat without a project runs in a new, empty folder of its own', as
 });
 test('a chat without a project is refused while its folders would sit inside a Git checkout', async (t) => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-own-folder-git-')));
-  t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, '.git'));
   const models = createModels(),
     faux = fauxProvider({ models: [{ id: 'model' }] });
@@ -293,7 +292,15 @@ test('a chat without a project is refused while its folders would sit inside a G
       chatFolders: join(root, 'profile', 'chats'),
     }),
   );
-  t.after(() => runtime.dispose());
+  // Close the store before removing its folder: Bun's SQLite fails the closing checkpoint of a
+  // deleted database.
+  t.after(async () => {
+    try {
+      await runtime.dispose();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
   const settings = { model: { provider: faux.provider.id, modelId: 'model' } };
   await assert.rejects(
     makeChatClient(runtime).command('createChat', {

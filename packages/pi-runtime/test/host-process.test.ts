@@ -47,9 +47,20 @@ async function port() {
   await new Promise<void>((r) => server.close(() => r()));
   return value;
 }
-function start(path: string, fixture = false, env: NodeJS.ProcessEnv = process.env) {
+// Hosts run on Node today and on Bun from the daemon on; each child runs on the suite's runtime
+// unless a test names one. Node needs its type-stripping flag for the TypeScript fixture.
+const runtimes = {
+  node: process.versions.bun ? 'node' : process.execPath,
+  bun: process.versions.bun ? process.execPath : 'bun',
+};
+function start(
+  path: string,
+  fixture = false,
+  env: NodeJS.ProcessEnv = process.env,
+  runtime = process.execPath,
+) {
   const child = spawn(
-    process.execPath,
+    runtime,
     [
       '--import',
       new URL('./no-provider.mjs', import.meta.url).pathname,
@@ -97,7 +108,28 @@ async function cleanup(child: ChildProcess, exited: Promise<unknown>) {
     await bounded(exited);
   });
 }
-test('actual standalone CLI owns one SQLite store before serving, releases on shutdown and recovers after SIGKILL', async () => {
+const isRunning = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if ((error as { code?: unknown }).code === 'ESRCH') return false;
+    throw error;
+  }
+};
+async function readRuntime(path: string) {
+  for (let i = 0; i < 100; i++) {
+    const text = await readFile(path, 'utf8').catch(() => '');
+    if (text) return JSON.parse(text) as Record<string, string | undefined>;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  throw Error('The host never reported its runtime.');
+}
+for (const [name, runtime] of Object.entries(runtimes))
+  test(`actual standalone CLI on ${name} owns one SQLite store before serving, releases on shutdown and recovers after SIGKILL`, async () => {
+    await checkStoreOwnership(name, runtime);
+  });
+async function checkStoreOwnership(name: string, runtime: string) {
   const dir = await mkdtemp(join(tmpdir(), 'moonbase-chat-host-')),
     token = randomBytes(32).toString('base64url'),
     host = { hostId: 'child-host', storeId: 'child-store' },
@@ -113,32 +145,35 @@ test('actual standalone CLI owns one SQLite store before serving, releases on sh
     token,
   };
   await writeFile(file, JSON.stringify(config), { mode: 0o600 });
-  const children: ReturnType<typeof start>[] = [];
+  const children: ReturnType<typeof start>[] = [],
+    reported = join(dir, 'runtime.json'),
+    env = { ...process.env, MOONBASE_TEST_RUNTIME_LOG: reported };
   try {
-    const owner = start(file);
+    const owner = start(file, false, env, runtime);
     children.push(owner);
     await bounded(owner.ready);
     const health = await Effect.runPromise(
       checkHostHealth({ origin: `http://127.0.0.1:${listen}`, token, expected: host }),
     );
     assert.equal(health.hostId, host.hostId);
+    assert.equal((await readRuntime(reported)).bun, name === 'bun' ? '1.4.4' : undefined);
     assert(!owner.output.includes(token));
     assert(!owner.errors.includes(token));
     const alternate = join(dir, 'alternate.json');
     await writeFile(alternate, JSON.stringify({ ...config, port: await port() }), { mode: 0o600 });
-    const contender = start(alternate);
+    const contender = start(alternate, false, env, runtime);
     children.push(contender);
     assert.equal((await bounded(contender.exited))[0], 1);
     assert(!contender.output.includes('ready'));
     assert(!contender.errors.includes(dir));
     owner.child.kill('SIGKILL');
     assert.equal((await bounded(owner.exited))[1], 'SIGKILL');
-    const recovered = start(file);
+    const recovered = start(file, false, env, runtime);
     children.push(recovered);
     await bounded(recovered.ready);
     recovered.child.kill('SIGTERM');
     assert.equal((await bounded(recovered.exited))[0], 0);
-    const again = start(file);
+    const again = start(file, false, env, runtime);
     children.push(again);
     await bounded(again.ready);
     again.child.kill('SIGTERM');
@@ -152,7 +187,7 @@ test('actual standalone CLI owns one SQLite store before serving, releases on sh
     await Promise.all(children.map((c) => cleanup(c.child, c.exited)));
     await rm(dir, { recursive: true, force: true });
   }
-});
+}
 test('CLI rejects malformed private config without echoing secrets or file paths', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'moonbase-chat-bad-')),
     file = join(dir, 'private.json'),
@@ -566,14 +601,24 @@ test('bundled host serves a Claude subscription through the host-side Claude Cod
     );
     // Claude Code runs in, and so reports, the host's chat folder rather than where it started.
     const cwd = await realpath(directory);
-    for (const line of (await readFile(join(directory, 'workers.log'), 'utf8')).trim().split('\n'))
-      assert.equal(JSON.parse(line).cwd, cwd);
+    const workers = (await readFile(join(directory, 'workers.log'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { cwd: string; pid: number; helper: number });
+    for (const worker of workers) assert.equal(worker.cwd, cwd);
+    // Warm workers and their tool helpers stay up between turns, in the worker's process group.
+    const processes = workers.flatMap((worker) => [worker.pid, worker.helper]);
+    assert(processes.some(isRunning), 'No Claude Code worker stayed warm');
     served.child.kill('SIGTERM');
     assert.equal(
       (await bounded(served.exited))[0],
       0,
       'Warm Claude Code workers kept the host alive',
     );
+    // Closing them on shutdown stops each worker's whole group, leaving no stray process.
+    for (let i = 0; i < 200 && processes.some(isRunning); i++)
+      await new Promise((r) => setTimeout(r, 10));
+    assert.deepEqual(processes.filter(isRunning), [], 'Claude Code processes outlived the host');
   } finally {
     await runtime.dispose();
     await Promise.all(children.map((c) => cleanup(c.child, c.exited)));

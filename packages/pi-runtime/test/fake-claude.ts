@@ -16,10 +16,10 @@ if (process.argv.includes('auth') && process.argv.includes('status')) {
   process.exit(0);
 }
 const system = readFileSync(process.argv[process.argv.indexOf('--system-prompt-file') + 1], 'utf8');
-appendFileSync(directory + '/workers.log', JSON.stringify({ cwd: process.cwd(), system }) + '\\n');
 const config = JSON.parse(process.argv[process.argv.indexOf('--mcp-config') + 1]);
 const server = config.mcpServers.pi;
 const mcp = spawn(server.command, server.args, { env: { ...process.env, ...server.env }, stdio: ['pipe', 'pipe', 'inherit'] });
+appendFileSync(directory + '/workers.log', JSON.stringify({ cwd: process.cwd(), system, pid: process.pid, helper: mcp.pid }) + '\\n');
 const replies = readline.createInterface({ input: mcp.stdout });
 const tools = await new Promise((resolve, reject) => {
   mcp.once('exit', (code) => reject(Error('MCP helper exited ' + code)));
@@ -63,7 +63,8 @@ mcp.kill();
 
 /**
  * Writes the fake `claude` executable and its `node` into `bin` (default `directory`); `directory`
- * receives its logs: `invocations.log`, and per worker its cwd and system prompt in `workers.log`.
+ * receives its logs: `invocations.log`, and per worker its cwd, system prompt, pid and tool
+ * helper's pid in `workers.log`.
  */
 export async function writeFakeClaude(directory: string, bin = directory) {
   const command = join(bin, 'claude');

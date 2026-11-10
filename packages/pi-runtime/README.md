@@ -39,6 +39,7 @@ The listener binds only `127.0.0.1`; reach it through the [SSH package](../ssh/R
 
 ## Behavior worth knowing
 
+- Both modes run on Node 26.13 or newer or exactly Bun 1.4.4; the local runtime also runs on the qualified Electron (45.1.0, Node 24.22.1). Anything else is refused as `Incompatible` before the store opens. Bun and Electron are qualified exactly, so upgrading either is a deliberate change. SQLite goes through chord's `node:sqlite` adapter on every runtime.
 - Mutations carry request IDs bound to their full input. A lost or unproved reply is `Uncertain`; callers retry with the original request rather than resending, and reconnects never resend.
 - `listChats` gives each chat's `activity`: `running` while a submission owns it, else how its latest generation ended (`idle`, `stopped`, `failed`), with when it started or ended (or the chat's creation time if it never ran).
 - A local `createChat` without `cwd` is a chat without a project: after `approveCreation` accepts it, the runtime makes it a new, empty, private folder under `chatFolders`, named for the day, the title's first words and a short id (`2026-11-08-tidy-the-composer-a1b2c3d4`), and lists it with `ownFolder: true`. It is refused when `chatFolders` is unset or sits inside a Git checkout, where the agent's Git commands would act on that repository. The runtime never deletes a chat's folder, so the agent's files stay until you remove them; it removes only an empty one it made for a request that made no chat. `LocalPiControl.markFolderAsProject` clears `ownFolder` once the host has opened that folder as a project.
@@ -61,4 +62,4 @@ bun run --cwd packages/pi-runtime test
 bun run test:chat-integration
 ```
 
-Tests use controlled providers and temporary SQLite stores, never real provider quota or SSH hosts.
+`test` runs the suite under `node --test` (`test:node`) and then under `bun test` (`test:bun`). The Electron cases run in the pinned Electron under either. Host-process tests run the bundled host on the suite's runtime, and its store ownership and SIGKILL recovery on both Node and Bun. Tests use controlled providers and temporary SQLite stores, never real provider quota or SSH hosts.

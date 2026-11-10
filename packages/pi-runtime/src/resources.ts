@@ -55,22 +55,24 @@ function retainedWork(kind: 'abort' | 'waiter'): Effect.Effect<RetainedWork, nev
   });
 }
 
+// Bun and Electron are qualified exactly, so upgrading either is a deliberate change. Bun reports
+// an older Node version than it implements, so it is never judged by that version.
+function isQualifiedRuntime(versions: NodeJS.ProcessVersions, local: boolean) {
+  if (versions.bun !== undefined) return versions.bun === '1.4.4';
+  if (local && versions.electron === '45.1.0' && versions.node === '24.22.1') return true;
+  const [major = 0, minor = 0] = versions.node.split('.').map(Number);
+  return major > 26 || (major === 26 && minor >= 13);
+}
+
 export function openHost(config: RuntimeConfiguration) {
   return Effect.gen(function* () {
     const validated = yield* Effect.tryPromise({
       try: async () => {
-        const [major, minor] = process.versions.node.split('.').map(Number);
         const local = 'mode' in config;
-        const qualifiedElectron =
-          process.versions.electron === '45.1.0' && process.versions.node === '24.22.1';
-        if (
-          local
-            ? !qualifiedElectron && (major < 26 || (major === 26 && minor < 13))
-            : major < 26 || (major === 26 && minor < 13)
-        )
+        if (!isQualifiedRuntime(process.versions, local))
           V.fail(
             'Incompatible',
-            'The Pi host requires qualified Node 26.13 or newer. The remote client has its own runtime boundary.',
+            'The Pi host requires Node 26.13 or newer, or exactly Bun 1.4.4. The remote client has its own runtime boundary.',
           );
         if (local) return S.localConfiguration(config);
         const data = S.runtimeConfiguration(config),
