@@ -2,7 +2,7 @@
 
 Moonbase is prerelease. The code and tests are the source of truth; docs only describe how things are today. Read the root README and the README of each module you change.
 
-Nothing here is set in stone. If a task would be better served by changing the architecture, a design choice or a saved/wire format, propose it rather than working around it. Formats can change without migrations or compatibility shims unless the task asks for them.
+Nothing here is set in stone. If a task would be better served by changing the architecture, a design choice or a saved/wire format, propose it rather than working around it. Formats can change without migrations or compatibility shims unless the task asks for them. Data may be lost between versions while Moonbase is prerelease: a change can start from a fresh store instead of migrating, but leaves the old data on disk untouched rather than deleting it.
 
 ## Structure
 
