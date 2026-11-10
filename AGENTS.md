@@ -4,6 +4,8 @@ Moonbase is prerelease. The code and tests are the source of truth; docs only de
 
 Nothing here is set in stone. If a task would be better served by changing the architecture, a design choice or a saved/wire format, propose it rather than working around it. Formats can change without migrations or compatibility shims unless the task asks for them.
 
+Data may be lost between versions while Moonbase is prerelease: a change can start from a fresh store instead of migrating.
+
 ## Structure
 
 - Packages own behavior; apps compose packages and supply platform integration. Consume other modules through their public exports and inject dependencies rather than importing an app.
@@ -22,8 +24,7 @@ Nothing here is set in stone. If a task would be better served by changing the a
 - Never lose a user's unsaved work, and never delete or overwrite real user data or state outside temporary test locations.
 - Keep credentials and host keys out of the repository, logs, URLs, process arguments and renderer code.
 - Don't spend real provider quota, connect to an SSH host the user hasn't named, or bypass SSH host-key checking without explicit authorization.
-- Don't deploy, publish releases or merge PRs.
 
 ## PRs and docs
 
-Use Conventional Commit PR titles and link PRs with T3 when available. Keep docs short. Put provenance, test logs and handoff notes in PR descriptions, not committed docs.
+Use Conventional Commit PR titles. Keep docs short. Put provenance, test logs and handoff notes in PR descriptions, not committed docs.
