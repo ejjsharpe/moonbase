@@ -239,6 +239,7 @@ export function openHost(config: RuntimeConfiguration) {
         acquired.closed = true;
       }),
     );
+    yield* Effect.addFinalizer(() => Effect.promise(() => acquired.files.close()));
     harness.resume();
     return acquired;
   });
