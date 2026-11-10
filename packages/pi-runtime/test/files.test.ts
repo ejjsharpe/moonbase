@@ -11,7 +11,7 @@ import { makeChatClient } from '@moonbase/application/runtime/clients';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import { ChatFileIndex, type ChatFileListingRun } from '../src/files.ts';
 import { LocalPiRuntimeLive } from '../src/index.ts';
-import { fixture, session } from './runtime-fixture.ts';
+import { fixture, isRunning, session } from './runtime-fixture.ts';
 
 const which = (name: string) => {
   try {
@@ -227,27 +227,44 @@ test('a Send carries mentions the text spells, and refuses ones it does not', as
   );
 });
 
-const isRunning = (pid: number) => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    if ((error as { code?: unknown }).code === 'ESRCH') return false;
-    throw error;
-  }
-};
+/**
+ * Writes a listing command that prints part of the folder, then stalls like ripgrep or Git on a
+ * hung mount, with a child that ignores SIGTERM and holds no pipe. It records its pid in `pids`
+ * and the child's in `children`.
+ */
+async function writeStalledListing(bin: string, name: string) {
+  const command = join(bin, name);
+  await writeFile(
+    command,
+    `#!/bin/sh
+echo $$ >> '${join(bin, 'pids')}'
+printf 'README.md\\0src/app/main.ts\\0'
+sh -c 'trap "" TERM; exec sleep 60' < /dev/null > /dev/null 2>&1 &
+echo $! >> '${join(bin, 'children')}'
+wait
+`,
+    { mode: 0o755 },
+  );
+  return command;
+}
+const readPid = async (path: string) =>
+  Number((await readFile(path, 'utf8').catch(() => '')).trim()) || undefined;
+/** The listing and its child are gone once the search returns: the whole group was stopped. */
+async function assertListingStopped(bin: string) {
+  const pid = await readPid(join(bin, 'pids')),
+    child = await readPid(join(bin, 'children'));
+  assert(pid && child, 'The listing never started its child');
+  for (let i = 0; i < 50 && (isRunning(pid) || isRunning(child)); i++)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  assert(!isRunning(pid), 'The stalled listing outlived its budget');
+  assert(!isRunning(child), "The stalled listing's child outlived its budget");
+}
 
 test('a cancelled search returns at once, and its stalled listing is stopped at its time budget', async (t) => {
   const root = await folder(t, false),
     bin = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-files-bin-')));
-  // A listing that prints part of the folder, then stalls like ripgrep on a hung mount.
   const pids = join(bin, 'pids'),
-    stalled = join(bin, 'rg');
-  await writeFile(
-    stalled,
-    `#!/bin/sh\necho $$ >> '${pids}'\nprintf 'README.md\\0src/app/main.ts\\0'\nexec sleep 60\n`,
-    { mode: 0o755 },
-  );
+    stalled = await writeStalledListing(bin, 'rg');
   const runtime = ManagedRuntime.make(
     LocalPiRuntimeLive({
       ...session,
@@ -270,7 +287,7 @@ test('a cancelled search returns at once, and its stalled listing is stopped at 
     cancelled = client.command('findChatFiles', input, { signal: abort.signal });
   let pid: number | undefined;
   for (let i = 0; i < 500 && !pid; i++) {
-    pid = Number((await readFile(pids, 'utf8').catch(() => '')).trim()) || undefined;
+    pid = await readPid(pids);
     if (!pid) await new Promise((resolve) => setTimeout(resolve, 10));
   }
   assert(pid, 'The listing never started');
@@ -283,8 +300,20 @@ test('a cancelled search returns at once, and its stalled listing is stopped at 
   const result = await client.command('findChatFiles', input);
   assert.deepEqual(paths(result), ['README.md', 'src/app/main.ts']);
   assert.equal(result.partial, true);
-  for (let i = 0; i < 100 && isRunning(pid); i++)
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  assert(!isRunning(pid), 'The stalled listing outlived its budget');
+  await assertListingStopped(bin);
   assert.equal((await readFile(pids, 'utf8')).trim(), String(pid), 'The search listed twice');
+});
+
+test('a stalled Git listing is stopped with its children at its time budget', async (t) => {
+  const root = await folder(t),
+    bin = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-files-bin-')));
+  t.after(() => rm(bin, { recursive: true, force: true }));
+  const index = new ChatFileIndex({
+    ripgrepExecutable: missing,
+    gitExecutable: await writeStalledListing(bin, 'git'),
+  });
+  const result = await index.find(root, '');
+  assert.deepEqual(paths(result), ['README.md', 'src/app/main.ts']);
+  assert.equal(result.partial, true);
+  await assertListingStopped(bin);
 });

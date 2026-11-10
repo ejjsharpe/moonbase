@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import { chatFileMatchLimit, isChatMentionPath, type ChatOutput } from '@moonbase/contracts/chat';
 import { matchPath, compareMatches } from '@moonbase/contracts/lookup';
@@ -35,14 +35,86 @@ export type ChatFileListingRun = (
 ) => Promise<Buffer>;
 type ListingFailure = { code?: unknown; killed?: boolean; stdout?: Buffer };
 
+/** How long a stopped listing's process group has to exit after SIGTERM before SIGKILL. */
+const stopGraceMs = 2_000;
+const isGroupAlive = (group: number) => {
+  try {
+    process.kill(-group, 0);
+    return true;
+  } catch (error) {
+    return (error as { code?: unknown }).code === 'EPERM';
+  }
+};
+const signalGroup = (group: number, signal: NodeJS.Signals) => {
+  try {
+    process.kill(-group, signal);
+  } catch {
+    // The group already exited.
+  }
+};
+/** Waits for every process in a stopped group to exit, sending SIGKILL after the grace period. */
+async function awaitGroupExit(group: number, stoppedAt: number) {
+  let killed = false;
+  while (isGroupAlive(group)) {
+    const elapsed = Date.now() - stoppedAt;
+    if (!killed && elapsed >= stopGraceMs) {
+      killed = true;
+      signalGroup(group, 'SIGKILL');
+    }
+    if (elapsed >= stopGraceMs * 2) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+// Its own process group, so a listing stopped by its budget takes any children with it. The
+// negative-PID kill is needed: a spawn signal or timeout reaches only the group leader.
 const runListing: ChatFileListingRun = (executable, args, cwd) =>
   new Promise((resolve, reject) => {
-    execFile(
-      executable,
-      args,
-      { cwd, encoding: 'buffer', maxBuffer: listingBytes, timeout: listingMs },
-      (error, stdout) => (error ? reject(Object.assign(error, { stdout })) : resolve(stdout)),
-    );
+    const child = spawn(executable, args, {
+      cwd,
+      detached: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const chunks: Buffer[] = [];
+    let length = 0,
+      settled = false,
+      stoppedAt: number | undefined,
+      failure: Record<string, unknown> | undefined;
+    const settle = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(budget);
+      const stdout = Buffer.concat(chunks);
+      if (error) reject(Object.assign(error, { stdout }));
+      else resolve(stdout);
+    };
+    const stop = (reason: Record<string, unknown>) => {
+      if (stoppedAt !== undefined || child.pid === undefined) return;
+      failure = reason;
+      stoppedAt = Date.now();
+      signalGroup(child.pid, 'SIGTERM');
+    };
+    const budget = setTimeout(() => stop({ killed: true }), listingMs);
+    child.stdout!.on('data', (chunk: Buffer) => {
+      if (stoppedAt !== undefined) return;
+      if (length + chunk.length > listingBytes) {
+        chunks.push(chunk.subarray(0, listingBytes - length));
+        length = listingBytes;
+        return stop({ code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' });
+      }
+      chunks.push(chunk);
+      length += chunk.length;
+    });
+    child.once('error', (error) => {
+      if (child.pid !== undefined) signalGroup(child.pid, 'SIGKILL');
+      settle(error);
+    });
+    child.once('close', async (code, signal) => {
+      if (stoppedAt !== undefined) await awaitGroupExit(child.pid!, stoppedAt);
+      if (failure) return settle(Object.assign(Error('The file listing was stopped'), failure));
+      if (code === 0) return settle();
+      settle(Object.assign(Error(`${executable} exited with ${code ?? signal}`), { code }));
+    });
   });
 const isNotFound = (error: unknown) => (error as ListingFailure).code === 'ENOENT';
 /** A listing cut short by its size or time budget: what it printed is a partial listing. */

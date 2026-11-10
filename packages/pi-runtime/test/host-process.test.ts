@@ -21,6 +21,7 @@ import { RemoteChatLive } from '../src/remote.ts';
 import { createRequire } from 'node:module';
 import { buildHost } from '../scripts/build-host.ts';
 import { writeFakeClaude } from './fake-claude.ts';
+import { isRunning } from './runtime-fixture.ts';
 
 // The production host runs from its bundle, built outside the repository to prove it is self-contained.
 const bundleDirectory = await mkdtemp(join(tmpdir(), 'moonbase-host-bundle-'));
@@ -108,15 +109,6 @@ async function cleanup(child: ChildProcess, exited: Promise<unknown>) {
     await bounded(exited);
   });
 }
-const isRunning = (pid: number) => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    if ((error as { code?: unknown }).code === 'ESRCH') return false;
-    throw error;
-  }
-};
 async function readRuntime(path: string) {
   for (let i = 0; i < 100; i++) {
     const text = await readFile(path, 'utf8').catch(() => '');
@@ -305,7 +297,7 @@ test('actual child host crash resumes Pi-owned work without resubmitting reserve
   }
 });
 
-test('compiled remote entry runs on Electron Node24 against the separate Node26 production host with no engine graph', async () => {
+test('compiled remote entry runs on Electron Node24 against the separate production host with no engine graph', async () => {
   const rootRequire = createRequire(new URL('../../../package.json', import.meta.url)),
     esbuild = rootRequire('esbuild') as typeof Esbuild,
     electron = rootRequire('electron') as string;
@@ -604,10 +596,13 @@ test('bundled host serves a Claude subscription through the host-side Claude Cod
     const workers = (await readFile(join(directory, 'workers.log'), 'utf8'))
       .trim()
       .split('\n')
-      .map((line) => JSON.parse(line) as { cwd: string; pid: number; helper: number });
+      .map(
+        (line) =>
+          JSON.parse(line) as { cwd: string; pid: number; helper: number; lingering: number },
+      );
     for (const worker of workers) assert.equal(worker.cwd, cwd);
-    // Warm workers and their tool helpers stay up between turns, in the worker's process group.
-    const processes = workers.flatMap((worker) => [worker.pid, worker.helper]);
+    // Warm workers and their children stay up between turns, in the worker's process group.
+    const processes = workers.flatMap((worker) => [worker.pid, worker.helper, worker.lingering]);
     assert(processes.some(isRunning), 'No Claude Code worker stayed warm');
     served.child.kill('SIGTERM');
     assert.equal(
@@ -615,7 +610,8 @@ test('bundled host serves a Claude subscription through the host-side Claude Cod
       0,
       'Warm Claude Code workers kept the host alive',
     );
-    // Closing them on shutdown stops each worker's whole group, leaving no stray process.
+    // Closing them on shutdown stops each worker's whole group, leaving no stray process: the
+    // lingering child ignores its stdin, so only a group kill ends it.
     for (let i = 0; i < 200 && processes.some(isRunning); i++)
       await new Promise((r) => setTimeout(r, 10));
     assert.deepEqual(processes.filter(isRunning), [], 'Claude Code processes outlived the host');
