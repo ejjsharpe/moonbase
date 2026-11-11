@@ -13,6 +13,16 @@ export const session = {
   host: { hostId: 'test-host', storeId: 'test-store' },
   actorId: 'personal',
 };
+/** Whether a process exists; a test checks this for processes it started. */
+export const isRunning = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if ((error as { code?: unknown }).code === 'ESRCH') return false;
+    throw error;
+  }
+};
 export const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 export async function until<T>(get: () => Promise<T>, ready: (value: T) => boolean): Promise<T> {
   for (let i = 0; i < 300; i++) {

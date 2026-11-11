@@ -16,10 +16,12 @@ if (process.argv.includes('auth') && process.argv.includes('status')) {
   process.exit(0);
 }
 const system = readFileSync(process.argv[process.argv.indexOf('--system-prompt-file') + 1], 'utf8');
-appendFileSync(directory + '/workers.log', JSON.stringify({ cwd: process.cwd(), system }) + '\\n');
 const config = JSON.parse(process.argv[process.argv.indexOf('--mcp-config') + 1]);
 const server = config.mcpServers.pi;
 const mcp = spawn(server.command, server.args, { env: { ...process.env, ...server.env }, stdio: ['pipe', 'pipe', 'inherit'] });
+// A child that never notices its parent die, so only stopping the worker's whole group ends it.
+const lingering = spawn('/bin/sleep', ['60'], { stdio: 'ignore' });
+appendFileSync(directory + '/workers.log', JSON.stringify({ cwd: process.cwd(), system, pid: process.pid, helper: mcp.pid, lingering: lingering.pid }) + '\\n');
 const replies = readline.createInterface({ input: mcp.stdout });
 const tools = await new Promise((resolve, reject) => {
   mcp.once('exit', (code) => reject(Error('MCP helper exited ' + code)));
@@ -59,11 +61,13 @@ for await (const line of input) {
   send({ type: 'result', subtype: answered ? 'success' : 'error_max_turns', is_error: !answered, num_turns: 1, usage, user_message_uuids: [frame.uuid] });
 }
 mcp.kill();
+lingering.kill();
 `;
 
 /**
  * Writes the fake `claude` executable and its `node` into `bin` (default `directory`); `directory`
- * receives its logs: `invocations.log`, and per worker its cwd and system prompt in `workers.log`.
+ * receives its logs: `invocations.log`, and per worker its cwd, system prompt, pid, tool helper's
+ * pid and the pid of a child that ignores its stdin (`lingering`) in `workers.log`.
  */
 export async function writeFakeClaude(directory: string, bin = directory) {
   const command = join(bin, 'claude');

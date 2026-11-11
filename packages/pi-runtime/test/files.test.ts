@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ManagedRuntime } from 'effect';
@@ -11,7 +11,7 @@ import { makeChatClient } from '@moonbase/application/runtime/clients';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import { ChatFileIndex, type ChatFileListingRun } from '../src/files.ts';
 import { LocalPiRuntimeLive } from '../src/index.ts';
-import { fixture, session } from './runtime-fixture.ts';
+import { fixture, isRunning, session } from './runtime-fixture.ts';
 
 const which = (name: string) => {
   try {
@@ -225,4 +225,163 @@ test('a Send carries mentions the text spells, and refuses ones it does not', as
     }),
     (error) => ApplicationError.is(error) && error.code === 'InvalidInput',
   );
+});
+
+/**
+ * Writes a listing command that prints part of the folder, then stalls like ripgrep or Git on a
+ * hung mount, with a child that ignores SIGTERM. The child holds no pipe unless `childHoldsOutput`,
+ * and the listing itself ignores SIGTERM when `ignoresTerm`. It records its pid in `pids` and the
+ * child's in `children`.
+ */
+async function writeStalledListing(
+  bin: string,
+  name: string,
+  { ignoresTerm = false, childHoldsOutput = false } = {},
+) {
+  const command = join(bin, name);
+  await writeFile(
+    command,
+    `#!/bin/sh
+${ignoresTerm ? 'trap "" TERM' : ''}
+echo $$ >> '${join(bin, 'pids')}'
+printf 'README.md\\0src/app/main.ts\\0'
+sh -c 'trap "" TERM; exec sleep 60' < /dev/null ${childHoldsOutput ? '' : '> /dev/null 2>&1'} &
+echo $! >> '${join(bin, 'children')}'
+wait
+`,
+    { mode: 0o755 },
+  );
+  return command;
+}
+const readPid = async (path: string) =>
+  Number((await readFile(path, 'utf8').catch(() => '')).trim()) || undefined;
+/** The listing and its child are gone once the search returns: the whole group was stopped. */
+async function assertListingStopped(bin: string) {
+  const pid = await readPid(join(bin, 'pids')),
+    child = await readPid(join(bin, 'children'));
+  assert(pid && child, 'The listing never started its child');
+  for (let i = 0; i < 50 && (isRunning(pid) || isRunning(child)); i++)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  assert(!isRunning(pid), 'The stalled listing outlived its budget');
+  assert(!isRunning(child), "The stalled listing's child outlived its budget");
+}
+
+test('a cancelled search returns at once, and its stalled listing is stopped at its time budget', async (t) => {
+  const root = await folder(t, false),
+    bin = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-files-bin-')));
+  const pids = join(bin, 'pids'),
+    stalled = await writeStalledListing(bin, 'rg');
+  const runtime = ManagedRuntime.make(
+    LocalPiRuntimeLive({
+      ...session,
+      databasePath: join(bin, 'chat.sqlite'),
+      models: createModels(),
+      ripgrepExecutable: stalled,
+      approveFolder: async () => {},
+    }),
+  );
+  t.after(async () => {
+    try {
+      await runtime.dispose();
+    } finally {
+      await rm(bin, { recursive: true, force: true });
+    }
+  });
+  const client = makeChatClient(runtime),
+    input = { session, cwd: root, query: '' };
+  const abort = new AbortController(),
+    cancelled = client.command('findChatFiles', input, { signal: abort.signal });
+  let pid: number | undefined;
+  for (let i = 0; i < 500 && !pid; i++) {
+    pid = await readPid(pids);
+    if (!pid) await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert(pid, 'The listing never started');
+  const started = Date.now();
+  abort.abort();
+  await assert.rejects(cancelled, { code: 'Cancelled' });
+  assert(Date.now() - started < 1_000, 'Cancelling waited for the listing');
+  // The listing is shared, so cancelling one search leaves it to finish for the next.
+  assert(isRunning(pid));
+  const result = await client.command('findChatFiles', input);
+  assert.deepEqual(paths(result), ['README.md', 'src/app/main.ts']);
+  assert.equal(result.partial, true);
+  await assertListingStopped(bin);
+  assert.equal((await readFile(pids, 'utf8')).trim(), String(pid), 'The search listed twice');
+});
+
+test('a stalled Git listing is stopped with its children at its time budget', async (t) => {
+  const root = await folder(t),
+    bin = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-files-bin-')));
+  t.after(() => rm(bin, { recursive: true, force: true }));
+  const index = new ChatFileIndex({
+    ripgrepExecutable: missing,
+    gitExecutable: await writeStalledListing(bin, 'git'),
+  });
+  const result = await index.find(root, '');
+  assert.deepEqual(paths(result), ['README.md', 'src/app/main.ts']);
+  assert.equal(result.partial, true);
+  await assertListingStopped(bin);
+});
+
+test(
+  'a listing that ignores SIGTERM, or whose child holds its output, is killed after the grace period',
+  { timeout: 30_000 },
+  async (t) => {
+    const root = await folder(t);
+    const search = async (options: { ignoresTerm?: boolean; childHoldsOutput?: boolean }) => {
+      const bin = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-files-bin-')));
+      t.after(() => rm(bin, { recursive: true, force: true }));
+      const index = new ChatFileIndex({
+        ripgrepExecutable: missing,
+        gitExecutable: await writeStalledListing(bin, 'git', options),
+      });
+      const result = await index.find(root, '');
+      assert.deepEqual(paths(result), ['README.md', 'src/app/main.ts']);
+      assert.equal(result.partial, true);
+      await assertListingStopped(bin);
+    };
+    // Both wait out the same 10 s budget, so they run together.
+    await Promise.all([search({ ignoresTerm: true }), search({ childHoldsOutput: true })]);
+  },
+);
+
+test('disposing the runtime stops its running listings and waits for them to exit', async (t) => {
+  const root = await folder(t, false),
+    bin = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-files-bin-')));
+  const pids = join(bin, 'pids'),
+    stalled = await writeStalledListing(bin, 'rg', { ignoresTerm: true, childHoldsOutput: true });
+  const runtime = ManagedRuntime.make(
+    LocalPiRuntimeLive({
+      ...session,
+      databasePath: join(bin, 'chat.sqlite'),
+      models: createModels(),
+      ripgrepExecutable: stalled,
+      approveFolder: async () => {},
+    }),
+  );
+  let disposed = false;
+  t.after(async () => {
+    try {
+      if (!disposed) await runtime.dispose();
+    } finally {
+      await rm(bin, { recursive: true, force: true });
+    }
+  });
+  const client = makeChatClient(runtime);
+  const search = client.command('findChatFiles', { session, cwd: root, query: '' });
+  search.catch(() => {});
+  let pid: number | undefined, child: number | undefined;
+  for (let i = 0; i < 500 && !(pid && child); i++) {
+    [pid, child] = [await readPid(pids), await readPid(join(bin, 'children'))];
+    if (!(pid && child)) await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert(pid && child, 'The listing never started its child');
+  const started = Date.now();
+  disposed = true;
+  await runtime.dispose();
+  // Well inside the 10 s listing budget: the listing was stopped, not left to time out.
+  assert(Date.now() - started < 5_000, 'Disposing waited for the listing budget');
+  assert(!isRunning(pid), 'The listing outlived its runtime');
+  assert(!isRunning(child), "The listing's child outlived its runtime");
 });

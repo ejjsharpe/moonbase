@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import { chatFileMatchLimit, isChatMentionPath, type ChatOutput } from '@moonbase/contracts/chat';
 import { matchPath, compareMatches } from '@moonbase/contracts/lookup';
@@ -26,23 +26,97 @@ const excluded = [
 type Listing = { files: string[]; partial: boolean };
 /**
  * Runs a listing command in the folder; tests inject one. A failure carries the output so far as
- * `stdout`, with `killed` set when the timeout stopped it.
+ * `stdout`, with `killed` set when the timeout stopped it. `signal` aborts when the index closes;
+ * the promise then settles once the command has exited.
  */
 export type ChatFileListingRun = (
   executable: string,
   args: string[],
   cwd: string,
+  signal: AbortSignal,
 ) => Promise<Buffer>;
 type ListingFailure = { code?: unknown; killed?: boolean; stdout?: Buffer };
 
-const runListing: ChatFileListingRun = (executable, args, cwd) =>
+/** How long a stopped listing's process group has to exit after SIGTERM before SIGKILL. */
+const stopGraceMs = 2_000;
+const isGroupAlive = (group: number) => {
+  try {
+    process.kill(-group, 0);
+    return true;
+  } catch (error) {
+    return (error as { code?: unknown }).code === 'EPERM';
+  }
+};
+const signalGroup = (group: number, signal: NodeJS.Signals) => {
+  try {
+    process.kill(-group, signal);
+  } catch {
+    // The group already exited.
+  }
+};
+/** Waits for every process in a stopped group to exit; its SIGKILL comes from `stop`'s timer. */
+async function awaitGroupExit(group: number, stoppedAt: number) {
+  while (isGroupAlive(group) && Date.now() - stoppedAt < stopGraceMs * 2)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+}
+
+// Its own process group, so a listing stopped by its budget takes any children with it. The
+// negative-PID kill is needed: a spawn signal or timeout reaches only the group leader.
+const runListing: ChatFileListingRun = (executable, args, cwd, signal) =>
   new Promise((resolve, reject) => {
-    execFile(
-      executable,
-      args,
-      { cwd, encoding: 'buffer', maxBuffer: listingBytes, timeout: listingMs },
-      (error, stdout) => (error ? reject(Object.assign(error, { stdout })) : resolve(stdout)),
-    );
+    if (signal.aborted) return reject(Error('The file index is closed'));
+    const child = spawn(executable, args, {
+      cwd,
+      detached: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const chunks: Buffer[] = [];
+    let length = 0,
+      settled = false,
+      stoppedAt: number | undefined,
+      escalation: NodeJS.Timeout | undefined,
+      failure: Record<string, unknown> | undefined;
+    const settle = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(budget);
+      clearTimeout(escalation);
+      signal.removeEventListener('abort', stopOnClose);
+      const stdout = Buffer.concat(chunks);
+      if (error) reject(Object.assign(error, { stdout }));
+      else resolve(stdout);
+    };
+    const stop = (reason: Record<string, unknown>) => {
+      if (stoppedAt !== undefined || child.pid === undefined) return;
+      failure = reason;
+      stoppedAt = Date.now();
+      signalGroup(child.pid, 'SIGTERM');
+      // Armed here, not on exit: a group that ignores SIGTERM may never exit or close its output.
+      escalation = setTimeout(() => signalGroup(child.pid!, 'SIGKILL'), stopGraceMs);
+    };
+    const budget = setTimeout(() => stop({ killed: true }), listingMs);
+    const stopOnClose = () => stop({ closed: true });
+    signal.addEventListener('abort', stopOnClose, { once: true });
+    child.stdout!.on('data', (chunk: Buffer) => {
+      if (stoppedAt !== undefined) return;
+      if (length + chunk.length > listingBytes) {
+        chunks.push(chunk.subarray(0, listingBytes - length));
+        length = listingBytes;
+        return stop({ code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' });
+      }
+      chunks.push(chunk);
+      length += chunk.length;
+    });
+    child.once('error', (error) => {
+      if (child.pid !== undefined) signalGroup(child.pid, 'SIGKILL');
+      settle(error);
+    });
+    child.once('close', async (code, exitSignal) => {
+      if (stoppedAt !== undefined) await awaitGroupExit(child.pid!, stoppedAt);
+      if (failure) return settle(Object.assign(Error('The file listing was stopped'), failure));
+      if (code === 0) return settle();
+      settle(Object.assign(Error(`${executable} exited with ${code ?? exitSignal}`), { code }));
+    });
   });
 const isNotFound = (error: unknown) => (error as ListingFailure).code === 'ENOENT';
 /** A listing cut short by its size or time budget: what it printed is a partial listing. */
@@ -77,6 +151,8 @@ export class ChatFileIndex {
   private readonly run: ChatFileListingRun;
   private readonly now: () => number;
   private readonly listings = new Map<string, { at: number; listing: Promise<Listing> }>();
+  private readonly closing = new AbortController();
+  private readonly running = new Set<Promise<unknown>>();
   constructor(
     options: {
       ripgrepExecutable?: string;
@@ -107,7 +183,11 @@ export class ChatFileIndex {
   /** Runs one listing command; output cut short by its budget is kept as a partial listing. */
   private async runPartial(executable: string, args: string[], cwd: string) {
     try {
-      return { bytes: await this.run(executable, args, cwd), truncated: false };
+      const run = this.run(executable, args, cwd, this.closing.signal);
+      const forget = () => this.running.delete(run);
+      this.running.add(run);
+      run.then(forget, forget);
+      return { bytes: await run, truncated: false };
     } catch (error) {
       const stdout = (error as ListingFailure).stdout;
       if (isTruncated(error) && stdout) return { bytes: stdout, truncated: true };
@@ -148,6 +228,11 @@ export class ChatFileIndex {
       files: files.slice(0, chatFileCandidateLimit),
       partial: output.truncated || files.length > chatFileCandidateLimit,
     };
+  }
+  /** Stops running listings and waits for their process groups to exit; later searches fail. */
+  async close() {
+    this.closing.abort();
+    await Promise.allSettled(this.running);
   }
   /** Ranks files with the editor's fuzzy matcher; an empty query lists the shallowest files. */
   async find(
