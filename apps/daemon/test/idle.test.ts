@@ -1,57 +1,20 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import type { ChatClient } from '@moonbase/contracts/chat';
 import { runDaemon, type DaemonExit } from '../src/daemon.ts';
-import { createIdleMonitor, type IdleClock } from '../src/idle.ts';
+import { createIdleMonitor, trackClientUse } from '../src/idle.ts';
 import {
-  createFauxClient,
-  delay,
+  createControlledClock,
   findFreePort,
-  readJson,
+  startInProcess,
   temporaryRoot,
   until,
 } from './fixture.ts';
-import { createFauxProviders, fauxModelId, fauxProviderId } from './faux.ts';
+import { fauxModelId, fauxProviderId } from './faux.ts';
 
 const minute = 60_000;
-
-/** A clock whose time moves only when the test advances it; due timers then fire in order. */
-function createControlledClock() {
-  let now = 0,
-    next = 0;
-  const timers = new Map<number, { at: number; callback: () => void }>();
-  const clock: IdleClock = {
-    now: () => now,
-    setTimeout: (callback, ms) => {
-      timers.set(++next, { at: now + ms, callback });
-      return next;
-    },
-    clearTimeout: (handle) => timers.delete(handle as number),
-  };
-  return {
-    clock,
-    get pending() {
-      return timers.size;
-    },
-    async advance(ms: number) {
-      const end = now + ms;
-      for (;;) {
-        const due = [...timers]
-          .filter(([, timer]) => timer.at <= end)
-          .sort((a, b) => a[1].at - b[1].at)[0];
-        if (!due) break;
-        timers.delete(due[0]);
-        now = due[1].at;
-        due[1].callback();
-        // The check reads active work from the real store before it decides.
-        await delay(40);
-      }
-      now = end;
-      await delay(40);
-    },
-  };
-}
 
 test('the idle monitor waits for every user to end, and treats an unreadable work check as work', async () => {
   const time = createControlledClock();
@@ -86,46 +49,67 @@ test('the idle monitor waits for every user to end, and treats an unreadable wor
   assert.equal(time.pending, 0);
 });
 
-async function startInProcess(root: string, time: ReturnType<typeof createControlledClock>) {
-  const directory = join(root, 'data'),
-    controller = new AbortController();
-  let ready!: (port: number) => void;
-  const listening = new Promise<number>((resolve) => (ready = resolve));
-  let settled: DaemonExit | Error | undefined;
-  const running = runDaemon({
-    directory,
-    signal: controller.signal,
-    ready: (line) => ready(JSON.parse(line).port),
-    closeClaudeCode: async () => {},
-    local: () => createFauxProviders(directory),
+test('a tracked client is refused new requests and watches once the monitor stops, and keeps open ones', async () => {
+  const time = createControlledClock();
+  let idle = 0;
+  const monitor = createIdleMonitor({
+    idleMs: 5 * minute,
+    pollMs: 30_000,
     clock: time.clock,
-  }).then(
-    (exit) => (settled = exit),
-    (error: Error) => (settled = error),
+    hasActiveWork: async () => false,
+    onIdle: () => idle++,
+  });
+  const forwarded: string[] = [];
+  let closed = 0;
+  const inner = {
+    command: async (operation: string) => {
+      forwarded.push(operation);
+      return {};
+    },
+    watch: () => {
+      forwarded.push('watch');
+      return async () => {
+        closed++;
+      };
+    },
+  } as unknown as ChatClient;
+  const client = trackClientUse(inner, monitor);
+  const target = { host: { hostId: 'h', storeId: 's' }, actorId: 'a', conversationId: 'c' };
+  const close = client.watch(
+    { target } as never,
+    () => {},
+    () => {},
   );
-  const port = await listening;
-  const token = (await readFile(join(directory, 'token'), 'utf8')).trim(),
-    identity = await readJson(join(directory, 'identity.json'));
-  return {
-    directory,
-    client: createFauxClient(port, token),
-    session: { host: identity.host, actorId: identity.actorId },
-    get settled() {
-      return settled;
+  await client.command('getChat', { target } as never);
+  await close();
+  await time.advance(5 * minute);
+  assert.equal(idle, 1);
+  assert.equal(monitor.stopped, true);
+  // Anything arriving between going idle and the server closing is refused, not half-admitted.
+  await assert.rejects(client.command('sendChat', { target } as never), {
+    code: 'Unavailable',
+  });
+  assert.throws(
+    () =>
+      client.watch(
+        { target } as never,
+        () => {},
+        () => {},
+      ),
+    {
+      code: 'Unavailable',
     },
-    running,
-    stop: async () => {
-      controller.abort();
-      return running;
-    },
-  };
-}
+  );
+  assert.deepEqual(forwarded, ['watch', 'getChat']);
+  assert.equal(closed, 1);
+});
 
 test('a local daemon exits idle only after 5 minutes with no client; a request restarts the wait', async () => {
   const root = await temporaryRoot(),
     time = createControlledClock();
+  let daemon: Awaited<ReturnType<typeof startInProcess>> | undefined;
   try {
-    const daemon = await startInProcess(root, time);
+    daemon = await startInProcess(root, time);
     await time.advance(4 * minute);
     await daemon.client.command('getChatHost', { host: daemon.session.host });
     await time.advance(4 * minute);
@@ -135,6 +119,7 @@ test('a local daemon exits idle only after 5 minutes with no client; a request r
     assert.equal(await daemon.running, 'idle');
     await assert.rejects(stat(join(daemon.directory, 'endpoint.json')), { code: 'ENOENT' });
   } finally {
+    await daemon?.stop();
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -142,8 +127,9 @@ test('a local daemon exits idle only after 5 minutes with no client; a request r
 test('an open watch and active work keep a local daemon running; it idles once both end', async () => {
   const root = await temporaryRoot(),
     time = createControlledClock();
+  let daemon: Awaited<ReturnType<typeof startInProcess>> | undefined;
   try {
-    const daemon = await startInProcess(root, time);
+    daemon = await startInProcess(root, time);
     await writeFile(
       join(daemon.directory, 'faux.json'),
       JSON.stringify({ steps: [{ hold: true }] }),
@@ -176,6 +162,7 @@ test('an open watch and active work keep a local daemon running; it idles once b
     await time.advance(5 * minute + 30_000);
     assert.equal(await daemon.running, 'idle');
   } finally {
+    await daemon?.stop();
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -208,9 +195,9 @@ test('a host-mode daemon never idles out and stops on its signal', async () => {
   const controller = new AbortController();
   let ready!: () => void;
   const listening = new Promise<void>((resolve) => (ready = resolve));
-  let settled: DaemonExit | undefined;
+  let settled: DaemonExit | undefined, running: Promise<unknown> | undefined;
   try {
-    const running = runDaemon({
+    running = runDaemon({
       directory,
       signal: controller.signal,
       ready: () => ready(),
@@ -225,6 +212,8 @@ test('a host-mode daemon never idles out and stops on its signal', async () => {
     controller.abort();
     assert.equal(await running, 'stopped');
   } finally {
+    controller.abort();
+    await running?.catch(() => {});
     process.chdir(previous.cwd);
     if (previous.key === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = previous.key;

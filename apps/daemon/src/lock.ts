@@ -26,12 +26,19 @@ export async function acquireDaemonLock(directory: string): Promise<{ release():
     const code = (error as { errcode?: unknown } | undefined)?.errcode;
     // SQLITE_BUSY or SQLITE_LOCKED: another process holds the lock.
     const busy = code === 5 || code === 6 || /locked|busy/i.test(String((error as Error)?.message));
+    // SQLITE_NOTADB: the lock file holds something else, which only its owner can clear up.
+    const corrupt = code === 26 || /not a database/i.test(String((error as Error)?.message));
     throw busy
       ? new DaemonFailure(
           'Conflict',
           'A Moonbase daemon is already running for this data directory.',
         )
-      : new DaemonFailure('Persistence', 'The daemon lock could not be taken.');
+      : new DaemonFailure(
+          'Persistence',
+          corrupt
+            ? 'The daemon lock file is damaged. If no daemon is running, remove daemon.lock from the data directory.'
+            : 'The daemon lock could not be taken.',
+        );
   }
   const held = database;
   // Bun finalizes a connection it can no longer reach, which would drop the lock early.

@@ -107,3 +107,23 @@ test('chat worktree approvals never push picker folders out of the recent list',
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('a use after a restart leads folders saved with a later clock reading', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-folders-')));
+  try {
+    const file = join(root, 'approved-folders.json');
+    const [alpha, beta] = ['alpha', 'beta'].map((name) => join(root, name));
+    for (const folder of [alpha, beta]) await mkdir(folder);
+    await createFolderApprovals(file).approve(alpha);
+    // A saved use stamped ahead of this clock, as a use within the same millisecond is.
+    const saved = JSON.parse(await readFile(file, 'utf8'));
+    saved[0].at = new Date(Date.now() + 60_000).toISOString();
+    await writeFile(file, JSON.stringify(saved), { mode: 0o600 });
+
+    const restarted = createFolderApprovals(file);
+    await restarted.approve(beta);
+    assert.deepEqual(await restarted.listRecent(), [beta, alpha]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

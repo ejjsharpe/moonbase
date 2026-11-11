@@ -5,6 +5,9 @@ import { mkdtemp, readFile, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChatCommand, ChatInput, ChatOutput, ChatTarget } from '@moonbase/contracts/chat';
+import { runDaemon, type DaemonExit } from '../src/daemon.ts';
+import type { IdleClock } from '../src/idle.ts';
+import { createFauxProviders } from './faux.ts';
 
 export const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 export async function until<T>(read: () => Promise<T>, ready: (value: T) => boolean, ms = 10000) {
@@ -201,3 +204,86 @@ export async function findFreePort() {
 }
 
 export const readJson = async (path: string) => JSON.parse(await readFile(path, 'utf8'));
+
+/** A clock whose time moves only when the test advances it; due timers then fire in order. */
+export function createControlledClock() {
+  let now = 0,
+    next = 0;
+  const timers = new Map<number, { at: number; callback: () => void }>();
+  const clock: IdleClock = {
+    now: () => now,
+    setTimeout: (callback, ms) => {
+      timers.set(++next, { at: now + ms, callback });
+      return next;
+    },
+    clearTimeout: (handle) => timers.delete(handle as number),
+  };
+  return {
+    clock,
+    get pending() {
+      return timers.size;
+    },
+    async advance(ms: number) {
+      const end = now + ms;
+      for (;;) {
+        const due = [...timers]
+          .filter(([, timer]) => timer.at <= end)
+          .sort((a, b) => a[1].at - b[1].at)[0];
+        if (!due) break;
+        timers.delete(due[0]);
+        now = due[1].at;
+        due[1].callback();
+        // The check reads active work from the real store before it decides.
+        await delay(40);
+      }
+      now = end;
+      await delay(40);
+    },
+  };
+}
+
+export type ControlledClock = ReturnType<typeof createControlledClock>;
+
+/**
+ * Runs a local-mode daemon in this process with faux providers, on `time`'s clock, and resolves
+ * once it is ready. `stop` aborts it and waits for it to finish.
+ */
+export async function startInProcess(
+  root: string,
+  time: ControlledClock,
+  { closeClaudeCode = async () => {} }: { closeClaudeCode?: () => Promise<void> } = {},
+) {
+  const directory = join(root, 'data'),
+    controller = new AbortController();
+  let ready!: (port: number) => void;
+  const listening = new Promise<number>((resolve) => (ready = resolve));
+  let settled: DaemonExit | Error | undefined;
+  const running = runDaemon({
+    directory,
+    signal: controller.signal,
+    ready: (line) => ready(JSON.parse(line).port),
+    closeClaudeCode,
+    local: () => createFauxProviders(directory),
+    clock: time.clock,
+  }).then(
+    (exit) => (settled = exit),
+    (error: Error) => (settled = error),
+  );
+  const port = await listening;
+  const token = (await readFile(join(directory, 'token'), 'utf8')).trim(),
+    identity = await readJson(join(directory, 'identity.json'));
+  return {
+    directory,
+    port,
+    client: createFauxClient(port, token),
+    session: { host: identity.host, actorId: identity.actorId },
+    get settled() {
+      return settled;
+    },
+    running,
+    stop: async () => {
+      controller.abort();
+      return running;
+    },
+  };
+}
