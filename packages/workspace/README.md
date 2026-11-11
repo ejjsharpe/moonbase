@@ -4,7 +4,7 @@
 
 ## Integration
 
-`WorkspaceLive(config)` provides `WorkspaceService` and the privileged `WorkspaceNative` service for approved native imports. Compose it once in a process root's runtime; see [`examples/local.ts`](examples/local.ts). Configure a stable `hostId` and a `dataDirectory` outside approved checkouts. Packaged apps must supply absolute `filesystemHelper` and `ripgrepExecutable` paths. System Git defaults to `/usr/bin/git`.
+`WorkspaceLive(config)` provides `WorkspaceService` and the privileged `WorkspaceNative` service for approved native imports. Compose it once in a process root's runtime; the workspace opens only on macOS with Node 26.13 or newer, the pinned Electron (45.1.0) or exactly Bun 1.4.4, and is refused as `Incompatible` otherwise; see [`examples/local.ts`](examples/local.ts). Configure a stable `hostId` and a `dataDirectory` outside approved checkouts. Packaged apps must supply absolute `filesystemHelper` and `ripgrepExecutable` paths. System Git defaults to `/usr/bin/git`.
 
 ## Search
 
@@ -44,4 +44,4 @@ bun run --cwd packages/workspace lint
 bun run --cwd packages/workspace test
 ```
 
-Tests use temporary repositories and stores and run the real native helper. Run them serially with other resource-heavy suites.
+Tests run under `bun test` (1.4.4) and use temporary repositories and stores and the real native helper. Run them serially with other resource-heavy suites. Source calls `fs.closeSync` and `fs.watch` through the default `node:fs` import so tests can mock them; Bun's named imports are not live bindings.

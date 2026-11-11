@@ -1,4 +1,4 @@
-import { openSync, closeSync, fstatSync, constants } from 'node:fs';
+import fs, { openSync, fstatSync, constants } from 'node:fs';
 import { basename, dirname, isAbsolute } from 'node:path';
 
 const flags = constants.O_RDONLY | constants.O_NONBLOCK | 0x20000000; // macOS O_NOFOLLOW_ANY
@@ -33,7 +33,7 @@ export class NativeImport {
       this.directory = stat.isDirectory();
       this.validate();
     } catch (error) {
-      closeSync(this.fd);
+      fs.closeSync(this.fd);
       throw error;
     }
   }
@@ -50,7 +50,7 @@ export class NativeImport {
         try {
           return identity(fstatSync(fd));
         } finally {
-          closeSync(fd);
+          fs.closeSync(fd);
         }
       })
       .join(',');
@@ -72,13 +72,13 @@ export class NativeImport {
       )
         throw Error('Native source changed. Drop or copy it again.');
     } finally {
-      closeSync(fd);
+      fs.closeSync(fd);
     }
   }
   private closed = false;
   close() {
     if (this.closed) return;
     this.closed = true;
-    closeSync(this.fd);
+    fs.closeSync(this.fd);
   }
 }
