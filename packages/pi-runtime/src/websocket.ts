@@ -53,16 +53,14 @@ export const encodeWebSocketClose = (code: number, masked = false) => {
 
 const violation = (): never => fail('InvalidInput', 'WebSocket framing is invalid.');
 /**
- * Reassembles messages from received bytes, holding at most one message of `maximum` bytes and
- * one frame header. It refuses a message's length from its header, before buffering its payload.
+ * Reads frames from received bytes, holding at most one frame of `maximum` bytes. Messages are
+ * never fragmented: a data frame without FIN, or a continuation, is refused, so nothing is held
+ * across frames. It refuses a frame's length from its header, before buffering its payload.
  */
 export class WebSocketReader {
   /** Received bytes not yet read as frames, and their length. */
   private chunks: Buffer[] = [];
   private buffered = 0;
-  private message: Buffer[] = [];
-  private messageBytes = 0;
-  private messageOpcode: number | undefined;
   maximum: number;
   private readonly masked: boolean;
   /** `masked`: whether frames must be masked, as a server requires of a client. */
@@ -90,10 +88,20 @@ export class WebSocketReader {
       let buffer = this.peek(2);
       const first = buffer[0]!,
         second = buffer[1]!,
-        fin = (first & 0x80) !== 0,
         opcode = first & 0x0f,
         masked = (second & 0x80) !== 0;
-      if (first & 0x70 || masked !== this.masked) violation();
+      if (
+        (first & 0xf0) !== 0x80 ||
+        masked !== this.masked ||
+        ![
+          webSocketOpcodes.text,
+          webSocketOpcodes.binary,
+          webSocketOpcodes.close,
+          webSocketOpcodes.ping,
+          webSocketOpcodes.pong,
+        ].includes(opcode)
+      )
+        violation();
       let length = second & 0x7f,
         offset = 2;
       if (length === 126) {
@@ -107,15 +115,7 @@ export class WebSocketReader {
         length = Number(long);
         offset = 10;
       }
-      const control = opcode >= 8;
-      if (control) {
-        if (!fin || length > 125 || ![8, 9, 10].includes(opcode)) violation();
-      } else if (
-        (opcode === webSocketOpcodes.continuation) === (this.messageOpcode === undefined) ||
-        opcode > 2 ||
-        this.messageBytes + length > this.maximum
-      )
-        violation();
+      if (length > (opcode >= webSocketOpcodes.close ? 125 : this.maximum)) violation();
       const start = offset + (masked ? 4 : 0);
       if (this.buffered < start + length) return;
       buffer = this.peek(start + length);
@@ -125,20 +125,7 @@ export class WebSocketReader {
         for (let i = 0; i < payload.length; i++) payload[i]! ^= mask[i & 3]!;
       }
       this.consume(start + length);
-      if (control) {
-        yield { opcode, payload };
-        continue;
-      }
-      if (opcode !== webSocketOpcodes.continuation) this.messageOpcode = opcode;
-      this.message.push(payload);
-      this.messageBytes += length;
-      if (!fin) continue;
-      const message = Buffer.concat(this.message, this.messageBytes);
-      const messageOpcode = this.messageOpcode!;
-      this.message = [];
-      this.messageBytes = 0;
-      this.messageOpcode = undefined;
-      yield { opcode: messageOpcode, payload: message };
+      yield { opcode, payload };
     }
   }
 }

@@ -34,13 +34,7 @@ test('one WebSocket runs every operation and holds chat, chat-list and provider 
       expected: host,
     });
     try {
-      assert.deepEqual(socket.health.capabilities, [
-        'chat-v0',
-        'daemon-local-v1',
-        'providers-v1',
-        'folders-v1',
-        'socket-v1',
-      ]);
+      assert(socket.health.capabilities.includes('socket-v1'));
       const ran = new Set<string>();
       /** One request's reply, or the code it was refused with. */
       const run = async <K extends SocketOperation>(

@@ -64,7 +64,8 @@ export type SocketServerContext = {
 const maximumConnections = 32;
 /**
  * Connections still waiting for their hello, bounded apart from authenticated ones so that a
- * process without the token cannot take every slot.
+ * process without the token cannot take every slot. A new one evicts the oldest, so held
+ * handshakes never lock a client out.
  */
 const maximumHandshakes = 8;
 /** A refused or closed connection's socket is destroyed this long after its close frame. */
@@ -103,12 +104,45 @@ export function createSocketServer(context: SocketServerContext) {
     /** Every live subscription by ID, attached or kept for resuming. */
     feeds = new Map<string, Feed>(),
     resumable = new Set<Feed>();
-  let closed = false;
+  let closed = false,
+    /** Kept deltas' bytes across every feed. */
+    historyBytes = 0;
 
-  const forget = (feed: Feed) => {
+  const dropHistory = (feed: Feed) => {
+    historyBytes -= feed.historyBytes;
+    feed.history = [];
+    feed.historyBytes = 0;
+  };
+  const trimHistory = (feed: Feed) => {
+    const oldest = feed.history.shift()!;
+    feed.historyBytes -= oldest.bytes;
+    historyBytes -= oldest.bytes;
+  };
+  /** Keeps a delta for resuming within its feed's bounds and the server's. */
+  const keep = (feed: Feed, update: Update) => {
+    feed.history.push(update);
+    feed.historyBytes += update.bytes;
+    historyBytes += update.bytes;
+    while (
+      feed.history.length > socketLimits.historyUpdates ||
+      feed.historyBytes > socketLimits.historyBytes
+    )
+      trimHistory(feed);
+    for (const other of feeds.values()) {
+      if (historyBytes <= socketLimits.historyTotalBytes) break;
+      while (other.history.length && historyBytes > socketLimits.historyTotalBytes)
+        trimHistory(other);
+    }
+  };
+  /** Stops a feed's expiry; it is no longer kept to resume. */
+  const claim = (feed: Feed) => {
     if (feed.expiry !== undefined) context.clock.clearTimeout(feed.expiry);
     feed.expiry = undefined;
     resumable.delete(feed);
+  };
+  const forget = (feed: Feed) => {
+    claim(feed);
+    dropHistory(feed);
     if (feeds.get(feed.id) === feed) feeds.delete(feed.id);
   };
   /** Stops a feed's source; it is kept to resume unless it ended or the server closed. */
@@ -137,22 +171,28 @@ export function createSocketServer(context: SocketServerContext) {
       closed ||
       request.method !== 'GET' ||
       request.url !== socketPath ||
+      // Any port: through an SSH forward, Host names the client's local end of the tunnel.
       !/^127\.0\.0\.1:\d+$/.test(request.headers.host ?? '') ||
       request.headers.upgrade?.toLowerCase() !== 'websocket' ||
       request.headers['sec-websocket-version'] !== '13' ||
       !accept
     )
       return refuse(400);
-    if (handshakes.size >= maximumHandshakes || sessions.size >= maximumConnections)
-      return refuse(503);
+    if (sessions.size >= maximumConnections) return refuse(503);
+    for (const oldest of handshakes) {
+      if (handshakes.size < maximumHandshakes) break;
+      oldest.evict();
+    }
     socket.write(
       `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\nCache-Control: no-store\r\n\r\n`,
     );
     const session = new Session(socket, context, {
       feeds,
-      resumable,
       forget,
+      claim,
       detach,
+      keep,
+      dropHistory,
       authenticate: () => {
         if (!handshakes.delete(session) || sessions.size >= maximumConnections) return false;
         sessions.add(session);
@@ -180,9 +220,13 @@ export function createSocketServer(context: SocketServerContext) {
 
 type Registry = {
   feeds: Map<string, Feed>;
-  resumable: Set<Feed>;
+  /** Ends a feed for good, with its kept deltas. */
   forget(feed: Feed): void;
+  /** Takes a feed kept to resume. */
+  claim(feed: Feed): void;
   detach(feed: Feed): void;
+  keep(feed: Feed, update: Update): void;
+  dropHistory(feed: Feed): void;
   /** Counts an authenticated connection; false when there is no room for it. */
   authenticate(): boolean;
   remove(): void;
@@ -384,9 +428,11 @@ class Session {
     if (feed) {
       // A client that reconnected before its old connection closed takes the subscription over.
       feed.session?.release(feed);
-      this.registry.forget(feed);
       // One that ended before its error was sent starts again.
-      if (feed.ended) feed = undefined;
+      if (feed.ended) {
+        this.registry.forget(feed);
+        feed = undefined;
+      } else this.registry.claim(feed);
     }
     if (feed) {
       const after = message.afterSequence,
@@ -490,7 +536,10 @@ class Session {
     }
   }
 
-  /** Releases a subscription another connection took over, without ending it. */
+  /**
+   * Releases a subscription another connection took over, without ending it; this connection's
+   * client learns it ended with `Conflict`.
+   */
   release(feed: Feed) {
     if (this.subscriptions.get(feed.id) !== feed) return;
     this.subscriptions.delete(feed.id);
@@ -498,6 +547,14 @@ class Session {
     feed.session = undefined;
     void feed.close?.().catch(() => {});
     feed.close = undefined;
+    if (this.phase === 'open')
+      this.queue([
+        this.seal({ type: 'update', subscriptionId: feed.id, kind: 'error', code: 'Conflict' }),
+      ]);
+  }
+  /** Closes a connection still waiting for its hello, to make room for a newer one. */
+  evict() {
+    this.fail();
   }
 
   /** The frames of a feed's next update: kept deltas first, then a delta or a fresh snapshot. */
@@ -527,13 +584,7 @@ class Session {
       const bytes = delta ? Buffer.byteLength(JSON.stringify(delta)) : Infinity;
       if (delta && bytes <= socketLimits.deltaBytes) {
         const kept = { base: feed.sequence, sequence: ++feed.sequence, delta, bytes };
-        feed.history.push(kept);
-        feed.historyBytes += bytes;
-        while (
-          feed.history.length > socketLimits.historyUpdates ||
-          feed.historyBytes > socketLimits.historyBytes
-        )
-          feed.historyBytes -= feed.history.shift()!.bytes;
+        this.registry.keep(feed, kept);
         feed.sent = value;
         frames.push(this.seal({ ...update, kind: 'delta', ...kept, bytes: undefined }));
         return frames;
@@ -546,8 +597,7 @@ class Session {
       return [...frames, ...this.nextUpdate(feed)];
     }
     feed.sequence++;
-    feed.history = [];
-    feed.historyBytes = 0;
+    this.registry.dropHistory(feed);
     feed.sent = value;
     for (const chunk of chunks)
       frames.push(this.seal({ ...update, kind: 'snapshot', sequence: feed.sequence, ...chunk }));

@@ -495,6 +495,14 @@ test('the handshake and every authenticated frame refuse forgery, replay, reorde
       header.writeBigUInt64BE(BigInt(socketLimits.frameBytes + 1), 2);
       raw.socket.write(header);
     }),
+    'fragmented frame': async (raw) => {
+      await raw.next();
+      // An empty first fragment and empty continuations would never complete a message.
+      raw.socket.write(Buffer.from([0x02, 0x80, 0, 0, 0, 0]));
+      raw.socket.write(
+        Buffer.concat(Array.from({ length: 64 }, () => Buffer.from([0, 0x80, 0, 0, 0, 0]))),
+      );
+    },
     'oversized hello': async (raw) => {
       await raw.next();
       raw.send(Buffer.alloc(8192, 0x20));
@@ -651,11 +659,15 @@ test('reconnecting resumes from kept deltas or resets with a snapshot, and a mut
 
   // Resuming after the first update replays the kept deltas, then continues with deltas.
   const second = await open(t, endpoint);
-  const resumed: string[] = [];
+  const resumed: string[] = [],
+    takenOver = Promise.withResolvers<ApplicationError>();
   second.subscribe(
     'chat',
     target,
-    { receive: (value, update) => resumed.push(`${update}:${value.run?.text}`), onError: () => {} },
+    {
+      receive: (value, update) => resumed.push(`${update}:${value.run?.text}`),
+      onError: takenOver.resolve,
+    },
     before,
   );
   await until(
@@ -674,6 +686,9 @@ test('reconnecting resumes from kept deltas or resets with a snapshot, and a mut
   );
   await until(async () => reset.length, Boolean);
   assert.deepEqual(reset, ['snapshot:one two three']);
+  // Another connection taking the subscription over ends it on the one that held it.
+  third.subscribe('chat', target, { receive: () => {}, onError: () => {} }, before);
+  assert.equal((await takenOver.promise).code, 'Conflict');
   // Nothing was sent again; a retry carries the original request ID.
   assert.deepEqual(sends, ['send']);
   hold.resolve();
@@ -784,7 +799,7 @@ test('a slow consumer is reset with a snapshot rather than a backlog, Stop stays
   assert.equal(stops, 1);
 });
 
-test('a ping flood that never reads stops being read and is dropped, and handshakes cannot take authenticated slots', async (t) => {
+test('a ping flood that never reads stops being read and is dropped, and held handshakes never lock a client out', async (t) => {
   const source = controlledClient(),
     clock = manualClock();
   const { token, port, endpoint } = await serve(t, source.client, { clock });
@@ -811,17 +826,16 @@ test('a ping flood that never reads stops being read and is dropped, and handsha
     if (message === 'closed') break;
     assert(message !== 'timeout' && [2, 8, 10].includes(message.opcode));
   }
-  // Connections still waiting for a hello have their own bound; an authenticated one is unaffected.
+  // Connections still waiting for a hello have their own bound: a new one evicts the oldest, so
+  // a client still connects while every slot is held, and an authenticated one is unaffected.
   const waiting = await Promise.all(Array.from({ length: 8 }, () => rawSocket(port)));
   for (const pending of waiting) assert.notEqual(await pending.next(), 'timeout');
-  const refused = await rawSocket(port);
-  assert.equal(await refused.next(), 'closed');
-  assert.match(refused.status!, /^HTTP\/1\.1 503/);
+  const later = await open(t, endpoint, clock);
+  await assertRefused(waiting.shift()!);
+  assert.equal((await later.request('getChatHost', { host })).actorId, 'owner');
   assert.equal((await client.request('getChatHost', { host })).actorId, 'owner');
   clock.advance(socketLimits.handshakeMs);
   for (const pending of waiting) await assertRefused(pending);
-  const later = await open(t, endpoint, clock);
-  assert.equal((await later.request('getChatHost', { host })).actorId, 'owner');
 });
 
 test('subscriptions are bounded, reads and watches end with their connection, and a silent client is dropped', async (t) => {

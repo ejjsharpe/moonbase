@@ -28,7 +28,7 @@ export const socketLimits = {
   /** Replies and refusals waiting to be written; a client that leaves more unread is dropped. */
   queuedReplies: 64,
   /** The hello must arrive this long after the challenge. */
-  handshakeMs: 10_000,
+  handshakeMs: 2_000,
   /** A side that has sent nothing for this long sends a heartbeat. */
   heartbeatMs: 10_000,
   /** A side that has received nothing for this long closes the connection. */
@@ -44,6 +44,8 @@ export const socketLimits = {
   /** Deltas a subscription keeps for resuming, and their JSON in all. */
   historyUpdates: 64,
   historyBytes: 256 * 1024,
+  /** Kept deltas' JSON across every subscription; the oldest subscriptions' go first. */
+  historyTotalBytes: 16 * 1024 * 1024,
 } as const;
 
 export type SocketSubscriptionKind = 'chat' | 'chatList' | 'providerSetup';
