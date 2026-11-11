@@ -79,10 +79,32 @@ const getAssociatedData = (providerId: string) =>
  * first write creates the key; a read never does.
  */
 export function createKeyEncryption(source: CredentialKeySource): CredentialEncryption {
-  // Sources never overwrite a stored key, so concurrent first writes all read back the same one.
-  let cached: Uint8Array | undefined;
-  const getKey = async (create: boolean) =>
-    (cached ??= (await source.load()) ?? (create ? await source.create() : undefined));
+  // Concurrent callers share one in-flight load or create, so a first `list()` spawns one
+  // `security` and shows at most one unlock prompt. A rejection is forgotten so a later call can
+  // retry once the keychain is unlocked, and absence is not cached because a write creates the key.
+  let loading: Promise<Uint8Array | undefined> | undefined;
+  let creating: Promise<Uint8Array> | undefined;
+  const getKey = async (create: boolean) => {
+    const loaded = (loading ??= source.load());
+    let key: Uint8Array | undefined;
+    try {
+      key = await loaded;
+    } catch (error) {
+      if (loading === loaded) loading = undefined;
+      throw error;
+    }
+    if (!key && loading === loaded) loading = undefined;
+    if (key || !create) return key;
+    const created = (creating ??= source.create());
+    try {
+      key = await created;
+    } catch (error) {
+      if (creating === created) creating = undefined;
+      throw error;
+    }
+    loading ??= created;
+    return key;
+  };
   return {
     available: async () => {
       if (await source.available()) return true;

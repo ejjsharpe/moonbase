@@ -134,6 +134,82 @@ test('an unavailable key source fails visibly and leaves stored credentials unto
   });
 });
 
+test('parallel reads share one key load, parallel first writes one create, and a failed load is retried', async (t) => {
+  const directory = await makeDirectory(t, 'moonbase-coalesce-'),
+    key = randomBytes(32),
+    providers = ['openai', 'anthropic', 'google'] as const;
+  const seeded = createCredentialStore(directory, createKeyEncryption(createMemoryKeySource(key)));
+  for (const id of providers) await seeded.modify(id, async () => secret);
+  const count = (inner: CredentialKeySource, failLoads = 0) => {
+    const calls = { load: 0, create: 0 };
+    const source: CredentialKeySource = {
+      available: inner.available,
+      load: async () => {
+        calls.load++;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        if (calls.load <= failLoads)
+          throw new ApplicationError({
+            code: 'Unavailable',
+            message: 'Keychain locked.',
+          });
+        return inner.load();
+      },
+      create: async () => {
+        calls.create++;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        return inner.create();
+      },
+    };
+    return { calls, source };
+  };
+
+  const reader = count(createMemoryKeySource(key));
+  const store = createCredentialStore(directory, createKeyEncryption(reader.source));
+  assert.equal((await store.list()).length, providers.length);
+  await Promise.all(providers.map((id) => store.read(id)));
+  assert.deepEqual(reader.calls, { load: 1, create: 0 });
+
+  const writer = count(createMemoryKeySource()),
+    fresh = createCredentialStore(join(directory, 'fresh'), createKeyEncryption(writer.source));
+  await Promise.all(providers.map((id) => fresh.modify(id, async () => secret)));
+  assert.deepEqual(writer.calls, { load: 1, create: 1 });
+  for (const id of providers) assert.deepEqual(await fresh.read(id), secret);
+  assert.deepEqual(writer.calls, { load: 1, create: 1 });
+
+  // A locked keychain is asked once per attempt, and unlocking it lets the next attempt succeed.
+  const locked = count(createMemoryKeySource(key), 1),
+    retrying = createCredentialStore(directory, createKeyEncryption(locked.source));
+  await assert.rejects(retrying.list(), {
+    code: 'Unavailable',
+    message: 'Keychain locked.',
+  });
+  assert.equal(locked.calls.load, 1);
+  assert.equal((await retrying.list()).length, providers.length);
+  assert.equal(locked.calls.load, 2);
+
+  // A failed create is retried too, and a store with no key never caches the absence.
+  let failCreate = true;
+  const flaky = count({
+    ...createMemoryKeySource(),
+    create: async () => {
+      if (failCreate) throw new ApplicationError({ code: 'Unavailable', message: 'No key.' });
+      return createMemoryKeySource(key).create();
+    },
+  });
+  const flakyStore = createCredentialStore(
+    join(directory, 'flaky'),
+    createKeyEncryption(flaky.source),
+  );
+  await assert.rejects(
+    flakyStore.modify('openai', async () => secret),
+    { message: 'No key.' },
+  );
+  failCreate = false;
+  await flakyStore.modify('openai', async () => secret);
+  assert.deepEqual(await flakyStore.read('openai'), secret);
+  assert.deepEqual(flaky.calls, { load: 2, create: 2 });
+});
+
 test('a key file is created privately once, read back by later sources and refused unless private', async (t) => {
   const directory = await makeDirectory(t, 'moonbase-key-file-'),
     path = join(directory, 'credential.key');
@@ -182,7 +258,13 @@ test('a key file is created privately once, read back by later sources and refus
   for (const contents of ['not a key', randomBytes(16).toString('base64'), 'x'.repeat(200)]) {
     await writeFile(join(directory, 'bad.key'), contents, { mode: 0o600 });
     await refuse(join(directory, 'bad.key'));
+    await assert.rejects(
+      createKeyFileSource(join(directory, 'bad.key')).load(),
+      /sign in .* again/,
+    );
   }
+  // A root-owned folder that only root can change, such as a system directory, is private enough.
+  assert.equal(await createKeyFileSource('/usr/bin/moonbase-absent.key').load(), undefined);
   await refuse(join(directory, 'missing', 'credential.key'), 'create');
   const shared = join(directory, 'shared');
   await mkdir(shared, { mode: 0o700 });
@@ -323,7 +405,7 @@ test(
     );
     assert.deepEqual(await readdir(directory), []);
     await writeFile(join(state, 'item'), 'not-a-key\n');
-    await run(undefined, 'load', /not a Moonbase key/);
+    await run(undefined, 'load', /not a Moonbase key.*sign in .* again/);
     await rm(join(state, 'item'));
 
     const noisy = observeSecurity(state, 'cat >/dev/null; head -c 8000 /dev/zero | tr "\\0" a');
@@ -348,7 +430,14 @@ test(
     assert.equal(hanging.children[0]!.signalCode, 'SIGKILL');
 
     assert.throws(() => createKeychainKeySource({ storeId: 'bad id' }), { code: 'Unavailable' });
-    for (const keychain of ['relative.keychain-db', '/tmp/a"b.keychain-db', '/tmp/a\nb'])
+    for (const keychain of [
+      'relative.keychain-db',
+      '/tmp/a"b.keychain-db',
+      '/tmp/a\nb',
+      // Too long for one `security -i` line once the add command and key are included.
+      '/' + 'k'.repeat(4000),
+      '/' + 'é'.repeat(2000),
+    ])
       assert.throws(() => createKeychainKeySource({ storeId: 'store-1', keychain }), {
         code: 'Unavailable',
       });
