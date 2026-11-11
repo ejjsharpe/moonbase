@@ -77,11 +77,22 @@ export type ChatCommands = {
 export type ChatInput<K extends ChatCommand> = ChatCommands[K]['input'];
 export type ChatOutput<K extends ChatCommand> = ChatCommands[K]['output'];
 /**
- * A chat list watch's first page of chats. `reset` marks a page that replaced the watch's state
- * after updates may have been missed (a reconnect that could not resume), so pages past the first
- * may have changed unseen too.
+ * What a chat list watch follows: the list's first page, and chats past it that changed while it
+ * watched, as they are now (the most recently changed, at most `chatPageSize` and within the reply
+ * limit). `dropped` counts changed chats it let go to stay within those bounds; a client that sees
+ * it grow lists again, since one of them may have changed unseen.
  */
-export type ChatListUpdate = { list: ChatOutput<'listChats'>; reset: boolean };
+export type ChatListState = {
+  list: ChatOutput<'listChats'>;
+  changed: ChatSummary[];
+  dropped: number;
+};
+/**
+ * A chat list watch's state. `reset` marks one that replaced the watch's state after updates may
+ * have been missed (a reconnect that could not resume), so chats past the first page may have
+ * changed unseen.
+ */
+export type ChatListUpdate = ChatListState & { reset: boolean };
 /** An implementation that receives untrusted data decodes and bounds every reply and snapshot. */
 export interface ChatClient {
   command<K extends ChatCommand>(
@@ -94,7 +105,7 @@ export interface ChatClient {
     receive: (snapshot: ChatSnapshot) => void,
     onError: (error: ApplicationError) => void,
   ): ObservationClose;
-  /** The chat list's first page, again after each change to it. */
+  /** The chat list's first page and changed chats past it, again after each change. */
   watchChatList(
     input: { session: ChatSession },
     receive: (update: ChatListUpdate) => void,

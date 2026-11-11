@@ -125,6 +125,22 @@ export async function readActivity(
     return { state, at: ms === undefined ? createdAt : new Date(ms).toISOString() };
   }, context);
 }
+/** One chat as a listing shows it, or undefined when it is missing or another identity's. */
+export async function readListedConversation(
+  harness: Harness,
+  session: ChatSession,
+  identity: string,
+  fixedSettings: ChatSettings | undefined,
+  conversationId: string,
+): Promise<ChatSummary | undefined> {
+  const meta = await harness.snapshot(Metadata, cid(conversationId), 'metadata', context);
+  if (meta?.identity !== identity) return undefined;
+  const saved = S.savedMetadata(meta);
+  return {
+    ...summarizeConversation(session, conversationId, saved, getSettings(saved, fixedSettings)),
+    activity: await readActivity(harness, conversationId, saved.createdAt),
+  };
+}
 export async function listConversations(
   harness: Harness,
   session: ChatSession,
@@ -145,13 +161,14 @@ export async function listConversations(
       scan = undefined;
       break;
     }
-    const meta = await harness.snapshot(Metadata, row.id, 'metadata', context);
-    if (meta?.identity === identity) {
-      const saved = S.savedMetadata(meta);
-      const summary = {
-        ...summarizeConversation(session, String(row.id), saved, getSettings(saved, fixedSettings)),
-        activity: await readActivity(harness, String(row.id), saved.createdAt),
-      };
+    const summary = await readListedConversation(
+      harness,
+      session,
+      identity,
+      fixedSettings,
+      String(row.id),
+    );
+    if (summary) {
       if (
         Buffer.byteLength(JSON.stringify({ conversations: [...conversations, summary] })) >
         entryListBytes

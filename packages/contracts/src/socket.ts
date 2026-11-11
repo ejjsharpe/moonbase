@@ -1,6 +1,6 @@
 import { ApplicationError } from './errors.ts';
 import { chatContentChunkBytes, maximumChatReplyBytes } from './chat.ts';
-import type { ChatOutput, ChatSnapshot, ChatSummary } from './chat.ts';
+import type { ChatListState, ChatSnapshot, ChatSummary } from './chat.ts';
 import type { ProviderState } from './providers.ts';
 import type * as Contracts from './socket-schema.ts';
 
@@ -62,7 +62,7 @@ export type SocketSubscriptionTarget<K extends SocketSubscriptionKind> = {
 }[K];
 export type SocketSubscriptionValue<K extends SocketSubscriptionKind> = {
   chat: ChatSnapshot;
-  chatList: ChatOutput<'listChats'>;
+  chatList: ChatListState;
   providerSetup: ProviderState;
 }[K];
 export type ChatDelta = typeof Contracts.ChatDeltaSchema.Type;
@@ -119,20 +119,28 @@ export function applyChatDelta(snapshot: ChatSnapshot, delta: ChatDelta): ChatSn
   }
   return { ...snapshot, run: next };
 }
-/** The chat list after `delta`: rows upserted and removed, in the delta's order. */
-export function applyChatListDelta(
-  list: ChatOutput<'listChats'>,
-  delta: ChatListDelta,
-): ChatOutput<'listChats'> {
-  const rows = new Map<string, ChatSummary>(
-    list.conversations.map((row) => [row.target.conversationId, row]),
-  );
+const byId = (rows: readonly ChatSummary[], upsert: readonly ChatSummary[] = []) =>
+  new Map<string, ChatSummary>([...rows, ...upsert].map((row) => [row.target.conversationId, row]));
+/** `rows` in `order`; refuses an ID it lacks or names twice. */
+const pick = (rows: Map<string, ChatSummary>, order: readonly string[]) => {
+  if (new Set(order).size !== order.length) inapplicable();
+  return order.map((id) => rows.get(id) ?? inapplicable());
+};
+/**
+ * The chat list after `delta`: page rows upserted and removed, in the delta's order, and changed
+ * chats past the page upserted, in theirs.
+ */
+export function applyChatListDelta(state: ChatListState, delta: ChatListDelta): ChatListState {
+  const rows = byId(state.list.conversations);
   for (const id of delta.remove) if (!rows.delete(id)) inapplicable();
   for (const row of delta.upsert) rows.set(row.target.conversationId, row);
   if (rows.size !== delta.order.length) inapplicable();
   return {
-    conversations: delta.order.map((id) => rows.get(id) ?? inapplicable()),
-    nextCursor: delta.nextCursor,
+    list: { conversations: pick(rows, delta.order), nextCursor: delta.nextCursor },
+    changed: delta.changed
+      ? pick(byId(state.changed, delta.changed.upsert), delta.changed.order)
+      : state.changed,
+    dropped: delta.dropped ?? state.dropped,
   };
 }
 /** Provider setup after `delta`: the fields it names replaced. */
@@ -153,6 +161,6 @@ export function applySocketDelta<K extends SocketSubscriptionKind>(
 ): SocketSubscriptionValue<K> {
   if (kind === 'chat') return applyChatDelta(value as ChatSnapshot, delta as ChatDelta) as never;
   if (kind === 'chatList')
-    return applyChatListDelta(value as ChatOutput<'listChats'>, delta as ChatListDelta) as never;
+    return applyChatListDelta(value as ChatListState, delta as ChatListDelta) as never;
   return applyProviderSetupDelta(value as ProviderState, delta as ProviderSetupDelta) as never;
 }

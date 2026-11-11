@@ -554,7 +554,12 @@ test('chat list and provider watches reach the renderer through main, scoped to 
   );
   const closeProviders = clients.providers.watch((state) => provided.push(state), assert.fail);
   while (!lists.length || !states.length || !refused.length) await turn();
-  const update = { list: { conversations: [], nextCursor: null }, reset: false },
+  const update = {
+      list: { conversations: [], nextCursor: null },
+      changed: [],
+      dropped: 0,
+      reset: false,
+    },
     state = { providers: [], flow: null };
   lists[0]!(update);
   states[0]!(state);

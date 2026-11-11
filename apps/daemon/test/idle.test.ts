@@ -133,10 +133,10 @@ test('unauthenticated requests never delay a local daemon going idle; an authent
       () => fetch(origin + '/v1/health'),
       () => probeHealth(origin, wrongKey),
     ];
-    // Each probe comes a minute after the last, four in all: had any counted as use, the daemon
-    // would still be up a minute and a half after the last one.
-    for (const request of [...unauthenticated, ...unauthenticated]) {
-      await time.advance(minute);
+    // Each probe comes two minutes after the last: had either counted as use, the daemon would
+    // still be up a minute and a half after the last one.
+    for (const request of unauthenticated) {
+      await time.advance(2 * minute);
       const response = await request();
       assert.equal(response.status, 401);
       await response.arrayBuffer();

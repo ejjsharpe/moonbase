@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { connect, type AddressInfo } from 'node:net';
 import { createServer } from 'node:http';
@@ -18,6 +18,7 @@ import {
   chatProtocolVersion,
   type ChatHostHealth,
 } from '@moonbase/contracts/host';
+import { checkHostHealth, healthDomain } from '@moonbase/ssh/host-health';
 import { localDaemonCapabilities, serveChat, type SocketSources } from '../src/server.ts';
 import { connectDaemonSocket } from '../src/socket-client.ts';
 import { createSocketServer } from '../src/socket-server.ts';
@@ -313,7 +314,7 @@ test('one connection serves requests and chat, chat-list and provider subscripti
   assert(socket.health.capabilities.includes('chat-v0'));
 
   const chatTarget = await f.create();
-  const lists: { value: { conversations: unknown[] }; update: string }[] = [],
+  const lists: { value: { list: { conversations: unknown[] } }; update: string }[] = [],
     chats: { value: ChatSnapshot; update: string }[] = [],
     setups: { value: ProviderState; update: string }[] = [],
     failures: ApplicationError[] = [];
@@ -363,7 +364,7 @@ test('one connection serves requests and chat, chat-list and provider subscripti
   assert.deepEqual(built, fresh);
   // The chat list's row changed as the run started and ended, as upserts.
   await until(
-    async () => lists.at(-1)!.value.conversations,
+    async () => lists.at(-1)!.value.list.conversations,
     (rows) => (rows[0] as { activity?: { state: string } })?.activity?.state === 'idle',
   );
   assert(lists.slice(1).some((list) => list.update === 'delta'));
@@ -917,6 +918,34 @@ test('subscriptions are bounded, reads and watches end with their connection, an
   await assertRefused(raw);
 });
 
+test('unauthenticated health probes are refused before they reach the chat service', async (t) => {
+  const { client, calls } = controlledClient();
+  const served = await serve(t, client);
+  const probe = P.nonce(),
+    before = calls.length;
+  const proof = (key: string) =>
+    'Moonbase-HMAC-SHA256 ' +
+    createHmac('sha256', key)
+      .update(JSON.stringify([healthDomain, 'request', probe]))
+      .digest('hex');
+  for (const headers of [
+    {},
+    { 'X-Moonbase-Nonce': probe },
+    { 'X-Moonbase-Nonce': probe, Authorization: 'Moonbase-HMAC-SHA256 ' + '0'.repeat(64) },
+    { 'X-Moonbase-Nonce': probe, Authorization: proof(P.nonce()) },
+  ] as Record<string, string>[]) {
+    const response = await fetch(`${served.endpoint.origin}/v1/health`, { headers });
+    assert.equal(response.status, 401);
+    await response.arrayBuffer();
+  }
+  assert.deepEqual(calls.slice(before), []);
+  // A probe with the token's proof is answered, after asking the chat service.
+  await Effect.runPromise(
+    checkHostHealth({ origin: served.endpoint.origin, token: served.token, expected: host }),
+  );
+  assert.deepEqual(calls.slice(before), ['getChatHost']);
+});
+
 test('daemon requests are bound to this host and their request ID; a substituted reply is refused, a mutation’s as Uncertain', async (t) => {
   // The daemon refuses another host's request and a request ID reused for another input, and
   // dispatches neither.
@@ -1011,6 +1040,27 @@ test('daemon requests are bound to this host and their request ID; a substituted
     await assert.rejects(client.request('getChatTranscriptContent', { source, selection }), {
       code: 'Incompatible',
     });
+  }
+  // A signed chat reply that reflects another chat or session is refused too, and the same reply
+  // for its own chat is accepted.
+  const row = (owner: typeof target) => ({ ...snapshotOf(null).conversation, target: owner }),
+    foreign = { ...target, actorId: 'other' };
+  for (const [operation, input, reply] of [
+    [
+      'getChat',
+      { target },
+      (owner: typeof target) => ({ ...snapshotOf(null), conversation: row(owner) }),
+    ],
+    [
+      'listChats',
+      { session },
+      (owner: typeof target) => ({ conversations: [row(owner)], nextCursor: null }),
+    ],
+  ] as const) {
+    substitute = () => reply(foreign);
+    await assert.rejects(client.request(operation, input as never), { code: 'Incompatible' });
+    substitute = () => reply(target);
+    assert.deepEqual(await client.request(operation, input as never), reply(target));
   }
   // The unchanged reply is accepted, so each refusal above was the substitution's.
   substitute = () => content;

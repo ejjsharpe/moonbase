@@ -1264,6 +1264,175 @@
               "type": "null"
             }
           ]
+        },
+        "changed": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "upsert": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "target": {
+                        "type": "object",
+                        "properties": {
+                          "host": {
+                            "type": "object",
+                            "properties": {
+                              "hostId": {
+                                "type": "string"
+                              },
+                              "storeId": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "hostId",
+                              "storeId"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "actorId": {
+                            "type": "string"
+                          },
+                          "conversationId": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "host",
+                          "actorId",
+                          "conversationId"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "title": {
+                        "type": "string"
+                      },
+                      "createdAt": {
+                        "type": "string"
+                      },
+                      "cwd": {
+                        "type": "string"
+                      },
+                      "ownFolder": {
+                        "anyOf": [
+                          {
+                            "type": "boolean",
+                            "enum": [
+                              true
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "model": {
+                        "type": "string"
+                      },
+                      "reasoningEffort": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "off",
+                              "minimal",
+                              "low",
+                              "medium",
+                              "high",
+                              "xhigh",
+                              "max"
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "activity": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "state": {
+                                "type": "string",
+                                "enum": [
+                                  "idle",
+                                  "running",
+                                  "stopped",
+                                  "failed"
+                                ]
+                              },
+                              "at": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "state",
+                              "at"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "settledAt": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "target",
+                      "title",
+                      "createdAt",
+                      "cwd",
+                      "model"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "maxItems": 32
+                },
+                "order": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 32
+                }
+              },
+              "required": [
+                "upsert",
+                "order"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dropped": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -2736,10 +2905,163 @@
       ],
       "additionalProperties": false
     },
-    "ChatList": {
+    "ChatListState": {
       "type": "object",
       "properties": {
-        "conversations": {
+        "list": {
+          "type": "object",
+          "properties": {
+            "conversations": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "target": {
+                    "type": "object",
+                    "properties": {
+                      "host": {
+                        "type": "object",
+                        "properties": {
+                          "hostId": {
+                            "type": "string"
+                          },
+                          "storeId": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "hostId",
+                          "storeId"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "actorId": {
+                        "type": "string"
+                      },
+                      "conversationId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "host",
+                      "actorId",
+                      "conversationId"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "createdAt": {
+                    "type": "string"
+                  },
+                  "cwd": {
+                    "type": "string"
+                  },
+                  "ownFolder": {
+                    "anyOf": [
+                      {
+                        "type": "boolean",
+                        "enum": [
+                          true
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "model": {
+                    "type": "string"
+                  },
+                  "reasoningEffort": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "off",
+                          "minimal",
+                          "low",
+                          "medium",
+                          "high",
+                          "xhigh",
+                          "max"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "activity": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "state": {
+                            "type": "string",
+                            "enum": [
+                              "idle",
+                              "running",
+                              "stopped",
+                              "failed"
+                            ]
+                          },
+                          "at": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "state",
+                          "at"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "settledAt": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "target",
+                  "title",
+                  "createdAt",
+                  "cwd",
+                  "model"
+                ],
+                "additionalProperties": false
+              },
+              "maxItems": 32
+            },
+            "nextCursor": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "conversations",
+            "nextCursor"
+          ],
+          "additionalProperties": false
+        },
+        "changed": {
           "type": "array",
           "items": {
             "type": "object",
@@ -2872,20 +3194,16 @@
           },
           "maxItems": 32
         },
-        "nextCursor": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
+        "dropped": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
         }
       },
       "required": [
-        "conversations",
-        "nextCursor"
+        "list",
+        "changed",
+        "dropped"
       ],
       "additionalProperties": false
     },

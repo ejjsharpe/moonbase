@@ -41,6 +41,7 @@ import {
 } from './documents.ts';
 import {
   listConversations,
+  readListedConversation,
   readHistory,
   readHistoryAround,
   projectSnapshot,
@@ -115,13 +116,21 @@ function isProgressOnly(change: CommitPublication['changes'][number]) {
  * Whether a commit may change a chat list: a conversation, task or metadata change, or a live
  * document change other than streamed progress, which can start or end a run.
  */
-function affectsChatList(publication: CommitPublication) {
-  return publication.changes.some((change) =>
-    change.type === 'document' || change.type === 'document.copy'
-      ? change.record.kind === Metadata.definition.kind ||
-        (change.record.kind === LiveDoc.definition.kind && !isProgressOnly(change))
-      : change.type === 'conversation' || change.type === 'task',
-  );
+/** The chats whose listing a commit may change. */
+function listedChanges(publication: CommitPublication): string[] {
+  const ids = new Set<string>();
+  for (const change of publication.changes) {
+    if (change.type === 'document' || change.type === 'document.copy') {
+      if (
+        change.conversationId !== undefined &&
+        (change.record.kind === Metadata.definition.kind ||
+          (change.record.kind === LiveDoc.definition.kind && !isProgressOnly(change)))
+      )
+        ids.add(String(change.conversationId));
+    } else if (change.type === 'conversation') ids.add(String(change.value.id));
+    else if (change.type === 'task') ids.add(String(change.value.conversationId));
+  }
+  return [...ids];
 }
 export function classifyPublication(
   publication: CommitPublication,
@@ -211,12 +220,15 @@ export class Host {
     this.waiters = waiters;
     this.observations = observations;
   }
-  /** Calls `listener` after a commit or status report that may change a chat list. */
-  subscribeChatList(listener: () => void): () => void {
+  /**
+   * Calls `listener` with the chats a commit or status report may have changed the listing of.
+   */
+  subscribeChatList(listener: (conversationIds: readonly string[]) => void): () => void {
     const off = this.harness.subscribeCommits((publication) => {
-      if (affectsChatList(publication)) listener();
+      const changed = listedChanges(publication);
+      if (changed.length) listener(changed);
     });
-    const notify = () => listener();
+    const notify = (conversationId: ConversationId) => listener([String(conversationId)]);
     this.statusListeners.add(notify);
     return () => {
       off();
@@ -411,6 +423,17 @@ export class Host {
       cwd: this.config.cwd,
       model: `${this.config.model.provider}/${this.config.model.modelId}`,
     };
+  }
+  /** One chat as a listing shows it; undefined when it is missing or not this session's. */
+  async listed(session: ChatSession, conversationId: string): Promise<ChatSummary | undefined> {
+    this.session(session);
+    return readListedConversation(
+      this.harness,
+      session,
+      this.identity,
+      this.fixedSettings,
+      conversationId,
+    );
   }
   async list(d: ChatInput<'listChats'>): Promise<ChatOutput<'listChats'>> {
     this.session(d.session);

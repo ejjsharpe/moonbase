@@ -321,6 +321,8 @@ export const LocalDaemonConnectionLive = (
             Effect.flatMap(ready ? Effect.void : recover, () => inner.endpoint(input)),
           ),
       } satisfies ConnectionServiceShape;
+      // Its own daemon link, since the shared one is built over this connection: it opens a
+      // second socket only once an outdated daemon is asked whether it is idle.
       const host = Context.get(
         yield* Layer.build(
           RemoteLocalHostLive.pipe(Layer.provide(Layer.succeed(ConnectionService, connection))),

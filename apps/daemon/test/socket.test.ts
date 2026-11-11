@@ -54,7 +54,7 @@ test('one WebSocket runs every operation and holds chat, chat-list and provider 
         setups: ProviderState[] = [],
         failures: ApplicationError[] = [];
       socket.subscribe('chatList', session, {
-        receive: (value) => lists.push(value),
+        receive: (value) => lists.push(value.list),
         onError: (error) => failures.push(error),
       });
       socket.subscribe(

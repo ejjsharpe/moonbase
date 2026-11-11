@@ -265,7 +265,7 @@ export function chatCapabilities(local = false, activity = false) {
     watchChatList(input, receive) {
       let open = true;
       void chat.command('listChats', input).then((list) => {
-        if (open) receive({ list, reset: false });
+        if (open) receive({ list, changed: [], dropped: 0, reset: false });
       });
       return async () => {
         open = false;

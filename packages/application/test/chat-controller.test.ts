@@ -2952,14 +2952,23 @@ test('the chat list follows its watch: changes merge without listing, and a rese
     target: { ...target, conversationId: 'other' },
     title: 'Made by another client',
   };
-  const page = (conversations: ChatSummary[]) => ({
+  const page = (conversations: ChatSummary[], changed: ChatSummary[] = [], dropped = 0) => ({
     list: { conversations, nextCursor: null },
+    changed,
+    dropped,
     reset: false,
   });
   first.receive(page([other, summary]));
   assert.deepEqual(
     controller.getSnapshot().chats.map((chat) => chat.target.conversationId),
     ['other', target.conversationId],
+  );
+  assert.equal(lists(), listed);
+  // A changed chat past the first page replaces its row on screen without listing.
+  first.receive(page([other], [{ ...summary, title: 'Changed past the page' }]));
+  assert.deepEqual(
+    controller.getSnapshot().chats.map((chat) => chat.title),
+    ['Made by another client', 'Changed past the page'],
   );
   assert.equal(lists(), listed);
   // A reload that read before a watch page lands after it: the newer page still wins.
@@ -2978,13 +2987,16 @@ test('the chat list follows its watch: changes merge without listing, and a rese
   // A reset may have missed changes past the first page, so the list is read again.
   first.receive({ ...page([other, summary]), reset: true });
   await until(() => lists() === listed + 2);
+  // So may changed chats the watch let go of.
+  first.receive(page([other, summary], [], 1));
+  await until(() => lists() === listed + 3);
   // A dropped watch watches again after its backoff and lists once it delivers.
   first.fail(new ApplicationError({ code: 'Unavailable', message: 'Dropped.' }));
   await until(() => f.chatLists.at(-1) !== first);
   assert.equal(first.closed, true);
   const second = open();
   second.receive(page([summary, other]));
-  await until(() => lists() === listed + 3);
+  await until(() => lists() === listed + 4);
   // A refused watch stops; becoming visible watches again, and an open one is left alone.
   second.fail(new ApplicationError({ code: 'Incompatible', message: 'Refused.' }));
   await until(() => second.closed);

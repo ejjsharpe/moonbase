@@ -10,6 +10,7 @@ import type {
   ChatClient,
   ChatCommand,
   ChatInput,
+  ChatListState,
   ChatOutput,
   ChatHostConfiguration,
   ChatSession,
@@ -765,18 +766,24 @@ class ChatModelState {
   }
   /** The owner whose chat list watch is open or waiting to reconnect. */
   private chatsFollowed?: Owner;
-  /** The latest first page the chat list's watch delivered, and how many it has delivered. */
-  private lastChatPage?: ChatOutput<'listChats'>;
+  /** The latest state the chat list's watch delivered, and how many it has delivered. */
+  private lastChatPage?: ChatListState;
   private chatPagesWatched = 0;
   /**
    * Follows the chat list's watch for `owner`: each first page it delivers merges into the list
-   * on screen, and a reset (or the first page after a failed watch) lists again in the
-   * background, since pages past the first may have changed unseen. A retryable failure watches
+   * on screen with the changed chats past it, and a reset, a growing count of changed chats the
+   * watch let go (or the first page after a failed watch) lists again in the background, since
+   * chats past the first page may have changed unseen. A retryable failure watches
    * again after the transcript's backoff; once that runs out, the list stays as it is until
    * `watchChats` or Refresh.
    */
   private followChats(owner: Owner, recovering = false): Effect.Effect<void, ApplicationError> {
-    type Attempt = { open: boolean; firstAt?: number; observation?: Observation };
+    type Attempt = {
+      open: boolean;
+      firstAt?: number;
+      dropped?: number;
+      observation?: Observation;
+    };
     let failures = 0;
     if (this.chatsFollowed !== owner) this.lastChatPage = undefined;
     this.chatsFollowed = owner;
@@ -793,10 +800,12 @@ class ChatModelState {
               (update) => {
                 if (!attempt.open || !current()) return;
                 attempt.firstAt ??= performance.now();
-                this.lastChatPage = update.list;
+                const dropped = attempt.dropped !== undefined && update.dropped !== attempt.dropped;
+                attempt.dropped = update.dropped;
+                this.lastChatPage = update;
                 this.chatPagesWatched++;
-                this.mergeChats(update.list);
-                if (update.reset || reload) {
+                this.mergeChats(update);
+                if (update.reset || reload || dropped) {
                   reload = false;
                   void this.reloadChats({ latest: true });
                 }
@@ -839,13 +848,20 @@ class ChatModelState {
     };
     return follow(recovering);
   }
-  /** Merges the chat list's first page into the list on screen, keeping chats it did not reach. */
-  private mergeChats(page: ChatOutput<'listChats'>) {
+  /**
+   * Merges the chat list's first page into the list on screen, keeping chats it did not reach,
+   * and replaces listed chats past it with their changed rows.
+   */
+  private mergeChats({ list: page, changed }: ChatListState) {
     const kept = keepUnreachedChats(this.state.chats, page.conversations);
     // The list reaches past the page only when a chat it did not reach comes last.
     const past = kept.length > 0 && !page.conversations.includes(kept.at(-1)!);
     if (!past) this.chatPages = 1;
-    this.listed({ chats: kept, next: past ? this.state.nextChats : page.nextCursor });
+    const rows = new Map(changed.map((chat) => [chat.target.conversationId, chat]));
+    this.listed({
+      chats: kept.map((chat) => rows.get(chat.target.conversationId) ?? chat),
+      next: past ? this.state.nextChats : page.nextCursor,
+    });
   }
   /**
    * Watches the chat list again if its watch stopped (as a window becomes visible), listing it

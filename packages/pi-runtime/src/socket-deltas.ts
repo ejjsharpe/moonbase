@@ -1,5 +1,5 @@
 import { areJsonValuesEqual } from '@moonbase/contracts/common';
-import type { ChatOutput, ChatSnapshot } from '@moonbase/contracts/chat';
+import type { ChatListState, ChatSnapshot, ChatSummary } from '@moonbase/contracts/chat';
 import type { ProviderState } from '@moonbase/contracts/providers';
 import type {
   ChatDelta,
@@ -23,10 +23,7 @@ export function projectSocketDelta<K extends SocketSubscriptionKind>(
   if (kind === 'chat')
     return projectChatDelta(previous as ChatSnapshot, next as ChatSnapshot) as SocketDelta<K>;
   if (kind === 'chatList')
-    return projectChatListDelta(
-      previous as ChatOutput<'listChats'>,
-      next as ChatOutput<'listChats'>,
-    ) as SocketDelta<K>;
+    return projectChatListDelta(previous as ChatListState, next as ChatListState) as SocketDelta<K>;
   return projectProviderSetupDelta(
     previous as ProviderState,
     next as ProviderState,
@@ -74,20 +71,25 @@ function projectChatDelta(previous: ChatSnapshot, next: ChatSnapshot): ChatDelta
   return delta;
 }
 
-function projectChatListDelta(
-  previous: ChatOutput<'listChats'>,
-  next: ChatOutput<'listChats'>,
-): ChatListDelta {
-  const before = new Map(previous.conversations.map((row) => [row.target.conversationId, row])),
-    order = next.conversations.map((row) => row.target.conversationId),
-    kept = new Set(order);
+/** Rows of `next` that differ from `previous`'s row with the same ID. */
+const upserted = (previous: readonly ChatSummary[], next: readonly ChatSummary[]) => {
+  const before = new Map(previous.map((row) => [row.target.conversationId, row]));
+  return next.filter((row) => !areJsonValuesEqual(before.get(row.target.conversationId), row));
+};
+const ids = (rows: readonly ChatSummary[]) => rows.map((row) => row.target.conversationId);
+
+function projectChatListDelta(previous: ChatListState, next: ChatListState): ChatListDelta {
+  const kept = new Set(ids(next.list.conversations));
+  const changed = areJsonValuesEqual(previous.changed, next.changed)
+    ? {}
+    : { changed: { upsert: upserted(previous.changed, next.changed), order: ids(next.changed) } };
   return {
-    upsert: next.conversations.filter(
-      (row) => !areJsonValuesEqual(before.get(row.target.conversationId), row),
-    ),
-    remove: [...before.keys()].filter((id) => !kept.has(id)),
-    order,
-    nextCursor: next.nextCursor,
+    upsert: upserted(previous.list.conversations, next.list.conversations),
+    remove: ids(previous.list.conversations).filter((id) => !kept.has(id)),
+    order: ids(next.list.conversations),
+    nextCursor: next.list.nextCursor,
+    ...changed,
+    ...(previous.dropped === next.dropped ? {} : { dropped: next.dropped }),
   };
 }
 

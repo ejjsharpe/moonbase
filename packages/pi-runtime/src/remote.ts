@@ -1,4 +1,5 @@
-import { Cause, Context, Effect, Exit, Layer, Queue, Stream } from 'effect';
+import { Cause, Context, Effect, Exit, Fiber, Layer, Queue, Stream } from 'effect';
+import { getJsonKey } from '@moonbase/contracts/common';
 import {
   chatHostCapabilities,
   type ChatHostHealth,
@@ -50,6 +51,11 @@ import { systemSocketClock, type SocketClock } from './socket-protocol.ts';
 type LinkUpdate<K extends SocketSubscriptionKind> =
   | { value: SocketSubscriptionValue<K>; reset: boolean }
   | { reconnecting: true };
+/** Where a followed subscription's updates and failure go. */
+type Sink<K extends SocketSubscriptionKind> = {
+  offer(update: LinkUpdate<K>): void;
+  fail(cause: Cause.Cause<ApplicationError>): Effect.Effect<void>;
+};
 /**
  * One authenticated WebSocket per connection generation, shared by every service built with it:
  * requests and subscriptions to the daemon the connection serves.
@@ -117,6 +123,7 @@ const DaemonLinkLive: Layer.Layer<DaemonLink, never, ConnectionService> = Layer.
   Effect.gen(function* () {
     const connections = yield* ConnectionService;
     const clock = yield* DaemonLinkClock;
+    const scope = yield* Effect.scope;
     const sleep = (ms: number) =>
       Effect.callback<void>((resume) => {
         const handle = clock.setTimeout(() => resume(Effect.void), ms);
@@ -172,6 +179,159 @@ const DaemonLinkLive: Layer.Layer<DaemonLink, never, ConnectionService> = Layer.
         Exit.isSuccess(now) ? sameEndpoint(now.value, endpoint) : false,
       );
 
+    /**
+     * Follows one socket subscription into `sink` until it fails; `reset` marks a snapshot that
+     * arrived when it subscribed again after a reconnect, so updates may have been missed.
+     */
+    const follow = <K extends SocketSubscriptionKind>(
+      host: ChatHostTarget,
+      kind: K,
+      target: SocketSubscriptionTarget<K>,
+      sink: Sink<K>,
+    ) =>
+      Effect.gen(function* () {
+        const first = yield* connections.endpoint({ host });
+        const stale = Effect.flatMap(isCurrent(host, first), (same) =>
+          same ? Effect.void : Effect.fail(generationChanged(false)),
+        );
+        const failWith = (effect: Effect.Effect<unknown, ApplicationError>) =>
+          effect.pipe(
+            Effect.catchCause((cause) =>
+              Cause.hasInterruptsOnly(cause) ? Effect.void : sink.fail(cause),
+            ),
+            Effect.forkScoped,
+          );
+        // A connection publication fails the subscription once its generation is gone.
+        yield* failWith(connections.watch().pipe(Stream.runForEach(() => stale)));
+        let state: SocketSubscriptionState<K> | undefined,
+          delivered = false,
+          failures = 0;
+        type Ended = { error: ApplicationError; closed: boolean; renewed: boolean };
+        const followSocket = (socket: DaemonSocket) =>
+          Effect.callback<Ended>((resume) => {
+            let firstAt: number | undefined,
+              // A snapshot first after subscribing again replaced whatever was missed meanwhile.
+              resuming = delivered;
+            const subscription = socket.subscribe(
+              kind,
+              target,
+              {
+                receive(value, update) {
+                  firstAt ??= socket.lastReceived;
+                  const reset = resuming && update === 'snapshot';
+                  resuming = false;
+                  delivered = true;
+                  state = subscription.state;
+                  sink.offer({ value, reset });
+                },
+                onError(error, closed) {
+                  state = subscription.state ?? state;
+                  resume(
+                    Effect.succeed({
+                      error,
+                      closed,
+                      renewed:
+                        firstAt !== undefined &&
+                        socket.lastReceived - firstAt >= P.streamLimits.renewMs,
+                    }),
+                  );
+                },
+              },
+              state,
+            );
+            return Effect.sync(() => subscription.close());
+          });
+        const loop = Effect.gen(function* () {
+          for (;;) {
+            const acquired = yield* Effect.exit(acquire(host));
+            let ended: Ended;
+            if (Exit.isSuccess(acquired)) {
+              if (!sameEndpoint(acquired.value.endpoint, first))
+                return yield* Effect.fail(generationChanged(false));
+              ended = yield* followSocket(acquired.value.socket);
+              if (!ended.closed) return yield* Effect.fail(ended.error);
+            } else {
+              const error = Cause.squash(acquired.cause);
+              if (Cause.hasInterruptsOnly(acquired.cause)) return yield* acquired;
+              ended = {
+                error: ApplicationError.is(error) ? error : lostReply(false),
+                closed: true,
+                renewed: false,
+              };
+            }
+            yield* stale;
+            if (ended.renewed) failures = 0;
+            if (ended.error.code !== 'Unavailable' || failures >= P.streamLimits.reconnectMs.length)
+              return yield* Effect.fail(ended.error);
+            if (delivered) sink.offer({ reconnecting: true });
+            yield* sleep(P.streamLimits.reconnectMs[failures++]!);
+          }
+        });
+        yield* failWith(loop);
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause) ? Effect.void : sink.fail(cause),
+        ),
+      );
+    /**
+     * Identical chat list and provider setup subscriptions share one socket subscription, so a
+     * connection's 64 cover every window. A sink that joins one already delivering gets its
+     * latest value at once; the last to leave closes it.
+     */
+    const shared = new Map<
+      string,
+      { sinks: Set<Sink<never>>; latest?: unknown; fiber?: Fiber.Fiber<unknown, unknown> }
+    >();
+    const join = <K extends SocketSubscriptionKind>(
+      host: ChatHostTarget,
+      kind: K,
+      target: SocketSubscriptionTarget<K>,
+      sink: Sink<K>,
+    ) =>
+      Effect.gen(function* () {
+        const key = getJsonKey({ kind, target });
+        type Entry = {
+          sinks: Set<Sink<K>>;
+          latest?: SocketSubscriptionValue<K>;
+          fiber?: Fiber.Fiber<unknown, unknown>;
+        };
+        let entry = shared.get(key) as Entry | undefined;
+        if (entry) {
+          if (entry.latest !== undefined) sink.offer({ value: entry.latest, reset: false });
+          entry.sinks.add(sink);
+        } else {
+          const created: Entry = { sinks: new Set([sink]) };
+          shared.set(key, created as never);
+          entry = created;
+          const fanOut: Sink<K> = {
+            offer(update) {
+              if ('value' in update) created.latest = update.value;
+              for (const each of created.sinks) each.offer(update);
+            },
+            fail: (cause) =>
+              Effect.suspend(() => {
+                if (shared.get(key) === (created as never)) shared.delete(key);
+                return Effect.forEach([...created.sinks], (each) => each.fail(cause), {
+                  discard: true,
+                });
+              }),
+          };
+          created.fiber = yield* Effect.forkIn(
+            Effect.scoped(Effect.andThen(follow(host, kind, target, fanOut), Effect.never)),
+            scope,
+          );
+        }
+        const joined = entry;
+        yield* Effect.addFinalizer(() =>
+          Effect.suspend(() => {
+            joined.sinks.delete(sink);
+            if (joined.sinks.size) return Effect.void;
+            if (shared.get(key) === (joined as never)) shared.delete(key);
+            return joined.fiber ? Fiber.interrupt(joined.fiber) : Effect.void;
+          }),
+        );
+      });
+
     return {
       request: (host, operation, input, mutation, check) =>
         Effect.gen(function* () {
@@ -216,90 +376,21 @@ const DaemonLinkLive: Layer.Layer<DaemonLink, never, ConnectionService> = Layer.
         kind: K,
         target: SocketSubscriptionTarget<K>,
       ) => {
-        // Set when a snapshot replaced earlier updates, until the consumer takes the next value.
+        // Set when a snapshot replaced missed updates, until the consumer takes the next value.
         let resetPending = false;
         return Stream.callback<LinkUpdate<K>, ApplicationError>(
-          (queue) =>
-            Effect.gen(function* () {
-              const first = yield* connections.endpoint({ host });
-              const stale = Effect.flatMap(isCurrent(host, first), (same) =>
-                same ? Effect.void : Effect.fail(generationChanged(false)),
-              );
-              const failWith = (effect: Effect.Effect<unknown, ApplicationError>) =>
-                effect.pipe(
-                  Effect.catchCause((cause) =>
-                    Cause.hasInterruptsOnly(cause) ? Effect.void : Queue.failCause(queue, cause),
-                  ),
-                  Effect.forkScoped,
-                );
-              // A connection publication fails the subscription once its generation is gone.
-              yield* failWith(connections.watch().pipe(Stream.runForEach(() => stale)));
-              let state: SocketSubscriptionState<K> | undefined,
-                delivered = false,
-                failures = 0;
-              type Ended = { error: ApplicationError; closed: boolean; renewed: boolean };
-              const follow = (socket: DaemonSocket) =>
-                Effect.callback<Ended>((resume) => {
-                  let firstAt: number | undefined;
-                  const subscription = socket.subscribe(
-                    kind,
-                    target,
-                    {
-                      receive(value, update) {
-                        firstAt ??= socket.lastReceived;
-                        if (update === 'snapshot' && delivered) resetPending = true;
-                        delivered = true;
-                        state = subscription.state;
-                        Queue.offerUnsafe(queue, { value, reset: false });
-                      },
-                      onError(error, closed) {
-                        state = subscription.state ?? state;
-                        resume(
-                          Effect.succeed({
-                            error,
-                            closed,
-                            renewed:
-                              firstAt !== undefined &&
-                              socket.lastReceived - firstAt >= P.streamLimits.renewMs,
-                          }),
-                        );
-                      },
-                    },
-                    state,
-                  );
-                  return Effect.sync(() => subscription.close());
-                });
-              const loop = Effect.gen(function* () {
-                for (;;) {
-                  const acquired = yield* Effect.exit(acquire(host));
-                  let ended: Ended;
-                  if (Exit.isSuccess(acquired)) {
-                    if (!sameEndpoint(acquired.value.endpoint, first))
-                      return yield* Effect.fail(generationChanged(false));
-                    ended = yield* follow(acquired.value.socket);
-                    if (!ended.closed) return yield* Effect.fail(ended.error);
-                  } else {
-                    const error = Cause.squash(acquired.cause);
-                    if (Cause.hasInterruptsOnly(acquired.cause)) return yield* acquired;
-                    ended = {
-                      error: ApplicationError.is(error) ? error : lostReply(false),
-                      closed: true,
-                      renewed: false,
-                    };
-                  }
-                  yield* stale;
-                  if (ended.renewed) failures = 0;
-                  if (
-                    ended.error.code !== 'Unavailable' ||
-                    failures >= P.streamLimits.reconnectMs.length
-                  )
-                    return yield* Effect.fail(ended.error);
-                  if (delivered) Queue.offerUnsafe(queue, { reconnecting: true });
-                  yield* sleep(P.streamLimits.reconnectMs[failures++]!);
-                }
-              });
-              yield* failWith(loop);
-            }),
+          (queue) => {
+            const sink: Sink<K> = {
+              offer(update) {
+                if ('value' in update && update.reset) resetPending = true;
+                Queue.offerUnsafe(queue, update);
+              },
+              fail: (cause) => Effect.asVoid(Queue.failCause(queue, cause)),
+            };
+            return kind === 'chat'
+              ? follow(host, kind, target, sink)
+              : join(host, kind, target, sink);
+          },
           { bufferSize: 1, strategy: 'sliding' },
         ).pipe(
           Stream.map((update) => {
@@ -401,7 +492,7 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
                 Stream.filter((update) => !('reconnecting' in update)),
                 Stream.map((update) => {
                   const { value, reset } = update as Exclude<typeof update, { reconnecting: true }>;
-                  return { list: value, reset };
+                  return { ...value, reset };
                 }),
               ),
           ),

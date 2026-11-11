@@ -71,12 +71,25 @@ export const ChatDeltaSchema = struct({
   ),
   nextCursor: optional(Schema.NullOr(cursor)),
 });
-/** Rows upserted and removed; `order` lists the page's conversation IDs after the change. */
+const rows = array(ChatSummarySchema).check(Schema.isMaxLength(chatPageSize));
+const ids = array(ChatIdentifierSchema).check(Schema.isMaxLength(chatPageSize));
+/** A chat list watch's first page and the changed chats past it (`ChatListState`). */
+export const ChatListStateSchema = struct({
+  list: chatOutputSchemas.listChats,
+  changed: rows,
+  dropped: sequence,
+});
+/**
+ * Page rows upserted and removed; `order` lists the page's conversation IDs after the change.
+ * `changed` upserts changed chats past the page and lists their IDs after the change.
+ */
 export const ChatListDeltaSchema = struct({
-  upsert: array(ChatSummarySchema).check(Schema.isMaxLength(chatPageSize)),
-  remove: array(ChatIdentifierSchema).check(Schema.isMaxLength(chatPageSize)),
-  order: array(ChatIdentifierSchema).check(Schema.isMaxLength(chatPageSize)),
+  upsert: rows,
+  remove: ids,
+  order: ids,
   nextCursor: Schema.NullOr(cursor),
+  changed: optional(struct({ upsert: rows, order: ids })),
+  dropped: optional(sequence),
 });
 /** The provider setup fields that changed. */
 export const ProviderSetupDeltaSchema = struct({
@@ -85,7 +98,7 @@ export const ProviderSetupDeltaSchema = struct({
 });
 const subscriptionValueSchemas = {
   chat: ChatSnapshotSchema,
-  chatList: chatOutputSchemas.listChats,
+  chatList: ChatListStateSchema,
   providerSetup: ProviderStateSchema,
 };
 const deltaSchemas = {
@@ -196,7 +209,7 @@ export const socketJsonSchemaRoots = {
   ChatListDelta: ChatListDeltaSchema,
   ProviderSetupDelta: ProviderSetupDeltaSchema,
   ChatSnapshot: ChatSnapshotSchema,
-  ChatList: chatOutputSchemas.listChats,
+  ChatListState: ChatListStateSchema,
   ProviderState: ProviderStateSchema,
 };
 

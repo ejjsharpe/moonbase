@@ -17,6 +17,7 @@ async function daemon(t: TestContext) {
   const token = P.nonce(),
     listed: string[] = [];
   let connections = 0,
+    listWatches = 0,
     scope: Scope.Closeable | undefined,
     port = 0;
   // Counts list commands, so a test sees that watches never poll.
@@ -25,6 +26,10 @@ async function daemon(t: TestContext) {
     command: (operation, input, options) => {
       if (operation === 'listChats') listed.push(operation);
       return f.client.command(operation, input, options);
+    },
+    watchChatList: (input, receive, onError) => {
+      listWatches++;
+      return f.client.watchChatList(input, receive, onError);
     },
   };
   const start = async () => {
@@ -57,6 +62,9 @@ async function daemon(t: TestContext) {
     stop,
     get connections() {
       return connections;
+    },
+    get listWatches() {
+      return listWatches;
     },
     endpoint: (): VerifiedChatEndpoint => ({
       origin: `http://127.0.0.1:${port}`,
@@ -126,22 +134,30 @@ function record<A>() {
   };
 }
 
-test('one client shares one socket, and a chat another client creates reaches its list without listing', async (t) => {
+test('one client shares one socket and one list watch, and chats another client creates or changes, past the first page too, reach its list without listing', async (t) => {
   const d = await daemon(t);
   const a = remote(t, d),
     b = remote(t, d);
-  const list = record<ChatListUpdate>();
+  // Two windows of one client.
+  const list = record<ChatListUpdate>(),
+    other = record<ChatListUpdate>();
   const close = b.chat.watchChatList({ session }, list.receive, list.fail);
   t.after(() => close().catch(() => {}));
   await until(async () => list.values.length, Boolean);
-  assert.deepEqual(list.values[0], { list: { conversations: [], nextCursor: null }, reset: false });
+  const closeOther = b.chat.watchChatList({ session }, other.receive, other.fail);
+  t.after(() => closeOther().catch(() => {}));
+  await until(async () => other.values.length, Boolean);
+  const empty = { list: { conversations: [], nextCursor: null }, changed: [], dropped: 0 };
+  assert.deepEqual(list.values[0], { ...empty, reset: false });
+  assert.deepEqual(other.values[0], { ...empty, reset: false });
   const created = await a.chat.command('createChat', {
     session,
     requestId: 'create',
     title: 'From another client',
   });
+  const target = created.conversation.target;
   const chat = record<ChatSnapshot>();
-  const closeChat = a.chat.watch({ target: created.conversation.target }, chat.receive, chat.fail);
+  const closeChat = a.chat.watch({ target }, chat.receive, chat.fail);
   t.after(() => closeChat().catch(() => {}));
   await until(
     async () => list.values.at(-1)!.list.conversations,
@@ -149,10 +165,33 @@ test('one client shares one socket, and a chat another client creates reaches it
   );
   await until(async () => chat.values.length, Boolean);
   assert.equal(chat.values[0]!.observationStatus, 'connected');
-  // A request, a chat watch and a list watch from one client share its one socket.
+  // A request, a chat watch and a list watch from one client share its one socket, and its two
+  // windows' list watches share one subscription.
   assert.equal(d.connections, 2);
+  assert.equal(d.listWatches, 1);
+  // Once a full page of newer chats pushes it past the first page, settling it still reaches
+  // the other client's list and the settling client's own.
+  const own = record<ChatListUpdate>();
+  const closeOwn = a.chat.watchChatList({ session }, own.receive, own.fail);
+  t.after(() => closeOwn().catch(() => {}));
+  for (let index = 0; index < 32; index++)
+    await a.chat.command('createChat', { session, requestId: `newer-${index}`, title: 'Newer' });
+  const pastPage = (update: ChatListUpdate | undefined) =>
+    !!update &&
+    !update.list.conversations.some((row) => row.target.conversationId === target.conversationId);
+  await until(async () => list.values.at(-1), pastPage);
+  await a.chat.command('settleChat', { target, settled: true });
+  for (const watched of [list, own])
+    await until(
+      async () => watched.values.at(-1)!,
+      (update) =>
+        pastPage(update) &&
+        update.changed.some(
+          (row) => row.target.conversationId === target.conversationId && row.settledAt,
+        ),
+    );
   assert.deepEqual(d.listed, []);
-  assert.deepEqual([...list.errors, ...chat.errors], []);
+  assert.deepEqual([...list.errors, ...other.errors, ...own.errors, ...chat.errors], []);
 });
 
 test('a dropped daemon shows reconnecting, then resets its watches; healthy traffic renews the budget, and a lost budget or generation fails them', async (t) => {

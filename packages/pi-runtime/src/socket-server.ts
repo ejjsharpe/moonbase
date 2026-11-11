@@ -3,6 +3,7 @@ import type { Duplex } from 'node:stream';
 import { getJsonKey } from '@moonbase/contracts/common';
 import type { ChatClient } from '@moonbase/contracts/chat';
 import type { DaemonClient } from '@moonbase/contracts/daemon';
+import { daemonCommandCapabilities } from '@moonbase/contracts/daemon-schema';
 import {
   chatProtocolVersion,
   type ChatHostHealth,
@@ -446,7 +447,13 @@ class Session {
     if (feed) {
       const after = message.afterSequence,
         start = feed.history.findIndex((update) => update.base === after);
-      if (after === undefined || (after !== feed.sequence && start < 0)) {
+      // A chat list's source starts again without the chats that changed past its first page
+      // meanwhile, so it resumes with a fresh snapshot rather than deltas.
+      if (
+        after === undefined ||
+        (after !== feed.sequence && start < 0) ||
+        feed.kind === 'chatList'
+      ) {
         feed.sent = undefined;
         feed.replay = [];
       } else feed.replay = start < 0 ? [] : feed.history.slice(start);
@@ -497,14 +504,19 @@ class Session {
       if (feed.kind === 'chatList') {
         feed.close = this.context.client.watchChatList(
           { session: feed.target as SocketSubscriptionTarget<'chatList'> },
-          (update) => receive(update.list),
+          ({ list, changed, dropped }) => receive({ list, changed, dropped }),
           end,
         );
         return;
       }
       const daemon = this.context.daemon,
         subscribe = this.context.sources.subscribeProviderSetup;
-      if (!daemon || !subscribe)
+      // Only what health advertises is served, as for daemon requests.
+      if (
+        !daemon ||
+        !subscribe ||
+        !this.context.health.capabilities.includes(daemonCommandCapabilities.getProviders)
+      )
         return V.fail('Incompatible', 'This host does not serve provider setup.');
       // A provider read follows each change, one at a time; changes during a read start one more.
       const target = feed.target as SocketSubscriptionTarget<'providerSetup'>;
