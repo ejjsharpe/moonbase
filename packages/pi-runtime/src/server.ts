@@ -39,6 +39,8 @@ import * as S from './private-schema.ts';
 export type ChatServerConfiguration = { host: ChatHostTarget; token: string; port: number };
 /** Request IDs of recent daemon mutations; a repeat of one returns its outcome instead of rerunning. */
 const rememberedDaemonRequests = 256;
+// Codes a daemon raises only before it applies anything, so a refused request may be sent again.
+const refusalCodes = new Set<string>(['InvalidInput', 'Unauthorized', 'Incompatible', 'Conflict']);
 
 /**
  * The injected clients are bound to the consumer's process root and shared handlers. They are the
@@ -103,7 +105,7 @@ export const serveChat = (
           let refused = false;
           const run = async () => {
             const reply = await daemon!.command(operation, input).catch((error: unknown) => {
-              refused = ApplicationError.is(error) && error.code !== 'Unavailable';
+              refused = ApplicationError.is(error) && refusalCodes.has(error.code);
               throw error;
             });
             const value = decodeDaemonOutput(operation, reply);
@@ -132,7 +134,7 @@ export const serveChat = (
             daemonRequests.delete(key);
           }
           // A refused request may be sent again. A failure that may have applied part of it
-          // (`Unavailable`, an unknown error, or a bad reply) is kept, so a repeat never reruns it.
+          // (any other code, an unknown error, or a bad reply) is kept, so a repeat never reruns it.
           outcome.catch(() => {
             if (refused && daemonRequests.get(key)?.outcome === outcome) daemonRequests.delete(key);
           });

@@ -2150,6 +2150,14 @@ test('a refused daemon mutation may be sent again; one that may have applied is 
   f.afterDispatch = undefined;
   assert.equal((await approve('applied')).body.error.code, 'Unavailable');
   assert.deepEqual(f.dispatched.slice(before), ['approveFolder', 'approveFolder', 'approveFolder']);
+  // So is any code that is not a refusal, such as a partial write.
+  f.afterDispatch = async () => {
+    throw new ApplicationError({ code: 'Persistence', message: 'Partly written.' });
+  };
+  assert.equal((await approve('partial')).body.error.code, 'Persistence');
+  f.afterDispatch = undefined;
+  assert.equal((await approve('partial')).body.error.code, 'Persistence');
+  assert.equal(f.dispatched.length - before, 4);
 });
 
 test('daemon refusals reach the client with fixed public messages, never host text', async (t) => {
