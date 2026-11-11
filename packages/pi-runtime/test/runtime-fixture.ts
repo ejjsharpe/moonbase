@@ -8,7 +8,6 @@ import { makeChatClient } from '@moonbase/application/runtime/clients';
 import { type Registry } from '@earendil-works/pi-durable';
 import { LocalPiRuntimeLive } from '../src/index.ts';
 import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
-import type { SocketClock } from '../src/socket-protocol.ts';
 
 export const session = {
   host: { hostId: 'test-host', storeId: 'test-store' },
@@ -24,27 +23,6 @@ export const isRunning = (pid: number) => {
     throw error;
   }
 };
-/** Time that moves only when a test advances it. */
-export function manualClock() {
-  let now = 0,
-    next = 0;
-  const timers = new Map<number, { at: number; run: () => void }>();
-  return {
-    now: () => now,
-    setTimeout: (run: () => void, ms: number) => {
-      timers.set(++next, { at: now + ms, run });
-      return next;
-    },
-    clearTimeout: (handle: unknown) => void timers.delete(handle as number),
-    /** Whether a timer is due `ms` from now. */
-    hasTimer: (ms: number) => [...timers.values()].some((timer) => timer.at === now + ms),
-    advance(ms: number) {
-      now += ms;
-      for (const [handle, timer] of [...timers].sort(([, a], [, b]) => a.at - b.at))
-        if (timer.at <= now && timers.delete(handle)) timer.run();
-    },
-  } satisfies SocketClock & { hasTimer(ms: number): boolean; advance(ms: number): void };
-}
 export const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 export async function until<T>(get: () => Promise<T>, ready: (value: T) => boolean): Promise<T> {
   for (let i = 0; i < 300; i++) {

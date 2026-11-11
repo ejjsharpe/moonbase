@@ -10,12 +10,12 @@ import {
   makeConnectionClient,
   makeProviderSetupClient,
 } from '@moonbase/application/runtime/clients';
-import { LoopbackConnectionLive } from '@moonbase/pi-runtime/loopback';
+import { LoopbackConnectionLive } from '@moonbase/daemon-protocol/loopback';
 import {
   RemoteChatLive,
   RemoteLocalHostLive,
   RemoteProviderSetupLive,
-} from '@moonbase/pi-runtime/remote';
+} from '@moonbase/daemon-protocol/remote';
 import { findDaemonCommand } from '../src/main/daemon-command.ts';
 import {
   bounded,

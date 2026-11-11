@@ -2,7 +2,7 @@ import { constants } from 'node:fs';
 import { lstat, open, readdir, realpath, rename, stat } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { ApplicationError } from '@moonbase/contracts/errors';
-import { daemonErrorReasons, type DaemonErrorReason } from '@moonbase/contracts/daemon';
+import { daemonErrorReasons, type FolderApprovals } from '@moonbase/contracts/daemon';
 import { maximumHostFolders } from '@moonbase/contracts/daemon-schema';
 
 type Approval = { path: string; dev: number; ino: number; at: string; recent: boolean };
@@ -12,22 +12,6 @@ const maxRecentApprovals = 50;
 const maxWorktreeApprovals = 200;
 const maxApprovals = maxRecentApprovals + maxWorktreeApprovals;
 const maxRecent = 8;
-
-/** Which working folders a daemon's chats may use, and how a client chooses one. */
-export type FolderApprovals = {
-  /** Whether `path` is exactly a folder chats may use, still the directory it was. */
-  has(path: string): Promise<boolean>;
-  /** Approves a folder a client chose, returning its real path; refuses one chats may not use. */
-  approve(path: string, options?: { recent?: boolean }): Promise<string>;
-  /** Marks an approved folder as just used. */
-  touch(path: string): Promise<void>;
-  /** Recently used approved folders, newest first. */
-  listRecent(): Promise<string[]>;
-  /** The folders a client with no native picker chooses from; absent where it has one. */
-  listFolders?(): Promise<string[]>;
-  /** Why a folder chats may not use is refused. */
-  refusal: DaemonErrorReason;
-};
 
 /**
  * Working folders the native picker approved for local chat, kept in a private file of the chat
@@ -219,20 +203,6 @@ async function findRealPath(path: string) {
   return realpath(path).catch(async () =>
     join(await realpath(dirname(path)).catch(() => dirname(path)), basename(path)),
   );
-}
-
-/**
- * Refuses any folder but one the runtime made directly under `chatFolders` for a chat without a
- * project, named by its real path.
- */
-export async function checkChatFolder(chatFolders: string, path: string) {
-  const [parent, folder] = await Promise.all([
-    realpath(chatFolders).catch(() => ''),
-    realpath(path).catch(() => ''),
-  ]);
-  const info = folder ? await stat(folder).catch(() => null) : null;
-  if (!parent || !folder || folder !== path || dirname(folder) !== parent || !info?.isDirectory())
-    throw new ApplicationError(daemonErrorReasons['not-chat-folder']);
 }
 
 async function readApprovals(file: string) {

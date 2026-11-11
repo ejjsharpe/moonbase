@@ -86,11 +86,12 @@ export function readRepository(root) {
 }
 
 export const processRoots = new Set([
-  'packages/pi-runtime/examples/remote.ts',
+  'packages/daemon-protocol/examples/remote.ts',
   'packages/workspace/examples/local.ts',
   'packages/ssh/examples/connect.ts',
 ]);
-const infrastructure = new Set(['workspace', 'pi-runtime', 'ssh']);
+// The daemon protocol is infrastructure beside the chat engine; neither imports the other.
+const infrastructure = new Set(['workspace', 'pi-runtime', 'daemon-protocol', 'ssh']);
 const portable = new Set(['application', 'contracts', 'effect']);
 // Browser-safe, dependency-free externals portable packages may import.
 const portableExternal = /^(?:effect|lru-cache)(?:\/|$)/;
@@ -232,7 +233,9 @@ export function checkBoundaries({ files, packages }) {
       seen.add(path);
       for (const edge of graph.get(path) ?? []) {
         if (
-          ['application', 'pi-runtime', 'workspace', 'ssh'].includes(owner(edge.target)) &&
+          ['application', 'pi-runtime', 'daemon-protocol', 'workspace', 'ssh'].includes(
+            owner(edge.target),
+          ) &&
           edge.target !== healthLeaf
         )
           errors.push(

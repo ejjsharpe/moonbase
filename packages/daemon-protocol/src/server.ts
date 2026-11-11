@@ -1,6 +1,7 @@
 import type { AddressInfo } from 'node:net';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { Cause, Effect, Exit, type ManagedRuntime } from 'effect';
+import * as Schema from 'effect/Schema';
 import type { ChatClient } from '@moonbase/contracts/chat';
 import type {
   DaemonClient,
@@ -27,9 +28,9 @@ import {
 } from '@moonbase/contracts/host';
 import { releaseResource } from '@moonbase/effect';
 import { ApplicationError } from '@moonbase/contracts/workspace';
+import { ChatHostTargetSchema } from '@moonbase/contracts/chat-schema';
 import * as P from './protocol.ts';
 import * as V from './validation.ts';
-import * as S from './private-schema.ts';
 import { createSocketServer, type SocketSources } from './socket-server.ts';
 import { systemSocketClock, type SocketClock } from './socket-protocol.ts';
 
@@ -37,6 +38,23 @@ export type { SocketSources } from './socket-server.ts';
 export type { SocketClock } from './socket-protocol.ts';
 
 export type ChatServerConfiguration = { host: ChatHostTarget; token: string; port: number };
+const decodeServerConfiguration = Schema.decodeUnknownSync(
+  Schema.Struct({
+    host: ChatHostTargetSchema,
+    token: Schema.String.check(Schema.makeFilter((value) => /^[\x21-\x7e]{16,4096}$/.test(value))),
+    port: Schema.Number.check(
+      Schema.makeFilter((value) => Number.isSafeInteger(value) && value >= 0 && value <= 65535),
+    ),
+  }),
+  { onExcessProperty: 'error', reportInput: false },
+);
+function readServerConfiguration(value: unknown) {
+  try {
+    return decodeServerConfiguration(value);
+  } catch {
+    return V.fail('InvalidInput', 'Invalid private chat configuration or cursor.');
+  }
+}
 /** What the WebSocket pushes beyond chats and their list, and its clock (for tests). */
 export type ChatSocketConfiguration = { sources?: SocketSources; clock?: SocketClock };
 /** A local-mode daemon's features beyond chat: local-mode chat and control, providers, folders. */
@@ -73,7 +91,7 @@ export const serveChat = (
   Effect.acquireRelease(
     Effect.tryPromise({
       try: async () => {
-        const settings = S.serverConfiguration(config),
+        const settings = readServerConfiguration(config),
           expected = settings.host,
           token = settings.token;
         const health = validateHostHealth(

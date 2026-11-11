@@ -13,8 +13,8 @@ import {
   LocalHostService,
   type ConnectionServiceShape,
 } from '@moonbase/contracts/services';
-import { LoopbackConnectionLive, loopbackProfileId } from '@moonbase/pi-runtime/loopback';
-import { RemoteLocalHostLive } from '@moonbase/pi-runtime/remote';
+import { LoopbackConnectionLive, loopbackProfileId } from '@moonbase/daemon-protocol/loopback';
+import { RemoteLocalHostLive } from '@moonbase/daemon-protocol/remote';
 import type { DaemonCommand } from './daemon-command.ts';
 
 /** A local daemon's data directory inside a Moonbase user-data directory (one per profile). */

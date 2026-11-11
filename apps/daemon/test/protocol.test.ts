@@ -13,7 +13,7 @@ import {
   LocalHostService,
   ProviderSetupService,
 } from '@moonbase/contracts/services';
-import { LoopbackConnectionLive } from '@moonbase/pi-runtime/loopback';
+import { LoopbackConnectionLive } from '@moonbase/daemon-protocol/loopback';
 import {
   bounded,
   connectClients,

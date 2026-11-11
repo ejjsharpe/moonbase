@@ -32,7 +32,7 @@ import {
   type SocketKeys,
 } from './socket-protocol.ts';
 import { projectSocketDelta } from './socket-deltas.ts';
-import { followChanges } from './changes.ts';
+import { followChanges } from '@moonbase/effect/changes';
 import {
   acceptWebSocketKey,
   encodeWebSocketClose,

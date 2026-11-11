@@ -8,6 +8,7 @@
     "./connection": "./src/connection.ts",
     "./host": "./src/host.ts",
     "./chat-schema": "./src/chat-schema.ts",
+    "./chat-validation": "./src/chat-validation.ts",
     "./workspace-schema": "./src/workspace-schema.ts",
     "./connection-schema": "./src/connection-schema.ts",
     "./host-schema": "./src/host-schema.ts",

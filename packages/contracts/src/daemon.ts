@@ -24,6 +24,22 @@ export interface DaemonClient {
   ): Promise<DaemonOutput<K>>;
 }
 
+/** Which working folders a daemon's chats may use, and how a client chooses one. */
+export type FolderApprovals = {
+  /** Whether `path` is exactly a folder chats may use, still the directory it was. */
+  has(path: string): Promise<boolean>;
+  /** Approves a folder a client chose, returning its real path; refuses one chats may not use. */
+  approve(path: string, options?: { recent?: boolean }): Promise<string>;
+  /** Marks an approved folder as just used. */
+  touch(path: string): Promise<void>;
+  /** Recently used approved folders, newest first. */
+  listRecent(): Promise<string[]>;
+  /** The folders a client with no native picker chooses from; absent where it has one. */
+  listFolders?(): Promise<string[]>;
+  /** Why a folder chats may not use is refused. */
+  refusal: DaemonErrorReason;
+};
+
 /**
  * Why a daemon operation was refused, when the user needs to know: each reason has one fixed
  * code and public message. A host names a reason in its signed error; a client shows the message

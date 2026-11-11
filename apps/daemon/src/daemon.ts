@@ -12,11 +12,7 @@ import {
   createKeyEncryption,
   type CredentialKeySource,
 } from '@moonbase/pi-runtime/credentials';
-import {
-  createFolderApprovals,
-  createRootFolders,
-  type FolderApprovals,
-} from '@moonbase/pi-runtime/folders';
+import { createFolderApprovals, createRootFolders } from '@moonbase/daemon-protocol/folders';
 import type { DaemonSettings } from '@moonbase/pi-runtime/host-configuration';
 import { createLocalModels } from '@moonbase/pi-runtime/local-models';
 import { ProviderSetupChanges, ProviderSetupLive } from '@moonbase/pi-runtime/providers';
@@ -26,11 +22,11 @@ import {
   makeDaemonClient,
   serveChat,
   type SocketSources,
-} from '@moonbase/pi-runtime/server';
+} from '@moonbase/daemon-protocol/server';
 import type { ClaudeCodeSubscription } from '@moonbase/pi-runtime/claude-code';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import type { ChatClient, ChatCreationSettings, ChatSession } from '@moonbase/contracts/chat';
-import type { DaemonClient } from '@moonbase/contracts/daemon';
+import type { DaemonClient, FolderApprovals } from '@moonbase/contracts/daemon';
 import type { ChatHostCapability } from '@moonbase/contracts/host';
 import { chatHostVersion, chatProtocolVersion } from '@moonbase/contracts/host';
 import { ApplicationError } from '@moonbase/contracts/errors';

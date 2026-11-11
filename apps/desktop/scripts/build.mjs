@@ -113,11 +113,11 @@ for (const inputs of [preloadInputs, rendererInputs]) {
     'Local runtime reached a browser boundary',
   );
 }
-// Local chat runs in the daemon: main holds only its loopback client, never the chat runtime,
-// provider setup, credentials or Claude Code.
+// Local chat runs in the daemon: main holds only the daemon protocol's client side, never the chat
+// runtime, provider setup, credentials, Claude Code or the protocol's server side.
 assert.deepEqual(
   mainInputs.filter((path) =>
-    /@earendil-works|pi-runtime\/src\/(?!remote|loopback|protocol|validation|socket-client|socket-protocol)[^/]+\.ts$/.test(
+    /@earendil-works|pi-runtime\/src\/|daemon-protocol\/src\/(?!remote|loopback|protocol|validation|socket-client|socket-protocol)[^/]+\.ts$/.test(
       path,
     ),
   ),
@@ -129,8 +129,8 @@ assert(
   'Electron main uses safeStorage',
 );
 for (const entry of [
-  'pi-runtime/src/remote.ts',
-  'pi-runtime/src/loopback.ts',
+  'daemon-protocol/src/remote.ts',
+  'daemon-protocol/src/loopback.ts',
   'src/main/local-daemon.ts',
   'src/main/daemon-command.ts',
   'src/chat/daemon.ts',
@@ -149,7 +149,7 @@ for (const entry of [
   'apps/daemon/src/main.ts',
   'pi-runtime/src/index.ts',
   'pi-runtime/src/claude-code.ts',
-  'pi-runtime/src/server.ts',
+  'daemon-protocol/src/server.ts',
 ])
   assert(
     daemonInputs.some((path) => path.endsWith(entry)),

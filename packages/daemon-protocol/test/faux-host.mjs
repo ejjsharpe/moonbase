@@ -11,7 +11,7 @@ import { Type } from 'typebox';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import { chatHostCapabilities } from '@moonbase/contracts/host';
 import { ApplicationError } from '@moonbase/contracts/errors';
-import { LocalPiRuntimeLive } from '../src/index.ts';
+import { LocalPiRuntimeLive } from '@moonbase/pi-runtime';
 import { serveChat } from '../src/server.ts';
 const config = JSON.parse(await readFile(process.argv[2], 'utf8'));
 const models = createModels(),

@@ -13,7 +13,7 @@ import {
   type SocketInput,
   type SocketOperation,
   type SocketOutput,
-} from '@moonbase/pi-runtime/socket';
+} from '@moonbase/daemon-protocol/socket';
 import { bounded, readJson, startDaemon, temporaryRoot, until } from './fixture.ts';
 import { fauxModelId, fauxProviderId, fauxSignInCode } from './faux.ts';
 

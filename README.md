@@ -9,7 +9,8 @@ A macOS workbench for editing local projects and chatting with Pi Durable agents
 | [Application](packages/application/README.md) | Headless editor/chat controllers, composition and lifecycle |
 | [Workbench](packages/workbench/README.md) | Project file sidebar, buffers and React/Monaco editor |
 | [Workspace](packages/workspace/README.md) | Local files, Git, recovery storage and file watching |
-| [Pi runtime](packages/pi-runtime/README.md) | Pi chat execution, provider setup, host server and remote adapter |
+| [Pi runtime](packages/pi-runtime/README.md) | Pi chat execution, provider setup and credentials |
+| [Daemon protocol](packages/daemon-protocol/README.md) | The daemon's signed health, authenticated WebSocket, its server, the remote client services and host folder authority |
 | [SSH](packages/ssh/README.md) | Authenticated SSH port forwarding to a chat host |
 | [UI](packages/ui/README.md) | Shared StyleX tokens, recipes and icons |
 | [Config](packages/config/README.md) | Lint, formatting and TypeScript defaults |

@@ -14,7 +14,7 @@ import {
   RemoteChatLive,
   RemoteLocalHostLive,
   RemoteProviderSetupLive,
-} from '@moonbase/pi-runtime/remote';
+} from '@moonbase/daemon-protocol/remote';
 import { LocalHostService } from '@moonbase/contracts/services';
 import { SshLive } from '@moonbase/ssh';
 import type { ChatTarget } from '@moonbase/contracts/chat';

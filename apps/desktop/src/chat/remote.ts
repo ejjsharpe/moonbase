@@ -3,7 +3,7 @@ import {
   RemoteChatLive,
   RemoteLocalHostLive,
   RemoteProviderSetupLive,
-} from '@moonbase/pi-runtime/remote';
+} from '@moonbase/daemon-protocol/remote';
 import { SshLive } from '@moonbase/ssh';
 import {
   ChatService,

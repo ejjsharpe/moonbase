@@ -4,16 +4,11 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./remote": "./src/remote.ts",
-    "./server": "./src/server.ts",
     "./providers": "./src/providers.ts",
     "./credentials": "./src/credentials.ts",
     "./local-models": "./src/local-models.ts",
     "./claude-code": "./src/claude-code.ts",
-    "./folders": "./src/folders.ts",
-    "./host-configuration": "./src/host-configuration.ts",
-    "./loopback": "./src/loopback.ts",
-    "./socket": "./src/socket-client.ts"
+    "./host-configuration": "./src/host-configuration.ts"
   },
   "scripts": {
     "build": "tsc --noEmit -p tsconfig.json",
@@ -29,7 +24,6 @@
     "@earendil-works/chord": "1.4.0",
     "@moonbase/contracts": "workspace:*",
     "@moonbase/effect": "workspace:*",
-    "@moonbase/ssh": "workspace:*",
     "lru-cache": "11.5.3"
   },
   "devDependencies": {

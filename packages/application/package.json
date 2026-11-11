@@ -37,6 +37,7 @@
             "input": "default",
             "projects": [
               "@moonbase/pi-runtime",
+              "@moonbase/daemon-protocol",
               "@moonbase/ssh"
             ]
           }

@@ -149,6 +149,10 @@ test('the configuration subpath has no SSH process or application service graph'
   assert(inputs.some((path) => path.endsWith('packages/ssh/src/configuration.ts')));
   assert(!inputs.some((path) => /packages\/ssh\/src\/(?:index|process)\.ts$/.test(path)));
   assert(!inputs.some((path) => /packages\/application\//.test(path)));
-  assert(!inputs.some((path) => /packages\/(?:pi-runtime|workspace)|@earendil-works/.test(path)));
+  assert(
+    !inputs.some((path) =>
+      /packages\/(?:pi-runtime|daemon-protocol|workspace)|@earendil-works/.test(path),
+    ),
+  );
   assert(!result.outputFiles[0].text.includes('node:child_process'));
 });

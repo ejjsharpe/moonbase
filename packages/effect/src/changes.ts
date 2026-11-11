@@ -1,6 +1,6 @@
 import { Cause, Effect, Queue, Stream } from 'effect';
 import type { ApplicationError } from '@moonbase/contracts/workspace';
-import { normalizeApplicationError } from '@moonbase/effect';
+import { normalizeApplicationError } from './index.ts';
 
 /**
  * Passes `read()`'s value to `receive` at once, then again after each change `subscribe`
