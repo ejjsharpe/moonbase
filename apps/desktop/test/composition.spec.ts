@@ -1256,8 +1256,9 @@ if (!packaged) {
         current = app;
         await screen(app, p, 'startup-' + failure);
         if (failure === 'chat-context') {
+          // Main's reason reaches the renderer through the context bridge.
           await expect(p.getByLabel('Chat configuration')).toContainText(
-            'Application effect failed',
+            'Controlled chat context initialization failure',
           );
           await local(p, app, f);
           await expect(p.getByRole('alert', { name: 'Chat initialization failed' })).toBeVisible();
@@ -1265,7 +1266,7 @@ if (!packaged) {
           await expect.poll(() => readFile(join(f.cwd, 'a.ts'), 'utf8')).toBe('local dirty draft');
           await tab(p, 'Agents').click();
           await expect(p.getByLabel('Chat configuration')).toContainText(
-            'Application effect failed',
+            'Controlled chat context initialization failure',
           );
           expect(await reloadOutcome(app)).toBe('veto');
           await app.evaluate(({ app }) => app.quit());
