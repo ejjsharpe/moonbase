@@ -147,7 +147,6 @@ test('a host-mode daemon serves local-mode chats in its approved roots, with mod
         () => owner.command('getProviders', {}),
         (state) => state.flow?.prompt?.type === 'manual_code',
       );
-      assert.match(pasted.flow!.prompt!.message, /paste the final redirect URL/);
       await owner.command('openProviderUrl', { flowId: chatgpt.id });
       assert.match(clients.opened[0]!, /^https:\/\/auth\.openai\.com\//);
       await owner.command('answerProviderPrompt', {

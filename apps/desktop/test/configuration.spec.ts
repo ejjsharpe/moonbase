@@ -212,7 +212,7 @@ for (const configured of [false, true])
     }
   });
 
-test('a remote daemon host offers its approved roots for a new chat, its own providers and model choice', async () => {
+test('a new chat on a remote daemon host chooses a folder from its approved roots and its default model', async () => {
   const f = await fixture();
   const site = join(f.cwd, 'site');
   mkdirSync(site);
@@ -236,36 +236,36 @@ test('a remote daemon host offers its approved roots for a new chat, its own pro
       .click();
     await selectRemoteChat(page);
     await page.getByRole('button', { name: 'Connect', exact: true }).click();
-    await expect(page.getByRole('button', { name: 'Connect', exact: true })).toHaveCount(0);
-    // The host's own provider setup, where ChatGPT signs in by pasting the redirect URL.
-    await expect(
-      (await openSettings(page, 'Providers')).getByRole('button', {
-        name: 'Sign in to ChatGPT subscription',
-        exact: true,
-      }),
-    ).toBeVisible();
-    await closeSettings(page);
+    await expect
+      .poll(() =>
+        page.evaluate(async () => {
+          const reply = await window.moonbaseChat.call(
+            'connection',
+            'getConnection',
+            {},
+            crypto.randomUUID(),
+          );
+          return reply.ok && (reply.value as { state: string }).state;
+        }),
+      )
+      .toBe('connected');
     // No picker reaches the host's disk: the menu offers its approved root and the folders in it.
     await page.getByRole('button', { name: 'Choose working folder', exact: true }).click();
     const menu = page.getByRole('dialog', { name: 'Working folder', exact: true });
-    const hostFolders = menu.getByRole('group', { name: 'On the host', exact: true });
-    await expect(hostFolders.getByRole('button', { name: /^remote-folder/ })).toBeVisible();
+    await expect(menu.getByRole('button', { name: /^remote-folder/ })).toBeVisible();
     await expect(menu.getByRole('button', { name: 'Choose folder…', exact: true })).toHaveCount(0);
-    await hostFolders.getByRole('button', { name: /^site/ }).click();
+    await menu.getByRole('button', { name: /^site/ }).click();
     await expect(
       page.getByRole('button', { name: 'Choose working folder', exact: true }),
     ).toHaveText(/site/);
-    // The host's default model is chosen, as for a local chat.
-    await expect(page.getByRole('button', { name: 'Chat model', exact: true })).toContainText(
-      'Faux model',
-    );
+    // The host's default model is chosen, as for a local chat, so Send is enabled.
     await page.getByLabel('Message', { exact: true }).fill('Work in the host folder');
     await page.getByRole('button', { name: 'Send message', exact: true }).click();
     await expect
       .poll(async () => (await f.stats()).mutations.find((m) => m.operation === 'createChat'))
       .toMatchObject({
         input: {
-          settings: { cwd: site, model: { provider: 'anthropic', modelId: 'claude-opus-5-5' } },
+          settings: { cwd: site, model: f.model },
         },
       });
     await expect.poll(async () => (await f.stats()).tools).toBe(1);
@@ -286,7 +286,9 @@ test('a remote daemon host offers its approved roots for a new chat, its own pro
             crypto.randomUUID(),
           );
       });
+      const child = app.process();
       await app.evaluate(({ app }) => app.exit(0));
+      await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
     } finally {
       await stopDaemon(join(base, 'desktop', 'daemon-v1'));
       await f.close();

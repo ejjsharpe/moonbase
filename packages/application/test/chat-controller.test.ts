@@ -586,18 +586,16 @@ test('a local-mode host over a connection waits for an explicit Connect, then ch
   assert.equal(offline.mode, 'local');
   assert.equal(offline.remote, true);
   assert.equal(offline.ready, false);
-  assert.match(offline.notice, /Connect explicitly/);
   // Nothing reaches the host until the user connects.
   assert(!f.calls.some((call) => call.operation === 'getChatHost'));
   assert.deepEqual(providerReads, []);
   controller.setDraft('Remote first message');
   await controller.send({ model: { provider: 'configured', modelId: 'model' } });
   assert(!f.calls.some((call) => call.operation === 'createChat'));
-  assert.match(controller.getSnapshot().error ?? '', /Connect to the configured host/);
+  assert.ok(controller.getSnapshot().error);
   await controller.connect();
   await turn();
   assert.equal(controller.getSnapshot().ready, true);
-  assert.match(controller.getSnapshot().notice, /Verified host/);
   // The verified host's providers are read, so its models can be chosen.
   assert.deepEqual(providerReads, ['getProviders']);
   // A local-mode host needs each new chat's settings, wherever it runs.

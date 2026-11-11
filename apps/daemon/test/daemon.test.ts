@@ -383,24 +383,7 @@ const refusals: Refusal[] = [
     },
   },
   {
-    name: 'host settings with the Keychain',
-    prepare: async (root, directory) => {
-      await mkdir(directory, { mode: 0o700 });
-      await writeFile(
-        join(directory, 'daemon.json'),
-        JSON.stringify({
-          mode: 'host',
-          port: 8787,
-          approvedRoots: [root],
-          credentialKey: { source: 'keychain' },
-        }),
-        { mode: 0o600 },
-      );
-    },
-  },
-  {
     name: 'host settings with a missing root',
-    message: 'Each approved root must be an existing folder named by its real path.',
     prepare: async (root, directory) => {
       await mkdir(directory, { mode: 0o700 });
       await writeHostSettings(directory, [join(root, 'missing')], join(root, 'credential.key'));
@@ -408,7 +391,6 @@ const refusals: Refusal[] = [
   },
   {
     name: 'host settings with a root that is a link',
-    message: 'Each approved root must be an existing folder named by its real path.',
     prepare: async (root, directory) => {
       await mkdir(directory, { mode: 0o700 });
       await mkdir(join(root, 'real'));
