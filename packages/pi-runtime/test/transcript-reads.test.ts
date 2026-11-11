@@ -75,13 +75,16 @@ function makeHeldTools(t: TestContext) {
         defineTool({
           name: 'hold',
           description: 'Publish controlled progress until released',
-          parameters: Type.Object({}),
-          execute: async (_, api, ctx) => {
+          // Parallel calls may start in any order, so a call can name its place in `controls`.
+          parameters: Type.Object({ index: Type.Optional(Type.Number()) }),
+          execute: async ({ index }, api, ctx) => {
             api.output('first ');
-            controls.push({
-              grow: (text) => api.output(text),
-              detail: (value) => api.details(value, ctx),
-            });
+            const control = {
+              grow: (text: string) => api.output(text),
+              detail: (value: { added: number }) => api.details(value, ctx),
+            };
+            if (index === undefined) controls.push(control);
+            else controls[index] = control;
             await Promise.race([
               gate,
               new Promise<void>((resolve) => {
@@ -109,14 +112,14 @@ test('live manifest cursors survive growing running output and appended parts, n
     target = await f.create();
   f.faux.setResponses([
     fauxAssistantMessage(
-      [0, 1, 2].map((i) => fauxToolCall('hold', {}, { id: 'hold-' + i })),
+      [0, 1, 2].map((i) => fauxToolCall('hold', { index: i }, { id: 'hold-' + i })),
       { stopReason: 'toolUse' },
     ),
     fauxAssistantMessage('Released'),
   ]);
   await f.client.command('sendChat', { target, requestId: 'send', text: 'Hold three' });
   await until(
-    async () => held.controls.length,
+    async () => held.controls.filter(Boolean).length,
     (count) => count === 3,
   );
   const view = await until(

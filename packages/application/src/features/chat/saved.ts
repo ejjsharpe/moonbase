@@ -83,11 +83,7 @@ const decode = Schema.decodeUnknownSync(SavedSchema, {
   onExcessProperty: 'error',
   reportInput: false,
 });
-export function decodeSaved(
-  value: unknown,
-  context: ChatSession,
-  mode?: 'local' | 'remote',
-): Saved {
+export function decodeSaved(value: unknown, context: ChatSession): Saved {
   try {
     const saved = decode(value);
     if (
@@ -111,7 +107,8 @@ export function decodeSaved(
       let session: ChatSession;
       if (item.operation === 'createChat') {
         session = item.input.session;
-        if (mode && (mode === 'local') !== (item.input.settings !== undefined)) throw Error();
+        // Every chat names its folder and model.
+        if (!item.input.settings) throw Error();
       } else if (item.operation === 'sendChat') session = item.input.target;
       else session = item.input.stop.target;
       if (!sameSession(session, context) || requests.has(item.input.requestId)) throw Error();

@@ -289,7 +289,7 @@ test('one connection serves requests and chat, chat-list and provider subscripti
       ],
     }),
   );
-  const f = await runtimeFixture(t, registry, { tokensPerSecond: 2000 }, true);
+  const f = await runtimeFixture(t, registry, { tokensPerSecond: 2000 });
   const sessionOf = { host: f.config.host, actorId: f.config.actorId };
   const providerSetup = emitter();
   let state: ProviderState = providers;

@@ -26,7 +26,6 @@ async function setup(t: { after: (f: () => Promise<void>) => void }, hold = fals
     storage = new Storage(),
     controller = await models.make({
       chat: root.chat,
-      mode: 'local',
       connection: root.connection,
       context: f.session,
       storage,
@@ -92,7 +91,6 @@ test('lost actual HTTP Send response + newer draft + controller reload/client cl
   const second = f.root(),
     next = await f.models.make({
       chat: second.chat,
-      mode: 'local',
       connection: second.connection,
       context: f.session,
       storage: f.storage,
@@ -118,7 +116,6 @@ test('lost actual HTTP Send response + newer draft + controller reload/client cl
   const third = f.root(),
     last = await f.models.make({
       chat: third.chat,
-      mode: 'local',
       connection: third.connection,
       context: f.session,
       storage: f.storage,

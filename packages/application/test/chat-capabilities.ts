@@ -53,7 +53,7 @@ export function chatCapabilities() {
       calls.push(operation);
       switch (operation) {
         case 'getChatHost':
-          return { ...context, cwd: conversation.cwd, model: conversation.model } as never;
+          return { ...context, mode: 'local' } as never;
         case 'listChats':
           return { conversations: [conversation], nextCursor: null } as never;
         case 'getChat':

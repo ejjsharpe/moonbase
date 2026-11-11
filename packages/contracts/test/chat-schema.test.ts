@@ -57,7 +57,7 @@ const inputs = {
   findChatFiles: { target, query: 'src' },
 } satisfies { [K in ChatCommand]: ChatInput<K> };
 const outputs = {
-  getChatHost: { ...session, cwd: conversation.cwd, model: conversation.model },
+  getChatHost: { ...session, mode: 'local' },
   listChats: { conversations: [conversation], nextCursor: null },
   createChat: { requestId: 'create', conversation },
   getChat: snapshot,
@@ -295,7 +295,7 @@ test('schema failures use safe application errors without rejected values', () =
     ['InvalidInput', () => decodeChatInput('sendChat', { ...inputs.sendChat, text: { secret } })],
     [
       'Incompatible',
-      () => decodeChatOutput('getChatHost', { ...outputs.getChatHost, cwd: { secret } }),
+      () => decodeChatOutput('getChatHost', { ...outputs.getChatHost, mode: { secret } }),
     ],
   ] as const)
     assert.throws(decode, (error: unknown) => {

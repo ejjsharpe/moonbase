@@ -89,15 +89,11 @@ export const ChatCreationSettingsSchema = struct({
   cwd: optional(text(4096)),
   ...ChatModelPreferenceSchema.fields,
 });
-const remoteHostConfiguration = struct({
+/** Every host is a local-mode daemon: each chat chooses its own folder and model. */
+export const ChatHostConfigurationSchema = struct({
   ...ChatSessionSchema.fields,
-  cwd: text(4096),
-  model: text(512),
+  mode: Schema.Literal('local'),
 });
-export const ChatHostConfigurationSchema = Schema.Union([
-  remoteHostConfiguration,
-  struct({ ...ChatSessionSchema.fields, mode: Schema.Literal('local') }),
-]);
 const timestamp = text(64).check(Schema.makeFilter((value) => Number.isFinite(Date.parse(value))));
 /** A listed chat's latest run: whether it is running or how it last ended, and when. */
 export const ChatActivitySchema = struct({

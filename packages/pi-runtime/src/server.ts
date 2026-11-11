@@ -99,8 +99,6 @@ export const serveChat = (
             'InvalidInput',
             'Keep the private host key separate from public chat identities and settings.',
           );
-        if (daemon && !('mode' in configuration))
-          V.fail('InvalidInput', 'Serve daemon operations only for a local-mode chat host.');
         const daemonRequests = new Map<
           string,
           { operation: DaemonCommand; input: unknown; outcome: Promise<unknown> }

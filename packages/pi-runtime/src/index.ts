@@ -28,9 +28,9 @@ import { readOnChange } from './changes.ts';
 import { checkChatFolder, type FolderApprovals } from './folders.ts';
 import * as V from './validation.ts';
 import { openHost } from './resources.ts';
-import type { PiRuntimeConfiguration, LocalPiRuntimeConfiguration } from './runtime-types.ts';
+import type { LocalPiRuntimeConfiguration } from './runtime-types.ts';
 
-export type { PiRuntimeConfiguration, LocalPiRuntimeConfiguration } from './runtime-types.ts';
+export type { LocalPiRuntimeConfiguration } from './runtime-types.ts';
 
 /** Privileged shutdown control; it grants no renderer capability. */
 export class LocalPiControl extends Context.Service<
@@ -119,17 +119,6 @@ function watchChatListState(
     },
   );
 }
-export const PiRuntimeLive = (
-  config: PiRuntimeConfiguration,
-): Layer.Layer<ChatService, ApplicationError> =>
-  Layer.effect(
-    ChatService,
-    Effect.gen(function* () {
-      const host = yield* openHost(config);
-      return makeChatService(host);
-    }),
-  );
-
 /**
  * Claude Code runs in this process's working directory and tells the model so, but its library
  * offers no way to give it a chat's own; until it does, state the chat's to the model.

@@ -156,11 +156,7 @@ export function chatCapabilities(local = false, activity = false) {
       calls.push(operation);
       switch (operation) {
         case 'getChatHost':
-          return (
-            local
-              ? { ...context, mode: 'local' }
-              : { ...context, cwd: conversation.cwd, model: conversation.model }
-          ) as never;
+          return { ...context, mode: 'local' } as never;
         case 'listChats':
           // `?activity` adds chats after the first listing, which marks only that one as seen.
           return {
@@ -179,21 +175,20 @@ export function chatCapabilities(local = false, activity = false) {
             : structuredClone(snapshot);
           return { ...opened, conversation: withSettled(opened.conversation) } as never;
         }
-        case 'createChat':
-          if (local) {
-            const creation = input as {
-              title: string;
-              settings: ChatCreationSettings;
-            };
-            conversation.title = creation.title;
-            // Like the host, a chat without a project gets a new folder of its own.
-            conversation.cwd = creation.settings.cwd ?? `/demo/chats/chat-${++ownFolders}`;
-            if (creation.settings.cwd) delete conversation.ownFolder;
-            else conversation.ownFolder = true;
-            conversation.model = creation.settings.model.modelId;
-            conversation.reasoningEffort = creation.settings.reasoningEffort;
-          }
+        case 'createChat': {
+          const creation = input as {
+            title: string;
+            settings: ChatCreationSettings;
+          };
+          conversation.title = creation.title;
+          // Like the host, a chat without a project gets a new folder of its own.
+          conversation.cwd = creation.settings.cwd ?? `/demo/chats/chat-${++ownFolders}`;
+          if (creation.settings.cwd) delete conversation.ownFolder;
+          else conversation.ownFolder = true;
+          conversation.model = creation.settings.model.modelId;
+          conversation.reasoningEffort = creation.settings.reasoningEffort;
           return { requestId: (input as { requestId: string }).requestId, conversation } as never;
+        }
         case 'sendChat':
           sent.push(structuredClone(input as ChatInput<'sendChat'>));
           settled.delete((input as ChatInput<'sendChat'>).target.conversationId);
@@ -293,82 +288,79 @@ export function chatCapabilities(local = false, activity = false) {
       return close();
     },
   };
+  // Every host is a daemon whose chats choose their folder and model; a remote one is connected.
   const dependencies: ChatDependencies = {
     chat,
-    ...(local
-      ? {
-          mode: 'local' as const,
-          providers: {
-            watch: () => async () => {},
-            command: async (operation: string) => {
-              if (operation !== 'getProviders') throw Error('Demo provider setup is read-only.');
-              return {
-                providers: [
+    ...(local ? {} : { connection }),
+    providers: {
+      watch: () => async () => {},
+      command: async (operation: string) => {
+        if (operation !== 'getProviders') throw Error('Demo provider setup is read-only.');
+        return {
+          providers: [
+            {
+              id: 'openai',
+              name: 'Demo provider',
+              auth: 'api_key' as const,
+              configured: true,
+              defaultModel: {
+                model: { provider: 'openai', modelId: 'demo-model' },
+                reasoningEffort: 'medium' as const,
+              },
+              models: [
+                {
+                  modelId: 'demo-model',
+                  name: 'Demo model',
+                  reasoningEfforts: ['low', 'medium', 'high'] as const,
+                  defaultReasoningEffort: 'medium' as const,
+                },
+                {
+                  modelId: 'demo-coding',
+                  name: 'Demo coding model',
+                  reasoningEfforts: ['low', 'medium', 'high', 'xhigh'] as const,
+                  defaultReasoningEffort: 'medium' as const,
+                },
+              ].map((model) => ({ ...model, reasoningEfforts: [...model.reasoningEfforts] })),
+            },
+            {
+              id: 'claude-code',
+              name: 'Claude subscription',
+              auth: 'claude_code' as const,
+              configured: false,
+              models: [],
+            },
+            // `?providers` adds a second provider that is set up and one that is not.
+            ...(new URLSearchParams(location.search).has('providers')
+              ? [
                   {
-                    id: 'openai',
-                    name: 'Demo provider',
+                    id: 'anthropic',
+                    name: 'Anthropic',
                     auth: 'api_key' as const,
                     configured: true,
-                    defaultModel: {
-                      model: { provider: 'openai', modelId: 'demo-model' },
-                      reasoningEffort: 'medium' as const,
-                    },
                     models: [
                       {
-                        modelId: 'demo-model',
-                        name: 'Demo model',
-                        reasoningEfforts: ['low', 'medium', 'high'] as const,
-                        defaultReasoningEffort: 'medium' as const,
+                        modelId: 'demo-opus',
+                        name: 'Demo Opus',
+                        reasoningEfforts: [...(['low', 'medium', 'high', 'max'] as const)],
+                        defaultReasoningEffort: 'high' as const,
                       },
-                      {
-                        modelId: 'demo-coding',
-                        name: 'Demo coding model',
-                        reasoningEfforts: ['low', 'medium', 'high', 'xhigh'] as const,
-                        defaultReasoningEffort: 'medium' as const,
-                      },
-                    ].map((model) => ({ ...model, reasoningEfforts: [...model.reasoningEfforts] })),
+                      { modelId: 'demo-haiku', name: 'Demo Haiku' },
+                    ],
                   },
                   {
-                    id: 'claude-code',
-                    name: 'Claude subscription',
-                    auth: 'claude_code' as const,
+                    id: 'google',
+                    name: 'Google Gemini',
+                    auth: 'api_key' as const,
                     configured: false,
-                    models: [],
+                    models: [{ modelId: 'demo-flash', name: 'Demo Flash' }],
                   },
-                  // `?providers` adds a second provider that is set up and one that is not.
-                  ...(new URLSearchParams(location.search).has('providers')
-                    ? [
-                        {
-                          id: 'anthropic',
-                          name: 'Anthropic',
-                          auth: 'api_key' as const,
-                          configured: true,
-                          models: [
-                            {
-                              modelId: 'demo-opus',
-                              name: 'Demo Opus',
-                              reasoningEfforts: [...(['low', 'medium', 'high', 'max'] as const)],
-                              defaultReasoningEffort: 'high' as const,
-                            },
-                            { modelId: 'demo-haiku', name: 'Demo Haiku' },
-                          ],
-                        },
-                        {
-                          id: 'google',
-                          name: 'Google Gemini',
-                          auth: 'api_key' as const,
-                          configured: false,
-                          models: [{ modelId: 'demo-flash', name: 'Demo Flash' }],
-                        },
-                      ]
-                    : []),
-                ],
-                flow: null,
-              };
-            },
-          },
-        }
-      : { connection }),
+                ]
+              : []),
+          ],
+          flow: null,
+        };
+      },
+    },
     context,
     storage: {
       read: () => storage.value,

@@ -6,7 +6,7 @@ import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import { type Registry } from '@earendil-works/pi-durable';
-import { PiRuntimeLive, LocalPiRuntimeLive } from '../src/index.ts';
+import { LocalPiRuntimeLive } from '../src/index.ts';
 import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
 import type { SocketClock } from '../src/socket-protocol.ts';
 
@@ -56,9 +56,8 @@ export async function fixture(
   t: { after: (fn: () => Promise<void>) => void },
   registry?: Registry,
   fauxOptions: Parameters<typeof fauxProvider>[0] = {},
-  local = false,
 ) {
-  const directory = await mkdtemp(join(tmpdir(), 'moonbase-pi-')),
+  const directory = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-pi-'))),
     faux = fauxProvider({ tokensPerSecond: 100000, ...fauxOptions }),
     models = createModels();
   models.setProvider(faux.provider);
@@ -70,9 +69,14 @@ export async function fixture(
     models,
     registry,
   };
-  const layer = local
-    ? LocalPiRuntimeLive({ ...session, databasePath: config.databasePath, models, registry })
-    : PiRuntimeLive(config);
+  // Each chat's own folder and model, as a client's first Send names them.
+  const settings = { cwd: directory, model: config.model };
+  const layer = LocalPiRuntimeLive({
+    ...session,
+    databasePath: config.databasePath,
+    models,
+    registry,
+  });
   let runtime = ManagedRuntime.make(layer);
   t.after(async () => {
     try {
@@ -84,6 +88,7 @@ export async function fixture(
   return {
     faux,
     config,
+    settings,
     get runtime() {
       return runtime;
     },
@@ -106,7 +111,7 @@ export async function fixture(
           session,
           requestId,
           title: 'Saved chat',
-          ...(local ? { settings: { cwd: await realpath(directory), model: config.model } } : {}),
+          settings,
         })
       ).conversation.target;
     },

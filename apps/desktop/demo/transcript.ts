@@ -93,12 +93,7 @@ export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabili
   const original = chat.dependencies.chat.command;
   chat.dependencies.chat.command = async (operation, input, options) => {
     if (operation === 'getChatHost')
-      return {
-        ...chat.dependencies.context,
-        ...(chat.dependencies.mode === 'local'
-          ? { mode: 'local' }
-          : { cwd: '/controlled', model: 'controlled' }),
-      } as never;
+      return { ...chat.dependencies.context, mode: 'local' } as never;
     if (operation === 'getChatHistory') {
       const hi = Number((input as { cursor?: string }).cursor ?? entries.length),
         lo = Math.max(0, hi - 32);

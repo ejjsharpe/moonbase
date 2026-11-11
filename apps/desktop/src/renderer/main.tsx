@@ -145,7 +145,6 @@ try {
           chat: clients.chat,
           providers: clients.providers,
           ...(target.mode === 'remote' ? { connection: clients.connection } : {}),
-          mode: 'local' as const,
           context: await window.moonbaseChat.context(target.id).catch((error: unknown) => {
             // An error crosses the context bridge as a plain Error that keeps only its message,
             // which main already made safe to show (why local chat is Unavailable, say).

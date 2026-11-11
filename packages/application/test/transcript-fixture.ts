@@ -57,11 +57,7 @@ export function transcriptFixture(count = 640, local = true) {
   >();
   let watchCloses = 0;
   function fallback(operation: string, input: unknown): unknown {
-    if (operation === 'getChatHost')
-      return {
-        ...base.dependencies.context,
-        ...(local ? { mode: 'local' } : { cwd: '/controlled', model: 'controlled' }),
-      };
+    if (operation === 'getChatHost') return { ...base.dependencies.context, mode: 'local' };
     if (operation === 'listChats')
       return { conversations: [snapshot.conversation], nextCursor: null };
     if (operation === 'getChat') return structuredClone(snapshot);
@@ -212,7 +208,6 @@ export function transcriptFixture(count = 640, local = true) {
   const dependencies = {
     ...base.dependencies,
     chat,
-    mode: local ? ('local' as const) : ('remote' as const),
     ...(local ? { connection: undefined } : {}),
   };
   return {

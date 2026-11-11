@@ -52,8 +52,6 @@ export interface DraftStorage {
   write(value: string): void;
 }
 export type ChatState = {
-  /** `local`: a local-mode host, where each chat chooses its folder and model; `remote`: fixed. */
-  mode: 'local' | 'remote';
   /** Whether the host is reached through a connection that is connected explicitly. */
   remote: boolean;
   ready: boolean;
@@ -80,8 +78,6 @@ export type ChatState = {
 };
 export type ChatDependencies = {
   chat: ChatClient;
-  /** The host's mode; a fixed-settings (`remote`) host needs a connection. */
-  mode?: 'local' | 'remote';
   /** How a host on another machine is connected; absent for one on this machine. */
   connection?: ConnectionClient;
   providers?: ProviderSetupClient;
@@ -181,7 +177,6 @@ class ChatModelState {
   private readonly chat: ChatClient;
   private readonly connection?: ConnectionClient;
   readonly providers: ProviderSetupController | null;
-  private readonly mode: 'local' | 'remote';
   private readonly session: ChatSession;
   private storage: DraftStorage;
   private newId: () => string;
@@ -202,9 +197,6 @@ class ChatModelState {
     this.transcriptWatchHealthyMs =
       dependencies.transcriptWatchHealthyMs ?? transcriptLimits.watchHealthyMs;
     this.connection = dependencies.connection;
-    this.mode = dependencies.mode ?? 'remote';
-    if (this.mode === 'remote' && !this.connection)
-      throw invalid('Remote chat requires a connection capability.');
     this.providers = dependencies.providers
       ? makeProviderSetupController(dependencies.providers, {
           retryMs: this.transcriptWatchRetryMs,
@@ -229,14 +221,13 @@ class ChatModelState {
       if (this.raw !== null) {
         if (bytes(this.raw) > maximumSavedBytes)
           throw invalid('Saved chat data exceeds its bound. Preserve it for recovery.');
-        this.saved = decodeSaved(JSON.parse(this.raw), this.session, this.mode);
+        this.saved = decodeSaved(JSON.parse(this.raw), this.session);
       }
     } catch {
       storageError =
         'Saved chat data or storage is unavailable. Preserve the original data; no new mutation can start.';
     }
     this.state = {
-      mode: this.mode,
       remote: !!this.connection,
       ready: false,
       connection: null,
@@ -315,7 +306,7 @@ class ChatModelState {
     if (this.closed) throw invalid('Chat model disposed.');
     if (this.state.storageError)
       throw new ApplicationError({ code: 'Persistence', message: this.state.storageError });
-    decodeSaved(next, this.session, this.mode);
+    decodeSaved(next, this.session);
     const raw = JSON.stringify(next);
     try {
       if (bytes(raw) > maximumSavedBytes || this.storage.read() !== this.raw) throw Error();
@@ -604,11 +595,6 @@ class ChatModelState {
       'refresh',
       Effect.gen({ self: this }, function* () {
         const host = yield* this.call('getChatHost', { host: this.session.host });
-        if ((this.mode === 'local') !== 'mode' in host)
-          throw new ApplicationError({
-            code: 'Incompatible',
-            message: 'Chat backend mode does not match this controller.',
-          });
         if (!sameSession(host, this.session))
           throw new ApplicationError({
             code: 'Incompatible',
@@ -986,8 +972,7 @@ class ChatModelState {
       Effect.gen({ self: this }, function* () {
         this.connected();
         const target = this.saved.selected,
-          host = this.state.host;
-        const cwd = options.cwd ?? (host && 'cwd' in host ? host.cwd : undefined);
+          cwd = options.cwd;
         if (!target && !cwd) throw invalid('Choose a working folder to search its files.');
         const input = decodeChatInput(
           'findChatFiles',
@@ -1232,13 +1217,12 @@ class ChatModelState {
         this.connected();
         if (!text(title, 200) || !title.trim())
           throw invalid('Use a chat title of 1–200 UTF-8 bytes.');
-        if ((this.mode === 'local') !== (settings !== undefined))
-          throw invalid('Choose folder/model settings for local chats only.');
+        if (!settings) throw invalid('Choose a folder and model for this chat.');
         const captured = decodeChatInput('createChat', {
           session: this.session,
           requestId: this.newId(),
           title,
-          ...(settings ? { settings } : {}),
+          settings,
         });
         const pending: Pending = {
           operation: 'createChat',
@@ -1273,8 +1257,7 @@ class ChatModelState {
             )
           )
             throw invalid('Resolve the retained new conversation before sending another.');
-          if ((this.mode === 'local') !== (settings !== undefined))
-            throw invalid('Choose folder/model settings for local chats only.');
+          if (!settings) throw invalid('Choose a folder and model for this chat.');
           let title = '';
           for (const character of value.trim().split('\n')[0]!) {
             if (bytes(title + character) > 80) break;
@@ -1286,7 +1269,7 @@ class ChatModelState {
               session: this.session,
               requestId: this.newId(),
               title: title || 'New conversation',
-              ...(settings ? { settings } : {}),
+              settings,
             }),
             firstMessage: { requestId: this.newId(), ...message },
             message: 'Outcome pending. Original creation and first message retained.',

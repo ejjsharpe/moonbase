@@ -1,18 +1,9 @@
-import type { ModelRef, Registry } from '@earendil-works/pi-durable';
+import type { Registry } from '@earendil-works/pi-durable';
 import type { Models } from '@earendil-works/pi-ai/models';
 import type { Effect, Fiber } from 'effect';
 import type { ApplicationError } from '@moonbase/contracts/workspace';
 import type { ChatCreationSettings, ChatSession } from '@moonbase/contracts/chat';
 
-export type PiRuntimeConfiguration = ChatSession & {
-  databasePath: string;
-  cwd: string;
-  model: ModelRef;
-  models: Models;
-  registry?: Registry;
-  /** Absolute ripgrep for chat file search; otherwise `rg` on PATH, then Git. */
-  ripgrepExecutable?: string;
-};
 export type LocalPiRuntimeConfiguration = ChatSession & {
   databasePath: string;
   models: Models;
@@ -22,11 +13,10 @@ export type LocalPiRuntimeConfiguration = ChatSession & {
   chatFolders?: string;
   /** Refuses a working folder a new chat may not search before it exists; absent allows any. */
   approveFolder?: (cwd: string) => Promise<void>;
+  /** Absolute ripgrep for chat file search; otherwise `rg` on PATH, then Git. */
   ripgrepExecutable?: string;
 };
-export type RuntimeConfiguration =
-  | PiRuntimeConfiguration
-  | (LocalPiRuntimeConfiguration & { mode: 'local' });
+export type RuntimeConfiguration = LocalPiRuntimeConfiguration & { mode: 'local' };
 export type RetainedWork = {
   run<A>(
     effect: Effect.Effect<A, ApplicationError>,

@@ -12,10 +12,10 @@ import { tmpdir } from 'node:os';
 import { createServer } from 'node:net';
 import { randomBytes } from 'node:crypto';
 import { Effect, Layer, ManagedRuntime, Stream } from 'effect';
-import { ConnectionService, LocalHostService } from '@moonbase/contracts/services';
+import { ConnectionService } from '@moonbase/contracts/services';
 import { ApplicationError } from '@moonbase/contracts/workspace';
-import { makeChatClient, makeProviderSetupClient } from '@moonbase/application/runtime/clients';
-import { RemoteChatLive, RemoteLocalHostLive, RemoteProviderSetupLive } from '../src/remote.ts';
+import { makeChatClient } from '@moonbase/application/runtime/clients';
+import { RemoteChatLive } from '../src/remote.ts';
 import { createRequire } from 'node:module';
 
 async function bounded<T>(promise: Promise<T>, ms = 5000): Promise<T> {
@@ -38,8 +38,10 @@ async function port() {
   await new Promise<void>((r) => server.close(() => r()));
   return value;
 }
+/** The model the controlled host (`faux-host.mjs`) installs. */
+const model = { provider: 'faux-host', modelId: 'faux-model' };
 /**
- * Starts the controlled fixed-settings host (`faux-host.mjs`) on the suite's runtime. Remote hosts
+ * Starts the controlled local-mode host (`faux-host.mjs`) on the suite's runtime. Remote hosts
  * themselves run the daemon, whose own suite covers its process; these cases cover the server and
  * the remote client across a real process boundary.
  */
@@ -90,100 +92,8 @@ async function cleanup(child: ChildProcess, exited: Promise<unknown>) {
     await bounded(exited);
   });
 }
-test('a client refuses local-mode features from a fixed-settings host before dispatch', async () => {
-  const dir = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-chat-fixed-'))),
-    token = randomBytes(32).toString('base64url'),
-    host = { hostId: 'fixed-host', storeId: 'fixed-store' },
-    listen = await port(),
-    file = join(dir, 'private.json');
-  await writeFile(
-    file,
-    JSON.stringify({
-      host,
-      actorId: 'personal',
-      cwd: dir,
-      databasePath: join(dir, 'chat.sqlite'),
-      port: listen,
-      token,
-      log: join(dir, 'effects.jsonl'),
-    }),
-    { mode: 0o600 },
-  );
-  const child = start(file);
-  const unused = () =>
-    Effect.fail(
-      new ApplicationError({ code: 'Unavailable', message: 'Not a connection command.' }),
-    );
-  const runtime = ManagedRuntime.make(
-    Layer.mergeAll(
-      RemoteChatLive,
-      RemoteLocalHostLive,
-      RemoteProviderSetupLive({ host, sameMachine: false, openUrl: async () => {} }),
-    ).pipe(
-      Layer.provide(
-        Layer.succeed(ConnectionService, {
-          getConnection: unused,
-          connect: unused,
-          disconnect: unused,
-          watch: () => Stream.empty,
-          endpoint: () =>
-            Effect.succeed({
-              origin: `http://127.0.0.1:${listen}`,
-              token,
-              expected: host,
-              connectionId: 'fixed',
-              // The client trusts the signed health of each challenge, not this cached copy.
-              health: {
-                ...host,
-                protocol: 2,
-                version: '0.1.0',
-                capabilities: [
-                  'chat-v0',
-                  'daemon-local-v1',
-                  'providers-v1',
-                  'folders-v1',
-                  'roots-v1',
-                ],
-              },
-            }),
-        }),
-      ),
-    ),
-  );
-  try {
-    await bounded(child.ready);
-    const chat = makeChatClient(runtime),
-      session = { host, actorId: 'personal' };
-    const folders = await runtime.runPromise(LocalHostService);
-    for (const refused of [
-      runtime.runPromise(folders.getActiveWork({ host })),
-      runtime.runPromise(folders.approveFolder({ host, requestId: 'approve', path: dir })),
-      runtime.runPromise(folders.listHostFolders({ host })),
-      runtime.runPromise(
-        folders.markFolderAsProject({
-          requestId: 'mark',
-          target: { ...session, conversationId: '1' },
-        }),
-      ),
-      makeProviderSetupClient(runtime, 'document').command('getProviders', {}),
-      chat.command('createChat', {
-        session,
-        requestId: 'with-settings',
-        title: 'Local settings',
-        settings: { model: { provider: 'openai', modelId: 'gpt-6-sol' } },
-      }),
-    ])
-      await assert.rejects(refused, { code: 'Incompatible' });
-    // Nothing was created; the host still serves its fixed-settings chats.
-    assert.deepEqual((await chat.command('listChats', { session })).conversations, []);
-  } finally {
-    await runtime.dispose();
-    await cleanup(child.child, child.exited);
-    await rm(dir, { recursive: true, force: true });
-  }
-});
 test('actual child host crash resumes Pi-owned work without resubmitting reserved application input or replaying the counted unsafe tool', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'moonbase-pi-resume-')),
+  const directory = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-pi-resume-'))),
     listen = await port(),
     host = { hostId: 'resumable', storeId: 'store' },
     token = randomBytes(32).toString('base64url'),
@@ -217,7 +127,12 @@ test('actual child host crash resumes Pi-owned work without resubmitting reserve
               token,
               expected: host,
               connectionId: 'controlled',
-              health: { ...host, protocol: 2, version: '0.1.0', capabilities: ['chat-v0'] },
+              health: {
+                ...host,
+                protocol: 2,
+                version: '0.1.0',
+                capabilities: ['chat-v0', 'daemon-local-v1'],
+              },
             }),
         }),
       ),
@@ -241,7 +156,12 @@ test('actual child host crash resumes Pi-owned work without resubmitting reserve
     await bounded(first.ready);
     const session = { host, actorId: 'personal' },
       target = (
-        await client.command('createChat', { session, requestId: 'create', title: 'Crash resume' })
+        await client.command('createChat', {
+          session,
+          requestId: 'create',
+          title: 'Crash resume',
+          settings: { cwd: directory, model },
+        })
       ).conversation.target;
     const receipt = await client.command('sendChat', {
       target,
@@ -287,7 +207,7 @@ test('compiled remote entry runs on Electron Node24 against the separate product
   const rootRequire = createRequire(new URL('../../../package.json', import.meta.url)),
     esbuild = rootRequire('esbuild') as typeof Esbuild,
     electron = rootRequire('electron') as string;
-  const directory = await mkdtemp(join(tmpdir(), 'moonbase-electron-remote-')),
+  const directory = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-electron-remote-'))),
     listen = await port(),
     host = { hostId: 'electron-remote', storeId: 'store' },
     token = randomBytes(32).toString('base64url'),
@@ -300,6 +220,7 @@ test('compiled remote entry runs on Electron Node24 against the separate product
     port: listen,
     token,
     log: join(directory, 'effects'),
+    model,
   };
   await writeFile(file, JSON.stringify(config), { mode: 0o600 });
   const entry = join(directory, 'remote.cjs');
@@ -311,9 +232,9 @@ test('compiled remote entry runs on Electron Node24 against the separate product
     async function main(){
       const config=JSON.parse(readFileSync(process.argv[2],'utf8'));
       const unavailable=()=>Effect.die('No implicit connection command');
-      const connection=Layer.succeed(ConnectionService,{getConnection:unavailable,connect:unavailable,disconnect:unavailable,watch:()=>Stream.empty,endpoint:()=>Effect.succeed({origin:'http://127.0.0.1:'+config.port,token:config.token,expected:config.host,connectionId:'controlled',health:{...config.host,protocol:2,version:'0.1.0',capabilities:['chat-v0']}})});
+      const connection=Layer.succeed(ConnectionService,{getConnection:unavailable,connect:unavailable,disconnect:unavailable,watch:()=>Stream.empty,endpoint:()=>Effect.succeed({origin:'http://127.0.0.1:'+config.port,token:config.token,expected:config.host,connectionId:'controlled',health:{...config.host,protocol:2,version:'0.1.0',capabilities:['chat-v0','daemon-local-v1']}})});
       const runtime=ManagedRuntime.make(RemoteChatLive.pipe(Layer.provide(connection))),client=makeChatClient(runtime);
-      try{const publicHost=await client.command('getChatHost',{host:config.host});const target=(await client.command('createChat',{session:{host:config.host,actorId:'personal'},requestId:'electron-create',title:'Electron remote'})).conversation.target;
+      try{const publicHost=await client.command('getChatHost',{host:config.host});const target=(await client.command('createChat',{session:{host:config.host,actorId:'personal'},requestId:'electron-create',title:'Electron remote',settings:{cwd:config.cwd,model:config.model}})).conversation.target;
         let off; await boundedWatch();
         async function boundedWatch(){await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('stream deadline')),4000);off=client.watch({target},value=>{if(value.observationStatus==='connected'){clearTimeout(timer);resolve();}},reject);});await off();}
         const receipt=await client.command('sendChat',{target,requestId:'electron-send',text:'One controlled input'});
@@ -377,7 +298,7 @@ test('compiled remote entry runs on Electron Node24 against the separate product
 });
 
 test('repeated actual process interruption parks Pi work visibly instead of reporting healthy idle/running', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'moonbase-pi-parked-')),
+  const directory = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-pi-parked-'))),
     listen = await port(),
     host = { hostId: 'parked', storeId: 'store' },
     token = randomBytes(32).toString('base64url'),
@@ -412,7 +333,12 @@ test('repeated actual process interruption parks Pi work visibly instead of repo
               token,
               expected: host,
               connectionId: 'controlled',
-              health: { ...host, protocol: 2, version: '0.1.0', capabilities: ['chat-v0'] },
+              health: {
+                ...host,
+                protocol: 2,
+                version: '0.1.0',
+                capabilities: ['chat-v0', 'daemon-local-v1'],
+              },
             }),
         }),
       ),
@@ -433,6 +359,7 @@ test('repeated actual process interruption parks Pi work visibly instead of repo
             session: { host, actorId: 'personal' },
             requestId: 'create',
             title: 'Park safely',
+            settings: { cwd: directory, model },
           })
         ).conversation.target;
         await client.command('sendChat', { target, requestId: 'original', text: 'One input' });

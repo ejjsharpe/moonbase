@@ -241,12 +241,9 @@ export class Host {
     if (value.actorId !== this.config.actorId)
       V.fail('Unauthorized', 'This personal chat belongs to another actor.');
   }
-  get fixedSettings(): ChatSettings | undefined {
-    return 'mode' in this.config ? undefined : { cwd: this.config.cwd, model: this.config.model };
-  }
   async metadata(target: ChatTarget) {
     this.session(target);
-    return readOwnedMetadata(this.harness, this.identity, target, 'mode' in this.config);
+    return readOwnedMetadata(this.harness, this.identity, target);
   }
   summary(
     conversationId: string,
@@ -256,7 +253,7 @@ export class Host {
       { host: this.config.host, actorId: this.config.actorId },
       conversationId,
       meta,
-      getSettings(meta, this.fixedSettings),
+      getSettings(meta),
     );
   }
   own<A>(effect: Effect.Effect<A, ApplicationError>) {
@@ -387,13 +384,10 @@ export class Host {
   findFiles(d: ChatInput<'findChatFiles'>) {
     return this.read(async (signal) => {
       let cwd: string;
-      if ('target' in d) cwd = getSettings(await this.metadata(d.target), this.fixedSettings).cwd;
+      if ('target' in d) cwd = getSettings(await this.metadata(d.target)).cwd;
       else {
         this.session(d.session);
-        const config = this.config;
-        if ('mode' in config) await config.approveFolder?.(d.cwd);
-        else if (d.cwd !== config.cwd)
-          V.fail('Unauthorized', 'This host searches only its configured working folder.');
+        await this.config.approveFolder?.(d.cwd);
         cwd = d.cwd;
       }
       signal.throwIfAborted();
@@ -411,43 +405,27 @@ export class Host {
     if (!V.sameHost(d.host, this.config.host))
       V.fail('Incompatible', 'Chat host/store does not match this host.');
     S.savedStore(await this.harness.snapshot(Store, 'identity', context));
-    if ('mode' in this.config)
-      return {
-        host: { ...this.config.host },
-        actorId: this.config.actorId,
-        mode: 'local',
-      };
-    return {
-      host: { ...this.config.host },
-      actorId: this.config.actorId,
-      cwd: this.config.cwd,
-      model: `${this.config.model.provider}/${this.config.model.modelId}`,
-    };
+    return { host: { ...this.config.host }, actorId: this.config.actorId, mode: 'local' };
   }
   /** One chat as a listing shows it; undefined when it is missing or not this session's. */
   async listed(session: ChatSession, conversationId: string): Promise<ChatSummary | undefined> {
     this.session(session);
-    return readListedConversation(
-      this.harness,
-      session,
-      this.identity,
-      this.fixedSettings,
-      conversationId,
-    );
+    return readListedConversation(this.harness, session, this.identity, conversationId);
   }
   async list(d: ChatInput<'listChats'>): Promise<ChatOutput<'listChats'>> {
     this.session(d.session);
-    return listConversations(this.harness, d.session, this.identity, this.fixedSettings, d.cursor);
+    return listConversations(this.harness, d.session, this.identity, d.cursor);
   }
   async create(d: ChatInput<'createChat'>): Promise<ChatOutput<'createChat'>> {
     this.session(d.session);
-    if ('mode' in this.config !== (d.settings !== undefined))
-      V.fail('InvalidInput', 'Choose folder/model settings for local chats only.');
+    if (d.settings === undefined)
+      V.fail('InvalidInput', 'Choose folder/model settings for this chat.');
     const binding = JSON.stringify({ operation: 'createChat', ...d });
-    const existing =
-      'mode' in this.config
-        ? await this.harness.snapshot(Request, key(d.session.actorId, d.requestId), context)
-        : undefined;
+    const existing = await this.harness.snapshot(
+      Request,
+      key(d.session.actorId, d.requestId),
+      context,
+    );
     if (existing) {
       S.savedRequest(existing, d.session.actorId, d.requestId);
       if (existing.binding !== binding)
@@ -462,31 +440,29 @@ export class Host {
         };
     }
     let settings: ChatSettings, ownFolder: string | undefined;
-    if ('mode' in this.config) {
-      const requested = d.settings!;
-      if (requested.cwd !== undefined) {
-        const cwd = await realpath(requested.cwd).catch(() =>
-          V.fail('InvalidInput', 'Choose an existing local working folder.'),
-        );
-        if (cwd !== requested.cwd || !(await stat(cwd)).isDirectory())
-          V.fail('InvalidInput', 'Choose a canonical local working folder.');
-      } else if (!this.config.chatFolders)
-        V.fail('InvalidInput', 'Choose a local working folder for this chat.');
-      const model =
-        this.config.models.getModel(requested.model.provider, requested.model.modelId) ??
-        V.fail('InvalidInput', 'Choose an installed model from the local catalog.');
-      if (
-        requested.reasoningEffort &&
-        !getSupportedThinkingLevels(model).includes(requested.reasoningEffort)
-      )
-        V.fail('InvalidInput', 'Choose a reasoning effort supported by this model.');
-      await this.config.approveCreation?.(requested);
-      if (requested.cwd !== undefined) settings = { ...requested, cwd: requested.cwd };
-      else {
-        ownFolder = await makeChatFolder(this.config.chatFolders!, d.title);
-        settings = { ...requested, cwd: ownFolder, ownFolder: true };
-      }
-    } else settings = { cwd: this.config.cwd, model: this.config.model };
+    const requested = d.settings!;
+    if (requested.cwd !== undefined) {
+      const cwd = await realpath(requested.cwd).catch(() =>
+        V.fail('InvalidInput', 'Choose an existing local working folder.'),
+      );
+      if (cwd !== requested.cwd || !(await stat(cwd)).isDirectory())
+        V.fail('InvalidInput', 'Choose a canonical local working folder.');
+    } else if (!this.config.chatFolders)
+      V.fail('InvalidInput', 'Choose a local working folder for this chat.');
+    const model =
+      this.config.models.getModel(requested.model.provider, requested.model.modelId) ??
+      V.fail('InvalidInput', 'Choose an installed model from the local catalog.');
+    if (
+      requested.reasoningEffort &&
+      !getSupportedThinkingLevels(model).includes(requested.reasoningEffort)
+    )
+      V.fail('InvalidInput', 'Choose a reasoning effort supported by this model.');
+    await this.config.approveCreation?.(requested);
+    if (requested.cwd !== undefined) settings = { ...requested, cwd: requested.cwd };
+    else {
+      ownFolder = await makeChatFolder(this.config.chatFolders!, d.title);
+      settings = { ...requested, cwd: ownFolder, ownFolder: true };
+    }
     let conversationId: string,
       definiteRejection: ApplicationError | undefined,
       reused = false;
@@ -520,7 +496,7 @@ export class Host {
           identity: this.identity,
           title: d.title,
           createdAt: new Date().toISOString(),
-          ...('mode' in this.config ? { settings } : {}),
+          settings,
         });
         request.conversationId = String(conversation.id);
         return String(conversation.id);
@@ -695,7 +671,6 @@ export class Host {
       target,
       conversation: this.summary(target.conversationId, meta),
       pending: meta.pending,
-      local: 'mode' in this.config,
       cache,
       signal,
     });

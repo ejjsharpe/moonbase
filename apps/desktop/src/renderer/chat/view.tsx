@@ -93,13 +93,12 @@ function findSelectedChat(state: ChatState) {
   );
 }
 /**
- * The folder the dock's chat works in: the selected chat's, or a new chat's (`newChatFolder`
- * locally, else the host's). Null while it isn't known, so nothing is mentioned against a guess.
+ * The folder the dock's chat works in: the selected chat's, or a new chat's (`newChatFolder`).
+ * Null while it isn't known, so nothing is mentioned against a guess.
  */
 function chatFolder(state: ChatState, newChatFolder: string) {
   if (state.selected) return findSelectedChat(state)?.cwd || null;
-  if (newChatFolder) return newChatFolder;
-  return (state.host && 'cwd' in state.host && state.host.cwd) || null;
+  return newChatFolder || null;
 }
 
 export type ChatHosts = {
@@ -192,7 +191,6 @@ export function ChatView({
     controller.providers?.subscribe ?? noSubscription,
     controller.providers?.getSnapshot ?? noProviders,
   );
-  const local = state.mode === 'local';
   const models =
     providerState?.status?.providers
       .filter((provider) => provider.configured)
@@ -230,23 +228,18 @@ export function ChatView({
           ...(selectedEffort ? { reasoningEffort: selectedEffort } : {}),
         }
       : undefined;
-  let contextLabel = local
-    ? 'Each conversation retains its working folder and model.'
-    : 'Fixed working folder and model are read from the verified remote host.';
-  if (state.host && 'cwd' in state.host) contextLabel = `${state.host.cwd} · ${state.host.model}`;
+  let contextLabel = 'Each conversation retains its working folder and model.';
   if (state.snapshot)
     contextLabel = `${state.snapshot.conversation.cwd} · ${state.snapshot.conversation.model}`;
   let conversationTitle = 'New chat';
   if (state.selected) conversationTitle = 'Saved chat selected';
   if (state.snapshot) conversationTitle = state.snapshot.conversation.title;
-  let toolNotice = 'Messages and tools run on your configured host.';
   const tools = remote ? 'Tools on the host' : 'Local tools';
-  if (local)
-    toolNotice =
-      state.selected || cwd
-        ? `${tools} can access files outside the working folder.`
-        : `Runs in a new empty folder. ${tools} are not sandboxed.`;
-  if (local && !state.selected && !models.length)
+  let toolNotice =
+    state.selected || cwd
+      ? `${tools} can access files outside the working folder.`
+      : `Runs in a new empty folder. ${tools} are not sandboxed.`;
+  if (!state.selected && !models.length)
     toolNotice = `Set up a provider to send. ${tools} are not sandboxed.`;
   const selectedChat = findSelectedChat(state);
   // A chat without a project has no project crumb.
@@ -276,7 +269,7 @@ export function ChatView({
   // A remote host's own folders never open here as a project, nor in this Mac's folder picker.
   const turnable = remote ? undefined : turnIntoProject,
     browseFolder = remote ? undefined : chooseFolder;
-  const turnButton = turnable && local && state.selected && selectedChat?.ownFolder && (
+  const turnButton = turnable && state.selected && selectedChat?.ownFolder && (
     <Button
       aria-label="Turn into project"
       title="Turn into project · opens this chat’s folder as a project"
@@ -352,10 +345,10 @@ export function ChatView({
     if (!mentionRequest) return;
     mentionHandled?.(mentionRequest.id);
     const current = controller.getSnapshot();
-    const newLocal = local && !current.selected;
+    const newLocal = !current.selected;
     // The draft being sent in a new worktree keeps the mentions it has.
     const making = newLocal && composer.getSnapshot().creatingWorktree;
-    const folder = making ? null : chatFolder(current, local ? cwd : '');
+    const folder = making ? null : chatFolder(current, cwd);
     // A path the new chat draft already mentions in another folder would name two files at once.
     const prefix = (folder ?? '').replace(/\/+$/, '') + '/';
     const clashes = new Map<string, string>();
@@ -416,15 +409,14 @@ export function ChatView({
       input.focus();
       input.setSelectionRange(input.value.length, input.value.length);
     });
-  }, [controller, composer, mentionRequest, mentionHandled, local, cwd]);
+  }, [controller, composer, mentionRequest, mentionHandled, cwd]);
   const focusMessage = () => document.getElementById('message')?.focus();
   const startNewChat = () => void controller.closeView().then(focusMessage);
-  const choosing = local && !state.selected && !busy('send') && !creatingWorktree;
+  const choosing = !state.selected && !busy('send') && !creatingWorktree;
   // A new worktree is made only when the first message is sent, so an unsent chat leaves no trace.
   // A project without Git has no worktrees to make.
   const worktreeChoice =
     !state.selected &&
-    local &&
     !remote &&
     !!createWorktree &&
     !!cwd &&
@@ -815,9 +807,7 @@ export function ChatView({
             if (!state.selected) composer.clearMessages(placeKey);
             // Without a folder, a new local chat runs in one the host makes for it.
             const settings =
-              local && !state.selected && selection
-                ? { ...(cwd ? { cwd } : {}), ...selection }
-                : undefined;
+              !state.selected && selection ? { ...(cwd ? { cwd } : {}), ...selection } : undefined;
             // Mentions picked in another view's folder are checked against this one before sending.
             const problem = settings && composer.checkMentions(cwd);
             if (problem) {
@@ -838,17 +828,13 @@ export function ChatView({
               controller={controller}
               draft={state.draft}
               mentions={state.mentions}
-              searchable={connected && (!!state.selected || !local || (!!cwd && !creatingWorktree))}
-              cwd={!state.selected && local && cwd ? cwd : undefined}
+              searchable={connected && (!!state.selected || (!!cwd && !creatingWorktree))}
+              cwd={!state.selected && cwd ? cwd : undefined}
               onMention={
-                !state.selected && local && cwd
-                  ? (path) => composer.noteMentions([path], cwd)
-                  : undefined
+                !state.selected && cwd ? (path) => composer.noteMentions([path], cwd) : undefined
               }
               refuseMention={
-                !state.selected && local && cwd
-                  ? (path) => composer.findMentionClash(path, cwd)
-                  : undefined
+                !state.selected && cwd ? (path) => composer.findMentionClash(path, cwd) : undefined
               }
               placeholder={
                 state.selected
@@ -861,50 +847,48 @@ export function ChatView({
             />
           </div>
           <div {...stylex.props(controls.row, styles.composeActions)}>
-            {!state.selected && (local || hosts) && (
+            {!state.selected && (
               <div {...stylex.props(styles.composeContext)}>
-                {local && (
-                  <FolderPicker
-                    cwd={cwd}
-                    projects={remote ? [] : folderProjects}
-                    recentFolders={recentFolders}
-                    hostFolders={
-                      remote
-                        ? {
-                            label: 'On the host',
-                            empty:
-                              'The host offers no folders. Add approved roots to its daemon.json.',
-                          }
-                        : undefined
-                    }
-                    disabled={busy('send') || creatingWorktree}
-                    noProject={
-                      // A project's dock keeps its chats in the project.
-                      dock
-                        ? undefined
-                        : () => updatePlace({ cwd: '', newWorktree: false, folderError: null })
-                    }
-                    choose={(folder) => {
+                <FolderPicker
+                  cwd={cwd}
+                  projects={remote ? [] : folderProjects}
+                  recentFolders={recentFolders}
+                  hostFolders={
+                    remote
+                      ? {
+                          label: 'On the host',
+                          empty:
+                            'The host offers no folders. Add approved roots to its daemon.json.',
+                        }
+                      : undefined
+                  }
+                  disabled={busy('send') || creatingWorktree}
+                  noProject={
+                    // A project's dock keeps its chats in the project.
+                    dock
+                      ? undefined
+                      : () => updatePlace({ cwd: '', newWorktree: false, folderError: null })
+                  }
+                  choose={(folder) => {
+                    setFolderError(null);
+                    if (folder !== cwd) setCwd(folder);
+                  }}
+                  browse={
+                    browseFolder &&
+                    (() => {
                       setFolderError(null);
-                      if (folder !== cwd) setCwd(folder);
-                    }}
-                    browse={
-                      browseFolder &&
-                      (() => {
-                        setFolderError(null);
-                        void browseFolder()
-                          .then((folder) => {
-                            if (folder) setCwd(folder);
-                          })
-                          .catch(() =>
-                            setFolderError(
-                              'The folder could not be approved. Choose an existing working folder again.',
-                            ),
-                          );
-                      })
-                    }
-                  />
-                )}
+                      void browseFolder()
+                        .then((folder) => {
+                          if (folder) setCwd(folder);
+                        })
+                        .catch(() =>
+                          setFolderError(
+                            'The folder could not be approved. Choose an existing working folder again.',
+                          ),
+                        );
+                    })
+                  }
+                />
                 {worktreeChoice && (
                   <div {...stylex.props(styles.worktreeChoice)}>
                     <Choice
@@ -942,7 +926,7 @@ export function ChatView({
               </div>
             )}
             <div {...stylex.props(controls.row, styles.modelActions)}>
-              {local && !state.selected ? (
+              {!state.selected ? (
                 <>
                   <div {...stylex.props(styles.modelChoice)}>
                     <ModelPicker
@@ -964,8 +948,7 @@ export function ChatView({
                 </>
               ) : (
                 <span {...stylex.props(styles.small, controls.truncate)}>
-                  {snapshot?.conversation.model ??
-                    (state.host && 'model' in state.host ? state.host.model : 'Remote model')}
+                  {snapshot?.conversation.model}
                   {snapshot?.conversation.reasoningEffort
                     ? ` · ${effortLabels[snapshot.conversation.reasoningEffort]}`
                     : ''}
@@ -995,7 +978,7 @@ export function ChatView({
                       busy('send') ||
                       busy('create') ||
                       !!state.storageError ||
-                      (!state.selected && local && !selection) ||
+                      (!state.selected && !selection) ||
                       state.pending.some(
                         (p) =>
                           (p.operation === 'sendChat' &&

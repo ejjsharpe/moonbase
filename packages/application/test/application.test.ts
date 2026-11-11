@@ -1038,11 +1038,7 @@ test('uncertain final Quit metadata keeps its original publication and vetoes un
 test('named local/remote targets preserve separate drafts and wait for controller cleanup without Stop or replay', async () => {
   const local = chatCapabilities(),
     remote = chatCapabilities();
-  const localDependencies = {
-    ...local.dependencies,
-    mode: 'local' as const,
-    connection: undefined,
-  };
+  const localDependencies = { ...local.dependencies, connection: undefined };
   const remoteDependencies = remote.dependencies;
   const localChat = localDependencies.chat;
   localDependencies.chat = {
@@ -1060,7 +1056,7 @@ test('named local/remote targets preserve separate drafts and wait for controlle
   });
   try {
     await application.chat!.start();
-    assert.equal(application.chat!.getSnapshot().mode, 'local');
+    assert.equal(application.chat!.getSnapshot().remote, false);
     await application.chat!.create('Local', {
       cwd: '/local',
       model: { provider: 'fake', modelId: 'first' },
@@ -1076,7 +1072,10 @@ test('named local/remote targets preserve separate drafts and wait for controlle
     await switching;
     await application.chat!.start();
     await application.chat!.connect();
-    await application.chat!.create('Remote');
+    await application.chat!.create('Remote', {
+      cwd: '/remote',
+      model: { provider: 'fake', modelId: 'first' },
+    });
     application.chat!.setDraft('remote draft');
     await application.selectChatTarget('local');
     assert.equal(application.chat!.getSnapshot().draft, 'local draft');

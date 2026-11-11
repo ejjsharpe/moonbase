@@ -5,13 +5,21 @@ import type { ChatClient, ChatListUpdate, ChatSnapshot } from '@moonbase/contrac
 import type { ConnectionSnapshot } from '@moonbase/contracts/connection';
 import { ConnectionService, type VerifiedChatEndpoint } from '@moonbase/contracts/services';
 import { ApplicationError } from '@moonbase/contracts/errors';
+import type { DaemonClient } from '@moonbase/contracts/daemon';
+import { chatHostCapabilities } from '@moonbase/contracts/host';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import { DaemonLinkClock, RemoteChatLive, RemoteLocalHostLive } from '../src/remote.ts';
 import { serveChat } from '../src/server.ts';
 import * as P from '../src/protocol.ts';
 import { fixture as runtimeFixture, manualClock, session, until } from './runtime-fixture.ts';
 
-/** A daemon over a fixed-settings runtime that can stop and start again on its port. */
+// The daemon serves chat; these cases need none of its other operations.
+const unserved: DaemonClient = {
+  command: async () => {
+    throw new ApplicationError({ code: 'Unavailable', message: 'Not served here.' });
+  },
+};
+/** A daemon over a local-mode runtime that can stop and start again on its port. */
 async function daemon(t: TestContext) {
   const f = await runtimeFixture(t);
   const token = P.nonce(),
@@ -35,14 +43,20 @@ async function daemon(t: TestContext) {
   const start = async () => {
     scope = Effect.runSync(Scope.make());
     const server = await Effect.runPromise(
-      serveChat({ host: session.host, token, port }, client, undefined, [], {
-        sources: {
-          trackConnection: () => {
-            connections++;
-            return () => {};
+      serveChat(
+        { host: session.host, token, port },
+        client,
+        unserved,
+        [chatHostCapabilities.local],
+        {
+          sources: {
+            trackConnection: () => {
+              connections++;
+              return () => {};
+            },
           },
         },
-      }).pipe(Effect.provideService(Scope.Scope, scope)),
+      ).pipe(Effect.provideService(Scope.Scope, scope)),
     );
     port = Number(new URL(server.origin).port);
   };
@@ -154,6 +168,7 @@ test('one client shares one socket and one list watch, and chats another client 
     session,
     requestId: 'create',
     title: 'From another client',
+    settings: d.f.settings,
   });
   const target = created.conversation.target;
   const chat = record<ChatSnapshot>();
@@ -175,7 +190,12 @@ test('one client shares one socket and one list watch, and chats another client 
   const closeOwn = a.chat.watchChatList({ session }, own.receive, own.fail);
   t.after(() => closeOwn().catch(() => {}));
   for (let index = 0; index < 32; index++)
-    await a.chat.command('createChat', { session, requestId: `newer-${index}`, title: 'Newer' });
+    await a.chat.command('createChat', {
+      session,
+      requestId: `newer-${index}`,
+      title: 'Newer',
+      settings: d.f.settings,
+    });
   const pastPage = (update: ChatListUpdate | undefined) =>
     !!update &&
     !update.list.conversations.some((row) => row.target.conversationId === target.conversationId);
@@ -199,7 +219,12 @@ test('a dropped daemon shows reconnecting, then resets its watches; healthy traf
     clock = manualClock();
   const client = remote(t, d, clock);
   const target = (
-    await client.chat.command('createChat', { session, requestId: 'create', title: 'Kept' })
+    await client.chat.command('createChat', {
+      session,
+      requestId: 'create',
+      title: 'Kept',
+      settings: d.f.settings,
+    })
   ).conversation.target;
   const chat = record<ChatSnapshot>(),
     list = record<ChatListUpdate>();

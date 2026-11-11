@@ -24,6 +24,8 @@ const summary = {
   model: 'configured-model',
   createdAt: '2026-01-01T00:00:00Z',
 };
+// A new chat's folder and model, which every host needs.
+const settings = { cwd: summary.cwd, model: { provider: 'configured', modelId: summary.model } };
 const snapshot: ChatSnapshot = {
   conversation: summary,
   state: 'idle',
@@ -94,7 +96,7 @@ async function fixture(
       if (handler) return (await handler(input as never)) as never;
       switch (op) {
         case 'getChatHost':
-          return { ...context, cwd: summary.cwd, model: summary.model } as never;
+          return { ...context, mode: 'local' } as never;
         case 'listChats':
           return { conversations: [summary], nextCursor: null } as never;
         case 'createChat':
@@ -226,7 +228,7 @@ test('explicit model and effort preferences survive chat selection, new chats an
   assert.deepEqual(f.controller.getSnapshot().modelPreference, expected);
   await f.controller.closeView();
   f.controller.setDraft('First new chat');
-  await f.controller.send();
+  await f.controller.send(settings);
   await f.controller.closeView();
   assert.deepEqual(f.controller.getSnapshot().modelPreference, expected);
   assert.equal(f.controller.preserve(), true);
@@ -265,7 +267,7 @@ test('first Send creates once and sends the captured message to its exact conver
   await f.controller.closeView();
   f.controller.setDraft('Explain the editor');
   assert(!f.calls.some((call) => call.operation === 'createChat'));
-  await Promise.all([f.controller.send(), f.controller.send()]);
+  await Promise.all([f.controller.send(settings), f.controller.send(settings)]);
   const creates = f.calls.filter((call) => call.operation === 'createChat');
   const sends = f.calls.filter((call) => call.operation === 'sendChat');
   assert.equal(creates.length, 1);
@@ -286,7 +288,7 @@ test('first Send checks draft capacity before creating and succeeds after an exi
   }
   await f.controller.closeView();
   f.controller.setDraft('Keep my first message');
-  await f.controller.send();
+  await f.controller.send(settings);
   assert(!f.calls.some((call) => ['createChat', 'sendChat'].includes(call.operation)));
   assert.match(f.controller.getSnapshot().error!, /32 conversation drafts/);
   assert.equal(f.controller.getSnapshot().draft, 'Keep my first message');
@@ -294,7 +296,7 @@ test('first Send checks draft capacity before creating and succeeds after an exi
   await f.controller.select({ ...target, conversationId: 'draft-0' });
   f.controller.setDraft('');
   await f.controller.closeView();
-  await f.controller.send();
+  await f.controller.send(settings);
   assert.equal(f.calls.filter((call) => call.operation === 'createChat').length, 1);
   assert.equal(f.calls.filter((call) => call.operation === 'sendChat').length, 1);
   assert.equal(f.controller.getSnapshot().draft, '');
@@ -313,7 +315,7 @@ test('typing during first-chat creation survives the captured first Send', async
     return { requestId: input.requestId, conversation: summary };
   });
   f.controller.setDraft('Captured first message');
-  const sending = f.controller.send();
+  const sending = f.controller.send(settings);
   await turn();
   f.controller.setDraft('Newer unsent edit');
   release();
@@ -353,7 +355,7 @@ for (const firstReply of [0, 1] as const)
         };
       });
       f.controller.setDraft('Captured first message');
-      const initial = f.controller.send();
+      const initial = f.controller.send(settings);
       await started[0]!.promise;
       const pending = f.controller.getSnapshot().pending[0]!;
       assert(pending.operation === 'createChat' && pending.firstMessage);
@@ -408,7 +410,7 @@ test('draft capacity reached during Create retains exact recovery and resumes af
     await gate;
     return { requestId: input.requestId, conversation: summary };
   });
-  const sending = f.controller.send();
+  const sending = f.controller.send(settings);
   await turn();
   await f.controller.select({ ...target, conversationId: 'last-slot' });
   f.controller.setDraft('Another conversation draft');
@@ -437,7 +439,7 @@ test('lost first-chat Create retains both identities across reload and sends onl
     throw failure();
   });
   f.controller.setDraft('Original first message');
-  await f.controller.send();
+  await f.controller.send(settings);
   const pending = f.controller.getSnapshot().pending[0]!;
   assert(pending.operation === 'createChat' && pending.firstMessage);
   f.controller.setDraft('Newer edit');
@@ -471,7 +473,7 @@ test('uncertain first Send retains the Send without creating another conversatio
     throw failure();
   });
   f.controller.setDraft('First message');
-  await f.controller.send();
+  await f.controller.send(settings);
   const pending = f.controller.getSnapshot().pending[0]!;
   assert.equal(pending.operation, 'sendChat');
   const original = structuredClone(pending.input);
@@ -500,7 +502,7 @@ test('failed first-message publication prevents Send after a successful Create',
     f.storage.fail = true;
     return { requestId: input.requestId, conversation: summary };
   });
-  await f.controller.send();
+  await f.controller.send(settings);
   assert(!f.calls.some((call) => call.operation === 'sendChat'));
   assert.equal(f.controller.getSnapshot().draft, 'Keep this message');
   assert.equal(f.controller.preserve(), false);
@@ -511,7 +513,7 @@ test('automatic conversation titles bound Unicode by UTF-8 bytes', async (t) => 
   await ready(f);
   await f.controller.closeView();
   f.controller.setDraft('🌙'.repeat(100));
-  await f.controller.send();
+  await f.controller.send(settings);
   const title = (
     f.calls.find((call) => call.operation === 'createChat')!.input as { title: string }
   ).title;
@@ -527,7 +529,7 @@ test('first-message Create retry preserves a discovered conversation draft and a
     throw failure();
   });
   f.controller.setDraft('Captured first message');
-  await f.controller.send();
+  await f.controller.send(settings);
   const pending = f.controller.getSnapshot().pending[0]!;
   f.controller.setDraft('New unsent conversation');
   await f.controller.select(target);
@@ -550,7 +552,6 @@ test('local first Send requires folder/model settings and retains the exact appr
           ? Promise.resolve({ ...context, mode: 'local' } as never)
           : f.chat.command(operation, input, options),
     },
-    mode: 'local',
     context,
     storage: new Storage(),
   });
@@ -591,14 +592,12 @@ test('a local-mode host over a connection waits for an explicit Connect, then ch
           ? Promise.resolve({ ...context, mode: 'local' } as never)
           : f.chat.command(operation, input, options),
     },
-    mode: 'local',
     connection: f.connection,
     context,
     storage: new Storage(),
   });
   await controller.start();
   const offline = controller.getSnapshot();
-  assert.equal(offline.mode, 'local');
   assert.equal(offline.remote, true);
   assert.equal(offline.ready, false);
   // Nothing reaches the host until the user connects.
@@ -642,7 +641,7 @@ test('throwing chat subscribers cannot poison saved drafts or block Send and pre
   assert.equal(f.controller.getSnapshot().storageError, null);
   assert.equal(JSON.parse(f.storage.value!).drafts[0].text, 'Preserved despite view failure');
   assert(delivered > 0);
-  await f.controller.send();
+  await f.controller.send(settings);
   assert.equal(f.calls.filter((call) => call.operation === 'sendChat').length, 1);
   assert.equal(f.controller.getSnapshot().storageError, null);
   assert.equal(f.controller.preserve(), true);
@@ -691,7 +690,7 @@ test('startup only observes; every mutation is durably captured before disclosur
       submissionId: 'one',
     };
   });
-  await f.controller.send();
+  await f.controller.send(settings);
   assert.equal(f.controller.getSnapshot().draft, '');
   assert.equal(f.controller.getSnapshot().pending.length, 0);
   await f.controller.dispose();
@@ -703,7 +702,7 @@ test('lost reply, null query, reload and reconnect retain original input without
   f.answers.set('sendChat', async () => {
     throw failure();
   });
-  await f.controller.send();
+  await f.controller.send(settings);
   const p = f.controller.getSnapshot().pending[0];
   assert(p.operation === 'sendChat');
   assert.equal(p.input.text, 'original');
@@ -732,7 +731,7 @@ test('matching Send recovery clears only captured draft text and preserves newer
   f.controller.setDraft('captured');
   let release!: (v: unknown) => void;
   f.answers.set('sendChat', () => new Promise((r) => (release = r)));
-  const sending = f.controller.send();
+  const sending = f.controller.send(settings);
   await turn();
   f.controller.setDraft('newer edit');
   release({
@@ -763,8 +762,8 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'])
     });
     f.storage.fail = true;
     const before = f.calls.length;
-    if (operation === 'createChat') await f.controller.create('Title');
-    if (operation === 'sendChat') await f.controller.send();
+    if (operation === 'createChat') await f.controller.create('Title', settings);
+    if (operation === 'sendChat') await f.controller.send(settings);
     if (operation === 'stopChat') await f.controller.stop();
     assert(!f.calls.slice(before).some((c) => c.operation === operation));
     assert(f.controller.getSnapshot().storageError);
@@ -791,7 +790,7 @@ for (const value of [
       const f = await fixture(t, storage);
       await f.controller.start();
       await f.controller.connect();
-      await f.controller.create('Do not send');
+      await f.controller.create('Do not send', settings);
       assert(f.controller.getSnapshot().storageError);
       assert.equal(storage.value, value);
       assert(!f.calls.some((c) => c.operation === 'createChat'));
@@ -816,9 +815,9 @@ test('same-input retry queries first, keeps original Create/Send/Stop identities
     f.answers.set(op, async () => {
       throw failure();
     });
-  await f.controller.create('Original title');
+  await f.controller.create('Original title', settings);
   f.controller.setDraft('Original message');
-  await f.controller.send();
+  await f.controller.send(settings);
   const old = { target, submissionId: 'original-submission', taskId: 'original-task' };
   f.publish({
     ...snapshot,
@@ -856,7 +855,7 @@ test('pending Send does not block captured Stop or status and detach never stops
   f.controller.setDraft('wait');
   let release!: (v: unknown) => void;
   f.answers.set('sendChat', () => new Promise((r) => (release = r)));
-  const sending = f.controller.send();
+  const sending = f.controller.send(settings);
   await turn();
   f.publish({
     ...snapshot,
@@ -885,7 +884,7 @@ test('read-only admitted lookup resolves without Send; foreign storage writes ar
   f.answers.set('sendChat', async () => {
     throw failure();
   });
-  await f.controller.send();
+  await f.controller.send(settings);
   const p = f.controller.getSnapshot().pending[0];
   f.answers.set('getChatSend', async () => ({
     target,
@@ -954,7 +953,7 @@ test('Create and captured Stop are written before disclosure; lost replies recov
       assert.deepEqual(JSON.parse(f.storage.value!).pending.at(-1).input, input);
       throw failure();
     });
-  await f.controller.create('Preserved creation');
+  await f.controller.create('Preserved creation', settings);
   f.publish({
     ...snapshot,
     state: 'running',
@@ -1038,10 +1037,10 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
     });
     let call;
     if (operation === 'createChat') {
-      call = f.controller.create('Captured create');
+      call = f.controller.create('Captured create', settings);
     } else {
       if (operation === 'sendChat') {
-        call = f.controller.send();
+        call = f.controller.send(settings);
       } else {
         call = f.controller.stop();
       }
@@ -1089,8 +1088,8 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
             };
           throw failure();
         });
-        if (operation === 'createChat') await f.controller.create('Captured title');
-        else if (operation === 'sendChat') await f.controller.send();
+        if (operation === 'createChat') await f.controller.create('Captured title', settings);
+        else if (operation === 'sendChat') await f.controller.send(settings);
         else {
           f.publish({
             ...snapshot,
@@ -1169,7 +1168,7 @@ for (const lifecycle of ['detach', 'dispose'] as const)
     await ready(f);
     let release!: (value: unknown) => void;
     f.answers.set('createChat', () => new Promise((resolve) => (release = resolve)));
-    const creating = f.controller.create('Delayed creation');
+    const creating = f.controller.create('Delayed creation', settings);
     const pending = f.controller.getSnapshot().pending[0];
     await f.controller[lifecycle]();
     assert.equal(f.subscriptions, 0);
@@ -1208,7 +1207,7 @@ for (const extraField of ['selectedHost', 'createSession'] as const)
     const f = await fixture(t, storage);
     await f.controller.start();
     await f.controller.connect();
-    await f.controller.create('Blocked');
+    await f.controller.create('Blocked', settings);
     assert(f.controller.getSnapshot().storageError);
     assert.equal(storage.value, original);
     assert(!f.calls.some((c) => c.operation === 'createChat'));
@@ -1303,7 +1302,7 @@ test('unfamiliar nested saved draft data stays byte-identical before any automat
     f = await fixture(t, storage);
   await f.controller.start();
   await f.controller.connect();
-  await f.controller.create('Blocked');
+  await f.controller.create('Blocked', settings);
   f.controller.setDraft('Cannot publish into incompatible namespace');
   assert.equal(f.controller.preserve(), false);
   assert(f.controller.getSnapshot().storageError);
@@ -1371,7 +1370,7 @@ for (const code of ['Persistence', 'Cancelled', null] as const)
           };
     });
     f.controller.setDraft('first retained');
-    const sending = f.controller.send();
+    const sending = f.controller.send(settings);
     const pending = structuredClone(f.controller.getSnapshot().pending);
     const saved = f.storage.value,
       writes = f.storage.writes;
@@ -1390,7 +1389,7 @@ for (const code of ['Persistence', 'Cancelled', null] as const)
     assert.equal(settled, false);
     assert.equal(f.signals.get('sendChat')!.at(-1)!.aborted, true);
     other.setDraft('other model remains usable');
-    await other.send();
+    await other.send(settings);
     assert.equal(other.getSnapshot().pending.length, 0);
     f.controller.setDraft('late edit');
     late({
@@ -1474,11 +1473,9 @@ test('generation replacement cancels held host reads and does not accept stale h
   });
   await f.controller.refresh();
   assert(old.aborted);
-  held.resolve({ ...context, cwd: '/obsolete', model: 'obsolete' });
+  held.resolve({ ...context, actorId: 'obsolete', mode: 'local' });
   await refreshing;
-  const host = f.controller.getSnapshot().host!;
-  assert('cwd' in host);
-  assert.equal(host.cwd, summary.cwd);
+  assert.equal(f.controller.getSnapshot().host!.actorId, context.actorId);
   assert.equal(f.controller.getSnapshot().error, null);
   assert.equal(f.subscriptions, 1);
   assert(!f.calls.some((call) => ['sendChat', 'stopChat'].includes(call.operation)));
@@ -1490,7 +1487,7 @@ test('detach leaves admitted mutation wait owned by model and preserves newer un
   const held = event<unknown>();
   f.answers.set('sendChat', () => held.promise);
   f.controller.setDraft('captured');
-  const sending = f.controller.send();
+  const sending = f.controller.send(settings);
   const pending = f.controller.getSnapshot().pending[0];
   f.controller.setDraft('newer unsent');
   await f.controller.detach();
@@ -1612,7 +1609,7 @@ test('Create receipt does not wait for its view read or report obsolete view can
           conversation: { ...summary, target: current, title: 'Selected B' },
         };
   });
-  await f.controller.create('Captured creation');
+  await f.controller.create('Captured creation', settings);
   assert.equal(f.controller.getSnapshot().pending.length, 0);
   await f.controller.select({ ...target, conversationId: 'B' });
   held.resolve(snapshot);
@@ -1760,7 +1757,7 @@ test('disposal fences reentrant snapshot listeners before releasing resources or
     if (reentered) return;
     reentered = true;
     f.controller.setDraft('reentrant edit after disposal began');
-    void f.controller.create('reentrant admission after disposal began');
+    void f.controller.create('reentrant admission after disposal began', settings);
   });
   await f.controller.dispose();
   assert.equal(f.storage.value, saved);
@@ -1813,7 +1810,7 @@ test('explicit Disconnect drains the captured observation before invalidating it
     assert.equal(f.calls.filter((call) => call.operation === 'disconnect').length, 0);
     assert.equal(f.subscriptions, 1);
     f.controller.setDraft('preserved while release is held');
-    await f.controller.send();
+    await f.controller.send(settings);
     assert(!f.calls.some((call) => call.operation === 'sendChat'));
   } finally {
     held.resolve();
@@ -1920,7 +1917,7 @@ test('Disconnect fences reentrant Send before publishing unavailable readiness',
     const state = f.controller.getSnapshot();
     if (!attempted && !state.ready && state.active.includes('disconnect')) {
       attempted = true;
-      void f.controller.send();
+      void f.controller.send(settings);
     }
   });
   try {
@@ -2103,7 +2100,7 @@ test('Hide fences reentrant Send before publishing detached readiness', async (t
   const off = f.controller.subscribe(() => {
     if (!attempted && !f.controller.getSnapshot().ready) {
       attempted = true;
-      void f.controller.send();
+      void f.controller.send(settings);
     }
   });
   try {
@@ -2317,7 +2314,7 @@ test('a failed local failure-note write retains original mutation uncertainty an
       message: 'Controlled mutation outcome uncertainty',
     });
   });
-  await f.controller.send();
+  await f.controller.send(settings);
   assert.match(
     f.controller.getSnapshot().error!,
     /^Uncertain: Controlled mutation outcome uncertainty.*Draft preservation failed/,
@@ -2339,7 +2336,7 @@ test('public context copies cannot retarget the model, its saved namespace or su
   assert.deepEqual(f.controller.context, context);
   assert.notStrictEqual(f.controller.context, f.controller.context);
   await ready(f);
-  await f.controller.create('Original authority');
+  await f.controller.create('Original authority', settings);
   const creation = f.calls.find((call) => call.operation === 'createChat')!;
   assert.deepEqual((creation.input as ChatCommands['createChat']['input']).session, context);
   assert.deepEqual(JSON.parse(f.storage.value!).session, context);
@@ -2420,7 +2417,7 @@ test('draft mentions persist with their text, drop when their text is deleted, a
     storage,
   });
   assert.deepEqual(reopened.getSnapshot().mentions, [{ path: 'src/a.ts' }]);
-  await f.controller.send();
+  await f.controller.send(settings);
   const send = f.calls.find((call) => call.operation === 'sendChat')!.input as {
     text: string;
     mentions?: unknown;
@@ -2430,18 +2427,18 @@ test('draft mentions persist with their text, drop when their text is deleted, a
   assert.deepEqual(f.controller.getSnapshot().mentions, []);
   // A reply in the open chat carries its own mentions.
   f.controller.setDraft('Now @b.ts', [{ path: 'b.ts' }]);
-  await f.controller.send();
+  await f.controller.send(settings);
   const reply = f.calls.filter((call) => call.operation === 'sendChat')[1]!.input as {
     mentions?: unknown;
   };
   assert.deepEqual(reply.mentions, [{ path: 'b.ts' }]);
   f.controller.setDraft('No mentions');
-  await f.controller.send();
+  await f.controller.send(settings);
   const plain = f.calls.filter((call) => call.operation === 'sendChat')[2]!.input as object;
   assert(!('mentions' in plain));
 });
 
-test('file search asks the host for the open chat, a new chat folder, or the host folder', async (t) => {
+test('file search asks the host for the open chat or a new chat folder', async (t) => {
   const f = await fixture(t);
   await f.controller.start();
   await assert.rejects(f.controller.findFiles('a'), { code: 'Unavailable' });
@@ -2450,9 +2447,9 @@ test('file search asks the host for the open chat, a new chat folder, or the hos
   await f.controller.refresh();
   const reply = { query: 'a', matches: [{ path: 'a.ts', positions: [0] }], partial: false };
   f.answers.set('findChatFiles', async () => reply);
-  assert.deepEqual(await f.controller.findFiles('a'), reply);
-  assert.deepEqual(f.calls.at(-1)!.input, { session: context, cwd: summary.cwd, query: 'a' });
-  await f.controller.findFiles('a', { cwd: '/chosen' });
+  // A new chat without a folder has nothing to search.
+  await assert.rejects(f.controller.findFiles('a'), { code: 'InvalidInput' });
+  assert.deepEqual(await f.controller.findFiles('a', { cwd: '/chosen' }), reply);
   assert.deepEqual(f.calls.at(-1)!.input, { session: context, cwd: '/chosen', query: 'a' });
   await f.controller.select(target);
   await f.controller.findFiles('a', { cwd: '/ignored' });
@@ -2676,7 +2673,7 @@ test('a draft mention the saved format rejects is refused without blocking stora
   assert.equal(f.controller.preserve(), true);
   f.controller.setDraft('Now @ok.ts', [{ path: 'ok.ts' }]);
   assert.equal(f.controller.getSnapshot().storageError, null);
-  await f.controller.send();
+  await f.controller.send(settings);
   const send = f.calls.find((call) => call.operation === 'sendChat')!.input as {
     mentions?: unknown;
   };
@@ -2713,7 +2710,7 @@ test('a Send in flight is dispatching, and only an uncertain one stays pending f
     }
   });
   f.controller.setDraft('Hello');
-  const sending = f.controller.send();
+  const sending = f.controller.send(settings);
   await entered.promise;
   assert(sawReservation);
   const id = f.controller.getSnapshot().pending[0]!.input.requestId;
@@ -2761,7 +2758,7 @@ test('a new chat’s first message is in flight from the moment its Create is an
       }
   });
   f.controller.setDraft('First message');
-  const sending = f.controller.send();
+  const sending = f.controller.send(settings);
   await entered.promise;
   assert.equal(f.controller.getSnapshot().pending[0]!.operation, 'sendChat');
   reply.resolve();
@@ -2847,7 +2844,7 @@ test('a background reload reads again through the older chats Show older added',
     requestId: input.requestId,
     conversation: { ...summary, target: { ...context, conversationId: 'created' } },
   }));
-  await f.controller.create('Created');
+  await f.controller.create('Created', settings);
   assert.deepEqual(shownIds(f), ['created', ...pageIds(19)]);
 });
 
@@ -2880,7 +2877,7 @@ test('a chat created while a complete listing reloads stays first', async (t) =>
     requestId: input.requestId,
     conversation: { ...summary, target: { ...context, conversationId: 'created' } },
   }));
-  await f.controller.create('Created');
+  await f.controller.create('Created', settings);
   assert.deepEqual(shownIds(f), ['created', ...pageIds(3)]);
   release();
   await reloading;

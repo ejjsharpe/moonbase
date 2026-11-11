@@ -438,13 +438,12 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
           input as never,
           V.isMutation(operation),
           (output, health) => {
+            // Every host is a daemon whose chats choose their own folder and model.
             if (
               operation === 'getChatHost' &&
-              output &&
-              'mode' in (output as object) &&
               !health.capabilities.includes(chatHostCapabilities.local)
             )
-              V.fail('Incompatible', 'An SSH host must supply its fixed working folder and model.');
+              V.fail('Incompatible', 'This host does not run the Moonbase daemon. Update it.');
           },
         )) as ChatOutput<K>;
       });

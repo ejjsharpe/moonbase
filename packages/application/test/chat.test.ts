@@ -49,7 +49,7 @@ function fixture(options: { slowSend?: boolean; cleanupFailure?: boolean } = {})
     getChatHost: (input) =>
       Effect.sync(() => {
         assert.deepEqual(input.host, session.host);
-        return { ...session, cwd: conversation.cwd, model: conversation.model };
+        return { ...session, mode: 'local' as const };
       }),
     listChats: (input) =>
       Effect.sync(() => {
@@ -174,8 +174,7 @@ test('public chat entry points share one scope and preserve exact targets/reques
   let unsubscribe = async () => {};
   try {
     const host = await client.command('getChatHost', { host: session.host });
-    assert('cwd' in host);
-    assert.equal(host.cwd, conversation.cwd);
+    assert.equal(host.mode, 'local');
     assert.deepEqual((await second.command('listChats', { session })).conversations, [
       conversation,
     ]);

@@ -132,7 +132,7 @@ const conversationId = (target: ChatTarget) => Number(target.conversationId) as 
 
 test('committed text/thinking stream before completion; B produces no A reads or publications and live-only updates reuse history/status', async (t) => {
   const measured = instrument(t),
-    f = await fixture(t, undefined, {}, true),
+    f = await fixture(t),
     target = await f.create(),
     other = await f.create('B');
   measured.select(target);
@@ -214,7 +214,7 @@ test('committed text/thinking stream before completion; B produces no A reads or
 
 test('steady provider progress publishes while projection is slower than the commit interval', async (t) => {
   const measured = instrument(t),
-    f = await fixture(t, undefined, {}, true),
+    f = await fixture(t),
     target = await f.create();
   const stream = createAssistantMessageEventStream();
   t.mock.method(

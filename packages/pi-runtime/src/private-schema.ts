@@ -30,24 +30,10 @@ const recordId = Schema.String.check(
   Schema.makeFilter((value) => /^[1-9][0-9]*$/.test(value) && Number.isSafeInteger(Number(value))),
 );
 const model = Schema.Struct({ provider: ChatIdentifierSchema, modelId: text(256) });
-const identity = Schema.Struct({ ...ChatSessionSchema.fields, cwd: path, model });
-const configuration = {
-  ...identity.fields,
-  databasePath: path,
-};
 const token = Schema.String.check(
   Schema.makeFilter((value) => /^[\x21-\x7e]{16,4096}$/.test(value)),
 );
 const port = integer.check(Schema.makeFilter((value) => value >= 0 && value <= 65535));
-const programmatic = Schema.Struct({
-  ...configuration,
-  // Supplied public SDK capabilities retain their identity; their internals are not configuration.
-  models: Schema.declare<Models>(
-    (value): value is Models => !!value && typeof (value as Models).getModel === 'function',
-  ),
-  registry: Schema.optional(Schema.declare<Registry>((value): value is Registry => !!value)),
-  ripgrepExecutable: Schema.optional(path),
-});
 const server = Schema.Struct({ host: ChatHostTargetSchema, token, port });
 const keyFile = Schema.Struct({ source: Schema.Literal('file'), path });
 // A root is named by its real path; one under another would only repeat its folders.
@@ -110,8 +96,11 @@ const localIdentity = Schema.Struct({ ...ChatSessionSchema.fields, mode: Schema.
 const localProgrammatic = Schema.Struct({
   ...localIdentity.fields,
   databasePath: path,
-  models: programmatic.fields.models,
-  registry: programmatic.fields.registry,
+  // Supplied public SDK capabilities retain their identity; their internals are not configuration.
+  models: Schema.declare<Models>(
+    (value): value is Models => !!value && typeof (value as Models).getModel === 'function',
+  ),
+  registry: Schema.optional(Schema.declare<Registry>((value): value is Registry => !!value)),
   approveCreation: Schema.optional(
     Schema.declare<(settings: ChatCreationSettings) => Promise<void>>(
       (value): value is (settings: ChatCreationSettings) => Promise<void> =>
@@ -167,7 +156,6 @@ function decode<S extends Schema.ConstraintDecoder<unknown, never>>(
     );
   }
 }
-export const runtimeConfiguration = (value: unknown) => decode(programmatic, value);
 export const localConfiguration = (value: unknown) => decode(localProgrammatic, value);
 export const serverConfiguration = (value: unknown) => decode(server, value);
 export const daemonSettings = (value: unknown) => decode(daemon, value);
@@ -214,7 +202,7 @@ export function savedMetadata(value: unknown) {
 }
 function savedIdentity(value: string) {
   try {
-    decode(Schema.Union([identity, localIdentity]), JSON.parse(value), true);
+    decode(localIdentity, JSON.parse(value), true);
   } catch {
     fail('Persistence', 'Stored Moonbase chat authority is invalid.');
   }
