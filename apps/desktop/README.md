@@ -78,7 +78,7 @@ Main serves stored PNG/JPEG transcript images from `moonbase://editor/transcript
 
 ## Checks
 
-Build before native tests and package before package tests:
+Build before native tests and package before package tests. `test:native` runs every Electron project from source; `test:package` runs the `packaged` project and the tests tagged `@packaged` (a Reload, a no-resend Disconnect and images under the production CSP) against the package. PR checks run only `test`; the `nightly` workflow runs `test:browser`, `test:native`, `check:package` and `test:package`.
 
 ```sh
 bun run --cwd apps/desktop typecheck

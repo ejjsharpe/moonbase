@@ -834,7 +834,7 @@ test('composed IPC rejects foreign frames/hosts and extra/prototype operations b
 });
 
 for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
-  test(`${packaged ? 'packaged' : 'source'} ${operation}: committed reply lost on Disconnect retains original identity and never resends`, async () => {
+  test(`${packaged ? 'packaged' : 'source'} ${operation}: committed reply lost on Disconnect retains original identity and never resends${operation === 'sendChat' ? ' @packaged' : ''}`, async () => {
     await mkdir(output, { recursive: true });
     const f = await fixture(true);
     let current: ElectronApplication | undefined;
