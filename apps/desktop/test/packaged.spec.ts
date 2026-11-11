@@ -280,6 +280,8 @@ test('unsigned macOS package runs with only system PATH, SQLite, native/rg resou
     await expect(page.getByRole('tab', { name: 'packaged-created.txt', exact: true })).toHaveCount(
       0,
     );
+    // At the small zoomed size the project chats dock would leave the editor no width for its tabs.
+    await page.getByRole('button', { name: 'Hide project chats', exact: true }).click();
     await checkTabMenu(app, page, screen, 'packaged-created.txt');
     writeFileSync(
       'test-results/packaged-filename-maps.json',
