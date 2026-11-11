@@ -19,12 +19,13 @@ import {
 } from '@moonbase/pi-runtime/folders';
 import type { DaemonSettings } from '@moonbase/pi-runtime/host-configuration';
 import { createLocalModels } from '@moonbase/pi-runtime/local-models';
-import { ProviderSetupLive } from '@moonbase/pi-runtime/providers';
+import { ProviderSetupChanges, ProviderSetupLive } from '@moonbase/pi-runtime/providers';
 import {
   hostDaemonCapabilities,
   localDaemonCapabilities,
   makeDaemonClient,
   serveChat,
+  type SocketSources,
 } from '@moonbase/pi-runtime/server';
 import type { ClaudeCodeSubscription } from '@moonbase/pi-runtime/claude-code';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
@@ -160,11 +161,16 @@ async function serveDaemon(
       composeRuntime(directory, providers, folders, session, databasePath, ripgrep),
     );
     try {
-      const control = await runtime.runPromise(
+      const { control, providerChanges } = await runtime.runPromise(
         Effect.gen(function* () {
-          return yield* LocalPiControl;
+          return { control: yield* LocalPiControl, providerChanges: yield* ProviderSetupChanges };
         }),
       );
+      // The WebSocket pushes chat list and provider setup changes beside chat watches.
+      const sources: SocketSources = {
+        subscribeChatList: (listener) => control.subscribeChatList(listener),
+        subscribeProviderSetup: (listener) => providerChanges.subscribe(listener),
+      };
       closeAdmissions = () => control.setAdmissionsOpen(false);
       if (stopping) closeAdmissions();
       const wrap = options.wrapChat ?? ((client: ChatClient) => client);
@@ -176,6 +182,7 @@ async function serveDaemon(
           settings.port,
           makeDaemonClient(runtime),
           hostDaemonCapabilities,
+          sources,
         );
       else {
         idle = createIdleMonitor({
@@ -195,6 +202,18 @@ async function serveDaemon(
           0,
           trackDaemonUse(makeDaemonClient(runtime), idle),
           localDaemonCapabilities,
+          {
+            ...sources,
+            // A connected client keeps a local daemon running, as an open watch does.
+            trackConnection: () => {
+              idle!.begin();
+              let open = true;
+              return () => {
+                if (open) idle!.end();
+                open = false;
+              };
+            },
+          },
         );
       }
     } finally {
@@ -218,6 +237,7 @@ async function serveDaemon(
     port: number,
     daemon: DaemonClient,
     capabilities: readonly ChatHostCapability[],
+    sources: SocketSources,
   ) {
     // A daemon told to stop while starting never listens or announces itself.
     if (stopping) return;
@@ -232,6 +252,7 @@ async function serveDaemon(
             refuseWhileStopping(client, refusing),
             refuseDaemonWhileStopping(daemon, refusing),
             capabilities,
+            { sources },
           );
           listening = Number(new URL(server.origin).port);
           if (!stopping)

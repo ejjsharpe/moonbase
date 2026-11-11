@@ -92,6 +92,37 @@ export type PublicationEffect = {
   liveRetired: boolean | undefined;
 };
 const progressPaths = ['output', 'details', 'diagnostics', 'droppedBytes', 'droppedLines'];
+/** A live document change that only streams a response's text or tools' progress. */
+function isProgressOnly(change: CommitPublication['changes'][number]) {
+  return (
+    change.type === 'document' &&
+    change.record.kind === LiveDoc.definition.kind &&
+    change.value !== null &&
+    change.ops.length !== 0 &&
+    change.ops.every((op) => {
+      if (op[0] === 'r') return false;
+      const path = op[1];
+      return (
+        (path[0] === 'generation' && path[1] === 'message') ||
+        ((path[0] === 'tools' || path[0] === 'nestedTools') &&
+          typeof path[1] === 'number' &&
+          progressPaths.includes(String(path[2])))
+      );
+    })
+  );
+}
+/**
+ * Whether a commit may change a chat list: a conversation, task or metadata change, or a live
+ * document change other than streamed progress, which can start or end a run.
+ */
+function affectsChatList(publication: CommitPublication) {
+  return publication.changes.some((change) =>
+    change.type === 'document' || change.type === 'document.copy'
+      ? change.record.kind === Metadata.definition.kind ||
+        (change.record.kind === LiveDoc.definition.kind && !isProgressOnly(change))
+      : change.type === 'conversation' || change.type === 'task',
+  );
+}
 export function classifyPublication(
   publication: CommitPublication,
   conversationId: ConversationId,
@@ -117,22 +148,7 @@ export function classifyPublication(
           continue;
         effect.relevant = true;
         // Progress can outpace projection without invalidating its captured source/control.
-        const progressOnly =
-          kind === LiveDoc.definition.kind &&
-          change.type === 'document' &&
-          change.value !== null &&
-          change.ops.length !== 0 &&
-          change.ops.every((op) => {
-            if (op[0] === 'r') return false;
-            const path = op[1];
-            return (
-              (path[0] === 'generation' && path[1] === 'message') ||
-              ((path[0] === 'tools' || path[0] === 'nestedTools') &&
-                typeof path[1] === 'number' &&
-                progressPaths.includes(String(path[2])))
-            );
-          });
-        effect.invalidatesCapture ||= !progressOnly;
+        effect.invalidatesCapture ||= !isProgressOnly(change);
         if (kind === LiveDoc.definition.kind) {
           if (change.type === 'document' && change.value === null) liveRetired = true;
           else livePresent = true;
@@ -194,6 +210,18 @@ export class Host {
     this.aborts = aborts;
     this.waiters = waiters;
     this.observations = observations;
+  }
+  /** Calls `listener` after a commit or status report that may change a chat list. */
+  subscribeChatList(listener: () => void): () => void {
+    const off = this.harness.subscribeCommits((publication) => {
+      if (affectsChatList(publication)) listener();
+    });
+    const notify = () => listener();
+    this.statusListeners.add(notify);
+    return () => {
+      off();
+      this.statusListeners.delete(notify);
+    };
   }
   session(value: ChatSession) {
     if (!V.sameHost(value.host, this.config.host))

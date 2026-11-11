@@ -229,11 +229,14 @@ const utf8Bytes = (value: string) => new TextEncoder().encode(value).length;
  * A running response's transcript: a text part may carry its whole text (`truncated` false), and
  * its parts' text stays within `chatLiveTextBytes` in all.
  */
+/** A running response's transcript part, whose text may be whole rather than a preview. */
+export const ChatLiveTranscriptPartSchema = struct({
+  ...ChatTranscriptPartSchema.fields,
+  text: unicode,
+});
 export const ChatLiveTranscriptSchema = struct({
   ...ChatTranscriptSchema.fields,
-  parts: Schema.mutable(
-    Schema.Array(struct({ ...ChatTranscriptPartSchema.fields, text: unicode })),
-  ).check(
+  parts: Schema.mutable(Schema.Array(ChatLiveTranscriptPartSchema)).check(
     Schema.isMaxLength(chatManifestPageSize),
     Schema.makeFilter(
       (parts) => parts.reduce((sum, part) => sum + utf8Bytes(part.text), 0) <= chatLiveTextBytes,
@@ -296,24 +299,26 @@ const streamIdentity = {
   streamId: unicode.check(Schema.isPattern(/^[A-Za-z0-9_-]{43}$/)),
   sequence: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
 };
+/** One chunk of a chunked payload: canonical base64 of 1 to `chatContentChunkBytes` bytes. */
+export const ChatContentChunkDataSchema = Schema.String.check(
+  Schema.makeFilter((value) => {
+    try {
+      const decoded = atob(value);
+      return (
+        decoded.length > 0 && decoded.length <= chatContentChunkBytes && btoa(decoded) === value
+      );
+    } catch {
+      return false;
+    }
+  }),
+);
 export const ChatStreamFrameSchema = Schema.Union([
   struct({
     ...streamIdentity,
     kind: Schema.Literal('snapshot'),
     offset: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: maximumChatReplyBytes })),
     total: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: maximumChatReplyBytes })),
-    data: Schema.String.check(
-      Schema.makeFilter((value) => {
-        try {
-          const decoded = atob(value);
-          return (
-            decoded.length > 0 && decoded.length <= chatContentChunkBytes && btoa(decoded) === value
-          );
-        } catch {
-          return false;
-        }
-      }),
-    ),
+    data: ChatContentChunkDataSchema,
   }),
   struct({ ...streamIdentity, kind: Schema.Literal('heartbeat') }),
   struct({

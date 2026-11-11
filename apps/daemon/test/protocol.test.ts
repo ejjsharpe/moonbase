@@ -25,7 +25,7 @@ import {
 import { fauxModelId, fauxProviderId, fauxSignInCode } from './faux.ts';
 
 const model = { provider: fauxProviderId, modelId: fauxModelId };
-const capabilities = ['chat-v0', 'daemon-local-v1', 'providers-v1', 'folders-v1'];
+const capabilities = ['chat-v0', 'daemon-local-v1', 'providers-v1', 'folders-v1', 'socket-v1'];
 
 async function withRoot(run: (root: string, started: DaemonProcess[]) => Promise<void>) {
   const root = await temporaryRoot(),

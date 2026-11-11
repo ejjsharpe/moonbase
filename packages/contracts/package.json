@@ -20,12 +20,16 @@
     "./providers": "./src/providers.ts",
     "./providers-schema": "./src/providers-schema.ts",
     "./daemon": "./src/daemon.ts",
-    "./daemon-schema": "./src/daemon-schema.ts"
+    "./daemon-schema": "./src/daemon-schema.ts",
+    "./socket": "./src/socket.ts",
+    "./socket-schema": "./src/socket-schema.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "oxlint .",
-    "test": "node --experimental-strip-types --test test/*.test.ts"
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "socket-schema": "node --experimental-strip-types scripts/socket-schema.ts",
+    "check:socket-schema": "node --experimental-strip-types scripts/socket-schema.ts --check"
   },
   "dependencies": {
     "effect": "4.1.0"

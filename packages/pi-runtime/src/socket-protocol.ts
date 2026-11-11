@@ -1,0 +1,110 @@
+import { createHmac, timingSafeEqual } from 'node:crypto';
+import { chatProtocolVersion, type ChatHostTarget } from '@moonbase/contracts/host';
+import { socketDomain, socketLimits } from '@moonbase/contracts/socket';
+import { fail } from './validation.ts';
+import { json } from './protocol.ts';
+
+export type SocketDirection = 'client' | 'server';
+export type SocketKeys = Record<SocketDirection, Buffer>;
+/** What the hello binds: the client's nonce, the server's challenge, the protocol and the host. */
+export type SocketBinding = { nonce: string; challenge: string; host: ChatHostTarget };
+export type SocketClock = {
+  now(): number;
+  setTimeout(callback: () => void, ms: number): unknown;
+  clearTimeout(handle: unknown): void;
+};
+export const systemSocketClock: SocketClock = {
+  now: () => performance.now(),
+  setTimeout: (callback, ms) => setTimeout(callback, ms),
+  clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
+
+/**
+ * Each direction's frame key, derived from the token and everything the hello binds, so a frame
+ * verifies only on its own connection and in its own direction.
+ */
+export function deriveSocketKeys(token: string, binding: SocketBinding): SocketKeys {
+  const key = (direction: SocketDirection) =>
+    createHmac('sha256', token)
+      .update(
+        JSON.stringify([
+          socketDomain,
+          'frame-key',
+          direction,
+          chatProtocolVersion,
+          binding.host.hostId,
+          binding.host.storeId,
+          binding.nonce,
+          binding.challenge,
+        ]),
+      )
+      .digest();
+  return { client: key('client'), server: key('server') };
+}
+const mac = (key: Buffer, body: Uint8Array) => createHmac('sha256', key).update(body).digest();
+/** A message's bytes: the 32-byte HMAC of its JSON body, then the body. */
+export function sealSocketMessage(key: Buffer, value: unknown) {
+  const body = Buffer.from(JSON.stringify(value));
+  if (body.length + 32 > socketLimits.frameBytes)
+    fail('InvalidInput', 'Socket message exceeds its frame limit.');
+  return Buffer.concat([mac(key, body), body]);
+}
+/** The sealed message's body bytes, or undefined when it is too short to hold a MAC and body. */
+export const readSealedBody = (bytes: Uint8Array) =>
+  bytes.length > 32 ? bytes.subarray(32) : undefined;
+/** Whether `bytes` carry a valid MAC under `key`; checked before its body is trusted. */
+export function verifySocketMessage(key: Buffer, bytes: Uint8Array) {
+  const body = readSealedBody(bytes);
+  return !!body && timingSafeEqual(Buffer.from(bytes.subarray(0, 32)), mac(key, body));
+}
+/** The verified body's JSON; a bad MAC or body fails without saying which. */
+export function openSocketMessage(key: Buffer, bytes: Uint8Array): unknown {
+  if (!verifySocketMessage(key, bytes)) fail('Unauthorized', 'Socket message is not authentic.');
+  return json(bytes.subarray(32));
+}
+/** A payload's JSON in `socketLimits.chunkBytes` chunks of base64. */
+export function chunkPayload(value: unknown) {
+  const bytes = Buffer.from(JSON.stringify(value));
+  if (bytes.length > socketLimits.payloadBytes) return undefined;
+  const chunks: { offset: number; total: number; data: string }[] = [];
+  for (let offset = 0; offset < bytes.length; offset += socketLimits.chunkBytes)
+    chunks.push({
+      offset,
+      total: bytes.length,
+      data: bytes.subarray(offset, offset + socketLimits.chunkBytes).toString('base64'),
+    });
+  return chunks;
+}
+/** Reassembles one chunked payload at a time; chunks must arrive in order and back to back. */
+export class PayloadAssembler {
+  private parts: Buffer[] = [];
+  private received = 0;
+  private key: string | undefined;
+  private total = 0;
+  /** Whether a payload is partly received. */
+  get partial() {
+    return this.key !== undefined;
+  }
+  /** The payload's JSON once `chunk` completes it; any gap, overlap or interleaving fails. */
+  push(
+    key: string,
+    chunk: { offset: number; total: number; data: string },
+  ): { value: unknown } | undefined {
+    if (this.key === undefined) {
+      if (chunk.offset !== 0) fail('Incompatible', 'Socket payload chunk is out of order.');
+      this.key = key;
+      this.total = chunk.total;
+    } else if (key !== this.key || chunk.total !== this.total || chunk.offset !== this.received)
+      fail('Incompatible', 'Socket payload chunk is out of order.');
+    const bytes = Buffer.from(chunk.data, 'base64');
+    this.received += bytes.length;
+    if (this.received > this.total) fail('Incompatible', 'Socket payload exceeds its total.');
+    this.parts.push(bytes);
+    if (this.received < this.total) return undefined;
+    const whole = Buffer.concat(this.parts, this.total);
+    this.parts = [];
+    this.received = 0;
+    this.key = undefined;
+    return { value: json(whole) };
+  }
+}

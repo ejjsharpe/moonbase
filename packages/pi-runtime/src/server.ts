@@ -37,8 +37,15 @@ import { ApplicationError } from '@moonbase/contracts/workspace';
 import * as P from './protocol.ts';
 import * as V from './validation.ts';
 import * as S from './private-schema.ts';
+import { createSocketServer, type SocketSources } from './socket-server.ts';
+import { systemSocketClock, type SocketClock } from './socket-protocol.ts';
+
+export type { SocketSources } from './socket-server.ts';
+export type { SocketClock } from './socket-protocol.ts';
 
 export type ChatServerConfiguration = { host: ChatHostTarget; token: string; port: number };
+/** What a daemon adds to serve its WebSocket beside HTTP; the clock is for tests. */
+export type ChatSocketConfiguration = { sources: SocketSources; clock?: SocketClock };
 /** A local-mode daemon's features beyond chat: local-mode chat and control, providers, folders. */
 export const localDaemonCapabilities: readonly ChatHostCapability[] = [
   chatHostCapabilities.local,
@@ -59,7 +66,8 @@ const refusalCodes = new Set<string>(['InvalidInput', 'Unauthorized', 'Incompati
  * The injected clients are bound to the consumer's process root and shared handlers. They are the
  * trusted local services, which already validate their replies and snapshots; only wire input is
  * decoded here. A local-mode daemon also supplies `daemon`, its folder, control and provider setup
- * operations, and its health then advertises them.
+ * operations, and its health then advertises them. A daemon that also supplies `socket` serves
+ * the WebSocket at `/v2/socket` on the same listener and advertises `socket-v1`.
  */
 export const serveChat = (
   config: ChatServerConfiguration,
@@ -67,6 +75,7 @@ export const serveChat = (
   daemon?: DaemonClient,
   /** What the daemon operations add to health; a local-mode daemon's by default. */
   daemonCapabilities: readonly ChatHostCapability[] = localDaemonCapabilities,
+  socket?: ChatSocketConfiguration,
 ) =>
   Effect.acquireRelease(
     Effect.tryPromise({
@@ -79,7 +88,11 @@ export const serveChat = (
             ...expected,
             protocol: chatProtocolVersion,
             version: chatHostVersion,
-            capabilities: [chatHostCapabilities.chat, ...(daemon ? daemonCapabilities : [])],
+            capabilities: [
+              chatHostCapabilities.chat,
+              ...(daemon ? daemonCapabilities : []),
+              ...(daemon && socket ? [chatHostCapabilities.socket] : []),
+            ],
           },
           expected,
         );
@@ -149,6 +162,39 @@ export const serveChat = (
           });
           return outcome;
         };
+        /** Runs one request: a daemon operation, or a chat operation that `signal` may cancel. */
+        const runOperation = async (operation: unknown, input: unknown, signal?: AbortSignal) => {
+          if (daemon && isDaemonCommand(operation))
+            return dispatchDaemon(operation, decodeDaemonInput(operation, input));
+          const command = V.command(operation),
+            decoded = V.input(command, input);
+          return client.command(
+            command,
+            decoded,
+            signal && V.isCancellableRead(command) ? { signal } : undefined,
+          );
+        };
+        const describeFailure = (operation: unknown, error: unknown) =>
+          daemon && isDaemonCommand(operation)
+            ? P.publicDaemonError(error)
+            : P.publicError(error, typeof operation === 'string' ? operation : undefined);
+        const sockets =
+          daemon && socket
+            ? createSocketServer({
+                token,
+                host: expected,
+                health,
+                client,
+                daemon,
+                sources: socket.sources,
+                clock: socket.clock ?? systemSocketClock,
+                answer: (operation, input, signal) =>
+                  runOperation(operation, input, signal).then(
+                    (value) => ({ ok: true, value }),
+                    (error: unknown) => ({ ok: false, error: describeFailure(operation, error) }),
+                  ),
+              })
+            : undefined;
         const streamClosures = new Set<Promise<void>>();
         let streamFailure: unknown;
         const grants = new Map<string, { nonce: string; expires: number }>();
@@ -274,8 +320,7 @@ export const serveChat = (
           let length = 0,
             authenticated = false;
           let timer: ReturnType<typeof setTimeout> | undefined;
-          let dispatchedOperation: string | undefined,
-            daemonOperation = false;
+          let operation: unknown;
           try {
             timer = setTimeout(() => request.destroy(), P.requestDeadlineMs);
             if (!/^application\/json(?:\s*;|$)/i.test(request.headers['content-type'] ?? ''))
@@ -342,52 +387,22 @@ export const serveChat = (
               return;
             }
             const envelope = V.object(P.json(bytes), ['operation', 'input']);
-            if (daemon && isDaemonCommand(envelope.operation)) {
-              daemonOperation = true;
-              const operation = envelope.operation,
-                input = decodeDaemonInput(operation, envelope.input);
-              dispatchedOperation = operation;
-              send(200, { ok: true, value: await dispatchDaemon(operation, input) }, challenge);
-              return;
-            }
-            const operation = V.command(envelope.operation),
-              input = V.input(operation, envelope.input);
-            dispatchedOperation = operation;
+            operation = envelope.operation;
             const controller = new AbortController();
             const cancelRead = () => {
               if (!response.writableEnded) controller.abort();
             };
             response.once('close', cancelRead);
             try {
-              const value = await client.command(
-                operation,
-                input,
-                V.isCancellableRead(operation) ? { signal: controller.signal } : undefined,
-              );
-              send(
-                200,
-                {
-                  ok: true,
-                  value,
-                },
-                challenge,
-              );
+              const value = await runOperation(operation, envelope.input, controller.signal);
+              send(200, { ok: true, value }, challenge);
             } finally {
               response.off('close', cancelRead);
             }
           } catch (error) {
             if (response.headersSent) response.destroy();
             else if (authenticated)
-              send(
-                400,
-                {
-                  ok: false,
-                  error: daemonOperation
-                    ? P.publicDaemonError(error)
-                    : P.publicError(error, dispatchedOperation),
-                },
-                challenge,
-              );
+              send(400, { ok: false, error: describeFailure(operation, error) }, challenge);
             else if (!response.destroyed) {
               response.writeHead(400);
               response.end();
@@ -403,6 +418,10 @@ export const serveChat = (
             resolve();
           });
         });
+        server.on('upgrade', (request, upgraded, head) => {
+          if (sockets) sockets.upgrade(request, upgraded, head);
+          else upgraded.destroy();
+        });
         const address = server.address();
         if (!address || typeof address === 'string')
           V.fail('Unavailable', 'Chat loopback listener did not open.');
@@ -411,6 +430,7 @@ export const serveChat = (
           close: async () => {
             closed = true;
             grants.clear();
+            await sockets?.close();
             await new Promise<void>((resolve, reject) => {
               server.close((error) => (error ? reject(error) : resolve()));
               server.closeAllConnections();

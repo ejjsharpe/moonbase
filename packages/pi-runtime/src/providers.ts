@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { Effect, Layer } from 'effect';
+import { Context, Effect, Layer } from 'effect';
 import { getSupportedThinkingLevels, type Models } from '@earendil-works/pi-ai/models';
 type Interaction = Parameters<Models['login']>[2];
 type AuthPrompt = Parameters<Interaction['prompt']>[0];
@@ -91,13 +91,23 @@ function boundText(value: string) {
   return text;
 }
 
+/** Tells a server when any owner's provider setup state may have changed, so it can push it. */
+export class ProviderSetupChanges extends Context.Service<
+  ProviderSetupChanges,
+  { subscribe(listener: () => void): () => void }
+>()('moonbase/ProviderSetupChanges') {}
+
 /** Provider callbacks remain privileged; only status and live prompt identities leave this layer. */
 export const ProviderSetupLive = (
   config: ProviderSetupConfiguration,
-): Layer.Layer<ProviderSetupService> =>
-  Layer.effect(
-    ProviderSetupService,
+): Layer.Layer<ProviderSetupService | ProviderSetupChanges> =>
+  Layer.effectContext(
     Effect.gen(function* () {
+      const listeners = new Set<() => void>();
+      /** A flow, an owner or a sign-in changed; reading state never calls it. */
+      const changed = () => {
+        for (const listener of listeners) listener();
+      };
       const owners = new Map<string, Flow>();
       const revisions = new Map<string, number>();
       const released = new Set<string>();
@@ -124,6 +134,7 @@ export const ProviderSetupLive = (
         owners.delete(owner);
         revisions.delete(owner);
         if (flow) await cancelFlow(flow);
+        if (flow) changed();
       };
       /**
        * Marks `owner` as heard from and drops other owners that went quiet or exceed the bound,
@@ -271,6 +282,7 @@ export const ProviderSetupLive = (
                 if (flow.answer?.id === id) {
                   flow.answer = undefined;
                   flow.state = { ...flow.state, prompt: null };
+                  changed();
                 }
               };
               const cancelled = () => {
@@ -305,6 +317,7 @@ export const ProviderSetupLive = (
               };
               abort.signal.addEventListener('abort', cancelled, { once: true });
               prompt.signal?.addEventListener('abort', cancelled, { once: true });
+              changed();
             });
           const notify = (event: AuthEvent) => {
             if (!live()) return;
@@ -320,6 +333,7 @@ export const ProviderSetupLive = (
                 ...flow.state,
                 message: 'Waiting for the provider to finish sign-in…',
               };
+            changed();
           };
           flow.completion = config.models
             .login(
@@ -351,6 +365,7 @@ export const ProviderSetupLive = (
             .finally(() => {
               flow.answer = undefined;
               flow.url = undefined;
+              changed();
             });
         } else if (operation === 'answerProviderPrompt') {
           const { flowId, promptId, answer } = value as ProviderInput<'answerProviderPrompt'>;
@@ -378,6 +393,7 @@ export const ProviderSetupLive = (
           await cancel(owner);
           await config.models.logout(providerId);
         }
+        if (operation !== 'getProviders' && operation !== 'openProviderUrl') changed();
         try {
           return decodeProviderOutput(operation, await getStatus(owner));
         } catch (error) {
@@ -388,7 +404,7 @@ export const ProviderSetupLive = (
           throw error;
         }
       };
-      return {
+      const service: ProviderSetupService['Service'] = {
         forOwner: (owner) =>
           Object.fromEntries(
             [
@@ -431,5 +447,15 @@ export const ProviderSetupLive = (
             catch: (error) => (ApplicationError.is(error) ? error : unavailable()),
           }),
       };
+      return Context.make(ProviderSetupService, service).pipe(
+        Context.add(ProviderSetupChanges, {
+          subscribe: (listener) => {
+            listeners.add(listener);
+            return () => {
+              listeners.delete(listener);
+            };
+          },
+        }),
+      );
     }),
   );

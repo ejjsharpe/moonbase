@@ -32,6 +32,8 @@ export class LocalPiControl extends Context.Service<
     hasActiveWork(): Effect.Effect<boolean, ApplicationError>;
     /** Clears `ownFolder` once a chat's own folder has become a project where it is. */
     markFolderAsProject(target: ChatTarget): Effect.Effect<void, ApplicationError>;
+    /** Calls `listener` after a change that may alter a chat list; returns its unsubscribe. */
+    subscribeChatList(listener: () => void): () => void;
   }
 >()('moonbase/LocalPiControl') {}
 function makeChatService(host: Host): ChatServiceShape {
@@ -99,6 +101,7 @@ export const LocalPiRuntimeLive = (
           },
           hasActiveWork: () =>
             Effect.tryPromise({ try: () => host.hasActiveWork(), catch: safeError }),
+          subscribeChatList: (listener) => host.subscribeChatList(listener),
           markFolderAsProject: (target) =>
             Effect.tryPromise({
               try: () => host.markFolderAsProject(target),

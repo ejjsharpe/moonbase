@@ -662,7 +662,10 @@ const publicFailure = (code: (typeof chatReplyErrorCodes)[number], operation?: s
  * Decodes a signed reply's `error` field; undefined when it carries no public error code. A daemon
  * operation's failure may name a reason, shown with the client's own fixed text.
  */
-function decodeErrorEnvelope(error: unknown, operation?: string): ApplicationError | undefined {
+export function decodeErrorEnvelope(
+  error: unknown,
+  operation?: string,
+): ApplicationError | undefined {
   try {
     const record = V.object(error);
     const code = chatReplyErrorCodes.find((value) => value === record.code);
