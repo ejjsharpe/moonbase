@@ -6,7 +6,7 @@
 bun run --cwd apps/daemon dev /absolute/private/data-directory
 ```
 
-The data directory is its only argument; everything else is read from files inside it, never from the environment or other arguments, so launchd can start it unchanged. It creates the directory if needed (its parent must exist). The directory must be 0700, owned by you and not a symlink; files are 0600, opened without following links and checked once open. Anything else, or a malformed file, is refused with a message that names no path or contents.
+The data directory is its only argument (a second one is refused); everything else is read from files inside it, never from the environment or other arguments, so launchd can start it unchanged. It creates the directory if needed (its parent must exist). The directory must be 0700, owned by you and not a symlink; files are 0600, opened without following links and checked once open. Anything else, or a malformed file, is refused with a message that names no path or contents.
 
 | Entry | Purpose |
 | --- | --- |
@@ -30,7 +30,7 @@ The data directory is its only argument; everything else is read from files insi
 - **Local mode** listens on an ephemeral 127.0.0.1 port. It runs the local Pi runtime with the local provider catalog and the Claude Code subscription; credentials are encrypted under a key in the Keychain (the default) or a private key file, which is checked at startup and created at the first sign-in. A chat may use only a folder in `approved-folders.json`. The daemon never opens a browser.
 - **Host mode** is the fixed-settings runtime of the standalone host (`host.ts`) on the configured port, with host-side provider keys.
 
-On start it prints one JSON `ready` line on stdout (`{"event":"ready","host":…,"port":…}`); failures print one `failed` line on stderr and exit 1, including "already running" when another daemon holds the lock. `SIGTERM` or `SIGINT` stops admitting (new requests and runs are refused at once), closes the server and runtime, closes Claude Code's workers, removes `endpoint.json` and exits 0; interrupted runs resume on the next start through Pi Durable. A local daemon also exits by itself after 5 minutes with no client request in flight, no open watch and no active work; host mode never idles out. Logs record only lifecycle events and failure codes: no token, credentials, request bodies or chat text.
+On start it prints one JSON `ready` line on stdout (`{"event":"ready","host":…,"port":…}`); failures print one `failed` line on stderr and exit 1, including "already running" when another daemon holds the lock. `SIGTERM` or `SIGINT` stops admitting (new requests and runs are refused at once), closes the server and runtime, closes Claude Code's workers, removes `endpoint.json` and exits 0; interrupted runs resume on the next start through Pi Durable. A local daemon also exits by itself after 5 minutes with no authenticated client request in flight, no open watch and no active work; host mode never idles out. Logs record only lifecycle events and failure codes: no token, credentials, request bodies or chat text.
 
 ## Checks
 

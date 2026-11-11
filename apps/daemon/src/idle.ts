@@ -1,5 +1,4 @@
 import type { ChatClient } from '@moonbase/contracts/chat';
-import { ApplicationError } from '@moonbase/contracts/errors';
 
 export type IdleClock = {
   now(): number;
@@ -89,18 +88,10 @@ export function createIdleMonitor({
 }
 export type IdleMonitor = ReturnType<typeof createIdleMonitor>;
 
-/**
- * Counts each request and open watch as a client using the daemon, and refuses new ones once the
- * monitor has stopped: the daemon is then shutting down, so nothing new is admitted.
- */
+/** Counts each request and open watch as a client using the daemon. */
 export function trackClientUse(client: ChatClient, idle: IdleMonitor): ChatClient {
-  const refuseIfStopping = () => {
-    if (idle.stopped)
-      throw new ApplicationError({ code: 'Unavailable', message: 'The daemon is stopping.' });
-  };
   return {
     command: async (operation, input, options) => {
-      refuseIfStopping();
       idle.begin();
       try {
         return await client.command(operation, input, options);
@@ -109,7 +100,6 @@ export function trackClientUse(client: ChatClient, idle: IdleMonitor): ChatClien
       }
     },
     watch: (input, receive, onError) => {
-      refuseIfStopping();
       idle.begin();
       let open = true;
       let close: ReturnType<ChatClient['watch']>;

@@ -192,6 +192,17 @@ export function createFauxClient(port: number, token: string) {
   return { origin, command, watch };
 }
 
+/** Sends a health probe signed with `token`, as a client checks the host before connecting. */
+export function probeHealth(origin: string, token: string) {
+  const nonce = randomBytes(32).toString('base64url');
+  const proof = createHmac('sha256', token)
+    .update(JSON.stringify(['moonbase-health-v1', 'request', nonce]))
+    .digest('hex');
+  return fetch(origin + '/v1/health', {
+    headers: { 'X-Moonbase-Nonce': nonce, Authorization: 'Moonbase-HMAC-SHA256 ' + proof },
+  });
+}
+
 /** A port free right now on 127.0.0.1, for a host-mode daemon's configured port. */
 export async function findFreePort() {
   const { createServer } = await import('node:net');

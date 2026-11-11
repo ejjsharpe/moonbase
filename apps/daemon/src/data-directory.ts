@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { constants, type Stats } from 'node:fs';
 import { link, lstat, mkdir, open, rename, unlink } from 'node:fs/promises';
-import { isAbsolute, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import type { ChatSession } from '@moonbase/contracts/chat';
 import { decodeChatInput } from '@moonbase/contracts/chat-schema';
 import { decodeDaemonSettings, type DaemonSettings } from '@moonbase/pi-runtime/host-configuration';
@@ -20,6 +20,16 @@ const malformed = () =>
 
 const isPrivate = (info: Stats, mask = 0o077) =>
   info.uid === process.getuid?.() && !(info.mode & mask);
+
+/** The data directory from the daemon's arguments, which must be exactly that one path. */
+export function readDirectoryArgument(args: readonly string[]) {
+  if (args.length > 1)
+    throw new DaemonFailure(
+      'InvalidInput',
+      'The daemon takes one argument: the absolute path of its data directory.',
+    );
+  return args[0] ?? '';
+}
 
 /** Creates or validates one private directory: 0700, owned by this user, not a symlink. */
 export async function openPrivateDirectory(path: string) {
@@ -97,6 +107,7 @@ async function createPrivateFile(path: string, contents: string) {
   }
   try {
     await link(temporary, path);
+    await syncDirectory(path);
     return true;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
@@ -118,6 +129,17 @@ export async function replacePrivateFile(path: string, contents: string) {
     await file.close();
   }
   await rename(temporary, path);
+  await syncDirectory(path);
+}
+
+/** Makes the link or rename that put `path` in place durable, by syncing its folder. */
+async function syncDirectory(path: string) {
+  const folder = await open(dirname(path), constants.O_RDONLY);
+  try {
+    await folder.sync();
+  } finally {
+    await folder.close();
+  }
 }
 
 /** Reads a private file, creating it once with `create()` when it does not exist. */
