@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { test } from 'node:test';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -66,6 +67,8 @@ test('one WebSocket runs every operation and holds chat, chat-list and provider 
       const project = join(root, 'project');
       await mkdir(project);
       await writeFile(join(project, 'readme.md'), 'hello');
+      // Git lists the folder whether or not this machine has ripgrep on PATH.
+      execFileSync('git', ['init', '-q'], { cwd: project });
       assert.equal(
         (await run('approveFolder', { host, requestId: 'approve', path: project })).path,
         project,

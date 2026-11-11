@@ -124,6 +124,8 @@ test('a token holder drives a local-mode daemon completely over the loopback con
       const project = join(root, 'project');
       await mkdir(project);
       await writeFile(join(project, 'readme.md'), 'hello');
+      // Git lists the folder whether or not this machine has ripgrep on PATH.
+      execFileSync('git', ['init', '-q'], { cwd: project });
       await clients.run(
         folders.approveFolder({ host: session.host, requestId: 'approve-project', path: project }),
       );
