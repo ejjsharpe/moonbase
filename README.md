@@ -14,6 +14,7 @@ A macOS workbench for editing local projects and chatting with Pi Durable agents
 | [UI](packages/ui/README.md) | Shared StyleX tokens, recipes and icons |
 | [Config](packages/config/README.md) | Lint, formatting and TypeScript defaults |
 | [Desktop](apps/desktop/README.md) | Electron app: navigation, Chat view, native capabilities and packaging |
+| [Daemon](apps/daemon/README.md) | Bun process root that serves chats from its own data directory |
 
 See [AGENTS.md](AGENTS.md) for contribution rules.
 

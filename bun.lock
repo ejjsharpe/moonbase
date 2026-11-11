@@ -39,6 +39,17 @@
         "vite-plus": "1.4.0",
       },
     },
+    "apps/daemon": {
+      "name": "@moonbase/daemon",
+      "version": "0.1.0",
+      "dependencies": {
+        "@earendil-works/pi-ai": "1.4.0",
+        "@moonbase/application": "workspace:*",
+        "@moonbase/contracts": "workspace:*",
+        "@moonbase/pi-runtime": "workspace:*",
+        "effect": "4.1.0",
+      },
+    },
     "apps/desktop": {
       "name": "@moonbase/desktop",
       "version": "0.1.0",
@@ -411,6 +422,8 @@
     "@moonbase/config": ["@moonbase/config@workspace:packages/config"],
 
     "@moonbase/contracts": ["@moonbase/contracts@workspace:packages/contracts"],
+
+    "@moonbase/daemon": ["@moonbase/daemon@workspace:apps/daemon"],
 
     "@moonbase/desktop": ["@moonbase/desktop@workspace:apps/desktop"],
 
