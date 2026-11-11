@@ -27,8 +27,18 @@ const failure = () =>
   new ApplicationError({
     code: 'Persistence',
     message:
-      'Encrypted provider credentials could not be read or saved. Existing files were retained. Unlock your keychain and retry.',
+      'Encrypted provider credentials could not be read or saved. Existing files were kept. Check that the credentials folder and its files are private to you, then retry.',
   });
+const unreadableFailure = () =>
+  new ApplicationError({
+    code: 'Persistence',
+    message:
+      "A saved provider credential can't be read with the current credential key. Sign in to that provider again to replace it, or sign out to remove it.",
+  });
+/** Thrown by `createKeyEncryption` when a file can't be opened under the key that loaded, or no key exists. */
+class UnreadableCredential extends Error {}
+/** A stored file that will never decode under this store's encryption, so it may be replaced. */
+const unreadable = Symbol('unreadable');
 const credentialSchema = Schema.NullOr(
   Schema.Union([
     Schema.Struct({
@@ -127,17 +137,22 @@ export function createKeyEncryption(source: CredentialKeySource): CredentialEncr
       ]);
     },
     decrypt: async (value, providerId) => {
-      const data = Buffer.from(value);
-      if (data.byteLength < 1 + nonceBytes + tagBytes || data[0] !== sealVersion) throw failure();
-      const secret = await getKey(false);
-      if (!secret) throw failure();
-      const decipher = createDecipheriv('aes-256-gcm', secret, data.subarray(1, 1 + nonceBytes));
-      decipher.setAAD(getAssociatedData(providerId));
-      decipher.setAuthTag(data.subarray(-tagBytes));
-      return Buffer.concat([
-        decipher.update(data.subarray(1 + nonceBytes, -tagBytes)),
-        decipher.final(),
-      ]).toString('utf8');
+      // The key loads first, so a locked keychain is always `Unavailable`, never unreadable.
+      const data = Buffer.from(value),
+        secret = await getKey(false);
+      if (!secret || data.byteLength < 1 + nonceBytes + tagBytes || data[0] !== sealVersion)
+        throw new UnreadableCredential();
+      try {
+        const decipher = createDecipheriv('aes-256-gcm', secret, data.subarray(1, 1 + nonceBytes));
+        decipher.setAAD(getAssociatedData(providerId));
+        decipher.setAuthTag(data.subarray(-tagBytes));
+        return Buffer.concat([
+          decipher.update(data.subarray(1 + nonceBytes, -tagBytes)),
+          decipher.final(),
+        ]).toString('utf8');
+      } catch {
+        throw new UnreadableCredential();
+      }
     },
   };
 }
@@ -163,7 +178,10 @@ export function createCredentialStore(
     )
       throw failure();
   };
-  const read = (providerId: string): Promise<Credential | undefined> =>
+  // A file is unreadable when the key encryption authenticates it as not sealed under the loaded
+  // key (or no key exists), or when it decrypts to something that isn't a credential. Any other
+  // failure, such as a locked keychain, a private-file check or I/O, keeps the file.
+  const readStored = (providerId: string): Promise<Credential | undefined | typeof unreadable> =>
     protectStorage(async () => {
       await prepare();
       let file;
@@ -183,16 +201,36 @@ export function createCredentialStore(
         )
           throw failure();
         if (!(await encryption.available())) throw failure();
-        return decodeCredential(
-          JSON.parse(await encryption.decrypt(await file.readFile(), providerId)),
-        );
+        const sealed = await file.readFile();
+        let plain: string;
+        try {
+          plain = await encryption.decrypt(sealed, providerId);
+        } catch (error) {
+          if (error instanceof UnreadableCredential) return unreadable;
+          throw error;
+        }
+        try {
+          return decodeCredential(JSON.parse(plain));
+        } catch {
+          return unreadable;
+        }
       } finally {
         await file.close();
       }
     });
-  const write = (providerId: string, value: Credential | undefined) =>
+  const read = async (providerId: string) => {
+    const stored = await readStored(providerId);
+    if (stored === unreadable) throw unreadableFailure();
+    return stored;
+  };
+  /** The current credential for a change, where an unreadable file counts as none. */
+  const readReplaceable = async (providerId: string) => {
+    const stored = await readStored(providerId);
+    return stored === unreadable ? undefined : stored;
+  };
+  const write = (providerId: string, value: Credential) =>
     protectStorage(async () => {
-      const plain = JSON.stringify(decodeCredential(value ?? null) ?? null);
+      const plain = JSON.stringify(decodeCredential(value));
       if (Buffer.byteLength(plain) > 64 * 1024) throw failure();
       if (!(await encryption.available())) throw failure();
       const encrypted = await encryption.encrypt(plain, providerId);
@@ -246,7 +284,7 @@ export function createCredentialStore(
       runLocked(
         id,
         async () => {
-          const current = await read(id);
+          const current = await readReplaceable(id);
           const next = await fn(current);
           if (next !== undefined) {
             options?.signal?.throwIfAborted();
@@ -260,9 +298,13 @@ export function createCredentialStore(
       runLocked(
         id,
         async () => {
-          await read(id);
+          await readReplaceable(id);
           options?.signal?.throwIfAborted();
-          await write(id, undefined);
+          await protectStorage(() =>
+            unlink(getCredentialPath(id)).catch((error) => {
+              if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+            }),
+          );
         },
         options?.signal,
       ),
