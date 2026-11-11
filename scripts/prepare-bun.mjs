@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import {
   chmod,
@@ -16,6 +15,14 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  bunPackages,
+  collectPackageNotices,
+  download,
+  packageNoticeFile,
+  sha256,
+  writePackageNotices,
+} from './bun-packages.mjs';
 
 /** The one Bun the daemon is qualified on. */
 export const bunVersion = '1.4.4';
@@ -30,10 +37,15 @@ const assets = {
 };
 export const bunExecutableSha256 = assets.arm64.executableSha256;
 
-// The release ships no notices. Each comes from the exact commit Bun's `bun-v1.4.4` tag builds
-// with: Bun's own files at the tagged commit, WebKit at its `WEBKIT_VERSION`, and every library at
-// the commit its `scripts/build/deps/*.ts` pins. macOS Bun uses the system ICU and SQLite, and
-// libuv only on Windows, so their notices don't apply.
+// The release ships no notices. These are the components Bun's LICENSE.md names that its
+// `bun-v1.4.4` tag pins, each from that exact commit: Bun's own files at the tagged commit, WebKit
+// at its `WEBKIT_VERSION`, each C/C++ library at the commit its `scripts/build/deps/*.ts` pins, and
+// code the licence names at a fixed revision. macOS Bun uses the system ICU and SQLite, and libuv
+// only on Windows, so their notices don't apply. Bun's licence also lists libbase64 and uucode,
+// which the tagged source no longer uses. The crates and polyfill packages in Bun's lockfiles come
+// from `bun-packages.mjs`. Code Bun ports from other projects (esbuild, typescript-go, ESLint,
+// Prettier, oxc, Biome, PostCSS and the others its licence lists) and the polyfills it vendors
+// outside its lockfile are pinned by no revision in the tag, so only LICENSE.md names them.
 const bunCommit = '38afee6c84fcf48c0edb2466aa4b27d287a59c30',
   webkitCommit = 'd6375c72affe0f70222cdcb45012b10f0bf3a9d5';
 const raw = (repository, commit, path) =>
@@ -237,34 +249,26 @@ export const bunComponents = [
     'a4bf6cd7cfb1a1421ba92bca9d017b49936c55e4',
     { 'libcxxabi/LICENSE.TXT': 'e2b35be49f7284a45b7baca8fc7b3ab7440e7902392b2528a457816b5bb2a15c' },
   ),
-  // Bun's licence lists these, but its tag pins no revision of them: their default branches when
-  // this list was made.
-  library('base64', 'BSD-2-Clause', 'aklomp/base64', '5d5074cb856b9a53fe64f04ddf47812a85f4fb5a', {
-    LICENSE: '42871ad9f4e5e9255a4ec80b6c5ec9989bab6964693cf5fee6bb33f3afe39220',
-  }),
-  library('uucode', 'MIT', 'jacobsandlund/uucode', '1fb73433bba5d93366c57f23ff2e9d7939746500', {
-    'LICENSE.md': '312e901e142be2477b4ca859e9311f9e3f80d33372991759b7921c1893605f33',
+  // Bun's argument parser, a port of zig-clap whose licence the tag keeps beside it.
+  library('clap', 'Unlicense', 'oven-sh/bun', bunCommit, {
+    'src/clap/LICENSE': '88d9b4eb60579c191ec391ca04c16130572d7eedc4a86daa58bf28c6e14c9bcd',
   }),
 ];
+/** The notices downloaded one by one from their pinned commits. */
 export const bunNotices = bunComponents.flatMap((component) => component.notices);
+/** Every package in Bun's lockfiles, with the licence files its verified archive holds. */
+for (const pkg of bunPackages)
+  bunComponents.push({
+    label:
+      pkg.ecosystem === 'crates'
+        ? `${pkg.name} ${pkg.version}, a crates.io crate in Bun ${bunVersion}'s Cargo.lock`
+        : `${pkg.name} ${pkg.version}, an npm package in the lockfile of the Node.js polyfills Bun ${bunVersion} embeds`,
+    license: pkg.license,
+    notices: pkg.files.map(({ path, sha256 }) => ({ file: packageNoticeFile(pkg, path), sha256 })),
+  });
+const allNotices = bunComponents.flatMap((component) => component.notices);
 
 const defaultOutput = fileURLToPath(new URL('../dist/tools/bun/', import.meta.url));
-const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
-
-/** Reads a response with a running cap, so an oversized body stops downloading at the cap. */
-async function download(fetch, url, maxBytes, label) {
-  const response = await fetch(url, { signal: AbortSignal.timeout(120000) });
-  assert(response.ok, `${label} download failed: HTTP ${response.status}`);
-  const chunks = [];
-  let size = 0;
-  for await (const chunk of response.body ?? []) {
-    size += chunk.length;
-    // Leaving the loop cancels the rest of the body.
-    assert(size <= maxBytes, `Unexpected ${label} size`);
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks);
-}
 
 /**
  * Refuses a prepared runtime folder whose `bun` or any notice differs from the pinned bytes, as a
@@ -276,7 +280,7 @@ export async function verifyBunRuntime(directory, executableSha256 = bunExecutab
     executableSha256,
     'Bun executable checksum mismatch',
   );
-  for (const notice of bunNotices)
+  for (const notice of allNotices)
     assert.equal(
       sha256(await readFile(join(directory, notice.file))),
       notice.sha256,
@@ -287,7 +291,7 @@ export async function verifyBunRuntime(directory, executableSha256 = bunExecutab
 /**
  * Downloads the pinned Bun runtime and its notices into a fresh cache directory under
  * `temporaryDirectory`. The archive's SHA-256 is verified before it is unpacked, and the
- * executable's and every notice's before Bun first runs; only then is `output` replaced with `bun`
+ * executable's, every notice's and every package archive's before Bun first runs; only then is `output` replaced with `bun`
  * and the notices. Any mismatch fails before `output` is touched.
  * `asset` replaces the pinned release, for tests only.
  */
@@ -334,6 +338,11 @@ export async function prepareBun({
       assert.equal(sha256(bytes), notice.sha256, `Bun notice checksum mismatch: ${notice.file}`);
       await writeFile(join(staged, notice.file), bytes);
     }
+    // Each package archive is checked against its lockfile and each licence against the manifest.
+    await writePackageNotices(
+      staged,
+      await collectPackageNotices({ fetch, packages: bunPackages }),
+    );
     // The same check every build and package check that uses the runtime makes.
     await verifyBunRuntime(staged, asset.executableSha256);
     const reported = execFileSync(join(staged, 'bun'), ['--version'], {

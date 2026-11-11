@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import { cp, mkdir, rm, writeFile, readFile, stat } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { notices } from '../../../scripts/notices.mjs';
 import { bunComponents, verifyBunRuntime } from '../../../scripts/prepare-bun.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url)),
@@ -79,12 +79,7 @@ for (const entry of [
 assert(!rendererInputs.some((p) => /packages\/editor\/|desktop\/src\/chat\/view\.tsx$/.test(p)));
 const mainInputs = Object.keys(main.metafile.inputs),
   preloadInputs = Object.keys(preload.metafile.inputs);
-for (const inputs of [
-  mainInputs,
-  preloadInputs,
-  rendererInputs,
-  daemonInputs.map((path) => relative(repository, path)),
-]) {
+for (const inputs of [mainInputs, preloadInputs, rendererInputs, daemonInputs]) {
   assert.deepEqual(
     inputs.filter((p) =>
       /(?:^|\/)(?:test|tests)\/|(?:packages\/workbench|apps\/desktop)\/demo\/|test-fixture|(?:^|\/)host\.mjs$/.test(
@@ -151,7 +146,11 @@ if (packaged) {
 const packages = await notices(
   [...Object.keys(main.metafile.inputs), ...Object.keys(preload.metafile.inputs)]
     .map((p) => resolve(root, p))
-    .concat(rendererInputs, daemonInputs, require.resolve('electron/package.json')),
+    .concat(
+      rendererInputs,
+      daemonInputs.map((path) => resolve(repository, path)),
+      require.resolve('electron/package.json'),
+    ),
   join(root, 'dist/dependency-notices.txt'),
   packaged
     ? bunComponents.map(({ label, license, notices }) => ({

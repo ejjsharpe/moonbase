@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join, relative } from 'node:path';
+import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 const root = fileURLToPath(new URL('../', import.meta.url)),
   repository = fileURLToPath(new URL('../../../', import.meta.url));
@@ -157,9 +157,8 @@ const daemonRipgrep = fileURLToPath(
 );
 assert.equal(daemonRipgrep, join(resources, 'workspace/ripgrep/rg'));
 assert((await stat(daemonRipgrep)).mode & 0o111, 'The daemon finds no executable ripgrep');
-const daemonInputs = JSON.parse(await readFile(join(root, 'dist/daemon-inputs.json'), 'utf8')).map(
-  (path) => relative(repository, path),
-);
+const daemonInputs = JSON.parse(await readFile(join(root, 'dist/daemon-inputs.json'), 'utf8'));
+assert(!daemonInputs.some((path) => path.startsWith('/')), 'Daemon inputs record absolute paths');
 assert(daemonInputs.includes('apps/daemon/src/main.ts'), 'The daemon bundle lost its entry');
 assert.deepEqual(
   daemonInputs.filter((path) =>
@@ -193,7 +192,8 @@ for (const [name] of daemonFiles.slice(1)) {
   ])
     assert(!found, `${name} embeds ${label}`);
 }
-// The notices cover the runtime, the WebKit it links and every package in the daemon bundle.
+// The notices cover the runtime, the WebKit and libraries it links, the packages in its lockfiles
+// and every package in the daemon bundle.
 const shippedNotices = asar.extractFile(archive, 'dependency-notices.txt').toString();
 for (const { label, license, notices } of bunComponents) {
   assert(shippedNotices.includes(`${label} (${JSON.stringify(license)})`), `Notices omit ${label}`);
