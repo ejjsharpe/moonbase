@@ -257,14 +257,21 @@ test('the packaged runtime never asks a registry for a package the bundle lacks'
     // Beside the bundle's own folder layout: no `node_modules` above the probe.
     const probe = join(root, 'probe.mjs');
     await writeFile(probe, missingPackageProbe);
-    const { result: run, requests } = await withLocalRegistry((registry) =>
-      runProbe(daemon, probe, {
-        ...daemon.env,
-        // Only a local listener: were auto-install on, it would ask this, never npm.
-        BUN_CONFIG_REGISTRY: registry,
-        BUN_INSTALL_CACHE_DIR: join(root, 'cache'),
-      }),
-    );
+    // Only a local listener: with auto-install on, Bun asks this, never npm.
+    const probeWith = (command: typeof daemon) =>
+      withLocalRegistry((registry) =>
+        runProbe(command, probe, {
+          ...daemon.env,
+          BUN_CONFIG_REGISTRY: registry,
+          BUN_INSTALL_CACHE_DIR: join(root, 'cache'),
+        }),
+      );
+    const control = await probeWith({
+      ...daemon,
+      args: daemon.args.filter((arg) => arg !== '--no-install'),
+    });
+    assert.notEqual(control.requests.length, 0, 'without --no-install, Bun asks the registry');
+    const { result: run, requests } = await probeWith(daemon);
     assert.equal(run.status, 0, run.stderr);
     assert.equal(run.stdout.trim(), 'missing');
     assert.deepEqual(requests, []);

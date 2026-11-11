@@ -28,15 +28,17 @@ export type DaemonLocation = {
  */
 const bunOptions = ['--no-env-file', '--config=/dev/null', '--no-install'];
 
+const strippedNames = new Set(['NODE_OPTIONS', 'NODE_PATH']);
+
 /**
- * The daemon's environment: the caller's, without what makes Bun or Node run other code or
- * options (`BUN_OPTIONS`, `NODE_OPTIONS` and every other `BUN_*` setting). `ws` would otherwise
- * try to load its optional native add-ons, which the bundle doesn't ship.
+ * The daemon's environment: the caller's, without what makes Bun or Node run other code, options
+ * or packages (`BUN_OPTIONS`, `NODE_OPTIONS`, `NODE_PATH` and every other `BUN_*` setting). `ws`
+ * would otherwise try to load its optional native add-ons, which the bundle doesn't ship.
  */
 function makeDaemonEnvironment(environment: Record<string, string | undefined>) {
   const env: Record<string, string> = {};
   for (const [name, value] of Object.entries(environment))
-    if (value !== undefined && !name.startsWith('BUN_') && name !== 'NODE_OPTIONS')
+    if (value !== undefined && !name.startsWith('BUN_') && !strippedNames.has(name))
       env[name] = value;
   return { ...env, WS_NO_BUFFER_UTIL: '1', WS_NO_UTF_8_VALIDATE: '1' };
 }

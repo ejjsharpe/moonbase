@@ -13,7 +13,7 @@ import type {
   ChatListUpdate,
 } from '@moonbase/contracts/chat';
 import type { ConnectionClient, ConnectionSnapshot } from '@moonbase/contracts/connection';
-import { type DraftStorage } from '@moonbase/application/chat';
+import { type DraftStorage, groupChatsByActivity } from '@moonbase/application/chat';
 import { modelRoot } from './chat-model-fixture.ts';
 const context = { host: { hostId: 'host', storeId: 'store' }, actorId: 'owner' },
   target = { ...context, conversationId: 'chat' };
@@ -2939,8 +2939,12 @@ test('the chat list follows its watch: changes merge without listing, and a rese
     reset: false,
   });
   // The watch opens before the first listing, so a chat past the first page that changes while
-  // the listing reads still reaches the list.
-  const old: ChatSummary = { ...summary, target: { ...target, conversationId: 'old' } };
+  // the listing reads still reaches the list, and counts as seen like the rest of that listing.
+  const old: ChatSummary = {
+    ...summary,
+    target: { ...target, conversationId: 'old' },
+    activity: { state: 'idle', at: '2026-01-02T00:00:00Z' },
+  };
   let older: (() => void) | undefined;
   f.answers.set('listChats', async (input: ChatInput<'listChats'>) => {
     if (!input.cursor) return { conversations: [summary], nextCursor: 'older' };
@@ -2956,6 +2960,11 @@ test('the chat list follows its watch: changes merge without listing, and a rese
   await connecting;
   await until(() => controller.getSnapshot().chats.length === 2);
   assert.equal(controller.getSnapshot().chats[1]!.title, 'Changed while listing');
+  const { ready } = groupChatsByActivity({
+    chats: controller.getSnapshot().chats,
+    seen: controller.getSnapshot().seen,
+  });
+  assert.deepEqual(ready, []);
   f.answers.delete('listChats');
   await turn();
   const lists = () => f.calls.filter((call) => call.operation === 'listChats').length;

@@ -45,6 +45,7 @@ test('a packaged app runs its own Bun runtime on the bundled daemon, from its da
         BUN_CONFIG_REGISTRY: 'http://127.0.0.1:1/',
         BUN_INSTALL: '/tmp/bun',
         NODE_OPTIONS: '--require /tmp/x.js',
+        NODE_PATH: '/tmp/node_modules',
         UNSET: undefined,
       },
     ),
@@ -81,10 +82,11 @@ test('the daemon command drops BUN_OPTIONS and NODE_OPTIONS from the caller envi
   const { root, directory } = await prepareDaemonRoot();
   try {
     const marker = join(root, 'preloaded');
+    const hostile = await writeHostilePreload(root, marker);
     const daemon = findDaemonCommand(development, directory, {
       PATH: process.env.PATH ?? '',
       HOME: root,
-      BUN_OPTIONS: await writeHostilePreload(root, marker),
+      BUN_OPTIONS: hostile,
       NODE_OPTIONS: `--require ${join(root, 'options-preload.ts')}`,
     });
     const probe = join(root, 'probe.mjs');
@@ -92,6 +94,11 @@ test('the daemon command drops BUN_OPTIONS and NODE_OPTIONS from the caller envi
       probe,
       'console.log(JSON.stringify([process.env.BUN_OPTIONS ?? null, process.env.NODE_OPTIONS ?? null]))',
     );
+    // Kept, it would run the preload.
+    const control = await runProbe(daemon, probe, { ...daemon.env, BUN_OPTIONS: hostile });
+    assert.equal(control.status, 0, control.stderr);
+    await access(marker);
+    await rm(marker);
     const run = await runProbe(daemon, probe);
     assert.equal(run.status, 0, run.stderr);
     assert.equal(run.stdout.trim(), '[null,null]');
@@ -111,14 +118,21 @@ test('the daemon command never asks a registry for a package it cannot resolve',
     // The probe sits in a temporary folder with no `node_modules` above it, as the bundle does.
     const probe = join(root, 'probe.mjs');
     await writeFile(probe, missingPackageProbe);
-    const { result: run, requests } = await withLocalRegistry((registry) =>
-      runProbe(daemon, probe, {
-        ...daemon.env,
-        // Only a local listener: were auto-install on, it would ask this, never npm.
-        BUN_CONFIG_REGISTRY: registry,
-        BUN_INSTALL_CACHE_DIR: join(root, 'cache'),
-      }),
-    );
+    // Only a local listener: with auto-install on, Bun asks this, never npm.
+    const probeWith = (command: typeof daemon) =>
+      withLocalRegistry((registry) =>
+        runProbe(command, probe, {
+          ...daemon.env,
+          BUN_CONFIG_REGISTRY: registry,
+          BUN_INSTALL_CACHE_DIR: join(root, 'cache'),
+        }),
+      );
+    const control = await probeWith({
+      ...daemon,
+      args: daemon.args.filter((arg) => arg !== '--no-install'),
+    });
+    assert.notEqual(control.requests.length, 0, 'without --no-install, Bun asks the registry');
+    const { result: run, requests } = await probeWith(daemon);
     assert.equal(run.status, 0, run.stderr);
     assert.equal(run.stdout.trim(), 'missing');
     assert.deepEqual(requests, []);
