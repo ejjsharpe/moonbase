@@ -75,14 +75,14 @@ assert.deepEqual(
 );
 assert.deepEqual(
   renderer.filter((p) =>
-    /@earendil-works|(?:pi-runtime|daemon-protocol)\/src\/|node:sqlite/.test(p),
+    /@earendil-works|(?:chat-runtime|daemon-protocol)\/src\/|node:sqlite/.test(p),
   ),
   [],
 );
 // Local chat runs in the bundled daemon; packaged main holds only the protocol's client side.
 assert.deepEqual(
   main.filter((path) =>
-    /@earendil-works|pi-runtime\/src\/|daemon-protocol\/src\/(?!remote|loopback|protocol|validation|socket-client|socket-protocol)[^/]+\.ts$/.test(
+    /@earendil-works|chat-runtime\/src\/|daemon-protocol\/src\/(?!remote|loopback|protocol|validation|socket-client|socket-protocol)[^/]+\.ts$/.test(
       path,
     ),
   ),
@@ -184,7 +184,7 @@ assert(!daemonInputs.some((path) => path.startsWith('/')), 'Daemon inputs record
 assert(daemonInputs.includes('apps/daemon/src/main.ts'), 'The daemon bundle lost its entry');
 assert.deepEqual(
   daemonInputs.filter((path) =>
-    /(?:^|\/)(?:test|tests)\/|test-fixture|pi-runtime\/src\/host\.ts$|(?:^|\/)host\.mjs$/.test(
+    /(?:^|\/)(?:test|tests)\/|test-fixture|chat-runtime\/src\/host\.ts$|(?:^|\/)host\.mjs$/.test(
       path,
     ),
   ),

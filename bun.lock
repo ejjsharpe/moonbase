@@ -10,11 +10,11 @@
         "@earendil-works/pi-durable": "1.4.0",
         "@effect/platform-node": "4.1.0",
         "@moonbase/application": "workspace:*",
+        "@moonbase/chat-runtime": "workspace:*",
         "@moonbase/config": "workspace:*",
         "@moonbase/contracts": "workspace:*",
         "@moonbase/daemon-protocol": "workspace:*",
         "@moonbase/effect": "workspace:*",
-        "@moonbase/pi-runtime": "workspace:*",
         "@moonbase/ssh": "workspace:*",
         "@moonbase/workbench": "workspace:*",
         "@moonbase/workspace": "workspace:*",
@@ -46,9 +46,9 @@
       "dependencies": {
         "@earendil-works/pi-ai": "1.4.0",
         "@moonbase/application": "workspace:*",
+        "@moonbase/chat-runtime": "workspace:*",
         "@moonbase/contracts": "workspace:*",
         "@moonbase/daemon-protocol": "workspace:*",
-        "@moonbase/pi-runtime": "workspace:*",
         "effect": "4.1.0",
       },
     },
@@ -59,9 +59,9 @@
         "@base-ui/react": "1.9.0",
         "@legendapp/list": "3.7.1",
         "@moonbase/application": "workspace:*",
+        "@moonbase/chat-runtime": "workspace:*",
         "@moonbase/contracts": "workspace:*",
         "@moonbase/daemon-protocol": "workspace:*",
-        "@moonbase/pi-runtime": "workspace:*",
         "@moonbase/ssh": "workspace:*",
         "@moonbase/ui": "workspace:*",
         "@moonbase/workbench": "workspace:*",
@@ -102,6 +102,23 @@
         "@moonbase/ssh": "workspace:*",
       },
     },
+    "packages/chat-runtime": {
+      "name": "@moonbase/chat-runtime",
+      "dependencies": {
+        "@earendil-works/chord": "1.4.0",
+        "@earendil-works/pi-ai": "1.4.0",
+        "@earendil-works/pi-claude-code": "github:earendil-works/pi-claude-code#d5b5e04c314d3452d357174d16d10dda34daa2d2",
+        "@earendil-works/pi-durable": "1.4.0",
+        "@moonbase/contracts": "workspace:*",
+        "@moonbase/effect": "workspace:*",
+        "effect": "4.1.0",
+        "lru-cache": "11.5.3",
+      },
+      "devDependencies": {
+        "@moonbase/application": "workspace:*",
+        "typebox": "1.3.27",
+      },
+    },
     "packages/config": {
       "name": "@moonbase/config",
     },
@@ -127,7 +144,7 @@
         "@earendil-works/pi-ai": "1.4.0",
         "@earendil-works/pi-durable": "1.4.0",
         "@moonbase/application": "workspace:*",
-        "@moonbase/pi-runtime": "workspace:*",
+        "@moonbase/chat-runtime": "workspace:*",
         "typebox": "1.3.27",
       },
     },
@@ -139,23 +156,6 @@
       },
       "devDependencies": {
         "@moonbase/config": "workspace:*",
-      },
-    },
-    "packages/pi-runtime": {
-      "name": "@moonbase/pi-runtime",
-      "dependencies": {
-        "@earendil-works/chord": "1.4.0",
-        "@earendil-works/pi-ai": "1.4.0",
-        "@earendil-works/pi-claude-code": "github:earendil-works/pi-claude-code#d5b5e04c314d3452d357174d16d10dda34daa2d2",
-        "@earendil-works/pi-durable": "1.4.0",
-        "@moonbase/contracts": "workspace:*",
-        "@moonbase/effect": "workspace:*",
-        "effect": "4.1.0",
-        "lru-cache": "11.5.3",
-      },
-      "devDependencies": {
-        "@moonbase/application": "workspace:*",
-        "typebox": "1.3.27",
       },
     },
     "packages/ssh": {
@@ -438,6 +438,8 @@
 
     "@moonbase/application": ["@moonbase/application@workspace:packages/application"],
 
+    "@moonbase/chat-runtime": ["@moonbase/chat-runtime@workspace:packages/chat-runtime"],
+
     "@moonbase/config": ["@moonbase/config@workspace:packages/config"],
 
     "@moonbase/contracts": ["@moonbase/contracts@workspace:packages/contracts"],
@@ -449,8 +451,6 @@
     "@moonbase/desktop": ["@moonbase/desktop@workspace:apps/desktop"],
 
     "@moonbase/effect": ["@moonbase/effect@workspace:packages/effect"],
-
-    "@moonbase/pi-runtime": ["@moonbase/pi-runtime@workspace:packages/pi-runtime"],
 
     "@moonbase/ssh": ["@moonbase/ssh@workspace:packages/ssh"],
 

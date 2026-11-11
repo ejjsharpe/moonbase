@@ -21,9 +21,9 @@ import {
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import type { ChatClient } from '@moonbase/contracts/chat';
 import { chatHostCapabilities } from '@moonbase/contracts/host';
-import { LocalHostLive, LocalPiRuntimeLive } from '@moonbase/pi-runtime';
+import { LocalHostLive, LocalPiRuntimeLive } from '@moonbase/chat-runtime';
 import { createFolderApprovals } from '../src/folders.ts';
-import { ProviderSetupLive, localProviderIds } from '@moonbase/pi-runtime/providers';
+import { ProviderSetupLive, localProviderIds } from '@moonbase/chat-runtime/providers';
 import { RemoteChatLive, RemoteLocalHostLive, RemoteProviderSetupLive } from '../src/remote.ts';
 import { makeDaemonClient, serveChat } from '../src/server.ts';
 import { connectDaemonSocket } from '../src/socket-client.ts';

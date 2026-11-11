@@ -1,8 +1,8 @@
-import { createKeyFileSource, createKeychainKeySource } from '@moonbase/pi-runtime/credentials';
+import { createKeyFileSource, createKeychainKeySource } from '@moonbase/chat-runtime/credentials';
 import {
   closeClaudeCodeProcesses,
   createClaudeCodeSubscription,
-} from '@moonbase/pi-runtime/claude-code';
+} from '@moonbase/chat-runtime/claude-code';
 import { runDaemon } from './daemon.ts';
 import { readDirectoryArgument } from './data-directory.ts';
 import { describeFailure } from './failure.ts';

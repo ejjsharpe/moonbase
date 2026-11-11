@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { createKeyFileSource } from '@moonbase/pi-runtime/credentials';
+import { createKeyFileSource } from '@moonbase/chat-runtime/credentials';
 import { runDaemon } from '../src/daemon.ts';
 import { createControlledClock, startInProcess, temporaryRoot } from './fixture.ts';
 import { createFauxProviders } from './faux.ts';

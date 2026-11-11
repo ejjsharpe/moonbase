@@ -7,7 +7,7 @@ import { ManagedRuntime } from 'effect';
 import { createMoonbaseApplication } from '@moonbase/application';
 import { transcriptLimits } from '@moonbase/application/chat';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
-import { LocalPiRuntimeLive } from '@moonbase/pi-runtime';
+import { LocalPiRuntimeLive } from '@moonbase/chat-runtime';
 import { mkdtemp, realpath, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,7 +16,7 @@ import {
   instrumentTranscriptReads,
   seedTranscriptHistory,
   seedTranscriptLongText,
-} from '../../packages/pi-runtime/test/transcript-history-fixture.ts';
+} from '../../packages/chat-runtime/test/transcript-history-fixture.ts';
 
 for (const mode of ['local', 'remote'] as const)
   test(`integrated ${mode} controller reveals evicted Find and around targets across 1,121 real mixed records`, async (t) => {

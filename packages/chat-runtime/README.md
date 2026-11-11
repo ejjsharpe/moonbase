@@ -1,6 +1,6 @@
-# Pi runtime
+# Chat runtime
 
-`@moonbase/pi-runtime` implements the contracts `ChatService` on Pi Durable, which owns execution, transcripts and tasks. Layers create no runtime; process roots compose them.
+`@moonbase/chat-runtime` implements the contracts `ChatService` on Pi Durable, which owns execution, transcripts and tasks. Layers create no runtime; process roots compose them.
 
 | Export | Role |
 | --- | --- |
@@ -31,9 +31,9 @@ The daemon serves the runtime over [`@moonbase/daemon-protocol`](../daemon-proto
 ## Checks
 
 ```sh
-bun run --cwd packages/pi-runtime typecheck
-bun run --cwd packages/pi-runtime lint
-bun run --cwd packages/pi-runtime test
+bun run --cwd packages/chat-runtime typecheck
+bun run --cwd packages/chat-runtime lint
+bun run --cwd packages/chat-runtime test
 bun run test:chat-integration
 ```
 

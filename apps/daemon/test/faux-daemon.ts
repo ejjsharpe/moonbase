@@ -1,4 +1,4 @@
-import { createKeyFileSource } from '@moonbase/pi-runtime/credentials';
+import { createKeyFileSource } from '@moonbase/chat-runtime/credentials';
 import { runDaemon } from '../src/daemon.ts';
 import { readDirectoryArgument } from '../src/data-directory.ts';
 import { describeFailure } from '../src/failure.ts';

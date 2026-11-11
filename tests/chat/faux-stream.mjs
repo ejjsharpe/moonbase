@@ -4,7 +4,7 @@ import {
   seedTranscriptHistory,
   seedTranscriptLongText,
   instrumentTranscriptReads,
-} from '../../packages/pi-runtime/test/transcript-history-fixture.ts';
+} from '../../packages/chat-runtime/test/transcript-history-fixture.ts';
 import { Harness } from '@earendil-works/pi-durable';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream';
 import { fauxProvider, fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux';

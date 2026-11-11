@@ -15,7 +15,7 @@
     "@moonbase/application": "workspace:*",
     "@moonbase/contracts": "workspace:*",
     "@moonbase/daemon-protocol": "workspace:*",
-    "@moonbase/pi-runtime": "workspace:*",
+    "@moonbase/chat-runtime": "workspace:*",
     "effect": "4.1.0"
   },
   "engines": {

@@ -8,7 +8,7 @@ import {
 } from '@earendil-works/pi-ai/providers/faux';
 import { createRegistry, defineExtension, defineTool } from '@earendil-works/pi-durable';
 import { Type } from 'typebox';
-import { LocalPiRuntimeLive } from '@moonbase/pi-runtime';
+import { LocalPiRuntimeLive } from '@moonbase/chat-runtime';
 import { fauxModel, fauxModelOptions, installFaux } from '../../../tests/chat/faux-model.ts';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import type { ChatSession } from '@moonbase/contracts/chat';

@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { ManagedRuntime } from 'effect';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
-import { LocalPiRuntimeLive } from '@moonbase/pi-runtime';
+import { LocalPiRuntimeLive } from '@moonbase/chat-runtime';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import { ChatIpcSession } from '../src/chat/session.ts';

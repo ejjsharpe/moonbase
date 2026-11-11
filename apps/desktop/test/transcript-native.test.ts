@@ -679,7 +679,7 @@ test('reentrant cancellation before the first native observation cannot strand C
   await f.owner.dispose();
 });
 
-// Unfiltered duplicates are rejected at the ChatClient boundary (pi-runtime transport test).
+// Unfiltered duplicates are rejected at the ChatClient boundary (chat-runtime transport test).
 test('native Copy rejects repeated copied parts within and across manifest pages before writing', async () => {
   for (const acrossPages of [false, true]) {
     const f = fixture(),
