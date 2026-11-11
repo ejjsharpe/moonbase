@@ -4,7 +4,11 @@ import { Context, Effect, Layer } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import type { ChatTarget } from '@moonbase/contracts/chat';
 import type { ChatHostTarget } from '@moonbase/contracts/host';
-import type { LocalHostCommand, LocalHostInput } from '@moonbase/contracts/daemon';
+import {
+  daemonErrorReasons,
+  type LocalHostCommand,
+  type LocalHostInput,
+} from '@moonbase/contracts/daemon';
 import { decodeLocalHostInput } from '@moonbase/contracts/daemon-schema';
 import {
   ChatService,
@@ -122,10 +126,7 @@ export const LocalHostLive = (
       const failure = (error: unknown) =>
         ApplicationError.is(error)
           ? error
-          : new ApplicationError({
-              code: 'Unavailable',
-              message: 'Local folder approvals are unavailable.',
-            });
+          : new ApplicationError(daemonErrorReasons['folders-unavailable']);
       const handle =
         <K extends LocalHostCommand, A>(
           operation: K,
@@ -154,10 +155,7 @@ export const LocalHostLive = (
               .catch((error: unknown) => {
                 throw ApplicationError.is(error)
                   ? error
-                  : new ApplicationError({
-                      code: 'InvalidInput',
-                      message: 'Choose an existing folder.',
-                    });
+                  : new ApplicationError(daemonErrorReasons['folder-missing']);
               });
             return { requestId, path: approved };
           }),

@@ -12,6 +12,7 @@ import {
   readProviderSignInUrl,
 } from '@moonbase/contracts/providers-schema';
 import { ApplicationError } from '@moonbase/contracts/errors';
+import { daemonErrorReasons, type DaemonErrorReason } from '@moonbase/contracts/daemon';
 import type { ChatReasoningEffort } from '@moonbase/contracts/chat';
 
 // Moonbase defaults for the pinned catalog; explicit user preferences take precedence.
@@ -41,19 +42,15 @@ const names: Partial<Record<string, string>> = {
   google: 'Google Gemini',
   'claude-code': 'Claude subscription',
 };
-const claudeCodeLogin =
-  'Claude Code manages this sign-in. Run `claude auth login` or `claude auth logout` in a terminal, then refresh providers.';
-function fail(message: string): never {
-  throw new ApplicationError({ code: 'InvalidInput', message });
+/** Refuses with a reason clients can show over the host protocol. */
+function fail(reason: DaemonErrorReason): never {
+  throw new ApplicationError(daemonErrorReasons[reason]);
 }
-const unavailable = () =>
-  new ApplicationError({
-    code: 'Unavailable',
-    message:
-      'Provider setup or encrypted credential storage is unavailable. Existing credentials were retained; retry setup or sign in again.',
-  });
+const unavailable = () => new ApplicationError(daemonErrorReasons['provider-setup-unavailable']);
 type Flow = {
   state: NonNullable<ProviderState['flow']>;
+  /** When its owner last used provider setup. */
+  usedAt: number;
   abort: AbortController;
   completion: Promise<void>;
   url?: string;
@@ -74,7 +71,14 @@ export type ProviderSetupConfiguration = {
   deviceId: string;
   /** Why the auth check made with `signal` couldn't tell whether a provider is configured, if it says. */
   getCheckProblem?(providerId: string, signal: AbortSignal): string | undefined;
+  /** The current time in milliseconds; `Date.now` by default. */
+  now?(): number;
 };
+/** An owner unheard from this long loses its flow, as when its client stopped without releasing it. */
+export const inactiveProviderOwnerMs = 30 * 60 * 1000;
+/** How many owners may hold a flow, and how many released owners stay refused. */
+const maximumOwners = 64;
+const maximumReleasedOwners = 256;
 /** Fits provider-supplied text to the status contract: no NULs or lone surrogates, at most 512 bytes. */
 function boundText(value: string) {
   let text = '',
@@ -97,8 +101,9 @@ export const ProviderSetupLive = (
       const owners = new Map<string, Flow>();
       const revisions = new Map<string, number>();
       const released = new Set<string>();
+      const now = config.now ?? Date.now;
       const validateProviderUrl = (value: string) =>
-        readProviderSignInUrl(value) ?? fail('The provider supplied an unsupported sign-in URL.');
+        readProviderSignInUrl(value) ?? fail('unsupported-sign-in-url');
       const cancelFlow = async (flow: Flow) => {
         flow.abort.abort();
         flow.answer?.reject(new Error('Cancelled'));
@@ -107,11 +112,35 @@ export const ProviderSetupLive = (
       const cancel = async (owner: string, flowId?: string) => {
         const flow = owners.get(owner);
         if (!flow) {
-          if (flowId) fail('This sign-in flow is no longer active.');
+          if (flowId) fail('sign-in-inactive');
           return;
         }
-        if (flowId && flow.state.id !== flowId) fail('This sign-in flow is no longer active.');
+        if (flowId && flow.state.id !== flowId) fail('sign-in-inactive');
         await cancelFlow(flow);
+      };
+      /** Forgets an owner's flow, cancelling it. */
+      const dropOwner = async (owner: string) => {
+        const flow = owners.get(owner);
+        owners.delete(owner);
+        revisions.delete(owner);
+        if (flow) await cancelFlow(flow);
+      };
+      /**
+       * Marks `owner` as heard from and drops other owners that went quiet or exceed the bound,
+       * least recently used first, so a daemon outliving its clients does not keep their flows.
+       */
+      const sweepOwners = async (owner: string) => {
+        const time = now();
+        const flow = owners.get(owner);
+        if (flow) flow.usedAt = time;
+        const others = [...owners]
+          .filter(([other]) => other !== owner)
+          .sort(([, a], [, b]) => b.usedAt - a.usedAt);
+        const stale = others.filter(
+          ([, flow], index) =>
+            time - flow.usedAt >= inactiveProviderOwnerMs || index >= maximumOwners - 1,
+        );
+        await Promise.all(stale.map(([other]) => dropOwner(other)));
       };
       yield* Effect.addFinalizer(() =>
         Effect.promise(async () => {
@@ -171,13 +200,13 @@ export const ProviderSetupLive = (
       function getCurrentFlow(owner: string, id: string) {
         const flow = owners.get(owner);
         if (!flow || flow.state.id !== id || flow.state.state !== 'running')
-          return fail('This sign-in flow is no longer active.');
+          return fail('sign-in-inactive');
         return flow;
       }
       function getProviderUrl(owner: string, flowId: string) {
-        if (released.has(owner)) fail('The owning document was released.');
+        if (released.has(owner)) fail('owner-released');
         const flow = getCurrentFlow(owner, flowId);
-        if (!flow.url) fail('There is no active sign-in URL.');
+        if (!flow.url) fail('no-sign-in-url');
         return validateProviderUrl(flow.url!);
       }
       const invoke = async <K extends ProviderCommand>(
@@ -185,19 +214,33 @@ export const ProviderSetupLive = (
         operation: K,
         input: ProviderInput<K>,
       ): Promise<ProviderState> => {
-        if (released.has(owner)) fail('The owning document was released.');
+        if (released.has(owner)) fail('owner-released');
         const value = decodeProviderInput(operation, input);
+        await sweepOwners(owner);
         let startedFlow: Flow | undefined;
         if (operation === 'startProviderLogin') {
           const { providerId } = value as ProviderInput<'startProviderLogin'>;
           if (!localProviderIds.includes(providerId as (typeof localProviderIds)[number]))
-            fail('Choose an installed provider.');
-          if (authKinds[providerId] === 'claude_code') fail(claudeCodeLogin);
+            fail('unknown-provider');
+          if (authKinds[providerId] === 'claude_code') fail('claude-code-sign-in');
           const revision = (revisions.get(owner) ?? 0) + 1;
           revisions.set(owner, revision);
           await cancel(owner);
-          if (released.has(owner) || revisions.get(owner) !== revision)
-            fail('This sign-in request was superseded.');
+          if (released.has(owner) || revisions.get(owner) !== revision) fail('sign-in-superseded');
+          // One sign-in per provider at a time: a provider's loopback callback (ChatGPT's
+          // 127.0.0.1:1455) serves only one flow, and an abandoned client's flow must not hold it.
+          for (;;) {
+            const contenders = [...owners].filter(
+              ([other, flow]) =>
+                other !== owner &&
+                flow.state.providerId === providerId &&
+                flow.state.state === 'running',
+            );
+            if (!contenders.length) break;
+            await Promise.all(contenders.map(([, flow]) => cancelFlow(flow)));
+            if (released.has(owner) || revisions.get(owner) !== revision)
+              fail('sign-in-superseded');
+          }
           const abort = new AbortController();
           const flow: Flow = {
             state: {
@@ -208,6 +251,7 @@ export const ProviderSetupLive = (
               canOpenUrl: false,
               prompt: null,
             },
+            usedAt: now(),
             abort,
             completion: Promise.resolve(),
           };
@@ -312,9 +356,9 @@ export const ProviderSetupLive = (
           const { flowId, promptId, answer } = value as ProviderInput<'answerProviderPrompt'>;
           const flow = getCurrentFlow(owner, flowId),
             pending = flow.answer;
-          if (!pending || pending.id !== promptId) fail('This setup prompt is obsolete.');
+          if (!pending || pending.id !== promptId) fail('prompt-obsolete');
           if (!answer.trim() || (pending.options && !pending.options.includes(answer)))
-            fail('Enter a valid answer for the active prompt.');
+            fail('invalid-answer');
           pending.resolve(answer);
         } else if (operation === 'cancelProviderLogin') {
           await cancel(owner, (value as ProviderInput<'cancelProviderLogin'>).flowId);
@@ -329,8 +373,8 @@ export const ProviderSetupLive = (
         } else if (operation === 'logoutProvider') {
           const { providerId } = value as ProviderInput<'logoutProvider'>;
           if (!localProviderIds.includes(providerId as (typeof localProviderIds)[number]))
-            fail('Choose an installed provider.');
-          if (authKinds[providerId] === 'claude_code') fail(claudeCodeLogin);
+            fail('unknown-provider');
+          if (authKinds[providerId] === 'claude_code') fail('claude-code-sign-in');
           await cancel(owner);
           await config.models.logout(providerId);
         }
@@ -367,9 +411,11 @@ export const ProviderSetupLive = (
           Effect.tryPromise({
             try: async () => {
               released.add(owner);
-              revisions.delete(owner);
-              await cancel(owner);
-              owners.delete(owner);
+              for (const old of released) {
+                if (released.size <= maximumReleasedOwners) break;
+                released.delete(old);
+              }
+              await dropOwner(owner);
             },
             catch: unavailable,
           }),

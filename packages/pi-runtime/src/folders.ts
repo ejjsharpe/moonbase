@@ -2,6 +2,7 @@ import { constants } from 'node:fs';
 import { open, realpath, rename, stat } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { ApplicationError } from '@moonbase/contracts/errors';
+import { daemonErrorReasons } from '@moonbase/contracts/daemon';
 
 type Approval = { path: string; dev: number; ino: number; at: string; recent: boolean };
 // Picker folders and chat worktrees are kept to separate limits, so worktree chats never push
@@ -71,8 +72,7 @@ export function createFolderApprovals(file: string) {
      */
     async approve(path: string, { recent = true }: { recent?: boolean } = {}) {
       const { cwd, info } = await identity(path);
-      if (!info.isDirectory())
-        throw new ApplicationError({ code: 'InvalidInput', message: 'Choose an existing folder.' });
+      if (!info.isDirectory()) throw new ApplicationError(daemonErrorReasons['folder-missing']);
       const map = await load();
       map.set(cwd, {
         path: cwd,
@@ -123,10 +123,7 @@ export async function checkChatFolder(chatFolders: string, path: string) {
   ]);
   const info = folder ? await stat(folder).catch(() => null) : null;
   if (!parent || !folder || folder !== path || dirname(folder) !== parent || !info?.isDirectory())
-    throw new ApplicationError({
-      code: 'Unauthorized',
-      message: 'This chat’s folder is not one Moonbase made for it.',
-    });
+    throw new ApplicationError(daemonErrorReasons['not-chat-folder']);
 }
 
 async function readApprovals(file: string) {

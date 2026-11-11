@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { Effect, Exit, Layer, ManagedRuntime, Scope } from 'effect';
+import { Context, Effect, Exit, Layer, ManagedRuntime, Scope } from 'effect';
 import type { ChatSnapshot } from '@moonbase/contracts/chat';
 import type { ApplicationError } from '@moonbase/contracts/errors';
 import {
@@ -72,17 +72,46 @@ function connectClients(directory: string, host: { hostId: string; storeId: stri
   };
 }
 
-/** Builds a loopback connection alone and reports why it could not be built, if it could not. */
-async function buildLoopback(directory: string) {
+/** The error an exit failed with, or `ok`. */
+const describeExit = (exit: Exit.Exit<unknown, ApplicationError>) =>
+  Exit.isFailure(exit)
+    ? (exit.cause.reasons.find((reason) => reason._tag === 'Fail') as { error: ApplicationError })
+        .error
+    : 'ok';
+
+/**
+ * Builds a loopback connection alone, then connects it, and reports the state it reached or the
+ * code (and message) that stopped it at either step.
+ */
+async function connectLoopback(directory: string) {
   const scope = Effect.runSync(Scope.make());
   try {
-    const exit = await Effect.runPromiseExit(
+    const built = await Effect.runPromiseExit(
       Layer.buildWithScope(LoopbackConnectionLive({ directory }), scope),
     );
-    return Exit.isFailure(exit)
-      ? (exit.cause.reasons.find((reason) => reason._tag === 'Fail') as { error: ApplicationError })
-          .error.code
-      : 'built';
+    const failure = describeExit(built);
+    if (failure !== 'ok' || !Exit.isSuccess(built))
+      return {
+        step: 'build',
+        code: (failure as ApplicationError).code,
+        message: (failure as ApplicationError).message,
+      };
+    const service = Context.get(built.value, ConnectionService);
+    const initial = await Effect.runPromise(service.getConnection({}));
+    const connected = await Effect.runPromiseExit(service.connect({ profileId: 'loopback' }));
+    const refused = describeExit(connected);
+    if (refused !== 'ok')
+      return {
+        step: 'connect',
+        initial: initial.state,
+        code: refused.code,
+        message: refused.message,
+      };
+    return {
+      step: 'connect',
+      initial: initial.state,
+      code: Exit.isSuccess(connected) && connected.value.state,
+    };
   } finally {
     await Effect.runPromise(Scope.close(scope, Exit.void));
   }
@@ -242,18 +271,99 @@ test('a token holder drives a local-mode daemon completely over the loopback con
   });
 });
 
+const unsafeMessage = 'The daemon data directory or one of its files is not private to this user.';
+
+test('the loopback connection builds from the identity alone while the daemon is stopped', async () => {
+  await withRoot(async (root, started) => {
+    const directory = join(root, 'data');
+    const first = startDaemon([directory]);
+    started.push(first);
+    const { host } = await bounded(first.ready);
+    await first.stop();
+    await assert.rejects(readFile(join(directory, 'endpoint.json')), { code: 'ENOENT' });
+    const clients = connectClients(directory, host);
+    try {
+      const initial = await clients.connection.command('getConnection', {});
+      assert.equal(initial.state, 'disconnected');
+      assert.equal(initial.profile.remotePort, undefined);
+      assert.deepEqual(initial.profile.expected, host);
+      await assert.rejects(clients.connection.command('connect', { profileId: 'loopback' }), {
+        code: 'Unavailable',
+        message: 'The daemon is not running.',
+      });
+      const daemon = startDaemon([directory]);
+      started.push(daemon);
+      const ready = await bounded(daemon.ready);
+      const connected = await clients.connection.command('connect', { profileId: 'loopback' });
+      assert.equal(connected.state, 'connected');
+      assert.equal(connected.profile.remotePort, ready.port);
+      assert.deepEqual((await clients.chat.command('getChatHost', { host })).host, host);
+    } finally {
+      await clients.runtime.dispose();
+    }
+  });
+});
+
+test('the loopback connection never follows a link to its data directory or files', async () => {
+  await withRoot(async (root, started) => {
+    const directory = join(root, 'data'),
+      elsewhere = join(root, 'elsewhere');
+    await mkdir(elsewhere, { mode: 0o700 });
+    const daemon = startDaemon([directory]);
+    started.push(daemon);
+    await bounded(daemon.ready);
+    assert.equal((await connectLoopback(directory)).code, 'connected');
+    // Each file in turn becomes a link to an identical private copy; only the link is wrong.
+    for (const [name, step] of [
+      ['identity.json', 'build'],
+      ['endpoint.json', 'connect'],
+      ['token', 'connect'],
+    ] as const) {
+      const file = join(directory, name),
+        copy = join(elsewhere, name);
+      await rename(file, copy);
+      await symlink(copy, file);
+      const refused = await connectLoopback(directory);
+      assert.deepEqual(
+        { step: refused.step, code: refused.code, message: refused.message },
+        { step, code: 'Unavailable', message: unsafeMessage },
+        name,
+      );
+      await rm(file);
+      await rename(copy, file);
+      assert.equal((await connectLoopback(directory)).code, 'connected', name);
+    }
+    // A link to the whole private data directory is refused too.
+    const linked = join(root, 'linked');
+    await symlink(directory, linked);
+    assert.deepEqual(await connectLoopback(linked), {
+      step: 'build',
+      code: 'Unavailable',
+      message: unsafeMessage,
+    });
+  });
+});
+
 test('the loopback connection refuses unsafe files, another protocol, another identity and a wrong token', async () => {
   await withRoot(async (root, started) => {
     const directory = join(root, 'data'),
       other = join(root, 'other');
-    assert.equal(await buildLoopback(directory), 'Unavailable', 'no daemon directory yet');
+    assert.deepEqual(
+      await connectLoopback(directory),
+      { step: 'build', code: 'Unavailable', message: 'The daemon is not running.' },
+      'no daemon directory yet, so no identity to bind to',
+    );
     const daemon = startDaemon([directory]),
       second = startDaemon([other]);
     started.push(daemon, second);
     const [ready] = await Promise.all([bounded(daemon.ready), bounded(second.ready)]);
-    assert.equal(await buildLoopback(directory), 'built');
+    assert.deepEqual(await connectLoopback(directory), {
+      step: 'connect',
+      initial: 'disconnected',
+      code: 'connected',
+    });
     await chmod(directory, 0o755);
-    assert.equal(await buildLoopback(directory), 'Unavailable', 'a directory others can read');
+    assert.equal((await connectLoopback(directory)).step, 'build', 'a directory others can read');
     await chmod(directory, 0o700);
     const endpointFile = join(directory, 'endpoint.json'),
       tokenFile = join(directory, 'token'),
@@ -262,10 +372,14 @@ test('the loopback connection refuses unsafe files, another protocol, another id
       token = await readFile(tokenFile, 'utf8'),
       identity = await readFile(identityFile, 'utf8');
     await chmod(tokenFile, 0o644);
-    assert.equal(await buildLoopback(directory), 'Unavailable', 'a token others can read');
+    assert.deepEqual(
+      await connectLoopback(directory),
+      { step: 'connect', initial: 'disconnected', code: 'Unavailable', message: unsafeMessage },
+      'a token others can read',
+    );
     await chmod(tokenFile, 0o600);
     await writeFile(endpointFile, JSON.stringify({ ...JSON.parse(endpoint), protocol: 1 }));
-    assert.equal(await buildLoopback(directory), 'Incompatible', 'an old protocol');
+    assert.equal((await connectLoopback(directory)).code, 'Incompatible', 'an old protocol');
     await writeFile(endpointFile, endpoint);
 
     const clients = connectClients(directory, ready.host);

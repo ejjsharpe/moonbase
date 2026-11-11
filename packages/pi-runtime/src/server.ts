@@ -110,23 +110,24 @@ export const serveChat = (
             return value;
           };
           if (!isDaemonMutation(operation)) return run();
-          const requestId = (input as { requestId: string }).requestId,
-            prior = daemonRequests.get(requestId);
+          // Keyed by owner too, so one owner's request IDs never answer for another's.
+          const { requestId, ownerId } = input as { requestId: string; ownerId?: string },
+            key = JSON.stringify([ownerId ?? null, requestId]),
+            prior = daemonRequests.get(key);
           if (prior) {
             if (prior.operation !== operation || !areJsonValuesEqual(prior.input, input))
               V.fail('InvalidInput', 'Request ID is bound to another operation or input.');
             return prior.outcome as Promise<DaemonOutput<K>>;
           }
           const outcome = run();
-          daemonRequests.set(requestId, { operation, input, outcome });
+          daemonRequests.set(key, { operation, input, outcome });
           for (const key of daemonRequests.keys()) {
             if (daemonRequests.size <= rememberedDaemonRequests) break;
             daemonRequests.delete(key);
           }
           // A refused request may be sent again; only an outcome that may have applied is kept.
           outcome.catch(() => {
-            if (daemonRequests.get(requestId)?.outcome === outcome)
-              daemonRequests.delete(requestId);
+            if (daemonRequests.get(key)?.outcome === outcome) daemonRequests.delete(key);
           });
           return outcome;
         };
@@ -255,7 +256,8 @@ export const serveChat = (
           let length = 0,
             authenticated = false;
           let timer: ReturnType<typeof setTimeout> | undefined;
-          let dispatchedOperation: string | undefined;
+          let dispatchedOperation: string | undefined,
+            daemonOperation = false;
           try {
             timer = setTimeout(() => request.destroy(), P.requestDeadlineMs);
             if (!/^application\/json(?:\s*;|$)/i.test(request.headers['content-type'] ?? ''))
@@ -323,6 +325,7 @@ export const serveChat = (
             }
             const envelope = V.object(P.json(bytes), ['operation', 'input']);
             if (daemon && isDaemonCommand(envelope.operation)) {
+              daemonOperation = true;
               const operation = envelope.operation,
                 input = decodeDaemonInput(operation, envelope.input);
               dispatchedOperation = operation;
@@ -357,7 +360,16 @@ export const serveChat = (
           } catch (error) {
             if (response.headersSent) response.destroy();
             else if (authenticated)
-              send(400, { ok: false, error: P.publicError(error, dispatchedOperation) }, challenge);
+              send(
+                400,
+                {
+                  ok: false,
+                  error: daemonOperation
+                    ? P.publicDaemonError(error)
+                    : P.publicError(error, dispatchedOperation),
+                },
+                challenge,
+              );
             else if (!response.destroyed) {
               response.writeHead(400);
               response.end();

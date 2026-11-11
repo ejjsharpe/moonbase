@@ -2,7 +2,7 @@ import type { ConversationId, Harness as HarnessType } from '@earendil-works/pi-
 import type { AddressInfo } from 'node:net';
 import type { ChatInput, ChatStopTarget } from '@moonbase/contracts/chat';
 import { maximumChatInputBytes, maximumChatRequestBytes } from '@moonbase/contracts/chat';
-import type { DaemonClient } from '@moonbase/contracts/daemon';
+import { daemonErrorReasons, type DaemonClient } from '@moonbase/contracts/daemon';
 import assert from 'node:assert/strict';
 import { test, mock } from 'node:test';
 import { execFileSync } from 'node:child_process';
@@ -2125,6 +2125,74 @@ test('a folder approval is re-checked by identity on use; a replaced folder need
   f.afterDispatch = undefined;
 });
 
+test('daemon refusals reach the client with fixed public messages, never host text', async (t) => {
+  const f = await setupLocal(t);
+  const owner = f.owner('document-reasons');
+  const refusesWith = async (promise: Promise<unknown>, reason: keyof typeof daemonErrorReasons) =>
+    assert.rejects(promise, (error: ApplicationError) => {
+      assert.deepEqual({ code: error.code, message: error.message }, daemonErrorReasons[reason]);
+      return true;
+    });
+  await refusesWith(
+    owner.command('startProviderLogin', { providerId: 'claude-code' }),
+    'claude-code-sign-in',
+  );
+  await refusesWith(
+    owner.command('logoutProvider', { providerId: 'claude-code' }),
+    'claude-code-sign-in',
+  );
+  await refusesWith(
+    owner.command('startProviderLogin', { providerId: 'not-installed' }),
+    'unknown-provider',
+  );
+  await refusesWith(
+    owner.command('cancelProviderLogin', { flowId: 'no-flow' }),
+    'sign-in-inactive',
+  );
+  const started = await owner.command('startProviderLogin', { providerId: 'anthropic' });
+  const prompt = (
+    await untilState(
+      () => owner.command('getProviders', {}),
+      (state) => !!state.flow?.prompt,
+    )
+  ).flow!.prompt!;
+  const flowId = started.flow!.id;
+  await refusesWith(
+    owner.command('answerProviderPrompt', { flowId, promptId: 'old-prompt', answer: 'key' }),
+    'prompt-obsolete',
+  );
+  await refusesWith(
+    owner.command('answerProviderPrompt', { flowId, promptId: prompt.id, answer: '  ' }),
+    'invalid-answer',
+  );
+  await refusesWith(owner.command('openProviderUrl', { flowId }), 'no-sign-in-url');
+  await f.host(f.providers.releaseOwner('document-reasons'));
+  await refusesWith(owner.command('getProviders', {}), 'owner-released');
+  await refusesWith(
+    f.host(
+      f.folders.approveFolder({ host: localHost, requestId: 'gone', path: join(f.dir, 'gone') }),
+    ),
+    'folder-missing',
+  );
+  await refusesWith(
+    f.host(f.folders.checkChatFolder({ host: localHost, path: f.dir })),
+    'not-chat-folder',
+  );
+  // A refusal without a reason gets the client's own generic text, not chat wording.
+  await assert.rejects(
+    f.host(
+      f.folders.markFolderAsProject({
+        requestId: 'mark',
+        target: { ...localSession, conversationId: 'missing-chat' },
+      }),
+    ),
+    (error: ApplicationError) => {
+      assert(!error.message.startsWith('Chat '), error.message);
+      return true;
+    },
+  );
+});
+
 test('a client refuses local-mode features from a host that does not advertise them', async (t) => {
   const f = await setup(t);
   const unadvertised = ManagedRuntime.make(
@@ -2319,6 +2387,32 @@ test('signed hostile daemon replies are refused, and a mutation’s becomes Unce
     assert(!error.message.includes('private'));
     return true;
   });
+  // A named reason shows the client's fixed text; one that is unknown or claims another code is
+  // ignored, and the host's message is never shown.
+  for (const [error, expected] of [
+    [
+      { code: 'InvalidInput', message: 'private', reason: 'folder-missing' },
+      daemonErrorReasons['folder-missing'],
+    ],
+    [
+      { code: 'Unauthorized', message: 'private', reason: 'folder-missing' },
+      { code: 'Unauthorized', message: 'The host did not authorize this request.' },
+    ],
+    [
+      { code: 'InvalidInput', message: 'private', reason: 'private' },
+      { code: 'InvalidInput', message: 'The host refused this request as invalid.' },
+    ],
+    [
+      { code: 'InvalidInput', message: 'private', reason: 'toString' },
+      { code: 'InvalidInput', message: 'The host refused this request as invalid.' },
+    ],
+  ] as const) {
+    reply = { status: 400, value: { ok: false, error } };
+    await assert.rejects(approve(), (failure: ApplicationError) => {
+      assert.deepEqual({ code: failure.code, message: failure.message }, expected);
+      return true;
+    });
+  }
   reply = {
     status: 200,
     value: { ok: true, value: { folders: Array.from({ length: 9 }, (_, i) => `/folder-${i}`) } },
@@ -2352,6 +2446,10 @@ test('signed hostile daemon replies are refused, and a mutation’s becomes Unce
   assert.deepEqual(opened, [signInUrl]);
   // Off the daemon's machine, the pasted redirect URL is the path.
   assert.match(presented.flow!.prompt!.message, /cannot reach the host’s sign-in callback/);
+  // Only ChatGPT's OAuth prompt is about the host's callback; another provider's is left as sent.
+  const other = { ...state, flow: { ...state.flow, providerId: 'anthropic' } };
+  reply = { status: 200, value: { ok: true, value: { state: other } } };
+  assert.equal((await owner.command('getProviders', {})).flow!.prompt!.message, 'Paste');
   reply = { status: 200, value: { ok: true, value: { requestId: 'another', state } } };
   await assert.rejects(owner.command('startProviderLogin', { providerId: 'openai' }), {
     code: 'Uncertain',

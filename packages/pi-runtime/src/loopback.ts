@@ -63,8 +63,8 @@ const parse = <A>(text: string, decode: (value: unknown) => A) => {
   }
 };
 
-/** The daemon's identity, its listening port and its token, read fresh from its directory. */
-async function readDaemonFiles(directory: string) {
+/** Refuses a data directory that is missing, a link, or not private to this user. */
+async function checkDirectory(directory: string) {
   const info = await lstat(directory).catch(() => {
     throw failure('Unavailable', 'The daemon is not running.');
   });
@@ -75,15 +75,25 @@ async function readDaemonFiles(directory: string) {
     info.mode & 0o077
   )
     throw unsafe();
+}
+const parseIdentity = (identity: string) =>
+  parse(identity, (value) => decodeChatInput('listChats', { session: value }).session).host;
+
+/** The daemon's host and store, from its directory's `identity.json`. */
+async function readDaemonIdentity(directory: string) {
+  await checkDirectory(directory);
+  return parseIdentity(await readPrivateFile(join(directory, 'identity.json'), 4096));
+}
+
+/** The daemon's identity, its listening port and its token, read fresh from its directory. */
+async function readDaemonFiles(directory: string) {
+  await checkDirectory(directory);
   const [identity, endpoint, token] = await Promise.all([
     readPrivateFile(join(directory, 'identity.json'), 4096),
     readPrivateFile(join(directory, 'endpoint.json'), 4096),
     readPrivateFile(join(directory, 'token'), 8192),
   ]);
-  const session = parse(
-    identity,
-    (value) => decodeChatInput('listChats', { session: value }).session,
-  );
+  const host = parseIdentity(identity);
   const { port, protocol } = parse(endpoint, (value) => {
     const record = V.object(value, ['port', 'pid', 'version', 'protocol']);
     if (
@@ -99,14 +109,15 @@ async function readDaemonFiles(directory: string) {
     throw failure('Incompatible', 'The daemon speaks another protocol version.');
   const key = token.trim();
   if (!/^[\x21-\x7e]{16,4096}$/.test(key)) throw malformed();
-  return { expected: session.host, origin: `http://127.0.0.1:${port}`, port, token: key };
+  return { expected: host, origin: `http://127.0.0.1:${port}`, port, token: key };
 }
 
 type Generation = { id: string; origin: string; token: string; health: ChatHostHealth };
 
 /**
- * A privileged `ConnectionService` for a daemon on this machine: each connect reads the daemon's
- * `identity.json`, `endpoint.json` and `token` from its data directory, then verifies signed
+ * A privileged `ConnectionService` for a daemon on this machine. It is built from the daemon's
+ * `identity.json` alone and starts disconnected, so it builds while the daemon is stopped; each
+ * connect reads `identity.json`, `endpoint.json` and `token` from its data directory, then verifies signed
  * health for that exact host and store. A connect that finds the same daemon keeps the current
  * generation; one that finds it restarted or replaced starts a new generation. The token never
  * leaves this service's endpoint lookup, so keep it out of renderers.
@@ -125,22 +136,21 @@ export function LoopbackConnectionLive(
       // oxlint-disable-next-line no-control-regex -- Labels reject control characters.
       if (typeof label !== 'string' || !/^[^\x00-\x1f\x7f]{1,128}$/.test(label))
         return yield* Effect.fail(failure('InvalidInput', 'Choose a short connection label.'));
-      const read = () =>
+      const readFiles = <A>(read: (directory: string) => Promise<A>) =>
         Effect.tryPromise({
-          try: () => readDaemonFiles(config.directory),
+          try: () => read(config.directory),
           catch: (error) =>
             ApplicationError.is(error)
               ? error
               : failure('Unavailable', 'The daemon’s connection files could not be read.'),
         });
+      const read = () => readFiles(readDaemonFiles);
       // The expected identity is the directory's at startup; a different one later is refused.
-      const initial = yield* read();
-      const expected = initial.expected;
+      const expected = yield* readFiles(readDaemonIdentity);
       let profile: ConnectionProfile = {
         id: loopbackProfileId,
         label,
         destination: '127.0.0.1',
-        remotePort: initial.port,
         expected,
       };
       let state: ConnectionSnapshot = { profile, state: 'disconnected', connectionId: null },

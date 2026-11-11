@@ -4,6 +4,9 @@ import type { ConnectionCommand, ConnectionInput, ConnectionOutput } from './con
 import { ChatHostHealthSchema, ChatHostTargetSchema, ChatIdentifierSchema } from './host-schema.ts';
 import { optional, struct, voidResult } from './schema.ts';
 
+export const ConnectionPortSchema = Schema.Int.check(
+  Schema.isBetween({ minimum: 1, maximum: 65535 }),
+);
 export const ConnectionProfileSchema = struct({
   id: ChatIdentifierSchema,
   // oxlint-disable-next-line no-control-regex -- Public SSH labels reject control characters.
@@ -14,7 +17,8 @@ export const ConnectionProfileSchema = struct({
       /^(?:[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}@)?(?:[A-Za-z0-9_][A-Za-z0-9_.-]{0,252}|\[[0-9A-Fa-f:.%_-]+\])$/,
     ),
   ),
-  remotePort: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 })),
+  /** The host's port: required over SSH; a loopback connection knows it once it has read one. */
+  remotePort: optional(ConnectionPortSchema),
   expected: ChatHostTargetSchema,
 });
 const common = { profile: ConnectionProfileSchema, message: optional(Schema.String) };

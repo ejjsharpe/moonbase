@@ -40,6 +40,7 @@ import {
   daemonCommandCapabilities,
   decodeDaemonInput,
   decodeDaemonOutput,
+  isDaemonCommand,
   isDaemonMutation,
 } from '@moonbase/contracts/daemon-schema';
 import { decodeChatHostTarget } from '@moonbase/contracts/host-schema';
@@ -486,9 +487,10 @@ export const RemoteProviderSetupLive = (
     Effect.gen(function* () {
       const connections = yield* ConnectionService;
       const host = decodeChatHostTarget(config.host);
-      // Which sign-in path applies depends on where the browser is, which only the client knows.
+      // Which ChatGPT sign-in path applies depends on where the browser is, which only the client
+      // knows; its OAuth flow is the one whose callback listens on the host.
       const present = (state: ProviderState): ProviderState =>
-        state.flow?.prompt?.type === 'manual_code'
+        state.flow?.providerId === 'openai' && state.flow.prompt?.type === 'manual_code'
           ? {
               ...state,
               flow: {
@@ -654,11 +656,15 @@ const publicFailure = (code: (typeof chatReplyErrorCodes)[number], operation?: s
     message: P.publicError(new ApplicationError({ code, message: '' }), operation).message,
   });
 
-/** Decodes a signed reply's `error` field; undefined when it carries no public error code. */
+/**
+ * Decodes a signed reply's `error` field; undefined when it carries no public error code. A daemon
+ * operation's failure may name a reason, shown with the client's own fixed text.
+ */
 function decodeErrorEnvelope(error: unknown, operation?: string): ApplicationError | undefined {
   try {
     const record = V.object(error);
     const code = chatReplyErrorCodes.find((value) => value === record.code);
+    if (code && isDaemonCommand(operation)) return P.daemonFailure(code, record.reason);
     return code && publicFailure(code, operation);
   } catch {
     return undefined;

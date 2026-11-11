@@ -10,6 +10,8 @@ import {
   maximumRecentFolders,
 } from '../src/daemon-schema.ts';
 import { readProviderSignInUrl } from '../src/providers-schema.ts';
+import { daemonErrorReasons, findDaemonErrorReason, readDaemonErrorReason } from '../src/daemon.ts';
+import { decodeConnectionProfile } from '../src/connection-schema.ts';
 import { chatHostCapabilities } from '../src/host.ts';
 import { decodeChatHostHealth } from '../src/host-schema.ts';
 
@@ -110,4 +112,30 @@ test('health accepts protocol 2 with daemon capabilities and refuses protocol 1'
   };
   assert.deepEqual(decodeChatHostHealth(health), health);
   assert.throws(() => decodeChatHostHealth({ ...health, protocol: 1 }), { code: 'Incompatible' });
+});
+
+test('daemon error reasons pair one code with one fixed message, and are read only for that code', () => {
+  const messages = Object.values(daemonErrorReasons).map(({ message }) => message);
+  assert.equal(new Set(messages).size, messages.length);
+  for (const [reason, error] of Object.entries(daemonErrorReasons)) {
+    assert.equal(findDaemonErrorReason(error), reason);
+    assert.equal(readDaemonErrorReason(reason, error.code), reason);
+    assert.equal(readDaemonErrorReason(reason, 'Conflict'), undefined);
+  }
+  assert.equal(
+    findDaemonErrorReason({ code: 'InvalidInput', message: 'Choose an existing folder' }),
+    undefined,
+  );
+  assert.equal(
+    findDaemonErrorReason({ code: 'Unavailable', message: 'Choose an existing folder.' }),
+    undefined,
+  );
+  for (const value of ['toString', '__proto__', 'constructor', '', 1, null, undefined, {}])
+    assert.equal(readDaemonErrorReason(value, 'InvalidInput'), undefined);
+});
+
+test('a connection profile may leave out its port until a loopback connection has read one', () => {
+  const profile = { id: 'loopback', label: 'This Mac', destination: '127.0.0.1', expected: host };
+  assert.deepEqual(decodeConnectionProfile(profile), profile);
+  assert.throws(() => decodeConnectionProfile({ ...profile, remotePort: 0 }));
 });
