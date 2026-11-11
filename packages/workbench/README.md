@@ -26,8 +26,11 @@ bun run --cwd packages/workbench typecheck
 bun run --cwd packages/workbench lint
 bun run --cwd packages/workbench check:renderer
 bun run --cwd packages/workbench build
+bun run --cwd packages/workbench test
 bun run --cwd packages/workbench test:ui
 bun run --cwd packages/workbench demo
 ```
+
+`test` runs the logic-only `*.test.ts` files under Node; `test:ui` runs the `*.spec.ts` browser tests against the demo.
 
 The demo renders two project workbenches with independent buffers; `?remote` gives the second a remote identity and `?clipboard` installs a paste fixture.

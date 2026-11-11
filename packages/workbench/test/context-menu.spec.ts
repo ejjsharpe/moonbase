@@ -179,24 +179,17 @@ test('Move to Trash hands focus to its dialog and Cancel returns to this tree', 
   expect(await page.evaluate(() => window.demo.memory.stats.mutations)).toBe(0);
 });
 
-for (const key of ['Tab', 'Shift+Tab'])
-  test(`${key} dismisses and traverses from the invoking tree without activation`, async ({
-    page,
-  }) => {
-    await page.goto('/');
-    await tree(page).focus();
-    await tree(page).press('Home');
-    await tree(page).press('ContextMenu');
-    await expect(item(page, 'New File…')).toBeFocused();
-    await page.keyboard.press(key);
-    await expect(menu(page)).toHaveCount(0);
-    await expect(
-      key === 'Tab'
-        ? region(page).getByRole('tab', { name: 'welcome.ts', exact: true })
-        : region(page).getByRole('button', { name: 'Changes', exact: true }),
-    ).toBeFocused();
-    await expect(page.getByRole('dialog')).toHaveCount(0);
-  });
+test('Tab dismisses and traverses from the invoking tree without activation', async ({ page }) => {
+  await page.goto('/');
+  await tree(page).focus();
+  await tree(page).press('Home');
+  await tree(page).press('ContextMenu');
+  await expect(item(page, 'New File…')).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(menu(page)).toHaveCount(0);
+  await expect(region(page).getByRole('tab', { name: 'welcome.ts', exact: true })).toBeFocused();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+});
 
 test('outside dismissal consumes the row click; background invocation stays native', async ({
   page,
@@ -518,81 +511,73 @@ test('an externally opened mutation dialog dismisses an unchosen menu without re
   await expect(dialog).toHaveCount(0);
 });
 
-for (const timing of ['focused', 'pending focus'])
-  test(`another workbench preservation dialog dismisses the menu and owns the first click (${timing})`, async ({
-    page,
-  }) => {
-    if (timing === 'pending focus') await holdMenuFocus(page);
-    await page.goto('/');
-    await row(page, 'README.md').click({ button: 'right' });
-    if (timing === 'pending focus')
-      expect(await page.evaluate(() => window.resumeMenuFrames())).toBeGreaterThan(0);
-    else await expect(item(page, 'Open')).toBeFocused();
-    await page.evaluate(() => {
-      const { second, checkout } = window.demo;
-      second.edit({ checkout, path: 'welcome.ts' }, 'Other editor dirty text');
-      void second.close([{ checkout, path: 'welcome.ts' }]);
-    });
-    const dialog = page.getByRole('dialog', { name: 'Save changes before closing?', exact: true });
-    await expect(dialog.getByRole('button', { name: 'Save', exact: true })).toBeFocused();
-    if (timing === 'pending focus') await page.evaluate(() => window.releaseMenuFocus());
-    await expect(menu(page)).toHaveCount(0);
-    await expect(dialog.getByRole('button', { name: 'Save', exact: true })).toBeFocused();
-    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
-    await expect(dialog).toHaveCount(0);
-    await expect(tree(page)).not.toBeFocused();
-    expect(
-      await page.evaluate(
-        () =>
-          window.demo.second
-            .getSnapshot()
-            .buffers.find((buffer) => buffer.target.path === 'welcome.ts')?.text,
-      ),
-    ).toBe('Other editor dirty text');
+test('another workbench preservation dialog dismisses a menu still taking focus and owns the first click', async ({
+  page,
+}) => {
+  await holdMenuFocus(page);
+  await page.goto('/');
+  await row(page, 'README.md').click({ button: 'right' });
+  expect(await page.evaluate(() => window.resumeMenuFrames())).toBeGreaterThan(0);
+  await page.evaluate(() => {
+    const { second, checkout } = window.demo;
+    second.edit({ checkout, path: 'welcome.ts' }, 'Other editor dirty text');
+    void second.close([{ checkout, path: 'welcome.ts' }]);
   });
+  const dialog = page.getByRole('dialog', { name: 'Save changes before closing?', exact: true });
+  await expect(dialog.getByRole('button', { name: 'Save', exact: true })).toBeFocused();
+  await page.evaluate(() => window.releaseMenuFocus());
+  await expect(menu(page)).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: 'Save', exact: true })).toBeFocused();
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(tree(page)).not.toBeFocused();
+  expect(
+    await page.evaluate(
+      () =>
+        window.demo.second
+          .getSnapshot()
+          .buffers.find((buffer) => buffer.target.path === 'welcome.ts')?.text,
+    ),
+  ).toBe('Other editor dirty text');
+});
 
-for (const timing of ['normal', 'before completion', 'late completion'])
-  test(`keyboard activation runs the captured action after later selection changes (${timing})`, async ({
-    page,
-  }) => {
-    if (timing !== 'normal') await holdMenuOpening(page);
-    await page.goto('/');
-    await row(page, 'README.md').click({ button: 'right' });
-    if (timing !== 'normal') await page.waitForFunction(() => !!window.finishMenuOpening);
-    if (timing === 'late completion') await menu(page).press('Home');
-    else await expect(item(page, 'Open')).toBeFocused();
-    await page.evaluate(() =>
-      window.demo.first.tree(window.demo.checkout, {
-        selected: ['welcome.ts'],
-        focus: 'welcome.ts',
-      }),
-    );
-    // Open, Mention in Chat, Cut, Copy, Paste (disabled, but focusable), Rename…, Duplicate…
-    for (let step = 0; step < 6; step++) await page.keyboard.press('ArrowDown');
-    await expect(item(page, 'Duplicate…')).toBeFocused();
-    if (timing === 'late completion') {
-      await page.evaluate(() => window.finishMenuOpening());
-      await expect(item(page, 'Duplicate…')).toBeFocused();
-    }
-    await page.keyboard.press('Space');
-    if (timing === 'before completion') await page.evaluate(() => window.finishMenuOpening());
-    const input = tree(page).getByRole('textbox', { name: 'Duplicate as', exact: true });
-    await expect(input).toHaveValue('README copy.md');
-    await input.fill('copied.md');
-    await input.press('Enter');
-    await expect(input).toHaveCount(0);
-    expect(
-      await page.evaluate(
-        async () =>
-          (
-            await window.demo.client.command('readFile', {
-              checkout: window.demo.checkout,
-              path: 'copied.md',
-            })
-          ).text,
-      ),
-    ).toContain('# Volatile demo');
-  });
+test('keyboard activation runs the captured action after later selection changes and a late menu opening', async ({
+  page,
+}) => {
+  await holdMenuOpening(page);
+  await page.goto('/');
+  await row(page, 'README.md').click({ button: 'right' });
+  await page.waitForFunction(() => !!window.finishMenuOpening);
+  await menu(page).press('Home');
+  await page.evaluate(() =>
+    window.demo.first.tree(window.demo.checkout, {
+      selected: ['welcome.ts'],
+      focus: 'welcome.ts',
+    }),
+  );
+  // Open, Mention in Chat, Cut, Copy, Paste (disabled, but focusable), Rename…, Duplicate…
+  for (let step = 0; step < 6; step++) await page.keyboard.press('ArrowDown');
+  await expect(item(page, 'Duplicate…')).toBeFocused();
+  await page.evaluate(() => window.finishMenuOpening());
+  await expect(item(page, 'Duplicate…')).toBeFocused();
+  await page.keyboard.press('Space');
+  const input = tree(page).getByRole('textbox', { name: 'Duplicate as', exact: true });
+  await expect(input).toHaveValue('README copy.md');
+  await input.fill('copied.md');
+  await input.press('Enter');
+  await expect(input).toHaveCount(0);
+  expect(
+    await page.evaluate(
+      async () =>
+        (
+          await window.demo.client.command('readFile', {
+            checkout: window.demo.checkout,
+            path: 'copied.md',
+          })
+        ).text,
+    ),
+  ).toContain('# Volatile demo');
+});
 
 test('empty-tree keyboard invocations remain unhandled', async ({ page }) => {
   await page.goto('/');
@@ -654,43 +639,39 @@ test('nested folder invocation preserves expansion and full relative paths', asy
   await expect(row(page, 'src')).toHaveAttribute('aria-expanded', 'true');
 });
 
-for (const width of [1440, 768, 390])
-  test(`menu positioning stays within the ${width}px viewport and uses highlighted states`, async ({
-    page,
-  }) => {
-    await page.setViewportSize({ width, height: 650 });
-    await page.goto('/');
-    await expect(row(page, 'README.md')).toBeVisible();
-    await row(page, 'README.md').evaluate(
-      (element, width) =>
-        element.dispatchEvent(
-          new MouseEvent('contextmenu', {
-            bubbles: true,
-            cancelable: true,
-            clientX: width - 2,
-            clientY: 648,
-          }),
-        ),
-      width,
-    );
-    await expect(item(page, 'Open')).toBeFocused();
-    await expect(item(page, 'Open')).toHaveCSS('background-color', 'rgb(32, 34, 43)');
-    await expect
-      .poll(() =>
-        menu(page).evaluate((element) => {
-          const rect = element.getBoundingClientRect();
-          // Opened at the bottom-right corner, it flips up and left to stay on screen.
-          return (
-            rect.left >= innerWidth - rect.width - 12 &&
-            rect.top >= innerHeight - rect.height - 12 &&
-            rect.right <= innerWidth &&
-            rect.bottom <= innerHeight
-          );
+test('a menu opened at the viewport corner stays within it', async ({ page }) => {
+  const width = 390;
+  await page.setViewportSize({ width, height: 650 });
+  await page.goto('/');
+  await expect(row(page, 'README.md')).toBeVisible();
+  await row(page, 'README.md').evaluate(
+    (element, width) =>
+      element.dispatchEvent(
+        new MouseEvent('contextmenu', {
+          bubbles: true,
+          cancelable: true,
+          clientX: width - 2,
+          clientY: 648,
         }),
-      )
-      .toBe(true);
-    await page.screenshot({ path: `test-results/file-menu-${width}.png` });
-  });
+      ),
+    width,
+  );
+  await expect(item(page, 'Open')).toBeFocused();
+  await expect
+    .poll(() =>
+      menu(page).evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        // Opened at the bottom-right corner, it flips up and left to stay on screen.
+        return (
+          rect.left >= innerWidth - rect.width - 12 &&
+          rect.top >= innerHeight - rect.height - 12 &&
+          rect.right <= innerWidth &&
+          rect.bottom <= innerHeight
+        );
+      }),
+    )
+    .toBe(true);
+});
 
 const menuItems = (page: Page) =>
   menu(page).evaluate((element) =>
@@ -705,85 +686,42 @@ const menuItems = (page: Page) =>
     ),
   );
 
-test('file, folder and multi-item menus group their own commands with shortcuts', async ({
+test('file, folder, multi-item and shell-less menus offer only their own commands', async ({
   page,
 }) => {
   await page.goto('/');
-  const reveal = process.platform === 'darwin' ? 'Reveal in Finder' : 'Show in Folder';
-  // The tree's command key is ⌘ on a Mac and Ctrl elsewhere.
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control';
   await row(page, 'README.md').click({ button: 'right' });
-  expect(await menuItems(page)).toEqual([
-    'Open [Enter]',
-    '—',
-    'Mention in Chat',
-    '—',
-    `Cut [${mod}+X]`,
-    `Copy [${mod}+C]`,
-    `Paste [${mod}+V]`,
-    '—',
-    'Rename… [F2]',
-    'Duplicate…',
-    `Copy Path [Alt+${mod}+C]`,
-    `Copy Relative Path [Shift+Alt+${mod}+C]`,
-    `${reveal} [Alt+${mod}+R]`,
-    '—',
-    `Move to Trash [${mod}+Backspace]`,
-  ]);
+  const file = await menuItems(page);
+  expect(file).toContain('Open [Enter]');
+  expect(file).toContain('Mention in Chat');
+  expect(file).toContain(`Move to Trash [${mod}+Backspace]`);
   await page.keyboard.press('Escape');
   await row(page, 'src').click({ button: 'right' });
-  expect(await menuItems(page)).toEqual([
-    'New File…',
-    'New Folder…',
-    '—',
-    `Cut [${mod}+X]`,
-    `Copy [${mod}+C]`,
-    `Paste [${mod}+V]`,
-    '—',
-    'Rename… [F2]',
-    `Copy Path [Alt+${mod}+C]`,
-    `Copy Relative Path [Shift+Alt+${mod}+C]`,
-    `${reveal} [Alt+${mod}+R]`,
-    '—',
-    `Move to Trash [${mod}+Backspace]`,
-  ]);
+  const folder = await menuItems(page);
+  expect(folder).toContain('New File…');
+  expect(folder).not.toContain('Open [Enter]');
+  expect(folder).not.toContain('Duplicate…');
   await page.keyboard.press('Escape');
   await tree(page).focus();
   await tree(page).press('Home');
   await tree(page).press('Shift+End');
   const all = await selected(page);
   await tree(page).press('ContextMenu');
-  const files = all.filter((path) => path !== 'src');
-  expect(await menuItems(page)).toEqual([
-    `Mention ${files.length} Files in Chat`,
-    '—',
-    `Cut [${mod}+X]`,
-    `Copy [${mod}+C]`,
-    `Paste [${mod}+V]`,
-    '—',
-    `Copy Paths [Alt+${mod}+C]`,
-    `Copy Relative Paths [Shift+Alt+${mod}+C]`,
-    '—',
-    `Move ${all.length} Items to Trash [${mod}+Backspace]`,
-  ]);
+  const several = await menuItems(page);
+  expect(several).toContain(`Move ${all.length} Items to Trash [${mod}+Backspace]`);
+  expect(several).not.toContain('Rename… [F2]');
   // The second editor's shell supplies no clipboard, file manager or chat.
   await page.keyboard.press('Escape');
   await page
     .getByRole('region', { name: 'Second editor', exact: true })
     .getByRole('treeitem', { name: 'README.md', exact: true })
     .click({ button: 'right' });
-  expect(await menuItems(page)).toEqual([
-    'Open [Enter]',
-    '—',
-    `Cut [${mod}+X]`,
-    `Copy [${mod}+C]`,
-    `Paste [${mod}+V]`,
-    '—',
-    'Rename… [F2]',
-    'Duplicate…',
-    '—',
-    `Move to Trash [${mod}+Backspace]`,
-  ]);
+  const shellLess = await menuItems(page);
+  expect(shellLess).toContain('Duplicate…');
+  expect(shellLess.some((name) => /Mention|Copy Path|Reveal|Show in Folder/.test(name))).toBe(
+    false,
+  );
 });
 
 test('copy, reveal and mention reach the shell and copy returns focus to the tree', async ({

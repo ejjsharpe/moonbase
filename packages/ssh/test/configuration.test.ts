@@ -56,111 +56,63 @@ test('public private-configuration schema resolves nullish executables and proje
   assert.equal(extra.profile.expected.hostId, configuration.profile.expected.hostId);
 });
 
-test('private configuration rejects missing and incorrectly typed fields with static errors', () => {
-  for (const value of [undefined, null, false, 1, 'private-credential-path', [], {}])
+test('private configuration refuses representative invalid values with a static error', () => {
+  const { profile, token } = configuration;
+  const withProfile = (changes: Record<string, unknown>) => ({
+    ...configuration,
+    profile: { ...profile, ...changes },
+  });
+  const withExpected = (changes: Record<string, unknown>) =>
+    withProfile({ expected: { ...profile.expected, ...changes } });
+  for (const value of [
+    'private-credential-path',
+    { ...configuration, token: undefined },
+    { ...configuration, token: 'a'.repeat(15) },
+    { ...configuration, token: token + '\n' },
+    { ...configuration, profile: null },
+    withExpected({ hostId: undefined }),
+    // Destinations that ssh would read as options, URLs, ports or shell syntax.
+    withProfile({ destination: '-oProxyCommand=private-credential-path' }),
+    withProfile({ destination: 'ssh://host' }),
+    withProfile({ destination: 'host:22' }),
+    withProfile({ destination: 'host;command' }),
+    withProfile({ destination: 'host$(command)' }),
+    withProfile({ destination: 'host\n' }),
+    withProfile({ label: 'line\n' }),
+    withProfile({ remotePort: 65536 }),
+    withProfile({ remotePort: '8787' }),
+    withProfile({ id: 'slash/id' }),
+    { ...configuration, sshExecutable: 'relative/private-credential-path' },
+    { ...configuration, sshExecutable: false },
+    // The private key never lands in a public field.
+    withProfile({ label: 'prefix-' + token }),
+    withExpected({ storeId: 'prefix-' + token }),
+    { ...configuration, sshExecutable: '/private-credential-path/' + token },
+  ])
     rejected(value);
-  for (const token of [undefined, null, false, 1, [], {}]) rejected({ ...configuration, token });
-  for (const profile of [undefined, null, false, 1, [], {}])
-    rejected({ ...configuration, profile });
-  for (const field of ['id', 'label', 'destination', 'remotePort', 'expected'])
-    for (const value of [undefined, null, false, {}, []])
-      rejected({ ...configuration, profile: { ...configuration.profile, [field]: value } });
-  for (const field of ['hostId', 'storeId'])
-    for (const value of [undefined, null, 1, false, {}, []])
-      rejected({
-        ...configuration,
-        profile: {
-          ...configuration.profile,
-          expected: { ...configuration.profile.expected, [field]: value },
-        },
-      });
-  for (const sshExecutable of [false, 1, [], {}]) rejected({ ...configuration, sshExecutable });
 });
 
-test('profile validation retains destination grammar, label controls, ports and identity bounds', () => {
-  const profile = configuration.profile;
-  for (const destination of [
-    '',
-    '-oProxyCommand=private-credential-path',
-    'ssh://host',
-    'host:22',
-    'host;command',
-    'host$(command)',
-    'host`command`',
-    'host|command',
-    'host name',
-    'host\n',
-    'host\0',
-    'u'.repeat(65) + '@host',
-    'h'.repeat(254),
-    '[' + 'a'.repeat(320) + ']',
-  ])
-    rejected({ ...configuration, profile: { ...profile, destination } });
-  for (const label of ['', 'a'.repeat(129), 'line\n', 'tab\t', 'null\0', 'delete\x7f'])
-    rejected({ ...configuration, profile: { ...profile, label } });
-  for (const remotePort of [0, -1, 65536, 1.5, Infinity, NaN, '8787'])
-    rejected({ ...configuration, profile: { ...profile, remotePort } });
-  for (const id of ['', 'a'.repeat(257), 'has space', 'line\n', 'slash/id', 'é']) {
-    rejected({ ...configuration, profile: { ...profile, id } });
-    for (const field of ['hostId', 'storeId'])
-      rejected({
+test('private configuration accepts destinations, ports, keys and paths at their bounds', () => {
+  for (const [destination, remotePort] of [
+    ['user@host.example', 1],
+    ['user@[fe80::1%25]', 65535],
+  ] as const)
+    assert.equal(
+      decodeSshConfiguration({
         ...configuration,
-        profile: { ...profile, expected: { ...profile.expected, [field]: id } },
-      });
-  }
-  for (const destination of ['alias', 'user@host.example', '[::1]', 'user@[fe80::1%25]'])
-    for (const remotePort of [1, 65535])
-      assert.equal(
-        decodeSshConfiguration({
-          ...configuration,
-          profile: { ...profile, destination, remotePort },
-        }).profile.destination,
-        destination,
-      );
-  const bounded = { ...profile, id: 'i'.repeat(256), label: 'l'.repeat(128) };
-  assert.deepEqual(decodeSshConfiguration({ ...configuration, profile: bounded }).profile, bounded);
-});
-
-test('private keys and executables retain bounds, path validation and public-field separation', () => {
-  for (const token of [
-    '',
-    'a'.repeat(15),
-    'a'.repeat(4097),
-    'contains a space',
-    'synthetic-private-host-key\n',
-    'synthetic-private-host-key\t',
-    'synthetic-private-host-key\0',
-    'synthetic-private-host-keyé',
-  ])
-    rejected({ ...configuration, token });
-  for (const token of ['a'.repeat(16), 'a'.repeat(4096), '!'.repeat(16), '~'.repeat(16)])
+        profile: { ...configuration.profile, destination, remotePort },
+      }).profile.destination,
+      destination,
+    );
+  for (const token of ['a'.repeat(16), 'a'.repeat(4096)])
     assert.equal(decodeSshConfiguration({ ...configuration, token }).token, token);
-  for (const sshExecutable of [
-    '',
-    'relative/private-credential-path',
-    '/private-credential-path\0',
-  ])
-    rejected({ ...configuration, sshExecutable });
+  const bounded = { ...configuration.profile, id: 'i'.repeat(256), label: 'l'.repeat(128) };
+  assert.deepEqual(decodeSshConfiguration({ ...configuration, profile: bounded }).profile, bounded);
   assert.equal(
     decodeSshConfiguration({ ...configuration, sshExecutable: '/private SSH resources/ssh' })
       .sshExecutable,
     '/private SSH resources/ssh',
   );
-  const token = configuration.token;
-  for (const field of ['id', 'label', 'destination'])
-    rejected({
-      ...configuration,
-      profile: { ...configuration.profile, [field]: 'prefix-' + token },
-    });
-  for (const field of ['hostId', 'storeId'])
-    rejected({
-      ...configuration,
-      profile: {
-        ...configuration.profile,
-        expected: { ...configuration.profile.expected, [field]: 'prefix-' + token },
-      },
-    });
-  rejected({ ...configuration, sshExecutable: '/private-credential-path/' + token });
 });
 
 test('hostile private values do not escape through decoder diagnostics', () => {

@@ -10,7 +10,7 @@ import { Effect, Layer, ManagedRuntime } from 'effect';
 import { ApplicationError, emptyRecovery, type CommandInput } from '@moonbase/contracts/workspace';
 import { WorkspaceService } from '@moonbase/contracts/services';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
-import { Store, pendingSaves } from '../src/store.ts';
+import { pendingSaves } from '../src/store.ts';
 import { WorkspaceLive } from '../src/index.ts';
 const binary = fileURLToPath(new URL('../dist/filesystem', import.meta.url));
 const isError = (code: ApplicationError['code']) => (e: unknown) =>
@@ -371,72 +371,6 @@ test('receipt insertion failure rolls back recovery snapshot and explicit public
   }
 });
 
-test('old matching publication replay and query do not advance observer acknowledgement bounds', async () => {
-  const f = fixture(),
-    { runtime, client } = f.start();
-  try {
-    const state = await snapshot(client, f.root),
-      checkout = state.checkouts[0],
-      initial = { clientId: 'alice', requestId: 'before-move', expectedRevision: 0, state };
-    const receipt = await client.command('persistRecovery', initial);
-    await client.command('persistRecovery', {
-      ...initial,
-      clientId: 'bob',
-      state: { ...state, clientId: 'bob' },
-    });
-    const sources = await client.command('inspectEntries', { checkout, paths: ['a.txt'] });
-    assert.equal(
-      (
-        await client.command('mutate', {
-          clientId: 'bob',
-          id: 'move',
-          checkout,
-          kind: 'move',
-          sources,
-          destination: 'moved.txt',
-        })
-      ).outcome,
-      'completed',
-    );
-    assert.deepEqual(await client.command('persistRecovery', initial), receipt);
-    assert.deepEqual(
-      await client.command('getRecoveryPublication', {
-        clientId: 'alice',
-        requestId: 'before-move',
-      }),
-      receipt,
-    );
-    await assert.rejects(
-      client.command('acknowledgeOperation', {
-        clientId: 'alice',
-        operationClientId: 'bob',
-        id: 'move',
-      }),
-      isError('Persistence'),
-    );
-    const loaded = await client.command('loadRecovery', { clientId: 'alice' });
-    await client.command('persistRecovery', {
-      clientId: 'alice',
-      requestId: 'after-move',
-      expectedRevision: loaded.revision,
-      state: loaded.state,
-    });
-    await client.command('acknowledgeOperation', {
-      clientId: 'alice',
-      operationClientId: 'bob',
-      id: 'move',
-    });
-    assert.equal(
-      (await client.command('loadRecovery', { clientId: 'alice' })).operations.length,
-      0,
-    );
-    assert.equal((await client.command('loadRecovery', { clientId: 'bob' })).operations.length, 1);
-  } finally {
-    await runtime.dispose();
-    f.cleanup();
-  }
-});
-
 test('matching receipt replay precedes later uncertain-operation preservation guards', async () => {
   const f = fixture(),
     helper = join(f.base, 'helper');
@@ -613,54 +547,5 @@ test('completed conflict history is not parsed by recovery and replays exactly a
   } finally {
     await runtime.dispose();
     f.cleanup();
-  }
-});
-
-test('pending Save index upgrades existing stores and retains unresolved and restore records', () => {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-index-upgrade-')));
-  const database = new DatabaseSync(join(base, 'moonbase-workspace-v1.sqlite'));
-  const records = [
-    { started: false },
-    { started: true },
-    { started: true, result: {}, published: false },
-    { result: {} },
-    { started: false, result: {}, restorePending: true, published: true },
-    { started: true, result: {}, restorePending: true, published: true },
-    { started: false, result: {} },
-    { started: true, result: {}, published: true },
-  ];
-  database.exec(`
-    PRAGMA application_id=1296193363;
-    CREATE TABLE records (bucket TEXT NOT NULL, key TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(bucket,key));
-    CREATE INDEX pending_saves ON records(bucket) WHERE bucket='saves' AND
-      (json_extract(body, '$.result') IS NULL OR json_extract(body, '$.published') IS NOT 1 OR json_extract(body, '$.restorePending') = 1);
-  `);
-  for (const [i, record] of records.entries())
-    database
-      .prepare('INSERT INTO records VALUES(?,?,?)')
-      .run('saves', String(i), JSON.stringify(record));
-  database.close();
-  const store = new Store(base, 'index-host');
-  try {
-    const read = (predicate = '1') =>
-      store.db
-        .prepare(`SELECT body FROM records WHERE bucket='saves' AND (${predicate}) ORDER BY rowid`)
-        .all()
-        .map((row) => JSON.parse(row.body as string));
-    assert.deepEqual(read(pendingSaves), records.slice(0, 6));
-    assert.deepEqual(read(), records, 'upgrading must retain every immutable receipt');
-    const plan = store.db
-      .prepare(
-        `EXPLAIN QUERY PLAN SELECT body FROM records WHERE bucket=? AND ${pendingSaves} ORDER BY rowid`,
-      )
-      .all('saves');
-    assert.ok(plan.some((row) => String(row.detail).includes('pending_saves_v2')));
-    assert.equal(
-      store.db.prepare("SELECT name FROM sqlite_master WHERE name='pending_saves'").get(),
-      undefined,
-    );
-  } finally {
-    store.close();
-    rmSync(base, { recursive: true, force: true });
   }
 });

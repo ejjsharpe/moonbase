@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "oxlint .",
     "build": "vp build --config vite.config.ts",
+    "test": "node --experimental-strip-types --test test/*.test.ts",
     "demo": "vp dev --config vite.config.ts --host 127.0.0.1",
     "test:ui": "playwright test --config playwright.config.ts",
     "check:renderer": "node test/renderer-imports.mjs"

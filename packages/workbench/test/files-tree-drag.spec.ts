@@ -45,6 +45,17 @@ const dropTargets = (page: Page) =>
   tree(page)
     .locator('[role="treeitem"][data-drop-target]')
     .evaluateAll((rows) => rows.map((row) => row.getAttribute('aria-label')!.split(',')[0]));
+/**
+ * Lets the work a key or drop started finish before checking that it changed nothing: the demo
+ * workspace answers without timers, so it is done once the page's pending tasks and frames have run.
+ */
+const settle = (page: Page) =>
+  page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve))),
+      ),
+  );
 /** Presses on `source` and drags over `target` without dropping. */
 async function dragOver(
   page: Page,
@@ -136,7 +147,6 @@ test('dragging a file onto a folder moves it there, highlighting the folder and 
   await expect(row(page, 'src/example.ts')).toBeVisible();
   await dragOver(page, row(page, 'welcome.ts'), row(page, 'src/example.ts'));
   await expect.poll(() => dropTargets(page)).toEqual(['src', 'src/example.ts', 'src/ignored.ts']);
-  await page.screenshot({ path: 'test-results/tree-drag-region.png' });
   await row(page, 'dest').hover();
   await row(page, 'dest').hover();
   await expect.poll(() => dropTargets(page)).toEqual(['dest']);
@@ -227,6 +237,7 @@ test('drops into a dragged folder or where nothing would move are refused', asyn
 });
 
 test('hovering a collapsed folder while dragging expands it', async ({ page }) => {
+  await page.clock.install();
   await page.goto('/');
   await create(page, 'dest/', 'dest/inner/');
   await expect(row(page, 'dest')).toHaveAttribute('aria-expanded', 'false');
@@ -242,7 +253,7 @@ test('hovering a collapsed folder while dragging expands it', async ({ page }) =
   await create(page, 'later/');
   await dragOver(page, row(page, 'welcome.ts'), row(page, 'later'));
   await row(page, 'welcome.ts').hover();
-  await page.waitForTimeout(700);
+  await page.clock.runFor(700);
   await page.mouse.up();
   await expect(row(page, 'later')).toHaveAttribute('aria-expanded', 'false');
 });
@@ -345,7 +356,7 @@ test('⌘Z undoes an inline rename, but not while the name is typed', async ({ p
   const before = await mutations(page);
   await input.press('ControlOrMeta+z');
   await expect(input).toHaveValue('NOTES.md');
-  await page.waitForTimeout(300);
+  await settle(page);
   expect(await mutations(page)).toBe(before);
   expect(await exists(page, 'NOTES.md')).toBe(true);
   expect(await exists(page, 'README.md')).toBe(false);
@@ -441,7 +452,7 @@ test('any other file operation forgets the undo, so ⌘Z never reaches past it',
   let before = await mutations(page);
   await tree(page).focus();
   await tree(page).press('ControlOrMeta+z');
-  await page.waitForTimeout(300);
+  await settle(page);
   expect(await mutations(page)).toBe(before);
   expect(await exists(page, 'NOTES.md')).toBe(true);
   // Move to Trash, from its dialog, after a rename.
@@ -456,7 +467,7 @@ test('any other file operation forgets the undo, so ⌘Z never reaches past it',
   before = await mutations(page);
   await tree(page).focus();
   await tree(page).press('ControlOrMeta+z');
-  await page.waitForTimeout(300);
+  await settle(page);
   expect(await mutations(page)).toBe(before);
   expect(await exists(page, 'README.md')).toBe(true);
   // A trash cancelled in its dialog changes nothing, and keeps the undo.
@@ -565,7 +576,7 @@ test('a drop whose DataTransfer isn’t the tree’s own drag is refused', async
     );
   });
   await page.mouse.up();
-  await page.waitForTimeout(300);
+  await settle(page);
   expect(await mutations(page)).toBe(before);
   expect(await exists(page, 'README.md')).toBe(true);
   expect(await exists(page, 'welcome.ts')).toBe(true);

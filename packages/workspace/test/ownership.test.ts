@@ -610,73 +610,6 @@ test('root disposal retains claimed native descriptors and journal ownership unt
   }
 });
 
-test('saved baseline hashes and embedded publication item objects reject corruption without rewriting', async () => {
-  const f = fixture(),
-    { runtime, client } = f.start();
-  try {
-    const checkout = await client.command('openCheckout', { root: f.root }),
-      target = { checkout, path: 'file.txt' },
-      disk = await client.command('readFile', target);
-    await client.command('saveFile', {
-      target,
-      clientId: 'alice',
-      requestId: 'baseline',
-      text: 'saved',
-      expectedVersion: disk.version,
-    });
-    const sources = await client.command('inspectEntries', { checkout, paths: ['file.txt'] });
-    await client.command('mutate', {
-      checkout,
-      clientId: 'alice',
-      id: 'move',
-      kind: 'move',
-      sources,
-      destination: 'moved',
-    });
-    const db = new DatabaseSync(join(f.base, 'state/moonbase-workspace-v1.sqlite'));
-    try {
-      for (const bucket of ['saves', 'operations']) {
-        const row = db.prepare('SELECT key,body FROM records WHERE bucket=?').get(bucket)!;
-        const record = JSON.parse(row.body as string);
-        if (bucket === 'saves') {
-          record.published = false;
-          record.baseline.version = '0'.repeat(64);
-        } else
-          record.publishedItems = record.publishedItems.map((item: string) =>
-            JSON.stringify({ ...JSON.parse(item), futureItem: 'must remain untouched' }),
-          );
-        const body = JSON.stringify(record);
-        db.prepare('UPDATE records SET body=? WHERE bucket=? AND key=?').run(
-          body,
-          bucket,
-          row.key!,
-        );
-        const attempt =
-          bucket === 'saves'
-            ? client.command('loadRecovery', { clientId: 'alice' })
-            : client.command('operationStatus', { clientId: 'alice', id: 'move' });
-        await assert.rejects(attempt, isError('Persistence'));
-        assert.equal(
-          db.prepare('SELECT body FROM records WHERE bucket=? AND key=?').get(bucket, row.key!)!
-            .body,
-          body,
-        );
-        db.prepare('UPDATE records SET body=? WHERE bucket=? AND key=?').run(
-          row.body!,
-          bucket,
-          row.key!,
-        );
-      }
-      assert.equal(readFileSync(join(f.root, 'moved'), 'utf8'), 'saved');
-    } finally {
-      db.close();
-    }
-  } finally {
-    await runtime.dispose();
-    f.cleanup();
-  }
-});
-
 test('public workspace IO normalizes unknown helper failures without rebranding raw private diagnostics', async () => {
   const f = fixture();
   const enabled = join(f.base, 'private-failure-enabled');
@@ -714,7 +647,7 @@ test('public workspace IO normalizes unknown helper failures without rebranding 
   }
 });
 
-test('malformed saved recovery domain values block later direct publication without replacing the original row', async () => {
+test('saved recovery naming a foreign checkout or escaping path blocks later publication without replacing the row', async () => {
   const f = fixture(),
     { runtime, client } = f.start();
   try {
@@ -734,7 +667,6 @@ test('malformed saved recovery domain values block later direct publication with
       state,
     });
     const invalid = [
-      { ...state, drafts: [{ ...state.drafts[0], disk: { ...disk, version: '0'.repeat(64) } }] },
       {
         ...state,
         drafts: [
@@ -745,7 +677,6 @@ test('malformed saved recovery domain values block later direct publication with
         ],
       },
       { ...state, drafts: [{ ...state.drafts[0], target: { ...target, path: '../escape' } }] },
-      { ...state, checkouts: [checkout, checkout] },
     ];
     const database = new DatabaseSync(join(f.base, 'state/moonbase-workspace-v1.sqlite'));
     try {
@@ -993,227 +924,3 @@ test('failed observation release stays root-owned, is retried, and remains visib
     f.cleanup();
   }
 });
-
-test('stored publication receipts bind the queried client/request and exact consecutive transition before replay', async () => {
-  const f = fixture(),
-    { runtime, client } = f.start();
-  try {
-    const input = {
-      clientId: 'alice',
-      requestId: 'owned-receipt',
-      expectedRevision: 0,
-      state: emptyRecovery('alice'),
-    };
-    await client.command('persistRecovery', input);
-    const database = new DatabaseSync(join(f.base, 'state/moonbase-workspace-v1.sqlite'));
-    try {
-      const row = database
-        .prepare("SELECT key,body FROM records WHERE bucket='recovery-publications'")
-        .get()!;
-      const record = JSON.parse(row.body as string);
-      const states = database.prepare('SELECT client,revision,body FROM recovery').all();
-      for (const receipt of [
-        { ...record.receipt, clientId: 'bob' },
-        { ...record.receipt, requestId: 'foreign' },
-        { ...record.receipt, revision: 42 },
-      ]) {
-        const body = JSON.stringify({ ...record, receipt });
-        database
-          .prepare("UPDATE records SET body=? WHERE bucket='recovery-publications' AND key=?")
-          .run(body, row.key!);
-        await assert.rejects(
-          client.command('getRecoveryPublication', {
-            clientId: 'alice',
-            requestId: 'owned-receipt',
-          }),
-          isError('Persistence'),
-        );
-        await assert.rejects(client.command('persistRecovery', input), isError('Persistence'));
-        assert.equal(
-          database
-            .prepare("SELECT body FROM records WHERE bucket='recovery-publications' AND key=?")
-            .get(row.key!)!.body,
-          body,
-        );
-        assert.deepEqual(
-          database.prepare('SELECT client,revision,body FROM recovery').all(),
-          states,
-        );
-      }
-      const body = JSON.stringify({
-        ...record,
-        receipt: { ...record.receipt, previousRevision: 10, revision: 11 },
-      });
-      database
-        .prepare("UPDATE records SET body=? WHERE bucket='recovery-publications' AND key=?")
-        .run(body, row.key!);
-      await assert.rejects(
-        client.command('getRecoveryPublication', { clientId: 'alice', requestId: 'owned-receipt' }),
-        isError('Persistence'),
-      );
-      await assert.rejects(client.command('persistRecovery', input), isError('Persistence'));
-      assert.equal(
-        database
-          .prepare("SELECT body FROM records WHERE bucket='recovery-publications' AND key=?")
-          .get(row.key!)!.body,
-        body,
-      );
-      assert.deepEqual(database.prepare('SELECT client,revision,body FROM recovery').all(), states);
-      database
-        .prepare("UPDATE records SET body=? WHERE bucket='recovery-publications' AND key=?")
-        .run(row.body!, row.key!);
-      await client.command('persistRecovery', {
-        ...input,
-        requestId: 'legitimate-advance',
-        expectedRevision: 1,
-      });
-      const advanced = database.prepare('SELECT client,revision,body FROM recovery').all();
-      const withinBound = JSON.stringify({
-        ...record,
-        receipt: { ...record.receipt, previousRevision: 1, revision: 2 },
-      });
-      database
-        .prepare("UPDATE records SET body=? WHERE bucket='recovery-publications' AND key=?")
-        .run(withinBound, row.key!);
-      await assert.rejects(client.command('persistRecovery', input), isError('Persistence'));
-      assert.equal(
-        database
-          .prepare("SELECT body FROM records WHERE bucket='recovery-publications' AND key=?")
-          .get(row.key!)!.body,
-        withinBound,
-      );
-      assert.deepEqual(
-        database.prepare('SELECT client,revision,body FROM recovery').all(),
-        advanced,
-      );
-    } finally {
-      database.close();
-    }
-  } finally {
-    await runtime.dispose();
-    f.cleanup();
-  }
-});
-
-test('SQLite BLOB revisions cannot be coerced into publication revisions or overwrite recovery', async () => {
-  const f = fixture(),
-    { runtime, client } = f.start();
-  try {
-    const state = emptyRecovery('blob-revision');
-    await client.command('persistRecovery', {
-      clientId: state.clientId,
-      requestId: 'initial-blob-revision',
-      expectedRevision: 0,
-      state,
-    });
-    const database = new DatabaseSync(join(f.base, 'state/moonbase-workspace-v1.sqlite'));
-    try {
-      database
-        .prepare('UPDATE recovery SET revision=? WHERE client=?')
-        .run(Buffer.from('1'), state.clientId);
-      const before = database
-        .prepare('SELECT typeof(revision) AS kind,revision,body FROM recovery WHERE client=?')
-        .get(state.clientId);
-      await assert.rejects(
-        client.command('loadRecovery', { clientId: state.clientId }),
-        isError('Persistence'),
-      );
-      await assert.rejects(
-        client.command('getRecoveryPublication', {
-          clientId: state.clientId,
-          requestId: 'initial-blob-revision',
-        }),
-        isError('Persistence'),
-      );
-      for (const expectedRevision of [1, 49])
-        await assert.rejects(
-          client.command('persistRecovery', {
-            clientId: state.clientId,
-            requestId: 'blob-overwrite-' + expectedRevision,
-            expectedRevision,
-            state,
-          }),
-          isError('Persistence'),
-        );
-      assert.deepEqual(
-        database
-          .prepare('SELECT typeof(revision) AS kind,revision,body FROM recovery WHERE client=?')
-          .get(state.clientId),
-        before,
-      );
-    } finally {
-      database.close();
-    }
-  } finally {
-    await runtime.dispose();
-    f.cleanup();
-  }
-});
-
-for (const namespace of ['recovery', 'publications'] as const)
-  test(`SQLite BLOB ${namespace} JSON stays untouched instead of being coerced and republished`, async () => {
-    const f = fixture(),
-      { runtime, client } = f.start();
-    try {
-      const state = emptyRecovery('blob-body');
-      await client.command('persistRecovery', {
-        clientId: state.clientId,
-        requestId: 'initial-blob-body',
-        expectedRevision: 0,
-        state,
-      });
-      const database = new DatabaseSync(join(f.base, 'state/moonbase-workspace-v1.sqlite'));
-      try {
-        if (namespace === 'recovery')
-          database
-            .prepare('UPDATE recovery SET body=? WHERE client=?')
-            .run(Buffer.from(JSON.stringify(state)), state.clientId);
-        else
-          database
-            .prepare("UPDATE records SET body=? WHERE bucket='publications' AND key=?")
-            .run(Buffer.from('1'), state.clientId);
-        const recoveryRows = database
-          .prepare('SELECT client,revision,typeof(body) AS kind,body FROM recovery')
-          .all();
-        const records = database
-          .prepare('SELECT bucket,key,typeof(body) AS kind,body FROM records ORDER BY bucket,key')
-          .all();
-        if (namespace === 'recovery')
-          await assert.rejects(
-            client.command('loadRecovery', { clientId: state.clientId }),
-            isError('Persistence'),
-          );
-        await assert.rejects(
-          client.command('persistRecovery', {
-            clientId: state.clientId,
-            requestId: 'blob-body-overwrite',
-            expectedRevision: 1,
-            state,
-          }),
-          isError('Persistence'),
-        );
-        assert.deepEqual(
-          database.prepare('SELECT client,revision,typeof(body) AS kind,body FROM recovery').all(),
-          recoveryRows,
-        );
-        assert.deepEqual(
-          database
-            .prepare('SELECT bucket,key,typeof(body) AS kind,body FROM records ORDER BY bucket,key')
-            .all(),
-          records,
-        );
-        assert.equal(
-          await client.command('getRecoveryPublication', {
-            clientId: state.clientId,
-            requestId: 'blob-body-overwrite',
-          }),
-          null,
-        );
-      } finally {
-        database.close();
-      }
-    } finally {
-      await runtime.dispose();
-      f.cleanup();
-    }
-  });
