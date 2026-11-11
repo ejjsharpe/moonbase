@@ -11,6 +11,7 @@ import {
   fauxAssistantMessage,
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux';
+import type { ChatInput } from '@moonbase/contracts/chat';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import { LocalPiRuntimeLive, LocalPiControl } from '../src/index.ts';
 
@@ -54,7 +55,11 @@ test('local conversations retain distinct folders/models, coding tools, immutabl
     mode: 'local',
   });
   await assert.rejects(
-    client.command('createChat', { session, requestId: 'missing', title: 'No settings' }),
+    client.command('createChat', {
+      session,
+      requestId: 'missing',
+      title: 'No settings',
+    } as ChatInput<'createChat'>),
     { code: 'InvalidInput' },
   );
   const inputs = [first, second].map((cwd, index) => ({

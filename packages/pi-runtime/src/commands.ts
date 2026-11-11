@@ -418,8 +418,6 @@ export class Host {
   }
   async create(d: ChatInput<'createChat'>): Promise<ChatOutput<'createChat'>> {
     this.session(d.session);
-    if (d.settings === undefined)
-      V.fail('InvalidInput', 'Choose folder/model settings for this chat.');
     const binding = JSON.stringify({ operation: 'createChat', ...d });
     const existing = await this.harness.snapshot(
       Request,
@@ -440,7 +438,7 @@ export class Host {
         };
     }
     let settings: ChatSettings, ownFolder: string | undefined;
-    const requested = d.settings!;
+    const requested = d.settings;
     if (requested.cwd !== undefined) {
       const cwd = await realpath(requested.cwd).catch(() =>
         V.fail('InvalidInput', 'Choose an existing local working folder.'),

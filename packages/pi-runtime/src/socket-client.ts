@@ -364,9 +364,7 @@ export function connectDaemonSocket(
             decoded = V.input(command, input);
             mutation = V.isMutation(command);
             capability =
-              command === 'createChat' && (decoded as ChatInput<'createChat'>).settings
-                ? chatHostCapabilities.local
-                : chatHostCapabilities.chat;
+              command === 'createChat' ? chatHostCapabilities.local : chatHostCapabilities.chat;
           }
           if (!health!.capabilities.includes(capability as never))
             V.fail('Incompatible', 'The daemon does not offer this feature.');

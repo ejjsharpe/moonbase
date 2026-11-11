@@ -44,7 +44,12 @@ const snapshot = {
 const inputs = {
   getChatHost: { host },
   listChats: { session },
-  createChat: { session, requestId: 'create', title: '  Saved chat  ' },
+  createChat: {
+    session,
+    requestId: 'create',
+    title: '  Saved chat  ',
+    settings: { model: { provider: 'faux', modelId: 'model' } },
+  },
   getChat: { target },
   getChatHistory: { target, cursor: 'opaque cursor' },
   getChatTranscriptContent: { source: { kind: 'entry', target, entryId: 'entry' } },

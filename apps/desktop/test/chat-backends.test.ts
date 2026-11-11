@@ -642,13 +642,15 @@ test('a remote daemon host offers its approved roots for folders, its own provid
     assert((await session.call('providers', 'getProviders', {}, 'providers')).ok);
     assert.equal(providerCalls.length, 1);
     // A chat on the host names its settings; one without them is refused before it is sent.
-    const missing = await session.call(
-      'chat',
-      'createChat',
-      { session: context, requestId: 'missing', title: 'Missing settings' },
-      'missing',
+    await assert.rejects(
+      session.call(
+        'chat',
+        'createChat',
+        { session: context, requestId: 'missing', title: 'Missing settings' },
+        'missing',
+      ),
+      { code: 'InvalidInput' },
     );
-    assert(!missing.ok && missing.error.code === 'InvalidInput');
     await backends.releaseDocument();
     assert.deepEqual(released, [providerCalls[0]![0]]);
   } finally {

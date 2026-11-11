@@ -10,6 +10,7 @@ import { ApplicationError } from '@moonbase/contracts/workspace';
 import {
   maximumChatRequestBytes,
   type ChatClient,
+  type ChatInput,
   type ChatCommand,
   type ChatSession,
 } from '@moonbase/contracts/chat';
@@ -218,9 +219,7 @@ export class ChatIpcSession {
       let folder: string | undefined;
       if (kind === 'chat' && operation === 'createChat') {
         // Every host is a daemon, local or remote, whose chats choose their folder and model.
-        const settings = (v as { settings?: { cwd?: string } }).settings;
-        if (settings === undefined) return invalid();
-        folder = settings.cwd;
+        folder = (v as ChatInput<'createChat'>).settings.cwd;
       }
       if (kind === 'chat' && operation === 'findChatFiles') folder = (v as { cwd?: string }).cwd;
       if (folder !== undefined) await this.capabilities.prepareFolder?.(folder);

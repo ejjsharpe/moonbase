@@ -402,13 +402,15 @@ test('local IPC captures its command and cannot route a late reply to a replacem
     watch: () => async () => {},
   };
   const owner = new ChatIpcSession(runtime, chat, { mode: 'local' }, context, () => {});
-  const missing = await owner.call(
-    'chat',
-    'createChat',
-    { session: context, requestId: 'missing', title: 'Missing settings' },
-    'missing',
+  await assert.rejects(
+    owner.call(
+      'chat',
+      'createChat',
+      { session: context, requestId: 'missing', title: 'Missing settings' },
+      'missing',
+    ),
+    { code: 'InvalidInput' },
   );
-  assert(!missing.ok && missing.error.code === 'InvalidInput');
   const pending = owner.call(
     'chat',
     'createChat',

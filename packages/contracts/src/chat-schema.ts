@@ -309,7 +309,7 @@ export const chatInputSchemas = {
     session: ChatSessionSchema,
     requestId: ChatIdentifierSchema,
     title: text(200),
-    settings: optional(ChatCreationSettingsSchema),
+    settings: ChatCreationSettingsSchema,
   }),
   getChat: struct({ target: ChatTargetSchema }),
   getChatHistory: struct({ target: ChatTargetSchema, cursor }),

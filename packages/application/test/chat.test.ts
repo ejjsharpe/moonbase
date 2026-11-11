@@ -184,6 +184,7 @@ test('public chat entry points share one scope and preserve exact targets/reques
           session,
           requestId: 'create-one',
           title: 'Saved chat',
+          settings: { model: { provider: 'faux', modelId: 'model' } },
         })
       ).requestId,
       'create-one',
