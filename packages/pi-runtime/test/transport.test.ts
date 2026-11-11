@@ -1183,6 +1183,38 @@ test('R1 pre-authentication malformed requests never obtain RPC signatures befor
   assert.equal(f.calls.filter((value) => value === 'createChat').length, 0);
   assert.equal((await f.client.command('listChats', { session })).conversations.length, 0);
 });
+test('unauthenticated health probes are refused before they reach the chat service', async (t) => {
+  const f = await setup(t);
+  const healthProof = (key: string, value: string) =>
+    createHmac('sha256', key)
+      .update(JSON.stringify(['moonbase-health-v1', 'request', value]))
+      .digest('hex');
+  const probe = nonce(),
+    before = f.calls.length;
+  for (const headers of [
+    {},
+    { 'X-Moonbase-Nonce': probe },
+    { 'X-Moonbase-Nonce': probe, Authorization: 'Moonbase-HMAC-SHA256 ' + '0'.repeat(64) },
+    {
+      'X-Moonbase-Nonce': probe,
+      Authorization: 'Moonbase-HMAC-SHA256 ' + healthProof(nonce(), probe),
+    },
+  ] as Record<string, string>[]) {
+    const response = await fetch(f.origin + '/v1/health', { headers });
+    assert.equal(response.status, 401);
+    await response.arrayBuffer();
+  }
+  assert.deepEqual(f.calls.slice(before), [], 'an unauthenticated probe reached the chat service');
+  const response = await fetch(f.origin + '/v1/health', {
+    headers: {
+      'X-Moonbase-Nonce': probe,
+      Authorization: 'Moonbase-HMAC-SHA256 ' + healthProof(f.token, probe),
+    },
+  });
+  assert.equal(response.status, 200);
+  assert.equal(((await response.json()) as { hostId: string }).hostId, host.hostId);
+  assert.deepEqual(f.calls.slice(before), ['getChatHost']);
+});
 test('R1 authenticated consumed-request validation and domain rejections remain signed and specific', async (t) => {
   const f = await setup(t);
   for (const body of ['{', JSON.stringify({ operation: 'unknown', input: {} })]) {

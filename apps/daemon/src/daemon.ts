@@ -37,6 +37,7 @@ import {
   type IdleClock,
   type IdleMonitor,
 } from './idle.ts';
+import { refuseWhileStopping } from './admission.ts';
 import { acquireDaemonLock } from './lock.ts';
 import { openDaemonLog, type DaemonLog } from './log.ts';
 
@@ -186,8 +187,13 @@ async function serveDaemon(
     await runtime.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const server = yield* serveChat({ host: session.host, token, port }, client);
-          const listening = Number(new URL(server.origin).port);
+          // The server's own startup read is let through; once it listens, stopping refuses.
+          let listening = 0;
+          const server = yield* serveChat(
+            { host: session.host, token, port },
+            refuseWhileStopping(client, () => stopping && listening > 0),
+          );
+          listening = Number(new URL(server.origin).port);
           if (!stopping)
             yield* Effect.promise(() =>
               writeEndpoint(directory, {

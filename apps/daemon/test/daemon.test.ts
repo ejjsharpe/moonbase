@@ -307,12 +307,15 @@ test('the real local entry starts with a private key file and never needs the Ke
 
 type Refusal = {
   name: string;
+  /** The exact message, where the refusal has one of its own. */
+  message?: string;
   prepare(root: string, directory: string, secret: string): Promise<string[] | void>;
 };
 const refusals: Refusal[] = [
   { name: 'a relative directory', prepare: async () => ['relative/data'] },
   {
     name: 'a second argument',
+    message: 'The daemon takes one argument: the absolute path of its data directory.',
     prepare: async (_root, directory) => [directory, '--port=1'],
   },
   {
@@ -402,6 +405,7 @@ for (const refusal of refusals)
       const failure = JSON.parse(daemon.errors.trim());
       assert.equal(failure.event, 'failed');
       assert.equal(typeof failure.error.message, 'string');
+      if (refusal.message) assert.equal(failure.error.message, refusal.message);
       for (const leaked of [root, secret])
         assert.ok(!daemon.errors.includes(leaked), 'discloses ' + leaked);
     });

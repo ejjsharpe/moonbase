@@ -89,13 +89,14 @@ export const serveChat = (config: ChatServerConfiguration, client: ChatClient) =
           response.setHeader('Cache-Control', 'no-store');
           if (request.method === 'GET' && request.url === '/v1/health') {
             try {
-              await client.command('getChatHost', { host: expected });
+              // The proof is checked first: an unauthenticated probe never reaches the service.
               const value = createHostHealthReply({
                 token,
                 nonce: request.headers['x-moonbase-nonce'] as string | undefined,
                 authorization: request.headers.authorization,
                 health,
               });
+              await client.command('getChatHost', { host: expected });
               response.writeHead(200, { 'content-type': 'application/json' });
               response.end(JSON.stringify(value));
             } catch (error) {

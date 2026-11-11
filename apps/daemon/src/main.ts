@@ -4,6 +4,7 @@ import {
   createClaudeCodeSubscription,
 } from '@moonbase/pi-runtime/claude-code';
 import { runDaemon } from './daemon.ts';
+import { readDirectoryArgument } from './data-directory.ts';
 import { describeFailure } from './failure.ts';
 import { onShutdownSignal } from './signals.ts';
 
@@ -12,9 +13,8 @@ import { onShutdownSignal } from './signals.ts';
  * data directory; all other configuration comes from files inside it.
  */
 async function main() {
-  const [directory, ...rest] = process.argv.slice(2);
   await runDaemon({
-    directory: rest.length ? '' : (directory ?? ''),
+    directory: readDirectoryArgument(process.argv.slice(2)),
     signal: onShutdownSignal(),
     ready: (line) => console.log(line),
     closeClaudeCode: closeClaudeCodeProcesses,

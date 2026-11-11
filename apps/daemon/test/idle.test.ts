@@ -1,13 +1,18 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ChatClient } from '@moonbase/contracts/chat';
 import { runDaemon, type DaemonExit } from '../src/daemon.ts';
-import { createIdleMonitor, trackClientUse } from '../src/idle.ts';
+import { refuseWhileStopping } from '../src/admission.ts';
+import { createIdleMonitor } from '../src/idle.ts';
 import {
+  bounded,
   createControlledClock,
+  createFauxClient,
   findFreePort,
+  probeHealth,
   startInProcess,
   temporaryRoot,
   until,
@@ -15,6 +20,7 @@ import {
 import { fauxModelId, fauxProviderId } from './faux.ts';
 
 const minute = 60_000;
+const randomNonce = () => randomBytes(32).toString('base64url');
 
 test('the idle monitor waits for every user to end, and treats an unreadable work check as work', async () => {
   const time = createControlledClock();
@@ -49,16 +55,8 @@ test('the idle monitor waits for every user to end, and treats an unreadable wor
   assert.equal(time.pending, 0);
 });
 
-test('a tracked client is refused new requests and watches once the monitor stops, and keeps open ones', async () => {
-  const time = createControlledClock();
-  let idle = 0;
-  const monitor = createIdleMonitor({
-    idleMs: 5 * minute,
-    pollMs: 30_000,
-    clock: time.clock,
-    hasActiveWork: async () => false,
-    onIdle: () => idle++,
-  });
+test('a gated client is refused new requests and watches once stopping, and keeps open ones', async () => {
+  let stopping = false;
   const forwarded: string[] = [];
   let closed = 0;
   const inner = {
@@ -73,7 +71,7 @@ test('a tracked client is refused new requests and watches once the monitor stop
       };
     },
   } as unknown as ChatClient;
-  const client = trackClientUse(inner, monitor);
+  const client = refuseWhileStopping(inner, () => stopping);
   const target = { host: { hostId: 'h', storeId: 's' }, actorId: 'a', conversationId: 'c' };
   const close = client.watch(
     { target } as never,
@@ -81,11 +79,8 @@ test('a tracked client is refused new requests and watches once the monitor stop
     () => {},
   );
   await client.command('getChat', { target } as never);
-  await close();
-  await time.advance(5 * minute);
-  assert.equal(idle, 1);
-  assert.equal(monitor.stopped, true);
-  // Anything arriving between going idle and the server closing is refused, not half-admitted.
+  stopping = true;
+  // Anything arriving between stopping and the server closing is refused, not half-admitted.
   await assert.rejects(client.command('sendChat', { target } as never), {
     code: 'Unavailable',
   });
@@ -100,6 +95,7 @@ test('a tracked client is refused new requests and watches once the monitor stop
       code: 'Unavailable',
     },
   );
+  await close();
   assert.deepEqual(forwarded, ['watch', 'getChat']);
   assert.equal(closed, 1);
 });
@@ -118,6 +114,66 @@ test('a local daemon exits idle only after 5 minutes with no client; a request r
     await time.advance(minute + 30_000);
     assert.equal(await daemon.running, 'idle');
     await assert.rejects(stat(join(daemon.directory, 'endpoint.json')), { code: 'ENOENT' });
+  } finally {
+    await daemon?.stop();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('unauthenticated requests never delay a local daemon going idle; an authenticated probe does', async () => {
+  const root = await temporaryRoot(),
+    time = createControlledClock();
+  let daemon: Awaited<ReturnType<typeof startInProcess>> | undefined;
+  try {
+    await mkdir(join(root, 'second'));
+    daemon = await startInProcess(root, time);
+    const origin = daemon.client.origin,
+      wrongKey = randomBytes(32).toString('base64url');
+    const unauthenticated = [
+      () => fetch(origin + '/v1/health'),
+      () => probeHealth(origin, wrongKey),
+      () =>
+        fetch(origin + '/v1/chat/challenge', { headers: { 'X-Moonbase-Nonce': randomNonce() } }),
+      () =>
+        fetch(origin + '/v1/chat', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'X-Moonbase-Nonce': randomNonce(),
+            'X-Moonbase-Challenge': randomNonce(),
+            Authorization: 'Moonbase-RPC-HMAC-SHA256 ' + '0'.repeat(64),
+          },
+          body: JSON.stringify({ operation: 'listChats', input: { session: daemon!.session } }),
+        }),
+    ];
+    for (const request of unauthenticated) {
+      await time.advance(minute);
+      const response = await request();
+      assert.equal(response.status, 401);
+      await response.arrayBuffer();
+    }
+    // A client holding the wrong key is refused its challenge.
+    await assert.rejects(
+      createFauxClient(daemon.port, wrongKey).command('listChats', { session: daemon.session }),
+      { status: 401 },
+    );
+    await time.advance(minute + 30_000);
+    assert.equal(
+      await bounded(daemon.running, 5000).catch(() => daemon!.settled),
+      'idle',
+      'unauthenticated requests delayed idle exit',
+    );
+
+    daemon = await startInProcess(join(root, 'second'), time);
+    const token = (await readFile(join(daemon.directory, 'token'), 'utf8')).trim();
+    await time.advance(4 * minute);
+    const probe = await probeHealth(daemon.client.origin, token);
+    assert.equal(probe.status, 200);
+    await probe.arrayBuffer();
+    await time.advance(4 * minute);
+    assert.equal(daemon.settled, undefined, 'the authenticated probe restarted the wait');
+    await time.advance(minute + 30_000);
+    assert.equal(await daemon.running, 'idle');
   } finally {
     await daemon?.stop();
     await rm(root, { recursive: true, force: true });
