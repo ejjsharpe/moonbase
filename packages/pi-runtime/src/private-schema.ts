@@ -54,6 +54,23 @@ const programmatic = Schema.Struct({
   ripgrepExecutable: Schema.optional(path),
 });
 const server = Schema.Struct({ host: ChatHostTargetSchema, token, port });
+const daemon = Schema.Union([
+  Schema.Struct({
+    mode: Schema.Literal('local'),
+    credentialKey: Schema.optional(
+      Schema.Union([
+        Schema.Struct({ source: Schema.Literal('keychain') }),
+        Schema.Struct({ source: Schema.Literal('file'), path }),
+      ]),
+    ),
+  }),
+  Schema.Struct({
+    mode: Schema.Literal('host'),
+    cwd: path,
+    model,
+    port: port.check(Schema.makeFilter((value) => value > 0)),
+  }),
+]);
 const storedTarget = Schema.Struct({ ...ChatTargetSchema.fields, conversationId: recordId });
 const storedStop = Schema.Struct({
   ...ChatStopTargetSchema.fields,
@@ -145,6 +162,8 @@ export const cliConfiguration = (value: unknown) => decode(cli, value);
 export const runtimeConfiguration = (value: unknown) => decode(programmatic, value);
 export const localConfiguration = (value: unknown) => decode(localProgrammatic, value);
 export const serverConfiguration = (value: unknown) => decode(server, value);
+export const daemonSettings = (value: unknown) => decode(daemon, value);
+export type DaemonSettings = typeof daemon.Type;
 export function cursorEnvelope(value: unknown) {
   const result = decode(cursor, value);
   if (result.scan?.start === true)

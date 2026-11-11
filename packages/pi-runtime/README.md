@@ -7,7 +7,9 @@
 | `.` | Remote fixed-settings `PiRuntimeLive(config)`, per-conversation `LocalPiRuntimeLive(config)` and privileged `LocalPiControl` |
 | `./local-models`, `./providers`, `./credentials` | Local provider catalog, provider sign-in and injected encrypted credential storage |
 | `./claude-code` | Claude Pro/Max subscription through the user's Claude Code login ([pi-claude-code](https://github.com/earendil-works/pi-claude-code)) |
-| `./server` | `serveChat(config, client)`: authenticated loopback listener for a remote host |
+| `./folders` | `createFolderApprovals(file)`: approved working folders, re-checked by identity on use |
+| `./host-configuration` | `decodeDaemonSettings` for the daemon's `daemon.json`, and `prepareFixedSettingsHost` for a fixed-settings host's providers and tools |
+| `./server` | `serveChat(config, client)`: authenticated loopback listener for a remote host or the daemon |
 | `./remote` | `RemoteChatLive`: client-side service over an injected `ConnectionService` |
 
 ## Host setup
