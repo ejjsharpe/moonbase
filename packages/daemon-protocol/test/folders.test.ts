@@ -15,7 +15,7 @@ import { test } from 'node:test';
 import { Effect, Layer } from 'effect';
 import { LocalHostService } from '@moonbase/contracts/services';
 import { createFolderApprovals, createRootFolders } from '../src/folders.ts';
-import { LocalHostLive, LocalPiControl } from '../src/index.ts';
+import { LocalHostLive, LocalPiControl } from '@moonbase/pi-runtime';
 
 test('native folder approvals survive a restart and lapse when the folder is replaced', async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-folders-')));

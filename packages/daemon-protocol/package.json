@@ -6,7 +6,8 @@
     "./remote": "./src/remote.ts",
     "./server": "./src/server.ts",
     "./loopback": "./src/loopback.ts",
-    "./socket": "./src/socket-client.ts"
+    "./socket": "./src/socket-client.ts",
+    "./folders": "./src/folders.ts"
   },
   "scripts": {
     "build": "tsc --noEmit -p tsconfig.json",

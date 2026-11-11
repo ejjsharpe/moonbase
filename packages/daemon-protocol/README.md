@@ -7,6 +7,7 @@
 | `./server` | `serveChat(config, client, daemon?, capabilities?, socket?)`: the daemon's 127.0.0.1 listener in either mode, serving the WebSocket at `/v2/socket` and signed health at `/v1/health`; `socket` adds provider setup change notifications and connection tracking (`sources`) and a test clock; `makeDaemonClient(runtime)` binds its folder, control and provider setup services, and `localDaemonCapabilities` / `hostDaemonCapabilities` are what each mode advertises |
 | `./remote` | `RemoteChatLive`, `RemoteLocalHostLive` and `RemoteProviderSetupLive({host, openUrl, sameMachine})`: client-side services over an injected `ConnectionService`, sharing one WebSocket per connection generation when built together |
 | `./socket` | `connectDaemonSocket(endpoint)`: one authenticated WebSocket to a daemon that advertises `socket-v1`, for requests and subscriptions; the `./remote` services use it |
+| `./folders` | Host-side folder authority, for the daemon only: `createFolderApprovals(file)`: approved working folders, re-checked by identity on use; `createRootFolders(roots, { reserved })`: a host-mode daemon's approved roots and the folders under them, refusing a root that holds or sits in a `reserved` path. Both return the contracts `FolderApprovals` |
 | `./loopback` | `LoopbackConnectionLive({directory})`: privileged `ConnectionService` for a daemon on this machine |
 
 Remote hosts run the [daemon](../../apps/daemon/README.md#remote-host) in host mode, reached through the [SSH package](../ssh/README.md); its listener binds only `127.0.0.1`.

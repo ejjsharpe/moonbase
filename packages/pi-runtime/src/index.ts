@@ -13,6 +13,7 @@ import {
 import type { ChatHostTarget } from '@moonbase/contracts/host';
 import {
   daemonErrorReasons,
+  type FolderApprovals,
   type LocalHostCommand,
   type LocalHostInput,
 } from '@moonbase/contracts/daemon';
@@ -25,7 +26,7 @@ import {
 } from '@moonbase/contracts/services';
 import { type Host, safeError } from './commands.ts';
 import { readOnChange } from '@moonbase/effect/changes';
-import { checkChatFolder, type FolderApprovals } from './folders.ts';
+import { checkChatFolder } from './chat-folders.ts';
 import * as V from './validation.ts';
 import { openHost } from './resources.ts';
 import type { LocalPiRuntimeConfiguration } from './runtime-types.ts';

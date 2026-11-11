@@ -1,6 +1,8 @@
 import { randomBytes } from 'node:crypto';
-import { lstat, mkdir, realpath } from 'node:fs/promises';
+import { lstat, mkdir, realpath, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { ApplicationError } from '@moonbase/contracts/errors';
+import { daemonErrorReasons } from '@moonbase/contracts/daemon';
 import * as V from './validation.ts';
 
 const slugLength = 40;
@@ -62,4 +64,18 @@ export async function makeChatFolder(parent: string, title: string) {
   } catch {
     return V.fail('Unavailable', 'A folder for the new chat could not be made.');
   }
+}
+
+/**
+ * Refuses any folder but one the runtime made directly under `chatFolders` for a chat without a
+ * project, named by its real path.
+ */
+export async function checkChatFolder(chatFolders: string, path: string) {
+  const [parent, folder] = await Promise.all([
+    realpath(chatFolders).catch(() => ''),
+    realpath(path).catch(() => ''),
+  ]);
+  const info = folder ? await stat(folder).catch(() => null) : null;
+  if (!parent || !folder || folder !== path || dirname(folder) !== parent || !info?.isDirectory())
+    throw new ApplicationError(daemonErrorReasons['not-chat-folder']);
 }
