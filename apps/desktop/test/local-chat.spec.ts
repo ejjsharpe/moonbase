@@ -679,19 +679,12 @@ test('transcript remote first/next chunks render through authenticated stream an
     await page.getByRole('button', { name: 'Send message', exact: true }).click();
     const live = page.getByRole('article', { name: 'Live response' });
     await expect(live.getByText('first remote text 0', { exact: true })).toBeVisible();
-    await live.getByRole('button', { name: /^Activity/ }).click();
-    const thought = live
-      .locator('[data-transcript-part]')
-      .filter({ hasText: /^Thinking/ })
-      .locator('pre');
-    await expect(thought).toHaveText('remote thinking 0');
-    await thought.focus();
+    // The text takes the place of the thought it follows, so the reply shows no step for it.
+    await expect(live.locator('[data-transcript-step]')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
     const before = await host.stats();
     host.nextChunk();
     await expect(live.getByText('first remote text 4', { exact: true })).toBeVisible();
-    await expect(live.locator('pre').getByText('remote thinking 4', { exact: true })).toBeVisible();
-    await expect(thought).toBeFocused();
     const after = await host.stats();
     expect(after.reads!.scans).toBe(before.reads!.scans);
     expect(after.commands.filter((operation) => operation === 'getChat').length).toBe(
