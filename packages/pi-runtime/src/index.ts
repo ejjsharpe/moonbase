@@ -188,8 +188,17 @@ export const LocalHostLive = (
         getActiveWork: handle('getActiveWork', () =>
           Effect.map(control.hasActiveWork(), (active) => ({ active })),
         ),
+        // A host-mode daemon's chats run only in its roots, so its own chat folders never
+        // become projects.
         markFolderAsProject: handle('markFolderAsProject', ({ requestId, target }) =>
-          Effect.as(control.markFolderAsProject(target), { requestId }),
+          config.folders.listFolders
+            ? Effect.fail(
+                new ApplicationError({
+                  code: 'Incompatible',
+                  message: 'A host’s chats can’t become projects.',
+                }),
+              )
+            : Effect.as(control.markFolderAsProject(target), { requestId }),
         ),
       } satisfies LocalHostHandlers;
     }),

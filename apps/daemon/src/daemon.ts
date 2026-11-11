@@ -147,7 +147,12 @@ async function serveDaemon(
     // A host's roots are checked once, so a root replaced later approves nothing.
     const folders =
       settings.mode === 'host'
-        ? await createRootFolders(settings.approvedRoots).catch((error: unknown) => {
+        ? await createRootFolders(settings.approvedRoots, {
+            reserved: [
+              directory,
+              ...(settings.credentialKey?.source === 'file' ? [settings.credentialKey.path] : []),
+            ],
+          }).catch((error: unknown) => {
             throw ApplicationError.is(error) ? new DaemonFailure(error.code, error.message) : error;
           })
         : createFolderApprovals(join(directory, 'approved-folders.json'));

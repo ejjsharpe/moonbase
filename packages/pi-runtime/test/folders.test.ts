@@ -12,7 +12,10 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { Effect, Layer } from 'effect';
+import { LocalHostService } from '@moonbase/contracts/services';
 import { createFolderApprovals, createRootFolders } from '../src/folders.ts';
+import { LocalHostLive, LocalPiControl } from '../src/index.ts';
 
 test('native folder approvals survive a restart and lapse when the folder is replaced', async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-folders-')));
@@ -128,7 +131,7 @@ test('a use after a restart leads folders saved with a later clock reading', asy
   }
 });
 
-test('a host-mode daemon allows its roots and folders under them, and refuses escapes and replacements', async () => {
+test('a host-mode daemon allows its roots and folders under them, and refuses escapes, replacements and roots holding its data', async () => {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-roots-')));
   try {
     const [root, other, outside] = ['root', 'other', 'outside'].map((name) => join(base, name));
@@ -147,8 +150,45 @@ test('a host-mode daemon allows its roots and folders under them, and refuses es
         return true;
       });
 
-    const folders = await createRootFolders([root, other]);
+    // No root holds or sits in the daemon's data or its credential key, even one not made yet.
+    for (const reserved of [join(root, 'alpha'), join(root, 'keys', 'credential.key'), base])
+      await assert.rejects(createRootFolders([root], { reserved: [reserved] }), {
+        code: 'InvalidInput',
+      });
+
+    const folders = await createRootFolders([root, other], {
+      reserved: [join(outside, 'data'), join(outside, 'credential.key')],
+    });
     assert.equal(folders.refusal, 'folder-outside-roots');
+    // A host's chats never become projects.
+    const host = { hostId: 'roots-host', storeId: 'roots-store' };
+    const marked: unknown[] = [];
+    const service = await Effect.runPromise(
+      Effect.provide(
+        Effect.gen(function* () {
+          return yield* LocalHostService;
+        }),
+        LocalHostLive({ host, folders, chatFolders: join(base, 'chats') }).pipe(
+          Layer.provide(
+            Layer.succeed(LocalPiControl, {
+              setAdmissionsOpen() {},
+              hasActiveWork: () => Effect.succeed(false),
+              markFolderAsProject: (target) => Effect.sync(() => void marked.push(target)),
+            }),
+          ),
+        ),
+      ),
+    );
+    await assert.rejects(
+      Effect.runPromise(
+        service.markFolderAsProject({
+          requestId: 'mark',
+          target: { host, actorId: 'owner', conversationId: '1' },
+        }),
+      ),
+      { code: 'Incompatible' },
+    );
+    assert.deepEqual(marked, []);
     for (const allowed of [root, other, join(root, 'alpha'), join(root, 'alpha', 'deep')])
       assert.equal(await folders.has(allowed), true, allowed);
     for (const refused of [

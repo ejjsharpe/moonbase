@@ -7,7 +7,7 @@
 | `.` | Fixed-settings `PiRuntimeLive(config)` (one folder and model for every chat; no process root serves it now), per-conversation `LocalPiRuntimeLive(config)`, privileged `LocalPiControl`, and `LocalHostLive(config)`: the contracts `LocalHostService` (folder approvals, chat folder checks, active work, mark as project) over `LocalPiControl` |
 | `./local-models`, `./providers`, `./credentials` | Local provider catalog, provider sign-in and injected encrypted credential storage |
 | `./claude-code` | Claude Pro/Max subscription through the user's Claude Code login ([pi-claude-code](https://github.com/earendil-works/pi-claude-code)) |
-| `./folders` | `createFolderApprovals(file)`: approved working folders, re-checked by identity on use; `createRootFolders(roots)`: a host-mode daemon's approved roots and the folders under them; `checkChatFolder(chatFolders, path)` |
+| `./folders` | `createFolderApprovals(file)`: approved working folders, re-checked by identity on use; `createRootFolders(roots, { reserved })`: a host-mode daemon's approved roots and the folders under them, refusing a root that holds or sits in a `reserved` path; `checkChatFolder(chatFolders, path)` |
 | `./host-configuration` | `decodeDaemonSettings` for the daemon's `daemon.json` |
 | `./server` | `serveChat(config, client, daemon?, capabilities?)`: authenticated loopback listener for the daemon in either mode; `makeDaemonClient(runtime)` binds its folder, control and provider setup services, and `localDaemonCapabilities` / `hostDaemonCapabilities` are what each mode advertises |
 | `./remote` | `RemoteChatLive`, `RemoteLocalHostLive` and `RemoteProviderSetupLive({host, openUrl, sameMachine})`: client-side services over an injected `ConnectionService` |

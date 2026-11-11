@@ -1,6 +1,6 @@
 import { constants } from 'node:fs';
 import { lstat, open, readdir, realpath, rename, stat } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { daemonErrorReasons, type DaemonErrorReason } from '@moonbase/contracts/daemon';
 import { maximumHostFolders } from '@moonbase/contracts/daemon-schema';
@@ -137,9 +137,12 @@ const isInside = (root: string, path: string) =>
  * path. Each root is checked at startup and must stay the same directory, so a root replaced by
  * another folder or a link approves nothing, and a path through a link never resolves to itself.
  * Nothing is stored: a remote client has no picker for the host's disk, so it chooses from the
- * roots and their subfolders.
+ * roots and their subfolders. A root that holds or sits in a `reserved` path is refused.
  */
-export async function createRootFolders(roots: readonly string[]): Promise<FolderApprovals> {
+export async function createRootFolders(
+  roots: readonly string[],
+  { reserved = [] }: { reserved?: readonly string[] } = {},
+): Promise<FolderApprovals> {
   const identities = await Promise.all(
     roots.map(async (root) => {
       const info = await lstat(root).catch(() => null);
@@ -151,6 +154,15 @@ export async function createRootFolders(roots: readonly string[]): Promise<Folde
       return { root, dev: info.dev, ino: info.ino };
     }),
   );
+  // A root holding the daemon's data or credential key would let chats and `@` search read them.
+  const held = await Promise.all(reserved.map(findRealPath));
+  if (
+    identities.some(({ root }) => held.some((path) => isInside(root, path) || isInside(path, root)))
+  )
+    throw new ApplicationError({
+      code: 'InvalidInput',
+      message: 'An approved root must not hold the daemon’s data or credential key.',
+    });
   /** Whether a root is still the directory it was at startup. */
   const unchanged = async ({ root, dev, ino }: (typeof identities)[number]) => {
     const info = await lstat(root).catch(() => null);
@@ -200,6 +212,13 @@ export async function createRootFolders(roots: readonly string[]): Promise<Folde
       return [...listed, ...children].slice(0, maximumHostFolders);
     },
   };
+}
+
+/** A path's real path, through its folder when the path itself doesn't exist yet. */
+async function findRealPath(path: string) {
+  return realpath(path).catch(async () =>
+    join(await realpath(dirname(path)).catch(() => dirname(path)), basename(path)),
+  );
 }
 
 /**

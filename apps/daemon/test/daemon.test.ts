@@ -383,19 +383,10 @@ const refusals: Refusal[] = [
     },
   },
   {
-    name: 'host settings with a missing root',
+    name: 'host settings with a root holding its data and key file',
     prepare: async (root, directory) => {
       await mkdir(directory, { mode: 0o700 });
-      await writeHostSettings(directory, [join(root, 'missing')], join(root, 'credential.key'));
-    },
-  },
-  {
-    name: 'host settings with a root that is a link',
-    prepare: async (root, directory) => {
-      await mkdir(directory, { mode: 0o700 });
-      await mkdir(join(root, 'real'));
-      await symlink(join(root, 'real'), join(root, 'linked'));
-      await writeHostSettings(directory, [join(root, 'linked')], join(root, 'credential.key'));
+      await writeHostSettings(directory, [root], join(root, 'credential.key'));
     },
   },
   {
