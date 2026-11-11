@@ -88,6 +88,7 @@ const snapshotOf = (text: string | null, entries = 0, seed = ''): ChatSnapshot =
 /** A chat client whose watches and commands the test drives. */
 function controlledClient() {
   const watches = new Set<(snapshot: ChatSnapshot) => void>(),
+    ends = new Map<(snapshot: ChatSnapshot) => void, (error: ApplicationError) => void>(),
     calls: string[] = [];
   let current = snapshotOf('');
   let closes = 0;
@@ -104,12 +105,14 @@ function controlledClient() {
       if (operation === 'listChats') return { conversations: [], nextCursor: null } as never;
       throw new ApplicationError({ code: 'Unavailable', message: 'Unexpected command.' });
     },
-    watch: (_input, receive) => {
+    watch: (_input, receive, onError) => {
       watches.add(receive);
+      ends.set(receive, onError);
       queueMicrotask(() => watches.has(receive) && receive(current));
       return async () => {
         closes++;
         watches.delete(receive);
+        ends.delete(receive);
       };
     },
   };
@@ -126,6 +129,14 @@ function controlledClient() {
     publish(snapshot: ChatSnapshot) {
       current = snapshot;
       for (const receive of watches) receive(snapshot);
+    },
+    /** Ends every open watch with `error`. */
+    end(error: ApplicationError) {
+      for (const [receive, onError] of ends) {
+        watches.delete(receive);
+        ends.delete(receive);
+        onError(error);
+      }
     },
   };
 }
@@ -440,6 +451,10 @@ test('the handshake and every authenticated frame refuse forgery, replay, reorde
       await raw.next();
       raw.send(captured!);
     },
+    'ping before hello': async (raw) => {
+      await raw.next();
+      raw.send(Buffer.alloc(8), 9);
+    },
     'request before hello': async (raw) => {
       await raw.next();
       raw.send(sealSocketMessage(Buffer.alloc(32), request(0)));
@@ -744,6 +759,21 @@ test('a slow consumer is reset with a snapshot rather than a backlog, Stop stays
     source.publish(snapshotOf(`again ${index}`, 30, `again ${index}`));
     await new Promise((resolve) => setImmediate(resolve));
   }
+  // A subscription whose source ended before its error was sent starts again when resumed.
+  source.end(new ApplicationError({ code: 'Unavailable', message: 'Watch ended.' }));
+  const resumed = await open(t, endpoint);
+  const restarted: string[] = [];
+  resumed.subscribe(
+    'chat',
+    target,
+    {
+      receive: (value, update) => restarted.push(`${update}:${value.run?.text}`),
+      onError: () => {},
+    },
+    { subscriptionId, sequence: 0, value: received.at(-1)!.value! },
+  );
+  await until(async () => restarted.length, Boolean);
+  assert.deepEqual(restarted, [`snapshot:again ${published - 1}`]);
   clock.advance(socketLimits.drainMs);
   raw.socket.resume();
   for (;;) {
@@ -752,6 +782,46 @@ test('a slow consumer is reset with a snapshot rather than a backlog, Stop stays
     if (message === 'closed') break;
   }
   assert.equal(stops, 1);
+});
+
+test('a ping flood that never reads stops being read and is dropped, and handshakes cannot take authenticated slots', async (t) => {
+  const source = controlledClient(),
+    clock = manualClock();
+  const { token, port, endpoint } = await serve(t, source.client, { clock });
+  const client = await open(t, endpoint, clock);
+  // Pings are answered, but the daemon stops reading once its answers go unread.
+  const raw = await rawSocket(port);
+  const { keys } = await rawHello(raw, token);
+  assert.equal(((await readSealed(raw, keys)) as { type: string }).type, 'welcome');
+  raw.socket.pause();
+  const ping = encodeWebSocketFrame(9, Buffer.alloc(125, 1), true),
+    batch = Buffer.concat(Array.from({ length: 1000 }, () => ping));
+  for (let index = 0; index < 256; index++) raw.socket.write(batch);
+  // What the daemon has not read stays queued here instead of as answers in the daemon.
+  await until(async () => {
+    const queued = raw.socket.writableLength;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    return queued > 0 && raw.socket.writableLength === queued;
+  }, Boolean);
+  // A flood left unread for `drainMs` is dropped.
+  clock.advance(socketLimits.drainMs);
+  raw.socket.resume();
+  for (;;) {
+    const message = await raw.next();
+    if (message === 'closed') break;
+    assert(message !== 'timeout' && [2, 8, 10].includes(message.opcode));
+  }
+  // Connections still waiting for a hello have their own bound; an authenticated one is unaffected.
+  const waiting = await Promise.all(Array.from({ length: 8 }, () => rawSocket(port)));
+  for (const pending of waiting) assert.notEqual(await pending.next(), 'timeout');
+  const refused = await rawSocket(port);
+  assert.equal(await refused.next(), 'closed');
+  assert.match(refused.status!, /^HTTP\/1\.1 503/);
+  assert.equal((await client.request('getChatHost', { host })).actorId, 'owner');
+  clock.advance(socketLimits.handshakeMs);
+  for (const pending of waiting) await assertRefused(pending);
+  const later = await open(t, endpoint, clock);
+  assert.equal((await later.request('getChatHost', { host })).actorId, 'owner');
 });
 
 test('subscriptions are bounded, reads and watches end with their connection, and a silent client is dropped', async (t) => {

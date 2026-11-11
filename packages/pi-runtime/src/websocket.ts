@@ -57,7 +57,9 @@ const violation = (): never => fail('InvalidInput', 'WebSocket framing is invali
  * one frame header. It refuses a message's length from its header, before buffering its payload.
  */
 export class WebSocketReader {
-  private buffer = Buffer.alloc(0);
+  /** Received bytes not yet read as frames, and their length. */
+  private chunks: Buffer[] = [];
+  private buffered = 0;
   private message: Buffer[] = [];
   private messageBytes = 0;
   private messageOpcode: number | undefined;
@@ -68,12 +70,26 @@ export class WebSocketReader {
     this.maximum = maximum;
     this.masked = masked;
   }
+  /** The first `length` buffered bytes, joined only when a frame spans received chunks. */
+  private peek(length: number) {
+    if (this.chunks[0]!.length < length) this.chunks = [Buffer.concat(this.chunks, this.buffered)];
+    return this.chunks[0]!;
+  }
+  private consume(length: number) {
+    this.buffered -= length;
+    const rest = this.chunks[0]!.subarray(length);
+    this.chunks = rest.length ? [rest, ...this.chunks.slice(1)] : this.chunks.slice(1);
+  }
   *push(bytes: Uint8Array): Generator<{ opcode: number; payload: Buffer }> {
-    this.buffer = this.buffer.length ? Buffer.concat([this.buffer, bytes]) : Buffer.from(bytes);
+    if (bytes.length) {
+      this.chunks.push(Buffer.from(bytes));
+      this.buffered += bytes.length;
+    }
     for (;;) {
-      if (this.buffer.length < 2) return;
-      const first = this.buffer[0]!,
-        second = this.buffer[1]!,
+      if (this.buffered < 2) return;
+      let buffer = this.peek(2);
+      const first = buffer[0]!,
+        second = buffer[1]!,
         fin = (first & 0x80) !== 0,
         opcode = first & 0x0f,
         masked = (second & 0x80) !== 0;
@@ -81,12 +97,12 @@ export class WebSocketReader {
       let length = second & 0x7f,
         offset = 2;
       if (length === 126) {
-        if (this.buffer.length < 4) return;
-        length = this.buffer.readUInt16BE(2);
+        if (this.buffered < 4) return;
+        length = this.peek(4).readUInt16BE(2);
         offset = 4;
       } else if (length === 127) {
-        if (this.buffer.length < 10) return;
-        const long = this.buffer.readBigUInt64BE(2);
+        if (this.buffered < 10) return;
+        const long = this.peek(10).readBigUInt64BE(2);
         if (long > BigInt(this.maximum)) violation();
         length = Number(long);
         offset = 10;
@@ -101,13 +117,14 @@ export class WebSocketReader {
       )
         violation();
       const start = offset + (masked ? 4 : 0);
-      if (this.buffer.length < start + length) return;
-      const payload = Buffer.from(this.buffer.subarray(start, start + length));
+      if (this.buffered < start + length) return;
+      buffer = this.peek(start + length);
+      const payload = Buffer.from(buffer.subarray(start, start + length));
       if (masked) {
-        const mask = this.buffer.subarray(offset, offset + 4);
+        const mask = buffer.subarray(offset, offset + 4);
         for (let i = 0; i < payload.length; i++) payload[i]! ^= mask[i & 3]!;
       }
-      this.buffer = this.buffer.subarray(start + length);
+      this.consume(start + length);
       if (control) {
         yield { opcode, payload };
         continue;

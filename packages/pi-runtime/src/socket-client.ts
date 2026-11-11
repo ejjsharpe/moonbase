@@ -262,6 +262,8 @@ export function connectDaemonSocket(
     if (reason) return;
     try {
       const bytes = new Uint8Array(event.data as ArrayBuffer);
+      if (bytes.length > socketLimits.frameBytes)
+        V.fail('Incompatible', 'Socket message is too large.');
       lastReceived = clock.now();
       if (!keys) {
         // The challenge, unauthenticated: the hello answers it under keys it binds.

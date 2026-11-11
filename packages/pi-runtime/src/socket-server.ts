@@ -60,8 +60,13 @@ export type SocketServerContext = {
   /** Runs one request as the HTTP protocol does; resolves its reply, never rejects. */
   answer(operation: string, input: unknown, signal: AbortSignal): Promise<unknown>;
 };
-/** Connections open at once; the HTTP listener has its own bound. */
+/** Authenticated connections open at once; the HTTP listener has its own bound. */
 const maximumConnections = 32;
+/**
+ * Connections still waiting for their hello, bounded apart from authenticated ones so that a
+ * process without the token cannot take every slot.
+ */
+const maximumHandshakes = 8;
 /** A refused or closed connection's socket is destroyed this long after its close frame. */
 const lingerMs = 1000;
 
@@ -94,6 +99,7 @@ type Feed = {
  */
 export function createSocketServer(context: SocketServerContext) {
   const sessions = new Set<Session>(),
+    handshakes = new Set<Session>(),
     /** Every live subscription by ID, attached or kept for resuming. */
     feeds = new Map<string, Feed>(),
     resumable = new Set<Feed>();
@@ -137,7 +143,8 @@ export function createSocketServer(context: SocketServerContext) {
       !accept
     )
       return refuse(400);
-    if (sessions.size >= maximumConnections) return refuse(503);
+    if (handshakes.size >= maximumHandshakes || sessions.size >= maximumConnections)
+      return refuse(503);
     socket.write(
       `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\nCache-Control: no-store\r\n\r\n`,
     );
@@ -146,9 +153,14 @@ export function createSocketServer(context: SocketServerContext) {
       resumable,
       forget,
       detach,
-      remove: () => sessions.delete(session),
+      authenticate: () => {
+        if (!handshakes.delete(session) || sessions.size >= maximumConnections) return false;
+        sessions.add(session);
+        return true;
+      },
+      remove: () => void (handshakes.delete(session) || sessions.delete(session)),
     });
-    sessions.add(session);
+    handshakes.add(session);
     if (head.length) session.receive(head);
   }
 
@@ -157,7 +169,9 @@ export function createSocketServer(context: SocketServerContext) {
     async close() {
       closed = true;
       await Promise.allSettled(
-        [...sessions].map((session) => session.shutdown(webSocketCloseCodes.goingAway, true)),
+        [...handshakes, ...sessions].map((session) =>
+          session.shutdown(webSocketCloseCodes.goingAway, true),
+        ),
       );
       for (const feed of feeds.values()) forget(feed);
     },
@@ -169,6 +183,8 @@ type Registry = {
   resumable: Set<Feed>;
   forget(feed: Feed): void;
   detach(feed: Feed): void;
+  /** Counts an authenticated connection; false when there is no room for it. */
+  authenticate(): boolean;
   remove(): void;
 };
 
@@ -187,6 +203,8 @@ class Session {
   private readonly replies: Buffer[][] = [];
   private readonly ready = new Set<Feed>();
   private pumping = false;
+  /** Set while the socket holds more than `outboundBytes`: reading pauses until it drains. */
+  private congestion: Promise<void> | undefined;
   private drain: (() => void) | undefined;
   private untrack: (() => void) | undefined;
   private readonly socket: Duplex;
@@ -202,11 +220,7 @@ class Session {
     this.finished = new Promise((resolve) => (this.resolveFinished = resolve));
     this.lastReceived = this.lastSent = context.clock.now();
     socket.on('data', (bytes: Buffer) => this.receive(bytes));
-    socket.on('drain', () => {
-      const drain = this.drain;
-      this.drain = undefined;
-      drain?.();
-    });
+    socket.on('drain', () => this.drain?.());
     socket.on('error', () => this.end());
     socket.on('close', () => this.end());
     // The challenge is the only unauthenticated message; the hello must answer it in time.
@@ -225,21 +239,29 @@ class Session {
     this.timer = context.clock.setTimeout(() => this.fail(), socketLimits.handshakeMs);
   }
 
+  /**
+   * Handles received frames until the socket is congested; frames already read wait in the
+   * reader until it drains. Only the hello is accepted before authentication, and only
+   * authenticated messages count as activity, so pings never keep a connection alive.
+   */
   receive(bytes: Buffer) {
     if (this.phase === 'closed') return;
     try {
       for (const { opcode, payload } of this.reader.push(bytes)) {
         if ((this.phase as string) === 'closed') return;
-        this.lastReceived = this.context.clock.now();
         if (opcode === webSocketOpcodes.close) return this.shutdown(webSocketCloseCodes.normal);
-        if (opcode === webSocketOpcodes.ping) {
+        if (opcode !== webSocketOpcodes.binary && this.phase === 'hello') return this.fail();
+        if (opcode === webSocketOpcodes.ping)
           this.socket.write(encodeWebSocketFrame(webSocketOpcodes.pong, payload));
-          continue;
+        else if (opcode === webSocketOpcodes.pong) continue;
+        else if (opcode !== webSocketOpcodes.binary) return this.fail();
+        else if (this.phase === 'hello') this.hello(payload);
+        else {
+          const message = this.open(payload);
+          this.lastReceived = this.context.clock.now();
+          this.handle(message);
         }
-        if (opcode === webSocketOpcodes.pong) continue;
-        if (opcode !== webSocketOpcodes.binary) return this.fail();
-        if (this.phase === 'hello') this.hello(payload);
-        else this.handle(this.open(payload));
+        if (this.congested()) return;
       }
     } catch {
       this.fail();
@@ -262,8 +284,10 @@ class Session {
       challenge: this.challenge,
       host: this.context.host,
     });
-    if (!verifySocketMessage(keys.client, bytes)) return this.fail();
+    if (!verifySocketMessage(keys.client, bytes) || !this.registry.authenticate())
+      return this.fail();
     this.keys = keys;
+    this.lastReceived = this.context.clock.now();
     this.received = 1;
     this.phase = 'open';
     this.reader.maximum = socketLimits.frameBytes;
@@ -334,12 +358,15 @@ class Session {
         ),
       })!;
     try {
-      this.replies.push(
-        chunks.map((chunk) => this.seal({ type: 'reply', id, ...chunk })).filter(Boolean),
-      );
+      this.queue(chunks.map((chunk) => this.seal({ type: 'reply', id, ...chunk })));
     } catch {
-      return this.fail();
+      this.fail();
     }
+  }
+  /** Queues frames ahead of updates; a client that leaves too many unread is disconnected. */
+  private queue(frames: Buffer[]) {
+    if (this.replies.length >= socketLimits.queuedReplies) return this.fail();
+    this.replies.push(frames);
     void this.pump();
   }
 
@@ -350,16 +377,18 @@ class Session {
     const key = getJsonKey({ kind, target });
     let feed = this.registry.feeds.get(id);
     if (feed && feed.key !== key) return this.fail();
-    const refuse = (code: 'Unauthorized' | 'Unavailable') => {
-      this.replies.push([this.seal({ type: 'update', subscriptionId: id, kind: 'error', code })]);
-      void this.pump();
-    };
+    const refuse = (code: 'Unauthorized' | 'Unavailable') =>
+      this.queue([this.seal({ type: 'update', subscriptionId: id, kind: 'error', code })]);
     if (!V.sameHost(host, this.context.host)) return refuse('Unauthorized');
     if (this.subscriptions.size >= socketLimits.subscriptions) return refuse('Unavailable');
     if (feed) {
       // A client that reconnected before its old connection closed takes the subscription over.
       feed.session?.release(feed);
       this.registry.forget(feed);
+      // One that ended before its error was sent starts again.
+      if (feed.ended) feed = undefined;
+    }
+    if (feed) {
       const after = message.afterSequence,
         start = feed.history.findIndex((update) => update.base === after);
       if (after === undefined || (after !== feed.sequence && start < 0)) feed.sent = undefined;
@@ -542,7 +571,8 @@ class Session {
           frames = this.nextUpdate(feed);
         }
         for (const frame of frames) this.write(frame);
-        if (this.socket.writableLength > socketLimits.outboundBytes) await this.drained();
+        const congestion = this.congested();
+        if (congestion) await congestion;
       }
     } catch {
       this.fail();
@@ -551,19 +581,31 @@ class Session {
     }
   }
 
-  private drained() {
-    return new Promise<void>((resolve) => {
-      const timer = this.context.clock.setTimeout(() => {
-        this.drain = undefined;
-        this.fail();
-        resolve();
-      }, socketLimits.drainMs);
+  /**
+   * While the socket holds more than `outboundBytes`, reading pauses so a client that never
+   * reads cannot make the daemon buffer more, and one that reads nothing for `drainMs` is
+   * disconnected. Resolves once it drains or the connection closes.
+   */
+  private congested() {
+    if (
+      this.phase === 'closed' ||
+      this.congestion ||
+      this.socket.writableLength <= socketLimits.outboundBytes
+    )
+      return this.congestion;
+    this.socket.pause();
+    this.congestion = new Promise<void>((resolve) => {
+      const timer = this.context.clock.setTimeout(() => this.fail(), socketLimits.drainMs);
       this.drain = () => {
         this.context.clock.clearTimeout(timer);
+        this.drain = this.congestion = undefined;
         resolve();
+        if (this.phase === 'closed') return;
+        this.socket.resume();
+        this.receive(Buffer.alloc(0));
       };
-      if (this.phase !== 'open') this.drain();
     });
+    return this.congestion;
   }
 
   private seal(message: Record<string, unknown>) {
@@ -611,6 +653,8 @@ class Session {
    */
   shutdown(code: number, immediate = false) {
     if (this.phase !== 'closed') {
+      // Nothing more is read from a connection that is closing.
+      this.socket.pause();
       this.socket.end(encodeWebSocketClose(code), () => {
         if (immediate) this.socket.destroy();
       });

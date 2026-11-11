@@ -25,13 +25,15 @@ export const socketLimits = {
   subscriptions: 64,
   /** Requests in flight on one connection. */
   requests: 32,
+  /** Replies and refusals waiting to be written; a client that leaves more unread is dropped. */
+  queuedReplies: 64,
   /** The hello must arrive this long after the challenge. */
   handshakeMs: 10_000,
   /** A side that has sent nothing for this long sends a heartbeat. */
   heartbeatMs: 10_000,
   /** A side that has received nothing for this long closes the connection. */
   idleMs: 30_000,
-  /** Bytes the server lets a connection's socket buffer before it waits for the client. */
+  /** Bytes a connection's socket may buffer before the server stops reading and writing. */
   outboundBytes: 1024 * 1024,
   /** A client that reads nothing of a full buffer for this long is disconnected. */
   drainMs: 20_000,

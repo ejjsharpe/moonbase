@@ -225,15 +225,15 @@ export const ChatTranscriptSchema = struct({
   thinking: Schema.Literals(['available', 'redacted', 'none']),
 });
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).length;
-/**
- * A running response's transcript: a text part may carry its whole text (`truncated` false), and
- * its parts' text stays within `chatLiveTextBytes` in all.
- */
 /** A running response's transcript part, whose text may be whole rather than a preview. */
 export const ChatLiveTranscriptPartSchema = struct({
   ...ChatTranscriptPartSchema.fields,
   text: unicode,
 });
+/**
+ * A running response's transcript: a text part may carry its whole text (`truncated` false), and
+ * its parts' text stays within `chatLiveTextBytes` in all.
+ */
 export const ChatLiveTranscriptSchema = struct({
   ...ChatTranscriptSchema.fields,
   parts: Schema.mutable(Schema.Array(ChatLiveTranscriptPartSchema)).check(
