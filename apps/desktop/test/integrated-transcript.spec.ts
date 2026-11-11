@@ -237,7 +237,7 @@ test('integrated remote archive/runtime reveals early/middle/end Find in real hi
   }
 });
 
-test('integrated remote archive/runtime displays retained images with production CSP and releases its viewer', async () => {
+test('integrated remote archive/runtime displays retained images with production CSP and releases its viewer @packaged', async () => {
   const host = await controlledHostFixture(new URL('./stored-image-faux.mjs', import.meta.url));
   let app: ElectronApplication | undefined;
   try {

@@ -1,4 +1,5 @@
-import { test, expect } from '@playwright/test';
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
 import type { DirectoryListing } from '@moonbase/contracts/workspace';
 import {
   findCreateFolder,
@@ -30,53 +31,54 @@ const listings: Record<string, DirectoryListing> = {
 };
 
 test('visible rows descend only into expanded folders that are listed', () => {
-  expect(listVisibleRows(listings, checkout, new Set())).toEqual([
+  assert.deepEqual(listVisibleRows(listings, checkout, new Set()), [
     { path: 'src', directory: true, level: 1, position: 1, size: 3 },
     { path: 'docs', directory: true, level: 1, position: 2, size: 3 },
     { path: 'README.md', directory: false, ignored: true, level: 1, position: 3, size: 3 },
   ]);
   // A collapsed parent hides an expanded child; an expanded folder without a listing has no rows.
-  expect(
+  assert.deepEqual(
     listVisibleRows(listings, checkout, new Set(['src', 'src/lib', 'missing'])).map((row) => [
       row.path,
       row.level,
       row.position,
       row.size,
     ]),
-  ).toEqual([
-    ['src', 1, 1, 3],
-    ['src/lib', 2, 1, 2],
-    ['src/lib/util.ts', 3, 1, 1],
-    ['src/main.ts', 2, 2, 2],
-    ['docs', 1, 2, 3],
-    ['README.md', 1, 3, 3],
-  ]);
-  expect(listVisibleRows(listings, checkout, new Set(['src/lib'])).map((row) => row.path)).toEqual([
-    'src',
-    'docs',
-    'README.md',
-  ]);
-  expect(listVisibleRows({}, checkout, new Set(['src']))).toEqual([]);
+    [
+      ['src', 1, 1, 3],
+      ['src/lib', 2, 1, 2],
+      ['src/lib/util.ts', 3, 1, 1],
+      ['src/main.ts', 2, 2, 2],
+      ['docs', 1, 2, 3],
+      ['README.md', 1, 3, 3],
+    ],
+  );
+  assert.deepEqual(
+    listVisibleRows(listings, checkout, new Set(['src/lib'])).map((row) => row.path),
+    ['src', 'docs', 'README.md'],
+  );
+  assert.deepEqual(listVisibleRows({}, checkout, new Set(['src'])), []);
 });
 
 test('a placeholder row leads its folder or follows the entry it copies', () => {
   const shape = (rows: ReturnType<typeof listVisibleRows>) =>
     rows.map((row) => [row.path, row.level, row.position, row.size, !!row.placeholder]);
   // First among an expanded folder's children, counted among its siblings.
-  expect(
+  assert.deepEqual(
     shape(
       listVisibleRows(listings, checkout, new Set(['src']), { parent: 'src', directory: true }),
     ),
-  ).toEqual([
-    ['src', 1, 1, 3, false],
-    ['src/\0', 2, 1, 3, true],
-    ['src/lib', 2, 2, 3, false],
-    ['src/main.ts', 2, 3, 3, false],
-    ['docs', 1, 2, 3, false],
-    ['README.md', 1, 3, 3, false],
-  ]);
+    [
+      ['src', 1, 1, 3, false],
+      ['src/\0', 2, 1, 3, true],
+      ['src/lib', 2, 2, 3, false],
+      ['src/main.ts', 2, 3, 3, false],
+      ['docs', 1, 2, 3, false],
+      ['README.md', 1, 3, 3, false],
+    ],
+  );
   // Right after a duplicated entry, at the root.
-  expect(
+  assert.deepEqual(
     shape(
       listVisibleRows(listings, checkout, new Set(), {
         parent: '',
@@ -84,17 +86,18 @@ test('a placeholder row leads its folder or follows the entry it copies', () => 
         after: 'docs',
       }),
     ),
-  ).toEqual([
-    ['src', 1, 1, 4, false],
-    ['docs', 1, 2, 4, false],
-    ['\0', 1, 3, 4, true],
-    ['README.md', 1, 4, 4, false],
-  ]);
+    [
+      ['src', 1, 1, 4, false],
+      ['docs', 1, 2, 4, false],
+      ['\0', 1, 3, 4, true],
+      ['README.md', 1, 4, 4, false],
+    ],
+  );
   const placeholder = listVisibleRows(listings, checkout, new Set(['docs']), {
     parent: 'docs',
     directory: false,
   })[2];
-  expect(placeholder).toEqual({
+  assert.deepEqual(placeholder, {
     path: placeholderPath('docs'),
     directory: false,
     placeholder: true,
@@ -103,17 +106,19 @@ test('a placeholder row leads its folder or follows the entry it copies', () => 
     size: 2,
   });
   // A folder not yet listed shows the placeholder alone; a hidden folder shows none.
-  expect(
+  assert.deepEqual(
     shape(
       listVisibleRows(listings, checkout, new Set(['src', 'src/new']), {
         parent: 'src/lib',
         directory: false,
       }),
     ),
-  ).toEqual(shape(listVisibleRows(listings, checkout, new Set(['src', 'src/new']))));
-  expect(
+    shape(listVisibleRows(listings, checkout, new Set(['src', 'src/new']))),
+  );
+  assert.deepEqual(
     shape(listVisibleRows({}, checkout, new Set(['src']), { parent: '', directory: false })),
-  ).toEqual([['\0', 1, 1, 1, true]]);
+    [['\0', 1, 1, 1, true]],
+  );
 });
 
 test('hiding ignored entries leaves out them and all they contain', () => {
@@ -124,40 +129,41 @@ test('hiding ignored entries leaves out them and all they contain', () => {
       { path: 'src/main.ts', directory: false, ignored: false },
     ),
   };
-  expect(
+  assert.deepEqual(
     listVisibleRows(hidden, checkout, new Set(['src', 'src/lib']), undefined, true).map((row) => [
       row.path,
       row.position,
       row.size,
     ]),
-  ).toEqual([
-    ['src', 1, 2],
-    ['src/main.ts', 1, 1],
-    ['docs', 2, 2],
-  ]);
+    [
+      ['src', 1, 2],
+      ['src/main.ts', 1, 1],
+      ['docs', 2, 2],
+    ],
+  );
   // A hidden path shows at the folder holding its outermost ignored entry.
-  expect(findShownPath(hidden, checkout, 'src/lib/util.ts')).toBe('src');
-  expect(findShownPath(hidden, checkout, 'README.md')).toBe('');
-  expect(findShownPath(hidden, checkout, 'src/main.ts')).toBe('src/main.ts');
-  expect(findShownPath(hidden, checkout, '')).toBe('');
-  expect(findShownPath(hidden, checkout, 'gone/file.ts')).toBe('gone/file.ts');
+  assert.equal(findShownPath(hidden, checkout, 'src/lib/util.ts'), 'src');
+  assert.equal(findShownPath(hidden, checkout, 'README.md'), '');
+  assert.equal(findShownPath(hidden, checkout, 'src/main.ts'), 'src/main.ts');
+  assert.equal(findShownPath(hidden, checkout, ''), '');
+  assert.equal(findShownPath(hidden, checkout, 'gone/file.ts'), 'gone/file.ts');
 });
 
 test('New File starts in the focused folder, a focused file’s folder, or the root', () => {
-  expect(findCreateFolder(listings, checkout, 'src/lib')).toBe('src/lib');
-  expect(findCreateFolder(listings, checkout, 'src/lib/util.ts')).toBe('src/lib');
-  expect(findCreateFolder(listings, checkout, 'README.md')).toBe('');
-  expect(findCreateFolder(listings, checkout, '')).toBe('');
-  expect(findCreateFolder(listings, checkout, 'gone/file.ts')).toBe('');
-  expect(findCreateFolder(listings, 'other', 'src')).toBe('');
+  assert.equal(findCreateFolder(listings, checkout, 'src/lib'), 'src/lib');
+  assert.equal(findCreateFolder(listings, checkout, 'src/lib/util.ts'), 'src/lib');
+  assert.equal(findCreateFolder(listings, checkout, 'README.md'), '');
+  assert.equal(findCreateFolder(listings, checkout, ''), '');
+  assert.equal(findCreateFolder(listings, checkout, 'gone/file.ts'), '');
+  assert.equal(findCreateFolder(listings, 'other', 'src'), '');
 });
 
 test('a name’s stem leaves out its extension, except for folders and dotfiles', () => {
-  expect(measureStem('index.test.ts', false)).toBe('index.test'.length);
-  expect(measureStem('README', false)).toBe(6);
-  expect(measureStem('.gitignore', false)).toBe(10);
-  expect(measureStem('lib.v2', true)).toBe(6);
-  expect(measureStem('', false)).toBe(0);
+  assert.equal(measureStem('index.test.ts', false), 'index.test'.length);
+  assert.equal(measureStem('README', false), 6);
+  assert.equal(measureStem('.gitignore', false), 10);
+  assert.equal(measureStem('lib.v2', true), 6);
+  assert.equal(measureStem('', false), 0);
 });
 
 test('mounted rows cover the scrolled window, the focused row and pinned rows', () => {
@@ -171,10 +177,11 @@ test('mounted rows cover the scrolled window, the focused row and pinned rows', 
   const range = (start: number, end: number) =>
     Array.from({ length: end - start }, (_, index) => start + index);
   // 28px rows: 1400px down shows rows 50–60, with ten more mounted on each side.
-  expect(selectMountedIndexes({ rows, top: 1400, height: 280, focusIndex: 55 })).toEqual(
+  assert.deepEqual(
+    selectMountedIndexes({ rows, top: 1400, height: 280, focusIndex: 55 }),
     range(40, 70),
   );
-  expect(
+  assert.deepEqual(
     selectMountedIndexes({
       rows,
       top: 1400,
@@ -182,6 +189,7 @@ test('mounted rows cover the scrolled window, the focused row and pinned rows', 
       focusIndex: 3,
       pinnedPaths: ['file-199', 'file-60', 'not-a-row'],
     }),
-  ).toEqual([3, ...range(40, 70), 199]);
-  expect(selectMountedIndexes({ rows: [], top: 0, height: 500, focusIndex: 0 })).toEqual([]);
+    [3, ...range(40, 70), 199],
+  );
+  assert.deepEqual(selectMountedIndexes({ rows: [], top: 0, height: 500, focusIndex: 0 }), []);
 });

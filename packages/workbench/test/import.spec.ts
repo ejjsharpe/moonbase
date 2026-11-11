@@ -56,7 +56,6 @@ test('native picker asks for a full single destination and captures explicit rep
   await page.getByLabel('Destination relative path', { exact: true }).fill('README.md');
   await imports(page).click();
   await expect(dialog(page).getByRole('alert')).toContainText('Replace README.md?');
-  await page.screenshot({ path: 'test-results/editor-import-replacement.png', fullPage: true });
   expect(await page.evaluate(() => window.importCalls)).toEqual([]);
   await dialog(page)
     .getByRole('button', { name: 'Replace captured destination', exact: true })
@@ -113,7 +112,6 @@ test('batch imports allow root and explicitly captured replacement paths in the 
     .fill('README.md');
   await imports(page).click();
   expect(await page.evaluate(() => window.importCalls)).toEqual([]);
-  await page.screenshot({ path: 'test-results/editor-import-batch.png', fullPage: true });
   await dialog(page)
     .getByRole('button', { name: 'Replace captured destination', exact: true })
     .click();

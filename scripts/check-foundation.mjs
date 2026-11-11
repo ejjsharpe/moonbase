@@ -15,6 +15,7 @@ for (const entry of [
   'connection',
   'chat',
   'providers',
+  'daemon',
   'errors',
   'common',
   'lookup',
@@ -34,6 +35,58 @@ for (const entry of [
   assert(!/node:|electron|@moonbase\/(workspace|pi-runtime|ssh)/.test(result.outputFiles[0].text));
 }
 console.log('Verified browser-only command contracts.');
+
+for (const entry of [
+  'chat-schema',
+  'workspace-schema',
+  'connection-schema',
+  'host-schema',
+  'daemon-schema',
+  'providers-schema',
+  'error-schema',
+  'schema',
+  'services',
+]) {
+  const result = await build({
+    entryPoints: [`@moonbase/contracts/${entry}`],
+    bundle: true,
+    platform: 'browser',
+    write: false,
+    metafile: true,
+  });
+  for (const input of Object.keys(result.metafile.inputs))
+    assert(
+      /^(?:packages\/contracts\/|node_modules\/(?:\.bun\/[^/]+\/node_modules\/)?effect\/)/.test(
+        input,
+      ),
+      `${entry} must bundle only contracts and portable Effect: ${input}`,
+    );
+}
+const typeOnly = await build({
+  absWorkingDir: root,
+  stdin: {
+    contents: `
+      import type { EditorClient } from '@moonbase/contracts/workspace';
+      import type { ChatClient } from '@moonbase/contracts/chat';
+      import type { ConnectionClient } from '@moonbase/contracts/connection';
+      export type Clients = [EditorClient, ChatClient, ConnectionClient];
+    `,
+    resolveDir: root,
+    loader: 'ts',
+  },
+  bundle: true,
+  platform: 'browser',
+  format: 'esm',
+  write: false,
+  metafile: true,
+});
+assert.deepEqual(Object.keys(typeOnly.metafile.inputs), ['<stdin>']);
+assert.equal(
+  typeOnly.outputFiles[0].text,
+  '',
+  'type-only client imports must emit no runtime code',
+);
+console.log('Verified schema entries bundle only contracts and portable Effect.');
 
 const smoke = await build({
   absWorkingDir: root,

@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-test('native Reload retains text painted before ordinary recovery debounce', async () => {
+test('native Reload retains text painted before ordinary recovery debounce @packaged', async () => {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-reload-'))),
     checkout = join(base, 'checkout');
   mkdirSync(checkout);
