@@ -916,8 +916,10 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
       await expect.poll(() => reloadOutcome(app)).toBe('reload');
       await connect(page);
       if (operation !== 'createChat')
-        // The chat header's breadcrumb carries the working folder in its title.
-        await expect(page.getByRole('main').getByTitle(f.cwd, { exact: false })).toBeVisible();
+        // The title bar's breadcrumb carries the working folder in its title.
+        await expect(
+          page.locator('header[aria-label="Window title bar"]').getByTitle(f.cwd, { exact: false }),
+        ).toBeVisible();
       if (operation === 'sendChat') {
         await expect(page.getByRole('region', { name: 'Retained commands' })).toHaveCount(0);
         await expect(page.getByLabel('Message', { exact: true })).toHaveValue(
