@@ -137,9 +137,13 @@ test.afterEach(async ({}, info) => {
       ),
     ).toEqual([]);
   } finally {
-    if (child && child.exitCode === null && child.signalCode === null) await forceStop();
-    await stopDaemon(join(base, 'user-data', 'daemon-v1'));
-    await stopDaemon(join(base, 'early-user-data', 'daemon-v1'));
+    try {
+      if (child && child.exitCode === null && child.signalCode === null) await forceStop();
+    } finally {
+      // A daemon outlives its app: stop it even when the steps before fail.
+      await stopDaemon(join(base, 'user-data', 'daemon-v1'));
+      await stopDaemon(join(base, 'early-user-data', 'daemon-v1'));
+    }
     rmSync(base, { recursive: true, force: true });
   }
 });

@@ -269,8 +269,11 @@ test('local chat runs in the daemon: setup, picker folders, tools, @ search; Qui
     await closeSettings(page);
     expect(errors).toEqual([]);
   } finally {
-    await profile.exit(launched);
-    await profile.release();
+    try {
+      await profile.exit(launched);
+    } finally {
+      await profile.release();
+    }
   }
 });
 
@@ -321,8 +324,11 @@ test('a crashed daemon restarts on the next request, and the chat shows it recon
     await expect(page.getByText('After the restart', { exact: true })).toBeVisible();
     expect(isAlive(pid)).toBe(false);
   } finally {
-    await profile.exit(launched);
-    await profile.release();
+    try {
+      await profile.exit(launched);
+    } finally {
+      await profile.release();
+    }
   }
 });
 
@@ -378,8 +384,11 @@ test('the editor works while the daemon starts; a failed first start shows a ret
     await expect(page.getByText('Started after the retry', { exact: true })).toBeVisible();
     expect(isAlive((await readDaemonPid(profile.daemon))!)).toBe(true);
   } finally {
-    await profile.exit(launched);
-    await profile.release();
+    try {
+      await profile.exit(launched);
+    } finally {
+      await profile.release();
+    }
   }
 });
 
@@ -498,8 +507,11 @@ test('folder grants: a chat without a project becomes one, an editor checkout an
     // The listed worktree no chat used was never granted.
     expect(granted).not.toContain(JSON.stringify(unused));
   } finally {
-    await profile.exit(launched);
-    await profile.release();
+    try {
+      await profile.exit(launched);
+    } finally {
+      await profile.release();
+    }
   }
 });
 
@@ -616,17 +628,21 @@ for (const mode of ['local', 'remote'] as const)
         'Stopped',
       );
     } finally {
-      host?.release();
-      if (child.exitCode === null) {
-        if (host) {
-          // Still connected when the sidebar has no Connect line.
-          if (!(await page.getByRole('button', { name: 'Connect', exact: true }).count()))
-            await disconnectChat(page);
+      try {
+        host?.release();
+        if (child.exitCode === null) {
+          if (host) {
+            // Still connected when the sidebar has no Connect line.
+            if (!(await page.getByRole('button', { name: 'Connect', exact: true }).count()))
+              await disconnectChat(page);
+          }
+          await app.evaluate(({ app }) => app.exit(0));
         }
-        await app.evaluate(({ app }) => app.exit(0));
+        await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
+      } finally {
+        // A daemon outlives its app: stop it even when the steps before fail.
+        await stopDaemon(daemon);
       }
-      await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
-      await stopDaemon(daemon);
       if (host) await host.close();
       else await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
     }
@@ -688,15 +704,19 @@ test('transcript remote first/next chunks render through authenticated stream an
     await page.getByLabel('Message', { exact: true }).focus();
     await expect(page.getByText('REMOTE COMPLETED', { exact: true })).toBeVisible();
   } finally {
-    host.release();
-    if (child.exitCode === null) {
-      // Still connected when the sidebar has no Connect line.
-      if (!(await page.getByRole('button', { name: 'Connect', exact: true }).count()))
-        await disconnectChat(page);
-      await app.evaluate(({ app }) => app.exit(0));
+    try {
+      host.release();
+      if (child.exitCode === null) {
+        // Still connected when the sidebar has no Connect line.
+        if (!(await page.getByRole('button', { name: 'Connect', exact: true }).count()))
+          await disconnectChat(page);
+        await app.evaluate(({ app }) => app.exit(0));
+      }
+      await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
+    } finally {
+      // A daemon outlives its app: stop it even when the steps before fail.
+      await stopDaemon(join(userData, 'daemon-v1'));
     }
-    await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
-    await stopDaemon(join(userData, 'daemon-v1'));
     await host.close();
   }
 });

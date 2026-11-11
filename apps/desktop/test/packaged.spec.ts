@@ -293,8 +293,12 @@ test('unsigned macOS package runs with only system PATH, SQLite, native/rg resou
       await page.getByRole('dialog').getByRole('button', { name: 'Discard', exact: true }).click();
     await closed;
   } finally {
-    await stop();
-    await stopDaemon(join(base, 'fresh-user-data', 'daemon-v1'));
+    try {
+      await stop();
+    } finally {
+      // A daemon outlives its app: stop it even when the steps before fail.
+      await stopDaemon(join(base, 'fresh-user-data', 'daemon-v1'));
+    }
     rmSync(base, { recursive: true, force: true });
   }
 });

@@ -89,12 +89,16 @@ for (const action of ['Recover workbench', 'Quit Moonbase', 'cleanup failure'])
       }
       await expect.poll(() => child.exitCode).toBe(action === 'cleanup failure' ? 1 : 0);
     } finally {
-      if (child.exitCode === null) {
-        const exited = new Promise((resolve) => child.once('exit', resolve));
-        await app.evaluate(({ app }) => app.exit(0));
-        await exited;
+      try {
+        if (child.exitCode === null) {
+          const exited = new Promise((resolve) => child.once('exit', resolve));
+          await app.evaluate(({ app }) => app.exit(0));
+          await exited;
+        }
+      } finally {
+        // A daemon outlives its app: stop it even when the steps before fail.
+        await stopDaemon(join(data, 'daemon-v1'));
       }
-      await stopDaemon(join(data, 'daemon-v1'));
       rmSync(data, { recursive: true, force: true, maxRetries: 5 });
     }
   });

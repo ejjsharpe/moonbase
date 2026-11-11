@@ -1,5 +1,6 @@
 import type { NativeTranscriptActions } from '../chat/transcript-native.ts';
 import { randomUUID } from 'node:crypto';
+import { realpath } from 'node:fs/promises';
 import type { Effect, ManagedRuntime } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type { ChatClient } from '@moonbase/contracts/chat';
@@ -12,6 +13,12 @@ import { ChatIpcSession } from '../chat/session.ts';
 import type { Reply, DesktopChatTarget } from '../chat/wire.ts';
 
 type LocalResult = { backend: DaemonChat | null; error: ApplicationError | null };
+
+const editorFolderChanged = () =>
+  new ApplicationError({
+    code: 'Unauthorized',
+    message: 'This folder changed since the editor approved it. Open it again.',
+  });
 
 export function createChatBackends({
   runtime,
@@ -66,14 +73,24 @@ export function createChatBackends({
     const backend = local;
     let grant = grants.get(path);
     if (!grant) {
-      grant = run(
-        backend.folders.approveFolder({
-          host: backend.session.host,
-          requestId: randomUUID(),
-          path,
-          recent: false,
-        }),
-      ).then(() => {});
+      // The daemon stores the folder a path resolves to. Grant only a path that is itself that
+      // folder, so a root replaced by a link never grants the link's target.
+      grant = realpath(path)
+        .catch(() => '')
+        .then((resolved) => {
+          if (resolved !== path) throw editorFolderChanged();
+          return run(
+            backend.folders.approveFolder({
+              host: backend.session.host,
+              requestId: randomUUID(),
+              path,
+              recent: false,
+            }),
+          );
+        })
+        .then((approved) => {
+          if (approved.path !== path) throw editorFolderChanged();
+        });
       grants.set(path, grant);
       // A failed grant is tried again on the folder's next use.
       grant.catch(() => grants.delete(path));

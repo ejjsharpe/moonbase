@@ -261,38 +261,42 @@ for (const mode of ['reload', 'veto', 'crash'])
         ),
       );
     } finally {
-      writeFileSync(
-        test.info().outputPath('final-probe.json'),
-        JSON.stringify(await app.evaluate(() => globalThis.reloadProbe), null, 2),
-      );
-      const held = await app.evaluate(() => globalThis.reloadProbe?.held);
-      if (held) {
-        pids.add(held);
-        try {
-          process.kill(held, 'SIGKILL');
-        } catch (error) {
-          // oxlint-disable-next-line no-unsafe-finally -- Unexpected cleanup failures must remain visible.
-          if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+      try {
+        writeFileSync(
+          test.info().outputPath('final-probe.json'),
+          JSON.stringify(await app.evaluate(() => globalThis.reloadProbe), null, 2),
+        );
+        const held = await app.evaluate(() => globalThis.reloadProbe?.held);
+        if (held) {
+          pids.add(held);
+          try {
+            process.kill(held, 'SIGKILL');
+          } catch (error) {
+            // oxlint-disable-next-line no-unsafe-finally -- Unexpected cleanup failures must remain visible.
+            if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+          }
         }
+        for (const pid of await app.evaluate(({ app }) =>
+          app.getAppMetrics().map((value) => value.pid),
+        ))
+          pids.add(pid);
+        await app.evaluate(({ app }) => app.exit(0));
+        await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
+        for (const pid of pids)
+          await expect
+            .poll(() => {
+              try {
+                process.kill(pid, 0);
+                return false;
+              } catch (error) {
+                return (error as NodeJS.ErrnoException).code === 'ESRCH';
+              }
+            })
+            .toBe(true);
+      } finally {
+        // A daemon outlives its app: stop it even when the steps before fail.
+        await stopDaemon(join(base, 'data', 'daemon-v1'));
       }
-      for (const pid of await app.evaluate(({ app }) =>
-        app.getAppMetrics().map((value) => value.pid),
-      ))
-        pids.add(pid);
-      await app.evaluate(({ app }) => app.exit(0));
-      await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
-      for (const pid of pids)
-        await expect
-          .poll(() => {
-            try {
-              process.kill(pid, 0);
-              return false;
-            } catch (error) {
-              return (error as NodeJS.ErrnoException).code === 'ESRCH';
-            }
-          })
-          .toBe(true);
-      await stopDaemon(join(base, 'data', 'daemon-v1'));
       rmSync(base, { recursive: true });
       writeFileSync(
         test.info().outputPath('cleanup.json'),

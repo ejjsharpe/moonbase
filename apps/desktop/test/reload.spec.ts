@@ -176,46 +176,52 @@ test('native Reload retains text painted before ordinary recovery debounce', asy
       .toContain('fresh visible tail');
     expect(errors).toEqual([]);
   } finally {
-    for (const pid of await app.evaluate(({ app }) =>
-      app.getAppMetrics().map((value) => value.pid),
-    ))
-      pids.add(pid);
-    await app.context().tracing.stop({ path: test.info().outputPath('trace.zip') });
-    // Fault teardown releases the optional public connection before intentional exit.
-    await page
-      .evaluate(async () => {
-        const bridge = (
-          window as unknown as {
-            moonbaseChat?: {
-              call(...args: unknown[]): Promise<{ ok: boolean; value?: { connectionId?: string } }>;
-            };
-          }
-        ).moonbaseChat;
-        if (!bridge) return;
-        const state = await bridge.call('connection', 'getConnection', {}, crypto.randomUUID());
-        if (state.ok && state.value?.connectionId)
-          await bridge.call(
-            'connection',
-            'disconnect',
-            { connectionId: state.value.connectionId },
-            crypto.randomUUID(),
-          );
-      })
-      .catch(() => {});
-    await app.evaluate(({ app }) => app.exit(0));
-    await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
-    for (const pid of pids)
-      await expect
-        .poll(() => {
-          try {
-            process.kill(pid, 0);
-            return false;
-          } catch (error) {
-            return (error as NodeJS.ErrnoException).code === 'ESRCH';
-          }
+    try {
+      for (const pid of await app.evaluate(({ app }) =>
+        app.getAppMetrics().map((value) => value.pid),
+      ))
+        pids.add(pid);
+      await app.context().tracing.stop({ path: test.info().outputPath('trace.zip') });
+      // Fault teardown releases the optional public connection before intentional exit.
+      await page
+        .evaluate(async () => {
+          const bridge = (
+            window as unknown as {
+              moonbaseChat?: {
+                call(
+                  ...args: unknown[]
+                ): Promise<{ ok: boolean; value?: { connectionId?: string } }>;
+              };
+            }
+          ).moonbaseChat;
+          if (!bridge) return;
+          const state = await bridge.call('connection', 'getConnection', {}, crypto.randomUUID());
+          if (state.ok && state.value?.connectionId)
+            await bridge.call(
+              'connection',
+              'disconnect',
+              { connectionId: state.value.connectionId },
+              crypto.randomUUID(),
+            );
         })
-        .toBe(true);
-    await stopDaemon(join(base, 'user-data', 'daemon-v1'));
+        .catch(() => {});
+      await app.evaluate(({ app }) => app.exit(0));
+      await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
+      for (const pid of pids)
+        await expect
+          .poll(() => {
+            try {
+              process.kill(pid, 0);
+              return false;
+            } catch (error) {
+              return (error as NodeJS.ErrnoException).code === 'ESRCH';
+            }
+          })
+          .toBe(true);
+    } finally {
+      // A daemon outlives its app: stop it even when the steps before fail.
+      await stopDaemon(join(base, 'user-data', 'daemon-v1'));
+    }
     rmSync(base, { recursive: true });
     writeFileSync(
       test.info().outputPath('cleanup.json'),

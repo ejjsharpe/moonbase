@@ -162,39 +162,43 @@ for (const configured of [false, true])
         ).toBeVisible();
       }
     } finally {
-      for (const pid of await app.evaluate(({ app }) =>
-        app.getAppMetrics().map((value) => value.pid),
-      ))
-        pids.add(pid);
-      await app.windows()[0].evaluate(async () => {
-        const state = await window.moonbaseChat.call(
-          'connection',
-          'getConnection',
-          {},
-          crypto.randomUUID(),
-        );
-        if (state.ok && (state.value as { connectionId?: string }).connectionId)
-          await window.moonbaseChat.call(
+      try {
+        for (const pid of await app.evaluate(({ app }) =>
+          app.getAppMetrics().map((value) => value.pid),
+        ))
+          pids.add(pid);
+        await app.windows()[0].evaluate(async () => {
+          const state = await window.moonbaseChat.call(
             'connection',
-            'disconnect',
-            { connectionId: (state.value as { connectionId: string }).connectionId },
+            'getConnection',
+            {},
             crypto.randomUUID(),
           );
-      });
-      await app.evaluate(({ app }) => app.exit(0));
-      await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
-      for (const pid of pids)
-        await expect
-          .poll(() => {
-            try {
-              process.kill(pid, 0);
-              return false;
-            } catch (error) {
-              return (error as NodeJS.ErrnoException).code === 'ESRCH';
-            }
-          })
-          .toBe(true);
-      await stopDaemon(join(base, 'desktop', 'daemon-v1'));
+          if (state.ok && (state.value as { connectionId?: string }).connectionId)
+            await window.moonbaseChat.call(
+              'connection',
+              'disconnect',
+              { connectionId: (state.value as { connectionId: string }).connectionId },
+              crypto.randomUUID(),
+            );
+        });
+        await app.evaluate(({ app }) => app.exit(0));
+        await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
+        for (const pid of pids)
+          await expect
+            .poll(() => {
+              try {
+                process.kill(pid, 0);
+                return false;
+              } catch (error) {
+                return (error as NodeJS.ErrnoException).code === 'ESRCH';
+              }
+            })
+            .toBe(true);
+      } finally {
+        // A daemon outlives its app: stop it even when the steps before fail.
+        await stopDaemon(join(base, 'desktop', 'daemon-v1'));
+      }
       const host = await f?.close();
       if (!f) rmSync(base, { recursive: true });
       writeFileSync(
